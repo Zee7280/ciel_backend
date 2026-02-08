@@ -31,6 +31,9 @@ import { Setting } from './settings/entities/setting.entity';
         username: configService.get<string>('DB_USERNAME'),
         password: configService.get<string>('DB_PASSWORD'),
         database: configService.get<string>('DB_NAME'),
+        ssl: {
+          rejectUnauthorized: false,
+        },
         synchronize: true,
         autoLoadEntities: true,
         logging: true,

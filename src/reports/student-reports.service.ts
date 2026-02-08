@@ -9,15 +9,22 @@ import * as path from 'path';
 
 @Injectable()
 export class StudentReportsService {
-    private readonly uploadDir = path.join(process.cwd(), 'uploads', 'student-reports');
+    private readonly uploadDir = process.env.NODE_ENV === 'production' || process.env.VERCEL
+        ? path.join('/tmp', 'uploads', 'student-reports')
+        : path.join(process.cwd(), 'uploads', 'student-reports');
 
     constructor(
         @InjectRepository(StudentReport)
         private studentReportsRepository: Repository<StudentReport>,
     ) {
         // Ensure upload directory exists
-        if (!fs.existsSync(this.uploadDir)) {
-            fs.mkdirSync(this.uploadDir, { recursive: true });
+        try {
+            if (!fs.existsSync(this.uploadDir)) {
+                fs.mkdirSync(this.uploadDir, { recursive: true });
+            }
+        } catch (error) {
+            console.error('Failed to create upload directory:', error);
+            // Don't crash the app, just log error
         }
     }
 

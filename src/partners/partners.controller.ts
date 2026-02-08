@@ -71,7 +71,7 @@ export class PartnersController {
     @Post('me/logo')
     @UseInterceptors(FileInterceptor('logo', {
         storage: diskStorage({
-            destination: './uploads',
+            destination: process.env.NODE_ENV === 'production' || process.env.VERCEL ? '/tmp/uploads' : './uploads',
             filename: (req, file, cb) => {
                 const randomName = Array(32).fill(null).map(() => (Math.round(Math.random() * 16)).toString(16)).join('');
                 cb(null, `${randomName}${extname(file.originalname)}`);
@@ -95,7 +95,7 @@ export class PartnersController {
     @Post('profile/logo')
     @UseInterceptors(FileInterceptor('logo', {
         storage: diskStorage({
-            destination: './uploads',
+            destination: process.env.NODE_ENV === 'production' || process.env.VERCEL ? '/tmp/uploads' : './uploads',
             filename: (req, file, cb) => {
                 const randomName = Array(32).fill(null).map(() => (Math.round(Math.random() * 16)).toString(16)).join('');
                 cb(null, `${randomName}${extname(file.originalname)}`);

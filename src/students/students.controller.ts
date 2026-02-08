@@ -127,7 +127,7 @@ export class StudentsController {
     @UseInterceptors(
         FileInterceptor('avatar', {
             storage: diskStorage({
-                destination: './uploads',
+                destination: process.env.NODE_ENV === 'production' || process.env.VERCEL ? '/tmp/uploads' : './uploads',
                 filename: (req, file, cb) => {
                     const randomName = Array(32)
                         .fill(null)

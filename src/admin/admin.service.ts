@@ -5,6 +5,7 @@ import { User } from '../users/entities/user.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { Report } from '../reports/entities/report.entity';
 import { Timesheet } from '../timesheets/entities/timesheet.entity';
+import { OpportunityParticipant } from '../opportunities/entities/opportunity-participant.entity';
 
 import { AuditLog } from '../audit-logs/entities/audit-log.entity';
 import { UserRole } from '../users/enums/user-role.enum';
@@ -27,9 +28,9 @@ export class AdminService {
         private auditLogRepository: Repository<AuditLog>,
         @InjectRepository(Setting)
         private settingRepository: Repository<Setting>,
+        @InjectRepository(OpportunityParticipant)
+        private opportunityParticipantRepository: Repository<OpportunityParticipant>,
     ) { }
-
-    // ... existing methods (getDashboardStats, etc.) ...
 
     async getSettings() {
         const settings = await this.settingRepository.find();
@@ -53,8 +54,6 @@ export class AdminService {
         };
     }
 
-    // ... continue other methods ...
-
     async getDashboardStats() {
         // User Breakdown
         const totalStudents = await this.usersRepository.count({ where: { role: UserRole.STUDENT } });
@@ -73,8 +72,8 @@ export class AdminService {
 
         // Pending Approvals (Users + Applications)
         const pendingUsers = await this.usersRepository.count({ where: { status: 'pending' } });
-        const pendingTimesheets = await this.timesheetRepository.count({ where: { status: 'pending' } });
-        const pendingApprovals = pendingUsers + pendingTimesheets; // Summing pending entities
+        const pendingApplications = await this.opportunityParticipantRepository.count({ where: { status: 'pending' } });
+        const pendingApprovals = pendingUsers + pendingApplications;
 
         // Verified Hours
         const verifiedTimesheets = await this.timesheetRepository.find({ where: { status: 'verified' } });
@@ -146,19 +145,17 @@ export class AdminService {
             relations: ['organization']
         });
 
-        // For volunteers and hours, ideally we aggregate from timesheets/applications
-        // Doing a simple loop for now as optimization can come later
         const projects = await Promise.all(opportunities.map(async (opp) => {
             const timesheets = await this.timesheetRepository.find({ where: { opportunityId: opp.id } });
             const hours = timesheets.filter(t => t.status === 'verified').reduce((sum, t) => sum + t.hours, 0);
-            const volunteers = new Set(timesheets.map(t => t.studentId)).size; // Unique volunteers who logged time
+            const volunteers = new Set(timesheets.map(t => t.studentId)).size;
 
             return {
                 id: opp.id,
                 title: opp.title,
                 org: opp.organization?.name || 'Unknown',
                 status: opp.status,
-                volunteers: volunteers || (opp.timeline?.volunteers_required || 0), // Fallback to required if 0? Spec impl implies actuals. Let's keep 0 if none.
+                volunteers: volunteers || (opp.timeline?.volunteers_required || 0),
                 hours: hours,
                 location: opp.location?.city || 'Unknown'
             };
@@ -173,7 +170,6 @@ export class AdminService {
             relations: ['opportunity']
         });
 
-        // Hours Trend (Mocking monthly for now based on createdAt of timesheet)
         const hoursTrendMap = {};
         verifiedTimesheets.forEach(t => {
             const date = new Date(t.createdAt);
@@ -183,28 +179,24 @@ export class AdminService {
 
         const hoursTrend = Object.entries(hoursTrendMap).map(([month, hours]) => ({ month, hours }));
 
-        // SDG Impact
         const sdgImpactMap = {};
         verifiedTimesheets.forEach(t => {
             const sdg = t.opportunity?.sdg || 'Unknown';
-            sdgImpactMap[sdg] = (sdgImpactMap[sdg] || 0) + t.hours; // Impact measured in hours? Spec says "value": 500
+            sdgImpactMap[sdg] = (sdgImpactMap[sdg] || 0) + t.hours;
         });
 
         const sdgImpact = Object.entries(sdgImpactMap).map(([name, value]) => ({ name, value }));
 
-        // Stats for Analytics Page
-        const activeVolunteersCount = await this.usersRepository.count({ where: { role: UserRole.STUDENT } }); // Approx
-        const partnerNgosCount = await this.usersRepository.count({ where: { role: UserRole.NGO } }); // Direct NGO role check
-        // Beneficiaries count logic? Using a placeholder or sum from opportunities.
-        // Assuming 'beneficiaries_count' in opportunity.objectives
+        const activeVolunteersCount = await this.usersRepository.count({ where: { role: UserRole.STUDENT } });
+        const partnerNgosCount = await this.usersRepository.count({ where: { role: UserRole.NGO } });
         const opportunities = await this.opportunityRepository.find();
         const totalBeneficiaries = opportunities.reduce((sum, opp) => sum + (parseInt(opp.objectives?.beneficiaries_count || '0') || 0), 0);
 
         return {
             success: true,
             data: {
-                hours_trend: hoursTrend, // Renamed to match spec
-                impact_by_sdg: sdgImpact, // Renamed slightly or keep matches? Spec: impact_by_sdg
+                hours_trend: hoursTrend,
+                impact_by_sdg: sdgImpact,
                 stats: {
                     active_volunteers: activeVolunteersCount,
                     partner_ngos: partnerNgosCount,
@@ -263,11 +255,16 @@ export class AdminService {
     }
 
     async findPendingApplications() {
-        const applications = await this.timesheetRepository.find({
+        console.log('Fetching pending applications...');
+        const applications = await this.opportunityParticipantRepository.find({
             where: { status: 'pending' },
             relations: ['student', 'opportunity', 'student.organization'],
             order: { createdAt: 'DESC' }
         });
+        console.log(`Found ${applications.length} pending applications.`);
+        if (applications.length > 0) {
+            console.log('First app ID:', applications[0].id);
+        }
 
         // Mapping to user requested format:
         // { "id": 1, "name": "John Doe", "email": "john@example.com", "organization_type": "NGO", "created_at": "..." }
@@ -277,37 +274,37 @@ export class AdminService {
                 id: app.id,
                 name: app.student?.name || 'Unknown',
                 email: app.student?.email || 'Unknown',
-                organization_type: app.student?.organization?.orgType || 'Student', // If no org, likely individual student
+                organization_type: app.participation_type === 'team' ? 'Team' : 'Individual',
+                opportunity: app.opportunity?.title || 'Unknown',
                 created_at: app.createdAt
             }))
         };
     }
 
     async approveApplication(id: string) {
-        const application = await this.timesheetRepository.findOne({ where: { id } });
+        console.log(`Approving application with ID: ${id}`);
+        const application = await this.opportunityParticipantRepository.findOne({ where: { id } });
         if (!application) {
-            throw new Error('Application not found'); // Best to use NotFoundException if possible, but Error works generic
+            throw new Error('Application not found');
         }
         application.status = 'approved';
-        // User requested 'active' or 'approved'. 'approved' matches our other status logic better.
-        await this.timesheetRepository.save(application);
+        await this.opportunityParticipantRepository.save(application);
         return {
             success: true,
-            message: 'User approved successfully'
+            message: 'Application approved successfully'
         };
     }
 
     async rejectApplication(id: string, reason: string) {
-        const application = await this.timesheetRepository.findOne({ where: { id } });
+        const application = await this.opportunityParticipantRepository.findOne({ where: { id } });
         if (!application) {
             throw new Error('Application not found');
         }
         application.status = 'rejected';
-        application.rejectionReason = reason;
-        await this.timesheetRepository.save(application);
+        await this.opportunityParticipantRepository.save(application);
         return {
             success: true,
-            message: 'User rejected successfully'
+            message: 'Application rejected successfully'
         };
     }
 }

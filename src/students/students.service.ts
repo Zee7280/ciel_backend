@@ -94,34 +94,48 @@ export class StudentsService {
             order: { createdAt: 'DESC' },
         });
 
-        let applicationStatuses = new Map<string, string>();
+        let applicationStatuses = new Map<string, any>();
 
         if (userId && opportunities.length > 0) {
             const opportunityIds = opportunities.map(o => o.id);
             const applications = await this.opportunityParticipantsRepository
                 .createQueryBuilder('participant')
+                .leftJoinAndSelect('participant.teamMembers', 'teamMembers')
                 .where('participant.studentId = :userId', { userId })
                 .andWhere('participant.opportunityId IN (:...opportunityIds)', { opportunityIds })
                 .getMany();
 
             applications.forEach(app => {
-                applicationStatuses.set(app.opportunityId, app.status);
+                applicationStatuses.set(app.opportunityId, app);
             });
         }
 
         return {
             success: true,
-            data: opportunities.map(o => ({
-                id: o.id,
-                title: o.title,
-                organization: o.organization?.name || 'Unknown',
-                sdg: o.sdg,
-                location: o.location?.city || 'Unknown',
-                volunteersNeeded: o.timeline?.volunteers_required || 0,
-                description: o.objectives?.description?.substring(0, 150) || 'No description',
-                application_status: applicationStatuses.get(o.id) || null,
-                status: applicationStatuses.has(o.id) ? 'applied' : o.status,
-            })),
+            data: opportunities.map(o => {
+                const app = applicationStatuses.get(o.id);
+                return {
+                    id: o.id,
+                    title: o.title,
+                    organization: o.organization?.name || 'Unknown',
+                    sdg: o.sdg,
+                    location: o.location?.city || 'Unknown',
+                    volunteersNeeded: o.timeline?.volunteers_required || 0,
+                    description: o.objectives?.description?.substring(0, 150) || 'No description',
+                    application_status: app ? app.status : null,
+                    // Map status for frontend buttons. "active" is required for "Submit Report".
+                    status: (app && (app.status === 'approved' || app.status === 'verified')) ? 'active' : (app ? 'applied' : o.status),
+                    teamMembers: app?.teamMembers?.map(member => ({
+                        name: member.name,
+                        role: member.role,
+                        cnic: member.cnic,
+                        email: member.email,
+                        mobile: member.mobile,
+                        university: member.university,
+                        is_verified: member.is_verified
+                    })) || []
+                };
+            }),
             pagination: {
                 total,
                 page: parseInt(page),
@@ -168,9 +182,27 @@ export class StudentsService {
             order: { createdAt: 'DESC' },
         });
 
+        const formattedProjects = applications.map(app => ({
+            id: app.opportunity.id, // Opportunity ID needed for frontend links
+            title: app.opportunity.title,
+            organization: app.opportunity.organization?.name || 'Unknown',
+            description: app.opportunity.objectives?.description,
+            // Map status for frontend buttons. "active" is required for "Submit Report".
+            status: (app.status === 'approved' || app.status === 'verified') ? 'active' : app.status,
+            teamMembers: app.teamMembers?.map(member => ({
+                name: member.name,
+                role: member.role,
+                cnic: member.cnic,
+                email: member.email,
+                mobile: member.mobile,
+                university: member.university,
+                is_verified: member.is_verified
+            })) || []
+        }));
+
         return {
             success: true,
-            data: applications,
+            data: formattedProjects,
         };
     }
 

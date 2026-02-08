@@ -10,10 +10,12 @@ import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { AuditLog } from '../audit-logs/entities/audit-log.entity';
 import { Setting } from '../settings/entities/setting.entity';
 
+import { OpportunityParticipant } from '../opportunities/entities/opportunity-participant.entity';
+
 @Module({
     imports: [
         UsersModule,
-        TypeOrmModule.forFeature([User, Opportunity, Report, Timesheet, AuditLog, Setting]),
+        TypeOrmModule.forFeature([User, Opportunity, Report, Timesheet, AuditLog, Setting, OpportunityParticipant]),
     ],
     controllers: [AdminController],
     providers: [AdminService],

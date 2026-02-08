@@ -11,9 +11,15 @@ async function bootstrap() {
 
   // Enable CORS
   app.enableCors({
-    origin: process.env.FRONTEND_URL || 'http://localhost:3001',
+    origin: [
+      'http://localhost:3001',
+      'http://localhost:3000',
+      'https://ciel-frontend-gamma.vercel.app',
+      process.env.FRONTEND_URL || ''
+    ].filter(url => url !== ''),
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
+    allowedHeaders: ['Content-Type', 'Authorization'],
   });
 
   // Enable validation pipe

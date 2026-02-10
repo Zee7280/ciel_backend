@@ -15,6 +15,8 @@ async function bootstrap() {
       'http://localhost:3001',
       'http://localhost:3000',
       'https://ciel-frontend-gamma.vercel.app',
+      'https://cielpk.com',
+      'https://www.cielpk.com',
       process.env.FRONTEND_URL || ''
     ].filter(url => url !== ''),
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',

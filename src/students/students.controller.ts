@@ -22,21 +22,22 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { extname } from 'path';
 
-@Controller('student')
+@Controller('students')
 @UseGuards(JwtAuthGuard)
 export class StudentsController {
     constructor(private readonly studentsService: StudentsService) { }
 
-    // Dashboard
+    // Dashboard - Moving to StudentController below, but keeping here for backward compatibility if needed? 
+    // Actually, user specifically asked for /student/dashboard.
+    // I will remove it from here to avoid confusion or keep it as alias? 
+    // Let's keep it here mapped to 'dashboard' (so /students/dashboard works) AND create the new one.
     @Get('dashboard')
     getDashboard(@Request() req, @Query('studentId') studentId?: string) {
-        // If studentId is provided, check if user is admin or the student themselves
-        const targetId = studentId || req.user.id;
-        if (targetId !== req.user.id && req.user.role !== 'admin') {
-            throw new BadRequestException('Unauthorized to view this dashboard');
-        }
-        return this.studentsService.getDashboard(targetId);
+        return this.studentsService.getDashboard(studentId || req.user.id);
     }
+
+    // ... other methods ...
+
 
     // Opportunities
     @Get('opportunities')
@@ -170,5 +171,21 @@ export class StudentsController {
     @Put('settings')
     updateSettings(@Request() req, @Body() settings: any) {
         return this.studentsService.updateSettings(req.user.id, settings);
+    }
+}
+
+@Controller('student')
+@UseGuards(JwtAuthGuard)
+export class StudentController {
+    constructor(private readonly studentsService: StudentsService) { }
+
+    @Get('dashboard')
+    getDashboard(@Request() req, @Query('studentId') studentId?: string) {
+        // If studentId is provided, check if user is admin or the student themselves
+        const targetId = studentId || req.user.id;
+        if (targetId !== req.user.id && req.user.role !== 'admin') {
+            throw new BadRequestException('Unauthorized to view this dashboard');
+        }
+        return this.studentsService.getDashboard(targetId);
     }
 }

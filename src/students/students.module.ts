@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { StudentsController } from './students.controller';
+import { StudentsController, StudentController } from './students.controller';
 import { StudentsService } from './students.service';
 import { User } from '../users/entities/user.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
@@ -13,7 +13,7 @@ import { StudentReportsController } from './student-reports.controller';
 
 @Module({
     imports: [TypeOrmModule.forFeature([User, Opportunity, Timesheet, OpportunityParticipant, OpportunityTeamMember, StudentReport])],
-    controllers: [StudentsController, StudentReportsController],
+    controllers: [StudentsController, StudentReportsController, StudentController],
     providers: [StudentsService, StudentReportsService],
     exports: [StudentsService],
 })

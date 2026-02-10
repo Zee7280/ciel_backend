@@ -27,47 +27,103 @@ export class StudentsService {
     ) { }
 
     // Dashboard
+    // Dashboard
     async getDashboard(userId: string) {
-        const timesheets = await this.timesheetsRepository.find({
-            where: { studentId: userId },
+        // 1. Fetch verified timesheets for stats
+        const verifiedTimesheets = await this.timesheetsRepository.find({
+            where: { studentId: userId, status: 'verified' },
             relations: ['opportunity'],
         });
 
-        const totalHours = timesheets
-            .filter(t => t.status === 'verified')
-            .reduce((sum, t) => sum + t.hours, 0);
+        // Calculate Stats
+        const hoursVolunteered = verifiedTimesheets.reduce((sum, t) => sum + t.hours, 0);
+        const projectsCompleted = new Set(verifiedTimesheets.map(t => t.opportunityId)).size;
+        // Mock impact points calculation: 10 points per hour
+        const impactPoints = hoursVolunteered * 10;
 
-        const activeOpportunities = new Set(
-            timesheets
-                .filter(t => t.status !== 'rejected')
-                .map(t => t.opportunityId)
-        ).size;
+        // 2. Fetch Active Projects (using OpportunityParticipants)
+        // Active means status is approved/verified/joined, but not necessarily completed? 
+        // For this context, let's say "active" applications that are approved.
+        const activeApplications = await this.opportunityParticipantsRepository.find({
+            where: {
+                studentId: userId,
+                status: 'approved' // Assuming 'approved' means currently working on it
+            },
+            relations: ['opportunity', 'opportunity.organization'],
+            take: 5 // Limit to 5 active
+        });
 
-        const completedOpportunities = new Set(
-            timesheets
-                .filter(t => t.status === 'verified')
-                .map(t => t.opportunityId)
-        ).size;
+        const activeCourses = activeApplications.length;
+
+        const activeProjects = activeApplications.map(app => {
+            // Calculate progress based on hours logged vs required
+            // This is an estimation. 
+            const required = app.opportunity.timeline?.expected_hours || 0;
+            // Get hours for this specific opportunity
+            // We need to fetch timesheets for these specific opportunities to calc progress correctly, 
+            // or we can do a separate query. For efficiency, let's just query all timesheets for this user 
+            // once if possible, or just query here.
+            // Let's rely on a separate quick count or similar if needed, 
+            // but for now let's set progress to 0 if no timesheets found in the loaded verified set.
+            const hoursDone = verifiedTimesheets
+                .filter(t => t.opportunityId === app.opportunityId)
+                .reduce((sum, t) => sum + t.hours, 0);
+
+            let progress = 0;
+            if (required > 0) {
+                progress = Math.min(100, Math.round((hoursDone / required) * 100));
+            }
+
+            return {
+                id: app.opportunity.id,
+                title: app.opportunity.title,
+                category: app.opportunity.sdg_info?.sdg_id || 'General', // Fallback to SDG or verify category field
+                assignedAt: app.createdAt.toISOString(),
+                status: 'In Progress', // Mapped from app.status
+                progress: progress
+            };
+        });
+
+        // 3. Deadlines
+        // Mock logic: deadlines are opportunity end dates
+        const deadLinesRaw = activeApplications
+            .filter(app => app.opportunity.timeline?.end_date)
+            .map(app => ({
+                id: app.opportunity.id,
+                title: `${app.opportunity.title} Deadline`,
+                date: new Date(app.opportunity.timeline.end_date),
+                type: 'info' // Default
+            }))
+            .sort((a, b) => a.date.getTime() - b.date.getTime())
+            .slice(0, 3); // Top 3
+
+        const deadlines = deadLinesRaw.map(d => {
+            const now = new Date();
+            const diffDays = Math.ceil((d.date.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+            let type = 'info';
+            if (diffDays <= 3) type = 'urgent';
+            else if (diffDays <= 7) type = 'warning';
+
+            return {
+                id: d.id,
+                title: d.title,
+                date: d.date.toISOString(),
+                type
+            };
+        });
 
         return {
             success: true,
             data: {
                 stats: {
-                    totalHours,
-                    activeOpportunities,
-                    completedOpportunities,
-                    impactScore: totalHours * 10, // Simple calculation
+                    activeCourses,
+                    impactPoints,
+                    projectsCompleted,
+                    hoursVolunteered
                 },
-                recentActivities: timesheets.slice(0, 5).map(t => ({
-                    id: t.id,
-                    type: 'timesheet',
-                    title: t.opportunity?.title || 'Unknown',
-                    hours: t.hours,
-                    status: t.status,
-                    date: t.createdAt,
-                })),
-                upcomingOpportunities: [], // Can be enhanced
-            },
+                activeProjects,
+                deadlines
+            }
         };
     }
 

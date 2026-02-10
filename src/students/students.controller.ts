@@ -22,15 +22,20 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { extname } from 'path';
 
-@Controller('students')
+@Controller('student')
 @UseGuards(JwtAuthGuard)
 export class StudentsController {
     constructor(private readonly studentsService: StudentsService) { }
 
     // Dashboard
     @Get('dashboard')
-    getDashboard(@Request() req) {
-        return this.studentsService.getDashboard(req.user.id);
+    getDashboard(@Request() req, @Query('studentId') studentId?: string) {
+        // If studentId is provided, check if user is admin or the student themselves
+        const targetId = studentId || req.user.id;
+        if (targetId !== req.user.id && req.user.role !== 'admin') {
+            throw new BadRequestException('Unauthorized to view this dashboard');
+        }
+        return this.studentsService.getDashboard(targetId);
     }
 
     // Opportunities

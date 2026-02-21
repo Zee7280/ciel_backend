@@ -23,7 +23,7 @@ export class ProfileController {
         if (avatar) updateData.avatar = avatar;
 
         const updatedUser = await this.usersService.update(req.user.id, updateData);
-        return { success: true, data: updatedUser };
+        return { success: true, data: this.usersService.formatUserResponse(updatedUser) };
     }
 
     @Post('change-password')

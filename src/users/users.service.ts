@@ -21,6 +21,45 @@ export class UsersService {
         return this.usersRepository.save(user);
     }
 
+    formatUserResponse(user: User) {
+        let roleTitle: string = user.role;
+        // Simple mapping based on known roles
+        if (user.role === UserRole.SUPER_ADMIN) roleTitle = 'Super Admin';
+        else if (user.role === UserRole.STUDENT) roleTitle = 'Student'; // Capitalized for consistency
+        else if (user.role === UserRole.ORGANIZATION_ADMIN) roleTitle = 'Organization Admin';
+        else if (user.role === UserRole.FACULTY) roleTitle = 'Faculty';
+        else if (user.role === UserRole.UNIVERSITY) roleTitle = 'University';
+        else if (user.role === UserRole.NGO) roleTitle = 'NGO';
+        else if (user.role === UserRole.CORPORATE) roleTitle = 'Corporate';
+
+        return {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            role: user.role, // Raw role for logic
+            roleTitle: roleTitle, // Display role
+            type: user.role, // keeping for backward compatibility if frontend uses it
+            avatar: user.avatar,
+            phone: user.phone,
+            city: user.city,
+            institution: user.institution,
+            department: user.department,
+            university: user.university,
+            major: user.major,
+            bio: user.bio,
+            interests: user.interests,
+            sdgPreferences: user.sdgPreferences,
+            notifications_count: 5, // Mock/Placeholder
+            organizationId: user.organization?.id,
+            orgName: user.orgName,
+            orgType: user.orgType,
+            contactPerson: user.contactPerson,
+            cnic: user.cnic,
+            countryCode: user.countryCode,
+            joinedDate: user.createdAt
+        };
+    }
+
     async updateGenericProfile(userId: string, dto: any) {
         const user = await this.usersRepository.findOne({ where: { id: userId } });
         if (!user) {
@@ -28,9 +67,6 @@ export class UsersService {
         }
 
         // Filter and map fields
-        // Allow updating: name, institution, city, phone, bio, avatar
-        // (And others if safe, but let's stick to safe list or just assign safe ones)
-
         if (dto.name) user.name = dto.name;
         if (dto.institution) user.institution = dto.institution;
         if (dto.city) user.city = dto.city;
@@ -44,19 +80,7 @@ export class UsersService {
         return {
             success: true,
             message: 'Profile updated successfully!',
-            data: {
-                id: updatedUser.id,
-                name: updatedUser.name,
-                email: updatedUser.email,
-                role: updatedUser.role,
-                institution: updatedUser.institution,
-                city: updatedUser.city,
-                contact: updatedUser.phone, // Return as 'contact' for consistency if frontend expects it
-                phone: updatedUser.phone,
-                bio: updatedUser.bio,
-                image: updatedUser.avatar, // Return as 'image' for consistency
-                avatar: updatedUser.avatar
-            }
+            data: this.formatUserResponse(updatedUser)
         };
     }
 
@@ -69,7 +93,7 @@ export class UsersService {
     }
 
     async findOne(id: string): Promise<User | null> {
-        return this.usersRepository.findOne({ where: { id } });
+        return this.usersRepository.findOne({ where: { id }, relations: ['organization'] });
     }
 
     async update(id: string, updateUserDto: any): Promise<User> {
@@ -99,35 +123,9 @@ export class UsersService {
         }
         console.log('Found user role:', user.role);
 
-        let roleTitle: string = user.role;
-        // Simple mapping based on known roles
-        if (user.role === UserRole.SUPER_ADMIN) roleTitle = 'Super Admin';
-        else if (user.role === UserRole.STUDENT) roleTitle = 'student';
-        else if (user.role === UserRole.ORGANIZATION_ADMIN) roleTitle = 'Organization Admin';
-
-        else if (user.role === UserRole.FACULTY) roleTitle = 'Faculty';
-        else if (user.role === UserRole.UNIVERSITY) roleTitle = 'University';
-        else if (user.role === UserRole.NGO) roleTitle = 'NGO';
-        else if (user.role === UserRole.CORPORATE) roleTitle = 'Corporate';
-
         return {
             success: true,
-            data: {
-                id: user.id,
-                name: user.name,
-                email: user.email,
-                role: roleTitle,
-                type: user.role, // 'admin', 'student', 'org'
-                avatar_url: user.avatar,
-                phone: user.phone,
-                city: user.city,
-                university: user.university,
-                major: user.major,
-                bio: user.bio,
-                interests: user.interests,
-                sdgPreferences: user.sdgPreferences,
-                notifications_count: 5 // Mock/Placeholder
-            }
+            data: this.formatUserResponse(user)
         };
     }
 

@@ -42,18 +42,13 @@ export class AuthService {
                 password: hashedPassword,
                 organization: organization // Link the org
             });
+
             return {
+                success: true,
                 message: 'User created successfully',
-                user: {
-                    id: user.id,
-                    name: user.name,
-                    email: user.email,
-                    role: user.role,
-                    organizationId: organization?.id,
-                    phone: user.phone,
-                    cnic: user.cnic,
-                    countryCode: user.countryCode
-                },
+                data: {
+                    user: this.usersService.formatUserResponse(user)
+                }
             };
         } catch (error) {
             console.error('Signup error:', error);
@@ -88,21 +83,10 @@ export class AuthService {
         const expiresIn = loginDto.isMobile ? '30d' : '60m';
 
         return {
-            access_token: this.jwtService.sign(payload, { expiresIn }),
-            user: {
-                id: user.id,
-                name: user.name,
-                email: user.email,
-                role: user.role,
-                institution: user.institution,
-                department: user.department,
-                orgName: user.orgName,
-                orgType: user.orgType,
-                contactPerson: user.contactPerson,
-                phone: user.phone,
-                cnic: user.cnic,
-                countryCode: user.countryCode,
-                organizationId: user.organization?.id
+            success: true,
+            data: {
+                access_token: this.jwtService.sign(payload, { expiresIn }),
+                user: this.usersService.formatUserResponse(user)
             }
         };
     }

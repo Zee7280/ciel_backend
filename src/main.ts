@@ -14,6 +14,7 @@ async function bootstrap() {
     origin: [
       'http://localhost:3001',
       'http://localhost:3000',
+      'http://localhost:3002',
       'https://ciel-frontend-gamma.vercel.app',
       'https://cielpk.com',
       'https://www.cielpk.com',
@@ -42,6 +43,12 @@ async function bootstrap() {
     });
   }
 
-  await app.listen(process.env.PORT ?? 3000);
+  const portArgIndex = process.argv.indexOf('-port');
+  const portArgIndexLong = process.argv.indexOf('--port');
+  const index = portArgIndex !== -1 ? portArgIndex : portArgIndexLong;
+  const port = index !== -1 ? process.argv[index + 1] : (process.env.PORT ?? 3000);
+
+  await app.listen(port);
+  console.log(`Application is running on: ${await app.getUrl()}`);
 }
 bootstrap();

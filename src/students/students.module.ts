@@ -10,9 +10,13 @@ import { OpportunityTeamMember } from '../opportunities/entities/opportunity-tea
 import { StudentReport } from '../reports/entities/student-report.entity';
 import { StudentReportsService } from '../reports/student-reports.service';
 import { StudentReportsController } from './student-reports.controller';
+import { UsersModule } from '../users/users.module';
 
 @Module({
-    imports: [TypeOrmModule.forFeature([User, Opportunity, Timesheet, OpportunityParticipant, OpportunityTeamMember, StudentReport])],
+    imports: [
+        TypeOrmModule.forFeature([User, Opportunity, Timesheet, OpportunityParticipant, OpportunityTeamMember, StudentReport]),
+        UsersModule
+    ],
     controllers: [StudentsController, StudentReportsController, StudentController],
     providers: [StudentsService, StudentReportsService],
     exports: [StudentsService],

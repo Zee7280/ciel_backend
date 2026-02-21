@@ -9,7 +9,9 @@ import { LogHoursDto } from './dto/log-hours.dto';
 import { UpdateStudentProfileDto } from './dto/update-profile.dto';
 
 import { OpportunityParticipant } from '../opportunities/entities/opportunity-participant.entity';
+
 import { OpportunityTeamMember } from '../opportunities/entities/opportunity-team-member.entity';
+import { UsersService } from '../users/users.service';
 
 @Injectable()
 export class StudentsService {
@@ -22,8 +24,10 @@ export class StudentsService {
         private timesheetsRepository: Repository<Timesheet>,
         @InjectRepository(OpportunityParticipant)
         private opportunityParticipantsRepository: Repository<OpportunityParticipant>,
+
         @InjectRepository(OpportunityTeamMember)
         private opportunityTeamMembersRepository: Repository<OpportunityTeamMember>,
+        private usersService: UsersService,
     ) { }
 
     // Dashboard
@@ -585,20 +589,7 @@ export class StudentsService {
 
         return {
             success: true,
-            data: {
-                id: user.id,
-                name: user.name,
-                email: user.email,
-                phone: user.phone,
-                avatar: user.avatar,
-                role: user.role,
-                university: user.university,
-                major: user.major,
-                bio: user.bio,
-                interests: user.interests,
-                sdgPreferences: user.sdgPreferences,
-                joinedDate: user.createdAt,
-            },
+            data: this.usersService.formatUserResponse(user),
         };
     }
 
@@ -616,7 +607,7 @@ export class StudentsService {
 
         return {
             success: true,
-            data: user,
+            data: this.usersService.formatUserResponse(user),
         };
     }
 

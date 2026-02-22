@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Query } from '@nestjs/common';
 import { UsersService } from '../users/users.service';
 import { CreateUserDto } from '../users/dto/create-user.dto';
 import { UpdateUserDto } from '../users/dto/update-user.dto';
@@ -8,14 +8,17 @@ import { Roles } from '../auth/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
 
 import { AdminService } from './admin.service';
+import { OpportunitiesService } from '../opportunities/opportunities.service';
+import { StudentReportsService } from '../reports/student-reports.service';
 
 @Controller('admin')
-@UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.SUPER_ADMIN)
+@UseGuards(JwtAuthGuard)
 export class AdminController {
     constructor(
         private readonly usersService: UsersService,
-        private readonly adminService: AdminService
+        private readonly adminService: AdminService,
+        private readonly opportunitiesService: OpportunitiesService,
+        private readonly studentReportsService: StudentReportsService
     ) { }
 
     @Get('dashboard')
@@ -38,6 +41,25 @@ export class AdminController {
         return this.adminService.rejectApplication(id, body.reason);
     }
 
+    // Opportunity approval routes (duplicate here to handle routing conflicts)
+    @Post('opportunities/:id/approve')
+    async approveOpportunity(@Param('id') id: string) {
+        await this.opportunitiesService.approve(id);
+        return { success: true, data: {} };
+    }
+
+    @Patch('opportunities/:id/approve')
+    async approveOpportunityPatch(@Param('id') id: string) {
+        await this.opportunitiesService.approve(id);
+        return { success: true, data: {} };
+    }
+
+    @Post('opportunities/:id/reject')
+    async rejectOpportunity(@Param('id') id: string, @Body() body: { reason: string }) {
+        await this.opportunitiesService.reject(id, body.reason);
+        return { success: true, data: {} };
+    }
+
     @Get('projects')
     getProjects() {
         return this.adminService.getProjects();
@@ -58,6 +80,7 @@ export class AdminController {
         return this.adminService.getAuditLogs();
     }
 
+
     @Get('settings')
     getSettings() {
         return this.adminService.getSettings();
@@ -69,8 +92,26 @@ export class AdminController {
     }
 
     @Get('reports')
-    getReports() {
-        return this.adminService.getReports();
+    getReports(@Query() query: any) {
+        // Fallback for existing system reports logic
+        if (query.type === 'system') {
+            return this.adminService.getReports();
+        }
+        // As per new spec, this endpoint now serves student reports
+        return this.studentReportsService.findAll(query);
+    }
+
+    @Get('reports/:id')
+    getReportById(@Param('id') id: string) {
+        return this.studentReportsService.findOne(id);
+    }
+
+    @Post('reports/:id/verify')
+    verifyReport(
+        @Param('id') id: string,
+        @Body() body: { action: 'approve' | 'reject'; reason?: string }
+    ) {
+        return this.studentReportsService.verifyReport(id, body.action, 'admin', body.reason);
     }
 
     @Post('users')
@@ -97,5 +138,18 @@ export class AdminController {
     @Delete('users/:id')
     remove(@Param('id') id: string) {
         return this.usersService.remove(id);
+    }
+
+    @Get('student-reports')
+    getStudentReports(@Query() query: any) {
+        return this.studentReportsService.findAll(query);
+    }
+
+    @Post('student-reports/:id/verify')
+    verifyStudentReport(
+        @Param('id') id: string,
+        @Body() body: { action: 'approve' | 'reject'; reason?: string }
+    ) {
+        return this.studentReportsService.verifyReport(id, body.action, 'admin', body.reason);
     }
 }

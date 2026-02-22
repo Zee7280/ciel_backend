@@ -19,10 +19,15 @@ export class OrganizationsController {
     }
 
     @Post('profile/detail')
-    getDetail(@Request() req, @Body('userId') userId: string) {
+    getDetail(@Request() req, @Body() body: any) {
         // Use passed userId or fallback to logged-in user
-        const targetUserId = userId || req.user.id;
+        const targetUserId = body?.userId || req.user.id;
         return this.organizationsService.getMyOrganization(targetUserId);
+    }
+
+    @Get('profile/detail')
+    getDetailGet(@Request() req) {
+        return this.organizationsService.getMyOrganization(req.user.id);
     }
 
     @Post('profile/acknowledge')

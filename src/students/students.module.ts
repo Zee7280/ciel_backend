@@ -19,6 +19,6 @@ import { UsersModule } from '../users/users.module';
     ],
     controllers: [StudentsController, StudentReportsController, StudentController],
     providers: [StudentsService, StudentReportsService],
-    exports: [StudentsService],
+    exports: [StudentsService, StudentReportsService],
 })
 export class StudentsModule { }

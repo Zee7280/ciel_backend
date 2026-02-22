@@ -113,17 +113,23 @@ export class StudentReportsService {
     }
 
     async findAll(query: any) {
-        const { status, page = 1, limit = 10 } = query;
+        const { status, organizationId, studentId, page = 1, limit = 10 } = query;
         const skip = (page - 1) * limit;
 
         const whereClause: any = {};
         if (status) {
             whereClause.status = status;
         }
+        if (organizationId) {
+            whereClause.opportunity = { organizationId };
+        }
+        if (studentId) {
+            whereClause.studentId = studentId;
+        }
 
         const [reports, total] = await this.studentReportsRepository.findAndCount({
             where: whereClause,
-            relations: ['student', 'opportunity'],
+            relations: ['student', 'opportunity', 'opportunity.organization'],
             skip,
             take: limit,
             order: { submission_date: 'DESC' },
@@ -136,7 +142,10 @@ export class StudentReportsService {
                 student_name: r.student?.name || 'Unknown',
                 student_email: r.student?.email || 'Unknown',
                 project_title: r.opportunity?.title || r.project_id,
+                organization_name: r.opportunity?.organization?.name || 'N/A',
                 status: r.status,
+                partner_status: r.partner_status,
+                admin_status: r.admin_status,
                 submission_date: r.submission_date,
                 created_at: r.createdAt,
             })),
@@ -159,6 +168,69 @@ export class StudentReportsService {
             throw new NotFoundException('Report not found');
         }
 
+        return this.formatReportResponse(report);
+    }
+
+    async findOneByOpportunityOrId(id: string, studentId: string) {
+        console.log(`[StudentReportsService] findOneByOpportunityOrId search started:`);
+        console.log(`  - Target ID (URL): ${id}`);
+        console.log(`  - Student ID (from JWT): ${studentId}`);
+
+        // Try finding by primary key (Report ID) first
+        let report = await this.studentReportsRepository.findOne({
+            where: { id, studentId },
+            relations: ['student', 'opportunity'],
+        });
+
+        if (report) {
+            console.log(`  - Match found by Primary Key (Report ID)`);
+        }
+
+        // If not found, try finding by opportunityId or project_id
+        if (!report) {
+            console.log(`  - Not found by Report ID. Searching by opportunityId or project_id...`);
+            report = await this.studentReportsRepository.findOne({
+                where: [
+                    { opportunityId: id, studentId },
+                    { project_id: id, studentId }
+                ],
+                relations: ['student', 'opportunity'],
+                order: { createdAt: 'DESC' }
+            });
+        }
+
+        if (report) {
+            console.log(`  - Match found by Opportunity/Project ID`);
+        }
+
+        if (!report) {
+            console.log(`  - Still not found for student ${studentId}. Checking existence for ANY student...`);
+            // Check if it exists at all for any student (for debugging)
+            const existsAny = await this.studentReportsRepository.findOne({
+                where: [
+                    { id },
+                    { opportunityId: id },
+                    { project_id: id }
+                ]
+            });
+
+            if (existsAny) {
+                console.warn(`  - WARNING: Report exists but belongs to a DIFFERENT student! Returning null so this student can create their own.`);
+            } else {
+                console.warn(`  - INFO: No report exists anywhere in the DB matching ID ${id}. Returning null for new creation.`);
+            }
+
+            // Return gracefully instead of 404 so frontend can show "Create Report" UI
+            return {
+                success: true,
+                data: null
+            };
+        }
+
+        return this.formatReportResponse(report);
+    }
+
+    private formatReportResponse(report: StudentReport) {
         return {
             success: true,
             data: {
@@ -173,7 +245,10 @@ export class StudentReportsService {
                     title: report.opportunity?.title,
                 },
                 project_id: report.project_id,
+                opportunityId: report.opportunityId,
                 status: report.status,
+                partner_status: report.partner_status,
+                admin_status: report.admin_status,
                 submission_date: report.submission_date,
                 section1: report.section1,
                 section2: report.section2,
@@ -191,28 +266,39 @@ export class StudentReportsService {
         };
     }
 
-    async verifyReport(id: string, action: 'approve' | 'reject', reason?: string) {
+    async verifyReport(id: string, action: 'approve' | 'reject', role: string = 'admin', reason?: string) {
         const report = await this.studentReportsRepository.findOne({ where: { id } });
 
         if (!report) {
             throw new NotFoundException('Report not found');
         }
 
-        if (action === 'approve') {
-            report.status = 'verified';
-        } else if (action === 'reject') {
+        if (action === 'reject') {
             report.status = 'rejected';
-            // You could add a rejection_reason field to the entity if needed
+            if (role === 'admin') report.admin_status = 'rejected';
+            if (role === 'partner') report.partner_status = 'rejected';
+        } else if (action === 'approve') {
+            if (role === 'partner') {
+                report.partner_status = 'approved';
+                report.status = 'partner_verified';
+            } else if (role === 'admin') {
+                report.admin_status = 'approved';
+                if (report.partner_status === 'approved') {
+                    report.status = 'verified';
+                }
+            }
         }
 
         await this.studentReportsRepository.save(report);
 
         return {
             success: true,
-            message: `Report ${action === 'approve' ? 'approved' : 'rejected'} successfully.`,
+            message: `Report ${action === 'approve' ? 'approved' : 'rejected'} by ${role} successfully.`,
             data: {
                 id: report.id,
                 status: report.status,
+                partner_status: report.partner_status,
+                admin_status: report.admin_status,
             },
         };
     }

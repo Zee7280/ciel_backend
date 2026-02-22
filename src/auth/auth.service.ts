@@ -1,9 +1,10 @@
-import { Injectable, UnauthorizedException, ConflictException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, ConflictException, BadRequestException, NotFoundException } from '@nestjs/common';
 import { UsersService } from '../users/users.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { Organization } from '../organizations/entities/organization.entity';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
 import { SignupDto } from './dto/signup.dto';
 import { LoginDto } from './dto/login.dto';
 
@@ -89,5 +90,49 @@ export class AuthService {
                 user: this.usersService.formatUserResponse(user)
             }
         };
+    }
+
+    async forgotPassword(email: string) {
+        const user = await this.usersService.findByEmail(email);
+
+        // Always return success to prevent email enumeration
+        if (!user) {
+            return { success: true, message: 'If an account with that email exists, a reset link has been sent.' };
+        }
+
+        // Generate a secure random token
+        const resetToken = crypto.randomBytes(32).toString('hex');
+        const expiry = new Date();
+        expiry.setHours(expiry.getHours() + 1); // Token valid for 1 hour
+
+        // Save token and expiry to the user
+        await this.usersService.savePasswordResetToken(user.id, resetToken, expiry);
+
+        // In a real app, send this via email. For now, return it in the response for testing.
+        return {
+            success: true,
+            message: 'Password reset token generated. In production, this would be sent via email.',
+            data: {
+                resetToken, // Remove this in production; send via email instead
+                expiresAt: expiry
+            }
+        };
+    }
+
+    async resetPassword(token: string, newPassword: string) {
+        const user = await this.usersService.findByResetToken(token);
+
+        if (!user) {
+            throw new BadRequestException('Invalid or expired reset token');
+        }
+
+        if (!user.passwordResetExpiry || new Date() > user.passwordResetExpiry) {
+            throw new BadRequestException('Reset token has expired. Please request a new one.');
+        }
+
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+        await this.usersService.updatePassword(user.id, hashedPassword);
+
+        return { success: true, message: 'Password has been reset successfully. Please login with your new password.' };
     }
 }

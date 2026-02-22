@@ -1,45 +1,62 @@
-import { Controller, Get, Post, Body, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, UseGuards, Patch } from '@nestjs/common';
 import { OpportunitiesService } from './opportunities.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-// Import AdminGuard if it exists, for now assumed JwtAuthGuard is enough or add Role check
-
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
+import { UsersService } from '../users/users.service';
 
 @Controller('admin/opportunities')
-@UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.SUPER_ADMIN)
+@UseGuards(JwtAuthGuard)
 export class AdminOpportunitiesController {
-    constructor(private readonly opportunitiesService: OpportunitiesService) { }
+    constructor(
+        private readonly opportunitiesService: OpportunitiesService,
+        private readonly usersService: UsersService
+    ) { }
 
     @Get('pending')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.SUPER_ADMIN)
     async findAllPending() {
         const opps = await this.opportunitiesService.findAllPending();
+
+        const data = await Promise.all(opps.map(async (opp) => {
+            let primaryContactId: string | null = null;
+            if (opp.organizationId) {
+                const primaryUser = await this.usersService.findOrganizationPrimaryUser(opp.organizationId);
+                primaryContactId = primaryUser?.id || null;
+            }
+
+            return {
+                ...opp,
+                partner_name: opp.organization?.name,
+                submitted_at: opp.createdAt,
+                primary_contact_id: primaryContactId
+            };
+        }));
+
         return {
             success: true,
-            data: opps.map(opp => ({
-                id: opp.id,
-                partner_name: opp.organization?.name,
-                title: opp.title,
-                types: opp.types || [],
-                submitted_at: opp.createdAt,
-                status: opp.status
-            }))
+            data
         };
     }
 
-    @UseGuards(JwtAuthGuard)
     @Post(':id/approve')
     async approve(@Param('id') id: string) {
         await this.opportunitiesService.approve(id);
         return { success: true, data: {} };
     }
 
-    @UseGuards(JwtAuthGuard)
+    @Patch(':id/approve')
+    async approvePatch(@Param('id') id: string) {
+        await this.opportunitiesService.approve(id);
+        return { success: true, data: {} };
+    }
+
     @Post(':id/reject')
     async reject(@Param('id') id: string, @Body() body: { reason: string }) {
         await this.opportunitiesService.reject(id, body.reason);
         return { success: true, data: {} };
     }
 }
+

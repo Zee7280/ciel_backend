@@ -152,4 +152,31 @@ export class UsersService {
 
         return { success: true, message: 'Password changed successfully' };
     }
+    async findOrganizationPrimaryUser(organizationId: string): Promise<User | null> {
+        return this.usersRepository.findOne({
+            where: { organization: { id: organizationId } },
+            order: { createdAt: 'ASC' }
+        });
+    }
+
+    async savePasswordResetToken(userId: string, token: string, expiry: Date): Promise<void> {
+        await this.usersRepository.update(userId, {
+            passwordResetToken: token,
+            passwordResetExpiry: expiry
+        });
+    }
+
+    async findByResetToken(token: string): Promise<User | null> {
+        return this.usersRepository.findOne({
+            where: { passwordResetToken: token }
+        });
+    }
+
+    async updatePassword(userId: string, hashedPassword: string): Promise<void> {
+        await this.usersRepository.update(userId, {
+            password: hashedPassword,
+            passwordResetToken: undefined,
+            passwordResetExpiry: undefined
+        });
+    }
 }

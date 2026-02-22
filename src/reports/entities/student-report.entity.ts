@@ -28,12 +28,19 @@ export class StudentReport {
     submission_date: Date;
 
     @Column({ default: 'draft' })
-    status: string; // 'draft', 'submitted', 'verified', 'rejected'
+    status: string; // 'draft', 'submitted', 'partner_verified', 'verified', 'rejected'
+
+    @Column({ default: 'pending' })
+    partner_status: string; // 'pending', 'approved', 'rejected'
+
+    @Column({ default: 'pending' })
+    admin_status: string; // 'pending', 'approved', 'rejected'
 
     // Section 1: Context
     @Column({ type: 'jsonb', nullable: true })
     section1: {
         problem_statement: string;
+        privacy_consent: boolean;
     };
 
     // Section 2: Team

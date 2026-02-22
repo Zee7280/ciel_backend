@@ -82,4 +82,10 @@ export class User {
 
     @Column({ type: 'json', nullable: true })
     settings: any;
+
+    @Column({ nullable: true })
+    passwordResetToken: string;
+
+    @Column({ nullable: true })
+    passwordResetExpiry: Date;
 }

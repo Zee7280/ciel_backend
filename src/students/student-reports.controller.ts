@@ -100,12 +100,14 @@ export class StudentReportsController {
 
     @Patch(':id/verify')
     async verifyReport(
+        @Request() req,
         @Param('id') id: string,
         @Body() body: { action: 'approve' | 'reject'; reason?: string }
     ) {
         return await this.studentReportsService.verifyReport(
             id,
             body.action,
+            req.user.role,
             body.reason
         );
     }

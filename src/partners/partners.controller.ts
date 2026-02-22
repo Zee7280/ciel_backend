@@ -12,6 +12,7 @@ import { UpdateReportDto } from '../reports/dto/update-report.dto';
 import { OpportunitiesService } from '../opportunities/opportunities.service';
 import { GetApplicantsDto } from './dto/get-applicants.dto';
 import { UpdateApplicantDto } from './dto/update-applicant.dto';
+import { StudentReportsService } from '../reports/student-reports.service';
 
 @Controller('partners')
 @UseGuards(JwtAuthGuard)
@@ -21,6 +22,7 @@ export class PartnersController {
         private readonly organizationsService: OrganizationsService,
         private readonly reportsService: ReportsService,
         private readonly opportunitiesService: OpportunitiesService,
+        private readonly studentReportsService: StudentReportsService,
     ) { }
 
     @Get('me')
@@ -186,6 +188,81 @@ export class PartnersController {
     }
 
     // Update Applicant Status
+    @Post('opportunities/applicants/update')
+    async updateApplicantStatus(@Request() req, @Body() dto: UpdateApplicantDto) {
+        if (!req.user.organizationId) {
+            throw new BadRequestException('User is not linked to an organization');
+        }
+
+        return this.opportunitiesService.updateApplicantStatus(
+            dto.applicantId,
+            dto.status,
+            req.user.organizationId
+        );
+    }
+
+    @Get('student-reports')
+    getStudentReports(@Request() req, @Query() query: any) {
+        return this.studentReportsService.findAll({
+            ...query,
+            organizationId: req.user.organizationId
+        });
+    }
+
+    @Post('student-reports/:id/verify')
+    verifyStudentReport(
+        @Request() req,
+        @Param('id') id: string,
+        @Body() body: { action: 'approve' | 'reject'; reason?: string }
+    ) {
+        return this.studentReportsService.verifyReport(id, body.action, 'partner', body.reason);
+    }
+}
+
+// Explicit alias controller for singular /partner routes
+@Controller('partner')
+@UseGuards(JwtAuthGuard)
+export class PartnerAliasController {
+    constructor(
+        private readonly studentReportsService: StudentReportsService,
+        private readonly opportunitiesService: OpportunitiesService
+    ) { }
+
+    @Get('reports')
+    getReports(@Request() req, @Query() query: any) {
+        return this.studentReportsService.findAll({
+            ...query,
+            organizationId: req.user.organizationId
+        });
+    }
+
+    @Get('reports/:id')
+    getReportById(@Param('id') id: string) {
+        return this.studentReportsService.findOne(id);
+    }
+
+    @Post('reports/:id/verify')
+    verifyReport(
+        @Request() req,
+        @Param('id') id: string,
+        @Body() body: { action: 'approve' | 'reject'; reason?: string }
+    ) {
+        return this.studentReportsService.verifyReport(id, body.action, 'partner', body.reason);
+    }
+
+    @Post('opportunities/applicants')
+    async getApplicants(@Request() req, @Body() dto: GetApplicantsDto) {
+        if (!req.user.organizationId) {
+            throw new BadRequestException('User is not linked to an organization');
+        }
+
+        const applicants = await this.opportunitiesService.getApplicantsForOpportunity(
+            dto.id,
+            req.user.organizationId
+        );
+        return { success: true, data: applicants };
+    }
+
     @Post('opportunities/applicants/update')
     async updateApplicantStatus(@Request() req, @Body() dto: UpdateApplicantDto) {
         if (!req.user.organizationId) {

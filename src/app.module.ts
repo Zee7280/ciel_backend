@@ -16,6 +16,7 @@ import { ReportsModule } from './reports/reports.module';
 import { FundingModule } from './funding/funding.module';
 import { SettingsModule } from './settings/settings.module';
 import { Setting } from './settings/entities/setting.entity';
+import { ChatModule } from './chat/chat.module';
 
 @Module({
   imports: [
@@ -38,7 +39,7 @@ import { Setting } from './settings/entities/setting.entity';
         } : undefined),
         synchronize: true,
         autoLoadEntities: true,
-        logging: true,
+        logging: false,
       }),
       inject: [ConfigService],
     }),
@@ -54,6 +55,7 @@ import { Setting } from './settings/entities/setting.entity';
     FundingModule,
     NotificationsModule,
     SettingsModule,
+    ChatModule,
     TypeOrmModule.forFeature([Setting])
   ],
   controllers: [AppController],

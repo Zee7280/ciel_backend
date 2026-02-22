@@ -1,12 +1,13 @@
 import { Module } from '@nestjs/common';
-import { PartnersController } from './partners.controller';
+import { PartnersController, PartnerAliasController } from './partners.controller';
 import { UsersModule } from '../users/users.module';
 import { OrganizationsModule } from '../organizations/organizations.module';
 import { ReportsModule } from '../reports/reports.module';
 import { OpportunitiesModule } from '../opportunities/opportunities.module';
+import { StudentsModule } from '../students/students.module';
 
 @Module({
-    imports: [UsersModule, OrganizationsModule, ReportsModule, OpportunitiesModule],
-    controllers: [PartnersController],
+    imports: [UsersModule, OrganizationsModule, ReportsModule, OpportunitiesModule, StudentsModule],
+    controllers: [PartnersController, PartnerAliasController],
 })
 export class PartnersModule { }

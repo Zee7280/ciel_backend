@@ -83,10 +83,8 @@ export class OpportunitiesService {
         // Map to spec if needed, or return entity if it matches enough
         // Spec response: { id, title, status, location, dates, capacity, applicants_count }
         return opportunities.map(opp => ({
-            id: opp.id,
-            title: opp.title,
-            status: opp.status,
-            location: opp.location ? { city: opp.location.city } : null,
+            ...opp,
+            location: opp.location ? { ...opp.location, city: opp.location.city } : null,
             dates: opp.timeline ? { end: opp.timeline.end_date } : null,
             capacity: opp.timeline ? { volunteers: opp.timeline.volunteers_required } : null,
             applicants_count: 0 // Mocking for now, need applicants relation

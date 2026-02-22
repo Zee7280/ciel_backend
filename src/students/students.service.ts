@@ -175,13 +175,10 @@ export class StudentsService {
             data: opportunities.map(o => {
                 const app = applicationStatuses.get(o.id);
                 return {
-                    id: o.id,
-                    title: o.title,
+                    ...o,
                     organization: o.organization?.name || 'Unknown',
-                    sdg: o.sdg,
-                    location: o.location?.city || 'Unknown',
                     volunteersNeeded: o.timeline?.volunteers_required || 0,
-                    description: o.objectives?.description?.substring(0, 150) || 'No description',
+                    description: o.objectives?.description || 'No description',
                     application_status: app ? app.status : null,
                     // Map status for frontend buttons. "active" is required for "Submit Report".
                     status: (app && (app.status === 'approved' || app.status === 'verified')) ? 'active' : (app ? 'applied' : o.status),
@@ -204,7 +201,7 @@ export class StudentsService {
         };
     }
 
-    async getOpportunityById(id: string) {
+    async getOpportunityById(id: string, userId?: string) {
         const opportunity = await this.opportunitiesRepository.findOne({
             where: { id },
             relations: ['organization'],
@@ -214,9 +211,32 @@ export class StudentsService {
             throw new NotFoundException('Opportunity not found');
         }
 
+        let applicationStatus: string | null = null;
+        let hasApplied = false;
+
+        if (userId) {
+            const application = await this.opportunityParticipantsRepository.findOne({
+                where: {
+                    studentId: userId,
+                    opportunityId: id,
+                },
+            });
+
+            if (application) {
+                applicationStatus = application.status;
+                hasApplied = true;
+            }
+        }
+
         return {
             success: true,
-            data: opportunity,
+            data: {
+                ...opportunity,
+                application_status: applicationStatus,
+                hasApplied: hasApplied,
+                // Also map status for report button visibility
+                status: (applicationStatus === 'approved' || applicationStatus === 'verified') ? 'active' : (hasApplied ? 'applied' : opportunity.status)
+            },
         };
     }
 
@@ -263,6 +283,40 @@ export class StudentsService {
         return {
             success: true,
             data: formattedProjects,
+        };
+    }
+
+    async getProjectById(opportunityId: string) {
+        const opportunity = await this.opportunitiesRepository.findOne({
+            where: { id: opportunityId },
+            relations: ['organization'],
+        });
+
+        if (!opportunity) {
+            throw new NotFoundException(`Project with ID ${opportunityId} not found`);
+        }
+
+        return {
+            success: true,
+            data: {
+                id: opportunity.id,
+                title: opportunity.title,
+                organization: opportunity.organization?.name || 'Unknown',
+                organizationId: opportunity.organizationId,
+                logoUrl: opportunity.organization?.logoUrl || null,
+                status: opportunity.status,
+                mode: opportunity.mode,
+                types: opportunity.types,
+                location: opportunity.location,
+                timeline: opportunity.timeline,
+                sdg_info: opportunity.sdg_info,
+                objectives: opportunity.objectives,
+                activity_details: opportunity.activity_details,
+                supervision: opportunity.supervision,
+                verification_method: opportunity.verification_method,
+                createdAt: opportunity.createdAt,
+                updatedAt: opportunity.updatedAt,
+            }
         };
     }
 
@@ -414,6 +468,57 @@ export class StudentsService {
         return {
             success: true,
             data: timesheets,
+        };
+    }
+
+    async getReports(userId: string, organisationId: string) {
+        // Find all applications/participants for this user in opportunities from this organisation
+        const activeApplications = await this.opportunityParticipantsRepository.find({
+            where: {
+                studentId: userId,
+                opportunity: {
+                    organizationId: organisationId
+                }
+            },
+            relations: ['opportunity', 'opportunity.organization']
+        });
+
+        // Fetch verified timesheets for these opportunities
+        const verifiedTimesheets = await this.timesheetsRepository.find({
+            where: { studentId: userId, status: 'verified' },
+            relations: ['opportunity']
+        });
+
+        // Format data
+        const reports = activeApplications.map(app => {
+            const requiredHours = app.opportunity.timeline?.expected_hours || 0;
+            const hoursDone = verifiedTimesheets
+                .filter(t => t.opportunityId === app.opportunityId)
+                .reduce((sum, t) => sum + t.hours, 0);
+
+            // Determine report status based on hours
+            let reportStatus = 'Pending';
+            if (hoursDone >= requiredHours && requiredHours > 0) reportStatus = 'Completed';
+            else if (hoursDone > 0) reportStatus = 'In Progress';
+
+            return {
+                id: app.id,
+                opportunityId: app.opportunity.id,
+                projectName: app.opportunity.title,
+                startDate: app.createdAt,
+                endDate: app.opportunity.timeline?.end_date || null,
+                totalHours: hoursDone,
+                requiredHours: requiredHours,
+                status: reportStatus,
+                partnerName: app.opportunity.organization?.name || 'Unknown Partner',
+                partnerLogo: app.opportunity.organization?.logoUrl || null,
+                certificateUrl: null, // Logic for certificate can go here
+            };
+        });
+
+        return {
+            success: true,
+            data: reports
         };
     }
 

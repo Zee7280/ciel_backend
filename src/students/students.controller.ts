@@ -11,14 +11,16 @@ import {
     UseGuards,
     UseInterceptors,
     UploadedFile,
+    UploadedFiles,
     BadRequestException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { StudentsService } from './students.service';
+import { StudentReportsService } from '../reports/student-reports.service';
 import { ApplyOpportunityDto } from './dto/apply-opportunity.dto';
 import { LogHoursDto } from './dto/log-hours.dto';
 import { UpdateStudentProfileDto } from './dto/update-profile.dto';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { extname } from 'path';
 
@@ -40,6 +42,14 @@ export class StudentsController {
 
 
     // Opportunities
+    @Get('reports')
+    getReports(@Request() req, @Query('organisationId') organisationId: string) {
+        if (!organisationId) {
+            throw new BadRequestException('organisationId is required');
+        }
+        return this.studentsService.getReports(req.user.id, organisationId);
+    }
+
     @Get('opportunities')
     getOpportunities(@Request() req, @Query() query) {
         return this.studentsService.getOpportunities(query, req.user.id);
@@ -55,14 +65,19 @@ export class StudentsController {
         return this.studentsService.getStudentProjects(body.studentId);
     }
 
+    @Get('projects/:id')
+    getProjectById(@Param('id') id: string) {
+        return this.studentsService.getProjectById(id);
+    }
+
     @Get('opportunities/recommended')
     getRecommendedOpportunities(@Request() req) {
         return this.studentsService.getRecommendedOpportunities(req.user.id);
     }
 
     @Get('opportunities/:id')
-    getOpportunityById(@Param('id') id: string) {
-        return this.studentsService.getOpportunityById(id);
+    getOpportunityById(@Request() req, @Param('id') id: string) {
+        return this.studentsService.getOpportunityById(id, req.user.id);
     }
 
     // Applications
@@ -177,15 +192,111 @@ export class StudentsController {
 @Controller('student')
 @UseGuards(JwtAuthGuard)
 export class StudentController {
-    constructor(private readonly studentsService: StudentsService) { }
+    constructor(
+        private readonly studentsService: StudentsService,
+        private readonly studentReportsService: StudentReportsService
+    ) { }
 
     @Get('dashboard')
     getDashboard(@Request() req, @Query('studentId') studentId?: string) {
-        // If studentId is provided, check if user is admin or the student themselves
         const targetId = studentId || req.user.id;
         if (targetId !== req.user.id && req.user.role !== 'admin') {
             throw new BadRequestException('Unauthorized to view this dashboard');
         }
         return this.studentsService.getDashboard(targetId);
+    }
+
+    @Get('projects/:id')
+    getProjectById(@Param('id') id: string) {
+        return this.studentsService.getProjectById(id);
+    }
+
+    // ---- Reports aliases (frontend uses /student not /students) ----
+
+    @Get('reports')
+    getAllReports(@Request() req, @Query() query: any) {
+        return this.studentReportsService.findAll({ ...query, studentId: req.user.id });
+    }
+
+    @Get('reports/check')
+    checkReportStatus(@Query() query: { studentId: string; opportunityId?: string }) {
+        return this.studentReportsService.checkReportStatus(query.studentId, query.opportunityId);
+    }
+
+    @Get('reports/:id')
+    getReportById(@Request() req, @Param('id') id: string) {
+        console.log(`[StudentController] getReportById HIT! ID: ${id}, User: ${req.user.id}`);
+        return this.studentReportsService.findOneByOpportunityOrId(id, req.user.id);
+    }
+
+    @Post('reports')
+    @UseInterceptors(FilesInterceptor('files', 50, {
+        limits: { fileSize: 10 * 1024 * 1024 },
+        fileFilter: (req, file, callback) => {
+            const allowedExtensions = ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx'];
+            const ext = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
+            if (allowedExtensions.includes(ext)) {
+                callback(null, true);
+            } else {
+                callback(new BadRequestException(`File type ${ext} is not allowed`), false);
+            }
+        },
+    }))
+    async submitReport(@Request() req, @Body() body: any, @UploadedFiles() files: any[]) {
+        return this.studentReportsService.createReport(req.user.id, body, files);
+    }
+
+    @Post('reports/:id/submit')
+    @UseInterceptors(FilesInterceptor('files', 50, {
+        limits: { fileSize: 10 * 1024 * 1024 },
+        fileFilter: (req, file, callback) => {
+            const allowedExtensions = ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx'];
+            const ext = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
+            if (allowedExtensions.includes(ext)) {
+                callback(null, true);
+            } else {
+                callback(new BadRequestException(`File type ${ext} is not allowed`), false);
+            }
+        },
+    }))
+    async submitReportWithId(@Request() req, @Param('id') id: string, @Body() body: any, @UploadedFiles() files: any[]) {
+        // If opportunityId is not in body, use the one from URL
+        if (!body.opportunityId) body.opportunityId = id;
+        return this.studentReportsService.createReport(req.user.id, body, files);
+    }
+
+    @Post('reports/draft')
+    @UseInterceptors(FilesInterceptor('files', 50, {
+        limits: { fileSize: 10 * 1024 * 1024 },
+        fileFilter: (req, file, callback) => {
+            const allowedExtensions = ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx'];
+            const ext = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
+            if (allowedExtensions.includes(ext)) {
+                callback(null, true);
+            } else {
+                callback(new BadRequestException(`File type ${ext} is not allowed`), false);
+            }
+        },
+    }))
+    async saveDraft(@Request() req, @Body() body: any, @UploadedFiles() files: any[]) {
+        return this.studentReportsService.saveDraft(req.user.id, body, files);
+    }
+
+    @Post('reports/:id/draft')
+    @UseInterceptors(FilesInterceptor('files', 50, {
+        limits: { fileSize: 10 * 1024 * 1024 },
+        fileFilter: (req, file, callback) => {
+            const allowedExtensions = ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx'];
+            const ext = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
+            if (allowedExtensions.includes(ext)) {
+                callback(null, true);
+            } else {
+                callback(new BadRequestException(`File type ${ext} is not allowed`), false);
+            }
+        },
+    }))
+    async saveDraftWithId(@Request() req, @Param('id') id: string, @Body() body: any, @UploadedFiles() files: any[]) {
+        if (!body.opportunityId) body.opportunityId = id;
+        return this.studentReportsService.saveDraft(req.user.id, body, files);
     }
 }

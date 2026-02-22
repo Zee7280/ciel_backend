@@ -7,6 +7,7 @@ import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 import { SignupDto } from './dto/signup.dto';
 import { LoginDto } from './dto/login.dto';
+import { MailService } from '../mail/mail.service';
 
 @Injectable()
 export class AuthService {
@@ -14,6 +15,7 @@ export class AuthService {
         private usersService: UsersService,
         private jwtService: JwtService,
         private organizationsService: OrganizationsService,
+        private mailService: MailService,
     ) { }
 
     async signup(signupDto: SignupDto) {
@@ -43,6 +45,9 @@ export class AuthService {
                 password: hashedPassword,
                 organization: organization // Link the org
             });
+
+            // Send welcome email
+            await this.mailService.sendWelcomeEmail(user.email, user.name);
 
             return {
                 success: true,

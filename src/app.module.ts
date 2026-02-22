@@ -17,6 +17,7 @@ import { FundingModule } from './funding/funding.module';
 import { SettingsModule } from './settings/settings.module';
 import { Setting } from './settings/entities/setting.entity';
 import { ChatModule } from './chat/chat.module';
+import { MailModule } from './mail/mail.module';
 
 @Module({
   imports: [
@@ -56,6 +57,7 @@ import { ChatModule } from './chat/chat.module';
     NotificationsModule,
     SettingsModule,
     ChatModule,
+    MailModule,
     TypeOrmModule.forFeature([Setting])
   ],
   controllers: [AppController],

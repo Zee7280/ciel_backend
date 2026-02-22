@@ -12,22 +12,28 @@ export class CreateOpportunityDto {
     mode: string;
 
     @IsObject()
-    location: any;
+    @IsOptional()
+    location?: any;
 
     @IsObject()
-    timeline: any;
+    @IsOptional()
+    timeline?: any;
 
     @IsObject()
-    sdg_info: any;
+    @IsOptional()
+    sdg_info?: any;
 
     @IsObject()
-    objectives: any;
+    @IsOptional()
+    objectives?: any;
 
     @IsObject()
-    activity_details: any;
+    @IsOptional()
+    activity_details?: any;
 
     @IsObject()
-    supervision: any;
+    @IsOptional()
+    supervision?: any;
 
     @IsArray()
     @IsString({ each: true })

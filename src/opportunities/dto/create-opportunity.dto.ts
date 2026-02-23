@@ -23,6 +23,10 @@ export class CreateOpportunityDto {
     @IsOptional()
     sdg_info?: any;
 
+    @IsArray()
+    @IsOptional()
+    secondary_sdgs?: { sdg_id: string, target_id: string, indicator_id: string, justification: string }[];
+
     @IsObject()
     @IsOptional()
     objectives?: any;
@@ -72,6 +76,10 @@ export class UpdateOpportunityDto {
     @IsObject()
     @IsOptional()
     sdg_info?: any;
+
+    @IsArray()
+    @IsOptional()
+    secondary_sdgs?: { sdg_id: string, target_id: string, indicator_id: string, justification: string }[];
 
     @IsObject()
     @IsOptional()

@@ -25,6 +25,9 @@ export class Opportunity {
     sdg_info: any; // { sdg_id, target_id, indicator_id }
 
     @Column({ type: 'jsonb', nullable: true })
+    secondary_sdgs: any[]; // Array of { sdg_id, target_id, indicator_id, justification }
+
+    @Column({ type: 'jsonb', nullable: true })
     objectives: any; // { description, beneficiaries_count, beneficiaries_type }
 
     @Column({ type: 'jsonb', nullable: true })

@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { Opportunity } from './entities/opportunity.entity';
 import { OpportunityParticipant } from './entities/opportunity-participant.entity';
 import { CreateOpportunityDto, UpdateOpportunityDto } from './dto/create-opportunity.dto';
@@ -26,15 +26,21 @@ export class OpportunitiesService {
             ...createOpportunityDto,
             organizationId: org.id,
             status: 'pending_approval',
-            sdg: createOpportunityDto.sdg_info?.sdg_id || 'SDG', // Fallback
+            sdg: createOpportunityDto.sdg_info?.sdg_id || 'SDG', // Fallback for legacy
         });
 
         return this.opportunitiesRepository.save(opportunity);
     }
 
-    async update(userId: string, updateOpportunityDto: UpdateOpportunityDto) {
-        const org = await this.organizationsService.getMyOrganization(userId);
-        if (!org) {
+    async update(userId: string, updateOpportunityDto: UpdateOpportunityDto, organizationId?: string) {
+        let orgId = organizationId;
+
+        if (!orgId) {
+            const org = await this.organizationsService.getMyOrganization(userId);
+            orgId = org?.id;
+        }
+
+        if (!orgId) {
             throw new ForbiddenException('User must belong to an organization to update opportunities');
         }
 
@@ -43,8 +49,8 @@ export class OpportunitiesService {
             throw new NotFoundException('Opportunity not found');
         }
 
-        if (opportunity.organizationId !== org.id) {
-            console.log(`Access Denied: Org ID mismatch. UserOrg: ${org.id}, OpportunityOrg: ${opportunity.organizationId}`);
+        if (opportunity.organizationId !== orgId) {
+            console.log(`Access Denied: Org ID mismatch. UserOrg: ${orgId}, OpportunityOrg: ${opportunity.organizationId}`);
             throw new ForbiddenException('You do not have access to this opportunity');
         }
 
@@ -84,11 +90,48 @@ export class OpportunitiesService {
         // Spec response: { id, title, status, location, dates, capacity, applicants_count }
         return opportunities.map(opp => ({
             ...opp,
-            location: opp.location ? { ...opp.location, city: opp.location.city } : null,
+            location: opp.location,
+            start_date: opp.timeline?.start_date,
+            end_date: opp.timeline?.end_date,
             dates: opp.timeline ? { end: opp.timeline.end_date } : null,
             capacity: opp.timeline ? { volunteers: opp.timeline.volunteers_required } : null,
-            applicants_count: 0 // Mocking for now, need applicants relation
+            applicants_count: 0
         }));
+    }
+
+    async getPublicOpportunities() {
+        const opportunities = await this.opportunitiesRepository.find({
+            where: { status: In(['active', 'pending_approval']) },
+            relations: ['organization'],
+            order: { createdAt: 'DESC' }
+        });
+
+        // We need to count participants for each opportunity
+        const opportunitiesWithCounts = await Promise.all(opportunities.map(async (opp) => {
+            const count = await this.participantsRepository.count({
+                where: { opportunityId: opp.id, status: 'accepted' }
+            });
+
+            return {
+                id: opp.id,
+                title: opp.title,
+                description: opp.objectives?.description || '',
+                types: opp.types,
+                sdg_info: opp.sdg_info,
+                participant_count: count,
+                status: opp.status,
+                location: opp.location,
+                start_date: opp.timeline?.start_date,
+                end_date: opp.timeline?.end_date,
+                organization: {
+                    id: opp.organization?.id,
+                    name: opp.organization?.name,
+                    logo_url: opp.organization?.logoUrl
+                }
+            };
+        }));
+
+        return opportunitiesWithCounts;
     }
 
     async findOne(id: string) {

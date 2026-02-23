@@ -17,12 +17,18 @@ export class OpportunitiesController {
     @UseGuards(JwtAuthGuard)
     @Post('update')
     update(@Request() req, @Body() updateOpportunityDto: UpdateOpportunityDto) {
-        return this.opportunitiesService.update(req.user.id, updateOpportunityDto);
+        return this.opportunitiesService.update(req.user.id, updateOpportunityDto, req.user.organizationId);
+    }
+
+    @Get()
+    async findAll() {
+        const data = await this.opportunitiesService.getPublicOpportunities();
+        return { success: true, data };
     }
 
     @UseGuards(JwtAuthGuard)
-    @Get()
-    async findAll(@Request() req, @Query() query) {
+    @Get('mine')
+    async findAllAuthenticated(@Request() req, @Query() query) {
         const data = await this.opportunitiesService.findAll(req.user.id, query);
         return { success: true, data };
     }

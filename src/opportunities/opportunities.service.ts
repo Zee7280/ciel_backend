@@ -26,7 +26,7 @@ export class OpportunitiesService {
             ...createOpportunityDto,
             organizationId: org.id,
             status: 'pending_approval',
-            sdg: createOpportunityDto.sdg_info?.sdg_id || 'SDG', // Fallback for legacy
+            sdg: createOpportunityDto.sdg_info?.sdg_id || 'SDG', // Fallback
         });
 
         return this.opportunitiesRepository.save(opportunity);
@@ -132,6 +132,42 @@ export class OpportunitiesService {
         }));
 
         return opportunitiesWithCounts;
+    }
+
+    async getPublicOpportunityById(id: string) {
+        const opp = await this.opportunitiesRepository.findOne({
+            where: {
+                id,
+                status: In(['active', 'pending_approval'])
+            },
+            relations: ['organization']
+        });
+
+        if (!opp) {
+            throw new NotFoundException('Opportunity not found or not public');
+        }
+
+        const count = await this.participantsRepository.count({
+            where: { opportunityId: opp.id, status: 'accepted' }
+        });
+
+        return {
+            id: opp.id,
+            title: opp.title,
+            description: opp.objectives?.description || '',
+            types: opp.types,
+            sdg_info: opp.sdg_info,
+            participant_count: count,
+            status: opp.status,
+            location: opp.location,
+            start_date: opp.timeline?.start_date,
+            end_date: opp.timeline?.end_date,
+            organization: {
+                id: opp.organization?.id,
+                name: opp.organization?.name,
+                logo_url: opp.organization?.logoUrl
+            }
+        };
     }
 
     async findOne(id: string) {

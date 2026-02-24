@@ -8,11 +8,12 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 export class OpportunitiesController {
     constructor(private readonly opportunitiesService: OpportunitiesService) { }
 
-    @UseGuards(JwtAuthGuard)
     @Post()
+    @UseGuards(JwtAuthGuard)
     create(@Request() req, @Body() createOpportunityDto: CreateOpportunityDto) {
         return this.opportunitiesService.create(req.user.id, createOpportunityDto);
     }
+
 
     @UseGuards(JwtAuthGuard)
     @Post('update')
@@ -20,11 +21,6 @@ export class OpportunitiesController {
         return this.opportunitiesService.update(req.user.id, updateOpportunityDto, req.user.organizationId);
     }
 
-    @Get()
-    async findAll() {
-        const data = await this.opportunitiesService.getPublicOpportunities();
-        return { success: true, data };
-    }
 
     @UseGuards(JwtAuthGuard)
     @Get('mine')

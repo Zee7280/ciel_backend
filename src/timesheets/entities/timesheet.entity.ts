@@ -33,7 +33,7 @@ export class Timesheet {
     @Column({ nullable: true })
     studentId: string;
 
-    @ManyToOne(() => Opportunity, { nullable: true })
+    @ManyToOne(() => Opportunity, { nullable: true, onDelete: 'CASCADE' })
     @JoinColumn({ name: 'opportunityId' })
     opportunity: Opportunity;
 

@@ -11,7 +11,9 @@ import { UpdateStudentProfileDto } from './dto/update-profile.dto';
 import { OpportunityParticipant } from '../opportunities/entities/opportunity-participant.entity';
 
 import { OpportunityTeamMember } from '../opportunities/entities/opportunity-team-member.entity';
+import { Otp } from './entities/otp.entity';
 import { UsersService } from '../users/users.service';
+import { MailService } from '../mail/mail.service';
 
 @Injectable()
 export class StudentsService {
@@ -27,8 +29,59 @@ export class StudentsService {
 
         @InjectRepository(OpportunityTeamMember)
         private opportunityTeamMembersRepository: Repository<OpportunityTeamMember>,
+        @InjectRepository(Otp)
+        private otpRepository: Repository<Otp>,
         private usersService: UsersService,
+        private mailService: MailService,
     ) { }
+    // Verification
+    async sendTeamMemberOtp(email: string) {
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+
+        // Save OTP in DB with 10 mins expiry
+        const expiresAt = new Date(Date.now() + 600000);
+
+        // We can either update existing or create new. Given many requests might happen, 
+        // let's just create or update if already exists for this email.
+        let otpRecord = await this.otpRepository.findOne({ where: { email } });
+        if (otpRecord) {
+            otpRecord.otp = otp;
+            otpRecord.expiresAt = expiresAt;
+        } else {
+            otpRecord = this.otpRepository.create({ email, otp, expiresAt });
+        }
+
+        await this.otpRepository.save(otpRecord);
+        await this.mailService.sendTeamMemberOtp(email, otp);
+
+        return { success: true, message: 'OTP sent successfully' };
+    }
+
+    async confirmTeamMemberOtp(email: string, otp: string) {
+        const record = await this.otpRepository.findOne({
+            where: { email, otp }
+        });
+
+        if (!record) {
+            throw new BadRequestException('Invalid OTP');
+        }
+
+        if (record.expiresAt < new Date()) {
+            throw new BadRequestException('OTP has expired');
+        }
+
+        // Success! We can delete the OTP record now to prevent reuse
+        await this.otpRepository.remove(record);
+
+        return { success: true, message: 'Email verified' };
+    }
+
+    async sendTeamMemberVerification(email: string) {
+        // 1. You can check if the user is already registered (optional)
+        // 2. Call MailService to send the email
+        await this.mailService.sendTeamMemberInvite(email);
+        return { success: true, message: 'Verification email sent' };
+    }
 
     // Dashboard
     // Dashboard
@@ -131,7 +184,6 @@ export class StudentsService {
         };
     }
 
-    // Opportunities
     async getOpportunities(query: any, userId?: string) {
         const { sdg, location, type, status, page = 1, limit = 10 } = query;
         const skip = (page - 1) * limit;

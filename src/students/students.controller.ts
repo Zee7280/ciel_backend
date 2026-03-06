@@ -21,13 +21,15 @@ import { ApplyOpportunityDto } from './dto/apply-opportunity.dto';
 import { LogHoursDto } from './dto/log-hours.dto';
 import { UpdateStudentProfileDto } from './dto/update-profile.dto';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
-import { extname } from 'path';
+import { S3Service } from '../common/s3.service';
 
 @Controller('students')
 @UseGuards(JwtAuthGuard)
 export class StudentsController {
-    constructor(private readonly studentsService: StudentsService) { }
+    constructor(
+        private readonly studentsService: StudentsService,
+        private readonly s3Service: S3Service
+    ) { }
 
     // Dashboard - Moving to StudentController below, but keeping here for backward compatibility if needed? 
     // Actually, user specifically asked for /student/dashboard.
@@ -145,25 +147,12 @@ export class StudentsController {
     }
 
     @Post('profile/avatar')
-    @UseInterceptors(
-        FileInterceptor('avatar', {
-            storage: diskStorage({
-                destination: process.env.NODE_ENV === 'production' || process.env.VERCEL ? '/tmp/uploads' : './uploads',
-                filename: (req, file, cb) => {
-                    const randomName = Array(32)
-                        .fill(null)
-                        .map(() => Math.round(Math.random() * 16).toString(16))
-                        .join('');
-                    cb(null, `${randomName}${extname(file.originalname)}`);
-                },
-            }),
-        }),
-    )
+    @UseInterceptors(FileInterceptor('avatar'))
     async uploadAvatar(@Request() req, @UploadedFile() file: any) {
         if (!file) {
             throw new BadRequestException('Avatar file not provided');
         }
-        const avatarUrl = `/uploads/${file.filename}`;
+        const avatarUrl = await this.s3Service.uploadFile(file, 'avatars');
         await this.studentsService.updateProfile(req.user.id, { avatar: avatarUrl } as any);
         return { success: true, data: { avatar_url: avatarUrl } };
     }
@@ -187,116 +176,29 @@ export class StudentsController {
     updateSettings(@Request() req, @Body() settings: any) {
         return this.studentsService.updateSettings(req.user.id, settings);
     }
-}
-
-@Controller('student')
-@UseGuards(JwtAuthGuard)
-export class StudentController {
-    constructor(
-        private readonly studentsService: StudentsService,
-        private readonly studentReportsService: StudentReportsService
-    ) { }
-
-    @Get('dashboard')
-    getDashboard(@Request() req, @Query('studentId') studentId?: string) {
-        const targetId = studentId || req.user.id;
-        if (targetId !== req.user.id && req.user.role !== 'admin') {
-            throw new BadRequestException('Unauthorized to view this dashboard');
+    @Post('verify-team-member/send')
+    @Post('verify-identity/send')
+    async sendOtp(@Body() body: { email: string }) {
+        if (!body.email) {
+            throw new BadRequestException('Email is required');
         }
-        return this.studentsService.getDashboard(targetId);
+        return this.studentsService.sendTeamMemberOtp(body.email);
     }
 
-    @Get('projects/:id')
-    getProjectById(@Param('id') id: string) {
-        return this.studentsService.getProjectById(id);
+    @Post('verify-team-member/confirm')
+    @Post('verify-identity/confirm')
+    async confirmOtp(@Body() body: { email: string; otp: string }) {
+        if (!body.email || !body.otp) {
+            throw new BadRequestException('Email and OTP required');
+        }
+        return this.studentsService.confirmTeamMemberOtp(body.email, body.otp);
     }
 
-    // ---- Reports aliases (frontend uses /student not /students) ----
-
-    @Get('reports')
-    getAllReports(@Request() req, @Query() query: any) {
-        return this.studentReportsService.findAll({ ...query, studentId: req.user.id });
-    }
-
-    @Get('reports/check')
-    checkReportStatus(@Query() query: { studentId: string; opportunityId?: string }) {
-        return this.studentReportsService.checkReportStatus(query.studentId, query.opportunityId);
-    }
-
-    @Get('reports/:id')
-    getReportById(@Request() req, @Param('id') id: string) {
-        console.log(`[StudentController] getReportById HIT! ID: ${id}, User: ${req.user.id}`);
-        return this.studentReportsService.findOneByOpportunityOrId(id, req.user.id);
-    }
-
-    @Post('reports')
-    @UseInterceptors(FilesInterceptor('files', 50, {
-        limits: { fileSize: 10 * 1024 * 1024 },
-        fileFilter: (req, file, callback) => {
-            const allowedExtensions = ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx'];
-            const ext = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
-            if (allowedExtensions.includes(ext)) {
-                callback(null, true);
-            } else {
-                callback(new BadRequestException(`File type ${ext} is not allowed`), false);
-            }
-        },
-    }))
-    async submitReport(@Request() req, @Body() body: any, @UploadedFiles() files: any[]) {
-        return this.studentReportsService.createReport(req.user.id, body, files);
-    }
-
-    @Post('reports/:id/submit')
-    @UseInterceptors(FilesInterceptor('files', 50, {
-        limits: { fileSize: 10 * 1024 * 1024 },
-        fileFilter: (req, file, callback) => {
-            const allowedExtensions = ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx'];
-            const ext = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
-            if (allowedExtensions.includes(ext)) {
-                callback(null, true);
-            } else {
-                callback(new BadRequestException(`File type ${ext} is not allowed`), false);
-            }
-        },
-    }))
-    async submitReportWithId(@Request() req, @Param('id') id: string, @Body() body: any, @UploadedFiles() files: any[]) {
-        // If opportunityId is not in body, use the one from URL
-        if (!body.opportunityId) body.opportunityId = id;
-        return this.studentReportsService.createReport(req.user.id, body, files);
-    }
-
-    @Post('reports/draft')
-    @UseInterceptors(FilesInterceptor('files', 50, {
-        limits: { fileSize: 10 * 1024 * 1024 },
-        fileFilter: (req, file, callback) => {
-            const allowedExtensions = ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx'];
-            const ext = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
-            if (allowedExtensions.includes(ext)) {
-                callback(null, true);
-            } else {
-                callback(new BadRequestException(`File type ${ext} is not allowed`), false);
-            }
-        },
-    }))
-    async saveDraft(@Request() req, @Body() body: any, @UploadedFiles() files: any[]) {
-        return this.studentReportsService.saveDraft(req.user.id, body, files);
-    }
-
-    @Post('reports/:id/draft')
-    @UseInterceptors(FilesInterceptor('files', 50, {
-        limits: { fileSize: 10 * 1024 * 1024 },
-        fileFilter: (req, file, callback) => {
-            const allowedExtensions = ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx'];
-            const ext = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
-            if (allowedExtensions.includes(ext)) {
-                callback(null, true);
-            } else {
-                callback(new BadRequestException(`File type ${ext} is not allowed`), false);
-            }
-        },
-    }))
-    async saveDraftWithId(@Request() req, @Param('id') id: string, @Body() body: any, @UploadedFiles() files: any[]) {
-        if (!body.opportunityId) body.opportunityId = id;
-        return this.studentReportsService.saveDraft(req.user.id, body, files);
+    @Post('verify-team-member')
+    async verifyTeamMember(@Body() body: { email: string }) {
+        if (!body.email) {
+            throw new BadRequestException('Email is required');
+        }
+        return this.studentsService.sendTeamMemberVerification(body.email);
     }
 }

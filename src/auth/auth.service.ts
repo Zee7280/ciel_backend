@@ -86,7 +86,7 @@ export class AuthService {
         }
 
         const payload = { sub: user.id, email: user.email, role: user.role, organizationId: user.organization?.id };
-        const expiresIn = loginDto.isMobile ? '30d' : '60m';
+        const expiresIn = loginDto.isMobile ? '30d' : '10h';
 
         return {
             success: true,

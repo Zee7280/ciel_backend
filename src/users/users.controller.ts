@@ -2,12 +2,14 @@ import { Controller, Get, Request, UseGuards, Post, Body, UseInterceptors, Uploa
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
-import { extname } from 'path';
+import { S3Service } from '../common/s3.service';
 
 @Controller('user')
 export class UsersController {
-    constructor(private readonly usersService: UsersService) { }
+    constructor(
+        private readonly usersService: UsersService,
+        private readonly s3Service: S3Service
+    ) { }
 
     @UseGuards(JwtAuthGuard)
     @Get('me')
@@ -25,20 +27,7 @@ export class UsersController {
 
     @Post('update')
     @UseGuards(JwtAuthGuard) // Ensure user is authenticated to update THEIR profile
-    @UseInterceptors(
-        FileInterceptor('image', {
-            storage: diskStorage({
-                destination: process.env.NODE_ENV === 'production' || process.env.VERCEL ? '/tmp/uploads' : './uploads',
-                filename: (req, file, cb) => {
-                    const randomName = Array(32)
-                        .fill(null)
-                        .map(() => Math.round(Math.random() * 16).toString(16))
-                        .join('');
-                    cb(null, `${randomName}${extname(file.originalname)}`);
-                },
-            }),
-        }),
-    )
+    @UseInterceptors(FileInterceptor('image'))
     async updateProfile(@Request() req, @Body() body: any, @UploadedFile() file: any) {
         // For 'multipart/form-data', body fields might need parsing if complex, but simple strings are fine.
         // User passed 'userId' in body, but we should prefer req.user.id for security, OR allow admin override.
@@ -49,7 +38,7 @@ export class UsersController {
         const dto: any = { ...body };
         if (body.contact) dto.phone = body.contact;
         if (file) {
-            dto.avatar = `/uploads/${file.filename}`;
+            dto.avatar = await this.s3Service.uploadFile(file, 'users');
         }
 
         // Remove 'image' and 'contact' from dto to clean up if strictly typed, but UsersService update is generic usually.

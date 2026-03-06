@@ -4,8 +4,6 @@ import { OrganizationsService } from '../organizations/organizations.service';
 import { UpdateOrganizationDto } from '../organizations/dto/organization.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
-import { extname } from 'path';
 import { ReportsService } from '../reports/reports.service';
 import { CreateReportDto } from '../reports/dto/create-report.dto';
 import { UpdateReportDto } from '../reports/dto/update-report.dto';
@@ -13,6 +11,7 @@ import { OpportunitiesService } from '../opportunities/opportunities.service';
 import { GetApplicantsDto } from './dto/get-applicants.dto';
 import { UpdateApplicantDto } from './dto/update-applicant.dto';
 import { StudentReportsService } from '../reports/student-reports.service';
+import { S3Service } from '../common/s3.service';
 
 @Controller('partners')
 @UseGuards(JwtAuthGuard)
@@ -23,6 +22,7 @@ export class PartnersController {
         private readonly reportsService: ReportsService,
         private readonly opportunitiesService: OpportunitiesService,
         private readonly studentReportsService: StudentReportsService,
+        private readonly s3Service: S3Service,
     ) { }
 
     @Get('me')
@@ -71,20 +71,13 @@ export class PartnersController {
     }
 
     @Post('me/logo')
-    @UseInterceptors(FileInterceptor('logo', {
-        storage: diskStorage({
-            destination: process.env.NODE_ENV === 'production' || process.env.VERCEL ? '/tmp/uploads' : './uploads',
-            filename: (req, file, cb) => {
-                const randomName = Array(32).fill(null).map(() => (Math.round(Math.random() * 16)).toString(16)).join('');
-                cb(null, `${randomName}${extname(file.originalname)}`);
-            },
-        }),
-    }))
+    @UseInterceptors(FileInterceptor('logo'))
     async uploadLogo(@Request() req, @UploadedFile() file: any, @Body() body: any) {
         if (!file) {
             throw new BadRequestException('Logo file not provided');
         }
-        const logoUrl = `/uploads/${file.filename}`; // In real app, upload to S3/Cloudinary
+
+        const logoUrl = await this.s3Service.uploadFile(file, 'logos');
 
         // Use userId from body if provided (and allowed), otherwise req.user.id
         // For now allowing it as per requirement. ideally should check admin role.
@@ -95,15 +88,7 @@ export class PartnersController {
     }
 
     @Post('profile/logo')
-    @UseInterceptors(FileInterceptor('logo', {
-        storage: diskStorage({
-            destination: process.env.NODE_ENV === 'production' || process.env.VERCEL ? '/tmp/uploads' : './uploads',
-            filename: (req, file, cb) => {
-                const randomName = Array(32).fill(null).map(() => (Math.round(Math.random() * 16)).toString(16)).join('');
-                cb(null, `${randomName}${extname(file.originalname)}`);
-            },
-        }),
-    }))
+    @UseInterceptors(FileInterceptor('logo'))
     async uploadLogoProfile(@Request() req, @UploadedFile() file: any, @Body() body: any) {
         return this.uploadLogo(req, file, body);
     }

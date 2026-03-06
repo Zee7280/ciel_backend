@@ -18,6 +18,8 @@ import { SettingsModule } from './settings/settings.module';
 import { Setting } from './settings/entities/setting.entity';
 import { ChatModule } from './chat/chat.module';
 import { MailModule } from './mail/mail.module';
+import { EngagementModule } from './engagement/engagement.module';
+import { StorageModule } from './common/storage.module';
 
 @Module({
   imports: [
@@ -58,6 +60,8 @@ import { MailModule } from './mail/mail.module';
     SettingsModule,
     ChatModule,
     MailModule,
+    EngagementModule,
+    StorageModule,
     TypeOrmModule.forFeature([Setting])
   ],
   controllers: [AppController],

@@ -23,10 +23,16 @@ export class OpportunitiesController {
 
 
     @UseGuards(JwtAuthGuard)
-    @Get('mine')
-    async findAllAuthenticated(@Request() req, @Query() query) {
+    @Get()
+    async findAll(@Request() req, @Query() query) {
         const data = await this.opportunitiesService.findAll(req.user.id, query);
         return { success: true, data };
+    }
+
+    @UseGuards(JwtAuthGuard)
+    @Get('mine')
+    async findAllAuthenticated(@Request() req, @Query() query) {
+        return this.findAll(req, query);
     }
 
     @UseGuards(JwtAuthGuard)

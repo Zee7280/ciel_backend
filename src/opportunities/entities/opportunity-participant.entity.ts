@@ -21,7 +21,7 @@ export class OpportunityParticipant {
     @Column({ nullable: true })
     studentId: string;
 
-    @ManyToOne(() => Opportunity)
+    @ManyToOne(() => Opportunity, { onDelete: 'CASCADE' })
     @JoinColumn({ name: 'opportunityId' })
     opportunity: Opportunity;
 

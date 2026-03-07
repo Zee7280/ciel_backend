@@ -11,7 +11,14 @@ async function bootstrap() {
 
   // Enable CORS
   app.enableCors({
-    origin: true, // Reflects the requesting origin, compatible with credentials: true
+    origin: [
+      'https://cielpk.com',
+      'https://www.cielpk.com',
+      'http://localhost:3000',
+      'http://localhost:3001',
+      'http://localhost:3002',
+      'https://ciel-frontend-gamma.vercel.app'
+    ],
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
   });

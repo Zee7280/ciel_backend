@@ -1,4 +1,4 @@
-import { Controller, Get, Param } from '@nestjs/common';
+import { Controller, Get, Param, Query } from '@nestjs/common';
 import { OpportunitiesService } from './opportunities.service';
 
 @Controller('public/opportunities')
@@ -6,8 +6,8 @@ export class PublicOpportunitiesController {
     constructor(private readonly opportunitiesService: OpportunitiesService) { }
 
     @Get()
-    async findAll() {
-        const data = await this.opportunitiesService.getPublicOpportunities();
+    async findAll(@Query() query: any) {
+        const data = await this.opportunitiesService.getPublicOpportunities(query);
         return { success: true, data };
     }
 

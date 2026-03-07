@@ -70,11 +70,26 @@ export class OpportunitiesService {
         const org = await this.organizationsService.getMyOrganization(userId);
         const query = this.opportunitiesRepository.createQueryBuilder('opportunity');
 
+        let filterOrgId: string | null = null;
+
         if (filters.partner_id === 'me' && org) {
-            query.andWhere('opportunity.organizationId = :orgId', { orgId: org.id });
+            filterOrgId = org.id;
         } else if (filters.partner_id && filters.partner_id !== 'me') {
-            const otherOrg = await this.organizationsService.findOne(filters.partner_id); // Check existence?
-            query.andWhere('opportunity.organizationId = :orgId', { orgId: filters.partner_id });
+            // Check if it's already an org ID
+            try {
+                const checkOrg = await this.organizationsService.findOne(filters.partner_id);
+                filterOrgId = checkOrg.id;
+            } catch (e) {
+                // Not an org ID, maybe it's a User ID?
+                const checkUserOrg = await this.organizationsService.getMyOrganization(filters.partner_id);
+                if (checkUserOrg) {
+                    filterOrgId = checkUserOrg.id;
+                }
+            }
+        }
+
+        if (filterOrgId) {
+            query.andWhere('opportunity.organizationId = :orgId', { orgId: filterOrgId });
         }
 
         if (filters.status) {
@@ -99,9 +114,21 @@ export class OpportunitiesService {
         }));
     }
 
-    async getPublicOpportunities() {
+    async getPublicOpportunities(filters: any = {}) {
+        const query: any = { status: In(['active', 'pending_approval']) };
+
+        if (filters.partner_id) {
+            let filterOrgId = filters.partner_id;
+            // Resolve if it's a user ID
+            const checkUserOrg = await this.organizationsService.getMyOrganization(filters.partner_id);
+            if (checkUserOrg) {
+                filterOrgId = checkUserOrg.id;
+            }
+            query.organizationId = filterOrgId;
+        }
+
         const opportunities = await this.opportunitiesRepository.find({
-            where: { status: In(['active', 'pending_approval']) },
+            where: query,
             relations: ['organization'],
             order: { createdAt: 'DESC' }
         });

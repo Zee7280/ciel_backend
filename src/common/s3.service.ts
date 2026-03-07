@@ -1,7 +1,7 @@
 import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { S3Client, PutObjectCommand, ObjectCannedACL } from '@aws-sdk/client-s3';
-import { v4 as uuidv4 } from 'uuid';
+import * as crypto from 'crypto';
 import * as path from 'path';
 
 @Injectable()
@@ -25,7 +25,7 @@ export class S3Service {
 
     async uploadFile(file: Express.Multer.File, folder: string): Promise<string> {
         const fileExt = path.extname(file.originalname);
-        const fileName = `${folder}/${uuidv4()}${fileExt}`;
+        const fileName = `${folder}/${crypto.randomUUID()}${fileExt}`;
 
         try {
             const command = new PutObjectCommand({

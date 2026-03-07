@@ -10,19 +10,36 @@ export class MailService {
   constructor(private configService: ConfigService) {
     const user = this.configService.get<string>('MAIL_USER');
     const pass = this.configService.get<string>('MAIL_PASS');
+    const host = this.configService.get<string>('MAIL_HOST');
+    const port = this.configService.get<number>('MAIL_PORT');
+
+    this.logger.log(`MailService init. USER found: ${!!user}, PASS found: ${!!pass}, HOST: ${host}, PORT: ${port}`);
 
     if (!user || !pass) {
-      this.logger.error('MAIL_USER or MAIL_PASS is missing from configuration. emails will fail to send.');
+      this.logger.error('CRITICAL: MAIL_USER or MAIL_PASS is missing from ConfigService!');
+      // Check process.env directly as fallback
+      const directUser = process.env.MAIL_USER;
+      const directPass = process.env.MAIL_PASS;
+      this.logger.log(`Direct process.env check - USER: ${!!directUser}, PASS: ${!!directPass}`);
     }
 
     this.transporter = nodemailer.createTransport({
-      host: this.configService.get<string>('MAIL_HOST') || 'smtpout.secureserver.net',
-      port: Number(this.configService.get<number>('MAIL_PORT')) || 465,
-      secure: this.configService.get<string>('MAIL_SECURE') === 'true' || Number(this.configService.get<number>('MAIL_PORT')) === 465,
+      host: host || 'smtpout.secureserver.net',
+      port: Number(port) || 465,
+      secure: this.configService.get<string>('MAIL_SECURE') === 'true' || Number(port) === 465,
       auth: {
-        user: user,
-        pass: pass,
+        user: user || process.env.MAIL_USER,
+        pass: pass || process.env.MAIL_PASS,
       },
+    });
+
+    // Verify connection configuration
+    this.transporter.verify((error, success) => {
+      if (error) {
+        this.logger.error('Transporter verification failed:', error.message);
+      } else {
+        this.logger.log('Transporter is ready to take our messages');
+      }
     });
   }
 

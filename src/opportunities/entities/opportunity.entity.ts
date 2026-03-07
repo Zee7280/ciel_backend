@@ -45,7 +45,7 @@ export class Opportunity {
     @Column({ default: 'pending_approval' })
     status: string; // active, closed, draft, pending_approval, rejected
 
-    @ManyToOne(() => Organization, { nullable: true })
+    @ManyToOne(() => Organization, { nullable: true, onDelete: 'CASCADE' })
     @JoinColumn({ name: 'organizationId' })
     organization: Organization;
 

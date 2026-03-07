@@ -77,7 +77,7 @@ export class User {
     @UpdateDateColumn()
     updatedAt: Date;
 
-    @ManyToOne(() => Organization, (organization) => organization.users, { nullable: true })
+    @ManyToOne(() => Organization, (organization) => organization.users, { nullable: true, onDelete: 'CASCADE' })
     organization: Organization;
 
     @Column({ type: 'json', nullable: true })

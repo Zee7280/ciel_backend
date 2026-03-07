@@ -13,10 +13,11 @@ import { Otp } from './entities/otp.entity';
 import { StudentReportsService } from '../reports/student-reports.service';
 import { StudentReportsController } from './student-reports.controller';
 import { UsersModule } from '../users/users.module';
+import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 
 @Module({
     imports: [
-        TypeOrmModule.forFeature([User, Opportunity, Timesheet, OpportunityParticipant, OpportunityTeamMember, StudentReport, Otp]),
+        TypeOrmModule.forFeature([User, Opportunity, Timesheet, OpportunityParticipant, OpportunityTeamMember, StudentReport, Otp, AttendanceLog]),
         UsersModule
     ],
     controllers: [StudentsController, StudentReportsController, StudentController],

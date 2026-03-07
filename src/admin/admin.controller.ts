@@ -114,6 +114,11 @@ export class AdminController {
         return this.studentReportsService.verifyReport(id, body.action, 'admin', body.reason);
     }
 
+    @Delete('reports/:id')
+    removeReport(@Param('id') id: string) {
+        return this.studentReportsService.removeReport(id);
+    }
+
     @Post('users')
     create(@Body() createUserDto: CreateUserDto) {
         return this.usersService.create(createUserDto);

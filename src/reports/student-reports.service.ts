@@ -5,6 +5,7 @@ import { StudentReport } from './entities/student-report.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { OpportunityParticipant } from '../opportunities/entities/opportunity-participant.entity';
 import { S3Service } from '../common/s3.service';
+import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import * as path from 'path';
 
 @Injectable()
@@ -16,6 +17,8 @@ export class StudentReportsService {
         private readonly opportunityParticipantsRepository: Repository<OpportunityParticipant>,
         @InjectRepository(StudentReport)
         private studentReportsRepository: Repository<StudentReport>,
+        @InjectRepository(AttendanceLog)
+        private readonly attendanceLogsRepository: Repository<AttendanceLog>,
         private readonly s3Service: S3Service,
     ) { }
 
@@ -216,7 +219,16 @@ export class StudentReportsService {
             throw new NotFoundException('Report not found');
         }
 
-        return this.formatReportResponse(report);
+        // Fetch attendance logs for this student and opportunity
+        const attendanceLogs = await this.attendanceLogsRepository.find({
+            where: {
+                participant: { userId: report.studentId },
+                projectId: report.opportunityId
+            },
+            order: { dateOfEngagement: 'ASC', startTime: 'ASC' }
+        });
+
+        return this.formatReportResponse(report, attendanceLogs);
     }
 
     async findOneByOpportunityOrId(id: string, studentId: string) {
@@ -251,34 +263,24 @@ export class StudentReportsService {
             console.log(`  - Match found by Opportunity/Project ID`);
         }
 
-        if (!report) {
-            console.log(`  - Still not found for student ${studentId}. Checking existence for ANY student...`);
-            // Check if it exists at all for any student (for debugging)
-            const existsAny = await this.studentReportsRepository.findOne({
-                where: [
-                    { id },
-                    { opportunityId: id },
-                    { project_id: id }
-                ]
+        if (report) {
+            const attendanceLogs = await this.attendanceLogsRepository.find({
+                where: {
+                    participant: { userId: report.studentId },
+                    projectId: report.opportunityId || report.project_id
+                },
+                order: { dateOfEngagement: 'ASC', startTime: 'ASC' }
             });
-
-            if (existsAny) {
-                console.warn(`  - WARNING: Report exists but belongs to a DIFFERENT student! Returning null so this student can create their own.`);
-            } else {
-                console.warn(`  - INFO: No report exists anywhere in the DB matching ID ${id}. Returning null for new creation.`);
-            }
-
-            // Return gracefully instead of 404 so frontend can show "Create Report" UI
-            return {
-                success: true,
-                data: null
-            };
+            return this.formatReportResponse(report, attendanceLogs);
         }
 
-        return this.formatReportResponse(report);
+        return {
+            success: true,
+            data: null
+        };
     }
 
-    private formatReportResponse(report: StudentReport) {
+    private formatReportResponse(report: StudentReport, attendanceLogs?: AttendanceLog[]) {
         return {
             success: true,
             data: {
@@ -291,6 +293,10 @@ export class StudentReportsService {
                 opportunity: {
                     id: report.opportunity?.id,
                     title: report.opportunity?.title,
+                    city: report.opportunity?.location?.city,
+                    start_date: report.opportunity?.timeline?.start_date,
+                    end_date: report.opportunity?.timeline?.end_date,
+                    expected_hours: report.opportunity?.timeline?.expected_hours,
                 },
                 project_id: report.project_id,
                 opportunityId: report.opportunityId,
@@ -298,7 +304,21 @@ export class StudentReportsService {
                 partner_status: report.partner_status,
                 admin_status: report.admin_status,
                 submission_date: report.submission_date,
-                section1: report.section1,
+                section1: {
+                    ...report.section1,
+                    attendance_logs: attendanceLogs ? attendanceLogs.map(log => ({
+                        id: log.id,
+                        date: log.dateOfEngagement,
+                        start_time: log.startTime,
+                        end_time: log.endTime,
+                        location: log.organizationName, // Mapping as location
+                        activity_type: log.activityType,
+                        description: log.description,
+                        hours: Number(log.sessionHours),
+                        evidence_url: log.evidenceUrl,
+                        entryStatus: log.entryStatus
+                    })) : (report.section1?.attendance_logs || [])
+                },
                 section2: report.section2,
                 section3: report.section3,
                 section4: report.section4,
@@ -313,6 +333,15 @@ export class StudentReportsService {
                 updated_at: report.updatedAt,
             },
         };
+    }
+
+    async removeReport(id: string) {
+        const report = await this.studentReportsRepository.findOne({ where: { id } });
+        if (!report) {
+            throw new NotFoundException('Report not found');
+        }
+        await this.studentReportsRepository.remove(report);
+        return { success: true, message: 'Report deleted successfully' };
     }
 
     async verifyReport(id: string, action: 'approve' | 'reject', role: string = 'admin', reason?: string) {

@@ -8,13 +8,20 @@ export class MailService {
   private readonly logger = new Logger(MailService.name);
 
   constructor(private configService: ConfigService) {
+    const user = this.configService.get<string>('MAIL_USER');
+    const pass = this.configService.get<string>('MAIL_PASS');
+
+    if (!user || !pass) {
+      this.logger.error('MAIL_USER or MAIL_PASS is missing from configuration. emails will fail to send.');
+    }
+
     this.transporter = nodemailer.createTransport({
       host: this.configService.get<string>('MAIL_HOST') || 'smtpout.secureserver.net',
-      port: this.configService.get<number>('MAIL_PORT') || 465,
-      secure: this.configService.get<string>('MAIL_SECURE') === 'true' || this.configService.get<number>('MAIL_PORT') === 465,
+      port: Number(this.configService.get<number>('MAIL_PORT')) || 465,
+      secure: this.configService.get<string>('MAIL_SECURE') === 'true' || Number(this.configService.get<number>('MAIL_PORT')) === 465,
       auth: {
-        user: this.configService.get<string>('MAIL_USER'),
-        pass: this.configService.get<string>('MAIL_PASS'),
+        user: user,
+        pass: pass,
       },
     });
   }

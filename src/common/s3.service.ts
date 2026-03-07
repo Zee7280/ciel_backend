@@ -33,7 +33,7 @@ export class S3Service {
                 Key: fileName,
                 Body: file.buffer,
                 ContentType: file.mimetype,
-                // ACL: 'public-read', // If the bucket allows public ACLs
+                ACL: 'public-read',
             });
 
             await this.s3Client.send(command);
@@ -53,6 +53,7 @@ export class S3Service {
                 Key: fileName,
                 Body: buffer,
                 ContentType: contentType,
+                ACL: 'public-read',
             });
 
             await this.s3Client.send(command);

@@ -35,7 +35,7 @@ export class Participant {
     @Column()
     fullName: string;
 
-    @Column({ unique: true })
+    @Column()
     cnicHash: string; // SHA-256 hash for duplicate checking
 
     @Column({ nullable: true })

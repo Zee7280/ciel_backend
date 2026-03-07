@@ -1,4 +1,4 @@
-import { IsString, IsDecimal, IsISO8601, MaxLength, Matches } from 'class-validator';
+import { IsString, IsDecimal, IsISO8601, MaxLength, Matches, IsOptional, IsBooleanString, IsBoolean } from 'class-validator';
 
 export class CreateAttendanceLogDto {
     @IsISO8601()
@@ -21,4 +21,7 @@ export class CreateAttendanceLogDto {
     @IsString()
     @MaxLength(300)
     description: string;
+
+    @IsOptional()
+    evidenceUploaded?: any;
 }

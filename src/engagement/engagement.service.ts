@@ -1,4 +1,5 @@
 import { Injectable, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
+import { S3Service } from '../common/s3.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Participant } from './entities/participant.entity';
@@ -23,6 +24,7 @@ export class EngagementService {
         @InjectRepository(Opportunity)
         private opportunityRepository: Repository<Opportunity>,
         private configService: ConfigService,
+        private s3Service: S3Service,
     ) {
         const secret = this.configService.get<string>('ENCRYPTION_KEY') || 'default-secret-key-32-chars-long!!';
         this.KEY = crypto.scryptSync(secret, 'salt', 32);
@@ -32,10 +34,12 @@ export class EngagementService {
         const opportunity = await this.opportunityRepository.findOne({ where: { id: dto.projectId } });
         if (!opportunity) throw new NotFoundException('Project not found');
 
-        // Check for duplicate CNIC (compare using hash)
+        // Check for duplicate CNIC within this specific project
         const cnicHash = this.hashString(dto.cnic);
-        const existing = await this.participantRepository.findOne({ where: { cnicHash } });
-        if (existing) throw new BadRequestException('CNIC already registered');
+        const existing = await this.participantRepository.findOne({
+            where: { cnicHash, projectId: opportunity.id }
+        });
+        if (existing) throw new BadRequestException('CNIC already registered for this opportunity');
 
         const encryptedCnic = this.encrypt(dto.cnic);
 
@@ -58,7 +62,7 @@ export class EngagementService {
         });
     }
 
-    async addAttendanceLog(userId: string, participantId: string, dto: CreateAttendanceLogDto) {
+    async addAttendanceLog(userId: string, participantId: string, dto: CreateAttendanceLogDto, file?: Express.Multer.File) {
         const participant = await this.participantRepository.findOne({
             where: { id: participantId },
             relations: ['attendanceLogs']
@@ -91,15 +95,42 @@ export class EngagementService {
         const wordCount = dto.description.trim().split(/\s+/).length;
         if (wordCount > 40) throw new BadRequestException('Description cannot exceed 40 words');
 
+        let evidenceUrl: string | null = null;
+        let evidenceUploaded: boolean = false;
+
+        // Process file if provided
+        if (file) {
+            evidenceUrl = await this.s3Service.uploadFile(file, 'attendance-evidence');
+            evidenceUploaded = true;
+        } else if (String(dto.evidenceUploaded) === 'true') {
+            evidenceUploaded = true;
+        }
+
         const log = this.attendanceLogRepository.create({
             ...dto,
             participantId,
             projectId: participant.projectId,
             sessionHours,
+            evidenceUploaded,
+            evidenceUrl: evidenceUrl as any,
         });
 
         return await this.attendanceLogRepository.save(log);
     }
+
+    async deleteAttendanceLog(userId: string, participantId: string, logId: string) {
+        const participant = await this.participantRepository.findOne({ where: { id: participantId } });
+        if (!participant) throw new NotFoundException('Participant record not found');
+        if (participant.userId !== userId) throw new BadRequestException('Not authorized');
+        if (participant.status === 'finalized') throw new BadRequestException('Cannot delete logs from a finalized engagement');
+
+        const log = await this.attendanceLogRepository.findOne({ where: { id: logId, participantId } });
+        if (!log) throw new NotFoundException('Attendance log not found');
+
+        await this.attendanceLogRepository.delete(logId);
+        return { deleted: true };
+    }
+
 
     async getEngagementMetrics(participantId: string) {
         const participant = await this.participantRepository.findOne({

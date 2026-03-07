@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { StorageModule } from '../common/storage.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Participant } from './entities/participant.entity';
 import { AttendanceLog } from './entities/attendance-log.entity';
@@ -9,6 +10,7 @@ import { Opportunity } from '../opportunities/entities/opportunity.entity';
 @Module({
     imports: [
         TypeOrmModule.forFeature([Participant, AttendanceLog, Opportunity]),
+        StorageModule,
     ],
     providers: [
         EngagementService

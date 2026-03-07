@@ -102,7 +102,7 @@ export class AuthService {
 
         // Always return success to prevent email enumeration
         if (!user) {
-            return { success: true, message: 'If an account with that email exists, a reset link has been sent.' };
+            return { success: true, message: 'Reset link sent to email.' };
         }
 
         // Generate a secure random token
@@ -113,31 +113,31 @@ export class AuthService {
         // Save token and expiry to the user
         await this.usersService.savePasswordResetToken(user.id, resetToken, expiry);
 
-        // In a real app, send this via email. For now, return it in the response for testing.
+        // Send the reset email
+        const baseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+        const resetLink = `${baseUrl}/reset-password?token=${resetToken}`;
+        await this.mailService.sendPasswordResetEmail(user.email, resetLink);
+
         return {
             success: true,
-            message: 'Password reset token generated. In production, this would be sent via email.',
-            data: {
-                resetToken, // Remove this in production; send via email instead
-                expiresAt: expiry
-            }
+            message: 'Reset link sent to email.',
         };
     }
 
     async resetPassword(token: string, newPassword: string) {
         const user = await this.usersService.findByResetToken(token);
 
-        if (!user) {
-            throw new BadRequestException('Invalid or expired reset token');
-        }
-
-        if (!user.passwordResetExpiry || new Date() > user.passwordResetExpiry) {
-            throw new BadRequestException('Reset token has expired. Please request a new one.');
+        if (!user || !user.passwordResetExpiry || new Date() > user.passwordResetExpiry) {
+            return {
+                success: false,
+                message: 'Invalid or expired token.'
+            };
         }
 
         const hashedPassword = await bcrypt.hash(newPassword, 10);
         await this.usersService.updatePassword(user.id, hashedPassword);
 
-        return { success: true, message: 'Password has been reset successfully. Please login with your new password.' };
+        return { success: true, message: 'Password updated successfully!' };
     }
+
 }

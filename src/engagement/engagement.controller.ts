@@ -1,4 +1,5 @@
-import { Controller, Post, Get, Body, Param, UseGuards, Request } from '@nestjs/common';
+import { Controller, Post, Get, Delete, Body, Param, UseGuards, Request, UseInterceptors, UploadedFile } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { EngagementService } from './engagement.service';
 import { RegisterParticipantDto } from './dto/register-participant.dto';
 import { CreateAttendanceLogDto } from './dto/create-attendance-log.dto';
@@ -29,8 +30,14 @@ export class EngagementController {
     }
 
     @Post(':id/attendance')
-    async addAttendance(@Request() req, @Param('id') id: string, @Body() dto: CreateAttendanceLogDto) {
-        const result = await this.engagementService.addAttendanceLog(req.user.id, id, dto);
+    @UseInterceptors(FileInterceptor('evidence'))
+    async addAttendance(
+        @Request() req,
+        @Param('id') id: string,
+        @Body() dto: CreateAttendanceLogDto,
+        @UploadedFile() file: Express.Multer.File
+    ) {
+        const result = await this.engagementService.addAttendanceLog(req.user.id, id, dto, file);
         return {
             success: true,
             data: result,
@@ -44,6 +51,16 @@ export class EngagementController {
         return {
             success: true,
             data: result,
+        };
+    }
+
+    @Delete(':id/attendance/:logId')
+    async deleteAttendance(@Request() req, @Param('id') id: string, @Param('logId') logId: string) {
+        const result = await this.engagementService.deleteAttendanceLog(req.user.id, id, logId);
+        return {
+            success: true,
+            data: result,
+            message: 'Attendance log deleted successfully',
         };
     }
 

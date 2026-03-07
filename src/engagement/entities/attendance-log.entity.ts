@@ -45,6 +45,9 @@ export class AttendanceLog {
     @Column({ default: false })
     evidenceUploaded: boolean;
 
+    @Column({ type: 'varchar', nullable: true })
+    evidenceUrl: string;
+
     @Column({
         type: 'enum',
         enum: ['pending', 'verified', 'flagged'],

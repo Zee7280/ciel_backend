@@ -36,6 +36,9 @@ export class StudentReport {
     @Column({ default: 'pending' })
     admin_status: string; // 'pending', 'approved', 'rejected'
 
+    @Column({ type: 'text', nullable: true })
+    admin_feedback: string;
+
     // Auto-Generated Summary Fields (Section 2 Context)
     @Column({ type: 'text', nullable: true })
     summary_text_generated: string;

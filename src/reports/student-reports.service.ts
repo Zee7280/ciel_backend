@@ -52,25 +52,55 @@ export class StudentReportsService {
             }
         }
 
-        // Create report entity
-        const report = this.studentReportsRepository.create({
-            studentId,
-            opportunityId: opportunityIdFromDto,
-            status: 'submitted',
-            section1: parsedData.section1, // Participation & Attendance
-            section2: parsedData.section2, // Project Context
-            section3: parsedData.section3,
-            section4: parsedData.section4,
-            section5: parsedData.section5,
-            section6: parsedData.section6,
-            section7: parsedData.section7,
-            section8: parsedData.section8,
-            section9: parsedData.section9,
-            section10: parsedData.section10,
-            section11: parsedData.section11,
-            sdg_summary_stage: 'preliminary',
-            sdg_validation_status: 'pending'
+        // Upsert logic: Check if report already exists
+        let report = await this.studentReportsRepository.findOne({
+            where: {
+                studentId,
+                opportunityId: opportunityIdFromDto
+            }
         });
+
+        if (report) {
+            // Update existing report
+            report.status = 'submitted';
+            if (parsedData.section1) report.section1 = parsedData.section1;
+            if (parsedData.section2) report.section2 = parsedData.section2;
+            if (parsedData.section3) report.section3 = parsedData.section3;
+            if (parsedData.section4) report.section4 = parsedData.section4;
+            if (parsedData.section5) report.section5 = parsedData.section5;
+            if (parsedData.section6) report.section6 = parsedData.section6;
+            if (parsedData.section7) report.section7 = parsedData.section7;
+            if (parsedData.section8) report.section8 = parsedData.section8;
+            if (parsedData.section9) report.section9 = parsedData.section9;
+            if (parsedData.section10) report.section10 = parsedData.section10;
+            if (parsedData.section11) report.section11 = parsedData.section11;
+
+            // If it was already validated, maybe keep it, otherwise reset to pending if re-submitting new data
+            if (report.sdg_validation_status !== 'validated') {
+                report.sdg_summary_stage = 'preliminary';
+                report.sdg_validation_status = 'pending';
+            }
+        } else {
+            // Create new report entity
+            report = this.studentReportsRepository.create({
+                studentId,
+                opportunityId: opportunityIdFromDto,
+                status: 'submitted',
+                section1: parsedData.section1, // Participation & Attendance
+                section2: parsedData.section2, // Project Context
+                section3: parsedData.section3,
+                section4: parsedData.section4,
+                section5: parsedData.section5,
+                section6: parsedData.section6,
+                section7: parsedData.section7,
+                section8: parsedData.section8,
+                section9: parsedData.section9,
+                section10: parsedData.section10,
+                section11: parsedData.section11,
+                sdg_summary_stage: 'preliminary',
+                sdg_validation_status: 'pending'
+            });
+        }
 
         // Sync Section 3 (SDG Mapping)
         report.section3 = parsedData.section3;
@@ -127,23 +157,46 @@ export class StudentReportsService {
     async saveDraft(studentId: string, dto: any, files: any[]) {
         const parsedData = this.parseFormData(dto);
 
-        const report = this.studentReportsRepository.create({
-            studentId,
-            project_id: parsedData.project_id,
-            opportunityId: parsedData.opportunityId,
-            status: 'draft',
-            section1: parsedData.section1,
-            section2: parsedData.section2,
-            section3: parsedData.section3,
-            section4: parsedData.section4,
-            section5: parsedData.section5,
-            section6: parsedData.section6,
-            section7: parsedData.section7,
-            section8: parsedData.section8,
-            section9: parsedData.section9,
-            section10: parsedData.section10,
-            section11: parsedData.section11,
+        let report = await this.studentReportsRepository.findOne({
+            where: {
+                studentId,
+                opportunityId: parsedData.opportunityId
+            }
         });
+
+        if (report) {
+            report.status = 'draft';
+            if (parsedData.project_id) report.project_id = parsedData.project_id;
+            if (parsedData.section1) report.section1 = parsedData.section1;
+            if (parsedData.section2) report.section2 = parsedData.section2;
+            if (parsedData.section3) report.section3 = parsedData.section3;
+            if (parsedData.section4) report.section4 = parsedData.section4;
+            if (parsedData.section5) report.section5 = parsedData.section5;
+            if (parsedData.section6) report.section6 = parsedData.section6;
+            if (parsedData.section7) report.section7 = parsedData.section7;
+            if (parsedData.section8) report.section8 = parsedData.section8;
+            if (parsedData.section9) report.section9 = parsedData.section9;
+            if (parsedData.section10) report.section10 = parsedData.section10;
+            if (parsedData.section11) report.section11 = parsedData.section11;
+        } else {
+            report = this.studentReportsRepository.create({
+                studentId,
+                project_id: parsedData.project_id,
+                opportunityId: parsedData.opportunityId,
+                status: 'draft',
+                section1: parsedData.section1,
+                section2: parsedData.section2,
+                section3: parsedData.section3,
+                section4: parsedData.section4,
+                section5: parsedData.section5,
+                section6: parsedData.section6,
+                section7: parsedData.section7,
+                section8: parsedData.section8,
+                section9: parsedData.section9,
+                section10: parsedData.section10,
+                section11: parsedData.section11,
+            });
+        }
 
         await this.studentReportsRepository.save(report);
 
@@ -329,6 +382,7 @@ export class StudentReportsService {
                 section9: report.section9,
                 section10: report.section10,
                 section11: report.section11,
+                admin_feedback: report.admin_feedback,
                 created_at: report.createdAt,
                 updated_at: report.updatedAt,
             },
@@ -344,17 +398,27 @@ export class StudentReportsService {
         return { success: true, message: 'Report deleted successfully' };
     }
 
-    async verifyReport(id: string, action: 'approve' | 'reject', role: string = 'admin', reason?: string) {
+    async verifyReport(id: string, action: 'approve' | 'reject' | 'unlock', role: string = 'admin', reason?: string) {
         const report = await this.studentReportsRepository.findOne({ where: { id } });
 
         if (!report) {
             throw new NotFoundException('Report not found');
         }
 
-        if (action === 'reject') {
+        if (action === 'unlock') {
+            report.status = 'draft';
+            report.admin_status = 'pending';
+            report.partner_status = 'pending';
+            if (reason) {
+                report.admin_feedback = reason;
+            }
+        } else if (action === 'reject') {
             report.status = 'rejected';
             if (role === 'admin') report.admin_status = 'rejected';
             if (role === 'partner') report.partner_status = 'rejected';
+            if (reason) {
+                report.admin_feedback = reason; // Save feedback on reject as well (optional, but good practice based on user req)
+            }
         } else if (action === 'approve') {
             if (role === 'partner') {
                 report.partner_status = 'approved';
@@ -369,9 +433,11 @@ export class StudentReportsService {
 
         await this.studentReportsRepository.save(report);
 
+        let actionMessage = action === 'approve' ? 'approved' : action === 'reject' ? 'rejected' : 'unlocked';
+
         return {
             success: true,
-            message: `Report ${action === 'approve' ? 'approved' : 'rejected'} by ${role} successfully.`,
+            message: `Report ${actionMessage} successfully.`,
             data: {
                 id: report.id,
                 status: report.status,

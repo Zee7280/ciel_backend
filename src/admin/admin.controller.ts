@@ -106,12 +106,12 @@ export class AdminController {
         return this.studentReportsService.findOne(id);
     }
 
-    @Post('reports/:id/verify')
+    @Patch('reports/:id/verify')
     verifyReport(
         @Param('id') id: string,
-        @Body() body: { action: 'approve' | 'reject'; reason?: string }
+        @Body() body: { action: 'approve' | 'reject' | 'unlock'; reason?: string; feedback?: string }
     ) {
-        return this.studentReportsService.verifyReport(id, body.action, 'admin', body.reason);
+        return this.studentReportsService.verifyReport(id, body.action, 'admin', body.reason || body.feedback);
     }
 
     @Delete('reports/:id')
@@ -150,11 +150,11 @@ export class AdminController {
         return this.studentReportsService.findAll(query);
     }
 
-    @Post('student-reports/:id/verify')
+    @Patch('student-reports/:id/verify')
     verifyStudentReport(
         @Param('id') id: string,
-        @Body() body: { action: 'approve' | 'reject'; reason?: string }
+        @Body() body: { action: 'approve' | 'reject' | 'unlock'; reason?: string; feedback?: string }
     ) {
-        return this.studentReportsService.verifyReport(id, body.action, 'admin', body.reason);
+        return this.studentReportsService.verifyReport(id, body.action, 'admin', body.reason || body.feedback);
     }
 }

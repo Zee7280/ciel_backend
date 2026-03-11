@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { User } from '../users/entities/user.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { Timesheet } from '../timesheets/entities/timesheet.entity';
@@ -34,6 +34,25 @@ export class StudentsService {
         private usersService: UsersService,
         private mailService: MailService,
     ) { }
+
+    private async getOccupiedSeats(opportunityId: string): Promise<number> {
+        const participants = await this.opportunityParticipantsRepository.find({
+            where: {
+                opportunityId,
+                status: In(['pending', 'accepted', 'approved', 'verified'])
+            },
+            relations: ['teamMembers']
+        });
+
+        let currentCount = 0;
+        for (const p of participants) {
+            currentCount += 1; // The student who applied
+            if (p.participation_type === 'team' && p.teamMembers) {
+                currentCount += p.teamMembers.length;
+            }
+        }
+        return currentCount;
+    }
     // Verification
     async sendTeamMemberOtp(email: string) {
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -224,12 +243,16 @@ export class StudentsService {
 
         return {
             success: true,
-            data: opportunities.map(o => {
+            data: await Promise.all(opportunities.map(async o => {
                 const app = applicationStatuses.get(o.id);
+                const occupiedSeats = await this.getOccupiedSeats(o.id);
+                const volunteersRequired = o.timeline?.volunteers_required || 0;
+
                 return {
                     ...o,
                     organization: o.organization?.name || 'Unknown',
-                    volunteersNeeded: o.timeline?.volunteers_required || 0,
+                    volunteersNeeded: volunteersRequired,
+                    remaining_seats: Math.max(0, volunteersRequired - occupiedSeats),
                     description: o.objectives?.description || 'No description',
                     application_status: app ? app.status : null,
                     // Map status for frontend buttons. "active" is required for "Submit Report".
@@ -244,7 +267,7 @@ export class StudentsService {
                         is_verified: member.is_verified
                     })) || []
                 };
-            }),
+            })),
             pagination: {
                 total,
                 page: parseInt(page),
@@ -280,12 +303,16 @@ export class StudentsService {
             }
         }
 
+        const occupiedSeats = await this.getOccupiedSeats(id);
+        const volunteersRequired = opportunity.timeline?.volunteers_required || 0;
+
         return {
             success: true,
             data: {
                 ...opportunity,
                 application_status: applicationStatus,
                 hasApplied: hasApplied,
+                remaining_seats: Math.max(0, volunteersRequired - occupiedSeats),
                 // Also map status for report button visibility
                 status: (applicationStatus === 'approved' || applicationStatus === 'verified') ? 'active' : (hasApplied ? 'applied' : opportunity.status)
             },
@@ -422,19 +449,7 @@ export class StudentsService {
             throw new BadRequestException('Already applied to this opportunity');
         }
 
-        // Capacity Check
-        const participants = await this.opportunityParticipantsRepository.find({
-            where: { opportunityId: dto.opportunityId },
-            relations: ['teamMembers']
-        });
-
-        let currentCount = 0;
-        for (const p of participants) {
-            currentCount += 1; // The participant themselves
-            if (p.participation_type === 'team' && p.teamMembers) {
-                currentCount += p.teamMembers.length;
-            }
-        }
+        const currentCount = await this.getOccupiedSeats(dto.opportunityId);
 
         let incomingCount = 1; // The applicant
         if (dto.participation_type === 'team' && dto.team_members) {

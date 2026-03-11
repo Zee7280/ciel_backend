@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { Opportunity } from './entities/opportunity.entity';
 import { OpportunityParticipant } from './entities/opportunity-participant.entity';
+import { OpportunityTeamMember } from './entities/opportunity-team-member.entity';
 import { CreateOpportunityDto, UpdateOpportunityDto } from './dto/create-opportunity.dto';
 import { OrganizationsService } from '../organizations/organizations.service';
 
@@ -13,8 +14,26 @@ export class OpportunitiesService {
         private opportunitiesRepository: Repository<Opportunity>,
         @InjectRepository(OpportunityParticipant)
         private participantsRepository: Repository<OpportunityParticipant>,
+        @InjectRepository(OpportunityTeamMember)
+        private teamMembersRepository: Repository<OpportunityTeamMember>,
         private organizationsService: OrganizationsService,
     ) { }
+
+    async getOccupiedSeats(opportunityId: string): Promise<number> {
+        const participants = await this.participantsRepository.find({
+            where: { opportunityId, status: In(['pending', 'accepted', 'approved', 'verified']) },
+            relations: ['teamMembers']
+        });
+
+        let currentCount = 0;
+        for (const p of participants) {
+            currentCount += 1; // The student who applied
+            if (p.participation_type === 'team' && p.teamMembers) {
+                currentCount += p.teamMembers.length;
+            }
+        }
+        return currentCount;
+    }
 
     async create(userId: string, createOpportunityDto: CreateOpportunityDto) {
         const org = await this.organizationsService.getMyOrganization(userId);
@@ -101,16 +120,23 @@ export class OpportunitiesService {
         }
 
         const opportunities = await query.getMany();
-        // Map to spec if needed, or return entity if it matches enough
-        // Spec response: { id, title, status, location, dates, capacity, applicants_count }
-        return opportunities.map(opp => ({
-            ...opp,
-            location: opp.location,
-            start_date: opp.timeline?.start_date,
-            end_date: opp.timeline?.end_date,
-            dates: opp.timeline ? { end: opp.timeline.end_date } : null,
-            capacity: opp.timeline ? { volunteers: opp.timeline.volunteers_required } : null,
-            applicants_count: 0
+
+        return Promise.all(opportunities.map(async opp => {
+            const occupiedSeats = await this.getOccupiedSeats(opp.id);
+            const volunteersRequired = opp.timeline?.volunteers_required || 0;
+
+            return {
+                ...opp,
+                location: opp.location,
+                start_date: opp.timeline?.start_date,
+                end_date: opp.timeline?.end_date,
+                dates: opp.timeline ? { end: opp.timeline.end_date } : null,
+                capacity: opp.timeline ? {
+                    volunteers: volunteersRequired,
+                    remaining_seats: Math.max(0, volunteersRequired - occupiedSeats)
+                } : null,
+                applicants_count: occupiedSeats
+            };
         }));
     }
 
@@ -135,9 +161,8 @@ export class OpportunitiesService {
 
         // We need to count participants for each opportunity
         const opportunitiesWithCounts = await Promise.all(opportunities.map(async (opp) => {
-            const count = await this.participantsRepository.count({
-                where: { opportunityId: opp.id, status: 'accepted' }
-            });
+            const occupiedSeats = await this.getOccupiedSeats(opp.id);
+            const volunteersRequired = opp.timeline?.volunteers_required || 0;
 
             return {
                 id: opp.id,
@@ -145,7 +170,8 @@ export class OpportunitiesService {
                 description: opp.objectives?.description || '',
                 types: opp.types,
                 sdg_info: opp.sdg_info,
-                participant_count: count,
+                participant_count: occupiedSeats,
+                remaining_seats: Math.max(0, volunteersRequired - occupiedSeats),
                 status: opp.status,
                 location: opp.location,
                 start_date: opp.timeline?.start_date,
@@ -174,9 +200,8 @@ export class OpportunitiesService {
             throw new NotFoundException('Opportunity not found or not public');
         }
 
-        const count = await this.participantsRepository.count({
-            where: { opportunityId: opp.id, status: 'accepted' }
-        });
+        const occupiedSeats = await this.getOccupiedSeats(opp.id);
+        const volunteersRequired = opp.timeline?.volunteers_required || 0;
 
         return {
             id: opp.id,
@@ -184,7 +209,8 @@ export class OpportunitiesService {
             description: opp.objectives?.description || '',
             types: opp.types,
             sdg_info: opp.sdg_info,
-            participant_count: count,
+            participant_count: occupiedSeats,
+            remaining_seats: Math.max(0, volunteersRequired - occupiedSeats),
             status: opp.status,
             location: opp.location,
             start_date: opp.timeline?.start_date,
@@ -203,11 +229,22 @@ export class OpportunitiesService {
 
     // Admin methods
     async findAllPending() {
-        return this.opportunitiesRepository.find({
+        const opportunities = await this.opportunitiesRepository.find({
             where: { status: 'pending_approval' },
             relations: ['organization'],
             order: { createdAt: 'DESC' }
         });
+
+        return Promise.all(opportunities.map(async opp => {
+            const occupiedSeats = await this.getOccupiedSeats(opp.id);
+            const volunteersRequired = opp.timeline?.volunteers_required || 0;
+
+            return {
+                ...opp,
+                remaining_seats: Math.max(0, volunteersRequired - occupiedSeats),
+                participant_count: occupiedSeats
+            };
+        }));
     }
 
     async approve(id: string) {
@@ -251,7 +288,7 @@ export class OpportunitiesService {
         // Fetch all participants/applicants for this opportunity
         const participants = await this.participantsRepository.find({
             where: { opportunityId },
-            relations: ['student'],
+            relations: ['student', 'teamMembers'],
             order: { createdAt: 'DESC' }
         });
 
@@ -263,8 +300,65 @@ export class OpportunitiesService {
             email: p.student?.email || 'N/A',
             status: p.status,
             appliedAt: p.createdAt,
-            avatar: p.student?.avatar || null
+            avatar: p.student?.avatar || null,
+            participation_type: p.participation_type,
+            teamMembers: p.teamMembers?.map(m => ({
+                id: m.id,
+                name: m.name,
+                email: m.email,
+                university: m.university,
+                role: m.role,
+                is_verified: m.is_verified
+            })) || []
         }));
+    }
+
+    async getOrganizationParticipants(organizationId: string) {
+        const participants = await this.participantsRepository.find({
+            where: {
+                opportunity: { organizationId },
+                status: In(['accepted', 'approved', 'verified'])
+            },
+            relations: ['student', 'opportunity', 'teamMembers'],
+            order: { createdAt: 'DESC' }
+        });
+
+        // We need to map to the format expected by PartnerParticipantsPage:
+        // { id, name, opportunity, joinedDate, hours, status }
+        const result: any[] = [];
+
+        for (const p of participants) {
+            // Main applicant
+            result.push({
+                id: p.id,
+                name: p.student?.name || 'Unknown student',
+                opportunity: p.opportunity?.title || 'Unknown Opportunity',
+                joinedDate: p.createdAt.toLocaleDateString(),
+                hours: 0, // In a real system, you'd fetch logged hours here
+                status: p.status === 'accepted' ? 'Active' : (p.status === 'verified' ? 'Completed' : p.status),
+                participation_type: p.participation_type,
+                is_leader: true
+            });
+
+            // Team members - if NGO wants to see everyone in the list
+            if (p.participation_type === 'team' && p.teamMembers) {
+                for (const tm of p.teamMembers) {
+                    result.push({
+                        id: tm.id,
+                        name: tm.name,
+                        opportunity: p.opportunity?.title || 'Unknown Opportunity',
+                        joinedDate: p.createdAt.toLocaleDateString(),
+                        hours: 0,
+                        status: p.status === 'accepted' ? 'Active' : (p.status === 'verified' ? 'Completed' : p.status),
+                        participation_type: 'team_member',
+                        is_leader: false,
+                        leader_name: p.student?.name
+                    });
+                }
+            }
+        }
+
+        return result;
     }
 
     async updateApplicantStatus(applicantId: string, status: string, organizationId: string) {

@@ -1,6 +1,6 @@
 import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { S3Client, PutObjectCommand, ObjectCannedACL } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import * as crypto from 'crypto';
 import * as path from 'path';
 
@@ -33,7 +33,6 @@ export class S3Service {
                 Key: fileName,
                 Body: file.buffer,
                 ContentType: file.mimetype,
-                ACL: 'public-read',
             });
 
             await this.s3Client.send(command);
@@ -53,7 +52,6 @@ export class S3Service {
                 Key: fileName,
                 Body: buffer,
                 ContentType: contentType,
-                ACL: 'public-read',
             });
 
             await this.s3Client.send(command);

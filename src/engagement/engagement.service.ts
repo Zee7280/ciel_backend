@@ -122,7 +122,6 @@ export class EngagementService {
         const participant = await this.participantRepository.findOne({ where: { id: participantId } });
         if (!participant) throw new NotFoundException('Participant record not found');
         if (participant.userId !== userId) throw new BadRequestException('Not authorized');
-        if (participant.status === 'finalized') throw new BadRequestException('Cannot delete logs from a finalized engagement');
 
         const log = await this.attendanceLogRepository.findOne({ where: { id: logId, participantId } });
         if (!log) throw new NotFoundException('Attendance log not found');
@@ -201,7 +200,6 @@ export class EngagementService {
 
         if (!participant) throw new NotFoundException('Participant record not found');
         if (participant.userId !== userId) throw new BadRequestException('Not authorized');
-        if (participant.status === 'finalized') throw new BadRequestException('Engagement is already finalized');
 
         const metrics = await this.getEngagementMetrics(participantId);
 

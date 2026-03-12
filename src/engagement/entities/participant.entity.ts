@@ -19,7 +19,7 @@ export class Participant {
     @JoinColumn({ name: 'userId' })
     user: User;
 
-    @Column()
+    @Column({ nullable: true })
     userId: string;
 
     @Column({

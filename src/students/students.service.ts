@@ -14,6 +14,7 @@ import { OpportunityTeamMember } from '../opportunities/entities/opportunity-tea
 import { Otp } from './entities/otp.entity';
 import { UsersService } from '../users/users.service';
 import { MailService } from '../mail/mail.service';
+import { EngagementService } from '../engagement/engagement.service';
 
 @Injectable()
 export class StudentsService {
@@ -26,13 +27,13 @@ export class StudentsService {
         private timesheetsRepository: Repository<Timesheet>,
         @InjectRepository(OpportunityParticipant)
         private opportunityParticipantsRepository: Repository<OpportunityParticipant>,
-
         @InjectRepository(OpportunityTeamMember)
         private opportunityTeamMembersRepository: Repository<OpportunityTeamMember>,
         @InjectRepository(Otp)
         private otpRepository: Repository<Otp>,
         private usersService: UsersService,
         private mailService: MailService,
+        private engagementService: EngagementService,
     ) { }
 
     private async getOccupiedSeats(opportunityId: string): Promise<number> {
@@ -461,7 +462,7 @@ export class StudentsService {
             throw new BadRequestException(`Opportunity is full. Remaining spots: ${Math.max(0, required - currentCount)}`);
         }
 
-        // Create Participant
+        // Create Opportunity Participant (Application)
         const participant = this.opportunityParticipantsRepository.create({
             studentId: userId,
             opportunityId: dto.opportunityId,
@@ -471,7 +472,49 @@ export class StudentsService {
 
         const savedParticipant = await this.opportunityParticipantsRepository.save(participant);
 
-        // Add Team Members
+        // Pre-register for Engagement/Report Flow (Merged Flow)
+        try {
+            const user = await this.usersRepository.findOne({ where: { id: userId } });
+            if (user) {
+                await this.engagementService.preRegister(userId, dto.opportunityId, {
+                    fullName: user.name,
+                    email: user.email,
+                    mobile: user.phone || '',
+                    cnic: user.cnic || '',
+                    universityName: user.university || '',
+                    academicProgram: user.major || '',
+                    participationMode: dto.participation_type || 'individual',
+                    isTeamLead: true,
+                    emailVerified: true,
+                    mobileVerified: true,
+                    status: 'verified' // Auto-verify if lead is already verified user
+                } as any);
+            }
+
+            // Register Team Members in Participant table too
+            if (dto.participation_type === 'team' && dto.team_members && dto.team_members.length > 0) {
+                for (const m of dto.team_members) {
+                    const memberUser = await this.usersService.findByEmail(m.email);
+                    await this.engagementService.preRegister(memberUser?.id || null, dto.opportunityId, {
+                        fullName: m.name,
+                        email: m.email,
+                        mobile: m.mobile || '',
+                        cnic: m.cnic || '',
+                        universityName: m.university || '',
+                        academicProgram: m.program || '',
+                        participationMode: 'team',
+                        isTeamLead: false,
+                        emailVerified: true,
+                        mobileVerified: true,
+                        status: 'verified'
+                    } as any);
+                }
+            }
+        } catch (e) {
+            console.error('Failed to register participants for engagement:', e);
+        }
+
+        // Add Team Members to OpportunityTeamMember table (Legacy/Parallel tracking)
         if (dto.participation_type === 'team' && dto.team_members && dto.team_members.length > 0) {
             const teamMembers = dto.team_members.map(m => this.opportunityTeamMembersRepository.create({
                 participantId: savedParticipant.id,
@@ -482,7 +525,7 @@ export class StudentsService {
                 university: m.university,
                 program: m.program,
                 role: m.role,
-                is_verified: false // Email verification needed logic can go here later
+                is_verified: true // Already verified in frontend as per request
             }));
             await this.opportunityTeamMembersRepository.save(teamMembers);
         }

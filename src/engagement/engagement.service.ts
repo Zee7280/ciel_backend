@@ -30,36 +30,116 @@ export class EngagementService {
         this.KEY = crypto.scryptSync(secret, 'salt', 32);
     }
 
+    async preRegister(userId: string | null, projectId: string, data: Partial<Participant>) {
+        const opportunity = await this.opportunityRepository.findOne({ where: { id: projectId } });
+        if (!opportunity) throw new NotFoundException('Project not found');
+
+        // Check if already registered
+        let existing;
+        if (userId) {
+            existing = await this.participantRepository.findOne({
+                where: { userId, projectId: opportunity.id }
+            });
+        } else if (data.email) {
+            existing = await this.participantRepository.findOne({
+                where: { email: data.email, projectId: opportunity.id }
+            });
+        }
+        if (existing) return this.decryptParticipant(existing);
+
+        const participantData: any = {
+            ...data,
+            projectId: opportunity.id,
+            status: 'draft',
+            emailVerified: true,
+            mobileVerified: true,
+        };
+
+        if (userId) {
+            participantData.userId = userId;
+        }
+
+        const participant = this.participantRepository.create(participantData as Partial<Participant>);
+
+        if (data.cnic) {
+            participant.cnicHash = this.hashString(data.cnic);
+            participant.cnic = this.encrypt(data.cnic);
+            participant.cnicLast4 = data.cnic.slice(-4);
+        }
+
+        const saved = await this.participantRepository.save(participant);
+        return this.decryptParticipant(saved);
+    }
+
     async registerParticipant(userId: string, dto: RegisterParticipantDto) {
         const opportunity = await this.opportunityRepository.findOne({ where: { id: dto.projectId } });
         if (!opportunity) throw new NotFoundException('Project not found');
 
-        // Check for duplicate CNIC within this specific project
+        // 1. Check if this CNIC is already used by SOMEONE ELSE in this project
         const cnicHash = this.hashString(dto.cnic);
-        const existing = await this.participantRepository.findOne({
+        const existingByCnic = await this.participantRepository.findOne({
             where: { cnicHash, projectId: opportunity.id }
         });
-        if (existing) throw new BadRequestException('CNIC already registered for this opportunity');
 
-        const encryptedCnic = this.encrypt(dto.cnic);
+        if (existingByCnic && existingByCnic.userId !== userId) {
+            throw new BadRequestException('CNIC already registered for this opportunity');
+        }
 
-        const participant = this.participantRepository.create({
-            ...dto,
-            userId,
-            cnicHash, // Used for lookup
-            cnic: encryptedCnic,
-            cnicLast4: dto.cnic.slice(-4),
+        // 2. Check if a record already exists for THIS user in this project
+        // We update the existing record to maintain idempotency and allow info updates
+        const existingByUser = await this.participantRepository.findOne({
+            where: { userId, projectId: opportunity.id }
         });
 
+        const encryptedCnic = this.encrypt(dto.cnic);
+        let participant: Participant;
 
-        return await this.participantRepository.save(participant);
+        if (existingByUser) {
+            // Update existing record
+            Object.assign(existingByUser, {
+                ...dto,
+                cnicHash,
+                cnic: encryptedCnic,
+                cnicLast4: dto.cnic.slice(-4),
+                // Ensure verified flags aren't reset if they were already true
+                emailVerified: true,
+                mobileVerified: true,
+            });
+            participant = existingByUser;
+        } else {
+            // Create new record
+            participant = this.participantRepository.create({
+                ...dto,
+                userId,
+                cnicHash,
+                cnic: encryptedCnic,
+                cnicLast4: dto.cnic.slice(-4),
+                emailVerified: true,
+                mobileVerified: true,
+            });
+        }
+
+        const saved = await this.participantRepository.save(participant);
+        return this.decryptParticipant(saved);
     }
 
     async getMyParticipants(userId: string) {
-        return await this.participantRepository.find({
+        const result = await this.participantRepository.find({
             where: { userId },
             relations: ['attendanceLogs']
         });
+        return result.map(p => this.decryptParticipant(p));
+    }
+
+    private decryptParticipant(p: Participant): Participant {
+        if (p.cnic && p.cnic.includes(':')) {
+            try {
+                p.cnic = this.decrypt(p.cnic);
+            } catch (e) {
+                this.logger.error(`Failed to decrypt CNIC for participant ${p.id}`);
+            }
+        }
+        return p;
     }
 
     async addAttendanceLog(userId: string, participantId: string, dto: CreateAttendanceLogDto, file?: Express.Multer.File) {
@@ -208,7 +288,8 @@ export class EngagementService {
         participant.hecStatus = metrics.hecStatus;
         participant.finalizedAt = new Date();
 
-        return await this.participantRepository.save(participant);
+        const saved = await this.participantRepository.save(participant);
+        return this.decryptParticipant(saved);
     }
 
     async generateSummary(participantId: string) {
@@ -275,6 +356,15 @@ export class EngagementService {
         let encrypted = cipher.update(text, 'utf8', 'hex');
         encrypted += cipher.final('hex');
         return iv.toString('hex') + ':' + encrypted;
+    }
+
+    public decryptCnicInternal(text: string): string {
+        if (!text || !text.includes(':')) return text;
+        try {
+            return this.decrypt(text);
+        } catch (e) {
+            return text;
+        }
     }
 
     private decrypt(text: string): string {

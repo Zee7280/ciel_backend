@@ -27,8 +27,8 @@ export class StudentReport {
     @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
     submission_date: Date;
 
-    @Column({ default: 'draft' })
-    status: string; // 'draft', 'submitted', 'partner_verified', 'verified', 'rejected'
+    @Column({ default: 'continue' })
+    status: string; // 'continue', 'submitted', 'partner_verified', 'verified', 'rejected'
 
     @Column({ default: 'pending' })
     partner_status: string; // 'pending', 'approved', 'rejected'
@@ -80,6 +80,7 @@ export class StudentReport {
         participation_type: 'individual' | 'team';
         team_lead: {
             name: string;
+            fullName?: string;
             cnic: string;
             mobile: string;
             email: string;
@@ -92,6 +93,7 @@ export class StudentReport {
         };
         team_members?: Array<{
             name: string;
+            fullName?: string;
             cnic: string;
             mobile: string;
             university: string;

@@ -8,6 +8,11 @@ import { S3Service } from '../common/s3.service';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import * as path from 'path';
 
+import { OpportunityTeamMember } from '../opportunities/entities/opportunity-team-member.entity';
+import { User } from '../users/entities/user.entity';
+
+import { EngagementService } from '../engagement/engagement.service';
+
 @Injectable()
 export class StudentReportsService {
     constructor(
@@ -15,11 +20,16 @@ export class StudentReportsService {
         private readonly opportunitiesRepository: Repository<Opportunity>,
         @InjectRepository(OpportunityParticipant)
         private readonly opportunityParticipantsRepository: Repository<OpportunityParticipant>,
+        @InjectRepository(OpportunityTeamMember)
+        private readonly opportunityTeamMembersRepository: Repository<OpportunityTeamMember>,
         @InjectRepository(StudentReport)
         private studentReportsRepository: Repository<StudentReport>,
         @InjectRepository(AttendanceLog)
         private readonly attendanceLogsRepository: Repository<AttendanceLog>,
+        @InjectRepository(User)
+        private readonly usersRepository: Repository<User>,
         private readonly s3Service: S3Service,
+        private readonly engagementService: EngagementService,
     ) { }
 
     async uploadFile(file: Express.Multer.File, section: string, studentId: string): Promise<string> {
@@ -165,7 +175,7 @@ export class StudentReportsService {
         });
 
         if (report) {
-            report.status = 'draft';
+            report.status = 'continue';
             if (parsedData.project_id) report.project_id = parsedData.project_id;
             if (parsedData.section1) report.section1 = parsedData.section1;
             if (parsedData.section2) report.section2 = parsedData.section2;
@@ -183,7 +193,7 @@ export class StudentReportsService {
                 studentId,
                 project_id: parsedData.project_id,
                 opportunityId: parsedData.opportunityId,
-                status: 'draft',
+                status: 'continue',
                 section1: parsedData.section1,
                 section2: parsedData.section2,
                 section3: parsedData.section3,
@@ -327,6 +337,59 @@ export class StudentReportsService {
             return this.formatReportResponse(report, attendanceLogs);
         }
 
+        // If no report found, check for an accepted application to pre-populate
+        const application = await this.opportunityParticipantsRepository.findOne({
+            where: { opportunityId: id, studentId },
+            relations: ['teamMembers']
+        });
+
+        if (application) {
+            const studentProfile = await this.usersRepository.findOne({ where: { id: studentId } });
+            return {
+                success: true,
+                data: {
+                    project_id: id,
+                    opportunityId: id,
+                    status: 'none',
+                    section1: {
+                        participation_type: application.participation_type || 'individual',
+                        team_lead: {
+                            name: studentProfile?.name || '',
+                            fullName: studentProfile?.name || '',
+                            email: studentProfile?.email || '',
+                            mobile: studentProfile?.phone || '',
+                            cnic: studentProfile?.cnic || '',
+                            university: studentProfile?.university || '',
+                            program: studentProfile?.major || '',
+                            verified: true
+                        },
+                        team_members: application.teamMembers?.map(m => ({
+                            name: m.name,
+                            fullName: m.name,
+                            email: m.email,
+                            mobile: m.mobile,
+                            cnic: m.cnic,
+                            university: m.university,
+                            program: m.program,
+                            role: m.role,
+                            verified: m.is_verified || true // Inherit verification
+                        })) || [],
+                        attendance_logs: [],
+                        metrics: {
+                            total_verified_hours: 0,
+                            total_active_days: 0,
+                            engagement_span: 0,
+                            attendance_frequency: 0,
+                            weekly_continuity: 0,
+                            eis_score: 0,
+                            engagement_category: 'Introductory Engagement',
+                            hec_compliance: 'below'
+                        }
+                    }
+                }
+            };
+        }
+
         return {
             success: true,
             data: null
@@ -359,6 +422,16 @@ export class StudentReportsService {
                 submission_date: report.submission_date,
                 section1: {
                     ...report.section1,
+                    team_lead: report.section1?.team_lead ? {
+                        ...report.section1.team_lead,
+                        fullName: report.section1.team_lead.fullName || report.section1.team_lead.name || '',
+                        cnic: this.engagementService.decryptCnicInternal(report.section1.team_lead.cnic)
+                    } : undefined,
+                    team_members: report.section1?.team_members?.map((m: any) => ({
+                        ...m,
+                        fullName: m.fullName || m.name || '',
+                        cnic: this.engagementService.decryptCnicInternal(m.cnic)
+                    })),
                     attendance_logs: attendanceLogs ? attendanceLogs.map(log => ({
                         id: log.id,
                         date: log.dateOfEngagement,

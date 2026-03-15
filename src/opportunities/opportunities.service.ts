@@ -6,6 +6,7 @@ import { OpportunityParticipant } from './entities/opportunity-participant.entit
 import { OpportunityTeamMember } from './entities/opportunity-team-member.entity';
 import { CreateOpportunityDto, UpdateOpportunityDto } from './dto/create-opportunity.dto';
 import { OrganizationsService } from '../organizations/organizations.service';
+import { EngagementService } from '../engagement/engagement.service';
 
 @Injectable()
 export class OpportunitiesService {
@@ -17,6 +18,7 @@ export class OpportunitiesService {
         @InjectRepository(OpportunityTeamMember)
         private teamMembersRepository: Repository<OpportunityTeamMember>,
         private organizationsService: OrganizationsService,
+        private engagementService: EngagementService,
     ) { }
 
     async getOccupiedSeats(opportunityId: string): Promise<number> {
@@ -365,7 +367,7 @@ export class OpportunitiesService {
         // Find the participant with opportunity relation
         const participant = await this.participantsRepository.findOne({
             where: { id: applicantId },
-            relations: ['opportunity']
+            relations: ['opportunity', 'student', 'teamMembers']
         });
 
         if (!participant) {
@@ -380,6 +382,44 @@ export class OpportunitiesService {
         // Update status
         participant.status = status;
         await this.participantsRepository.save(participant);
+
+        // If status is accepted, automatically pre-register for engagement/attendance
+        if (status === 'accepted') {
+            try {
+                // 1. Pre-register Team Lead
+                await this.engagementService.preRegister(
+                    participant.studentId,
+                    participant.opportunityId,
+                    {
+                        fullName: participant.student?.name,
+                        email: participant.student?.email,
+                        mobile: participant.student?.phone,
+                        universityId: participant.student?.institution,
+                        cnic: participant.student?.cnic,
+                    }
+                );
+
+                // 2. Pre-register all Team Members
+                if (participant.teamMembers && participant.teamMembers.length > 0) {
+                    for (const member of participant.teamMembers) {
+                        await this.engagementService.preRegister(
+                            null, // User IDs often not available for team members yet
+                            participant.opportunityId,
+                            {
+                                fullName: member.name,
+                                email: member.email,
+                                mobile: member.mobile,
+                                universityId: member.university,
+                                cnic: member.cnic,
+                            }
+                        );
+                    }
+                }
+            } catch (err) {
+                // Log error but don't fail the status update
+                console.error('Failed to pre-register part/team after acceptance:', err);
+            }
+        }
 
         return { success: true, message: 'Applicant status updated successfully' };
     }

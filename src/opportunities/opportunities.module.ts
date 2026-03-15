@@ -10,9 +10,15 @@ import { OrganizationsModule } from '../organizations/organizations.module';
 import { OpportunityParticipant } from './entities/opportunity-participant.entity';
 import { OpportunityTeamMember } from './entities/opportunity-team-member.entity';
 import { UsersModule } from '../users/users.module';
+import { EngagementModule } from '../engagement/engagement.module';
 
 @Module({
-    imports: [TypeOrmModule.forFeature([Opportunity, OpportunityParticipant, OpportunityTeamMember]), OrganizationsModule, UsersModule],
+    imports: [
+        TypeOrmModule.forFeature([Opportunity, OpportunityParticipant, OpportunityTeamMember]),
+        OrganizationsModule,
+        UsersModule,
+        EngagementModule
+    ],
     controllers: [OpportunitiesController, AdminOpportunitiesController, PublicOpportunitiesController, ParticipantsController],
     providers: [OpportunitiesService],
     exports: [OpportunitiesService],

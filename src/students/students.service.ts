@@ -256,6 +256,8 @@ export class StudentsService {
                     remaining_seats: Math.max(0, volunteersRequired - occupiedSeats),
                     description: o.objectives?.description || 'No description',
                     application_status: app ? app.status : null,
+                    payment_status: app ? app.payment_status : null,
+                    payment_proof_url: app ? app.payment_proof_url : null,
                     // Map status for frontend buttons. "active" is required for "Submit Report".
                     status: (app && (app.status === 'approved' || app.status === 'verified')) ? 'active' : (app ? 'applied' : o.status),
                     teamMembers: app?.teamMembers?.map(member => ({
@@ -288,6 +290,8 @@ export class StudentsService {
         }
 
         let applicationStatus: string | null = null;
+        let paymentStatus: string | null = null;
+        let paymentProofUrl: string | null = null;
         let hasApplied = false;
 
         if (userId) {
@@ -300,6 +304,8 @@ export class StudentsService {
 
             if (application) {
                 applicationStatus = application.status;
+                paymentStatus = application.payment_status;
+                paymentProofUrl = application.payment_proof_url;
                 hasApplied = true;
             }
         }
@@ -312,6 +318,8 @@ export class StudentsService {
             data: {
                 ...opportunity,
                 application_status: applicationStatus,
+                payment_status: paymentStatus,
+                payment_proof_url: paymentProofUrl,
                 hasApplied: hasApplied,
                 remaining_seats: Math.max(0, volunteersRequired - occupiedSeats),
                 // Also map status for report button visibility
@@ -349,6 +357,8 @@ export class StudentsService {
             description: app.opportunity.objectives?.description,
             // Map status for frontend buttons. "active" is required for "Submit Report".
             status: (app.status === 'approved' || app.status === 'verified') ? 'active' : app.status,
+            payment_status: app.payment_status,
+            payment_proof_url: app.payment_proof_url,
             teamMembers: app.teamMembers?.map(member => ({
                 name: member.name,
                 role: member.role,

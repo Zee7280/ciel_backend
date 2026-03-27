@@ -20,6 +20,8 @@ import { ChatModule } from './chat/chat.module';
 import { MailModule } from './mail/mail.module';
 import { EngagementModule } from './engagement/engagement.module';
 import { StorageModule } from './common/storage.module';
+import { PaymentsModule } from './payments/payments.module';
+import { FacultyModule } from './faculty/faculty.module';
 
 @Module({
   imports: [
@@ -62,8 +64,10 @@ import { StorageModule } from './common/storage.module';
     MailModule,
     EngagementModule,
     StorageModule,
+    PaymentsModule,
+    FacultyModule,
     TypeOrmModule.forFeature([Setting])
-  ],
+],
   controllers: [AppController],
   providers: [AppService],
 })

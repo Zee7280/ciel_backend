@@ -10,6 +10,7 @@ import * as path from 'path';
 
 import { OpportunityTeamMember } from '../opportunities/entities/opportunity-team-member.entity';
 import { User } from '../users/entities/user.entity';
+import { MailService } from '../mail/mail.service';
 
 import { EngagementService } from '../engagement/engagement.service';
 
@@ -30,6 +31,7 @@ export class StudentReportsService {
         private readonly usersRepository: Repository<User>,
         private readonly s3Service: S3Service,
         private readonly engagementService: EngagementService,
+        private readonly mailService: MailService,
     ) { }
 
     async uploadFile(file: Express.Multer.File, section: string, studentId: string): Promise<string> {
@@ -140,6 +142,11 @@ export class StudentReportsService {
             report.section2.primary_beneficiary = report.primary_beneficiary;
         }
 
+        // Handle Faculty Assignment if faculty email is provided in Section 1
+        if (report.section1?.faculty_supervisor_email) {
+            await this.handleFacultyAssignment(report, report.section1.faculty_supervisor_email);
+        }
+
         // Save report to get ID
         await this.studentReportsRepository.save(report);
 
@@ -206,6 +213,11 @@ export class StudentReportsService {
                 section10: parsedData.section10,
                 section11: parsedData.section11,
             });
+        }
+
+        // Handle Faculty Assignment if faculty email is provided in Section 1
+        if (report.section1?.faculty_supervisor_email) {
+            await this.handleFacultyAssignment(report, report.section1.faculty_supervisor_email);
         }
 
         await this.studentReportsRepository.save(report);
@@ -724,6 +736,30 @@ export class StudentReportsService {
                 // Add new URLs to the section
                 report[section].media_urls.push(...filePaths[section]);
             }
+        }
+    }
+
+    private async handleFacultyAssignment(report: StudentReport, email: string) {
+        // 1. Search for faculty user
+        const facultyUser = await this.usersRepository.findOne({
+            where: { email: email.toLowerCase(), role: 'faculty' as any }
+        });
+
+        if (facultyUser) {
+            // Already exists, link it
+            report.facultyId = facultyUser.id;
+            // No need to invite if they already have an account, but maybe notify?
+            // For now, just link.
+        } else {
+            // Does not exist, clear any previous link and trigger invite
+            report.facultyId = null;
+
+            // Get student name and project title for the email
+            const student = await this.usersRepository.findOne({ where: { id: report.studentId } });
+            const opportunity = await this.opportunitiesRepository.findOne({ where: { id: report.opportunityId } });
+            const projectTitle = opportunity?.title || report.project_id || 'Student Project';
+
+            await this.mailService.sendFacultyInvite(email, student?.name || 'A Student', projectTitle);
         }
     }
 }

@@ -172,4 +172,36 @@ export class MailService {
       this.logger.error(`Failed to send team invite email to ${to}`, error.stack);
     }
   }
+
+  async sendFacultyInvite(to: string, studentName: string, projectName: string) {
+    const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
+    const signupLink = `https://cielpk.com/signup?role=faculty&email=${encodeURIComponent(to)}`;
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">Faculty Supervisor Invitation</h2>
+        <p>Dear Faculty Member,</p>
+        <p><strong>${studentName}</strong> has requested you to be their Faculty Supervisor for the project: <strong>${projectName}</strong> on Ciel PK.</p>
+        <p>As a Faculty Supervisor, you will be able to review student reports, monitor engagement metrics, and provide official institutional approval for their work.</p>
+        <p>If you don't have an account yet, you can sign up using the link below:</p>
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${signupLink}" style="background-color: #4CAF50; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Sign Up as Faculty</a>
+        </div>
+        <p>If you already have an account, please log in to your dashboard to see the pending report.</p>
+        <p>Best regards,<br>The Ciel Team</p>
+      </div>
+    `;
+
+    try {
+      await this.transporter.sendMail({
+        from,
+        to,
+        subject: `Invitation to supervise project: ${projectName}`,
+        html,
+      });
+      this.logger.log(`Faculty invite email sent to ${to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send faculty invite email to ${to}`, error.stack);
+    }
+  }
 }

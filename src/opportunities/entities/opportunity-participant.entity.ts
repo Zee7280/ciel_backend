@@ -31,6 +31,19 @@ export class OpportunityParticipant {
     @OneToMany(() => OpportunityTeamMember, (member) => member.participant)
     teamMembers: OpportunityTeamMember[];
 
+    @Column({
+        type: 'enum',
+        enum: ['pending', 'pending_payment_approval', 'paid', 'rejected'],
+        default: 'pending'
+    })
+    payment_status: string;
+
+    @Column({ nullable: true })
+    payment_proof_url: string;
+
+    @Column({ type: 'timestamp', nullable: true })
+    payment_date: Date;
+
     @CreateDateColumn()
     createdAt: Date;
 

@@ -24,6 +24,19 @@ export class StudentReport {
     @Column({ nullable: true })
     project_id: string;
 
+    @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
+    @JoinColumn({ name: 'facultyId' })
+    faculty: User;
+
+    @Column({ nullable: true })
+    facultyId: string | null;
+
+    @Column({ default: 'pending' })
+    faculty_status: string; // 'pending', 'approved', 'rejected'
+
+    @Column({ type: 'text', nullable: true })
+    faculty_remarks: string;
+
     @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
     submission_date: Date;
 
@@ -78,6 +91,7 @@ export class StudentReport {
     @Column({ type: 'jsonb', nullable: true })
     section1: {
         participation_type: 'individual' | 'team';
+        faculty_supervisor_email?: string;
         team_lead: {
             name: string;
             fullName?: string;

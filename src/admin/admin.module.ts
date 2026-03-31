@@ -9,7 +9,7 @@ import { Report } from '../reports/entities/report.entity';
 import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { AuditLog } from '../audit-logs/entities/audit-log.entity';
 import { Setting } from '../settings/entities/setting.entity';
-import { OpportunityParticipant } from '../opportunities/entities/opportunity-participant.entity';
+import { Participation } from '../engagement/entities/participant.entity';
 import { OpportunitiesModule } from '../opportunities/opportunities.module';
 import { StudentsModule } from '../students/students.module';
 
@@ -18,7 +18,7 @@ import { StudentsModule } from '../students/students.module';
         UsersModule,
         OpportunitiesModule,
         StudentsModule,
-        TypeOrmModule.forFeature([User, Opportunity, Report, Timesheet, AuditLog, Setting, OpportunityParticipant]),
+        TypeOrmModule.forFeature([User, Opportunity, Report, Timesheet, AuditLog, Setting, Participation]),
     ],
     controllers: [AdminController],
     providers: [AdminService],

@@ -5,7 +5,7 @@ import { User } from '../users/entities/user.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { Report } from '../reports/entities/report.entity';
 import { Timesheet } from '../timesheets/entities/timesheet.entity';
-import { OpportunityParticipant } from '../opportunities/entities/opportunity-participant.entity';
+import { Participation } from '../engagement/entities/participant.entity';
 
 import { AuditLog } from '../audit-logs/entities/audit-log.entity';
 import { UserRole } from '../users/enums/user-role.enum';
@@ -28,8 +28,8 @@ export class AdminService {
         private auditLogRepository: Repository<AuditLog>,
         @InjectRepository(Setting)
         private settingRepository: Repository<Setting>,
-        @InjectRepository(OpportunityParticipant)
-        private opportunityParticipantRepository: Repository<OpportunityParticipant>,
+        @InjectRepository(Participation)
+        private participationRepository: Repository<Participation>,
     ) { }
 
     async getSettings() {
@@ -72,7 +72,7 @@ export class AdminService {
 
         // Pending Approvals (Users + Applications)
         const pendingUsers = await this.usersRepository.count({ where: { status: 'pending' } });
-        const pendingApplications = await this.opportunityParticipantRepository.count({ where: { status: 'pending' } });
+        const pendingApplications = await this.participationRepository.count({ where: { status: 'pending' } });
         const pendingApprovals = pendingUsers + pendingApplications;
 
         // Verified Hours
@@ -256,9 +256,9 @@ export class AdminService {
 
     async findPendingApplications() {
         console.log('Fetching pending applications...');
-        const applications = await this.opportunityParticipantRepository.find({
+        const applications = await this.participationRepository.find({
             where: { status: 'pending' },
-            relations: ['student', 'opportunity', 'student.organization'],
+            relations: ['student', 'project'],
             order: { createdAt: 'DESC' }
         });
         console.log(`Found ${applications.length} pending applications.`);
@@ -272,10 +272,10 @@ export class AdminService {
             success: true,
             data: applications.map(app => ({
                 id: app.id,
-                name: app.student?.name || 'Unknown',
-                email: app.student?.email || 'Unknown',
-                organization_type: app.participation_type === 'team' ? 'Team' : 'Individual',
-                opportunity: app.opportunity?.title || 'Unknown',
+                name: app.fullName || app.student?.name || 'Unknown',
+                email: app.email || app.student?.email || 'Unknown',
+                organization_type: app.participationMode === 'team' ? 'Team' : 'Individual',
+                opportunity: app.project?.title || 'Unknown',
                 created_at: app.createdAt
             }))
         };
@@ -283,12 +283,12 @@ export class AdminService {
 
     async approveApplication(id: string) {
         console.log(`Approving application with ID: ${id}`);
-        const application = await this.opportunityParticipantRepository.findOne({ where: { id } });
+        const application = await this.participationRepository.findOne({ where: { id } });
         if (!application) {
             throw new Error('Application not found');
         }
         application.status = 'approved';
-        await this.opportunityParticipantRepository.save(application);
+        await this.participationRepository.save(application);
         return {
             success: true,
             message: 'Application approved successfully'
@@ -296,12 +296,12 @@ export class AdminService {
     }
 
     async rejectApplication(id: string, reason: string) {
-        const application = await this.opportunityParticipantRepository.findOne({ where: { id } });
+        const application = await this.participationRepository.findOne({ where: { id } });
         if (!application) {
             throw new Error('Application not found');
         }
         application.status = 'rejected';
-        await this.opportunityParticipantRepository.save(application);
+        await this.participationRepository.save(application);
         return {
             success: true,
             message: 'Application rejected successfully'

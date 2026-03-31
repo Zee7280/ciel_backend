@@ -25,7 +25,7 @@ export class EngagementController {
         return {
             success: true,
             data: result,
-            message: 'Participant registered successfully',
+            message: 'Participation registered successfully',
         };
     }
 
@@ -89,6 +89,34 @@ export class EngagementController {
             success: true,
             data: result,
             message: 'Engagement finalized successfully',
+        };
+    }
+
+    @Post(':id/faculty-approve')
+    async facultyApprove(@Param('id') id: string, @Body('status') status: string) {
+        const result = await this.engagementService.facultyApprove(id, status);
+        return {
+            success: true,
+            data: result,
+            message: `Participation ${status} by faculty`,
+        };
+    }
+
+    @Get('project/:projectId/team')
+    async getProjectTeam(@Param('projectId') projectId: string) {
+        const result = await this.engagementService.getProjectTeam(projectId);
+        return {
+            success: true,
+            data: result,
+        };
+    }
+
+    @Delete(':id')
+    async deleteParticipant(@Param('id') id: string) {
+        await this.engagementService.deleteParticipant(id);
+        return {
+            success: true,
+            message: 'Member removed from project participation',
         };
     }
 }

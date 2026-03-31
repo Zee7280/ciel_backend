@@ -51,6 +51,9 @@ export class Opportunity {
 
     @Column({ nullable: true })
     organizationId: string;
+    
+    @Column({ default: 16 })
+    requiredHours: number;
 
     @Column()
     sdg: string; // Keeping for backward compatibility if needed, or remove? Spec says sdg_info. I'll keep it as optional or remove if unused. Let's keep it but maybe nullable.

@@ -173,22 +173,120 @@ export class MailService {
     }
   }
 
+  async sendFacultyApprovalRequest(
+    to: string,
+    studentName: string,
+    projectTitle: string,
+    participationId: string
+  ) {
+    const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
+    const html = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+            <p>Dear Faculty Member,</p>
+            <p>Greetings from Community Impact Education Lab (CIEL).</p>
+            <p>Your student, <strong>${studentName}</strong>, has selected a community engagement project and listed you as the supervising faculty.</p>
+            <p><strong>Project:</strong> ${projectTitle}</p>
+            <p>Kindly review and approve the project so the student can begin:</p>
+            <div style="text-align: center; margin: 30px 0;">
+                <a href="https://cielpk.com/login" style="background-color: #4CAF50; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">👉 Click here to Review & Approve</a>
+            </div>
+            <p>Your approval will enable the student to proceed with the project and reporting.</p>
+            <p>Thank you for your support.</p>
+            <p>Warm regards,<br><strong>CIEL Team</strong></p>
+        </div>
+    `;
+
+    try {
+      await this.transporter.sendMail({
+        from,
+        to,
+        subject: `Project Approval Required – CIEL`,
+        html,
+      });
+      this.logger.log(`Faculty approval request email sent to ${to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send faculty approval request email to ${to}`, error.stack);
+    }
+  }
+
+  async sendFacultyCollaboratorNotice(
+    to: string,
+    studentName: string,
+    projectTitle: string
+  ) {
+    const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
+    const html = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+            <p>Dear Faculty Member,</p>
+            <p>Greetings from Community Impact Education Lab (CIEL).</p>
+            <p>You have been added as a Secondary/Collaborating Faculty Supervisor for the following project:</p>
+            <p><strong>Student:</strong> ${studentName}</p>
+            <p><strong>Project:</strong> ${projectTitle}</p>
+            <p>You can view and monitor this project on the SEAL platform. Note that your official approval is not required as you are listed in a collaborating capacity.</p>
+            <p>Thank you for your engagement.</p>
+            <p>Warm regards,<br><strong>CIEL Team</strong></p>
+        </div>
+    `;
+
+    try {
+      await this.transporter.sendMail({
+        from,
+        to,
+        subject: `Collaborating Supervisor Notice – CIEL`,
+        html,
+      });
+      this.logger.log(`Faculty collaborator notice email sent to ${to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send faculty collaborator notice email to ${to}`, error.stack);
+    }
+  }
+
+  async sendApplicationSubmitted(
+    to: string,
+    studentName: string,
+    projectTitle: string
+  ) {
+    const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
+    const html = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+            <h2 style="color: #333;">Application Submitted Successfully</h2>
+            <p>Hi ${studentName},</p>
+            <p>Your application for <strong>${projectTitle}</strong> has been submitted successfully.</p>
+            <p>Your primary faculty supervisor will review and approve your participation.</p>
+            <p>Status: <strong>Pending Faculty Approval</strong></p>
+            <p>Best regards,<br>The Ciel Team</p>
+        </div>
+    `;
+
+    try {
+      await this.transporter.sendMail({
+        from,
+        to,
+        subject: `Application Submitted – Pending Approval – SEAL Platform`,
+        html,
+      });
+      this.logger.log(`Application submission confirmation email sent to ${to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send application submission confirmation email to ${to}`, error.stack);
+    }
+  }
+
   async sendFacultyInvite(to: string, studentName: string, projectName: string) {
     const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
     const signupLink = `https://cielpk.com/signup?role=faculty&email=${encodeURIComponent(to)}`;
 
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
-        <h2 style="color: #333;">Faculty Supervisor Invitation</h2>
         <p>Dear Faculty Member,</p>
-        <p><strong>${studentName}</strong> has requested you to be their Faculty Supervisor for the project: <strong>${projectName}</strong> on Ciel PK.</p>
-        <p>As a Faculty Supervisor, you will be able to review student reports, monitor engagement metrics, and provide official institutional approval for their work.</p>
-        <p>If you don't have an account yet, you can sign up using the link below:</p>
+        <p>Greetings from Community Impact Education Lab (CIEL).</p>
+        <p><strong>${studentName}</strong> has requested you to be their Faculty Supervisor for the project: <strong>${projectName}</strong> on the SEAL Platform.</p>
+        <p>As a Faculty Supervisor, you will be able to review student progress, monitor engagement metrics, and provide official institutional approval for their work.</p>
+        <p>If you don't have an account yet, please sign up using the link below:</p>
         <div style="text-align: center; margin: 30px 0;">
           <a href="${signupLink}" style="background-color: #4CAF50; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Sign Up as Faculty</a>
         </div>
-        <p>If you already have an account, please log in to your dashboard to see the pending report.</p>
-        <p>Best regards,<br>The Ciel Team</p>
+        <p>Your support is vital in ensuring impactful student engagement.</p>
+        <p>Warm regards,<br><strong>CIEL Team</strong></p>
       </div>
     `;
 
@@ -196,7 +294,7 @@ export class MailService {
       await this.transporter.sendMail({
         from,
         to,
-        subject: `Invitation to supervise project: ${projectName}`,
+        subject: `Faculty Supervisor Invitation – CIEL`,
         html,
       });
       this.logger.log(`Faculty invite email sent to ${to}`);

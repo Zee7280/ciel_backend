@@ -3,24 +3,36 @@ import { User } from '../../users/entities/user.entity';
 import { Opportunity } from '../../opportunities/entities/opportunity.entity';
 import { AttendanceLog } from './attendance-log.entity';
 
-@Entity('participants')
-export class Participant {
+@Entity('participations')
+export class Participation {
     @PrimaryGeneratedColumn('uuid')
     id: string;
 
     @ManyToOne(() => Opportunity, { onDelete: 'CASCADE' })
-    @JoinColumn({ name: 'projectId' })
+    @JoinColumn({ name: 'project_id' })
     project: Opportunity;
 
-    @Column()
+    @Column({ name: 'project_id' })
     projectId: string;
 
     @ManyToOne(() => User, { onDelete: 'CASCADE' })
-    @JoinColumn({ name: 'userId' })
-    user: User;
+    @JoinColumn({ name: 'student_id' })
+    student: User;
+
+    @Column({ name: 'student_id', nullable: true })
+    studentId: string;
 
     @Column({ nullable: true })
-    userId: string;
+    facultySupervisorEmail: string;
+
+    @Column({ nullable: true })
+    primaryFacultyEmail: string;
+
+    @Column({ nullable: true })
+    secondaryFacultyEmail: string;
+
+    @Column({ nullable: true })
+    teamId: string;
 
     @Column({
         type: 'enum',
@@ -35,13 +47,13 @@ export class Participant {
     @Column()
     fullName: string;
 
-    @Column()
+    @Column({ nullable: true })
     cnicHash: string; // SHA-256 hash for duplicate checking
 
     @Column({ nullable: true })
     cnic: string; // AES-256 encrypted CNIC
 
-    @Column()
+    @Column({ nullable: true })
     cnicLast4: string; // For searching/displaying last 4 digits
 
     @Column()
@@ -56,36 +68,51 @@ export class Participant {
     @Column({ default: false })
     emailVerified: boolean;
 
-    @Column()
+    @Column({ nullable: true })
     universityId: string;
 
-    @Column()
+    @Column({ nullable: true })
     universityName: string;
 
-    @Column()
+    @Column({ nullable: true })
     academicProgram: string;
 
     @Column({
         type: 'enum',
-        enum: ['1st Year', '2nd Year', '3rd Year', '4th Year', 'Graduate', 'Postgraduate']
+        enum: ['1st Year', '2nd Year', '3rd Year', '4th Year', 'Graduate', 'Postgraduate'],
+        nullable: true
     })
     yearOfStudy: string;
 
-    @Column()
+    @Column({ nullable: true })
     department: string;
 
     @Column({
         type: 'enum',
-        enum: ['Voluntary', 'Course-Linked', 'Credit-Bearing', 'Capstone / Thesis', 'Research-Integrated']
+        enum: ['Voluntary', 'Course-Linked', 'Credit-Bearing', 'Capstone / Thesis', 'Research-Integrated'],
+        nullable: true
     })
     academicIntegrationType: string;
 
     @Column({
         type: 'enum',
-        enum: ['draft', 'submitted', 'verified', 'finalized'],
-        default: 'draft'
+        enum: ['pending', 'pending_payment_approval', 'paid', 'pending_ciel_approval', 'pending_faculty_approval', 'approved', 'rejected', 'finalized', 'verified', 'accepted'],
+        default: 'pending'
     })
     status: string;
+
+    @Column({
+        type: 'enum',
+        enum: ['pending', 'pending_payment_approval', 'paid', 'rejected'],
+        default: 'pending'
+    })
+    paymentStatus: string;
+
+    @Column({ nullable: true })
+    paymentProofUrl: string;
+
+    @Column({ type: 'timestamp', nullable: true })
+    paymentDate: Date;
 
     @Column({ type: 'float', nullable: true })
     eisScore: number;
@@ -98,6 +125,9 @@ export class Participant {
 
     @OneToMany(() => AttendanceLog, (log) => log.participant)
     attendanceLogs: AttendanceLog[];
+
+    @Column({ nullable: true })
+    applicationId: string;
 
     @CreateDateColumn()
     createdAt: Date;

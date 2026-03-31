@@ -1,15 +1,15 @@
 import { Injectable, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
 import { S3Service } from '../common/s3.service';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Participant } from './entities/participant.entity';
+import { Repository, In } from 'typeorm';
+import { Participation } from './entities/participant.entity';
 import { AttendanceLog } from './entities/attendance-log.entity';
 import { RegisterParticipantDto } from './dto/register-participant.dto';
 import { CreateAttendanceLogDto } from './dto/create-attendance-log.dto';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { User } from '../users/entities/user.entity';
-import { OpportunityTeamMember } from '../opportunities/entities/opportunity-team-member.entity';
 import { ConfigService } from '@nestjs/config';
+import { MailService } from '../mail/mail.service';
 import * as crypto from 'crypto';
 
 @Injectable()
@@ -19,36 +19,43 @@ export class EngagementService {
     private readonly KEY: Buffer;
 
     constructor(
-        @InjectRepository(Participant)
-        private participantRepository: Repository<Participant>,
+        @InjectRepository(Participation)
+        private participantRepository: Repository<Participation>,
         @InjectRepository(AttendanceLog)
         private attendanceLogRepository: Repository<AttendanceLog>,
         @InjectRepository(Opportunity)
         private opportunityRepository: Repository<Opportunity>,
         @InjectRepository(User)
         private userRepository: Repository<User>,
-        @InjectRepository(OpportunityTeamMember)
-        private teamMemberRepository: Repository<OpportunityTeamMember>,
         private configService: ConfigService,
         private s3Service: S3Service,
+        private mailService: MailService,
     ) {
         const secret = this.configService.get<string>('ENCRYPTION_KEY') || 'default-secret-key-32-chars-long!!';
         this.KEY = crypto.scryptSync(secret, 'salt', 32);
     }
 
-    async preRegister(userId: string | null, projectId: string, data: Partial<Participant>) {
+    async preRegister(studentId: string | null, projectId: string, data: Partial<Participation>) {
         const opportunity = await this.opportunityRepository.findOne({ where: { id: projectId } });
         if (!opportunity) throw new NotFoundException('Project not found');
 
         // Check if already registered
         let existing;
-        if (userId) {
+        if (studentId) {
             existing = await this.participantRepository.findOne({
-                where: { userId, projectId: opportunity.id }
+                where: { studentId, projectId: opportunity.id }
             });
         } else if (data.email) {
             existing = await this.participantRepository.findOne({
                 where: { email: data.email, projectId: opportunity.id }
+            });
+        }
+
+        // Try lookup by CNIC if still not found
+        if (!existing && data.cnic) {
+            const cnicHash = this.hashString(data.cnic);
+            existing = await this.participantRepository.findOne({
+                where: { cnicHash, projectId: opportunity.id }
             });
         }
         if (existing) {
@@ -64,34 +71,39 @@ export class EngagementService {
                 existing.cnicLast4 = data.cnic.slice(-4);
             }
             const saved = await this.participantRepository.save(existing);
-            return this.decryptParticipant(saved);
+            return this.decryptParticipation(saved);
         }
 
-        const participantData: any = {
+        const participationData: any = {
             ...data,
             projectId: opportunity.id,
-            status: 'draft',
+            status: data.status || 'approved',
             emailVerified: true,
             mobileVerified: true,
         };
 
-        if (userId) {
-            participantData.userId = userId;
+        if (studentId) {
+            participationData.studentId = studentId;
         }
 
-        const participant = this.participantRepository.create(participantData as Partial<Participant>);
+        const participation = this.participantRepository.create(participationData as Partial<Participation>);
 
         if (data.cnic) {
-            participant.cnicHash = this.hashString(data.cnic);
-            participant.cnic = this.encrypt(data.cnic);
-            participant.cnicLast4 = data.cnic.slice(-4);
+            participation.cnicHash = this.hashString(data.cnic);
+            participation.cnic = this.encrypt(data.cnic);
+            participation.cnicLast4 = data.cnic.slice(-4);
         }
 
-        const saved = await this.participantRepository.save(participant);
-        return this.decryptParticipant(saved);
+        const saved = await this.participantRepository.save(participation);
+        return this.decryptParticipation(saved);
     }
 
-    async registerParticipant(userId: string, dto: RegisterParticipantDto) {
+    async registerParticipant(studentId: string, dto: RegisterParticipantDto) {
+        let targetStudentId: string | null = dto.studentId || null;
+        if (!targetStudentId) {
+            const userByEmail = await this.userRepository.findOne({ where: { email: dto.email } });
+            targetStudentId = userByEmail?.id || null;
+        }
         const opportunity = await this.opportunityRepository.findOne({ where: { id: dto.projectId } });
         if (!opportunity) throw new NotFoundException('Project not found');
 
@@ -101,81 +113,135 @@ export class EngagementService {
             where: { cnicHash, projectId: opportunity.id }
         });
 
-        if (existingByCnic && existingByCnic.userId !== userId) {
+        if (existingByCnic && existingByCnic.studentId && existingByCnic.studentId !== targetStudentId) {
             throw new BadRequestException('CNIC already registered for this opportunity');
         }
 
-        // 2. Check if a record already exists for THIS user in this project
-        // We update the existing record to maintain idempotency and allow info updates
-        const existingByUser = await this.participantRepository.findOne({
-            where: { userId, projectId: opportunity.id }
+        // 2. Check if a record already exists for THIS user/email in this project
+        const existingByTarget = await this.participantRepository.findOne({
+            where: [
+                { studentId: targetStudentId as any, projectId: opportunity.id },
+                { email: dto.email, projectId: opportunity.id }
+            ],
+            order: { createdAt: 'DESC' }
         });
 
         const encryptedCnic = this.encrypt(dto.cnic);
-        let participant: Participant;
+        let participation: Participation;
 
-        if (existingByUser) {
-            // Update existing record
-            Object.assign(existingByUser, {
-                ...dto,
-                cnicHash,
-                cnic: encryptedCnic,
-                cnicLast4: dto.cnic.slice(-4),
-                // Ensure verified flags aren't reset if they were already true
-                emailVerified: true,
-                mobileVerified: true,
-            });
-            participant = existingByUser;
+        // RECONCILIATION LOGIC:
+        // If we found a record by CNIC (Step 1) and it belongs to the same user or has no owner, prefer it.
+        if (existingByCnic) {
+            // Already checked at 104 if it's someone else's.
+            // If it's the same person or no owner, use this record.
+            participation = existingByCnic;
+            
+            // If we also had a target record (Record 2) that was separate, 
+            // merge its non-empty fields and delete the duplicate target record if they are different.
+            if (existingByTarget && existingByTarget.id !== participation.id) {
+                // Keep the record that's already in use (participation)
+                // but delete the other one (existingByTarget) to avoid duplicates.
+                await this.participantRepository.remove(existingByTarget);
+            }
+        } else if (existingByTarget) {
+            // No record by CNIC yet, but found a record by ID/Email.
+            participation = existingByTarget;
         } else {
-            // Create new record
-            participant = this.participantRepository.create({
-                ...dto,
-                userId,
-                cnicHash,
-                cnic: encryptedCnic,
-                cnicLast4: dto.cnic.slice(-4),
-                emailVerified: true,
-                mobileVerified: true,
+            // No record by CNIC or Target, create new one.
+            participation = this.participantRepository.create({
+                projectId: opportunity.id,
+                status: 'pending',
             });
         }
 
-        const saved = await this.participantRepository.save(participant);
-        return this.decryptParticipant(saved);
+        // Apply all DTO fields
+        Object.assign(participation, {
+            ...dto,
+            studentId: targetStudentId,
+            cnicHash,
+            cnic: encryptedCnic,
+            cnicLast4: dto.cnic.slice(-4),
+            emailVerified: true,
+            mobileVerified: true,
+            status: participation.status === 'approved' ? 'approved' : 'pending_ciel_approval'
+        });
+
+        const saved = await this.participantRepository.save(participation);
+        
+        // Trigger Faculty Email if provided
+        if (dto.facultySupervisorEmail) {
+            try {
+                const user = targetStudentId ? await this.userRepository.findOne({ where: { id: targetStudentId } }) : null;
+                await this.mailService.sendFacultyInvite(
+                    dto.facultySupervisorEmail,
+                    user?.name || dto.fullName,
+                    opportunity.title
+                );
+            } catch (error) {
+                this.logger.error(`Failed to send faculty invite to ${dto.facultySupervisorEmail}`, error.stack);
+            }
+        }
+
+        return this.decryptParticipation(saved);
     }
 
-    async getMyParticipants(userId: string) {
+    async getMyParticipants(studentId: string) {
         const result = await this.participantRepository.find({
-            where: { userId },
+            where: { studentId },
             relations: ['attendanceLogs']
         });
-        return result.map(p => this.decryptParticipant(p));
+        return result.map(p => this.decryptParticipation(p));
     }
 
-    private decryptParticipant(p: Participant): Participant {
+    async getProjectTeam(projectId: string) {
+        const participants = await this.participantRepository.find({
+            where: { 
+                projectId,
+                status: In(['approved', 'finalized', 'pending_ciel_approval']) // Including pending for visibility if needed, but user said "verified".
+            },
+            order: { createdAt: 'ASC' }
+        });
+        return participants.map(p => this.decryptParticipation(p));
+    }
+
+    async deleteParticipant(participantId: string) {
+        const participation = await this.participantRepository.findOne({
+            where: { id: participantId }
+        });
+
+        if (!participation) {
+            throw new NotFoundException('Participation record not found');
+        }
+
+        await this.participantRepository.remove(participation);
+        return { success: true };
+    }
+
+    private decryptParticipation(p: Participation): Participation {
         if (p.cnic && p.cnic.includes(':')) {
             try {
                 p.cnic = this.decrypt(p.cnic);
             } catch (e) {
-                this.logger.error(`Failed to decrypt CNIC for participant ${p.id}`);
+                this.logger.error(`Failed to decrypt CNIC for participation ${p.id}`);
             }
         }
         return p;
     }
 
-    private async findParticipantByIdentifier(participantId: string, relations: string[] = []): Promise<Participant> {
-        this.logger.debug(`Searching for participant with identifier: ${participantId}`);
+    private async findParticipationByIdentifier(participantId: string, relations: string[] = []): Promise<Participation> {
+        this.logger.debug(`Searching for participation with identifier: ${participantId}`);
         const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-        // 1. Direct Lookup in Participants Table
+        // 1. Direct Lookup in Participations Table
         
         // If it's a valid UUID, look up by ID
         if (uuidRegex.test(participantId)) {
             this.logger.debug(`Identifier is a UUID, searching by ID...`);
-            const participant = await this.participantRepository.findOne({
+            const participation = await this.participantRepository.findOne({
                 where: { id: participantId },
                 relations
             });
-            if (participant) return participant;
+            if (participation) return participation;
         }
 
         // Try University ID
@@ -211,18 +277,18 @@ export class EngagementService {
         });
         if (byEmail) return byEmail;
 
-        // Try userId (if UUID)
+        // Try studentId (if UUID)
         if (uuidRegex.test(participantId)) {
-            this.logger.debug(`Searching by userId...`);
-            const byUserId = await this.participantRepository.findOne({
-                where: { userId: participantId },
+            this.logger.debug(`Searching by studentId...`);
+            const byStudentId = await this.participantRepository.findOne({
+                where: { studentId: participantId },
                 relations
             });
-            if (byUserId) return byUserId;
+            if (byStudentId) return byStudentId;
         }
 
-        // 2. Failsafe: Search Users table if not found in Participants
-        this.logger.debug(`Not found in participants, searching Users table...`);
+        // 2. Failsafe: Search Users table if not found in Participations
+        this.logger.debug(`Not found in participations, searching Users table...`);
         let userRecord: User | null = null;
 
         if (uuidRegex.test(participantId)) {
@@ -243,73 +309,77 @@ export class EngagementService {
         if (userRecord) {
             this.logger.debug(`Found user matching identifier: ${userRecord.id}. Searching for their project registration...`);
             
-            const participantByUser = await this.participantRepository.findOne({
-                where: { userId: userRecord.id },
+            const participationByUser = await this.participantRepository.findOne({
+                where: { studentId: userRecord.id },
                 relations,
                 order: { createdAt: 'DESC' }
             });
             
-            if (participantByUser) {
-                this.logger.log(`Bridged identifier ${participantId} to participant ${participantByUser.id} for user ${userRecord.id}`);
-                return participantByUser;
+            if (participationByUser) {
+                this.logger.log(`Bridged identifier ${participantId} to participation ${participationByUser.id} for student ${userRecord.id}`);
+                return participationByUser;
             }
         }
 
-        // 3. Last Resort: Search OpportunityTeamMember (for those added via application but not registered for engagement)
-        this.logger.debug(`Not found in users, searching OpportunityTeamMember table...`);
-        const teamMemberRecord = await this.teamMemberRepository.findOne({
-            where: [
-                { cnic: participantId },
-                { email: participantId },
-                { mobile: participantId }
-            ],
-            relations: ['participant']
-        });
-
-        if (teamMemberRecord) {
-            this.logger.debug(`Found TeamMember matching identifier: ${teamMemberRecord.name}. Searching for their project registration...`);
-            
-            // Try to find if this team member already has a participant record (unlikely if they reached here, but safe)
-            // If they don't, and we need to return a Participant object, we might need to pre-register them ON THE FLY
-            // or just bridge them if the controllers can handle a "virtual" participant.
-            // But since addAttendanceLog needs a REAL participant ID in DB, we should pre-register them now!
-            
-            this.logger.log(`Auto-bridging Team Member ${teamMemberRecord.name} (CNIC: ${teamMemberRecord.cnic}) to Engagement Participants...`);
-            
-            const autoRegistered = await this.preRegister(
-                null, // No User ID yet
-                teamMemberRecord.participant.opportunityId,
-                {
-                    fullName: teamMemberRecord.name,
-                    email: teamMemberRecord.email,
-                    mobile: teamMemberRecord.mobile,
-                    universityId: teamMemberRecord.university,
-                    cnic: teamMemberRecord.cnic,
-                }
-            );
-
-            if (autoRegistered) {
-                this.logger.log(`Successfully auto-bridged Team Member to Participant ID: ${autoRegistered.id}`);
-                return autoRegistered;
-            }
-        }
-
-        this.logger.warn(`No participant found for identifier: ${participantId}`);
-        throw new NotFoundException('Participant record not found');
+        this.logger.warn(`No participation found for identifier: ${participantId}`);
+        throw new NotFoundException('Participation record not found');
     }
 
-    async addAttendanceLog(userId: string, participantId: string, dto: CreateAttendanceLogDto, file?: Express.Multer.File) {
-        const participant = await this.findParticipantByIdentifier(participantId, ['attendanceLogs']);
-        if (!participant) throw new NotFoundException('Participant record not found');
-        if (participant.userId !== userId) throw new BadRequestException('Not authorized');
+    async addAttendanceLog(studentId: string, participantId: string, dto: CreateAttendanceLogDto, file?: Express.Multer.File) {
+        const participation = await this.findParticipationByIdentifier(participantId, ['attendanceLogs']);
+        if (!participation) throw new NotFoundException('Participation record not found');
+        
+        if (participation.studentId !== studentId) {
+            const user = await this.userRepository.findOne({ where: { id: studentId } });
+            const pEmail = (participation.email || '').toLowerCase().trim();
+            const uEmail = (user?.email || '').toLowerCase().trim();
+            
+            const userCnicHash = user?.cnic ? this.hashString(user.cnic) : null;
+            const isEmailMatch = user && pEmail && uEmail === pEmail;
+            const isCnicMatch = user && userCnicHash && participation.cnicHash && userCnicHash === participation.cnicHash;
+
+            if (isEmailMatch || isCnicMatch) {
+                const matchType = isEmailMatch ? 'email' : 'CNIC';
+                // Auto-claim the record since we identified the student
+                participation.studentId = studentId;
+                await this.participantRepository.save(participation);
+                this.logger.log(`Participation ${participation.id} auto-claimed by user ${studentId} via ${matchType} matching during attendance logging`);
+            } else {
+                // Fallback: Check if requester is the Team Lead for this application
+                let isAuthorizedAsLead = false;
+                if (participation.applicationId) {
+                    const leadRecord = await this.participantRepository.findOne({
+                        where: {
+                            applicationId: participation.applicationId,
+                            studentId: studentId,
+                            isTeamLead: true
+                        }
+                    });
+                    if (leadRecord) {
+                        isAuthorizedAsLead = true;
+                        this.logger.log(`Attendance entry by Team Lead ${studentId} authorized for team member record ${participation.id}`);
+                    }
+                }
+
+                if (!isAuthorizedAsLead) {
+                    this.logger.warn(`Not authorized: User ${studentId} (email: ${user?.email}, cnicHash: ${userCnicHash?.slice(-6)}) tried logging attendance for record ${participation.id} (owner: ${participation.studentId}, email: ${participation.email}, cnicHash: ${participation.cnicHash?.slice(-6)})`);
+                    throw new BadRequestException('Not authorized');
+                }
+            }
+        }
+
+        // Check if participation is approved
+        if (participation.status !== 'approved') {
+            throw new BadRequestException('Attendance logging is only allowed for approved participations');
+        }
 
         // Rule 1: Date Validation (Not in future)
         const date = new Date(dto.dateOfEngagement);
         if (date > new Date()) throw new BadRequestException('Attendance date cannot be in the future');
 
         // Handle Flexible Project 4-month window
-        if (participant.attendanceLogs && participant.attendanceLogs.length > 0) {
-            const firstLogDate = new Date(Math.min(...participant.attendanceLogs.map(l => new Date(l.dateOfEngagement).getTime())));
+        if (participation.attendanceLogs && participation.attendanceLogs.length > 0) {
+            const firstLogDate = new Date(Math.min(...participation.attendanceLogs.map(l => new Date(l.dateOfEngagement).getTime())));
             const fourMonthsLater = new Date(firstLogDate);
             fourMonthsLater.setMonth(fourMonthsLater.getMonth() + 4);
 
@@ -341,8 +411,8 @@ export class EngagementService {
 
         const log = this.attendanceLogRepository.create({
             ...dto,
-            participantId: participant.id,
-            projectId: participant.projectId,
+            participantId: participation.id,
+            projectId: participation.projectId,
             sessionHours,
             evidenceUploaded,
             evidenceUrl: evidenceUrl as any,
@@ -351,12 +421,12 @@ export class EngagementService {
         return await this.attendanceLogRepository.save(log);
     }
 
-    async deleteAttendanceLog(userId: string, participantId: string, logId: string) {
-        const participant = await this.findParticipantByIdentifier(participantId);
-        if (!participant) throw new NotFoundException('Participant record not found');
-        if (participant.userId !== userId) throw new BadRequestException('Not authorized');
+    async deleteAttendanceLog(studentId: string, participantId: string, logId: string) {
+        const participation = await this.findParticipationByIdentifier(participantId);
+        if (!participation) throw new NotFoundException('Participation record not found');
+        if (participation.studentId !== studentId) throw new BadRequestException('Not authorized');
 
-        const log = await this.attendanceLogRepository.findOne({ where: { id: logId, participantId: participant.id } });
+        const log = await this.attendanceLogRepository.findOne({ where: { id: logId, participantId: participation.id } });
         if (!log) throw new NotFoundException('Attendance log not found');
 
         await this.attendanceLogRepository.delete(logId);
@@ -365,10 +435,10 @@ export class EngagementService {
 
 
     async getEngagementMetrics(participantId: string) {
-        const participant = await this.findParticipantByIdentifier(participantId, ['attendanceLogs']);
-        if (!participant) throw new NotFoundException('Participant not found');
+        const participation = await this.findParticipationByIdentifier(participantId, ['attendanceLogs']);
+        if (!participation) throw new NotFoundException('Participation not found');
 
-        const logs = participant.attendanceLogs || [];
+        const logs = participation.attendanceLogs || [];
         const totalHours = logs.reduce((sum, log) => sum + Number(log.sessionHours), 0);
         const activeDays = new Set(logs.map(l => l.dateOfEngagement)).size;
 
@@ -422,26 +492,26 @@ export class EngagementService {
         };
     }
 
-    async finalizeEngagement(userId: string, participantId: string) {
-        const participant = await this.findParticipantByIdentifier(participantId, ['attendanceLogs']);
+    async finalizeEngagement(studentId: string, participantId: string) {
+        const participation = await this.findParticipationByIdentifier(participantId, ['attendanceLogs']);
 
-        if (!participant) throw new NotFoundException('Participant record not found');
-        if (participant.userId !== userId) throw new BadRequestException('Not authorized');
+        if (!participation) throw new NotFoundException('Participation record not found');
+        if (participation.studentId !== studentId) throw new BadRequestException('Not authorized');
 
         const metrics = await this.getEngagementMetrics(participantId);
 
-        participant.status = 'finalized';
-        participant.eisScore = metrics.eis;
-        participant.hecStatus = metrics.hecStatus;
-        participant.finalizedAt = new Date();
+        participation.status = 'finalized';
+        participation.eisScore = metrics.eis;
+        participation.hecStatus = metrics.hecStatus;
+        participation.finalizedAt = new Date();
 
-        const saved = await this.participantRepository.save(participant);
-        return this.decryptParticipant(saved);
+        const saved = await this.participantRepository.save(participation);
+        return this.decryptParticipation(saved);
     }
 
     async generateSummary(participantId: string) {
         const metrics = await this.getEngagementMetrics(participantId);
-        const participant = await this.findParticipantByIdentifier(participantId);
+        const participation = await this.findParticipationByIdentifier(participantId);
 
         let summary = `This report includes 1 OTP-verified participant contributing ${metrics.totalHours} verified hours across ${metrics.activeDays} active days over a ${metrics.spanWeeks}-week span. `;
         summary += `The engagement ${metrics.hecDisplay}. `;
@@ -457,9 +527,22 @@ export class EngagementService {
     }
 
     async getAttendanceLogs(participantId: string) {
-        const participant = await this.findParticipantByIdentifier(participantId, ['attendanceLogs']);
-        if (!participant) throw new NotFoundException('Participant not found');
-        return participant.attendanceLogs;
+        const participation = await this.findParticipationByIdentifier(participantId, ['attendanceLogs']);
+        if (!participation) throw new NotFoundException('Participation not found');
+        return participation.attendanceLogs;
+    }
+
+    async facultyApprove(participationId: string, status: string) {
+        const participation = await this.participantRepository.findOne({ where: { id: participationId } });
+        if (!participation) throw new NotFoundException('Participation not found');
+
+        if (!['approved', 'rejected'].includes(status)) {
+            throw new BadRequestException('Invalid status for faculty approval');
+        }
+
+        participation.status = status;
+        const saved = await this.participantRepository.save(participation);
+        return this.decryptParticipation(saved);
     }
 
     private getHecCode(hours: number): string {

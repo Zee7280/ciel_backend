@@ -2,8 +2,7 @@ import { Injectable, NotFoundException, ForbiddenException, UnauthorizedExceptio
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { Opportunity } from './entities/opportunity.entity';
-import { OpportunityParticipant } from './entities/opportunity-participant.entity';
-import { OpportunityTeamMember } from './entities/opportunity-team-member.entity';
+import { Participation } from '../engagement/entities/participant.entity';
 import { CreateOpportunityDto, UpdateOpportunityDto } from './dto/create-opportunity.dto';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { EngagementService } from '../engagement/engagement.service';
@@ -13,28 +12,19 @@ export class OpportunitiesService {
     constructor(
         @InjectRepository(Opportunity)
         private opportunitiesRepository: Repository<Opportunity>,
-        @InjectRepository(OpportunityParticipant)
-        private participantsRepository: Repository<OpportunityParticipant>,
-        @InjectRepository(OpportunityTeamMember)
-        private teamMembersRepository: Repository<OpportunityTeamMember>,
+        @InjectRepository(Participation)
+        private participationRepository: Repository<Participation>,
         private organizationsService: OrganizationsService,
         private engagementService: EngagementService,
     ) { }
 
     async getOccupiedSeats(opportunityId: string): Promise<number> {
-        const participants = await this.participantsRepository.find({
-            where: { opportunityId, status: In(['pending', 'accepted', 'approved', 'verified']) },
-            relations: ['teamMembers']
-        });
-
-        let currentCount = 0;
-        for (const p of participants) {
-            currentCount += 1; // The student who applied
-            if (p.participation_type === 'team' && p.teamMembers) {
-                currentCount += p.teamMembers.length;
+        return await this.participationRepository.count({
+            where: {
+                projectId: opportunityId,
+                status: In(['pending', 'accepted', 'approved', 'verified', 'paid', 'pending_payment_approval', 'pending_ciel_approval', 'pending_faculty_approval'])
             }
-        }
-        return currentCount;
+        });
     }
 
     async create(userId: string, createOpportunityDto: CreateOpportunityDto) {
@@ -274,7 +264,6 @@ export class OpportunitiesService {
 
     // Partner methods for managing applicants
     async getApplicantsForOpportunity(opportunityId: string, organizationId: string) {
-        // First verify the opportunity belongs to this organization
         const opportunity = await this.opportunitiesRepository.findOne({
             where: { id: opportunityId }
         });
@@ -287,139 +276,74 @@ export class OpportunitiesService {
             throw new ForbiddenException('You do not have access to this opportunity');
         }
 
-        // Fetch all participants/applicants for this opportunity
-        const participants = await this.participantsRepository.find({
-            where: { opportunityId },
-            relations: ['student', 'teamMembers'],
+        const participants = await this.participationRepository.find({
+            where: { projectId: opportunityId },
+            relations: ['student'],
             order: { createdAt: 'DESC' }
         });
 
-        // Map to API response format
-        return participants.map(p => ({
+        // Group by Application ID to show team structure if needed, or just list everyone
+        return await Promise.all(participants.map(async p => ({
             id: p.id,
-            studentName: p.student?.name || 'Unknown',
-            university: p.student?.institution || 'N/A',
-            email: p.student?.email || 'N/A',
+            studentName: p.fullName || p.student?.name || 'Unknown',
+            university: p.universityName || p.student?.institution || 'N/A',
+            email: p.email || p.student?.email || 'N/A',
             status: p.status,
             appliedAt: p.createdAt,
             avatar: p.student?.avatar || null,
-            participation_type: p.participation_type,
-            teamMembers: p.teamMembers?.map(m => ({
+            participation_type: p.participationMode,
+            isTeamLead: p.isTeamLead,
+            teamMembers: p.isTeamLead && p.applicationId ? (await this.participationRepository.find({
+                where: { applicationId: p.applicationId, isTeamLead: false }
+            })).map(m => ({
                 id: m.id,
-                name: m.name,
+                name: m.fullName,
                 email: m.email,
-                university: m.university,
-                role: m.role,
-                is_verified: m.is_verified
-            })) || []
-        }));
+                university: m.universityName,
+                role: 'Member',
+                is_verified: true
+            })) : []
+        })));
     }
 
     async getOrganizationParticipants(organizationId: string) {
-        const participants = await this.participantsRepository.find({
+        const participants = await this.participationRepository.find({
             where: {
-                opportunity: { organizationId },
-                status: In(['accepted', 'approved', 'verified'])
+                project: { organizationId },
+                status: In(['accepted', 'approved', 'verified', 'finalized'])
             },
-            relations: ['student', 'opportunity', 'teamMembers'],
+            relations: ['student', 'project'],
             order: { createdAt: 'DESC' }
         });
 
-        // We need to map to the format expected by PartnerParticipantsPage:
-        // { id, name, opportunity, joinedDate, hours, status }
-        const result: any[] = [];
-
-        for (const p of participants) {
-            // Main applicant
-            result.push({
-                id: p.id,
-                name: p.student?.name || 'Unknown student',
-                opportunity: p.opportunity?.title || 'Unknown Opportunity',
-                joinedDate: p.createdAt.toLocaleDateString(),
-                hours: 0, // In a real system, you'd fetch logged hours here
-                status: p.status === 'accepted' ? 'Active' : (p.status === 'verified' ? 'Completed' : p.status),
-                participation_type: p.participation_type,
-                is_leader: true
-            });
-
-            // Team members - if NGO wants to see everyone in the list
-            if (p.participation_type === 'team' && p.teamMembers) {
-                for (const tm of p.teamMembers) {
-                    result.push({
-                        id: tm.id,
-                        name: tm.name,
-                        opportunity: p.opportunity?.title || 'Unknown Opportunity',
-                        joinedDate: p.createdAt.toLocaleDateString(),
-                        hours: 0,
-                        status: p.status === 'accepted' ? 'Active' : (p.status === 'verified' ? 'Completed' : p.status),
-                        participation_type: 'team_member',
-                        is_leader: false,
-                        leader_name: p.student?.name
-                    });
-                }
-            }
-        }
-
-        return result;
+        return participants.map(p => ({
+            id: p.id,
+            name: p.fullName || p.student?.name || 'Unknown student',
+            opportunity: p.project?.title || 'Unknown Opportunity',
+            joinedDate: p.createdAt.toLocaleDateString(),
+            hours: 0,
+            status: p.status === 'accepted' ? 'Active' : (p.status === 'verified' ? 'Completed' : p.status),
+            participation_type: p.participationMode,
+            is_leader: p.isTeamLead
+        }));
     }
 
     async updateApplicantStatus(applicantId: string, status: string, organizationId: string) {
-        // Find the participant with opportunity relation
-        const participant = await this.participantsRepository.findOne({
+        const participant = await this.participationRepository.findOne({
             where: { id: applicantId },
-            relations: ['opportunity', 'student', 'teamMembers']
+            relations: ['project', 'student']
         });
 
         if (!participant) {
             throw new NotFoundException('Applicant not found');
         }
 
-        // Verify the opportunity belongs to this organization
-        if (participant.opportunity.organizationId !== organizationId) {
+        if (participant.project.organizationId !== organizationId) {
             throw new ForbiddenException('You do not have access to this applicant');
         }
 
-        // Update status
         participant.status = status;
-        await this.participantsRepository.save(participant);
-
-        // If status is accepted, automatically pre-register for engagement/attendance
-        if (status === 'accepted') {
-            try {
-                // 1. Pre-register Team Lead
-                await this.engagementService.preRegister(
-                    participant.studentId,
-                    participant.opportunityId,
-                    {
-                        fullName: participant.student?.name,
-                        email: participant.student?.email,
-                        mobile: participant.student?.phone,
-                        universityId: participant.student?.institution,
-                        cnic: participant.student?.cnic,
-                    }
-                );
-
-                // 2. Pre-register all Team Members
-                if (participant.teamMembers && participant.teamMembers.length > 0) {
-                    for (const member of participant.teamMembers) {
-                        await this.engagementService.preRegister(
-                            null, // User IDs often not available for team members yet
-                            participant.opportunityId,
-                            {
-                                fullName: member.name,
-                                email: member.email,
-                                mobile: member.mobile,
-                                universityId: member.university,
-                                cnic: member.cnic,
-                            }
-                        );
-                    }
-                }
-            } catch (err) {
-                // Log error but don't fail the status update
-                console.error('Failed to pre-register part/team after acceptance:', err);
-            }
-        }
+        await this.participationRepository.save(participant);
 
         return { success: true, message: 'Applicant status updated successfully' };
     }

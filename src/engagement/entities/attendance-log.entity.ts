@@ -1,5 +1,5 @@
 import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn } from 'typeorm';
-import { Participant } from './participant.entity';
+import { Participation } from './participant.entity';
 import { Opportunity } from '../../opportunities/entities/opportunity.entity';
 
 @Entity('attendance_logs')
@@ -7,9 +7,9 @@ export class AttendanceLog {
     @PrimaryGeneratedColumn('uuid')
     id: string;
 
-    @ManyToOne(() => Participant, (participant) => participant.attendanceLogs, { onDelete: 'CASCADE' })
+    @ManyToOne(() => Participation, (participation) => participation.attendanceLogs, { onDelete: 'CASCADE' })
     @JoinColumn({ name: 'participantId' })
-    participant: Participant;
+    participant: Participation;
 
     @Column()
     participantId: string;

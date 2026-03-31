@@ -3,12 +3,11 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { StudentReport } from './entities/student-report.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
-import { OpportunityParticipant } from '../opportunities/entities/opportunity-participant.entity';
+import { Participation } from '../engagement/entities/participant.entity';
 import { S3Service } from '../common/s3.service';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import * as path from 'path';
 
-import { OpportunityTeamMember } from '../opportunities/entities/opportunity-team-member.entity';
 import { User } from '../users/entities/user.entity';
 import { MailService } from '../mail/mail.service';
 
@@ -19,10 +18,8 @@ export class StudentReportsService {
     constructor(
         @InjectRepository(Opportunity)
         private readonly opportunitiesRepository: Repository<Opportunity>,
-        @InjectRepository(OpportunityParticipant)
-        private readonly opportunityParticipantsRepository: Repository<OpportunityParticipant>,
-        @InjectRepository(OpportunityTeamMember)
-        private readonly opportunityTeamMembersRepository: Repository<OpportunityTeamMember>,
+        @InjectRepository(Participation)
+        private readonly participantRepository: Repository<Participation>,
         @InjectRepository(StudentReport)
         private studentReportsRepository: Repository<StudentReport>,
         @InjectRepository(AttendanceLog)
@@ -142,6 +139,11 @@ export class StudentReportsService {
             report.section2.primary_beneficiary = report.primary_beneficiary;
         }
 
+        // Point 3 Clean Up: Ensure team_members is not stored in the JSON blob
+        if (report.section1 && (report.section1 as any).team_members) {
+            delete (report.section1 as any).team_members;
+        }
+
         // Handle Faculty Assignment if faculty email is provided in Section 1
         if (report.section1?.faculty_supervisor_email) {
             await this.handleFacultyAssignment(report, report.section1.faculty_supervisor_email);
@@ -213,6 +215,11 @@ export class StudentReportsService {
                 section10: parsedData.section10,
                 section11: parsedData.section11,
             });
+        }
+
+        // Point 3 Clean Up: Ensure team_members is not stored in the JSON blob
+        if (report.section1 && (report.section1 as any).team_members) {
+            delete (report.section1 as any).team_members;
         }
 
         // Handle Faculty Assignment if faculty email is provided in Section 1
@@ -297,13 +304,13 @@ export class StudentReportsService {
         // Fetch attendance logs for this student and opportunity
         const attendanceLogs = await this.attendanceLogsRepository.find({
             where: {
-                participant: { userId: report.studentId },
+                participant: { studentId: report.studentId },
                 projectId: report.opportunityId
             },
             order: { dateOfEngagement: 'ASC', startTime: 'ASC' }
         });
 
-        return this.formatReportResponse(report, attendanceLogs);
+        return await this.formatReportResponse(report, attendanceLogs);
     }
 
     async findOneByOpportunityOrId(id: string, studentId: string) {
@@ -341,18 +348,17 @@ export class StudentReportsService {
         if (report) {
             const attendanceLogs = await this.attendanceLogsRepository.find({
                 where: {
-                    participant: { userId: report.studentId },
+                    participant: { studentId: report.studentId },
                     projectId: report.opportunityId || report.project_id
                 },
                 order: { dateOfEngagement: 'ASC', startTime: 'ASC' }
             });
-            return this.formatReportResponse(report, attendanceLogs);
+            return await this.formatReportResponse(report, attendanceLogs);
         }
 
-        // If no report found, check for an accepted application to pre-populate
-        const application = await this.opportunityParticipantsRepository.findOne({
-            where: { opportunityId: id, studentId },
-            relations: ['teamMembers']
+        // If no report found, check for an application to pre-populate
+        const application = await this.participantRepository.findOne({
+            where: { projectId: id, studentId },
         });
 
         if (application) {
@@ -364,7 +370,7 @@ export class StudentReportsService {
                     opportunityId: id,
                     status: 'none',
                     section1: {
-                        participation_type: application.participation_type || 'individual',
+                        participation_type: application.participationMode || 'individual',
                         team_lead: {
                             name: studentProfile?.name || '',
                             fullName: studentProfile?.name || '',
@@ -375,17 +381,7 @@ export class StudentReportsService {
                             program: studentProfile?.major || '',
                             verified: true
                         },
-                        team_members: application.teamMembers?.map(m => ({
-                            name: m.name,
-                            fullName: m.name,
-                            email: m.email,
-                            mobile: m.mobile,
-                            cnic: m.cnic,
-                            university: m.university,
-                            program: m.program,
-                            role: m.role,
-                            verified: m.is_verified || true // Inherit verification
-                        })) || [],
+                        team_members: await this.engagementService.getProjectTeam(id),
                         attendance_logs: [],
                         metrics: {
                             total_verified_hours: 0,
@@ -408,7 +404,7 @@ export class StudentReportsService {
         };
     }
 
-    private formatReportResponse(report: StudentReport, attendanceLogs?: AttendanceLog[]) {
+    private async formatReportResponse(report: StudentReport, attendanceLogs?: AttendanceLog[]) {
         return {
             success: true,
             data: {
@@ -439,11 +435,8 @@ export class StudentReportsService {
                         fullName: report.section1.team_lead.fullName || report.section1.team_lead.name || '',
                         cnic: this.engagementService.decryptCnicInternal(report.section1.team_lead.cnic)
                     } : undefined,
-                    team_members: report.section1?.team_members?.map((m: any) => ({
-                        ...m,
-                        fullName: m.fullName || m.name || '',
-                        cnic: this.engagementService.decryptCnicInternal(m.cnic)
-                    })),
+                    // Point 1 & 3: Dynamically fetch team members from the source of truth (Participants/Engagement table)
+                    team_members: await this.engagementService.getProjectTeam(report.opportunityId || report.project_id),
                     attendance_logs: attendanceLogs ? attendanceLogs.map(log => ({
                         id: log.id,
                         date: log.dateOfEngagement,

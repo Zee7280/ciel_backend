@@ -49,7 +49,7 @@ export class FacultyReportsService {
         // Fetch attendance logs for this student and opportunity for complete review context
         const attendanceLogs = await this.attendanceLogsRepository.find({
             where: {
-                participant: { userId: report.studentId },
+                participant: { studentId: report.studentId },
                 projectId: report.opportunityId || report.project_id
             },
             order: { dateOfEngagement: 'ASC', startTime: 'ASC' }

@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { OpportunityParticipant } from '../opportunities/entities/opportunity-participant.entity';
+import { Participation } from '../engagement/entities/participant.entity';
 import { Setting } from '../settings/entities/setting.entity';
 import { StorageModule } from '../common/storage.module';
 import { PaymentsService } from './payments.service';
@@ -9,7 +9,7 @@ import { AdminPaymentsController } from './admin-payments.controller';
 
 @Module({
     imports: [
-        TypeOrmModule.forFeature([OpportunityParticipant, Setting]),
+        TypeOrmModule.forFeature([Participation, Setting]),
         StorageModule,
     ],
     controllers: [StudentPaymentsController, AdminPaymentsController],

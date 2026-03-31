@@ -1,15 +1,15 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { OpportunityParticipant } from '../opportunities/entities/opportunity-participant.entity';
+import { Participation } from '../engagement/entities/participant.entity';
 import { Setting } from '../settings/entities/setting.entity';
 import { S3Service } from '../common/s3.service';
 
 @Injectable()
 export class PaymentsService {
     constructor(
-        @InjectRepository(OpportunityParticipant)
-        private readonly participantRepository: Repository<OpportunityParticipant>,
+        @InjectRepository(Participation)
+        private readonly participantRepository: Repository<Participation>,
         @InjectRepository(Setting)
         private readonly settingRepository: Repository<Setting>,
         private readonly s3Service: S3Service,
@@ -36,7 +36,7 @@ export class PaymentsService {
 
     async submitPaymentProof(studentId: string, projectId: string, file: any) {
         const participant = await this.participantRepository.findOne({
-            where: { studentId, opportunityId: projectId },
+            where: { studentId, projectId },
         });
 
         if (!participant) {
@@ -45,9 +45,9 @@ export class PaymentsService {
 
         const proofUrl = await this.s3Service.uploadFile(file, `payments/${studentId}`);
 
-        participant.payment_proof_url = proofUrl;
-        participant.payment_status = 'pending_payment_approval';
-        participant.payment_date = new Date();
+        participant.paymentProofUrl = proofUrl;
+        participant.paymentStatus = 'pending_payment_approval';
+        participant.paymentDate = new Date();
 
         await this.participantRepository.save(participant);
 
@@ -55,7 +55,7 @@ export class PaymentsService {
             success: true,
             message: 'Payment proof submitted successfully',
             data: {
-                payment_status: participant.payment_status,
+                payment_status: participant.paymentStatus,
                 payment_proof_url: proofUrl,
             },
         };
@@ -63,8 +63,8 @@ export class PaymentsService {
 
     async getPendingPayments() {
         const payments = await this.participantRepository.find({
-            where: { payment_status: 'pending_payment_approval' },
-            relations: ['student', 'opportunity', 'opportunity.organization'],
+            where: { paymentStatus: 'pending_payment_approval' },
+            relations: ['student', 'project', 'project.organization'],
             order: { updatedAt: 'DESC' }
         });
 
@@ -72,12 +72,12 @@ export class PaymentsService {
             id: p.id,
             studentName: p.student?.name || 'Unknown',
             studentEmail: p.student?.email || 'Unknown',
-            projectTitle: p.opportunity?.title || 'Unknown',
-            organization: p.opportunity?.organization?.name || 'Unknown',
-            proofUrl: p.payment_proof_url,
+            projectTitle: p.project?.title || 'Unknown',
+            organization: p.project?.organization?.name || 'Unknown',
+            proofUrl: p.paymentProofUrl,
             amount: 5000, // This could be dynamic later
-            submittedAt: p.payment_date,
-            status: p.payment_status
+            submittedAt: p.paymentDate,
+            status: p.paymentStatus
         }));
     }
 
@@ -89,9 +89,11 @@ export class PaymentsService {
         }
 
         if (action === 'approve') {
-            participant.payment_status = 'paid';
+            participant.paymentStatus = 'paid';
+            participant.status = 'paid'; // Sync main status if needed
         } else {
-            participant.payment_status = 'rejected';
+            participant.paymentStatus = 'rejected';
+            participant.status = 'rejected';
         }
 
         // feedback can be stored in a separate field if needed, for now we just log it or ignore
@@ -101,7 +103,7 @@ export class PaymentsService {
             success: true,
             message: `Payment ${action}d successfully`,
             data: {
-                payment_status: participant.payment_status,
+                payment_status: participant.paymentStatus,
             },
         };
     }

@@ -1,4 +1,4 @@
-import { IsString, IsEnum, IsBoolean, IsUUID, IsEmail, Length } from 'class-validator';
+import { IsString, IsEnum, IsBoolean, IsUUID, IsEmail, Length, IsOptional } from 'class-validator';
 
 export class RegisterParticipantDto {
     @IsUUID()
@@ -40,4 +40,12 @@ export class RegisterParticipantDto {
 
     @IsEnum(['Voluntary', 'Course-Linked', 'Credit-Bearing', 'Capstone / Thesis', 'Research-Integrated'])
     academicIntegrationType: string;
+
+    @IsEmail()
+    @IsOptional()
+    facultySupervisorEmail?: string;
+
+    @IsUUID()
+    @IsOptional()
+    studentId?: string;
 }

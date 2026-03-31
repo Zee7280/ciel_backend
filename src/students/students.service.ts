@@ -8,9 +8,7 @@ import { ApplyOpportunityDto } from './dto/apply-opportunity.dto';
 import { LogHoursDto } from './dto/log-hours.dto';
 import { UpdateStudentProfileDto } from './dto/update-profile.dto';
 
-import { OpportunityParticipant } from '../opportunities/entities/opportunity-participant.entity';
-
-import { OpportunityTeamMember } from '../opportunities/entities/opportunity-team-member.entity';
+import { Participation } from '../engagement/entities/participant.entity';
 import { Otp } from './entities/otp.entity';
 import { UsersService } from '../users/users.service';
 import { MailService } from '../mail/mail.service';
@@ -25,10 +23,8 @@ export class StudentsService {
         private opportunitiesRepository: Repository<Opportunity>,
         @InjectRepository(Timesheet)
         private timesheetsRepository: Repository<Timesheet>,
-        @InjectRepository(OpportunityParticipant)
-        private opportunityParticipantsRepository: Repository<OpportunityParticipant>,
-        @InjectRepository(OpportunityTeamMember)
-        private opportunityTeamMembersRepository: Repository<OpportunityTeamMember>,
+        @InjectRepository(Participation)
+        private participantRepository: Repository<Participation>,
         @InjectRepository(Otp)
         private otpRepository: Repository<Otp>,
         private usersService: UsersService,
@@ -37,22 +33,12 @@ export class StudentsService {
     ) { }
 
     private async getOccupiedSeats(opportunityId: string): Promise<number> {
-        const participants = await this.opportunityParticipantsRepository.find({
+        return await this.participantRepository.count({
             where: {
-                opportunityId,
-                status: In(['pending', 'accepted', 'approved', 'verified'])
-            },
-            relations: ['teamMembers']
-        });
-
-        let currentCount = 0;
-        for (const p of participants) {
-            currentCount += 1; // The student who applied
-            if (p.participation_type === 'team' && p.teamMembers) {
-                currentCount += p.teamMembers.length;
+                projectId: opportunityId,
+                status: In(['pending', 'accepted', 'approved', 'verified', 'paid', 'pending_payment_approval', 'pending_ciel_approval', 'pending_faculty_approval'])
             }
-        }
-        return currentCount;
+        });
     }
     // Verification
     async sendTeamMemberOtp(email: string) {
@@ -118,32 +104,22 @@ export class StudentsService {
         // Mock impact points calculation: 10 points per hour
         const impactPoints = hoursVolunteered * 10;
 
-        // 2. Fetch Active Projects (using OpportunityParticipants)
-        // Active means status is approved/verified/joined, but not necessarily completed? 
-        // For this context, let's say "active" applications that are approved.
-        const activeApplications = await this.opportunityParticipantsRepository.find({
+        // 2. Fetch Active Projects (using Participations)
+        const activeApplications = await this.participantRepository.find({
             where: {
                 studentId: userId,
-                status: 'approved' // Assuming 'approved' means currently working on it
+                status: In(['approved', 'verified', 'paid', 'pending_ciel_approval', 'pending_faculty_approval', 'accepted'])
             },
-            relations: ['opportunity', 'opportunity.organization'],
-            take: 5 // Limit to 5 active
+            relations: ['project', 'project.organization'],
+            take: 5
         });
 
         const activeCourses = activeApplications.length;
 
         const activeProjects = activeApplications.map(app => {
-            // Calculate progress based on hours logged vs required
-            // This is an estimation. 
-            const required = app.opportunity.timeline?.expected_hours || 0;
-            // Get hours for this specific opportunity
-            // We need to fetch timesheets for these specific opportunities to calc progress correctly, 
-            // or we can do a separate query. For efficiency, let's just query all timesheets for this user 
-            // once if possible, or just query here.
-            // Let's rely on a separate quick count or similar if needed, 
-            // but for now let's set progress to 0 if no timesheets found in the loaded verified set.
+            const required = app.project.timeline?.expected_hours || 0;
             const hoursDone = verifiedTimesheets
-                .filter(t => t.opportunityId === app.opportunityId)
+                .filter(t => t.opportunityId === app.projectId)
                 .reduce((sum, t) => sum + t.hours, 0);
 
             let progress = 0;
@@ -152,27 +128,26 @@ export class StudentsService {
             }
 
             return {
-                id: app.opportunity.id,
-                title: app.opportunity.title,
-                category: app.opportunity.sdg_info?.sdg_id || 'General', // Fallback to SDG or verify category field
+                id: app.projectId,
+                title: app.project.title,
+                category: app.project.sdg_info?.sdg_id || 'General',
                 assignedAt: app.createdAt.toISOString(),
-                status: 'In Progress', // Mapped from app.status
+                status: 'In Progress',
                 progress: progress
             };
         });
 
         // 3. Deadlines
-        // Mock logic: deadlines are opportunity end dates
         const deadLinesRaw = activeApplications
-            .filter(app => app.opportunity.timeline?.end_date)
+            .filter(app => app.project.timeline?.end_date)
             .map(app => ({
-                id: app.opportunity.id,
-                title: `${app.opportunity.title} Deadline`,
-                date: new Date(app.opportunity.timeline.end_date),
-                type: 'info' // Default
+                id: app.projectId,
+                title: `${app.project.title} Deadline`,
+                date: new Date(app.project.timeline.end_date),
+                type: 'info'
             }))
             .sort((a, b) => a.date.getTime() - b.date.getTime())
-            .slice(0, 3); // Top 3
+            .slice(0, 3);
 
         const deadlines = deadLinesRaw.map(d => {
             const now = new Date();
@@ -230,15 +205,15 @@ export class StudentsService {
 
         if (userId && opportunities.length > 0) {
             const opportunityIds = opportunities.map(o => o.id);
-            const applications = await this.opportunityParticipantsRepository
-                .createQueryBuilder('participant')
-                .leftJoinAndSelect('participant.teamMembers', 'teamMembers')
-                .where('participant.studentId = :userId', { userId })
-                .andWhere('participant.opportunityId IN (:...opportunityIds)', { opportunityIds })
-                .getMany();
+            const applications = await this.participantRepository.find({
+                where: {
+                    studentId: userId,
+                    projectId: In(opportunityIds)
+                }
+            });
 
             applications.forEach(app => {
-                applicationStatuses.set(app.opportunityId, app);
+                applicationStatuses.set(app.projectId, app);
             });
         }
 
@@ -256,19 +231,11 @@ export class StudentsService {
                     remaining_seats: Math.max(0, volunteersRequired - occupiedSeats),
                     description: o.objectives?.description || 'No description',
                     application_status: app ? app.status : null,
-                    payment_status: app ? app.payment_status : null,
-                    payment_proof_url: app ? app.payment_proof_url : null,
+                    payment_status: app ? app.paymentStatus : null,
+                    payment_proof_url: app ? app.paymentProofUrl : null,
                     // Map status for frontend buttons. "active" is required for "Submit Report".
                     status: (app && (app.status === 'approved' || app.status === 'verified')) ? 'active' : (app ? 'applied' : o.status),
-                    teamMembers: app?.teamMembers?.map(member => ({
-                        name: member.name,
-                        role: member.role,
-                        cnic: member.cnic,
-                        email: member.email,
-                        mobile: member.mobile,
-                        university: member.university,
-                        is_verified: member.is_verified
-                    })) || []
+                    teamMembers: [] // We no longer fetch team members in a list view for performance, or we can fetch them if needed.
                 };
             })),
             pagination: {
@@ -295,17 +262,17 @@ export class StudentsService {
         let hasApplied = false;
 
         if (userId) {
-            const application = await this.opportunityParticipantsRepository.findOne({
+            const application = await this.participantRepository.findOne({
                 where: {
                     studentId: userId,
-                    opportunityId: id,
+                    projectId: id,
                 },
             });
 
             if (application) {
                 applicationStatus = application.status;
-                paymentStatus = application.payment_status;
-                paymentProofUrl = application.payment_proof_url;
+                paymentStatus = application.paymentStatus;
+                paymentProofUrl = application.paymentProofUrl;
                 hasApplied = true;
             }
         }
@@ -344,31 +311,30 @@ export class StudentsService {
     }
 
     async getStudentProjects(studentId: string) {
-        const applications = await this.opportunityParticipantsRepository.find({
+        const applications = await this.participantRepository.find({
             where: { studentId },
-            relations: ['opportunity', 'opportunity.organization', 'teamMembers'],
+            relations: ['project', 'project.organization'],
             order: { createdAt: 'DESC' },
         });
 
-        const formattedProjects = applications.map(app => ({
-            id: app.opportunity.id, // Opportunity ID needed for frontend links
-            title: app.opportunity.title,
-            organization: app.opportunity.organization?.name || 'Unknown',
-            description: app.opportunity.objectives?.description,
-            // Map status for frontend buttons. "active" is required for "Submit Report".
+        const formattedProjects = await Promise.all(applications.map(async app => ({
+            id: app.projectId,
+            title: app.project.title,
+            organization: app.project.organization?.name || 'Unknown',
+            description: app.project.objectives?.description,
             status: (app.status === 'approved' || app.status === 'verified') ? 'active' : app.status,
-            payment_status: app.payment_status,
-            payment_proof_url: app.payment_proof_url,
-            teamMembers: app.teamMembers?.map(member => ({
-                name: member.name,
-                role: member.role,
-                cnic: member.cnic,
-                email: member.email,
-                mobile: member.mobile,
-                university: member.university,
-                is_verified: member.is_verified
-            })) || []
-        }));
+            payment_status: app.paymentStatus,
+            payment_proof_url: app.paymentProofUrl,
+            teamMembers: app.applicationId ? (await this.participantRepository.find({
+                where: { applicationId: app.applicationId }
+            })).map(m => ({
+                name: m.fullName,
+                email: m.email,
+                mobile: m.mobile,
+                university: m.universityName,
+                is_verified: true
+            })) : []
+        })));
 
         return {
             success: true,
@@ -449,10 +415,10 @@ export class StudentsService {
         }
 
         // Check if already applied
-        const existing = await this.opportunityParticipantsRepository.findOne({
+        const existing = await this.participantRepository.findOne({
             where: {
                 studentId: userId,
-                opportunityId: dto.opportunityId,
+                projectId: dto.opportunityId,
             },
         });
 
@@ -462,109 +428,107 @@ export class StudentsService {
 
         const currentCount = await this.getOccupiedSeats(dto.opportunityId);
 
-        let incomingCount = 1; // The applicant
-        if (dto.participation_type === 'team' && dto.team_members) {
-            incomingCount += dto.team_members.length;
+        const applicationId = crypto.randomUUID();
+
+        // 1. Register Lead
+        const user = await this.usersRepository.findOne({ where: { id: userId } });
+        let leadParticipation;
+        if (user) {
+            leadParticipation = await this.engagementService.preRegister(userId, dto.opportunityId, {
+                applicationId,
+                fullName: user.name,
+                email: user.email,
+                mobile: user.phone || '',
+                cnic: user.cnic || '',
+                universityName: user.university || '',
+                universityId: user.university || '',
+                academicProgram: user.major || '',
+                yearOfStudy: '1st Year',
+                department: 'Other',
+                academicIntegrationType: 'Voluntary',
+                participationMode: dto.participation_type || 'individual',
+                isTeamLead: true,
+                emailVerified: true,
+                mobileVerified: true,
+                status: 'pending', // Initial status for application
+                primaryFacultyEmail: dto.primary_faculty_email,
+                secondaryFacultyEmail: dto.secondary_faculty_email,
+                teamId: dto.team_id,
+            } as any);
+
+            // Send Notifications
+            if (dto.primary_faculty_email) {
+                await this.mailService.sendFacultyApprovalRequest(
+                    dto.primary_faculty_email,
+                    user.name,
+                    opportunity.title,
+                    leadParticipation.id
+                );
+            }
+
+            if (dto.secondary_faculty_email) {
+                await this.mailService.sendFacultyCollaboratorNotice(
+                    dto.secondary_faculty_email,
+                    user.name,
+                    opportunity.title
+                );
+            }
+
+            await this.mailService.sendApplicationSubmitted(
+                user.email,
+                user.name,
+                opportunity.title
+            );
         }
 
-        const required = opportunity.timeline?.volunteers_required || 0;
-        if (required > 0 && (currentCount + incomingCount) > required) {
-            throw new BadRequestException(`Opportunity is full. Remaining spots: ${Math.max(0, required - currentCount)}`);
-        }
-
-        // Create Opportunity Participant (Application)
-        const participant = this.opportunityParticipantsRepository.create({
-            studentId: userId,
-            opportunityId: dto.opportunityId,
-            participation_type: dto.participation_type || 'individual',
-            status: 'pending' // Or 'approved' if auto-approve?
-        });
-
-        const savedParticipant = await this.opportunityParticipantsRepository.save(participant);
-
-        // Pre-register for Engagement/Report Flow (Merged Flow)
-        try {
-            const user = await this.usersRepository.findOne({ where: { id: userId } });
-            if (user) {
-                await this.engagementService.preRegister(userId, dto.opportunityId, {
-                    fullName: user.name,
-                    email: user.email,
-                    mobile: user.phone || '',
-                    cnic: user.cnic || '',
-                    universityName: user.university || '',
-                    academicProgram: user.major || '',
-                    participationMode: dto.participation_type || 'individual',
-                    isTeamLead: true,
+        // 2. Register Team Members
+        if (dto.participation_type === 'team' && dto.team_members && dto.team_members.length > 0) {
+            for (const m of dto.team_members) {
+                const memberUser = await this.usersService.findByEmail(m.email);
+                await this.engagementService.preRegister(memberUser?.id || null, dto.opportunityId, {
+                    applicationId,
+                    fullName: m.name,
+                    email: m.email,
+                    mobile: m.mobile || '',
+                    cnic: m.cnic || '',
+                    universityName: m.university || '',
+                    universityId: m.university || '',
+                    academicProgram: m.program || '',
+                    yearOfStudy: '1st Year',
+                    department: 'Other',
+                    academicIntegrationType: 'Voluntary',
+                    participationMode: 'team',
+                    isTeamLead: false,
                     emailVerified: true,
                     mobileVerified: true,
-                    status: 'verified' // Auto-verify if lead is already verified user
+                    status: 'approved', // Auto-approved for verified members added by lead?
+                    teamId: dto.team_id,
+                    primaryFacultyEmail: dto.primary_faculty_email,
                 } as any);
             }
-
-            // Register Team Members in Participant table too
-            if (dto.participation_type === 'team' && dto.team_members && dto.team_members.length > 0) {
-                for (const m of dto.team_members) {
-                    const memberUser = await this.usersService.findByEmail(m.email);
-                    await this.engagementService.preRegister(memberUser?.id || null, dto.opportunityId, {
-                        fullName: m.name,
-                        email: m.email,
-                        mobile: m.mobile || '',
-                        cnic: m.cnic || '',
-                        universityName: m.university || '',
-                        academicProgram: m.program || '',
-                        participationMode: 'team',
-                        isTeamLead: false,
-                        emailVerified: true,
-                        mobileVerified: true,
-                        status: 'verified'
-                    } as any);
-                }
-            }
-        } catch (e) {
-            console.error('Failed to register participants for engagement:', e);
-        }
-
-        // Add Team Members to OpportunityTeamMember table (Legacy/Parallel tracking)
-        if (dto.participation_type === 'team' && dto.team_members && dto.team_members.length > 0) {
-            const teamMembers = dto.team_members.map(m => this.opportunityTeamMembersRepository.create({
-                participantId: savedParticipant.id,
-                name: m.name,
-                cnic: m.cnic,
-                mobile: m.mobile,
-                email: m.email,
-                university: m.university,
-                program: m.program,
-                role: m.role,
-                is_verified: true // Already verified in frontend as per request
-            }));
-            await this.opportunityTeamMembersRepository.save(teamMembers);
         }
 
         return {
             success: true,
-            data: savedParticipant,
+            data: leadParticipation,
             message: 'Application submitted successfully',
         };
     }
 
     async withdrawApplication(userId: string, id: string) {
-        const application = await this.timesheetsRepository.findOne({
-            where: { id },
+        const application = await this.participantRepository.findOne({
+            where: { id, studentId: userId },
         });
 
         if (!application) {
             throw new NotFoundException('Application not found');
         }
 
-        if (application.studentId !== userId) {
-            throw new ForbiddenException('Not your application');
-        }
-
         if (application.status !== 'pending') {
             throw new BadRequestException('Can only withdraw pending applications');
         }
 
-        await this.timesheetsRepository.remove(application);
+        await this.participantRepository.remove(application);
 
         return {
             success: true,
@@ -593,14 +557,14 @@ export class StudentsService {
 
     async getReports(userId: string, organisationId: string) {
         // Find all applications/participants for this user in opportunities from this organisation
-        const activeApplications = await this.opportunityParticipantsRepository.find({
+        const activeApplications = await this.participantRepository.find({
             where: {
                 studentId: userId,
-                opportunity: {
+                project: {
                     organizationId: organisationId
                 }
             },
-            relations: ['opportunity', 'opportunity.organization']
+            relations: ['project', 'project.organization']
         });
 
         // Fetch verified timesheets for these opportunities
@@ -611,9 +575,9 @@ export class StudentsService {
 
         // Format data
         const reports = activeApplications.map(app => {
-            const requiredHours = app.opportunity.timeline?.expected_hours || 0;
+            const requiredHours = app.project.timeline?.expected_hours || 0;
             const hoursDone = verifiedTimesheets
-                .filter(t => t.opportunityId === app.opportunityId)
+                .filter(t => t.opportunityId === app.projectId)
                 .reduce((sum, t) => sum + t.hours, 0);
 
             // Determine report status based on hours
@@ -623,15 +587,15 @@ export class StudentsService {
 
             return {
                 id: app.id,
-                opportunityId: app.opportunity.id,
-                projectName: app.opportunity.title,
+                opportunityId: app.project.id,
+                projectName: app.project.title,
                 startDate: app.createdAt,
-                endDate: app.opportunity.timeline?.end_date || null,
+                endDate: app.project.timeline?.end_date || null,
                 totalHours: hoursDone,
                 requiredHours: requiredHours,
                 status: reportStatus,
-                partnerName: app.opportunity.organization?.name || 'Unknown Partner',
-                partnerLogo: app.opportunity.organization?.logoUrl || null,
+                partnerName: app.project.organization?.name || 'Unknown Partner',
+                partnerLogo: app.project.organization?.logoUrl || null,
                 certificateUrl: null, // Logic for certificate can go here
             };
         });

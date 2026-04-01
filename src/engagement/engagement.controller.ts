@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Delete, Body, Param, UseGuards, Request, UseInterceptors, UploadedFile } from '@nestjs/common';
+import { Controller, Post, Get, Delete, Body, Param, UseGuards, Request, UseInterceptors, UploadedFile, NotFoundException } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { EngagementService } from './engagement.service';
 import { RegisterParticipantDto } from './dto/register-participant.dto';
@@ -13,6 +13,15 @@ export class EngagementController {
     @Get('my')
     async getMy(@Request() req) {
         const result = await this.engagementService.getMyParticipants(req.user.id);
+        return {
+            success: true,
+            data: result,
+        };
+    }
+
+    @Get('me/latest')
+    async getMyLatest(@Request() req) {
+        const result = await this.engagementService.getLatestParticipation(req.user.id);
         return {
             success: true,
             data: result,
@@ -105,6 +114,15 @@ export class EngagementController {
     @Get('project/:projectId/team')
     async getProjectTeam(@Param('projectId') projectId: string) {
         const result = await this.engagementService.getProjectTeam(projectId);
+        return {
+            success: true,
+            data: result,
+        };
+    }
+
+    @Get('project/:projectId/attendance-logs')
+    async getProjectAttendance(@Param('projectId') projectId: string) {
+        const result = await this.engagementService.getProjectAttendanceLogs(projectId);
         return {
             success: true,
             data: result,

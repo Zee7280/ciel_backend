@@ -53,8 +53,7 @@ export class EngagementService {
 
         // Try lookup by CNIC if still not found
         if (!existing && data.cnic) {
-            const normalizedCnic = (data.cnic || '').replace(/\D/g, '');
-            const cnicHash = this.hashString(normalizedCnic);
+            const cnicHash = this.hashString(data.cnic);
             existing = await this.participantRepository.findOne({
                 where: { cnicHash, projectId: opportunity.id }
             });
@@ -74,10 +73,9 @@ export class EngagementService {
             }
 
             if (data.cnic) {
-                const normalizedCnic = (data.cnic || '').replace(/\D/g, '');
-                existing.cnicHash = this.hashString(normalizedCnic);
-                existing.cnic = this.encrypt(normalizedCnic);
-                existing.cnicLast4 = normalizedCnic.slice(-4);
+                existing.cnicHash = this.hashString(data.cnic);
+                existing.cnic = this.encrypt(data.cnic);
+                existing.cnicLast4 = data.cnic.slice(-4);
             }
             const saved = await this.participantRepository.save(existing);
             return this.decryptParticipation(saved);
@@ -98,10 +96,9 @@ export class EngagementService {
         const participation = this.participantRepository.create(participationData as Partial<Participation>);
 
         if (data.cnic) {
-            const normalizedCnic = (data.cnic || '').replace(/\D/g, '');
-            participation.cnicHash = this.hashString(normalizedCnic);
-            participation.cnic = this.encrypt(normalizedCnic);
-            participation.cnicLast4 = normalizedCnic.slice(-4);
+            participation.cnicHash = this.hashString(data.cnic);
+            participation.cnic = this.encrypt(data.cnic);
+            participation.cnicLast4 = data.cnic.slice(-4);
         }
 
         const saved = await this.participantRepository.save(participation);
@@ -109,126 +106,127 @@ export class EngagementService {
     }
 
     async registerParticipant(studentId: string, dto: RegisterParticipantDto) {
-        return await this.participantRepository.manager.transaction(async (manager) => {
-            let targetStudentId: string | null = dto.studentId || null;
-            if (!targetStudentId) {
-                const userByEmail = await manager.findOne(User, { where: { email: dto.email } });
-                targetStudentId = userByEmail?.id || null;
-            }
+        let targetStudentId: string | null = dto.studentId || null;
+        if (!targetStudentId) {
+            const userByEmail = await this.userRepository.findOne({ where: { email: dto.email } });
+            targetStudentId = userByEmail?.id || null;
+        }
 
-            // Fallback to the logged-in user if no ID is resolved yet
-            if (!targetStudentId) {
-                targetStudentId = studentId;
-            }
+        // Fallback to the logged-in user if no ID is resolved yet
+        if (!targetStudentId) {
+            targetStudentId = studentId;
+        }
+        const opportunity = await this.opportunityRepository.findOne({ where: { id: dto.projectId } });
+        if (!opportunity) throw new NotFoundException('Project not found');
 
-            const opportunity = await manager.findOne(Opportunity, { where: { id: dto.projectId } });
-            if (!opportunity) throw new NotFoundException('Project not found');
+        // 1. Check if this CNIC is already used by SOMEONE ELSE in this project
+        const cnicHash = this.hashString(dto.cnic);
+        const existingByCnic = await this.participantRepository.findOne({
+            where: { cnicHash, projectId: opportunity.id }
+        });
 
-            // 1. Check if this CNIC is already used in this project
-            const normalizedCnic = (dto.cnic || '').replace(/\D/g, '');
-            const cnicHash = this.hashString(normalizedCnic);
-            const existingByCnic = await manager.findOne(Participation, {
-                where: { cnicHash, projectId: opportunity.id }
-            });
+        if (existingByCnic && existingByCnic.studentId && existingByCnic.studentId !== targetStudentId) {
+            throw new BadRequestException('CNIC already registered for this opportunity');
+        }
 
-            if (existingByCnic && existingByCnic.studentId && existingByCnic.studentId !== targetStudentId) {
-                this.logger.log(`Found CNIC match for student ${existingByCnic.studentId}, will merge with target student ${targetStudentId}`);
-                // Instead of throwing, we allow it to proceed to the reconciliation below
-                // where existingByCnic and existingByTarget are merged.
-            }
+        // 2. Check if a record already exists for THIS user/email in this project
+        let existingByTarget: Participation | null = null;
+        
+        // Try by Email first (Most specific)
+        existingByTarget = await this.participantRepository.findOne({
+            where: { email: dto.email, projectId: opportunity.id },
+            order: { createdAt: 'DESC' }
+        });
 
-            // 2. Check if a record already exists for THIS user/email in this project
-            let existingByTarget: Participation | null = null;
-            
-            // Try by Email first (Most specific)
-            existingByTarget = await manager.findOne(Participation, {
-                where: { email: dto.email, projectId: opportunity.id },
+        // If not found by email, and we have a Student ID, try matching by ID
+        if (!existingByTarget && targetStudentId) {
+            existingByTarget = await this.participantRepository.findOne({
+                where: { studentId: targetStudentId, projectId: opportunity.id },
                 order: { createdAt: 'DESC' }
             });
+        }
 
-            // If not found by email, we stop here. We will NOT match by studentId
-            // because we want to allow a logged-in user to create a new registration
-            // if they provide a different email address.
+        const encryptedCnic = this.encrypt(dto.cnic);
+        let participation: Participation;
 
-            let participation: Participation;
-
-            // RECONCILIATION LOGIC:
-            if (existingByCnic) {
-                participation = existingByCnic;
-                
-                // If we also had a target record that was separate, 
-                // merge its non-empty fields and delete it.
-                if (existingByTarget && existingByTarget.id !== participation.id) {
-                    this.logger.log(`Merging duplicate records for student ${targetStudentId}: KEEPING ${participation.id}, REMOVING ${existingByTarget.id}`);
-                    
-                    // PRESERVE fields from the record we are removing if they are missing on the one we keep
-                    participation.applicationId = participation.applicationId || existingByTarget.applicationId;
-                    participation.teamId = participation.teamId || existingByTarget.teamId;
-                    participation.participationMode = participation.participationMode || existingByTarget.participationMode;
-                    
-                    await manager.remove(Participation, existingByTarget);
-                }
-            } else if (existingByTarget) {
-                participation = existingByTarget;
-            } else {
-                participation = manager.create(Participation, {
-                    projectId: opportunity.id,
-                    status: 'pending',
-                });
-            }
-
-            // Apply all DTO fields
-            const normalizedCnicForStorage = (dto.cnic || '').replace(/\D/g, '');
-            Object.assign(participation, {
-                ...dto,
-                studentId: targetStudentId || participation.studentId,
-                cnicHash,
-                cnic: this.encrypt(normalizedCnicForStorage),
-                cnicLast4: normalizedCnicForStorage.slice(-4),
-                emailVerified: true,
-                mobileVerified: true,
-                status: 'pending_ciel_approval'
-            });
-
-            const saved = await manager.save(Participation, participation);
-            this.logger.log(`Participation ${saved.id} successfully PERSISTED within transaction for student ${targetStudentId || 'Guest'}`);
+        // RECONCILIATION LOGIC:
+        // If we found a record by CNIC (Step 1) and it belongs to the same user or has no owner, prefer it.
+        if (existingByCnic) {
+            // Already checked at 104 if it's someone else's.
+            // If it's the same person or no owner, use this record.
+            participation = existingByCnic;
             
-            // 3. Trigger Faculty Emails (Post-save within transaction, though ideally should be after commit)
-            if (dto.primaryFacultyEmail || dto.secondaryFacultyEmail) {
-                const studentName = targetStudentId 
-                    ? (await manager.findOne(User, { where: { id: targetStudentId } }))?.name || dto.fullName
-                    : dto.fullName;
+            // If we also had a target record (Record 2) that was separate, 
+            // merge its non-empty fields and delete the duplicate target record if they are different.
+            if (existingByTarget && existingByTarget.id !== participation.id) {
+                // Keep the record that's already in use (participation)
+                // but delete the other one (existingByTarget) to avoid duplicates.
+                await this.participantRepository.remove(existingByTarget);
+            }
+        } else if (existingByTarget) {
+            // No record by CNIC yet, but found a record by ID/Email.
+            participation = existingByTarget;
+        } else {
+            // No record by CNIC or Target, create new one.
+            participation = this.participantRepository.create({
+                projectId: opportunity.id,
+                status: 'pending',
+            });
+        }
 
-                if (dto.primaryFacultyEmail) {
-                    try {
-                        await this.mailService.sendFacultyApprovalRequest(
-                            dto.primaryFacultyEmail,
-                            studentName,
-                            opportunity.title,
-                            saved.id
-                        );
-                    } catch (error) {
-                        this.logger.error(`Failed to send faculty approval request to ${dto.primaryFacultyEmail}`, error.stack);
-                    }
-                }
+        // Apply all DTO fields
+        Object.assign(participation, {
+            ...dto,
+            // Only overwrite studentId if we resolved a non-null targetStudentId,
+            // or if the participation was previously unowned.
+            studentId: targetStudentId || participation.studentId,
+            cnicHash,
+            cnic: encryptedCnic,
+            cnicLast4: dto.cnic.slice(-4),
+            emailVerified: true,
+            mobileVerified: true,
+            status: 'pending_ciel_approval'
+        });
 
-                if (dto.secondaryFacultyEmail) {
-                    try {
-                        await this.mailService.sendFacultyCollaboratorNotice(
-                            dto.secondaryFacultyEmail,
-                            studentName,
-                            opportunity.title
-                        );
-                    } catch (error) {
-                        this.logger.error(`Failed to send faculty collaborator notice to ${dto.secondaryFacultyEmail}`, error.stack);
-                    }
+        const saved = await this.participantRepository.save(participation);
+        this.logger.log(`Participation ${saved.id} successfully SAVED to 'participations' table for student ${targetStudentId || 'Guest'}`);
+        
+        // Trigger Faculty Emails
+        if (dto.primaryFacultyEmail || dto.secondaryFacultyEmail) {
+            const studentName = targetStudentId 
+                ? (await this.userRepository.findOne({ where: { id: targetStudentId } }))?.name || dto.fullName
+                : dto.fullName;
+
+            // Primary: Approval Request
+            if (dto.primaryFacultyEmail) {
+                try {
+                    await this.mailService.sendFacultyApprovalRequest(
+                        dto.primaryFacultyEmail,
+                        studentName,
+                        opportunity.title,
+                        saved.id
+                    );
+                } catch (error) {
+                    this.logger.error(`Failed to send faculty approval request to ${dto.primaryFacultyEmail}`, error.stack);
                 }
             }
 
-            return this.decryptParticipation(saved);
-        });
-    }
+            // Secondary: Collaborator Notice
+            if (dto.secondaryFacultyEmail) {
+                try {
+                    await this.mailService.sendFacultyCollaboratorNotice(
+                        dto.secondaryFacultyEmail,
+                        studentName,
+                        opportunity.title
+                    );
+                } catch (error) {
+                    this.logger.error(`Failed to send faculty collaborator notice to ${dto.secondaryFacultyEmail}`, error.stack);
+                }
+            }
+        }
 
+        return this.decryptParticipation(saved);
+    }
 
     async getMyParticipants(studentId: string) {
         const result = await this.participantRepository.find({
@@ -307,16 +305,13 @@ export class EngagementService {
         if (byUniversityId) return byUniversityId;
 
         // Try CNIC Hash
-        const normalizedCnic = (participantId || '').replace(/\D/g, '');
-        if (normalizedCnic.length >= 10) { // Likely a CNIC
-            const cnicHash = this.hashString(normalizedCnic);
-            this.logger.debug(`Searching by CNIC Hash (${cnicHash})...`);
-            const byCnic = await this.participantRepository.findOne({
-                where: { cnicHash },
-                relations
-            });
-            if (byCnic) return byCnic;
-        }
+        const cnicHash = this.hashString(participantId);
+        this.logger.debug(`Searching by CNIC Hash (${cnicHash})...`);
+        const byCnic = await this.participantRepository.findOne({
+            where: { cnicHash },
+            relations
+        });
+        if (byCnic) return byCnic;
 
         // Try Mobile
         this.logger.debug(`Searching by Mobile...`);
@@ -391,38 +386,16 @@ export class EngagementService {
             const pEmail = (participation.email || '').toLowerCase().trim();
             const uEmail = (user?.email || '').toLowerCase().trim();
             
-            let userCnicHash = user?.cnic ? this.hashString(user.cnic) : null;
-
-            // Collect transitive identifiers from other participations belonging to this user
-            // We search by studentId AND email to find records that might not be linked yet
-            const myOtherParticipations = await this.participantRepository.find({
-                where: [
-                    { studentId },
-                    { email: uEmail }
-                ]
-            });
-
-            const myEmails = new Set([uEmail]);
-            const myCnicHashes = new Set(userCnicHash ? [userCnicHash] : []);
-
-            for (const p of myOtherParticipations) {
-                if (p.email) myEmails.add(p.email.toLowerCase().trim());
-                if (p.cnicHash) myCnicHashes.add(p.cnicHash);
-            }
-
-            const isEmailMatch = pEmail && myEmails.has(pEmail);
-            const isCnicMatch = participation.cnicHash && myCnicHashes.has(participation.cnicHash);
-
-            this.logger.warn(`Authorization check: Requester ${studentId} (email: ${uEmail}) vs Participation ${participation.id} (owner: ${participation.studentId}, email: ${pEmail})`);
+            const userCnicHash = user?.cnic ? this.hashString(user.cnic) : null;
+            const isEmailMatch = user && pEmail && uEmail === pEmail;
+            const isCnicMatch = user && userCnicHash && participation.cnicHash && userCnicHash === participation.cnicHash;
 
             if (isEmailMatch || isCnicMatch) {
                 const matchType = isEmailMatch ? 'email' : 'CNIC';
-                this.logger.log(`Auto-claiming participation ${participation.id} for user ${studentId} via transitive ${matchType} match.`);
-                
                 // Auto-claim the record since we identified the student
                 participation.studentId = studentId;
                 await this.participantRepository.save(participation);
-                this.logger.log(`Participation ${participation.id} auto-claimed by user ${studentId} via transitive ${matchType} matching during attendance logging`);
+                this.logger.log(`Participation ${participation.id} auto-claimed by user ${studentId} via ${matchType} matching during attendance logging`);
             } else {
                 // Fallback: Check if requester is the Team Lead for this application
                 let isAuthorizedAsLead = false;
@@ -441,16 +414,15 @@ export class EngagementService {
                 }
 
                 if (!isAuthorizedAsLead) {
-                    this.logger.error(`Not authorized: User ${studentId} (email: ${user?.email}, cnicHash: ${userCnicHash?.slice(-6)}) tried logging attendance for record ${participation.id} (owner: ${participation.studentId}, email: ${participation.email}, cnicHash: ${participation.cnicHash?.slice(-6)})`);
+                    this.logger.warn(`Not authorized: User ${studentId} (email: ${user?.email}, cnicHash: ${userCnicHash?.slice(-6)}) tried logging attendance for record ${participation.id} (owner: ${participation.studentId}, email: ${participation.email}, cnicHash: ${participation.cnicHash?.slice(-6)})`);
                     throw new BadRequestException('Not authorized');
                 }
             }
         }
 
         // Check if participation is approved
-        if (!['approved', 'verified', 'accepted', 'finalized'].includes(participation.status)) {
-            this.logger.warn(`Attendance logging attempt for record ${participation.id} in status: ${participation.status}`);
-            throw new BadRequestException(`Attendance logging is only allowed for approved/verified records (Current status: ${participation.status})`);
+        if (participation.status !== 'approved') {
+            throw new BadRequestException('Attendance logging is only allowed for approved participations');
         }
 
         // Rule 1: Date Validation (Not in future)
@@ -620,14 +592,6 @@ export class EngagementService {
         const participation = await this.findParticipationByIdentifier(participantId, ['attendanceLogs']);
         if (!participation) throw new NotFoundException('Participation not found');
         return participation.attendanceLogs;
-    }
-
-    async getProjectAttendanceLogs(projectId: string) {
-        return await this.attendanceLogRepository.find({
-            where: { projectId },
-            relations: ['participant'],
-            order: { dateOfEngagement: 'DESC' }
-        });
     }
 
     async facultyApprove(participationId: string, status: string) {

@@ -180,19 +180,38 @@ export class MailService {
     participationId: string
   ) {
     const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
+    const approvalLink = `https://cielpk.com/login`; // Assuming login for now, or faculty dashboard
+
     const html = `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
-            <p>Dear Faculty Member,</p>
-            <p>Greetings from Community Impact Education Lab (CIEL).</p>
-            <p>Your student, <strong>${studentName}</strong>, has selected a community engagement project and listed you as the supervising faculty.</p>
-            <p><strong>Project:</strong> ${projectTitle}</p>
-            <p>Kindly review and approve the project so the student can begin:</p>
-            <div style="text-align: center; margin: 30px 0;">
-                <a href="https://cielpk.com/login" style="background-color: #4CAF50; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">👉 Click here to Review & Approve</a>
+        <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: 0 auto; padding: 30px; border: 1px solid #f0f0f0; border-radius: 12px; background-color: #ffffff; color: #333;">
+            <div style="text-align: center; margin-bottom: 25px;">
+                <h2 style="color: #2c3e50; margin-bottom: 5px;">Project Approval Required</h2>
+                <div style="width: 50px; height: 3px; background: #4CAF50; margin: 0 auto;"></div>
             </div>
+            
+            <p>Dear Faculty Member,</p>
+            <p>Greetings from <strong>Community Impact Education Lab (CIEL)</strong>.</p>
+            
+            <p>Your student, <strong>${studentName}</strong>, has selected a community engagement project and listed you as the supervising faculty.</p>
+            
+            <div style="background-color: #f9f9f9; padding: 15px; border-left: 4px solid #4CAF50; margin: 20px 0;">
+                <p style="margin: 0;"><strong>Project:</strong> ${projectTitle}</p>
+            </div>
+
+            <p>Kindly review and approve the project so the student can begin:</p>
+            
+            <div style="text-align: center; margin: 35px 0;">
+                <a href="${approvalLink}" style="background-color: #4CAF50; color: white; padding: 14px 30px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px; display: inline-block; box-shadow: 0 4px 6px rgba(76, 175, 80, 0.2); transition: background-color 0.3s;">👉 Click here to Review & Approve</a>
+            </div>
+
             <p>Your approval will enable the student to proceed with the project and reporting.</p>
+            
             <p>Thank you for your support.</p>
-            <p>Warm regards,<br><strong>CIEL Team</strong></p>
+            
+            <p style="margin-top: 40px; border-top: 1px solid #eee; padding-top: 20px;">
+                Warm regards,<br>
+                <span style="color: #4CAF50; font-weight: bold;">CIEL Team</span>
+            </p>
         </div>
     `;
 
@@ -216,15 +235,30 @@ export class MailService {
   ) {
     const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
     const html = `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: 0 auto; padding: 30px; border: 1px solid #f0f0f0; border-radius: 12px; background-color: #ffffff; color: #333;">
+            <div style="text-align: center; margin-bottom: 25px;">
+                <h2 style="color: #2c3e50; margin-bottom: 5px;">Collaborating Supervisor Notice</h2>
+                <div style="width: 50px; height: 3px; background: #3498db; margin: 0 auto;"></div>
+            </div>
+            
             <p>Dear Faculty Member,</p>
-            <p>Greetings from Community Impact Education Lab (CIEL).</p>
-            <p>You have been added as a Secondary/Collaborating Faculty Supervisor for the following project:</p>
-            <p><strong>Student:</strong> ${studentName}</p>
-            <p><strong>Project:</strong> ${projectTitle}</p>
-            <p>You can view and monitor this project on the SEAL platform. Note that your official approval is not required as you are listed in a collaborating capacity.</p>
+            <p>Greetings from <strong>Community Impact Education Lab (CIEL)</strong>.</p>
+            
+            <p>You have been added as a **Secondary/Collaborating Faculty Supervisor** for the following project:</p>
+            
+            <div style="background-color: #f9f9f9; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #3498db;">
+                <p style="margin: 0 0 10px 0;"><strong>Student:</strong> ${studentName}</p>
+                <p style="margin: 0;"><strong>Project:</strong> ${projectTitle}</p>
+            </div>
+
+            <p>You can view and monitor this project on the SEAL platform. **Note that your official approval is not required** as you are listed in a collaborating capacity.</p>
+            
             <p>Thank you for your engagement.</p>
-            <p>Warm regards,<br><strong>CIEL Team</strong></p>
+            
+            <p style="margin-top: 40px; border-top: 1px solid #eee; padding-top: 20px;">
+                Warm regards,<br>
+                <span style="color: #2c3e50; font-weight: bold;">CIEL Team</span>
+            </p>
         </div>
     `;
 

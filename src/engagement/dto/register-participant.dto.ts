@@ -43,7 +43,11 @@ export class RegisterParticipantDto {
 
     @IsEmail()
     @IsOptional()
-    facultySupervisorEmail?: string;
+    primaryFacultyEmail?: string;
+
+    @IsEmail()
+    @IsOptional()
+    secondaryFacultyEmail?: string;
 
     @IsUUID()
     @IsOptional()

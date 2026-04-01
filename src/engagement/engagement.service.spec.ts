@@ -5,7 +5,7 @@ import { Participation } from './entities/participant.entity';
 import { AttendanceLog } from './entities/attendance-log.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { User } from '../users/entities/user.entity';
-import { OpportunityTeamMember } from '../opportunities/entities/opportunity-team-member.entity';
+// import { OpportunityTeamMember } from '../opportunities/entities/opportunity-team-member.entity';
 import { ConfigService } from '@nestjs/config';
 import { S3Service } from '../common/s3.service';
 import { MailService } from '../mail/mail.service';
@@ -34,9 +34,9 @@ describe('EngagementService', () => {
         findOne: jest.fn(),
     };
 
-    const mockTeamMemberRepository = {
-        findOne: jest.fn(),
-    };
+    // const mockTeamMemberRepository = {
+    //     findOne: jest.fn(),
+    // };
 
     const mockConfigService = {
         get: jest.fn().mockReturnValue('test-secret-key-32-chars-long-!!!'),
@@ -70,10 +70,10 @@ describe('EngagementService', () => {
                     provide: getRepositoryToken(User),
                     useValue: mockUserRepository,
                 },
-                {
-                    provide: getRepositoryToken(OpportunityTeamMember),
-                    useValue: mockTeamMemberRepository,
-                },
+                // {
+                //     provide: getRepositoryToken(OpportunityTeamMember),
+                //     useValue: mockTeamMemberRepository,
+                // },
                 {
                     provide: ConfigService,
                     useValue: mockConfigService,
@@ -198,6 +198,80 @@ describe('EngagementService', () => {
             mockParticipationRepository.findOne.mockResolvedValue(mockParticipation);
 
             await expect(service.addAttendanceLog('u1', 'p1', dto)).rejects.toThrow('Attendance logging is only allowed for approved participations');
+        });
+    });
+    describe('registerParticipant', () => {
+        it('should create a NEW record if the email is different, even for same studentId', async () => {
+            const studentId = 'u1';
+            const projectId = 'proj1';
+            const dto = {
+                projectId,
+                email: 'new@example.com',
+                fullName: 'Fatima',
+                cnic: '1234567890123',
+                mobile: '03001234567',
+            } as any;
+
+            const mockOpportunity = { id: projectId, title: 'Project 1' };
+            
+            // Mock transaction manager
+            const mockManager = {
+                findOne: jest.fn()
+                    .mockResolvedValueOnce(null) // User by email
+                    .mockResolvedValueOnce(mockOpportunity) // Opportunity
+                    .mockResolvedValueOnce(null) // existingByCnic
+                    .mockResolvedValueOnce(null), // existingByTarget (email)
+                create: jest.fn().mockReturnValue({}),
+                save: jest.fn().mockImplementation((entity, data) => ({ id: 'new-id', ...data })),
+            };
+
+            (mockParticipationRepository as any).manager = {
+                transaction: jest.fn().mockImplementation((cb) => cb(mockManager)),
+            };
+
+            const result = await service.registerParticipant(studentId, dto);
+
+            expect(result).toBeDefined();
+            expect(mockManager.create).toHaveBeenCalled();
+            expect(mockManager.save).toHaveBeenCalled();
+        });
+
+        it('should OVERRIDE if the email matches', async () => {
+            const studentId = 'u1';
+            const projectId = 'proj1';
+            const dto = {
+                projectId,
+                email: 'existing@example.com',
+                fullName: 'Fatima Updated',
+                cnic: '1234567890123',
+                mobile: '03001234567',
+            } as any;
+
+            const mockOpportunity = { id: projectId, title: 'Project 1' };
+            const existingParticipation = { id: 'old-id', email: 'existing@example.com' };
+
+            // Mock transaction manager
+            const mockManager = {
+                findOne: jest.fn()
+                    .mockResolvedValueOnce(null) // User by email
+                    .mockResolvedValueOnce(mockOpportunity) // Opportunity
+                    .mockResolvedValueOnce(null) // existingByCnic
+                    .mockResolvedValueOnce(existingParticipation), // existingByTarget (email found!)
+                create: jest.fn(),
+                save: jest.fn().mockImplementation((entity, data) => ({ ...data })),
+            };
+
+            (mockParticipationRepository as any).manager = {
+                transaction: jest.fn().mockImplementation((cb) => cb(mockManager)),
+            };
+
+            const result = await service.registerParticipant(studentId, dto);
+
+            expect(result).toBeDefined();
+            expect(mockManager.create).not.toHaveBeenCalled();
+            expect(mockManager.save).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+                fullName: 'Fatima Updated'
+            }));
         });
     });
 });

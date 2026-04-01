@@ -72,7 +72,9 @@ export class AdminService {
 
         // Pending Approvals (Users + Applications)
         const pendingUsers = await this.usersRepository.count({ where: { status: 'pending' } });
-        const pendingApplications = await this.participationRepository.count({ where: { status: 'pending' } });
+        const pendingApplications = await this.participationRepository.count({ 
+            where: { status: In(['pending', 'pending_ciel_approval']) } 
+        });
         const pendingApprovals = pendingUsers + pendingApplications;
 
         // Verified Hours
@@ -257,7 +259,7 @@ export class AdminService {
     async findPendingApplications() {
         console.log('Fetching pending applications...');
         const applications = await this.participationRepository.find({
-            where: { status: 'pending' },
+            where: { status: In(['pending', 'pending_ciel_approval']) },
             relations: ['student', 'project'],
             order: { createdAt: 'DESC' }
         });
@@ -276,6 +278,7 @@ export class AdminService {
                 email: app.email || app.student?.email || 'Unknown',
                 organization_type: app.participationMode === 'team' ? 'Team' : 'Individual',
                 opportunity: app.project?.title || 'Unknown',
+                status: app.status,
                 created_at: app.createdAt
             }))
         };

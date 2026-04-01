@@ -27,7 +27,7 @@ export class StudentPaymentsController {
     }
 
     @Post('payments/submit')
-    @UseInterceptors(FileInterceptor('file'))
+    @UseInterceptors(FileInterceptor('proof'))
     async submitPayment(
         @Request() req,
         @Body('projectId') projectId: string,

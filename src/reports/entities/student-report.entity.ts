@@ -40,8 +40,8 @@ export class StudentReport {
     @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
     submission_date: Date;
 
-    @Column({ default: 'continue' })
-    status: string; // 'continue', 'submitted', 'partner_verified', 'verified', 'rejected'
+    @Column({ default: 'draft' })
+    status: string; // 'draft', 'submitted', 'partner_verified', 'payment_pending', 'verified', 'rejected'
 
     @Column({ default: 'pending' })
     partner_status: string; // 'pending', 'approved', 'rejected'

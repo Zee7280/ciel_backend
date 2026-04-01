@@ -52,6 +52,36 @@ export class StudentReportsController {
         }
     }
 
+    @Post(':projectId/submit')
+    @UseInterceptors(FilesInterceptor('files', 50, {
+        limits: { fileSize: 10 * 1024 * 1024 },
+        fileFilter: (req, file, callback) => {
+            const allowedExtensions = ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx'];
+            const ext = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
+            if (allowedExtensions.includes(ext)) {
+                callback(null, true);
+            } else {
+                callback(new BadRequestException(`File type ${ext} is not allowed.`), false);
+            }
+        },
+    }))
+    async submitReportSpecific(
+        @Request() req,
+        @Param('projectId') projectId: string,
+        @Body() body: any,
+        @UploadedFiles() files: any[]
+    ) {
+        // Ensure projectId is in the body for the service logic
+        body.projectId = projectId;
+        body.opportunityId = projectId;
+        
+        return await this.studentReportsService.createReport(
+            req.user.id,
+            body,
+            files
+        );
+    }
+
     @Post('draft')
     @UseInterceptors(FilesInterceptor('files', 50, {
         limits: {

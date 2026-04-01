@@ -40,6 +40,6 @@ export class StudentPaymentsController {
             throw new BadRequestException('projectId is required');
         }
 
-        return await this.paymentsService.submitPaymentProof(req.user.id, projectId, file);
+        return await this.paymentsService.submitManualPayment(req.user.id, projectId, file);
     }
 }

@@ -12,6 +12,7 @@ import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
 import { PaymentsService } from './payments.service';
+import { PaymentStatus } from './entities/payment.entity';
 
 @Controller('admin/payments')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -23,19 +24,19 @@ export class AdminPaymentsController {
     async getPendingPayments() {
         return {
             success: true,
-            data: await this.paymentsService.getPendingPayments(),
+            data: await this.paymentsService.findAllPendingManual(),
         };
     }
 
     @Patch(':id/verify')
     async verifyPayment(
         @Param('id') id: string,
-        @Body() body: { action: 'approve' | 'reject', feedback?: string },
+        @Body() body: { status: PaymentStatus, feedback?: string },
     ) {
-        if (!body.action || !['approve', 'reject'].includes(body.action)) {
-            throw new BadRequestException('Action must be either "approve" or "reject"');
+        if (!body.status || !Object.values(PaymentStatus).includes(body.status)) {
+            throw new BadRequestException('Invalid status');
         }
 
-        return await this.paymentsService.verifyPayment(id, body.action, body.feedback);
+        return await this.paymentsService.verifyManualPayment(id, body.status, body.feedback);
     }
 }

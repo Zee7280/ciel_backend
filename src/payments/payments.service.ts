@@ -5,6 +5,9 @@ import { Participation } from '../engagement/entities/participant.entity';
 import { Setting } from '../settings/entities/setting.entity';
 import { S3Service } from '../common/s3.service';
 
+import { Payment, PaymentStatus } from './entities/payment.entity';
+import { StudentReport } from '../reports/entities/student-report.entity';
+
 @Injectable()
 export class PaymentsService {
     constructor(
@@ -12,6 +15,10 @@ export class PaymentsService {
         private readonly participantRepository: Repository<Participation>,
         @InjectRepository(Setting)
         private readonly settingRepository: Repository<Setting>,
+        @InjectRepository(Payment)
+        private readonly paymentRepository: Repository<Payment>,
+        @InjectRepository(StudentReport)
+        private readonly studentReportRepository: Repository<StudentReport>,
         private readonly s3Service: S3Service,
     ) { }
 
@@ -105,6 +112,93 @@ export class PaymentsService {
             data: {
                 payment_status: participant.paymentStatus,
             },
+        };
+    }
+
+    // --- NEW MANUAL PAYMENT FLOW ---
+
+    async submitManualPayment(studentId: string, projectId: string, file: any) {
+        // 1. Upload proof to S3
+        const proofUrl = await this.s3Service.uploadFile(file, `payments-manual/${studentId}`);
+
+        // 2. Insert record into payments table
+        const payment = this.paymentRepository.create({
+            studentId,
+            projectId,
+            proof_url: proofUrl,
+            status: PaymentStatus.PENDING,
+        });
+        await this.paymentRepository.save(payment);
+
+        // 3. Update reports.status to 'payment_pending'
+        const report = await this.studentReportRepository.findOne({
+            where: { studentId, opportunityId: projectId },
+        });
+
+        if (report) {
+            report.status = 'payment_pending';
+            await this.studentReportRepository.save(report);
+        }
+
+        return {
+            success: true,
+            message: 'Payment proof submitted successfully',
+            data: {
+                paymentId: payment.id,
+            },
+        };
+    }
+
+    async findAllPendingManual() {
+        const payments = await this.paymentRepository.find({
+            where: { status: PaymentStatus.PENDING },
+            relations: ['student', 'opportunity', 'opportunity.organization'],
+            order: { created_at: 'DESC' },
+        });
+
+        return payments.map(p => ({
+            id: p.id,
+            studentName: p.student?.name || 'Unknown',
+            studentEmail: p.student?.email || 'Unknown',
+            projectTitle: p.opportunity?.title || 'Unknown',
+            organization: p.opportunity?.organization?.name || 'Unknown',
+            amount: p.amount,
+            proofUrl: p.proof_url,
+            submittedAt: p.created_at,
+            status: p.status,
+        }));
+    }
+
+    async verifyManualPayment(id: string, status: PaymentStatus, feedback?: string) {
+        const payment = await this.paymentRepository.findOne({
+            where: { id },
+        });
+
+        if (!payment) {
+            throw new NotFoundException('Payment record not found');
+        }
+
+        payment.status = status;
+        if (feedback) payment.feedback = feedback;
+        await this.paymentRepository.save(payment);
+
+        // Update corresponding report status
+        const report = await this.studentReportRepository.findOne({
+            where: { studentId: payment.studentId, opportunityId: payment.projectId },
+        });
+
+        if (report) {
+            if (status === PaymentStatus.APPROVED) {
+                report.status = 'verified';
+            } else if (status === PaymentStatus.REJECTED) {
+                report.status = 'submitted'; // Revert back so they can Pay again
+            }
+            await this.studentReportRepository.save(report);
+        }
+
+        return {
+            success: true,
+            message: `Payment ${status} successfully`,
         };
     }
 }

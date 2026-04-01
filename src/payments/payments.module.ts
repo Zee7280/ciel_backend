@@ -7,9 +7,12 @@ import { PaymentsService } from './payments.service';
 import { StudentPaymentsController } from './student-payments.controller';
 import { AdminPaymentsController } from './admin-payments.controller';
 
+import { Payment } from './entities/payment.entity';
+import { StudentReport } from '../reports/entities/student-report.entity';
+
 @Module({
     imports: [
-        TypeOrmModule.forFeature([Participation, Setting]),
+        TypeOrmModule.forFeature([Participation, Setting, Payment, StudentReport]),
         StorageModule,
     ],
     controllers: [StudentPaymentsController, AdminPaymentsController],

@@ -34,7 +34,7 @@ export class Opportunity {
     activity_details: any; // { student_responsibilities, skills_gained }
 
     @Column({ type: 'jsonb', nullable: true })
-    supervision: any; // { supervisor_name, role, contact, safe_environment, supervised }
+    supervision: any; // { supervisor_name, role, contact, safe_environment, supervised, partner_org_name, partner_contact_person, partner_email, information_accurate }
 
     @Column("text", { array: true, nullable: true })
     verification_method: string[];
@@ -57,6 +57,18 @@ export class Opportunity {
 
     @Column()
     sdg: string; // Keeping for backward compatibility if needed, or remove? Spec says sdg_info. I'll keep it as optional or remove if unused. Let's keep it but maybe nullable.
+
+    @Column({ nullable: true })
+    liaisonToken: string;
+
+    @Column({ default: false })
+    liaisonVerified: boolean;
+
+    @Column({ nullable: true })
+    partnerToken: string;
+
+    @Column({ default: true })
+    partnerVerified: boolean;
 
     @CreateDateColumn()
     createdAt: Date;

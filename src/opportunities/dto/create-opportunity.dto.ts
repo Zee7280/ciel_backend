@@ -1,4 +1,43 @@
-import { IsString, IsArray, IsOptional, IsObject, IsEnum } from 'class-validator';
+import { IsString, IsArray, IsOptional, IsObject, IsEnum, IsBoolean, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
+
+export class SupervisionDto {
+    @IsString()
+    @IsOptional()
+    supervisor_name?: string;
+
+    @IsString()
+    @IsOptional()
+    role?: string;
+
+    @IsString()
+    @IsOptional()
+    contact?: string;
+
+    @IsBoolean()
+    @IsOptional()
+    safe_environment?: boolean;
+
+    @IsBoolean()
+    @IsOptional()
+    supervised?: boolean;
+
+    @IsString()
+    @IsOptional()
+    partner_org_name?: string;
+
+    @IsString()
+    @IsOptional()
+    partner_contact_person?: string;
+
+    @IsString()
+    @IsOptional()
+    partner_email?: string;
+
+    @IsBoolean()
+    @IsOptional()
+    information_accurate?: boolean;
+}
 
 export class CreateOpportunityDto {
     @IsString()
@@ -35,9 +74,10 @@ export class CreateOpportunityDto {
     @IsOptional()
     activity_details?: any;
 
-    @IsObject()
+    @ValidateNested()
+    @Type(() => SupervisionDto)
     @IsOptional()
-    supervision?: any;
+    supervision?: SupervisionDto;
 
     @IsArray()
     @IsString({ each: true })
@@ -89,9 +129,10 @@ export class UpdateOpportunityDto {
     @IsOptional()
     activity_details?: any;
 
-    @IsObject()
+    @ValidateNested()
+    @Type(() => SupervisionDto)
     @IsOptional()
-    supervision?: any;
+    supervision?: SupervisionDto;
 
     @IsArray()
     @IsString({ each: true })

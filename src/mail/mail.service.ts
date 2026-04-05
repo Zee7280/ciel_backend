@@ -336,4 +336,70 @@ export class MailService {
       this.logger.error(`Failed to send faculty invite email to ${to}`, error.stack);
     }
   }
+
+  async sendLiaisonVerification(to: string, projectTitle: string, token: string) {
+    const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
+    const apiUrl = this.configService.get<string>('API_URL') || 'https://api.cielpk.com/api/v1';
+    const verifyLink = `${apiUrl}/verifications/verify?token=${token}`;
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">Liaison Verification Required</h2>
+        <p>Hello!</p>
+        <p>A student has claimed you as their Institutional Liaison for the project <strong>${projectTitle}</strong>.</p>
+        <p>Please click the button below to verify and approve it:</p>
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${verifyLink}" style="background-color: #4CAF50; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Verify Project</a>
+        </div>
+        <p style="color: #666; font-size: 14px;">If the button doesn't work, you can copy and paste this link into your browser:</p>
+        <p style="color: #2563eb; font-size: 14px; word-break: break-all;">${verifyLink}</p>
+        <p style="font-size: 12px; color: #999; margin-top: 30px;">If you did not authorize this, you may ignore this email.</p>
+      </div>
+    `;
+
+    try {
+      await this.transporter.sendMail({
+        from,
+        to,
+        subject: `Project Verification Required: ${projectTitle}`,
+        html,
+      });
+      this.logger.log(`Liaison verification email sent to ${to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send liaison verification email to ${to}`, error.stack);
+    }
+  }
+
+  async sendPartnerVerification(to: string, projectTitle: string, token: string) {
+    const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
+    const apiUrl = this.configService.get<string>('API_URL') || 'https://api.cielpk.com/api/v1';
+    const verifyLink = `${apiUrl}/verifications/verify?token=${token}`;
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">Partner Verification Required</h2>
+        <p>Hello!</p>
+        <p>A student has claimed to be doing a project at your organization: <strong>${projectTitle}</strong></p>
+        <p>Please click the button below to verify the site and collaboration:</p>
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${verifyLink}" style="background-color: #4CAF50; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Verify Collaboration</a>
+        </div>
+        <p style="color: #666; font-size: 14px;">If the button doesn't work, you can copy and paste this link into your browser:</p>
+        <p style="color: #2563eb; font-size: 14px; word-break: break-all;">${verifyLink}</p>
+        <p style="font-size: 12px; color: #999; margin-top: 30px;">If you are unaware of this, you may safely ignore this email.</p>
+      </div>
+    `;
+
+    try {
+      await this.transporter.sendMail({
+        from,
+        to,
+        subject: `Partner Verification Required: ${projectTitle}`,
+        html,
+      });
+      this.logger.log(`Partner verification email sent to ${to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send partner verification email to ${to}`, error.stack);
+    }
+  }
 }

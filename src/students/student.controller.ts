@@ -15,6 +15,7 @@ import {
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { StudentsService } from './students.service';
 import { StudentReportsService } from '../reports/student-reports.service';
+import { CreateOpportunityDto } from '../opportunities/dto/create-opportunity.dto';
 import { FilesInterceptor, FileInterceptor } from '@nestjs/platform-express';
 
 @Controller('student')
@@ -42,6 +43,16 @@ export class StudentController {
     @Get('projects/:id')
     getProjectById(@Param('id') id: string) {
         return this.studentsService.getProjectById(id);
+    }
+
+    @Get('opportunity')
+    getOpportunity(@Request() req, @Query() query: any) {
+        return this.studentsService.getOpportunities(query, req.user.id);
+    }
+
+    @Post('opportunity')
+    createIndependentProject(@Request() req, @Body() createOpportunityDto: CreateOpportunityDto) {
+        return this.studentsService.createStudentOpportunity(req.user.id, createOpportunityDto);
     }
 
     @Post('verify-team-member/send')

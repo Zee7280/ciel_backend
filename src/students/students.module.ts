@@ -13,12 +13,13 @@ import { StudentReportsService } from '../reports/student-reports.service';
 import { StudentReportsController } from './student-reports.controller';
 import { UsersModule } from '../users/users.module';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
+import { Organization } from '../organizations/entities/organization.entity';
 
 import { EngagementModule } from '../engagement/engagement.module';
 
 @Module({
     imports: [
-        TypeOrmModule.forFeature([User, Participation, Opportunity, Timesheet, StudentReport, Otp, AttendanceLog]),
+        TypeOrmModule.forFeature([User, Participation, Opportunity, Timesheet, StudentReport, Otp, AttendanceLog, Organization]),
         UsersModule,
         EngagementModule
     ],

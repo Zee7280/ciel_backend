@@ -243,6 +243,7 @@ export class OpportunitiesService {
         const opp = await this.findOne(id);
         if (!opp) throw new NotFoundException('Opportunity not found');
         opp.status = 'active';
+        opp.partnerVerified = true; // Auto-verify on explicit admin approval
         return this.opportunitiesRepository.save(opp);
     }
 
@@ -346,5 +347,49 @@ export class OpportunitiesService {
         await this.participationRepository.save(participant);
 
         return { success: true, message: 'Applicant status updated successfully' };
+    }
+
+    async verifyOpportunityToken(token: string) {
+        const opportunity = await this.opportunitiesRepository.findOne({
+            where: [
+                { liaisonToken: token },
+                { partnerToken: token }
+            ]
+        });
+
+        if (!opportunity) {
+            throw new NotFoundException('Invalid or expired verification token.');
+        }
+
+        let verifiedRole = '';
+
+        if (opportunity.liaisonToken === token && !opportunity.liaisonVerified) {
+            opportunity.liaisonVerified = true;
+            verifiedRole = 'Liaison';
+        } else if (opportunity.partnerToken === token && !opportunity.partnerVerified) {
+            opportunity.partnerVerified = true;
+            verifiedRole = 'Partner';
+        } else {
+            return {
+                success: true,
+                message: 'This component of the project has already been verified.'
+            };
+        }
+
+        // Check if both are now verified
+        if (opportunity.liaisonVerified && opportunity.partnerVerified) {
+            opportunity.status = 'active';
+        }
+
+        await this.opportunitiesRepository.save(opportunity);
+
+        return {
+            success: true,
+            data: {
+                title: opportunity.title,
+                isFullyVerified: opportunity.status === 'active'
+            },
+            message: `${verifiedRole} verification successful.`
+        };
     }
 }

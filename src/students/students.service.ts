@@ -1,14 +1,17 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
+import * as cryptoNode from 'crypto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { User } from '../users/entities/user.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
+import { CreateOpportunityDto } from '../opportunities/dto/create-opportunity.dto';
 import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { ApplyOpportunityDto } from './dto/apply-opportunity.dto';
 import { LogHoursDto } from './dto/log-hours.dto';
 import { UpdateStudentProfileDto } from './dto/update-profile.dto';
 
 import { Participation } from '../engagement/entities/participant.entity';
+import { Organization } from '../organizations/entities/organization.entity';
 import { Otp } from './entities/otp.entity';
 import { UsersService } from '../users/users.service';
 import { MailService } from '../mail/mail.service';
@@ -25,6 +28,8 @@ export class StudentsService {
         private timesheetsRepository: Repository<Timesheet>,
         @InjectRepository(Participation)
         private participantRepository: Repository<Participation>,
+        @InjectRepository(Organization)
+        private orgRepository: Repository<Organization>,
         @InjectRepository(Otp)
         private otpRepository: Repository<Otp>,
         private usersService: UsersService,
@@ -373,6 +378,55 @@ export class StudentsService {
                 createdAt: opportunity.createdAt,
                 updatedAt: opportunity.updatedAt,
             }
+        };
+    }
+
+    async createStudentOpportunity(userId: string, dto: CreateOpportunityDto) {
+        const liaisonToken = cryptoNode.randomBytes(32).toString('hex');
+        const partnerToken = dto.supervision?.partner_email ? cryptoNode.randomBytes(32).toString('hex') : null;
+        const partnerVerified = dto.supervision?.partner_email ? false : true;
+
+        let orgId: string | null = null;
+
+        // Auto-create Partner Organization (Option 3 Logic)
+        if (dto.supervision?.partner_org_name) {
+            const newOrganization = this.orgRepository.create({
+                name: dto.supervision.partner_org_name,
+                contactName: dto.supervision.partner_contact_person || '',
+                contactEmail: dto.supervision.partner_email || '',
+                orgType: 'OTHER',
+                verificationStatus: 'unclaimed_student_initiated'
+            });
+            const savedOrg = await this.orgRepository.save(newOrganization);
+            orgId = savedOrg.id;
+        }
+
+        const opportunity = this.opportunitiesRepository.create({
+            ...dto,
+            organizationId: orgId,
+            status: 'pending_verification',
+            sdg: dto.sdg_info?.sdg_id || 'SDG',
+            liaisonToken,
+            liaisonVerified: false,
+            partnerToken: partnerToken || undefined,
+            partnerVerified
+        } as any);
+
+
+        const savedOpp = await this.opportunitiesRepository.save(opportunity) as any;
+
+        if (dto.supervision?.contact) {
+            await this.mailService.sendLiaisonVerification(dto.supervision.contact, dto.title, liaisonToken);
+        }
+
+        if (partnerToken && dto.supervision?.partner_email) {
+            await this.mailService.sendPartnerVerification(dto.supervision.partner_email, dto.title, partnerToken);
+        }
+
+        return {
+            success: true,
+            data: savedOpp,
+            message: 'Opportunity submitted and is pending verification',
         };
     }
 

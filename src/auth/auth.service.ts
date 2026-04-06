@@ -8,6 +8,7 @@ import * as crypto from 'crypto';
 import { SignupDto } from './dto/signup.dto';
 import { LoginDto } from './dto/login.dto';
 import { MailService } from '../mail/mail.service';
+import { OtpService } from './otp.service';
 
 @Injectable()
 export class AuthService {
@@ -16,18 +17,22 @@ export class AuthService {
         private jwtService: JwtService,
         private organizationsService: OrganizationsService,
         private mailService: MailService,
+        private otpService: OtpService,
     ) { }
 
     async signup(signupDto: SignupDto) {
         try {
             console.log('Signup payload:', signupDto);
-            const { password, email, ...userData } = signupDto;
+            const { password, email: rawEmail, ...userData } = signupDto;
+            const email = rawEmail.trim().toLowerCase();
 
             // Check if user already exists
             const existingUser = await this.usersService.findByEmail(email);
             if (existingUser) {
                 throw new ConflictException('Email already exists');
             }
+
+            await this.otpService.requireVerifiedEmailForSignup(email);
 
             const hashedPassword = await bcrypt.hash(password, 10);
 
@@ -46,8 +51,11 @@ export class AuthService {
                 organization: organization // Link the org
             });
 
-            // Send welcome email
-            await this.mailService.sendWelcomeEmail(user.email, user.name);
+            try {
+                await this.mailService.sendWelcomeEmail(user.email, user.name);
+            } finally {
+                await this.otpService.clearOtpsForEmail(email);
+            }
 
             return {
                 success: true,

@@ -131,12 +131,6 @@ export class EngagementService {
                 where: { cnicHash, projectId: opportunity.id }
             });
 
-            if (existingByCnic && existingByCnic.studentId && existingByCnic.studentId !== targetStudentId) {
-                this.logger.log(`Found CNIC match for student ${existingByCnic.studentId}, will merge with target student ${targetStudentId}`);
-                // Instead of throwing, we allow it to proceed to the reconciliation below
-                // where existingByCnic and existingByTarget are merged.
-            }
-
             // 2. Check if a record already exists for THIS user/email in this project
             let existingByTarget: Participation | null = null;
             
@@ -146,9 +140,32 @@ export class EngagementService {
                 order: { createdAt: 'DESC' }
             });
 
-            // If not found by email, we stop here. We will NOT match by studentId
-            // because we want to allow a logged-in user to create a new registration
-            // if they provide a different email address.
+            const dtoEmailNorm = (dto.email || '').toLowerCase().trim();
+
+            // Team: a new member must not reuse the team lead's row (e.g. lead's email sent again by mistake)
+            if (
+                dto.participationMode === 'team' &&
+                !dto.isTeamLead &&
+                existingByTarget?.isTeamLead
+            ) {
+                throw new BadRequestException(
+                    'This email is already used by the team lead on this project. Each member must register with their own email address.',
+                );
+            }
+
+            // Same CNIC on the project must belong to the same email; otherwise we would overwrite another member
+            if (existingByCnic) {
+                const cnicRowEmail = (existingByCnic.email || '').toLowerCase().trim();
+                if (cnicRowEmail !== dtoEmailNorm) {
+                    throw new BadRequestException(
+                        'This CNIC is already registered on this project under a different email. Use each member\'s own CNIC and email.',
+                    );
+                }
+            }
+
+            if (existingByCnic && existingByCnic.studentId && existingByCnic.studentId !== targetStudentId) {
+                this.logger.log(`Found CNIC match for student ${existingByCnic.studentId}, will merge with target student ${targetStudentId}`);
+            }
 
             let participation: Participation;
 

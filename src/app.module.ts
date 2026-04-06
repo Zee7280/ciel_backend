@@ -22,6 +22,7 @@ import { EngagementModule } from './engagement/engagement.module';
 import { StorageModule } from './common/storage.module';
 import { PaymentsModule } from './payments/payments.module';
 import { FacultyModule } from './faculty/faculty.module';
+import { ContactModule } from './contact/contact.module';
 
 @Module({
   imports: [
@@ -66,6 +67,7 @@ import { FacultyModule } from './faculty/faculty.module';
     StorageModule,
     PaymentsModule,
     FacultyModule,
+    ContactModule,
     TypeOrmModule.forFeature([Setting])
 ],
   controllers: [AppController],

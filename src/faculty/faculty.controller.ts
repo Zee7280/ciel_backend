@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Query, Param, UseGuards, Request } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { FacultyService } from './faculty.service';
 
@@ -13,5 +13,11 @@ export class FacultyController {
         @Query('status') status?: string
     ) {
         return this.facultyService.getApprovals(req.user.id, status);
+    }
+
+    /** Full student project (opportunity) detail + linked reports for this faculty supervisor */
+    @Get(':id')
+    async getProjectDetail(@Request() req, @Param('id') id: string) {
+        return this.facultyService.getProjectDetail(req.user.id, id);
     }
 }

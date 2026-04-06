@@ -1,6 +1,6 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Brackets, Repository, WhereExpressionBuilder } from 'typeorm';
 import { StudentReport } from './entities/student-report.entity';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 
@@ -13,12 +13,22 @@ export class FacultyReportsService {
         private readonly attendanceLogsRepository: Repository<AttendanceLog>,
     ) { }
 
+    private applyFacultyAccessFilter(qb: WhereExpressionBuilder, facultyId: string) {
+        qb.where('report.facultyId = :facultyId', { facultyId }).orWhere(
+            'opportunity.facultyId = :facultyId',
+            { facultyId },
+        );
+    }
+
     async findAll(facultyId: string) {
-        const reports = await this.studentReportsRepository.find({
-            where: { facultyId },
-            relations: ['student', 'opportunity', 'opportunity.organization'],
-            order: { submission_date: 'DESC' },
-        });
+        const reports = await this.studentReportsRepository
+            .createQueryBuilder('report')
+            .leftJoinAndSelect('report.student', 'student')
+            .leftJoinAndSelect('report.opportunity', 'opportunity')
+            .leftJoinAndSelect('opportunity.organization', 'organization')
+            .where(new Brackets((qb) => this.applyFacultyAccessFilter(qb, facultyId)))
+            .orderBy('report.submission_date', 'DESC')
+            .getMany();
 
         return {
             success: true,
@@ -37,10 +47,14 @@ export class FacultyReportsService {
     }
 
     async findOne(id: string, facultyId: string) {
-        const report = await this.studentReportsRepository.findOne({
-            where: { id, facultyId },
-            relations: ['student', 'opportunity', 'opportunity.organization'],
-        });
+        const report = await this.studentReportsRepository
+            .createQueryBuilder('report')
+            .leftJoinAndSelect('report.student', 'student')
+            .leftJoinAndSelect('report.opportunity', 'opportunity')
+            .leftJoinAndSelect('opportunity.organization', 'organization')
+            .where('report.id = :id', { id })
+            .andWhere(new Brackets((qb) => this.applyFacultyAccessFilter(qb, facultyId)))
+            .getOne();
 
         if (!report) {
             throw new NotFoundException('Report not found or not assigned to you');
@@ -76,9 +90,12 @@ export class FacultyReportsService {
     }
 
     async updateAction(id: string, facultyId: string, status: 'approved' | 'rejected', remarks?: string) {
-        const report = await this.studentReportsRepository.findOne({
-            where: { id, facultyId },
-        });
+        const report = await this.studentReportsRepository
+            .createQueryBuilder('report')
+            .leftJoin('report.opportunity', 'opportunity')
+            .where('report.id = :id', { id })
+            .andWhere(new Brackets((qb) => this.applyFacultyAccessFilter(qb, facultyId)))
+            .getOne();
 
         if (!report) {
             throw new NotFoundException('Report not found or not assigned to you');

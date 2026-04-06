@@ -1,4 +1,16 @@
-import { Controller, Get, Post, Body, Param, UseGuards, Request, Query } from '@nestjs/common';
+import {
+    Controller,
+    Get,
+    Post,
+    Body,
+    Param,
+    UseGuards,
+    Request,
+    Query,
+    HttpException,
+    HttpStatus,
+    Header,
+} from '@nestjs/common';
 import { VerificationsService } from './verifications.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { OpportunitiesService } from '../opportunities/opportunities.service';
@@ -7,8 +19,8 @@ import { OpportunitiesService } from '../opportunities/opportunities.service';
 export class VerificationsController {
     constructor(
         private readonly verificationsService: VerificationsService,
-        private readonly opportunitiesService: OpportunitiesService
-    ) { }
+        private readonly opportunitiesService: OpportunitiesService,
+    ) {}
 
     @UseGuards(JwtAuthGuard)
     @Get('partners/verifications')
@@ -19,11 +31,17 @@ export class VerificationsController {
     }
 
     @Get('verifications/verify')
+    @Header('Cache-Control', 'no-store, no-cache, must-revalidate, private')
+    @Header('Pragma', 'no-cache')
     async verifyOpportunity(@Query('token') token: string) {
-        if (!token) {
-            return { success: false, message: 'Token is required' };
+        const t = typeof token === 'string' ? token.trim() : '';
+        if (!t) {
+            throw new HttpException(
+                { success: false, message: 'Token is required' },
+                HttpStatus.BAD_REQUEST,
+            );
         }
-        return this.opportunitiesService.verifyOpportunityToken(token);
+        return this.opportunitiesService.verifyOpportunityToken(t);
     }
 
     @UseGuards(JwtAuthGuard)

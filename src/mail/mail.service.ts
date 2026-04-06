@@ -337,10 +337,29 @@ export class MailService {
     }
   }
 
+  /**
+   * Liaison/partner verification links: default to marketing site (FRONTEND_URL + FRONTEND_VERIFY_PATH).
+   * The frontend page should call GET {API}/api/v1/verifications/verify?token=… (or open it in the browser).
+   * Set VERIFICATION_EMAIL_LINK=api to put the API URL in the email instead (no frontend page needed).
+   */
+  private buildProjectVerificationLink(token: string): string {
+    const enc = encodeURIComponent(token);
+    const linkTarget = (this.configService.get<string>('VERIFICATION_EMAIL_LINK') || 'frontend').toLowerCase();
+    if (linkTarget === 'api') {
+      const raw = this.configService.get<string>('API_URL') || 'https://api.cielpk.com';
+      const base = raw.replace(/\/+$/, '');
+      const withApiV1 = base.endsWith('/api/v1') ? base : `${base}/api/v1`;
+      return `${withApiV1}/verifications/verify?token=${enc}`;
+    }
+    const frontend = (this.configService.get<string>('FRONTEND_URL') || 'https://cielpk.com').replace(/\/+$/, '');
+    const pathRaw = this.configService.get<string>('FRONTEND_VERIFY_PATH') || '/verify-project';
+    const path = pathRaw.startsWith('/') ? pathRaw : `/${pathRaw}`;
+    return `${frontend}${path}?token=${enc}`;
+  }
+
   async sendLiaisonVerification(to: string, projectTitle: string, token: string) {
     const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
-    const apiUrl = this.configService.get<string>('API_URL') || 'https://api.cielpk.com/api/v1';
-    const verifyLink = `${apiUrl}/verifications/verify?token=${token}`;
+    const verifyLink = this.buildProjectVerificationLink(token);
 
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
@@ -351,8 +370,6 @@ export class MailService {
         <div style="text-align: center; margin: 30px 0;">
           <a href="${verifyLink}" style="background-color: #4CAF50; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Verify Project</a>
         </div>
-        <p style="color: #666; font-size: 14px;">If the button doesn't work, you can copy and paste this link into your browser:</p>
-        <p style="color: #2563eb; font-size: 14px; word-break: break-all;">${verifyLink}</p>
         <p style="font-size: 12px; color: #999; margin-top: 30px;">If you did not authorize this, you may ignore this email.</p>
       </div>
     `;
@@ -372,8 +389,7 @@ export class MailService {
 
   async sendPartnerVerification(to: string, projectTitle: string, token: string) {
     const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
-    const apiUrl = this.configService.get<string>('API_URL') || 'https://api.cielpk.com/api/v1';
-    const verifyLink = `${apiUrl}/verifications/verify?token=${token}`;
+    const verifyLink = this.buildProjectVerificationLink(token);
 
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
@@ -384,8 +400,6 @@ export class MailService {
         <div style="text-align: center; margin: 30px 0;">
           <a href="${verifyLink}" style="background-color: #4CAF50; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Verify Collaboration</a>
         </div>
-        <p style="color: #666; font-size: 14px;">If the button doesn't work, you can copy and paste this link into your browser:</p>
-        <p style="color: #2563eb; font-size: 14px; word-break: break-all;">${verifyLink}</p>
         <p style="font-size: 12px; color: #999; margin-top: 30px;">If you are unaware of this, you may safely ignore this email.</p>
       </div>
     `;

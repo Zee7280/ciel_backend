@@ -57,6 +57,9 @@ export class User {
     university: string;
 
     @Column({ nullable: true })
+    registrationNumber: string;
+
+    @Column({ nullable: true })
     major: string;
 
     @Column({ nullable: true })

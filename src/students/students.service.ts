@@ -3,6 +3,7 @@ import * as cryptoNode from 'crypto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { User } from '../users/entities/user.entity';
+import { UserRole } from '../users/enums/user-role.enum';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { CreateOpportunityDto } from '../opportunities/dto/create-opportunity.dto';
 import { Timesheet } from '../timesheets/entities/timesheet.entity';
@@ -401,6 +402,16 @@ export class StudentsService {
             orgId = savedOrg.id;
         }
 
+        let facultyId: string | null = null;
+        if (dto.supervision?.contact) {
+            const faculty = await this.usersRepository.findOne({
+                where: { email: dto.supervision.contact.toLowerCase(), role: UserRole.FACULTY }
+            });
+            if (faculty) {
+                facultyId = faculty.id;
+            }
+        }
+
         const opportunity = this.opportunitiesRepository.create({
             ...dto,
             organizationId: orgId,
@@ -409,7 +420,9 @@ export class StudentsService {
             liaisonToken,
             liaisonVerified: false,
             partnerToken: partnerToken || undefined,
-            partnerVerified
+            partnerVerified,
+            creatorId: userId,
+            facultyId
         } as any);
 
 

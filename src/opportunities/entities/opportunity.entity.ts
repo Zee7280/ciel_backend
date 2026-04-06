@@ -70,6 +70,12 @@ export class Opportunity {
     @Column({ default: true })
     partnerVerified: boolean;
 
+    @Column({ nullable: true })
+    creatorId: string;
+
+    @Column({ nullable: true })
+    facultyId: string;
+
     @CreateDateColumn()
     createdAt: Date;
 

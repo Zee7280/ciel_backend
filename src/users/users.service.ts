@@ -69,10 +69,12 @@ export class UsersService {
         // Filter and map fields
         if (dto.name) user.name = dto.name;
         if (dto.institution) user.institution = dto.institution;
+        if (dto.university) user.university = dto.university;
         if (dto.city) user.city = dto.city;
         if (dto.phone) user.phone = dto.phone;
         if (dto.avatar) user.avatar = dto.avatar;
         if (dto.bio) user.bio = dto.bio;
+        if (dto.department) user.department = dto.department;
 
         // Save
         const updatedUser = await this.usersRepository.save(user);

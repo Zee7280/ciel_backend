@@ -21,6 +21,11 @@ export class OpportunitiesController {
         return this.opportunitiesService.update(req.user.id, updateOpportunityDto, req.user.organizationId);
     }
 
+    @Get('verify/executing-org')
+    async verifyExecutingOrg(@Query('token') token: string) {
+        return this.opportunitiesService.verifyExecutingOrganization(token);
+    }
+
 
     @UseGuards(JwtAuthGuard)
     @Get()

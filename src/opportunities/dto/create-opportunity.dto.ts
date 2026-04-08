@@ -1,5 +1,35 @@
-import { IsString, IsArray, IsOptional, IsObject, IsEnum, IsBoolean, ValidateNested } from 'class-validator';
+import { IsString, IsArray, IsOptional, IsObject, IsEnum, IsBoolean, ValidateNested, IsInt } from 'class-validator';
 import { Type } from 'class-transformer';
+
+export class TimelineDto {
+    @IsString()
+    @IsOptional()
+    type?: string; // fixed | flexible | ongoing
+
+    @IsString()
+    @IsOptional()
+    start_date?: string;
+
+    @IsString()
+    @IsOptional()
+    end_date?: string;
+
+    @IsString()
+    @IsOptional()
+    from_time?: string; // daily window start (e.g. 09:00)
+
+    @IsString()
+    @IsOptional()
+    to_time?: string;   // daily window end (e.g. 13:00)
+
+    @IsInt()
+    @IsOptional()
+    expected_hours?: number;
+
+    @IsInt()
+    @IsOptional()
+    volunteers_required?: number;
+}
 
 export class SupervisionDto {
     @IsString()
@@ -37,6 +67,14 @@ export class SupervisionDto {
     @IsBoolean()
     @IsOptional()
     information_accurate?: boolean;
+
+    @IsString()
+    @IsOptional()
+    faculty_department?: string;
+
+    @IsString()
+    @IsOptional()
+    faculty_university_name?: string;
 }
 
 export class CreateOpportunityDto {
@@ -50,13 +88,18 @@ export class CreateOpportunityDto {
     @IsString()
     mode: string;
 
+    @IsString()
+    @IsOptional()
+    student_contact?: string;
+
     @IsObject()
     @IsOptional()
     location?: any;
 
-    @IsObject()
+    @ValidateNested()
+    @Type(() => TimelineDto)
     @IsOptional()
-    timeline?: any;
+    timeline?: TimelineDto;
 
     @IsObject()
     @IsOptional()
@@ -86,6 +129,54 @@ export class CreateOpportunityDto {
     @IsString()
     @IsOptional()
     visibility?: string;
+
+    @IsArray()
+    @IsOptional()
+    restricted_universities?: string[];
+
+    @IsObject()
+    @IsOptional()
+    executing_context?: any;
+
+    @IsObject()
+    @IsOptional()
+    safety_declaration?: any;
+
+    @IsObject()
+    @IsOptional()
+    submission_confirmations?: any;
+
+    @IsObject()
+    @IsOptional()
+    participation_scope?: any;
+
+    @IsObject()
+    @IsOptional()
+    executing_organization?: any;
+
+    @IsObject()
+    @IsOptional()
+    partner_organization?: any;
+
+    @IsObject()
+    @IsOptional()
+    safety_supervision_declaration?: any;
+
+    @IsObject()
+    @IsOptional()
+    visibility_and_academic_linkage?: any;
+
+    @IsBoolean()
+    @IsOptional()
+    admin_approval_required?: boolean;
+
+    @IsObject()
+    @IsOptional()
+    external_partner_collaboration?: any;
+
+    @IsObject()
+    @IsOptional()
+    academic_linkage?: any;
 }
 
 export class UpdateOpportunityDto {
@@ -109,9 +200,10 @@ export class UpdateOpportunityDto {
     @IsOptional()
     location?: any;
 
-    @IsObject()
+    @ValidateNested()
+    @Type(() => TimelineDto)
     @IsOptional()
-    timeline?: any;
+    timeline?: TimelineDto;
 
     @IsObject()
     @IsOptional()

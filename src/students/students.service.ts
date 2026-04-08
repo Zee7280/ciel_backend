@@ -38,6 +38,10 @@ export class StudentsService {
         private engagementService: EngagementService,
     ) { }
 
+    private normalize(str?: string) {
+        return (str || '').trim().toLowerCase();
+    }
+
     private async getOccupiedSeats(opportunityId: string): Promise<number> {
         return await this.participantRepository.count({
             where: {
@@ -45,6 +49,48 @@ export class StudentsService {
                 status: In(['pending', 'accepted', 'approved', 'verified', 'paid', 'pending_payment_approval', 'pending_ciel_approval', 'pending_faculty_approval'])
             }
         });
+    }
+
+    private isEligibleForOpportunity(user: User, opp: Opportunity): boolean {
+        const userUniversity = this.normalize(user.university || user.institution || user.orgName);
+        const userDept = this.normalize(user.department || user.major);
+
+        // Backward compatibility: restricted_universities
+        if (opp.restricted_universities && opp.restricted_universities.length > 0) {
+            const allowed = opp.restricted_universities.map(this.normalize);
+            if (!allowed.includes(userUniversity)) return false;
+        }
+
+        const scope = opp.participation_scope;
+        if (!scope) return true;
+
+        const rule = scope.rule;
+        const uniNames: string[] = scope.university_names || [];
+        const creatorUni = scope.creator_university_name || '';
+        const deptScope = scope.department_restriction?.scope || 'all';
+        const departments: string[] = scope.department_restriction?.departments || [];
+
+        const uniSet = uniNames.map(this.normalize);
+        const creatorNorm = this.normalize(creatorUni);
+        const deptSet = departments.map(this.normalize);
+
+        const uniMatch = (names: string[]) => names.includes(userUniversity);
+        const deptMatch = deptScope === 'all' || (!!userDept && deptSet.includes(userDept));
+
+        switch (rule) {
+            case 'open_all_universities':
+                return deptMatch;
+            case 'restricted_specific_universities':
+                return uniMatch(uniSet) && deptMatch;
+            case 'own_university_only':
+                return (!!userUniversity && userUniversity === creatorNorm) && deptMatch;
+            case 'departments_across_universities':
+                return uniMatch(uniSet) && deptMatch;
+            case 'own_university_departments':
+                return (!!userUniversity && userUniversity === creatorNorm) && deptMatch;
+            default:
+                return true;
+        }
     }
     // Verification
     async sendTeamMemberOtp(email: string) {
@@ -208,6 +254,7 @@ export class StudentsService {
         });
 
         let applicationStatuses = new Map<string, any>();
+        const user = userId ? await this.usersRepository.findOne({ where: { id: userId } }) : null;
 
         if (userId && opportunities.length > 0) {
             const opportunityIds = opportunities.map(o => o.id);
@@ -223,9 +270,11 @@ export class StudentsService {
             });
         }
 
+        const filtered = user ? opportunities.filter(o => this.isEligibleForOpportunity(user, o)) : opportunities;
+
         return {
             success: true,
-            data: await Promise.all(opportunities.map(async o => {
+            data: await Promise.all(filtered.map(async o => {
                 const app = applicationStatuses.get(o.id);
                 const occupiedSeats = await this.getOccupiedSeats(o.id);
                 const volunteersRequired = o.timeline?.volunteers_required || 0;
@@ -481,6 +530,12 @@ export class StudentsService {
             throw new NotFoundException('Opportunity not found');
         }
 
+        const user = await this.usersRepository.findOne({ where: { id: userId } });
+        if (!user) throw new NotFoundException('User not found');
+        if (!this.isEligibleForOpportunity(user, opportunity)) {
+            throw new ForbiddenException('You are not eligible to apply for this opportunity');
+        }
+
         // Check if already applied
         const existing = await this.participantRepository.findOne({
             where: {
@@ -493,12 +548,9 @@ export class StudentsService {
             throw new BadRequestException('Already applied to this opportunity');
         }
 
-        const currentCount = await this.getOccupiedSeats(dto.opportunityId);
-
         const applicationId = crypto.randomUUID();
 
         // 1. Register Lead
-        const user = await this.usersRepository.findOne({ where: { id: userId } });
         let leadParticipation;
         if (user) {
             leadParticipation = await this.engagementService.preRegister(userId, dto.opportunityId, {

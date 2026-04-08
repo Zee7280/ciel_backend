@@ -37,6 +37,7 @@ export class UsersController {
         // Map 'contact' to 'phone', 'image' to 'avatar'
         const dto: any = { ...body };
         if (body.contact) dto.phone = body.contact;
+        if (body.university) dto.university = body.university;
         if (file) {
             dto.avatar = await this.s3Service.uploadFile(file, 'users');
         }

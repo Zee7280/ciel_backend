@@ -28,7 +28,7 @@ export class StudentReport {
     @JoinColumn({ name: 'facultyId' })
     faculty: User;
 
-    @Column({ nullable: true })
+    @Column({ type: 'uuid', nullable: true })
     facultyId: string | null;
 
     @Column({ default: 'pending' })

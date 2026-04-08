@@ -19,7 +19,7 @@ export class Opportunity {
     location: any; // { city, venue, pin }
 
     @Column({ type: 'jsonb', nullable: true })
-    timeline: any; // { type, start_date, end_date, expected_hours, volunteers_required }
+    timeline: any; // { type, start_date, end_date, from_time, to_time, expected_hours, volunteers_required }
 
     @Column({ type: 'jsonb', nullable: true })
     sdg_info: any; // { sdg_id, target_id, indicator_id }
@@ -39,6 +39,67 @@ export class Opportunity {
     @Column("text", { array: true, nullable: true })
     verification_method: string[];
 
+    @Column("text", { array: true, nullable: true })
+    restricted_universities: string[];
+
+    @Column({ type: 'jsonb', nullable: true })
+    executing_context: any; // { type: 'partner' | 'independent', ... }
+
+    // Partner / faculty / student extended metadata
+    @Column({ type: 'jsonb', nullable: true })
+    executing_organization: any; // { name, contact_person_name, official_email }
+
+    @Column({ type: 'jsonb', nullable: true })
+    partner_organization: any; // optional { organization_name, contact_person_name, official_email }
+
+    @Column({ type: 'jsonb', nullable: true })
+    safety_supervision_declaration: any; // partner F3: booleans
+
+    @Column({ type: 'jsonb', nullable: true })
+    safety_declaration: any;
+
+    @Column({ type: 'jsonb', nullable: true })
+    submission_confirmations: any;
+
+    @Column({ type: 'jsonb', nullable: true })
+    participation_scope: any;
+
+    @Column({ type: 'jsonb', nullable: true })
+    visibility_and_academic_linkage: any; // { visibility_type, restricted_university_names, faculty_institutional_representative }
+
+    @Column({ default: false })
+    admin_approved: boolean;
+
+    @Column({ default: false })
+    admin_approval_required: boolean;
+
+    @Column({ type: 'jsonb', nullable: true })
+    external_partner_collaboration: any;
+
+    @Column({ type: 'jsonb', nullable: true })
+    academic_linkage: any;
+
+    @Column({ nullable: true })
+    student_contact: string;
+
+    @Column({ nullable: true })
+    faculty_verification_token: string;
+
+    @Column({ default: 'pending_faculty' })
+    faculty_verification_status: string; // pending_faculty | faculty_verified | rejected
+
+    @Column({ default: false })
+    faculty_verified: boolean;
+
+    @Column({ type: 'uuid', nullable: true })
+    execution_verification_token: string | null;
+
+    @Column({ default: false })
+    execution_verified: boolean;
+
+    @Column({ default: 'pending_execution' })
+    execution_verification_status: string; // pending_execution | execution_verified | rejected
+
     @Column({ default: 'public' })
     visibility: string;
 
@@ -50,7 +111,7 @@ export class Opportunity {
     organization: Organization;
 
     @Column({ nullable: true })
-    organizationId: string;
+    organizationId: string | null;
     
     @Column({ default: 16 })
     requiredHours: number;
@@ -73,8 +134,8 @@ export class Opportunity {
     @Column({ nullable: true })
     creatorId: string;
 
-    @Column({ nullable: true })
-    facultyId: string;
+    @Column({ type: 'uuid', nullable: true })
+    facultyId: string | null;
 
     @CreateDateColumn()
     createdAt: Date;

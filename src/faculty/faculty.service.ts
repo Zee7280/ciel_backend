@@ -99,16 +99,39 @@ export class FacultyService {
                 }),
             );
 
-        // Pending faculty queue: new student flow + legacy liaison path
+        // Pending: still waiting on faculty/liaison action (email or dashboard).
         if (status === 'pending' || status === undefined || status === '') {
-            query.andWhere(
-                new Brackets((qb) => {
-                    qb.where('opportunity.status = :pf', { pf: 'pending_faculty' }).orWhere(
-                        'opportunity.status = :pv',
-                        { pv: 'pending_verification' },
-                    );
-                }),
-            );
+            query
+                .andWhere(
+                    new Brackets((qb) => {
+                        qb.where('opportunity.status = :pf', { pf: 'pending_faculty' }).orWhere(
+                            'opportunity.status = :pv',
+                            { pv: 'pending_verification' },
+                        );
+                    }),
+                )
+                .andWhere('opportunity.faculty_verified = :fvp', { fvp: false })
+                .andWhere('opportunity.liaisonVerified = :lvp', { lvp: false });
+        } else if (status === 'history' || status === 'reviewed') {
+            // Student-originated proposals this faculty supervised, after liaison/faculty step or further along.
+            query
+                .andWhere('opportunity.creatorId IS NOT NULL')
+                .andWhere(
+                    new Brackets((qb) => {
+                        qb.where('opportunity.isStudentCreated = :isc', { isc: true }).orWhere(
+                            'opportunity.liaisonToken IS NOT NULL',
+                        );
+                    }),
+                )
+                .andWhere(
+                    new Brackets((qb) => {
+                        qb.where('opportunity.faculty_verified = :fv', { fv: true })
+                            .orWhere('opportunity.liaisonVerified = :lv', { lv: true })
+                            .orWhere('opportunity.status IN (:...histSt)', {
+                                histSt: ['pending_approval', 'pending_partner', 'active', 'rejected'],
+                            });
+                    }),
+                );
         } else {
             query.andWhere('opportunity.status = :st', { st: status });
         }
@@ -124,10 +147,15 @@ export class FacultyService {
                 projectTitle: opp.title,
                 studentName: student?.name || 'Unknown Student',
                 studentId: student?.registrationNumber || student?.id || 'N/A',
+                studentEmail: student?.email || null,
                 submittedDate: opp.createdAt.toISOString().split('T')[0],
                 totalHours: 0, // Default for new independent opportunities
                 eisScore: 0,   // Default for new independent opportunities
-                sdg: opp.sdg || (opp.sdg_info?.sdg_id) || 'N/A'
+                sdg: opp.sdg || (opp.sdg_info?.sdg_id) || 'N/A',
+                opportunityStatus: opp.status,
+                workflowStage: opp.workflowStage ?? null,
+                facultyVerified: opp.faculty_verified,
+                liaisonVerified: opp.liaisonVerified,
             };
         }));
 

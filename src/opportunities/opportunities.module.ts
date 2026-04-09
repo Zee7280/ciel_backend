@@ -6,6 +6,7 @@ import { AdminOpportunitiesController } from './admin-opportunities.controller';
 import { PublicOpportunitiesController } from './public-opportunities.controller';
 import { ParticipantsController } from './participants.controller';
 import { Opportunity } from './entities/opportunity.entity';
+import { Organization } from '../organizations/entities/organization.entity';
 import { Participation } from '../engagement/entities/participant.entity';
 import { OrganizationsModule } from '../organizations/organizations.module';
 import { UsersModule } from '../users/users.module';
@@ -17,7 +18,7 @@ import { OpportunityWorkflowService } from './opportunity-workflow.service';
 
 @Module({
     imports: [
-        TypeOrmModule.forFeature([Opportunity, Participation, User]),
+        TypeOrmModule.forFeature([Opportunity, Organization, Participation, User]),
         OrganizationsModule,
         UsersModule,
         EngagementModule,

@@ -123,6 +123,9 @@ export class EngagementService {
 
             const opportunity = await manager.findOne(Opportunity, { where: { id: dto.projectId } });
             if (!opportunity) throw new NotFoundException('Project not found');
+            if (opportunity.status !== 'active' || !opportunity.admin_approved) {
+                throw new BadRequestException('This project is not open for applications yet');
+            }
 
             // 1. Check if this CNIC is already used in this project
             const normalizedCnic = (dto.cnic || '').replace(/\D/g, '');

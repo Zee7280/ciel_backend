@@ -137,6 +137,10 @@ export class OpportunityWorkflowService {
             admin_approval_status: opp.adminApprovalStatus,
             is_student_created: opp.isStudentCreated,
             source: opp.isStudentCreated ? 'student_created' : 'participant',
+            faculty_verified: opp.faculty_verified,
+            faculty_verification_status: opp.faculty_verification_status,
+            requires_partner_approval: opp.requiresPartnerApproval,
+            liaison_verified: opp.liaisonVerified,
         };
     }
 

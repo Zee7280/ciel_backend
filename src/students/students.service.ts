@@ -1,5 +1,4 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
-import * as cryptoNode from 'crypto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { User } from '../users/entities/user.entity';
@@ -18,6 +17,7 @@ import { UsersService } from '../users/users.service';
 import { MailService } from '../mail/mail.service';
 import { EngagementService } from '../engagement/engagement.service';
 import { OpportunityWorkflowService } from '../opportunities/opportunity-workflow.service';
+import { OpportunitiesService } from '../opportunities/opportunities.service';
 
 @Injectable()
 export class StudentsService {
@@ -38,6 +38,7 @@ export class StudentsService {
         private mailService: MailService,
         private engagementService: EngagementService,
         private readonly opportunityWorkflow: OpportunityWorkflowService,
+        private readonly opportunitiesService: OpportunitiesService,
     ) { }
 
     private normalize(str?: string) {
@@ -243,6 +244,9 @@ export class StudentsService {
         }
 
         const whereClause: any = { status: filterStatus };
+        if (filterStatus === 'active') {
+            whereClause.admin_approved = true;
+        }
         if (sdg) whereClause.sdg = sdg;
         if (location) whereClause.location = { city: location };
         if (type) whereClause.type = type;
@@ -305,7 +309,7 @@ export class StudentsService {
 
     async getOpportunityById(id: string, userId?: string) {
         const opportunity = await this.opportunitiesRepository.findOne({
-            where: { id },
+            where: { id, status: 'active', admin_approved: true },
             relations: ['organization'],
         });
 
@@ -355,7 +359,7 @@ export class StudentsService {
     async getRecommendedOpportunities(userId: string) {
         // Simple implementation - can be enhanced with ML
         const opportunities = await this.opportunitiesRepository.find({
-            where: { status: 'active' },
+            where: { status: 'active', admin_approved: true },
             relations: ['organization'],
             take: 5,
             order: { createdAt: 'DESC' },
@@ -459,63 +463,11 @@ export class StudentsService {
     }
 
     async createStudentOpportunity(userId: string, dto: CreateOpportunityDto) {
-        const liaisonToken = cryptoNode.randomBytes(32).toString('hex');
-        const partnerToken = dto.supervision?.partner_email ? cryptoNode.randomBytes(32).toString('hex') : null;
-        const partnerVerified = dto.supervision?.partner_email ? false : true;
-
-        let orgId: string | null = null;
-
-        // Auto-create Partner Organization (Option 3 Logic)
-        if (dto.supervision?.partner_org_name) {
-            const newOrganization = this.orgRepository.create({
-                name: dto.supervision.partner_org_name,
-                contactName: dto.supervision.partner_contact_person || '',
-                contactEmail: dto.supervision.partner_email || '',
-                orgType: 'OTHER',
-                verificationStatus: 'unclaimed_student_initiated'
-            });
-            const savedOrg = await this.orgRepository.save(newOrganization);
-            orgId = savedOrg.id;
-        }
-
-        let facultyId: string | null = null;
-        if (dto.supervision?.contact) {
-            const faculty = await this.usersRepository.findOne({
-                where: { email: dto.supervision.contact.toLowerCase(), role: UserRole.FACULTY }
-            });
-            if (faculty) {
-                facultyId = faculty.id;
-            }
-        }
-
-        const opportunity = this.opportunitiesRepository.create({
-            ...dto,
-            organizationId: orgId,
-            status: 'pending_verification',
-            sdg: dto.sdg_info?.sdg_id || 'SDG',
-            liaisonToken,
-            liaisonVerified: false,
-            partnerToken: partnerToken || undefined,
-            partnerVerified,
-            creatorId: userId,
-            facultyId
-        } as any);
-
-
-        const savedOpp = await this.opportunitiesRepository.save(opportunity) as any;
-
-        if (dto.supervision?.contact) {
-            await this.mailService.sendLiaisonVerification(dto.supervision.contact, dto.title, liaisonToken);
-        }
-
-        if (partnerToken && dto.supervision?.partner_email) {
-            await this.mailService.sendPartnerVerification(dto.supervision.partner_email, dto.title, partnerToken);
-        }
-
+        // Single CIEL workflow (faculty token + stages); avoids duplicate liaison-only rows that never sync with the dashboard.
+        const result = await this.opportunitiesService.createStudentOpportunity(userId, dto);
         return {
-            success: true,
-            data: savedOpp,
-            message: 'Opportunity submitted and is pending verification',
+            ...result,
+            message: 'Opportunity submitted successfully',
         };
     }
 
@@ -555,6 +507,9 @@ export class StudentsService {
 
         if (!opportunity) {
             throw new NotFoundException('Opportunity not found');
+        }
+        if (opportunity.status !== 'active' || !opportunity.admin_approved) {
+            throw new BadRequestException('This opportunity is not open for applications yet');
         }
 
         const user = await this.usersRepository.findOne({ where: { id: userId } });

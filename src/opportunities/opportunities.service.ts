@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, ForbiddenException, UnauthorizedExceptio
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, DeepPartial } from 'typeorm';
 import { Opportunity } from './entities/opportunity.entity';
+import { Organization } from '../organizations/entities/organization.entity';
 import { Participation } from '../engagement/entities/participant.entity';
 import { CreateOpportunityDto, UpdateOpportunityDto } from './dto/create-opportunity.dto';
 import { OrganizationsService } from '../organizations/organizations.service';
@@ -21,6 +22,8 @@ export class OpportunitiesService {
         private participationRepository: Repository<Participation>,
         @InjectRepository(User)
         private usersRepository: Repository<User>,
+        @InjectRepository(Organization)
+        private organizationsRepository: Repository<Organization>,
         private organizationsService: OrganizationsService,
         private engagementService: EngagementService,
         private mailService: MailService,
@@ -237,6 +240,19 @@ export class OpportunitiesService {
         const partnerEmail = requiresPartner ? dto.executing_context.partner?.official_email : null;
         const partnerToken = requiresPartner && partnerEmail ? randomUUID() : null;
 
+        let organizationId: string | null = null;
+        if (dto.supervision?.partner_org_name) {
+            const newOrganization = this.organizationsRepository.create({
+                name: dto.supervision.partner_org_name,
+                contactName: dto.supervision.partner_contact_person || '',
+                contactEmail: dto.supervision.partner_email || '',
+                orgType: 'OTHER',
+                verificationStatus: 'unclaimed_student_initiated',
+            });
+            const savedOrg = await this.organizationsRepository.save(newOrganization);
+            organizationId = savedOrg.id;
+        }
+
         let resolvedFacultyId: string | null = null;
         if (dto.supervision?.contact) {
             const facultyUser = await this.usersRepository.findOne({
@@ -252,7 +268,7 @@ export class OpportunitiesService {
 
         const payload: DeepPartial<Opportunity> = {
             ...dto,
-            organizationId: null,
+            organizationId,
             facultyId: resolvedFacultyId,
             creatorId: user.id,
             status: 'pending_faculty',
@@ -440,7 +456,8 @@ export class OpportunitiesService {
     }
 
     async getPublicOpportunities(filters: any = {}) {
-        const query: any = { status: In(['active', 'pending_approval']) };
+        // Only admin-approved, live opportunities appear on the marketing site and public listings.
+        const query: any = { status: 'active', admin_approved: true };
 
         if (filters.partner_id) {
             let filterOrgId = filters.partner_id;
@@ -503,7 +520,8 @@ export class OpportunitiesService {
         const opp = await this.opportunitiesRepository.findOne({
             where: {
                 id,
-                status: In(['active', 'pending_approval'])
+                status: 'active',
+                admin_approved: true,
             },
             relations: ['organization']
         });
@@ -739,6 +757,32 @@ export class OpportunitiesService {
         if (opportunity.liaisonToken === token && !opportunity.liaisonVerified) {
             opportunity.liaisonVerified = true;
             verifiedRole = 'Liaison';
+
+            // Legacy POST /student/opportunity: liaison email acted as faculty approval but never advanced workflow.
+            if (
+                opportunity.creatorId &&
+                !opportunity.isStudentCreated &&
+                opportunity.status === 'pending_verification'
+            ) {
+                opportunity.requiresPartnerApproval = !!(opportunity.partnerToken && !opportunity.partnerVerified);
+                opportunity.isStudentCreated = true;
+                this.opportunityWorkflow.initStudentCreated(
+                    opportunity,
+                    opportunity.requiresPartnerApproval,
+                );
+                this.opportunityWorkflow.afterFacultyVerified(opportunity);
+                await this.opportunitiesRepository.save(opportunity);
+                return {
+                    success: true,
+                    data: {
+                        title: opportunity.title,
+                        isFullyVerified: false,
+                        status: opportunity.status,
+                        workflow_stage: opportunity.workflowStage,
+                    },
+                    message: 'Faculty verification successful. The project will continue in the approval workflow.',
+                };
+            }
         } else if (opportunity.partnerToken === token && !opportunity.partnerVerified) {
             opportunity.partnerVerified = true;
             verifiedRole = 'Partner';

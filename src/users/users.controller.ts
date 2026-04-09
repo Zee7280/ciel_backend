@@ -38,6 +38,8 @@ export class UsersController {
         const dto: any = { ...body };
         if (body.contact) dto.phone = body.contact;
         if (body.university) dto.university = body.university;
+        if (body.department) dto.department = body.department;
+        if (body.faculty_department) dto.faculty_department = body.faculty_department;
         if (file) {
             dto.avatar = await this.s3Service.uploadFile(file, 'users');
         }

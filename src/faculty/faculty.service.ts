@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Brackets, Repository } from 'typeorm';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { User } from '../users/entities/user.entity';
 import { StudentReport } from '../reports/entities/student-report.entity';
@@ -16,11 +16,24 @@ export class FacultyService {
         private readonly studentReportsRepository: Repository<StudentReport>,
     ) { }
 
-    async getProjectDetail(facultyId: string, opportunityId: string) {
-        const opportunity = await this.opportunitiesRepository.findOne({
-            where: { id: opportunityId, facultyId },
-            relations: ['organization'],
-        });
+    async getProjectDetail(facultyId: string, facultyEmail: string, opportunityId: string) {
+        const email = (facultyEmail || '').trim();
+        const opportunity = await this.opportunitiesRepository
+            .createQueryBuilder('opportunity')
+            .leftJoinAndSelect('opportunity.organization', 'organization')
+            .where('opportunity.id = :opportunityId', { opportunityId })
+            .andWhere(
+                new Brackets((qb) => {
+                    qb.where('opportunity.facultyId = :facultyId', { facultyId });
+                    if (email) {
+                        qb.orWhere(
+                            `LOWER(TRIM(opportunity.supervision->>'contact')) = LOWER(:email)`,
+                            { email },
+                        );
+                    }
+                }),
+            )
+            .getOne();
 
         if (!opportunity) {
             throw new NotFoundException('Project not found or not assigned to you');
@@ -69,21 +82,38 @@ export class FacultyService {
         };
     }
 
-    async getApprovals(facultyId: string, status?: string) {
-        // Map frontend status to backend status
-        let dbStatus = status;
-        if (status === 'pending') {
-            dbStatus = 'pending_verification';
+    async getApprovals(facultyId: string, facultyEmail: string, status?: string) {
+        const email = (facultyEmail || '').trim();
+
+        const query = this.opportunitiesRepository
+            .createQueryBuilder('opportunity')
+            .where(
+                new Brackets((qb) => {
+                    qb.where('opportunity.facultyId = :facultyId', { facultyId });
+                    if (email) {
+                        qb.orWhere(
+                            `LOWER(TRIM(opportunity.supervision->>'contact')) = LOWER(:email)`,
+                            { email },
+                        );
+                    }
+                }),
+            );
+
+        // Pending faculty queue: new student flow + legacy liaison path
+        if (status === 'pending' || status === undefined || status === '') {
+            query.andWhere(
+                new Brackets((qb) => {
+                    qb.where('opportunity.status = :pf', { pf: 'pending_faculty' }).orWhere(
+                        'opportunity.status = :pv',
+                        { pv: 'pending_verification' },
+                    );
+                }),
+            );
+        } else {
+            query.andWhere('opportunity.status = :st', { st: status });
         }
 
-        const query = this.opportunitiesRepository.createQueryBuilder('opportunity')
-            .where('opportunity.facultyId = :facultyId', { facultyId });
-
-        if (dbStatus) {
-            query.andWhere('opportunity.status = :status', { status: dbStatus });
-        }
-
-        const opportunities = await query.getMany();
+        const opportunities = await query.orderBy('opportunity.createdAt', 'DESC').getMany();
 
         // Format according to user request
         const formatted = await Promise.all(opportunities.map(async (opp) => {

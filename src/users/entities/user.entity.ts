@@ -23,6 +23,9 @@ export class User {
     department: string;
 
     @Column({ nullable: true })
+    faculty_department: string;
+
+    @Column({ nullable: true })
     orgName: string;
 
     @Column({ nullable: true })
@@ -91,4 +94,16 @@ export class User {
 
     @Column({ nullable: true })
     passwordResetExpiry: Date;
+
+    @Column({ default: false })
+    requires_cnic: boolean;
+
+    @Column({ default: false })
+    requires_profile_verification: boolean;
+
+    @Column({ default: false })
+    profile_verified: boolean;
+
+    @Column({ default: false })
+    identity_verified: boolean;
 }

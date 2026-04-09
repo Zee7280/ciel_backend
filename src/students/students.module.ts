@@ -16,12 +16,14 @@ import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import { Organization } from '../organizations/entities/organization.entity';
 
 import { EngagementModule } from '../engagement/engagement.module';
+import { OpportunitiesModule } from '../opportunities/opportunities.module';
 
 @Module({
     imports: [
         TypeOrmModule.forFeature([User, Participation, Opportunity, Timesheet, StudentReport, Otp, AttendanceLog, Organization]),
         UsersModule,
-        EngagementModule
+        EngagementModule,
+        OpportunitiesModule,
     ],
     controllers: [StudentsController, StudentReportsController, StudentController],
     providers: [StudentsService, StudentReportsService],

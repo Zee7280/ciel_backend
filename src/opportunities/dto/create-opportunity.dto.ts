@@ -238,4 +238,56 @@ export class UpdateOpportunityDto {
     @IsString()
     @IsOptional()
     status?: string; // active, closed, draft
+
+    @IsString()
+    @IsOptional()
+    sdg?: string;
+
+    @IsObject()
+    @IsOptional()
+    safety_declaration?: any;
+
+    @IsObject()
+    @IsOptional()
+    submission_confirmations?: any;
+
+    @IsObject()
+    @IsOptional()
+    participation_scope?: any;
+
+    @IsArray()
+    @IsOptional()
+    restricted_universities?: string[];
+
+    @IsObject()
+    @IsOptional()
+    external_partner_collaboration?: any;
+
+    @IsObject()
+    @IsOptional()
+    academic_linkage?: any;
+
+    @IsObject()
+    @IsOptional()
+    executing_context?: any;
+
+    @IsObject()
+    @IsOptional()
+    executing_organization?: any;
+
+    @IsObject()
+    @IsOptional()
+    partner_organization?: any;
+
+    @IsObject()
+    @IsOptional()
+    safety_supervision_declaration?: any;
+
+    @IsObject()
+    @IsOptional()
+    visibility_and_academic_linkage?: any;
+
+    @IsBoolean()
+    @IsOptional()
+    admin_approval_required?: boolean;
 }

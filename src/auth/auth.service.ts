@@ -93,7 +93,17 @@ export class AuthService {
             throw new UnauthorizedException('Invalid credentials');
         }
 
-        const payload = { sub: user.id, email: user.email, role: user.role, organizationId: user.organization?.id };
+        const payload = {
+            sub: user.id,
+            email: user.email,
+            role: user.role,
+            organizationId: user.organization?.id,
+            organizationName: user.organization?.name || user.orgName,
+            department: user.department,
+            faculty_department: user.faculty_department,
+            city: user.city,
+            university: user.university || user.institution
+        };
         const expiresIn = loginDto.isMobile ? '30d' : '10h';
 
         return {

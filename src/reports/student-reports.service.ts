@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { StudentReport } from './entities/student-report.entity';
@@ -31,6 +31,22 @@ export class StudentReportsService {
         private readonly mailService: MailService,
     ) { }
 
+    /**
+     * Student-submitted opportunities only unlock reporting after admin approval (`live` / active).
+     * Does not affect org/faculty-created opportunities or legacy rows without `isStudentCreated`.
+     */
+    private assertStudentOpportunityReportableForWrite(opp: Opportunity | null) {
+        if (!opp?.isStudentCreated) return;
+        const ok =
+            opp.admin_approved === true &&
+            (opp.workflowStage === 'live' || opp.status === 'active');
+        if (!ok) {
+            throw new ForbiddenException(
+                'This opportunity is not live yet. Complete faculty, partner (if any), and admin approval before starting a report.',
+            );
+        }
+    }
+
     async uploadFile(file: Express.Multer.File, section: string, studentId: string): Promise<string> {
         const folder = `student-reports-temp/${studentId}/${section}`;
         return this.s3Service.uploadFile(file, folder);
@@ -43,20 +59,23 @@ export class StudentReportsService {
         // Determine the opportunity ID from parsed data
         const opportunityIdFromDto = parsedData.opportunityId || parsedData.project_id;
 
-        // 4. Enforce 4-Month Policy for Flexible Projects
+        let opportunityForPolicy: Opportunity | null = null;
         if (opportunityIdFromDto) {
-            const opportunity = await this.opportunitiesRepository.findOne({ where: { id: opportunityIdFromDto } });
-            if (opportunity && opportunity.timeline?.type === 'flexible') {
-                const startDate = new Date(opportunity.timeline.start_date);
-                const endDate = new Date(opportunity.timeline.end_date);
-                const diffMonths = (endDate.getFullYear() - startDate.getFullYear()) * 12 + (endDate.getMonth() - startDate.getMonth());
+            opportunityForPolicy = await this.opportunitiesRepository.findOne({
+                where: { id: opportunityIdFromDto },
+            });
+            this.assertStudentOpportunityReportableForWrite(opportunityForPolicy);
+            if (opportunityForPolicy?.timeline?.type === 'flexible') {
+                const startDate = new Date(opportunityForPolicy.timeline.start_date);
+                const endDate = new Date(opportunityForPolicy.timeline.end_date);
+                const diffMonths =
+                    (endDate.getFullYear() - startDate.getFullYear()) * 12 +
+                    (endDate.getMonth() - startDate.getMonth());
 
                 if (diffMonths > 4) {
-                    // Silently cap or log? User says "should not be shown to the audience" 
-                    // but "Enforce 4-month maximum window". I'll throw if it exceeds significantly 
-                    // or just ensure the verification reflects this.
-                    // For now, let's keep it as a soft warning or strict check if it's a hard policy.
-                    console.warn(`[Policy] Flexible project ${opportunity.id} exceeds 4-month window: ${diffMonths} months.`);
+                    console.warn(
+                        `[Policy] Flexible project ${opportunityForPolicy.id} exceeds 4-month window: ${diffMonths} months.`,
+                    );
                 }
             }
         }
@@ -125,14 +144,16 @@ export class StudentReportsService {
 
         // Sync Summary Fields (Section 2)
         // Re-generate in backend to ensure consistency
-        const opportunity = await this.opportunitiesRepository.findOne({ where: { id: report.opportunityId } });
+        const opportunityForSummary = await this.opportunitiesRepository.findOne({
+            where: { id: report.opportunityId },
+        });
 
         report.problem_category = this.classifyProblem(report.section2?.problem_statement);
         report.primary_beneficiary = this.detectBeneficiary(report.section2?.problem_statement);
         report.baseline_evidence_source = (report.section2?.baseline_evidence === 'Other' ? report.section2.baseline_evidence_other : report.section2?.baseline_evidence) || 'Unknown';
         report.discipline_alignment = report.section2?.discipline || 'Not specified';
 
-        report.summary_text_generated = this.generateSection2Summary(report, opportunity || undefined);
+        report.summary_text_generated = this.generateSection2Summary(report, opportunityForSummary || undefined);
         if (report.section2) {
             report.section2.summary_text = report.summary_text_generated;
             report.section2.problem_category = report.problem_category;
@@ -198,6 +219,12 @@ export class StudentReportsService {
             if (parsedData.section10) report.section10 = parsedData.section10;
             if (parsedData.section11) report.section11 = parsedData.section11;
         } else {
+            if (parsedData.opportunityId) {
+                const opp = await this.opportunitiesRepository.findOne({
+                    where: { id: parsedData.opportunityId },
+                });
+                this.assertStudentOpportunityReportableForWrite(opp);
+            }
             report = this.studentReportsRepository.create({
                 studentId,
                 project_id: parsedData.project_id,

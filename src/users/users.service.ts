@@ -56,7 +56,12 @@ export class UsersService {
             contactPerson: user.contactPerson,
             cnic: user.cnic,
             countryCode: user.countryCode,
-            joinedDate: user.createdAt
+            joinedDate: user.createdAt,
+            faculty_department: user.faculty_department,
+            requires_cnic: user.requires_cnic,
+            requires_profile_verification: user.requires_profile_verification,
+            profile_verified: user.profile_verified,
+            identity_verified: user.identity_verified
         };
     }
 
@@ -75,6 +80,11 @@ export class UsersService {
         if (dto.avatar) user.avatar = dto.avatar;
         if (dto.bio) user.bio = dto.bio;
         if (dto.department) user.department = dto.department;
+        if (dto.faculty_department) user.faculty_department = dto.faculty_department;
+        if (dto.requires_cnic !== undefined) user.requires_cnic = dto.requires_cnic;
+        if (dto.requires_profile_verification !== undefined) user.requires_profile_verification = dto.requires_profile_verification;
+        if (dto.profile_verified !== undefined) user.profile_verified = dto.profile_verified;
+        if (dto.identity_verified !== undefined) user.identity_verified = dto.identity_verified;
 
         // Save
         const updatedUser = await this.usersRepository.save(user);

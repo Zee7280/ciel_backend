@@ -63,8 +63,10 @@ export class StudentsController {
     }
 
     @Post('projects')
-    getStudentProjects(@Body() body: { studentId: string }) {
-        return this.studentsService.getStudentProjects(body.studentId);
+    getStudentProjects(@Request() req, @Body() body?: { studentId?: string }) {
+        const targetId =
+            body?.studentId && req.user?.role === 'admin' ? body.studentId : req.user.id;
+        return this.studentsService.getStudentProjects(targetId);
     }
 
     @Get('projects/:id')

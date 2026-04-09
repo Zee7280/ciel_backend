@@ -8,10 +8,12 @@ import { StudentReport } from '../reports/entities/student-report.entity';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import { User } from '../users/entities/user.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
+import { OpportunitiesModule } from '../opportunities/opportunities.module';
 
 @Module({
     imports: [
         TypeOrmModule.forFeature([StudentReport, AttendanceLog, User, Opportunity]),
+        OpportunitiesModule,
     ],
     controllers: [FacultyReportsController, FacultyController],
     providers: [FacultyReportsService, FacultyService],

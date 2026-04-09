@@ -137,6 +137,29 @@ export class Opportunity {
     @Column({ type: 'uuid', nullable: true })
     facultyId: string | null;
 
+    /** Student-submitted opportunity; drives multi-step faculty → partner → admin workflow. */
+    @Column({ default: false })
+    isStudentCreated: boolean;
+
+    @Column({ default: false })
+    requiresPartnerApproval: boolean;
+
+    /** Canonical stage for API / frontend (`pending_faculty`, `pending_partner`, `pending_admin`, `live`, …). */
+    @Column({ type: 'varchar', length: 64, nullable: true })
+    workflowStage: string | null;
+
+    @Column({ type: 'varchar', length: 32, nullable: true })
+    facultyApprovalStatus: string | null;
+
+    @Column({ type: 'varchar', length: 32, nullable: true })
+    partnerApprovalStatus: string | null;
+
+    @Column({ type: 'varchar', length: 32, nullable: true })
+    adminApprovalStatus: string | null;
+
+    @Column({ type: 'text', nullable: true })
+    rejectionReason: string | null;
+
     @CreateDateColumn()
     createdAt: Date;
 

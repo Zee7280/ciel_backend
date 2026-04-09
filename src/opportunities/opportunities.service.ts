@@ -10,6 +10,7 @@ import { User } from '../users/entities/user.entity';
 import { UserRole } from '../users/enums/user-role.enum';
 import { MailService } from '../mail/mail.service';
 import { randomUUID } from 'crypto';
+import { OpportunityWorkflowService } from './opportunity-workflow.service';
 
 @Injectable()
 export class OpportunitiesService {
@@ -23,6 +24,7 @@ export class OpportunitiesService {
         private organizationsService: OrganizationsService,
         private engagementService: EngagementService,
         private mailService: MailService,
+        private readonly opportunityWorkflow: OpportunityWorkflowService,
     ) { }
 
     private isValidEmail(email?: string) {
@@ -92,6 +94,8 @@ export class OpportunitiesService {
         if (supervision.external_partner_email && !this.isValidEmail(supervision.external_partner_email)) {
             throw new BadRequestException('supervision.external_partner_email must be a valid email');
         }
+        if (supervision.faculty_department === '') throw new BadRequestException('faculty_department is required');
+        if (supervision.faculty_university_name === '') throw new BadRequestException('faculty_university_name is required');
     }
 
     private validateExternalPartner(collab?: any) {
@@ -102,6 +106,24 @@ export class OpportunitiesService {
         }
         if (!this.isValidEmail(official_email)) {
             throw new BadRequestException('external_partner_collaboration.official_email must be valid');
+        }
+    }
+
+    private ensureProfileComplete(user: User) {
+        const missing: string[] = [];
+        if (!user.name) missing.push('name');
+        if (!user.email) missing.push('email');
+        if (!user.phone) missing.push('phone');
+        if (!user.city) missing.push('city');
+        if (!user.university && !user.institution) missing.push('university');
+        if (user.role === UserRole.STUDENT && !user.department) missing.push('department');
+        if (user.role === UserRole.FACULTY && !user.faculty_department) missing.push('faculty_department');
+        if (user.requires_cnic && !user.cnic) missing.push('cnic');
+        if (user.requires_profile_verification && !user.profile_verified) {
+            missing.push('profile_verified');
+        }
+        if (missing.length > 0) {
+            throw new ForbiddenException(`Profile incomplete: missing ${missing.join(', ')}`);
         }
     }
 
@@ -130,6 +152,7 @@ export class OpportunitiesService {
         if (!user) {
             throw new ForbiddenException('User not found');
         }
+        this.ensureProfileComplete(user);
 
         this.validateSupervision(createOpportunityDto.supervision);
         this.validateSafetyDeclaration(createOpportunityDto.safety_declaration);
@@ -188,6 +211,7 @@ export class OpportunitiesService {
     async createStudentOpportunity(userId: string, dto: CreateOpportunityDto) {
         const user = await this.usersRepository.findOne({ where: { id: userId } });
         if (!user) throw new ForbiddenException('User not found');
+        this.ensureProfileComplete(user);
         // validation rules for student flow
         if (!dto.supervision?.contact) throw new BadRequestException('Faculty email (supervision.contact) is required');
         if (!dto.supervision?.faculty_department) throw new BadRequestException('faculty_department is required');
@@ -209,10 +233,27 @@ export class OpportunitiesService {
             ? dto.restricted_universities
             : (dto.participation_scope?.creator_university_name ? [dto.participation_scope.creator_university_name] : []);
 
+        const requiresPartner = dto.executing_context.type === 'partner';
+        const partnerEmail = requiresPartner ? dto.executing_context.partner?.official_email : null;
+        const partnerToken = requiresPartner && partnerEmail ? randomUUID() : null;
+
+        let resolvedFacultyId: string | null = null;
+        if (dto.supervision?.contact) {
+            const facultyUser = await this.usersRepository.findOne({
+                where: {
+                    email: dto.supervision.contact.trim().toLowerCase(),
+                    role: UserRole.FACULTY,
+                },
+            });
+            if (facultyUser) {
+                resolvedFacultyId = facultyUser.id;
+            }
+        }
+
         const payload: DeepPartial<Opportunity> = {
             ...dto,
             organizationId: null,
-            facultyId: null,
+            facultyId: resolvedFacultyId,
             creatorId: user.id,
             status: 'pending_faculty',
             sdg: dto.sdg_info?.sdg_id || 'SDG',
@@ -220,65 +261,113 @@ export class OpportunitiesService {
             visibility: dto.visibility || 'restricted',
             faculty_verification_status: 'pending_faculty',
             faculty_verified: false,
-            faculty_verification_token: randomUUID()
+            faculty_verification_token: randomUUID(),
+            isStudentCreated: true,
+            requiresPartnerApproval: requiresPartner,
+            partnerToken: partnerToken ?? undefined,
+            partnerVerified: !requiresPartner,
         };
 
-        const opportunity = await this.opportunitiesRepository.save(this.opportunitiesRepository.create(payload));
+        const opportunity = this.opportunitiesRepository.create(payload);
+        this.opportunityWorkflow.initStudentCreated(opportunity as Opportunity, requiresPartner);
+        const saved = await this.opportunitiesRepository.save(opportunity);
 
         // send faculty email
         const verifyBase = process.env.FRONTEND_URL || process.env.APP_URL || '';
-        const link = `${verifyBase}/verify/faculty?token=${opportunity.faculty_verification_token}`;
+        const facultyLink = `${verifyBase}/verify/faculty?token=${saved.faculty_verification_token}`;
         try {
-            await this.mailService.sendPasswordResetEmail(dto.supervision.contact, link); // reuse template
+            await this.mailService.sendPasswordResetEmail(dto.supervision.contact, facultyLink);
         } catch (e) {
             console.warn('Failed to send faculty verification email', e.message);
         }
 
-        // optional partner email
-        const partnerEmail = dto.executing_context.type === 'partner' ? dto.executing_context.partner?.official_email : null;
-        if (partnerEmail) {
+        if (partnerEmail && partnerToken) {
             try {
-                await this.mailService.sendPasswordResetEmail(partnerEmail, link);
+                await this.mailService.sendPartnerVerification(partnerEmail, saved.title, partnerToken);
             } catch (e) {
-                console.warn('Failed to send partner email', e.message);
+                console.warn('Failed to send partner verification email', e.message);
             }
         }
 
-        return { success: true, data: opportunity };
+        return { success: true, data: saved };
     }
 
     async update(userId: string, updateOpportunityDto: UpdateOpportunityDto, organizationId?: string) {
-        let orgId = organizationId;
-
-        if (!orgId) {
-            const org = await this.organizationsService.getMyOrganization(userId);
-            orgId = org?.id;
-        }
-
-        if (!orgId) {
-            throw new ForbiddenException('User must belong to an organization to update opportunities');
-        }
-
         const opportunity = await this.opportunitiesRepository.findOne({ where: { id: updateOpportunityDto.id } });
         if (!opportunity) {
             throw new NotFoundException('Opportunity not found');
         }
 
-        if (opportunity.organizationId !== orgId) {
-            console.log(`Access Denied: Org ID mismatch. UserOrg: ${orgId}, OpportunityOrg: ${opportunity.organizationId}`);
-            throw new ForbiddenException('You do not have access to this opportunity');
+        const user = await this.usersRepository.findOne({ where: { id: userId } });
+        if (!user) {
+            throw new ForbiddenException('User not found');
         }
 
-        // Update fields
-        Object.assign(opportunity, updateOpportunityDto);
+        const isFacultyOwner =
+            user.role === UserRole.FACULTY &&
+            opportunity.creatorId === userId &&
+            (opportunity.facultyId === userId || opportunity.facultyId == null);
 
-        // Handle nested object updates if necessary, but Object.assign handles replacement of top-level properties which seems to be what we want given the DTO structure.
-        // Use fallback for sdg if sdg_info is updated
+        let orgId = organizationId;
+        if (!orgId) {
+            const org = await this.organizationsService.getMyOrganization(userId);
+            orgId = org?.id;
+        }
+
+        if (!isFacultyOwner) {
+            if (!orgId) {
+                throw new ForbiddenException('User must belong to an organization to update opportunities');
+            }
+            if (opportunity.organizationId !== orgId) {
+                console.log(`Access Denied: Org ID mismatch. UserOrg: ${orgId}, OpportunityOrg: ${opportunity.organizationId}`);
+                throw new ForbiddenException('You do not have access to this opportunity');
+            }
+        }
+
+        const { id: _dtoId, ...patch } = updateOpportunityDto as UpdateOpportunityDto & { id: string };
+        Object.assign(opportunity, patch);
+
         if (updateOpportunityDto.sdg_info) {
             opportunity.sdg = updateOpportunityDto.sdg_info.sdg_id || opportunity.sdg;
         }
 
         return this.opportunitiesRepository.save(opportunity);
+    }
+
+    /** Faculty dashboard: opportunities this user created (same account as faculty creator). */
+    async findMineForFaculty(userId: string) {
+        const user = await this.usersRepository.findOne({ where: { id: userId } });
+        if (!user) {
+            throw new ForbiddenException('User not found');
+        }
+        if (user.role !== UserRole.FACULTY) {
+            throw new ForbiddenException('Only faculty can access this list');
+        }
+
+        const rows = await this.opportunitiesRepository.find({
+            where: { creatorId: userId },
+            relations: ['organization'],
+            order: { createdAt: 'DESC' },
+        });
+
+        return Promise.all(
+            rows.map(async (opp) => {
+                const occupiedSeats = await this.getOccupiedSeats(opp.id);
+                const volunteersRequired = opp.timeline?.volunteers_required || 0;
+                return {
+                    id: opp.id,
+                    title: opp.title,
+                    status: opp.status,
+                    workflow_stage: opp.workflowStage,
+                    created_at: opp.createdAt,
+                    mode: opp.mode,
+                    sdg: opp.sdg_info?.sdg_id || opp.sdg,
+                    applicants_count: occupiedSeats,
+                    remaining_seats: Math.max(0, volunteersRequired - occupiedSeats),
+                    organization_name: opp.organization?.name || null,
+                };
+            }),
+        );
     }
 
     async findAll(userId: string, filters: any) {
@@ -504,17 +593,17 @@ export class OpportunitiesService {
     async approve(id: string) {
         const opp = await this.findOne(id);
         if (!opp) throw new NotFoundException('Opportunity not found');
-        opp.admin_approved = true;
-        opp.partnerVerified = true; // keep legacy behavior
-        opp.status = opp.execution_verified ? 'active' : 'pending_execution';
+        this.opportunityWorkflow.afterAdminApproved(opp);
         return this.opportunitiesRepository.save(opp);
     }
 
     async reject(id: string, reason: string) {
         const opp = await this.findOne(id);
         if (!opp) throw new NotFoundException('Opportunity not found');
-        opp.status = 'rejected';
-        // Store reason? Maybe in a new field or just log it for now as spec doesn't show where to store it on entity
+        this.opportunityWorkflow.afterAdminRejected(opp);
+        if (reason) {
+            opp.rejectionReason = reason;
+        }
         return this.opportunitiesRepository.save(opp);
     }
 
@@ -624,6 +713,27 @@ export class OpportunitiesService {
             throw new NotFoundException('Invalid or expired verification token.');
         }
 
+        // Student-created flow: partner link advances to admin queue (no liaison).
+        if (
+            opportunity.isStudentCreated &&
+            opportunity.partnerToken === token &&
+            opportunity.status === 'pending_partner' &&
+            !opportunity.partnerVerified
+        ) {
+            this.opportunityWorkflow.afterPartnerVerified(opportunity);
+            await this.opportunitiesRepository.save(opportunity);
+            return {
+                success: true,
+                data: {
+                    title: opportunity.title,
+                    isFullyVerified: false,
+                    status: opportunity.status,
+                    workflow_stage: opportunity.workflowStage,
+                },
+                message: 'Partner verification successful. The opportunity will now be reviewed by CIEL Admin.',
+            };
+        }
+
         let verifiedRole = '';
 
         if (opportunity.liaisonToken === token && !opportunity.liaisonVerified) {
@@ -673,12 +783,62 @@ export class OpportunitiesService {
     async verifyFaculty(token: string) {
         const opp = await this.opportunitiesRepository.findOne({ where: { faculty_verification_token: token } });
         if (!opp) throw new NotFoundException('Invalid or expired faculty verification token');
-        opp.faculty_verified = true;
-        opp.faculty_verification_status = 'faculty_verified';
-        if (opp.status === 'pending_faculty') {
-            opp.status = 'pending_approval';
-        }
+        this.opportunityWorkflow.afterFacultyVerified(opp);
         await this.opportunitiesRepository.save(opp);
-        return { success: true, message: 'Faculty verification successful', data: { id: opp.id, status: opp.status } };
+        return {
+            success: true,
+            message: 'Faculty verification successful',
+            data: {
+                id: opp.id,
+                status: opp.status,
+                workflow_stage: opp.workflowStage,
+            },
+        };
+    }
+
+    private normalizeEmail(s?: string) {
+        return (s || '').trim().toLowerCase();
+    }
+
+    /**
+     * Faculty dashboard: must match assigned facultyId OR supervision.contact email (registered faculty).
+     */
+    private assertFacultyCanReviewStudentOpportunity(
+        opp: Opportunity,
+        facultyUserId: string,
+        facultyEmail: string,
+    ) {
+        const sup = this.normalizeEmail(opp.supervision?.contact);
+        const fe = this.normalizeEmail(facultyEmail);
+        const idOk = !!opp.facultyId && opp.facultyId === facultyUserId;
+        const emailOk = !!sup && !!fe && sup === fe;
+        if (!idOk && !emailOk) {
+            throw new ForbiddenException('You are not the assigned faculty supervisor for this opportunity');
+        }
+        const awaiting = opp.status === 'pending_faculty' || opp.status === 'pending_verification';
+        if (!awaiting) {
+            throw new BadRequestException('This opportunity is not awaiting faculty approval');
+        }
+    }
+
+    async facultyDashboardApprove(opportunityId: string, facultyUserId: string, facultyEmail: string) {
+        const opp = await this.findOne(opportunityId);
+        if (!opp) throw new NotFoundException('Opportunity not found');
+        this.assertFacultyCanReviewStudentOpportunity(opp, facultyUserId, facultyEmail);
+        this.opportunityWorkflow.afterFacultyVerified(opp);
+        return this.opportunitiesRepository.save(opp);
+    }
+
+    async facultyDashboardReject(
+        opportunityId: string,
+        facultyUserId: string,
+        facultyEmail: string,
+        reason?: string,
+    ) {
+        const opp = await this.findOne(opportunityId);
+        if (!opp) throw new NotFoundException('Opportunity not found');
+        this.assertFacultyCanReviewStudentOpportunity(opp, facultyUserId, facultyEmail);
+        this.opportunityWorkflow.afterFacultyRejected(opp, reason);
+        return this.opportunitiesRepository.save(opp);
     }
 }

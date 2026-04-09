@@ -17,6 +17,7 @@ import { Otp } from './entities/otp.entity';
 import { UsersService } from '../users/users.service';
 import { MailService } from '../mail/mail.service';
 import { EngagementService } from '../engagement/engagement.service';
+import { OpportunityWorkflowService } from '../opportunities/opportunity-workflow.service';
 
 @Injectable()
 export class StudentsService {
@@ -36,6 +37,7 @@ export class StudentsService {
         private usersService: UsersService,
         private mailService: MailService,
         private engagementService: EngagementService,
+        private readonly opportunityWorkflow: OpportunityWorkflowService,
     ) { }
 
     private normalize(str?: string) {
@@ -372,28 +374,53 @@ export class StudentsService {
             order: { createdAt: 'DESC' },
         });
 
-        const formattedProjects = await Promise.all(applications.map(async app => ({
-            id: app.projectId,
-            title: app.project.title,
-            organization: app.project.organization?.name || 'Unknown',
-            description: app.project.objectives?.description,
-            status: (app.status === 'approved' || app.status === 'verified') ? 'active' : app.status,
-            payment_status: app.paymentStatus,
-            payment_proof_url: app.paymentProofUrl,
-            teamMembers: app.applicationId ? (await this.participantRepository.find({
-                where: { applicationId: app.applicationId }
-            })).map(m => ({
-                name: m.fullName,
-                email: m.email,
-                mobile: m.mobile,
-                university: m.universityName,
-                is_verified: true
-            })) : []
-        })));
+        const appliedIds = new Set(applications.map((a) => a.projectId));
+
+        const createdOpportunities = await this.opportunitiesRepository.find({
+            where: { creatorId: studentId },
+            relations: ['organization'],
+            order: { createdAt: 'DESC' },
+        });
+
+        const ownNotApplied = createdOpportunities.filter((o) => !appliedIds.has(o.id));
+
+        const fromCreator = ownNotApplied.map((opp) =>
+            this.opportunityWorkflow.toStudentProjectCard(opp, { teamMembers: [] }),
+        );
+
+        const fromParticipants = await Promise.all(
+            applications.map(async (app) => {
+                const teamMembers = app.applicationId
+                    ? (
+                          await this.participantRepository.find({
+                              where: { applicationId: app.applicationId },
+                          })
+                      ).map((m) => ({
+                          name: m.fullName,
+                          email: m.email,
+                          mobile: m.mobile,
+                          university: m.universityName,
+                          is_verified: true,
+                      }))
+                    : [];
+
+                const base = this.opportunityWorkflow.toStudentProjectCard(app.project, { teamMembers });
+                const participationStatus =
+                    app.status === 'approved' || app.status === 'verified' ? 'active' : app.status;
+
+                return {
+                    ...base,
+                    status: participationStatus,
+                    organization: app.project.organization?.name || 'Unknown',
+                    payment_status: app.paymentStatus,
+                    payment_proof_url: app.paymentProofUrl,
+                };
+            }),
+        );
 
         return {
             success: true,
-            data: formattedProjects,
+            data: [...fromCreator, ...fromParticipants],
         };
     }
 

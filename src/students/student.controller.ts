@@ -40,6 +40,12 @@ export class StudentController {
         return this.studentsService.getStudentProjects(req.user.id);
     }
 
+    /** Alias for clients that POST (e.g. Next.js proxy); always scoped to JWT user. */
+    @Post('projects')
+    postStudentProjects(@Request() req) {
+        return this.studentsService.getStudentProjects(req.user.id);
+    }
+
     @Get('projects/:id')
     getProjectById(@Param('id') id: string) {
         return this.studentsService.getProjectById(id);

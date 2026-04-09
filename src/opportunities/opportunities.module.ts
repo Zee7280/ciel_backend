@@ -13,6 +13,7 @@ import { EngagementModule } from '../engagement/engagement.module';
 import { User } from '../users/entities/user.entity';
 import { MailModule } from '../mail/mail.module';
 import { StudentOpportunitiesController } from './student-opportunities.controller';
+import { OpportunityWorkflowService } from './opportunity-workflow.service';
 
 @Module({
     imports: [
@@ -23,7 +24,7 @@ import { StudentOpportunitiesController } from './student-opportunities.controll
         MailModule
     ],
     controllers: [OpportunitiesController, AdminOpportunitiesController, PublicOpportunitiesController, ParticipantsController, StudentOpportunitiesController],
-    providers: [OpportunitiesService],
-    exports: [OpportunitiesService],
+    providers: [OpportunitiesService, OpportunityWorkflowService],
+    exports: [OpportunitiesService, OpportunityWorkflowService],
 })
 export class OpportunitiesModule { }

@@ -17,7 +17,7 @@ export class FacultyService {
     ) { }
 
     async getProjectDetail(facultyId: string, facultyEmail: string, opportunityId: string) {
-        const email = (facultyEmail || '').trim();
+        const fe = (facultyEmail || '').trim().toLowerCase();
         const opportunity = await this.opportunitiesRepository
             .createQueryBuilder('opportunity')
             .leftJoinAndSelect('opportunity.organization', 'organization')
@@ -25,11 +25,15 @@ export class FacultyService {
             .andWhere(
                 new Brackets((qb) => {
                     qb.where('opportunity.facultyId = :facultyId', { facultyId });
-                    if (email) {
+                    if (fe) {
                         qb.orWhere(
-                            `LOWER(TRIM(opportunity.supervision->>'contact')) = LOWER(:email)`,
-                            { email },
-                        );
+                            `LOWER(TRIM(COALESCE(opportunity.supervision->>'contact', ''))) = :fe`,
+                            { fe },
+                        )
+                            .orWhere(
+                                `LOWER(TRIM(COALESCE(opportunity.supervision->>'official_email', ''))) = :fe`,
+                                { fe },
+                            );
                     }
                 }),
             )
@@ -83,17 +87,20 @@ export class FacultyService {
     }
 
     async getApprovals(facultyId: string, facultyEmail: string, status?: string) {
-        const email = (facultyEmail || '').trim();
+        const fe = (facultyEmail || '').trim().toLowerCase();
 
         const query = this.opportunitiesRepository
             .createQueryBuilder('opportunity')
             .where(
                 new Brackets((qb) => {
                     qb.where('opportunity.facultyId = :facultyId', { facultyId });
-                    if (email) {
+                    if (fe) {
                         qb.orWhere(
-                            `LOWER(TRIM(opportunity.supervision->>'contact')) = LOWER(:email)`,
-                            { email },
+                            `LOWER(TRIM(COALESCE(opportunity.supervision->>'contact', ''))) = :fe`,
+                            { fe },
+                        ).orWhere(
+                            `LOWER(TRIM(COALESCE(opportunity.supervision->>'official_email', ''))) = :fe`,
+                            { fe },
                         );
                     }
                 }),
@@ -102,6 +109,14 @@ export class FacultyService {
         // Pending: still waiting on faculty/liaison action (email or dashboard).
         if (status === 'pending' || status === undefined || status === '') {
             query
+                // Student / liaison proposals only (not org-owned postings where facultyId matches).
+                .andWhere(
+                    new Brackets((qb) => {
+                        qb.where('opportunity.isStudentCreated = :isc', { isc: true }).orWhere(
+                            '(opportunity.creatorId IS NOT NULL AND opportunity.faculty_verification_token IS NOT NULL)',
+                        );
+                    }),
+                )
                 .andWhere(
                     new Brackets((qb) => {
                         qb.where('opportunity.status = :pf', { pf: 'pending_faculty' }).orWhere(
@@ -111,7 +126,14 @@ export class FacultyService {
                     }),
                 )
                 .andWhere('opportunity.faculty_verified = :fvp', { fvp: false })
-                .andWhere('opportunity.liaisonVerified = :lvp', { lvp: false });
+                // liaisonVerified can be NULL on older rows; NULL must still count as "not liaison-approved"
+                .andWhere(
+                    new Brackets((qb) => {
+                        qb.where('opportunity.liaisonVerified = :lvp', { lvp: false }).orWhere(
+                            'opportunity.liaisonVerified IS NULL',
+                        );
+                    }),
+                );
         } else if (status === 'history' || status === 'reviewed') {
             // Student-originated proposals this faculty supervised, after liaison/faculty step or further along.
             query

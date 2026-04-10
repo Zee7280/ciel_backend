@@ -35,6 +35,55 @@ export class OpportunitiesService {
         return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email);
     }
 
+    private normalizeEmail(s?: string) {
+        return (s || '').trim().toLowerCase();
+    }
+
+    /**
+     * Liaison/partner links do not log the faculty in; ensure facultyId is set from supervision.contact
+     * so Project Approvals / history match the supervising faculty account.
+     */
+    private async assignFacultyIdFromSupervisionIfMissing(opp: Opportunity): Promise<void> {
+        if (opp.facultyId) return;
+        const sup = opp.supervision;
+        if (!sup || typeof sup !== 'object') return;
+        const o = sup as Record<string, unknown>;
+        const raw =
+            (typeof o.contact === 'string' && o.contact) ||
+            (typeof o.official_email === 'string' && o.official_email) ||
+            '';
+        const em = this.normalizeEmail(raw);
+        if (!em) return;
+        const user = await this.usersRepository
+            .createQueryBuilder('u')
+            .where('LOWER(TRIM(u.email)) = :em', { em })
+            .andWhere('u.role = :role', { role: UserRole.FACULTY })
+            .getOne();
+        if (user) {
+            opp.facultyId = user.id;
+        }
+    }
+
+    /**
+     * One new organization row per student opportunity when there is no named partner org.
+     * Same student creating many opportunities → many placeholder orgs (no shared dummy).
+     */
+    private async createPlaceholderOrganizationForStudentOpportunity(opportunityTitle: string): Promise<string> {
+        const t = (opportunityTitle || 'Untitled').trim().slice(0, 72);
+        const tag = randomUUID().slice(0, 8);
+        const name = `Student opportunity — ${t} — ${tag}`;
+        const row = this.organizationsRepository.create({
+            name,
+            orgType: 'OTHER',
+            verificationStatus: 'unclaimed_student_initiated',
+            country: 'Pakistan',
+            countryCode: 'PK',
+            description: 'Auto-created placeholder for a student-submitted opportunity (not a partner site).',
+        });
+        const saved = await this.organizationsRepository.save(row);
+        return saved.id;
+    }
+
     private validateSafetyDeclaration(safety?: any) {
         if (!safety) throw new BadRequestException('safety_declaration is required');
         const keys = [
@@ -170,13 +219,21 @@ export class OpportunitiesService {
         }
 
         const executionVerificationToken = createOpportunityDto.executing_organization?.official_email ? randomUUID() : null;
+        const needsExecutingOrgVerification = !!executionVerificationToken;
+        // Admin queue (findAllPending) lists only pending_approval. Faculty-created opps used to default to
+        // pending_execution when admin_approval_required was false, so they never appeared for CIEL Admin.
+        const initialStatus = needsExecutingOrgVerification
+            ? 'pending_execution'
+            : user.role === UserRole.FACULTY || createOpportunityDto.admin_approval_required
+              ? 'pending_approval'
+              : 'pending_execution';
 
         const payload: DeepPartial<Opportunity> = {
             ...createOpportunityDto,
             organizationId: org?.id || null,
             facultyId: user.role === UserRole.FACULTY ? user.id : null,
             creatorId: user.id,
-            status: createOpportunityDto.admin_approval_required ? 'pending_approval' : 'pending_execution',
+            status: initialStatus,
             execution_verification_token: executionVerificationToken,
             execution_verified: false,
             execution_verification_status: executionVerificationToken ? 'pending_execution' : 'execution_verified',
@@ -251,6 +308,10 @@ export class OpportunitiesService {
             });
             const savedOrg = await this.organizationsRepository.save(newOrganization);
             organizationId = savedOrg.id;
+        }
+
+        if (!organizationId) {
+            organizationId = await this.createPlaceholderOrganizationForStudentOpportunity(dto.title || '');
         }
 
         let resolvedFacultyId: string | null = null;
@@ -572,11 +633,15 @@ export class OpportunitiesService {
 
     // Admin methods
     async findAllPending() {
-        const opportunities = await this.opportunitiesRepository.find({
-            where: { status: 'pending_approval' },
-            relations: ['organization'],
-            order: { createdAt: 'DESC' }
-        });
+        // CIEL admin final review: org/partner flows and student-created after faculty (+ partner if any).
+        // Treat NULL admin_approved like false (older rows).
+        const opportunities = await this.opportunitiesRepository
+            .createQueryBuilder('opportunity')
+            .leftJoinAndSelect('opportunity.organization', 'organization')
+            .where('opportunity.status = :st', { st: 'pending_approval' })
+            .andWhere('(opportunity.admin_approved = :aa OR opportunity.admin_approved IS NULL)', { aa: false })
+            .orderBy('opportunity.createdAt', 'DESC')
+            .getMany();
 
         return Promise.all(opportunities.map(async opp => {
             const occupiedSeats = await this.getOccupiedSeats(opp.id);
@@ -739,6 +804,7 @@ export class OpportunitiesService {
             !opportunity.partnerVerified
         ) {
             this.opportunityWorkflow.afterPartnerVerified(opportunity);
+            await this.assignFacultyIdFromSupervisionIfMissing(opportunity);
             await this.opportunitiesRepository.save(opportunity);
             return {
                 success: true,
@@ -771,6 +837,7 @@ export class OpportunitiesService {
                     opportunity.requiresPartnerApproval,
                 );
                 this.opportunityWorkflow.afterFacultyVerified(opportunity);
+                await this.assignFacultyIdFromSupervisionIfMissing(opportunity);
                 await this.opportunitiesRepository.save(opportunity);
                 return {
                     success: true,
@@ -783,6 +850,7 @@ export class OpportunitiesService {
                     message: 'Faculty verification successful. The project will continue in the approval workflow.',
                 };
             }
+            await this.assignFacultyIdFromSupervisionIfMissing(opportunity);
         } else if (opportunity.partnerToken === token && !opportunity.partnerVerified) {
             opportunity.partnerVerified = true;
             verifiedRole = 'Partner';
@@ -798,6 +866,7 @@ export class OpportunitiesService {
             opportunity.status = 'active';
         }
 
+        await this.assignFacultyIdFromSupervisionIfMissing(opportunity);
         await this.opportunitiesRepository.save(opportunity);
 
         return {
@@ -828,6 +897,7 @@ export class OpportunitiesService {
         const opp = await this.opportunitiesRepository.findOne({ where: { faculty_verification_token: token } });
         if (!opp) throw new NotFoundException('Invalid or expired faculty verification token');
         this.opportunityWorkflow.afterFacultyVerified(opp);
+        await this.assignFacultyIdFromSupervisionIfMissing(opp);
         await this.opportunitiesRepository.save(opp);
         return {
             success: true,
@@ -840,10 +910,6 @@ export class OpportunitiesService {
         };
     }
 
-    private normalizeEmail(s?: string) {
-        return (s || '').trim().toLowerCase();
-    }
-
     /**
      * Faculty dashboard: must match assigned facultyId OR supervision.contact email (registered faculty).
      */
@@ -852,10 +918,13 @@ export class OpportunitiesService {
         facultyUserId: string,
         facultyEmail: string,
     ) {
-        const sup = this.normalizeEmail(opp.supervision?.contact);
+        const o = opp.supervision;
+        const supContact = this.normalizeEmail(typeof o?.contact === 'string' ? o.contact : undefined);
+        const supOfficial = this.normalizeEmail(typeof o?.official_email === 'string' ? o.official_email : undefined);
         const fe = this.normalizeEmail(facultyEmail);
         const idOk = !!opp.facultyId && opp.facultyId === facultyUserId;
-        const emailOk = !!sup && !!fe && sup === fe;
+        const emailOk =
+            (!!supContact && !!fe && supContact === fe) || (!!supOfficial && !!fe && supOfficial === fe);
         if (!idOk && !emailOk) {
             throw new ForbiddenException('You are not the assigned faculty supervisor for this opportunity');
         }

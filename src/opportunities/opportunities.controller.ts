@@ -54,7 +54,18 @@ export class OpportunitiesController {
         if (!data) {
             throw new NotFoundException('Opportunity not found');
         }
-        return { success: true, data };
+        // Duplicate workflow keys in snake_case for frontend badges (entity fields are camelCase).
+        return {
+            success: true,
+            data: {
+                ...data,
+                workflow_stage: data.workflowStage ?? null,
+                faculty_approval_status: data.facultyApprovalStatus ?? null,
+                partner_approval_status: data.partnerApprovalStatus ?? null,
+                admin_approval_status: data.adminApprovalStatus ?? null,
+                requires_partner_approval: data.requiresPartnerApproval,
+            },
+        };
     }
 
     @UseGuards(JwtAuthGuard)

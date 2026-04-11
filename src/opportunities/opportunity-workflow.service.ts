@@ -35,6 +35,25 @@ export class OpportunityWorkflowService {
     }
 
     /**
+     * Faculty-authored posting: no separate faculty-approval step; optional partner gate then admin.
+     */
+    initFacultyCreated(opp: Opportunity, requiresPartner: boolean): void {
+        opp.isStudentCreated = false;
+        opp.requiresPartnerApproval = requiresPartner;
+        opp.facultyApprovalStatus = LINE_STATUS.APPROVED;
+        opp.partnerApprovalStatus = requiresPartner ? LINE_STATUS.PENDING : LINE_STATUS.NOT_APPLICABLE;
+        opp.adminApprovalStatus = LINE_STATUS.PENDING;
+        if (requiresPartner) {
+            opp.workflowStage = WORKFLOW_STAGE.PENDING_PARTNER;
+            opp.status = 'pending_partner';
+            opp.partnerVerified = false;
+        } else {
+            opp.workflowStage = WORKFLOW_STAGE.PENDING_ADMIN;
+            opp.status = 'pending_approval';
+        }
+    }
+
+    /**
      * After faculty verifies via token link.
      */
     afterFacultyVerified(opp: Opportunity): void {
@@ -76,6 +95,15 @@ export class OpportunityWorkflowService {
         opp.status = 'pending_approval';
     }
 
+    /** Faculty-authored opportunity: partner used magic link → CIEL admin queue. */
+    afterFacultyCreatedPartnerVerified(opp: Opportunity): void {
+        if (opp.isStudentCreated) return;
+        opp.partnerVerified = true;
+        opp.partnerApprovalStatus = LINE_STATUS.APPROVED;
+        opp.workflowStage = WORKFLOW_STAGE.PENDING_ADMIN;
+        opp.status = 'pending_approval';
+    }
+
     /** Faculty rejects a student-created proposal (dashboard or future API). */
     afterFacultyRejected(opp: Opportunity, reason?: string | null): void {
         if (opp.isStudentCreated) {
@@ -91,6 +119,8 @@ export class OpportunityWorkflowService {
         }
         opp.faculty_verification_status = 'rejected';
         opp.status = 'rejected';
+        opp.workflowStage = WORKFLOW_STAGE.REJECTED;
+        opp.facultyApprovalStatus = LINE_STATUS.REJECTED;
         if (reason) {
             opp.rejectionReason = reason;
         }

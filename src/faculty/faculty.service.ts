@@ -166,6 +166,8 @@ export class FacultyService {
             
             return {
                 id: opp.id,
+                opportunity_id: opp.id,
+                title: opp.title,
                 projectTitle: opp.title,
                 studentName: student?.name || 'Unknown Student',
                 studentId: student?.registrationNumber || student?.id || 'N/A',
@@ -176,6 +178,11 @@ export class FacultyService {
                 sdg: opp.sdg || (opp.sdg_info?.sdg_id) || 'N/A',
                 opportunityStatus: opp.status,
                 workflowStage: opp.workflowStage ?? null,
+                workflow_stage: opp.workflowStage ?? null,
+                requires_partner_approval: opp.requiresPartnerApproval,
+                faculty_approval_status: opp.facultyApprovalStatus ?? null,
+                partner_approval_status: opp.partnerApprovalStatus ?? null,
+                admin_approval_status: opp.adminApprovalStatus ?? null,
                 facultyVerified: opp.faculty_verified,
                 liaisonVerified: opp.liaisonVerified,
             };

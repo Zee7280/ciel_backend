@@ -40,12 +40,16 @@ export class FacultyController {
     }
 
     @Post(':id/reject')
-    async reject(@Request() req, @Param('id') id: string, @Body() body: { reason?: string }) {
+    async reject(
+        @Request() req,
+        @Param('id') id: string,
+        @Body() body: { reason?: string; comment?: string },
+    ) {
         const saved = await this.opportunitiesService.facultyDashboardReject(
             id,
             req.user.id,
             req.user.email || '',
-            body?.reason,
+            body?.reason ?? body?.comment,
         );
         return {
             success: true,

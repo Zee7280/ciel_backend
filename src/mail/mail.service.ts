@@ -401,6 +401,7 @@ export class MailService {
           <a href="${verifyLink}" style="background-color: #4CAF50; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Verify Collaboration</a>
         </div>
         <p style="font-size: 12px; color: #999; margin-top: 30px;">If you are unaware of this, you may safely ignore this email.</p>
+        <p style="font-size: 12px; color: #666;">This link only works after the faculty supervisor has approved the proposal.</p>
       </div>
     `;
 
@@ -414,6 +415,80 @@ export class MailService {
       this.logger.log(`Partner verification email sent to ${to}`);
     } catch (error) {
       this.logger.error(`Failed to send partner verification email to ${to}`, error.stack);
+    }
+  }
+
+  /** Faculty supervisor magic link for student-submitted opportunities (GET …/verifications/verify?token=…). */
+  /** Notify student when their proposal is rejected from the faculty approvals queue. */
+  async sendStudentOpportunityRejectedByFaculty(
+    to: string,
+    projectTitle: string,
+    facultyFeedback?: string | null,
+  ) {
+    const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
+    const esc = (s: string) =>
+      String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    const feedbackBlock =
+      facultyFeedback && facultyFeedback.trim()
+        ? `<p style="margin:16px 0 0 0;"><strong>Feedback from your faculty supervisor:</strong></p><p style="background:#f9fafb;border-left:4px solid #ef4444;padding:12px 14px;margin:8px 0 0 0;color:#374151;">${esc(
+            facultyFeedback.trim(),
+          )}</p>`
+        : '';
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">Update on your opportunity</h2>
+        <p>Your faculty supervisor did not approve the following submission on CIEL:</p>
+        <p style="font-size:16px;"><strong>${esc(projectTitle)}</strong></p>
+        ${feedbackBlock}
+        <p style="margin-top:20px;color:#555;">You can revise and submit again from your dashboard if your program allows it.</p>
+      </div>
+    `;
+
+    try {
+      await this.transporter.sendMail({
+        from,
+        to,
+        subject: `Opportunity not approved: ${projectTitle}`,
+        html,
+      });
+      this.logger.log(`Student faculty-rejection notice sent to ${to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send student faculty-rejection email to ${to}`, error.stack);
+    }
+  }
+
+  async sendFacultyStudentOpportunityVerification(to: string, projectTitle: string, token: string) {
+    const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
+    const verifyLink = this.buildProjectVerificationLink(token);
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">Faculty approval required</h2>
+        <p>Hello,</p>
+        <p>A student has submitted a community opportunity and listed you as the supervising faculty for <strong>${projectTitle}</strong>.</p>
+        <p>Please review and approve using the link below:</p>
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${verifyLink}" style="background-color: #2563eb; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Approve as faculty supervisor</a>
+        </div>
+        <p style="font-size: 12px; color: #999; margin-top: 30px;">If you did not expect this email, you can ignore it.</p>
+      </div>
+    `;
+
+    try {
+      await this.transporter.sendMail({
+        from,
+        to,
+        subject: `Faculty approval required: ${projectTitle}`,
+        html,
+      });
+      this.logger.log(`Faculty student-opportunity verification email sent to ${to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send faculty verification email to ${to}`, error.stack);
     }
   }
 

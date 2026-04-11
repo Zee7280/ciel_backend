@@ -9,9 +9,10 @@ import { OrganizationsService } from '../organizations/organizations.service';
 import { EngagementService } from '../engagement/engagement.service';
 import { User } from '../users/entities/user.entity';
 import { UserRole } from '../users/enums/user-role.enum';
-import { MailService } from '../mail/mail.service';
+import { MailService, OpportunityVerificationEmailDetails } from '../mail/mail.service';
 import { randomUUID } from 'crypto';
 import { OpportunityWorkflowService } from './opportunity-workflow.service';
+import { isProjectVerificationAuthRequired } from '../common/project-verification-auth.util';
 
 @Injectable()
 export class OpportunitiesService {
@@ -65,6 +66,148 @@ export class OpportunitiesService {
             }
         }
         return null;
+    }
+
+    /** Same heuristics as {@link resolvePartnerEmail}, reading persisted opportunity JSON. */
+    private resolvePartnerEmailFromOpportunity(opp: Opportunity): string | null {
+        return this.resolvePartnerEmail({
+            external_partner_collaboration: opp.external_partner_collaboration,
+            supervision: opp.supervision,
+            executing_context: opp.executing_context,
+            partner_organization: opp.partner_organization,
+        } as CreateOpportunityDto);
+    }
+
+    private buildOpportunityVerificationEmailDetails(
+        opp: Opportunity,
+        meta: {
+            studentName?: string;
+            studentUniversity?: string;
+            facultyAuthorName?: string;
+            facultyAuthorEmail?: string;
+        },
+    ): OpportunityVerificationEmailDetails {
+        const timeline = opp.timeline as Record<string, unknown> | null | undefined;
+        const tl: string[] = [];
+        if (timeline && typeof timeline === 'object') {
+            if (timeline.start_date) tl.push(`Starts: ${String(timeline.start_date)}`);
+            if (timeline.end_date) tl.push(`Ends: ${String(timeline.end_date)}`);
+            if (timeline.expected_hours != null && timeline.expected_hours !== '') {
+                tl.push(`Expected hours: ${String(timeline.expected_hours)}`);
+            }
+        }
+        const sup = opp.supervision as Record<string, unknown> | null | undefined;
+        const supervisorBits: string[] = [];
+        if (sup && typeof sup === 'object') {
+            if (typeof sup.supervisor_name === 'string' && sup.supervisor_name.trim()) {
+                supervisorBits.push(sup.supervisor_name.trim());
+            }
+            if (typeof sup.faculty_department === 'string' && sup.faculty_department.trim()) {
+                supervisorBits.push(sup.faculty_department.trim());
+            }
+            if (typeof sup.faculty_university_name === 'string' && sup.faculty_university_name.trim()) {
+                supervisorBits.push(sup.faculty_university_name.trim());
+            }
+        }
+        let partnerOrg: string | undefined;
+        if (sup && typeof sup.partner_org_name === 'string' && sup.partner_org_name.trim()) {
+            partnerOrg = sup.partner_org_name.trim();
+        }
+        const po = opp.partner_organization as { organization_name?: string } | undefined;
+        if (!partnerOrg && po?.organization_name?.trim()) partnerOrg = po.organization_name.trim();
+        const collab = opp.external_partner_collaboration as { organization_name?: string } | undefined;
+        if (!partnerOrg && collab?.organization_name?.trim()) partnerOrg = collab.organization_name.trim();
+
+        const ect = opp.executing_context as { type?: string } | undefined;
+        let executionSummary: string | undefined;
+        if (ect?.type === 'partner') executionSummary = 'With host / partner organization';
+        else if (ect?.type === 'independent') executionSummary = 'Independent community activity';
+
+        let objectivesPreview: string | undefined;
+        const obj = opp.objectives as { description?: string } | undefined;
+        if (obj?.description && typeof obj.description === 'string') {
+            const raw = obj.description.trim();
+            if (raw) objectivesPreview = raw.length > 300 ? `${raw.slice(0, 297)}…` : raw;
+        }
+
+        let sdgLabel: string | undefined;
+        const sdg = opp.sdg_info as { sdg_id?: string } | undefined;
+        if (sdg?.sdg_id) sdgLabel = String(sdg.sdg_id);
+        else if (opp.sdg && opp.sdg !== 'SDG') sdgLabel = opp.sdg;
+
+        const loc = opp.location as { city?: string; venue?: string } | undefined;
+        const locParts = [loc?.city, loc?.venue].filter((x): x is string => typeof x === 'string' && !!x.trim());
+
+        return {
+            opportunityId: opp.id,
+            mode: opp.mode || undefined,
+            typesLine: opp.types?.length ? opp.types.join(', ') : undefined,
+            timelineSummary: tl.length ? tl.join(' · ') : undefined,
+            locationSummary: locParts.length ? locParts.join(', ') : undefined,
+            sdgLabel,
+            partnerOrganization: partnerOrg,
+            executionSummary,
+            facultySupervisionLine: supervisorBits.length ? supervisorBits.join(' · ') : undefined,
+            objectivesPreview,
+            studentName: meta.studentName,
+            studentUniversity: meta.studentUniversity,
+            facultyAuthorName: meta.facultyAuthorName,
+            facultyAuthorEmail: meta.facultyAuthorEmail,
+        };
+    }
+
+    private verificationAuthRequired(): boolean {
+        return isProjectVerificationAuthRequired();
+    }
+
+    private projectVerificationTokenKind(
+        opportunity: Opportunity,
+        token: string,
+    ): 'faculty' | 'partner' | 'liaison' | null {
+        if (opportunity.faculty_verification_token === token) return 'faculty';
+        if (opportunity.partnerToken === token) return 'partner';
+        if (opportunity.liaisonToken === token) return 'liaison';
+        return null;
+    }
+
+    private verificationUserMatchesToken(
+        opportunity: Opportunity,
+        kind: 'faculty' | 'partner' | 'liaison',
+        user: { id: string; email: string; role: string },
+    ): boolean {
+        const ue = this.normalizeEmail(user.email);
+        if (kind === 'faculty' || kind === 'liaison') {
+            if (user.role !== UserRole.FACULTY) return false;
+            if (opportunity.facultyId && user.id === opportunity.facultyId) return true;
+            const sup = opportunity.supervision as Record<string, unknown> | undefined;
+            const c = this.normalizeEmail(typeof sup?.contact === 'string' ? sup.contact : '');
+            const oe = this.normalizeEmail(typeof sup?.official_email === 'string' ? sup.official_email : '');
+            return ue === c || (!!oe && ue === oe);
+        }
+        const pe = this.resolvePartnerEmailFromOpportunity(opportunity);
+        if (!pe || ue !== this.normalizeEmail(pe)) return false;
+        if (user.role === UserRole.STUDENT || user.role === UserRole.FACULTY) return false;
+        return true;
+    }
+
+    /**
+     * When VERIFICATION_REQUIRE_AUTH is enabled, the logged-in user must match the email / faculty
+     * binding for the magic link (partner vs faculty vs legacy liaison).
+     */
+    private assertVerificationIdentityIfRequired(
+        opportunity: Opportunity,
+        token: string,
+        user?: { id: string; email: string; role: string },
+    ): void {
+        if (!this.verificationAuthRequired()) return;
+        if (!user?.id) {
+            throw new UnauthorizedException('Login required to verify this link.');
+        }
+        const kind = this.projectVerificationTokenKind(opportunity, token);
+        if (!kind) return;
+        if (!this.verificationUserMatchesToken(opportunity, kind, user)) {
+            throw new ForbiddenException('Ye link is account se link nahi hai');
+        }
     }
 
     /** Whether partner approval + email flow applies for this student submission. */
@@ -335,7 +478,11 @@ export class OpportunitiesService {
             const pe = this.resolvePartnerEmail(createOpportunityDto);
             if (pe) {
                 try {
-                    await this.mailService.sendPartnerVerification(pe, saved.title, facultyPartnerToken);
+                    const verifyDetails = this.buildOpportunityVerificationEmailDetails(saved as Opportunity, {
+                        facultyAuthorName: user.name || undefined,
+                        facultyAuthorEmail: user.email || undefined,
+                    });
+                    await this.mailService.sendPartnerVerification(pe, saved.title, facultyPartnerToken, verifyDetails);
                 } catch (e) {
                     console.warn('Failed to send faculty opportunity partner verification email', (e as Error).message);
                 }
@@ -439,11 +586,16 @@ export class OpportunitiesService {
         const saved = await this.opportunitiesRepository.save(opportunity);
 
         const facultyTo = this.normalizeEmail(dto.supervision.contact);
+        const studentVerifyDetails = this.buildOpportunityVerificationEmailDetails(saved as Opportunity, {
+            studentName: user.name || undefined,
+            studentUniversity: user.university || user.institution || undefined,
+        });
         try {
             await this.mailService.sendFacultyStudentOpportunityVerification(
                 facultyTo,
                 saved.title,
                 saved.faculty_verification_token,
+                studentVerifyDetails,
             );
         } catch (e) {
             console.warn('Failed to send faculty verification email', (e as Error).message);
@@ -451,7 +603,12 @@ export class OpportunitiesService {
 
         if (partnerEmail && partnerToken) {
             try {
-                await this.mailService.sendPartnerVerification(partnerEmail, saved.title, partnerToken);
+                await this.mailService.sendPartnerVerification(
+                    partnerEmail,
+                    saved.title,
+                    partnerToken,
+                    studentVerifyDetails,
+                );
             } catch (e) {
                 console.warn('Failed to send partner verification email', (e as Error).message);
             }
@@ -929,7 +1086,7 @@ export class OpportunitiesService {
         return { success: true, message: 'Applicant status updated successfully' };
     }
 
-    async verifyOpportunityToken(token: string) {
+    async verifyOpportunityToken(token: string, user?: { id: string; email: string; role: string }) {
         const opportunity = await this.opportunitiesRepository.findOne({
             where: [
                 { faculty_verification_token: token },
@@ -942,9 +1099,11 @@ export class OpportunitiesService {
             throw new NotFoundException('Invalid or expired verification token.');
         }
 
+        this.assertVerificationIdentityIfRequired(opportunity, token, user);
+
         // Faculty magic link — isolated from partner/liaison tokens (wrong link cannot approve as partner).
         if (opportunity.faculty_verification_token === token) {
-            return this.verifyFaculty(token);
+            return this.verifyFaculty(token, user);
         }
 
         // Student-created partner: same verify URL as legacy partner, but only after faculty approval.
@@ -1072,9 +1231,10 @@ export class OpportunitiesService {
         return { success: true, message: 'Executing organization verified', data: { id: opp.id, status: opp.status } };
     }
 
-    async verifyFaculty(token: string) {
+    async verifyFaculty(token: string, user?: { id: string; email: string; role: string }) {
         const opp = await this.opportunitiesRepository.findOne({ where: { faculty_verification_token: token } });
         if (!opp) throw new NotFoundException('Invalid or expired faculty verification token');
+        this.assertVerificationIdentityIfRequired(opp, token, user);
         if (opp.isStudentCreated && opp.faculty_verified) {
             return {
                 success: true,

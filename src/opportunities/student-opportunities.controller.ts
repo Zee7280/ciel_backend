@@ -1,5 +1,6 @@
-import { Controller, Post, Body, UseGuards, Request, Get, Query } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, Request, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { VerificationVerifyAuthGuard } from '../auth/verification-verify-auth.guard';
 import { OpportunitiesService } from './opportunities.service';
 import { CreateOpportunityDto } from './dto/create-opportunity.dto';
 
@@ -13,8 +14,9 @@ export class StudentOpportunitiesController {
         return this.opportunitiesService.createStudentOpportunity(req.user.id, dto);
     }
 
+    @UseGuards(VerificationVerifyAuthGuard)
     @Get('faculty/verify')
-    verify(@Query('token') token: string) {
-        return this.opportunitiesService.verifyFaculty(token);
+    verify(@Request() req, @Query('token') token: string) {
+        return this.opportunitiesService.verifyFaculty(token, req.user);
     }
 }

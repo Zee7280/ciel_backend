@@ -2,6 +2,7 @@ import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { VerificationsService } from './verifications.service';
 import { VerificationsController } from './verifications.controller';
+import { VerificationVerifyAuthGuard } from '../auth/verification-verify-auth.guard';
 import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { Report } from '../reports/entities/report.entity';
 import { OrganizationsModule } from '../organizations/organizations.module';
@@ -14,6 +15,6 @@ import { OpportunitiesModule } from '../opportunities/opportunities.module';
         forwardRef(() => OpportunitiesModule)
     ],
     controllers: [VerificationsController],
-    providers: [VerificationsService],
+    providers: [VerificationsService, VerificationVerifyAuthGuard],
 })
 export class VerificationsModule { }

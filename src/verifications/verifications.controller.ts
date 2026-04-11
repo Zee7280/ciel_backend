@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import { VerificationsService } from './verifications.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { VerificationVerifyAuthGuard } from '../auth/verification-verify-auth.guard';
 import { OpportunitiesService } from '../opportunities/opportunities.service';
 
 @Controller()
@@ -30,10 +31,11 @@ export class VerificationsController {
         return { success: true, data };
     }
 
+    @UseGuards(VerificationVerifyAuthGuard)
     @Get('verifications/verify')
     @Header('Cache-Control', 'no-store, no-cache, must-revalidate, private')
     @Header('Pragma', 'no-cache')
-    async verifyOpportunity(@Query('token') token: string) {
+    async verifyOpportunity(@Request() req, @Query('token') token: string) {
         const t = typeof token === 'string' ? token.trim() : '';
         if (!t) {
             throw new HttpException(
@@ -41,7 +43,22 @@ export class VerificationsController {
                 HttpStatus.BAD_REQUEST,
             );
         }
-        return this.opportunitiesService.verifyOpportunityToken(t);
+        return this.opportunitiesService.verifyOpportunityToken(t, req.user);
+    }
+
+    @UseGuards(VerificationVerifyAuthGuard)
+    @Post('verifications/verify')
+    @Header('Cache-Control', 'no-store, no-cache, must-revalidate, private')
+    @Header('Pragma', 'no-cache')
+    async verifyOpportunityPost(@Request() req, @Body() body: { token?: string }) {
+        const t = typeof body?.token === 'string' ? body.token.trim() : '';
+        if (!t) {
+            throw new HttpException(
+                { success: false, message: 'Token is required' },
+                HttpStatus.BAD_REQUEST,
+            );
+        }
+        return this.opportunitiesService.verifyOpportunityToken(t, req.user);
     }
 
     @UseGuards(JwtAuthGuard)

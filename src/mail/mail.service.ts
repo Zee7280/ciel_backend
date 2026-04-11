@@ -2,6 +2,24 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 
+/** Optional structured summary for faculty/partner verification emails. */
+export interface OpportunityVerificationEmailDetails {
+  opportunityId?: string;
+  studentName?: string;
+  studentUniversity?: string;
+  facultyAuthorName?: string;
+  facultyAuthorEmail?: string;
+  mode?: string;
+  typesLine?: string;
+  timelineSummary?: string;
+  locationSummary?: string;
+  sdgLabel?: string;
+  partnerOrganization?: string;
+  executionSummary?: string;
+  facultySupervisionLine?: string;
+  objectivesPreview?: string;
+}
+
 @Injectable()
 export class MailService {
   private transporter: nodemailer.Transporter;
@@ -339,9 +357,55 @@ export class MailService {
 
   /**
    * Liaison/partner verification links: default to marketing site (FRONTEND_URL + FRONTEND_VERIFY_PATH).
-   * The frontend page should call GET {API}/api/v1/verifications/verify?token=… (or open it in the browser).
+   * The frontend page should call GET/POST {API}/api/v1/verifications/verify with the token (Bearer JWT when
+   * auth is required: see isProjectVerificationAuthRequired — production defaults to required unless
+   * VERIFICATION_REQUIRE_AUTH=false).
    * Set VERIFICATION_EMAIL_LINK=api to put the API URL in the email instead (no frontend page needed).
    */
+  private escHtmlPlain(s: string): string {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  private opportunityVerificationDetailsHtml(details?: OpportunityVerificationEmailDetails): string {
+    if (!details) return '';
+    const rows: [string, string | undefined][] = [
+      ['Reference ID', details.opportunityId],
+      ['Student', details.studentName],
+      ['Student university', details.studentUniversity],
+      ['Posted by (faculty)', details.facultyAuthorName],
+      ['Faculty email', details.facultyAuthorEmail],
+      ['Supervision', details.facultySupervisionLine],
+      ['Host / partner organization', details.partnerOrganization],
+      ['Activity format', details.executionSummary],
+      ['Mode', details.mode],
+      ['Project types', details.typesLine],
+      ['Timeline', details.timelineSummary],
+      ['Location', details.locationSummary],
+      ['SDG', details.sdgLabel],
+      ['Objectives (summary)', details.objectivesPreview],
+    ];
+    const filtered = rows.filter(([, v]) => v && String(v).trim());
+    if (!filtered.length) return '';
+    const body = filtered
+      .map(
+        ([k, v]) =>
+          `<tr><td style="padding:8px 14px 8px 0;vertical-align:top;color:#64748b;font-size:13px;width:38%;">${this.escHtmlPlain(k)}</td><td style="padding:8px 0;color:#0f172a;font-size:14px;">${this.escHtmlPlain(String(v).trim())}</td></tr>`,
+      )
+      .join('');
+    return `
+    <table role="presentation" width="100%" style="border-collapse:collapse;margin:20px 0;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
+      <tbody>${body}</tbody>
+    </table>`;
+  }
+
+  private verificationSignInHintHtml(): string {
+    return `<p style="font-size:13px;color:#475569;margin:16px 0 0 0;line-height:1.5;"><strong>Signing in:</strong> If the site asks you to log in before approving, use the <strong>same email address</strong> this message was sent to, then use the button below (or open the link again after signing in).</p>`;
+  }
+
   private buildProjectVerificationLink(token: string): string {
     const enc = encodeURIComponent(token);
     const linkTarget = (this.configService.get<string>('VERIFICATION_EMAIL_LINK') || 'frontend').toLowerCase();
@@ -387,15 +451,24 @@ export class MailService {
     }
   }
 
-  async sendPartnerVerification(to: string, projectTitle: string, token: string) {
+  async sendPartnerVerification(
+    to: string,
+    projectTitle: string,
+    token: string,
+    details?: OpportunityVerificationEmailDetails,
+  ) {
     const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
     const verifyLink = this.buildProjectVerificationLink(token);
+    const titleEsc = this.escHtmlPlain(projectTitle);
+    const detailBlock = this.opportunityVerificationDetailsHtml(details);
 
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
         <h2 style="color: #333;">Partner Verification Required</h2>
         <p>Hello!</p>
-        <p>A student has claimed to be doing a project at your organization: <strong>${projectTitle}</strong></p>
+        <p>A student has claimed to be doing a project at your organization: <strong>${titleEsc}</strong></p>
+        ${detailBlock}
+        ${this.verificationSignInHintHtml()}
         <p>Please click the button below to verify the site and collaboration:</p>
         <div style="text-align: center; margin: 30px 0;">
           <a href="${verifyLink}" style="background-color: #4CAF50; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Verify Collaboration</a>
@@ -462,15 +535,24 @@ export class MailService {
     }
   }
 
-  async sendFacultyStudentOpportunityVerification(to: string, projectTitle: string, token: string) {
+  async sendFacultyStudentOpportunityVerification(
+    to: string,
+    projectTitle: string,
+    token: string,
+    details?: OpportunityVerificationEmailDetails,
+  ) {
     const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
     const verifyLink = this.buildProjectVerificationLink(token);
+    const titleEsc = this.escHtmlPlain(projectTitle);
+    const detailBlock = this.opportunityVerificationDetailsHtml(details);
 
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
         <h2 style="color: #333;">Faculty approval required</h2>
         <p>Hello,</p>
-        <p>A student has submitted a community opportunity and listed you as the supervising faculty for <strong>${projectTitle}</strong>.</p>
+        <p>A student has submitted a community opportunity and listed you as the supervising faculty for <strong>${titleEsc}</strong>.</p>
+        ${detailBlock}
+        ${this.verificationSignInHintHtml()}
         <p>Please review and approve using the link below:</p>
         <div style="text-align: center; margin: 30px 0;">
           <a href="${verifyLink}" style="background-color: #2563eb; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Approve as faculty supervisor</a>

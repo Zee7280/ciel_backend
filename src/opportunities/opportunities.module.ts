@@ -15,6 +15,7 @@ import { User } from '../users/entities/user.entity';
 import { MailModule } from '../mail/mail.module';
 import { StudentOpportunitiesController } from './student-opportunities.controller';
 import { OpportunityWorkflowService } from './opportunity-workflow.service';
+import { VerificationVerifyAuthGuard } from '../auth/verification-verify-auth.guard';
 
 @Module({
     imports: [
@@ -25,7 +26,7 @@ import { OpportunityWorkflowService } from './opportunity-workflow.service';
         MailModule
     ],
     controllers: [OpportunitiesController, AdminOpportunitiesController, PublicOpportunitiesController, ParticipantsController, StudentOpportunitiesController],
-    providers: [OpportunitiesService, OpportunityWorkflowService],
+    providers: [OpportunitiesService, OpportunityWorkflowService, VerificationVerifyAuthGuard],
     exports: [OpportunitiesService, OpportunityWorkflowService],
 })
 export class OpportunitiesModule { }

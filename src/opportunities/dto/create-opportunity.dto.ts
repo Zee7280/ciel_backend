@@ -64,6 +64,11 @@ export class SupervisionDto {
     @IsOptional()
     partner_email?: string;
 
+    /** Partner site contact (student flow); distinct from faculty supervision.contact */
+    @IsString()
+    @IsOptional()
+    external_partner_email?: string;
+
     @IsBoolean()
     @IsOptional()
     information_accurate?: boolean;

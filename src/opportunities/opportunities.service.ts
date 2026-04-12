@@ -11,7 +11,7 @@ import { User } from '../users/entities/user.entity';
 import { UserRole } from '../users/enums/user-role.enum';
 import { MailService, OpportunityVerificationEmailDetails } from '../mail/mail.service';
 import { randomUUID } from 'crypto';
-import { OpportunityWorkflowService, WORKFLOW_STAGE } from './opportunity-workflow.service';
+import { OpportunityWorkflowService, WORKFLOW_STAGE, LINE_STATUS } from './opportunity-workflow.service';
 import { isProjectVerificationAuthRequired } from '../common/project-verification-auth.util';
 import { NotificationsService } from '../notifications/notifications.service';
 
@@ -1065,6 +1065,24 @@ export class OpportunitiesService {
             opportunity.sdg = updateOpportunityDto.sdg_info.sdg_id || opportunity.sdg;
         }
 
+        // Faculty edit/resubmit: force opportunity back into review lanes for fresh approval.
+        if (isFacultyOwner && !opportunity.isStudentCreated) {
+            const requiresPartnerApproval =
+                this.studentOpportunityRequiresPartner(opportunity as unknown as CreateOpportunityDto) &&
+                !!this.resolvePartnerEmailFromOpportunity(opportunity);
+
+            this.opportunityWorkflow.initFacultyCreated(opportunity, requiresPartnerApproval);
+            opportunity.admin_approved = false;
+            opportunity.rejectionReason = null;
+            opportunity.partnerVerified = !requiresPartnerApproval;
+
+            if (opportunity.execution_verification_token && !opportunity.execution_verified) {
+                opportunity.status = 'pending_execution';
+                opportunity.execution_verification_status = 'pending_execution';
+                opportunity.adminApprovalStatus = LINE_STATUS.PENDING;
+            }
+        }
+
         return this.opportunitiesRepository.save(opportunity);
     }
 
@@ -1717,10 +1735,19 @@ export class OpportunitiesService {
             throw new ForbiddenException('You are not the assigned partner reviewer for this opportunity');
         }
 
-        if (!opp.faculty_verified || opp.workflowStage !== WORKFLOW_STAGE.PENDING_PARTNER) {
-            throw new BadRequestException(
-                'Partner verification is only available after faculty approval.',
-            );
+        if (opp.isStudentCreated) {
+            if (!opp.faculty_verified || opp.workflowStage !== WORKFLOW_STAGE.PENDING_PARTNER) {
+                throw new BadRequestException(
+                    'Partner verification is only available after faculty approval.',
+                );
+            }
+            return;
+        }
+
+        const awaitingPartnerReview =
+            opp.workflowStage === WORKFLOW_STAGE.PENDING_PARTNER || opp.status === 'pending_partner';
+        if (!awaitingPartnerReview) {
+            throw new BadRequestException('This opportunity is not awaiting partner approval.');
         }
     }
 
@@ -1794,7 +1821,11 @@ export class OpportunitiesService {
         }
 
         this.assertPartnerCanReviewOpportunity(opp, partner.email, partner.organizationId);
-        this.opportunityWorkflow.afterPartnerVerified(opp);
+        if (opp.isStudentCreated) {
+            this.opportunityWorkflow.afterPartnerVerified(opp);
+        } else {
+            this.opportunityWorkflow.afterFacultyCreatedPartnerVerified(opp);
+        }
         const saved = await this.opportunitiesRepository.save(opp);
         await this.handlePartnerApprovedSideEffects(saved);
         return saved;

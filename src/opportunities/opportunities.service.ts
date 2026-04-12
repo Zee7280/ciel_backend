@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, ForbiddenException, UnauthorizedException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, DeepPartial } from 'typeorm';
+import { Repository, In, DeepPartial, Brackets } from 'typeorm';
 import { Opportunity } from './entities/opportunity.entity';
 import { Organization } from '../organizations/entities/organization.entity';
 import { Participation } from '../engagement/entities/participant.entity';
@@ -564,6 +564,41 @@ export class OpportunitiesService {
             partner_approval_status: opp.partnerApprovalStatus ?? null,
             admin_approval_status: opp.adminApprovalStatus ?? null,
         };
+    }
+
+    /** Whether CIEL admin final-approve may run without skipping required gates. */
+    private isOpportunityReadyForAdminFinalApprove(opp: Opportunity): boolean {
+        if (opp.isStudentCreated) {
+            if (opp.workflowStage === WORKFLOW_STAGE.PENDING_ADMIN) return true;
+            if (!opp.workflowStage && opp.status === 'pending_approval') return true;
+            return false;
+        }
+        if (opp.status === 'pending_partner') return false;
+        if (opp.workflowStage === WORKFLOW_STAGE.PENDING_PARTNER) return false;
+        return true;
+    }
+
+    /** Short label for the admin approvals queue (student pipeline + final step). */
+    private describeAdminQueueFlow(opp: Opportunity): { flow_status: string; admin_can_approve: boolean } {
+        const admin_can_approve = this.isOpportunityReadyForAdminFinalApprove(opp);
+        const st = opp.status;
+        if (opp.isStudentCreated) {
+            const ws = opp.workflowStage;
+            if (ws === WORKFLOW_STAGE.PENDING_FACULTY || st === 'pending_faculty' || st === 'pending_verification') {
+                return { flow_status: 'Awaiting faculty / liaison', admin_can_approve: false };
+            }
+            if (ws === WORKFLOW_STAGE.PENDING_PARTNER || st === 'pending_partner') {
+                return { flow_status: 'Awaiting partner', admin_can_approve: false };
+            }
+            if (ws === WORKFLOW_STAGE.PENDING_ADMIN || st === 'pending_approval') {
+                return { flow_status: 'CIEL final approval', admin_can_approve };
+            }
+            return { flow_status: st || 'In review', admin_can_approve };
+        }
+        if (st === 'pending_partner') {
+            return { flow_status: 'Awaiting partner', admin_can_approve: false };
+        }
+        return { flow_status: 'CIEL final approval', admin_can_approve };
     }
 
     /** Public directory: honor org/creator visibility flags only. Participation rules apply at apply/enroll time. */
@@ -1308,13 +1343,38 @@ export class OpportunitiesService {
 
     // Admin methods
     async findAllPending() {
-        // CIEL admin final review: org/partner flows and student-created after faculty (+ partner if any).
+        // CIEL admin queue: final review (`pending_approval`) plus student-created rows still with faculty/partner
+        // so admins can track the pipeline (`flow_status`, `admin_can_approve`).
         // Treat NULL admin_approved like false (older rows).
         const opportunities = await this.opportunitiesRepository
             .createQueryBuilder('opportunity')
             .leftJoinAndSelect('opportunity.organization', 'organization')
-            .where('opportunity.status = :st', { st: 'pending_approval' })
-            .andWhere('(opportunity.admin_approved = :aa OR opportunity.admin_approved IS NULL)', { aa: false })
+            .where(
+                new Brackets((qb) => {
+                    qb.where(
+                        new Brackets((inner) => {
+                            inner
+                                .where('opportunity.status = :st', { st: 'pending_approval' })
+                                .andWhere(
+                                    '(opportunity.admin_approved = :aa OR opportunity.admin_approved IS NULL)',
+                                    { aa: false },
+                                );
+                        }),
+                    ).orWhere(
+                        new Brackets((inner) => {
+                            inner
+                                .where('opportunity.isStudentCreated = :isc', { isc: true })
+                                .andWhere(
+                                    '(opportunity.admin_approved = :aa OR opportunity.admin_approved IS NULL)',
+                                    { aa: false },
+                                )
+                                .andWhere('opportunity.status IN (:...early)', {
+                                    early: ['pending_faculty', 'pending_partner', 'pending_verification'],
+                                });
+                        }),
+                    );
+                }),
+            )
             .orderBy('opportunity.createdAt', 'DESC')
             .getMany();
 
@@ -1353,6 +1413,8 @@ export class OpportunitiesService {
                 ...oppRest
             } = opp;
 
+            const { flow_status, admin_can_approve } = this.describeAdminQueueFlow(opp);
+
             return {
                 ...oppRest,
                 status: this.getApiOpportunityStatus(opp),
@@ -1376,6 +1438,8 @@ export class OpportunitiesService {
                 execution_verified: opp.execution_verified,
                 admin_approved: opp.admin_approved,
                 ...this.getWorkflowResponseFields(opp),
+                flow_status,
+                admin_can_approve,
                 is_student_created: opp.isStudentCreated,
                 organization: opp.organization || orgFallback,
                 creator: creator
@@ -1399,6 +1463,11 @@ export class OpportunitiesService {
     async approve(id: string) {
         const opp = await this.findOne(id);
         if (!opp) throw new NotFoundException('Opportunity not found');
+        if (!this.isOpportunityReadyForAdminFinalApprove(opp)) {
+            throw new BadRequestException(
+                'CIEL final approval is only available after faculty and partner steps (when applicable) are completed.',
+            );
+        }
         this.opportunityWorkflow.afterAdminApproved(opp);
         const saved = await this.opportunitiesRepository.save(opp);
         await this.handleAdminApprovedSideEffects(saved);

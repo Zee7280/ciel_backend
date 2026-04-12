@@ -112,18 +112,36 @@ export class StudentsService {
         return this.normalizeOpportunityStatus(opportunity.status);
     }
 
-    private isEligibleForOpportunity(user: User, opp: Opportunity): boolean {
+    /**
+     * Same rules as before; returns a clear message when the student cannot apply (for API / UI).
+     */
+    private getOpportunityEligibility(
+        user: User,
+        opp: Opportunity,
+    ): { eligible: true } | { eligible: false; message: string } {
         const userUniversity = this.normalize(user.university || user.institution || user.orgName);
         const userDept = this.normalize(user.department || user.major);
+
+        const restrictedListMsg =
+            'This opportunity is limited to certain universities. Update your profile university so it matches the allowed institution, or choose a different opportunity.';
 
         // Backward compatibility: restricted_universities
         if (opp.restricted_universities && opp.restricted_universities.length > 0) {
             const allowed = opp.restricted_universities.map(this.normalize);
-            if (!allowed.includes(userUniversity)) return false;
+            if (!allowed.includes(userUniversity)) {
+                if (!userUniversity) {
+                    return {
+                        eligible: false,
+                        message:
+                            'Add your university to your profile first. This opportunity is only open to students from selected universities.',
+                    };
+                }
+                return { eligible: false, message: restrictedListMsg };
+            }
         }
 
         const scope = opp.participation_scope;
-        if (!scope) return true;
+        if (!scope) return { eligible: true };
 
         const rule = scope.rule;
         const uniNames: string[] = scope.university_names || [];
@@ -138,19 +156,67 @@ export class StudentsService {
         const uniMatch = (names: string[]) => names.includes(userUniversity);
         const deptMatch = deptScope === 'all' || (!!userDept && deptSet.includes(userDept));
 
+        const deptFail = (): { eligible: false; message: string } => {
+            if (!userDept) {
+                return {
+                    eligible: false,
+                    message:
+                        'This opportunity is limited to selected departments. Add your department or major in your profile, then try again.',
+                };
+            }
+            return {
+                eligible: false,
+                message:
+                    'This opportunity is limited to selected departments, and your department or major is not on the allowed list for this activity.',
+            };
+        };
+
+        const uniNotInList = (): { eligible: false; message: string } => {
+            if (!userUniversity) {
+                return {
+                    eligible: false,
+                    message:
+                        'Add your university to your profile first. This opportunity is only open to students from specific institutions.',
+                };
+            }
+            return {
+                eligible: false,
+                message:
+                    'This opportunity is only open to students from specific institutions, and your profile university does not match the allowed list.',
+            };
+        };
+
+        const ownUniFail = (): { eligible: false; message: string } => {
+            const label = creatorUni.trim() || 'the host university';
+            if (!userUniversity) {
+                return {
+                    eligible: false,
+                    message: `Add your university to your profile. This opportunity is only for students at ${label}.`,
+                };
+            }
+            return {
+                eligible: false,
+                message: `This opportunity is only for students at ${label}. Update your profile university if yours is the same institution (spelling must match), or choose another opportunity.`,
+            };
+        };
+
         switch (rule) {
             case 'open_all_universities':
-                return deptMatch;
+                return deptMatch ? { eligible: true } : deptFail();
             case 'restricted_specific_universities':
-                return uniMatch(uniSet) && deptMatch;
+                if (!uniMatch(uniSet)) return uniNotInList();
+                return deptMatch ? { eligible: true } : deptFail();
             case 'own_university_only':
-                return (!!userUniversity && userUniversity === creatorNorm) && deptMatch;
+                if (!userUniversity || userUniversity !== creatorNorm) return ownUniFail();
+                return deptMatch ? { eligible: true } : deptFail();
             case 'departments_across_universities':
-                return uniMatch(uniSet) && deptMatch;
+                if (!uniMatch(uniSet)) return uniNotInList();
+                return deptMatch ? { eligible: true } : deptFail();
             case 'own_university_departments':
-                return (!!userUniversity && userUniversity === creatorNorm) && deptMatch;
+                if (!userUniversity || userUniversity !== creatorNorm) return ownUniFail();
+                return deptMatch ? { eligible: true } : deptFail();
             default:
-                return true;
+                return { eligible: true };
         }
     }
     // Verification
@@ -719,8 +785,9 @@ export class StudentsService {
 
         const user = await this.usersRepository.findOne({ where: { id: userId } });
         if (!user) throw new NotFoundException('User not found');
-        if (!this.isEligibleForOpportunity(user, opportunity)) {
-            throw new ForbiddenException('You are not eligible to apply for this opportunity');
+        const eligibility = this.getOpportunityEligibility(user, opportunity);
+        if (!eligibility.eligible) {
+            throw new ForbiddenException(eligibility.message);
         }
 
         // Check if already applied

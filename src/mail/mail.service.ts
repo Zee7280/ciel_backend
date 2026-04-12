@@ -279,7 +279,7 @@ export class MailService {
                 <p style="margin: 0;"><strong>Project:</strong> ${projectTitle}</p>
             </div>
 
-            <p>You can view and monitor this project on the SEAL platform. **Note that your official approval is not required** as you are listed in a collaborating capacity.</p>
+            <p>You can view and monitor this project on the CIEL platform. **Note that your official approval is not required** as you are listed in a collaborating capacity.</p>
             
             <p>Thank you for your engagement.</p>
             
@@ -324,7 +324,7 @@ export class MailService {
       await this.transporter.sendMail({
         from,
         to,
-        subject: `Application Submitted – Pending Approval – SEAL Platform`,
+        subject: `Application Submitted – Pending Approval – CIEL Platform`,
         html,
       });
       this.logger.log(`Application submission confirmation email sent to ${to}`);
@@ -341,7 +341,7 @@ export class MailService {
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
         <p>Dear Faculty Member,</p>
         <p>Greetings from Community Impact Education Lab (CIEL).</p>
-        <p><strong>${studentName}</strong> has requested you to be their Faculty Supervisor for the project: <strong>${projectName}</strong> on the SEAL Platform.</p>
+        <p><strong>${studentName}</strong> has requested you to be their Faculty Supervisor for the project: <strong>${projectName}</strong> on the CIEL Platform.</p>
         <p>As a Faculty Supervisor, you will be able to review student progress, monitor engagement metrics, and provide official institutional approval for their work.</p>
         <p>If you don't have an account yet, please sign up using the link below:</p>
         <div style="text-align: center; margin: 30px 0;">

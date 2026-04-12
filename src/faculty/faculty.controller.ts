@@ -31,9 +31,19 @@ export class FacultyController {
         );
         return {
             success: true,
+            message: 'Faculty approval completed',
             data: {
                 id: saved.id,
-                status: saved.status,
+                status:
+                    saved.workflowStage === 'live'
+                        ? 'live'
+                        : ['pending_faculty', 'pending_partner', 'pending_admin'].includes(saved.workflowStage || '')
+                            ? 'pending_verification'
+                            : saved.workflowStage === 'rejected'
+                                ? 'rejected'
+                                : saved.workflowStage === 'revision'
+                                    ? 'revision'
+                                    : saved.status,
                 workflow_stage: saved.workflowStage,
             },
         };
@@ -53,9 +63,19 @@ export class FacultyController {
         );
         return {
             success: true,
+            message: 'Faculty rejection submitted',
             data: {
                 id: saved.id,
-                status: saved.status,
+                status:
+                    saved.workflowStage === 'live'
+                        ? 'live'
+                        : ['pending_faculty', 'pending_partner', 'pending_admin'].includes(saved.workflowStage || '')
+                            ? 'pending_verification'
+                            : saved.workflowStage === 'rejected'
+                                ? 'rejected'
+                                : saved.workflowStage === 'revision'
+                                    ? 'revision'
+                                    : saved.status,
                 workflow_stage: saved.workflowStage,
             },
         };

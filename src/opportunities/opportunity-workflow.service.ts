@@ -25,6 +25,20 @@ export const LINE_STATUS = {
  */
 @Injectable()
 export class OpportunityWorkflowService {
+    private responseStatus(opp: Opportunity): string {
+        if (opp.workflowStage === WORKFLOW_STAGE.LIVE) return 'live';
+        if (
+            opp.workflowStage === WORKFLOW_STAGE.PENDING_FACULTY ||
+            opp.workflowStage === WORKFLOW_STAGE.PENDING_PARTNER ||
+            opp.workflowStage === WORKFLOW_STAGE.PENDING_ADMIN
+        ) {
+            return 'pending_verification';
+        }
+        if (opp.workflowStage === WORKFLOW_STAGE.REJECTED) return 'rejected';
+        if (opp.workflowStage === WORKFLOW_STAGE.REVISION) return 'revision';
+        return opp.status;
+    }
+
     initStudentCreated(opp: Opportunity, requiresPartner: boolean): void {
         opp.isStudentCreated = true;
         opp.requiresPartnerApproval = requiresPartner;
@@ -95,6 +109,16 @@ export class OpportunityWorkflowService {
         opp.status = 'pending_approval';
     }
 
+    afterPartnerRejected(opp: Opportunity, reason?: string | null): void {
+        opp.partnerVerified = false;
+        opp.partnerApprovalStatus = LINE_STATUS.REJECTED;
+        opp.workflowStage = WORKFLOW_STAGE.REJECTED;
+        opp.status = 'rejected';
+        if (reason) {
+            opp.rejectionReason = reason;
+        }
+    }
+
     /** Faculty-authored opportunity: partner used magic link → CIEL admin queue. */
     afterFacultyCreatedPartnerVerified(opp: Opportunity): void {
         if (opp.isStudentCreated) return;
@@ -141,10 +165,13 @@ export class OpportunityWorkflowService {
         opp.status = opp.execution_verified ? 'active' : 'pending_execution';
     }
 
-    afterAdminRejected(opp: Opportunity): void {
+    afterAdminRejected(opp: Opportunity, reason?: string | null): void {
         opp.adminApprovalStatus = LINE_STATUS.REJECTED;
         opp.workflowStage = WORKFLOW_STAGE.REJECTED;
         opp.status = 'rejected';
+        if (reason) {
+            opp.rejectionReason = reason;
+        }
     }
 
     /**
@@ -157,7 +184,7 @@ export class OpportunityWorkflowService {
             title: opp.title,
             organization: org?.name || 'Unknown',
             category: opp.sdg_info?.sdg_id || opp.sdg || 'General',
-            status: opp.status,
+            status: this.responseStatus(opp),
             submitted_at: opp.createdAt?.toISOString?.() ?? opp.createdAt,
             description: opp.objectives?.description || '',
             teamMembers: extra?.teamMembers ?? [],

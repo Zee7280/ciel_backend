@@ -1,15 +1,19 @@
 import {
+    BadRequestException,
     Controller,
+    ForbiddenException,
     Get,
     Post,
     Body,
     Param,
+    HttpException,
     UseGuards,
     Request,
     Query,
-    HttpException,
     HttpStatus,
     Header,
+    NotFoundException,
+    UnauthorizedException,
 } from '@nestjs/common';
 import { VerificationsService } from './verifications.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -22,6 +26,36 @@ export class VerificationsController {
         private readonly verificationsService: VerificationsService,
         private readonly opportunitiesService: OpportunitiesService,
     ) {}
+
+    private async performOpportunityVerification(
+        token: string,
+        user?: { id?: string; email?: string; role?: string },
+    ) {
+        try {
+            return await this.opportunitiesService.verifyOpportunityToken(token, user as any);
+        } catch (error) {
+            if (
+                error instanceof BadRequestException ||
+                error instanceof UnauthorizedException ||
+                error instanceof ForbiddenException ||
+                error instanceof NotFoundException
+            ) {
+                const response = error.getResponse();
+                const message =
+                    typeof response === 'string'
+                        ? response
+                        : (response as any)?.message || error.message;
+                throw new HttpException(
+                    {
+                        success: false,
+                        message: Array.isArray(message) ? message.join(', ') : message,
+                    },
+                    error.getStatus(),
+                );
+            }
+            throw error;
+        }
+    }
 
     @UseGuards(JwtAuthGuard)
     @Get('partners/verifications')
@@ -43,7 +77,7 @@ export class VerificationsController {
                 HttpStatus.BAD_REQUEST,
             );
         }
-        return this.opportunitiesService.verifyOpportunityToken(t, req.user);
+        return this.performOpportunityVerification(t, req.user);
     }
 
     @UseGuards(VerificationVerifyAuthGuard)
@@ -58,7 +92,7 @@ export class VerificationsController {
                 HttpStatus.BAD_REQUEST,
             );
         }
-        return this.opportunitiesService.verifyOpportunityToken(t, req.user);
+        return this.performOpportunityVerification(t, req.user);
     }
 
     @UseGuards(JwtAuthGuard)

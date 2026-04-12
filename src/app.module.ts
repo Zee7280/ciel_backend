@@ -23,6 +23,7 @@ import { StorageModule } from './common/storage.module';
 import { PaymentsModule } from './payments/payments.module';
 import { FacultyModule } from './faculty/faculty.module';
 import { ContactModule } from './contact/contact.module';
+import { PlatformStatsModule } from './platform-stats/platform-stats.module';
 
 @Module({
   imports: [
@@ -68,6 +69,7 @@ import { ContactModule } from './contact/contact.module';
     PaymentsModule,
     FacultyModule,
     ContactModule,
+    PlatformStatsModule,
     TypeOrmModule.forFeature([Setting])
 ],
   controllers: [AppController],

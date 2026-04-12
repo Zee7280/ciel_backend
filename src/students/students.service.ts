@@ -41,7 +41,7 @@ export class StudentsService {
         private readonly opportunitiesService: OpportunitiesService,
     ) { }
 
-    private normalize(str?: string) {
+    private normalize(str?: string | null) {
         return (str || '').trim().toLowerCase();
     }
 
@@ -52,6 +52,60 @@ export class StudentsService {
                 status: In(['pending', 'accepted', 'approved', 'verified', 'paid', 'pending_payment_approval', 'pending_ciel_approval', 'pending_faculty_approval'])
             }
         });
+    }
+
+    private readonly liveOpportunityStatuses = ['active', 'live', 'open', 'recruiting'];
+
+    private normalizeOpportunityStatus(status?: string | null): string | null {
+        const normalized = this.normalize(status);
+        if (!normalized) return null;
+        if (this.liveOpportunityStatuses.includes(normalized)) return 'live';
+        if (['completed', 'complete', 'verified', 'finalized'].includes(normalized)) return 'completed';
+        if (['closed', 'inactive', 'draft', 'rejected', 'cancelled', 'canceled'].includes(normalized)) {
+            return 'closed';
+        }
+        return normalized;
+    }
+
+    private normalizeApplicationStatus(status?: string | null): string | null {
+        const normalized = this.normalize(status);
+        if (!normalized) return null;
+        if (['pending', 'pending_payment_approval', 'pending_ciel_approval', 'pending_faculty_approval'].includes(normalized)) {
+            return 'pending';
+        }
+        if (['approved', 'verified', 'accepted', 'paid', 'finalized'].includes(normalized)) {
+            return 'approved';
+        }
+        if (normalized === 'rejected') return 'rejected';
+        if (normalized === 'withdrawn') return 'withdrawn';
+        return normalized;
+    }
+
+    private isLiveOpportunityStatus(status?: string | null): boolean {
+        return this.normalizeOpportunityStatus(status) === 'live';
+    }
+
+    private getWorkflowResponseFields(opportunity: Opportunity) {
+        return {
+            workflow_stage: opportunity.workflowStage ?? null,
+            faculty_approval_status: opportunity.facultyApprovalStatus ?? null,
+            partner_approval_status: opportunity.partnerApprovalStatus ?? null,
+            admin_approval_status: opportunity.adminApprovalStatus ?? null,
+        };
+    }
+
+    private getApiOpportunityStatus(opportunity: Opportunity): string | null {
+        if (opportunity.workflowStage === 'live') return 'live';
+        if (
+            opportunity.workflowStage === 'pending_faculty' ||
+            opportunity.workflowStage === 'pending_partner' ||
+            opportunity.workflowStage === 'pending_admin'
+        ) {
+            return 'pending_verification';
+        }
+        if (opportunity.workflowStage === 'rejected') return 'rejected';
+        if (opportunity.workflowStage === 'revision') return 'revision';
+        return this.normalizeOpportunityStatus(opportunity.status);
     }
 
     private isEligibleForOpportunity(user: User, opp: Opportunity): boolean {
@@ -236,37 +290,49 @@ export class StudentsService {
 
     async getOpportunities(query: any, userId?: string) {
         const { sdg, location, type, status, page = 1, limit = 10 } = query;
-        const skip = (page - 1) * limit;
+        const pageNumber = Math.max(1, Number(page) || 1);
+        const limitNumber = Math.max(1, Number(limit) || 10);
+        const skip = (pageNumber - 1) * limitNumber;
+        const requestedStatus = this.normalize(status);
 
-        let filterStatus = status || 'active';
-        if (filterStatus === 'approved') {
-            filterStatus = 'active';
+        let dbStatuses: string[];
+        let requireAdminApproval = false;
+
+        if (!requestedStatus || ['approved', 'active', 'live'].includes(requestedStatus)) {
+            dbStatuses = this.liveOpportunityStatuses;
+            requireAdminApproval = true;
+        } else if (['open', 'recruiting'].includes(requestedStatus)) {
+            dbStatuses = [requestedStatus];
+            requireAdminApproval = true;
+        } else if (requestedStatus === 'completed') {
+            dbStatuses = ['completed'];
+        } else if (requestedStatus === 'closed') {
+            dbStatuses = ['closed'];
+        } else {
+            dbStatuses = [requestedStatus];
+            requireAdminApproval = this.liveOpportunityStatuses.includes(requestedStatus);
         }
 
-        const whereClause: any = { status: filterStatus };
-        if (filterStatus === 'active') {
+        const whereClause: any = { status: In(dbStatuses) };
+        if (requireAdminApproval) {
             whereClause.admin_approved = true;
         }
-        if (sdg) whereClause.sdg = sdg;
-        if (location) whereClause.location = { city: location };
-        if (type) whereClause.type = type;
 
-        const [opportunities, total] = await this.opportunitiesRepository.findAndCount({
+        const opportunities = await this.opportunitiesRepository.find({
             where: whereClause,
             relations: ['organization'],
-            skip,
-            take: limit,
             order: { createdAt: 'DESC' },
         });
 
         let applicationStatuses = new Map<string, any>();
-        const user = userId ? await this.usersRepository.findOne({ where: { id: userId } }) : null;
+        const studentContextId = query?.student_id || query?.studentId || userId;
+        const user = studentContextId ? await this.usersRepository.findOne({ where: { id: studentContextId } }) : null;
 
-        if (userId && opportunities.length > 0) {
+        if (studentContextId && opportunities.length > 0) {
             const opportunityIds = opportunities.map(o => o.id);
             const applications = await this.participantRepository.find({
                 where: {
-                    studentId: userId,
+                    studentId: studentContextId,
                     projectId: In(opportunityIds)
                 }
             });
@@ -276,45 +342,88 @@ export class StudentsService {
             });
         }
 
-        const filtered = user ? opportunities.filter(o => this.isEligibleForOpportunity(user, o)) : opportunities;
+        const normalizedLocation = this.normalize(location);
+        const normalizedType = this.normalize(type);
+        const normalizedSdg = this.normalize(sdg);
+
+        const filtered = opportunities.filter((opportunity) => {
+            const application = applicationStatuses.get(opportunity.id);
+            const isEligible = user ? this.isEligibleForOpportunity(user, opportunity) : true;
+            const matchesSdg =
+                !normalizedSdg ||
+                this.normalize(opportunity.sdg) === normalizedSdg ||
+                this.normalize(opportunity.sdg_info?.sdg_id) === normalizedSdg;
+            const matchesLocation =
+                !normalizedLocation || this.normalize(opportunity.location?.city) === normalizedLocation;
+            const matchesType =
+                !normalizedType ||
+                (Array.isArray(opportunity.types) &&
+                    opportunity.types.some((entry) => this.normalize(entry) === normalizedType));
+
+            return matchesSdg && matchesLocation && matchesType && (isEligible || !!application);
+        });
+
+        const total = filtered.length;
+        const paginated = filtered.slice(skip, skip + limitNumber);
 
         return {
             success: true,
-            data: await Promise.all(filtered.map(async o => {
+            data: await Promise.all(paginated.map(async o => {
                 const app = applicationStatuses.get(o.id);
                 const occupiedSeats = await this.getOccupiedSeats(o.id);
                 const volunteersRequired = o.timeline?.volunteers_required || 0;
+                const applicationStatus = this.normalizeApplicationStatus(app?.status || null);
+                const hasApplied = !!app;
+                const organizationName = o.organization?.name || 'Unknown';
 
                 return {
                     ...o,
-                    organization: o.organization?.name || 'Unknown',
+                    organization: organizationName,
+                    organization_name: organizationName,
                     volunteersNeeded: volunteersRequired,
                     remaining_seats: Math.max(0, volunteersRequired - occupiedSeats),
                     description: o.objectives?.description || 'No description',
-                    application_status: app ? app.status : null,
+                    application_status: applicationStatus,
+                    has_applied: hasApplied,
                     payment_status: app ? app.paymentStatus : null,
                     payment_proof_url: app ? app.paymentProofUrl : null,
-                    // Map status for frontend buttons. "active" is required for "Submit Report".
-                    status: (app && (app.status === 'approved' || app.status === 'verified')) ? 'active' : (app ? 'applied' : o.status),
+                    status: this.getApiOpportunityStatus(o),
+                    ...this.getWorkflowResponseFields(o),
                     teamMembers: [] // We no longer fetch team members in a list view for performance, or we can fetch them if needed.
                 };
             })),
             pagination: {
                 total,
-                page: parseInt(page),
-                limit: parseInt(limit),
+                page: pageNumber,
+                limit: limitNumber,
             },
         };
     }
 
     async getOpportunityById(id: string, userId?: string) {
         const opportunity = await this.opportunitiesRepository.findOne({
-            where: { id, status: 'active', admin_approved: true },
+            where: { id, status: In(this.liveOpportunityStatuses), admin_approved: true },
             relations: ['organization'],
         });
 
         if (!opportunity) {
             throw new NotFoundException('Opportunity not found');
+        }
+
+        let viewer: User | null = null;
+        if (userId) {
+            viewer = await this.usersRepository.findOne({ where: { id: userId } });
+            if (viewer) {
+                const existingApplication = await this.participantRepository.findOne({
+                    where: {
+                        studentId: userId,
+                        projectId: id,
+                    },
+                });
+                if (!this.isEligibleForOpportunity(viewer, opportunity) && !existingApplication) {
+                    throw new ForbiddenException('You are not allowed to access this opportunity');
+                }
+            }
         }
 
         let applicationStatus: string | null = null;
@@ -331,7 +440,7 @@ export class StudentsService {
             });
 
             if (application) {
-                applicationStatus = application.status;
+                applicationStatus = this.normalizeApplicationStatus(application.status);
                 paymentStatus = application.paymentStatus;
                 paymentProofUrl = application.paymentProofUrl;
                 hasApplied = true;
@@ -348,10 +457,12 @@ export class StudentsService {
                 application_status: applicationStatus,
                 payment_status: paymentStatus,
                 payment_proof_url: paymentProofUrl,
+                has_applied: hasApplied,
                 hasApplied: hasApplied,
                 remaining_seats: Math.max(0, volunteersRequired - occupiedSeats),
-                // Also map status for report button visibility
-                status: (applicationStatus === 'approved' || applicationStatus === 'verified') ? 'active' : (hasApplied ? 'applied' : opportunity.status)
+                volunteersNeeded: volunteersRequired,
+                status: this.getApiOpportunityStatus(opportunity),
+                ...this.getWorkflowResponseFields(opportunity),
             },
         };
     }
@@ -359,7 +470,7 @@ export class StudentsService {
     async getRecommendedOpportunities(userId: string) {
         // Simple implementation - can be enhanced with ML
         const opportunities = await this.opportunitiesRepository.find({
-            where: { status: 'active', admin_approved: true },
+            where: { status: In(this.liveOpportunityStatuses), admin_approved: true },
             relations: ['organization'],
             take: 5,
             order: { createdAt: 'DESC' },
@@ -484,7 +595,7 @@ export class StudentsService {
             throw new ForbiddenException('You do not have access to this opportunity');
         }
 
-        if (opportunity.admin_approved || opportunity.status === 'active') {
+        if (opportunity.admin_approved || this.isLiveOpportunityStatus(opportunity.status)) {
             throw new BadRequestException('Approved opportunities cannot be updated');
         }
 
@@ -586,7 +697,7 @@ export class StudentsService {
         if (!opportunity) {
             throw new NotFoundException('Opportunity not found');
         }
-        if (opportunity.status !== 'active' || !opportunity.admin_approved) {
+        if (!this.isLiveOpportunityStatus(opportunity.status) || !opportunity.admin_approved) {
             throw new BadRequestException('This opportunity is not open for applications yet');
         }
 

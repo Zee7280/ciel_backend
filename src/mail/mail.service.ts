@@ -7,6 +7,12 @@ export interface OpportunityVerificationEmailDetails {
   opportunityId?: string;
   studentName?: string;
   studentUniversity?: string;
+  /** Student / creator university line for faculty summary emails. */
+  institutionName?: string;
+  /** Supervision.supervisor_name — greeting "Dear …" for faculty reviewer. */
+  facultyReviewerName?: string;
+  /** Supervision.faculty_department — dedicated bullet in faculty approval email. */
+  departmentName?: string;
   facultyAuthorName?: string;
   facultyAuthorEmail?: string;
   mode?: string;
@@ -15,9 +21,13 @@ export interface OpportunityVerificationEmailDetails {
   locationSummary?: string;
   sdgLabel?: string;
   partnerOrganization?: string;
+  /** Greeting for partner verification (contact person or organization name). */
+  partnerRecipientName?: string;
   executionSummary?: string;
   facultySupervisionLine?: string;
   objectivesPreview?: string;
+  /** Display string for volunteers required (e.g. "12" or "Not specified"). */
+  volunteersRequired?: string;
 }
 
 @Injectable()
@@ -406,19 +416,36 @@ export class MailService {
     return `<p style="font-size:13px;color:#475569;margin:16px 0 0 0;line-height:1.5;"><strong>Signing in:</strong> If the site asks you to log in before approving, use the <strong>same email address</strong> this message was sent to, then use the button below (or open the link again after signing in).</p>`;
   }
 
-  private buildProjectVerificationLink(token: string): string {
+  private buildFrontendLink(pathname: string, params: Record<string, string | undefined>): string {
+    const frontend = (this.configService.get<string>('FRONTEND_URL') || 'https://cielpk.com').replace(/\/+$/, '');
+    const path = pathname.startsWith('/') ? pathname : `/${pathname}`;
+    const search = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value) search.set(key, value);
+    }
+    const query = search.toString();
+    return `${frontend}${path}${query ? `?${query}` : ''}`;
+  }
+
+  private buildProjectVerificationLink(
+    token: string,
+    options?: { mode?: 'frontend' | 'api'; path?: string; returnTo?: string },
+  ): string {
     const enc = encodeURIComponent(token);
-    const linkTarget = (this.configService.get<string>('VERIFICATION_EMAIL_LINK') || 'frontend').toLowerCase();
+    const linkTarget = (options?.mode || this.configService.get<string>('VERIFICATION_EMAIL_LINK') || 'frontend').toLowerCase();
     if (linkTarget === 'api') {
       const raw = this.configService.get<string>('API_URL') || 'https://api.cielpk.com';
       const base = raw.replace(/\/+$/, '');
       const withApiV1 = base.endsWith('/api/v1') ? base : `${base}/api/v1`;
       return `${withApiV1}/verifications/verify?token=${enc}`;
     }
-    const frontend = (this.configService.get<string>('FRONTEND_URL') || 'https://cielpk.com').replace(/\/+$/, '');
-    const pathRaw = this.configService.get<string>('FRONTEND_VERIFY_PATH') || '/verify-project';
-    const path = pathRaw.startsWith('/') ? pathRaw : `/${pathRaw}`;
-    return `${frontend}${path}?token=${enc}`;
+    return this.buildFrontendLink(
+      options?.path || this.configService.get<string>('FRONTEND_VERIFY_PATH') || '/verify-project',
+      {
+        token,
+        returnTo: options?.returnTo,
+      },
+    );
   }
 
   async sendLiaisonVerification(to: string, projectTitle: string, token: string) {
@@ -456,25 +483,100 @@ export class MailService {
     projectTitle: string,
     token: string,
     details?: OpportunityVerificationEmailDetails,
+    options?: { returnTo?: string; path?: string; introText?: string; ctaLabel?: string },
   ) {
     const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
-    const verifyLink = this.buildProjectVerificationLink(token);
+    const verifyLink = this.buildProjectVerificationLink(token, {
+      mode: 'frontend',
+      path: options?.path || '/verify-project',
+      returnTo: options?.returnTo,
+    });
     const titleEsc = this.escHtmlPlain(projectTitle);
-    const detailBlock = this.opportunityVerificationDetailsHtml(details);
+    const customLead = options?.introText?.trim();
+    const postFacultyContext = !!customLead;
+    const ctaLabel = (options?.ctaLabel || 'View Opportunity Details').trim();
+
+    const partnerGreetingRaw =
+      details?.partnerRecipientName?.trim() ||
+      details?.partnerOrganization?.trim() ||
+      'Partner';
+    const dearPartner = this.escHtmlPlain(partnerGreetingRaw);
+
+    const submittedByRaw =
+      details?.studentName?.trim() ||
+      details?.facultyAuthorName?.trim() ||
+      '';
+    const submittedByEsc = submittedByRaw ? this.escHtmlPlain(submittedByRaw) : '—';
+
+    const institutionRaw =
+      details?.institutionName?.trim() ||
+      details?.studentUniversity?.trim() ||
+      '';
+    const institutionEsc = institutionRaw ? this.escHtmlPlain(institutionRaw) : '—';
+
+    const facultySupervisorRaw =
+      details?.facultyReviewerName?.trim() ||
+      details?.facultySupervisionLine?.trim() ||
+      details?.facultyAuthorName?.trim() ||
+      '';
+    const facultySupervisorEsc = facultySupervisorRaw ? this.escHtmlPlain(facultySupervisorRaw) : '—';
+
+    const typeEsc = details?.typesLine?.trim() ? this.escHtmlPlain(details.typesLine.trim()) : '—';
+    const modeLabel = this.formatModeForFacultyEmail(details?.mode);
+    const durationEsc = details?.timelineSummary?.trim() ? this.escHtmlPlain(details.timelineSummary.trim()) : '—';
+    const volunteersEsc = details?.volunteersRequired?.trim()
+      ? this.escHtmlPlain(details.volunteersRequired.trim())
+      : '—';
+
+    const studentSubmittedLead = `<p style="margin: 0 0 16px 0;">A student has submitted a community engagement opportunity on CIEL PK and has listed your organization as the project partner.</p>
+        <p style="margin: 0 0 20px 0;">You are requested to review the opportunity details and verify your involvement in this project.</p>`;
+    const facultyOrNeutralLead = `<p style="margin: 0 0 16px 0;">A community engagement opportunity on CIEL PK lists your organization as the project partner.</p>
+        <p style="margin: 0 0 20px 0;">You are requested to review the opportunity details and verify your involvement in this project.</p>`;
+    const defaultLead =
+      details?.studentName?.trim() || details?.institutionName?.trim() || details?.studentUniversity?.trim()
+        ? studentSubmittedLead
+        : facultyOrNeutralLead;
+    const leadParagraph = postFacultyContext
+      ? `<p style="margin: 0 0 16px 0;">${customLead}</p>`
+      : defaultLead;
+
+    const showFacultyPrerequisite =
+      !postFacultyContext && !!details?.studentName?.trim();
+    const facultyFirstNote = showFacultyPrerequisite
+      ? `<p style="font-size: 13px; color: #4b5563; margin: 0 0 20px 0;">Please note that verification may only proceed after the faculty supervisor has approved this opportunity.</p>`
+      : '';
 
     const html = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
-        <h2 style="color: #333;">Partner Verification Required</h2>
-        <p>Hello!</p>
-        <p>A student has claimed to be doing a project at your organization: <strong>${titleEsc}</strong></p>
-        ${detailBlock}
-        ${this.verificationSignInHintHtml()}
-        <p>Please click the button below to verify the site and collaboration:</p>
-        <div style="text-align: center; margin: 30px 0;">
-          <a href="${verifyLink}" style="background-color: #4CAF50; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Verify Collaboration</a>
+      <div style="font-family: Arial, Helvetica, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 10px; color: #1f2937; line-height: 1.55;">
+        <p style="margin: 0 0 16px 0;">Dear ${dearPartner},</p>
+        ${leadParagraph}
+        <p style="margin: 0 0 8px 0; font-weight: bold; color: #111827;">Opportunity Summary</p>
+        <ul style="margin: 0 0 20px 0; padding-left: 20px; color: #374151;">
+          <li style="margin-bottom: 6px;"><strong>Project Title:</strong> ${titleEsc}</li>
+          <li style="margin-bottom: 6px;"><strong>Submitted By:</strong> ${submittedByEsc}</li>
+          <li style="margin-bottom: 6px;"><strong>Institution:</strong> ${institutionEsc}</li>
+          <li style="margin-bottom: 6px;"><strong>Faculty Supervisor:</strong> ${facultySupervisorEsc}</li>
+          <li style="margin-bottom: 6px;"><strong>Opportunity Type:</strong> ${typeEsc}</li>
+          <li style="margin-bottom: 6px;"><strong>Mode:</strong> ${modeLabel}</li>
+          <li style="margin-bottom: 6px;"><strong>Duration:</strong> ${durationEsc}</li>
+          <li style="margin-bottom: 6px;"><strong>Volunteers Required:</strong> ${volunteersEsc}</li>
+        </ul>
+        ${facultyFirstNote}
+        <p style="margin: 0 0 16px 0;">Please click the button below to review the full project details:</p>
+        <div style="text-align: center; margin: 28px 0;">
+          <a href="${verifyLink}" style="background-color: #16a34a; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">${this.escHtmlPlain(ctaLabel)}</a>
         </div>
-        <p style="font-size: 12px; color: #999; margin-top: 30px;">If you are unaware of this, you may safely ignore this email.</p>
-        <p style="font-size: 12px; color: #666;">This link only works after the faculty supervisor has approved the proposal.</p>
+        ${this.verificationSignInHintHtml()}
+        <p style="margin: 20px 0 8px 0;">After reviewing the opportunity, you may:</p>
+        <ul style="margin: 0 0 20px 0; padding-left: 20px; color: #374151;">
+          <li style="margin-bottom: 4px;">Approve</li>
+          <li style="margin-bottom: 4px;">Reject</li>
+          <li style="margin-bottom: 4px;">Send back for revision</li>
+        </ul>
+        <p style="margin: 0 0 20px 0;">Your verification is required before CIEL PK can proceed with final approval.</p>
+        <p style="margin: 0 0 4px 0;">Thank you for your collaboration.</p>
+        <p style="margin: 20px 0 0 0;">Best regards,<br><strong>CIEL PK Team</strong></p>
+        <p style="font-size: 12px; color: #9ca3af; margin-top: 24px;">If you are unaware of this, you may safely ignore this email.</p>
       </div>
     `;
 
@@ -482,7 +584,7 @@ export class MailService {
       await this.transporter.sendMail({
         from,
         to,
-        subject: `Partner Verification Required: ${projectTitle}`,
+        subject: `Verification Request: Community Opportunity Submitted on CIEL PK.`,
         html,
       });
       this.logger.log(`Partner verification email sent to ${to}`);
@@ -535,29 +637,81 @@ export class MailService {
     }
   }
 
+  private formatModeForFacultyEmail(mode?: string): string {
+    if (!mode || !String(mode).trim()) return '—';
+    const m = String(mode).trim().toLowerCase();
+    if (m.includes('remote')) return 'Remote';
+    if (m.includes('hybrid')) return 'Hybrid';
+    if (m.includes('on') && m.includes('site')) return 'On-site';
+    if (m === 'on site' || m === 'onsite') return 'On-site';
+    return this.escHtmlPlain(String(mode).trim());
+  }
+
   async sendFacultyStudentOpportunityVerification(
     to: string,
     projectTitle: string,
     token: string,
     details?: OpportunityVerificationEmailDetails,
+    options?: { returnTo?: string; path?: string },
   ) {
     const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
-    const verifyLink = this.buildProjectVerificationLink(token);
+    const verifyLink = this.buildProjectVerificationLink(token, {
+      mode: 'frontend',
+      path: options?.path || '/verify/faculty',
+      returnTo: options?.returnTo,
+    });
     const titleEsc = this.escHtmlPlain(projectTitle);
-    const detailBlock = this.opportunityVerificationDetailsHtml(details);
+    const facultyGreetingName =
+      details?.facultyReviewerName?.trim() ||
+      details?.facultySupervisionLine?.split('·')[0]?.trim() ||
+      '';
+    const dearLine = facultyGreetingName ? this.escHtmlPlain(facultyGreetingName) : 'Faculty Member';
+    const studentName = details?.studentName?.trim() ? this.escHtmlPlain(details.studentName.trim()) : '—';
+    const institution =
+      details?.institutionName?.trim() ||
+      details?.studentUniversity?.trim() ||
+      '';
+    const institutionEsc = institution ? this.escHtmlPlain(institution) : '—';
+    const department = details?.departmentName?.trim() || '';
+    const departmentEsc = department ? this.escHtmlPlain(department) : '—';
+    const typeEsc = details?.typesLine?.trim() ? this.escHtmlPlain(details.typesLine.trim()) : '—';
+    const modeLabel = this.formatModeForFacultyEmail(details?.mode);
+    const durationEsc = details?.timelineSummary?.trim() ? this.escHtmlPlain(details.timelineSummary.trim()) : '—';
+    const volunteersEsc = details?.volunteersRequired?.trim()
+      ? this.escHtmlPlain(details.volunteersRequired.trim())
+      : '—';
 
     const html = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
-        <h2 style="color: #333;">Faculty approval required</h2>
-        <p>Hello,</p>
-        <p>A student has submitted a community opportunity and listed you as the supervising faculty for <strong>${titleEsc}</strong>.</p>
-        ${detailBlock}
-        ${this.verificationSignInHintHtml()}
-        <p>Please review and approve using the link below:</p>
-        <div style="text-align: center; margin: 30px 0;">
-          <a href="${verifyLink}" style="background-color: #2563eb; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Approve as faculty supervisor</a>
+      <div style="font-family: Arial, Helvetica, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 10px; color: #1f2937; line-height: 1.55;">
+        <p style="margin: 0 0 16px 0;">Dear ${dearLine},</p>
+        <p style="margin: 0 0 16px 0;">A student has submitted a new opportunity on CIEL PK and listed you as the faculty reviewer for this project.</p>
+        <p style="margin: 0 0 20px 0;">You are requested to review the opportunity details and provide your approval decision.</p>
+        <p style="margin: 0 0 8px 0; font-weight: bold; color: #111827;">Opportunity Summary</p>
+        <ul style="margin: 0 0 20px 0; padding-left: 20px; color: #374151;">
+          <li style="margin-bottom: 6px;"><strong>Project Title:</strong> ${titleEsc}</li>
+          <li style="margin-bottom: 6px;"><strong>Submitted By:</strong> ${studentName}</li>
+          <li style="margin-bottom: 6px;"><strong>Institution:</strong> ${institutionEsc}</li>
+          <li style="margin-bottom: 6px;"><strong>Department:</strong> ${departmentEsc}</li>
+          <li style="margin-bottom: 6px;"><strong>Opportunity Type:</strong> ${typeEsc}</li>
+          <li style="margin-bottom: 6px;"><strong>Mode:</strong> ${modeLabel}</li>
+          <li style="margin-bottom: 6px;"><strong>Duration:</strong> ${durationEsc}</li>
+          <li style="margin-bottom: 6px;"><strong>Volunteers Required:</strong> ${volunteersEsc}</li>
+        </ul>
+        <p style="margin: 0 0 16px 0;">Please click the button below to view the complete opportunity details:</p>
+        <div style="text-align: center; margin: 28px 0;">
+          <a href="${verifyLink}" style="background-color: #16a34a; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">View Opportunity Details</a>
         </div>
-        <p style="font-size: 12px; color: #999; margin-top: 30px;">If you did not expect this email, you can ignore it.</p>
+        ${this.verificationSignInHintHtml()}
+        <p style="margin: 20px 0 8px 0;">After reviewing the project, you may:</p>
+        <ul style="margin: 0 0 20px 0; padding-left: 20px; color: #374151;">
+          <li style="margin-bottom: 4px;">Approve</li>
+          <li style="margin-bottom: 4px;">Reject</li>
+          <li style="margin-bottom: 4px;">Send back for revision</li>
+        </ul>
+        <p style="margin: 0 0 20px 0;">Please note that CIEL will proceed with final approval only after all required verifications are completed.</p>
+        <p style="margin: 0 0 4px 0;">Thank you for your support.</p>
+        <p style="margin: 20px 0 0 0;">Best regards,<br><strong>CIEL PK Team</strong></p>
+        <p style="font-size: 12px; color: #9ca3af; margin-top: 24px;">If you did not expect this email, you can ignore it.</p>
       </div>
     `;
 
@@ -565,12 +719,142 @@ export class MailService {
       await this.transporter.sendMail({
         from,
         to,
-        subject: `Faculty approval required: ${projectTitle}`,
+        subject: `Approval Request: Student Opportunity Submitted on CIEL PK.`,
         html,
       });
       this.logger.log(`Faculty student-opportunity verification email sent to ${to}`);
     } catch (error) {
       this.logger.error(`Failed to send faculty verification email to ${to}`, error.stack);
+    }
+  }
+
+  async sendStudentOpportunityStatusUpdate(
+    to: string,
+    projectTitle: string,
+    subjectPrefix: string,
+    title: string,
+    message: string,
+    reason?: string | null,
+  ) {
+    const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
+    const titleEsc = this.escHtmlPlain(projectTitle);
+    const messageEsc = this.escHtmlPlain(message);
+    const reasonBlock =
+      reason && reason.trim()
+        ? `<p style="margin:16px 0 0 0;"><strong>Reason / feedback:</strong></p><p style="background:#f8fafc;border-left:4px solid #94a3b8;padding:12px 14px;margin:8px 0 0 0;color:#334155;">${this.escHtmlPlain(
+            reason.trim(),
+          )}</p>`
+        : '';
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">${this.escHtmlPlain(title)}</h2>
+        <p><strong>${titleEsc}</strong></p>
+        <p>${messageEsc}</p>
+        ${reasonBlock}
+      </div>
+    `;
+
+    try {
+      await this.transporter.sendMail({
+        from,
+        to,
+        subject: `${subjectPrefix}: ${projectTitle}`,
+        html,
+      });
+      this.logger.log(`Student opportunity status email sent to ${to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send student opportunity status email to ${to}`, error.stack);
+    }
+  }
+
+  /** Sent when CIEL admin approves a student-created opportunity (fully live). */
+  async sendStudentOpportunityFullyApprovedEmail(
+    to: string,
+    studentName: string,
+    projectTitle: string,
+    opportunityId?: string,
+  ) {
+    const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
+    const nameEsc = studentName?.trim() ? this.escHtmlPlain(studentName.trim()) : 'Student';
+    const titleEsc = this.escHtmlPlain(projectTitle);
+    const dashboardPath =
+      this.configService.get<string>('FRONTEND_STUDENT_DASHBOARD_PATH') || '/dashboard';
+    const startLink = this.buildFrontendLink(dashboardPath.startsWith('/') ? dashboardPath : `/${dashboardPath}`, {
+      opportunity: opportunityId,
+    });
+
+    const html = `
+      <div style="font-family: Arial, Helvetica, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 10px; color: #1f2937; line-height: 1.55;">
+        <p style="margin: 0 0 16px 0;">Dear ${nameEsc},</p>
+        <p style="margin: 0 0 16px 0;">Great news — your opportunity has been fully approved on CIEL PK and is now live.</p>
+        <p style="margin: 0 0 20px 0;">You may now begin your report and manage participation for your project through your dashboard.</p>
+        <p style="margin: 0 0 8px 0;"><strong>Opportunity Title:</strong> ${titleEsc}</p>
+        <p style="margin: 20px 0 16px 0;">Please click below to continue:</p>
+        <div style="text-align: center; margin: 28px 0;">
+          <a href="${startLink}" style="background-color: #16a34a; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">Start Report</a>
+        </div>
+        <p style="margin: 0 0 20px 0;">You can also track volunteer participation and project progress from your dashboard.</p>
+        <p style="margin: 20px 0 0 0;">Best regards,<br><strong>CIEL PK Team</strong></p>
+      </div>
+    `;
+
+    try {
+      await this.transporter.sendMail({
+        from,
+        to,
+        subject: `Your Opportunity Has Been Approved on CIEL PK!`,
+        html,
+      });
+      this.logger.log(`Student opportunity fully approved email sent to ${to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send student opportunity fully approved email to ${to}`, error.stack);
+    }
+  }
+
+  async sendAdminOpportunityReviewNeeded(
+    projectTitle: string,
+    opportunityId: string,
+    stageLabel: string,
+  ) {
+    const recipientsRaw =
+      this.configService.get<string>('ADMIN_REVIEW_EMAILS') ||
+      this.configService.get<string>('ADMIN_EMAILS') ||
+      '';
+    const recipients = recipientsRaw
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean);
+
+    if (!recipients.length) {
+      this.logger.warn(`Skipped admin review email for ${opportunityId}; no ADMIN_REVIEW_EMAILS configured.`);
+      return;
+    }
+
+    const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
+    const adminLink = this.buildFrontendLink('/dashboard/admin/opportunities', {
+      opportunity: opportunityId,
+      tab: 'pending',
+    });
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">Opportunity ready for admin review</h2>
+        <p><strong>${this.escHtmlPlain(projectTitle)}</strong> is now awaiting admin review after ${this.escHtmlPlain(stageLabel)}.</p>
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${adminLink}" style="background-color: #2563eb; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Open admin queue</a>
+        </div>
+      </div>
+    `;
+
+    try {
+      await this.transporter.sendMail({
+        from,
+        to: recipients.join(', '),
+        subject: `Admin review required: ${projectTitle}`,
+        html,
+      });
+      this.logger.log(`Admin review email sent for opportunity ${opportunityId}`);
+    } catch (error) {
+      this.logger.error(`Failed to send admin review email for ${opportunityId}`, error.stack);
     }
   }
 

@@ -202,6 +202,48 @@ export class PartnersController {
     ) {
         return this.studentReportsService.verifyReport(id, body.action, 'partner', body.reason);
     }
+
+    @Post('approvals/:id/approve')
+    async approveOpportunity(@Request() req, @Param('id') id: string) {
+        const saved = await this.opportunitiesService.partnerDashboardApprove(id, {
+            email: req.user.email || '',
+            organizationId: req.user.organizationId || null,
+        });
+        return {
+            success: true,
+            message: 'Partner approval completed',
+            data: {
+                id: saved.id,
+                partner_approval_status: saved.partnerApprovalStatus,
+                workflow_stage: saved.workflowStage,
+            },
+        };
+    }
+
+    @Post('approvals/:id/reject')
+    async rejectOpportunity(
+        @Request() req,
+        @Param('id') id: string,
+        @Body() body: { reason?: string },
+    ) {
+        const saved = await this.opportunitiesService.partnerDashboardReject(
+            id,
+            {
+                email: req.user.email || '',
+                organizationId: req.user.organizationId || null,
+            },
+            body?.reason,
+        );
+        return {
+            success: true,
+            message: 'Partner rejection submitted',
+            data: {
+                id: saved.id,
+                partner_approval_status: saved.partnerApprovalStatus,
+                workflow_stage: saved.workflowStage,
+            },
+        };
+    }
 }
 
 // Explicit alias controller for singular /partner routes
@@ -259,5 +301,47 @@ export class PartnerAliasController {
             dto.status,
             req.user.organizationId
         );
+    }
+
+    @Post('approvals/:id/approve')
+    async approveOpportunity(@Request() req, @Param('id') id: string) {
+        const saved = await this.opportunitiesService.partnerDashboardApprove(id, {
+            email: req.user.email || '',
+            organizationId: req.user.organizationId || null,
+        });
+        return {
+            success: true,
+            message: 'Partner approval completed',
+            data: {
+                id: saved.id,
+                partner_approval_status: saved.partnerApprovalStatus,
+                workflow_stage: saved.workflowStage,
+            },
+        };
+    }
+
+    @Post('approvals/:id/reject')
+    async rejectOpportunity(
+        @Request() req,
+        @Param('id') id: string,
+        @Body() body: { reason?: string },
+    ) {
+        const saved = await this.opportunitiesService.partnerDashboardReject(
+            id,
+            {
+                email: req.user.email || '',
+                organizationId: req.user.organizationId || null,
+            },
+            body?.reason,
+        );
+        return {
+            success: true,
+            message: 'Partner rejection submitted',
+            data: {
+                id: saved.id,
+                partner_approval_status: saved.partnerApprovalStatus,
+                workflow_stage: saved.workflowStage,
+            },
+        };
     }
 }

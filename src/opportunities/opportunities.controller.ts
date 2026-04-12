@@ -54,11 +54,22 @@ export class OpportunitiesController {
         if (!data) {
             throw new NotFoundException('Opportunity not found');
         }
+        const status =
+            data.workflowStage === 'live'
+                ? 'live'
+                : ['pending_faculty', 'pending_partner', 'pending_admin'].includes(data.workflowStage || '')
+                    ? 'pending_verification'
+                    : data.workflowStage === 'rejected'
+                        ? 'rejected'
+                        : data.workflowStage === 'revision'
+                            ? 'revision'
+                            : data.status;
         // Duplicate workflow keys in snake_case for frontend badges (entity fields are camelCase).
         return {
             success: true,
             data: {
                 ...data,
+                status,
                 workflow_stage: data.workflowStage ?? null,
                 faculty_approval_status: data.facultyApprovalStatus ?? null,
                 partner_approval_status: data.partnerApprovalStatus ?? null,

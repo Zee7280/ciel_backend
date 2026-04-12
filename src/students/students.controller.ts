@@ -58,8 +58,21 @@ export class StudentsController {
     }
 
     @Post('opportunities')
-    getOpportunitiesPost(@Request() req, @Query() query) {
-        return this.studentsService.getOpportunities(query, req.user.id);
+    getOpportunitiesPost(
+        @Request() req,
+        @Query() query,
+        @Body() body?: { student_id?: string; studentId?: string },
+    ) {
+        const requestedStudentId = body?.student_id || body?.studentId;
+        const studentContextId =
+            requestedStudentId && (req.user?.role === 'admin' || requestedStudentId === req.user.id)
+                ? requestedStudentId
+                : req.user.id;
+
+        return this.studentsService.getOpportunities(
+            { ...query, ...body, student_id: studentContextId },
+            studentContextId,
+        );
     }
 
     @Post('projects')

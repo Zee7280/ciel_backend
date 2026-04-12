@@ -16,6 +16,7 @@ import { MailModule } from '../mail/mail.module';
 import { StudentOpportunitiesController } from './student-opportunities.controller';
 import { OpportunityWorkflowService } from './opportunity-workflow.service';
 import { VerificationVerifyAuthGuard } from '../auth/verification-verify-auth.guard';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
     imports: [
@@ -23,7 +24,8 @@ import { VerificationVerifyAuthGuard } from '../auth/verification-verify-auth.gu
         OrganizationsModule,
         UsersModule,
         EngagementModule,
-        MailModule
+        MailModule,
+        NotificationsModule,
     ],
     controllers: [OpportunitiesController, AdminOpportunitiesController, PublicOpportunitiesController, ParticipantsController, StudentOpportunitiesController],
     providers: [OpportunitiesService, OpportunityWorkflowService, VerificationVerifyAuthGuard],

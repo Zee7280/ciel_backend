@@ -11,8 +11,9 @@ import { User } from '../users/entities/user.entity';
 import { UserRole } from '../users/enums/user-role.enum';
 import { MailService, OpportunityVerificationEmailDetails } from '../mail/mail.service';
 import { randomUUID } from 'crypto';
-import { OpportunityWorkflowService } from './opportunity-workflow.service';
+import { OpportunityWorkflowService, WORKFLOW_STAGE } from './opportunity-workflow.service';
 import { isProjectVerificationAuthRequired } from '../common/project-verification-auth.util';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class OpportunitiesService {
@@ -28,6 +29,7 @@ export class OpportunitiesService {
         private organizationsService: OrganizationsService,
         private engagementService: EngagementService,
         private mailService: MailService,
+        private notificationsService: NotificationsService,
         private readonly opportunityWorkflow: OpportunityWorkflowService,
     ) { }
 
@@ -113,10 +115,36 @@ export class OpportunitiesService {
         if (sup && typeof sup.partner_org_name === 'string' && sup.partner_org_name.trim()) {
             partnerOrg = sup.partner_org_name.trim();
         }
-        const po = opp.partner_organization as { organization_name?: string } | undefined;
+        const po = opp.partner_organization as {
+            organization_name?: string;
+            contact_person_name?: string;
+        } | undefined;
         if (!partnerOrg && po?.organization_name?.trim()) partnerOrg = po.organization_name.trim();
-        const collab = opp.external_partner_collaboration as { organization_name?: string } | undefined;
+        const collab = opp.external_partner_collaboration as {
+            organization_name?: string;
+            contact_person_name?: string;
+            contact_name?: string;
+        } | undefined;
         if (!partnerOrg && collab?.organization_name?.trim()) partnerOrg = collab.organization_name.trim();
+        const ectPartner = opp.executing_context?.partner as {
+            organization_name?: string;
+            contact_person_name?: string;
+            contact_name?: string;
+        } | undefined;
+        if (!partnerOrg && ectPartner?.organization_name?.trim()) partnerOrg = ectPartner.organization_name.trim();
+
+        let partnerRecipientName: string | undefined;
+        const supPartnerContact =
+            sup && typeof sup === 'object' && typeof sup.partner_contact_person === 'string' && sup.partner_contact_person.trim()
+                ? sup.partner_contact_person.trim()
+                : undefined;
+        if (po?.contact_person_name?.trim()) partnerRecipientName = po.contact_person_name.trim();
+        else if (collab?.contact_person_name?.trim()) partnerRecipientName = collab.contact_person_name.trim();
+        else if (collab?.contact_name?.trim()) partnerRecipientName = collab.contact_name.trim();
+        else if (ectPartner?.contact_person_name?.trim()) partnerRecipientName = ectPartner.contact_person_name.trim();
+        else if (ectPartner?.contact_name?.trim()) partnerRecipientName = ectPartner.contact_name.trim();
+        else if (supPartnerContact) partnerRecipientName = supPartnerContact;
+        else if (partnerOrg) partnerRecipientName = partnerOrg;
 
         const ect = opp.executing_context as { type?: string } | undefined;
         let executionSummary: string | undefined;
@@ -138,6 +166,29 @@ export class OpportunitiesService {
         const loc = opp.location as { city?: string; venue?: string } | undefined;
         const locParts = [loc?.city, loc?.venue].filter((x): x is string => typeof x === 'string' && !!x.trim());
 
+        const scope = opp.participation_scope as { creator_university_name?: string } | null | undefined;
+        const creatorUni =
+            scope && typeof scope.creator_university_name === 'string' && scope.creator_university_name.trim()
+                ? scope.creator_university_name.trim()
+                : undefined;
+        const institutionName = meta.studentUniversity?.trim() || creatorUni;
+
+        let facultyReviewerName: string | undefined;
+        let departmentName: string | undefined;
+        if (sup && typeof sup === 'object') {
+            if (typeof sup.supervisor_name === 'string' && sup.supervisor_name.trim()) {
+                facultyReviewerName = sup.supervisor_name.trim();
+            }
+            if (typeof sup.faculty_department === 'string' && sup.faculty_department.trim()) {
+                departmentName = sup.faculty_department.trim();
+            }
+        }
+
+        let volunteersRequired: string | undefined;
+        if (timeline && typeof timeline === 'object' && timeline.volunteers_required != null && timeline.volunteers_required !== '') {
+            volunteersRequired = String(timeline.volunteers_required);
+        }
+
         return {
             opportunityId: opp.id,
             mode: opp.mode || undefined,
@@ -146,11 +197,16 @@ export class OpportunitiesService {
             locationSummary: locParts.length ? locParts.join(', ') : undefined,
             sdgLabel,
             partnerOrganization: partnerOrg,
+            partnerRecipientName,
             executionSummary,
             facultySupervisionLine: supervisorBits.length ? supervisorBits.join(' · ') : undefined,
             objectivesPreview,
             studentName: meta.studentName,
             studentUniversity: meta.studentUniversity,
+            institutionName,
+            facultyReviewerName,
+            departmentName,
+            volunteersRequired,
             facultyAuthorName: meta.facultyAuthorName,
             facultyAuthorEmail: meta.facultyAuthorEmail,
         };
@@ -387,6 +443,348 @@ export class OpportunitiesService {
         };
     }
 
+    private readonly publicLiveStatuses = ['active', 'live', 'open', 'recruiting'];
+
+    private normalizeOpportunityStatus(status?: string | null): string | null {
+        const normalized = (status || '').trim().toLowerCase();
+        if (!normalized) return null;
+        if (this.publicLiveStatuses.includes(normalized)) return 'active';
+        if (['completed', 'complete', 'verified', 'finalized'].includes(normalized)) return 'completed';
+        if (['closed', 'inactive', 'draft', 'rejected', 'cancelled', 'canceled'].includes(normalized)) {
+            return 'closed';
+        }
+        return normalized;
+    }
+
+    private buildOpportunityOrganization(
+        opp: Opportunity,
+        orgFallback?: { id: string | null; name: string | null; logo_url: string | null } | null,
+    ) {
+        if (opp.organization) {
+            return {
+                id: opp.organization.id,
+                name: opp.organization.name,
+                logo_url: opp.organization.logoUrl,
+            };
+        }
+        return orgFallback || null;
+    }
+
+    private buildPublicOpportunityPayload(
+        opp: Opportunity,
+        occupiedSeats: number,
+        orgFallback?: { id: string | null; name: string | null; logo_url: string | null } | null,
+        detail = false,
+    ) {
+        const volunteersRequired = opp.timeline?.volunteers_required || 0;
+        const organization = this.buildOpportunityOrganization(opp, orgFallback);
+        const organizationName =
+            organization?.name ||
+            opp.partner_organization?.organization_name ||
+            opp.executing_organization?.name ||
+            null;
+
+        const base = {
+            id: opp.id,
+            title: opp.title,
+            description: opp.objectives?.description || '',
+            status: this.getApiOpportunityStatus(opp),
+            mode: opp.mode,
+            types: opp.types,
+            sdg: opp.sdg_info?.sdg_id || opp.sdg || null,
+            sdg_info: opp.sdg_info,
+            organization_name: organizationName,
+            organization,
+            participant_count: occupiedSeats,
+            remaining_seats: Math.max(0, volunteersRequired - occupiedSeats),
+            volunteersNeeded: volunteersRequired,
+            location: opp.location,
+            timeline: opp.timeline,
+            start_date: opp.timeline?.start_date,
+            end_date: opp.timeline?.end_date,
+            from_time: opp.timeline?.from_time,
+            to_time: opp.timeline?.to_time,
+            ...this.getWorkflowResponseFields(opp),
+        };
+
+        if (!detail) {
+            return {
+                ...base,
+                participation_scope: opp.participation_scope,
+                executing_context: opp.executing_context,
+                executing_organization: opp.executing_organization,
+                partner_organization: opp.partner_organization,
+                safety_supervision_declaration: opp.safety_supervision_declaration,
+                safety_declaration: opp.safety_declaration,
+                visibility_and_academic_linkage: opp.visibility_and_academic_linkage,
+                submission_confirmations: opp.submission_confirmations,
+                external_partner_collaboration: opp.external_partner_collaboration,
+                academic_linkage: opp.academic_linkage,
+            };
+        }
+
+        return {
+            ...base,
+            objectives: opp.objectives,
+            activity_details: opp.activity_details,
+            supervision: opp.supervision,
+            verification_method: opp.verification_method,
+            participation_scope: opp.participation_scope,
+            executing_context: opp.executing_context,
+            executing_organization: opp.executing_organization,
+            partner_organization: opp.partner_organization,
+            safety_supervision_declaration: opp.safety_supervision_declaration,
+            safety_declaration: opp.safety_declaration,
+            visibility_and_academic_linkage: opp.visibility_and_academic_linkage,
+            submission_confirmations: opp.submission_confirmations,
+            external_partner_collaboration: opp.external_partner_collaboration,
+            academic_linkage: opp.academic_linkage,
+        };
+    }
+
+    private getApiOpportunityStatus(opp: Opportunity): string | null {
+        if (opp.workflowStage === WORKFLOW_STAGE.LIVE) return 'live';
+        if (
+            opp.workflowStage === WORKFLOW_STAGE.PENDING_FACULTY ||
+            opp.workflowStage === WORKFLOW_STAGE.PENDING_PARTNER ||
+            opp.workflowStage === WORKFLOW_STAGE.PENDING_ADMIN
+        ) {
+            return 'pending_verification';
+        }
+        if (opp.workflowStage === WORKFLOW_STAGE.REJECTED) return 'rejected';
+        if (opp.workflowStage === WORKFLOW_STAGE.REVISION) return 'revision';
+        const normalized = this.normalizeOpportunityStatus(opp.status);
+        return normalized === 'active' ? 'live' : normalized;
+    }
+
+    private getWorkflowResponseFields(opp: Opportunity) {
+        return {
+            workflow_stage: opp.workflowStage ?? null,
+            faculty_approval_status: opp.facultyApprovalStatus ?? null,
+            partner_approval_status: opp.partnerApprovalStatus ?? null,
+            admin_approval_status: opp.adminApprovalStatus ?? null,
+        };
+    }
+
+    /** Public directory: honor org/creator visibility flags only. Participation rules apply at apply/enroll time. */
+    private isPubliclyVisibleOpportunity(opp: Opportunity): boolean {
+        const linkage = opp.visibility_and_academic_linkage;
+        const explicitType =
+            linkage && typeof linkage.visibility_type === 'string'
+                ? linkage.visibility_type.trim().toLowerCase()
+                : '';
+
+        if (explicitType) {
+            return !['own_university_only', 'restricted_specific_universities', 'restricted'].includes(
+                explicitType,
+            );
+        }
+
+        // Student flow defaults top-level `visibility` to "restricted" while scope lives in
+        // participation_scope; treat that default as public listing. Faculty/org "restricted"
+        // without linkage still suppresses the directory (previous behavior).
+        const legacy = String(opp.visibility || '').trim().toLowerCase();
+        if (['own_university_only', 'restricted_specific_universities'].includes(legacy)) {
+            return false;
+        }
+        if (legacy === 'restricted' && !opp.isStudentCreated) {
+            return false;
+        }
+        return true;
+    }
+
+    private getFacultyApprovalReturnTo(opportunityId: string): string {
+        return `/dashboard/faculty/approvals?opportunity=${encodeURIComponent(opportunityId)}&tab=pending`;
+    }
+
+    private getPartnerApprovalReturnTo(opportunityId: string): string {
+        return `/dashboard/partner/verify?opportunity=${encodeURIComponent(opportunityId)}&tab=pending`;
+    }
+
+    private async getOpportunityCreatorContact(opportunity: Opportunity) {
+        if (!opportunity.creatorId) return null;
+        return this.usersRepository.findOne({
+            where: { id: opportunity.creatorId },
+            select: ['id', 'email', 'name', 'university', 'institution'],
+        });
+    }
+
+    private async notifyStudentOpportunityUpdate(
+        opportunity: Opportunity,
+        input: {
+            title: string;
+            message: string;
+            emailSubject: string;
+            emailTitle?: string;
+            emailMessage?: string;
+            reason?: string | null;
+            /** When true, only in-app notification is sent (no generic status email). */
+            skipStatusEmail?: boolean;
+        },
+    ) {
+        const creator = await this.getOpportunityCreatorContact(opportunity);
+        if (!creator) return;
+
+        if (creator.id) {
+            try {
+                await this.notificationsService.createApprovalNotification(
+                    creator.id,
+                    input.title,
+                    input.message,
+                );
+            } catch (error) {
+                console.warn(
+                    'Failed to create student notification',
+                    (error as Error).message,
+                );
+            }
+        }
+
+        if (creator.email && !input.skipStatusEmail) {
+            try {
+                await this.mailService.sendStudentOpportunityStatusUpdate(
+                    creator.email,
+                    opportunity.title,
+                    input.emailSubject,
+                    input.emailTitle || input.title,
+                    input.emailMessage || input.message,
+                    input.reason,
+                );
+            } catch (error) {
+                console.warn(
+                    'Failed to send student opportunity update email',
+                    (error as Error).message,
+                );
+            }
+        }
+    }
+
+    private async sendPartnerApprovalEmail(opportunity: Opportunity) {
+        if (!opportunity.partnerToken) return;
+        const partnerEmail = this.resolvePartnerEmailFromOpportunity(opportunity);
+        if (!partnerEmail) return;
+
+        const creator = await this.getOpportunityCreatorContact(opportunity);
+        const details = this.buildOpportunityVerificationEmailDetails(opportunity, {
+            studentName: creator?.name || undefined,
+            studentUniversity: creator?.university || creator?.institution || undefined,
+        });
+
+        try {
+            await this.mailService.sendPartnerVerification(
+                partnerEmail,
+                opportunity.title,
+                opportunity.partnerToken,
+                details,
+                {
+                    path: '/verify-project',
+                    returnTo: this.getPartnerApprovalReturnTo(opportunity.id),
+                    introText:
+                        `The faculty supervisor has approved <strong>${this.escHtml(opportunity.title)}</strong>. ` +
+                        'Please review the partner execution scope to continue this opportunity in CIEL.',
+                    ctaLabel: 'Review partner approval',
+                },
+            );
+        } catch (error) {
+            console.warn('Failed to send partner approval email', (error as Error).message);
+        }
+    }
+
+    private async sendAdminReviewEmail(opportunity: Opportunity, stageLabel: string) {
+        try {
+            await this.mailService.sendAdminOpportunityReviewNeeded(
+                opportunity.title,
+                opportunity.id,
+                stageLabel,
+            );
+        } catch (error) {
+            console.warn('Failed to send admin review email', (error as Error).message);
+        }
+    }
+
+    private escHtml(input: string) {
+        return String(input)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    private async handleFacultyApprovedSideEffects(opportunity: Opportunity) {
+        if (!opportunity.isStudentCreated) return;
+
+        if (opportunity.workflowStage === WORKFLOW_STAGE.PENDING_PARTNER) {
+            await this.sendPartnerApprovalEmail(opportunity);
+            await this.notifyStudentOpportunityUpdate(opportunity, {
+                title: 'Faculty Approved',
+                message:
+                    'Your opportunity has passed faculty review and is now waiting for partner approval.',
+                emailSubject: 'Faculty approved your opportunity',
+            });
+            return;
+        }
+
+        if (opportunity.workflowStage === WORKFLOW_STAGE.PENDING_ADMIN) {
+            await this.sendAdminReviewEmail(opportunity, 'faculty approval');
+            await this.notifyStudentOpportunityUpdate(opportunity, {
+                title: 'Faculty Approved',
+                message:
+                    'Your opportunity has passed faculty review and is now waiting for admin approval.',
+                emailSubject: 'Faculty approved your opportunity',
+            });
+        }
+    }
+
+    private async handlePartnerApprovedSideEffects(opportunity: Opportunity) {
+        await this.sendAdminReviewEmail(opportunity, 'partner approval');
+
+        if (!opportunity.isStudentCreated) return;
+
+        await this.notifyStudentOpportunityUpdate(opportunity, {
+            title: 'Partner Approved',
+            message:
+                'Your opportunity has passed partner review and is now waiting for admin approval.',
+            emailSubject: 'Partner approved your opportunity',
+        });
+    }
+
+    private async handleAdminApprovedSideEffects(opportunity: Opportunity) {
+        if (!opportunity.isStudentCreated) return;
+
+        await this.notifyStudentOpportunityUpdate(opportunity, {
+            title: 'Admin Approved',
+            message: 'Your opportunity has passed admin review.',
+            emailSubject: 'Admin approved your opportunity',
+            skipStatusEmail: true,
+        });
+
+        await this.notifyStudentOpportunityUpdate(opportunity, {
+            title: 'Opportunity Live',
+            message: 'Your opportunity is now live on CIEL.',
+            emailSubject: 'Your opportunity is now live',
+            emailTitle: 'Your opportunity is live',
+            emailMessage: 'Your opportunity has completed all approvals and is now live on CIEL.',
+            skipStatusEmail: true,
+        });
+
+        const creator = await this.getOpportunityCreatorContact(opportunity);
+        if (creator?.email) {
+            try {
+                await this.mailService.sendStudentOpportunityFullyApprovedEmail(
+                    creator.email,
+                    creator.name || 'Student',
+                    opportunity.title,
+                    opportunity.id,
+                );
+            } catch (error) {
+                console.warn(
+                    'Failed to send student fully approved opportunity email',
+                    (error as Error).message,
+                );
+            }
+        }
+    }
+
     async create(userId: string, createOpportunityDto: CreateOpportunityDto) {
         const user = await this.usersRepository.findOne({ where: { id: userId } });
         if (!user) {
@@ -482,7 +880,10 @@ export class OpportunitiesService {
                         facultyAuthorName: user.name || undefined,
                         facultyAuthorEmail: user.email || undefined,
                     });
-                    await this.mailService.sendPartnerVerification(pe, saved.title, facultyPartnerToken, verifyDetails);
+                    await this.mailService.sendPartnerVerification(pe, saved.title, facultyPartnerToken, verifyDetails, {
+                        path: '/verify-project',
+                        returnTo: this.getPartnerApprovalReturnTo(saved.id),
+                    });
                 } catch (e) {
                     console.warn('Failed to send faculty opportunity partner verification email', (e as Error).message);
                 }
@@ -596,6 +997,10 @@ export class OpportunitiesService {
                 saved.title,
                 saved.faculty_verification_token,
                 studentVerifyDetails,
+                {
+                    path: '/verify/faculty',
+                    returnTo: this.getFacultyApprovalReturnTo(saved.id),
+                },
             );
         } catch (e) {
             console.warn('Failed to send faculty verification email', (e as Error).message);
@@ -608,6 +1013,10 @@ export class OpportunitiesService {
                     saved.title,
                     partnerToken,
                     studentVerifyDetails,
+                    {
+                        path: '/verify-project',
+                        returnTo: this.getPartnerApprovalReturnTo(saved.id),
+                    },
                 );
             } catch (e) {
                 console.warn('Failed to send partner verification email', (e as Error).message);
@@ -682,12 +1091,9 @@ export class OpportunitiesService {
                 return {
                     id: opp.id,
                     title: opp.title,
-                    status: opp.status,
-                    workflow_stage: opp.workflowStage,
+                    status: this.getApiOpportunityStatus(opp),
                     requires_partner_approval: opp.requiresPartnerApproval,
-                    faculty_approval_status: opp.facultyApprovalStatus ?? null,
-                    partner_approval_status: opp.partnerApprovalStatus ?? null,
-                    admin_approval_status: opp.adminApprovalStatus ?? null,
+                    ...this.getWorkflowResponseFields(opp),
                     created_at: opp.createdAt,
                     mode: opp.mode,
                     sdg: opp.sdg_info?.sdg_id || opp.sdg,
@@ -772,6 +1178,7 @@ export class OpportunitiesService {
 
             return {
                 ...opp,
+                status: this.getApiOpportunityStatus(opp),
                 location: opp.location,
                 start_date: opp.timeline?.start_date,
                 end_date: opp.timeline?.end_date,
@@ -793,67 +1200,41 @@ export class OpportunitiesService {
                 submission_confirmations: opp.submission_confirmations,
                 external_partner_collaboration: opp.external_partner_collaboration,
                 academic_linkage: opp.academic_linkage,
-                organization: opp.organization || orgFallback
+                organization: opp.organization || orgFallback,
+                ...this.getWorkflowResponseFields(opp),
             };
         }));
     }
 
     async getPublicOpportunities(filters: any = {}) {
-        // Only admin-approved, live opportunities appear on the marketing site and public listings.
-        const query: any = { status: 'active', admin_approved: true };
-
+        // Admin-approved opportunities that are "live" for students: either legacy status in the
+        // public set, or workflow live (legacy faculty flow can keep status `pending_execution` until
+        // executing org verifies — same rows already surface as live in authenticated APIs).
+        const orgFilter: { organizationId?: string } = {};
         if (filters.partner_id) {
             let filterOrgId = filters.partner_id;
-            // Resolve if it's a user ID
             const checkUserOrg = await this.organizationsService.getMyOrganization(filters.partner_id);
             if (checkUserOrg) {
                 filterOrgId = checkUserOrg.id;
             }
-            query.organizationId = filterOrgId;
+            orgFilter.organizationId = filterOrgId;
         }
 
         const opportunities = await this.opportunitiesRepository.find({
-            where: query,
+            where: [
+                { admin_approved: true, status: In(this.publicLiveStatuses), ...orgFilter },
+                { admin_approved: true, workflowStage: WORKFLOW_STAGE.LIVE, ...orgFilter },
+            ],
             relations: ['organization'],
-            order: { createdAt: 'DESC' }
+            order: { createdAt: 'DESC' },
         });
+        const visibleOpportunities = opportunities.filter((opp) => this.isPubliclyVisibleOpportunity(opp));
 
         // We need to count participants for each opportunity
-        const opportunitiesWithCounts = await Promise.all(opportunities.map(async (opp) => {
+        const opportunitiesWithCounts = await Promise.all(visibleOpportunities.map(async (opp) => {
             const occupiedSeats = await this.getOccupiedSeats(opp.id);
-            const volunteersRequired = opp.timeline?.volunteers_required || 0;
             const orgFallback = !opp.organizationId ? await this.getFacultyOrgFallback(opp.facultyId) : null;
-
-            return {
-                id: opp.id,
-                title: opp.title,
-                description: opp.objectives?.description || '',
-                types: opp.types,
-                sdg_info: opp.sdg_info,
-                participant_count: occupiedSeats,
-                remaining_seats: Math.max(0, volunteersRequired - occupiedSeats),
-                status: opp.status,
-                location: opp.location,
-                start_date: opp.timeline?.start_date,
-                end_date: opp.timeline?.end_date,
-                from_time: opp.timeline?.from_time,
-                to_time: opp.timeline?.to_time,
-                participation_scope: opp.participation_scope,
-                executing_context: opp.executing_context,
-                executing_organization: opp.executing_organization,
-                partner_organization: opp.partner_organization,
-                safety_supervision_declaration: opp.safety_supervision_declaration,
-                safety_declaration: opp.safety_declaration,
-                visibility_and_academic_linkage: opp.visibility_and_academic_linkage,
-                submission_confirmations: opp.submission_confirmations,
-                external_partner_collaboration: opp.external_partner_collaboration,
-                academic_linkage: opp.academic_linkage,
-                organization: opp.organization ? {
-                    id: opp.organization?.id,
-                    name: opp.organization?.name,
-                    logo_url: opp.organization?.logoUrl
-                } : orgFallback
-            };
+            return this.buildPublicOpportunityPayload(opp, occupiedSeats, orgFallback);
         }));
 
         return opportunitiesWithCounts;
@@ -861,52 +1242,23 @@ export class OpportunitiesService {
 
     async getPublicOpportunityById(id: string) {
         const opp = await this.opportunitiesRepository.findOne({
-            where: {
-                id,
-                status: 'active',
-                admin_approved: true,
-            },
-            relations: ['organization']
+            where: [
+                { id, admin_approved: true, status: In(this.publicLiveStatuses) },
+                { id, admin_approved: true, workflowStage: WORKFLOW_STAGE.LIVE },
+            ],
+            relations: ['organization'],
         });
 
         if (!opp) {
             throw new NotFoundException('Opportunity not found or not public');
         }
+        if (!this.isPubliclyVisibleOpportunity(opp)) {
+            throw new NotFoundException('Opportunity not found or not public');
+        }
 
         const occupiedSeats = await this.getOccupiedSeats(opp.id);
-        const volunteersRequired = opp.timeline?.volunteers_required || 0;
         const orgFallback = !opp.organizationId ? await this.getFacultyOrgFallback(opp.facultyId) : null;
-
-        return {
-            id: opp.id,
-            title: opp.title,
-            description: opp.objectives?.description || '',
-            types: opp.types,
-            sdg_info: opp.sdg_info,
-            participant_count: occupiedSeats,
-            remaining_seats: Math.max(0, volunteersRequired - occupiedSeats),
-            status: opp.status,
-            location: opp.location,
-            start_date: opp.timeline?.start_date,
-            end_date: opp.timeline?.end_date,
-            from_time: opp.timeline?.from_time,
-            to_time: opp.timeline?.to_time,
-            participation_scope: opp.participation_scope,
-            executing_context: opp.executing_context,
-            executing_organization: opp.executing_organization,
-            partner_organization: opp.partner_organization,
-            safety_supervision_declaration: opp.safety_supervision_declaration,
-            safety_declaration: opp.safety_declaration,
-            visibility_and_academic_linkage: opp.visibility_and_academic_linkage,
-            submission_confirmations: opp.submission_confirmations,
-            external_partner_collaboration: opp.external_partner_collaboration,
-            academic_linkage: opp.academic_linkage,
-            organization: opp.organization ? {
-                id: opp.organization?.id,
-                name: opp.organization?.name,
-                logo_url: opp.organization?.logoUrl
-            } : orgFallback
-        };
+        return this.buildPublicOpportunityPayload(opp, occupiedSeats, orgFallback, true);
     }
 
     async findOne(id: string) {
@@ -962,6 +1314,7 @@ export class OpportunitiesService {
 
             return {
                 ...oppRest,
+                status: this.getApiOpportunityStatus(opp),
                 start_date: opp.timeline?.start_date,
                 end_date: opp.timeline?.end_date,
                 from_time: opp.timeline?.from_time,
@@ -981,10 +1334,7 @@ export class OpportunitiesService {
                 academic_linkage: opp.academic_linkage,
                 execution_verified: opp.execution_verified,
                 admin_approved: opp.admin_approved,
-                workflow_stage: opp.workflowStage,
-                faculty_approval_status: opp.facultyApprovalStatus,
-                partner_approval_status: opp.partnerApprovalStatus,
-                admin_approval_status: opp.adminApprovalStatus,
+                ...this.getWorkflowResponseFields(opp),
                 is_student_created: opp.isStudentCreated,
                 organization: opp.organization || orgFallback,
                 creator: creator
@@ -1009,17 +1359,25 @@ export class OpportunitiesService {
         const opp = await this.findOne(id);
         if (!opp) throw new NotFoundException('Opportunity not found');
         this.opportunityWorkflow.afterAdminApproved(opp);
-        return this.opportunitiesRepository.save(opp);
+        const saved = await this.opportunitiesRepository.save(opp);
+        await this.handleAdminApprovedSideEffects(saved);
+        return saved;
     }
 
     async reject(id: string, reason: string) {
         const opp = await this.findOne(id);
         if (!opp) throw new NotFoundException('Opportunity not found');
-        this.opportunityWorkflow.afterAdminRejected(opp);
-        if (reason) {
-            opp.rejectionReason = reason;
+        this.opportunityWorkflow.afterAdminRejected(opp, reason);
+        const saved = await this.opportunitiesRepository.save(opp);
+        if (saved.isStudentCreated) {
+            await this.notifyStudentOpportunityUpdate(saved, {
+                title: 'Admin Rejected',
+                message: 'Your opportunity was rejected during admin review.',
+                emailSubject: 'Admin rejected your opportunity',
+                reason,
+            });
         }
-        return this.opportunitiesRepository.save(opp);
+        return saved;
     }
 
     async remove(id: string) {
@@ -1144,7 +1502,7 @@ export class OpportunitiesService {
                     message: 'Partner verification was already completed.',
                     data: {
                         title: opportunity.title,
-                        status: opportunity.status,
+                        status: this.getApiOpportunityStatus(opportunity),
                         workflow_stage: opportunity.workflowStage,
                     },
                 };
@@ -1157,12 +1515,13 @@ export class OpportunitiesService {
             this.opportunityWorkflow.afterPartnerVerified(opportunity);
             await this.assignFacultyIdFromSupervisionIfMissing(opportunity);
             await this.opportunitiesRepository.save(opportunity);
+            await this.handlePartnerApprovedSideEffects(opportunity);
             return {
                 success: true,
                 data: {
                     title: opportunity.title,
                     isFullyVerified: false,
-                    status: opportunity.status,
+                    status: this.getApiOpportunityStatus(opportunity),
                     workflow_stage: opportunity.workflowStage,
                 },
                 message: 'Partner verification successful. The opportunity will now be reviewed by CIEL Admin.',
@@ -1190,12 +1549,13 @@ export class OpportunitiesService {
                 this.opportunityWorkflow.afterFacultyVerified(opportunity);
                 await this.assignFacultyIdFromSupervisionIfMissing(opportunity);
                 await this.opportunitiesRepository.save(opportunity);
+                await this.handleFacultyApprovedSideEffects(opportunity);
                 return {
                     success: true,
                     data: {
                         title: opportunity.title,
                         isFullyVerified: false,
-                        status: opportunity.status,
+                        status: this.getApiOpportunityStatus(opportunity),
                         workflow_stage: opportunity.workflowStage,
                     },
                     message: 'Faculty verification successful. The project will continue in the approval workflow.',
@@ -1211,12 +1571,13 @@ export class OpportunitiesService {
             verifiedRole = 'Partner';
             await this.assignFacultyIdFromSupervisionIfMissing(opportunity);
             await this.opportunitiesRepository.save(opportunity);
+            await this.handlePartnerApprovedSideEffects(opportunity);
             return {
                 success: true,
                 data: {
                     title: opportunity.title,
                     isFullyVerified: false,
-                    status: opportunity.status,
+                    status: this.getApiOpportunityStatus(opportunity),
                     workflow_stage: opportunity.workflowStage,
                 },
                 message:
@@ -1241,7 +1602,7 @@ export class OpportunitiesService {
             success: true,
             data: {
                 title: opportunity.title,
-                isFullyVerified: opportunity.status === 'active'
+                isFullyVerified: this.getApiOpportunityStatus(opportunity) === 'live'
             },
             message: `${verifiedRole} verification successful.`
         };
@@ -1271,7 +1632,7 @@ export class OpportunitiesService {
                 message: 'Faculty verification was already completed.',
                 data: {
                     id: opp.id,
-                    status: opp.status,
+                    status: this.getApiOpportunityStatus(opp),
                     workflow_stage: opp.workflowStage,
                 },
             };
@@ -1279,12 +1640,13 @@ export class OpportunitiesService {
         this.opportunityWorkflow.afterFacultyVerified(opp);
         await this.assignFacultyIdFromSupervisionIfMissing(opp);
         await this.opportunitiesRepository.save(opp);
+        await this.handleFacultyApprovedSideEffects(opp);
         return {
             success: true,
             message: 'Faculty verification successful',
             data: {
                 id: opp.id,
-                status: opp.status,
+                status: this.getApiOpportunityStatus(opp),
                 workflow_stage: opp.workflowStage,
             },
         };
@@ -1314,12 +1676,39 @@ export class OpportunitiesService {
         }
     }
 
+    private assertPartnerCanReviewOpportunity(
+        opp: Opportunity,
+        partnerEmail: string,
+        organizationId?: string | null,
+    ) {
+        const expectedEmail = this.resolvePartnerEmailFromOpportunity(opp);
+        const emailMatches =
+            !!expectedEmail &&
+            this.normalizeEmail(expectedEmail) === this.normalizeEmail(partnerEmail);
+        const organizationMatches =
+            !!organizationId &&
+            !!opp.organizationId &&
+            organizationId === opp.organizationId;
+
+        if (!emailMatches && !organizationMatches) {
+            throw new ForbiddenException('You are not the assigned partner reviewer for this opportunity');
+        }
+
+        if (!opp.faculty_verified || opp.workflowStage !== WORKFLOW_STAGE.PENDING_PARTNER) {
+            throw new BadRequestException(
+                'Partner verification is only available after faculty approval.',
+            );
+        }
+    }
+
     async facultyDashboardApprove(opportunityId: string, facultyUserId: string, facultyEmail: string) {
         const opp = await this.findOne(opportunityId);
         if (!opp) throw new NotFoundException('Opportunity not found');
         this.assertFacultyCanReviewStudentOpportunity(opp, facultyUserId, facultyEmail);
         this.opportunityWorkflow.afterFacultyVerified(opp);
-        return this.opportunitiesRepository.save(opp);
+        const saved = await this.opportunitiesRepository.save(opp);
+        await this.handleFacultyApprovedSideEffects(saved);
+        return saved;
     }
 
     async facultyDashboardReject(
@@ -1333,6 +1722,20 @@ export class OpportunitiesService {
         this.assertFacultyCanReviewStudentOpportunity(opp, facultyUserId, facultyEmail);
         this.opportunityWorkflow.afterFacultyRejected(opp, reason);
         const saved = await this.opportunitiesRepository.save(opp);
+        if (opp.isStudentCreated && opp.creatorId) {
+            try {
+                await this.notificationsService.createApprovalNotification(
+                    opp.creatorId,
+                    'Faculty Rejected',
+                    'Your opportunity was rejected during faculty review.',
+                );
+            } catch (e) {
+                console.warn(
+                    'Failed to create faculty rejection notification',
+                    (e as Error).message,
+                );
+            }
+        }
         if (opp.isStudentCreated && opp.creatorId) {
             const student = await this.usersRepository.findOne({
                 where: { id: opp.creatorId },
@@ -1353,6 +1756,48 @@ export class OpportunitiesService {
                 }
             }
         }
+        return saved;
+    }
+
+    async partnerDashboardApprove(
+        opportunityId: string,
+        partner: { email: string; organizationId?: string | null },
+    ) {
+        const opp = await this.findOne(opportunityId);
+        if (!opp) throw new NotFoundException('Opportunity not found');
+
+        if (opp.partnerApprovalStatus === 'approved' && opp.workflowStage === WORKFLOW_STAGE.PENDING_ADMIN) {
+            return opp;
+        }
+
+        this.assertPartnerCanReviewOpportunity(opp, partner.email, partner.organizationId);
+        this.opportunityWorkflow.afterPartnerVerified(opp);
+        const saved = await this.opportunitiesRepository.save(opp);
+        await this.handlePartnerApprovedSideEffects(saved);
+        return saved;
+    }
+
+    async partnerDashboardReject(
+        opportunityId: string,
+        partner: { email: string; organizationId?: string | null },
+        reason?: string,
+    ) {
+        const opp = await this.findOne(opportunityId);
+        if (!opp) throw new NotFoundException('Opportunity not found');
+
+        this.assertPartnerCanReviewOpportunity(opp, partner.email, partner.organizationId);
+        this.opportunityWorkflow.afterPartnerRejected(opp, reason);
+        const saved = await this.opportunitiesRepository.save(opp);
+
+        if (saved.isStudentCreated) {
+            await this.notifyStudentOpportunityUpdate(saved, {
+                title: 'Partner Rejected',
+                message: 'Your opportunity was rejected during partner review.',
+                emailSubject: 'Partner rejected your opportunity',
+                reason,
+            });
+        }
+
         return saved;
     }
 }

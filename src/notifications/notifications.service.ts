@@ -11,6 +11,28 @@ export class NotificationsService {
         private notificationsRepository: Repository<Notification>,
     ) { }
 
+    async createNotification(
+        userId: string,
+        input: { type: string; title: string; message: string },
+    ) {
+        const notification = this.notificationsRepository.create({
+            userId,
+            type: input.type,
+            title: input.title,
+            message: input.message,
+        });
+
+        return this.notificationsRepository.save(notification);
+    }
+
+    async createApprovalNotification(userId: string, title: string, message: string) {
+        return this.createNotification(userId, {
+            type: 'approval',
+            title,
+            message,
+        });
+    }
+
     async findAll(userId: string, query: any) {
         const { status, type } = query;
         const whereClause: any = { userId };

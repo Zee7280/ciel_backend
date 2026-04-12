@@ -739,19 +739,36 @@ export class MailService {
     const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
     const titleEsc = this.escHtmlPlain(projectTitle);
     const messageEsc = this.escHtmlPlain(message);
+    const headingEsc = this.escHtmlPlain(title);
     const reasonBlock =
       reason && reason.trim()
-        ? `<p style="margin:16px 0 0 0;"><strong>Reason / feedback:</strong></p><p style="background:#f8fafc;border-left:4px solid #94a3b8;padding:12px 14px;margin:8px 0 0 0;color:#334155;">${this.escHtmlPlain(
+        ? `<p style="margin:24px 0 0 0;font-size:14px;"><strong>Reason / feedback:</strong></p><p style="background:#f8fafc;border-left:4px solid #94a3b8;padding:12px 14px;margin:8px 0 0 0;color:#334155;font-size:14px;line-height:1.5;">${this.escHtmlPlain(
             reason.trim(),
           )}</p>`
         : '';
     const html = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
-        <h2 style="color: #333;">${this.escHtmlPlain(title)}</h2>
-        <p><strong>${titleEsc}</strong></p>
-        <p>${messageEsc}</p>
-        ${reasonBlock}
-      </div>
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background-color:#f3f4f6;-webkit-text-size-adjust:100%;">
+  <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background-color:#f3f4f6;padding:32px 16px;font-family:Arial,Helvetica,sans-serif;">
+    <tr>
+      <td align="center">
+        <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="max-width:600px;background-color:#ffffff;border:1px solid #e0e0e0;border-radius:10px;">
+          <tr>
+            <td style="padding:40px;color:#111827;">
+              <h1 style="margin:0 0 20px 0;font-size:24px;font-weight:700;line-height:1.3;color:#000000;">${headingEsc}</h1>
+              <p style="margin:0 0 18px 0;font-size:17px;font-weight:700;line-height:1.35;color:#000000;">${titleEsc}</p>
+              <p style="margin:0;font-size:15px;font-weight:400;line-height:1.6;color:#111827;">${messageEsc}</p>
+              ${reasonBlock}
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
     `;
 
     try {

@@ -330,7 +330,6 @@ export class StudentsService {
 
         let applicationStatuses = new Map<string, any>();
         const studentContextId = query?.student_id || query?.studentId || userId;
-        const user = studentContextId ? await this.usersRepository.findOne({ where: { id: studentContextId } }) : null;
 
         if (studentContextId && opportunities.length > 0) {
             const opportunityIds = opportunities.map(o => o.id);
@@ -350,9 +349,8 @@ export class StudentsService {
         const normalizedType = this.normalize(type);
         const normalizedSdg = this.normalize(sdg);
 
+        // Participation scope is enforced in applyToOpportunity, not on the browse list.
         const filtered = opportunities.filter((opportunity) => {
-            const application = applicationStatuses.get(opportunity.id);
-            const isEligible = user ? this.isEligibleForOpportunity(user, opportunity) : true;
             const matchesSdg =
                 !normalizedSdg ||
                 this.normalize(opportunity.sdg) === normalizedSdg ||
@@ -364,7 +362,7 @@ export class StudentsService {
                 (Array.isArray(opportunity.types) &&
                     opportunity.types.some((entry) => this.normalize(entry) === normalizedType));
 
-            return matchesSdg && matchesLocation && matchesType && (isEligible || !!application);
+            return matchesSdg && matchesLocation && matchesType;
         });
 
         const total = filtered.length;
@@ -412,22 +410,6 @@ export class StudentsService {
 
         if (!opportunity) {
             throw new NotFoundException('Opportunity not found');
-        }
-
-        let viewer: User | null = null;
-        if (userId) {
-            viewer = await this.usersRepository.findOne({ where: { id: userId } });
-            if (viewer) {
-                const existingApplication = await this.participantRepository.findOne({
-                    where: {
-                        studentId: userId,
-                        projectId: id,
-                    },
-                });
-                if (!this.isEligibleForOpportunity(viewer, opportunity) && !existingApplication) {
-                    throw new ForbiddenException('You are not allowed to access this opportunity');
-                }
-            }
         }
 
         let applicationStatus: string | null = null;

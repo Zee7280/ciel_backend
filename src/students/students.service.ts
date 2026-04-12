@@ -16,7 +16,11 @@ import { Otp } from './entities/otp.entity';
 import { UsersService } from '../users/users.service';
 import { MailService } from '../mail/mail.service';
 import { EngagementService } from '../engagement/engagement.service';
-import { OpportunityWorkflowService } from '../opportunities/opportunity-workflow.service';
+import {
+    LINE_STATUS,
+    OpportunityWorkflowService,
+    WORKFLOW_STAGE,
+} from '../opportunities/opportunity-workflow.service';
 import { OpportunitiesService } from '../opportunities/opportunities.service';
 
 @Injectable()
@@ -649,6 +653,36 @@ export class StudentsService {
 
         if (dto.sdg_info) {
             opportunity.sdg = dto.sdg_info.sdg_id || opportunity.sdg;
+        }
+
+        // Edit & resubmit: restore actionable queue after faculty/partner rejection.
+        if (opportunity.isStudentCreated && opportunity.workflowStage === WORKFLOW_STAGE.REJECTED) {
+            const wasPartnerRejected = opportunity.partnerApprovalStatus === LINE_STATUS.REJECTED;
+            const wasFacultyRejected =
+                opportunity.facultyApprovalStatus === LINE_STATUS.REJECTED ||
+                opportunity.faculty_verification_status === 'rejected';
+
+            if (wasPartnerRejected) {
+                opportunity.workflowStage = WORKFLOW_STAGE.PENDING_PARTNER;
+                opportunity.status = WORKFLOW_STAGE.PENDING_PARTNER;
+                opportunity.partnerApprovalStatus = LINE_STATUS.PENDING;
+                opportunity.partnerVerified = false;
+            } else if (wasFacultyRejected) {
+                opportunity.workflowStage = WORKFLOW_STAGE.PENDING_FACULTY;
+                opportunity.status = WORKFLOW_STAGE.PENDING_FACULTY;
+                opportunity.facultyApprovalStatus = LINE_STATUS.PENDING;
+                opportunity.faculty_verification_status = WORKFLOW_STAGE.PENDING_FACULTY;
+                opportunity.faculty_verified = false;
+                opportunity.partnerApprovalStatus = opportunity.requiresPartnerApproval
+                    ? LINE_STATUS.PENDING
+                    : LINE_STATUS.NOT_APPLICABLE;
+            }
+
+            // Keep admin lane as pending while resubmission goes back through review queues.
+            if (wasPartnerRejected || wasFacultyRejected) {
+                opportunity.adminApprovalStatus = LINE_STATUS.PENDING;
+                opportunity.admin_approved = false;
+            }
         }
 
         const saved = await this.opportunitiesRepository.save(opportunity);

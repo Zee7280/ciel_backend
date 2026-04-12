@@ -50,7 +50,7 @@ export class OpportunitiesController {
     @UseGuards(JwtAuthGuard)
     @Post('detail')
     async findOne(@Body() getOpportunityDetailDto: GetOpportunityDetailDto) {
-        const data = await this.opportunitiesService.findOne(getOpportunityDetailDto.id);
+        const data = await this.opportunitiesService.findOneWithCreator(getOpportunityDetailDto.id);
         if (!data) {
             throw new NotFoundException('Opportunity not found');
         }

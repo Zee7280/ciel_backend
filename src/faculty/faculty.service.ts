@@ -163,6 +163,20 @@ export class FacultyService {
         // Format according to user request
         const formatted = await Promise.all(opportunities.map(async (opp) => {
             const student = await this.usersRepository.findOne({ where: { id: opp.creatorId } });
+            const latestReport =
+                opp.creatorId
+                    ? await this.studentReportsRepository.findOne({
+                          where: { opportunityId: opp.id, studentId: opp.creatorId },
+                          order: { submission_date: 'DESC' },
+                      })
+                    : null;
+            const metrics = (latestReport?.section1 as { metrics?: { total_verified_hours?: number; eis_score?: number } } | undefined)
+                ?.metrics;
+            const totalHours = Number(metrics?.total_verified_hours ?? 0) || 0;
+            const eisScore = Number(metrics?.eis_score ?? 0) || 0;
+            const impactScore = Number(
+                (latestReport?.section11 as { ai_generated_impact_score?: number } | undefined)?.ai_generated_impact_score ?? 0,
+            ) || 0;
             
             return {
                 id: opp.id,
@@ -173,8 +187,9 @@ export class FacultyService {
                 studentId: student?.registrationNumber || student?.id || 'N/A',
                 studentEmail: student?.email || null,
                 submittedDate: opp.createdAt.toISOString().split('T')[0],
-                totalHours: 0, // Default for new independent opportunities
-                eisScore: 0,   // Default for new independent opportunities
+                totalHours,
+                eisScore,
+                impactScore,
                 sdg: opp.sdg || (opp.sdg_info?.sdg_id) || 'N/A',
                 opportunityStatus: opp.status,
                 workflowStage: opp.workflowStage ?? null,

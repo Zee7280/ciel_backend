@@ -1265,6 +1265,29 @@ export class OpportunitiesService {
         return this.opportunitiesRepository.findOne({ where: { id }, relations: ['organization'] });
     }
 
+    async findOneWithCreator(id: string) {
+        const opportunity = await this.findOne(id);
+        if (!opportunity) return null;
+
+        const creator = opportunity.creatorId
+            ? await this.usersRepository.findOne({
+                  where: { id: opportunity.creatorId },
+                  select: ['id', 'name', 'email'],
+              })
+            : null;
+
+        return {
+            ...opportunity,
+            creator: creator
+                ? {
+                      id: creator.id,
+                      name: creator.name,
+                      email: creator.email,
+                  }
+                : null,
+        };
+    }
+
     // Admin methods
     async findAllPending() {
         // CIEL admin final review: org/partner flows and student-created after faculty (+ partner if any).

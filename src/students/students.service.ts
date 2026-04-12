@@ -471,6 +471,84 @@ export class StudentsService {
         };
     }
 
+    async updateStudentOpportunity(userId: string, opportunityId: string, dto: Partial<CreateOpportunityDto>) {
+        const opportunity = await this.opportunitiesRepository.findOne({
+            where: { id: opportunityId },
+        });
+
+        if (!opportunity) {
+            throw new NotFoundException('Opportunity not found');
+        }
+
+        if (opportunity.creatorId !== userId) {
+            throw new ForbiddenException('You do not have access to this opportunity');
+        }
+
+        if (opportunity.admin_approved || opportunity.status === 'active') {
+            throw new BadRequestException('Approved opportunities cannot be updated');
+        }
+
+        const patchableFields: (keyof CreateOpportunityDto)[] = [
+            'title',
+            'types',
+            'mode',
+            'student_contact',
+            'location',
+            'timeline',
+            'sdg_info',
+            'secondary_sdgs',
+            'objectives',
+            'activity_details',
+            'supervision',
+            'verification_method',
+            'visibility',
+            'restricted_universities',
+            'executing_context',
+            'safety_declaration',
+            'submission_confirmations',
+            'participation_scope',
+            'executing_organization',
+            'partner_organization',
+            'safety_supervision_declaration',
+            'visibility_and_academic_linkage',
+            'external_partner_collaboration',
+            'academic_linkage',
+        ];
+
+        const patch: Partial<Opportunity> = {};
+        for (const field of patchableFields) {
+            const value = dto[field];
+            if (value !== undefined) {
+                patch[field as keyof Opportunity] = value as Opportunity[keyof Opportunity];
+            }
+        }
+
+        const nextRestricted =
+            dto.restricted_universities && dto.restricted_universities.length > 0
+                ? dto.restricted_universities
+                : dto.participation_scope?.creator_university_name
+                    ? [dto.participation_scope.creator_university_name]
+                    : undefined;
+
+        if (nextRestricted !== undefined) {
+            patch.restricted_universities = nextRestricted;
+        }
+
+        Object.assign(opportunity, patch);
+
+        if (dto.sdg_info) {
+            opportunity.sdg = dto.sdg_info.sdg_id || opportunity.sdg;
+        }
+
+        const saved = await this.opportunitiesRepository.save(opportunity);
+
+        return {
+            success: true,
+            data: saved,
+            message: 'Opportunity updated successfully',
+        };
+    }
+
     // Applications (using Timesheets as applications)
     async getApplications(userId: string, status?: string) {
         const whereClause: any = { studentId: userId };

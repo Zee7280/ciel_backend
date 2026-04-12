@@ -1,4 +1,6 @@
 import { Injectable, UnauthorizedException, ConflictException, BadRequestException, NotFoundException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { UsersService } from '../users/users.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { Organization } from '../organizations/entities/organization.entity';
@@ -9,6 +11,9 @@ import { SignupDto } from './dto/signup.dto';
 import { LoginDto } from './dto/login.dto';
 import { MailService } from '../mail/mail.service';
 import { OtpService } from './otp.service';
+import { Opportunity } from '../opportunities/entities/opportunity.entity';
+import { User } from '../users/entities/user.entity';
+import { UserRole } from '../users/enums/user-role.enum';
 
 @Injectable()
 export class AuthService {
@@ -18,7 +23,66 @@ export class AuthService {
         private organizationsService: OrganizationsService,
         private mailService: MailService,
         private otpService: OtpService,
+        @InjectRepository(Opportunity)
+        private opportunitiesRepository: Repository<Opportunity>,
     ) { }
+
+    /**
+     * After a new faculty or partner user registers, link any existing opportunities
+     * that were submitted with their email address but have no facultyId / organizationId yet.
+     * This is best-effort — a failure here must never block the signup response.
+     */
+    private async reconcileNewUser(user: User, org: Organization | null): Promise<void> {
+        const email = (user.email || '').trim().toLowerCase();
+        if (!email) return;
+
+        try {
+            if (user.role === UserRole.FACULTY) {
+                // Set facultyId on opportunities whose supervision email matches this faculty's email
+                await this.opportunitiesRepository
+                    .createQueryBuilder()
+                    .update(Opportunity)
+                    .set({ facultyId: user.id })
+                    .where('"facultyId" IS NULL')
+                    .andWhere(
+                        `(LOWER(TRIM(COALESCE(supervision->>'contact', ''))) = :email`
+                        + ` OR LOWER(TRIM(COALESCE(supervision->>'official_email', ''))) = :email)`,
+                        { email },
+                    )
+                    .execute();
+            } else if (org) {
+                // Partner user: link their organization to opportunities that were submitted
+                // with their email but only have a placeholder org or no org at all.
+                const matching = await this.opportunitiesRepository
+                    .createQueryBuilder('opp')
+                    .leftJoinAndSelect('opp.organization', 'org')
+                    .where(
+                        `(LOWER(TRIM(COALESCE(opp.external_partner_collaboration->>'official_email', ''))) = :email`
+                        + ` OR LOWER(TRIM(COALESCE(opp.supervision->>'external_partner_email', ''))) = :email`
+                        + ` OR LOWER(TRIM(COALESCE(opp.supervision->>'partner_email', ''))) = :email`
+                        + ` OR LOWER(TRIM(COALESCE(opp.executing_context->'partner'->>'official_email', ''))) = :email`
+                        + ` OR LOWER(TRIM(COALESCE(opp.partner_organization->>'official_email', ''))) = :email)`,
+                        { email },
+                    )
+                    .andWhere(
+                        `(opp."organizationId" IS NULL OR org."verificationStatus" = :placeholder)`,
+                        { placeholder: 'unclaimed_student_initiated' },
+                    )
+                    .getMany();
+
+                if (matching.length > 0) {
+                    await this.opportunitiesRepository
+                        .createQueryBuilder()
+                        .update(Opportunity)
+                        .set({ organizationId: org.id })
+                        .whereInIds(matching.map((o) => o.id))
+                        .execute();
+                }
+            }
+        } catch (err) {
+            console.warn('Post-signup reconciliation failed (non-fatal):', (err as Error).message);
+        }
+    }
 
     async signup(signupDto: SignupDto) {
         try {
@@ -57,6 +121,9 @@ export class AuthService {
                 await this.otpService.clearOtpsForEmail(email);
             }
 
+            // Link any pre-existing opportunities that were awaiting this user's email
+            await this.reconcileNewUser(user, organization);
+
             return {
                 success: true,
                 message: 'User created successfully',
@@ -77,7 +144,8 @@ export class AuthService {
     }
 
     async login(loginDto: LoginDto) {
-        const { email, password } = loginDto;
+        const { email: rawLoginEmail, password } = loginDto;
+        const email = rawLoginEmail.trim().toLowerCase();
         const user = await this.usersService.findByEmail(email);
 
         if (!user) {

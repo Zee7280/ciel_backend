@@ -2,6 +2,7 @@ import {
     Controller,
     Get,
     Post,
+    Patch,
     Body,
     Param,
     Query,
@@ -59,6 +60,12 @@ export class StudentController {
     @Post('opportunity')
     createIndependentProject(@Request() req, @Body() createOpportunityDto: CreateOpportunityDto) {
         return this.studentsService.createStudentOpportunity(req.user.id, createOpportunityDto);
+    }
+
+    @Post('opportunity/:id')
+    @Patch('opportunity/:id')
+    updateIndependentProject(@Request() req, @Param('id') id: string, @Body() updateOpportunityDto: Partial<CreateOpportunityDto>) {
+        return this.studentsService.updateStudentOpportunity(req.user.id, id, updateOpportunityDto);
     }
 
     @Post('verify-team-member/send')

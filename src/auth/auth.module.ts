@@ -10,10 +10,11 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtStrategy } from './jwt.strategy';
 import { EmailOtp } from './entities/email-otp.entity';
 import { OtpService } from './otp.service';
+import { Opportunity } from '../opportunities/entities/opportunity.entity';
 
 @Module({
     imports: [
-        TypeOrmModule.forFeature([EmailOtp]),
+        TypeOrmModule.forFeature([EmailOtp, Opportunity]),
         UsersModule,
         OrganizationsModule,
         PassportModule,

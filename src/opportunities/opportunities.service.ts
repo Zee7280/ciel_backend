@@ -704,9 +704,19 @@ export class OpportunitiesService {
         const query = this.opportunitiesRepository.createQueryBuilder('opportunity');
 
         let filterOrgId: string | null = null;
+        // Email-based fallback for student-created opportunities that list this partner's email
+        // in JSON fields but may not yet have the partner's organizationId set.
+        let filterPartnerEmail: string | null = null;
 
-        if (filters.partner_id === 'me' && org) {
-            filterOrgId = org.id;
+        if (filters.partner_id === 'me') {
+            if (org) filterOrgId = org.id;
+            // Resolve requesting user's email for the email-based OR match
+            const meUser = await this.usersRepository.findOne({
+                where: { id: userId },
+                select: ['email'],
+            });
+            const candidate = (meUser?.email || '').trim().toLowerCase();
+            filterPartnerEmail = candidate || null;
         } else if (filters.partner_id && filters.partner_id !== 'me') {
             // Check if it's already an org ID
             try {
@@ -721,8 +731,28 @@ export class OpportunitiesService {
             }
         }
 
-        if (filterOrgId) {
+        if (filterOrgId && filterPartnerEmail) {
+            // Org-owned opportunities OR student-submitted opportunities that mention this partner's email
+            query.andWhere(
+                `(opportunity."organizationId" = :orgId`
+                + ` OR LOWER(TRIM(COALESCE(opportunity.external_partner_collaboration->>'official_email', ''))) = :pe`
+                + ` OR LOWER(TRIM(COALESCE(opportunity.supervision->>'external_partner_email', ''))) = :pe`
+                + ` OR LOWER(TRIM(COALESCE(opportunity.supervision->>'partner_email', ''))) = :pe`
+                + ` OR LOWER(TRIM(COALESCE(opportunity.executing_context->'partner'->>'official_email', ''))) = :pe`
+                + ` OR LOWER(TRIM(COALESCE(opportunity.partner_organization->>'official_email', ''))) = :pe)`,
+                { orgId: filterOrgId, pe: filterPartnerEmail },
+            );
+        } else if (filterOrgId) {
             query.andWhere('opportunity.organizationId = :orgId', { orgId: filterOrgId });
+        } else if (filterPartnerEmail) {
+            query.andWhere(
+                `(LOWER(TRIM(COALESCE(opportunity.external_partner_collaboration->>'official_email', ''))) = :pe`
+                + ` OR LOWER(TRIM(COALESCE(opportunity.supervision->>'external_partner_email', ''))) = :pe`
+                + ` OR LOWER(TRIM(COALESCE(opportunity.supervision->>'partner_email', ''))) = :pe`
+                + ` OR LOWER(TRIM(COALESCE(opportunity.executing_context->'partner'->>'official_email', ''))) = :pe`
+                + ` OR LOWER(TRIM(COALESCE(opportunity.partner_organization->>'official_email', ''))) = :pe)`,
+                { pe: filterPartnerEmail },
+            );
         }
 
         if (filters.status) {

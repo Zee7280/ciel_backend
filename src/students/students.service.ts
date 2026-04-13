@@ -22,6 +22,8 @@ import {
     WORKFLOW_STAGE,
 } from '../opportunities/opportunity-workflow.service';
 import { OpportunitiesService } from '../opportunities/opportunities.service';
+import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
+import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 
 @Injectable()
 export class StudentsService {
@@ -43,6 +45,7 @@ export class StudentsService {
         private engagementService: EngagementService,
         private readonly opportunityWorkflow: OpportunityWorkflowService,
         private readonly opportunitiesService: OpportunitiesService,
+        private readonly opportunityApplicationsService: OpportunityApplicationsService,
     ) { }
 
     private normalize(str?: string | null) {
@@ -50,12 +53,14 @@ export class StudentsService {
     }
 
     private async getOccupiedSeats(opportunityId: string): Promise<number> {
-        return await this.participantRepository.count({
+        const participationSeats = await this.participantRepository.count({
             where: {
                 projectId: opportunityId,
                 status: In(['pending', 'accepted', 'approved', 'verified', 'paid', 'pending_payment_approval', 'pending_ciel_approval', 'pending_faculty_approval'])
             }
         });
+        const pipelineSeats = await this.opportunityApplicationsService.countSeatsInFlight(opportunityId);
+        return participationSeats + pipelineSeats;
     }
 
     private readonly liveOpportunityStatuses = ['active', 'live', 'open', 'recruiting'];
@@ -75,14 +80,30 @@ export class StudentsService {
         const normalized = this.normalize(status);
         if (!normalized) return null;
         if (['pending', 'pending_payment_approval', 'pending_ciel_approval', 'pending_faculty_approval'].includes(normalized)) {
-            return 'pending';
+            return 'pending_approval';
         }
-        if (['approved', 'verified', 'accepted', 'paid', 'finalized'].includes(normalized)) {
+        if (normalized === 'verified') return 'verified';
+        if (['approved', 'accepted', 'paid', 'finalized'].includes(normalized)) {
             return 'approved';
         }
-        if (normalized === 'rejected') return 'rejected';
+        if (['rejected', 'not_approved', 'denied', 'declined'].includes(normalized)) {
+            return 'rejected';
+        }
         if (normalized === 'withdrawn') return 'withdrawn';
         return normalized;
+    }
+
+    /** Participation rows that mean the student is already in (or past) the program — block another apply. */
+    private isParticipationActivelyEnrolled(status?: string | null): boolean {
+        if (!status) return false;
+        return ['approved', 'verified', 'accepted', 'finalized', 'paid'].includes(status);
+    }
+
+    private isParticipationPendingPipeline(status?: string | null): boolean {
+        if (!status) return false;
+        return ['pending', 'pending_payment_approval', 'pending_ciel_approval', 'pending_faculty_approval'].includes(
+            status,
+        );
     }
 
     private isLiveOpportunityStatus(status?: string | null): boolean {
@@ -394,9 +415,10 @@ export class StudentsService {
             order: { createdAt: 'DESC' },
         });
 
-        let applicationStatuses = new Map<string, any>();
+        const participationByOpp = new Map<string, Participation>();
         const studentContextId = query?.student_id || query?.studentId || userId;
 
+        let appByOpp = new Map<string, OpportunityApplication>();
         if (studentContextId && opportunities.length > 0) {
             const opportunityIds = opportunities.map(o => o.id);
             const applications = await this.participantRepository.find({
@@ -407,8 +429,13 @@ export class StudentsService {
             });
 
             applications.forEach(app => {
-                applicationStatuses.set(app.projectId, app);
+                participationByOpp.set(app.projectId, app);
             });
+
+            appByOpp = await this.opportunityApplicationsService.mapCurrentApplicationsForOpportunities(
+                studentContextId,
+                opportunityIds,
+            );
         }
 
         const normalizedLocation = this.normalize(location);
@@ -437,11 +464,14 @@ export class StudentsService {
         return {
             success: true,
             data: await Promise.all(paginated.map(async o => {
-                const app = applicationStatuses.get(o.id);
+                const part = participationByOpp.get(o.id);
+                const app = appByOpp.get(o.id);
                 const occupiedSeats = await this.getOccupiedSeats(o.id);
                 const volunteersRequired = o.timeline?.volunteers_required || 0;
-                const applicationStatus = this.normalizeApplicationStatus(app?.status || null);
-                const hasApplied = !!app;
+                const applicationStatus = app
+                    ? this.opportunityApplicationsService.toPublicApplicationStatus(app.internalStatus, part)
+                    : this.normalizeApplicationStatus(part?.status || null);
+                const hasApplied = !!(app || part);
                 const organizationName = o.organization?.name || 'Unknown';
 
                 return {
@@ -452,9 +482,11 @@ export class StudentsService {
                     remaining_seats: Math.max(0, volunteersRequired - occupiedSeats),
                     description: o.objectives?.description || 'No description',
                     application_status: applicationStatus,
+                    application_stage: app ? this.opportunityApplicationsService.applicationStage(app.internalStatus) : null,
                     has_applied: hasApplied,
-                    payment_status: app ? app.paymentStatus : null,
-                    payment_proof_url: app ? app.paymentProofUrl : null,
+                    hasApplied,
+                    payment_status: part ? part.paymentStatus : null,
+                    payment_proof_url: part ? part.paymentProofUrl : null,
                     status: this.getApiOpportunityStatus(o),
                     ...this.getWorkflowResponseFields(o),
                     teamMembers: [] // We no longer fetch team members in a list view for performance, or we can fetch them if needed.
@@ -482,20 +514,31 @@ export class StudentsService {
         let paymentStatus: string | null = null;
         let paymentProofUrl: string | null = null;
         let hasApplied = false;
+        let applicationStage: 'faculty' | 'admin' | null = null;
 
         if (userId) {
-            const application = await this.participantRepository.findOne({
+            const part = await this.participantRepository.findOne({
                 where: {
                     studentId: userId,
                     projectId: id,
                 },
             });
+            const app = await this.opportunityApplicationsService.findLatestForStudentOpportunity(userId, id);
 
-            if (application) {
-                applicationStatus = this.normalizeApplicationStatus(application.status);
-                paymentStatus = application.paymentStatus;
-                paymentProofUrl = application.paymentProofUrl;
+            if (app) {
+                applicationStage = this.opportunityApplicationsService.applicationStage(app.internalStatus);
+                applicationStatus = this.opportunityApplicationsService.toPublicApplicationStatus(
+                    app.internalStatus,
+                    part,
+                );
+            } else if (part) {
+                applicationStatus = this.normalizeApplicationStatus(part.status);
+            }
+
+            if (app || part) {
                 hasApplied = true;
+                paymentStatus = part?.paymentStatus ?? null;
+                paymentProofUrl = part?.paymentProofUrl ?? null;
             }
         }
 
@@ -507,6 +550,7 @@ export class StudentsService {
             data: {
                 ...opportunity,
                 application_status: applicationStatus,
+                application_stage: applicationStage,
                 payment_status: paymentStatus,
                 payment_proof_url: paymentProofUrl,
                 has_applied: hasApplied,
@@ -540,6 +584,16 @@ export class StudentsService {
             relations: ['project', 'project.organization'],
             order: { createdAt: 'DESC' },
         });
+
+        const pipelineApps = await this.opportunityApplicationsService.findNonWithdrawnApplicationsForStudent(
+            studentId,
+        );
+        const latestAppByOpp = new Map<string, (typeof pipelineApps)[0]>();
+        for (const row of pipelineApps) {
+            if (!latestAppByOpp.has(row.opportunityId)) {
+                latestAppByOpp.set(row.opportunityId, row);
+            }
+        }
 
         const appliedIds = new Set(applications.map((a) => a.projectId));
 
@@ -575,23 +629,53 @@ export class StudentsService {
                 const participationStatus =
                     app.status === 'approved' || app.status === 'verified' ? 'active' : app.status;
 
+                const oa = latestAppByOpp.get(app.projectId);
+                const applicationStatus = oa
+                    ? this.opportunityApplicationsService.toPublicApplicationStatus(oa.internalStatus, app)
+                    : this.normalizeApplicationStatus(app.status);
+
                 return {
                     ...base,
                     status: participationStatus,
                     organization: app.project.organization?.name || 'Unknown',
                     payment_status: app.paymentStatus,
                     payment_proof_url: app.paymentProofUrl,
+                    application_status: applicationStatus,
+                    application_stage: oa
+                        ? this.opportunityApplicationsService.applicationStage(oa.internalStatus)
+                        : null,
+                    has_applied: true,
+                    hasApplied: true,
                 };
             }),
         );
 
+        const participantOppIds = new Set(applications.map((p) => p.projectId));
+
+        const fromPipelineOnly: Record<string, unknown>[] = [];
+        for (const oa of latestAppByOpp.values()) {
+            if (participantOppIds.has(oa.opportunityId)) continue;
+            if (!oa.opportunity) continue;
+            const st = this.opportunityApplicationsService.toPublicApplicationStatus(oa.internalStatus, null);
+            const base = this.opportunityWorkflow.toStudentProjectCard(oa.opportunity, { teamMembers: [] });
+            fromPipelineOnly.push({
+                ...base,
+                status: st,
+                organization: oa.opportunity.organization?.name || 'Unknown',
+                application_status: st,
+                application_stage: this.opportunityApplicationsService.applicationStage(oa.internalStatus),
+                has_applied: true,
+                hasApplied: true,
+            });
+        }
+
         return {
             success: true,
-            data: [...fromCreator, ...fromParticipants],
+            data: [...fromCreator, ...fromParticipants, ...fromPipelineOnly],
         };
     }
 
-    async getProjectById(opportunityId: string) {
+    async getProjectById(opportunityId: string, studentUserId?: string) {
         const opportunity = await this.opportunitiesRepository.findOne({
             where: { id: opportunityId },
             relations: ['organization'],
@@ -599,6 +683,29 @@ export class StudentsService {
 
         if (!opportunity) {
             throw new NotFoundException(`Project with ID ${opportunityId} not found`);
+        }
+
+        let statusForReport = (opportunity.status || '').toLowerCase();
+
+        if (studentUserId) {
+            const oa = await this.opportunityApplicationsService.findLatestForStudentOpportunity(
+                studentUserId,
+                opportunityId,
+            );
+            const part = await this.participantRepository.findOne({
+                where: { studentId: studentUserId, projectId: opportunityId },
+            });
+            const joinApproved =
+                oa?.internalStatus === 'approved' ||
+                (!!part && ['approved', 'verified'].includes(part.status));
+
+            if (joinApproved) {
+                if (part?.status === 'verified') {
+                    statusForReport = 'verified';
+                } else {
+                    statusForReport = 'approved';
+                }
+            }
         }
 
         return {
@@ -609,7 +716,7 @@ export class StudentsService {
                 organization: opportunity.organization?.name || 'Unknown',
                 organizationId: opportunity.organizationId,
                 logoUrl: opportunity.organization?.logoUrl || null,
-                status: opportunity.status,
+                status: statusForReport,
                 mode: opportunity.mode,
                 types: opportunity.types,
                 location: opportunity.location,
@@ -790,105 +897,92 @@ export class StudentsService {
             throw new ForbiddenException(eligibility.message);
         }
 
-        // Check if already applied
-        const existing = await this.participantRepository.findOne({
+        if (await this.opportunityApplicationsService.hasOpenPipelineApplication(userId, dto.opportunityId)) {
+            throw new BadRequestException('Already applied to this opportunity');
+        }
+
+        const latestPipelineApp = await this.opportunityApplicationsService.findLatestForStudentOpportunity(
+            userId,
+            dto.opportunityId,
+        );
+        const pipelineWasRejected =
+            !!latestPipelineApp && this.opportunityApplicationsService.isTerminalRejection(latestPipelineApp.internalStatus);
+
+        const existingParticipation = await this.participantRepository.findOne({
             where: {
                 studentId: userId,
                 projectId: dto.opportunityId,
             },
         });
 
-        if (existing) {
-            throw new BadRequestException('Already applied to this opportunity');
+        if (existingParticipation) {
+            if (this.isParticipationActivelyEnrolled(existingParticipation.status)) {
+                throw new BadRequestException('Already applied to this opportunity');
+            }
+            if (existingParticipation.status === 'rejected') {
+                // OK: re-apply after participation rejection
+            } else if (this.isParticipationPendingPipeline(existingParticipation.status)) {
+                if (!pipelineWasRejected) {
+                    throw new BadRequestException('Already applied to this opportunity');
+                }
+                // Stale pending participation while latest opportunity_application is terminal-rejected — allow new row
+            } else {
+                throw new BadRequestException('Already applied to this opportunity');
+            }
         }
 
-        const applicationId = crypto.randomUUID();
+        const applyPayload: Record<string, unknown> = {
+            participation_type: dto.participation_type,
+            primary_faculty_email: dto.primary_faculty_email,
+            secondary_faculty_email: dto.secondary_faculty_email,
+            team_id: dto.team_id,
+            team_members: dto.team_members,
+            contact_phone_e164: dto.contact_phone_e164,
+        };
 
-        // 1. Register Lead
-        let leadParticipation;
-        if (user) {
-            leadParticipation = await this.engagementService.preRegister(userId, dto.opportunityId, {
-                applicationId,
-                fullName: user.name,
-                email: user.email,
-                mobile: user.phone || '',
-                cnic: user.cnic || '',
-                universityName: user.university || '',
-                universityId: user.university || '',
-                academicProgram: user.major || '',
-                yearOfStudy: '1st Year',
-                department: 'Other',
-                academicIntegrationType: 'Voluntary',
-                participationMode: dto.participation_type || 'individual',
-                isTeamLead: true,
-                emailVerified: true,
-                mobileVerified: true,
-                status: 'pending', // Initial status for application
-                primaryFacultyEmail: dto.primary_faculty_email,
-                secondaryFacultyEmail: dto.secondary_faculty_email,
-                teamId: dto.team_id,
-            } as any);
+        const saved = await this.opportunityApplicationsService.createApplication({
+            studentUserId: userId,
+            opportunityId: dto.opportunityId,
+            primaryFacultyEmail: dto.primary_faculty_email,
+            secondaryFacultyEmail: dto.secondary_faculty_email,
+            applyPayload,
+        });
 
-            // Send Notifications
-            if (dto.primary_faculty_email) {
-                await this.mailService.sendFacultyApprovalRequest(
-                    dto.primary_faculty_email,
-                    user.name,
-                    opportunity.title,
-                    leadParticipation.id
-                );
-            }
-
-            if (dto.secondary_faculty_email) {
-                await this.mailService.sendFacultyCollaboratorNotice(
-                    dto.secondary_faculty_email,
-                    user.name,
-                    opportunity.title
-                );
-            }
-
-            await this.mailService.sendApplicationSubmitted(
-                user.email,
+        if (dto.primary_faculty_email) {
+            await this.mailService.sendFacultyApprovalRequest(
+                dto.primary_faculty_email,
                 user.name,
-                opportunity.title
+                opportunity.title,
+                saved.id,
             );
         }
 
-        // 2. Register Team Members
-        if (dto.participation_type === 'team' && dto.team_members && dto.team_members.length > 0) {
-            for (const m of dto.team_members) {
-                const memberUser = await this.usersService.findByEmail(m.email);
-                await this.engagementService.preRegister(memberUser?.id || null, dto.opportunityId, {
-                    applicationId,
-                    fullName: m.name,
-                    email: m.email,
-                    mobile: m.mobile || '',
-                    cnic: m.cnic || '',
-                    universityName: m.university || '',
-                    universityId: m.university || '',
-                    academicProgram: m.program || '',
-                    yearOfStudy: '1st Year',
-                    department: 'Other',
-                    academicIntegrationType: 'Voluntary',
-                    participationMode: 'team',
-                    isTeamLead: false,
-                    emailVerified: true,
-                    mobileVerified: true,
-                    status: 'approved', // Auto-approved for verified members added by lead?
-                    teamId: dto.team_id,
-                    primaryFacultyEmail: dto.primary_faculty_email,
-                } as any);
-            }
+        if (dto.secondary_faculty_email) {
+            await this.mailService.sendFacultyCollaboratorNotice(
+                dto.secondary_faculty_email,
+                user.name,
+                opportunity.title,
+            );
         }
+
+        await this.mailService.sendApplicationSubmitted(user.email, user.name, opportunity.title);
 
         return {
             success: true,
-            data: leadParticipation,
+            data: {
+                application_id: saved.id,
+                application_status: 'pending_approval',
+            },
             message: 'Application submitted successfully',
         };
     }
 
     async withdrawApplication(userId: string, id: string) {
+        const pipelineWithdraw = await this.opportunityApplicationsService.withdraw(userId, id);
+        if (pipelineWithdraw) {
+            return pipelineWithdraw;
+        }
+
         const application = await this.participantRepository.findOne({
             where: { id, studentId: userId },
         });

@@ -25,4 +25,8 @@ export class ApplyOpportunityDto {
 
     @IsOptional()
     team_members?: any[];
+
+    @IsOptional()
+    @IsString()
+    contact_phone_e164?: string;
 }

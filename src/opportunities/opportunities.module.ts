@@ -6,6 +6,8 @@ import { AdminOpportunitiesController } from './admin-opportunities.controller';
 import { PublicOpportunitiesController } from './public-opportunities.controller';
 import { ParticipantsController } from './participants.controller';
 import { Opportunity } from './entities/opportunity.entity';
+import { OpportunityApplication } from './entities/opportunity-application.entity';
+import { OpportunityApplicationsService } from './opportunity-applications.service';
 import { Organization } from '../organizations/entities/organization.entity';
 import { Participation } from '../engagement/entities/participant.entity';
 import { OrganizationsModule } from '../organizations/organizations.module';
@@ -20,7 +22,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
     imports: [
-        TypeOrmModule.forFeature([Opportunity, Organization, Participation, User]),
+        TypeOrmModule.forFeature([Opportunity, Organization, Participation, User, OpportunityApplication]),
         OrganizationsModule,
         UsersModule,
         EngagementModule,
@@ -28,7 +30,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
         NotificationsModule,
     ],
     controllers: [OpportunitiesController, AdminOpportunitiesController, PublicOpportunitiesController, ParticipantsController, StudentOpportunitiesController],
-    providers: [OpportunitiesService, OpportunityWorkflowService, VerificationVerifyAuthGuard],
-    exports: [OpportunitiesService, OpportunityWorkflowService],
+    providers: [OpportunitiesService, OpportunityWorkflowService, OpportunityApplicationsService, VerificationVerifyAuthGuard],
+    exports: [OpportunitiesService, OpportunityWorkflowService, OpportunityApplicationsService],
 })
 export class OpportunitiesModule { }

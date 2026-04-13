@@ -6,6 +6,7 @@ import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { Report } from '../reports/entities/report.entity';
 import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { Participation } from '../engagement/entities/participant.entity';
+import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
 
 import { AuditLog } from '../audit-logs/entities/audit-log.entity';
 import { UserRole } from '../users/enums/user-role.enum';
@@ -30,6 +31,7 @@ export class AdminService {
         private settingRepository: Repository<Setting>,
         @InjectRepository(Participation)
         private participationRepository: Repository<Participation>,
+        private readonly opportunityApplicationsService: OpportunityApplicationsService,
     ) { }
 
     async getSettings() {
@@ -75,7 +77,8 @@ export class AdminService {
         const pendingApplications = await this.participationRepository.count({ 
             where: { status: In(['pending', 'pending_ciel_approval']) } 
         });
-        const pendingApprovals = pendingUsers + pendingApplications;
+        const pendingOppApplications = await this.opportunityApplicationsService.countPendingAdmin();
+        const pendingApprovals = pendingUsers + pendingApplications + pendingOppApplications;
 
         // Verified Hours
         const verifiedTimesheets = await this.timesheetRepository.find({ where: { status: 'verified' } });

@@ -83,8 +83,8 @@ export class StudentsController {
     }
 
     @Get('projects/:id')
-    getProjectById(@Param('id') id: string) {
-        return this.studentsService.getProjectById(id);
+    getProjectById(@Request() req, @Param('id') id: string) {
+        return this.studentsService.getProjectById(id, req.user.id);
     }
 
     @Get('opportunities/recommended')

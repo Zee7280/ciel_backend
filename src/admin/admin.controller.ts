@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Query } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Query, Request } from '@nestjs/common';
 import { UsersService } from '../users/users.service';
 import { CreateUserDto } from '../users/dto/create-user.dto';
 import { UpdateUserDto } from '../users/dto/update-user.dto';
@@ -10,6 +10,7 @@ import { UserRole } from '../users/enums/user-role.enum';
 import { AdminService } from './admin.service';
 import { OpportunitiesService } from '../opportunities/opportunities.service';
 import { StudentReportsService } from '../reports/student-reports.service';
+import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
 
 @Controller('admin')
 @UseGuards(JwtAuthGuard)
@@ -18,12 +19,32 @@ export class AdminController {
         private readonly usersService: UsersService,
         private readonly adminService: AdminService,
         private readonly opportunitiesService: OpportunitiesService,
-        private readonly studentReportsService: StudentReportsService
+        private readonly studentReportsService: StudentReportsService,
+        private readonly opportunityApplicationsService: OpportunityApplicationsService,
     ) { }
 
     @Get('dashboard')
     getDashboard() {
         return this.adminService.getDashboardStats();
+    }
+
+    @Get('applications')
+    getOpportunityApplications(@Query('status') status?: string) {
+        return this.opportunityApplicationsService.adminList(status);
+    }
+
+    @Post('applications/:id/approve')
+    approveOpportunityApplication(@Request() req, @Param('id') id: string) {
+        return this.opportunityApplicationsService.adminApprove(id, req.user.id);
+    }
+
+    @Post('applications/:id/reject')
+    rejectOpportunityApplication(
+        @Request() req,
+        @Param('id') id: string,
+        @Body() body: { reason: string },
+    ) {
+        return this.opportunityApplicationsService.adminReject(id, req.user.id, body?.reason || '');
     }
 
     @Get('users/pending')

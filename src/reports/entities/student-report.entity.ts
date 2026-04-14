@@ -41,7 +41,7 @@ export class StudentReport {
     submission_date: Date;
 
     @Column({ default: 'draft' })
-    status: string; // 'draft', 'submitted', 'partner_verified', 'payment_pending', 'verified', 'rejected'
+    status: string; // 'draft', 'submitted', 'partner_verified', 'payment_pending' (legacy), 'payment_under_review', 'verified', 'rejected', 'paid'
 
     @Column({ default: 'pending' })
     partner_status: string; // 'pending', 'approved', 'rejected'

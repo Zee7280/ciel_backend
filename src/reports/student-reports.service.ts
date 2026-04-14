@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { StudentReport } from './entities/student-report.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { Participation } from '../engagement/entities/participant.entity';
@@ -12,6 +12,7 @@ import { User } from '../users/entities/user.entity';
 import { MailService } from '../mail/mail.service';
 
 import { EngagementService } from '../engagement/engagement.service';
+import { Payment, PaymentStatus } from '../payments/entities/payment.entity';
 
 @Injectable()
 export class StudentReportsService {
@@ -26,10 +27,36 @@ export class StudentReportsService {
         private readonly attendanceLogsRepository: Repository<AttendanceLog>,
         @InjectRepository(User)
         private readonly usersRepository: Repository<User>,
+        @InjectRepository(Payment)
+        private readonly paymentRepository: Repository<Payment>,
         private readonly s3Service: S3Service,
         private readonly engagementService: EngagementService,
         private readonly mailService: MailService,
     ) { }
+
+    /** Aligns legacy DB values with student UI / frontend lifecycle names. */
+    private toPublicReportStatus(raw: string | null | undefined): string {
+        if (raw === 'payment_pending') return 'payment_under_review';
+        if (raw === 'continue') return 'draft';
+        return raw ?? 'draft';
+    }
+
+    private async findLatestManualPayment(studentId: string, projectId: string | null | undefined) {
+        if (!projectId) return null;
+        return this.paymentRepository.findOne({
+            where: { studentId, projectId },
+            order: { created_at: 'DESC' },
+        });
+    }
+
+    private paymentDerivedFields(latest: Payment | null | undefined, rawReportStatus: string) {
+        const payment_verified = latest?.status === PaymentStatus.APPROVED;
+        return {
+            status: this.toPublicReportStatus(rawReportStatus),
+            payment_verified,
+            ...(payment_verified ? { report_status: 'paid' as const } : {}),
+        };
+    }
 
     /**
      * Student-submitted opportunities only unlock reporting after admin approval (`live` / active).
@@ -204,8 +231,20 @@ export class StudentReportsService {
             }
         });
 
+        const lockedReportStatuses = new Set([
+            'submitted',
+            'partner_verified',
+            'payment_pending',
+            'payment_under_review',
+            'verified',
+            'paid',
+            'rejected',
+        ]);
+
         if (report) {
-            report.status = 'continue';
+            if (!lockedReportStatuses.has(report.status)) {
+                report.status = 'draft';
+            }
             if (parsedData.project_id) report.project_id = parsedData.project_id;
             if (parsedData.section1) report.section1 = parsedData.section1;
             if (parsedData.section2) report.section2 = parsedData.section2;
@@ -229,7 +268,7 @@ export class StudentReportsService {
                 studentId,
                 project_id: parsedData.project_id,
                 opportunityId: parsedData.opportunityId,
-                status: 'continue',
+                status: 'draft',
                 section1: parsedData.section1,
                 section2: parsedData.section2,
                 section3: parsedData.section3,
@@ -432,6 +471,13 @@ export class StudentReportsService {
     }
 
     private async formatReportResponse(report: StudentReport, attendanceLogs?: AttendanceLog[]) {
+        const projectKey = report.opportunityId || report.project_id;
+        const latestPayment = await this.findLatestManualPayment(report.studentId, projectKey);
+        const { status, payment_verified, ...paymentRest } = this.paymentDerivedFields(
+            latestPayment,
+            report.status,
+        );
+
         return {
             success: true,
             data: {
@@ -450,8 +496,11 @@ export class StudentReportsService {
                     expected_hours: report.opportunity?.timeline?.expected_hours,
                 },
                 project_id: report.project_id,
+                projectId: projectKey,
                 opportunityId: report.opportunityId,
-                status: report.status,
+                status,
+                payment_verified,
+                ...paymentRest,
                 partner_status: report.partner_status,
                 admin_status: report.admin_status,
                 submission_date: report.submission_date,
@@ -561,17 +610,46 @@ export class StudentReportsService {
                 order: { createdAt: 'DESC' },
             });
 
+            const oppIds = [...new Set(reports.map((r) => r.opportunityId).filter(Boolean))] as string[];
+            const paymentByProject = new Map<string, Payment>();
+            if (oppIds.length) {
+                const pays = await this.paymentRepository.find({
+                    where: { studentId, projectId: In(oppIds) },
+                });
+                pays.sort(
+                    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+                );
+                for (const p of pays) {
+                    if (!paymentByProject.has(p.projectId)) {
+                        paymentByProject.set(p.projectId, p);
+                    }
+                }
+            }
+
             return {
                 success: true,
-                data: reports.map(r => ({
-                    status: r.status,
-                    report_id: r.id,
-                    project_id: r.project_id,
-                    opportunity_id: r.opportunityId,
-                    opportunity_title: r.opportunity?.title,
-                    feedback: null,
-                    submission_date: r.submission_date
-                }))
+                data: reports.map((r) => {
+                    const projectKey = r.opportunityId || r.project_id;
+                    const latest = projectKey ? paymentByProject.get(projectKey) : undefined;
+                    const { status, payment_verified, ...paymentRest } = this.paymentDerivedFields(
+                        latest,
+                        r.status,
+                    );
+                    return {
+                        status,
+                        payment_verified,
+                        ...paymentRest,
+                        report_id: r.id,
+                        project_id: r.project_id,
+                        projectId: projectKey,
+                        opportunity_id: r.opportunityId,
+                        opportunity_title: r.opportunity?.title,
+                        admin_status: r.admin_status,
+                        partner_status: r.partner_status,
+                        feedback: null,
+                        submission_date: r.submission_date,
+                    };
+                }),
             };
         }
 
@@ -579,7 +657,7 @@ export class StudentReportsService {
         const report = await this.studentReportsRepository.findOne({
             where: {
                 studentId,
-                opportunityId
+                opportunityId,
             },
             order: { createdAt: 'DESC' },
         });
@@ -595,14 +673,29 @@ export class StudentReportsService {
             };
         }
 
+        const latest = await this.findLatestManualPayment(
+            studentId,
+            report.opportunityId || report.project_id,
+        );
+        const { status, payment_verified, ...paymentRest } = this.paymentDerivedFields(
+            latest,
+            report.status,
+        );
+
         return {
             success: true,
             data: {
-                status: report.status,
+                status,
+                payment_verified,
+                ...paymentRest,
                 report_id: report.id,
                 project_id: report.project_id,
+                projectId: report.opportunityId || report.project_id,
                 opportunity_id: report.opportunityId,
+                admin_status: report.admin_status,
+                partner_status: report.partner_status,
                 feedback: null,
+                submission_date: report.submission_date,
             },
         };
     }

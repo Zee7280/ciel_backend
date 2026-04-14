@@ -14,13 +14,24 @@ import { StudentReportsController } from './student-reports.controller';
 import { UsersModule } from '../users/users.module';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import { Organization } from '../organizations/entities/organization.entity';
+import { Payment } from '../payments/entities/payment.entity';
 
 import { EngagementModule } from '../engagement/engagement.module';
 import { OpportunitiesModule } from '../opportunities/opportunities.module';
 
 @Module({
     imports: [
-        TypeOrmModule.forFeature([User, Participation, Opportunity, Timesheet, StudentReport, Otp, AttendanceLog, Organization]),
+        TypeOrmModule.forFeature([
+            User,
+            Participation,
+            Opportunity,
+            Timesheet,
+            StudentReport,
+            Otp,
+            AttendanceLog,
+            Organization,
+            Payment,
+        ]),
         UsersModule,
         EngagementModule,
         OpportunitiesModule,

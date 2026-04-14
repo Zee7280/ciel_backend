@@ -133,13 +133,13 @@ export class PaymentsService {
         });
         await this.paymentRepository.save(payment);
 
-        // 3. Update reports.status to 'payment_pending'
+        // 3. Update reports.status (student UI: payment_under_review)
         const report = await this.studentReportRepository.findOne({
             where: { studentId, opportunityId: projectId },
         });
 
         if (report) {
-            report.status = 'payment_pending';
+            report.status = 'payment_under_review';
             await this.studentReportRepository.save(report);
         }
 
@@ -245,7 +245,7 @@ export class PaymentsService {
         });
 
         if (report && report.status === 'verified') {
-            report.status = 'payment_pending';
+            report.status = 'payment_under_review';
             await this.studentReportRepository.save(report);
         }
 

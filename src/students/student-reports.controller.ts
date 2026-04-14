@@ -1,4 +1,17 @@
-import { Controller, Post, Get, Patch, Body, Param, Query, UseGuards, Request, UseInterceptors, UploadedFiles, BadRequestException } from '@nestjs/common';
+import {
+    Controller,
+    Post,
+    Get,
+    Patch,
+    Body,
+    Param,
+    Query,
+    UseGuards,
+    Request,
+    UseInterceptors,
+    UploadedFiles,
+    BadRequestException,
+} from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { StudentReportsService } from '../reports/student-reports.service';
@@ -124,8 +137,9 @@ export class StudentReportsController {
     }
 
     @Get(':id')
-    async getReportById(@Param('id') id: string) {
-        return await this.studentReportsService.findOne(id);
+    async getReportById(@Request() req, @Param('id') id: string) {
+        // Match /student/reports/:id — accept report UUID or opportunity (project) id for the JWT student.
+        return await this.studentReportsService.findOneByOpportunityOrId(id, req.user.id);
     }
 
     @Patch(':id/verify')

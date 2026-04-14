@@ -1,11 +1,15 @@
 import {
     Controller,
     Get,
+    Post,
     Patch,
     Param,
     Body,
+    Query,
+    Request,
     UseGuards,
     BadRequestException,
+    MethodNotAllowedException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
@@ -28,15 +32,62 @@ export class AdminPaymentsController {
         };
     }
 
-    @Patch(':id/verify')
+    @Get()
+    async listByStatus(@Query('status') status?: string) {
+        if (!status) {
+            throw new BadRequestException('Query parameter status is required (approved or rejected)');
+        }
+        const normalized = status.trim().toLowerCase();
+        if (normalized === 'approved') {
+            return {
+                success: true,
+                data: await this.paymentsService.findManualPaymentsByStatus(PaymentStatus.APPROVED),
+            };
+        }
+        if (normalized === 'rejected') {
+            return {
+                success: true,
+                data: await this.paymentsService.findManualPaymentsByStatus(PaymentStatus.REJECTED),
+            };
+        }
+        throw new BadRequestException('status must be approved or rejected');
+    }
+
+    @Post(':paymentId/verify')
     async verifyPayment(
-        @Param('id') id: string,
-        @Body() body: { status: PaymentStatus, feedback?: string },
+        @Param('paymentId') paymentId: string,
+        @Body() body: { status: PaymentStatus; feedback?: string },
     ) {
-        if (!body.status || !Object.values(PaymentStatus).includes(body.status)) {
-            throw new BadRequestException('Invalid status');
+        const allowed = [PaymentStatus.APPROVED, PaymentStatus.REJECTED];
+        if (!body.status || !allowed.includes(body.status)) {
+            throw new BadRequestException('status must be "approved" or "rejected"');
+        }
+        if (body.status === PaymentStatus.REJECTED) {
+            if (typeof body.feedback !== 'string' || !body.feedback.trim()) {
+                throw new BadRequestException('feedback is required when rejecting');
+            }
         }
 
-        return await this.paymentsService.verifyManualPayment(id, body.status, body.feedback);
+        return await this.paymentsService.verifyManualPayment(paymentId, body.status, body.feedback);
+    }
+
+    @Patch(':paymentId/verify')
+    verifyPaymentDeprecated() {
+        throw new MethodNotAllowedException(
+            'PATCH is no longer supported. Use POST /api/v1/admin/payments/:paymentId/verify with body { "status": "approved" | "rejected", "feedback"?: string }.',
+        );
+    }
+
+    @Post(':paymentId/revert')
+    async revertPayment(
+        @Request() req: { user: { id: string; email?: string } },
+        @Param('paymentId') paymentId: string,
+        @Body() body: { reason?: string },
+    ) {
+        return await this.paymentsService.revertManualPaymentApproval(
+            paymentId,
+            { id: req.user.id, email: req.user.email },
+            body?.reason,
+        );
     }
 }

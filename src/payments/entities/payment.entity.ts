@@ -41,7 +41,7 @@ export class Payment {
     status: PaymentStatus;
 
     @Column({ type: 'text', nullable: true })
-    feedback: string;
+    feedback: string | null;
 
     @CreateDateColumn()
     created_at: Date;

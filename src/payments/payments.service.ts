@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Participation } from '../engagement/entities/participant.entity';
@@ -7,6 +7,7 @@ import { S3Service } from '../common/s3.service';
 
 import { Payment, PaymentStatus } from './entities/payment.entity';
 import { StudentReport } from '../reports/entities/student-report.entity';
+import { AuditLog } from '../audit-logs/entities/audit-log.entity';
 
 @Injectable()
 export class PaymentsService {
@@ -19,6 +20,8 @@ export class PaymentsService {
         private readonly paymentRepository: Repository<Payment>,
         @InjectRepository(StudentReport)
         private readonly studentReportRepository: Repository<StudentReport>,
+        @InjectRepository(AuditLog)
+        private readonly auditLogRepository: Repository<AuditLog>,
         private readonly s3Service: S3Service,
     ) { }
 
@@ -149,14 +152,8 @@ export class PaymentsService {
         };
     }
 
-    async findAllPendingManual() {
-        const payments = await this.paymentRepository.find({
-            where: { status: PaymentStatus.PENDING },
-            relations: ['student', 'opportunity', 'opportunity.organization'],
-            order: { created_at: 'DESC' },
-        });
-
-        return payments.map(p => ({
+    private mapManualPaymentRow(p: Payment) {
+        return {
             id: p.id,
             studentName: p.student?.name || 'Unknown',
             studentEmail: p.student?.email || 'Unknown',
@@ -166,7 +163,27 @@ export class PaymentsService {
             proofUrl: p.proof_url,
             submittedAt: p.created_at,
             status: p.status,
-        }));
+        };
+    }
+
+    async findAllPendingManual() {
+        const payments = await this.paymentRepository.find({
+            where: { status: PaymentStatus.PENDING },
+            relations: ['student', 'opportunity', 'opportunity.organization'],
+            order: { created_at: 'DESC' },
+        });
+
+        return payments.map(p => this.mapManualPaymentRow(p));
+    }
+
+    async findManualPaymentsByStatus(status: PaymentStatus.APPROVED | PaymentStatus.REJECTED) {
+        const payments = await this.paymentRepository.find({
+            where: { status },
+            relations: ['student', 'opportunity', 'opportunity.organization'],
+            order: { created_at: 'DESC' },
+        });
+
+        return payments.map(p => this.mapManualPaymentRow(p));
     }
 
     async verifyManualPayment(id: string, status: PaymentStatus, feedback?: string) {
@@ -199,6 +216,61 @@ export class PaymentsService {
         return {
             success: true,
             message: `Payment ${status} successfully`,
+        };
+    }
+
+    async revertManualPaymentApproval(
+        paymentId: string,
+        admin: { id: string; email?: string },
+        reason?: string,
+    ) {
+        const payment = await this.paymentRepository.findOne({
+            where: { id: paymentId },
+        });
+
+        if (!payment) {
+            throw new NotFoundException('Payment record not found');
+        }
+
+        if (payment.status !== PaymentStatus.APPROVED) {
+            throw new ConflictException('Only an approved payment can be reverted');
+        }
+
+        payment.status = PaymentStatus.PENDING;
+        payment.feedback = null;
+        await this.paymentRepository.save(payment);
+
+        const report = await this.studentReportRepository.findOne({
+            where: { studentId: payment.studentId, opportunityId: payment.projectId },
+        });
+
+        if (report && report.status === 'verified') {
+            report.status = 'payment_pending';
+            await this.studentReportRepository.save(report);
+        }
+
+        const log = this.auditLogRepository.create({
+            action: 'payment_approval_reverted',
+            user: admin.email || admin.id,
+            target: paymentId,
+            target_type: 'payment',
+            details: {
+                adminId: admin.id,
+                adminEmail: admin.email,
+                paymentId,
+                reason: reason ?? null,
+            },
+        });
+        await this.auditLogRepository.save(log);
+
+        const updated = await this.paymentRepository.findOne({
+            where: { id: paymentId },
+            relations: ['student', 'opportunity', 'opportunity.organization'],
+        });
+
+        return {
+            success: true,
+            data: updated ? this.mapManualPaymentRow(updated) : { id: paymentId, status: PaymentStatus.PENDING },
         };
     }
 }

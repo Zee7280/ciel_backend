@@ -325,15 +325,30 @@ export class OpportunitiesService {
         return saved.id;
     }
 
+    private normalizeSafetyDeclaration(safety?: any) {
+        if (!safety) return safety;
+        return {
+            environment_safe_and_appropriate:
+                safety.environment_safe_and_appropriate ?? safety.site_safe_and_suitable,
+            students_guided_and_supervised:
+                safety.students_guided_and_supervised ?? safety.students_properly_supervised,
+            lawful_ethical_and_non_hazardous:
+                safety.lawful_ethical_and_non_hazardous ?? safety.lawful_and_free_from_hazards,
+            precautions_and_basic_safety:
+                safety.precautions_and_basic_safety ?? safety.basic_safety_and_emergency_measures,
+        };
+    }
+
     private validateSafetyDeclaration(safety?: any) {
         if (!safety) throw new BadRequestException('safety_declaration is required');
+        const normalized = this.normalizeSafetyDeclaration(safety);
         const keys = [
             'environment_safe_and_appropriate',
             'students_guided_and_supervised',
             'lawful_ethical_and_non_hazardous',
             'precautions_and_basic_safety'
         ];
-        const allTrue = keys.every(k => safety[k] === true);
+        const allTrue = keys.every(k => normalized[k] === true);
         if (!allTrue) {
             throw new BadRequestException('All safety_declaration checks must be true');
         }
@@ -345,13 +360,23 @@ export class OpportunitiesService {
 
     private validateSubmissionConfirmations(confirm?: any) {
         if (!confirm) throw new BadRequestException('submission_confirmations are required');
+        const normalized = {
+            academically_valid_and_accurately_described:
+                confirm.academically_valid_and_accurately_described ?? confirm.genuine_and_accurate,
+            activity_properly_supervised:
+                confirm.activity_properly_supervised ?? confirm.organization_responsible_for_execution,
+            environment_safe_and_appropriate:
+                confirm.environment_safe_and_appropriate,
+            information_correct_and_verifiable:
+                confirm.information_correct_and_verifiable,
+        };
         const keys = [
             'academically_valid_and_accurately_described',
             'activity_properly_supervised',
             'environment_safe_and_appropriate',
             'information_correct_and_verifiable'
         ];
-        if (!keys.every(k => confirm[k] === true)) {
+        if (!keys.every(k => normalized[k] === true)) {
             throw new BadRequestException('All submission_confirmations must be true');
         }
     }
@@ -832,6 +857,7 @@ export class OpportunitiesService {
         }
         this.ensureProfileComplete(user);
         createOpportunityDto.safety_declaration = this.resolveSafetyDeclarationPayload(createOpportunityDto);
+        createOpportunityDto.safety_declaration = this.normalizeSafetyDeclaration(createOpportunityDto.safety_declaration);
 
         this.validateSupervision(createOpportunityDto.supervision);
         this.validateSafetyDeclaration(createOpportunityDto.safety_declaration);
@@ -939,6 +965,7 @@ export class OpportunitiesService {
         if (!user) throw new ForbiddenException('User not found');
         this.ensureProfileComplete(user);
         dto.safety_declaration = this.resolveSafetyDeclarationPayload(dto);
+        dto.safety_declaration = this.normalizeSafetyDeclaration(dto.safety_declaration);
         // validation rules for student flow
         if (!dto.supervision?.contact) throw new BadRequestException('Faculty email (supervision.contact) is required');
         if (!dto.supervision?.faculty_department) throw new BadRequestException('faculty_department is required');

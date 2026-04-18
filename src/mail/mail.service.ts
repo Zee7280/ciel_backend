@@ -147,7 +147,7 @@ export class MailService {
     }
   }
 
-  async sendExecutingOrganizationVerificationEmail(to: string, projectTitle: string, verifyLink: string) {
+  async sendExecutingOrganizationVerificationEmail(to: string, projectTitle: string, signInPortalLink: string) {
     const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
     const titleEsc = this.escHtmlPlain(projectTitle);
 
@@ -156,12 +156,12 @@ export class MailService {
         <h2 style="color: #333;">Executing Organization Verification Required</h2>
         <p>An opportunity has been submitted on CIEL PK and your organization was listed as the executing organization.</p>
         <p><strong>Opportunity:</strong> ${titleEsc}</p>
-        <p>Please review the request and confirm the execution details using the button below.</p>
+        <p><strong>Important:</strong> sign in to CIEL PK using <strong>this same email address</strong>, open the opportunity under <strong>Partner → My requests</strong>, review the details, then click <strong>Confirm execution details</strong>. Verification is not done from a public link.</p>
         <div style="text-align: center; margin: 30px 0;">
-          <a href="${verifyLink}" style="background-color: #4CAF50; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Review Opportunity</a>
+          <a href="${signInPortalLink}" style="background-color: #4CAF50; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Sign in to CIEL PK</a>
         </div>
-        <p style="color: #666; font-size: 14px;">If the button doesn't work, you can copy and paste this link into your browser:</p>
-        <p style="color: #2563eb; font-size: 14px; word-break: break-all;">${verifyLink}</p>
+        <p style="color: #666; font-size: 14px;">If the button does not work, copy and paste this URL into your browser:</p>
+        <p style="color: #2563eb; font-size: 14px; word-break: break-all;">${signInPortalLink}</p>
         <p style="font-size: 12px; color: #999; margin-top: 30px;">If you did not expect this email, you can ignore it or contact support.</p>
       </div>
     `;

@@ -1,4 +1,17 @@
-import { Controller, Get, Post, Patch, Body, UseGuards, Request, Query, Delete, Param, NotFoundException } from '@nestjs/common';
+import {
+    Controller,
+    Get,
+    Post,
+    Patch,
+    Body,
+    UseGuards,
+    Request,
+    Query,
+    Delete,
+    Param,
+    NotFoundException,
+    BadRequestException,
+} from '@nestjs/common';
 import { OpportunitiesService } from './opportunities.service';
 import { CreateOpportunityDto, UpdateOpportunityDto } from './dto/create-opportunity.dto';
 import { GetOpportunityDetailDto } from './dto/get-opportunity-detail.dto';
@@ -21,9 +34,15 @@ export class OpportunitiesController {
         return this.opportunitiesService.update(req.user.id, updateOpportunityDto, req.user.organizationId);
     }
 
-    @Get('verify/executing-org')
-    async verifyExecutingOrg(@Query('token') token: string) {
-        return this.opportunitiesService.verifyExecutingOrganization(token);
+    /** Executing-org confirmation: must be signed in as the official executing-organization contact email. */
+    @Post('verify/executing-org')
+    @UseGuards(JwtAuthGuard)
+    async verifyExecutingOrgPost(@Request() req, @Body() body: { id?: string }) {
+        const id = typeof body?.id === 'string' ? body.id.trim() : '';
+        if (!id) {
+            throw new BadRequestException('Opportunity id is required');
+        }
+        return this.opportunitiesService.verifyExecutingOrganizationForUser(req.user.id, req.user.email, id);
     }
 
     /** Opportunities created by the logged-in faculty member (creatorId = user). */

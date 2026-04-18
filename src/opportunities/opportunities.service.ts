@@ -42,6 +42,15 @@ export class OpportunitiesService {
         return (s || '').trim().toLowerCase();
     }
 
+    /** F2 “additional partner organization” — executing-org portal confirmation runs only when this block is present. */
+    private hasAdditionalPartnerOrganization(dto: Pick<CreateOpportunityDto, 'partner_organization'>): boolean {
+        const po = dto.partner_organization as Record<string, unknown> | null | undefined;
+        if (!po || typeof po !== 'object') return false;
+        const email = typeof po['official_email'] === 'string' ? po['official_email'].trim() : '';
+        const name = typeof po['organization_name'] === 'string' ? po['organization_name'].trim() : '';
+        return email.length > 0 || name.length > 0;
+    }
+
     /**
      * Partner contact email for student-created opportunities (legacy + new payload shapes).
      * Priority: external_partner_collaboration → supervision external/partner fields → executing_context.partner → partner_organization.
@@ -882,8 +891,14 @@ export class OpportunitiesService {
             throw new ForbiddenException('User must belong to an organization to create opportunities');
         }
 
-        const executionVerificationToken = createOpportunityDto.executing_organization?.official_email ? randomUUID() : null;
-        const needsExecutingOrgVerification = !!executionVerificationToken;
+        const hasExecContactEmail = !!this.normalizeEmail(
+            typeof createOpportunityDto.executing_organization?.official_email === 'string'
+                ? createOpportunityDto.executing_organization.official_email
+                : undefined,
+        );
+        const needsExecutingOrgVerification =
+            this.hasAdditionalPartnerOrganization(createOpportunityDto) && hasExecContactEmail;
+        const executionVerificationToken = needsExecutingOrgVerification ? randomUUID() : null;
         const isFaculty = user.role === UserRole.FACULTY;
         /** Partner gate for faculty-authored posts (same heuristics as student flow, but only when a valid partner email exists). */
         let facultyPartnerToken: string | null = null;
@@ -911,7 +926,7 @@ export class OpportunitiesService {
             creatorId: user.id,
             status: initialStatus,
             execution_verification_token: executionVerificationToken,
-            execution_verified: false,
+            execution_verified: !executionVerificationToken,
             execution_verification_status: executionVerificationToken ? 'pending_execution' : 'execution_verified',
             sdg: createOpportunityDto.sdg_info?.sdg_id || 'SDG', // Fallback
             ...(isFaculty && !needsExecutingOrgVerification && facultyPartnerToken
@@ -929,15 +944,17 @@ export class OpportunitiesService {
 
         const saved = await this.opportunitiesRepository.save(opportunity);
 
-        // send executing org verification email if provided
+        // Notify executing-org contact: sign in and confirm from opportunity detail (no public token link).
         if (executionVerificationToken && createOpportunityDto.executing_organization?.official_email) {
-            const verifyBase = process.env.FRONTEND_URL || process.env.APP_URL || '';
-            const link = `${verifyBase}/verify/executing-org?token=${executionVerificationToken}`;
+            const verifyBase = (process.env.FRONTEND_URL || process.env.APP_URL || '').replace(/\/+$/, '');
+            const nextPath = `/dashboard/partner/requests/${saved.id}`;
+            const signInPath = `/login?next=${encodeURIComponent(nextPath)}`;
+            const portalLink = verifyBase ? `${verifyBase}${signInPath}` : signInPath;
             try {
                 await this.mailService.sendExecutingOrganizationVerificationEmail(
                     createOpportunityDto.executing_organization.official_email,
                     saved.title,
-                    link,
+                    portalLink,
                 );
             } catch (e) {
                 console.warn('Failed to send executing org verification email', e.message);
@@ -1779,10 +1796,49 @@ export class OpportunitiesService {
         };
     }
 
-    async verifyExecutingOrganization(token: string) {
-        const opp = await this.opportunitiesRepository.findOne({ where: { execution_verification_token: token } });
-        if (!opp) throw new NotFoundException('Invalid or expired execution verification token');
-        const wasAlreadyVerified = !!opp.execution_verified;
+    async verifyExecutingOrganizationForUser(userId: string, jwtEmail: string | undefined, opportunityId: string) {
+        const user = await this.usersRepository.findOne({
+            where: { id: userId },
+            select: ['id', 'email'],
+        });
+        const actorEmail = this.normalizeEmail(user?.email || jwtEmail);
+        if (!actorEmail) {
+            throw new ForbiddenException('Your account must have an email to confirm execution details.');
+        }
+
+        const opp = await this.findOne(opportunityId);
+        if (!opp) {
+            throw new NotFoundException('Opportunity not found');
+        }
+
+        if (!opp.execution_verification_token) {
+            throw new BadRequestException(
+                'This opportunity does not require executing-organization confirmation in the portal.',
+            );
+        }
+
+        if (opp.execution_verified) {
+            return {
+                success: true,
+                message: 'Executing organization was already verified.',
+                data: { id: opp.id, status: opp.status, workflow_stage: opp.workflowStage },
+            };
+        }
+
+        const exec = opp.executing_organization as { official_email?: string; officialEmail?: string } | null;
+        const expected = this.normalizeEmail(
+            typeof exec?.official_email === 'string'
+                ? exec.official_email
+                : typeof exec?.officialEmail === 'string'
+                  ? exec.officialEmail
+                  : undefined,
+        );
+        if (!expected || expected !== actorEmail) {
+            throw new ForbiddenException(
+                'Only the official executing-organization contact (the email on file) can confirm this step. Sign in with that CIEL account.',
+            );
+        }
+
         opp.execution_verified = true;
         opp.execution_verification_status = 'execution_verified';
         if (opp.admin_approved) {
@@ -1797,10 +1853,14 @@ export class OpportunitiesService {
             }
         }
         await this.opportunitiesRepository.save(opp);
-        if (!opp.admin_approved && !wasAlreadyVerified) {
+        if (!opp.admin_approved) {
             await this.sendAdminReviewEmail(opp, 'executing organization verification');
         }
-        return { success: true, message: 'Executing organization verified', data: { id: opp.id, status: opp.status } };
+        return {
+            success: true,
+            message: 'Executing organization verified.',
+            data: { id: opp.id, status: opp.status, workflow_stage: opp.workflowStage },
+        };
     }
 
     async verifyFaculty(token: string, user?: { id: string; email: string; role: string }) {

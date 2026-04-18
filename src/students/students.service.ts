@@ -120,17 +120,22 @@ export class StudentsService {
     }
 
     private getApiOpportunityStatus(opportunity: Opportunity): string | null {
-        if (opportunity.workflowStage === 'live') return 'live';
+        if (opportunity.workflowStage === 'live' && opportunity.admin_approved) return 'live';
         if (
             opportunity.workflowStage === 'pending_faculty' ||
             opportunity.workflowStage === 'pending_partner' ||
-            opportunity.workflowStage === 'pending_admin'
+            opportunity.workflowStage === 'pending_admin' ||
+            (opportunity.workflowStage === 'live' && !opportunity.admin_approved)
         ) {
             return 'pending_verification';
         }
         if (opportunity.workflowStage === 'rejected') return 'rejected';
         if (opportunity.workflowStage === 'revision') return 'revision';
-        return this.normalizeOpportunityStatus(opportunity.status);
+        const normalized = this.normalizeOpportunityStatus(opportunity.status);
+        if ((normalized === 'live' || normalized === 'active') && !opportunity.admin_approved) {
+            return 'pending_approval';
+        }
+        return normalized;
     }
 
     /**

@@ -573,18 +573,22 @@ export class OpportunitiesService {
     }
 
     private getApiOpportunityStatus(opp: Opportunity): string | null {
-        if (opp.workflowStage === WORKFLOW_STAGE.LIVE) return 'live';
+        if (opp.workflowStage === WORKFLOW_STAGE.LIVE && opp.admin_approved) return 'live';
         if (
             opp.workflowStage === WORKFLOW_STAGE.PENDING_FACULTY ||
             opp.workflowStage === WORKFLOW_STAGE.PENDING_PARTNER ||
-            opp.workflowStage === WORKFLOW_STAGE.PENDING_ADMIN
+            opp.workflowStage === WORKFLOW_STAGE.PENDING_ADMIN ||
+            (opp.workflowStage === WORKFLOW_STAGE.LIVE && !opp.admin_approved)
         ) {
             return 'pending_verification';
         }
         if (opp.workflowStage === WORKFLOW_STAGE.REJECTED) return 'rejected';
         if (opp.workflowStage === WORKFLOW_STAGE.REVISION) return 'revision';
         const normalized = this.normalizeOpportunityStatus(opp.status);
-        return normalized === 'active' ? 'live' : normalized;
+        // Never surface `live` for rows that are not CIEL-admin approved. Legacy rows can still have
+        // `status = active` while `admin_approved` is false; those must stay in review, not "live".
+        if (normalized === 'active' && opp.admin_approved) return 'live';
+        return normalized;
     }
 
     private getWorkflowResponseFields(opp: Opportunity) {
@@ -605,6 +609,13 @@ export class OpportunitiesService {
         }
         if (opp.status === 'pending_partner') return false;
         if (opp.workflowStage === WORKFLOW_STAGE.PENDING_PARTNER) return false;
+        // Partner / org flows: if executing-org verification is required, block final admin approval until verified.
+        if (opp.execution_verification_token && !opp.execution_verified) {
+            return false;
+        }
+        if (opp.status === 'pending_execution') {
+            return false;
+        }
         return true;
     }
 
@@ -1408,6 +1419,18 @@ export class OpportunitiesService {
                                 )
                                 .andWhere('opportunity.status IN (:...early)', {
                                     early: ['pending_faculty', 'pending_partner', 'pending_verification'],
+                                });
+                        }),
+                    ).orWhere(
+                        new Brackets((inner) => {
+                            inner
+                                .where('opportunity.isStudentCreated = :isc2', { isc2: false })
+                                .andWhere(
+                                    '(opportunity.admin_approved = :aa2 OR opportunity.admin_approved IS NULL)',
+                                    { aa2: false },
+                                )
+                                .andWhere('opportunity.status IN (:...partnerOrg)', {
+                                    partnerOrg: ['pending_execution', 'pending_partner'],
                                 });
                         }),
                     );

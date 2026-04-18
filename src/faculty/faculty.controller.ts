@@ -35,9 +35,10 @@ export class FacultyController {
             data: {
                 id: saved.id,
                 status:
-                    saved.workflowStage === 'live'
+                    saved.workflowStage === 'live' && saved.admin_approved
                         ? 'live'
-                        : ['pending_faculty', 'pending_partner', 'pending_admin'].includes(saved.workflowStage || '')
+                        : ['pending_faculty', 'pending_partner', 'pending_admin'].includes(saved.workflowStage || '') ||
+                            (saved.workflowStage === 'live' && !saved.admin_approved)
                             ? 'pending_verification'
                             : saved.workflowStage === 'rejected'
                                 ? 'rejected'
@@ -67,9 +68,10 @@ export class FacultyController {
             data: {
                 id: saved.id,
                 status:
-                    saved.workflowStage === 'live'
+                    saved.workflowStage === 'live' && saved.admin_approved
                         ? 'live'
-                        : ['pending_faculty', 'pending_partner', 'pending_admin'].includes(saved.workflowStage || '')
+                        : ['pending_faculty', 'pending_partner', 'pending_admin'].includes(saved.workflowStage || '') ||
+                            (saved.workflowStage === 'live' && !saved.admin_approved)
                             ? 'pending_verification'
                             : saved.workflowStage === 'rejected'
                                 ? 'rejected'

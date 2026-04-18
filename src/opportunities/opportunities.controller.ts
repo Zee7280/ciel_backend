@@ -55,9 +55,10 @@ export class OpportunitiesController {
             throw new NotFoundException('Opportunity not found');
         }
         const status =
-            data.workflowStage === 'live'
+            data.workflowStage === 'live' && data.admin_approved
                 ? 'live'
-                : ['pending_faculty', 'pending_partner', 'pending_admin'].includes(data.workflowStage || '')
+                : ['pending_faculty', 'pending_partner', 'pending_admin'].includes(data.workflowStage || '') ||
+                    (data.workflowStage === 'live' && !data.admin_approved)
                     ? 'pending_verification'
                     : data.workflowStage === 'rejected'
                         ? 'rejected'

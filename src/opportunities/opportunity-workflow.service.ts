@@ -26,11 +26,12 @@ export const LINE_STATUS = {
 @Injectable()
 export class OpportunityWorkflowService {
     private responseStatus(opp: Opportunity): string {
-        if (opp.workflowStage === WORKFLOW_STAGE.LIVE) return 'live';
+        if (opp.workflowStage === WORKFLOW_STAGE.LIVE && opp.admin_approved) return 'live';
         if (
             opp.workflowStage === WORKFLOW_STAGE.PENDING_FACULTY ||
             opp.workflowStage === WORKFLOW_STAGE.PENDING_PARTNER ||
-            opp.workflowStage === WORKFLOW_STAGE.PENDING_ADMIN
+            opp.workflowStage === WORKFLOW_STAGE.PENDING_ADMIN ||
+            (opp.workflowStage === WORKFLOW_STAGE.LIVE && !opp.admin_approved)
         ) {
             return 'pending_verification';
         }

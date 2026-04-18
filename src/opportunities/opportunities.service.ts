@@ -407,11 +407,12 @@ export class OpportunitiesService {
 
     private ensureProfileComplete(user: User) {
         const missing: string[] = [];
+        const requiresAcademicProfile = [UserRole.STUDENT, UserRole.FACULTY, UserRole.UNIVERSITY].includes(user.role);
         if (!user.name) missing.push('name');
         if (!user.email) missing.push('email');
         if (!user.phone) missing.push('phone');
-        if (!user.city) missing.push('city');
-        if (!user.university && !user.institution) missing.push('university');
+        if (requiresAcademicProfile && !user.city) missing.push('city');
+        if (requiresAcademicProfile && !user.university && !user.institution) missing.push('university');
         if (user.role === UserRole.STUDENT && !user.department) missing.push('department');
         if (user.role === UserRole.FACULTY && !user.faculty_department) missing.push('faculty_department');
         if (user.requires_cnic && !user.cnic) missing.push('cnic');

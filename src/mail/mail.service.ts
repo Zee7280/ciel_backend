@@ -836,11 +836,14 @@ export class MailService {
     const recipientsRaw =
       this.configService.get<string>('ADMIN_REVIEW_EMAILS') ||
       this.configService.get<string>('ADMIN_EMAILS') ||
-      '';
-    const recipients = recipientsRaw
-      .split(',')
-      .map((value) => value.trim())
-      .filter(Boolean);
+      'support@cielpk.com';
+    const recipients = Array.from(
+      new Set(
+        [...recipientsRaw.split(','), 'admin@ciel.pk']
+          .map((value) => value.trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    );
 
     if (!recipients.length) {
       this.logger.warn(`Skipped admin review email for ${opportunityId}; no ADMIN_REVIEW_EMAILS configured.`);

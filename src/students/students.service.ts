@@ -24,6 +24,7 @@ import {
 import { OpportunitiesService } from '../opportunities/opportunities.service';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
+import { StudentReport } from '../reports/entities/student-report.entity';
 
 @Injectable()
 export class StudentsService {
@@ -36,6 +37,8 @@ export class StudentsService {
         private timesheetsRepository: Repository<Timesheet>,
         @InjectRepository(Participation)
         private participantRepository: Repository<Participation>,
+        @InjectRepository(StudentReport)
+        private studentReportsRepository: Repository<StudentReport>,
         @InjectRepository(Organization)
         private orgRepository: Repository<Organization>,
         @InjectRepository(Otp)
@@ -1186,43 +1189,263 @@ export class StudentsService {
         };
     }
 
-    async getImpactHistory(studentId: string) {
-        // Fetch verified timesheets
-        const timesheets = await this.timesheetsRepository.find({
-            where: { studentId: studentId, status: 'verified' },
-            relations: ['opportunity', 'opportunity.organization'],
-            order: { createdAt: 'DESC' }
-        });
+    private resolveImpactStudentId(
+        requestingUserId: string,
+        role: string | undefined,
+        body?: { student_id?: string; studentId?: string },
+    ): string {
+        const requested = (body?.student_id || body?.studentId || '').trim();
+        if (requested && (role === UserRole.SUPER_ADMIN || requested === requestingUserId)) {
+            return requested;
+        }
+        return requestingUserId;
+    }
 
-        // 1. Total Hours
+    private isApprovedImpactReport(r: StudentReport): boolean {
+        return (
+            r.status === 'verified' &&
+            r.partner_status === 'approved' &&
+            r.admin_status === 'approved'
+        );
+    }
+
+    private collectStringsDeep(value: unknown, acc: string[]) {
+        if (value == null) return;
+        if (typeof value === 'string') {
+            acc.push(value);
+            return;
+        }
+        if (Array.isArray(value)) {
+            value.forEach((v) => this.collectStringsDeep(v, acc));
+            return;
+        }
+        if (typeof value === 'object') {
+            for (const v of Object.values(value as Record<string, unknown>)) {
+                this.collectStringsDeep(v, acc);
+            }
+        }
+    }
+
+    private collectHttpsUrls(value: unknown): string[] {
+        const strings: string[] = [];
+        this.collectStringsDeep(value, strings);
+        return strings.filter((s) => /^https?:\/\//i.test(s));
+    }
+
+    private pickPdfUrlFromReport(report: StudentReport): string | null {
+        const buckets = [
+            report.section8,
+            report.section2,
+            report.section5,
+            report.section7,
+            report.section10,
+        ];
+        const urls = buckets.flatMap((b) => this.collectHttpsUrls(b));
+        return urls.find((u) => /\.pdf($|\?)/i.test(u)) ?? null;
+    }
+
+    private pickCertificateUrlFromReport(report: StudentReport): string | null {
+        const buckets = [
+            report.section8,
+            report.section2,
+            report.section3,
+            report.section5,
+            report.section11,
+        ];
+        const urls = buckets.flatMap((b) => this.collectHttpsUrls(b));
+        return (
+            urls.find((u) => /certificat/i.test(u) || /\/certificates?\//i.test(u)) ?? null
+        );
+    }
+
+    private impactActivityStatus(
+        kind: 'hours_log' | 'cii_report',
+        participation: Participation | undefined,
+        opportunity: Opportunity | undefined,
+    ): 'verified' | 'certified' | 'archived' {
+        if (kind === 'cii_report') {
+            return 'certified';
+        }
+        const oppStatus = (opportunity?.status || '').toLowerCase();
+        const closedOpp = ['closed', 'completed', 'complete', 'verified', 'finalized'].includes(
+            oppStatus,
+        );
+        if (participation?.status === 'finalized' && closedOpp) {
+            return 'archived';
+        }
+        return 'verified';
+    }
+
+    private async getApprovedOwnedReport(
+        requestingUserId: string,
+        role: string | undefined,
+        reportId: string,
+        query?: { student_id?: string; studentId?: string },
+    ): Promise<StudentReport> {
+        const studentId = this.resolveImpactStudentId(requestingUserId, role, query);
+        const report = await this.studentReportsRepository.findOne({
+            where: { id: reportId },
+            relations: ['opportunity', 'opportunity.organization'],
+        });
+        if (!report) {
+            throw new NotFoundException('Report not found');
+        }
+        if (report.studentId !== studentId) {
+            throw new ForbiddenException('Access denied');
+        }
+        if (!this.isApprovedImpactReport(report)) {
+            throw new NotFoundException('Report not available');
+        }
+        return report;
+    }
+
+    async getImpactHistory(
+        requestingUserId: string,
+        role: string | undefined,
+        body?: { student_id?: string; studentId?: string },
+    ) {
+        const studentId = this.resolveImpactStudentId(requestingUserId, role, body);
+
+        const [timesheets, reports, participations] = await Promise.all([
+            this.timesheetsRepository.find({
+                where: { studentId, status: 'verified' },
+                relations: ['opportunity', 'opportunity.organization'],
+                order: { createdAt: 'DESC' },
+            }),
+            this.studentReportsRepository.find({
+                where: { studentId },
+                relations: ['opportunity', 'opportunity.organization'],
+                order: { createdAt: 'DESC' },
+            }),
+            this.participantRepository.find({
+                where: { studentId },
+            }),
+        ]);
+
+        const participationByProject = new Map(participations.map((p) => [p.projectId, p]));
+        const approvedReports = reports.filter((r) => this.isApprovedImpactReport(r));
+
         const totalHours = timesheets.reduce((sum, t) => sum + t.hours, 0);
 
-        // 2. Hours this Month
         const now = new Date();
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
         const hoursThisMonth = timesheets
-            .filter(t => new Date(t.createdAt) >= startOfMonth)
+            .filter((t) => new Date(t.createdAt) >= startOfMonth)
             .reduce((sum, t) => sum + t.hours, 0);
 
-        // 3. Projects Completed
-        const projectsCompleted = new Set(timesheets.map(t => t.opportunityId)).size;
+        const projectIdsFromHours = new Set(
+            timesheets.map((t) => t.opportunityId).filter(Boolean) as string[],
+        );
+        const projectIdsFromReports = new Set(
+            approvedReports.map((r) => r.opportunityId).filter(Boolean) as string[],
+        );
+        const projectsCompleted = new Set([...projectIdsFromHours, ...projectIdsFromReports]).size;
 
-        // 4. Impact Score (Mock Calculation: hours * 10 + projects * 50)
-        const impactScore = (totalHours * 10) + (projectsCompleted * 50);
+        const scoresFromReports = approvedReports
+            .map((r) => Number((r.section11 as { ai_generated_impact_score?: number } | undefined)?.ai_generated_impact_score))
+            .filter((n) => Number.isFinite(n));
+        const maxReportScore = scoresFromReports.length ? Math.max(...scoresFromReports) : null;
 
-        // 5. Percentile (Mock: Top X%)
-        // in real world, compare with count of all students. 
-        const impactPercentile = "Top 10%";
+        const impactScore =
+            maxReportScore != null
+                ? Math.round(maxReportScore)
+                : Math.round(totalHours * 10 + projectsCompleted * 50);
 
-        // 6. Activities List
-        const activities = timesheets.map(t => ({
-            id: t.id,
-            title: t.opportunity?.title || 'Unknown Activity',
-            organization: t.opportunity?.organization?.name || 'Unknown Org',
-            date: t.createdAt.toISOString().split('T')[0], // YYYY-MM-DD
-            hours: t.hours,
-            sdg: t.opportunity?.sdg || 'General'
-        }));
+        const impactPercentile = 'Top 10%';
+
+        const basePrefix = '/api/v1/students/impact';
+
+        const latestApprovedReportByOpp = new Map<string, StudentReport>();
+        for (const r of approvedReports) {
+            const oid = r.opportunityId;
+            if (oid && !latestApprovedReportByOpp.has(oid)) {
+                latestApprovedReportByOpp.set(oid, r);
+            }
+        }
+
+        const activities: Record<string, unknown>[] = [];
+
+        for (const t of timesheets) {
+            if (!t.opportunityId) continue;
+            const part = participationByProject.get(t.opportunityId);
+            const recordStatus = this.impactActivityStatus('hours_log', part, t.opportunity);
+            const participationMode =
+                part?.participationMode === 'team' || part?.participationMode === 'individual'
+                    ? part.participationMode
+                    : null;
+            const linkedReport = latestApprovedReportByOpp.get(t.opportunityId);
+            const certFromReport = linkedReport ? this.pickCertificateUrlFromReport(linkedReport) : null;
+            const pdfFromReport = linkedReport ? this.pickPdfUrlFromReport(linkedReport) : null;
+
+            activities.push({
+                id: t.id,
+                title: t.opportunity?.title || 'Unknown Activity',
+                organization: t.opportunity?.organization?.name || 'Unknown Org',
+                date: t.createdAt.toISOString().split('T')[0],
+                hours: t.hours,
+                sdg: t.opportunity?.sdg || 'General',
+                record_type: 'hours_log',
+                status: recordStatus,
+                participation: participationMode,
+                project_id: t.opportunityId,
+                opportunity_id: t.opportunityId,
+                report_id: linkedReport?.id ?? null,
+                actions: {
+                    certificate_url: linkedReport
+                        ? certFromReport ?? `${basePrefix}/certificates/${linkedReport.id}/download`
+                        : null,
+                    pdf_url: linkedReport
+                        ? pdfFromReport ?? `${basePrefix}/reports/${linkedReport.id}/pdf`
+                        : null,
+                    cii_url: linkedReport ? `${basePrefix}/cii/${linkedReport.id}` : null,
+                    ai_report_url: linkedReport ? `${basePrefix}/ai-reports/${linkedReport.id}` : null,
+                    results_url: `${basePrefix}/projects/${t.opportunityId}/results`,
+                },
+            });
+        }
+
+        for (const r of approvedReports) {
+            const oppId = r.opportunityId;
+            const part = oppId ? participationByProject.get(oppId) : undefined;
+            const participationMode =
+                part?.participationMode === 'team' || part?.participationMode === 'individual'
+                    ? part.participationMode
+                    : null;
+            const s11 = (r.section11 || {}) as {
+                ai_generated_impact_score?: number;
+                institutional_alignment_score?: number;
+            };
+            const pdfDirect = this.pickPdfUrlFromReport(r);
+            const certDirect = this.pickCertificateUrlFromReport(r);
+
+            activities.push({
+                id: r.id,
+                title: r.opportunity?.title || 'Impact report',
+                organization: r.opportunity?.organization?.name || 'Unknown Org',
+                date: r.submission_date
+                    ? new Date(r.submission_date).toISOString().split('T')[0]
+                    : r.createdAt.toISOString().split('T')[0],
+                hours: 0,
+                sdg: r.opportunity?.sdg || 'General',
+                record_type: 'cii_report',
+                status: 'certified',
+                participation: participationMode,
+                project_id: oppId,
+                opportunity_id: oppId,
+                report_id: r.id,
+                cii_score: s11.ai_generated_impact_score ?? null,
+                institutional_alignment_score: s11.institutional_alignment_score ?? null,
+                actions: {
+                    certificate_url: certDirect ?? `${basePrefix}/certificates/${r.id}/download`,
+                    pdf_url: pdfDirect ?? `${basePrefix}/reports/${r.id}/pdf`,
+                    cii_url: `${basePrefix}/cii/${r.id}`,
+                    ai_report_url: `${basePrefix}/ai-reports/${r.id}`,
+                    results_url: oppId ? `${basePrefix}/projects/${oppId}/results` : null,
+                },
+            });
+        }
+
+        activities.sort((a, b) => String(b.date).localeCompare(String(a.date)));
 
         return {
             success: true,
@@ -1232,8 +1455,115 @@ export class StudentsService {
                 projects_completed: projectsCompleted,
                 impact_score: impactScore,
                 impact_percentile: impactPercentile,
-                activities: activities
-            }
+                activities,
+            },
+        };
+    }
+
+    async getImpactCertificateDownload(
+        requestingUserId: string,
+        role: string | undefined,
+        reportId: string,
+        query?: { student_id?: string; studentId?: string },
+    ) {
+        const report = await this.getApprovedOwnedReport(requestingUserId, role, reportId, query);
+        const url = this.pickCertificateUrlFromReport(report);
+        if (!url) {
+            throw new NotFoundException('Certificate not available');
+        }
+        return { success: true, data: { url } };
+    }
+
+    async getImpactReportPdf(
+        requestingUserId: string,
+        role: string | undefined,
+        reportId: string,
+        query?: { student_id?: string; studentId?: string },
+    ) {
+        const report = await this.getApprovedOwnedReport(requestingUserId, role, reportId, query);
+        const url = this.pickPdfUrlFromReport(report);
+        if (!url) {
+            throw new NotFoundException('PDF not available');
+        }
+        return { success: true, data: { url } };
+    }
+
+    async getImpactCiiView(
+        requestingUserId: string,
+        role: string | undefined,
+        reportId: string,
+        query?: { student_id?: string; studentId?: string },
+    ) {
+        const report = await this.getApprovedOwnedReport(requestingUserId, role, reportId, query);
+        const s11 = (report.section11 || {}) as {
+            ai_generated_impact_score?: number;
+            institutional_alignment_score?: number;
+            verified_narrative?: string;
+        };
+        return {
+            success: true,
+            data: {
+                report_id: report.id,
+                opportunity_id: report.opportunityId,
+                scores: {
+                    ai_generated_impact_score: s11.ai_generated_impact_score ?? null,
+                    institutional_alignment_score: s11.institutional_alignment_score ?? null,
+                },
+                verified_narrative: s11.verified_narrative ?? null,
+            },
+        };
+    }
+
+    async getImpactAiReportView(
+        requestingUserId: string,
+        role: string | undefined,
+        reportId: string,
+        query?: { student_id?: string; studentId?: string },
+    ) {
+        const report = await this.getApprovedOwnedReport(requestingUserId, role, reportId, query);
+        const s11 = report.section11 || {};
+        return {
+            success: true,
+            data: {
+                report_id: report.id,
+                opportunity_id: report.opportunityId,
+                section11: s11,
+            },
+        };
+    }
+
+    async getImpactProjectResults(
+        requestingUserId: string,
+        role: string | undefined,
+        opportunityId: string,
+        query?: { student_id?: string; studentId?: string },
+    ) {
+        const studentId = this.resolveImpactStudentId(requestingUserId, role, query);
+        const verifiedTs = await this.timesheetsRepository.findOne({
+            where: { studentId, opportunityId, status: 'verified' },
+        });
+        const reports = await this.studentReportsRepository.find({
+            where: { studentId, opportunityId },
+            order: { createdAt: 'DESC' },
+        });
+        const approvedReport = reports.find((r) => this.isApprovedImpactReport(r));
+        if (!verifiedTs && !approvedReport) {
+            throw new NotFoundException('Results not available');
+        }
+        const projectPayload = await this.getProjectById(opportunityId, studentId);
+        return {
+            success: true,
+            data: {
+                ...projectPayload.data,
+                completion: {
+                    report_id: approvedReport?.id ?? null,
+                    impact_score:
+                        (approvedReport?.section11 as { ai_generated_impact_score?: number } | undefined)
+                            ?.ai_generated_impact_score ?? null,
+                    verified_hours: verifiedTs?.hours ?? null,
+                    has_verified_report: !!approvedReport,
+                },
+            },
         };
     }
 

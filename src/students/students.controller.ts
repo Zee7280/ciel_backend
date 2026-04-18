@@ -146,8 +146,60 @@ export class StudentsController {
     }
 
     @Post('impact/history')
-    getImpactHistory(@Body() body: { student_id: string }) {
-        return this.studentsService.getImpactHistory(body.student_id);
+    getImpactHistory(
+        @Request() req,
+        @Body() body?: { student_id?: string; studentId?: string },
+    ) {
+        return this.studentsService.getImpactHistory(req.user.id, req.user.role, body);
+    }
+
+    @Get('impact/certificates/:id/download')
+    getImpactCertificateDownload(
+        @Request() req,
+        @Param('id') id: string,
+        @Query('student_id') student_id?: string,
+    ) {
+        return this.studentsService.getImpactCertificateDownload(req.user.id, req.user.role, id, {
+            student_id,
+        });
+    }
+
+    @Get('impact/reports/:id/pdf')
+    getImpactReportPdf(
+        @Request() req,
+        @Param('id') id: string,
+        @Query('student_id') student_id?: string,
+    ) {
+        return this.studentsService.getImpactReportPdf(req.user.id, req.user.role, id, { student_id });
+    }
+
+    @Get('impact/cii/:id')
+    getImpactCiiView(
+        @Request() req,
+        @Param('id') id: string,
+        @Query('student_id') student_id?: string,
+    ) {
+        return this.studentsService.getImpactCiiView(req.user.id, req.user.role, id, { student_id });
+    }
+
+    @Get('impact/ai-reports/:id')
+    getImpactAiReportView(
+        @Request() req,
+        @Param('id') id: string,
+        @Query('student_id') student_id?: string,
+    ) {
+        return this.studentsService.getImpactAiReportView(req.user.id, req.user.role, id, { student_id });
+    }
+
+    @Get('impact/projects/:id/results')
+    getImpactProjectResults(
+        @Request() req,
+        @Param('id') id: string,
+        @Query('student_id') student_id?: string,
+    ) {
+        return this.studentsService.getImpactProjectResults(req.user.id, req.user.role, id, {
+            student_id,
+        });
     }
 
     // Profile

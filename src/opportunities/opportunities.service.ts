@@ -1159,6 +1159,17 @@ export class OpportunitiesService {
             }
         }
 
+        const rejectedResubmitSnapshot = {
+            wasRejected:
+                opportunity.status === 'rejected' ||
+                opportunity.workflowStage === WORKFLOW_STAGE.REJECTED ||
+                opportunity.adminApprovalStatus === LINE_STATUS.REJECTED ||
+                opportunity.partnerApprovalStatus === LINE_STATUS.REJECTED,
+            partnerLineRejected: opportunity.partnerApprovalStatus === LINE_STATUS.REJECTED,
+            /** Snapshot before patch — student pipeline must never use NGO resubmit logic. */
+            isStudentCreated: opportunity.isStudentCreated,
+        };
+
         const { id: _dtoId, ...patch } = updateOpportunityDto as UpdateOpportunityDto & { id: string };
         Object.assign(opportunity, patch);
 
@@ -1181,6 +1192,44 @@ export class OpportunitiesService {
                 opportunity.status = 'pending_execution';
                 opportunity.execution_verification_status = 'pending_execution';
                 opportunity.adminApprovalStatus = LINE_STATUS.PENDING;
+            }
+        }
+
+        // Partner / NGO org member: after admin (or partner) rejection, saving edits resubmits into review queues.
+        const isPartnerOrgMemberUpdate =
+            !isFacultyOwner &&
+            !!orgId &&
+            opportunity.organizationId === orgId &&
+            !rejectedResubmitSnapshot.isStudentCreated;
+
+        if (rejectedResubmitSnapshot.wasRejected && isPartnerOrgMemberUpdate) {
+            opportunity.rejectionReason = null;
+            opportunity.admin_approved = false;
+
+            const needsPartnerReverify =
+                opportunity.requiresPartnerApproval &&
+                (rejectedResubmitSnapshot.partnerLineRejected ||
+                    opportunity.partnerApprovalStatus === LINE_STATUS.REJECTED);
+
+            if (needsPartnerReverify) {
+                opportunity.partnerApprovalStatus = LINE_STATUS.PENDING;
+                opportunity.partnerVerified = false;
+                opportunity.workflowStage = WORKFLOW_STAGE.PENDING_PARTNER;
+                opportunity.status = 'pending_partner';
+                opportunity.adminApprovalStatus = LINE_STATUS.PENDING;
+            } else if (opportunity.execution_verification_token && !opportunity.execution_verified) {
+                opportunity.status = 'pending_execution';
+                opportunity.execution_verification_status = 'pending_execution';
+                opportunity.workflowStage = null;
+                opportunity.adminApprovalStatus = LINE_STATUS.PENDING;
+            } else {
+                opportunity.status = 'pending_approval';
+                opportunity.workflowStage = WORKFLOW_STAGE.PENDING_ADMIN;
+                opportunity.adminApprovalStatus = LINE_STATUS.PENDING;
+            }
+
+            if (opportunity.status === 'pending_approval' || opportunity.status === 'pending_execution') {
+                await this.sendAdminReviewEmail(opportunity, 'partner resubmission after rejection');
             }
         }
 

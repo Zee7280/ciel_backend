@@ -923,7 +923,11 @@ export class OpportunitiesService {
             const verifyBase = process.env.FRONTEND_URL || process.env.APP_URL || '';
             const link = `${verifyBase}/verify/executing-org?token=${executionVerificationToken}`;
             try {
-                await this.mailService.sendPasswordResetEmail(createOpportunityDto.executing_organization.official_email, link);
+                await this.mailService.sendExecutingOrganizationVerificationEmail(
+                    createOpportunityDto.executing_organization.official_email,
+                    saved.title,
+                    link,
+                );
             } catch (e) {
                 console.warn('Failed to send executing org verification email', e.message);
             }
@@ -933,7 +937,7 @@ export class OpportunitiesService {
         const partnerEmail = createOpportunityDto.partner_organization?.official_email;
         if (partnerEmail && !(isFaculty && facultyPartnerToken)) {
             try {
-                await this.mailService.sendPasswordResetEmail(partnerEmail, `Partner confirmation requested for ${saved.title}`);
+                await this.mailService.sendPartnerOpportunityNotice(partnerEmail, saved.title);
             } catch (e) {
                 console.warn('Failed to send partner org email', e.message);
             }

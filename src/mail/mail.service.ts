@@ -147,6 +147,68 @@ export class MailService {
     }
   }
 
+  async sendExecutingOrganizationVerificationEmail(to: string, projectTitle: string, verifyLink: string) {
+    const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
+    const titleEsc = this.escHtmlPlain(projectTitle);
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">Executing Organization Verification Required</h2>
+        <p>An opportunity has been submitted on CIEL PK and your organization was listed as the executing organization.</p>
+        <p><strong>Opportunity:</strong> ${titleEsc}</p>
+        <p>Please review the request and confirm the execution details using the button below.</p>
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${verifyLink}" style="background-color: #4CAF50; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Review Opportunity</a>
+        </div>
+        <p style="color: #666; font-size: 14px;">If the button doesn't work, you can copy and paste this link into your browser:</p>
+        <p style="color: #2563eb; font-size: 14px; word-break: break-all;">${verifyLink}</p>
+        <p style="font-size: 12px; color: #999; margin-top: 30px;">If you did not expect this email, you can ignore it or contact support.</p>
+      </div>
+    `;
+
+    try {
+      await this.transporter.sendMail({
+        from,
+        to,
+        subject: `Execution verification required: ${projectTitle}`,
+        html,
+      });
+      this.logger.log(`Executing organization verification email sent to ${to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send executing organization verification email to ${to}`, error.stack);
+    }
+  }
+
+  async sendPartnerOpportunityNotice(to: string, projectTitle: string) {
+    const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
+    const titleEsc = this.escHtmlPlain(projectTitle);
+    const dashboardLink = this.buildFrontendLink('/login', {});
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">Opportunity Notification</h2>
+        <p>Your email address was listed for the opportunity <strong>${titleEsc}</strong> on CIEL PK.</p>
+        <p>Please sign in to CIEL if you need to review any associated details.</p>
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${dashboardLink}" style="background-color: #4CAF50; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Open CIEL</a>
+        </div>
+        <p style="font-size: 12px; color: #999; margin-top: 30px;">If you did not expect this email, you can ignore it or contact support.</p>
+      </div>
+    `;
+
+    try {
+      await this.transporter.sendMail({
+        from,
+        to,
+        subject: `Opportunity notice: ${projectTitle}`,
+        html,
+      });
+      this.logger.log(`Partner opportunity notice email sent to ${to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send partner opportunity notice email to ${to}`, error.stack);
+    }
+  }
+
   async sendTeamMemberOtp(to: string, otp: string) {
     const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
 

@@ -339,6 +339,10 @@ export class OpportunitiesService {
         }
     }
 
+    private resolveSafetyDeclarationPayload(dto: { safety_declaration?: any; safety_supervision_declaration?: any }) {
+        return dto.safety_declaration ?? dto.safety_supervision_declaration;
+    }
+
     private validateSubmissionConfirmations(confirm?: any) {
         if (!confirm) throw new BadRequestException('submission_confirmations are required');
         const keys = [
@@ -827,6 +831,7 @@ export class OpportunitiesService {
             throw new ForbiddenException('User not found');
         }
         this.ensureProfileComplete(user);
+        createOpportunityDto.safety_declaration = this.resolveSafetyDeclarationPayload(createOpportunityDto);
 
         this.validateSupervision(createOpportunityDto.supervision);
         this.validateSafetyDeclaration(createOpportunityDto.safety_declaration);
@@ -933,6 +938,7 @@ export class OpportunitiesService {
         const user = await this.usersRepository.findOne({ where: { id: userId } });
         if (!user) throw new ForbiddenException('User not found');
         this.ensureProfileComplete(user);
+        dto.safety_declaration = this.resolveSafetyDeclarationPayload(dto);
         // validation rules for student flow
         if (!dto.supervision?.contact) throw new BadRequestException('Faculty email (supervision.contact) is required');
         if (!dto.supervision?.faculty_department) throw new BadRequestException('faculty_department is required');

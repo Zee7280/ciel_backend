@@ -42,18 +42,24 @@ export class AdminOpportunitiesController {
     }
 
     @Post(':id/approve')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.SUPER_ADMIN)
     async approve(@Param('id') id: string) {
         await this.opportunitiesService.approve(id);
         return { success: true, data: {} };
     }
 
     @Patch(':id/approve')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.SUPER_ADMIN)
     async approvePatch(@Param('id') id: string) {
         await this.opportunitiesService.approve(id);
         return { success: true, data: {} };
     }
 
     @Post(':id/reject')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.SUPER_ADMIN)
     async reject(@Param('id') id: string, @Body() body: { reason: string }) {
         await this.opportunitiesService.reject(id, body.reason);
         return { success: true, data: {} };

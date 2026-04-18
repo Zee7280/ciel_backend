@@ -1759,14 +1759,24 @@ export class OpportunitiesService {
     async verifyExecutingOrganization(token: string) {
         const opp = await this.opportunitiesRepository.findOne({ where: { execution_verification_token: token } });
         if (!opp) throw new NotFoundException('Invalid or expired execution verification token');
+        const wasAlreadyVerified = !!opp.execution_verified;
         opp.execution_verified = true;
         opp.execution_verification_status = 'execution_verified';
         if (opp.admin_approved) {
             opp.status = 'active';
         } else {
             opp.status = 'pending_approval';
+            if (!opp.workflowStage || opp.workflowStage === WORKFLOW_STAGE.PENDING_ADMIN) {
+                opp.workflowStage = WORKFLOW_STAGE.PENDING_ADMIN;
+            }
+            if (!opp.adminApprovalStatus || opp.adminApprovalStatus === LINE_STATUS.NOT_APPLICABLE) {
+                opp.adminApprovalStatus = LINE_STATUS.PENDING;
+            }
         }
         await this.opportunitiesRepository.save(opp);
+        if (!opp.admin_approved && !wasAlreadyVerified) {
+            await this.sendAdminReviewEmail(opp, 'executing organization verification');
+        }
         return { success: true, message: 'Executing organization verified', data: { id: opp.id, status: opp.status } };
     }
 

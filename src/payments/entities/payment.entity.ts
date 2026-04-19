@@ -30,6 +30,10 @@ export class Payment {
     @Column({ default: '5,000 PKR' })
     amount: string;
 
+    /** Amount the student paid (PKR), from submit body; legacy rows may be null. */
+    @Column({ type: 'int', nullable: true })
+    paid_amount: number | null;
+
     @Column({ type: 'text' })
     proof_url: string;
 

@@ -120,7 +120,14 @@ export class PaymentsService {
 
     // --- NEW MANUAL PAYMENT FLOW ---
 
-    async submitManualPayment(studentId: string, projectId: string, file: any) {
+    async submitManualPayment(
+        studentId: string,
+        projectId: string,
+        file: any,
+        paidAmountRaw?: string | number,
+    ) {
+        const paidAmount = this.parsePaidAmount(paidAmountRaw);
+
         // 1. Upload proof to S3
         const proofUrl = await this.s3Service.uploadFile(file, `payments-manual/${studentId}`);
 
@@ -130,6 +137,7 @@ export class PaymentsService {
             projectId,
             proof_url: proofUrl,
             status: PaymentStatus.PENDING,
+            paid_amount: paidAmount,
         });
         await this.paymentRepository.save(payment);
 
@@ -148,8 +156,21 @@ export class PaymentsService {
             message: 'Payment proof submitted successfully',
             data: {
                 paymentId: payment.id,
+                paid_amount: payment.paid_amount,
             },
         };
+    }
+
+    private parsePaidAmount(paidAmountRaw?: string | number): number {
+        if (paidAmountRaw === undefined || paidAmountRaw === null || paidAmountRaw === '') {
+            throw new BadRequestException('paid_amount is required');
+        }
+        const n =
+            typeof paidAmountRaw === 'number' ? paidAmountRaw : Number(String(paidAmountRaw).trim());
+        if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) {
+            throw new BadRequestException('paid_amount must be a positive whole number');
+        }
+        return n;
     }
 
     private mapManualPaymentRow(p: Payment) {
@@ -160,6 +181,7 @@ export class PaymentsService {
             projectTitle: p.opportunity?.title || 'Unknown',
             organization: p.opportunity?.organization?.name || 'Unknown',
             amount: p.amount,
+            paid_amount: p.paid_amount,
             proofUrl: p.proof_url,
             submittedAt: p.created_at,
             status: p.status,

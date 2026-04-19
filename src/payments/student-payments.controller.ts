@@ -31,6 +31,7 @@ export class StudentPaymentsController {
     async submitPayment(
         @Request() req,
         @Body('projectId') projectId: string,
+        @Body('paid_amount') paidAmount: string | number | undefined,
         @UploadedFile() file: any,
     ) {
         if (!file) {
@@ -40,6 +41,11 @@ export class StudentPaymentsController {
             throw new BadRequestException('projectId is required');
         }
 
-        return await this.paymentsService.submitManualPayment(req.user.id, projectId, file);
+        return await this.paymentsService.submitManualPayment(
+            req.user.id,
+            projectId,
+            file,
+            paidAmount,
+        );
     }
 }

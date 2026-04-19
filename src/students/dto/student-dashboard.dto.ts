@@ -12,6 +12,8 @@ export interface ActiveProject {
     assignedAt: string; // ISO Date
     status: string;
     progress: number; // 0-100
+    /** Canonical report lifecycle for this project when a student_reports row exists (additive for clients). */
+    report_status?: string | null;
 }
 
 export interface Deadline {
@@ -40,6 +42,11 @@ export interface DashboardOverview {
     completedActivityBars: number[];
     completedSample?: { id: string; title: string };
     impactHistoryBadgeCount?: number;
+    /** Reports where the student still owes fee / must submit payment proof (`partner_verified`, legacy `payment_pending`). */
+    pendingPaymentsCount?: number;
+    /** Reports with proof submitted and awaiting staff (`payment_under_review`). */
+    paymentsUnderReviewCount?: number;
+    pendingPaymentsSample?: DashboardOverviewSample[];
 }
 
 export interface ContinueReportQuickAction {
@@ -48,8 +55,23 @@ export interface ContinueReportQuickAction {
     subtitle: string;
 }
 
+export interface ViewPaymentQuickAction {
+    projectId: string;
+    title: string;
+    subtitle?: string;
+}
+
+export interface ViewReportResultsQuickAction {
+    projectId: string;
+    title: string;
+}
+
 export interface DashboardQuickActions {
     continueReport: ContinueReportQuickAction | null;
+    /** Deeplink to student payment flow (first project that needs fee / slip). */
+    viewPayment?: ViewPaymentQuickAction | null;
+    /** Distinct from payment: finalized report / outcome viewing. */
+    viewReportResults?: ViewReportResultsQuickAction | null;
 }
 
 export interface DashboardNotificationItem {
@@ -57,6 +79,8 @@ export interface DashboardNotificationItem {
     title: string;
     detail: string;
     tone?: 'urgent' | 'warning' | 'neutral';
+    /** Lets the UI style tiles (e.g. payment vs generic review) without parsing copy. */
+    category?: 'payment' | 'report' | 'approval' | 'deadline' | string;
 }
 
 export interface DashboardNotificationsPreview {

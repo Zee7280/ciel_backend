@@ -24,6 +24,7 @@ import { PaymentsModule } from './payments/payments.module';
 import { FacultyModule } from './faculty/faculty.module';
 import { ContactModule } from './contact/contact.module';
 import { PlatformStatsModule } from './platform-stats/platform-stats.module';
+import { SupportModule } from './support/support.module';
 
 @Module({
   imports: [
@@ -70,6 +71,7 @@ import { PlatformStatsModule } from './platform-stats/platform-stats.module';
     FacultyModule,
     ContactModule,
     PlatformStatsModule,
+    SupportModule,
     TypeOrmModule.forFeature([Setting])
 ],
   controllers: [AppController],

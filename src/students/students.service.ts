@@ -142,6 +142,23 @@ export class StudentsService {
         }
     }
 
+    /**
+     * Public `report_status` for dashboard lists (distinct from legacy DB-only labels).
+     * `pending_payment` = student must pay / submit proof (`partner_verified`, legacy `payment_pending`).
+     */
+    private dashboardPublicReportStatus(raw: string | null | undefined): string | null {
+        if (!raw) return null;
+        if (raw === 'continue') return 'draft';
+        if (raw === 'partner_verified' || raw === 'payment_pending') return 'pending_payment';
+        if (raw === 'payment_under_review') return 'payment_under_review';
+        return raw;
+    }
+
+    private reportProjectKey(report: StudentReport): string | null {
+        const k = report.opportunityId || report.project_id;
+        return k ? String(k) : null;
+    }
+
     private normalizeBarHeights(values: number[]): number[] {
         if (!values.length) return [];
         const max = Math.max(...values.map((v) => this.safeDashboardNumber(v)), 1);
@@ -446,6 +463,14 @@ export class StudentsService {
             }),
         ]);
 
+        const reportByProjectId = new Map<string, StudentReport>();
+        for (const r of studentReports) {
+            const key = this.reportProjectKey(r);
+            if (key && !reportByProjectId.has(key)) {
+                reportByProjectId.set(key, r);
+            }
+        }
+
         const activeProjects = activeApplications.map((app) => {
             const required = this.safeDashboardNumber(app.project?.timeline?.expected_hours);
             const hoursDone = verifiedTimesheets
@@ -463,6 +488,9 @@ export class StudentsService {
                     ? String(sdgId)
                     : 'General';
 
+            const rep = reportByProjectId.get(String(app.projectId));
+            const reportStatus = rep ? this.dashboardPublicReportStatus(rep.status) : null;
+
             return {
                 id: String(app.projectId),
                 title: app.project?.title || 'Project',
@@ -470,6 +498,7 @@ export class StudentsService {
                 assignedAt: app.createdAt.toISOString(),
                 status: this.participationToDashboardStatus(app.status),
                 progress,
+                ...(reportStatus ? { report_status: reportStatus } : {}),
             };
         });
 
@@ -537,6 +566,15 @@ export class StudentsService {
             (r) => r.status === 'draft' || r.status === 'continue',
         );
         const continueProjectId = draftReport?.opportunityId || draftReport?.project_id;
+
+        const paymentDueReport = studentReports.find((r) =>
+            ['partner_verified', 'payment_pending'].includes(r.status),
+        );
+        const paymentDueProjectId = paymentDueReport ? this.reportProjectKey(paymentDueReport) : null;
+
+        const resultsReport = studentReports.find((r) => ['verified', 'paid'].includes(r.status));
+        const resultsProjectId = resultsReport ? this.reportProjectKey(resultsReport) : null;
+
         const quickActions = {
             continueReport:
                 draftReport && continueProjectId
@@ -544,6 +582,21 @@ export class StudentsService {
                           projectId: String(continueProjectId),
                           title: draftReport.opportunity?.title || 'Continue report',
                           subtitle: 'Pick up where you left off',
+                      }
+                    : null,
+            viewPayment:
+                paymentDueReport && paymentDueProjectId
+                    ? {
+                          projectId: paymentDueProjectId,
+                          title: paymentDueReport.opportunity?.title || 'Project',
+                          subtitle: 'Fee or payment proof required',
+                      }
+                    : null,
+            viewReportResults:
+                resultsReport && resultsProjectId
+                    ? {
+                          projectId: resultsProjectId,
+                          title: resultsReport.opportunity?.title || 'Project',
                       }
                     : null,
         };
@@ -555,6 +608,7 @@ export class StudentsService {
                 title: 'Deadline approaching',
                 detail: d.title,
                 tone: 'urgent' as const,
+                category: 'deadline' as const,
             }));
 
         const pendingNotifs = pendingSampleRows.map((app) => ({
@@ -562,20 +616,59 @@ export class StudentsService {
             title: app.project?.title || 'Project',
             detail: 'Awaiting approval to start or proceed.',
             tone: 'warning' as const,
+            category: 'approval' as const,
         }));
 
-        const underReviewNotifs = reportsUnderReviewList.slice(0, 5).map((r) => ({
-            id: `report-${r.id}`,
-            title: r.opportunity?.title || 'Report',
-            detail: 'Submitted — review in progress.',
-            tone: 'neutral' as const,
-        }));
+        const underReviewNotifs = reportsUnderReviewList.slice(0, 5).map((r) => {
+            const paymentish =
+                r.status === 'payment_under_review' ||
+                r.status === 'payment_pending' ||
+                r.status === 'partner_verified';
+            let detail = 'Submitted — review in progress.';
+            if (r.status === 'payment_under_review') {
+                detail = 'Payment proof is under review.';
+            } else if (r.status === 'payment_pending' || r.status === 'partner_verified') {
+                detail = 'Payment or fee slip is required.';
+            }
+            return {
+                id: `report-${r.id}`,
+                title: r.opportunity?.title || 'Report',
+                detail,
+                tone: 'neutral' as const,
+                category: paymentish ? ('payment' as const) : ('report' as const),
+            };
+        });
 
         const notificationsPreview = {
             active: urgentDeadlineNotifs,
             pending: pendingNotifs,
             underReview: underReviewNotifs,
         };
+
+        const pendingPaymentByProject = new Map<string, StudentReport>();
+        for (const r of studentReports) {
+            if (!['partner_verified', 'payment_pending'].includes(r.status)) continue;
+            const key = this.reportProjectKey(r);
+            if (key && !pendingPaymentByProject.has(key)) {
+                pendingPaymentByProject.set(key, r);
+            }
+        }
+        const paymentUnderReviewByProject = new Map<string, StudentReport>();
+        for (const r of studentReports) {
+            if (r.status !== 'payment_under_review') continue;
+            const key = this.reportProjectKey(r);
+            if (key && !paymentUnderReviewByProject.has(key)) {
+                paymentUnderReviewByProject.set(key, r);
+            }
+        }
+
+        const pendingPaymentsSample = Array.from(pendingPaymentByProject.values())
+            .slice(0, 2)
+            .map((r) => ({
+                id: String(r.opportunityId || r.project_id || r.id),
+                title: r.opportunity?.title || 'Project',
+                hint: 'Payment required',
+            }));
 
         const overview = {
             activeProjectsCount: activeProjectsCount,
@@ -589,6 +682,9 @@ export class StudentsService {
             completedActivityBars: this.buildCompletedActivityBars(studentReports),
             ...(completedSample ? { completedSample } : {}),
             impactHistoryBadgeCount: studentReports.filter((r) => r.status !== 'draft').length,
+            pendingPaymentsCount: pendingPaymentByProject.size,
+            paymentsUnderReviewCount: paymentUnderReviewByProject.size,
+            ...(pendingPaymentsSample.length ? { pendingPaymentsSample } : {}),
         };
 
         return {

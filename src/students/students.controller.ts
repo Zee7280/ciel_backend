@@ -40,6 +40,12 @@ export class StudentsController {
         return this.studentsService.getDashboard(studentId || req.user.id);
     }
 
+    /** BFF-friendly alias: always the authenticated student (ignores `studentId` query). */
+    @Get('me/dashboard')
+    getMyDashboard(@Request() req) {
+        return this.studentsService.getDashboard(req.user.id);
+    }
+
     // ... other methods ...
 
 

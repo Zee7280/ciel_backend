@@ -36,6 +36,11 @@ export class StudentController {
         return this.studentsService.getDashboard(targetId);
     }
 
+    @Get('me/dashboard')
+    getMyDashboard(@Request() req) {
+        return this.studentsService.getDashboard(req.user.id);
+    }
+
     @Get('projects')
     getStudentProjects(@Request() req) {
         return this.studentsService.getStudentProjects(req.user.id);

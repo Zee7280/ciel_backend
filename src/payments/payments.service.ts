@@ -188,6 +188,62 @@ export class PaymentsService {
         };
     }
 
+    async getStudentManualPaymentHistory(studentId: string) {
+        const payments = await this.paymentRepository.find({
+            where: { studentId },
+            relations: ['opportunity', 'opportunity.organization', 'student'],
+            order: { created_at: 'DESC' },
+        });
+
+        const firstStudent = payments[0]?.student;
+        const student =
+            firstStudent != null
+                ? {
+                      id: firstStudent.id,
+                      name: firstStudent.name,
+                      email: firstStudent.email,
+                  }
+                : { id: studentId, name: null as string | null, email: null as string | null };
+
+        const paymentRows = payments.map((p) => ({
+            id: p.id,
+            studentId: p.studentId,
+            opportunityId: p.projectId,
+            amount: p.amount,
+            paid_amount: p.paid_amount,
+            proofUrl: p.proof_url,
+            status: p.status,
+            feedback: p.feedback,
+            submittedAt: p.created_at,
+            updatedAt: p.updated_at,
+            opportunity: p.opportunity
+                ? {
+                      id: p.opportunity.id,
+                      title: p.opportunity.title,
+                      status: p.opportunity.status,
+                      workflowStage: p.opportunity.workflowStage,
+                      adminApproved: p.opportunity.admin_approved,
+                      types: p.opportunity.types ?? null,
+                      mode: p.opportunity.mode ?? null,
+                      requiredHours: p.opportunity.requiredHours,
+                      organization: p.opportunity.organization
+                          ? {
+                                id: p.opportunity.organization.id,
+                                name: p.opportunity.organization.name,
+                                orgType: p.opportunity.organization.orgType,
+                            }
+                          : null,
+                  }
+                : null,
+        }));
+
+        return {
+            studentId,
+            student,
+            payments: paymentRows,
+        };
+    }
+
     async findAllPendingManual() {
         const payments = await this.paymentRepository.find({
             where: { status: PaymentStatus.PENDING },

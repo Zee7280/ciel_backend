@@ -4,10 +4,13 @@ import {
     Post,
     Body,
     Request,
+    Query,
     UseGuards,
     UseInterceptors,
     UploadedFile,
     BadRequestException,
+    ForbiddenException,
+    ParseUUIDPipe,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -23,6 +26,21 @@ export class StudentPaymentsController {
         return {
             success: true,
             data: await this.paymentsService.getPaymentInfo(),
+        };
+    }
+
+    @Get('payments/history')
+    async getPaymentHistory(
+        @Request() req,
+        @Query('studentId', ParseUUIDPipe) studentId: string,
+    ) {
+        if (studentId !== req.user.id) {
+            throw new ForbiddenException('You can only view your own payment history');
+        }
+
+        return {
+            success: true,
+            data: await this.paymentsService.getStudentManualPaymentHistory(studentId),
         };
     }
 

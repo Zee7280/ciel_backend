@@ -1431,6 +1431,17 @@ export class StudentsService {
         );
     }
 
+    /** UI status for CII rows that are not fully certified yet. */
+    private deriveImpactReportPipelineStatus(r: StudentReport): string {
+        if (r.status === 'rejected' || r.partner_status === 'rejected' || r.admin_status === 'rejected') {
+            return 'rejected';
+        }
+        if (r.status === 'verified' && (r.partner_status !== 'approved' || r.admin_status !== 'approved')) {
+            return 'under_review';
+        }
+        return 'under_review';
+    }
+
     private collectStringsDeep(value: unknown, acc: string[]) {
         if (value == null) return;
         if (typeof value === 'string') {
@@ -1530,7 +1541,7 @@ export class StudentsService {
 
         const [timesheets, reports, participations] = await Promise.all([
             this.timesheetsRepository.find({
-                where: { studentId, status: 'verified' },
+                where: { studentId, status: In(['verified', 'pending']) },
                 relations: ['opportunity', 'opportunity.organization'],
                 order: { createdAt: 'DESC' },
             }),
@@ -1546,17 +1557,23 @@ export class StudentsService {
 
         const participationByProject = new Map(participations.map((p) => [p.projectId, p]));
         const approvedReports = reports.filter((r) => this.isApprovedImpactReport(r));
+        const verifiedTimesheets = timesheets.filter((t) => t.status === 'verified');
+        const pendingTimesheets = timesheets.filter((t) => t.status === 'pending');
 
-        const totalHours = timesheets.reduce((sum, t) => sum + t.hours, 0);
+        const totalHours = verifiedTimesheets.reduce((sum, t) => sum + t.hours, 0);
+        const pendingHours = pendingTimesheets.reduce((sum, t) => sum + t.hours, 0);
 
         const now = new Date();
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-        const hoursThisMonth = timesheets
+        const hoursThisMonth = verifiedTimesheets
+            .filter((t) => new Date(t.createdAt) >= startOfMonth)
+            .reduce((sum, t) => sum + t.hours, 0);
+        const pendingHoursThisMonth = pendingTimesheets
             .filter((t) => new Date(t.createdAt) >= startOfMonth)
             .reduce((sum, t) => sum + t.hours, 0);
 
         const projectIdsFromHours = new Set(
-            timesheets.map((t) => t.opportunityId).filter(Boolean) as string[],
+            verifiedTimesheets.map((t) => t.opportunityId).filter(Boolean) as string[],
         );
         const projectIdsFromReports = new Set(
             approvedReports.map((r) => r.opportunityId).filter(Boolean) as string[],
@@ -1588,45 +1605,59 @@ export class StudentsService {
         const activities: Record<string, unknown>[] = [];
 
         for (const t of timesheets) {
-            if (!t.opportunityId) continue;
-            const part = participationByProject.get(t.opportunityId);
-            const recordStatus = this.impactActivityStatus('hours_log', part, t.opportunity);
+            const oppId = t.opportunityId;
+            const part = oppId ? participationByProject.get(oppId) : undefined;
+            const baseRecordStatus = oppId
+                ? this.impactActivityStatus('hours_log', part, t.opportunity)
+                : 'verified';
+            const recordStatus =
+                t.status === 'pending' ? 'pending_verification' : baseRecordStatus;
             const participationMode =
                 part?.participationMode === 'team' || part?.participationMode === 'individual'
                     ? part.participationMode
                     : null;
-            const linkedReport = latestApprovedReportByOpp.get(t.opportunityId);
+            const linkedReport = oppId ? latestApprovedReportByOpp.get(oppId) : undefined;
             const certFromReport = linkedReport ? this.pickCertificateUrlFromReport(linkedReport) : null;
             const pdfFromReport = linkedReport ? this.pickPdfUrlFromReport(linkedReport) : null;
 
             activities.push({
                 id: t.id,
-                title: t.opportunity?.title || 'Unknown Activity',
+                title: t.opportunity?.title || 'Logged hours',
                 organization: t.opportunity?.organization?.name || 'Unknown Org',
                 date: t.createdAt.toISOString().split('T')[0],
                 hours: t.hours,
                 sdg: t.opportunity?.sdg || 'General',
                 record_type: 'hours_log',
                 status: recordStatus,
+                timesheet_status: t.status,
                 participation: participationMode,
-                project_id: t.opportunityId,
-                opportunity_id: t.opportunityId,
+                project_id: oppId ?? null,
+                opportunity_id: oppId ?? null,
                 report_id: linkedReport?.id ?? null,
                 actions: {
-                    certificate_url: linkedReport
-                        ? certFromReport ?? `${basePrefix}/certificates/${linkedReport.id}/download`
-                        : null,
-                    pdf_url: linkedReport
-                        ? pdfFromReport ?? `${basePrefix}/reports/${linkedReport.id}/pdf`
-                        : null,
-                    cii_url: linkedReport ? `${basePrefix}/cii/${linkedReport.id}` : null,
-                    ai_report_url: linkedReport ? `${basePrefix}/ai-reports/${linkedReport.id}` : null,
-                    results_url: `${basePrefix}/projects/${t.opportunityId}/results`,
+                    certificate_url:
+                        linkedReport && t.status === 'verified'
+                            ? certFromReport ?? `${basePrefix}/certificates/${linkedReport.id}/download`
+                            : null,
+                    pdf_url:
+                        linkedReport && t.status === 'verified'
+                            ? pdfFromReport ?? `${basePrefix}/reports/${linkedReport.id}/pdf`
+                            : null,
+                    cii_url:
+                        linkedReport && t.status === 'verified'
+                            ? `${basePrefix}/cii/${linkedReport.id}`
+                            : null,
+                    ai_report_url:
+                        linkedReport && t.status === 'verified'
+                            ? `${basePrefix}/ai-reports/${linkedReport.id}`
+                            : null,
+                    results_url: oppId ? `${basePrefix}/projects/${oppId}/results` : null,
                 },
             });
         }
 
-        for (const r of approvedReports) {
+        const visibleReports = reports.filter((r) => r.status !== 'draft');
+        for (const r of visibleReports) {
             const oppId = r.opportunityId;
             const part = oppId ? participationByProject.get(oppId) : undefined;
             const participationMode =
@@ -1637,34 +1668,70 @@ export class StudentsService {
                 ai_generated_impact_score?: number;
                 institutional_alignment_score?: number;
             };
+            const isApproved = this.isApprovedImpactReport(r);
             const pdfDirect = this.pickPdfUrlFromReport(r);
             const certDirect = this.pickCertificateUrlFromReport(r);
 
-            activities.push({
-                id: r.id,
-                title: r.opportunity?.title || 'Impact report',
-                organization: r.opportunity?.organization?.name || 'Unknown Org',
-                date: r.submission_date
-                    ? new Date(r.submission_date).toISOString().split('T')[0]
-                    : r.createdAt.toISOString().split('T')[0],
-                hours: 0,
-                sdg: r.opportunity?.sdg || 'General',
-                record_type: 'cii_report',
-                status: 'certified',
-                participation: participationMode,
-                project_id: oppId,
-                opportunity_id: oppId,
-                report_id: r.id,
-                cii_score: s11.ai_generated_impact_score ?? null,
-                institutional_alignment_score: s11.institutional_alignment_score ?? null,
-                actions: {
-                    certificate_url: certDirect ?? `${basePrefix}/certificates/${r.id}/download`,
-                    pdf_url: pdfDirect ?? `${basePrefix}/reports/${r.id}/pdf`,
-                    cii_url: `${basePrefix}/cii/${r.id}`,
-                    ai_report_url: `${basePrefix}/ai-reports/${r.id}`,
-                    results_url: oppId ? `${basePrefix}/projects/${oppId}/results` : null,
-                },
-            });
+            if (isApproved) {
+                activities.push({
+                    id: r.id,
+                    title: r.opportunity?.title || 'Impact report',
+                    organization: r.opportunity?.organization?.name || 'Unknown Org',
+                    date: r.submission_date
+                        ? new Date(r.submission_date).toISOString().split('T')[0]
+                        : r.createdAt.toISOString().split('T')[0],
+                    hours: 0,
+                    sdg: r.opportunity?.sdg || 'General',
+                    record_type: 'cii_report',
+                    status: 'certified',
+                    report_status: r.status,
+                    partner_status: r.partner_status,
+                    admin_status: r.admin_status,
+                    participation: participationMode,
+                    project_id: oppId,
+                    opportunity_id: oppId,
+                    report_id: r.id,
+                    cii_score: s11.ai_generated_impact_score ?? null,
+                    institutional_alignment_score: s11.institutional_alignment_score ?? null,
+                    actions: {
+                        certificate_url: certDirect ?? `${basePrefix}/certificates/${r.id}/download`,
+                        pdf_url: pdfDirect ?? `${basePrefix}/reports/${r.id}/pdf`,
+                        cii_url: `${basePrefix}/cii/${r.id}`,
+                        ai_report_url: `${basePrefix}/ai-reports/${r.id}`,
+                        results_url: oppId ? `${basePrefix}/projects/${oppId}/results` : null,
+                    },
+                });
+            } else {
+                const pipelineStatus = this.deriveImpactReportPipelineStatus(r);
+                activities.push({
+                    id: r.id,
+                    title: r.opportunity?.title || 'Impact report',
+                    organization: r.opportunity?.organization?.name || 'Unknown Org',
+                    date: r.submission_date
+                        ? new Date(r.submission_date).toISOString().split('T')[0]
+                        : r.createdAt.toISOString().split('T')[0],
+                    hours: 0,
+                    sdg: r.opportunity?.sdg || 'General',
+                    record_type: 'cii_report',
+                    status: pipelineStatus,
+                    report_status: r.status,
+                    partner_status: r.partner_status,
+                    admin_status: r.admin_status,
+                    participation: participationMode,
+                    project_id: oppId,
+                    opportunity_id: oppId,
+                    report_id: r.id,
+                    cii_score: s11.ai_generated_impact_score ?? null,
+                    institutional_alignment_score: s11.institutional_alignment_score ?? null,
+                    actions: {
+                        certificate_url: null,
+                        pdf_url: null,
+                        cii_url: null,
+                        ai_report_url: null,
+                        results_url: oppId ? `${basePrefix}/projects/${oppId}/results` : null,
+                    },
+                });
+            }
         }
 
         activities.sort((a, b) => String(b.date).localeCompare(String(a.date)));
@@ -1673,7 +1740,10 @@ export class StudentsService {
             success: true,
             data: {
                 total_hours: totalHours,
+                pending_hours: pendingHours,
+                total_logged_hours: totalHours + pendingHours,
                 hours_this_month: hoursThisMonth,
+                pending_hours_this_month: pendingHoursThisMonth,
                 projects_completed: projectsCompleted,
                 impact_score: impactScore,
                 impact_percentile: impactPercentile,

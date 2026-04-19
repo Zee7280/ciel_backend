@@ -711,7 +711,10 @@ export class EngagementService {
             qb.andWhere('log.assignedApproverType = :adminT', { adminT: 'admin' });
         } else {
             qb.andWhere('log.assignedApproverType = :partnerT', { partnerT: 'partner' });
-            qb.andWhere('(log.assignedApproverUserId = :uid OR project.creatorId = :uid)', { uid: actorUserId });
+            // Avoid 42883: opportunities.creatorId is varchar; assignedApproverUserId is uuid.
+            qb.andWhere('(log.assignedApproverUserId::text = :uid OR project.creatorId::text = :uid)', {
+                uid: actorUserId,
+            });
         }
 
         return qb.orderBy('log.createdAt', 'DESC').getMany();

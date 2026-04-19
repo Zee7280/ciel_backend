@@ -113,6 +113,72 @@ export class StudentsService {
         return this.normalizeOpportunityStatus(status) === 'live';
     }
 
+    private safeDashboardNumber(value: unknown): number {
+        const n = Number(value);
+        return Number.isFinite(n) ? n : 0;
+    }
+
+    /** Labels include keywords the student dashboard UI derives from when overview is absent. */
+    private participationToDashboardStatus(status: string | null | undefined): string {
+        switch (status) {
+            case 'pending':
+            case 'pending_payment_approval':
+            case 'pending_ciel_approval':
+            case 'pending_faculty_approval':
+                return 'Pending approval';
+            case 'paid':
+                return 'Payment received — active';
+            case 'approved':
+            case 'accepted':
+                return 'Active — in progress';
+            case 'verified':
+                return 'Verified — in progress';
+            case 'finalized':
+                return 'Completed';
+            case 'rejected':
+                return 'Rejected';
+            default:
+                return 'In progress';
+        }
+    }
+
+    private normalizeBarHeights(values: number[]): number[] {
+        if (!values.length) return [];
+        const max = Math.max(...values.map((v) => this.safeDashboardNumber(v)), 1);
+        return values.map((h) =>
+            Math.min(100, Math.round((this.safeDashboardNumber(h) / max) * 100)),
+        );
+    }
+
+    private buildHoursActivityBars(timesheets: Timesheet[], weeks = 8): number[] {
+        const buckets = new Array(weeks).fill(0);
+        const now = Date.now();
+        const msWeek = 7 * 24 * 60 * 60 * 1000;
+        for (const t of timesheets) {
+            const created = t.createdAt ? new Date(t.createdAt).getTime() : now;
+            const weekIdx = Math.floor((now - created) / msWeek);
+            if (weekIdx >= 0 && weekIdx < weeks) {
+                buckets[weeks - 1 - weekIdx] += this.safeDashboardNumber(t.hours);
+            }
+        }
+        return this.normalizeBarHeights(buckets);
+    }
+
+    private buildCompletedActivityBars(reports: StudentReport[], months = 6): number[] {
+        const buckets = new Array(months).fill(0);
+        const now = new Date();
+        for (const r of reports) {
+            if (!['paid', 'verified'].includes(r.status)) continue;
+            const d = r.submission_date ? new Date(r.submission_date) : new Date(r.updatedAt);
+            const monthDiff =
+                (now.getFullYear() - d.getFullYear()) * 12 + (now.getMonth() - d.getMonth());
+            if (monthDiff >= 0 && monthDiff < months) {
+                buckets[months - 1 - monthDiff] += 1;
+            }
+        }
+        return this.normalizeBarHeights(buckets);
+    }
+
     private getWorkflowResponseFields(opportunity: Opportunity) {
         return {
             workflow_stage: opportunity.workflowStage ?? null,
@@ -297,70 +363,131 @@ export class StudentsService {
         return { success: true, message: 'Verification email sent' };
     }
 
-    // Dashboard
-    // Dashboard
     async getDashboard(userId: string) {
-        // 1. Fetch verified timesheets for stats
+        /** Matches legacy dashboard stat: enrolled / in-flight, excluding raw application `pending`. */
+        const activeCourseStatStatuses = [
+            'approved',
+            'verified',
+            'paid',
+            'pending_ciel_approval',
+            'pending_faculty_approval',
+            'accepted',
+        ] as const;
+
+        /** Broader list so the student still sees pipeline + payment-pending rows in activeProjects. */
+        const participationDashboardStatuses = [
+            ...activeCourseStatStatuses,
+            'pending',
+            'pending_payment_approval',
+        ] as const;
+
+        const pendingParticipationStatuses = [
+            'pending',
+            'pending_payment_approval',
+            'pending_ciel_approval',
+            'pending_faculty_approval',
+        ] as const;
+
+        const workingParticipationStatuses = ['approved', 'verified', 'paid', 'accepted'] as const;
+
+        const reportUnderReviewStatuses = [
+            'submitted',
+            'partner_verified',
+            'payment_under_review',
+            'payment_pending',
+        ] as const;
+
         const verifiedTimesheets = await this.timesheetsRepository.find({
             where: { studentId: userId, status: 'verified' },
             relations: ['opportunity'],
         });
 
-        // Calculate Stats
-        const hoursVolunteered = verifiedTimesheets.reduce((sum, t) => sum + t.hours, 0);
-        const projectsCompleted = new Set(verifiedTimesheets.map(t => t.opportunityId)).size;
-        // Mock impact points calculation: 10 points per hour
-        const impactPoints = hoursVolunteered * 10;
+        const hoursVolunteered = verifiedTimesheets.reduce(
+            (sum, t) => sum + this.safeDashboardNumber(t.hours),
+            0,
+        );
+        const completedOppIds = verifiedTimesheets
+            .map((t) => t.opportunityId)
+            .filter((id): id is string => !!id);
+        const projectsCompleted = new Set(completedOppIds).size;
+        const impactPoints = Math.round(hoursVolunteered * 10);
 
-        // 2. Fetch Active Projects (using Participations)
-        const activeApplications = await this.participantRepository.find({
-            where: {
-                studentId: userId,
-                status: In(['approved', 'verified', 'paid', 'pending_ciel_approval', 'pending_faculty_approval', 'accepted'])
-            },
-            relations: ['project', 'project.organization'],
-            take: 5
-        });
+        const [
+            activeCourses,
+            activeProjectsCount,
+            pendingApprovalsCount,
+            reportsUnderReviewCount,
+            activeApplications,
+            studentReports,
+        ] = await Promise.all([
+            this.participantRepository.count({
+                where: { studentId: userId, status: In([...activeCourseStatStatuses]) },
+            }),
+            this.participantRepository.count({
+                where: { studentId: userId, status: In([...workingParticipationStatuses]) },
+            }),
+            this.participantRepository.count({
+                where: { studentId: userId, status: In([...pendingParticipationStatuses]) },
+            }),
+            this.studentReportsRepository.count({
+                where: { studentId: userId, status: In([...reportUnderReviewStatuses]) },
+            }),
+            this.participantRepository.find({
+                where: { studentId: userId, status: In([...participationDashboardStatuses]) },
+                relations: ['project', 'project.organization'],
+                order: { updatedAt: 'DESC' },
+                take: 50,
+            }),
+            this.studentReportsRepository.find({
+                where: { studentId: userId },
+                relations: ['opportunity'],
+                order: { updatedAt: 'DESC' },
+                take: 200,
+            }),
+        ]);
 
-        const activeCourses = activeApplications.length;
-
-        const activeProjects = activeApplications.map(app => {
-            const required = app.project.timeline?.expected_hours || 0;
+        const activeProjects = activeApplications.map((app) => {
+            const required = this.safeDashboardNumber(app.project?.timeline?.expected_hours);
             const hoursDone = verifiedTimesheets
-                .filter(t => t.opportunityId === app.projectId)
-                .reduce((sum, t) => sum + t.hours, 0);
+                .filter((t) => t.opportunityId === app.projectId)
+                .reduce((sum, t) => sum + this.safeDashboardNumber(t.hours), 0);
 
             let progress = 0;
             if (required > 0) {
                 progress = Math.min(100, Math.round((hoursDone / required) * 100));
             }
 
+            const sdgId = app.project?.sdg_info?.sdg_id;
+            const category =
+                sdgId !== undefined && sdgId !== null && String(sdgId).length > 0
+                    ? String(sdgId)
+                    : 'General';
+
             return {
-                id: app.projectId,
-                title: app.project.title,
-                category: app.project.sdg_info?.sdg_id || 'General',
+                id: String(app.projectId),
+                title: app.project?.title || 'Project',
+                category,
                 assignedAt: app.createdAt.toISOString(),
-                status: 'In Progress',
-                progress: progress
+                status: this.participationToDashboardStatus(app.status),
+                progress,
             };
         });
 
-        // 3. Deadlines
         const deadLinesRaw = activeApplications
-            .filter(app => app.project.timeline?.end_date)
-            .map(app => ({
-                id: app.projectId,
-                title: `${app.project.title} Deadline`,
-                date: new Date(app.project.timeline.end_date),
-                type: 'info'
+            .filter((app) => app.project?.timeline?.end_date)
+            .map((app) => ({
+                id: String(app.projectId),
+                title: `${app.project?.title || 'Project'} deadline`,
+                date: new Date(app.project!.timeline!.end_date as string | Date),
+                type: 'default',
             }))
             .sort((a, b) => a.date.getTime() - b.date.getTime())
-            .slice(0, 3);
+            .slice(0, 12);
 
-        const deadlines = deadLinesRaw.map(d => {
+        const deadlines = deadLinesRaw.map((d) => {
             const now = new Date();
             const diffDays = Math.ceil((d.date.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-            let type = 'info';
+            let type = 'default';
             if (diffDays <= 3) type = 'urgent';
             else if (diffDays <= 7) type = 'warning';
 
@@ -368,22 +495,117 @@ export class StudentsService {
                 id: d.id,
                 title: d.title,
                 date: d.date.toISOString(),
-                type
+                type,
             };
         });
+
+        const pendingSampleRows = activeApplications
+            .filter((app) =>
+                (pendingParticipationStatuses as readonly string[]).includes(app.status),
+            )
+            .slice(0, 3);
+
+        const pendingApprovalsSample = pendingSampleRows.map((app) => ({
+            id: String(app.projectId),
+            title: app.project?.title || 'Project',
+            hint: this.participationToDashboardStatus(app.status),
+        }));
+
+        const reportsUnderReviewList = studentReports.filter((r) =>
+            (reportUnderReviewStatuses as readonly string[]).includes(r.status),
+        );
+        const reportsUnderReviewSample = reportsUnderReviewList.slice(0, 3).map((r) => ({
+            id: String(r.opportunityId || r.project_id || r.id),
+            title: r.opportunity?.title || 'Report',
+            hint: 'Under review',
+        }));
+
+        const latestPaidOrVerified = studentReports.find((r) =>
+            ['paid', 'verified'].includes(r.status),
+        );
+        const completedSample =
+            latestPaidOrVerified && (latestPaidOrVerified.opportunityId || latestPaidOrVerified.project_id)
+                ? {
+                      id: String(
+                          latestPaidOrVerified.opportunityId || latestPaidOrVerified.project_id,
+                      ),
+                      title: latestPaidOrVerified.opportunity?.title || 'Project',
+                  }
+                : undefined;
+
+        const draftReport = studentReports.find(
+            (r) => r.status === 'draft' || r.status === 'continue',
+        );
+        const continueProjectId = draftReport?.opportunityId || draftReport?.project_id;
+        const quickActions = {
+            continueReport:
+                draftReport && continueProjectId
+                    ? {
+                          projectId: String(continueProjectId),
+                          title: draftReport.opportunity?.title || 'Continue report',
+                          subtitle: 'Pick up where you left off',
+                      }
+                    : null,
+        };
+
+        const urgentDeadlineNotifs = deadlines
+            .filter((d) => d.type === 'urgent')
+            .map((d) => ({
+                id: `deadline-${d.id}`,
+                title: 'Deadline approaching',
+                detail: d.title,
+                tone: 'urgent' as const,
+            }));
+
+        const pendingNotifs = pendingSampleRows.map((app) => ({
+            id: `pending-${app.projectId}`,
+            title: app.project?.title || 'Project',
+            detail: 'Awaiting approval to start or proceed.',
+            tone: 'warning' as const,
+        }));
+
+        const underReviewNotifs = reportsUnderReviewList.slice(0, 5).map((r) => ({
+            id: `report-${r.id}`,
+            title: r.opportunity?.title || 'Report',
+            detail: 'Submitted — review in progress.',
+            tone: 'neutral' as const,
+        }));
+
+        const notificationsPreview = {
+            active: urgentDeadlineNotifs,
+            pending: pendingNotifs,
+            underReview: underReviewNotifs,
+        };
+
+        const overview = {
+            activeProjectsCount: activeProjectsCount,
+            pendingApprovalsCount: pendingApprovalsCount,
+            reportsUnderReviewCount: reportsUnderReviewCount,
+            totalVerifiedHours: this.safeDashboardNumber(hoursVolunteered),
+            completedCount: projectsCompleted,
+            pendingApprovalsSample,
+            reportsUnderReviewSample,
+            hoursActivityBars: this.buildHoursActivityBars(verifiedTimesheets),
+            completedActivityBars: this.buildCompletedActivityBars(studentReports),
+            ...(completedSample ? { completedSample } : {}),
+            impactHistoryBadgeCount: studentReports.filter((r) => r.status !== 'draft').length,
+        };
 
         return {
             success: true,
             data: {
                 stats: {
-                    activeCourses,
-                    impactPoints,
-                    projectsCompleted,
-                    hoursVolunteered
+                    activeCourses: this.safeDashboardNumber(activeCourses),
+                    impactPoints: this.safeDashboardNumber(impactPoints),
+                    projectsCompleted: this.safeDashboardNumber(projectsCompleted),
+                    hoursVolunteered: this.safeDashboardNumber(hoursVolunteered),
                 },
                 activeProjects,
-                deadlines
-            }
+                deadlines,
+                overview,
+                quickActions,
+                notificationsPreview,
+            },
         };
     }
 

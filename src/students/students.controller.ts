@@ -145,6 +145,15 @@ export class StudentsController {
         return this.studentsService.getImpact(req.user.id);
     }
 
+    @Get('impact/history')
+    getImpactHistoryGet(
+        @Request() req,
+        @Query('student_id') student_id?: string,
+        @Query('studentId') studentId?: string,
+    ) {
+        return this.studentsService.getImpactHistory(req.user.id, req.user.role, { student_id, studentId });
+    }
+
     @Post('impact/history')
     getImpactHistory(
         @Request() req,

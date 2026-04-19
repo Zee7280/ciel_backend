@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ForbiddenException, Logger } from '@nestjs/common';
 import { S3Service } from '../common/s3.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
@@ -6,8 +6,15 @@ import { Participation } from './entities/participant.entity';
 import { AttendanceLog } from './entities/attendance-log.entity';
 import { RegisterParticipantDto } from './dto/register-participant.dto';
 import { CreateAttendanceLogDto } from './dto/create-attendance-log.dto';
+import { PatchAttendanceApprovalDto } from './dto/patch-attendance-approval.dto';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { User } from '../users/entities/user.entity';
+import { UserRole } from '../users/enums/user-role.enum';
+import {
+    attendanceCountsTowardProgress,
+    canUserActOnAttendanceQueue,
+    resolveAttendanceApproverRouting,
+} from './attendance-approver.util';
 import { ConfigService } from '@nestjs/config';
 import { MailService } from '../mail/mail.service';
 import * as crypto from 'crypto';
@@ -444,7 +451,18 @@ export class EngagementService {
                 await this.participantRepository.save(participation);
                 this.logger.log(`Participation ${participation.id} auto-claimed by user ${studentId} via transitive ${matchType} matching during attendance logging`);
             } else {
-                // Fallback: Check if requester is the Team Lead for this application
+                // Target must not be a team-lead row. Allow proxy when not a "solo individual" row
+                // (mode individual with no application/team link — those are never team-member targets).
+                const mayReceiveTeamLeadAttendance =
+                    !participation.isTeamLead &&
+                    participation.projectId &&
+                    !(
+                        participation.participationMode === 'individual' &&
+                        !participation.applicationId &&
+                        !participation.teamId
+                    );
+
+                // Fallback: Check if requester is the Team Lead for this application / team
                 let isAuthorizedAsLead = false;
                 if (participation.applicationId) {
                     const leadRecord = await this.participantRepository.findOne({
@@ -456,7 +474,103 @@ export class EngagementService {
                     });
                     if (leadRecord) {
                         isAuthorizedAsLead = true;
-                        this.logger.log(`Attendance entry by Team Lead ${studentId} authorized for team member record ${participation.id}`);
+                        this.logger.log(`Attendance entry by Team Lead ${studentId} authorized for team member record ${participation.id} (applicationId)`);
+                    }
+                }
+
+                if (!isAuthorizedAsLead && participation.teamId) {
+                    const leadRecord = await this.participantRepository.findOne({
+                        where: {
+                            teamId: participation.teamId,
+                            projectId: participation.projectId,
+                            studentId: studentId,
+                            isTeamLead: true
+                        }
+                    });
+                    if (leadRecord) {
+                        isAuthorizedAsLead = true;
+                        this.logger.log(`Attendance entry by Team Lead ${studentId} authorized for team member record ${participation.id} (teamId)`);
+                    }
+                }
+
+                // Self-serve team flow (registerParticipant) often leaves applicationId/teamId unset.
+                // When the project has exactly one team lead row, treat that student as lead for any non-lead team participation on the same project.
+                if (!isAuthorizedAsLead && mayReceiveTeamLeadAttendance) {
+                    const teamLeads = await this.participantRepository.find({
+                        where: {
+                            projectId: participation.projectId,
+                            isTeamLead: true,
+                        },
+                    });
+                    if (teamLeads.length === 1 && teamLeads[0].studentId === studentId) {
+                        isAuthorizedAsLead = true;
+                        this.logger.log(
+                            `Attendance entry by sole Team Lead ${studentId} authorized for team member record ${participation.id} (single-lead fallback)`,
+                        );
+                    }
+                }
+
+                // Multiple teams on one project: allow when this member's primaryFacultyEmail matches
+                // exactly one team lead row on the same project (same normalized email).
+                if (!isAuthorizedAsLead && mayReceiveTeamLeadAttendance) {
+                    const memberFaculty = (participation.primaryFacultyEmail || '').trim().toLowerCase();
+                    if (memberFaculty) {
+                        const allTeamLeads = await this.participantRepository.find({
+                            where: {
+                                projectId: participation.projectId,
+                                isTeamLead: true,
+                            },
+                        });
+                        const leadsSameFaculty = allTeamLeads.filter(
+                            (p) => (p.primaryFacultyEmail || '').trim().toLowerCase() === memberFaculty,
+                        );
+                        if (leadsSameFaculty.length === 1 && leadsSameFaculty[0].studentId === studentId) {
+                            isAuthorizedAsLead = true;
+                            this.logger.log(
+                                `Attendance entry by Team Lead ${studentId} authorized for team member record ${participation.id} (single lead for primaryFacultyEmail)`,
+                            );
+                        }
+                    }
+                }
+
+                // Report flow: lead logs attendance for every team member. Allow when this user has at
+                // least one team-lead row on the project and no *other student* is also a team lead here
+                // (covers duplicate lead rows for the same lead). If another student is a lead, require
+                // applicationId/teamId to match one of this user's lead rows (same team only).
+                if (!isAuthorizedAsLead && mayReceiveTeamLeadAttendance) {
+                    const allTeamLeadsOnProject = await this.participantRepository.find({
+                        where: {
+                            projectId: participation.projectId,
+                            isTeamLead: true,
+                        },
+                    });
+                    const myTeamLeadRows = allTeamLeadsOnProject.filter((l) => l.studentId === studentId);
+                    const otherStudentLeads = allTeamLeadsOnProject.filter(
+                        (l) => l.studentId != null && l.studentId !== studentId,
+                    );
+                    if (myTeamLeadRows.length > 0) {
+                        if (otherStudentLeads.length === 0) {
+                            isAuthorizedAsLead = true;
+                            this.logger.log(
+                                `Attendance entry by Team Lead ${studentId} authorized for team member record ${participation.id} (only this student has team-lead rows on project)`,
+                            );
+                        } else {
+                            const linkedToMyLead = myTeamLeadRows.some(
+                                (l) =>
+                                    (Boolean(l.applicationId) &&
+                                        Boolean(participation.applicationId) &&
+                                        l.applicationId === participation.applicationId) ||
+                                    (Boolean(l.teamId) &&
+                                        Boolean(participation.teamId) &&
+                                        l.teamId === participation.teamId),
+                            );
+                            if (linkedToMyLead) {
+                                isAuthorizedAsLead = true;
+                                this.logger.log(
+                                    `Attendance entry by Team Lead ${studentId} authorized for team member record ${participation.id} (team scoped by applicationId/teamId)`,
+                                );
+                            }
+                        }
                     }
                 }
 
@@ -509,6 +623,19 @@ export class EngagementService {
             evidenceUploaded = true;
         }
 
+        const opportunity = await this.opportunityRepository.findOne({
+            where: { id: participation.projectId },
+            relations: ['organization'],
+        });
+        if (!opportunity) {
+            throw new NotFoundException('Project not found');
+        }
+
+        const creator = opportunity.creatorId
+            ? await this.userRepository.findOne({ where: { id: opportunity.creatorId } })
+            : null;
+        const routing = resolveAttendanceApproverRouting(opportunity, creator, opportunity.organization ?? null);
+
         const log = this.attendanceLogRepository.create({
             ...dto,
             participantId: participation.id,
@@ -516,7 +643,111 @@ export class EngagementService {
             sessionHours,
             evidenceUploaded,
             evidenceUrl: evidenceUrl as any,
+            approvalStatus: routing.approvalStatus,
+            assignedApproverType: routing.assignedApproverType,
+            assignedApproverUserId: routing.assignedApproverUserId,
+            opportunityCreatorKind: routing.opportunityCreatorKind,
         });
+
+        const saved = await this.attendanceLogRepository.save(log);
+        void this.notifyAttendancePendingReview(saved, opportunity, participation, routing).catch((err) =>
+            this.logger.warn(`Attendance pending notification skipped: ${err?.message}`),
+        );
+        return saved;
+    }
+
+    private async notifyAttendancePendingReview(
+        log: AttendanceLog,
+        opportunity: Opportunity,
+        participation: Participation,
+        routing: ReturnType<typeof resolveAttendanceApproverRouting>,
+    ) {
+        const title = opportunity.title || 'Project';
+        const student = participation.studentId
+            ? await this.userRepository.findOne({ where: { id: participation.studentId } })
+            : null;
+        const studentLabel = student?.name || participation.fullName || participation.email || 'A participant';
+
+        if (routing.assignedApproverType === 'partner' && routing.assignedApproverUserId) {
+            const approver = await this.userRepository.findOne({ where: { id: routing.assignedApproverUserId } });
+            if (approver?.email) {
+                await this.mailService.sendAttendancePendingPartnerReview(
+                    approver.email,
+                    approver.name || 'Partner',
+                    studentLabel,
+                    title,
+                    opportunity.id,
+                );
+            }
+        } else if (routing.assignedApproverType === 'admin') {
+            await this.mailService.sendAttendancePendingAdminReview(title, opportunity.id, log.id, studentLabel);
+        }
+    }
+
+    async listPendingAttendanceLogs(actorUserId: string, actorRole: string | undefined, projectId?: string) {
+        const isAdmin = actorRole === UserRole.SUPER_ADMIN;
+        const isPartnerSide = [
+            UserRole.NGO,
+            UserRole.PARTNER,
+            UserRole.CORPORATE,
+            UserRole.ORGANIZATION_ADMIN,
+        ].includes(actorRole as UserRole);
+
+        if (!isAdmin && !isPartnerSide) {
+            throw new ForbiddenException('Not authorized to list pending attendance');
+        }
+
+        const qb = this.attendanceLogRepository
+            .createQueryBuilder('log')
+            .leftJoinAndSelect('log.participant', 'participant')
+            .leftJoinAndSelect('log.project', 'project')
+            .where('log.approvalStatus = :pending', { pending: 'pending' });
+
+        if (projectId) {
+            qb.andWhere('log.projectId = :projectId', { projectId });
+        }
+
+        if (isAdmin) {
+            qb.andWhere('log.assignedApproverType = :adminT', { adminT: 'admin' });
+        } else {
+            qb.andWhere('log.assignedApproverType = :partnerT', { partnerT: 'partner' });
+            qb.andWhere('(log.assignedApproverUserId = :uid OR project.creatorId = :uid)', { uid: actorUserId });
+        }
+
+        return qb.orderBy('log.createdAt', 'DESC').getMany();
+    }
+
+    async patchAttendanceApproval(actorUserId: string, actorRole: string | undefined, logId: string, dto: PatchAttendanceApprovalDto) {
+        const log = await this.attendanceLogRepository.findOne({
+            where: { id: logId },
+            relations: ['project', 'participant'],
+        });
+        if (!log) {
+            throw new NotFoundException('Attendance log not found');
+        }
+        if (!log.approvalStatus || log.approvalStatus !== 'pending') {
+            throw new BadRequestException('This attendance entry is not awaiting approval');
+        }
+
+        const allowed = canUserActOnAttendanceQueue(actorUserId, actorRole, log, log.project?.creatorId);
+        if (!allowed) {
+            throw new ForbiddenException('Not authorized to approve this attendance');
+        }
+
+        const now = new Date();
+        if (dto.action === 'approve') {
+            log.approvalStatus = 'approved';
+            log.entryStatus = 'verified';
+        } else if (dto.action === 'reject') {
+            log.approvalStatus = 'rejected';
+            log.entryStatus = 'pending';
+        } else {
+            log.approvalStatus = 'flagged';
+            log.entryStatus = 'flagged';
+        }
+        log.approvalActionReason = dto.reason ?? null;
+        log.approvalActorUserId = actorUserId;
+        log.approvalActionAt = now;
 
         return await this.attendanceLogRepository.save(log);
     }
@@ -538,7 +769,8 @@ export class EngagementService {
         const participation = await this.findParticipationByIdentifier(participantId, ['attendanceLogs']);
         if (!participation) throw new NotFoundException('Participation not found');
 
-        const logs = participation.attendanceLogs || [];
+        const rawLogs = participation.attendanceLogs || [];
+        const logs = rawLogs.filter((l) => attendanceCountsTowardProgress(l));
         const totalHours = logs.reduce((sum, log) => sum + Number(log.sessionHours), 0);
         const activeDays = new Set(logs.map(l => l.dateOfEngagement)).size;
 

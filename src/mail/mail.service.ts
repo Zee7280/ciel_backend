@@ -1024,6 +1024,92 @@ export class MailService {
     }
   }
 
+  async sendAttendancePendingPartnerReview(
+    to: string,
+    partnerName: string,
+    studentLabel: string,
+    projectTitle: string,
+    opportunityId: string,
+  ) {
+    const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
+    const link = this.buildFrontendLink('/dashboard/partner', {
+      opportunity: opportunityId,
+      tab: 'attendance',
+    });
+    const titleEsc = this.escHtmlPlain(projectTitle);
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">New attendance pending your review</h2>
+        <p>Hi ${this.escHtmlPlain(partnerName)},</p>
+        <p><strong>${this.escHtmlPlain(studentLabel)}</strong> submitted attendance for <strong>${titleEsc}</strong>.</p>
+        <p>Please sign in to your partner dashboard to approve or reject the entry.</p>
+        <div style="text-align: center; margin: 28px 0;">
+          <a href="${link}" style="background-color: #16a34a; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-weight: bold;">Review attendance</a>
+        </div>
+      </div>
+    `;
+    try {
+      await this.transporter.sendMail({
+        from,
+        to,
+        subject: `Attendance pending review: ${projectTitle}`,
+        html,
+      });
+      this.logger.log(`Partner attendance pending email sent to ${to} for opportunity ${opportunityId}`);
+    } catch (error) {
+      this.logger.error(`Failed partner attendance pending email`, error.stack);
+    }
+  }
+
+  async sendAttendancePendingAdminReview(
+    projectTitle: string,
+    opportunityId: string,
+    logId: string,
+    studentLabel: string,
+  ) {
+    const recipientsRaw =
+      this.configService.get<string>('ADMIN_REVIEW_EMAILS') ||
+      this.configService.get<string>('ADMIN_EMAILS') ||
+      'support@cielpk.com';
+    const recipients = Array.from(
+      new Set(
+        [...recipientsRaw.split(','), 'admin@ciel.pk']
+          .map((value) => value.trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    );
+    if (!recipients.length) {
+      this.logger.warn(`Skipped admin attendance email for log ${logId}; no admin recipients configured.`);
+      return;
+    }
+    const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
+    const adminLink = this.buildFrontendLink('/dashboard/admin', {
+      opportunity: opportunityId,
+      attendanceLog: logId,
+    });
+    const titleEsc = this.escHtmlPlain(projectTitle);
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">Attendance pending (CIEL queue)</h2>
+        <p><strong>${this.escHtmlPlain(studentLabel)}</strong> logged hours on <strong>${titleEsc}</strong> (faculty/student-hosted project).</p>
+        <div style="text-align: center; margin: 28px 0;">
+          <a href="${adminLink}" style="background-color: #2563eb; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Open admin dashboard</a>
+        </div>
+      </div>
+    `;
+    try {
+      await this.transporter.sendMail({
+        from,
+        to: recipients.join(', '),
+        subject: `Attendance pending (admin): ${projectTitle}`,
+        html,
+      });
+      this.logger.log(`Admin attendance pending email for log ${logId}`);
+    } catch (error) {
+      this.logger.error(`Failed admin attendance pending email for log ${logId}`, error.stack);
+    }
+  }
+
   /** Public contact form: delivers inquiry to support@cielpk.com */
   async sendContactInquiry(name: string, email: string, subject: string, message: string): Promise<void> {
     const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';

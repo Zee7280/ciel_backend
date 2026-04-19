@@ -48,6 +48,8 @@ describe('EngagementService', () => {
 
     const mockMailService = {
         sendFacultyInvite: jest.fn(),
+        sendAttendancePendingPartnerReview: jest.fn(),
+        sendAttendancePendingAdminReview: jest.fn(),
     };
 
     beforeEach(async () => {
@@ -158,6 +160,13 @@ describe('EngagementService', () => {
             } as any;
 
             mockParticipationRepository.findOne.mockResolvedValue(mockParticipation);
+            mockOpportunityRepository.findOne.mockResolvedValue({
+                id: 'proj1',
+                title: 'Project',
+                creatorId: 'faculty-1',
+                organization: null,
+            });
+            mockUserRepository.findOne.mockResolvedValue({ id: 'faculty-1', role: 'faculty', name: 'Dr. A' });
             mockAttendanceLogRepository.create.mockReturnValue({ ...dto, participantId: 'p1', projectId: 'proj1', sessionHours: 3 });
             mockAttendanceLogRepository.save.mockResolvedValue({ id: 'log1', ...dto });
 
@@ -168,6 +177,8 @@ describe('EngagementService', () => {
                 participantId: 'p1',
                 projectId: 'proj1',
                 sessionHours: 3,
+                approvalStatus: 'pending',
+                assignedApproverType: 'admin',
             }));
             expect(mockAttendanceLogRepository.save).toHaveBeenCalled();
         });
@@ -197,7 +208,7 @@ describe('EngagementService', () => {
 
             mockParticipationRepository.findOne.mockResolvedValue(mockParticipation);
 
-            await expect(service.addAttendanceLog('u1', 'p1', dto)).rejects.toThrow('Attendance logging is only allowed for approved participations');
+            await expect(service.addAttendanceLog('u1', 'p1', dto)).rejects.toThrow('Attendance logging is only allowed for approved/verified records');
         });
     });
     describe('registerParticipant', () => {
@@ -212,7 +223,7 @@ describe('EngagementService', () => {
                 mobile: '03001234567',
             } as any;
 
-            const mockOpportunity = { id: projectId, title: 'Project 1' };
+            const mockOpportunity = { id: projectId, title: 'Project 1', status: 'active', admin_approved: true };
             
             // Mock transaction manager
             const mockManager = {
@@ -247,7 +258,7 @@ describe('EngagementService', () => {
                 mobile: '03001234567',
             } as any;
 
-            const mockOpportunity = { id: projectId, title: 'Project 1' };
+            const mockOpportunity = { id: projectId, title: 'Project 1', status: 'active', admin_approved: true };
             const existingParticipation = { id: 'old-id', email: 'existing@example.com' };
 
             // Mock transaction manager

@@ -55,6 +55,31 @@ export class AttendanceLog {
     })
     entryStatus: string;
 
+    /** New workflow: null = legacy row (treat as pre-workflow). pending | approved | rejected | flagged */
+    @Column({ type: 'varchar', length: 32, nullable: true })
+    approvalStatus: string | null;
+
+    /** Server-assigned queue: partner (opportunity creator) or CIEL admin pool. */
+    @Column({ type: 'varchar', length: 16, nullable: true })
+    assignedApproverType: string | null;
+
+    /** When assignedApproverType is partner, matches opportunity.creatorId unless reassigned later. */
+    @Column({ type: 'uuid', nullable: true })
+    assignedApproverUserId: string | null;
+
+    /** NGO vs corporate vs faculty/student host — audit / UI. */
+    @Column({ type: 'varchar', length: 32, nullable: true })
+    opportunityCreatorKind: string | null;
+
+    @Column({ type: 'text', nullable: true })
+    approvalActionReason: string | null;
+
+    @Column({ type: 'uuid', nullable: true })
+    approvalActorUserId: string | null;
+
+    @Column({ type: 'timestamp', nullable: true })
+    approvalActionAt: Date | null;
+
     @CreateDateColumn()
     createdAt: Date;
 

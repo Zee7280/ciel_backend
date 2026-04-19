@@ -83,7 +83,10 @@ export class FacultyReportsService {
                     description: log.description,
                     hours: Number(log.sessionHours),
                     evidence_url: log.evidenceUrl,
-                    entryStatus: log.entryStatus
+                    entryStatus: log.entryStatus,
+                    approval_status: (log as any).approvalStatus ?? null,
+                    assigned_approver_type: (log as any).assignedApproverType ?? null,
+                    opportunity_creator_kind: (log as any).opportunityCreatorKind ?? null,
                 }))
             }
         };

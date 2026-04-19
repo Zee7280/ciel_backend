@@ -1,8 +1,9 @@
-import { Controller, Post, Get, Delete, Body, Param, UseGuards, Request, UseInterceptors, UploadedFile, NotFoundException } from '@nestjs/common';
+import { Controller, Post, Get, Patch, Delete, Body, Param, Query, UseGuards, Request, UseInterceptors, UploadedFile, NotFoundException } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { EngagementService } from './engagement.service';
 import { RegisterParticipantDto } from './dto/register-participant.dto';
 import { CreateAttendanceLogDto } from './dto/create-attendance-log.dto';
+import { PatchAttendanceApprovalDto } from './dto/patch-attendance-approval.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 @Controller('engagement')
@@ -25,6 +26,30 @@ export class EngagementController {
         return {
             success: true,
             data: result,
+        };
+    }
+
+    /** Partner/NGO (creator) or CIEL admin: pending attendance queue (server-side routing; no client-supplied approver). */
+    @Get('attendance/pending')
+    async listPendingAttendance(@Request() req, @Query('projectId') projectId?: string) {
+        const result = await this.engagementService.listPendingAttendanceLogs(req.user.id, req.user.role, projectId);
+        return {
+            success: true,
+            data: result,
+        };
+    }
+
+    @Patch('attendance/:logId')
+    async patchAttendanceApproval(
+        @Request() req,
+        @Param('logId') logId: string,
+        @Body() dto: PatchAttendanceApprovalDto,
+    ) {
+        const result = await this.engagementService.patchAttendanceApproval(req.user.id, req.user.role, logId, dto);
+        return {
+            success: true,
+            data: result,
+            message: 'Attendance approval updated',
         };
     }
 

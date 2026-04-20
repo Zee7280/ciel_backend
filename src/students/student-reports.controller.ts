@@ -138,6 +138,9 @@ export class StudentReportsController {
 
     @Get(':id')
     async getReportById(@Request() req, @Param('id') id: string) {
+        if (req.user?.organizationId && ['partner', 'ngo', 'corporate', 'organization_admin'].includes(req.user?.role)) {
+            return await this.studentReportsService.findOneForPartner(id, req.user.organizationId);
+        }
         // Match /student/reports/:id — accept report UUID or opportunity (project) id for the JWT student.
         return await this.studentReportsService.findOneByOpportunityOrId(id, req.user.id);
     }
@@ -146,13 +149,14 @@ export class StudentReportsController {
     async verifyReport(
         @Request() req,
         @Param('id') id: string,
-        @Body() body: { action: 'approve' | 'reject'; reason?: string }
+        @Body() body: { action: 'approve' | 'reject'; reason?: string; feedback?: string; verified_by?: string }
     ) {
         return await this.studentReportsService.verifyReport(
             id,
             body.action,
             req.user.role,
-            body.reason
+            body.reason || body.feedback,
+            req.user.organizationId
         );
     }
 }

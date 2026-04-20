@@ -81,6 +81,11 @@ export class AdminController {
         return { success: true, data: {} };
     }
 
+    @Delete('opportunities/:id')
+    removeOpportunity(@Param('id') id: string) {
+        return this.opportunitiesService.remove(id);
+    }
+
     @Get('projects')
     getProjects() {
         return this.adminService.getProjects();

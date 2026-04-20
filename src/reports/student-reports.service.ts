@@ -41,6 +41,45 @@ export class StudentReportsService {
         return raw ?? 'draft';
     }
 
+    private isPartnerReviewerRole(role: string | null | undefined): boolean {
+        return ['partner', 'ngo', 'corporate', 'organization_admin'].includes(role ?? '');
+    }
+
+    private collectEvidenceUrls(report: StudentReport): string[] {
+        const urls = new Set<string>();
+        const sections = [
+            report.section1,
+            report.section2,
+            report.section3,
+            report.section4,
+            report.section5,
+            report.section6,
+            report.section7,
+            report.section8,
+            report.section9,
+            report.section10,
+        ];
+
+        for (const section of sections) {
+            const mediaUrls = Array.isArray(section?.media_urls) ? section.media_urls : [];
+            for (const url of mediaUrls) {
+                if (url) urls.add(url);
+            }
+        }
+
+        const attendanceLogs = Array.isArray(report.section1?.attendance_logs)
+            ? report.section1.attendance_logs
+            : [];
+        for (const log of attendanceLogs) {
+            const evidenceUrl = (log as any)?.evidence_url;
+            if (evidenceUrl) {
+                urls.add(evidenceUrl);
+            }
+        }
+
+        return Array.from(urls);
+    }
+
     private async findLatestManualPayment(studentId: string, projectId: string | null | undefined) {
         if (!projectId) return null;
         return this.paymentRepository.findOne({
@@ -378,10 +417,11 @@ export class StudentReportsService {
                 student_email: r.student?.email || 'Unknown',
                 project_title: r.opportunity?.title || r.project_id,
                 organization_name: r.opportunity?.organization?.name || 'N/A',
-                status: r.status,
+                status: this.toPublicReportStatus(r.status),
                 partner_status: r.partner_status,
                 admin_status: r.admin_status,
                 submission_date: r.submission_date,
+                submitted_at: r.reportSubmittedAt ?? r.submission_date ?? r.createdAt,
                 report_submitted_at: r.reportSubmittedAt,
                 partner_approved_at: r.partnerApprovedAt,
                 admin_approved_at: r.adminApprovedAt,
@@ -407,6 +447,31 @@ export class StudentReportsService {
         }
 
         // Fetch attendance logs for this student and opportunity
+        const attendanceLogs = await this.attendanceLogsRepository.find({
+            where: {
+                participant: { studentId: report.studentId },
+                projectId: report.opportunityId || report.project_id
+            },
+            order: { dateOfEngagement: 'ASC', startTime: 'ASC' }
+        });
+
+        return await this.formatReportResponse(report, attendanceLogs);
+    }
+
+    async findOneForPartner(id: string, organizationId: string) {
+        const report = await this.studentReportsRepository.findOne({
+            where: { id },
+            relations: ['student', 'opportunity'],
+        });
+
+        if (!report) {
+            throw new NotFoundException('Report not found');
+        }
+
+        if (!organizationId || report.opportunity?.organizationId !== organizationId) {
+            throw new ForbiddenException('You can only access reports linked to your organization');
+        }
+
         const attendanceLogs = await this.attendanceLogsRepository.find({
             where: {
                 participant: { studentId: report.studentId },
@@ -543,9 +608,11 @@ export class StudentReportsService {
                 partner_status: report.partner_status,
                 admin_status: report.admin_status,
                 submission_date: report.submission_date,
+                submitted_at: report.reportSubmittedAt ?? report.submission_date ?? report.createdAt,
                 report_submitted_at: report.reportSubmittedAt,
                 partner_approved_at: report.partnerApprovedAt,
                 admin_approved_at: report.adminApprovedAt,
+                evidence_urls: this.collectEvidenceUrls(report),
                 section1: {
                     ...report.section1,
                     team_lead: report.section1?.team_lead ? {
@@ -597,15 +664,34 @@ export class StudentReportsService {
         return { success: true, message: 'Report deleted successfully' };
     }
 
-    async verifyReport(id: string, action: 'approve' | 'reject' | 'unlock', role: string = 'admin', reason?: string) {
-        const report = await this.studentReportsRepository.findOne({ where: { id } });
+    async verifyReport(
+        id: string,
+        action: 'approve' | 'reject' | 'unlock',
+        role: string = 'admin',
+        reason?: string,
+        organizationId?: string,
+    ) {
+        const report = await this.studentReportsRepository.findOne({
+            where: { id },
+            relations: ['opportunity'],
+        });
 
         if (!report) {
             throw new NotFoundException('Report not found');
         }
 
+        const isPartnerReviewer = this.isPartnerReviewerRole(role);
+        if (isPartnerReviewer) {
+            if (!organizationId || report.opportunity?.organizationId !== organizationId) {
+                throw new ForbiddenException('You can only verify reports linked to your organization');
+            }
+        }
+
         const decisionStamp = new Date();
         if (action === 'unlock') {
+            if (isPartnerReviewer) {
+                throw new ForbiddenException('Only admins can unlock reports');
+            }
             report.status = 'draft';
             report.admin_status = 'pending';
             report.partner_status = 'pending';
@@ -617,15 +703,18 @@ export class StudentReportsService {
         } else if (action === 'reject') {
             report.status = 'rejected';
             if (role === 'admin') report.admin_status = 'rejected';
-            if (role === 'partner') report.partner_status = 'rejected';
+            if (isPartnerReviewer) {
+                report.partner_status = 'rejected';
+                report.partnerApprovedAt = null;
+            }
             if (reason) {
                 report.admin_feedback = reason; // Save feedback on reject as well (optional, but good practice based on user req)
             }
         } else if (action === 'approve') {
-            if (role === 'partner') {
+            if (isPartnerReviewer) {
                 report.partner_status = 'approved';
                 report.partnerApprovedAt = decisionStamp;
-                report.status = 'partner_verified';
+                report.status = report.admin_status === 'approved' ? 'verified' : 'partner_verified';
             } else if (role === 'admin') {
                 report.admin_status = 'approved';
                 report.adminApprovedAt = decisionStamp;

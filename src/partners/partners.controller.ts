@@ -194,13 +194,25 @@ export class PartnersController {
         });
     }
 
+    @Get('student-reports/:id')
+    getStudentReportById(@Request() req, @Param('id') id: string) {
+        return this.studentReportsService.findOneForPartner(id, req.user.organizationId);
+    }
+
+    @Patch('student-reports/:id/verify')
     @Post('student-reports/:id/verify')
     verifyStudentReport(
         @Request() req,
         @Param('id') id: string,
-        @Body() body: { action: 'approve' | 'reject'; reason?: string }
+        @Body() body: { action: 'approve' | 'reject'; reason?: string; feedback?: string; verified_by?: string }
     ) {
-        return this.studentReportsService.verifyReport(id, body.action, 'partner', body.reason);
+        return this.studentReportsService.verifyReport(
+            id,
+            body.action,
+            req.user.role,
+            body.reason || body.feedback,
+            req.user.organizationId,
+        );
     }
 
     @Post('approvals/:id/approve')
@@ -264,17 +276,24 @@ export class PartnerAliasController {
     }
 
     @Get('reports/:id')
-    getReportById(@Param('id') id: string) {
-        return this.studentReportsService.findOne(id);
+    getReportById(@Request() req, @Param('id') id: string) {
+        return this.studentReportsService.findOneForPartner(id, req.user.organizationId);
     }
 
+    @Patch('reports/:id/verify')
     @Post('reports/:id/verify')
     verifyReport(
         @Request() req,
         @Param('id') id: string,
-        @Body() body: { action: 'approve' | 'reject'; reason?: string }
+        @Body() body: { action: 'approve' | 'reject'; reason?: string; feedback?: string; verified_by?: string }
     ) {
-        return this.studentReportsService.verifyReport(id, body.action, 'partner', body.reason);
+        return this.studentReportsService.verifyReport(
+            id,
+            body.action,
+            req.user.role,
+            body.reason || body.feedback,
+            req.user.organizationId,
+        );
     }
 
     @Post('opportunities/applicants')

@@ -1,6 +1,6 @@
-import { Injectable, NotFoundException, ForbiddenException, UnauthorizedException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, UnauthorizedException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, DeepPartial, Brackets } from 'typeorm';
+import { Repository, In, DeepPartial, Brackets, EntityManager, ObjectLiteral, QueryFailedError } from 'typeorm';
 import { Opportunity } from './entities/opportunity.entity';
 import { Organization } from '../organizations/entities/organization.entity';
 import { Participation } from '../engagement/entities/participant.entity';
@@ -14,6 +14,12 @@ import { randomUUID } from 'crypto';
 import { OpportunityWorkflowService, WORKFLOW_STAGE, LINE_STATUS } from './opportunity-workflow.service';
 import { isProjectVerificationAuthRequired } from '../common/project-verification-auth.util';
 import { NotificationsService } from '../notifications/notifications.service';
+import { OpportunityApplication } from './entities/opportunity-application.entity';
+import { StudentReport } from '../reports/entities/student-report.entity';
+import { Report } from '../reports/entities/report.entity';
+import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
+import { Payment } from '../payments/entities/payment.entity';
+import { Timesheet } from '../timesheets/entities/timesheet.entity';
 
 @Injectable()
 export class OpportunitiesService {
@@ -40,6 +46,55 @@ export class OpportunitiesService {
 
     private normalizeEmail(s?: string) {
         return (s || '').trim().toLowerCase();
+    }
+
+    private async deleteChildRows(
+        manager: EntityManager,
+        entity: { new(): ObjectLiteral },
+        where: Record<string, unknown> | Array<Record<string, unknown>>,
+    ): Promise<number> {
+        const filters = Array.isArray(where) ? where : [where];
+        let affected = 0;
+
+        for (const filter of filters) {
+            const result = await manager.delete(entity, filter);
+            affected += result.affected ?? 0;
+        }
+
+        return affected;
+    }
+
+    private async deleteOpportunityChildren(manager: EntityManager, opportunityId: string) {
+        const deleted = {
+            attendanceLogs: await this.deleteChildRows(manager, AttendanceLog, { projectId: opportunityId }),
+            payments: await this.deleteChildRows(manager, Payment, { projectId: opportunityId }),
+            studentReports: await this.deleteChildRows(manager, StudentReport, [
+                { opportunityId },
+                { project_id: opportunityId },
+            ]),
+            reports: await this.deleteChildRows(manager, Report, { opportunityId }),
+            timesheets: await this.deleteChildRows(manager, Timesheet, { opportunityId }),
+            opportunityApplications: await this.deleteChildRows(manager, OpportunityApplication, { opportunityId }),
+            participations: await this.deleteChildRows(manager, Participation, { projectId: opportunityId }),
+        };
+
+        return deleted;
+    }
+
+    private extractQueryFailedDetail(error: QueryFailedError) {
+        const driverError = error.driverError as { detail?: string; message?: string } | undefined;
+        return String(driverError?.detail || driverError?.message || error.message || '').trim();
+    }
+
+    private buildOpportunityDeleteConflictMessage(id: string, error: unknown) {
+        const dbDetail =
+            error instanceof QueryFailedError
+                ? this.extractQueryFailedDetail(error)
+                : '';
+
+        return dbDetail
+            ? `Opportunity "${id}" could not be deleted because dependent records still exist: ${dbDetail}`
+            : `Opportunity "${id}" could not be deleted because dependent records still exist. Remove or unlink the remaining child records and try again.`;
     }
 
     /** F2 “additional partner organization” — executing-org portal confirmation runs only when this block is present. */
@@ -1628,11 +1683,45 @@ export class OpportunitiesService {
     }
 
     async remove(id: string) {
-        const result = await this.opportunitiesRepository.delete(id);
-        if (result.affected === 0) {
+        const opportunity = await this.opportunitiesRepository.findOne({ where: { id } });
+        if (!opportunity) {
             throw new NotFoundException(`Opportunity with ID "${id}" not found`);
         }
-        return { success: true, message: 'Opportunity deleted successfully' };
+
+        try {
+            const deleted = await this.opportunitiesRepository.manager.transaction(async (manager) => {
+                const deletedChildren = await this.deleteOpportunityChildren(manager, id);
+                const result = await manager.delete(Opportunity, { id });
+
+                if ((result.affected ?? 0) === 0) {
+                    throw new NotFoundException(`Opportunity with ID "${id}" not found`);
+                }
+
+                return deletedChildren;
+            });
+
+            return {
+                success: true,
+                message: 'Opportunity deleted successfully',
+                data: {
+                    id,
+                    deleted,
+                },
+            };
+        } catch (error) {
+            if (error instanceof NotFoundException) {
+                throw error;
+            }
+
+            if (
+                error instanceof QueryFailedError ||
+                (error instanceof Error && /foreign key|constraint/i.test(error.message))
+            ) {
+                throw new ConflictException(this.buildOpportunityDeleteConflictMessage(id, error));
+            }
+
+            throw error;
+        }
     }
 
     // Partner methods for managing applicants

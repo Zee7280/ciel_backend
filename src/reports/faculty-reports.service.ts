@@ -41,6 +41,9 @@ export class FacultyReportsService {
                 status: r.status,
                 faculty_status: r.faculty_status,
                 submission_date: r.submission_date,
+                report_submitted_at: r.reportSubmittedAt,
+                partner_approved_at: r.partnerApprovedAt,
+                admin_approved_at: r.adminApprovedAt,
                 metrics: r.section1?.metrics,
             })),
         };

@@ -40,6 +40,16 @@ export class StudentReport {
     @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
     submission_date: Date;
 
+    /** Last time the student submitted the report for partner/admin review (aligned with submission_date on submit). */
+    @Column({ name: 'report_submitted_at', type: 'timestamptz', nullable: true })
+    reportSubmittedAt: Date | null;
+
+    @Column({ name: 'partner_approved_at', type: 'timestamptz', nullable: true })
+    partnerApprovedAt: Date | null;
+
+    @Column({ name: 'admin_approved_at', type: 'timestamptz', nullable: true })
+    adminApprovedAt: Date | null;
+
     @Column({ default: 'draft' })
     status: string; // 'draft', 'submitted', 'partner_verified', 'payment_pending' (legacy), 'payment_under_review', 'verified', 'rejected', 'paid'
 

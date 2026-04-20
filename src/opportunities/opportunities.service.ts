@@ -868,6 +868,16 @@ export class OpportunitiesService {
                 );
             }
         }
+
+        try {
+            await this.mailService.sendAdminStudentMayStartReport(
+                opportunity.title || 'Project',
+                opportunity.id,
+                creator?.name || creator?.email || 'Student',
+            );
+        } catch (error) {
+            console.warn('Failed to send admin start-report notice', (error as Error).message);
+        }
     }
 
     async create(userId: string, createOpportunityDto: CreateOpportunityDto) {

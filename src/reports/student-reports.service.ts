@@ -114,6 +114,7 @@ export class StudentReportsService {
                 opportunityId: opportunityIdFromDto
             }
         });
+        const priorReportStatus = report?.status ?? null;
 
         if (report) {
             // Update existing report
@@ -197,6 +198,10 @@ export class StudentReportsService {
             await this.handleFacultyAssignment(report, report.section1.faculty_supervisor_email);
         }
 
+        const submitStamp = new Date();
+        report.reportSubmittedAt = submitStamp;
+        report.submission_date = submitStamp;
+
         // Save report to get ID
         await this.studentReportsRepository.save(report);
 
@@ -209,6 +214,34 @@ export class StudentReportsService {
             await this.studentReportsRepository.save(report);
         }
 
+        const skipAdminSubmitNotify = new Set([
+            'submitted',
+            'partner_verified',
+            'payment_pending',
+            'payment_under_review',
+            'verified',
+            'paid',
+        ]);
+        const shouldEmailAdminSubmit =
+            priorReportStatus == null || !skipAdminSubmitNotify.has(priorReportStatus);
+        if (shouldEmailAdminSubmit) {
+            const oppForTitle =
+                opportunityForPolicy ||
+                (report.opportunityId
+                    ? await this.opportunitiesRepository.findOne({ where: { id: report.opportunityId } })
+                    : null);
+            const projectTitle = oppForTitle?.title || report.project_id || 'Student project';
+            const student = await this.usersRepository.findOne({ where: { id: studentId } });
+            void this.mailService
+                .sendAdminStudentReportSubmitted(
+                    projectTitle,
+                    report.opportunityId || opportunityIdFromDto || '',
+                    report.id,
+                    student?.name || 'Student',
+                )
+                .catch(() => undefined);
+        }
+
         return {
             success: true,
             message: 'Report submitted successfully.',
@@ -216,6 +249,9 @@ export class StudentReportsService {
                 report_id: report.id,
                 project_id: report.project_id,
                 submitted_at: report.submission_date,
+                report_submitted_at: report.reportSubmittedAt,
+                partner_approved_at: report.partnerApprovedAt,
+                admin_approved_at: report.adminApprovedAt,
                 status: report.status,
             },
         };
@@ -346,6 +382,9 @@ export class StudentReportsService {
                 partner_status: r.partner_status,
                 admin_status: r.admin_status,
                 submission_date: r.submission_date,
+                report_submitted_at: r.reportSubmittedAt,
+                partner_approved_at: r.partnerApprovedAt,
+                admin_approved_at: r.adminApprovedAt,
                 created_at: r.createdAt,
             })),
             pagination: {
@@ -504,6 +543,9 @@ export class StudentReportsService {
                 partner_status: report.partner_status,
                 admin_status: report.admin_status,
                 submission_date: report.submission_date,
+                report_submitted_at: report.reportSubmittedAt,
+                partner_approved_at: report.partnerApprovedAt,
+                admin_approved_at: report.adminApprovedAt,
                 section1: {
                     ...report.section1,
                     team_lead: report.section1?.team_lead ? {
@@ -562,10 +604,13 @@ export class StudentReportsService {
             throw new NotFoundException('Report not found');
         }
 
+        const decisionStamp = new Date();
         if (action === 'unlock') {
             report.status = 'draft';
             report.admin_status = 'pending';
             report.partner_status = 'pending';
+            report.partnerApprovedAt = null;
+            report.adminApprovedAt = null;
             if (reason) {
                 report.admin_feedback = reason;
             }
@@ -579,9 +624,11 @@ export class StudentReportsService {
         } else if (action === 'approve') {
             if (role === 'partner') {
                 report.partner_status = 'approved';
+                report.partnerApprovedAt = decisionStamp;
                 report.status = 'partner_verified';
             } else if (role === 'admin') {
                 report.admin_status = 'approved';
+                report.adminApprovedAt = decisionStamp;
                 if (report.partner_status === 'approved') {
                     report.status = 'verified';
                 }
@@ -600,6 +647,9 @@ export class StudentReportsService {
                 status: report.status,
                 partner_status: report.partner_status,
                 admin_status: report.admin_status,
+                report_submitted_at: report.reportSubmittedAt,
+                partner_approved_at: report.partnerApprovedAt,
+                admin_approved_at: report.adminApprovedAt,
             },
         };
     }
@@ -651,6 +701,9 @@ export class StudentReportsService {
                         partner_status: r.partner_status,
                         feedback: null,
                         submission_date: r.submission_date,
+                        report_submitted_at: r.reportSubmittedAt,
+                        partner_approved_at: r.partnerApprovedAt,
+                        admin_approved_at: r.adminApprovedAt,
                     };
                 }),
             };
@@ -699,6 +752,9 @@ export class StudentReportsService {
                 partner_status: report.partner_status,
                 feedback: null,
                 submission_date: report.submission_date,
+                report_submitted_at: report.reportSubmittedAt,
+                partner_approved_at: report.partnerApprovedAt,
+                admin_approved_at: report.adminApprovedAt,
             },
         };
     }

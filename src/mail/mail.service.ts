@@ -895,17 +895,7 @@ export class MailService {
     opportunityId: string,
     stageLabel: string,
   ) {
-    const recipientsRaw =
-      this.configService.get<string>('ADMIN_REVIEW_EMAILS') ||
-      this.configService.get<string>('ADMIN_EMAILS') ||
-      'support@cielpk.com';
-    const recipients = Array.from(
-      new Set(
-        [...recipientsRaw.split(','), 'admin@ciel.pk']
-          .map((value) => value.trim().toLowerCase())
-          .filter(Boolean),
-      ),
-    );
+    const recipients = this.getAdminReviewRecipientList();
 
     if (!recipients.length) {
       this.logger.warn(`Skipped admin review email for ${opportunityId}; no ADMIN_REVIEW_EMAILS configured.`);
@@ -1067,17 +1057,7 @@ export class MailService {
     logId: string,
     studentLabel: string,
   ) {
-    const recipientsRaw =
-      this.configService.get<string>('ADMIN_REVIEW_EMAILS') ||
-      this.configService.get<string>('ADMIN_EMAILS') ||
-      'support@cielpk.com';
-    const recipients = Array.from(
-      new Set(
-        [...recipientsRaw.split(','), 'admin@ciel.pk']
-          .map((value) => value.trim().toLowerCase())
-          .filter(Boolean),
-      ),
-    );
+    const recipients = this.getAdminReviewRecipientList();
     if (!recipients.length) {
       this.logger.warn(`Skipped admin attendance email for log ${logId}; no admin recipients configured.`);
       return;
@@ -1107,6 +1087,96 @@ export class MailService {
       this.logger.log(`Admin attendance pending email for log ${logId}`);
     } catch (error) {
       this.logger.error(`Failed admin attendance pending email for log ${logId}`, error.stack);
+    }
+  }
+
+  private getAdminReviewRecipientList(): string[] {
+    const recipientsRaw =
+      this.configService.get<string>('ADMIN_REVIEW_EMAILS') ||
+      this.configService.get<string>('ADMIN_EMAILS') ||
+      'support@cielpk.com';
+    return Array.from(
+      new Set(
+        [...recipientsRaw.split(','), 'admin@ciel.pk']
+          .map((value) => value.trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    );
+  }
+
+  /** Student submitted an impact report (admin queue). */
+  async sendAdminStudentReportSubmitted(
+    projectTitle: string,
+    opportunityId: string,
+    reportId: string,
+    studentName: string,
+  ) {
+    const recipients = this.getAdminReviewRecipientList();
+    if (!recipients.length) {
+      this.logger.warn(`Skipped admin student-report email for ${reportId}; no admin recipients configured.`);
+      return;
+    }
+    const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
+    const adminLink = this.buildFrontendLink('/dashboard/admin', {
+      opportunity: opportunityId || undefined,
+      studentReport: reportId,
+    });
+    const titleEsc = this.escHtmlPlain(projectTitle);
+    const studentEsc = this.escHtmlPlain(studentName?.trim() ? studentName.trim() : 'Student');
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">Student report submitted</h2>
+        <p><strong>${studentEsc}</strong> submitted an impact report for <strong>${titleEsc}</strong>.</p>
+        <div style="text-align: center; margin: 28px 0;">
+          <a href="${adminLink}" style="background-color: #2563eb; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Open admin dashboard</a>
+        </div>
+      </div>
+    `;
+    try {
+      await this.transporter.sendMail({
+        from,
+        to: recipients.join(', '),
+        subject: `Student report submitted: ${projectTitle}`,
+        html,
+      });
+      this.logger.log(`Admin student-report submitted email for report ${reportId}`);
+    } catch (error) {
+      this.logger.error(`Failed admin student-report submitted email for ${reportId}`, error.stack);
+    }
+  }
+
+  /** Student-created opportunity is live; student received "Start report" email (admin FYI). */
+  async sendAdminStudentMayStartReport(projectTitle: string, opportunityId: string, studentName: string) {
+    const recipients = this.getAdminReviewRecipientList();
+    if (!recipients.length) {
+      this.logger.warn(`Skipped admin start-report notice for ${opportunityId}; no admin recipients configured.`);
+      return;
+    }
+    const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
+    const adminLink = this.buildFrontendLink('/dashboard/admin/opportunities', {
+      opportunity: opportunityId,
+    });
+    const titleEsc = this.escHtmlPlain(projectTitle);
+    const studentEsc = this.escHtmlPlain(studentName?.trim() ? studentName.trim() : 'Student');
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">Student can start reporting</h2>
+        <p><strong>${studentEsc}</strong>&rsquo;s opportunity <strong>${titleEsc}</strong> is fully approved and live. The student was notified to begin their report.</p>
+        <div style="text-align: center; margin: 28px 0;">
+          <a href="${adminLink}" style="background-color: #2563eb; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Open admin opportunities</a>
+        </div>
+      </div>
+    `;
+    try {
+      await this.transporter.sendMail({
+        from,
+        to: recipients.join(', '),
+        subject: `Student may start report: ${projectTitle}`,
+        html,
+      });
+      this.logger.log(`Admin start-report notice sent for opportunity ${opportunityId}`);
+    } catch (error) {
+      this.logger.error(`Failed admin start-report notice for ${opportunityId}`, error.stack);
     }
   }
 

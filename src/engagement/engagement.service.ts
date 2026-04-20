@@ -678,6 +678,13 @@ export class EngagementService {
                     title,
                     opportunity.id,
                 );
+            } else {
+                await this.mailService.sendAttendancePendingAdminReview(
+                    title,
+                    opportunity.id,
+                    log.id,
+                    studentLabel,
+                );
             }
         } else if (routing.assignedApproverType === 'admin') {
             await this.mailService.sendAttendancePendingAdminReview(title, opportunity.id, log.id, studentLabel);

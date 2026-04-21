@@ -4,6 +4,7 @@ import { In, Repository } from 'typeorm';
 import { SupportFaq } from './entities/support-faq.entity';
 import { SupportTicket } from './entities/support-ticket.entity';
 import { User } from '../users/entities/user.entity';
+import { UpdateSupportTicketDto } from './dto/update-support-ticket.dto';
 
 @Injectable()
 export class AdminSupportService {
@@ -73,6 +74,18 @@ export class AdminSupportService {
                 student: this.formatStudent(user ?? undefined),
             },
         };
+    }
+
+    async updateTicket(idOrRef: string, dto: UpdateSupportTicketDto) {
+        const ticket = await this.findTicketByIdOrReference(idOrRef);
+        if (!ticket) {
+            throw new NotFoundException('Ticket not found');
+        }
+        if (dto.status !== undefined) {
+            ticket.status = dto.status.trim();
+            await this.ticketRepo.save(ticket);
+        }
+        return this.getTicket(idOrRef);
     }
 
     private toTicketRow(t: SupportTicket) {

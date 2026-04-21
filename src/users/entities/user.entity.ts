@@ -95,6 +95,10 @@ export class User {
     @Column({ nullable: true })
     passwordResetExpiry: Date;
 
+    /** Bumped on password change so existing JWTs are rejected (e.g. after reset on another device). */
+    @Column({ type: 'int', default: 0 })
+    tokenVersion: number;
+
     @Column({ default: false })
     requires_cnic: boolean;
 

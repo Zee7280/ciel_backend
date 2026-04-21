@@ -330,6 +330,22 @@ export class OpportunitiesService {
         }
     }
 
+    /**
+     * F2 "partner organization" block: separate collaboration contact who must acknowledge in the portal
+     * when their email is not the same as the executing-organization official contact.
+     */
+    private shouldRequirePartnerOrganizationAck(dto: CreateOpportunityDto): boolean {
+        const po = dto.partner_organization as { official_email?: string } | undefined;
+        const raw = po && typeof po.official_email === 'string' ? po.official_email : undefined;
+        const pe = this.normalizeEmail(raw);
+        if (!pe || !this.isValidEmail(pe)) return false;
+        const exec = dto.executing_organization as { official_email?: string } | undefined;
+        const ee =
+            exec && typeof exec.official_email === 'string' ? this.normalizeEmail(exec.official_email) : null;
+        if (!ee) return true;
+        return pe !== ee;
+    }
+
     /** Whether partner approval + email flow applies for this student submission. */
     private studentOpportunityRequiresPartner(dto: CreateOpportunityDto): boolean {
         const typePartner = dto.executing_context?.type === 'partner';
@@ -341,7 +357,7 @@ export class OpportunitiesService {
             Object.keys(collab as object).length > 0;
         const sup = dto.supervision as { external_partner_email?: string; partner_email?: string } | undefined;
         const hasSupPartnerLead = !!(sup?.external_partner_email || sup?.partner_email);
-        return typePartner || hasCollab || hasSupPartnerLead;
+        return typePartner || hasCollab || hasSupPartnerLead || this.shouldRequirePartnerOrganizationAck(dto);
     }
 
     /**
@@ -671,6 +687,7 @@ export class OpportunitiesService {
             if (!opp.workflowStage && opp.status === 'pending_approval') return true;
             return false;
         }
+        if (opp.requiresPartnerApproval && !opp.partnerVerified) return false;
         if (opp.status === 'pending_partner') return false;
         if (opp.workflowStage === WORKFLOW_STAGE.PENDING_PARTNER) return false;
         // Partner / org flows: if executing-org verification is required, block final admin approval until verified.
@@ -876,7 +893,11 @@ export class OpportunitiesService {
     }
 
     private async handlePartnerApprovedSideEffects(opportunity: Opportunity) {
-        await this.sendAdminReviewEmail(opportunity, 'partner approval');
+        const execBlocking =
+            !!opportunity.execution_verification_token && !opportunity.execution_verified;
+        if (!execBlocking || opportunity.isStudentCreated) {
+            await this.sendAdminReviewEmail(opportunity, 'partner approval');
+        }
 
         if (!opportunity.isStudentCreated) return;
 
@@ -891,19 +912,12 @@ export class OpportunitiesService {
     private async handleAdminApprovedSideEffects(opportunity: Opportunity) {
         if (!opportunity.isStudentCreated) return;
 
+        // Single in-app notification (two used to fire here and could surface as duplicate alerts / digests).
         await this.notifyStudentOpportunityUpdate(opportunity, {
-            title: 'Admin Approved',
-            message: 'Your opportunity has passed admin review.',
-            emailSubject: 'Admin approved your opportunity',
-            skipStatusEmail: true,
-        });
-
-        await this.notifyStudentOpportunityUpdate(opportunity, {
-            title: 'Opportunity Live',
-            message: 'Your opportunity is now live on CIEL.',
+            title: 'Opportunity live',
+            message:
+                'Your opportunity has passed admin review and is now live on CIEL. You can begin your report from your dashboard.',
             emailSubject: 'Your opportunity is now live',
-            emailTitle: 'Your opportunity is live',
-            emailMessage: 'Your opportunity has completed all approvals and is now live on CIEL.',
             skipStatusEmail: true,
         });
 
@@ -984,6 +998,14 @@ export class OpportunitiesService {
             initialStatus = 'pending_execution';
         }
 
+        /** Distinct partner_organization contact must acknowledge (even when executing-org portal step runs first). */
+        const needsPartnerOrgAck = this.shouldRequirePartnerOrganizationAck(createOpportunityDto);
+        let resolvedPartnerToken: string | null =
+            isFaculty && !needsExecutingOrgVerification && facultyPartnerToken ? facultyPartnerToken : null;
+        if (needsPartnerOrgAck && !resolvedPartnerToken) {
+            resolvedPartnerToken = randomUUID();
+        }
+
         const payload: DeepPartial<Opportunity> = {
             ...createOpportunityDto,
             organizationId: org?.id || null,
@@ -994,8 +1016,16 @@ export class OpportunitiesService {
             execution_verified: !executionVerificationToken,
             execution_verification_status: executionVerificationToken ? 'pending_execution' : 'execution_verified',
             sdg: createOpportunityDto.sdg_info?.sdg_id || 'SDG', // Fallback
-            ...(isFaculty && !needsExecutingOrgVerification && facultyPartnerToken
-                ? { partnerToken: facultyPartnerToken, partnerVerified: false }
+            ...(resolvedPartnerToken
+                ? {
+                      partnerToken: resolvedPartnerToken,
+                      partnerVerified: false,
+                      requiresPartnerApproval: true,
+                      partnerApprovalStatus: LINE_STATUS.PENDING,
+                      ...(isFaculty
+                          ? { facultyApprovalStatus: LINE_STATUS.APPROVED, adminApprovalStatus: LINE_STATUS.PENDING }
+                          : {}),
+                  }
                 : {}),
         };
 
@@ -1026,9 +1056,9 @@ export class OpportunitiesService {
             }
         }
 
-        // optional partner email (legacy non-faculty path; faculty uses verification link below when applicable)
+        // Informational notice only when there is no magic-link partner gate for this row.
         const partnerEmail = createOpportunityDto.partner_organization?.official_email;
-        if (partnerEmail && !(isFaculty && facultyPartnerToken)) {
+        if (partnerEmail && !resolvedPartnerToken) {
             try {
                 await this.mailService.sendPartnerOpportunityNotice(partnerEmail, saved.title);
             } catch (e) {
@@ -1036,7 +1066,7 @@ export class OpportunitiesService {
             }
         }
 
-        if (isFaculty && !needsExecutingOrgVerification && facultyPartnerToken) {
+        if (resolvedPartnerToken) {
             const pe = this.resolvePartnerEmail(createOpportunityDto);
             if (pe) {
                 try {
@@ -1044,14 +1074,27 @@ export class OpportunitiesService {
                         facultyAuthorName: user.name || undefined,
                         facultyAuthorEmail: user.email || undefined,
                     });
-                    await this.mailService.sendPartnerVerification(pe, saved.title, facultyPartnerToken, verifyDetails, {
+                    await this.mailService.sendPartnerVerification(pe, saved.title, resolvedPartnerToken, verifyDetails, {
                         path: '/verify-project',
                         returnTo: this.getPartnerApprovalReturnTo(saved.id),
                     });
                 } catch (e) {
-                    console.warn('Failed to send faculty opportunity partner verification email', (e as Error).message);
+                    console.warn('Failed to send partner verification email for opportunity', (e as Error).message);
                 }
             }
+        }
+
+        const execBlocking = !!saved.execution_verification_token && !saved.execution_verified;
+        const notAwaitingFacultyOrPartner =
+            saved.workflowStage !== WORKFLOW_STAGE.PENDING_FACULTY &&
+            saved.workflowStage !== WORKFLOW_STAGE.PENDING_PARTNER;
+        if (
+            saved.status === 'pending_approval' &&
+            !saved.admin_approved &&
+            !execBlocking &&
+            notAwaitingFacultyOrPartner
+        ) {
+            await this.sendAdminReviewEmail(saved as Opportunity, 'new submission');
         }
 
         return saved;
@@ -1655,6 +1698,10 @@ export class OpportunitiesService {
     async approve(id: string) {
         const opp = await this.findOne(id);
         if (!opp) throw new NotFoundException('Opportunity not found');
+        // Idempotent: repeated approve (double-click, retried request) must not re-run side effects / emails.
+        if (opp.admin_approved === true && opp.workflowStage === WORKFLOW_STAGE.LIVE) {
+            return opp;
+        }
         if (!this.isOpportunityReadyForAdminFinalApprove(opp)) {
             throw new BadRequestException(
                 'CIEL final approval is only available after faculty and partner steps (when applicable) are completed.',
@@ -1991,6 +2038,12 @@ export class OpportunitiesService {
         opp.execution_verification_status = 'execution_verified';
         if (opp.admin_approved) {
             opp.status = 'active';
+        } else if (opp.requiresPartnerApproval && !opp.partnerVerified) {
+            opp.status = 'pending_partner';
+            opp.workflowStage = WORKFLOW_STAGE.PENDING_PARTNER;
+            if (!opp.partnerApprovalStatus || opp.partnerApprovalStatus === LINE_STATUS.NOT_APPLICABLE) {
+                opp.partnerApprovalStatus = LINE_STATUS.PENDING;
+            }
         } else {
             opp.status = 'pending_approval';
             if (!opp.workflowStage || opp.workflowStage === WORKFLOW_STAGE.PENDING_ADMIN) {

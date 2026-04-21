@@ -170,7 +170,8 @@ export class AuthService {
             department: user.department,
             faculty_department: user.faculty_department,
             city: user.city,
-            university: user.university || user.institution
+            university: user.university || user.institution,
+            tokenVersion: user.tokenVersion ?? 0,
         };
         const expiresIn = loginDto.isMobile ? '30d' : '10h';
 

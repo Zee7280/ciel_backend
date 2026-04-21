@@ -125,6 +125,12 @@ export class OpportunityWorkflowService {
         if (opp.isStudentCreated) return;
         opp.partnerVerified = true;
         opp.partnerApprovalStatus = LINE_STATUS.APPROVED;
+        // Executing-org confirmation can run in parallel; do not skip `pending_execution` until that gate clears.
+        if (opp.execution_verification_token && !opp.execution_verified) {
+            opp.workflowStage = null;
+            opp.status = 'pending_execution';
+            return;
+        }
         opp.workflowStage = WORKFLOW_STAGE.PENDING_ADMIN;
         opp.status = 'pending_approval';
     }

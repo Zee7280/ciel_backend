@@ -109,10 +109,14 @@ export class UsersService {
     }
 
     async update(id: string, updateUserDto: any): Promise<User> {
+        const passwordBeingUpdated = !!(updateUserDto?.password);
         if (updateUserDto.password && !updateUserDto.password.startsWith('$2b$')) {
             updateUserDto.password = await bcrypt.hash(updateUserDto.password, 10);
         }
         await this.usersRepository.update(id, updateUserDto);
+        if (passwordBeingUpdated) {
+            await this.usersRepository.increment({ id }, 'tokenVersion', 1);
+        }
         const user = await this.findOne(id);
         if (!user) {
             throw new NotFoundException('User not found');
@@ -160,6 +164,7 @@ export class UsersService {
 
         const hashedPassword = await bcrypt.hash(newPassword, 10);
         user.password = hashedPassword;
+        user.tokenVersion = (user.tokenVersion ?? 0) + 1;
         await this.usersRepository.save(user);
 
         return { success: true, message: 'Password changed successfully' };
@@ -190,5 +195,6 @@ export class UsersService {
             passwordResetToken: null as any,
             passwordResetExpiry: null as any
         });
+        await this.usersRepository.increment({ id: userId }, 'tokenVersion', 1);
     }
 }

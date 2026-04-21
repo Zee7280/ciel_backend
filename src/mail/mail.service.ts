@@ -1091,17 +1091,17 @@ export class MailService {
   }
 
   private getAdminReviewRecipientList(): string[] {
+    const primaryAdmin = 'admin@cielpk.com';
     const recipientsRaw =
       this.configService.get<string>('ADMIN_REVIEW_EMAILS') ||
       this.configService.get<string>('ADMIN_EMAILS') ||
       'support@cielpk.com';
-    return Array.from(
-      new Set(
-        [...recipientsRaw.split(','), 'admin@ciel.pk']
-          .map((value) => value.trim().toLowerCase())
-          .filter(Boolean),
-      ),
-    );
+    const fromConfig = recipientsRaw
+      .split(',')
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean);
+    const rest = fromConfig.filter((e) => e !== primaryAdmin);
+    return [primaryAdmin, ...rest];
   }
 
   /** Student submitted an impact report (admin queue). */

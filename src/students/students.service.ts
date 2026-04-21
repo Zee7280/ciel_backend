@@ -714,10 +714,13 @@ export class StudentsService {
 
         let dbStatuses: string[];
         let requireAdminApproval = false;
+        /** Matches `OpportunitiesService.getPublicOpportunities`: CIEL-approved live workflow rows can still use legacy status (e.g. `pending_execution`). */
+        let useDefaultLiveBrowseOr = false;
 
         if (!requestedStatus || ['approved', 'active', 'live'].includes(requestedStatus)) {
             dbStatuses = this.liveOpportunityStatuses;
             requireAdminApproval = true;
+            useDefaultLiveBrowseOr = true;
         } else if (['open', 'recruiting'].includes(requestedStatus)) {
             dbStatuses = [requestedStatus];
             requireAdminApproval = true;
@@ -730,16 +733,29 @@ export class StudentsService {
             requireAdminApproval = this.liveOpportunityStatuses.includes(requestedStatus);
         }
 
-        const whereClause: any = { status: In(dbStatuses) };
-        if (requireAdminApproval) {
-            whereClause.admin_approved = true;
+        let opportunities: Opportunity[];
+        if (useDefaultLiveBrowseOr && requireAdminApproval) {
+            opportunities = await this.opportunitiesRepository.find({
+                where: [
+                    { status: In(dbStatuses), admin_approved: true },
+                    { workflowStage: WORKFLOW_STAGE.LIVE, admin_approved: true },
+                ],
+                relations: ['organization'],
+                order: { createdAt: 'DESC' },
+            });
+        } else {
+            const whereClause: { status: ReturnType<typeof In>; admin_approved?: boolean } = {
+                status: In(dbStatuses),
+            };
+            if (requireAdminApproval) {
+                whereClause.admin_approved = true;
+            }
+            opportunities = await this.opportunitiesRepository.find({
+                where: whereClause,
+                relations: ['organization'],
+                order: { createdAt: 'DESC' },
+            });
         }
-
-        const opportunities = await this.opportunitiesRepository.find({
-            where: whereClause,
-            relations: ['organization'],
-            order: { createdAt: 'DESC' },
-        });
 
         const participationByOpp = new Map<string, Participation>();
         const studentContextId = query?.student_id || query?.studentId || userId;
@@ -828,7 +844,10 @@ export class StudentsService {
 
     async getOpportunityById(id: string, userId?: string) {
         const opportunity = await this.opportunitiesRepository.findOne({
-            where: { id, status: In(this.liveOpportunityStatuses), admin_approved: true },
+            where: [
+                { id, status: In(this.liveOpportunityStatuses), admin_approved: true },
+                { id, workflowStage: WORKFLOW_STAGE.LIVE, admin_approved: true },
+            ],
             relations: ['organization'],
         });
 
@@ -892,7 +911,10 @@ export class StudentsService {
     async getRecommendedOpportunities(userId: string) {
         // Simple implementation - can be enhanced with ML
         const opportunities = await this.opportunitiesRepository.find({
-            where: { status: In(this.liveOpportunityStatuses), admin_approved: true },
+            where: [
+                { status: In(this.liveOpportunityStatuses), admin_approved: true },
+                { workflowStage: WORKFLOW_STAGE.LIVE, admin_approved: true },
+            ],
             relations: ['organization'],
             take: 5,
             order: { createdAt: 'DESC' },

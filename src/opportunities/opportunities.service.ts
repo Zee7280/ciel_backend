@@ -1031,9 +1031,11 @@ export class OpportunitiesService {
 
         const opportunity = this.opportunitiesRepository.create(payload);
         if (isFaculty && !needsExecutingOrgVerification) {
+            // Align workflow with any partner gate (magic link): `resolvedPartnerToken` can be set via
+            // `needsPartnerOrgAck` even when `facultyPartnerToken` was not (e.g. org-ack-only path).
             this.opportunityWorkflow.initFacultyCreated(
                 opportunity as Opportunity,
-                !!facultyPartnerToken,
+                !!resolvedPartnerToken,
             );
         }
 
@@ -2137,7 +2139,14 @@ export class OpportunitiesService {
         }
 
         if (opp.isStudentCreated) {
-            if (!opp.faculty_verified || opp.workflowStage !== WORKFLOW_STAGE.PENDING_PARTNER) {
+            const awaitingStudentPartnerReview =
+                opp.faculty_verified &&
+                (opp.workflowStage === WORKFLOW_STAGE.PENDING_PARTNER ||
+                    opp.status === 'pending_partner' ||
+                    (opp.requiresPartnerApproval === true &&
+                        opp.partnerApprovalStatus === LINE_STATUS.PENDING &&
+                        !opp.partnerVerified));
+            if (!awaitingStudentPartnerReview) {
                 throw new BadRequestException(
                     'Partner verification is only available after faculty approval.',
                 );
@@ -2146,7 +2155,11 @@ export class OpportunitiesService {
         }
 
         const awaitingPartnerReview =
-            opp.workflowStage === WORKFLOW_STAGE.PENDING_PARTNER || opp.status === 'pending_partner';
+            opp.workflowStage === WORKFLOW_STAGE.PENDING_PARTNER ||
+            opp.status === 'pending_partner' ||
+            (opp.requiresPartnerApproval === true &&
+                opp.partnerApprovalStatus === LINE_STATUS.PENDING &&
+                !opp.partnerVerified);
         if (!awaitingPartnerReview) {
             throw new BadRequestException('This opportunity is not awaiting partner approval.');
         }

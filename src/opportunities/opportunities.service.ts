@@ -690,11 +690,11 @@ export class OpportunitiesService {
         if (opp.requiresPartnerApproval && !opp.partnerVerified) return false;
         if (opp.status === 'pending_partner') return false;
         if (opp.workflowStage === WORKFLOW_STAGE.PENDING_PARTNER) return false;
-        // Partner / org flows: if executing-org verification is required, block final admin approval until verified.
-        if (opp.execution_verification_token && !opp.execution_verified) {
-            return false;
-        }
-        if (opp.status === 'pending_execution') {
+        // `pending_execution` is also used for org/faculty rows waiting on executing-org confirmation in
+        // parallel with CIEL review (`afterFacultyCreatedPartnerVerified`). Those must still allow final
+        // admin approval when a CIEL admin step exists; `afterAdminApproved` keeps the listing gated until
+        // execution verifies when needed.
+        if (opp.status === 'pending_execution' && opp.admin_approval_required !== true) {
             return false;
         }
         return true;

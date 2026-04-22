@@ -145,7 +145,7 @@ export class OpportunityApplicationsService {
 
     async countPendingAdmin(): Promise<number> {
         return this.appRepo.count({
-            where: { internalStatus: 'pending_admin', withdrawnAt: IsNull() },
+            where: { internalStatus: In(['pending_admin', 'pending_partner']), withdrawnAt: IsNull() },
         });
     }
 
@@ -275,10 +275,8 @@ export class OpportunityApplicationsService {
         if (!opp) {
             throw new NotFoundException('Opportunity not found for this application');
         }
-        const nextStatus: OpportunityApplicationInternalStatus = opp.requiresPartnerApproval
-            ? 'pending_partner'
-            : 'pending_admin';
-        app.internalStatus = nextStatus;
+        // Student join/apply pipeline: faculty → CIEL admin only (no org/partner gate on applications).
+        app.internalStatus = 'pending_admin';
         app.facultyDecidedAt = new Date();
         app.facultyDecidedBy = facultyUserId;
         app.facultyComment = null;
@@ -305,7 +303,7 @@ export class OpportunityApplicationsService {
     }
 
     /**
-     * Browse listing org: join applications after faculty, when opportunity.requiresPartnerApproval.
+     * Browse listing org: legacy partner queue (new applications no longer enter this stage from faculty).
      */
     async partnerList(organizationId: string, status: 'pending' | 'history' = 'pending') {
         if (!organizationId) {
@@ -392,10 +390,10 @@ export class OpportunityApplicationsService {
         return { success: true, data: app };
     }
 
-    /** Rows waiting on CIEL admin (after faculty, and partner if applicable). */
+    /** Rows waiting on CIEL admin (after faculty; legacy `pending_partner` included for same queue). */
     async findPendingAdminApplicationsForQueue(): Promise<OpportunityApplication[]> {
         return this.appRepo.find({
-            where: { internalStatus: 'pending_admin', withdrawnAt: IsNull() },
+            where: { internalStatus: In(['pending_admin', 'pending_partner']), withdrawnAt: IsNull() },
             relations: ['opportunity', 'opportunity.organization', 'studentUser'],
             order: { createdAt: 'ASC' },
         });
@@ -419,7 +417,7 @@ export class OpportunityApplicationsService {
         const rows =
             normalized === 'pending'
                 ? await this.appRepo.find({
-                      where: { internalStatus: 'pending_admin', withdrawnAt: IsNull() },
+                      where: { internalStatus: In(['pending_admin', 'pending_partner']), withdrawnAt: IsNull() },
                       relations: [...relations],
                       order: { createdAt: 'ASC' },
                   })
@@ -454,7 +452,7 @@ export class OpportunityApplicationsService {
             relations: ['opportunity', 'studentUser'],
         });
         if (!app) throw new NotFoundException('Application not found');
-        if (app.internalStatus !== 'pending_admin') {
+        if (app.internalStatus !== 'pending_admin' && app.internalStatus !== 'pending_partner') {
             throw new BadRequestException('Application is not awaiting admin review');
         }
 
@@ -543,7 +541,7 @@ export class OpportunityApplicationsService {
     async adminReject(id: string, adminUserId: string, reason: string) {
         const app = await this.appRepo.findOne({ where: { id, withdrawnAt: IsNull() } });
         if (!app) throw new NotFoundException('Application not found');
-        if (app.internalStatus !== 'pending_admin') {
+        if (app.internalStatus !== 'pending_admin' && app.internalStatus !== 'pending_partner') {
             throw new BadRequestException('Application is not awaiting admin review');
         }
         app.internalStatus = 'admin_rejected';

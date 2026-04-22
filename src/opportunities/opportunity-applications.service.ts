@@ -392,6 +392,15 @@ export class OpportunityApplicationsService {
         return { success: true, data: app };
     }
 
+    /** Rows waiting on CIEL admin (after faculty, and partner if applicable). */
+    async findPendingAdminApplicationsForQueue(): Promise<OpportunityApplication[]> {
+        return this.appRepo.find({
+            where: { internalStatus: 'pending_admin', withdrawnAt: IsNull() },
+            relations: ['opportunity', 'opportunity.organization', 'studentUser'],
+            order: { createdAt: 'ASC' },
+        });
+    }
+
     async adminList(status?: string) {
         const normalized = (status || 'pending').trim().toLowerCase();
         if (normalized !== 'pending' && normalized !== 'history') {

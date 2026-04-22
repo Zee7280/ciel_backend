@@ -53,13 +53,13 @@ export class AdminController {
     }
 
     @Post('users/:id/approve')
-    approveApplication(@Param('id') id: string) {
-        return this.adminService.approveApplication(id);
+    approveApplication(@Request() req, @Param('id') id: string) {
+        return this.adminService.approveApplication(id, req.user.id);
     }
 
     @Post('users/:id/reject')
-    rejectApplication(@Param('id') id: string, @Body() body: { reason: string }) {
-        return this.adminService.rejectApplication(id, body.reason);
+    rejectApplication(@Request() req, @Param('id') id: string, @Body() body: { reason: string }) {
+        return this.adminService.rejectApplication(id, body.reason || '', req.user.id);
     }
 
     // Opportunity approval routes (duplicate here to handle routing conflicts)

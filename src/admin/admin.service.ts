@@ -260,57 +260,73 @@ export class AdminService {
     }
 
     async findPendingApplications() {
-        console.log('Fetching pending applications...');
         const applications = await this.participationRepository.find({
             where: { status: In(['pending', 'pending_ciel_approval']) },
             relations: ['student', 'project'],
-            order: { createdAt: 'DESC' }
+            order: { createdAt: 'DESC' },
         });
-        console.log(`Found ${applications.length} pending applications.`);
-        if (applications.length > 0) {
-            console.log('First app ID:', applications[0].id);
-        }
 
-        // Mapping to user requested format:
-        // { "id": 1, "name": "John Doe", "email": "john@example.com", "organization_type": "NGO", "created_at": "..." }
+        const browseApps = await this.opportunityApplicationsService.findPendingAdminApplicationsForQueue();
+
+        const fromParticipation = applications.map((app) => ({
+            id: app.id,
+            name: app.fullName || app.student?.name || 'Unknown',
+            email: app.email || app.student?.email || 'Unknown',
+            organization_type: app.participationMode === 'team' ? 'Team' : 'Individual',
+            opportunity: app.project?.title || 'Unknown',
+            status: app.status,
+            created_at: app.createdAt,
+            approval_kind: 'participation' as const,
+        }));
+
+        const fromBrowse = browseApps.map((a) => {
+            const payload = a.applyPayload || {};
+            const ptype = (payload['participation_type'] as string) || 'individual';
+            return {
+                id: a.id,
+                name: a.studentUser?.name || 'Unknown',
+                email: a.studentUser?.email || 'Unknown',
+                organization_type: ptype === 'team' ? 'Team' : 'Individual',
+                opportunity: a.opportunity?.title || 'Unknown',
+                status: 'pending_ciel_approval',
+                created_at: a.createdAt,
+                approval_kind: 'opportunity_application' as const,
+            };
+        });
+
+        const merged = [...fromParticipation, ...fromBrowse].sort(
+            (x, y) => new Date(y.created_at).getTime() - new Date(x.created_at).getTime(),
+        );
+
         return {
             success: true,
-            data: applications.map(app => ({
-                id: app.id,
-                name: app.fullName || app.student?.name || 'Unknown',
-                email: app.email || app.student?.email || 'Unknown',
-                organization_type: app.participationMode === 'team' ? 'Team' : 'Individual',
-                opportunity: app.project?.title || 'Unknown',
-                status: app.status,
-                created_at: app.createdAt
-            }))
+            data: merged,
         };
     }
 
-    async approveApplication(id: string) {
-        console.log(`Approving application with ID: ${id}`);
+    async approveApplication(id: string, adminUserId: string) {
         const application = await this.participationRepository.findOne({ where: { id } });
-        if (!application) {
-            throw new Error('Application not found');
+        if (application) {
+            application.status = 'approved';
+            await this.participationRepository.save(application);
+            return {
+                success: true,
+                message: 'Application approved successfully',
+            };
         }
-        application.status = 'approved';
-        await this.participationRepository.save(application);
-        return {
-            success: true,
-            message: 'Application approved successfully'
-        };
+        return this.opportunityApplicationsService.adminApprove(id, adminUserId);
     }
 
-    async rejectApplication(id: string, reason: string) {
+    async rejectApplication(id: string, reason: string, adminUserId: string) {
         const application = await this.participationRepository.findOne({ where: { id } });
-        if (!application) {
-            throw new Error('Application not found');
+        if (application) {
+            application.status = 'rejected';
+            await this.participationRepository.save(application);
+            return {
+                success: true,
+                message: 'Application rejected successfully',
+            };
         }
-        application.status = 'rejected';
-        await this.participationRepository.save(application);
-        return {
-            success: true,
-            message: 'Application rejected successfully'
-        };
+        return this.opportunityApplicationsService.adminReject(id, adminUserId, reason || '');
     }
 }

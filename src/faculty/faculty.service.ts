@@ -169,6 +169,30 @@ export class FacultyService {
                                     },
                                 );
                             }),
+                        )
+                        // Browse/join flow: row stays in opportunity_applications as pending_faculty while
+                        // the opportunity itself may already be live — faculty must still see it under Pending.
+                        .orWhere(
+                            new Brackets((app) => {
+                                app.where('opportunity.creatorId IS NOT NULL').andWhere(
+                                    `EXISTS (
+                                        SELECT 1 FROM opportunity_applications oa
+                                        WHERE oa.opportunity_id::text = opportunity.id::text
+                                          AND oa.student_user_id::text = opportunity."creatorId"::text
+                                          AND oa.withdrawn_at IS NULL
+                                          AND oa.internal_status = :oaPendingFac
+                                          AND (
+                                            :oaEmailFilterOff = true
+                                            OR LOWER(TRIM(oa.primary_faculty_email)) = :oaFacultyEmail
+                                          )
+                                    )`,
+                                    {
+                                        oaPendingFac: 'pending_faculty',
+                                        oaEmailFilterOff: !fe,
+                                        oaFacultyEmail: fe,
+                                    },
+                                );
+                            }),
                         );
                 }),
             );
@@ -211,6 +235,24 @@ export class FacultyService {
                         histRepFacPending: 'pending',
                         histRepDraft: 'draft',
                         histRepRejected: 'rejected',
+                    },
+                )
+                .andWhere(
+                    `NOT EXISTS (
+                        SELECT 1 FROM opportunity_applications oa
+                        WHERE oa.opportunity_id::text = opportunity.id::text
+                          AND oa.student_user_id::text = opportunity."creatorId"::text
+                          AND oa.withdrawn_at IS NULL
+                          AND oa.internal_status = :histOaPendingFac
+                          AND (
+                            :histOaEmailFilterOff = true
+                            OR LOWER(TRIM(oa.primary_faculty_email)) = :histOaFacultyEmail
+                          )
+                    )`,
+                    {
+                        histOaPendingFac: 'pending_faculty',
+                        histOaEmailFilterOff: !fe,
+                        histOaFacultyEmail: fe,
                     },
                 );
         } else {

@@ -109,34 +109,59 @@ export class FacultyService {
                 }),
             );
 
-        // Pending: still waiting on faculty/liaison action (email or dashboard).
+        // Pending: still waiting on faculty/liaison action (email or dashboard), OR a submitted
+        // impact report on the student's opportunity that still needs faculty verification — even
+        // when the opportunity workflow is already `live` / `active`.
         if (status === 'pending' || status === undefined || status === '') {
-            query
-                // Student / liaison proposals only (not org-owned postings where facultyId matches).
-                .andWhere(
-                    new Brackets((qb) => {
-                        qb.where('opportunity.isStudentCreated = :isc', { isc: true }).orWhere(
-                            '(opportunity.creatorId IS NOT NULL AND opportunity.faculty_verification_token IS NOT NULL)',
+            query.andWhere(
+                new Brackets((outer) => {
+                    outer
+                        .where(
+                            new Brackets((early) => {
+                                // Student / liaison proposals only (not org-owned postings where facultyId matches).
+                                early
+                                    .where(
+                                        new Brackets((s) => {
+                                            s.where('opportunity.isStudentCreated = :isc', { isc: true }).orWhere(
+                                                '(opportunity.creatorId IS NOT NULL AND opportunity.faculty_verification_token IS NOT NULL)',
+                                            );
+                                        }),
+                                    )
+                                    .andWhere(
+                                        new Brackets((s) => {
+                                            s.where('opportunity.status = :pf', { pf: 'pending_faculty' }).orWhere(
+                                                'opportunity.status = :pv',
+                                                { pv: 'pending_verification' },
+                                            );
+                                        }),
+                                    )
+                                    .andWhere('opportunity.faculty_verified = :fvp', { fvp: false })
+                                    // liaisonVerified can be NULL on older rows; NULL must still count as "not liaison-approved"
+                                    .andWhere(
+                                        new Brackets((s) => {
+                                            s.where('opportunity.liaisonVerified = :lvp', { lvp: false }).orWhere(
+                                                'opportunity.liaisonVerified IS NULL',
+                                            );
+                                        }),
+                                    );
+                            }),
+                        )
+                        .orWhere(
+                            new Brackets((rep) => {
+                                rep.where('opportunity.creatorId IS NOT NULL').andWhere(
+                                    `EXISTS (
+                                        SELECT 1 FROM student_reports sr
+                                        WHERE sr."opportunityId" = opportunity.id
+                                          AND sr."studentId" = opportunity."creatorId"
+                                          AND sr.faculty_status = :repFacPending
+                                          AND sr.status != :repDraft
+                                    )`,
+                                    { repFacPending: 'pending', repDraft: 'draft' },
+                                );
+                            }),
                         );
-                    }),
-                )
-                .andWhere(
-                    new Brackets((qb) => {
-                        qb.where('opportunity.status = :pf', { pf: 'pending_faculty' }).orWhere(
-                            'opportunity.status = :pv',
-                            { pv: 'pending_verification' },
-                        );
-                    }),
-                )
-                .andWhere('opportunity.faculty_verified = :fvp', { fvp: false })
-                // liaisonVerified can be NULL on older rows; NULL must still count as "not liaison-approved"
-                .andWhere(
-                    new Brackets((qb) => {
-                        qb.where('opportunity.liaisonVerified = :lvp', { lvp: false }).orWhere(
-                            'opportunity.liaisonVerified IS NULL',
-                        );
-                    }),
-                );
+                }),
+            );
         } else if (status === 'history' || status === 'reviewed') {
             // Student-originated proposals this faculty supervised, after liaison/faculty step or further along.
             query
@@ -156,6 +181,17 @@ export class FacultyService {
                                 histSt: ['pending_approval', 'pending_partner', 'active', 'rejected'],
                             });
                     }),
+                )
+                // Keep submitted reports that still need faculty verification in Pending, not History.
+                .andWhere(
+                    `NOT EXISTS (
+                        SELECT 1 FROM student_reports sr
+                        WHERE sr."opportunityId" = opportunity.id
+                          AND sr."studentId" = opportunity."creatorId"
+                          AND sr.faculty_status = :histRepFacPending
+                          AND sr.status != :histRepDraft
+                    )`,
+                    { histRepFacPending: 'pending', histRepDraft: 'draft' },
                 );
         } else {
             query.andWhere('opportunity.status = :st', { st: status });

@@ -11,11 +11,32 @@ import { Participation } from '../engagement/entities/participant.entity';
 import { EngagementService } from '../engagement/engagement.service';
 import { UsersService } from '../users/users.service';
 import { User } from '../users/entities/user.entity';
+import { StudentReport } from '../reports/entities/student-report.entity';
+import { Payment } from '../payments/entities/payment.entity';
 
 const PENDING_PIPELINE: OpportunityApplicationInternalStatus[] = [
     'pending_faculty',
     'pending_partner',
     'pending_admin',
+];
+
+/**
+ * Student report is past the point where admin should remove the seat via this endpoint
+ * (aligned with `StudentReportsService.saveDraft` locked statuses, minus `rejected`).
+ */
+const REPORT_STATUSES_BLOCKING_ADMIN_SEAT_REMOVAL: readonly string[] = [
+    'submitted',
+    'partner_verified',
+    'payment_pending',
+    'payment_under_review',
+    'verified',
+    'paid',
+];
+
+/** Applicants listed as having work still before final verification / payment-complete. */
+const REPORT_STATUSES_EXCLUDED_FROM_INCOMPLETE_LIST: readonly string[] = [
+    ...REPORT_STATUSES_BLOCKING_ADMIN_SEAT_REMOVAL,
+    'rejected',
 ];
 
 @Injectable()
@@ -27,12 +48,142 @@ export class OpportunityApplicationsService {
         private readonly participationRepo: Repository<Participation>,
         @InjectRepository(User)
         private readonly userRepo: Repository<User>,
+        @InjectRepository(StudentReport)
+        private readonly studentReportRepo: Repository<StudentReport>,
         private readonly engagementService: EngagementService,
         private readonly usersService: UsersService,
     ) {}
 
     normalizeEmail(email: string) {
         return (email || '').trim().toLowerCase();
+    }
+
+    /** Public-facing report label for admin lists (matches student report API mapping). */
+    private mapReportStatusForAdminList(raw: string | null | undefined): string {
+        if (raw === 'payment_pending') return 'payment_under_review';
+        if (raw === 'continue') return 'draft';
+        return raw ?? 'draft';
+    }
+
+    private async findReportsForOpportunityAndStudents(opportunityId: string, studentIds: string[]) {
+        if (!studentIds.length) return [];
+        return this.studentReportRepo
+            .createQueryBuilder('r')
+            .where('r.studentId IN (:...studentIds)', { studentIds })
+            .andWhere(
+                '(r.opportunityId = :oid OR (r.project_id IS NOT NULL AND TRIM(r.project_id) = CAST(:oid AS varchar)))',
+                { oid: opportunityId },
+            )
+            .getMany();
+    }
+
+    private pickLatestReportForStudent(reports: StudentReport[], studentId: string): StudentReport | null {
+        const forStudent = reports.filter((r) => r.studentId === studentId);
+        if (!forStudent.length) return null;
+        return [...forStudent].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0] ?? null;
+    }
+
+    /**
+     * Approved enrollments on this opportunity whose student has a student_reports row
+     * that is not yet submitted / verified / paid (etc.).
+     */
+    async adminListIncompleteReportApplicants(opportunityId: string) {
+        const apps = await this.appRepo.find({
+            where: {
+                opportunityId,
+                internalStatus: 'approved',
+                withdrawnAt: IsNull(),
+            },
+            relations: ['studentUser'],
+            order: { createdAt: 'DESC' },
+        });
+        if (!apps.length) {
+            return { data: [] as Array<Record<string, unknown>> };
+        }
+
+        const studentIds = apps.map((a) => a.studentUserId);
+        const reports = await this.findReportsForOpportunityAndStudents(opportunityId, studentIds);
+
+        const data: Array<Record<string, unknown>> = [];
+        for (const a of apps) {
+            const rep = this.pickLatestReportForStudent(reports, a.studentUserId);
+            if (!rep) continue;
+            if (REPORT_STATUSES_EXCLUDED_FROM_INCOMPLETE_LIST.includes(rep.status)) continue;
+            data.push({
+                application_id: a.id,
+                student_name: a.studentUser?.name ?? null,
+                student_email: a.studentUser?.email ?? null,
+                report_status: this.mapReportStatusForAdminList(rep.status),
+            });
+        }
+
+        return { data };
+    }
+
+    /**
+     * Withdraws the application, removes linked participations (same applicationId),
+     * student reports, and payments for this project/students — only while no report is
+     * in a submitted-or-verified-or-paid state (see REPORT_STATUSES_BLOCKING_ADMIN_SEAT_REMOVAL).
+     */
+    async adminDeleteApprovedApplicationForIncompleteReport(opportunityId: string, applicationId: string) {
+        await this.appRepo.manager.transaction(async (em) => {
+            const app = await em.findOne(OpportunityApplication, {
+                where: { id: applicationId, opportunityId, withdrawnAt: IsNull() },
+            });
+            if (!app) {
+                throw new NotFoundException('Application not found for this opportunity');
+            }
+            if (app.internalStatus !== 'approved') {
+                throw new BadRequestException(
+                    'Only approved applications on this opportunity can be removed with this action',
+                );
+            }
+
+            const participations = await em.find(Participation, {
+                where: { projectId: opportunityId, applicationId },
+            });
+
+            const studentIdSet = new Set<string>();
+            for (const p of participations) {
+                if (p.studentId) studentIdSet.add(p.studentId);
+            }
+            studentIdSet.add(app.studentUserId);
+            const studentIds = [...studentIdSet];
+
+            const reports = await em
+                .getRepository(StudentReport)
+                .createQueryBuilder('r')
+                .where('r.studentId IN (:...studentIds)', { studentIds })
+                .andWhere(
+                    '(r.opportunityId = :oid OR (r.project_id IS NOT NULL AND TRIM(r.project_id) = CAST(:oid AS varchar)))',
+                    { oid: opportunityId },
+                )
+                .getMany();
+
+            for (const sid of studentIds) {
+                const forSid = reports.filter((r) => r.studentId === sid);
+                if (
+                    forSid.some((r) => REPORT_STATUSES_BLOCKING_ADMIN_SEAT_REMOVAL.includes(r.status))
+                ) {
+                    throw new BadRequestException(
+                        'Cannot remove this enrollment: report is already submitted or verified for at least one participant',
+                    );
+                }
+            }
+
+            if (participations.length) {
+                await em.remove(participations);
+            }
+
+            if (reports.length) {
+                await em.remove(reports);
+            }
+
+            await em.delete(Payment, { projectId: opportunityId, studentId: In(studentIds) });
+
+            app.withdrawnAt = new Date();
+            await em.save(app);
+        });
     }
 
     applicationStage(internal: OpportunityApplicationInternalStatus): 'faculty' | 'partner' | 'admin' | null {

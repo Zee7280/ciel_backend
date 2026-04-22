@@ -15,6 +15,7 @@ import { UsersModule } from '../users/users.module';
 import { EngagementModule } from '../engagement/engagement.module';
 import { User } from '../users/entities/user.entity';
 import { MailModule } from '../mail/mail.module';
+import { StudentReport } from '../reports/entities/student-report.entity';
 import { StudentOpportunitiesController } from './student-opportunities.controller';
 import { OpportunityWorkflowService } from './opportunity-workflow.service';
 import { VerificationVerifyAuthGuard } from '../auth/verification-verify-auth.guard';
@@ -22,7 +23,14 @@ import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
     imports: [
-        TypeOrmModule.forFeature([Opportunity, Organization, Participation, User, OpportunityApplication]),
+        TypeOrmModule.forFeature([
+            Opportunity,
+            Organization,
+            Participation,
+            User,
+            OpportunityApplication,
+            StudentReport,
+        ]),
         OrganizationsModule,
         UsersModule,
         EngagementModule,

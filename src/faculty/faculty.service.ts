@@ -151,12 +151,22 @@ export class FacultyService {
                                 rep.where('opportunity.creatorId IS NOT NULL').andWhere(
                                     `EXISTS (
                                         SELECT 1 FROM student_reports sr
-                                        WHERE sr."opportunityId" = opportunity.id
+                                        WHERE (
+                                            sr."opportunityId"::text = opportunity.id::text
+                                            OR (
+                                                sr.project_id IS NOT NULL
+                                                AND TRIM(sr.project_id)::text = opportunity.id::text
+                                            )
+                                        )
                                           AND sr."studentId"::text = opportunity."creatorId"::text
-                                          AND sr.faculty_status = :repFacPending
-                                          AND sr.status != :repDraft
+                                          AND (sr.faculty_status IS NULL OR sr.faculty_status = :repFacPending)
+                                          AND COALESCE(sr.status, '') NOT IN (:repDraft, :repRejected)
                                     )`,
-                                    { repFacPending: 'pending', repDraft: 'draft' },
+                                    {
+                                        repFacPending: 'pending',
+                                        repDraft: 'draft',
+                                        repRejected: 'rejected',
+                                    },
                                 );
                             }),
                         );
@@ -186,12 +196,22 @@ export class FacultyService {
                 .andWhere(
                     `NOT EXISTS (
                         SELECT 1 FROM student_reports sr
-                        WHERE sr."opportunityId" = opportunity.id
+                        WHERE (
+                            sr."opportunityId"::text = opportunity.id::text
+                            OR (
+                                sr.project_id IS NOT NULL
+                                AND TRIM(sr.project_id)::text = opportunity.id::text
+                            )
+                        )
                           AND sr."studentId"::text = opportunity."creatorId"::text
-                          AND sr.faculty_status = :histRepFacPending
-                          AND sr.status != :histRepDraft
+                          AND (sr.faculty_status IS NULL OR sr.faculty_status = :histRepFacPending)
+                          AND COALESCE(sr.status, '') NOT IN (:histRepDraft, :histRepRejected)
                     )`,
-                    { histRepFacPending: 'pending', histRepDraft: 'draft' },
+                    {
+                        histRepFacPending: 'pending',
+                        histRepDraft: 'draft',
+                        histRepRejected: 'rejected',
+                    },
                 );
         } else {
             query.andWhere('opportunity.status = :st', { st: status });
@@ -205,7 +225,10 @@ export class FacultyService {
             const latestReport =
                 opp.creatorId
                     ? await this.studentReportsRepository.findOne({
-                          where: { opportunityId: opp.id, studentId: opp.creatorId },
+                          where: [
+                              { opportunityId: opp.id, studentId: opp.creatorId },
+                              { project_id: opp.id, studentId: opp.creatorId },
+                          ],
                           order: { submission_date: 'DESC' },
                       })
                     : null;

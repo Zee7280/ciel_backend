@@ -152,7 +152,7 @@ export class FacultyService {
                                     `EXISTS (
                                         SELECT 1 FROM student_reports sr
                                         WHERE sr."opportunityId" = opportunity.id
-                                          AND sr."studentId" = opportunity."creatorId"
+                                          AND sr."studentId"::text = opportunity."creatorId"::text
                                           AND sr.faculty_status = :repFacPending
                                           AND sr.status != :repDraft
                                     )`,
@@ -187,7 +187,7 @@ export class FacultyService {
                     `NOT EXISTS (
                         SELECT 1 FROM student_reports sr
                         WHERE sr."opportunityId" = opportunity.id
-                          AND sr."studentId" = opportunity."creatorId"
+                          AND sr."studentId"::text = opportunity."creatorId"::text
                           AND sr.faculty_status = :histRepFacPending
                           AND sr.status != :histRepDraft
                     )`,

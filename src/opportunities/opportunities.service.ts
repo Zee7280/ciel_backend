@@ -15,6 +15,7 @@ import { OpportunityWorkflowService, WORKFLOW_STAGE, LINE_STATUS } from './oppor
 import { isProjectVerificationAuthRequired } from '../common/project-verification-auth.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { OpportunityApplication } from './entities/opportunity-application.entity';
+import { OpportunityApplicationsService } from './opportunity-applications.service';
 import { StudentReport } from '../reports/entities/student-report.entity';
 import { Report } from '../reports/entities/report.entity';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
@@ -37,6 +38,7 @@ export class OpportunitiesService {
         private mailService: MailService,
         private notificationsService: NotificationsService,
         private readonly opportunityWorkflow: OpportunityWorkflowService,
+        private readonly opportunityApplicationsService: OpportunityApplicationsService,
     ) { }
 
     private isValidEmail(email?: string) {
@@ -2097,9 +2099,10 @@ export class OpportunitiesService {
     }
 
     /**
-     * Faculty dashboard: must match assigned facultyId OR supervision.contact email (registered faculty).
+     * Faculty dashboard: must match assigned facultyId OR supervision.contact / official_email.
+     * Does not assert opportunity.status — see facultyDashboardApprove/Reject for pipeline vs application.
      */
-    private assertFacultyCanReviewStudentOpportunity(
+    private assertFacultySupervisorForStudentOpportunity(
         opp: Opportunity,
         facultyUserId: string,
         facultyEmail: string,
@@ -2113,10 +2116,6 @@ export class OpportunitiesService {
             (!!supContact && !!fe && supContact === fe) || (!!supOfficial && !!fe && supOfficial === fe);
         if (!idOk && !emailOk) {
             throw new ForbiddenException('You are not the assigned faculty supervisor for this opportunity');
-        }
-        const awaiting = opp.status === 'pending_faculty' || opp.status === 'pending_verification';
-        if (!awaiting) {
-            throw new BadRequestException('This opportunity is not awaiting faculty approval');
         }
     }
 
@@ -2168,11 +2167,36 @@ export class OpportunitiesService {
     async facultyDashboardApprove(opportunityId: string, facultyUserId: string, facultyEmail: string) {
         const opp = await this.findOne(opportunityId);
         if (!opp) throw new NotFoundException('Opportunity not found');
-        this.assertFacultyCanReviewStudentOpportunity(opp, facultyUserId, facultyEmail);
-        this.opportunityWorkflow.afterFacultyVerified(opp);
-        const saved = await this.opportunitiesRepository.save(opp);
-        await this.handleFacultyApprovedSideEffects(saved);
-        return saved;
+        this.assertFacultySupervisorForStudentOpportunity(opp, facultyUserId, facultyEmail);
+
+        const oppAwaitingFaculty =
+            opp.status === 'pending_faculty' || opp.status === 'pending_verification';
+        const pendingApp =
+            await this.opportunityApplicationsService.findLatestPendingFacultyApplicationForDashboard(
+                opportunityId,
+                facultyEmail,
+                opp.creatorId,
+            );
+
+        if (!oppAwaitingFaculty && !pendingApp) {
+            throw new BadRequestException('This opportunity is not awaiting faculty approval');
+        }
+
+        if (oppAwaitingFaculty) {
+            this.opportunityWorkflow.afterFacultyVerified(opp);
+            const saved = await this.opportunitiesRepository.save(opp);
+            await this.handleFacultyApprovedSideEffects(saved);
+            return saved;
+        }
+
+        await this.opportunityApplicationsService.facultyApprove(
+            pendingApp!.id,
+            facultyEmail,
+            facultyUserId,
+        );
+        const refreshed = await this.findOne(opportunityId);
+        if (!refreshed) throw new NotFoundException('Opportunity not found');
+        return refreshed;
     }
 
     async facultyDashboardReject(
@@ -2183,8 +2207,33 @@ export class OpportunitiesService {
     ) {
         const opp = await this.findOne(opportunityId);
         if (!opp) throw new NotFoundException('Opportunity not found');
-        this.assertFacultyCanReviewStudentOpportunity(opp, facultyUserId, facultyEmail);
-        this.opportunityWorkflow.afterFacultyRejected(opp, reason);
+        this.assertFacultySupervisorForStudentOpportunity(opp, facultyUserId, facultyEmail);
+
+        const oppAwaitingFaculty =
+            opp.status === 'pending_faculty' || opp.status === 'pending_verification';
+        const pendingApp =
+            await this.opportunityApplicationsService.findLatestPendingFacultyApplicationForDashboard(
+                opportunityId,
+                facultyEmail,
+                opp.creatorId,
+            );
+
+        if (!oppAwaitingFaculty && !pendingApp) {
+            throw new BadRequestException('This opportunity is not awaiting faculty approval');
+        }
+
+        if (oppAwaitingFaculty) {
+            this.opportunityWorkflow.afterFacultyRejected(opp, reason);
+        } else {
+            await this.opportunityApplicationsService.facultyReject(
+                pendingApp!.id,
+                facultyEmail,
+                facultyUserId,
+                reason || '',
+            );
+            return (await this.findOne(opportunityId))!;
+        }
+
         const saved = await this.opportunitiesRepository.save(opp);
         if (opp.isStudentCreated && opp.creatorId) {
             try {

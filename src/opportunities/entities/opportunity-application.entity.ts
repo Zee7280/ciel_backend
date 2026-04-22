@@ -12,9 +12,11 @@ import { User } from '../../users/entities/user.entity';
 
 export type OpportunityApplicationInternalStatus =
     | 'pending_faculty'
+    | 'pending_partner'
     | 'pending_admin'
     | 'approved'
     | 'faculty_rejected'
+    | 'partner_rejected'
     | 'admin_rejected';
 
 @Entity('opportunity_applications')
@@ -56,6 +58,9 @@ export class OpportunityApplication {
 
     @Column({ name: 'faculty_comment', type: 'text', nullable: true })
     facultyComment: string | null;
+
+    @Column({ name: 'partner_comment', type: 'text', nullable: true })
+    partnerComment: string | null;
 
     @Column({ name: 'admin_decided_at', type: 'timestamp', nullable: true })
     adminDecidedAt: Date | null;

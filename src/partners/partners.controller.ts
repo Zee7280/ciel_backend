@@ -12,6 +12,7 @@ import { GetApplicantsDto } from './dto/get-applicants.dto';
 import { UpdateApplicantDto } from './dto/update-applicant.dto';
 import { StudentReportsService } from '../reports/student-reports.service';
 import { S3Service } from '../common/s3.service';
+import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
 
 @Controller('partners')
 @UseGuards(JwtAuthGuard)
@@ -23,6 +24,7 @@ export class PartnersController {
         private readonly opportunitiesService: OpportunitiesService,
         private readonly studentReportsService: StudentReportsService,
         private readonly s3Service: S3Service,
+        private readonly opportunityApplicationsService: OpportunityApplicationsService,
     ) { }
 
     @Get('me')
@@ -186,6 +188,42 @@ export class PartnersController {
         );
     }
 
+    /** Student join requests on this org's listings: faculty-approved → partner (if required) → CIEL admin. */
+    @Get('opportunity-applications')
+    listOpportunityApplications(@Request() req, @Query('status') status?: 'pending' | 'history') {
+        if (!req.user.organizationId) {
+            throw new BadRequestException('User is not linked to an organization');
+        }
+        return this.opportunityApplicationsService.partnerList(
+            req.user.organizationId,
+            status === 'history' ? 'history' : 'pending',
+        );
+    }
+
+    @Post('opportunity-applications/:id/approve')
+    approveOpportunityApplication(@Request() req, @Param('id') id: string) {
+        if (!req.user.organizationId) {
+            throw new BadRequestException('User is not linked to an organization');
+        }
+        return this.opportunityApplicationsService.partnerApprove(id, req.user.organizationId);
+    }
+
+    @Post('opportunity-applications/:id/reject')
+    rejectOpportunityApplication(
+        @Request() req,
+        @Param('id') id: string,
+        @Body() body: { reason?: string },
+    ) {
+        if (!req.user.organizationId) {
+            throw new BadRequestException('User is not linked to an organization');
+        }
+        return this.opportunityApplicationsService.partnerReject(
+            id,
+            req.user.organizationId,
+            body?.reason || '',
+        );
+    }
+
     @Get('student-reports')
     getStudentReports(@Request() req, @Query() query: any) {
         return this.studentReportsService.findAll({
@@ -264,7 +302,8 @@ export class PartnersController {
 export class PartnerAliasController {
     constructor(
         private readonly studentReportsService: StudentReportsService,
-        private readonly opportunitiesService: OpportunitiesService
+        private readonly opportunitiesService: OpportunitiesService,
+        private readonly opportunityApplicationsService: OpportunityApplicationsService,
     ) { }
 
     @Get('reports')
@@ -273,6 +312,41 @@ export class PartnerAliasController {
             ...query,
             organizationId: req.user.organizationId
         });
+    }
+
+    @Get('opportunity-applications')
+    listOpportunityApplications(@Request() req, @Query('status') status?: 'pending' | 'history') {
+        if (!req.user.organizationId) {
+            throw new BadRequestException('User is not linked to an organization');
+        }
+        return this.opportunityApplicationsService.partnerList(
+            req.user.organizationId,
+            status === 'history' ? 'history' : 'pending',
+        );
+    }
+
+    @Post('opportunity-applications/:id/approve')
+    approveOpportunityApplication(@Request() req, @Param('id') id: string) {
+        if (!req.user.organizationId) {
+            throw new BadRequestException('User is not linked to an organization');
+        }
+        return this.opportunityApplicationsService.partnerApprove(id, req.user.organizationId);
+    }
+
+    @Post('opportunity-applications/:id/reject')
+    rejectOpportunityApplication(
+        @Request() req,
+        @Param('id') id: string,
+        @Body() body: { reason?: string },
+    ) {
+        if (!req.user.organizationId) {
+            throw new BadRequestException('User is not linked to an organization');
+        }
+        return this.opportunityApplicationsService.partnerReject(
+            id,
+            req.user.organizationId,
+            body?.reason || '',
+        );
     }
 
     @Get('reports/:id')

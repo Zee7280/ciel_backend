@@ -859,7 +859,7 @@ export class StudentsService {
         let paymentStatus: string | null = null;
         let paymentProofUrl: string | null = null;
         let hasApplied = false;
-        let applicationStage: 'faculty' | 'admin' | null = null;
+        let applicationStage: 'faculty' | 'partner' | 'admin' | null = null;
 
         if (userId) {
             const part = await this.participantRepository.findOne({

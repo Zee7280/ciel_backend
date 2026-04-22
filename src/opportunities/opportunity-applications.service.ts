@@ -12,7 +12,11 @@ import { EngagementService } from '../engagement/engagement.service';
 import { UsersService } from '../users/users.service';
 import { User } from '../users/entities/user.entity';
 
-const PENDING_PIPELINE: OpportunityApplicationInternalStatus[] = ['pending_faculty', 'pending_admin'];
+const PENDING_PIPELINE: OpportunityApplicationInternalStatus[] = [
+    'pending_faculty',
+    'pending_partner',
+    'pending_admin',
+];
 
 @Injectable()
 export class OpportunityApplicationsService {
@@ -31,14 +35,19 @@ export class OpportunityApplicationsService {
         return (email || '').trim().toLowerCase();
     }
 
-    applicationStage(internal: OpportunityApplicationInternalStatus): 'faculty' | 'admin' | null {
+    applicationStage(internal: OpportunityApplicationInternalStatus): 'faculty' | 'partner' | 'admin' | null {
         if (internal === 'pending_faculty') return 'faculty';
+        if (internal === 'pending_partner') return 'partner';
         if (internal === 'pending_admin') return 'admin';
         return null;
     }
 
     isTerminalRejection(internal: OpportunityApplicationInternalStatus): boolean {
-        return internal === 'faculty_rejected' || internal === 'admin_rejected';
+        return (
+            internal === 'faculty_rejected' ||
+            internal === 'partner_rejected' ||
+            internal === 'admin_rejected'
+        );
     }
 
     /**
@@ -53,8 +62,15 @@ export class OpportunityApplicationsService {
             return 'approved';
         }
         if (internal === 'faculty_rejected') return 'faculty_rejected';
+        if (internal === 'partner_rejected') return 'partner_rejected';
         if (internal === 'admin_rejected') return 'admin_rejected';
-        if (internal === 'pending_faculty' || internal === 'pending_admin') return 'pending_approval';
+        if (
+            internal === 'pending_faculty' ||
+            internal === 'pending_partner' ||
+            internal === 'pending_admin'
+        ) {
+            return 'pending_approval';
+        }
         return 'pending_approval';
     }
 
@@ -73,7 +89,7 @@ export class OpportunityApplicationsService {
                 studentUserId,
                 opportunityId,
                 withdrawnAt: IsNull(),
-                internalStatus: In(['pending_faculty', 'pending_admin', 'approved']),
+                internalStatus: In(['pending_faculty', 'pending_partner', 'pending_admin', 'approved']),
             },
         });
     }
@@ -122,7 +138,7 @@ export class OpportunityApplicationsService {
             where: {
                 opportunityId,
                 withdrawnAt: IsNull(),
-                internalStatus: In(['pending_faculty', 'pending_admin']),
+                internalStatus: In(['pending_faculty', 'pending_partner', 'pending_admin']),
             },
         });
     }
@@ -178,6 +194,28 @@ export class OpportunityApplicationsService {
         return { success: true, message: 'Application withdrawn successfully' };
     }
 
+    /**
+     * Browse/join: faculty dashboard uses opportunity id; resolve the row awaiting this faculty.
+     */
+    async findLatestPendingFacultyApplicationForDashboard(
+        opportunityId: string,
+        facultyEmail: string,
+        studentUserId?: string | null,
+    ): Promise<OpportunityApplication | null> {
+        const email = this.normalizeEmail(facultyEmail);
+        const qb = this.appRepo
+            .createQueryBuilder('a')
+            .where('a.opportunityId = :oid', { oid: opportunityId })
+            .andWhere('a.withdrawnAt IS NULL')
+            .andWhere('a.internalStatus = :st', { st: 'pending_faculty' })
+            .andWhere('LOWER(TRIM(a.primaryFacultyEmail)) = :email', { email });
+        if (studentUserId) {
+            qb.andWhere('a.studentUserId = :sid', { sid: studentUserId });
+        }
+        qb.orderBy('a.createdAt', 'DESC');
+        return qb.getOne();
+    }
+
     async facultyList(facultyEmail: string, status: 'pending' | 'history' = 'pending') {
         const email = this.normalizeEmail(facultyEmail);
         const qb = this.appRepo
@@ -191,7 +229,14 @@ export class OpportunityApplicationsService {
             qb.andWhere('a.internalStatus = :st', { st: 'pending_faculty' });
         } else {
             qb.andWhere('a.internalStatus IN (:...sts)', {
-                sts: ['pending_admin', 'approved', 'faculty_rejected', 'admin_rejected'],
+                sts: [
+                    'pending_partner',
+                    'pending_admin',
+                    'approved',
+                    'faculty_rejected',
+                    'partner_rejected',
+                    'admin_rejected',
+                ],
             });
         }
 
@@ -226,7 +271,14 @@ export class OpportunityApplicationsService {
         if (app.internalStatus !== 'pending_faculty') {
             throw new BadRequestException('Application is not awaiting faculty review');
         }
-        app.internalStatus = 'pending_admin';
+        const opp = app.opportunity;
+        if (!opp) {
+            throw new NotFoundException('Opportunity not found for this application');
+        }
+        const nextStatus: OpportunityApplicationInternalStatus = opp.requiresPartnerApproval
+            ? 'pending_partner'
+            : 'pending_admin';
+        app.internalStatus = nextStatus;
         app.facultyDecidedAt = new Date();
         app.facultyDecidedBy = facultyUserId;
         app.facultyComment = null;
@@ -252,6 +304,94 @@ export class OpportunityApplicationsService {
         return { success: true, data: app };
     }
 
+    /**
+     * Browse listing org: join applications after faculty, when opportunity.requiresPartnerApproval.
+     */
+    async partnerList(organizationId: string, status: 'pending' | 'history' = 'pending') {
+        if (!organizationId) {
+            throw new BadRequestException('Organization is required');
+        }
+        const qb = this.appRepo
+            .createQueryBuilder('a')
+            .leftJoinAndSelect('a.opportunity', 'o')
+            .leftJoinAndSelect('a.studentUser', 's')
+            .where('o.organizationId = :orgId', { orgId: organizationId })
+            .andWhere('a.withdrawnAt IS NULL');
+
+        if (status === 'pending') {
+            qb.andWhere('a.internalStatus = :st', { st: 'pending_partner' });
+        } else {
+            qb.andWhere('a.internalStatus IN (:...sts)', {
+                sts: [
+                    'pending_admin',
+                    'approved',
+                    'faculty_rejected',
+                    'partner_rejected',
+                    'admin_rejected',
+                ],
+            });
+        }
+        qb.orderBy('a.createdAt', 'DESC');
+        const rows = await qb.getMany();
+        return {
+            success: true,
+            data: rows.map((a) => ({
+                id: a.id,
+                opportunity_id: a.opportunityId,
+                opportunity_title: a.opportunity?.title,
+                student_name: a.studentUser?.name,
+                student_email: a.studentUser?.email,
+                internal_status: a.internalStatus,
+                application_status: this.toPublicApplicationStatus(a.internalStatus),
+                application_stage: this.applicationStage(a.internalStatus),
+                created_at: a.createdAt,
+            })),
+        };
+    }
+
+    async partnerApprove(id: string, organizationId: string | null) {
+        if (!organizationId) {
+            throw new ForbiddenException('User is not linked to an organization');
+        }
+        const app = await this.appRepo.findOne({
+            where: { id, withdrawnAt: IsNull() },
+            relations: ['opportunity', 'studentUser'],
+        });
+        if (!app) throw new NotFoundException('Application not found');
+        if (app.internalStatus !== 'pending_partner') {
+            throw new BadRequestException('Application is not awaiting partner review');
+        }
+        const orgId = app.opportunity?.organizationId;
+        if (!orgId || orgId !== organizationId) {
+            throw new ForbiddenException('Not authorized to act on this application');
+        }
+        app.internalStatus = 'pending_admin';
+        await this.appRepo.save(app);
+        return { success: true, data: app };
+    }
+
+    async partnerReject(id: string, organizationId: string | null, reason: string) {
+        if (!organizationId) {
+            throw new ForbiddenException('User is not linked to an organization');
+        }
+        const app = await this.appRepo.findOne({
+            where: { id, withdrawnAt: IsNull() },
+            relations: ['opportunity'],
+        });
+        if (!app) throw new NotFoundException('Application not found');
+        if (app.internalStatus !== 'pending_partner') {
+            throw new BadRequestException('Application is not awaiting partner review');
+        }
+        const orgId = app.opportunity?.organizationId;
+        if (!orgId || orgId !== organizationId) {
+            throw new ForbiddenException('Not authorized to act on this application');
+        }
+        app.internalStatus = 'partner_rejected';
+        app.partnerComment = reason?.trim() || null;
+        await this.appRepo.save(app);
+        return { success: true, data: app };
+    }
+
     async adminList(status?: string) {
         const normalized = (status || 'pending').trim().toLowerCase();
         if (normalized !== 'pending' && normalized !== 'history') {
@@ -263,6 +403,7 @@ export class OpportunityApplicationsService {
         const ADMIN_HISTORY_STATUSES: OpportunityApplicationInternalStatus[] = [
             'approved',
             'faculty_rejected',
+            'partner_rejected',
             'admin_rejected',
         ];
 

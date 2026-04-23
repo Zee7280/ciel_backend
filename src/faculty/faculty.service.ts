@@ -535,7 +535,7 @@ export class FacultyService {
             .andWhere('r.primary_sdg_goal IS NOT NULL')
             .andWhere(
                 new Brackets((qb) => {
-                    qb.where('r.opportunityId IN (:...ids)', idParams).orWhere(
+                    qb.where('r."opportunityId"::text IN (:...ids)', idParams).orWhere(
                         '(r.project_id IS NOT NULL AND TRIM(r.project_id) IN (:...ids))',
                         idParams,
                     );
@@ -587,7 +587,7 @@ export class FacultyService {
                     .createQueryBuilder('r')
                     .where(
                         new Brackets((qb) => {
-                            qb.where('r.opportunityId = :oid', { oid: opp.id }).orWhere(
+                            qb.where('r."opportunityId"::text = :oid', { oid: opp.id }).orWhere(
                                 '(r.project_id IS NOT NULL AND TRIM(r.project_id) = :oid)',
                                 { oid: opp.id },
                             );
@@ -619,7 +619,7 @@ export class FacultyService {
             .leftJoinAndSelect('r.student', 'stu')
             .where(
                 new Brackets((qb) => {
-                    qb.where('r.opportunityId IN (:...ids)', idParams).orWhere(
+                    qb.where('r."opportunityId"::text IN (:...ids)', idParams).orWhere(
                         '(r.project_id IS NOT NULL AND TRIM(r.project_id) IN (:...ids))',
                         idParams,
                     );

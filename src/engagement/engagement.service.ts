@@ -206,6 +206,11 @@ export class EngagementService {
 
             // Apply all DTO fields
             const normalizedCnicForStorage = (dto.cnic || '').replace(/\D/g, '');
+            const registrationStatus =
+                dto.participationMode === 'team' && !dto.isTeamLead
+                    ? 'approved'
+                    : 'pending_ciel_approval';
+
             Object.assign(participation, {
                 ...dto,
                 studentId: targetStudentId || participation.studentId,
@@ -214,7 +219,7 @@ export class EngagementService {
                 cnicLast4: normalizedCnicForStorage.slice(-4),
                 emailVerified: true,
                 mobileVerified: true,
-                status: 'pending_ciel_approval'
+                status: registrationStatus,
             });
 
             const saved = await manager.save(Participation, participation);

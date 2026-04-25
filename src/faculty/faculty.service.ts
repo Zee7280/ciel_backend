@@ -95,7 +95,7 @@ export class FacultyService {
         const fe = this.normalizeFacultyEmail(facultyEmail);
         const oppQ = this.opportunitiesRepository.createQueryBuilder('o').select('o.id').where(
             new Brackets((qb) => {
-                qb.where('o.facultyId = :facultyId', { facultyId });
+                qb.where('"o"."facultyId"::text = :facultyId', { facultyId });
                 if (fe) {
                     qb.orWhere(`LOWER(TRIM(COALESCE(o.supervision->>'contact', ''))) = :fe`, { fe }).orWhere(
                         `LOWER(TRIM(COALESCE(o.supervision->>'official_email', ''))) = :fe`,
@@ -129,7 +129,7 @@ export class FacultyService {
             .createQueryBuilder('opportunity')
             .where(
                 new Brackets((qb) => {
-                    qb.where('opportunity.facultyId = :facultyId', { facultyId });
+                    qb.where('"opportunity"."facultyId"::text = :facultyId', { facultyId });
                     if (fe) {
                         qb.orWhere(
                             `LOWER(TRIM(COALESCE(opportunity.supervision->>'contact', ''))) = :fe`,
@@ -331,7 +331,7 @@ export class FacultyService {
             .where('opportunity.id = :opportunityId', { opportunityId })
             .andWhere(
                 new Brackets((qb) => {
-                    qb.where('opportunity.facultyId = :facultyId', { facultyId });
+                    qb.where('"opportunity"."facultyId"::text = :facultyId', { facultyId });
                     if (fe) {
                         qb.orWhere(
                             `LOWER(TRIM(COALESCE(opportunity.supervision->>'contact', ''))) = :fe`,

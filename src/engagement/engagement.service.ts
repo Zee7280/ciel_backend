@@ -13,6 +13,7 @@ import { UserRole } from '../users/enums/user-role.enum';
 import {
     attendanceCountsTowardProgress,
     canUserActOnAttendanceQueue,
+    getParticipantFacultyEmails,
     resolveAttendanceApproverRouting,
 } from './attendance-approver.util';
 import { ConfigService } from '@nestjs/config';
@@ -636,10 +637,26 @@ export class EngagementService {
             throw new NotFoundException('Project not found');
         }
 
-        const creator = opportunity.creatorId
-            ? await this.userRepository.findOne({ where: { id: opportunity.creatorId } })
-            : null;
-        const routing = resolveAttendanceApproverRouting(opportunity, creator, opportunity.organization ?? null);
+        const facultyEmails = getParticipantFacultyEmails(participation);
+        if (!facultyEmails.length) {
+            throw new BadRequestException(
+                'Attendance approval assignment requires at least one faculty email on the participation record',
+            );
+        }
+
+        let assignedFacultyUserId: string | null = null;
+        for (const facultyEmail of facultyEmails) {
+            const facultyUser = await this.userRepository
+                .createQueryBuilder('user')
+                .where('LOWER("user"."email") = :facultyEmail', { facultyEmail })
+                .andWhere('"user"."role" = :facultyRole', { facultyRole: UserRole.FACULTY })
+                .getOne();
+            if (facultyUser?.id) {
+                assignedFacultyUserId = facultyUser.id;
+                break;
+            }
+        }
+        const routing = resolveAttendanceApproverRouting(assignedFacultyUserId);
 
         const log = this.attendanceLogRepository.create({
             ...dto,
@@ -673,61 +690,58 @@ export class EngagementService {
             : null;
         const studentLabel = student?.name || participation.fullName || participation.email || 'A participant';
 
-        if (routing.assignedApproverType === 'partner' && routing.assignedApproverUserId) {
-            const approver = await this.userRepository.findOne({ where: { id: routing.assignedApproverUserId } });
-            if (approver?.email) {
+        if (routing.assignedApproverType === 'faculty') {
+            const approver = routing.assignedApproverUserId
+                ? await this.userRepository.findOne({ where: { id: routing.assignedApproverUserId } })
+                : null;
+            const recipientEmail =
+                approver?.email ||
+                participation.primaryFacultyEmail ||
+                participation.facultySupervisorEmail ||
+                participation.secondaryFacultyEmail;
+            if (recipientEmail) {
                 await this.mailService.sendAttendancePendingPartnerReview(
-                    approver.email,
-                    approver.name || 'Partner',
+                    recipientEmail,
+                    approver?.name || 'Faculty',
                     studentLabel,
                     title,
                     opportunity.id,
-                );
-            } else {
-                await this.mailService.sendAttendancePendingAdminReview(
-                    title,
-                    opportunity.id,
-                    log.id,
-                    studentLabel,
                 );
             }
-        } else if (routing.assignedApproverType === 'admin') {
-            await this.mailService.sendAttendancePendingAdminReview(title, opportunity.id, log.id, studentLabel);
         }
     }
 
     async listPendingAttendanceLogs(actorUserId: string, actorRole: string | undefined, projectId?: string) {
-        const isAdmin = actorRole === UserRole.SUPER_ADMIN;
-        const isPartnerSide = [
-            UserRole.NGO,
-            UserRole.PARTNER,
-            UserRole.CORPORATE,
-            UserRole.ORGANIZATION_ADMIN,
-        ].includes(actorRole as UserRole);
-
-        if (!isAdmin && !isPartnerSide) {
+        if (actorRole !== UserRole.FACULTY) {
             throw new ForbiddenException('Not authorized to list pending attendance');
         }
+
+        const actor = await this.userRepository.findOne({ where: { id: actorUserId } });
+        const actorEmail = (actor?.email || '').trim().toLowerCase();
 
         const qb = this.attendanceLogRepository
             .createQueryBuilder('log')
             .leftJoinAndSelect('log.participant', 'participant')
             .leftJoinAndSelect('log.project', 'project')
-            .where('log.approvalStatus = :pending', { pending: 'pending' });
+            .where('log.approvalStatus = :pending', { pending: 'pending' })
+            .andWhere('log.assignedApproverType = :facultyType', { facultyType: 'faculty' });
 
         if (projectId) {
             qb.andWhere('log.projectId = :projectId', { projectId });
         }
 
-        if (isAdmin) {
-            qb.andWhere('log.assignedApproverType = :adminT', { adminT: 'admin' });
-        } else {
-            qb.andWhere('log.assignedApproverType = :partnerT', { partnerT: 'partner' });
-            // Avoid 42883: opportunities.creatorId is varchar; assignedApproverUserId is uuid.
+        if (actorEmail) {
             qb.andWhere(
-                '("log"."assignedApproverUserId"::text = :uid OR "project"."creatorId"::text = :uid)',
-                { uid: actorUserId },
+                `(
+                    "log"."assignedApproverUserId"::text = :uid
+                    OR LOWER(TRIM(COALESCE("participant"."facultySupervisorEmail", ''))) = :actorEmail
+                    OR LOWER(TRIM(COALESCE("participant"."primaryFacultyEmail", ''))) = :actorEmail
+                    OR LOWER(TRIM(COALESCE("participant"."secondaryFacultyEmail", ''))) = :actorEmail
+                )`,
+                { uid: actorUserId, actorEmail },
             );
+        } else {
+            qb.andWhere('"log"."assignedApproverUserId"::text = :uid', { uid: actorUserId });
         }
 
         return qb.orderBy('log.createdAt', 'DESC').getMany();
@@ -745,7 +759,14 @@ export class EngagementService {
             throw new BadRequestException('This attendance entry is not awaiting approval');
         }
 
-        const allowed = canUserActOnAttendanceQueue(actorUserId, actorRole, log, log.project?.creatorId);
+        const actor = await this.userRepository.findOne({ where: { id: actorUserId } });
+        const allowed = canUserActOnAttendanceQueue(
+            actorUserId,
+            actorRole,
+            actor?.email || null,
+            log,
+            getParticipantFacultyEmails(log.participant || {}),
+        );
         if (!allowed) {
             throw new ForbiddenException('Not authorized to approve this attendance');
         }

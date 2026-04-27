@@ -32,6 +32,16 @@ describe('EngagementService', () => {
 
     const mockUserRepository = {
         findOne: jest.fn(),
+        createQueryBuilder: jest.fn().mockReturnValue({
+            where: jest.fn().mockReturnThis(),
+            andWhere: jest.fn().mockReturnThis(),
+            getOne: jest.fn().mockResolvedValue({
+                id: 'faculty-1',
+                email: 'faculty@example.com',
+                role: 'faculty',
+                name: 'Dr. A',
+            }),
+        }),
     };
 
     // const mockTeamMemberRepository = {
@@ -149,6 +159,7 @@ describe('EngagementService', () => {
                 studentId: 'u1',
                 projectId: 'proj1',
                 status: 'approved',
+                primaryFacultyEmail: 'faculty@example.com',
             };
             const dto = {
                 dateOfEngagement: '2023-10-01',
@@ -178,7 +189,7 @@ describe('EngagementService', () => {
                 projectId: 'proj1',
                 sessionHours: 3,
                 approvalStatus: 'pending',
-                assignedApproverType: 'admin',
+                assignedApproverType: 'faculty',
             }));
             expect(mockAttendanceLogRepository.save).toHaveBeenCalled();
         });

@@ -59,15 +59,15 @@ export class AttendanceLog {
     @Column({ type: 'varchar', length: 32, nullable: true })
     approvalStatus: string | null;
 
-    /** Server-assigned queue: partner (opportunity creator) or CIEL admin pool. */
+    /** Server-assigned queue: faculty-only attendance approval gate. */
     @Column({ type: 'varchar', length: 16, nullable: true })
     assignedApproverType: string | null;
 
-    /** When assignedApproverType is partner, matches opportunity.creatorId unless reassigned later. */
+    /** Preferred: mapped faculty user id from participation faculty emails. */
     @Column({ type: 'uuid', nullable: true })
     assignedApproverUserId: string | null;
 
-    /** NGO vs corporate vs faculty/student host — audit / UI. */
+    /** Audit marker for approval route origin. */
     @Column({ type: 'varchar', length: 32, nullable: true })
     opportunityCreatorKind: string | null;
 

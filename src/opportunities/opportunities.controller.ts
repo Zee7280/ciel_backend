@@ -45,7 +45,10 @@ export class OpportunitiesController {
         return this.opportunitiesService.verifyExecutingOrganizationForUser(req.user.id, req.user.email, id);
     }
 
-    /** Opportunities created by the logged-in faculty member (creatorId = user). */
+    /**
+     * Faculty-facing list: created by this user, linked as project faculty (`facultyId`),
+     * or listed on an application as primary/secondary faculty email (same flows as attendance verification).
+     */
     @UseGuards(JwtAuthGuard)
     @Get('faculty/mine')
     async findMineForFaculty(@Request() req) {

@@ -1348,7 +1348,10 @@ export class OpportunitiesService {
         return this.opportunitiesRepository.save(opportunity);
     }
 
-    /** Faculty dashboard: opportunities this user created (same account as faculty creator). */
+    /**
+     * Faculty dashboard: opportunities this user created, is linked as `facultyId`,
+     * or is listed on an opportunity application as primary/secondary faculty email (verifier flow).
+     */
     async findMineForFaculty(userId: string) {
         const user = await this.usersRepository.findOne({ where: { id: userId } });
         if (!user) {
@@ -1358,18 +1361,55 @@ export class OpportunitiesService {
             throw new ForbiddenException('Only faculty can access this list');
         }
 
+        const email = this.normalizeEmail(user.email);
+        const idSet = new Set<string>();
+
+        const ownedOrLinked = await this.opportunitiesRepository
+            .createQueryBuilder('o')
+            .select('o.id')
+            .where('o.creatorId = :uid OR o.facultyId = :uid', { uid: userId })
+            .getMany();
+        for (const o of ownedOrLinked) {
+            idSet.add(o.id);
+        }
+
+        if (email) {
+            const appRepo = this.opportunitiesRepository.manager.getRepository(OpportunityApplication);
+            const appRows = await appRepo
+                .createQueryBuilder('app')
+                .select('app.opportunityId', 'opportunityId')
+                .where(
+                    '(LOWER(TRIM(app.primaryFacultyEmail)) = :email OR LOWER(TRIM(COALESCE(app.secondaryFacultyEmail, \'\'))) = :email)',
+                    { email },
+                )
+                .getRawMany();
+            for (const r of appRows) {
+                const oid = (r as { opportunityId?: string }).opportunityId;
+                if (oid) {
+                    idSet.add(oid);
+                }
+            }
+        }
+
+        if (idSet.size === 0) {
+            const empty: unknown[] = [];
+            return { items: empty, opportunities: empty, rows: empty };
+        }
+
         const rows = await this.opportunitiesRepository.find({
-            where: { creatorId: userId },
+            where: { id: In([...idSet]) },
             relations: ['organization'],
             order: { createdAt: 'DESC' },
         });
 
-        return Promise.all(
+        const items = await Promise.all(
             rows.map(async (opp) => {
                 const occupiedSeats = await this.getOccupiedSeats(opp.id);
                 const volunteersRequired = opp.timeline?.volunteers_required || 0;
                 return {
                     id: opp.id,
+                    _id: opp.id,
+                    opportunity_id: opp.id,
                     title: opp.title,
                     status: this.getApiOpportunityStatus(opp),
                     requires_partner_approval: opp.requiresPartnerApproval,
@@ -1383,6 +1423,8 @@ export class OpportunitiesService {
                 };
             }),
         );
+
+        return { items, opportunities: items, rows: items };
     }
 
     async findAll(userId: string, filters: any) {

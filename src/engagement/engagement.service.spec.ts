@@ -61,6 +61,7 @@ describe('EngagementService', () => {
         sendFacultyInvite: jest.fn(),
         sendAttendancePendingPartnerReview: jest.fn(),
         sendAttendancePendingAdminReview: jest.fn(),
+        sendAttendanceVerificationRequestNotice: jest.fn(),
     };
 
     beforeEach(async () => {
@@ -321,6 +322,60 @@ describe('EngagementService', () => {
             await expect(
                 service.createAttendanceVerifyRequest('student-1', 'student', 'proj-1', dto),
             ).rejects.toThrow('Not authorized to request attendance verification');
+        });
+
+        it('should reject faculty user with no project linkage targeting another participant', async () => {
+            const dto = {
+                projectId: 'proj-1',
+                participantId: 'participant-victim',
+                requestedAt: '2026-04-27T06:40:00.000Z',
+            } as any;
+
+            const mockAppQb = {
+                where: jest.fn().mockReturnThis(),
+                andWhere: jest.fn().mockReturnThis(),
+                getCount: jest.fn().mockResolvedValue(0),
+            };
+            (mockOpportunityRepository as any).manager = {
+                getRepository: jest.fn().mockReturnValue({
+                    createQueryBuilder: jest.fn().mockReturnValue(mockAppQb),
+                }),
+            };
+            (mockParticipationRepository as any).createQueryBuilder = jest.fn().mockReturnValue({
+                where: jest.fn().mockReturnThis(),
+                andWhere: jest.fn().mockReturnThis(),
+                getCount: jest.fn().mockResolvedValue(0),
+            });
+
+            mockOpportunityRepository.findOne.mockResolvedValue({
+                id: 'proj-1',
+                title: 'Project 1',
+                creatorId: 'some-partner-user',
+                facultyId: null,
+                organizationId: 'org-a',
+            });
+            mockParticipationRepository.findOne.mockResolvedValue({
+                id: 'participant-victim',
+                projectId: 'proj-1',
+                studentId: 'student-victim',
+                email: 'victim@example.com',
+                primaryFacultyEmail: 'real.supervisor@uni.edu',
+                attendanceVerificationRequested: false,
+                attendanceLocked: false,
+            });
+            mockUserRepository.findOne.mockResolvedValue({
+                id: 'random-faculty',
+                email: 'random.faculty@evil.edu',
+                role: UserRole.FACULTY,
+                organization: null,
+            });
+
+            await expect(
+                service.createAttendanceVerifyRequest('random-faculty', UserRole.FACULTY, 'proj-1', dto),
+            ).rejects.toThrow('Not authorized to request attendance verification');
+
+            delete (mockOpportunityRepository as any).manager;
+            delete (mockParticipationRepository as any).createQueryBuilder;
         });
 
         it('should allow non-privileged user when unclaimed participant email matches actor', async () => {

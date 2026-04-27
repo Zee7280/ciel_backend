@@ -9,6 +9,7 @@ import { CreateAttendanceLogDto } from './dto/create-attendance-log.dto';
 import { PatchAttendanceApprovalDto } from './dto/patch-attendance-approval.dto';
 import { CreateAttendanceVerifyRequestDto } from './dto/create-attendance-verify-request.dto';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
+import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 import { User } from '../users/entities/user.entity';
 import { UserRole } from '../users/enums/user-role.enum';
 import {
@@ -712,11 +713,33 @@ export class EngagementService {
 
     async listPendingAttendanceLogs(actorUserId: string, actorRole: string | undefined, projectId?: string) {
         if (actorRole !== UserRole.FACULTY) {
-            throw new ForbiddenException('Not authorized to list pending attendance');
+            throw new ForbiddenException('Only faculty accounts can load the pending attendance queue.');
         }
+
+        const trimmed = typeof projectId === 'string' ? projectId.trim() : '';
+        const scopedProjectId = trimmed.length > 0 ? trimmed : undefined;
 
         const actor = await this.userRepository.findOne({ where: { id: actorUserId } });
         const actorEmail = (actor?.email || '').trim().toLowerCase();
+
+        if (scopedProjectId) {
+            const opportunity = await this.opportunityRepository.findOne({ where: { id: scopedProjectId } });
+            if (!opportunity) {
+                throw new NotFoundException(
+                    'No opportunity exists for this projectId. Use the same opportunity id as in your faculty list or attendance email links (the project UUID).',
+                );
+            }
+            const canAccess = await this.facultyMemberCanAccessOpportunityForPendingAttendance(
+                actorUserId,
+                actorEmail,
+                opportunity,
+            );
+            if (!canAccess) {
+                throw new ForbiddenException(
+                    'This projectId is valid but you are not listed as faculty or supervisor for that opportunity, so pending attendance cannot be loaded for it.',
+                );
+            }
+        }
 
         const qb = this.attendanceLogRepository
             .createQueryBuilder('log')
@@ -725,8 +748,8 @@ export class EngagementService {
             .where('log.approvalStatus = :pending', { pending: 'pending' })
             .andWhere('log.assignedApproverType = :facultyType', { facultyType: 'faculty' });
 
-        if (projectId) {
-            qb.andWhere('log.projectId = :projectId', { projectId });
+        if (scopedProjectId) {
+            qb.andWhere('log.projectId = :projectId', { projectId: scopedProjectId });
         }
 
         if (actorEmail) {
@@ -743,7 +766,66 @@ export class EngagementService {
             qb.andWhere('"log"."assignedApproverUserId"::text = :uid', { uid: actorUserId });
         }
 
-        return qb.orderBy('log.createdAt', 'DESC').getMany();
+        const logs = await qb.orderBy('log.createdAt', 'DESC').getMany();
+        return this.formatPendingAttendanceResponse(logs, scopedProjectId);
+    }
+
+    /** Normalized payload: plain arrays plus aliases for older clients (`data.items`, `data.pending`). */
+    private formatPendingAttendanceResponse(logs: AttendanceLog[], projectId?: string) {
+        return {
+            items: logs,
+            pending: logs,
+            rows: logs,
+            projectId: projectId ?? null,
+            opportunity_id: projectId ?? null,
+        };
+    }
+
+    private async facultyMemberCanAccessOpportunityForPendingAttendance(
+        userId: string,
+        actorEmail: string,
+        opportunity: Opportunity,
+    ): Promise<boolean> {
+        if (opportunity.creatorId === userId || opportunity.facultyId === userId) {
+            return true;
+        }
+        if (!actorEmail) {
+            return false;
+        }
+        const appRepo = this.opportunityRepository.manager.getRepository(OpportunityApplication);
+        const appCount = await appRepo
+            .createQueryBuilder('app')
+            .where('app.opportunityId = :oid', { oid: opportunity.id })
+            .andWhere(
+                '(LOWER(TRIM(app.primaryFacultyEmail)) = :em OR LOWER(TRIM(COALESCE(app.secondaryFacultyEmail, \'\'))) = :em)',
+                { em: actorEmail },
+            )
+            .getCount();
+        if (appCount > 0) {
+            return true;
+        }
+        const partCount = await this.participantRepository
+            .createQueryBuilder('p')
+            .where('p.projectId = :oid', { oid: opportunity.id })
+            .andWhere(
+                `(
+                    LOWER(TRIM(COALESCE(p.facultySupervisorEmail, ''))) = :em
+                    OR LOWER(TRIM(COALESCE(p.primaryFacultyEmail, ''))) = :em
+                    OR LOWER(TRIM(COALESCE(p.secondaryFacultyEmail, ''))) = :em
+                )`,
+                { em: actorEmail },
+            )
+            .getCount();
+        return partCount > 0;
+    }
+
+    /** NGO / corporate / org-admin user may act only for opportunities hosted by them or their organization. */
+    private partnerActorHostsOpportunity(actorUserId: string, actor: User | null, opportunity: Opportunity): boolean {
+        if (opportunity.creatorId === actorUserId) {
+            return true;
+        }
+        const orgId = actor?.organization?.id ?? null;
+        return !!(orgId && opportunity.organizationId && orgId === opportunity.organizationId);
     }
 
     async patchAttendanceApproval(actorUserId: string, actorRole: string | undefined, logId: string, dto: PatchAttendanceApprovalDto) {
@@ -752,10 +834,15 @@ export class EngagementService {
             relations: ['project', 'participant'],
         });
         if (!log) {
-            throw new NotFoundException('Attendance log not found');
+            throw new NotFoundException(
+                'No attendance log was found for this id. It may have been removed or the link is out of date.',
+            );
         }
         if (!log.approvalStatus || log.approvalStatus !== 'pending') {
-            throw new BadRequestException('This attendance entry is not awaiting approval');
+            const state = log.approvalStatus ? String(log.approvalStatus) : 'legacy';
+            throw new BadRequestException(
+                `This attendance entry is not awaiting approval (current state: ${state}). Refresh the list and try again.`,
+            );
         }
 
         const actor = await this.userRepository.findOne({ where: { id: actorUserId } });
@@ -768,7 +855,9 @@ export class EngagementService {
             log.project?.creatorId ?? null,
         );
         if (!allowed) {
-            throw new ForbiddenException('Not authorized to approve this attendance');
+            throw new ForbiddenException(
+                'You cannot update this attendance approval. Sign in as the faculty member listed for this participant, or confirm the entry is still pending.',
+            );
         }
 
         const now = new Date();
@@ -817,22 +906,37 @@ export class EngagementService {
             throw new NotFoundException('Participation record not found for this project');
         }
 
-        const isPrivilegedActor =
-            actorRole === UserRole.SUPER_ADMIN ||
-            actorRole === UserRole.FACULTY ||
-            actorRole === UserRole.NGO ||
-            actorRole === UserRole.CORPORATE ||
-            actorRole === UserRole.ORGANIZATION_ADMIN;
-        if (!isPrivilegedActor) {
-            const actor = await this.userRepository.findOne({ where: { id: actorUserId } });
-            const actorEmail = (actor?.email || '').trim().toLowerCase();
-            const participantEmail = (participant.email || '').trim().toLowerCase();
-            const ownsParticipantRecord = participant.studentId === actorUserId;
-            const canClaimByEmail = !participant.studentId && !!actorEmail && participantEmail === actorEmail;
+        const actor = await this.userRepository.findOne({ where: { id: actorUserId }, relations: ['organization'] });
+        const actorEmail = (actor?.email || '').trim().toLowerCase();
+        const participantEmail = (participant.email || '').trim().toLowerCase();
+        const ownsParticipantRecord = participant.studentId === actorUserId;
+        const canClaimByEmail = !participant.studentId && !!actorEmail && participantEmail === actorEmail;
 
-            if (!ownsParticipantRecord && !canClaimByEmail) {
-                throw new ForbiddenException('Not authorized to request attendance verification');
-            }
+        let authorized = ownsParticipantRecord || canClaimByEmail;
+
+        if (!authorized && actorRole === UserRole.SUPER_ADMIN) {
+            authorized = true;
+        }
+
+        if (!authorized && actorRole === UserRole.FACULTY) {
+            authorized = await this.facultyMemberCanAccessOpportunityForPendingAttendance(
+                actorUserId,
+                actorEmail,
+                opportunity,
+            );
+        }
+
+        if (
+            !authorized &&
+            (actorRole === UserRole.NGO ||
+                actorRole === UserRole.CORPORATE ||
+                actorRole === UserRole.ORGANIZATION_ADMIN)
+        ) {
+            authorized = this.partnerActorHostsOpportunity(actorUserId, actor, opportunity);
+        }
+
+        if (!authorized) {
+            throw new ForbiddenException('Not authorized to request attendance verification');
         }
 
         const reviewer = await this.resolveAttendanceVerificationReviewer(opportunity, participant);

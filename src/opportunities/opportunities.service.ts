@@ -1367,7 +1367,7 @@ export class OpportunitiesService {
         const ownedOrLinked = await this.opportunitiesRepository
             .createQueryBuilder('o')
             .select('o.id')
-            .where('o.creatorId = :uid OR o.facultyId = :uid', { uid: userId })
+            .where('o.creatorId = :uid OR o.facultyId::text = :uid', { uid: userId })
             .getMany();
         for (const o of ownedOrLinked) {
             idSet.add(o.id);

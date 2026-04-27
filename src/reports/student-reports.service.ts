@@ -1,4 +1,5 @@
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { StudentReport } from './entities/student-report.entity';
@@ -32,7 +33,25 @@ export class StudentReportsService {
         private readonly s3Service: S3Service,
         private readonly engagementService: EngagementService,
         private readonly mailService: MailService,
+        private readonly configService: ConfigService,
     ) { }
+
+    /**
+     * Single value for QR: absolute public page URL when FRONTEND_URL/APP_URL is set,
+     * otherwise path-only `/impact/verify/{slug}` — resolve on the client with `new URL(impact_verify_url, NEXT_PUBLIC_APP_URL)`.
+     */
+    private buildImpactVerifyUrl(slug: string | null | undefined): string | null {
+        const s = slug?.trim();
+        if (!s) return null;
+        let pathSeg = (this.configService.get<string>('IMPACT_VERIFY_PATH') || '/impact/verify').trim();
+        if (!pathSeg.startsWith('/')) pathSeg = `/${pathSeg}`;
+        pathSeg = pathSeg.replace(/\/+$/, '');
+        const base = (this.configService.get<string>('FRONTEND_URL') || this.configService.get<string>('APP_URL') || '')
+            .trim()
+            .replace(/\/+$/, '');
+        const pathAndSlug = `${pathSeg}/${encodeURIComponent(s)}`;
+        return base ? `${base}${pathAndSlug}` : pathAndSlug;
+    }
 
     /** Aligns legacy DB values with student UI / frontend lifecycle names. */
     private toPublicReportStatus(raw: string | null | undefined): string {
@@ -43,6 +62,66 @@ export class StudentReportsService {
 
     private isPartnerReviewerRole(role: string | null | undefined): boolean {
         return ['partner', 'ngo', 'corporate', 'organization_admin'].includes(role ?? '');
+    }
+
+    private looksLikeUuid(value: string): boolean {
+        return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.trim());
+    }
+
+    /**
+     * Public, unauthenticated: resolve QR / link key to verified status only (no PII or report body).
+     * Lookup order: verification_public_slug, then report id, then project_id (legacy).
+     */
+    async getPublicImpactReportVerification(verificationKey: string) {
+        const key = (verificationKey || '').trim();
+        if (!key) {
+            throw new NotFoundException();
+        }
+
+        let report =
+            (await this.studentReportsRepository.findOne({
+                where: { verificationPublicSlug: key },
+                relations: ['opportunity'],
+            })) ?? null;
+
+        if (!report && this.looksLikeUuid(key)) {
+            report = await this.studentReportsRepository.findOne({
+                where: { id: key },
+                relations: ['opportunity'],
+            });
+        }
+
+        if (!report) {
+            const rows = await this.studentReportsRepository.find({
+                where: { project_id: key },
+                relations: ['opportunity'],
+                order: { adminApprovedAt: 'DESC', updatedAt: 'DESC' },
+                take: 1,
+            });
+            report = rows[0] ?? null;
+        }
+
+        if (!report) {
+            throw new NotFoundException();
+        }
+
+        const verified =
+            report.admin_status === 'approved' && (report.status === 'verified' || report.status === 'paid');
+
+        if (!verified) {
+            return { success: true, verified: false };
+        }
+
+        const project_title = (report.opportunity?.title || 'Impact report').trim() || 'Impact report';
+
+        return {
+            success: true,
+            verified: true,
+            project_title,
+            verified_at: report.adminApprovedAt
+                ? new Date(report.adminApprovedAt).toISOString()
+                : null,
+        };
     }
 
     private collectEvidenceUrls(report: StudentReport): string[] {
@@ -241,7 +320,7 @@ export class StudentReportsService {
         report.reportSubmittedAt = submitStamp;
         report.submission_date = submitStamp;
 
-        // Save report to get ID
+        // Save report to get ID (verification_public_slug filled in entity @BeforeInsert/@BeforeUpdate)
         await this.studentReportsRepository.save(report);
 
         // Save files if any
@@ -286,6 +365,7 @@ export class StudentReportsService {
             message: 'Report submitted successfully.',
             data: {
                 report_id: report.id,
+                impact_verify_url: this.buildImpactVerifyUrl(report.verificationPublicSlug),
                 project_id: report.project_id,
                 submitted_at: report.submission_date,
                 report_submitted_at: report.reportSubmittedAt,
@@ -381,6 +461,8 @@ export class StudentReportsService {
             message: 'Draft saved successfully.',
             data: {
                 draft_id: report.id,
+                report_id: report.id,
+                impact_verify_url: this.buildImpactVerifyUrl(report.verificationPublicSlug),
                 last_saved: report.updatedAt,
             },
         };
@@ -498,6 +580,16 @@ export class StudentReportsService {
             console.log(`  - Match found by Primary Key (Report ID)`);
         }
 
+        if (!report) {
+            report = await this.studentReportsRepository.findOne({
+                where: { verificationPublicSlug: id, studentId },
+                relations: ['student', 'opportunity'],
+            });
+            if (report) {
+                console.log(`  - Match found by verification_public_slug`);
+            }
+        }
+
         // If not found, try finding by opportunityId or project_id
         if (!report) {
             console.log(`  - Not found by Report ID. Searching by opportunityId or project_id...`);
@@ -586,6 +678,8 @@ export class StudentReportsService {
             success: true,
             data: {
                 id: report.id,
+                report_id: report.id,
+                impact_verify_url: this.buildImpactVerifyUrl(report.verificationPublicSlug),
                 student: {
                     id: report.student?.id,
                     name: report.student?.name,
@@ -782,6 +876,7 @@ export class StudentReportsService {
                         payment_verified,
                         ...paymentRest,
                         report_id: r.id,
+                        impact_verify_url: this.buildImpactVerifyUrl(r.verificationPublicSlug),
                         project_id: r.project_id,
                         projectId: projectKey,
                         opportunity_id: r.opportunityId,
@@ -834,6 +929,7 @@ export class StudentReportsService {
                 payment_verified,
                 ...paymentRest,
                 report_id: report.id,
+                impact_verify_url: this.buildImpactVerifyUrl(report.verificationPublicSlug),
                 project_id: report.project_id,
                 projectId: report.opportunityId || report.project_id,
                 opportunity_id: report.opportunityId,

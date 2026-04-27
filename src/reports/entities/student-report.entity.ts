@@ -1,4 +1,15 @@
-import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn } from 'typeorm';
+import {
+    Entity,
+    Column,
+    PrimaryGeneratedColumn,
+    CreateDateColumn,
+    UpdateDateColumn,
+    ManyToOne,
+    JoinColumn,
+    BeforeInsert,
+    BeforeUpdate,
+} from 'typeorm';
+import { randomUUID } from 'crypto';
 import { User } from '../../users/entities/user.entity';
 import { Opportunity } from '../../opportunities/entities/opportunity.entity';
 
@@ -23,6 +34,10 @@ export class StudentReport {
 
     @Column({ nullable: true })
     project_id: string;
+
+    /** Opaque token for public QR verification (never use raw report/opportunity id in QR when set). */
+    @Column({ name: 'verification_public_slug', type: 'varchar', length: 36, nullable: true, unique: true })
+    verificationPublicSlug: string | null;
 
     @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
     @JoinColumn({ name: 'facultyId' })
@@ -304,4 +319,12 @@ export class StudentReport {
 
     @UpdateDateColumn()
     updatedAt: Date;
+
+    @BeforeInsert()
+    @BeforeUpdate()
+    assignVerificationPublicSlugIfNeeded(): void {
+        if (!this.verificationPublicSlug?.trim()) {
+            this.verificationPublicSlug = randomUUID();
+        }
+    }
 }

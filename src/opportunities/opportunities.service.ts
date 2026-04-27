@@ -1367,8 +1367,8 @@ export class OpportunitiesService {
         const ownedOrLinked = await this.opportunitiesRepository
             .createQueryBuilder('o')
             .select('o.id')
-            // DB may mix varchar creatorId with uuid facultyId; bind param is text — cast both sides (avoids 42883 uuid = text).
-            .where('(o.creatorId)::text = :uid OR (o.facultyId)::text = :uid', { uid: userId })
+            // camelCase columns are quoted in DB; unquoted o.facultyId → facultyid (42703). Cast both as text for uuid/text param mix (42883).
+            .where('("o"."creatorId")::text = :uid OR ("o"."facultyId")::text = :uid', { uid: userId })
             .getMany();
         for (const o of ownedOrLinked) {
             idSet.add(o.id);

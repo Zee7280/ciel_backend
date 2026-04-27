@@ -11,6 +11,7 @@ import { StudentReport } from '../reports/entities/student-report.entity';
 import { Otp } from './entities/otp.entity';
 import { StudentReportsService } from '../reports/student-reports.service';
 import { StudentReportsController } from './student-reports.controller';
+import { PublicImpactReportsController } from './public-impact-reports.controller';
 import { UsersModule } from '../users/users.module';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import { Organization } from '../organizations/entities/organization.entity';
@@ -36,7 +37,7 @@ import { OpportunitiesModule } from '../opportunities/opportunities.module';
         EngagementModule,
         OpportunitiesModule,
     ],
-    controllers: [StudentsController, StudentReportsController, StudentController],
+    controllers: [StudentsController, StudentReportsController, StudentController, PublicImpactReportsController],
     providers: [StudentsService, StudentReportsService],
     exports: [StudentsService, StudentReportsService],
 })

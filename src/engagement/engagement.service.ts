@@ -636,10 +636,10 @@ export class EngagementService {
             throw new NotFoundException('Project not found');
         }
 
-        const facultyEmails = getParticipantFacultyEmails(participation);
+        const facultyEmails = await this.resolveFacultyEmailsForAttendanceRouting(participation, opportunity);
         if (!facultyEmails.length) {
             throw new BadRequestException(
-                'Attendance approval assignment requires at least one faculty email on the participation record',
+                'Attendance approval needs a supervising faculty: add primary or secondary faculty email on registration, or ensure the project has faculty (linked faculty account or supervision contact matching a faculty user).',
             );
         }
 
@@ -765,6 +765,7 @@ export class EngagementService {
             actor?.email || null,
             log,
             getParticipantFacultyEmails(log.participant || {}),
+            log.project?.creatorId ?? null,
         );
         if (!allowed) {
             throw new ForbiddenException('Not authorized to approve this attendance');
@@ -1115,21 +1116,57 @@ export class EngagementService {
             .getOne();
     }
 
-    private async resolveAttendanceVerificationReviewer(
+    /**
+     * Emails used to resolve a faculty approver for new attendance logs.
+     * Prefer participation fields; then project-linked faculty (same idea as verification reviewer).
+     */
+    private async resolveFacultyEmailsForAttendanceRouting(
+        participation: Participation,
         opportunity: Opportunity,
-        participant: Participation,
-    ): Promise<{ reviewerType: 'faculty' | 'partner'; reviewerEmail: string }> {
-        const facultyEmails = getParticipantFacultyEmails(participant);
-        if (facultyEmails.length > 0) {
-            return { reviewerType: 'faculty', reviewerEmail: facultyEmails[0] };
+    ): Promise<string[]> {
+        const fromParticipant = getParticipantFacultyEmails(participation);
+        if (fromParticipant.length) {
+            return fromParticipant;
         }
 
         if (opportunity.facultyId) {
             const facultyUser = await this.userRepository.findOne({ where: { id: opportunity.facultyId } });
             const facultyEmail = (facultyUser?.email || '').trim().toLowerCase();
             if (facultyEmail) {
-                return { reviewerType: 'faculty', reviewerEmail: facultyEmail };
+                return [facultyEmail];
             }
+        }
+
+        const sup = opportunity.supervision;
+        if (sup && typeof sup === 'object') {
+            const o = sup as Record<string, unknown>;
+            const raw =
+                (typeof o.contact === 'string' && o.contact) ||
+                (typeof o.official_email === 'string' && o.official_email) ||
+                '';
+            const em = raw.trim().toLowerCase();
+            if (em) {
+                const user = await this.userRepository
+                    .createQueryBuilder('u')
+                    .where('LOWER(TRIM(u.email)) = :em', { em })
+                    .andWhere('u.role = :role', { role: UserRole.FACULTY })
+                    .getOne();
+                if (user?.email) {
+                    return [(user.email || '').trim().toLowerCase()];
+                }
+            }
+        }
+
+        return [];
+    }
+
+    private async resolveAttendanceVerificationReviewer(
+        opportunity: Opportunity,
+        participant: Participation,
+    ): Promise<{ reviewerType: 'faculty' | 'partner'; reviewerEmail: string }> {
+        const facultyEmails = await this.resolveFacultyEmailsForAttendanceRouting(participant, opportunity);
+        if (facultyEmails.length > 0) {
+            return { reviewerType: 'faculty', reviewerEmail: facultyEmails[0] };
         }
 
         const partnerUser = opportunity.organizationId

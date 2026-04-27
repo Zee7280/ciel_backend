@@ -42,9 +42,20 @@ export function canUserActOnAttendanceQueue(
         approvalStatus: string | null | undefined;
     },
     participantFacultyEmails: string[],
+    /** For legacy logs routed to the opportunity creator (partner queue). */
+    opportunityCreatorId?: string | null,
 ): boolean {
     if (log.approvalStatus && log.approvalStatus !== 'pending') {
         return false;
+    }
+
+    // Legacy rows before faculty-only routing: partner (NGO/creator) or CIEL admin queue.
+    if (log.assignedApproverType === 'partner') {
+        const target = log.assignedApproverUserId || opportunityCreatorId || null;
+        return !!target && target === userId;
+    }
+    if (log.assignedApproverType === 'admin') {
+        return userRole === UserRole.SUPER_ADMIN;
     }
 
     if (userRole !== UserRole.FACULTY) {

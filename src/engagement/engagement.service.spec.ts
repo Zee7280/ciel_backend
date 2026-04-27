@@ -9,6 +9,7 @@ import { User } from '../users/entities/user.entity';
 import { ConfigService } from '@nestjs/config';
 import { S3Service } from '../common/s3.service';
 import { MailService } from '../mail/mail.service';
+import { UserRole } from '../users/enums/user-role.enum';
 
 describe('EngagementService', () => {
     let service: EngagementService;
@@ -192,6 +193,76 @@ describe('EngagementService', () => {
                 assignedApproverType: 'faculty',
             }));
             expect(mockAttendanceLogRepository.save).toHaveBeenCalled();
+        });
+
+        it('should create attendance log when participation has no faculty emails but project has facultyId', async () => {
+            const mockParticipation = {
+                id: 'p1',
+                studentId: 'u1',
+                projectId: 'proj1',
+                status: 'approved',
+            };
+            const dto = {
+                dateOfEngagement: '2023-10-01',
+                startTime: '09:00',
+                endTime: '12:00',
+                description: 'Valid description with fewer than 40 words.',
+                organizationName: 'Org',
+                activityType: 'Activity',
+            } as any;
+
+            mockParticipationRepository.findOne.mockResolvedValue(mockParticipation);
+            mockOpportunityRepository.findOne.mockResolvedValue({
+                id: 'proj1',
+                title: 'Project',
+                facultyId: 'linked-faculty-id',
+                creatorId: 'u1',
+                organization: null,
+            });
+            mockUserRepository.findOne.mockResolvedValue({
+                id: 'linked-faculty-id',
+                email: 'linked.faculty@example.com',
+                role: UserRole.FACULTY,
+                name: 'Dr. Linked',
+            });
+            mockAttendanceLogRepository.create.mockReturnValue({ ...dto, participantId: 'p1', projectId: 'proj1', sessionHours: 3 });
+            mockAttendanceLogRepository.save.mockResolvedValue({ id: 'log1', ...dto });
+
+            const result = await service.addAttendanceLog('u1', 'p1', dto);
+
+            expect(result).toBeDefined();
+            expect(mockAttendanceLogRepository.save).toHaveBeenCalled();
+        });
+
+        it('should throw when no faculty email on participation and project cannot resolve faculty', async () => {
+            const mockParticipation = {
+                id: 'p1',
+                studentId: 'u1',
+                projectId: 'proj1',
+                status: 'approved',
+            };
+            const dto = {
+                dateOfEngagement: '2023-10-01',
+                startTime: '09:00',
+                endTime: '10:00',
+                description: 'Short valid description here.',
+                organizationName: 'Org',
+                activityType: 'Activity',
+            } as any;
+
+            mockParticipationRepository.findOne.mockResolvedValue(mockParticipation);
+            mockOpportunityRepository.findOne.mockResolvedValue({
+                id: 'proj1',
+                title: 'Project',
+                facultyId: null,
+                supervision: null,
+                organization: null,
+            });
+            mockUserRepository.findOne.mockResolvedValue(null);
+
+            await expect(service.addAttendanceLog('u1', 'p1', dto)).rejects.toThrow(
+                'Attendance approval needs a supervising faculty',
+            );
         });
 
         it('should throw error if session exceeds 12 hours', async () => {

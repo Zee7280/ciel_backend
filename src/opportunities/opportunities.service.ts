@@ -1367,7 +1367,8 @@ export class OpportunitiesService {
         const ownedOrLinked = await this.opportunitiesRepository
             .createQueryBuilder('o')
             .select('o.id')
-            .where('o.creatorId = :uid OR o.facultyId::text = :uid', { uid: userId })
+            // DB may mix varchar creatorId with uuid facultyId; bind param is text — cast both sides (avoids 42883 uuid = text).
+            .where('(o.creatorId)::text = :uid OR (o.facultyId)::text = :uid', { uid: userId })
             .getMany();
         for (const o of ownedOrLinked) {
             idSet.add(o.id);

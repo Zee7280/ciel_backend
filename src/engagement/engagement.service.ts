@@ -208,10 +208,8 @@ export class EngagementService {
 
             // Apply all DTO fields
             const normalizedCnicForStorage = (dto.cnic || '').replace(/\D/g, '');
-            const registrationStatus =
-                dto.participationMode === 'team' && !dto.isTeamLead
-                    ? 'approved'
-                    : 'pending_ciel_approval';
+            // Auto-approve on self-serve register so students can log attendance immediately (same as team non-lead path).
+            const registrationStatus = 'approved';
 
             Object.assign(participation, {
                 ...dto,

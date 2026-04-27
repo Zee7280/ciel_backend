@@ -7,6 +7,7 @@ import { AttendanceLog } from './entities/attendance-log.entity';
 import { RegisterParticipantDto } from './dto/register-participant.dto';
 import { CreateAttendanceLogDto } from './dto/create-attendance-log.dto';
 import { PatchAttendanceApprovalDto } from './dto/patch-attendance-approval.dto';
+import { CreateAttendanceVerifyRequestDto } from './dto/create-attendance-verify-request.dto';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { User } from '../users/entities/user.entity';
 import { UserRole } from '../users/enums/user-role.enum';
@@ -789,6 +790,95 @@ export class EngagementService {
         return await this.attendanceLogRepository.save(log);
     }
 
+    async createAttendanceVerifyRequest(
+        actorUserId: string,
+        actorRole: string | undefined,
+        projectId: string,
+        dto: CreateAttendanceVerifyRequestDto,
+    ) {
+        if (dto.projectId !== projectId) {
+            throw new BadRequestException('projectId in path and body must match');
+        }
+
+        const requestedAt = new Date(dto.requestedAt);
+        if (Number.isNaN(requestedAt.getTime())) {
+            throw new BadRequestException('Invalid requestedAt value');
+        }
+
+        const opportunity = await this.opportunityRepository.findOne({
+            where: { id: projectId },
+            relations: ['organization'],
+        });
+        if (!opportunity) {
+            throw new NotFoundException('Project not found');
+        }
+
+        const participant = await this.resolveVerifyRequestTargetParticipant(actorUserId, projectId, dto.participantId);
+        if (!participant) {
+            throw new NotFoundException('Participation record not found for this project');
+        }
+
+        const isPrivilegedActor =
+            actorRole === UserRole.SUPER_ADMIN ||
+            actorRole === UserRole.FACULTY ||
+            actorRole === UserRole.NGO ||
+            actorRole === UserRole.CORPORATE ||
+            actorRole === UserRole.ORGANIZATION_ADMIN;
+        if (!isPrivilegedActor) {
+            const actor = await this.userRepository.findOne({ where: { id: actorUserId } });
+            const actorEmail = (actor?.email || '').trim().toLowerCase();
+            const participantEmail = (participant.email || '').trim().toLowerCase();
+            const ownsParticipantRecord = participant.studentId === actorUserId;
+            const canClaimByEmail = !participant.studentId && !!actorEmail && participantEmail === actorEmail;
+
+            if (!ownsParticipantRecord && !canClaimByEmail) {
+                throw new ForbiddenException('Not authorized to request attendance verification');
+            }
+        }
+
+        const reviewer = await this.resolveAttendanceVerificationReviewer(opportunity, participant);
+
+        if (participant.attendanceVerificationRequested) {
+            if (!participant.attendanceLocked) {
+                participant.attendanceLocked = true;
+                await this.participantRepository.save(participant);
+            }
+            return {
+                emailNotified: Boolean(participant.attendanceVerificationEmailSentAt),
+                reviewerType: participant.attendanceVerificationReviewerType || reviewer.reviewerType,
+                type: 'already_requested',
+            };
+        }
+
+        participant.attendanceVerificationRequested = true;
+        participant.attendanceLocked = true;
+        participant.attendanceVerificationRequestedAt = requestedAt;
+        participant.attendanceVerificationReviewerType = reviewer.reviewerType;
+        participant.attendanceVerificationReviewerEmail = reviewer.reviewerEmail;
+
+        let emailNotified = false;
+        try {
+            await this.mailService.sendAttendanceVerificationRequestNotice(
+                reviewer.reviewerEmail,
+                reviewer.reviewerType,
+                opportunity.title || 'Project',
+                opportunity.id,
+            );
+            participant.attendanceVerificationEmailSentAt = new Date();
+            emailNotified = true;
+        } catch (error) {
+            this.logger.warn(
+                `Attendance verification request email failed for project ${projectId}: ${error?.message || error}`,
+            );
+        }
+
+        await this.participantRepository.save(participant);
+        return {
+            emailNotified,
+            reviewerType: reviewer.reviewerType,
+        };
+    }
+
     async deleteAttendanceLog(studentId: string, participantId: string, logId: string) {
         const participation = await this.findParticipationByIdentifier(participantId);
         if (!participation) throw new NotFoundException('Participation record not found');
@@ -996,5 +1086,75 @@ export class EngagementService {
         const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
         const weekNo = Math.ceil((((date.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
         return weekNo;
+    }
+
+    private async resolveVerifyRequestTargetParticipant(
+        actorUserId: string,
+        projectId: string,
+        participantId?: string,
+    ): Promise<Participation | null> {
+        if (participantId) {
+            return this.participantRepository.findOne({
+                where: { id: participantId, projectId },
+            });
+        }
+
+        const direct = await this.participantRepository.findOne({
+            where: { studentId: actorUserId, projectId },
+            order: { createdAt: 'DESC' },
+        });
+        if (direct) return direct;
+
+        const actor = await this.userRepository.findOne({ where: { id: actorUserId } });
+        const actorEmail = (actor?.email || '').trim().toLowerCase();
+        if (!actorEmail) return null;
+
+        return this.participantRepository
+            .createQueryBuilder('participant')
+            .where('participant.projectId = :projectId', { projectId })
+            .andWhere('LOWER(TRIM(COALESCE(participant.email, \'\'))) = :actorEmail', { actorEmail })
+            .orderBy('participant.createdAt', 'DESC')
+            .getOne();
+    }
+
+    private async resolveAttendanceVerificationReviewer(
+        opportunity: Opportunity,
+        participant: Participation,
+    ): Promise<{ reviewerType: 'faculty' | 'partner'; reviewerEmail: string }> {
+        const facultyEmails = getParticipantFacultyEmails(participant);
+        if (facultyEmails.length > 0) {
+            return { reviewerType: 'faculty', reviewerEmail: facultyEmails[0] };
+        }
+
+        if (opportunity.facultyId) {
+            const facultyUser = await this.userRepository.findOne({ where: { id: opportunity.facultyId } });
+            const facultyEmail = (facultyUser?.email || '').trim().toLowerCase();
+            if (facultyEmail) {
+                return { reviewerType: 'faculty', reviewerEmail: facultyEmail };
+            }
+        }
+
+        const partnerUser = opportunity.organizationId
+            ? await this.userRepository
+                  .createQueryBuilder('user')
+                  .leftJoin('user.organization', 'organization')
+                  .where('organization.id = :organizationId', { organizationId: opportunity.organizationId })
+                  .orderBy('user.createdAt', 'ASC')
+                  .getOne()
+            : null;
+        const partnerUserEmail = (partnerUser?.email || '').trim().toLowerCase();
+        if (partnerUserEmail) {
+            return { reviewerType: 'partner', reviewerEmail: partnerUserEmail };
+        }
+
+        const partnerEmailFromMeta =
+            String(opportunity?.partner_organization?.official_email || '').trim().toLowerCase() ||
+            String(opportunity?.executing_organization?.official_email || '').trim().toLowerCase() ||
+            String(opportunity?.supervision?.partner_email || '').trim().toLowerCase();
+        if (partnerEmailFromMeta) {
+            return { reviewerType: 'partner', reviewerEmail: partnerEmailFromMeta };
+        }
+
+        throw new BadRequestException('Unable to resolve reviewer for this project');
     }
 }

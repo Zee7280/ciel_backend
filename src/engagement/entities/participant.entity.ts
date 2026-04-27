@@ -129,6 +129,24 @@ export class Participation {
     @Column({ nullable: true })
     applicationId: string;
 
+    @Column({ default: false })
+    attendanceVerificationRequested: boolean;
+
+    @Column({ default: false })
+    attendanceLocked: boolean;
+
+    @Column({ type: 'timestamp', nullable: true })
+    attendanceVerificationRequestedAt: Date | null;
+
+    @Column({ type: 'timestamp', nullable: true })
+    attendanceVerificationEmailSentAt: Date | null;
+
+    @Column({ type: 'varchar', length: 16, nullable: true })
+    attendanceVerificationReviewerType: 'faculty' | 'partner' | null;
+
+    @Column({ type: 'varchar', length: 320, nullable: true })
+    attendanceVerificationReviewerEmail: string | null;
+
     @CreateDateColumn()
     createdAt: Date;
 

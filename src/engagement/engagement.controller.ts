@@ -4,6 +4,7 @@ import { EngagementService } from './engagement.service';
 import { RegisterParticipantDto } from './dto/register-participant.dto';
 import { CreateAttendanceLogDto } from './dto/create-attendance-log.dto';
 import { PatchAttendanceApprovalDto } from './dto/patch-attendance-approval.dto';
+import { CreateAttendanceVerifyRequestDto } from './dto/create-attendance-verify-request.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 @Controller('engagement')
@@ -50,6 +51,24 @@ export class EngagementController {
             success: true,
             data: result,
             message: 'Attendance approval updated',
+        };
+    }
+
+    @Post('project/:projectId/attendance/verify-request')
+    async createAttendanceVerifyRequest(
+        @Request() req,
+        @Param('projectId') projectId: string,
+        @Body() dto: CreateAttendanceVerifyRequestDto,
+    ) {
+        const result = await this.engagementService.createAttendanceVerifyRequest(
+            req.user.id,
+            req.user.role,
+            projectId,
+            dto,
+        );
+        return {
+            success: true,
+            ...result,
         };
     }
 

@@ -222,6 +222,78 @@ describe('EngagementService', () => {
             await expect(service.addAttendanceLog('u1', 'p1', dto)).rejects.toThrow('Attendance logging is only allowed for approved/verified records');
         });
     });
+
+    describe('createAttendanceVerifyRequest', () => {
+        it('should reject non-privileged user targeting another participant by participantId', async () => {
+            const dto = {
+                projectId: 'proj-1',
+                participantId: 'participant-2',
+                requestedAt: '2026-04-27T06:40:00.000Z',
+            } as any;
+
+            mockOpportunityRepository.findOne.mockResolvedValue({
+                id: 'proj-1',
+                title: 'Project 1',
+            });
+            mockParticipationRepository.findOne.mockResolvedValue({
+                id: 'participant-2',
+                projectId: 'proj-1',
+                studentId: null,
+                email: 'victim@example.com',
+            });
+            mockUserRepository.findOne.mockResolvedValue({
+                id: 'student-1',
+                email: 'attacker@example.com',
+                role: 'student',
+            });
+
+            await expect(
+                service.createAttendanceVerifyRequest('student-1', 'student', 'proj-1', dto),
+            ).rejects.toThrow('Not authorized to request attendance verification');
+        });
+
+        it('should allow non-privileged user when unclaimed participant email matches actor', async () => {
+            const dto = {
+                projectId: 'proj-1',
+                participantId: 'participant-1',
+                requestedAt: '2026-04-27T06:40:00.000Z',
+            } as any;
+
+            mockOpportunityRepository.findOne.mockResolvedValue({
+                id: 'proj-1',
+                title: 'Project 1',
+                facultyId: null,
+                organizationId: null,
+                partner_organization: null,
+                executing_organization: null,
+                supervision: null,
+            });
+            mockParticipationRepository.findOne.mockResolvedValue({
+                id: 'participant-1',
+                projectId: 'proj-1',
+                studentId: null,
+                email: 'student@example.com',
+                primaryFacultyEmail: 'faculty@example.com',
+                attendanceVerificationRequested: true,
+                attendanceLocked: true,
+                attendanceVerificationEmailSentAt: null,
+                attendanceVerificationReviewerType: null,
+            });
+            mockUserRepository.findOne.mockResolvedValue({
+                id: 'student-1',
+                email: 'student@example.com',
+                role: 'student',
+            });
+
+            const result = await service.createAttendanceVerifyRequest('student-1', 'student', 'proj-1', dto);
+            expect(result).toEqual(
+                expect.objectContaining({
+                    type: 'already_requested',
+                }),
+            );
+        });
+    });
+
     describe('registerParticipant', () => {
         it('should create a NEW record if the email is different, even for same studentId', async () => {
             const studentId = 'u1';

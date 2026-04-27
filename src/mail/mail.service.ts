@@ -1051,6 +1051,39 @@ export class MailService {
     }
   }
 
+  async sendAttendanceVerificationRequestNotice(
+    to: string,
+    reviewerType: 'faculty' | 'partner',
+    projectTitle: string,
+    opportunityId: string,
+  ) {
+    const from = this.configService.get<string>('MAIL_FROM') || 'Ciel <no-reply@ciel.com>';
+    const dashboardPath = reviewerType === 'faculty' ? '/dashboard/faculty' : '/dashboard/partner';
+    const link = this.buildFrontendLink(dashboardPath, {
+      opportunity: opportunityId,
+      tab: 'attendance',
+    });
+    const titleEsc = this.escHtmlPlain(projectTitle);
+    const reviewerLabel = reviewerType === 'faculty' ? 'faculty reviewer' : 'partner reviewer';
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">Attendance verification requested</h2>
+        <p>A participant requested attendance verification for <strong>${titleEsc}</strong>.</p>
+        <p>You are assigned as the ${this.escHtmlPlain(reviewerLabel)} for this project.</p>
+        <div style="text-align: center; margin: 28px 0;">
+          <a href="${link}" style="background-color: #16a34a; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-weight: bold;">Review attendance</a>
+        </div>
+      </div>
+    `;
+    await this.transporter.sendMail({
+      from,
+      to,
+      subject: `Attendance verification requested: ${projectTitle}`,
+      html,
+    });
+    this.logger.log(`Attendance verification request email sent to ${to} for opportunity ${opportunityId}`);
+  }
+
   async sendAttendancePendingAdminReview(
     projectTitle: string,
     opportunityId: string,

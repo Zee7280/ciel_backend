@@ -60,6 +60,10 @@ export class OrganizationsService {
             where: { organizationId: orgId, status: 'pending' }
         });
 
+        const pendingOpportunities = await this.opportunitiesRepository.count({
+            where: { organizationId: orgId, status: 'pending_approval' }
+        });
+
         // Recent Projects
         const recentProjects = await this.opportunitiesRepository.find({
             where: { organizationId: orgId },
@@ -77,6 +81,27 @@ export class OrganizationsService {
                     reportsSubmitted
                 },
                 pendingVerifications,
+                pendingSummary: {
+                    total: pendingVerifications + pendingOpportunities,
+                    items: [
+                        {
+                            key: 'partner_pending_verifications',
+                            title: 'Pending verifications',
+                            count: pendingVerifications,
+                            href: '/dashboard/partner/verification',
+                            tone: 'warning',
+                            description: 'Student hours or reports waiting for partner review.',
+                        },
+                        {
+                            key: 'partner_pending_opportunities',
+                            title: 'Requests under approval',
+                            count: pendingOpportunities,
+                            href: '/dashboard/partner/requests',
+                            tone: 'neutral',
+                            description: 'Your opportunities still moving through approval.',
+                        },
+                    ],
+                },
                 recentProjects: recentProjects.map(p => ({
                     id: p.id,
                     title: p.title,

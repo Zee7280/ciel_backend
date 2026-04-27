@@ -477,6 +477,19 @@ export class FacultyService {
                     hours_trend: [],
                     impact_distribution: [],
                     recent_activity: [],
+                    pendingSummary: {
+                        total: pendingApprovals,
+                        items: [
+                            {
+                                key: 'faculty_pending_approvals',
+                                title: 'Pending approvals',
+                                count: pendingApprovals,
+                                href: '/dashboard/faculty/approvals',
+                                tone: 'warning',
+                                description: 'Student-created opportunities or reports waiting for faculty review.',
+                            },
+                        ],
+                    },
                 },
             };
         }
@@ -610,6 +623,7 @@ export class FacultyService {
                 };
             }),
         );
+        const pendingGradingTotal = courses.reduce((sum, course) => sum + (course.pending_grading || 0), 0);
 
         const activities: ActivityRow[] = [];
 
@@ -693,6 +707,27 @@ export class FacultyService {
                 hours_trend,
                 impact_distribution,
                 recent_activity,
+                pendingSummary: {
+                    total: pendingApprovals + pendingGradingTotal,
+                    items: [
+                        {
+                            key: 'faculty_pending_approvals',
+                            title: 'Pending approvals',
+                            count: pendingApprovals,
+                            href: '/dashboard/faculty/approvals',
+                            tone: 'warning',
+                            description: 'Student-created opportunities or reports waiting for faculty review.',
+                        },
+                        {
+                            key: 'faculty_pending_grading',
+                            title: 'Pending grading',
+                            count: pendingGradingTotal,
+                            href: '/dashboard/faculty/grading',
+                            tone: 'neutral',
+                            description: 'Submitted student work still waiting for grading.',
+                        },
+                    ],
+                },
             },
         };
     }

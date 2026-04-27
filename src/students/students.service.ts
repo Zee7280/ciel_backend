@@ -687,6 +687,48 @@ export class StudentsService {
             ...(pendingPaymentsSample.length ? { pendingPaymentsSample } : {}),
         };
 
+        const pendingSummary = {
+            total:
+                pendingApprovalsCount +
+                reportsUnderReviewCount +
+                pendingPaymentByProject.size +
+                urgentDeadlineNotifs.length,
+            items: [
+                {
+                    key: 'student_pending_approvals',
+                    title: 'Pending approvals',
+                    count: pendingApprovalsCount,
+                    href: '/dashboard/student/projects',
+                    tone: 'warning',
+                    description: 'Applications or projects waiting for approval.',
+                },
+                {
+                    key: 'student_reports_under_review',
+                    title: 'Reports under review',
+                    count: reportsUnderReviewCount,
+                    href: '/dashboard/student/projects',
+                    tone: 'neutral',
+                    description: 'Submitted reports currently being checked.',
+                },
+                {
+                    key: 'student_pending_payments',
+                    title: 'Payment required',
+                    count: pendingPaymentByProject.size,
+                    href: '/dashboard/student/payments',
+                    tone: 'urgent',
+                    description: 'Projects where fee or payment proof is still needed.',
+                },
+                {
+                    key: 'student_deadlines',
+                    title: 'Urgent deadlines',
+                    count: urgentDeadlineNotifs.length,
+                    href: '/dashboard/student/projects',
+                    tone: 'urgent',
+                    description: 'Upcoming deadlines that need attention.',
+                },
+            ],
+        };
+
         return {
             success: true,
             data: {
@@ -701,6 +743,7 @@ export class StudentsService {
                 overview,
                 quickActions,
                 notificationsPreview,
+                pendingSummary,
             },
         };
     }

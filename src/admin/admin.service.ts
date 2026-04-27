@@ -74,8 +74,8 @@ export class AdminService {
 
         // Pending Approvals (Users + Applications)
         const pendingUsers = await this.usersRepository.count({ where: { status: 'pending' } });
-        const pendingApplications = await this.participationRepository.count({ 
-            where: { status: In(['pending', 'pending_ciel_approval']) } 
+        const pendingApplications = await this.participationRepository.count({
+            where: { status: In(['pending', 'pending_ciel_approval']) }
         });
         const pendingOppApplications = await this.opportunityApplicationsService.countPendingAdmin();
         const pendingApprovals = pendingUsers + pendingApplications + pendingOppApplications;
@@ -112,6 +112,35 @@ export class AdminService {
                     verifiedHours: verifiedHours,
                     pendingApprovals: pendingApprovals,
                     totalReports: totalReports
+                },
+                pendingSummary: {
+                    total: pendingApprovals,
+                    items: [
+                        {
+                            key: 'admin_pending_users',
+                            title: 'User approvals',
+                            count: pendingUsers,
+                            href: '/dashboard/admin/approvals',
+                            tone: 'urgent',
+                            description: 'Registrations waiting for admin approval.',
+                        },
+                        {
+                            key: 'admin_participation_requests',
+                            title: 'Participation requests',
+                            count: pendingApplications,
+                            href: '/dashboard/admin/approvals',
+                            tone: 'warning',
+                            description: 'Student participation records waiting for CIEL review.',
+                        },
+                        {
+                            key: 'admin_opportunity_applications',
+                            title: 'Opportunity applications',
+                            count: pendingOppApplications,
+                            href: '/dashboard/admin/join-applications',
+                            tone: 'warning',
+                            description: 'Join applications in the admin approval queue.',
+                        },
+                    ],
                 },
                 sdgDistribution: sdgDistribution,
                 recentActivity: [] // Optional

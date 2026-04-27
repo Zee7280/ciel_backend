@@ -89,6 +89,20 @@ export interface DashboardNotificationsPreview {
     underReview: DashboardNotificationItem[];
 }
 
+export interface DashboardPendingSummaryItem {
+    key: string;
+    title: string;
+    count: number;
+    href: string;
+    tone?: 'urgent' | 'warning' | 'neutral' | 'success';
+    description?: string;
+}
+
+export interface DashboardPendingSummary {
+    total: number;
+    items: DashboardPendingSummaryItem[];
+}
+
 export interface StudentDashboardResponse {
     success: boolean;
     data: {
@@ -98,5 +112,6 @@ export interface StudentDashboardResponse {
         overview?: DashboardOverview;
         quickActions?: DashboardQuickActions;
         notificationsPreview?: DashboardNotificationsPreview;
+        pendingSummary?: DashboardPendingSummary;
     };
 }

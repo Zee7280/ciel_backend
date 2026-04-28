@@ -493,22 +493,46 @@ export class StudentReportsService {
 
         return {
             success: true,
-            data: reports.map(r => ({
-                id: r.id,
-                student_name: r.student?.name || 'Unknown',
-                student_email: r.student?.email || 'Unknown',
-                project_title: r.opportunity?.title || r.project_id,
-                organization_name: r.opportunity?.organization?.name || 'N/A',
-                status: this.toPublicReportStatus(r.status),
-                partner_status: r.partner_status,
-                admin_status: r.admin_status,
-                submission_date: r.submission_date,
-                submitted_at: r.reportSubmittedAt ?? r.submission_date ?? r.createdAt,
-                report_submitted_at: r.reportSubmittedAt,
-                partner_approved_at: r.partnerApprovedAt,
-                admin_approved_at: r.adminApprovedAt,
-                created_at: r.createdAt,
-            })),
+            data: reports.map(r => {
+                const section3 = r.section3 as any;
+                const section4 = r.section4 as any;
+                const sdgs = section3?.sdgs ?? section3?.secondary_sdgs ?? [];
+
+                return {
+                    id: r.id,
+                    student_name: r.student?.name || 'Unknown',
+                    student_email: r.student?.email || 'Unknown',
+                    project_title: r.opportunity?.title || r.project_id,
+                    organization_name: r.opportunity?.organization?.name || 'N/A',
+                    status: this.toPublicReportStatus(r.status),
+                    partner_status: r.partner_status,
+                    admin_status: r.admin_status,
+                    submission_date: r.submission_date,
+                    submitted_at: r.reportSubmittedAt ?? r.submission_date ?? r.createdAt,
+                    report_submitted_at: r.reportSubmittedAt,
+                    partner_approved_at: r.partnerApprovedAt,
+                    admin_approved_at: r.adminApprovedAt,
+                    section1: {
+                        metrics: {
+                            total_verified_hours: r.section1?.metrics?.total_verified_hours ?? 0,
+                        },
+                    },
+                    section3: {
+                        sdgs,
+                    },
+                    section4: {
+                        project_summary: {
+                            distinct_total_beneficiaries:
+                                section4?.project_summary?.distinct_total_beneficiaries ??
+                                section4?.distinct_total_beneficiaries ??
+                                section4?.total_beneficiaries ??
+                                null,
+                        },
+                    },
+                    sdgs,
+                    created_at: r.createdAt,
+                };
+            }),
             pagination: {
                 total,
                 page: parseInt(page),
@@ -765,6 +789,10 @@ export class StudentReportsService {
         reason?: string,
         organizationId?: string,
     ) {
+        if (!['approve', 'reject', 'unlock'].includes(action)) {
+            throw new BadRequestException('action must be approve, reject, or unlock');
+        }
+
         const report = await this.studentReportsRepository.findOne({
             where: { id },
             relations: ['opportunity'],
@@ -795,20 +823,21 @@ export class StudentReportsService {
                 report.admin_feedback = reason;
             }
         } else if (action === 'reject') {
+            if (!reason?.trim()) {
+                throw new BadRequestException('feedback or reason is required when rejecting');
+            }
             report.status = 'rejected';
             if (role === 'admin') report.admin_status = 'rejected';
             if (isPartnerReviewer) {
                 report.partner_status = 'rejected';
                 report.partnerApprovedAt = null;
             }
-            if (reason) {
-                report.admin_feedback = reason; // Save feedback on reject as well (optional, but good practice based on user req)
-            }
+            report.admin_feedback = reason.trim();
         } else if (action === 'approve') {
             if (isPartnerReviewer) {
                 report.partner_status = 'approved';
                 report.partnerApprovedAt = decisionStamp;
-                report.status = report.admin_status === 'approved' ? 'verified' : 'partner_verified';
+                report.status = 'partner_verified';
             } else if (role === 'admin') {
                 report.admin_status = 'approved';
                 report.adminApprovedAt = decisionStamp;

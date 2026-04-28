@@ -226,6 +226,9 @@ export class PartnersController {
 
     @Get('student-reports')
     getStudentReports(@Request() req, @Query() query: any) {
+        if (!req.user.organizationId) {
+            throw new BadRequestException('User is not linked to an organization');
+        }
         return this.studentReportsService.findAll({
             ...query,
             organizationId: req.user.organizationId
@@ -308,6 +311,9 @@ export class PartnerAliasController {
 
     @Get('reports')
     getReports(@Request() req, @Query() query: any) {
+        if (!req.user.organizationId) {
+            throw new BadRequestException('User is not linked to an organization');
+        }
         return this.studentReportsService.findAll({
             ...query,
             organizationId: req.user.organizationId

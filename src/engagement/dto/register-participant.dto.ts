@@ -11,6 +11,14 @@ export class RegisterParticipantDto {
     isTeamLead: boolean;
 
     @IsString()
+    @IsOptional()
+    teamId?: string;
+
+    @IsString()
+    @IsOptional()
+    team_id?: string;
+
+    @IsString()
     fullName: string;
 
     @IsString()

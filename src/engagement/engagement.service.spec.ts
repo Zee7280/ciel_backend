@@ -156,6 +156,7 @@ describe('EngagementService', () => {
                     id: 'lead-1',
                     projectId: 'proj1',
                     isTeamLead: true,
+                    teamId: null,
                     primaryFacultyEmail: 'Faculty@Example.com',
                     secondaryFacultyEmail: null,
                 },
@@ -163,6 +164,7 @@ describe('EngagementService', () => {
                     id: 'member-1',
                     projectId: 'proj1',
                     isTeamLead: false,
+                    teamId: null,
                     primaryFacultyEmail: null,
                     secondaryFacultyEmail: null,
                 },
@@ -173,13 +175,61 @@ describe('EngagementService', () => {
             expect(result).toEqual([
                 expect.objectContaining({
                     id: 'lead-1',
+                    teamId: 'lead-1',
+                    team_id: 'lead-1',
                     facultyEmail: 'faculty@example.com',
                     primary_faculty_email: 'Faculty@Example.com',
                 }),
                 expect.objectContaining({
                     id: 'member-1',
+                    teamId: 'lead-1',
+                    team_id: 'lead-1',
                     facultyEmail: 'faculty@example.com',
                     primaryFacultyEmail: 'faculty@example.com',
+                    primary_faculty_email: 'faculty@example.com',
+                }),
+            ]);
+        });
+
+        it('should include team aliases in my participation response', async () => {
+            mockParticipationRepository.find
+                .mockResolvedValueOnce([
+                    {
+                        id: 'lead-1',
+                        projectId: 'proj1',
+                        studentId: 'u1',
+                        isTeamLead: true,
+                        teamId: null,
+                        primaryFacultyEmail: 'faculty@example.com',
+                        attendanceLogs: [],
+                    },
+                ])
+                .mockResolvedValueOnce([
+                    {
+                        id: 'lead-1',
+                        projectId: 'proj1',
+                        studentId: 'u1',
+                        isTeamLead: true,
+                        teamId: null,
+                        primaryFacultyEmail: 'faculty@example.com',
+                    },
+                    {
+                        id: 'member-1',
+                        projectId: 'proj1',
+                        studentId: 'u2',
+                        isTeamLead: false,
+                        teamId: null,
+                        primaryFacultyEmail: null,
+                    },
+                ]);
+
+            const result = await service.getMyParticipants('u1');
+
+            expect(result).toEqual([
+                expect.objectContaining({
+                    id: 'lead-1',
+                    teamId: 'lead-1',
+                    team_id: 'lead-1',
                     primary_faculty_email: 'faculty@example.com',
                 }),
             ]);
@@ -608,6 +658,7 @@ describe('EngagementService', () => {
                 mobile: '03001234567',
                 primary_faculty_email: 'Faculty@Example.com',
                 secondary_faculty_email: 'CoFaculty@Example.com',
+                team_id: 'team-123',
             } as any;
 
             const mockOpportunity = { id: projectId, title: 'Project 1', status: 'active', admin_approved: true };
@@ -631,6 +682,7 @@ describe('EngagementService', () => {
             expect(mockManager.save).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
                 primaryFacultyEmail: 'faculty@example.com',
                 secondaryFacultyEmail: 'cofaculty@example.com',
+                teamId: 'team-123',
             }));
             expect(mockMailService.sendFacultyApprovalRequest).toHaveBeenCalledWith(
                 'faculty@example.com',

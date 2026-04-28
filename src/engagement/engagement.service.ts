@@ -219,6 +219,7 @@ export class EngagementService {
             const secondaryFacultyEmail = this.normalizeOptionalEmail(
                 dto.secondaryFacultyEmail || dto.secondary_faculty_email,
             );
+            const teamId = this.normalizeOptionalString(dto.teamId || dto.team_id);
             const facultyFields: Partial<Participation> = {};
             if (primaryFacultyEmail) {
                 facultyFields.primaryFacultyEmail = primaryFacultyEmail;
@@ -226,11 +227,16 @@ export class EngagementService {
             if (secondaryFacultyEmail) {
                 facultyFields.secondaryFacultyEmail = secondaryFacultyEmail;
             }
-            const { primary_faculty_email, secondary_faculty_email, ...registrationFields } = dto;
+            const teamFields: Partial<Participation> = {};
+            if (teamId) {
+                teamFields.teamId = teamId;
+            }
+            const { primary_faculty_email, secondary_faculty_email, team_id, ...registrationFields } = dto;
 
             Object.assign(participation, {
                 ...registrationFields,
                 ...facultyFields,
+                ...teamFields,
                 studentId: targetStudentId || participation.studentId,
                 cnicHash,
                 cnic: this.encrypt(normalizedCnicForStorage),
@@ -285,7 +291,32 @@ export class EngagementService {
             where: { studentId },
             relations: ['attendanceLogs']
         });
-        return result.map(p => this.decryptParticipation(p));
+        const projectIds = Array.from(new Set(result.map((p) => p.projectId).filter(Boolean)));
+        const projectParticipants = projectIds.length
+            ? await this.participantRepository.find({
+                where: {
+                    projectId: In(projectIds),
+                    status: In(['approved', 'finalized', 'pending_ciel_approval']),
+                },
+                order: { createdAt: 'ASC' },
+            })
+            : [];
+        const participantsByProject = new Map<string, Participation[]>();
+        for (const participant of projectParticipants) {
+            if (!participantsByProject.has(participant.projectId)) {
+                participantsByProject.set(participant.projectId, []);
+            }
+            participantsByProject.get(participant.projectId)!.push(participant);
+        }
+
+        return Promise.all(
+            result.map((p) =>
+                this.enrichParticipationForTeamResponse(
+                    this.decryptParticipation(p),
+                    participantsByProject.get(p.projectId) || [],
+                ),
+            ),
+        );
     }
 
     async getProjectTeam(projectId: string) {
@@ -296,38 +327,74 @@ export class EngagementService {
             },
             order: { createdAt: 'ASC' }
         });
-        const decrypted = participants.map(p => this.decryptParticipation(p));
-        const teamLeads = decrypted.filter((p) => p.isTeamLead);
-
         return Promise.all(
-            decrypted.map(async (p) => {
-                const participantEmails = getParticipantFacultyEmails(p);
-                const fallbackLead = teamLeads.find((lead) =>
-                    lead.id !== p.id &&
-                    (
-                        (Boolean(p.applicationId) && lead.applicationId === p.applicationId) ||
-                        (Boolean(p.teamId) && lead.teamId === p.teamId) ||
-                        (!p.applicationId && !p.teamId)
-                    ),
-                );
-                const facultyEmails = participantEmails.length
-                    ? participantEmails
-                    : [
-                        ...(await this.resolveApplicationFacultyEmails(p)),
-                        ...getParticipantFacultyEmails(fallbackLead || {}),
-                    ];
-                const uniqueFacultyEmails = this.normalizeEmailList(facultyEmails);
-
-                return {
-                    ...p,
-                    primaryFacultyEmail: p.primaryFacultyEmail || uniqueFacultyEmails[0] || null,
-                    secondaryFacultyEmail: p.secondaryFacultyEmail || uniqueFacultyEmails[1] || null,
-                    facultyEmail: uniqueFacultyEmails[0] || p.primaryFacultyEmail || p.facultySupervisorEmail || null,
-                    primary_faculty_email: p.primaryFacultyEmail || uniqueFacultyEmails[0] || null,
-                    secondary_faculty_email: p.secondaryFacultyEmail || uniqueFacultyEmails[1] || null,
-                };
-            }),
+            participants.map((p) =>
+                this.enrichParticipationForTeamResponse(this.decryptParticipation(p), participants),
+            ),
         );
+    }
+
+    private async enrichParticipationForTeamResponse(
+        participation: Participation,
+        projectParticipants: Participation[],
+    ) {
+        const projectRows = projectParticipants.length ? projectParticipants : [participation];
+        const teamLeads = projectRows.filter((p) => p.isTeamLead);
+        const fallbackLead = this.findFallbackTeamLead(participation, teamLeads);
+        const responseTeamId = this.resolveResponseTeamId(participation, fallbackLead, teamLeads);
+        const participantEmails = getParticipantFacultyEmails(participation);
+        const facultyEmails = participantEmails.length
+            ? participantEmails
+            : [
+                ...(await this.resolveApplicationFacultyEmails(participation)),
+                ...getParticipantFacultyEmails(fallbackLead || {}),
+            ];
+        const uniqueFacultyEmails = this.normalizeEmailList(facultyEmails);
+
+        return {
+            ...participation,
+            teamId: participation.teamId || responseTeamId,
+            team_id: participation.teamId || responseTeamId,
+            primaryFacultyEmail: participation.primaryFacultyEmail || uniqueFacultyEmails[0] || null,
+            secondaryFacultyEmail: participation.secondaryFacultyEmail || uniqueFacultyEmails[1] || null,
+            facultyEmail: uniqueFacultyEmails[0] || participation.primaryFacultyEmail || participation.facultySupervisorEmail || null,
+            primary_faculty_email: participation.primaryFacultyEmail || uniqueFacultyEmails[0] || null,
+            secondary_faculty_email: participation.secondaryFacultyEmail || uniqueFacultyEmails[1] || null,
+        };
+    }
+
+    private findFallbackTeamLead(participation: Participation, teamLeads: Participation[]): Participation | undefined {
+        const matchingLead = teamLeads.find((lead) =>
+            lead.id !== participation.id &&
+            (
+                (Boolean(participation.applicationId) && lead.applicationId === participation.applicationId) ||
+                (Boolean(participation.teamId) && lead.teamId === participation.teamId)
+            ),
+        );
+        if (matchingLead) {
+            return matchingLead;
+        }
+
+        if (!participation.applicationId && !participation.teamId && teamLeads.length === 1) {
+            return teamLeads[0];
+        }
+
+        return undefined;
+    }
+
+    private resolveResponseTeamId(
+        participation: Participation,
+        fallbackLead: Participation | undefined,
+        teamLeads: Participation[],
+    ): string | null {
+        if (participation.teamId) return participation.teamId;
+        if (participation.applicationId) return participation.applicationId;
+        if (participation.isTeamLead) return participation.id;
+        if (fallbackLead?.teamId) return fallbackLead.teamId;
+        if (fallbackLead?.applicationId) return fallbackLead.applicationId;
+        if (fallbackLead?.id) return fallbackLead.id;
+        if (teamLeads.length === 1) return teamLeads[0].teamId || teamLeads[0].applicationId || teamLeads[0].id;
+        return null;
     }
 
     async getLatestParticipation(studentId: string): Promise<Participation | null> {
@@ -1341,6 +1408,11 @@ export class EngagementService {
 
     private normalizeOptionalEmail(value: string | null | undefined): string | undefined {
         const normalized = (value || '').trim().toLowerCase();
+        return normalized || undefined;
+    }
+
+    private normalizeOptionalString(value: string | null | undefined): string | undefined {
+        const normalized = (value || '').trim();
         return normalized || undefined;
     }
 

@@ -1,7 +1,7 @@
-import { Controller, Get, Request, UseGuards, Post, Body, UseInterceptors, UploadedFile, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Request, UseGuards, Post, Body, UseInterceptors, UploadedFiles } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { S3Service } from '../common/s3.service';
 
 @Controller('user')
@@ -27,8 +27,11 @@ export class UsersController {
 
     @Post('update')
     @UseGuards(JwtAuthGuard) // Ensure user is authenticated to update THEIR profile
-    @UseInterceptors(FileInterceptor('image'))
-    async updateProfile(@Request() req, @Body() body: any, @UploadedFile() file: any) {
+    @UseInterceptors(FileFieldsInterceptor([
+        { name: 'image', maxCount: 1 },
+        { name: 'avatar', maxCount: 1 },
+    ]))
+    async updateProfile(@Request() req, @Body() body: any, @UploadedFiles() files: any) {
         // For 'multipart/form-data', body fields might need parsing if complex, but simple strings are fine.
         // User passed 'userId' in body, but we should prefer req.user.id for security, OR allow admin override.
         // The prompt says "userId: 123" in body.
@@ -40,6 +43,7 @@ export class UsersController {
         if (body.university) dto.university = body.university;
         if (body.department) dto.department = body.department;
         if (body.faculty_department) dto.faculty_department = body.faculty_department;
+        const file = files?.image?.[0] || files?.avatar?.[0];
         if (file) {
             dto.avatar = await this.s3Service.uploadFile(file, 'users');
         }

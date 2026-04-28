@@ -616,6 +616,8 @@ export class OpportunityApplicationsService {
         const primaryFaculty = (payload['primary_faculty_email'] as string) || app.primaryFacultyEmail;
         const secondaryFaculty =
             (payload['secondary_faculty_email'] as string) || app.secondaryFacultyEmail || undefined;
+        const normalizedPrimaryFaculty = this.normalizeEmail(primaryFaculty);
+        const normalizedSecondaryFaculty = secondaryFaculty ? this.normalizeEmail(secondaryFaculty) : undefined;
         const contactPhone = (payload['contact_phone_e164'] as string) || undefined;
         const teamMembers = (payload['team_members'] as any[]) || [];
 
@@ -623,6 +625,22 @@ export class OpportunityApplicationsService {
             where: { studentId: app.studentUserId, projectId: app.opportunityId },
         });
         if (existingLead && ['approved', 'verified', 'accepted', 'finalized'].includes(existingLead.status)) {
+            let changed = false;
+            if (!existingLead.applicationId) {
+                existingLead.applicationId = app.id;
+                changed = true;
+            }
+            if (!existingLead.primaryFacultyEmail && normalizedPrimaryFaculty) {
+                existingLead.primaryFacultyEmail = normalizedPrimaryFaculty;
+                changed = true;
+            }
+            if (!existingLead.secondaryFacultyEmail && normalizedSecondaryFaculty) {
+                existingLead.secondaryFacultyEmail = normalizedSecondaryFaculty;
+                changed = true;
+            }
+            if (changed) {
+                await this.participationRepo.save(existingLead);
+            }
             app.internalStatus = 'approved';
             app.adminDecidedAt = new Date();
             app.adminDecidedBy = adminUserId;
@@ -649,8 +667,8 @@ export class OpportunityApplicationsService {
             emailVerified: true,
             mobileVerified: true,
             status: 'approved',
-            primaryFacultyEmail: this.normalizeEmail(primaryFaculty),
-            secondaryFacultyEmail: secondaryFaculty ? this.normalizeEmail(secondaryFaculty) : undefined,
+            primaryFacultyEmail: normalizedPrimaryFaculty,
+            secondaryFacultyEmail: normalizedSecondaryFaculty,
             teamId,
         } as any);
 
@@ -675,7 +693,7 @@ export class OpportunityApplicationsService {
                     mobileVerified: true,
                     status: 'approved',
                     teamId,
-                    primaryFacultyEmail: this.normalizeEmail(primaryFaculty),
+                    primaryFacultyEmail: normalizedPrimaryFaculty,
                 } as any);
             }
         }

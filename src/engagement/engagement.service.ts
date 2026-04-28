@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException, Logger } from '@nestjs/common';
 import { S3Service } from '../common/s3.service';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, IsNull } from 'typeorm';
 import { Participation } from './entities/participant.entity';
 import { AttendanceLog } from './entities/attendance-log.entity';
 import { RegisterParticipantDto } from './dto/register-participant.dto';
@@ -35,6 +35,8 @@ export class EngagementService {
         private attendanceLogRepository: Repository<AttendanceLog>,
         @InjectRepository(Opportunity)
         private opportunityRepository: Repository<Opportunity>,
+        @InjectRepository(OpportunityApplication)
+        private opportunityApplicationRepository: Repository<OpportunityApplication>,
         @InjectRepository(User)
         private userRepository: Repository<User>,
         private configService: ConfigService,
@@ -211,9 +213,24 @@ export class EngagementService {
             const normalizedCnicForStorage = (dto.cnic || '').replace(/\D/g, '');
             // Auto-approve on self-serve register so students can log attendance immediately (same as team non-lead path).
             const registrationStatus = 'approved';
+            const primaryFacultyEmail = this.normalizeOptionalEmail(
+                dto.primaryFacultyEmail || dto.primary_faculty_email,
+            );
+            const secondaryFacultyEmail = this.normalizeOptionalEmail(
+                dto.secondaryFacultyEmail || dto.secondary_faculty_email,
+            );
+            const facultyFields: Partial<Participation> = {};
+            if (primaryFacultyEmail) {
+                facultyFields.primaryFacultyEmail = primaryFacultyEmail;
+            }
+            if (secondaryFacultyEmail) {
+                facultyFields.secondaryFacultyEmail = secondaryFacultyEmail;
+            }
+            const { primary_faculty_email, secondary_faculty_email, ...registrationFields } = dto;
 
             Object.assign(participation, {
-                ...dto,
+                ...registrationFields,
+                ...facultyFields,
                 studentId: targetStudentId || participation.studentId,
                 cnicHash,
                 cnic: this.encrypt(normalizedCnicForStorage),
@@ -227,33 +244,33 @@ export class EngagementService {
             this.logger.log(`Participation ${saved.id} successfully PERSISTED within transaction for student ${targetStudentId || 'Guest'}`);
             
             // 3. Trigger Faculty Emails (Post-save within transaction, though ideally should be after commit)
-            if (dto.primaryFacultyEmail || dto.secondaryFacultyEmail) {
+            if (primaryFacultyEmail || secondaryFacultyEmail) {
                 const studentName = targetStudentId 
                     ? (await manager.findOne(User, { where: { id: targetStudentId } }))?.name || dto.fullName
                     : dto.fullName;
 
-                if (dto.primaryFacultyEmail) {
+                if (primaryFacultyEmail) {
                     try {
                         await this.mailService.sendFacultyApprovalRequest(
-                            dto.primaryFacultyEmail,
+                            primaryFacultyEmail,
                             studentName,
                             opportunity.title,
                             saved.id
                         );
                     } catch (error) {
-                        this.logger.error(`Failed to send faculty approval request to ${dto.primaryFacultyEmail}`, error.stack);
+                        this.logger.error(`Failed to send faculty approval request to ${primaryFacultyEmail}`, error.stack);
                     }
                 }
 
-                if (dto.secondaryFacultyEmail) {
+                if (secondaryFacultyEmail) {
                     try {
                         await this.mailService.sendFacultyCollaboratorNotice(
-                            dto.secondaryFacultyEmail,
+                            secondaryFacultyEmail,
                             studentName,
                             opportunity.title
                         );
                     } catch (error) {
-                        this.logger.error(`Failed to send faculty collaborator notice to ${dto.secondaryFacultyEmail}`, error.stack);
+                        this.logger.error(`Failed to send faculty collaborator notice to ${secondaryFacultyEmail}`, error.stack);
                     }
                 }
             }
@@ -279,7 +296,38 @@ export class EngagementService {
             },
             order: { createdAt: 'ASC' }
         });
-        return participants.map(p => this.decryptParticipation(p));
+        const decrypted = participants.map(p => this.decryptParticipation(p));
+        const teamLeads = decrypted.filter((p) => p.isTeamLead);
+
+        return Promise.all(
+            decrypted.map(async (p) => {
+                const participantEmails = getParticipantFacultyEmails(p);
+                const fallbackLead = teamLeads.find((lead) =>
+                    lead.id !== p.id &&
+                    (
+                        (Boolean(p.applicationId) && lead.applicationId === p.applicationId) ||
+                        (Boolean(p.teamId) && lead.teamId === p.teamId) ||
+                        (!p.applicationId && !p.teamId)
+                    ),
+                );
+                const facultyEmails = participantEmails.length
+                    ? participantEmails
+                    : [
+                        ...(await this.resolveApplicationFacultyEmails(p)),
+                        ...getParticipantFacultyEmails(fallbackLead || {}),
+                    ];
+                const uniqueFacultyEmails = this.normalizeEmailList(facultyEmails);
+
+                return {
+                    ...p,
+                    primaryFacultyEmail: p.primaryFacultyEmail || uniqueFacultyEmails[0] || null,
+                    secondaryFacultyEmail: p.secondaryFacultyEmail || uniqueFacultyEmails[1] || null,
+                    facultyEmail: uniqueFacultyEmails[0] || p.primaryFacultyEmail || p.facultySupervisorEmail || null,
+                    primary_faculty_email: p.primaryFacultyEmail || uniqueFacultyEmails[0] || null,
+                    secondary_faculty_email: p.secondaryFacultyEmail || uniqueFacultyEmails[1] || null,
+                };
+            }),
+        );
     }
 
     async getLatestParticipation(studentId: string): Promise<Participation | null> {
@@ -1233,6 +1281,23 @@ export class EngagementService {
             return fromParticipant;
         }
 
+        const fromApplication = await this.resolveApplicationFacultyEmails(participation);
+        if (fromApplication.length) {
+            let changed = false;
+            if (!participation.primaryFacultyEmail) {
+                participation.primaryFacultyEmail = fromApplication[0];
+                changed = true;
+            }
+            if (!participation.secondaryFacultyEmail && fromApplication[1]) {
+                participation.secondaryFacultyEmail = fromApplication[1];
+                changed = true;
+            }
+            if (changed) {
+                await this.participantRepository.save(participation);
+            }
+            return getParticipantFacultyEmails(participation);
+        }
+
         if (opportunity.facultyId) {
             const facultyUser = await this.userRepository.findOne({ where: { id: opportunity.facultyId } });
             const facultyEmail = (facultyUser?.email || '').trim().toLowerCase();
@@ -1262,6 +1327,59 @@ export class EngagementService {
         }
 
         return [];
+    }
+
+    private normalizeEmailList(values: Array<string | null | undefined>): string[] {
+        return Array.from(
+            new Set(
+                values
+                    .map((value) => (value || '').trim().toLowerCase())
+                    .filter(Boolean),
+            ),
+        );
+    }
+
+    private normalizeOptionalEmail(value: string | null | undefined): string | undefined {
+        const normalized = (value || '').trim().toLowerCase();
+        return normalized || undefined;
+    }
+
+    private async resolveApplicationFacultyEmails(participation: Participation): Promise<string[]> {
+        let app: OpportunityApplication | null = null;
+
+        if (participation.applicationId) {
+            app = await this.opportunityApplicationRepository.findOne({
+                where: {
+                    id: participation.applicationId,
+                    withdrawnAt: IsNull(),
+                },
+            });
+        }
+
+        if (!app && participation.studentId) {
+            const rows = await this.opportunityApplicationRepository.find({
+                where: {
+                    studentUserId: participation.studentId,
+                    opportunityId: participation.projectId,
+                    withdrawnAt: IsNull(),
+                },
+                order: { createdAt: 'DESC' },
+                take: 1,
+            });
+            app = rows[0] || null;
+        }
+
+        if (!app) {
+            return [];
+        }
+
+        const payload = app.applyPayload || {};
+        return this.normalizeEmailList([
+            app.primaryFacultyEmail,
+            app.secondaryFacultyEmail,
+            typeof payload.primary_faculty_email === 'string' ? payload.primary_faculty_email : null,
+            typeof payload.secondary_faculty_email === 'string' ? payload.secondary_faculty_email : null,
+        ]);
     }
 
     private async resolveAttendanceVerificationReviewer(

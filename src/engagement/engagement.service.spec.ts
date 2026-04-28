@@ -4,6 +4,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { Participation } from './entities/participant.entity';
 import { AttendanceLog } from './entities/attendance-log.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
+import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 import { User } from '../users/entities/user.entity';
 // import { OpportunityTeamMember } from '../opportunities/entities/opportunity-team-member.entity';
 import { ConfigService } from '@nestjs/config';
@@ -29,6 +30,11 @@ describe('EngagementService', () => {
 
     const mockOpportunityRepository = {
         findOne: jest.fn(),
+    };
+
+    const mockOpportunityApplicationRepository = {
+        findOne: jest.fn(),
+        find: jest.fn(),
     };
 
     const mockUserRepository = {
@@ -59,12 +65,17 @@ describe('EngagementService', () => {
 
     const mockMailService = {
         sendFacultyInvite: jest.fn(),
+        sendFacultyApprovalRequest: jest.fn(),
+        sendFacultyCollaboratorNotice: jest.fn(),
         sendAttendancePendingPartnerReview: jest.fn(),
         sendAttendancePendingAdminReview: jest.fn(),
         sendAttendanceVerificationRequestNotice: jest.fn(),
     };
 
     beforeEach(async () => {
+        mockOpportunityApplicationRepository.findOne.mockResolvedValue(null);
+        mockOpportunityApplicationRepository.find.mockResolvedValue([]);
+
         const module: TestingModule = await Test.createTestingModule({
             providers: [
                 EngagementService,
@@ -79,6 +90,10 @@ describe('EngagementService', () => {
                 {
                     provide: getRepositoryToken(Opportunity),
                     useValue: mockOpportunityRepository,
+                },
+                {
+                    provide: getRepositoryToken(OpportunityApplication),
+                    useValue: mockOpportunityApplicationRepository,
                 },
                 {
                     provide: getRepositoryToken(User),
@@ -131,6 +146,43 @@ describe('EngagementService', () => {
             expect(metrics.frequency).toBe(1.5);
             expect(metrics.weeklyContinuity).toBe(100);
             expect(metrics.eis).toBeGreaterThan(0);
+        });
+    });
+
+    describe('getProjectTeam', () => {
+        it('should include faculty email aliases in team response', async () => {
+            mockParticipationRepository.find.mockResolvedValue([
+                {
+                    id: 'lead-1',
+                    projectId: 'proj1',
+                    isTeamLead: true,
+                    primaryFacultyEmail: 'Faculty@Example.com',
+                    secondaryFacultyEmail: null,
+                },
+                {
+                    id: 'member-1',
+                    projectId: 'proj1',
+                    isTeamLead: false,
+                    primaryFacultyEmail: null,
+                    secondaryFacultyEmail: null,
+                },
+            ]);
+
+            const result = await service.getProjectTeam('proj1');
+
+            expect(result).toEqual([
+                expect.objectContaining({
+                    id: 'lead-1',
+                    facultyEmail: 'faculty@example.com',
+                    primary_faculty_email: 'Faculty@Example.com',
+                }),
+                expect.objectContaining({
+                    id: 'member-1',
+                    facultyEmail: 'faculty@example.com',
+                    primaryFacultyEmail: 'faculty@example.com',
+                    primary_faculty_email: 'faculty@example.com',
+                }),
+            ]);
         });
     });
 
@@ -232,6 +284,55 @@ describe('EngagementService', () => {
             const result = await service.addAttendanceLog('u1', 'p1', dto);
 
             expect(result).toBeDefined();
+            expect(mockAttendanceLogRepository.save).toHaveBeenCalled();
+        });
+
+        it('should backfill faculty emails from the approved application before routing attendance', async () => {
+            const mockParticipation = {
+                id: 'p1',
+                studentId: 'u1',
+                projectId: 'proj1',
+                applicationId: 'app1',
+                status: 'approved',
+            };
+            const dto = {
+                dateOfEngagement: '2023-10-01',
+                startTime: '09:00',
+                endTime: '12:00',
+                description: 'Valid description with fewer than 40 words.',
+                organizationName: 'Org',
+                activityType: 'Activity',
+            } as any;
+
+            mockParticipationRepository.findOne.mockResolvedValue(mockParticipation);
+            mockParticipationRepository.save.mockResolvedValue(mockParticipation);
+            mockOpportunityRepository.findOne.mockResolvedValue({
+                id: 'proj1',
+                title: 'Project',
+                facultyId: null,
+                supervision: null,
+                organization: null,
+            });
+            mockOpportunityApplicationRepository.findOne.mockResolvedValue({
+                id: 'app1',
+                opportunityId: 'proj1',
+                studentUserId: 'u1',
+                primaryFacultyEmail: 'Faculty@Example.com',
+                secondaryFacultyEmail: null,
+                applyPayload: {},
+            });
+            mockUserRepository.findOne.mockResolvedValue({ id: 'faculty-1', role: UserRole.FACULTY, name: 'Dr. A' });
+            mockAttendanceLogRepository.create.mockReturnValue({ ...dto, participantId: 'p1', projectId: 'proj1', sessionHours: 3 });
+            mockAttendanceLogRepository.save.mockResolvedValue({ id: 'log1', ...dto });
+
+            const result = await service.addAttendanceLog('u1', 'p1', dto);
+
+            expect(result).toBeDefined();
+            expect(mockParticipationRepository.save).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    primaryFacultyEmail: 'faculty@example.com',
+                }),
+            );
             expect(mockAttendanceLogRepository.save).toHaveBeenCalled();
         });
 
@@ -492,6 +593,51 @@ describe('EngagementService', () => {
             expect(mockManager.save).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
                 fullName: 'Fatima Updated'
             }));
+        });
+
+        it('should map snake_case faculty emails onto participation columns', async () => {
+            const studentId = 'u1';
+            const projectId = 'proj1';
+            const dto = {
+                projectId,
+                participationMode: 'team',
+                isTeamLead: false,
+                email: 'member@example.com',
+                fullName: 'Team Member',
+                cnic: '1234567890123',
+                mobile: '03001234567',
+                primary_faculty_email: 'Faculty@Example.com',
+                secondary_faculty_email: 'CoFaculty@Example.com',
+            } as any;
+
+            const mockOpportunity = { id: projectId, title: 'Project 1', status: 'active', admin_approved: true };
+            const mockManager = {
+                findOne: jest.fn()
+                    .mockResolvedValueOnce(null) // User by email
+                    .mockResolvedValueOnce(mockOpportunity) // Opportunity
+                    .mockResolvedValueOnce(null) // existingByCnic
+                    .mockResolvedValueOnce(null) // existingByTarget
+                    .mockResolvedValueOnce({ name: 'Team Member' }), // Student for email display
+                create: jest.fn().mockReturnValue({}),
+                save: jest.fn().mockImplementation((entity, data) => ({ id: 'new-id', ...data })),
+            };
+
+            (mockParticipationRepository as any).manager = {
+                transaction: jest.fn().mockImplementation((cb) => cb(mockManager)),
+            };
+
+            await service.registerParticipant(studentId, dto);
+
+            expect(mockManager.save).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+                primaryFacultyEmail: 'faculty@example.com',
+                secondaryFacultyEmail: 'cofaculty@example.com',
+            }));
+            expect(mockMailService.sendFacultyApprovalRequest).toHaveBeenCalledWith(
+                'faculty@example.com',
+                'Team Member',
+                'Project 1',
+                'new-id',
+            );
         });
     });
 });

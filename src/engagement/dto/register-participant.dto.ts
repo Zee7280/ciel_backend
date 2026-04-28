@@ -47,7 +47,15 @@ export class RegisterParticipantDto {
 
     @IsEmail()
     @IsOptional()
+    primary_faculty_email?: string;
+
+    @IsEmail()
+    @IsOptional()
     secondaryFacultyEmail?: string;
+
+    @IsEmail()
+    @IsOptional()
+    secondary_faculty_email?: string;
 
     @IsUUID()
     @IsOptional()

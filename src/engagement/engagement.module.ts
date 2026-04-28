@@ -6,13 +6,14 @@ import { AttendanceLog } from './entities/attendance-log.entity';
 import { EngagementService } from './engagement.service';
 import { EngagementController } from './engagement.controller';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
+import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 import { User } from '../users/entities/user.entity';
 
 import { MailModule } from '../mail/mail.module';
 
 @Module({
     imports: [
-        TypeOrmModule.forFeature([Participation, AttendanceLog, Opportunity, User]),
+        TypeOrmModule.forFeature([Participation, AttendanceLog, Opportunity, OpportunityApplication, User]),
         StorageModule,
         MailModule,
     ],

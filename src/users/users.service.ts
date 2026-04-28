@@ -89,10 +89,15 @@ export class UsersService {
         // Save
         const updatedUser = await this.usersRepository.save(user);
 
+        const data = this.formatUserResponse(updatedUser);
         return {
             success: true,
             message: 'Profile updated successfully!',
-            data: this.formatUserResponse(updatedUser)
+            data: {
+                ...data,
+                image: data.avatar,
+                avatar_url: data.avatar,
+            },
         };
     }
 

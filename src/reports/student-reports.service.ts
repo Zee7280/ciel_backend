@@ -36,6 +36,45 @@ export class StudentReportsService {
         private readonly configService: ConfigService,
     ) { }
 
+    private hasMeaningfulObjectValue(value: any): boolean {
+        if (!value || typeof value !== 'object') return false;
+        return Object.values(value).some((v) => {
+            if (Array.isArray(v)) return v.length > 0;
+            if (v && typeof v === 'object') return this.hasMeaningfulObjectValue(v);
+            return v !== null && v !== undefined && String(v).trim() !== '';
+        });
+    }
+
+    private getPublicReportApprovalContext(report: StudentReport) {
+        const partners = Array.isArray(report.section7?.partners) ? report.section7.partners : [];
+        const hasSectionPartner =
+            report.section7?.has_partners === 'yes' ||
+            report.section8?.partner_verification === true ||
+            partners.some((partner: any) => this.hasMeaningfulObjectValue(partner));
+        const hasOpportunityPartner =
+            Boolean(report.opportunity?.organizationId) ||
+            this.hasMeaningfulObjectValue(report.opportunity?.partner_organization) ||
+            this.hasMeaningfulObjectValue(report.opportunity?.executing_organization);
+        const hasNgo = partners.some((partner: any) => {
+            const type = String(partner?.type || partner?.name || '').toLowerCase();
+            return type.includes('ngo') || type.includes('non-government');
+        });
+        const hasPartner = Boolean(hasSectionPartner || hasOpportunityPartner || report.opportunity?.requiresPartnerApproval);
+        const requiresPartnerApproval = Boolean(
+            report.opportunity?.requiresPartnerApproval ||
+            hasPartner ||
+            hasNgo ||
+            report.partner_status === 'approved',
+        );
+
+        return {
+            has_partner: hasPartner,
+            has_ngo: hasNgo,
+            requires_partner_approval: requiresPartnerApproval,
+            partner_required: requiresPartnerApproval,
+        };
+    }
+
     /**
      * Single value for QR: absolute public page URL when FRONTEND_URL/APP_URL is set,
      * otherwise path-only `/impact/verify/{slug}` — resolve on the client with `new URL(impact_verify_url, NEXT_PUBLIC_APP_URL)`.
@@ -105,14 +144,41 @@ export class StudentReportsService {
             throw new NotFoundException();
         }
 
+        const project_title = (report.opportunity?.title || 'Impact report').trim() || 'Impact report';
+        const publicStatus = this.toPublicReportStatus(report.status);
+        const latestPayment = await this.findLatestManualPayment(
+            report.studentId,
+            report.opportunityId || report.project_id,
+        );
+        const paymentStatus = latestPayment?.status ?? null;
         const verified =
             report.admin_status === 'approved' && (report.status === 'verified' || report.status === 'paid');
 
         if (!verified) {
-            return { success: true, verified: false };
-        }
+            const approvalContext = this.getPublicReportApprovalContext(report);
+            const paymentPending =
+                report.status === 'payment_pending' ||
+                report.status === 'payment_under_review' ||
+                paymentStatus === PaymentStatus.PENDING;
+            const workflowStage =
+                approvalContext.requires_partner_approval && report.partner_status !== 'approved'
+                    ? 'pending_partner'
+                    : 'pending_admin';
 
-        const project_title = (report.opportunity?.title || 'Impact report').trim() || 'Impact report';
+            return {
+                success: true,
+                verified: false,
+                project_title,
+                workflow_stage: paymentPending ? undefined : workflowStage,
+                approval_stage: paymentPending ? undefined : workflowStage,
+                status: publicStatus,
+                report_status: paymentPending ? 'pending_payment' : publicStatus,
+                partner_approval_status: report.partner_status,
+                admin_approval_status: report.admin_status,
+                payment_status: paymentStatus,
+                ...approvalContext,
+            };
+        }
 
         return {
             success: true,
@@ -167,12 +233,25 @@ export class StudentReportsService {
         });
     }
 
-    private paymentDerivedFields(latest: Payment | null | undefined, rawReportStatus: string) {
-        const payment_verified = latest?.status === PaymentStatus.APPROVED;
+    private paymentDerivedFields(
+        latest: Payment | null | undefined,
+        rawReportStatus: string,
+        adminStatus?: string | null,
+    ) {
+        const publicStatus = this.toPublicReportStatus(rawReportStatus);
+        const payment_verified =
+            latest?.status === PaymentStatus.APPROVED ||
+            rawReportStatus === 'paid' ||
+            rawReportStatus === 'verified';
+        const adminApproved = adminStatus === 'approved';
+        const payment_status = payment_verified ? 'paid' : latest?.status ?? null;
+        const status = payment_verified ? (adminApproved ? 'verified' : 'paid') : publicStatus;
+
         return {
-            status: this.toPublicReportStatus(rawReportStatus),
+            status,
             payment_verified,
-            ...(payment_verified ? { report_status: 'paid' as const } : {}),
+            payment_status,
+            ...(payment_verified ? { report_status: status } : {}),
         };
     }
 
@@ -693,9 +772,11 @@ export class StudentReportsService {
     private async formatReportResponse(report: StudentReport, attendanceLogs?: AttendanceLog[]) {
         const projectKey = report.opportunityId || report.project_id;
         const latestPayment = await this.findLatestManualPayment(report.studentId, projectKey);
+        const adminStatus = report.admin_status ?? 'pending';
         const { status, payment_verified, ...paymentRest } = this.paymentDerivedFields(
             latestPayment,
             report.status,
+            adminStatus,
         );
 
         return {
@@ -724,7 +805,8 @@ export class StudentReportsService {
                 payment_verified,
                 ...paymentRest,
                 partner_status: report.partner_status,
-                admin_status: report.admin_status,
+                admin_status: adminStatus,
+                admin_approval_status: adminStatus,
                 submission_date: report.submission_date,
                 submitted_at: report.reportSubmittedAt ?? report.submission_date ?? report.createdAt,
                 report_submitted_at: report.reportSubmittedAt,
@@ -896,9 +978,11 @@ export class StudentReportsService {
                 data: reports.map((r) => {
                     const projectKey = r.opportunityId || r.project_id;
                     const latest = projectKey ? paymentByProject.get(projectKey) : undefined;
+                    const adminStatus = r.admin_status ?? 'pending';
                     const { status, payment_verified, ...paymentRest } = this.paymentDerivedFields(
                         latest,
                         r.status,
+                        adminStatus,
                     );
                     return {
                         status,
@@ -910,7 +994,8 @@ export class StudentReportsService {
                         projectId: projectKey,
                         opportunity_id: r.opportunityId,
                         opportunity_title: r.opportunity?.title,
-                        admin_status: r.admin_status,
+                        admin_status: adminStatus,
+                        admin_approval_status: adminStatus,
                         partner_status: r.partner_status,
                         feedback: null,
                         submission_date: r.submission_date,
@@ -946,9 +1031,11 @@ export class StudentReportsService {
             studentId,
             report.opportunityId || report.project_id,
         );
+        const adminStatus = report.admin_status ?? 'pending';
         const { status, payment_verified, ...paymentRest } = this.paymentDerivedFields(
             latest,
             report.status,
+            adminStatus,
         );
 
         return {
@@ -962,7 +1049,8 @@ export class StudentReportsService {
                 project_id: report.project_id,
                 projectId: report.opportunityId || report.project_id,
                 opportunity_id: report.opportunityId,
-                admin_status: report.admin_status,
+                admin_status: adminStatus,
+                admin_approval_status: adminStatus,
                 partner_status: report.partner_status,
                 feedback: null,
                 submission_date: report.submission_date,

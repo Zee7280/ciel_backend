@@ -130,6 +130,51 @@ export class StudentController {
         return { success: true, data: { url } };
     }
 
+    @Post('reports/:projectId/evidence')
+    @UseInterceptors(FileInterceptor('file', {
+        limits: { fileSize: 10 * 1024 * 1024 },
+        fileFilter: (req, file, callback) => {
+            const allowedExtensions = ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx'];
+            const ext = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
+            if (allowedExtensions.includes(ext)) {
+                callback(null, true);
+            } else {
+                callback(new BadRequestException(`File type ${ext} is not allowed`), false);
+            }
+        },
+    }))
+    async uploadEvidenceFile(
+        @Request() req,
+        @Param('projectId') projectId: string,
+        @UploadedFile() file: any,
+        @Body() body: { project_id?: string; section?: string; field?: string }
+    ) {
+        if (!file) {
+            throw new BadRequestException('File not provided');
+        }
+
+        if (!body.project_id) {
+            throw new BadRequestException('project_id is required');
+        }
+
+        if (body.project_id !== projectId) {
+            throw new BadRequestException('project_id must match projectId parameter');
+        }
+
+        if (body.section !== 'section8') {
+            throw new BadRequestException('section must be section8');
+        }
+
+        const allowedFields = ['evidence_files', 'partner_verification_files'];
+        if (!body.field || !allowedFields.includes(body.field)) {
+            throw new BadRequestException(`field must be one of: ${allowedFields.join(', ')}`);
+        }
+
+        const folder = `${projectId}/${body.section}/${body.field}`;
+        const url = await this.studentReportsService.uploadFile(file, folder, req.user.id);
+        return { url };
+    }
+
     @Post('reports')
     @UseInterceptors(FilesInterceptor('files', 50, {
         limits: { fileSize: 10 * 1024 * 1024 },

@@ -6,6 +6,7 @@ import { UserRole } from '../users/enums/user-role.enum';
 import { Organization } from '../organizations/entities/organization.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { Participation } from '../engagement/entities/participant.entity';
+import { StudentReport } from '../reports/entities/student-report.entity';
 
 export type PlatformStatsPayload = {
     contributors: number;
@@ -13,6 +14,11 @@ export type PlatformStatsPayload = {
     impact_hours_label: string | null;
     universities: number;
     sdgs_impacted: number;
+    students_enrolled: number;
+    engagement_hours: number;
+    sdgs_covered: number;
+    active_projects: number;
+    avg_cii_score: number;
 };
 
 const PUBLIC_LIVE_STATUSES = ['active', 'live', 'open', 'recruiting'];
@@ -72,10 +78,11 @@ export class PlatformStatsService {
         @InjectRepository(Organization) private readonly organizationsRepository: Repository<Organization>,
         @InjectRepository(Opportunity) private readonly opportunitiesRepository: Repository<Opportunity>,
         @InjectRepository(Participation) private readonly participationsRepository: Repository<Participation>,
+        @InjectRepository(StudentReport) private readonly studentReportsRepository: Repository<StudentReport>,
     ) {}
 
     async getAggregatedStats(): Promise<PlatformStatsPayload> {
-        const [contributors, universities, opportunities] = await Promise.all([
+        const [contributors, universities, opportunities, avgCiiScore] = await Promise.all([
             this.countDistinctContributors(),
             this.countApprovedUniversities(),
             this.opportunitiesRepository.find({
@@ -90,11 +97,14 @@ export class PlatformStatsService {
                     'visibility',
                 ],
             }),
+            this.getAverageCiiScore(),
         ]);
 
         const sdgSet = new Set<number>();
+        let activeProjects = 0;
         for (const opp of opportunities) {
             if (!isPubliclyListableOpportunity(opp)) continue;
+            activeProjects += 1;
             for (const g of collectSdgGoalsFromOpportunity(opp)) {
                 sdgSet.add(g);
             }
@@ -115,12 +125,19 @@ export class PlatformStatsService {
                 ? (process.env.PLATFORM_STATS_IMPACT_HOURS_LABEL?.trim() || defaultLabel)
                 : null;
 
+        const sdgsImpacted = Math.min(17, sdgSet.size);
+
         return {
             contributors,
             impact_hours,
             impact_hours_label,
             universities,
-            sdgs_impacted: Math.min(17, sdgSet.size),
+            sdgs_impacted: sdgsImpacted,
+            students_enrolled: contributors,
+            engagement_hours: impact_hours ?? 0,
+            sdgs_covered: sdgsImpacted,
+            active_projects: activeProjects,
+            avg_cii_score: avgCiiScore,
         };
     }
 
@@ -160,5 +177,26 @@ export class PlatformStatsService {
             .andWhere('o.verificationStatus = :v', { v: 'APPROVED' })
             .andWhere('o.isBlocked = false')
             .getCount();
+    }
+
+    private async getAverageCiiScore(): Promise<number> {
+        const reports = await this.studentReportsRepository.find({
+            where: { status: In(['verified', 'paid']) },
+            select: ['section11'],
+        });
+
+        const scores = reports
+            .map((report) =>
+                Number(
+                    (report.section11 as { ai_generated_impact_score?: number } | null | undefined)
+                        ?.ai_generated_impact_score,
+                ),
+            )
+            .filter((score) => Number.isFinite(score) && score >= 0);
+
+        if (scores.length === 0) return 0;
+
+        const total = scores.reduce((sum, score) => sum + score, 0);
+        return Math.round(total / scores.length);
     }
 }

@@ -6,6 +6,7 @@ import { UserRole } from '../users/enums/user-role.enum';
 import { Organization } from '../organizations/entities/organization.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { Participation } from '../engagement/entities/participant.entity';
+import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import { StudentReport } from '../reports/entities/student-report.entity';
 
 export type PlatformStatsPayload = {
@@ -36,21 +37,6 @@ function parseSdgGoal(raw: string | undefined | null): number | null {
     return null;
 }
 
-function isPubliclyListableOpportunity(opp: Opportunity): boolean {
-    const visibilityType = String(
-        (opp.visibility_and_academic_linkage as { visibility_type?: string } | undefined)
-            ?.visibility_type ||
-            opp.visibility ||
-            '',
-    )
-        .trim()
-        .toLowerCase();
-
-    return !['own_university_only', 'restricted_specific_universities', 'restricted'].includes(
-        visibilityType,
-    );
-}
-
 function collectSdgGoalsFromOpportunity(opp: Opportunity): number[] {
     const goals: number[] = [];
     const primaryRaw =
@@ -78,50 +64,53 @@ export class PlatformStatsService {
         @InjectRepository(Organization) private readonly organizationsRepository: Repository<Organization>,
         @InjectRepository(Opportunity) private readonly opportunitiesRepository: Repository<Opportunity>,
         @InjectRepository(Participation) private readonly participationsRepository: Repository<Participation>,
+        @InjectRepository(AttendanceLog) private readonly attendanceLogsRepository: Repository<AttendanceLog>,
         @InjectRepository(StudentReport) private readonly studentReportsRepository: Repository<StudentReport>,
     ) {}
 
     async getAggregatedStats(): Promise<PlatformStatsPayload> {
-        const [contributors, universities, opportunities, avgCiiScore] = await Promise.all([
-            this.countDistinctContributors(),
-            this.countApprovedUniversities(),
-            this.opportunitiesRepository.find({
-                where: { status: In(PUBLIC_LIVE_STATUSES), admin_approved: true },
-                select: [
-                    'id',
-                    'sdg',
-                    'sdg_info',
-                    'secondary_sdgs',
-                    'participation_scope',
-                    'visibility_and_academic_linkage',
-                    'visibility',
-                ],
-            }),
-            this.getAverageCiiScore(),
-        ]);
+        const [contributors, studentsEnrolled, universities, opportunities, engagementHours, avgCiiScore] =
+            await Promise.all([
+                this.countDistinctContributors(),
+                this.countStudentsEnrolled(),
+                this.countApprovedUniversities(),
+                this.opportunitiesRepository.find({
+                    where: { status: In(PUBLIC_LIVE_STATUSES) },
+                    select: [
+                        'id',
+                        'sdg',
+                        'sdg_info',
+                        'secondary_sdgs',
+                        'participation_scope',
+                        'visibility_and_academic_linkage',
+                        'visibility',
+                    ],
+                }),
+                this.sumEngagementHours(),
+                this.getAverageCiiScore(),
+            ]);
 
         const sdgSet = new Set<number>();
-        let activeProjects = 0;
+        const activeProjects = opportunities.length;
         for (const opp of opportunities) {
-            if (!isPubliclyListableOpportunity(opp)) continue;
-            activeProjects += 1;
             for (const g of collectSdgGoalsFromOpportunity(opp)) {
                 sdgSet.add(g);
             }
         }
 
         const impactHoursRaw = process.env.PLATFORM_STATS_IMPACT_HOURS;
-        let impact_hours: number | null = null;
+        let configuredImpactHours: number | null = null;
         if (impactHoursRaw != null && impactHoursRaw.trim() !== '') {
             const n = parseInt(impactHoursRaw.trim(), 10);
             if (!Number.isNaN(n) && n >= 0) {
-                impact_hours = n;
+                configuredImpactHours = n;
             }
         }
 
+        const impact_hours = configuredImpactHours ?? engagementHours;
         const defaultLabel = 'Launching Pilot';
         const impact_hours_label =
-            impact_hours == null
+            configuredImpactHours == null && engagementHours === 0
                 ? (process.env.PLATFORM_STATS_IMPACT_HOURS_LABEL?.trim() || defaultLabel)
                 : null;
 
@@ -133,8 +122,8 @@ export class PlatformStatsService {
             impact_hours_label,
             universities,
             sdgs_impacted: sdgsImpacted,
-            students_enrolled: contributors,
-            engagement_hours: impact_hours ?? 0,
+            students_enrolled: studentsEnrolled,
+            engagement_hours: engagementHours,
             sdgs_covered: sdgsImpacted,
             active_projects: activeProjects,
             avg_cii_score: avgCiiScore,
@@ -170,6 +159,12 @@ export class PlatformStatsService {
         return ids.size;
     }
 
+    private async countStudentsEnrolled(): Promise<number> {
+        return this.usersRepository.count({
+            where: { role: UserRole.STUDENT },
+        });
+    }
+
     private async countApprovedUniversities(): Promise<number> {
         return this.organizationsRepository
             .createQueryBuilder('o')
@@ -179,9 +174,22 @@ export class PlatformStatsService {
             .getCount();
     }
 
+    private async sumEngagementHours(): Promise<number> {
+        const row = await this.attendanceLogsRepository
+            .createQueryBuilder('log')
+            .select('COALESCE(SUM(log.sessionHours), 0)', 'total')
+            .where('(log.approvalStatus IS NULL OR log.approvalStatus = :empty OR log.approvalStatus = :approved)', {
+                empty: '',
+                approved: 'approved',
+            })
+            .getRawOne<{ total: string | number | null }>();
+
+        const total = Number(row?.total ?? 0);
+        return Number.isFinite(total) ? Math.round(total) : 0;
+    }
+
     private async getAverageCiiScore(): Promise<number> {
         const reports = await this.studentReportsRepository.find({
-            where: { status: In(['verified', 'paid']) },
             select: ['section11'],
         });
 

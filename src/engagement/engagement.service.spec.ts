@@ -386,6 +386,52 @@ describe('EngagementService', () => {
             expect(mockAttendanceLogRepository.save).toHaveBeenCalled();
         });
 
+        it('should route attendance to the partner owner when requested on the participation', async () => {
+            const mockParticipation = {
+                id: 'p1',
+                studentId: 'u1',
+                projectId: 'proj1',
+                status: 'approved',
+                attendanceApproverType: 'partner',
+            };
+            const dto = {
+                dateOfEngagement: '2023-10-01',
+                startTime: '09:00',
+                endTime: '12:00',
+                description: 'Valid description with fewer than 40 words.',
+                organizationName: 'Org',
+                activityType: 'Activity',
+            } as any;
+
+            mockParticipationRepository.findOne.mockResolvedValue(mockParticipation);
+            mockOpportunityRepository.findOne.mockResolvedValue({
+                id: 'proj1',
+                title: 'Project',
+                creatorId: 'partner-1',
+                organization: null,
+            });
+            mockUserRepository.findOne.mockResolvedValue({
+                id: 'partner-1',
+                email: 'partner@example.com',
+                name: 'Partner Owner',
+                role: UserRole.NGO,
+            });
+            mockAttendanceLogRepository.create.mockReturnValue({ ...dto, participantId: 'p1', projectId: 'proj1', sessionHours: 3 });
+            mockAttendanceLogRepository.save.mockResolvedValue({ id: 'log1', ...dto });
+
+            const result = await service.addAttendanceLog('u1', 'p1', dto);
+
+            expect(result).toBeDefined();
+            expect(mockAttendanceLogRepository.create).toHaveBeenCalledWith(expect.objectContaining({
+                participantId: 'p1',
+                projectId: 'proj1',
+                sessionHours: 3,
+                approvalStatus: 'pending',
+                assignedApproverType: 'partner',
+                assignedApproverUserId: 'partner-1',
+            }));
+        });
+
         it('should throw when no faculty email on participation and project cannot resolve faculty', async () => {
             const mockParticipation = {
                 id: 'p1',

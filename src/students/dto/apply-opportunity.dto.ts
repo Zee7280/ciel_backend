@@ -1,4 +1,4 @@
-import { IsString, IsUUID, IsOptional, IsEmail } from 'class-validator';
+import { IsString, IsUUID, IsOptional, IsEmail, IsIn } from 'class-validator';
 
 export class ApplyOpportunityDto {
     @IsUUID()
@@ -12,8 +12,9 @@ export class ApplyOpportunityDto {
     @IsOptional()
     participation_type?: string;
 
+    @IsOptional()
     @IsEmail()
-    primary_faculty_email: string;
+    primary_faculty_email?: string;
 
     @IsOptional()
     @IsEmail()
@@ -29,4 +30,8 @@ export class ApplyOpportunityDto {
     @IsOptional()
     @IsString()
     contact_phone_e164?: string;
+
+    @IsOptional()
+    @IsIn(['partner', 'faculty'])
+    attendance_approver_type?: 'partner' | 'faculty';
 }

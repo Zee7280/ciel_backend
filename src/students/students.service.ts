@@ -1322,6 +1322,11 @@ export class StudentsService {
             }
         }
 
+        const attendanceApproverType = dto.attendance_approver_type === 'partner' ? 'partner' : 'faculty';
+        if (attendanceApproverType === 'faculty' && !dto.primary_faculty_email) {
+            throw new BadRequestException('Primary faculty email is required when attendance approval is routed to faculty');
+        }
+
         const applyPayload: Record<string, unknown> = {
             participation_type: dto.participation_type,
             primary_faculty_email: dto.primary_faculty_email,
@@ -1329,6 +1334,7 @@ export class StudentsService {
             team_id: dto.team_id,
             team_members: dto.team_members,
             contact_phone_e164: dto.contact_phone_e164,
+            attendance_approver_type: attendanceApproverType,
         };
 
         const saved = await this.opportunityApplicationsService.createApplication({
@@ -1336,6 +1342,7 @@ export class StudentsService {
             opportunityId: dto.opportunityId,
             primaryFacultyEmail: dto.primary_faculty_email,
             secondaryFacultyEmail: dto.secondary_faculty_email,
+            attendanceApproverType,
             applyPayload,
         });
 

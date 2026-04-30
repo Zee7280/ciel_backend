@@ -54,7 +54,7 @@ export class OpportunityApplicationsService {
         private readonly usersService: UsersService,
     ) {}
 
-    normalizeEmail(email: string) {
+    normalizeEmail(email?: string | null) {
         return (email || '').trim().toLowerCase();
     }
 
@@ -303,21 +303,24 @@ export class OpportunityApplicationsService {
     async createApplication(params: {
         studentUserId: string;
         opportunityId: string;
-        primaryFacultyEmail: string;
+        primaryFacultyEmail?: string | null;
         secondaryFacultyEmail?: string | null;
+        attendanceApproverType?: 'faculty' | 'partner';
         applyPayload: Record<string, unknown>;
     }) {
-        const primary = this.normalizeEmail(params.primaryFacultyEmail);
+        const primary = params.primaryFacultyEmail ? this.normalizeEmail(params.primaryFacultyEmail) : null;
         const secondary = params.secondaryFacultyEmail
             ? this.normalizeEmail(String(params.secondaryFacultyEmail))
             : null;
+        const attendanceApproverType = params.attendanceApproverType === 'partner' ? 'partner' : 'faculty';
 
         const row = this.appRepo.create({
             opportunityId: params.opportunityId,
             studentUserId: params.studentUserId,
-            internalStatus: 'pending_faculty',
+            internalStatus: attendanceApproverType === 'partner' && !primary ? 'pending_admin' : 'pending_faculty',
             primaryFacultyEmail: primary,
             secondaryFacultyEmail: secondary,
+            attendanceApproverType,
             applyPayload: params.applyPayload,
         });
         try {
@@ -616,10 +619,15 @@ export class OpportunityApplicationsService {
         const primaryFaculty = (payload['primary_faculty_email'] as string) || app.primaryFacultyEmail;
         const secondaryFaculty =
             (payload['secondary_faculty_email'] as string) || app.secondaryFacultyEmail || undefined;
-        const normalizedPrimaryFaculty = this.normalizeEmail(primaryFaculty);
+        const normalizedPrimaryFaculty = primaryFaculty ? this.normalizeEmail(primaryFaculty) : undefined;
         const normalizedSecondaryFaculty = secondaryFaculty ? this.normalizeEmail(secondaryFaculty) : undefined;
         const contactPhone = (payload['contact_phone_e164'] as string) || undefined;
         const teamMembers = (payload['team_members'] as any[]) || [];
+        const attendanceApproverType =
+            app.attendanceApproverType === 'partner' ||
+            payload['attendance_approver_type'] === 'partner'
+                ? 'partner'
+                : 'faculty';
 
         const existingLead = await this.participationRepo.findOne({
             where: { studentId: app.studentUserId, projectId: app.opportunityId },
@@ -628,6 +636,10 @@ export class OpportunityApplicationsService {
             let changed = false;
             if (!existingLead.applicationId) {
                 existingLead.applicationId = app.id;
+                changed = true;
+            }
+            if (existingLead.attendanceApproverType !== attendanceApproverType) {
+                existingLead.attendanceApproverType = attendanceApproverType;
                 changed = true;
             }
             if (!existingLead.primaryFacultyEmail && normalizedPrimaryFaculty) {
@@ -669,6 +681,7 @@ export class OpportunityApplicationsService {
             status: 'approved',
             primaryFacultyEmail: normalizedPrimaryFaculty,
             secondaryFacultyEmail: normalizedSecondaryFaculty,
+            attendanceApproverType,
             teamId,
         } as any);
 
@@ -694,6 +707,7 @@ export class OpportunityApplicationsService {
                     status: 'approved',
                     teamId,
                     primaryFacultyEmail: normalizedPrimaryFaculty,
+                    attendanceApproverType,
                 } as any);
             }
         }

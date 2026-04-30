@@ -141,6 +141,9 @@ export class Participation {
     @Column({ type: 'timestamp', nullable: true })
     attendanceVerificationEmailSentAt: Date | null;
 
+    @Column({ name: 'attendance_approver_type', type: 'varchar', length: 16, nullable: true })
+    attendanceApproverType: 'faculty' | 'partner' | null;
+
     @Column({ type: 'varchar', length: 16, nullable: true })
     attendanceVerificationReviewerType: 'faculty' | 'partner' | null;
 

@@ -752,26 +752,40 @@ export class EngagementService {
             throw new NotFoundException('Project not found');
         }
 
-        const facultyEmails = await this.resolveFacultyEmailsForAttendanceRouting(participation, opportunity);
-        if (!facultyEmails.length) {
-            throw new BadRequestException(
-                'Attendance approval needs a supervising faculty: add primary or secondary faculty email on registration, or ensure the project has faculty (linked faculty account or supervision contact matching a faculty user).',
-            );
-        }
-
+        const attendanceApproverType = await this.resolveAttendanceApproverTypeForParticipation(participation);
         let assignedFacultyUserId: string | null = null;
-        for (const facultyEmail of facultyEmails) {
-            const facultyUser = await this.userRepository
-                .createQueryBuilder('user')
-                .where('LOWER("user"."email") = :facultyEmail', { facultyEmail })
-                .andWhere('"user"."role" = :facultyRole', { facultyRole: UserRole.FACULTY })
-                .getOne();
-            if (facultyUser?.id) {
-                assignedFacultyUserId = facultyUser.id;
-                break;
+        let assignedPartnerUserId: string | null = null;
+
+        if (attendanceApproverType === 'faculty') {
+            const facultyEmails = await this.resolveFacultyEmailsForAttendanceRouting(participation, opportunity);
+            if (!facultyEmails.length) {
+                throw new BadRequestException(
+                    'Attendance approval needs a supervising faculty: add primary or secondary faculty email on registration, or ensure the project has faculty (linked faculty account or supervision contact matching a faculty user).',
+                );
+            }
+
+            for (const facultyEmail of facultyEmails) {
+                const facultyUser = await this.userRepository
+                    .createQueryBuilder('user')
+                    .where('LOWER("user"."email") = :facultyEmail', { facultyEmail })
+                    .andWhere('"user"."role" = :facultyRole', { facultyRole: UserRole.FACULTY })
+                    .getOne();
+                if (facultyUser?.id) {
+                    assignedFacultyUserId = facultyUser.id;
+                    break;
+                }
+            }
+        } else {
+            assignedPartnerUserId = await this.resolvePartnerOwnerUserId(opportunity);
+            if (!assignedPartnerUserId) {
+                throw new BadRequestException('Attendance approval needs a partner owner user for this project.');
             }
         }
-        const routing = resolveAttendanceApproverRouting(assignedFacultyUserId);
+        const routing = resolveAttendanceApproverRouting(
+            assignedFacultyUserId,
+            attendanceApproverType,
+            assignedPartnerUserId,
+        );
 
         const log = this.attendanceLogRepository.create({
             ...dto,
@@ -824,13 +838,24 @@ export class EngagementService {
                 );
             }
         }
+
+        if (routing.assignedApproverType === 'partner') {
+            const approver = routing.assignedApproverUserId
+                ? await this.userRepository.findOne({ where: { id: routing.assignedApproverUserId } })
+                : null;
+            if (approver?.email) {
+                await this.mailService.sendAttendancePendingPartnerReview(
+                    approver.email,
+                    approver.name || 'Partner',
+                    studentLabel,
+                    title,
+                    opportunity.id,
+                );
+            }
+        }
     }
 
     async listPendingAttendanceLogs(actorUserId: string, actorRole: string | undefined, projectId?: string) {
-        if (actorRole !== UserRole.FACULTY) {
-            throw new ForbiddenException('Only faculty accounts can load the pending attendance queue.');
-        }
-
         const trimmed = typeof projectId === 'string' ? projectId.trim() : '';
         const scopedProjectId = trimmed.length > 0 ? trimmed : undefined;
 
@@ -844,15 +869,17 @@ export class EngagementService {
                     'No opportunity exists for this projectId. Use the same opportunity id as in your faculty list or attendance email links (the project UUID).',
                 );
             }
-            const canAccess = await this.facultyMemberCanAccessOpportunityForPendingAttendance(
-                actorUserId,
-                actorEmail,
-                opportunity,
-            );
-            if (!canAccess) {
-                throw new ForbiddenException(
-                    'This projectId is valid but you are not listed as faculty or supervisor for that opportunity, so pending attendance cannot be loaded for it.',
+            if (actorRole === UserRole.FACULTY) {
+                const canAccess = await this.facultyMemberCanAccessOpportunityForPendingAttendance(
+                    actorUserId,
+                    actorEmail,
+                    opportunity,
                 );
+                if (!canAccess) {
+                    throw new ForbiddenException(
+                        'This projectId is valid but you are not listed as faculty or supervisor for that opportunity, so pending attendance cannot be loaded for it.',
+                    );
+                }
             }
         }
 
@@ -860,24 +887,31 @@ export class EngagementService {
             .createQueryBuilder('log')
             .leftJoinAndSelect('log.participant', 'participant')
             .leftJoinAndSelect('log.project', 'project')
-            .where('log.approvalStatus = :pending', { pending: 'pending' })
-            .andWhere('log.assignedApproverType = :facultyType', { facultyType: 'faculty' });
+            .where('log.approvalStatus = :pending', { pending: 'pending' });
 
         if (scopedProjectId) {
             qb.andWhere('log.projectId = :projectId', { projectId: scopedProjectId });
         }
 
-        if (actorEmail) {
-            qb.andWhere(
-                `(
-                    "log"."assignedApproverUserId"::text = :uid
-                    OR LOWER(TRIM(COALESCE("participant"."facultySupervisorEmail", ''))) = :actorEmail
-                    OR LOWER(TRIM(COALESCE("participant"."primaryFacultyEmail", ''))) = :actorEmail
-                    OR LOWER(TRIM(COALESCE("participant"."secondaryFacultyEmail", ''))) = :actorEmail
-                )`,
-                { uid: actorUserId, actorEmail },
-            );
+        if (actorRole === UserRole.FACULTY) {
+            qb.andWhere('log.assignedApproverType = :facultyType', { facultyType: 'faculty' });
+            if (actorEmail) {
+                qb.andWhere(
+                    `(
+                        "log"."assignedApproverUserId"::text = :uid
+                        OR LOWER(TRIM(COALESCE("participant"."facultySupervisorEmail", ''))) = :actorEmail
+                        OR LOWER(TRIM(COALESCE("participant"."primaryFacultyEmail", ''))) = :actorEmail
+                        OR LOWER(TRIM(COALESCE("participant"."secondaryFacultyEmail", ''))) = :actorEmail
+                    )`,
+                    { uid: actorUserId, actorEmail },
+                );
+            } else {
+                qb.andWhere('"log"."assignedApproverUserId"::text = :uid', { uid: actorUserId });
+            }
+        } else if (actorRole === UserRole.SUPER_ADMIN) {
+            qb.andWhere('log.assignedApproverType = :adminType', { adminType: 'admin' });
         } else {
+            qb.andWhere('log.assignedApproverType = :partnerType', { partnerType: 'partner' });
             qb.andWhere('"log"."assignedApproverUserId"::text = :uid', { uid: actorUserId });
         }
 
@@ -1414,6 +1448,67 @@ export class EngagementService {
     private normalizeOptionalString(value: string | null | undefined): string | undefined {
         const normalized = (value || '').trim();
         return normalized || undefined;
+    }
+
+    private normalizeAttendanceApproverType(value: unknown): 'faculty' | 'partner' {
+        return value === 'partner' ? 'partner' : 'faculty';
+    }
+
+    private async resolveAttendanceApproverTypeForParticipation(
+        participation: Participation,
+    ): Promise<'faculty' | 'partner'> {
+        const stored = this.normalizeAttendanceApproverType(participation.attendanceApproverType);
+        if (participation.attendanceApproverType) {
+            return stored;
+        }
+
+        let app: OpportunityApplication | null = null;
+        if (participation.applicationId) {
+            app = await this.opportunityApplicationRepository.findOne({
+                where: {
+                    id: participation.applicationId,
+                    withdrawnAt: IsNull(),
+                },
+            });
+        }
+        if (!app && participation.studentId) {
+            const rows = await this.opportunityApplicationRepository.find({
+                where: {
+                    studentUserId: participation.studentId,
+                    opportunityId: participation.projectId,
+                    withdrawnAt: IsNull(),
+                },
+                order: { createdAt: 'DESC' },
+                take: 1,
+            });
+            app = rows[0] || null;
+        }
+
+        const payload = app?.applyPayload || {};
+        const resolved = this.normalizeAttendanceApproverType(
+            app?.attendanceApproverType || payload.attendance_approver_type,
+        );
+        participation.attendanceApproverType = resolved;
+        await this.participantRepository.save(participation);
+        return resolved;
+    }
+
+    private async resolvePartnerOwnerUserId(opportunity: Opportunity): Promise<string | null> {
+        if (opportunity.creatorId) {
+            return opportunity.creatorId;
+        }
+
+        if (!opportunity.organizationId) {
+            return null;
+        }
+
+        const partnerUser = await this.userRepository
+            .createQueryBuilder('user')
+            .leftJoin('user.organization', 'organization')
+            .where('organization.id = :organizationId', { organizationId: opportunity.organizationId })
+            .orderBy('user.createdAt', 'ASC')
+            .getOne();
+        return partnerUser?.id || null;
     }
 
     private async resolveApplicationFacultyEmails(participation: Participation): Promise<string[]> {

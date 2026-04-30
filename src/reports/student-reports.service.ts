@@ -241,8 +241,7 @@ export class StudentReportsService {
         const publicStatus = this.toPublicReportStatus(rawReportStatus);
         const payment_verified =
             latest?.status === PaymentStatus.APPROVED ||
-            rawReportStatus === 'paid' ||
-            rawReportStatus === 'verified';
+            rawReportStatus === 'paid';
         const adminApproved = adminStatus === 'approved';
         const payment_status = payment_verified ? 'paid' : latest?.status ?? null;
         const status = payment_verified ? (adminApproved ? 'verified' : 'paid') : publicStatus;

@@ -41,14 +41,17 @@ export class OpportunityApplication {
     @Column({ name: 'internal_status', type: 'varchar', length: 32 })
     internalStatus: OpportunityApplicationInternalStatus;
 
-    @Column({ name: 'primary_faculty_email', type: 'varchar', length: 320 })
-    primaryFacultyEmail: string;
+    @Column({ name: 'primary_faculty_email', type: 'varchar', length: 320, nullable: true })
+    primaryFacultyEmail: string | null;
 
     @Column({ name: 'secondary_faculty_email', type: 'varchar', length: 320, nullable: true })
     secondaryFacultyEmail: string | null;
 
     @Column({ name: 'apply_payload', type: 'jsonb' })
     applyPayload: Record<string, unknown>;
+
+    @Column({ name: 'attendance_approver_type', type: 'varchar', length: 16, nullable: true })
+    attendanceApproverType: 'faculty' | 'partner' | null;
 
     @Column({ name: 'faculty_decided_at', type: 'timestamp', nullable: true })
     facultyDecidedAt: Date | null;

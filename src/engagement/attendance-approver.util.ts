@@ -1,11 +1,11 @@
 import { UserRole } from '../users/enums/user-role.enum';
 
-export type AssignedApproverType = 'faculty';
+export type AssignedApproverType = 'faculty' | 'partner';
 
 export type AttendanceApprovalStatus = 'pending' | 'approved' | 'rejected' | 'flagged';
 
-/** Audit: attendance approval queue is faculty-gated. */
-export type OpportunityCreatorKind = 'faculty';
+/** Audit marker for the selected attendance approval queue. */
+export type OpportunityCreatorKind = AssignedApproverType;
 
 export interface AttendanceApproverRouting {
     approvalStatus: AttendanceApprovalStatus;
@@ -16,7 +16,18 @@ export interface AttendanceApproverRouting {
 
 export function resolveAttendanceApproverRouting(
     assignedFacultyUserId: string | null,
+    assignedApproverType: AssignedApproverType = 'faculty',
+    assignedPartnerUserId: string | null = null,
 ): AttendanceApproverRouting {
+    if (assignedApproverType === 'partner') {
+        return {
+            approvalStatus: 'pending',
+            assignedApproverType: 'partner',
+            assignedApproverUserId: assignedPartnerUserId,
+            opportunityCreatorKind: 'partner',
+        };
+    }
+
     return {
         approvalStatus: 'pending',
         assignedApproverType: 'faculty',

@@ -189,7 +189,7 @@ export class StudentController {
         },
     }))
     async submitReport(@Request() req, @Body() body: any, @UploadedFiles() files: any[]) {
-        return this.studentReportsService.createReport(req.user.id, body, files);
+        return this.studentReportsService.createReport(req.user.id, body, files, false);
     }
 
     @Post('reports/:id/submit')
@@ -208,7 +208,7 @@ export class StudentController {
     async submitReportWithId(@Request() req, @Param('id') id: string, @Body() body: any, @UploadedFiles() files: any[]) {
         // If opportunityId is not in body, use the one from URL
         if (!body.opportunityId) body.opportunityId = id;
-        return this.studentReportsService.createReport(req.user.id, body, files);
+        return this.studentReportsService.createReport(req.user.id, body, files, true);
     }
 
     @Post('reports/draft')

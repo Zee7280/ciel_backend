@@ -275,9 +275,25 @@ export class StudentReportsService {
         return this.s3Service.uploadFile(file, folder);
     }
 
-    async createReport(studentId: string, dto: any, files: any[]) {
+    private resolveSubmitIntent(parsedData: any, forceSubmit: boolean): boolean {
+        if (forceSubmit) return true;
+        const submitSignal =
+            parsedData?.submit ??
+            parsedData?.is_submit ??
+            parsedData?.final_submit ??
+            parsedData?.action;
+        if (typeof submitSignal === 'boolean') return submitSignal;
+        if (typeof submitSignal === 'string') {
+            const normalized = submitSignal.trim().toLowerCase();
+            return ['true', '1', 'yes', 'submit', 'submitted'].includes(normalized);
+        }
+        return false;
+    }
+
+    async createReport(studentId: string, dto: any, files: any[], forceSubmit = false) {
         // Parse form data and convert dot notation to nested objects
         const parsedData = this.parseFormData(dto);
+        const shouldSubmit = this.resolveSubmitIntent(parsedData, forceSubmit);
 
         // Determine the opportunity ID from parsed data
         const opportunityIdFromDto = parsedData.opportunityId || parsedData.project_id;
@@ -311,10 +327,23 @@ export class StudentReportsService {
             }
         });
         const priorReportStatus = report?.status ?? null;
+        const lockedReportStatuses = new Set([
+            'submitted',
+            'partner_verified',
+            'payment_pending',
+            'payment_under_review',
+            'verified',
+            'paid',
+            'rejected',
+        ]);
 
         if (report) {
             // Update existing report
-            report.status = 'submitted';
+            if (shouldSubmit) {
+                report.status = 'submitted';
+            } else if (!lockedReportStatuses.has(report.status)) {
+                report.status = 'draft';
+            }
             if (parsedData.section1) report.section1 = parsedData.section1;
             if (parsedData.section2) report.section2 = parsedData.section2;
             if (parsedData.section3) report.section3 = parsedData.section3;
@@ -337,7 +366,7 @@ export class StudentReportsService {
             report = this.studentReportsRepository.create({
                 studentId,
                 opportunityId: opportunityIdFromDto,
-                status: 'submitted',
+                status: shouldSubmit ? 'submitted' : 'draft',
                 section1: parsedData.section1, // Participation & Attendance
                 section2: parsedData.section2, // Project Context
                 section3: parsedData.section3,
@@ -394,9 +423,11 @@ export class StudentReportsService {
             await this.handleFacultyAssignment(report, report.section1.faculty_supervisor_email);
         }
 
-        const submitStamp = new Date();
-        report.reportSubmittedAt = submitStamp;
-        report.submission_date = submitStamp;
+        if (shouldSubmit) {
+            const submitStamp = new Date();
+            report.reportSubmittedAt = submitStamp;
+            report.submission_date = submitStamp;
+        }
 
         // Save report to get ID (verification_public_slug filled in entity @BeforeInsert/@BeforeUpdate)
         await this.studentReportsRepository.save(report);
@@ -419,7 +450,7 @@ export class StudentReportsService {
             'paid',
         ]);
         const shouldEmailAdminSubmit =
-            priorReportStatus == null || !skipAdminSubmitNotify.has(priorReportStatus);
+            shouldSubmit && (priorReportStatus == null || !skipAdminSubmitNotify.has(priorReportStatus));
         if (shouldEmailAdminSubmit) {
             const oppForTitle =
                 opportunityForPolicy ||
@@ -440,7 +471,7 @@ export class StudentReportsService {
 
         return {
             success: true,
-            message: 'Report submitted successfully.',
+            message: shouldSubmit ? 'Report submitted successfully.' : 'Report saved as draft.',
             data: {
                 report_id: report.id,
                 impact_verify_url: this.buildImpactVerifyUrl(report.verificationPublicSlug),

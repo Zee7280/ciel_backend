@@ -55,6 +55,24 @@ export class StudentsService {
         return (str || '').trim().toLowerCase();
     }
 
+    private hasMeaningfulObjectValue(value: unknown): boolean {
+        if (!value || typeof value !== 'object') return false;
+        return Object.values(value as Record<string, unknown>).some((v) => {
+            if (Array.isArray(v)) return v.length > 0;
+            if (v && typeof v === 'object') return this.hasMeaningfulObjectValue(v);
+            return v !== null && v !== undefined && String(v).trim() !== '';
+        });
+    }
+
+    private opportunityHasPartner(opportunity: Opportunity): boolean {
+        return Boolean(
+            opportunity.organizationId ||
+            this.hasMeaningfulObjectValue(opportunity.partner_organization) ||
+            this.hasMeaningfulObjectValue(opportunity.executing_organization) ||
+            opportunity.requiresPartnerApproval,
+        );
+    }
+
     private async getOccupiedSeats(opportunityId: string): Promise<number> {
         const participationSeats = await this.participantRepository.count({
             where: {
@@ -1322,7 +1340,7 @@ export class StudentsService {
             }
         }
 
-        const attendanceApproverType = dto.attendance_approver_type === 'partner' ? 'partner' : 'faculty';
+        const attendanceApproverType = this.opportunityHasPartner(opportunity) ? 'partner' : 'faculty';
         if (attendanceApproverType === 'faculty' && !dto.primary_faculty_email) {
             throw new BadRequestException('Primary faculty email is required when attendance approval is routed to faculty');
         }

@@ -47,20 +47,31 @@ export class EngagementService {
         this.KEY = crypto.scryptSync(secret, 'salt', 32);
     }
 
+    /** Match participation rows regardless of stored email casing/whitespace. */
+    private normalizeParticipantEmail(email?: string | null): string {
+        return (email ?? '').trim().toLowerCase();
+    }
+
     async preRegister(studentId: string | null, projectId: string, data: Partial<Participation>) {
         const opportunity = await this.opportunityRepository.findOne({ where: { id: projectId } });
         if (!opportunity) throw new NotFoundException('Project not found');
+
+        const normalizedEmailLookup = data.email ? this.normalizeParticipantEmail(data.email) : '';
 
         // Check if already registered
         let existing;
         if (studentId) {
             existing = await this.participantRepository.findOne({
-                where: { studentId, projectId: opportunity.id }
+                where: { studentId, projectId: opportunity.id },
             });
-        } else if (data.email) {
-            existing = await this.participantRepository.findOne({
-                where: { email: data.email, projectId: opportunity.id }
-            });
+        } else if (normalizedEmailLookup) {
+            existing = await this.participantRepository
+                .createQueryBuilder('p')
+                .where('p.projectId = :projectId', { projectId: opportunity.id })
+                .andWhere('LOWER(TRIM(COALESCE(p.email, \'\'))) = :emailNorm', {
+                    emailNorm: normalizedEmailLookup,
+                })
+                .getOne();
         }
 
         // Try lookup by CNIC if still not found
@@ -75,6 +86,7 @@ export class EngagementService {
             // Update existing record if new info is provided
             Object.assign(existing, {
                 ...data,
+                ...(normalizedEmailLookup ? { email: normalizedEmailLookup } : {}),
                 emailVerified: true,
                 mobileVerified: true,
             });
@@ -97,6 +109,7 @@ export class EngagementService {
 
         const participationData: any = {
             ...data,
+            ...(normalizedEmailLookup ? { email: normalizedEmailLookup } : {}),
             projectId: opportunity.id,
             status: data.status || 'approved',
             emailVerified: true,
@@ -148,14 +161,17 @@ export class EngagementService {
 
             // 2. Check if a record already exists for THIS user/email in this project
             let existingByTarget: Participation | null = null;
-            
-            // Try by Email first (Most specific)
-            existingByTarget = await manager.findOne(Participation, {
-                where: { email: dto.email, projectId: opportunity.id },
-                order: { createdAt: 'DESC' }
-            });
 
-            const dtoEmailNorm = (dto.email || '').toLowerCase().trim();
+            const dtoEmailNorm = this.normalizeParticipantEmail(dto.email);
+            // Try by email (normalized; avoids duplicate rows when casing differs)
+            if (dtoEmailNorm) {
+                existingByTarget = await manager
+                    .createQueryBuilder(Participation, 'p')
+                    .where('p.projectId = :projectId', { projectId: opportunity.id })
+                    .andWhere('LOWER(TRIM(COALESCE(p.email, \'\'))) = :emailNorm', { emailNorm: dtoEmailNorm })
+                    .orderBy('p.createdAt', 'DESC')
+                    .getOne();
+            }
 
             // Team: a new member must not reuse the team lead's row (e.g. lead's email sent again by mistake)
             if (
@@ -237,6 +253,7 @@ export class EngagementService {
                 ...registrationFields,
                 ...facultyFields,
                 ...teamFields,
+                ...(dtoEmailNorm ? { email: dtoEmailNorm } : {}),
                 studentId: targetStudentId || participation.studentId,
                 cnicHash,
                 cnic: this.encrypt(normalizedCnicForStorage),

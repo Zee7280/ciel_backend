@@ -1345,6 +1345,31 @@ export class StudentsService {
             throw new BadRequestException('Primary faculty email is required when attendance approval is routed to faculty');
         }
 
+        if (
+            dto.participation_type === 'team' &&
+            Array.isArray(dto.team_members) &&
+            dto.team_members.length > 0
+        ) {
+            const leadNorm = (user.email ?? '').trim().toLowerCase();
+            const seenEmails = new Set<string>();
+            for (const member of dto.team_members) {
+                const em =
+                    typeof member?.email === 'string' ? member.email.trim().toLowerCase() : '';
+                if (!em) continue;
+                if (em === leadNorm) {
+                    throw new BadRequestException(
+                        "Team members list cannot repeat the team lead's email.",
+                    );
+                }
+                if (seenEmails.has(em)) {
+                    throw new BadRequestException(
+                        'Each team member email must appear only once.',
+                    );
+                }
+                seenEmails.add(em);
+            }
+        }
+
         const applyPayload: Record<string, unknown> = {
             participation_type: dto.participation_type,
             primary_faculty_email: dto.primary_faculty_email,

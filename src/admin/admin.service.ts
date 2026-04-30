@@ -14,6 +14,18 @@ import { In } from 'typeorm';
 
 import { Setting } from '../settings/entities/setting.entity';
 
+/** Same statuses as OpportunitiesService.getOccupiedSeats (seats counted toward enrollment). */
+const OCCUPIED_SEAT_STATUSES = [
+    'pending',
+    'accepted',
+    'approved',
+    'verified',
+    'paid',
+    'pending_payment_approval',
+    'pending_ciel_approval',
+    'pending_faculty_approval',
+];
+
 @Injectable()
 export class AdminService {
     constructor(
@@ -181,17 +193,39 @@ export class AdminService {
 
         const projects = await Promise.all(opportunities.map(async (opp) => {
             const timesheets = await this.timesheetRepository.find({ where: { opportunityId: opp.id } });
-            const hours = timesheets.filter(t => t.status === 'verified').reduce((sum, t) => sum + t.hours, 0);
-            const volunteers = new Set(timesheets.map(t => t.studentId)).size;
+            const hours = timesheets.filter(t => t.status === 'verified').reduce((sum, t) => sum + Number(t.hours || 0), 0);
+
+            const occupiedSeats = await this.participationRepository.count({
+                where: {
+                    projectId: opp.id,
+                    status: In(OCCUPIED_SEAT_STATUSES),
+                },
+            });
+
+            const volunteersRequired = Number(opp.timeline?.volunteers_required) || 0;
+            const perVolunteerHours = Number(opp.timeline?.expected_hours) || opp.requiredHours || 0;
+            let targetHours = 0;
+            if (volunteersRequired > 0 && perVolunteerHours > 0) {
+                targetHours = volunteersRequired * perVolunteerHours;
+            } else if (occupiedSeats > 0 && perVolunteerHours > 0) {
+                targetHours = occupiedSeats * perVolunteerHours;
+            }
+
+            const remainingSeats = Math.max(0, volunteersRequired - occupiedSeats);
+            const remainingHours = Math.max(0, targetHours - hours);
 
             return {
                 id: opp.id,
                 title: opp.title,
                 org: opp.organization?.name || 'Unknown',
                 status: opp.status,
-                volunteers: volunteers || (opp.timeline?.volunteers_required || 0),
-                hours: hours,
-                location: opp.location?.city || 'Unknown'
+                volunteers: occupiedSeats,
+                volunteers_required: volunteersRequired,
+                hours,
+                remaining_hours: remainingHours,
+                remaining_seats: remainingSeats,
+                remaining_members: remainingSeats,
+                location: opp.location?.city || 'Unknown',
             };
         }));
 

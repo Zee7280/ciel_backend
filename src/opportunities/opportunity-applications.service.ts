@@ -5,7 +5,7 @@ import {
     NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, IsNull, Repository } from 'typeorm';
+import { In, IsNull, Not, Repository } from 'typeorm';
 import { OpportunityApplication, OpportunityApplicationInternalStatus } from './entities/opportunity-application.entity';
 import { Participation } from '../engagement/entities/participant.entity';
 import { EngagementService } from '../engagement/engagement.service';
@@ -153,7 +153,29 @@ export class OpportunityApplicationsService {
             const actualTeamId = (members[0]?.teamId || '').trim() || null;
             const isIndividualEntry = !actualTeamId;
             const lead = members.find((m) => m.isTeamLead) ?? members[0];
-            const memberPayload = members.map((member) => {
+
+            /** One dashboard row per person (legacy duplicates share email / student id). */
+            const dedupMembers: Participation[] = [];
+            const seenMemberKeys = new Set<string>();
+            for (const member of members) {
+                const sid = member.studentId?.trim();
+                const ek = sid
+                    ? `s:${sid}`
+                    : (() => {
+                          const raw = member.student?.email ?? member.email ?? '';
+                          const n = this.normalizeEmail(raw);
+                          return n ? `e:${n}` : `id:${member.id}`;
+                      })();
+                if (!isIndividualEntry && seenMemberKeys.has(ek)) {
+                    continue;
+                }
+                if (!isIndividualEntry) {
+                    seenMemberKeys.add(ek);
+                }
+                dedupMembers.push(member);
+            }
+
+            const memberPayload = dedupMembers.map((member) => {
                 const rep = member.studentId
                     ? this.pickLatestReportForStudent(reports, member.studentId)
                     : null;
@@ -312,10 +334,43 @@ export class OpportunityApplicationsService {
     }
 
     /**
-     * Approved enrollments on this opportunity whose student has a student_reports row
-     * that is not yet submitted / verified / paid (etc.).
+     * Enrollments that still need student report work before submitted / verified / paid (etc.).
+     * Uses active participations (team members + solo) so listing is non-empty even when only the
+     * team lead row exists in opportunity_applications; merges approved applications when present.
      */
     async adminListIncompleteReportApplicants(opportunityId: string) {
+        const participations = await this.participationRepo.find({
+            where: {
+                projectId: opportunityId,
+                studentId: Not(IsNull()),
+                status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
+            },
+            relations: ['student'],
+            order: { createdAt: 'ASC' },
+        });
+
+        type Row = {
+            applicationId: string | null;
+            student_name: string | null;
+            student_email: string | null;
+        };
+        const byStudent = new Map<string, Row>();
+
+        for (const p of participations) {
+            if (!p.studentId) continue;
+            const prev = byStudent.get(p.studentId);
+            const next: Row = {
+                applicationId: p.applicationId ?? null,
+                student_name: p.student?.name ?? p.fullName ?? null,
+                student_email: p.student?.email ?? p.email ?? null,
+            };
+            if (!prev) {
+                byStudent.set(p.studentId, next);
+            } else if (!prev.applicationId && next.applicationId) {
+                byStudent.set(p.studentId, next);
+            }
+        }
+
         const apps = await this.appRepo.find({
             where: {
                 opportunityId,
@@ -325,21 +380,36 @@ export class OpportunityApplicationsService {
             relations: ['studentUser'],
             order: { createdAt: 'DESC' },
         });
-        if (!apps.length) {
+        for (const a of apps) {
+            const existing = byStudent.get(a.studentUserId);
+            if (existing) {
+                if (!existing.applicationId) {
+                    existing.applicationId = a.id;
+                }
+            } else {
+                byStudent.set(a.studentUserId, {
+                    applicationId: a.id,
+                    student_name: a.studentUser?.name ?? null,
+                    student_email: a.studentUser?.email ?? null,
+                });
+            }
+        }
+
+        if (!byStudent.size) {
             return { data: [] as Array<Record<string, unknown>> };
         }
 
-        const studentIds = apps.map((a) => a.studentUserId);
+        const studentIds = [...byStudent.keys()];
         const reports = await this.findReportsForOpportunityAndStudents(opportunityId, studentIds);
 
         const data: Array<Record<string, unknown>> = [];
-        for (const a of apps) {
-            const rep = this.pickLatestReportForStudent(reports, a.studentUserId);
+        for (const [studentUserId, row] of byStudent) {
+            const rep = this.pickLatestReportForStudent(reports, studentUserId);
             if (rep && REPORT_STATUSES_EXCLUDED_FROM_INCOMPLETE_LIST.includes(rep.status)) continue;
             data.push({
-                application_id: a.id,
-                student_name: a.studentUser?.name ?? null,
-                student_email: a.studentUser?.email ?? null,
+                application_id: row.applicationId,
+                student_name: row.student_name,
+                student_email: row.student_email,
                 report_status: rep ? this.mapReportStatusForAdminList(rep.status) : 'not_started',
             });
         }
@@ -849,7 +919,18 @@ export class OpportunityApplicationsService {
         const normalizedPrimaryFaculty = primaryFaculty ? this.normalizeEmail(primaryFaculty) : undefined;
         const normalizedSecondaryFaculty = secondaryFaculty ? this.normalizeEmail(secondaryFaculty) : undefined;
         const contactPhone = (payload['contact_phone_e164'] as string) || undefined;
-        const teamMembers = (payload['team_members'] as any[]) || [];
+        const rawTeamMembers = Array.isArray(payload['team_members']) ? (payload['team_members'] as any[]) : [];
+        const leadEmailNorm = this.normalizeEmail(user.email);
+        const teamMembersUnique: typeof rawTeamMembers = [];
+        const seenMemberEmails = new Set<string>();
+        for (const m of rawTeamMembers) {
+            const em = typeof m?.email === 'string' ? this.normalizeEmail(m.email) : '';
+            if (!em) continue;
+            if (em === leadEmailNorm) continue;
+            if (seenMemberEmails.has(em)) continue;
+            seenMemberEmails.add(em);
+            teamMembersUnique.push(m);
+        }
         const attendanceApproverType =
             app.attendanceApproverType === 'partner' ||
             payload['attendance_approver_type'] === 'partner'
@@ -912,9 +993,12 @@ export class OpportunityApplicationsService {
             teamId,
         } as any);
 
-        if (participationType === 'team' && teamMembers.length > 0) {
-            for (const m of teamMembers) {
+        if (participationType === 'team' && teamMembersUnique.length > 0) {
+            for (const m of teamMembersUnique) {
                 const memberUser = await this.usersService.findByEmail(m.email);
+                if (memberUser?.id && memberUser.id === app.studentUserId) {
+                    continue;
+                }
                 await this.engagementService.preRegister(memberUser?.id || null, app.opportunityId, {
                     applicationId: applicationCorrelationId,
                     fullName: m.name,

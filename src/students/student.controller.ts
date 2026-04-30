@@ -118,7 +118,18 @@ export class StudentController {
     }
 
     @Post('reports/upload')
-    @UseInterceptors(FileInterceptor('file'))
+    @UseInterceptors(FileInterceptor('file', {
+        limits: { fileSize: 10 * 1024 * 1024, fieldSize: 50 * 1024 * 1024 },
+        fileFilter: (_req, file, callback) => {
+            const allowed = ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx'];
+            const ext = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
+            if (allowed.includes(ext)) {
+                callback(null, true);
+            } else {
+                callback(new BadRequestException(`File type ${ext} is not allowed`), false);
+            }
+        },
+    }))
     async uploadFile(@Request() req, @UploadedFile() file: any, @Body('section') section: string) {
         if (!file) {
             throw new BadRequestException('File not provided');
@@ -132,7 +143,7 @@ export class StudentController {
 
     @Post('reports/:projectId/evidence')
     @UseInterceptors(FileInterceptor('file', {
-        limits: { fileSize: 10 * 1024 * 1024 },
+        limits: { fileSize: 10 * 1024 * 1024, fieldSize: 50 * 1024 * 1024 },
         fileFilter: (req, file, callback) => {
             const allowedExtensions = ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx'];
             const ext = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
@@ -177,7 +188,7 @@ export class StudentController {
 
     @Post('reports')
     @UseInterceptors(FilesInterceptor('files', 50, {
-        limits: { fileSize: 10 * 1024 * 1024 },
+        limits: { fileSize: 10 * 1024 * 1024, fieldSize: 50 * 1024 * 1024 },
         fileFilter: (req, file, callback) => {
             const allowedExtensions = ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx'];
             const ext = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
@@ -194,7 +205,7 @@ export class StudentController {
 
     @Post('reports/:id/submit')
     @UseInterceptors(FilesInterceptor('files', 50, {
-        limits: { fileSize: 10 * 1024 * 1024 },
+        limits: { fileSize: 10 * 1024 * 1024, fieldSize: 50 * 1024 * 1024 },
         fileFilter: (req, file, callback) => {
             const allowedExtensions = ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx'];
             const ext = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
@@ -213,7 +224,7 @@ export class StudentController {
 
     @Post('reports/draft')
     @UseInterceptors(FilesInterceptor('files', 50, {
-        limits: { fileSize: 10 * 1024 * 1024 },
+        limits: { fileSize: 10 * 1024 * 1024, fieldSize: 50 * 1024 * 1024 },
         fileFilter: (req, file, callback) => {
             const allowedExtensions = ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx'];
             const ext = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
@@ -230,7 +241,7 @@ export class StudentController {
 
     @Post('reports/:id/draft')
     @UseInterceptors(FilesInterceptor('files', 50, {
-        limits: { fileSize: 10 * 1024 * 1024 },
+        limits: { fileSize: 10 * 1024 * 1024, fieldSize: 50 * 1024 * 1024 },
         fileFilter: (req, file, callback) => {
             const allowedExtensions = ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx'];
             const ext = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));

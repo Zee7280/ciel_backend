@@ -171,17 +171,6 @@ export class OpportunityApplicationsService {
             .orderBy('p.createdAt', 'ASC')
             .getMany();
 
-        if (!rows.length) {
-            return {
-                summary: {
-                    registered_teams: 0,
-                    completed_reports: 0,
-                    reports_available: 0,
-                },
-                data: [],
-            };
-        }
-
         const rowsByTeamId = new Map<string, Participation[]>();
         for (const row of rows) {
             const normalizedTeamId = (row.teamId || '').trim();
@@ -257,6 +246,71 @@ export class OpportunityApplicationsService {
                 participation_mode: isIndividualEntry ? 'individual' : 'team',
                 report_status: teamReportStatus,
                 report_available: teamReportAvailable,
+                members: memberPayload,
+            });
+        }
+
+        const coveredTeamIds = new Set(
+            data.map((row) => String(row['team_id'] ?? '').trim()).filter(Boolean),
+        );
+
+        const pendingPipelineApps = await this.appRepo.find({
+            where: {
+                opportunityId,
+                withdrawnAt: IsNull(),
+                internalStatus: In(PENDING_PIPELINE),
+            },
+            relations: ['studentUser'],
+            order: { createdAt: 'ASC' },
+        });
+
+        for (const app of pendingPipelineApps) {
+            const payload = app.applyPayload || {};
+            const rawTeamId =
+                typeof payload['team_id'] === 'string' ? payload['team_id'].trim() : '';
+            const teamMembersRaw = Array.isArray(payload['team_members'])
+                ? (payload['team_members'] as Array<{ email?: string; name?: string }>)
+                : [];
+            const isTeamApply =
+                payload['participation_type'] === 'team' || teamMembersRaw.length > 0;
+            if (!rawTeamId || !isTeamApply || coveredTeamIds.has(rawTeamId)) {
+                continue;
+            }
+            coveredTeamIds.add(rawTeamId);
+
+            const leadUser = app.studentUser;
+            const leadEmail = this.normalizeEmail(leadUser?.email ?? '');
+            const memberPayload: Array<Record<string, unknown>> = [
+                {
+                    id: app.id,
+                    name: leadUser?.name ?? null,
+                    email: leadUser?.email ?? null,
+                    role: 'lead',
+                    report_status: 'not_started',
+                    report_available: false,
+                },
+            ];
+            for (const m of teamMembersRaw) {
+                const em = typeof m?.email === 'string' ? this.normalizeEmail(m.email) : '';
+                if (!em || em === leadEmail) continue;
+                memberPayload.push({
+                    id: `pending:${app.id}:m:${em}`,
+                    name: typeof m?.name === 'string' ? m.name : null,
+                    email: typeof m?.email === 'string' ? m.email.trim() : null,
+                    role: 'member',
+                    report_status: 'not_started',
+                    report_available: false,
+                });
+            }
+
+            data.push({
+                id: rawTeamId,
+                team_id: rawTeamId,
+                team_name: `Team ${rawTeamId.slice(0, 8)}`,
+                lead_name: leadUser?.name ?? null,
+                participation_mode: 'team',
+                report_status: 'not_started',
+                report_available: false,
                 members: memberPayload,
             });
         }

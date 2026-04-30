@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, In, Repository } from 'typeorm';
@@ -1436,8 +1437,16 @@ export class StudentsService {
             teamMembersPayload = sanitized;
         }
 
-        if (isTeamApply && !(dto.team_id || '').trim()) {
-            throw new BadRequestException('team_id is required for team applications (use a unique value per team).');
+        let resolvedTeamId = (dto.team_id || '').trim();
+        if (isTeamApply && !resolvedTeamId) {
+            do {
+                resolvedTeamId = randomUUID();
+            } while (
+                await this.opportunityApplicationsService.isTeamSlugInUseOnOpportunity(
+                    dto.opportunityId,
+                    resolvedTeamId,
+                )
+            );
         }
 
         if (
@@ -1457,10 +1466,10 @@ export class StudentsService {
             await this.assertTeamMembersNotAlreadySeatedOnOpportunity(dto.opportunityId, teamMembersPayload);
         }
 
-        if (isTeamApply && (dto.team_id || '').trim()) {
+        if (isTeamApply && resolvedTeamId) {
             const slugTaken = await this.opportunityApplicationsService.isTeamSlugInUseOnOpportunity(
                 dto.opportunityId,
-                dto.team_id,
+                resolvedTeamId,
             );
             if (slugTaken) {
                 throw new BadRequestException(
@@ -1473,7 +1482,7 @@ export class StudentsService {
             participation_type: isTeamApply ? 'team' : dto.participation_type,
             primary_faculty_email: dto.primary_faculty_email,
             secondary_faculty_email: dto.secondary_faculty_email,
-            team_id: dto.team_id,
+            team_id: isTeamApply ? resolvedTeamId : dto.team_id,
             team_members: teamMembersPayload,
             contact_phone_e164: dto.contact_phone_e164,
             attendance_approver_type: attendanceApproverType,

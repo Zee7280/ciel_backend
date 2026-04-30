@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Brackets, In, Repository } from 'typeorm';
 import { User } from '../users/entities/user.entity';
 import { UserRole } from '../users/enums/user-role.enum';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
@@ -125,6 +125,63 @@ export class StudentsService {
         return ['pending', 'pending_payment_approval', 'pending_ciel_approval', 'pending_faculty_approval'].includes(
             status,
         );
+    }
+
+    private async findLatestParticipationForProjectAndMemberEmail(
+        projectId: string,
+        emailNorm: string,
+    ): Promise<Participation | null> {
+        const user = await this.usersRepository
+            .createQueryBuilder('u')
+            .where('LOWER(TRIM(COALESCE(u.email, \'\'))) = :em', { em: emailNorm })
+            .getOne();
+
+        const qb = this.participantRepository
+            .createQueryBuilder('p')
+            .where('p.projectId = :projectId', { projectId })
+            .andWhere(
+                new Brackets((w) => {
+                    w.where('LOWER(TRIM(COALESCE(p.email, \'\'))) = :emailNorm', { emailNorm });
+                    if (user?.id) {
+                        w.orWhere('p.studentId = :studentId', { studentId: user.id });
+                    }
+                }),
+            )
+            .orderBy('p.createdAt', 'DESC');
+
+        return qb.getOne();
+    }
+
+    /**
+     * Block listing someone who already has a participation row on this project (another team / solo),
+     * except when their only row was rejected (re-apply path).
+     */
+    private async assertTeamMembersNotAlreadySeatedOnOpportunity(
+        opportunityId: string,
+        members: NonNullable<ApplyOpportunityDto['team_members']>,
+    ): Promise<void> {
+        for (const member of members) {
+            const raw = typeof member?.email === 'string' ? member.email.trim() : '';
+            const emailNorm = raw.toLowerCase();
+            if (!emailNorm) continue;
+            const row = await this.findLatestParticipationForProjectAndMemberEmail(opportunityId, emailNorm);
+            if (!row) continue;
+            if (row.status === 'rejected') continue;
+            const label = raw || emailNorm;
+            if (this.isParticipationActivelyEnrolled(row.status)) {
+                throw new BadRequestException(
+                    `Team member ${label} is already enrolled on this opportunity.`,
+                );
+            }
+            if (this.isParticipationPendingPipeline(row.status)) {
+                throw new BadRequestException(
+                    `Team member ${label} already has a pending seat on this opportunity.`,
+                );
+            }
+            throw new BadRequestException(
+                `Team member ${label} is already associated with this opportunity.`,
+            );
+        }
     }
 
     private isLiveOpportunityStatus(status?: string | null): boolean {
@@ -1336,17 +1393,28 @@ export class StudentsService {
             }
         }
 
+        const claimedEmailsOnOpenApplications =
+            await this.opportunityApplicationsService.collectClaimedEmailsOnOpenApplications(dto.opportunityId);
+        const leadEmailNorm = (user.email ?? '').trim().toLowerCase();
+        if (leadEmailNorm && claimedEmailsOnOpenApplications.has(leadEmailNorm)) {
+            throw new BadRequestException(
+                'You are already listed on another application for this opportunity (as lead or team member). Withdraw that application first if you want to change teams.',
+            );
+        }
+
+        /** Must match payload reality: omitting participation_type must not bypass team checks if members are sent. */
+        const hasTeamMemberList =
+            Array.isArray(dto.team_members) &&
+            dto.team_members.some((m) => typeof m?.email === 'string' && m.email.trim() !== '');
+        const isTeamApply = this.normalize(dto.participation_type) === 'team' || hasTeamMemberList;
+
         const attendanceApproverType = this.opportunityHasPartner(opportunity) ? 'partner' : 'faculty';
         if (attendanceApproverType === 'faculty' && !dto.primary_faculty_email) {
             throw new BadRequestException('Primary faculty email is required when attendance approval is routed to faculty');
         }
 
         let teamMembersPayload = dto.team_members;
-        if (
-            dto.participation_type === 'team' &&
-            Array.isArray(dto.team_members) &&
-            dto.team_members.length > 0
-        ) {
+        if (isTeamApply && Array.isArray(dto.team_members) && dto.team_members.length > 0) {
             const leadNorm = (user.email ?? '').trim().toLowerCase();
             const seenEmails = new Set<string>();
             const sanitized: NonNullable<ApplyOpportunityDto['team_members']> = [];
@@ -1368,8 +1436,41 @@ export class StudentsService {
             teamMembersPayload = sanitized;
         }
 
+        if (isTeamApply && !(dto.team_id || '').trim()) {
+            throw new BadRequestException('team_id is required for team applications (use a unique value per team).');
+        }
+
+        if (
+            isTeamApply &&
+            Array.isArray(teamMembersPayload) &&
+            teamMembersPayload.length > 0
+        ) {
+            for (const member of teamMembersPayload) {
+                const em =
+                    typeof member?.email === 'string' ? member.email.trim().toLowerCase() : '';
+                if (em && claimedEmailsOnOpenApplications.has(em)) {
+                    throw new BadRequestException(
+                        `${member.email} is already listed on another application for this opportunity.`,
+                    );
+                }
+            }
+            await this.assertTeamMembersNotAlreadySeatedOnOpportunity(dto.opportunityId, teamMembersPayload);
+        }
+
+        if (isTeamApply && (dto.team_id || '').trim()) {
+            const slugTaken = await this.opportunityApplicationsService.isTeamSlugInUseOnOpportunity(
+                dto.opportunityId,
+                dto.team_id,
+            );
+            if (slugTaken) {
+                throw new BadRequestException(
+                    'This team_id is already used on this opportunity. Use a different team identifier.',
+                );
+            }
+        }
+
         const applyPayload: Record<string, unknown> = {
-            participation_type: dto.participation_type,
+            participation_type: isTeamApply ? 'team' : dto.participation_type,
             primary_faculty_email: dto.primary_faculty_email,
             secondary_faculty_email: dto.secondary_faculty_email,
             team_id: dto.team_id,

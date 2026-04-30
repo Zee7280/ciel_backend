@@ -70,6 +70,58 @@ export class OpportunityApplicationsService {
         return (email || '').trim().toLowerCase();
     }
 
+    /**
+     * Normalized emails of everyone already tied to a non-withdrawn application:
+     * the applicant (lead) plus every email listed in apply_payload.team_members.
+     */
+    async collectClaimedEmailsOnOpenApplications(opportunityId: string): Promise<Set<string>> {
+        const rows = await this.appRepo.find({
+            where: { opportunityId, withdrawnAt: IsNull() },
+            relations: ['studentUser'],
+        });
+        const out = new Set<string>();
+        for (const row of rows) {
+            const lead = this.normalizeEmail(row.studentUser?.email ?? '');
+            if (lead) out.add(lead);
+            const raw = row.applyPayload?.team_members;
+            if (Array.isArray(raw)) {
+                for (const m of raw) {
+                    const em = typeof (m as { email?: unknown })?.email === 'string'
+                        ? this.normalizeEmail((m as { email: string }).email)
+                        : '';
+                    if (em) out.add(em);
+                }
+            }
+        }
+        return out;
+    }
+
+    /** True if this team slug is used by active seat rows or another in-flight application. */
+    async isTeamSlugInUseOnOpportunity(
+        opportunityId: string,
+        rawTeamId: string | undefined | null,
+    ): Promise<boolean> {
+        const teamId = (rawTeamId || '').trim();
+        if (!teamId) return false;
+
+        const existingSeats = await this.participationRepo.count({
+            where: {
+                projectId: opportunityId,
+                teamId,
+                status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
+            },
+        });
+        if (existingSeats > 0) return true;
+
+        const inflight = await this.appRepo
+            .createQueryBuilder('a')
+            .where('a.opportunity_id = :oid', { oid: opportunityId })
+            .andWhere('a.withdrawn_at IS NULL')
+            .andWhere(`TRIM(COALESCE(a.apply_payload->>'team_id','')) = :teamId`, { teamId })
+            .getCount();
+        return inflight > 0;
+    }
+
     /** Public-facing report label for admin lists (matches student report API mapping). */
     private mapReportStatusForAdminList(raw: string | null | undefined): string {
         if (raw === 'payment_pending') return 'payment_under_review';

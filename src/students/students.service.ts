@@ -1284,10 +1284,6 @@ export class StudentsService {
     }
 
     async applyToOpportunity(userId: string, dto: ApplyOpportunityDto) {
-        console.log('Apply Opportunity DTO:', JSON.stringify(dto));
-        console.log('Participation Type:', dto.participation_type);
-        console.log('Team Members:', dto.team_members?.length);
-
         const opportunity = await this.opportunitiesRepository.findOne({
             where: { id: dto.opportunityId },
         });
@@ -1345,6 +1341,7 @@ export class StudentsService {
             throw new BadRequestException('Primary faculty email is required when attendance approval is routed to faculty');
         }
 
+        let teamMembersPayload = dto.team_members;
         if (
             dto.participation_type === 'team' &&
             Array.isArray(dto.team_members) &&
@@ -1352,14 +1349,13 @@ export class StudentsService {
         ) {
             const leadNorm = (user.email ?? '').trim().toLowerCase();
             const seenEmails = new Set<string>();
+            const sanitized: NonNullable<ApplyOpportunityDto['team_members']> = [];
             for (const member of dto.team_members) {
                 const em =
                     typeof member?.email === 'string' ? member.email.trim().toLowerCase() : '';
                 if (!em) continue;
                 if (em === leadNorm) {
-                    throw new BadRequestException(
-                        "Team members list cannot repeat the team lead's email.",
-                    );
+                    continue;
                 }
                 if (seenEmails.has(em)) {
                     throw new BadRequestException(
@@ -1367,7 +1363,9 @@ export class StudentsService {
                     );
                 }
                 seenEmails.add(em);
+                sanitized.push(member);
             }
+            teamMembersPayload = sanitized;
         }
 
         const applyPayload: Record<string, unknown> = {
@@ -1375,7 +1373,7 @@ export class StudentsService {
             primary_faculty_email: dto.primary_faculty_email,
             secondary_faculty_email: dto.secondary_faculty_email,
             team_id: dto.team_id,
-            team_members: dto.team_members,
+            team_members: teamMembersPayload,
             contact_phone_e164: dto.contact_phone_e164,
             attendance_approver_type: attendanceApproverType,
         };

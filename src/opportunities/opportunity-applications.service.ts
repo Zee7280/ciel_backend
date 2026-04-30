@@ -115,8 +115,6 @@ export class OpportunityApplicationsService {
             .createQueryBuilder('p')
             .leftJoinAndSelect('p.student', 'student')
             .where('p.projectId = :opportunityId', { opportunityId })
-            .andWhere('p.teamId IS NOT NULL')
-            .andWhere("TRIM(p.teamId) <> ''")
             .andWhere('p.status IN (:...statuses)', { statuses: [...TEAM_ACTIVE_PARTICIPATION_STATUSES] })
             .orderBy('p.createdAt', 'ASC')
             .getMany();
@@ -134,11 +132,12 @@ export class OpportunityApplicationsService {
 
         const rowsByTeamId = new Map<string, Participation[]>();
         for (const row of rows) {
-            if (!row.teamId) continue;
-            if (!rowsByTeamId.has(row.teamId)) {
-                rowsByTeamId.set(row.teamId, []);
+            const normalizedTeamId = (row.teamId || '').trim();
+            const groupId = normalizedTeamId || `individual:${row.studentId || row.id}`;
+            if (!rowsByTeamId.has(groupId)) {
+                rowsByTeamId.set(groupId, []);
             }
-            rowsByTeamId.get(row.teamId)!.push(row);
+            rowsByTeamId.get(groupId)!.push(row);
         }
 
         const studentIds = rows
@@ -150,7 +149,9 @@ export class OpportunityApplicationsService {
         let completedReports = 0;
         let reportsAvailable = 0;
 
-        for (const [teamId, members] of rowsByTeamId.entries()) {
+        for (const [groupId, members] of rowsByTeamId.entries()) {
+            const actualTeamId = (members[0]?.teamId || '').trim() || null;
+            const isIndividualEntry = !actualTeamId;
             const lead = members.find((m) => m.isTeamLead) ?? members[0];
             const memberPayload = members.map((member) => {
                 const rep = member.studentId
@@ -161,7 +162,7 @@ export class OpportunityApplicationsService {
                     id: member.id,
                     name: member.student?.name ?? member.fullName ?? null,
                     email: member.student?.email ?? member.email ?? null,
-                    role: member.isTeamLead ? 'lead' : 'member',
+                    role: isIndividualEntry || member.isTeamLead ? 'lead' : 'member',
                     report_status: reportStatus,
                     report_available: reportStatus !== 'not_started',
                 };
@@ -173,11 +174,13 @@ export class OpportunityApplicationsService {
             if (teamReportStatus === 'completed') completedReports += 1;
             if (teamReportAvailable) reportsAvailable += 1;
 
+            const fallbackTeamName = lead?.student?.name ?? lead?.fullName ?? 'Individual Participant';
             data.push({
-                id: teamId,
-                team_id: teamId,
-                team_name: `Team ${teamId.slice(0, 8)}`,
+                id: actualTeamId || groupId,
+                team_id: actualTeamId || groupId,
+                team_name: actualTeamId ? `Team ${actualTeamId.slice(0, 8)}` : fallbackTeamName,
                 lead_name: lead?.student?.name ?? lead?.fullName ?? null,
+                participation_mode: isIndividualEntry ? 'individual' : 'team',
                 report_status: teamReportStatus,
                 report_available: teamReportAvailable,
                 members: memberPayload,
@@ -332,13 +335,12 @@ export class OpportunityApplicationsService {
         const data: Array<Record<string, unknown>> = [];
         for (const a of apps) {
             const rep = this.pickLatestReportForStudent(reports, a.studentUserId);
-            if (!rep) continue;
-            if (REPORT_STATUSES_EXCLUDED_FROM_INCOMPLETE_LIST.includes(rep.status)) continue;
+            if (rep && REPORT_STATUSES_EXCLUDED_FROM_INCOMPLETE_LIST.includes(rep.status)) continue;
             data.push({
                 application_id: a.id,
                 student_name: a.studentUser?.name ?? null,
                 student_email: a.studentUser?.email ?? null,
-                report_status: this.mapReportStatusForAdminList(rep.status),
+                report_status: rep ? this.mapReportStatusForAdminList(rep.status) : 'not_started',
             });
         }
 

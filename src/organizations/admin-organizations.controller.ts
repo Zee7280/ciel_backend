@@ -19,8 +19,9 @@ export class AdminOrganizationsController {
     }
 
     @Get(':id')
-    findOne(@Param('id') id: string) {
-        return this.organizationsService.findOne(id);
+    async findOne(@Param('id') id: string) {
+        const data = await this.organizationsService.getAdminOrganizationDetails(id);
+        return { success: true, data };
     }
 
     @Patch(':id/approve')

@@ -329,6 +329,50 @@ export class OrganizationsService {
         });
     }
 
+    async getAdminOrganizationDetails(id: string) {
+        const org = await this.findOne(id);
+
+        const activeProjectsCount = await this.opportunitiesRepository.count({
+            where: {
+                organizationId: org.id,
+                status: 'active',
+            },
+        });
+
+        const normalizedStatus = org.isBlocked
+            ? 'suspended'
+            : org.verificationStatus?.toUpperCase() === 'APPROVED'
+                ? 'verified'
+                : (org.verificationStatus || 'PENDING').toLowerCase();
+
+        return {
+            id: org.id,
+            name: org.name,
+            email: org.contactEmail,
+            contact_person: org.contactName,
+            contact: org.contactName,
+            organization_type: org.orgType,
+            type: org.orgType,
+            status: normalizedStatus,
+            verification_status: org.verificationStatus,
+            active_projects_count: activeProjectsCount,
+            projects: activeProjectsCount,
+            phone: org.contactPhone,
+            website: org.websiteUrl,
+            address: org.address,
+            city: org.city,
+            state: org.region,
+            province: org.region,
+            country: org.country,
+            postal_code: null,
+            registration_number: null,
+            tax_number: null,
+            created_at: org.createdAt,
+            updated_at: org.updatedAt,
+            verified_at: org.verifiedAt,
+        };
+    }
+
     async findOne(id: string) {
         const org = await this.organizationsRepository.findOne({ where: { id } });
         if (!org) throw new NotFoundException('Organization not found');

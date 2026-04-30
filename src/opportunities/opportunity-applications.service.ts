@@ -39,6 +39,18 @@ const REPORT_STATUSES_EXCLUDED_FROM_INCOMPLETE_LIST: readonly string[] = [
     'rejected',
 ];
 
+const TEAM_ACTIVE_PARTICIPATION_STATUSES: readonly string[] = [
+    'pending',
+    'accepted',
+    'approved',
+    'verified',
+    'paid',
+    'pending_payment_approval',
+    'pending_ciel_approval',
+    'pending_faculty_approval',
+    'finalized',
+];
+
 @Injectable()
 export class OpportunityApplicationsService {
     constructor(
@@ -77,10 +89,223 @@ export class OpportunityApplicationsService {
             .getMany();
     }
 
+    private toTeamReportStatus(raw: string | null | undefined): 'not_started' | 'in_progress' | 'completed' {
+        if (!raw) return 'not_started';
+        if (raw === 'verified' || raw === 'paid') return 'completed';
+        return 'in_progress';
+    }
+
+    private aggregateTeamReportStatus(
+        statuses: Array<'not_started' | 'in_progress' | 'completed'>,
+    ): 'not_started' | 'in_progress' | 'completed' {
+        if (!statuses.length) return 'not_started';
+        if (statuses.every((s) => s === 'completed')) return 'completed';
+        if (statuses.some((s) => s !== 'not_started')) return 'in_progress';
+        return 'not_started';
+    }
+
     private pickLatestReportForStudent(reports: StudentReport[], studentId: string): StudentReport | null {
         const forStudent = reports.filter((r) => r.studentId === studentId);
         if (!forStudent.length) return null;
         return [...forStudent].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0] ?? null;
+    }
+
+    async adminListOpportunityTeams(opportunityId: string) {
+        const rows = await this.participationRepo
+            .createQueryBuilder('p')
+            .leftJoinAndSelect('p.student', 'student')
+            .where('p.projectId = :opportunityId', { opportunityId })
+            .andWhere('p.teamId IS NOT NULL')
+            .andWhere("TRIM(p.teamId) <> ''")
+            .andWhere('p.status IN (:...statuses)', { statuses: [...TEAM_ACTIVE_PARTICIPATION_STATUSES] })
+            .orderBy('p.createdAt', 'ASC')
+            .getMany();
+
+        if (!rows.length) {
+            return {
+                summary: {
+                    registered_teams: 0,
+                    completed_reports: 0,
+                    reports_available: 0,
+                },
+                data: [],
+            };
+        }
+
+        const rowsByTeamId = new Map<string, Participation[]>();
+        for (const row of rows) {
+            if (!row.teamId) continue;
+            if (!rowsByTeamId.has(row.teamId)) {
+                rowsByTeamId.set(row.teamId, []);
+            }
+            rowsByTeamId.get(row.teamId)!.push(row);
+        }
+
+        const studentIds = rows
+            .map((r) => r.studentId)
+            .filter((id): id is string => Boolean(id));
+        const reports = await this.findReportsForOpportunityAndStudents(opportunityId, studentIds);
+
+        const data: Array<Record<string, unknown>> = [];
+        let completedReports = 0;
+        let reportsAvailable = 0;
+
+        for (const [teamId, members] of rowsByTeamId.entries()) {
+            const lead = members.find((m) => m.isTeamLead) ?? members[0];
+            const memberPayload = members.map((member) => {
+                const rep = member.studentId
+                    ? this.pickLatestReportForStudent(reports, member.studentId)
+                    : null;
+                const reportStatus = this.toTeamReportStatus(rep?.status);
+                return {
+                    id: member.id,
+                    name: member.student?.name ?? member.fullName ?? null,
+                    email: member.student?.email ?? member.email ?? null,
+                    role: member.isTeamLead ? 'lead' : 'member',
+                    report_status: reportStatus,
+                    report_available: reportStatus !== 'not_started',
+                };
+            });
+            const teamReportStatus = this.aggregateTeamReportStatus(
+                memberPayload.map((m) => m.report_status as 'not_started' | 'in_progress' | 'completed'),
+            );
+            const teamReportAvailable = teamReportStatus !== 'not_started';
+            if (teamReportStatus === 'completed') completedReports += 1;
+            if (teamReportAvailable) reportsAvailable += 1;
+
+            data.push({
+                id: teamId,
+                team_id: teamId,
+                team_name: `Team ${teamId.slice(0, 8)}`,
+                lead_name: lead?.student?.name ?? lead?.fullName ?? null,
+                report_status: teamReportStatus,
+                report_available: teamReportAvailable,
+                members: memberPayload,
+            });
+        }
+
+        return {
+            summary: {
+                registered_teams: data.length,
+                completed_reports: completedReports,
+                reports_available: reportsAvailable,
+            },
+            data,
+        };
+    }
+
+    async adminDeleteOpportunityTeam(opportunityId: string, teamId: string) {
+        await this.appRepo.manager.transaction(async (em) => {
+            const members = await em.find(Participation, {
+                where: {
+                    projectId: opportunityId,
+                    teamId,
+                    status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
+                },
+            });
+            if (!members.length) {
+                throw new NotFoundException('Team not found for this opportunity');
+            }
+
+            const studentIds = members
+                .map((m) => m.studentId)
+                .filter((id): id is string => Boolean(id));
+            const applicationIds = Array.from(
+                new Set(
+                    members
+                        .map((m) => m.applicationId)
+                        .filter((id): id is string => Boolean(id)),
+                ),
+            );
+
+            if (studentIds.length) {
+                const reports = await em
+                    .getRepository(StudentReport)
+                    .createQueryBuilder('r')
+                    .where('r.studentId IN (:...studentIds)', { studentIds })
+                    .andWhere(
+                        '(r.opportunityId = :oid OR (r.project_id IS NOT NULL AND TRIM(r.project_id) = CAST(:oid AS varchar)))',
+                        { oid: opportunityId },
+                    )
+                    .getMany();
+                if (reports.length) {
+                    await em.remove(reports);
+                }
+                await em.delete(Payment, { projectId: opportunityId, studentId: In(studentIds) });
+            }
+
+            await em.remove(members);
+
+            if (applicationIds.length) {
+                await em
+                    .getRepository(OpportunityApplication)
+                    .createQueryBuilder()
+                    .update(OpportunityApplication)
+                    .set({ withdrawnAt: new Date() })
+                    .where('id IN (:...applicationIds)', { applicationIds })
+                    .andWhere('withdrawnAt IS NULL')
+                    .execute();
+            }
+        });
+    }
+
+    async adminDeleteOpportunityTeamMember(opportunityId: string, teamId: string, memberId: string) {
+        await this.appRepo.manager.transaction(async (em) => {
+            const member = await em.findOne(Participation, {
+                where: {
+                    id: memberId,
+                    projectId: opportunityId,
+                    teamId,
+                    status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
+                },
+            });
+            if (!member) {
+                throw new NotFoundException('Team member not found for this opportunity');
+            }
+
+            if (member.studentId) {
+                const reports = await em
+                    .getRepository(StudentReport)
+                    .createQueryBuilder('r')
+                    .where('r.studentId = :studentId', { studentId: member.studentId })
+                    .andWhere(
+                        '(r.opportunityId = :oid OR (r.project_id IS NOT NULL AND TRIM(r.project_id) = CAST(:oid AS varchar)))',
+                        { oid: opportunityId },
+                    )
+                    .getMany();
+                if (reports.length) {
+                    await em.remove(reports);
+                }
+                await em.delete(Payment, { projectId: opportunityId, studentId: member.studentId });
+            }
+
+            await em.remove(member);
+
+            if (member.applicationId) {
+                await em
+                    .getRepository(OpportunityApplication)
+                    .createQueryBuilder()
+                    .update(OpportunityApplication)
+                    .set({ withdrawnAt: new Date() })
+                    .where('id = :applicationId', { applicationId: member.applicationId })
+                    .andWhere('withdrawnAt IS NULL')
+                    .execute();
+            }
+
+            const remainingTeamMembers = await em.find(Participation, {
+                where: {
+                    projectId: opportunityId,
+                    teamId,
+                    status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
+                },
+                order: { createdAt: 'ASC' },
+            });
+            if (remainingTeamMembers.length && !remainingTeamMembers.some((p) => p.isTeamLead)) {
+                const nextLead = remainingTeamMembers[0];
+                nextLead.isTeamLead = true;
+                await em.save(nextLead);
+            }
+        });
     }
 
     /**

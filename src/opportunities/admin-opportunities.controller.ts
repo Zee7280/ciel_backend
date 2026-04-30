@@ -95,5 +95,33 @@ export class AdminOpportunitiesController {
             applicationId,
         );
     }
+
+    @Get(':id/teams')
+    async listTeams(@Param('id') opportunityId: string) {
+        return this.opportunityApplicationsService.adminListOpportunityTeams(opportunityId);
+    }
+
+    @Delete(':id/teams/:teamId')
+    @HttpCode(HttpStatus.NO_CONTENT)
+    async deleteTeam(
+        @Param('id') opportunityId: string,
+        @Param('teamId') teamId: string,
+    ) {
+        await this.opportunityApplicationsService.adminDeleteOpportunityTeam(opportunityId, teamId);
+    }
+
+    @Delete(':id/teams/:teamId/members/:memberId')
+    @HttpCode(HttpStatus.NO_CONTENT)
+    async deleteTeamMember(
+        @Param('id') opportunityId: string,
+        @Param('teamId') teamId: string,
+        @Param('memberId') memberId: string,
+    ) {
+        await this.opportunityApplicationsService.adminDeleteOpportunityTeamMember(
+            opportunityId,
+            teamId,
+            memberId,
+        );
+    }
 }
 

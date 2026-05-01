@@ -128,8 +128,8 @@ export class AuthService {
                 success: true,
                 message: 'User created successfully',
                 data: {
-                    user: this.usersService.formatUserResponse(user)
-                }
+                    user: await this.usersService.formatUserResponse(user),
+                },
             };
         } catch (error) {
             console.error('Signup error:', error);
@@ -179,8 +179,8 @@ export class AuthService {
             success: true,
             data: {
                 access_token: this.jwtService.sign(payload, { expiresIn }),
-                user: this.usersService.formatUserResponse(user)
-            }
+                user: await this.usersService.formatUserResponse(user),
+            },
         };
     }
 

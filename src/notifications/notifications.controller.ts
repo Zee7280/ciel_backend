@@ -8,6 +8,12 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 export class NotificationsController {
     constructor(private readonly notificationsService: NotificationsService) { }
 
+    @Get('unread-count')
+    async unreadCount(@Request() req) {
+        const count = await this.notificationsService.countUnread(req.user.id);
+        return { success: true, data: { count } };
+    }
+
     @Get()
     async findAll(@Request() req, @Query() query) {
         const data = await this.notificationsService.findAll(req.user.id, query);

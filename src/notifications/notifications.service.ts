@@ -33,6 +33,12 @@ export class NotificationsService {
         });
     }
 
+    async countUnread(userId: string): Promise<number> {
+        return this.notificationsRepository.count({
+            where: { userId, isRead: false },
+        });
+    }
+
     async findAll(userId: string, query: any) {
         const { status, type } = query;
         const whereClause: any = { userId };

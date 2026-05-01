@@ -2323,7 +2323,7 @@ export class StudentsService {
 
         return {
             success: true,
-            data: this.usersService.formatUserResponse(user),
+            data: await this.usersService.formatUserResponse(user),
         };
     }
 
@@ -2341,7 +2341,7 @@ export class StudentsService {
 
         return {
             success: true,
-            data: this.usersService.formatUserResponse(user),
+            data: await this.usersService.formatUserResponse(user),
         };
     }
 

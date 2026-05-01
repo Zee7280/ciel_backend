@@ -5,12 +5,14 @@ import { User } from './entities/user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UserRole } from './enums/user-role.enum';
 import * as bcrypt from 'bcrypt';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class UsersService {
     constructor(
         @InjectRepository(User)
         private usersRepository: Repository<User>,
+        private readonly notificationsService: NotificationsService,
     ) { }
 
     async create(createUserDto: CreateUserDto): Promise<User> {
@@ -21,7 +23,8 @@ export class UsersService {
         return this.usersRepository.save(user);
     }
 
-    formatUserResponse(user: User) {
+    async formatUserResponse(user: User) {
+        const notifications_count = await this.notificationsService.countUnread(user.id);
         let roleTitle: string = user.role;
         // Simple mapping based on known roles
         if (user.role === UserRole.SUPER_ADMIN) roleTitle = 'Super Admin';
@@ -49,7 +52,7 @@ export class UsersService {
             bio: user.bio,
             interests: user.interests,
             sdgPreferences: user.sdgPreferences,
-            notifications_count: 5, // Mock/Placeholder
+            notifications_count,
             organizationId: user.organization?.id,
             orgName: user.orgName,
             orgType: user.orgType,
@@ -89,7 +92,7 @@ export class UsersService {
         // Save
         const updatedUser = await this.usersRepository.save(user);
 
-        const data = this.formatUserResponse(updatedUser);
+        const data = await this.formatUserResponse(updatedUser);
         return {
             success: true,
             message: 'Profile updated successfully!',
@@ -146,7 +149,7 @@ export class UsersService {
 
         return {
             success: true,
-            data: this.formatUserResponse(user)
+            data: await this.formatUserResponse(user),
         };
     }
 

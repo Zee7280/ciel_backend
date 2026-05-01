@@ -25,6 +25,9 @@ import { FacultyModule } from './faculty/faculty.module';
 import { ContactModule } from './contact/contact.module';
 import { PlatformStatsModule } from './platform-stats/platform-stats.module';
 import { SupportModule } from './support/support.module';
+import { APP_FILTER } from '@nestjs/core';
+import { IssueLogsExceptionFilter } from './issue-logs/issue-logs.filter';
+import { IssueLogsModule } from './issue-logs/issue-logs.module';
 
 @Module({
   imports: [
@@ -72,9 +75,16 @@ import { SupportModule } from './support/support.module';
     ContactModule,
     PlatformStatsModule,
     SupportModule,
+    IssueLogsModule,
     TypeOrmModule.forFeature([Setting])
 ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    {
+      provide: APP_FILTER,
+      useClass: IssueLogsExceptionFilter,
+    },
+  ],
 })
 export class AppModule { }

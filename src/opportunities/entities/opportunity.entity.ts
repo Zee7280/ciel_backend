@@ -110,7 +110,7 @@ export class Opportunity {
     @JoinColumn({ name: 'organizationId' })
     organization: Organization;
 
-    @Column({ nullable: true })
+    @Column({ name: 'organizationId', type: 'uuid', nullable: true })
     organizationId: string | null;
     
     @Column({ default: 16 })

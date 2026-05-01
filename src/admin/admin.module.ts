@@ -13,12 +13,14 @@ import { Setting } from '../settings/entities/setting.entity';
 import { Participation } from '../engagement/entities/participant.entity';
 import { OpportunitiesModule } from '../opportunities/opportunities.module';
 import { StudentsModule } from '../students/students.module';
+import { IssueLogsModule } from '../issue-logs/issue-logs.module';
 
 @Module({
     imports: [
         UsersModule,
         OpportunitiesModule,
         StudentsModule,
+        IssueLogsModule,
         TypeOrmModule.forFeature([User, Opportunity, Report, StudentReport, Timesheet, AuditLog, Setting, Participation]),
     ],
     controllers: [AdminController],

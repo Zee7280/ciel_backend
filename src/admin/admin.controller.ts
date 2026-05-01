@@ -11,6 +11,8 @@ import { AdminService } from './admin.service';
 import { OpportunitiesService } from '../opportunities/opportunities.service';
 import { StudentReportsService } from '../reports/student-reports.service';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
+import { IssueLogsService } from '../issue-logs/issue-logs.service';
+import type { IssueLogListQuery } from '../issue-logs/issue-logs.service';
 
 @Controller('admin')
 @UseGuards(JwtAuthGuard)
@@ -21,6 +23,7 @@ export class AdminController {
         private readonly opportunitiesService: OpportunitiesService,
         private readonly studentReportsService: StudentReportsService,
         private readonly opportunityApplicationsService: OpportunityApplicationsService,
+        private readonly issueLogsService: IssueLogsService,
     ) { }
 
     @Get('dashboard')
@@ -104,6 +107,16 @@ export class AdminController {
     @Get('audit-logs')
     getAuditLogs() {
         return this.adminService.getAuditLogs();
+    }
+
+    @Get('issue-logs')
+    getIssueLogs(@Query() query: IssueLogListQuery) {
+        return this.issueLogsService.findAll(query);
+    }
+
+    @Get('issue-logs/:id')
+    getIssueLogById(@Param('id') id: string) {
+        return this.issueLogsService.findOne(id);
     }
 
 

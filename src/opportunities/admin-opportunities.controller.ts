@@ -5,6 +5,7 @@ import {
     Body,
     Param,
     UseGuards,
+    UseInterceptors,
     Patch,
     Delete,
     HttpCode,
@@ -18,8 +19,11 @@ import { UserRole } from '../users/enums/user-role.enum';
 import { UsersService } from '../users/users.service';
 import { OpportunityApplicationsService } from './opportunity-applications.service';
 
+import { AdminMutationAuditInterceptor } from '../audit-logs/admin-mutation-audit.interceptor';
+
 @Controller('admin/opportunities')
 @UseGuards(JwtAuthGuard)
+@UseInterceptors(AdminMutationAuditInterceptor)
 export class AdminOpportunitiesController {
     constructor(
         private readonly opportunitiesService: OpportunitiesService,

@@ -20,6 +20,7 @@ import { StudentOpportunitiesController } from './student-opportunities.controll
 import { OpportunityWorkflowService } from './opportunity-workflow.service';
 import { VerificationVerifyAuthGuard } from '../auth/verification-verify-auth.guard';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 
 @Module({
     imports: [
@@ -36,6 +37,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
         EngagementModule,
         MailModule,
         NotificationsModule,
+        AuditLogsModule,
     ],
     controllers: [OpportunitiesController, AdminOpportunitiesController, PublicOpportunitiesController, ParticipantsController, StudentOpportunitiesController],
     providers: [OpportunitiesService, OpportunityWorkflowService, OpportunityApplicationsService, VerificationVerifyAuthGuard],

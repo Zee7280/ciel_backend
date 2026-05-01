@@ -4,6 +4,7 @@ import {
     PrimaryGeneratedColumn,
     CreateDateColumn,
     UpdateDateColumn,
+    DeleteDateColumn,
 } from 'typeorm';
 
 @Entity('support_tickets')
@@ -34,4 +35,7 @@ export class SupportTicket {
 
     @UpdateDateColumn()
     updatedAt: Date;
+
+    @DeleteDateColumn({ type: 'timestamptz' })
+    deletedAt?: Date | null;
 }

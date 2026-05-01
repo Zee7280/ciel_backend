@@ -7,7 +7,6 @@ import { S3Service } from '../common/s3.service';
 
 import { Payment, PaymentStatus } from './entities/payment.entity';
 import { StudentReport } from '../reports/entities/student-report.entity';
-import { AuditLog } from '../audit-logs/entities/audit-log.entity';
 
 @Injectable()
 export class PaymentsService {
@@ -20,8 +19,6 @@ export class PaymentsService {
         private readonly paymentRepository: Repository<Payment>,
         @InjectRepository(StudentReport)
         private readonly studentReportRepository: Repository<StudentReport>,
-        @InjectRepository(AuditLog)
-        private readonly auditLogRepository: Repository<AuditLog>,
         private readonly s3Service: S3Service,
     ) { }
 
@@ -326,20 +323,6 @@ export class PaymentsService {
             report.status = 'payment_under_review';
             await this.studentReportRepository.save(report);
         }
-
-        const log = this.auditLogRepository.create({
-            action: 'payment_approval_reverted',
-            user: admin.email || admin.id,
-            target: paymentId,
-            target_type: 'payment',
-            details: {
-                adminId: admin.id,
-                adminEmail: admin.email,
-                paymentId,
-                reason: reason ?? null,
-            },
-        });
-        await this.auditLogRepository.save(log);
 
         const updated = await this.paymentRepository.findOne({
             where: { id: paymentId },

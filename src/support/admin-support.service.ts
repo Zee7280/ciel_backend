@@ -88,6 +88,14 @@ export class AdminSupportService {
         return this.getTicket(idOrRef);
     }
 
+    async deleteTicket(idOrRef: string): Promise<void> {
+        const ticket = await this.findTicketByIdOrReference(idOrRef);
+        if (!ticket) {
+            throw new NotFoundException('Ticket not found');
+        }
+        await this.ticketRepo.softDelete({ id: ticket.id });
+    }
+
     private toTicketRow(t: SupportTicket) {
         return {
             id: t.id,

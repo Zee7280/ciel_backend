@@ -116,8 +116,11 @@ export class StudentSupportService {
     private async nextReference(): Promise<string> {
         for (let attempt = 0; attempt < 8; attempt++) {
             const ref = `ST-${randomBytes(4).toString('hex').toUpperCase()}`;
-            const exists = await this.ticketRepo.exist({ where: { reference: ref } });
-            if (!exists) {
+            const taken = await this.ticketRepo.findOne({
+                where: { reference: ref },
+                withDeleted: true,
+            });
+            if (!taken) {
                 return ref;
             }
         }

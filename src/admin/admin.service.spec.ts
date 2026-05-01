@@ -13,7 +13,14 @@ describe('AdminService impact analytics', () => {
             timesheetRepository: {
                 find: jest.fn().mockResolvedValue([]),
             },
-            auditLogRepository: {},
+            auditLogsService: {
+                findPaginated: jest.fn().mockResolvedValue({
+                    logs: [],
+                    total: 0,
+                    page: 1,
+                    limit: 20,
+                }),
+            },
             settingRepository: {},
             participationRepository: {
                 find: jest.fn().mockResolvedValue([]),
@@ -30,7 +37,7 @@ describe('AdminService impact analytics', () => {
             repositories.opportunityRepository as any,
             repositories.reportRepository as any,
             repositories.timesheetRepository as any,
-            repositories.auditLogRepository as any,
+            repositories.auditLogsService as any,
             repositories.settingRepository as any,
             repositories.participationRepository as any,
             repositories.studentReportRepository as any,

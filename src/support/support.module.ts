@@ -9,8 +9,10 @@ import { AdminSupportService } from './admin-support.service';
 import { AdminSupportController } from './admin-support.controller';
 import { CreateTicketRateLimitGuard } from './guards/create-ticket-rate-limit.guard';
 
+import { AuditLogsModule } from '../audit-logs/audit-logs.module';
+
 @Module({
-    imports: [TypeOrmModule.forFeature([SupportFaq, SupportTicket, User])],
+    imports: [TypeOrmModule.forFeature([SupportFaq, SupportTicket, User]), AuditLogsModule],
     controllers: [StudentSupportController, AdminSupportController],
     providers: [StudentSupportService, AdminSupportService, CreateTicketRateLimitGuard],
 })

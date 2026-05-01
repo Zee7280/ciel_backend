@@ -10,6 +10,7 @@ import {
     UseGuards,
     BadRequestException,
     MethodNotAllowedException,
+    UseInterceptors,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
@@ -18,9 +19,12 @@ import { UserRole } from '../users/enums/user-role.enum';
 import { PaymentsService } from './payments.service';
 import { PaymentStatus } from './entities/payment.entity';
 
+import { AdminMutationAuditInterceptor } from '../audit-logs/admin-mutation-audit.interceptor';
+
 @Controller('admin/payments')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.SUPER_ADMIN)
+@UseInterceptors(AdminMutationAuditInterceptor)
 export class AdminPaymentsController {
     constructor(private readonly paymentsService: PaymentsService) { }
 

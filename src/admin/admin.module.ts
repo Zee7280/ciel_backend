@@ -8,7 +8,7 @@ import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { Report } from '../reports/entities/report.entity';
 import { StudentReport } from '../reports/entities/student-report.entity';
 import { Timesheet } from '../timesheets/entities/timesheet.entity';
-import { AuditLog } from '../audit-logs/entities/audit-log.entity';
+import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 import { Setting } from '../settings/entities/setting.entity';
 import { Participation } from '../engagement/entities/participant.entity';
 import { OpportunitiesModule } from '../opportunities/opportunities.module';
@@ -21,7 +21,8 @@ import { IssueLogsModule } from '../issue-logs/issue-logs.module';
         OpportunitiesModule,
         StudentsModule,
         IssueLogsModule,
-        TypeOrmModule.forFeature([User, Opportunity, Report, StudentReport, Timesheet, AuditLog, Setting, Participation]),
+        AuditLogsModule,
+        TypeOrmModule.forFeature([User, Opportunity, Report, StudentReport, Timesheet, Setting, Participation]),
     ],
     controllers: [AdminController],
     providers: [AdminService],

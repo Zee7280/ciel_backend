@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Query, Request } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Query, Request, UseInterceptors } from '@nestjs/common';
+import { AdminMutationAuditInterceptor } from '../audit-logs/admin-mutation-audit.interceptor';
 import { UsersService } from '../users/users.service';
 import { CreateUserDto } from '../users/dto/create-user.dto';
 import { UpdateUserDto } from '../users/dto/update-user.dto';
@@ -16,6 +17,7 @@ import type { IssueLogListQuery } from '../issue-logs/issue-logs.service';
 
 @Controller('admin')
 @UseGuards(JwtAuthGuard)
+@UseInterceptors(AdminMutationAuditInterceptor)
 export class AdminController {
     constructor(
         private readonly usersService: UsersService,
@@ -105,8 +107,16 @@ export class AdminController {
     }
 
     @Get('audit-logs')
-    getAuditLogs() {
-        return this.adminService.getAuditLogs();
+    getAuditLogs(
+        @Query('page') page?: string,
+        @Query('limit') limit?: string,
+    ) {
+        const pg = Number.parseInt(page ?? '', 10);
+        const lim = Number.parseInt(limit ?? '', 10);
+        return this.adminService.getAuditLogs(
+            Number.isFinite(pg) ? pg : undefined,
+            Number.isFinite(lim) ? lim : undefined,
+        );
     }
 
     @Get('issue-logs')

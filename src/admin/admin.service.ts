@@ -9,7 +9,7 @@ import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { Participation } from '../engagement/entities/participant.entity';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
 
-import { AuditLog } from '../audit-logs/entities/audit-log.entity';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { UserRole } from '../users/enums/user-role.enum';
 import { In } from 'typeorm';
 
@@ -38,8 +38,7 @@ export class AdminService {
         private reportRepository: Repository<Report>,
         @InjectRepository(Timesheet)
         private timesheetRepository: Repository<Timesheet>,
-        @InjectRepository(AuditLog)
-        private auditLogRepository: Repository<AuditLog>,
+        private auditLogsService: AuditLogsService,
         @InjectRepository(Setting)
         private settingRepository: Repository<Setting>,
         @InjectRepository(Participation)
@@ -506,17 +505,13 @@ export class AdminService {
         };
     }
 
-    async getAuditLogs(page: number = 1, limit: number = 20) {
-        const skip = (page - 1) * limit;
-        const [logs, total] = await this.auditLogRepository.findAndCount({
-            order: { created_at: 'DESC' },
-            skip,
-            take: limit
-        });
+    async getAuditLogs(page?: number, limit?: number) {
+        const { logs, total, page: p, limit: l } =
+            await this.auditLogsService.findPaginated(page ?? 1, limit ?? 20);
 
         return {
             success: true,
-            data: logs.map(log => ({
+            data: logs.map((log) => ({
                 id: log.id,
                 action: log.action,
                 user: log.user,
@@ -525,13 +520,13 @@ export class AdminService {
                 target_type: log.target_type,
                 ip: log.ip,
                 details: log.details,
-                created_at: log.created_at
+                created_at: log.created_at,
             })),
             meta: {
-                page,
-                limit,
-                total
-            }
+                page: p,
+                limit: l,
+                total,
+            },
         };
     }
 

@@ -9,8 +9,10 @@ import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { Report } from '../reports/entities/report.entity';
 
+import { AuditLogsModule } from '../audit-logs/audit-logs.module';
+
 @Module({
-    imports: [TypeOrmModule.forFeature([Organization, User, Opportunity, Timesheet, Report])],
+    imports: [TypeOrmModule.forFeature([Organization, User, Opportunity, Timesheet, Report]), AuditLogsModule],
     controllers: [OrganizationsController, AdminOrganizationsController],
     providers: [OrganizationsService],
     exports: [OrganizationsService],

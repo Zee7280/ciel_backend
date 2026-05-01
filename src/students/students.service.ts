@@ -1761,6 +1761,73 @@ export class StudentsService {
         return 'under_review';
     }
 
+    private toImpactNumber(value: unknown): number | null {
+        if (typeof value === 'number') {
+            return Number.isFinite(value) ? value : null;
+        }
+        if (typeof value !== 'string') {
+            return null;
+        }
+        const match = value.replace(/,/g, '').match(/-?\d+(\.\d+)?/);
+        if (!match) {
+            return null;
+        }
+        const parsed = Number(match[0]);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    private getReportProjectId(report: StudentReport): string | null {
+        return report.opportunityId || report.project_id || null;
+    }
+
+    private getImpactReportDate(report: StudentReport): Date {
+        return report.submission_date
+            ? new Date(report.submission_date)
+            : new Date(report.createdAt);
+    }
+
+    private getImpactReportHours(report: StudentReport): number {
+        const section1 = report.section1 as
+            | {
+                metrics?: { total_verified_hours?: unknown };
+                attendance_logs?: Array<{ hours?: unknown }>;
+                team_lead?: { hours?: unknown };
+            }
+            | undefined;
+        const section4 = report.section4 as { my_hours?: unknown } | undefined;
+
+        const metricHours = this.toImpactNumber(section1?.metrics?.total_verified_hours);
+        if (metricHours && metricHours > 0) {
+            return metricHours;
+        }
+
+        const attendanceHours = Array.isArray(section1?.attendance_logs)
+            ? section1.attendance_logs.reduce(
+                (sum, log) => sum + (this.toImpactNumber(log?.hours) ?? 0),
+                0,
+            )
+            : 0;
+        if (attendanceHours > 0) {
+            return attendanceHours;
+        }
+
+        return (
+            this.toImpactNumber(section4?.my_hours) ??
+            this.toImpactNumber(section1?.team_lead?.hours) ??
+            0
+        );
+    }
+
+    private isPendingImpactReport(report: StudentReport): boolean {
+        return (
+            report.status !== 'draft' &&
+            report.status !== 'rejected' &&
+            report.partner_status !== 'rejected' &&
+            report.admin_status !== 'rejected' &&
+            !this.isApprovedImpactReport(report)
+        );
+    }
+
     private collectStringsDeep(value: unknown, acc: string[]) {
         if (value == null) return;
         if (typeof value === 'string') {
@@ -1878,24 +1945,55 @@ export class StudentsService {
         const approvedReports = reports.filter((r) => this.isApprovedImpactReport(r));
         const verifiedTimesheets = timesheets.filter((t) => t.status === 'verified');
         const pendingTimesheets = timesheets.filter((t) => t.status === 'pending');
+        const visibleReports = reports.filter((r) => r.status !== 'draft');
+        const pendingReports = visibleReports.filter((r) => this.isPendingImpactReport(r));
 
-        const totalHours = verifiedTimesheets.reduce((sum, t) => sum + t.hours, 0);
-        const pendingHours = pendingTimesheets.reduce((sum, t) => sum + t.hours, 0);
+        const verifiedTimesheetProjectIds = new Set(
+            verifiedTimesheets.map((t) => t.opportunityId).filter(Boolean) as string[],
+        );
+        const pendingTimesheetProjectIds = new Set(
+            pendingTimesheets.map((t) => t.opportunityId).filter(Boolean) as string[],
+        );
+        const reportHoursForTotals = (report: StudentReport, coveredProjectIds: Set<string>) => {
+            const projectId = this.getReportProjectId(report);
+            if (projectId && coveredProjectIds.has(projectId)) {
+                return 0;
+            }
+            return this.getImpactReportHours(report);
+        };
+
+        const reportTotalHours = approvedReports.reduce(
+            (sum, r) => sum + reportHoursForTotals(r, verifiedTimesheetProjectIds),
+            0,
+        );
+        const reportPendingHours = pendingReports.reduce(
+            (sum, r) => sum + reportHoursForTotals(r, pendingTimesheetProjectIds),
+            0,
+        );
+
+        const totalHours = verifiedTimesheets.reduce((sum, t) => sum + t.hours, 0) + reportTotalHours;
+        const pendingHours = pendingTimesheets.reduce((sum, t) => sum + t.hours, 0) + reportPendingHours;
 
         const now = new Date();
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const reportHoursThisMonth = approvedReports
+            .filter((r) => this.getImpactReportDate(r) >= startOfMonth)
+            .reduce((sum, r) => sum + reportHoursForTotals(r, verifiedTimesheetProjectIds), 0);
+        const reportPendingHoursThisMonth = pendingReports
+            .filter((r) => this.getImpactReportDate(r) >= startOfMonth)
+            .reduce((sum, r) => sum + reportHoursForTotals(r, pendingTimesheetProjectIds), 0);
         const hoursThisMonth = verifiedTimesheets
             .filter((t) => new Date(t.createdAt) >= startOfMonth)
-            .reduce((sum, t) => sum + t.hours, 0);
+            .reduce((sum, t) => sum + t.hours, 0) + reportHoursThisMonth;
         const pendingHoursThisMonth = pendingTimesheets
             .filter((t) => new Date(t.createdAt) >= startOfMonth)
-            .reduce((sum, t) => sum + t.hours, 0);
+            .reduce((sum, t) => sum + t.hours, 0) + reportPendingHoursThisMonth;
 
         const projectIdsFromHours = new Set(
             verifiedTimesheets.map((t) => t.opportunityId).filter(Boolean) as string[],
         );
         const projectIdsFromReports = new Set(
-            approvedReports.map((r) => r.opportunityId).filter(Boolean) as string[],
+            approvedReports.map((r) => this.getReportProjectId(r)).filter(Boolean) as string[],
         );
         const projectsCompleted = new Set([...projectIdsFromHours, ...projectIdsFromReports]).size;
 
@@ -1915,7 +2013,7 @@ export class StudentsService {
 
         const latestApprovedReportByOpp = new Map<string, StudentReport>();
         for (const r of approvedReports) {
-            const oid = r.opportunityId;
+            const oid = this.getReportProjectId(r);
             if (oid && !latestApprovedReportByOpp.has(oid)) {
                 latestApprovedReportByOpp.set(oid, r);
             }
@@ -1975,9 +2073,8 @@ export class StudentsService {
             });
         }
 
-        const visibleReports = reports.filter((r) => r.status !== 'draft');
         for (const r of visibleReports) {
-            const oppId = r.opportunityId;
+            const oppId = this.getReportProjectId(r);
             const part = oppId ? participationByProject.get(oppId) : undefined;
             const participationMode =
                 part?.participationMode === 'team' || part?.participationMode === 'individual'
@@ -1999,7 +2096,7 @@ export class StudentsService {
                     date: r.submission_date
                         ? new Date(r.submission_date).toISOString().split('T')[0]
                         : r.createdAt.toISOString().split('T')[0],
-                    hours: 0,
+                    hours: this.getImpactReportHours(r),
                     sdg: r.opportunity?.sdg || 'General',
                     record_type: 'cii_report',
                     status: 'certified',
@@ -2032,7 +2129,7 @@ export class StudentsService {
                     date: r.submission_date
                         ? new Date(r.submission_date).toISOString().split('T')[0]
                         : r.createdAt.toISOString().split('T')[0],
-                    hours: 0,
+                    hours: this.getImpactReportHours(r),
                     sdg: r.opportunity?.sdg || 'General',
                     record_type: 'cii_report',
                     status: pipelineStatus,

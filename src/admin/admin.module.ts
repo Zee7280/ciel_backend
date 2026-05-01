@@ -6,6 +6,7 @@ import { UsersModule } from '../users/users.module';
 import { User } from '../users/entities/user.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { Report } from '../reports/entities/report.entity';
+import { StudentReport } from '../reports/entities/student-report.entity';
 import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { AuditLog } from '../audit-logs/entities/audit-log.entity';
 import { Setting } from '../settings/entities/setting.entity';
@@ -18,7 +19,7 @@ import { StudentsModule } from '../students/students.module';
         UsersModule,
         OpportunitiesModule,
         StudentsModule,
-        TypeOrmModule.forFeature([User, Opportunity, Report, Timesheet, AuditLog, Setting, Participation]),
+        TypeOrmModule.forFeature([User, Opportunity, Report, StudentReport, Timesheet, AuditLog, Setting, Participation]),
     ],
     controllers: [AdminController],
     providers: [AdminService],

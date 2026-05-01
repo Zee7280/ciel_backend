@@ -72,6 +72,13 @@ describe('EngagementService', () => {
         sendAttendanceVerificationRequestNotice: jest.fn(),
     };
 
+    const mockParticipationQueryBuilder = (result: Participation | null) => ({
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue(result),
+    });
+
     beforeEach(async () => {
         mockOpportunityApplicationRepository.findOne.mockResolvedValue(null);
         mockOpportunityApplicationRepository.find.mockResolvedValue([]);
@@ -636,8 +643,8 @@ describe('EngagementService', () => {
                 findOne: jest.fn()
                     .mockResolvedValueOnce(null) // User by email
                     .mockResolvedValueOnce(mockOpportunity) // Opportunity
-                    .mockResolvedValueOnce(null) // existingByCnic
-                    .mockResolvedValueOnce(null), // existingByTarget (email)
+                    .mockResolvedValueOnce(null), // existingByCnic
+                createQueryBuilder: jest.fn().mockReturnValue(mockParticipationQueryBuilder(null)),
                 create: jest.fn().mockReturnValue({}),
                 save: jest.fn().mockImplementation((entity, data) => ({ id: 'new-id', ...data })),
             };
@@ -672,8 +679,10 @@ describe('EngagementService', () => {
                 findOne: jest.fn()
                     .mockResolvedValueOnce(null) // User by email
                     .mockResolvedValueOnce(mockOpportunity) // Opportunity
-                    .mockResolvedValueOnce(null) // existingByCnic
-                    .mockResolvedValueOnce(existingParticipation), // existingByTarget (email found!)
+                    .mockResolvedValueOnce(null), // existingByCnic
+                createQueryBuilder: jest
+                    .fn()
+                    .mockReturnValue(mockParticipationQueryBuilder(existingParticipation as Participation)),
                 create: jest.fn(),
                 save: jest.fn().mockImplementation((entity, data) => ({ ...data })),
             };
@@ -713,8 +722,8 @@ describe('EngagementService', () => {
                     .mockResolvedValueOnce(null) // User by email
                     .mockResolvedValueOnce(mockOpportunity) // Opportunity
                     .mockResolvedValueOnce(null) // existingByCnic
-                    .mockResolvedValueOnce(null) // existingByTarget
                     .mockResolvedValueOnce({ name: 'Team Member' }), // Student for email display
+                createQueryBuilder: jest.fn().mockReturnValue(mockParticipationQueryBuilder(null)),
                 create: jest.fn().mockReturnValue({}),
                 save: jest.fn().mockImplementation((entity, data) => ({ id: 'new-id', ...data })),
             };

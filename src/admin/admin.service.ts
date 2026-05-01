@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { User } from '../users/entities/user.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { Report } from '../reports/entities/report.entity';
+import { StudentReport } from '../reports/entities/student-report.entity';
 import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { Participation } from '../engagement/entities/participant.entity';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
@@ -43,6 +44,8 @@ export class AdminService {
         private settingRepository: Repository<Setting>,
         @InjectRepository(Participation)
         private participationRepository: Repository<Participation>,
+        @InjectRepository(StudentReport)
+        private studentReportRepository: Repository<StudentReport>,
         private readonly opportunityApplicationsService: OpportunityApplicationsService,
     ) { }
 
@@ -186,6 +189,107 @@ export class AdminService {
         return colors[sdg] || '#000000';
     }
 
+    private toAnalyticsNumber(value: unknown): number | null {
+        if (typeof value === 'number') {
+            return Number.isFinite(value) ? value : null;
+        }
+        if (typeof value !== 'string') {
+            return null;
+        }
+        const match = value.replace(/,/g, '').match(/-?\d+(\.\d+)?/);
+        if (!match) {
+            return null;
+        }
+        const parsed = Number(match[0]);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    private isApprovedImpactReport(report: StudentReport): boolean {
+        return (
+            report.status === 'verified' &&
+            report.partner_status === 'approved' &&
+            report.admin_status === 'approved'
+        );
+    }
+
+    private getReportProjectId(report: StudentReport): string | null {
+        return report.opportunityId || report.project_id || null;
+    }
+
+    private getReportImpactHours(report: StudentReport): number {
+        const section1 = report.section1 as
+            | {
+                metrics?: { total_verified_hours?: unknown };
+                attendance_logs?: Array<{ hours?: unknown }>;
+                team_lead?: { hours?: unknown };
+            }
+            | undefined;
+        const section4 = report.section4 as { my_hours?: unknown } | undefined;
+
+        const metricHours = this.toAnalyticsNumber(section1?.metrics?.total_verified_hours);
+        if (metricHours && metricHours > 0) {
+            return metricHours;
+        }
+
+        const attendanceHours = Array.isArray(section1?.attendance_logs)
+            ? section1.attendance_logs.reduce(
+                (sum, log) => sum + (this.toAnalyticsNumber(log?.hours) ?? 0),
+                0,
+            )
+            : 0;
+        if (attendanceHours > 0) {
+            return attendanceHours;
+        }
+
+        return (
+            this.toAnalyticsNumber(section4?.my_hours) ??
+            this.toAnalyticsNumber(section1?.team_lead?.hours) ??
+            0
+        );
+    }
+
+    private getReportBeneficiaries(report: StudentReport): number {
+        const section4 = report.section4 as
+            | {
+                project_summary?: { distinct_total_beneficiaries?: unknown };
+                distinct_total_beneficiaries?: unknown;
+                total_beneficiaries?: unknown;
+                my_beneficiaries?: unknown;
+            }
+            | undefined;
+
+        return (
+            this.toAnalyticsNumber(section4?.project_summary?.distinct_total_beneficiaries) ??
+            this.toAnalyticsNumber(section4?.distinct_total_beneficiaries) ??
+            this.toAnalyticsNumber(section4?.total_beneficiaries) ??
+            this.toAnalyticsNumber(section4?.my_beneficiaries) ??
+            0
+        );
+    }
+
+    private getOpportunityBeneficiaries(opportunity: Opportunity): number {
+        return (
+            this.toAnalyticsNumber(opportunity.objectives?.beneficiaries_count) ??
+            this.toAnalyticsNumber(opportunity.objectives?.total_beneficiaries) ??
+            0
+        );
+    }
+
+    private getSdgName(opportunity?: Opportunity | null, report?: StudentReport): string {
+        const primarySdg = (report?.section3 as { primary_sdg?: { goal_number?: unknown; goal_title?: unknown } } | undefined)
+            ?.primary_sdg;
+        const goalNumber = this.toAnalyticsNumber(primarySdg?.goal_number);
+        if (goalNumber) {
+            return primarySdg?.goal_title ? `SDG ${goalNumber}: ${primarySdg.goal_title}` : `SDG ${goalNumber}`;
+        }
+        return (
+            opportunity?.sdg ||
+            opportunity?.sdg_info?.sdg_id ||
+            opportunity?.sdg_info?.goal ||
+            'Unknown'
+        );
+    }
+
     async getProjects() {
         const opportunities = await this.opportunityRepository.find({
             relations: ['organization']
@@ -233,32 +337,112 @@ export class AdminService {
     }
 
     async getImpactAnalytics() {
-        const verifiedTimesheets = await this.timesheetRepository.find({
-            where: { status: 'verified' },
-            relations: ['opportunity']
-        });
+        const [
+            verifiedTimesheets,
+            studentReports,
+            participations,
+            totalStudents,
+            partnerNgosCount,
+            opportunities,
+        ] = await Promise.all([
+            this.timesheetRepository.find({
+                where: { status: 'verified' },
+                relations: ['opportunity']
+            }),
+            this.studentReportRepository.find({
+                relations: ['opportunity'],
+                order: { submission_date: 'DESC' },
+            }),
+            this.participationRepository.find({
+                where: { status: In([...OCCUPIED_SEAT_STATUSES]) },
+                select: ['studentId'],
+            }),
+            this.usersRepository.count({ where: { role: UserRole.STUDENT } }),
+            this.usersRepository.count({ where: { role: UserRole.NGO } }),
+            this.opportunityRepository.find(),
+        ]);
 
-        const hoursTrendMap = {};
-        verifiedTimesheets.forEach(t => {
-            const date = new Date(t.createdAt);
-            const month = date.toLocaleString('default', { month: 'short' });
-            hoursTrendMap[month] = (hoursTrendMap[month] || 0) + t.hours;
-        });
+        const approvedReports = studentReports.filter((report) => this.isApprovedImpactReport(report));
+        const coveredTimesheetKeys = new Set(
+            verifiedTimesheets
+                .map((t) => t.studentId && t.opportunityId ? `${t.studentId}:${t.opportunityId}` : null)
+                .filter(Boolean) as string[],
+        );
+        const impactEvents: Array<{ date: Date; hours: number; sdg: string }> = [];
 
-        const hoursTrend = Object.entries(hoursTrendMap).map(([month, hours]) => ({ month, hours }));
+        for (const t of verifiedTimesheets) {
+            const hours = this.toAnalyticsNumber(t.hours) ?? 0;
+            if (hours <= 0) continue;
+            impactEvents.push({
+                date: new Date(t.createdAt),
+                hours,
+                sdg: this.getSdgName(t.opportunity),
+            });
+        }
 
-        const sdgImpactMap = {};
-        verifiedTimesheets.forEach(t => {
-            const sdg = t.opportunity?.sdg || 'Unknown';
-            sdgImpactMap[sdg] = (sdgImpactMap[sdg] || 0) + t.hours;
-        });
+        for (const report of approvedReports) {
+            const projectId = this.getReportProjectId(report);
+            const key = report.studentId && projectId ? `${report.studentId}:${projectId}` : null;
+            if (key && coveredTimesheetKeys.has(key)) {
+                continue;
+            }
 
-        const sdgImpact = Object.entries(sdgImpactMap).map(([name, value]) => ({ name, value }));
+            const hours = this.getReportImpactHours(report);
+            if (hours <= 0) continue;
+            impactEvents.push({
+                date: report.submission_date ? new Date(report.submission_date) : new Date(report.createdAt),
+                hours,
+                sdg: this.getSdgName(report.opportunity, report),
+            });
+        }
 
-        const activeVolunteersCount = await this.usersRepository.count({ where: { role: UserRole.STUDENT } });
-        const partnerNgosCount = await this.usersRepository.count({ where: { role: UserRole.NGO } });
-        const opportunities = await this.opportunityRepository.find();
-        const totalBeneficiaries = opportunities.reduce((sum, opp) => sum + (parseInt(opp.objectives?.beneficiaries_count || '0') || 0), 0);
+        const hoursTrendMap: Record<string, { month: string; sortKey: string; hours: number }> = {};
+        for (const event of impactEvents) {
+            const year = event.date.getFullYear();
+            const monthIndex = event.date.getMonth();
+            const sortKey = `${year}-${String(monthIndex + 1).padStart(2, '0')}`;
+            const month = event.date.toLocaleString('default', { month: 'short' });
+            hoursTrendMap[sortKey] = hoursTrendMap[sortKey] || { month, sortKey, hours: 0 };
+            hoursTrendMap[sortKey].hours += event.hours;
+        }
+
+        const hoursTrend = Object.values(hoursTrendMap)
+            .sort((a, b) => a.sortKey.localeCompare(b.sortKey))
+            .map(({ month, hours }) => ({ month, hours }));
+
+        const sdgImpactMap: Record<string, number> = {};
+        for (const event of impactEvents) {
+            sdgImpactMap[event.sdg] = (sdgImpactMap[event.sdg] || 0) + event.hours;
+        }
+
+        const sdgImpact = Object.entries(sdgImpactMap)
+            .sort(([, a], [, b]) => b - a)
+            .map(([name, value]) => ({ name, value }));
+
+        const activeVolunteerIds = new Set(
+            participations.map((p) => p.studentId).filter(Boolean) as string[],
+        );
+        for (const t of verifiedTimesheets) {
+            if (t.studentId) activeVolunteerIds.add(t.studentId);
+        }
+        for (const report of approvedReports) {
+            if (report.studentId) activeVolunteerIds.add(report.studentId);
+        }
+        const activeVolunteersCount = activeVolunteerIds.size || totalStudents;
+
+        const beneficiaryProjectsFromReports = new Set<string>();
+        const reportBeneficiaries = approvedReports.reduce((sum, report) => {
+            const projectId = this.getReportProjectId(report);
+            if (projectId) beneficiaryProjectsFromReports.add(projectId);
+            return sum + this.getReportBeneficiaries(report);
+        }, 0);
+        const opportunityBeneficiaries = opportunities.reduce((sum, opportunity) => {
+            if (beneficiaryProjectsFromReports.has(opportunity.id)) {
+                return sum;
+            }
+            return sum + this.getOpportunityBeneficiaries(opportunity);
+        }, 0);
+        const totalBeneficiaries = reportBeneficiaries + opportunityBeneficiaries;
 
         return {
             success: true,

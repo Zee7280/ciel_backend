@@ -137,6 +137,26 @@ export class OrganizationsService {
         return this.filterSensitiveFields(user.organization);
     }
 
+    /** Opportunity flows require User.name / User.phone; partner forms often save these on Organization only. */
+    private async maybeFillUserContactFromOrg(
+        user: User,
+        contactName?: string,
+        contactPhone?: string,
+    ): Promise<void> {
+        let changed = false;
+        const nameTrim = typeof contactName === 'string' ? contactName.trim() : '';
+        if (nameTrim && !user.name?.trim()) {
+            user.name = nameTrim;
+            changed = true;
+        }
+        const phoneTrim = typeof contactPhone === 'string' ? contactPhone.trim() : '';
+        if (phoneTrim && !user.phone?.trim()) {
+            user.phone = phoneTrim;
+            changed = true;
+        }
+        if (changed) await this.usersRepository.save(user);
+    }
+
     async updateMyOrganization(reqUserId: string, updateDto: UpdateOrganizationDto) {
         console.log('updateMyOrganization DTO:', updateDto);
         // Use userId from DTO if provided (and maybe validate admin?), or default to req.user.id
@@ -189,6 +209,7 @@ export class OrganizationsService {
             // Link to user explicitly if needed
             user.organization = orgToLink;
             await this.usersRepository.save(user);
+            await this.maybeFillUserContactFromOrg(user, updateData.contactName, updateData.contactPhone);
 
             return this.filterSensitiveFields(orgToLink);
         } else {
@@ -198,6 +219,7 @@ export class OrganizationsService {
             if (!updatedOrg) {
                 throw new NotFoundException('Organization not found after update');
             }
+            await this.maybeFillUserContactFromOrg(user, updateData.contactName, updateData.contactPhone);
             return this.filterSensitiveFields(updatedOrg);
         }
     }

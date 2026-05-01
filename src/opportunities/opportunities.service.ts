@@ -516,12 +516,27 @@ export class OpportunitiesService {
         }
     }
 
+    /** Same semantics as profile completion checks: User.name OR linked Organization.contactName. */
+    private resolveCreatorDisplayName(user: User): string | undefined {
+        const fromUser = typeof user.name === 'string' ? user.name.trim() : '';
+        if (fromUser) return fromUser;
+        const fromOrg =
+            user.organization?.contactName != null ? String(user.organization.contactName).trim() : '';
+        return fromOrg || undefined;
+    }
+
     private ensureProfileComplete(user: User) {
         const missing: string[] = [];
         const requiresAcademicProfile = [UserRole.STUDENT, UserRole.FACULTY, UserRole.UNIVERSITY].includes(user.role);
-        if (!user.name) missing.push('name');
+        const org = user.organization;
+        const resolvedName = this.resolveCreatorDisplayName(user) || '';
+        if (!resolvedName) missing.push('name');
+        const resolvedPhone =
+            (typeof user.phone === 'string' && user.phone.trim()) ||
+            (org?.contactPhone && String(org.contactPhone).trim()) ||
+            '';
+        if (!resolvedPhone) missing.push('phone');
         if (!user.email) missing.push('email');
-        if (!user.phone) missing.push('phone');
         if (requiresAcademicProfile && !user.city) missing.push('city');
         if (requiresAcademicProfile && !user.university && !user.institution) missing.push('university');
         if (user.role === UserRole.STUDENT && !user.department) missing.push('department');
@@ -952,7 +967,7 @@ export class OpportunitiesService {
     }
 
     async create(userId: string, createOpportunityDto: CreateOpportunityDto) {
-        const user = await this.usersRepository.findOne({ where: { id: userId } });
+        const user = await this.usersRepository.findOne({ where: { id: userId }, relations: ['organization'] });
         if (!user) {
             throw new ForbiddenException('User not found');
         }
@@ -1075,7 +1090,7 @@ export class OpportunitiesService {
             if (pe) {
                 try {
                     const verifyDetails = this.buildOpportunityVerificationEmailDetails(saved as Opportunity, {
-                        facultyAuthorName: user.name || undefined,
+                        facultyAuthorName: this.resolveCreatorDisplayName(user),
                         facultyAuthorEmail: user.email || undefined,
                     });
                     await this.mailService.sendPartnerVerification(pe, saved.title, resolvedPartnerToken, verifyDetails, {
@@ -1105,7 +1120,7 @@ export class OpportunitiesService {
     }
 
     async createStudentOpportunity(userId: string, dto: CreateOpportunityDto) {
-        const user = await this.usersRepository.findOne({ where: { id: userId } });
+        const user = await this.usersRepository.findOne({ where: { id: userId }, relations: ['organization'] });
         if (!user) throw new ForbiddenException('User not found');
         this.ensureProfileComplete(user);
         dto.safety_declaration = this.resolveSafetyDeclarationPayload(dto);
@@ -1201,7 +1216,7 @@ export class OpportunitiesService {
 
         const facultyTo = this.normalizeEmail(dto.supervision.contact);
         const studentVerifyDetails = this.buildOpportunityVerificationEmailDetails(saved as Opportunity, {
-            studentName: user.name || undefined,
+            studentName: this.resolveCreatorDisplayName(user),
             studentUniversity: user.university || user.institution || undefined,
         });
         try {

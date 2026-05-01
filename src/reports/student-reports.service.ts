@@ -45,6 +45,25 @@ export class StudentReportsService {
         });
     }
 
+    private reportRequiresPartnerApproval(report: StudentReport): boolean {
+        const partners = Array.isArray(report.section7?.partners) ? report.section7.partners : [];
+        const hasSectionPartner =
+            report.section7?.has_partners === 'yes' ||
+            report.section8?.partner_verification === true ||
+            partners.some((partner: any) => this.hasMeaningfulObjectValue(partner));
+        const hasNgo = partners.some((partner: any) => {
+            const type = String(partner?.type || partner?.name || '').toLowerCase();
+            return type.includes('ngo') || type.includes('non-government');
+        });
+
+        return Boolean(
+            report.opportunity?.requiresPartnerApproval ||
+            hasSectionPartner ||
+            hasNgo ||
+            report.partner_status === 'approved',
+        );
+    }
+
     private getPublicReportApprovalContext(report: StudentReport) {
         const partners = Array.isArray(report.section7?.partners) ? report.section7.partners : [];
         const hasSectionPartner =
@@ -52,20 +71,14 @@ export class StudentReportsService {
             report.section8?.partner_verification === true ||
             partners.some((partner: any) => this.hasMeaningfulObjectValue(partner));
         const hasOpportunityPartner =
-            Boolean(report.opportunity?.organizationId) ||
-            this.hasMeaningfulObjectValue(report.opportunity?.partner_organization) ||
-            this.hasMeaningfulObjectValue(report.opportunity?.executing_organization);
+            Boolean(report.opportunity?.requiresPartnerApproval) ||
+            this.hasMeaningfulObjectValue(report.opportunity?.partner_organization);
         const hasNgo = partners.some((partner: any) => {
             const type = String(partner?.type || partner?.name || '').toLowerCase();
             return type.includes('ngo') || type.includes('non-government');
         });
         const hasPartner = Boolean(hasSectionPartner || hasOpportunityPartner || report.opportunity?.requiresPartnerApproval);
-        const requiresPartnerApproval = Boolean(
-            report.opportunity?.requiresPartnerApproval ||
-            hasPartner ||
-            hasNgo ||
-            report.partner_status === 'approved',
-        );
+        const requiresPartnerApproval = this.reportRequiresPartnerApproval(report);
 
         return {
             has_partner: hasPartner,
@@ -949,11 +962,11 @@ export class StudentReportsService {
             if (isPartnerReviewer) {
                 report.partner_status = 'approved';
                 report.partnerApprovedAt = decisionStamp;
-                report.status = 'partner_verified';
+                report.status = report.admin_status === 'approved' ? 'verified' : 'partner_verified';
             } else if (role === 'admin') {
                 report.admin_status = 'approved';
                 report.adminApprovedAt = decisionStamp;
-                if (report.partner_status === 'approved') {
+                if (report.partner_status === 'approved' || !this.reportRequiresPartnerApproval(report)) {
                     report.status = 'verified';
                 }
             }

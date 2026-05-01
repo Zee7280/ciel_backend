@@ -77,6 +77,43 @@ describe('StudentsService impact history', () => {
     );
   });
 
+  it('treats admin-approved reports without partner approval requirement as certified', async () => {
+    const now = new Date();
+    const service = makeService({
+      studentReportsRepository: {
+        find: jest.fn().mockResolvedValue([
+          {
+            id: 'report-admin-approved',
+            studentId: 'student-1',
+            opportunityId: 'project-admin-approved',
+            status: 'submitted',
+            partner_status: 'pending',
+            admin_status: 'approved',
+            submission_date: now,
+            createdAt: now,
+            opportunity: { requiresPartnerApproval: false },
+            section1: { metrics: { total_verified_hours: 118.2 } },
+          },
+        ]),
+      },
+    });
+
+    const result = await service.getImpactHistory('student-1', 'student');
+
+    expect(result.data.total_hours).toBe(118.2);
+    expect(result.data.pending_hours).toBe(0);
+    expect(result.data.projects_completed).toBe(1);
+    expect(result.data.activities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'report-admin-approved',
+          hours: 118.2,
+          status: 'certified',
+        }),
+      ]),
+    );
+  });
+
   it('uses under-review report hours as pending when no pending timesheet exists', async () => {
     const now = new Date();
     const service = makeService({

@@ -1742,12 +1742,41 @@ export class StudentsService {
         return requestingUserId;
     }
 
-    private isApprovedImpactReport(r: StudentReport): boolean {
-        return (
-            r.status === 'verified' &&
-            r.partner_status === 'approved' &&
-            r.admin_status === 'approved'
+    private hasMeaningfulImpactObjectValue(value: unknown): boolean {
+        if (!value || typeof value !== 'object') return false;
+        return Object.values(value as Record<string, unknown>).some((v) => {
+            if (Array.isArray(v)) return v.length > 0;
+            if (v && typeof v === 'object') return this.hasMeaningfulImpactObjectValue(v);
+            return v !== null && v !== undefined && String(v).trim() !== '';
+        });
+    }
+
+    private reportRequiresPartnerApproval(report: StudentReport): boolean {
+        const partners = Array.isArray(report.section7?.partners) ? report.section7.partners : [];
+        const hasDeclaredPartner =
+            report.section7?.has_partners === 'yes' ||
+            report.section8?.partner_verification === true ||
+            partners.some((partner) => this.hasMeaningfulImpactObjectValue(partner));
+
+        return Boolean(
+            report.opportunity?.requiresPartnerApproval ||
+            hasDeclaredPartner ||
+            report.partner_status === 'approved',
         );
+    }
+
+    private isApprovedImpactReport(r: StudentReport): boolean {
+        if (r.status === 'rejected' || r.partner_status === 'rejected' || r.admin_status === 'rejected') {
+            return false;
+        }
+
+        const hasFinalStatus =
+            r.status === 'verified' ||
+            r.status === 'paid' ||
+            (r.admin_status === 'approved' && ['submitted', 'partner_verified'].includes(r.status));
+        const partnerApproved = !this.reportRequiresPartnerApproval(r) || r.partner_status === 'approved';
+
+        return hasFinalStatus && partnerApproved && r.admin_status === 'approved';
     }
 
     /** UI status for CII rows that are not fully certified yet. */

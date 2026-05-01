@@ -137,4 +137,40 @@ describe('AdminService impact analytics', () => {
         expect(result.data.hours_trend).toEqual([{ month: 'Apr', hours: 10 }]);
         expect(result.data.impact_by_sdg).toEqual([{ name: 'SDG 4', value: 10 }]);
     });
+
+    it('includes admin-approved report hours when partner approval is not required', async () => {
+        const submittedAt = new Date('2026-05-01T00:00:00.000Z');
+        const service = makeService({
+            usersRepository: {
+                count: jest
+                    .fn()
+                    .mockResolvedValueOnce(57)
+                    .mockResolvedValueOnce(3),
+            },
+            studentReportRepository: {
+                find: jest.fn().mockResolvedValue([
+                    {
+                        studentId: 'student-1',
+                        opportunityId: 'project-1',
+                        status: 'submitted',
+                        partner_status: 'pending',
+                        admin_status: 'approved',
+                        submission_date: submittedAt,
+                        createdAt: submittedAt,
+                        opportunity: {
+                            id: 'project-1',
+                            sdg: 'SDG 4',
+                            requiresPartnerApproval: false,
+                        },
+                        section1: { metrics: { total_verified_hours: 118.2 } },
+                    },
+                ]),
+            },
+        });
+
+        const result = await service.getImpactAnalytics();
+
+        expect(result.data.hours_trend).toEqual([{ month: 'May', hours: 118.2 }]);
+        expect(result.data.impact_by_sdg).toEqual([{ name: 'SDG 4', value: 118.2 }]);
+    });
 });

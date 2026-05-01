@@ -204,12 +204,41 @@ export class AdminService {
         return Number.isFinite(parsed) ? parsed : null;
     }
 
-    private isApprovedImpactReport(report: StudentReport): boolean {
-        return (
-            report.status === 'verified' &&
-            report.partner_status === 'approved' &&
-            report.admin_status === 'approved'
+    private hasMeaningfulAnalyticsObjectValue(value: unknown): boolean {
+        if (!value || typeof value !== 'object') return false;
+        return Object.values(value as Record<string, unknown>).some((v) => {
+            if (Array.isArray(v)) return v.length > 0;
+            if (v && typeof v === 'object') return this.hasMeaningfulAnalyticsObjectValue(v);
+            return v !== null && v !== undefined && String(v).trim() !== '';
+        });
+    }
+
+    private reportRequiresPartnerApproval(report: StudentReport): boolean {
+        const partners = Array.isArray(report.section7?.partners) ? report.section7.partners : [];
+        const hasDeclaredPartner =
+            report.section7?.has_partners === 'yes' ||
+            report.section8?.partner_verification === true ||
+            partners.some((partner) => this.hasMeaningfulAnalyticsObjectValue(partner));
+
+        return Boolean(
+            report.opportunity?.requiresPartnerApproval ||
+            hasDeclaredPartner ||
+            report.partner_status === 'approved',
         );
+    }
+
+    private isApprovedImpactReport(report: StudentReport): boolean {
+        if (report.status === 'rejected' || report.partner_status === 'rejected' || report.admin_status === 'rejected') {
+            return false;
+        }
+
+        const hasFinalStatus =
+            report.status === 'verified' ||
+            report.status === 'paid' ||
+            (report.admin_status === 'approved' && ['submitted', 'partner_verified'].includes(report.status));
+        const partnerApproved = !this.reportRequiresPartnerApproval(report) || report.partner_status === 'approved';
+
+        return hasFinalStatus && partnerApproved && report.admin_status === 'approved';
     }
 
     private getReportProjectId(report: StudentReport): string | null {

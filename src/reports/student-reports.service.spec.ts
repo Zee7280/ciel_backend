@@ -113,4 +113,62 @@ describe('StudentReportsService', () => {
         );
         expect(mockMailService.sendAdminStudentReportSubmitted).toHaveBeenCalledTimes(1);
     });
+
+    it('marks no-partner reports verified when admin approves', async () => {
+        const report = {
+            id: 'report-1',
+            status: 'submitted',
+            partner_status: 'pending',
+            admin_status: 'pending',
+            partnerApprovedAt: null,
+            adminApprovedAt: null,
+            opportunity: { requiresPartnerApproval: false },
+        };
+        mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+        const result = await service.verifyReport('report-1', 'approve', 'admin');
+
+        expect(report.status).toBe('verified');
+        expect(report.admin_status).toBe('approved');
+        expect(result.data.status).toBe('verified');
+        expect(mockStudentReportsRepository.save).toHaveBeenCalledWith(report);
+    });
+
+    it('keeps reports pending partner approval when that approval is required', async () => {
+        const report = {
+            id: 'report-1',
+            status: 'submitted',
+            partner_status: 'pending',
+            admin_status: 'pending',
+            partnerApprovedAt: null,
+            adminApprovedAt: null,
+            opportunity: { requiresPartnerApproval: true },
+        };
+        mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+        const result = await service.verifyReport('report-1', 'approve', 'admin');
+
+        expect(report.status).toBe('submitted');
+        expect(report.admin_status).toBe('approved');
+        expect(result.data.status).toBe('submitted');
+    });
+
+    it('marks partner-required reports verified when partner approves after admin', async () => {
+        const report = {
+            id: 'report-1',
+            status: 'submitted',
+            partner_status: 'pending',
+            admin_status: 'approved',
+            partnerApprovedAt: null,
+            adminApprovedAt: new Date('2026-05-01T00:00:00.000Z'),
+            opportunity: { organizationId: 'org-1', requiresPartnerApproval: true },
+        };
+        mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+        const result = await service.verifyReport('report-1', 'approve', 'partner', undefined, 'org-1');
+
+        expect(report.status).toBe('verified');
+        expect(report.partner_status).toBe('approved');
+        expect(result.data.status).toBe('verified');
+    });
 });

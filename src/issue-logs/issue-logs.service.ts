@@ -41,9 +41,41 @@ export type IssueLogListQuery = {
   dateTo?: string;
 };
 
+/** Max JSON size for `metadata` before we drop bulky fields (Postgres handles large JSONB; still cap for safety). */
+const METADATA_JSON_MAX_CHARS = 384 * 1024;
+
 @Injectable()
 export class IssueLogsService {
   private readonly logger = new Logger(IssueLogsService.name);
+  private readonly safeHeaderAllowlist = new Set([
+    'accept',
+    'accept-encoding',
+    'accept-language',
+    'content-type',
+    'referer',
+    'origin',
+    'x-forwarded-for',
+    'x-forwarded-proto',
+    'x-forwarded-host',
+    'x-real-ip',
+    'cf-connecting-ip',
+    'cf-ray',
+    'sec-fetch-dest',
+    'sec-fetch-mode',
+    'sec-fetch-site',
+    'sec-ch-ua',
+    'sec-ch-ua-mobile',
+    'sec-ch-ua-platform',
+  ]);
+
+  /** Per-string cap inside sanitized JSON payloads (raised for diagnosis — still excludes secrets via key rules). */
+  private readonly sanitizationStringCap = 16_384;
+  private readonly sanitizationArrayCap = 100;
+  private readonly sanitizationMaxDepth = 6;
+  private readonly stackMaxChars = 32_768;
+  private readonly causeStackChars = 4_096;
+  private readonly causeDepthMax = 4;
+
   private readonly sensitiveKeyFragments = [
     'authorization',
     'cookie',
@@ -95,7 +127,7 @@ export class IssueLogsService {
         path,
         message,
         errorName: this.getErrorName(exception),
-        stack: statusCode >= 500 ? this.getStack(exception) : null,
+        stack: this.getStack(exception),
         userId: request.user?.id ?? null,
         userEmail: request.user?.email ?? null,
         userRole: request.user?.role ?? null,
@@ -105,6 +137,8 @@ export class IssueLogsService {
         ip: request.ip,
         userAgent: this.getHeader(request, 'user-agent') ?? null,
         metadata: this.compactMetadata({
+          requestTrace: this.summarizeRequestRouting(request),
+          safeHeaders: this.pickSafeHeaders(request),
           routePath,
           params,
           query,
@@ -112,6 +146,10 @@ export class IssueLogsService {
           contentType: this.getHeader(request, 'content-type'),
           contentLength: this.getHeader(request, 'content-length'),
           response: this.sanitizeForLog(responseBody),
+          exceptionConstructName: this.getExceptionConstructorName(exception),
+          errorCauseChain: this.sanitizeForLog(
+            this.collectErrorCauseChain(exception),
+          ),
         }),
       });
 
@@ -153,6 +191,99 @@ export class IssueLogsService {
       success: Boolean(log),
       data: log,
     };
+  }
+
+  private summarizeRequestRouting(request: Request): Record<string, unknown> {
+    const r = request as Request & {
+      protocol?: string;
+      hostname?: string;
+      baseUrl?: string;
+    };
+    return {
+      method: request.method ?? null,
+      originalUrl:
+        typeof request.originalUrl === 'string' ? request.originalUrl : null,
+      path: typeof request.path === 'string' ? request.path : null,
+      url: typeof request.url === 'string' ? request.url : null,
+      baseUrl: typeof r.baseUrl === 'string' ? r.baseUrl : null,
+      protocol: typeof r.protocol === 'string' ? r.protocol : null,
+      hostname: typeof r.hostname === 'string' ? r.hostname : null,
+      host:
+        typeof request.headers?.host === 'string'
+          ? request.headers.host
+          : null,
+    };
+  }
+
+  private pickSafeHeaders(request: Request): Record<string, string | string[]> {
+    const out: Record<string, string | string[]> = {};
+    for (const [key, raw] of Object.entries(request.headers)) {
+      if (!this.safeHeaderAllowlist.has(key.toLowerCase())) continue;
+      if (raw === undefined) continue;
+      if (Array.isArray(raw)) {
+        out[key] = raw.map((segment) =>
+          segment.length > 512 ? `${segment.slice(0, 512)}…` : segment,
+        );
+      } else if (typeof raw === 'string') {
+        out[key] = raw.length > 512 ? `${raw.slice(0, 512)}…` : raw;
+      }
+    }
+    return out;
+  }
+
+  private getExceptionConstructorName(exception: unknown): string | null {
+    if (typeof exception !== 'object' || exception === null) return null;
+    const ctor = (exception as { constructor?: { name?: string } }).constructor;
+    const name = ctor?.name;
+    return typeof name === 'string' && name.length > 0 ? name : null;
+  }
+
+  private collectErrorCauseChain(exception: unknown): unknown[] {
+    const chain: unknown[] = [];
+    let cur: unknown = exception;
+
+    for (let depth = 0; depth < this.causeDepthMax; depth++) {
+      if (!cur || typeof cur !== 'object') break;
+      const cause = (cur as { cause?: unknown }).cause;
+      if (cause === undefined || cause === null) break;
+
+      if (typeof cause === 'string') {
+        chain.push({
+          kind: 'stringCause',
+          message:
+            cause.length > this.sanitizationStringCap
+              ? `${cause.slice(0, this.sanitizationStringCap)}…`
+              : cause,
+        });
+        break;
+      }
+
+      if (cause instanceof Error) {
+        const msg = cause.message ?? '';
+        chain.push({
+          kind: 'Error',
+          name: cause.name,
+          message:
+            msg.length > this.sanitizationStringCap
+              ? `${msg.slice(0, this.sanitizationStringCap)}…`
+              : msg,
+          stack:
+            typeof cause.stack === 'string'
+              ? cause.stack.slice(0, this.causeStackChars)
+              : null,
+        });
+        cur = cause;
+        continue;
+      }
+
+      chain.push({
+        kind: 'objectCause',
+        value: this.sanitizeForLog(cause),
+      });
+      break;
+    }
+
+    return chain;
   }
 
   private buildWhere(
@@ -207,7 +338,28 @@ export class IssueLogsService {
   private getErrorMessage(exception: unknown, responseBody?: unknown): string {
     if (responseBody && typeof responseBody === 'object') {
       const message = (responseBody as { message?: unknown }).message;
-      if (Array.isArray(message)) return message.join(', ');
+      if (Array.isArray(message)) {
+        return message
+          .map((item) => {
+            if (typeof item === 'string') return item;
+            if (item && typeof item === 'object') {
+              const o = item as Record<string, unknown>;
+              if (
+                typeof o.property === 'string' &&
+                o.constraints &&
+                typeof o.constraints === 'object'
+              ) {
+                const parts = Object.values(
+                  o.constraints as Record<string, string>,
+                );
+                return `${o.property}: ${parts.join(', ')}`;
+              }
+              return JSON.stringify(this.sanitizeForLog(item));
+            }
+            return String(item);
+          })
+          .join('; ');
+      }
       if (typeof message === 'string') return message;
     }
     if (typeof exception === 'object' && exception && 'message' in exception) {
@@ -229,7 +381,9 @@ export class IssueLogsService {
   private getStack(exception: unknown): string | null {
     if (typeof exception === 'object' && exception && 'stack' in exception) {
       const stack = (exception as { stack?: unknown }).stack;
-      return typeof stack === 'string' ? stack.slice(0, 8000) : null;
+      return typeof stack === 'string'
+        ? stack.slice(0, this.stackMaxChars)
+        : null;
     }
     return null;
   }
@@ -308,13 +462,15 @@ export class IssueLogsService {
 
   private sanitizeForLog(value: unknown, depth = 0): unknown {
     if (value === null || value === undefined) return value;
-    if (depth > 4) return '[Max depth reached]';
-    if (typeof value === 'string')
-      return value.length > 1000 ? `${value.slice(0, 1000)}...` : value;
+    if (depth > this.sanitizationMaxDepth) return '[Max depth reached]';
+    if (typeof value === 'string') {
+      const cap = this.sanitizationStringCap;
+      return value.length > cap ? `${value.slice(0, cap)}…` : value;
+    }
     if (typeof value !== 'object') return value;
     if (Array.isArray(value)) {
       return value
-        .slice(0, 20)
+        .slice(0, this.sanitizationArrayCap)
         .map((item) => this.sanitizeForLog(item, depth + 1));
     }
 
@@ -339,11 +495,56 @@ export class IssueLogsService {
   }
 
   private compactMetadata(metadata: Record<string, unknown>) {
-    const json = JSON.stringify(metadata);
-    if (json.length <= 12000) return metadata;
+    const stringify = (m: Record<string, unknown>) => {
+      try {
+        return JSON.stringify(m);
+      } catch {
+        return null;
+      }
+    };
+
+    let current: Record<string, unknown> = { ...metadata };
+    let json = stringify(current);
+
+    if (json === null) {
+      return { error: '[metadata not serializable]' };
+    }
+
+    if (json.length <= METADATA_JSON_MAX_CHARS) return current;
+
+    current = {
+      ...current,
+      body: '[Omitted — metadata size cap; see response column details]',
+    };
+    json = stringify(current);
+    if (json && json.length <= METADATA_JSON_MAX_CHARS) return current;
+
+    current = {
+      ...current,
+      query: '[Omitted]',
+    };
+    json = stringify(current);
+    if (json && json.length <= METADATA_JSON_MAX_CHARS) return current;
+
+    current = {
+      ...current,
+      response: '[Omitted — see message / stack / exceptionConstructName]',
+    };
+    json = stringify(current);
+    if (json && json.length <= METADATA_JSON_MAX_CHARS) return current;
+
+    current = {
+      ...current,
+      safeHeaders: {},
+      errorCauseChain: '[Omitted]',
+    };
+    json = stringify(current);
+    if (json && json.length <= METADATA_JSON_MAX_CHARS) return current;
+
     return {
-      ...metadata,
-      body: '[Body omitted because log metadata exceeded size limit]',
+      requestTrace: current.requestTrace ?? null,
+      routePath: current.routePath ?? null,
+      note: 'Heavy truncation applied to satisfy metadata size limit',
     };
   }
 

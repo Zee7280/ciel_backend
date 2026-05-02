@@ -19,17 +19,23 @@ describe('IssueLogsService', () => {
   it('logs user-facing report errors with safe metadata', async () => {
     const repository = makeRepository();
     const service = new IssueLogsService(repository as any);
+
+    const method = 'POST';
+    const requestUrl =
+      '/api/v1/student/reports/project-1/submit';
+    const acceptHeaderValue = 'application/json';
     const exception = new BadRequestException('Report validation failed');
 
     await service.logException(
       exception,
       makeHost({
-        method: 'POST',
-        originalUrl: '/api/v1/student/reports/project-1/submit',
-        url: '/api/v1/student/reports/project-1/submit',
+        method,
+        originalUrl: requestUrl,
+        url: requestUrl,
         route: { path: '/student/reports/:id/submit' },
         ip: '127.0.0.1',
         headers: {
+          accept: acceptHeaderValue,
           'user-agent': 'jest',
           authorization: 'Bearer secret',
           'x-request-id': 'request-1',
@@ -64,6 +70,26 @@ describe('IssueLogsService', () => {
     expect(repository.save.mock.calls[0][0].metadata.body.password).toBe(
       '[REDACTED]',
     );
+
+    const saved = repository.save.mock.calls[0][0];
+    expect(typeof saved.stack).toBe('string');
+    expect(saved.stack!.length).toBeGreaterThan(0);
+    expect(saved.metadata.exceptionConstructName).toBe(
+      exception.constructor.name,
+    );
+    expect(saved.metadata.requestTrace).toEqual(
+      expect.objectContaining({
+        method,
+        originalUrl: requestUrl,
+      }),
+    );
+    expect(saved.metadata.safeHeaders).toEqual(
+      expect.objectContaining({
+        accept: acceptHeaderValue,
+      }),
+    );
+    expect(saved.metadata.safeHeaders).not.toHaveProperty('authorization');
+    expect(saved.metadata.safeHeaders).not.toHaveProperty('user-agent');
   });
 
   it('swallows repository errors so logging cannot break the response flow', async () => {

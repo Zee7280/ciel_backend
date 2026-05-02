@@ -7,7 +7,7 @@ import {
     ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Brackets, In, Repository } from 'typeorm';
 import { Organization } from './entities/organization.entity';
 import { User } from '../users/entities/user.entity';
 import { CreateOrganizationDto, UpdateOrganizationDto, AcknowledgePolicyDto, AdminRejectOrganizationDto } from './dto/organization.dto';
@@ -17,6 +17,7 @@ import * as bcrypt from 'bcrypt';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { Report } from '../reports/entities/report.entity';
+import { Participation } from '../engagement/entities/participant.entity';
 
 @Injectable()
 export class OrganizationsService {
@@ -31,6 +32,8 @@ export class OrganizationsService {
         private timesheetsRepository: Repository<Timesheet>,
         @InjectRepository(Report)
         private reportsRepository: Repository<Report>,
+        @InjectRepository(Participation)
+        private participationRepository: Repository<Participation>,
     ) { }
 
     async getPartnerDashboardStats(orgId: string) {
@@ -536,6 +539,304 @@ export class OrganizationsService {
                 email: user.email,
                 role: user.role,
                 organizationId: org.id,
+            },
+        };
+    }
+
+    /**
+     * University org analytics: participations linked to this org via enrollment `universityId`,
+     * opportunities owned by the org, or students whose user profile is tied to the org.
+     * Non-university org types receive 403.
+     */
+    async getUniversityAnalytics(orgId: string) {
+        const org = await this.organizationsRepository.findOne({ where: { id: orgId } });
+        if (!org) {
+            throw new NotFoundException('Organization not found');
+        }
+        if (!this.isUniversityOrgType(org.orgType)) {
+            throw new ForbiddenException('University analytics are only available for university organizations.');
+        }
+
+        const st = [
+            'pending',
+            'pending_payment_approval',
+            'paid',
+            'pending_ciel_approval',
+            'pending_faculty_approval',
+            'approved',
+            'verified',
+            'accepted',
+            'finalized',
+        ];
+
+        const participations = await this.participationRepository
+            .createQueryBuilder('p')
+            .leftJoinAndSelect('p.project', 'project')
+            .leftJoin('p.student', 'student')
+            .where('p.student_id IS NOT NULL')
+            .andWhere('p.status IN (:...st)', { st })
+            .andWhere(
+                new Brackets((b) => {
+                    b.where(`TRIM(COALESCE(p.universityId, '')) = :orgId`, { orgId })
+                        .orWhere(`project."organizationId"::text = :orgId`, { orgId })
+                        .orWhere(`student."organizationId"::text = :orgId`, { orgId });
+                }),
+            )
+            .getMany();
+
+        const total_participants = participations.length;
+        const distinctStudentIds = [
+            ...new Set(participations.map((p) => p.studentId).filter((id): id is string => Boolean(id))),
+        ];
+        const total_distinct_students = distinctStudentIds.length;
+
+        let verified_students = 0;
+        if (distinctStudentIds.length > 0) {
+            verified_students = await this.usersRepository.count({
+                where: {
+                    id: In(distinctStudentIds),
+                    profile_verified: true,
+                    identity_verified: true,
+                },
+            });
+        }
+
+        const verification_rate_percent =
+            total_distinct_students === 0
+                ? 0
+                : Math.round((100 * verified_students) / total_distinct_students);
+
+        const degreeMap = new Map<string, number>();
+        const yearMap = new Map<string, number>();
+        let individualEnrollmentRows = 0;
+        let teamEnrollmentRows = 0;
+        let total_required_hours = 0;
+
+        for (const p of participations) {
+            const deg = (p.academicProgram || '').trim() || 'Unspecified';
+            degreeMap.set(deg, (degreeMap.get(deg) || 0) + 1);
+            const yr = (p.yearOfStudy || '').trim() || 'Unspecified';
+            yearMap.set(yr, (yearMap.get(yr) || 0) + 1);
+            if (p.participationMode === 'team') {
+                teamEnrollmentRows += 1;
+            } else {
+                individualEnrollmentRows += 1;
+            }
+            total_required_hours += this.resolveRequiredHoursPerStudentFromOpportunity(p.project);
+        }
+
+        const individual_participation_percent =
+            total_participants === 0
+                ? 0
+                : Math.round((100 * individualEnrollmentRows) / total_participants);
+        const team_participation_percent =
+            total_participants === 0 ? 0 : Math.round((100 * teamEnrollmentRows) / total_participants);
+
+        const degree_participation = [...degreeMap.entries()]
+            .map(([degree, count]) => ({ degree, count }))
+            .sort((a, b) => b.count - a.count);
+
+        const year_participation = [...yearMap.entries()]
+            .map(([year_of_study, count]) => ({ year_of_study, count }))
+            .sort((a, b) => b.count - a.count);
+
+        return {
+            success: true,
+            data: {
+                organization_id: orgId,
+                organization_name: org.name,
+                total_participants,
+                total_distinct_students,
+                verified_students,
+                verification_rate_percent,
+                degree_participation,
+                year_participation,
+                individual_participation_percent,
+                team_participation_percent,
+                total_required_hours: Math.round(total_required_hours * 10) / 10,
+            },
+        };
+    }
+
+    /**
+     * Partner (NGO) org: students on listings owned by this org (`opportunity.organizationId`).
+     * Assignments = participation rows; distinct students and profile/identity verification match university analytics.
+     */
+    async getPartnerStudentsAnalytics(orgId: string) {
+        const st = [
+            'pending',
+            'pending_payment_approval',
+            'paid',
+            'pending_ciel_approval',
+            'pending_faculty_approval',
+            'approved',
+            'verified',
+            'accepted',
+            'finalized',
+        ];
+
+        const participations = await this.participationRepository
+            .createQueryBuilder('p')
+            .innerJoinAndSelect('p.project', 'project')
+            .leftJoinAndSelect('p.student', 'student')
+            .where('p.student_id IS NOT NULL')
+            .andWhere('project.organizationId = :orgId', { orgId })
+            .andWhere('p.status IN (:...st)', { st })
+            .getMany();
+
+        const total_enrollments = participations.length;
+        const distinctStudentIds = [
+            ...new Set(participations.map((p) => p.studentId).filter((id): id is string => Boolean(id))),
+        ];
+        const total_students_assigned = distinctStudentIds.length;
+
+        let verified_students = 0;
+        if (distinctStudentIds.length > 0) {
+            verified_students = await this.usersRepository.count({
+                where: {
+                    id: In(distinctStudentIds),
+                    profile_verified: true,
+                    identity_verified: true,
+                },
+            });
+        }
+
+        const verification_rate_percent =
+            total_students_assigned === 0 ? 0 : Math.round((100 * verified_students) / total_students_assigned);
+
+        const universityMap = new Map<string, number>();
+        const degreeMap = new Map<string, number>();
+        let total_required_hours = 0;
+
+        for (const p of participations) {
+            const uni =
+                (p.universityName || '').trim() ||
+                ((p.student as User | undefined)?.university || '').trim() ||
+                'Unspecified';
+            universityMap.set(uni, (universityMap.get(uni) || 0) + 1);
+
+            const deg = (p.academicProgram || '').trim() || 'Unspecified';
+            degreeMap.set(deg, (degreeMap.get(deg) || 0) + 1);
+
+            total_required_hours += this.resolveRequiredHoursPerStudentFromOpportunity(p.project);
+        }
+
+        const university_mix = [...universityMap.entries()]
+            .map(([university, count]) => ({ university, count }))
+            .sort((a, b) => b.count - a.count);
+
+        const degree_mix = [...degreeMap.entries()]
+            .map(([degree, count]) => ({ degree, count }))
+            .sort((a, b) => b.count - a.count);
+
+        return {
+            success: true,
+            data: {
+                organization_id: orgId,
+                total_students_assigned,
+                total_enrollments,
+                verified_students,
+                verification_rate_percent,
+                university_mix,
+                degree_mix,
+                total_required_hours: Math.round(total_required_hours * 10) / 10,
+            },
+        };
+    }
+
+    private resolveRequiredHoursPerStudentFromOpportunity(project: Opportunity | null | undefined): number {
+        if (!project) return 0;
+        const raw = project.timeline?.expected_hours;
+        const fromT = Number(raw);
+        if (Number.isFinite(fromT) && fromT > 0) return fromT;
+        const rh = Number(project.requiredHours);
+        return Number.isFinite(rh) ? rh : 0;
+    }
+
+    private parsePrimarySdgGoalNumber(opp: Opportunity): number | null {
+        const parse = (raw: unknown): number | null => {
+            if (raw == null || raw === '') return null;
+            const m = String(raw).match(/(\d{1,2})/);
+            if (!m) return null;
+            const n = parseInt(m[1], 10);
+            return n >= 1 && n <= 17 ? n : null;
+        };
+        const fromInfo = parse(opp.sdg_info?.sdg_id);
+        if (fromInfo != null) return fromInfo;
+        return parse(opp.sdg);
+    }
+
+    /** Partner impact analytics: org opportunities, objectives beneficiaries, SDG tags, verified timesheet hours. */
+    async getPartnerImpactMetrics(orgId: string) {
+        const opps = await this.opportunitiesRepository.find({
+            where: { organizationId: orgId },
+        });
+
+        const excluded = new Set(['draft', 'rejected']);
+        let totalBeneficiaries = 0;
+        const sdgCounts = new Map<number, number>();
+        let totalProjects = 0;
+
+        for (const o of opps) {
+            const st = String(o.status || '').toLowerCase();
+            if (!excluded.has(st)) {
+                totalProjects += 1;
+            }
+
+            const obj = o.objectives as { beneficiaries_count?: number; total_beneficiaries?: number } | null;
+            const b = Number(obj?.beneficiaries_count ?? obj?.total_beneficiaries ?? 0);
+            if (Number.isFinite(b) && b > 0) {
+                totalBeneficiaries += b;
+            }
+
+            const g = this.parsePrimarySdgGoalNumber(o);
+            if (g != null) {
+                sdgCounts.set(g, (sdgCounts.get(g) || 0) + 1);
+            }
+        }
+
+        const verifiedTs = await this.timesheetsRepository.find({
+            where: { organizationId: orgId, status: 'verified' },
+        });
+        const totalHours = verifiedTs.reduce((s, t) => s + (Number(t.hours) || 0), 0);
+
+        const totalSdgWeight = [...sdgCounts.values()].reduce((a, b) => a + b, 0);
+        const sdgDistribution: Record<string, number> = {};
+        if (totalSdgWeight > 0) {
+            for (const [k, v] of sdgCounts) {
+                sdgDistribution[String(k)] = Math.round((100 * v) / totalSdgWeight);
+            }
+        }
+
+        const byMonth = new Map<string, number>();
+        for (const t of verifiedTs) {
+            const d = t.updatedAt instanceof Date ? t.updatedAt : new Date(t.updatedAt);
+            const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+            byMonth.set(key, (byMonth.get(key) || 0) + (Number(t.hours) || 0));
+        }
+
+        const now = new Date();
+        const monthlyTrend: Array<{ month: string; beneficiaries: number; hours: number }> = [];
+        for (let i = 11; i >= 0; i--) {
+            const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+            const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+            const hoursRaw = byMonth.get(key) || 0;
+            const rounded = Math.round(hoursRaw * 10) / 10;
+            monthlyTrend.push({
+                month: d.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' }),
+                hours: rounded,
+                beneficiaries: Math.round(hoursRaw),
+            });
+        }
+
+        return {
+            success: true,
+            data: {
+                totalBeneficiaries: Math.round(totalBeneficiaries),
+                totalProjects,
+                totalHours: Math.round(totalHours * 10) / 10,
+                sdgDistribution,
+                monthlyTrend,
             },
         };
     }

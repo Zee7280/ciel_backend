@@ -116,27 +116,33 @@ export class PartnersController {
         return this.organizationsService.getPartnerDashboardStats(orgId);
     }
 
+    /** University-organization participation & verification analytics (403 for non-university orgs). */
+    @Get('university/analytics')
+    async getUniversityAnalytics(@Request() req) {
+        const orgId = req.user.organizationId;
+        if (!orgId) {
+            throw new BadRequestException('User is not linked to an organization');
+        }
+        return this.organizationsService.getUniversityAnalytics(orgId);
+    }
+
+    /** Partner org: students assigned to this partner’s opportunities, mix and required hours. */
+    @Get('students/analytics')
+    async getPartnerStudentsAnalytics(@Request() req) {
+        const orgId = req.user.organizationId;
+        if (!orgId) {
+            throw new BadRequestException('User is not linked to an organization');
+        }
+        return this.organizationsService.getPartnerStudentsAnalytics(orgId);
+    }
+
     @Get('impact/metrics')
-    getImpactMetrics() {
-        // Mock data to match spec
-        return {
-            success: true,
-            data: {
-                totalBeneficiaries: 5000,
-                totalProjects: 25,
-                totalHours: 12000,
-                sdgDistribution: {
-                    "4": 40,
-                    "8": 30,
-                    "10": 20,
-                    "13": 10
-                },
-                monthlyTrend: [
-                    { "month": "Jan", "beneficiaries": 400 },
-                    { "month": "Feb", "beneficiaries": 450 }
-                ]
-            }
-        };
+    async getImpactMetrics(@Request() req) {
+        const orgId = req.user.organizationId;
+        if (!orgId) {
+            throw new BadRequestException('User is not linked to an organization');
+        }
+        return this.organizationsService.getPartnerImpactMetrics(orgId);
     }
 
     // Reports Endpoints

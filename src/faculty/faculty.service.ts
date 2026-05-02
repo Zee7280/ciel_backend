@@ -1,7 +1,7 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, In, Repository, SelectQueryBuilder } from 'typeorm';
+import { Brackets, In, IsNull, Not, Repository, SelectQueryBuilder } from 'typeorm';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { User } from '../users/entities/user.entity';
 import { StudentReport } from '../reports/entities/student-report.entity';
@@ -60,6 +60,13 @@ const SDG_COLORS: Record<number, string> = {
     17: '#19486a',
 };
 
+const COURSE_LINKED_ACADEMIC_TYPES = [
+    'Course-Linked',
+    'Credit-Bearing',
+    'Capstone / Thesis',
+    'Research-Integrated',
+] as const;
+
 type ActivityRow = {
     title: string;
     description: string | null;
@@ -90,6 +97,74 @@ export class FacultyService {
 
     private normalizeFacultyEmail(facultyEmail: string): string {
         return (facultyEmail || '').trim().toLowerCase();
+    }
+
+    private resolveRequiredHoursPerStudent(project: Opportunity | null | undefined): number {
+        if (!project) return 0;
+        const raw = project.timeline?.expected_hours;
+        const fromT = Number(raw);
+        if (Number.isFinite(fromT) && fromT > 0) return fromT;
+        const rh = Number(project.requiredHours);
+        return Number.isFinite(rh) ? rh : 0;
+    }
+
+    private participationTeamBucketKey(
+        p: Pick<Participation, 'id' | 'participationMode' | 'teamId' | 'applicationId'>,
+    ): string {
+        if (p.participationMode !== 'team') {
+            return `ind:${p.id}`;
+        }
+        const tid = typeof p.teamId === 'string' ? p.teamId.trim() : '';
+        if (tid) return `tid:${tid}`;
+        if (p.applicationId) return `aid:${p.applicationId}`;
+        return `ind:${p.id}`;
+    }
+
+    /** Same opportunity scope as `GET /faculty/dashboard` for a given `view`. */
+    private async resolveFacultyScopedContext(
+        facultyId: string,
+        facultyEmail: string,
+        view: FacultyDashboardViewMode,
+    ): Promise<{
+        university_scope: { organization_id: string; organization_name: string } | null;
+        effectiveView: FacultyDashboardViewMode;
+        scopedIds: string[];
+        delegatedOppIds: string[];
+        faculty_view_modes_available: FacultyDashboardViewMode[];
+    }> {
+        const user = await this.usersRepository.findOne({ where: { id: facultyId } });
+        if (!user || user.role !== UserRole.FACULTY) {
+            throw new ForbiddenException('Only faculty can access this dashboard');
+        }
+
+        const personalIds = await this.resolveFacultyPersonalOpportunityIds(facultyId, facultyEmail);
+        const delegatedOppIds = await this.resolveDelegatedOpportunityIds(facultyId);
+
+        const delegation = await this.facultyUniversityScopeService.getAssignmentForFaculty(facultyId);
+        const university_scope = delegation?.universityOrganization
+            ? {
+                  organization_id: delegation.universityOrganization.id,
+                  organization_name: delegation.universityOrganization.name,
+              }
+            : null;
+
+        const effectiveView: FacultyDashboardViewMode =
+            view === 'university' && !university_scope ? 'combined' : view;
+
+        let scopedIds: string[];
+        if (effectiveView === 'personal') {
+            scopedIds = personalIds;
+        } else if (effectiveView === 'university') {
+            scopedIds = [...delegatedOppIds];
+        } else {
+            scopedIds = [...new Set([...personalIds, ...delegatedOppIds])];
+        }
+
+        const faculty_view_modes_available: FacultyDashboardViewMode[] = university_scope
+            ? ['combined', 'personal', 'university']
+            : ['combined', 'personal'];
+
+        return { university_scope, effectiveView, scopedIds, delegatedOppIds, faculty_view_modes_available };
     }
 
     /**
@@ -500,33 +575,8 @@ export class FacultyService {
         facultyEmail: string,
         view: FacultyDashboardViewMode = 'combined',
     ) {
-        const user = await this.usersRepository.findOne({ where: { id: facultyId } });
-        if (!user || user.role !== UserRole.FACULTY) {
-            throw new ForbiddenException('Only faculty can access this dashboard');
-        }
-
-        const personalIds = await this.resolveFacultyPersonalOpportunityIds(facultyId, facultyEmail);
-        const delegatedOppIds = await this.resolveDelegatedOpportunityIds(facultyId);
-
-        const delegation = await this.facultyUniversityScopeService.getAssignmentForFaculty(facultyId);
-        const university_scope = delegation?.universityOrganization
-            ? {
-                  organization_id: delegation.universityOrganization.id,
-                  organization_name: delegation.universityOrganization.name,
-              }
-            : null;
-
-        const effectiveView: FacultyDashboardViewMode =
-            view === 'university' && !university_scope ? 'combined' : view;
-
-        let scopedIds: string[];
-        if (effectiveView === 'personal') {
-            scopedIds = personalIds;
-        } else if (effectiveView === 'university') {
-            scopedIds = [...delegatedOppIds];
-        } else {
-            scopedIds = [...new Set([...personalIds, ...delegatedOppIds])];
-        }
+        const { university_scope, effectiveView, scopedIds, delegatedOppIds, faculty_view_modes_available } =
+            await this.resolveFacultyScopedContext(facultyId, facultyEmail, view);
 
         const delegatedForPendingQuery = effectiveView === 'personal' ? [] : delegatedOppIds;
         const pendingList = await this.buildFacultyApprovalsQuery(
@@ -540,10 +590,6 @@ export class FacultyService {
             effectiveView === 'university'
                 ? pendingList.filter((o) => delegatedSet.has(o.id)).length
                 : pendingList.length;
-
-        const faculty_view_modes_available: FacultyDashboardViewMode[] = university_scope
-            ? ['combined', 'personal', 'university']
-            : ['combined', 'personal'];
 
         if (scopedIds.length === 0) {
             return {
@@ -816,6 +862,231 @@ export class FacultyService {
                         },
                     ],
                 },
+            },
+        };
+    }
+
+    /**
+     * Department / supervision analytics for Impact Analytics page.
+     * Uses the same opportunity scope as `getDashboard` for the given `view`.
+     */
+    async getImpactAnalytics(
+        facultyId: string,
+        facultyEmail: string,
+        view: FacultyDashboardViewMode = 'combined',
+    ) {
+        const { university_scope, effectiveView, scopedIds, faculty_view_modes_available } =
+            await this.resolveFacultyScopedContext(facultyId, facultyEmail, view);
+
+        const buildEmpty = () => ({
+            university_scope,
+            dashboard_view: effectiveView,
+            requested_dashboard_view: view,
+            faculty_view_modes_available,
+            total_students_under_faculty: 0,
+            verified_students: 0,
+            verification_rate_percent: 0,
+            individual_participants: 0,
+            team_participants: 0,
+            total_teams: 0,
+            average_team_size: 0,
+            total_required_hours: 0,
+            course_linked_ce_ratio_percent: 0,
+            hours_verified: 0,
+            projects_completed: 0,
+            avg_impact_score: 0,
+            hours_trend: [] as { label: string; hours: number }[],
+            impact_distribution: [] as { name: string; value: number; color: string }[],
+        });
+
+        if (scopedIds.length === 0) {
+            return { success: true, data: buildEmpty() };
+        }
+
+        const idParams = { ids: scopedIds };
+        const st = [...ACTIVE_PARTICIPATION_STATUSES];
+
+        const totalStudentsRow = await this.participationRepository
+            .createQueryBuilder('p')
+            .select('COUNT(DISTINCT p.student_id)', 'cnt')
+            .where('p.project_id IN (:...ids)', idParams)
+            .andWhere('p.status IN (:...st)', { st })
+            .andWhere('p.student_id IS NOT NULL')
+            .getRawOne<{ cnt: string }>();
+        const totalStudents = Number(totalStudentsRow?.cnt ?? 0) || 0;
+
+        const verifiedRow = await this.participationRepository
+            .createQueryBuilder('p')
+            .innerJoin('users', 'u', 'u.id = p.student_id')
+            .select('COUNT(DISTINCT p.student_id)', 'cnt')
+            .where('p.project_id IN (:...ids)', idParams)
+            .andWhere('p.status IN (:...st)', { st })
+            .andWhere('p.student_id IS NOT NULL')
+            .andWhere('u.profile_verified = true')
+            .andWhere('u.identity_verified = true')
+            .getRawOne<{ cnt: string }>();
+        const verifiedStudents = Number(verifiedRow?.cnt ?? 0) || 0;
+
+        const verificationRatePercent =
+            totalStudents === 0 ? 0 : Math.round((100 * verifiedStudents) / totalStudents);
+
+        const participations = await this.participationRepository.find({
+            where: {
+                projectId: In(scopedIds),
+                status: In([...st] as unknown as string[]),
+                studentId: Not(IsNull()),
+            },
+            relations: ['project'],
+        });
+
+        let individualParticipants = 0;
+        let teamParticipants = 0;
+        const teamBuckets = new Set<string>();
+        for (const p of participations) {
+            if (p.participationMode === 'team') {
+                teamParticipants += 1;
+                teamBuckets.add(`${p.projectId}|${this.participationTeamBucketKey(p)}`);
+            } else {
+                individualParticipants += 1;
+            }
+        }
+        const totalTeams = teamBuckets.size;
+        const averageTeamSize =
+            totalTeams > 0 ? Math.round((teamParticipants / totalTeams) * 10) / 10 : 0;
+
+        let totalRequiredHours = 0;
+        for (const p of participations) {
+            totalRequiredHours += this.resolveRequiredHoursPerStudent(p.project);
+        }
+
+        const ceStudentsRow = await this.participationRepository
+            .createQueryBuilder('p')
+            .select('COUNT(DISTINCT p.student_id)', 'cnt')
+            .where('p.project_id IN (:...ids)', idParams)
+            .andWhere('p.status IN (:...st)', { st })
+            .andWhere('p.student_id IS NOT NULL')
+            .andWhere('p.academicIntegrationType IN (:...ce)', { ce: [...COURSE_LINKED_ACADEMIC_TYPES] })
+            .getRawOne<{ cnt: string }>();
+        const ceStudentCount = Number(ceStudentsRow?.cnt ?? 0) || 0;
+        const courseLinkedCeRatioPercent =
+            totalStudents === 0 ? 0 : Math.round((100 * ceStudentCount) / totalStudents);
+
+        const hoursRow = await this.timesheetsRepository
+            .createQueryBuilder('t')
+            .select('COALESCE(SUM(t.hours), 0)', 'sum')
+            .where('t.status = :vs', { vs: 'verified' })
+            .andWhere('t.opportunityId IN (:...ids)', idParams)
+            .getRawOne<{ sum: string }>();
+        const hoursVerified = Number(hoursRow?.sum ?? 0) || 0;
+
+        const projectsCompletedRow = await this.timesheetsRepository
+            .createQueryBuilder('t')
+            .select('COUNT(DISTINCT t.opportunityId)', 'cnt')
+            .where('t.status = :vs', { vs: 'verified' })
+            .andWhere('t.opportunityId IN (:...ids)', idParams)
+            .getRawOne<{ cnt: string }>();
+        const projectsCompleted = Number(projectsCompletedRow?.cnt ?? 0) || 0;
+
+        const trendRows = await this.timesheetsRepository
+            .createQueryBuilder('t')
+            .select(`date_trunc('month', t."updatedAt")`, 'bucket')
+            .addSelect('SUM(t.hours)', 'hours')
+            .where('t.status = :vs', { vs: 'verified' })
+            .andWhere('t.opportunityId IN (:...ids)', idParams)
+            .andWhere(`t."updatedAt" >= NOW() - INTERVAL '13 months'`)
+            .groupBy('bucket')
+            .orderBy('bucket', 'ASC')
+            .getRawMany<{ bucket: Date; hours: string }>();
+
+        const hours_trend = trendRows.map((row) => {
+            const d = row.bucket instanceof Date ? row.bucket : new Date(row.bucket);
+            const label = d.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' });
+            return { label, hours: Number(row.hours) || 0 };
+        });
+
+        const oppsForSdg = await this.opportunitiesRepository.find({
+            where: { id: In(scopedIds) },
+            select: ['id', 'sdg', 'sdg_info'],
+        });
+        const sdgCounts = new Map<string, number>();
+        for (const o of oppsForSdg) {
+            const label = this.formatSdgLabel(o);
+            sdgCounts.set(label, (sdgCounts.get(label) || 0) + 1);
+        }
+
+        const reportSdgRows = await this.studentReportsRepository
+            .createQueryBuilder('r')
+            .select('r.primary_sdg_goal', 'g')
+            .addSelect('COUNT(*)', 'c')
+            .where('COALESCE(r.status, \'\') NOT IN (:...draftish)', { draftish: ['draft', 'rejected'] })
+            .andWhere('r.primary_sdg_goal IS NOT NULL')
+            .andWhere(
+                new Brackets((qb) => {
+                    qb.where('r."opportunityId"::text IN (:...ids)', idParams).orWhere(
+                        '(r.project_id IS NOT NULL AND TRIM(r.project_id) IN (:...ids))',
+                        idParams,
+                    );
+                }),
+            )
+            .groupBy('r.primary_sdg_goal')
+            .getRawMany<{ g: number; c: string }>();
+
+        for (const row of reportSdgRows) {
+            const n = Number(row.g);
+            if (!Number.isFinite(n) || n < 1 || n > 17) continue;
+            const label = `SDG ${n} – ${SDG_SHORT_NAMES[n]}`;
+            sdgCounts.set(label, (sdgCounts.get(label) || 0) + Number(row.c));
+        }
+
+        const impact_distribution = [...sdgCounts.entries()]
+            .map(([name, value]) => ({
+                name,
+                value,
+                color: this.sdgColorForLabel(name),
+            }))
+            .sort((a, b) => b.value - a.value)
+            .slice(0, 12);
+
+        const avgRow = await this.studentReportsRepository
+            .createQueryBuilder('r')
+            .select(
+                `AVG(CAST(r.section11->>'ai_generated_impact_score' AS double precision))`,
+                'avg',
+            )
+            .where(
+                new Brackets((qb) => {
+                    qb.where('r."opportunityId"::text IN (:...ids)', idParams).orWhere(
+                        '(r.project_id IS NOT NULL AND TRIM(r.project_id) IN (:...ids))',
+                        idParams,
+                    );
+                }),
+            )
+            .andWhere('COALESCE(r.status, \'\') NOT IN (:...ex)', { ex: ['draft', 'rejected'] })
+            .andWhere(`r.section11->>'ai_generated_impact_score' IS NOT NULL`)
+            .getRawOne<{ avg: string | null }>();
+        const avgImpactScore = Math.round((Number(avgRow?.avg ?? 0) || 0) * 10) / 10;
+
+        return {
+            success: true,
+            data: {
+                university_scope,
+                dashboard_view: effectiveView,
+                requested_dashboard_view: view,
+                faculty_view_modes_available,
+                total_students_under_faculty: totalStudents,
+                verified_students: verifiedStudents,
+                verification_rate_percent: verificationRatePercent,
+                individual_participants: individualParticipants,
+                team_participants: teamParticipants,
+                total_teams: totalTeams,
+                average_team_size: averageTeamSize,
+                total_required_hours: Math.round(totalRequiredHours * 10) / 10,
+                course_linked_ce_ratio_percent: courseLinkedCeRatioPercent,
+                hours_verified: hoursVerified,
+                projects_completed: projectsCompleted,
+                avg_impact_score: avgImpactScore,
+                hours_trend,
+                impact_distribution,
             },
         };
     }

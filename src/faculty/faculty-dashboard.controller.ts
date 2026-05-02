@@ -24,4 +24,13 @@ export class FacultyDashboardController {
         const view = parseFacultyDashboardView(viewRaw);
         return this.facultyService.getDashboard(req.user.id, req.user.email || '', view);
     }
+
+    @Get('analytics')
+    async getImpactAnalytics(
+        @Request() req: { user: { id: string; email?: string } },
+        @Query('view') viewRaw?: string,
+    ) {
+        const view = parseFacultyDashboardView(viewRaw);
+        return this.facultyService.getImpactAnalytics(req.user.id, req.user.email || '', view);
+    }
 }

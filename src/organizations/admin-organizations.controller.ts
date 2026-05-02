@@ -51,6 +51,21 @@ export class AdminOrganizationsController {
         return this.organizationsService.createForAdmin(body, req.user.id);
     }
 
+    /** Add another university operator account linked to an existing university organization. */
+    @Post(':id/members')
+    addUniversityMember(
+        @Param('id') organizationId: string,
+        @Body()
+        body: {
+            name: string;
+            email: string;
+            password: string;
+            role?: UserRole.UNIVERSITY | UserRole.ORGANIZATION_ADMIN;
+        },
+    ) {
+        return this.organizationsService.addStaffMemberToUniversityOrganization(organizationId, body);
+    }
+
     @Delete(':id')
     remove(@Param('id') id: string) {
         return this.organizationsService.remove(id);

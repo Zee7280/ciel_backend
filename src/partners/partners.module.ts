@@ -5,9 +5,17 @@ import { OrganizationsModule } from '../organizations/organizations.module';
 import { ReportsModule } from '../reports/reports.module';
 import { OpportunitiesModule } from '../opportunities/opportunities.module';
 import { StudentsModule } from '../students/students.module';
+import { OrganizationMembershipModule } from '../organization-membership/organization-membership.module';
 
 @Module({
-    imports: [UsersModule, OrganizationsModule, ReportsModule, OpportunitiesModule, StudentsModule],
+    imports: [
+        UsersModule,
+        OrganizationsModule,
+        ReportsModule,
+        OpportunitiesModule,
+        StudentsModule,
+        OrganizationMembershipModule,
+    ],
     controllers: [PartnersController, PartnerAliasController],
 })
 export class PartnersModule { }

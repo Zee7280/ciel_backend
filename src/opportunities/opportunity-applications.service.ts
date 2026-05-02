@@ -5,12 +5,14 @@ import {
     NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, IsNull, Not, Repository } from 'typeorm';
+import { Brackets, In, IsNull, Not, Repository } from 'typeorm';
 import { OpportunityApplication, OpportunityApplicationInternalStatus } from './entities/opportunity-application.entity';
 import { Participation } from '../engagement/entities/participant.entity';
 import { EngagementService } from '../engagement/engagement.service';
 import { UsersService } from '../users/users.service';
 import { User } from '../users/entities/user.entity';
+import { UserRole } from '../users/enums/user-role.enum';
+import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
 import { StudentReport } from '../reports/entities/student-report.entity';
 import { Payment } from '../payments/entities/payment.entity';
 
@@ -64,6 +66,7 @@ export class OpportunityApplicationsService {
         private readonly studentReportRepo: Repository<StudentReport>,
         private readonly engagementService: EngagementService,
         private readonly usersService: UsersService,
+        private readonly facultyUniversityScopeService: FacultyUniversityScopeService,
     ) {}
 
     normalizeEmail(email?: string | null) {
@@ -773,14 +776,39 @@ export class OpportunityApplicationsService {
         return qb.getOne();
     }
 
-    async facultyList(facultyEmail: string, status: 'pending' | 'history' = 'pending') {
+    async facultyList(
+        facultyEmail: string,
+        facultyUserId: string,
+        status: 'pending' | 'history' = 'pending',
+    ) {
         const email = this.normalizeEmail(facultyEmail);
+        const assignment = await this.facultyUniversityScopeService.getAssignmentForFaculty(facultyUserId);
+        const orgNorm = assignment?.universityOrganization?.name
+            ? this.facultyUniversityScopeService.normalizeOrgName(assignment.universityOrganization.name)
+            : null;
+
         const qb = this.appRepo
             .createQueryBuilder('a')
             .leftJoinAndSelect('a.opportunity', 'o')
             .leftJoinAndSelect('a.studentUser', 's')
-            .where('lower(a.primaryFacultyEmail) = :email', { email })
-            .andWhere('a.withdrawnAt IS NULL');
+            .where('a.withdrawnAt IS NULL')
+            .andWhere(
+                new Brackets((outer) => {
+                    outer.where('lower(a.primaryFacultyEmail) = :email', { email });
+                    if (orgNorm) {
+                        outer.orWhere(
+                            new Brackets((inner) => {
+                                inner
+                                    .where('s.role = :studentRole', { studentRole: UserRole.STUDENT })
+                                    .andWhere(
+                                        '(LOWER(TRIM(COALESCE(s.university, \'\'))) = :orgNorm OR LOWER(TRIM(COALESCE(s.institution, \'\'))) = :orgNorm)',
+                                        { orgNorm },
+                                    );
+                            }),
+                        );
+                    }
+                }),
+            );
 
         if (status === 'pending') {
             qb.andWhere('a.internalStatus = :st', { st: 'pending_faculty' });
@@ -822,7 +850,14 @@ export class OpportunityApplicationsService {
             relations: ['opportunity', 'studentUser'],
         });
         if (!app) throw new NotFoundException('Application not found');
-        if (this.normalizeEmail(app.primaryFacultyEmail) !== email) {
+        const okPrimary = this.normalizeEmail(app.primaryFacultyEmail) === email;
+        const okDelegated =
+            okPrimary ||
+            (await this.facultyUniversityScopeService.canFacultyReviewApplicationAsUniversityDelegate(
+                facultyUserId,
+                app.studentUser,
+            ));
+        if (!okDelegated) {
             throw new ForbiddenException('Not authorized to act on this application');
         }
         if (app.internalStatus !== 'pending_faculty') {
@@ -843,9 +878,19 @@ export class OpportunityApplicationsService {
 
     async facultyReject(id: string, facultyEmail: string, facultyUserId: string, reason: string) {
         const email = this.normalizeEmail(facultyEmail);
-        const app = await this.appRepo.findOne({ where: { id, withdrawnAt: IsNull() } });
+        const app = await this.appRepo.findOne({
+            where: { id, withdrawnAt: IsNull() },
+            relations: ['studentUser'],
+        });
         if (!app) throw new NotFoundException('Application not found');
-        if (this.normalizeEmail(app.primaryFacultyEmail) !== email) {
+        const okPrimary = this.normalizeEmail(app.primaryFacultyEmail) === email;
+        const okDelegated =
+            okPrimary ||
+            (await this.facultyUniversityScopeService.canFacultyReviewApplicationAsUniversityDelegate(
+                facultyUserId,
+                app.studentUser,
+            ));
+        if (!okDelegated) {
             throw new ForbiddenException('Not authorized to act on this application');
         }
         if (app.internalStatus !== 'pending_faculty') {

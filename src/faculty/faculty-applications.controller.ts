@@ -11,6 +11,7 @@ export class FacultyApplicationsController {
     list(@Request() req, @Query('status') status?: 'pending' | 'history') {
         return this.opportunityApplicationsService.facultyList(
             req.user.email || '',
+            req.user.id,
             status === 'history' ? 'history' : 'pending',
         );
     }

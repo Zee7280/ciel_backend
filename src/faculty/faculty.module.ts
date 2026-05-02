@@ -14,6 +14,7 @@ import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 import { OpportunitiesModule } from '../opportunities/opportunities.module';
 import { FacultyApplicationsController } from './faculty-applications.controller';
+import { FacultyUniversityScopeModule } from '../faculty-university-scope/faculty-university-scope.module';
 
 @Module({
     imports: [
@@ -27,6 +28,7 @@ import { FacultyApplicationsController } from './faculty-applications.controller
             OpportunityApplication,
         ]),
         OpportunitiesModule,
+        FacultyUniversityScopeModule,
     ],
     controllers: [
         FacultyReportsController,

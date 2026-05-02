@@ -1,4 +1,11 @@
-import { Injectable, NotFoundException, UnauthorizedException, ForbiddenException } from '@nestjs/common';
+import {
+    Injectable,
+    NotFoundException,
+    UnauthorizedException,
+    ForbiddenException,
+    BadRequestException,
+    ConflictException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Organization } from './entities/organization.entity';
@@ -158,13 +165,6 @@ export class OrganizationsService {
     }
 
     async updateMyOrganization(reqUserId: string, updateDto: UpdateOrganizationDto) {
-        console.log('updateMyOrganization DTO:', updateDto);
-        // Use userId from DTO if provided (and maybe validate admin?), or default to req.user.id
-        // The prompt implies we are updating the logged in user's organization, or creating it.
-        // If DTO has userId, maybe we are updating THAT user? But endpoint is /profile (me).
-        // Safest is to use reqUserId for security, or if admin allow override.
-        // Assuming "Pass logged-in user ID" means it matches req.user.id or we just use req.user.id.
-
         const userId = reqUserId;
 
         const user = await this.usersRepository.findOne({
@@ -490,6 +490,56 @@ export class OrganizationsService {
             }
         };
     }
+
+    private isUniversityOrgType(orgType: string): boolean {
+        return String(orgType || '')
+            .trim()
+            .toLowerCase()
+            .includes('university');
+    }
+
+    /** Attach a new login to an existing university organization (e.g. ops staff after membership purchase). */
+    async addStaffMemberToUniversityOrganization(
+        organizationId: string,
+        dto: { name: string; email: string; password: string; role?: UserRole },
+    ) {
+        const org = await this.organizationsRepository.findOne({ where: { id: organizationId } });
+        if (!org) {
+            throw new NotFoundException('Organization not found');
+        }
+        if (!this.isUniversityOrgType(org.orgType)) {
+            throw new BadRequestException('Staff members can only be added to university-type organizations');
+        }
+        const email = dto.email.trim().toLowerCase();
+        const taken = await this.usersRepository.findOne({ where: { email } });
+        if (taken) {
+            throw new ConflictException('Email already exists');
+        }
+        const hashedPassword = await bcrypt.hash(dto.password, 10);
+        const role =
+            dto.role === UserRole.ORGANIZATION_ADMIN ? UserRole.ORGANIZATION_ADMIN : UserRole.UNIVERSITY;
+        const user = this.usersRepository.create({
+            name: dto.name,
+            email,
+            password: hashedPassword,
+            role,
+            organization: org,
+            orgName: org.name,
+            orgType: org.orgType,
+            status: 'active',
+        });
+        await this.usersRepository.save(user);
+        return {
+            success: true,
+            data: {
+                id: user.id,
+                email: user.email,
+                role: user.role,
+                organizationId: org.id,
+            },
+        };
+    }
+
     async remove(id: string) {
         const org = await this.findOne(id);
         return this.organizationsRepository.remove(org);

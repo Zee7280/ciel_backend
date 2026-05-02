@@ -28,6 +28,7 @@ import { SupportModule } from './support/support.module';
 import { APP_FILTER } from '@nestjs/core';
 import { IssueLogsExceptionFilter } from './issue-logs/issue-logs.filter';
 import { IssueLogsModule } from './issue-logs/issue-logs.module';
+import { OrganizationMembershipModule } from './organization-membership/organization-membership.module';
 
 @Module({
   imports: [
@@ -76,6 +77,7 @@ import { IssueLogsModule } from './issue-logs/issue-logs.module';
     PlatformStatsModule,
     SupportModule,
     IssueLogsModule,
+    OrganizationMembershipModule,
     TypeOrmModule.forFeature([Setting])
 ],
   controllers: [AppController],

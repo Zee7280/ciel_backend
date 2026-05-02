@@ -86,8 +86,8 @@ export class AuthService {
 
     async signup(signupDto: SignupDto) {
         try {
-            console.log('Signup payload:', signupDto);
-            const { password, email: rawEmail, ...userData } = signupDto;
+            const { password, email: rawEmail, ...rawUserData } = signupDto;
+            const { status: _clientStatus, ...userData } = rawUserData as SignupDto & { status?: string };
             const email = rawEmail.trim().toLowerCase();
 
             // Check if user already exists
@@ -108,11 +108,16 @@ export class AuthService {
                 });
             }
 
+            const needsMembershipFee =
+                !!organization &&
+                (userData.role === UserRole.UNIVERSITY || userData.role === UserRole.CORPORATE);
+
             const user = await this.usersService.create({
                 ...userData,
                 email,
                 password: hashedPassword,
-                organization: organization // Link the org
+                organization,
+                ...(needsMembershipFee ? { status: 'pending_membership_payment' } : {}),
             });
 
             try {
@@ -126,7 +131,9 @@ export class AuthService {
 
             return {
                 success: true,
-                message: 'User created successfully',
+                message: needsMembershipFee
+                    ? 'Account created. Pay the membership fee and submit proof, or wait for admin activation.'
+                    : 'User created successfully',
                 data: {
                     user: await this.usersService.formatUserResponse(user),
                 },
@@ -152,7 +159,11 @@ export class AuthService {
             throw new UnauthorizedException('Invalid credentials');
         }
 
-        if (user.status !== 'active' && user.status !== 'approved') {
+        if (
+            user.status !== 'active' &&
+            user.status !== 'approved' &&
+            user.status !== 'pending_membership_payment'
+        ) {
             throw new UnauthorizedException('Account is not active');
         }
 

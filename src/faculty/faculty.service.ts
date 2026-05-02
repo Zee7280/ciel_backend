@@ -1,4 +1,5 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, In, Repository, SelectQueryBuilder } from 'typeorm';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
@@ -66,6 +67,9 @@ type ActivityRow = {
     sortAt: number;
 };
 
+/** Query `view` on GET /faculty/dashboard — Instagram-style context switch for delegated university visibility. */
+export type FacultyDashboardViewMode = 'combined' | 'personal' | 'university';
+
 @Injectable()
 export class FacultyService {
     constructor(
@@ -81,6 +85,7 @@ export class FacultyService {
         private readonly timesheetsRepository: Repository<Timesheet>,
         @InjectRepository(OpportunityApplication)
         private readonly opportunityApplicationsRepository: Repository<OpportunityApplication>,
+        private readonly facultyUniversityScopeService: FacultyUniversityScopeService,
     ) {}
 
     private normalizeFacultyEmail(facultyEmail: string): string {
@@ -88,10 +93,9 @@ export class FacultyService {
     }
 
     /**
-     * Opportunities this faculty supervises (assigned id or supervision emails),
-     * plus any listing id appearing on a non-withdrawn application where this faculty is primary.
+     * Supervision + primary-faculty applications only (no admin-delegated university org expansion).
      */
-    private async resolveFacultyScopedOpportunityIds(facultyId: string, facultyEmail: string): Promise<string[]> {
+    private async resolveFacultyPersonalOpportunityIds(facultyId: string, facultyEmail: string): Promise<string[]> {
         const fe = this.normalizeFacultyEmail(facultyEmail);
         const oppQ = this.opportunitiesRepository.createQueryBuilder('o').select('o.id').where(
             new Brackets((qb) => {
@@ -118,29 +122,51 @@ export class FacultyService {
         return [...new Set([...fromOpps, ...fromApps])];
     }
 
+    /** Personal opportunities plus delegated university-org visibility (combined default). */
+    private async resolveFacultyScopedOpportunityIds(facultyId: string, facultyEmail: string): Promise<string[]> {
+        const personal = await this.resolveFacultyPersonalOpportunityIds(facultyId, facultyEmail);
+        const delegated = await this.resolveDelegatedOpportunityIds(facultyId);
+        return [...new Set([...personal, ...delegated])];
+    }
+
+    private async resolveDelegatedOpportunityIds(facultyId: string): Promise<string[]> {
+        const orgId = await this.facultyUniversityScopeService.getDelegatedOrganizationId(facultyId);
+        if (!orgId) return [];
+        return this.facultyUniversityScopeService.resolveOpportunityIdsForUniversityOrganization(orgId);
+    }
+
     private buildFacultyApprovalsQuery(
         facultyId: string,
         facultyEmail: string,
         status?: string,
+        delegatedOpportunityIds: string[] = [],
     ): SelectQueryBuilder<Opportunity> {
         const fe = this.normalizeFacultyEmail(facultyEmail);
+        const hasDelegated = delegatedOpportunityIds.length > 0;
 
-        const query = this.opportunitiesRepository
-            .createQueryBuilder('opportunity')
-            .where(
-                new Brackets((qb) => {
-                    qb.where('"opportunity"."facultyId"::text = :facultyId', { facultyId });
-                    if (fe) {
-                        qb.orWhere(
-                            `LOWER(TRIM(COALESCE(opportunity.supervision->>'contact', ''))) = :fe`,
-                            { fe },
-                        ).orWhere(
-                            `LOWER(TRIM(COALESCE(opportunity.supervision->>'official_email', ''))) = :fe`,
-                            { fe },
-                        );
-                    }
-                }),
-            );
+        const query = this.opportunitiesRepository.createQueryBuilder('opportunity').where(
+            new Brackets((top) => {
+                top.where(
+                    new Brackets((qb) => {
+                        qb.where('"opportunity"."facultyId"::text = :facultyId', { facultyId });
+                        if (fe) {
+                            qb.orWhere(
+                                `LOWER(TRIM(COALESCE(opportunity.supervision->>'contact', ''))) = :fe`,
+                                { fe },
+                            ).orWhere(
+                                `LOWER(TRIM(COALESCE(opportunity.supervision->>'official_email', ''))) = :fe`,
+                                { fe },
+                            );
+                        }
+                    }),
+                );
+                if (hasDelegated) {
+                    top.orWhere('opportunity.id IN (:...delegatedOppIdsTop)', {
+                        delegatedOppIdsTop: delegatedOpportunityIds,
+                    });
+                }
+            }),
+        );
 
         if (status === 'pending' || status === undefined || status === '') {
             query.andWhere(
@@ -199,8 +225,19 @@ export class FacultyService {
                         )
                         .orWhere(
                             new Brackets((app) => {
-                                app.where(
-                                    `EXISTS (
+                                const appPred = hasDelegated
+                                    ? `EXISTS (
+                                        SELECT 1 FROM opportunity_applications oa
+                                        WHERE oa.opportunity_id::text = opportunity.id::text
+                                          AND oa.withdrawn_at IS NULL
+                                          AND oa.internal_status = :oaPendingFac
+                                          AND (
+                                            :oaEmailFilterOff = true
+                                            OR LOWER(TRIM(oa.primary_faculty_email)) = :oaFacultyEmail
+                                            OR opportunity.id IN (:...delegatedOppIdsApp)
+                                          )
+                                    )`
+                                    : `EXISTS (
                                         SELECT 1 FROM opportunity_applications oa
                                         WHERE oa.opportunity_id::text = opportunity.id::text
                                           AND oa.withdrawn_at IS NULL
@@ -209,13 +246,13 @@ export class FacultyService {
                                             :oaEmailFilterOff = true
                                             OR LOWER(TRIM(oa.primary_faculty_email)) = :oaFacultyEmail
                                           )
-                                    )`,
-                                    {
-                                        oaPendingFac: 'pending_faculty',
-                                        oaEmailFilterOff: !fe,
-                                        oaFacultyEmail: fe,
-                                    },
-                                );
+                                    )`;
+                                app.where(appPred, {
+                                    oaPendingFac: 'pending_faculty',
+                                    oaEmailFilterOff: !fe,
+                                    oaFacultyEmail: fe,
+                                    ...(hasDelegated ? { delegatedOppIdsApp: delegatedOpportunityIds } : {}),
+                                });
                             }),
                         );
                 }),
@@ -260,7 +297,19 @@ export class FacultyService {
                     },
                 )
                 .andWhere(
-                    `NOT EXISTS (
+                    hasDelegated
+                        ? `NOT EXISTS (
+                        SELECT 1 FROM opportunity_applications oa
+                        WHERE oa.opportunity_id::text = opportunity.id::text
+                          AND oa.withdrawn_at IS NULL
+                          AND oa.internal_status = :histOaPendingFac
+                          AND (
+                            :histOaEmailFilterOff = true
+                            OR LOWER(TRIM(oa.primary_faculty_email)) = :histOaFacultyEmail
+                            OR opportunity.id IN (:...delegatedOppIdsHistApp)
+                          )
+                    )`
+                        : `NOT EXISTS (
                         SELECT 1 FROM opportunity_applications oa
                         WHERE oa.opportunity_id::text = opportunity.id::text
                           AND oa.withdrawn_at IS NULL
@@ -274,6 +323,7 @@ export class FacultyService {
                         histOaPendingFac: 'pending_faculty',
                         histOaEmailFilterOff: !fe,
                         histOaFacultyEmail: fe,
+                        ...(hasDelegated ? { delegatedOppIdsHistApp: delegatedOpportunityIds } : {}),
                     },
                 );
         } else {
@@ -322,29 +372,18 @@ export class FacultyService {
     }
 
     async getProjectDetail(facultyId: string, facultyEmail: string, opportunityId: string) {
-        const fe = this.normalizeFacultyEmail(facultyEmail);
-        const opportunity = await this.opportunitiesRepository
-            .createQueryBuilder('opportunity')
-            .leftJoinAndSelect('opportunity.organization', 'organization')
-            .where('opportunity.id = :opportunityId', { opportunityId })
-            .andWhere(
-                new Brackets((qb) => {
-                    qb.where('"opportunity"."facultyId"::text = :facultyId', { facultyId });
-                    if (fe) {
-                        qb.orWhere(
-                            `LOWER(TRIM(COALESCE(opportunity.supervision->>'contact', ''))) = :fe`,
-                            { fe },
-                        ).orWhere(
-                            `LOWER(TRIM(COALESCE(opportunity.supervision->>'official_email', ''))) = :fe`,
-                            { fe },
-                        );
-                    }
-                }),
-            )
-            .getOne();
+        const scopedIds = await this.resolveFacultyScopedOpportunityIds(facultyId, facultyEmail);
+        if (!scopedIds.includes(opportunityId)) {
+            throw new NotFoundException('Project not found or not assigned to you');
+        }
+
+        const opportunity = await this.opportunitiesRepository.findOne({
+            where: { id: opportunityId },
+            relations: ['organization'],
+        });
 
         if (!opportunity) {
-            throw new NotFoundException('Project not found or not assigned to you');
+            throw new NotFoundException('Project not found');
         }
 
         const student = opportunity.creatorId
@@ -394,7 +433,8 @@ export class FacultyService {
     }
 
     async getApprovals(facultyId: string, facultyEmail: string, status?: string) {
-        const query = this.buildFacultyApprovalsQuery(facultyId, facultyEmail, status);
+        const delegatedOppIds = await this.resolveDelegatedOpportunityIds(facultyId);
+        const query = this.buildFacultyApprovalsQuery(facultyId, facultyEmail, status, delegatedOppIds);
         const opportunities = await query.orderBy('opportunity.createdAt', 'DESC').getMany();
 
         const formatted = await Promise.all(
@@ -455,19 +495,64 @@ export class FacultyService {
         };
     }
 
-    async getDashboard(facultyId: string, facultyEmail: string) {
+    async getDashboard(
+        facultyId: string,
+        facultyEmail: string,
+        view: FacultyDashboardViewMode = 'combined',
+    ) {
         const user = await this.usersRepository.findOne({ where: { id: facultyId } });
         if (!user || user.role !== UserRole.FACULTY) {
             throw new ForbiddenException('Only faculty can access this dashboard');
         }
 
-        const scopedIds = await this.resolveFacultyScopedOpportunityIds(facultyId, facultyEmail);
-        const pendingApprovals = await this.buildFacultyApprovalsQuery(facultyId, facultyEmail, 'pending').getCount();
+        const personalIds = await this.resolveFacultyPersonalOpportunityIds(facultyId, facultyEmail);
+        const delegatedOppIds = await this.resolveDelegatedOpportunityIds(facultyId);
+
+        const delegation = await this.facultyUniversityScopeService.getAssignmentForFaculty(facultyId);
+        const university_scope = delegation?.universityOrganization
+            ? {
+                  organization_id: delegation.universityOrganization.id,
+                  organization_name: delegation.universityOrganization.name,
+              }
+            : null;
+
+        const effectiveView: FacultyDashboardViewMode =
+            view === 'university' && !university_scope ? 'combined' : view;
+
+        let scopedIds: string[];
+        if (effectiveView === 'personal') {
+            scopedIds = personalIds;
+        } else if (effectiveView === 'university') {
+            scopedIds = [...delegatedOppIds];
+        } else {
+            scopedIds = [...new Set([...personalIds, ...delegatedOppIds])];
+        }
+
+        const delegatedForPendingQuery = effectiveView === 'personal' ? [] : delegatedOppIds;
+        const pendingList = await this.buildFacultyApprovalsQuery(
+            facultyId,
+            facultyEmail,
+            'pending',
+            delegatedForPendingQuery,
+        ).getMany();
+        const delegatedSet = new Set(delegatedOppIds);
+        const pendingApprovals =
+            effectiveView === 'university'
+                ? pendingList.filter((o) => delegatedSet.has(o.id)).length
+                : pendingList.length;
+
+        const faculty_view_modes_available: FacultyDashboardViewMode[] = university_scope
+            ? ['combined', 'personal', 'university']
+            : ['combined', 'personal'];
 
         if (scopedIds.length === 0) {
             return {
                 success: true,
                 data: {
+                    university_scope,
+                    dashboard_view: effectiveView,
+                    requested_dashboard_view: view,
+                    faculty_view_modes_available,
                     students_active: 0,
                     hours_verified: 0,
                     pending_approvals: pendingApprovals,
@@ -699,6 +784,10 @@ export class FacultyService {
         return {
             success: true,
             data: {
+                university_scope,
+                dashboard_view: effectiveView,
+                requested_dashboard_view: view,
+                faculty_view_modes_available,
                 students_active: studentsActive,
                 hours_verified: hoursVerified,
                 pending_approvals: pendingApprovals,

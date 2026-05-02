@@ -6,6 +6,7 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { UserRole } from './enums/user-role.enum';
 import * as bcrypt from 'bcrypt';
 import { NotificationsService } from '../notifications/notifications.service';
+import { OrganizationMembershipService } from '../organization-membership/organization-membership.service';
 
 @Injectable()
 export class UsersService {
@@ -13,6 +14,7 @@ export class UsersService {
         @InjectRepository(User)
         private usersRepository: Repository<User>,
         private readonly notificationsService: NotificationsService,
+        private readonly organizationMembershipService: OrganizationMembershipService,
     ) { }
 
     async create(createUserDto: CreateUserDto): Promise<User> {
@@ -25,6 +27,7 @@ export class UsersService {
 
     async formatUserResponse(user: User) {
         const notifications_count = await this.notificationsService.countUnread(user.id);
+        const membershipFlags = await this.organizationMembershipService.getUiFlags(user);
         let roleTitle: string = user.role;
         // Simple mapping based on known roles
         if (user.role === UserRole.SUPER_ADMIN) roleTitle = 'Super Admin';
@@ -39,6 +42,7 @@ export class UsersService {
             id: user.id,
             name: user.name,
             email: user.email,
+            account_status: user.status,
             role: user.role, // Raw role for logic
             roleTitle: roleTitle, // Display role
             type: user.role, // keeping for backward compatibility if frontend uses it
@@ -64,7 +68,8 @@ export class UsersService {
             requires_cnic: user.requires_cnic,
             requires_profile_verification: user.requires_profile_verification,
             profile_verified: user.profile_verified,
-            identity_verified: user.identity_verified
+            identity_verified: user.identity_verified,
+            ...membershipFlags,
         };
     }
 
@@ -137,7 +142,6 @@ export class UsersService {
     }
 
     async getProfile(id: string) {
-        console.log('getProfile called with ID:', id);
         if (!id) {
             throw new BadRequestException('User ID is required');
         }
@@ -145,7 +149,6 @@ export class UsersService {
         if (!user) {
             throw new NotFoundException('User not found');
         }
-        console.log('Found user role:', user.role);
 
         return {
             success: true,

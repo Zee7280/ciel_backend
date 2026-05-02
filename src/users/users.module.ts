@@ -5,9 +5,10 @@ import { UsersService } from './users.service';
 import { UsersController } from './users.controller';
 import { ProfileController } from './profile.controller';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { OrganizationMembershipModule } from '../organization-membership/organization-membership.module';
 
 @Module({
-    imports: [TypeOrmModule.forFeature([User]), NotificationsModule],
+    imports: [TypeOrmModule.forFeature([User]), NotificationsModule, OrganizationMembershipModule],
     controllers: [UsersController, ProfileController],
     providers: [UsersService],
     exports: [UsersService],

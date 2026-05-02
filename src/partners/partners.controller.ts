@@ -3,6 +3,7 @@ import { UsersService } from '../users/users.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { UpdateOrganizationDto } from '../organizations/dto/organization.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { MembershipActiveGuard } from '../organization-membership/membership-active.guard';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ReportsService } from '../reports/reports.service';
 import { CreateReportDto } from '../reports/dto/create-report.dto';
@@ -15,7 +16,7 @@ import { S3Service } from '../common/s3.service';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
 
 @Controller('partners')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, MembershipActiveGuard)
 export class PartnersController {
     constructor(
         private readonly usersService: UsersService,
@@ -95,7 +96,6 @@ export class PartnersController {
         return this.uploadLogo(req, file, body);
     }
 
-    @Get('dashboard')
     @Get('dashboard')
     async getDashboardStats(@Request() req, @Query('id') userId?: string) {
         let orgId = req.user.organizationId;
@@ -301,7 +301,7 @@ export class PartnersController {
 
 // Explicit alias controller for singular /partner routes
 @Controller('partner')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, MembershipActiveGuard)
 export class PartnerAliasController {
     constructor(
         private readonly studentReportsService: StudentReportsService,

@@ -194,6 +194,83 @@ export class StudentsService {
         return Number.isFinite(n) ? n : 0;
     }
 
+    private resolveDisplayNameForUser(user: User): string {
+        const fromUser = typeof user.name === 'string' ? user.name.trim() : '';
+        if (fromUser) return fromUser;
+        const fromOrg =
+            user.organization?.contactName != null ? String(user.organization.contactName).trim() : '';
+        return fromOrg || '';
+    }
+
+    private resolvePhoneForUser(user: User): string {
+        const org = user.organization;
+        return (
+            (typeof user.phone === 'string' && user.phone.trim()) ||
+            (org?.contactPhone && String(org.contactPhone).trim()) ||
+            ''
+        );
+    }
+
+    /**
+     * Aligns with opportunity submission `ensureProfileComplete` checks for students
+     * so completion % matches the same required fields (including conditional CNIC / profile verification flags).
+     */
+    private computeStudentProfileCompletion(user: User): {
+        completed_required_fields: number;
+        total_required_fields: number;
+        profile_completion_percent: number;
+    } {
+        const satisfied: boolean[] = [];
+        satisfied.push(Boolean(this.resolveDisplayNameForUser(user)));
+        satisfied.push(Boolean(this.resolvePhoneForUser(user)));
+        satisfied.push(Boolean(typeof user.email === 'string' && user.email.trim()));
+        satisfied.push(Boolean(typeof user.city === 'string' && user.city.trim()));
+        satisfied.push(
+            Boolean(
+                (typeof user.university === 'string' && user.university.trim()) ||
+                    (typeof user.institution === 'string' && user.institution.trim()),
+            ),
+        );
+        satisfied.push(Boolean(typeof user.department === 'string' && user.department.trim()));
+        if (user.requires_cnic) {
+            satisfied.push(Boolean(typeof user.cnic === 'string' && user.cnic.trim()));
+        }
+        if (user.requires_profile_verification) {
+            satisfied.push(user.profile_verified === true);
+        }
+        const total_required_fields = satisfied.length;
+        const completed_required_fields = satisfied.filter(Boolean).length;
+        const profile_completion_percent =
+            total_required_fields === 0
+                ? 100
+                : Math.round((completed_required_fields / total_required_fields) * 100);
+        return { completed_required_fields, total_required_fields, profile_completion_percent };
+    }
+
+    /** Uses `timeline.expected_hours` when positive, otherwise the opportunity `requiredHours` column. */
+    private resolveRequiredHoursPerStudent(project: Opportunity | null | undefined): number {
+        if (!project) return 0;
+        const fromTimeline = this.safeDashboardNumber(project.timeline?.expected_hours);
+        if (fromTimeline > 0) return fromTimeline;
+        return this.safeDashboardNumber(project.requiredHours);
+    }
+
+    /**
+     * Bucket key for counting peers on the same project team (`team_id` or shared application batch).
+     * Individual participations are counted alone.
+     */
+    private participationTeamBucketKey(
+        p: Pick<Participation, 'id' | 'participationMode' | 'teamId' | 'applicationId'>,
+    ): string {
+        if (p.participationMode !== 'team') {
+            return `ind:${p.id}`;
+        }
+        const tid = typeof p.teamId === 'string' ? p.teamId.trim() : '';
+        if (tid) return `tid:${tid}`;
+        if (p.applicationId) return `aid:${p.applicationId}`;
+        return `ind:${p.id}`;
+    }
+
     /** Labels include keywords the student dashboard UI derives from when overview is absent. */
     private participationToDashboardStatus(status: string | null | undefined): string {
         switch (status) {
@@ -505,6 +582,18 @@ export class StudentsService {
         const projectsCompleted = new Set(completedOppIds).size;
         const impactPoints = Math.round(hoursVolunteered * 10);
 
+        const teamCountStatuses = [
+            'pending',
+            'pending_payment_approval',
+            'paid',
+            'pending_ciel_approval',
+            'pending_faculty_approval',
+            'approved',
+            'finalized',
+            'verified',
+            'accepted',
+        ] as const;
+
         const [
             activeCourses,
             activeProjectsCount,
@@ -512,6 +601,7 @@ export class StudentsService {
             reportsUnderReviewCount,
             activeApplications,
             studentReports,
+            studentUser,
         ] = await Promise.all([
             this.participantRepository.count({
                 where: { studentId: userId, status: In([...activeCourseStatStatuses]) },
@@ -537,7 +627,48 @@ export class StudentsService {
                 order: { updatedAt: 'DESC' },
                 take: 200,
             }),
+            this.usersRepository.findOne({ where: { id: userId }, relations: ['organization'] }),
         ]);
+
+        const projectIdsForTeams = [...new Set(activeApplications.map((a) => a.projectId))];
+        const teamSizeByKey = new Map<string, number>();
+        if (projectIdsForTeams.length > 0) {
+            const teamRows = await this.participantRepository.find({
+                where: {
+                    projectId: In(projectIdsForTeams),
+                    status: In([...teamCountStatuses]),
+                },
+                select: ['id', 'projectId', 'teamId', 'applicationId', 'participationMode'],
+            });
+            for (const row of teamRows) {
+                const key = `${row.projectId}|${this.participationTeamBucketKey(row)}`;
+                teamSizeByKey.set(key, (teamSizeByKey.get(key) || 0) + 1);
+            }
+        }
+
+        let student_analytics: {
+            profile_completion_percent: number;
+            completed_required_fields: number;
+            total_required_fields: number;
+            verified: boolean;
+        };
+        if (studentUser) {
+            const c = this.computeStudentProfileCompletion(studentUser);
+            student_analytics = {
+                profile_completion_percent: c.profile_completion_percent,
+                completed_required_fields: c.completed_required_fields,
+                total_required_fields: c.total_required_fields,
+                verified:
+                    studentUser.profile_verified === true && studentUser.identity_verified === true,
+            };
+        } else {
+            student_analytics = {
+                profile_completion_percent: 0,
+                completed_required_fields: 0,
+                total_required_fields: 0,
+                verified: false,
+            };
+        }
 
         const reportByProjectId = new Map<string, StudentReport>();
         for (const r of studentReports) {
@@ -548,7 +679,7 @@ export class StudentsService {
         }
 
         const activeProjects = activeApplications.map((app) => {
-            const required = this.safeDashboardNumber(app.project?.timeline?.expected_hours);
+            const required = this.resolveRequiredHoursPerStudent(app.project);
             const hoursDone = verifiedTimesheets
                 .filter((t) => t.opportunityId === app.projectId)
                 .reduce((sum, t) => sum + this.safeDashboardNumber(t.hours), 0);
@@ -567,6 +698,9 @@ export class StudentsService {
             const rep = reportByProjectId.get(String(app.projectId));
             const reportStatus = rep ? this.dashboardPublicReportStatus(rep.status) : null;
 
+            const teamSize =
+                teamSizeByKey.get(`${app.projectId}|${this.participationTeamBucketKey(app)}`) ?? 1;
+
             return {
                 id: String(app.projectId),
                 title: app.project?.title || 'Project',
@@ -574,6 +708,10 @@ export class StudentsService {
                 assignedAt: app.createdAt.toISOString(),
                 status: this.participationToDashboardStatus(app.status),
                 progress,
+                required_hours_per_student: required,
+                participation_type: app.participationMode || 'individual',
+                academic_integration_type: app.academicIntegrationType ?? null,
+                team_size: teamSize,
                 ...(reportStatus ? { report_status: reportStatus } : {}),
             };
         });
@@ -820,6 +958,7 @@ export class StudentsService {
                 quickActions,
                 notificationsPreview,
                 pendingSummary,
+                student_analytics,
             },
         };
     }

@@ -154,3 +154,167 @@ describe('StudentsService impact history', () => {
     );
   });
 });
+
+describe('StudentsService getDashboard analytics', () => {
+  it('exposes student_analytics and per-project fields including team_size', async () => {
+    const createdAt = new Date('2025-01-15T12:00:00Z');
+    const participantFind = jest.fn().mockImplementation((opts: { select?: string[] }) => {
+      if (opts?.select) {
+        return Promise.resolve([
+          {
+            id: 'self-p',
+            projectId: 'proj-1',
+            teamId: 'team-a',
+            applicationId: null,
+            participationMode: 'team',
+          },
+          {
+            id: 'mate-1',
+            projectId: 'proj-1',
+            teamId: 'team-a',
+            applicationId: null,
+            participationMode: 'team',
+          },
+          {
+            id: 'mate-2',
+            projectId: 'proj-1',
+            teamId: 'team-a',
+            applicationId: null,
+            participationMode: 'team',
+          },
+        ]);
+      }
+      return Promise.resolve([
+        {
+          projectId: 'proj-1',
+          createdAt,
+          status: 'approved',
+          participationMode: 'team',
+          teamId: 'team-a',
+          applicationId: null,
+          academicIntegrationType: 'Course-Linked',
+          id: 'self-p',
+          project: {
+            title: 'Community Lab',
+            sdg_info: { sdg_id: '4' },
+            timeline: { expected_hours: 40 },
+            requiredHours: 16,
+          },
+        },
+      ]);
+    });
+
+    const service = new StudentsService(
+      {
+        findOne: jest.fn().mockResolvedValue({
+          id: 'student-1',
+          name: 'Ada',
+          email: 'ada@test.edu',
+          phone: '0300',
+          city: 'Lahore',
+          university: 'UET',
+          department: 'CS',
+          requires_cnic: false,
+          requires_profile_verification: false,
+          profile_verified: true,
+          identity_verified: true,
+        }),
+      } as any,
+      {} as any,
+      { find: jest.fn().mockResolvedValue([]) } as any,
+      {
+        count: jest.fn().mockResolvedValue(0),
+        find: participantFind,
+      } as any,
+      { find: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0) } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+    const result = await service.getDashboard('student-1');
+
+    expect(result.data.student_analytics).toEqual({
+      profile_completion_percent: 100,
+      completed_required_fields: 6,
+      total_required_fields: 6,
+      verified: true,
+    });
+
+    expect(result.data.activeProjects[0]).toEqual(
+      expect.objectContaining({
+        id: 'proj-1',
+        required_hours_per_student: 40,
+        participation_type: 'team',
+        academic_integration_type: 'Course-Linked',
+        team_size: 3,
+      }),
+    );
+  });
+
+  it('falls back to opportunity.requiredHours when timeline expected_hours is absent', async () => {
+    const participantFind = jest.fn().mockImplementation((opts: { select?: string[] }) => {
+      if (opts?.select) {
+        return Promise.resolve([]);
+      }
+      return Promise.resolve([
+        {
+          projectId: 'proj-2',
+          createdAt: new Date(),
+          status: 'approved',
+          participationMode: 'individual',
+          teamId: null,
+          applicationId: null,
+          academicIntegrationType: null,
+          id: 'solo-p',
+          project: {
+            title: 'Solo',
+            sdg_info: {},
+            timeline: {},
+            requiredHours: 24,
+          },
+        },
+      ]);
+    });
+
+    const service = new StudentsService(
+      {
+        findOne: jest.fn().mockResolvedValue({
+          id: 'student-1',
+          name: 'Bob',
+          email: 'bob@test.edu',
+          phone: '1',
+          city: 'c',
+          university: 'u',
+          department: 'd',
+          requires_cnic: false,
+          requires_profile_verification: false,
+          profile_verified: false,
+          identity_verified: false,
+        }),
+      } as any,
+      {} as any,
+      { find: jest.fn().mockResolvedValue([]) } as any,
+      { count: jest.fn().mockResolvedValue(0), find: participantFind } as any,
+      { find: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0) } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+    const result = await service.getDashboard('student-1');
+    expect(result.data.student_analytics?.verified).toBe(false);
+    expect(result.data.activeProjects[0]?.required_hours_per_student).toBe(24);
+    expect(result.data.activeProjects[0]?.team_size).toBe(1);
+  });
+});

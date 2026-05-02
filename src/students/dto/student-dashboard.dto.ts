@@ -14,6 +14,12 @@ export interface ActiveProject {
     progress: number; // 0-100
     /** Canonical report lifecycle for this project when a student_reports row exists (additive for clients). */
     report_status?: string | null;
+    /** Opportunity requirement per student (`timeline.expected_hours` if set, else `requiredHours`). */
+    required_hours_per_student?: number;
+    participation_type?: string;
+    academic_integration_type?: string | null;
+    /** Team enrollments on this project sharing the same `team_id` / application group; 1 for individual. */
+    team_size?: number;
 }
 
 export interface Deadline {
@@ -103,6 +109,15 @@ export interface DashboardPendingSummary {
     items: DashboardPendingSummaryItem[];
 }
 
+/** Account-level analytics on the student dashboard (not tied to a single project). */
+export interface StudentDashboardAnalytics {
+    profile_completion_percent: number;
+    completed_required_fields: number;
+    total_required_fields: number;
+    /** Both profile and identity verification passed. */
+    verified: boolean;
+}
+
 export interface StudentDashboardResponse {
     success: boolean;
     data: {
@@ -113,5 +128,6 @@ export interface StudentDashboardResponse {
         quickActions?: DashboardQuickActions;
         notificationsPreview?: DashboardNotificationsPreview;
         pendingSummary?: DashboardPendingSummary;
+        student_analytics?: StudentDashboardAnalytics;
     };
 }

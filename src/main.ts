@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
+import { RequestMethod, ValidationPipe } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import { join } from 'path';
@@ -35,8 +35,10 @@ async function bootstrap() {
     transform: true,
   }));
 
-  // Set global API prefix
-  app.setGlobalPrefix('api/v1');
+  // API routes live under /api/v1; keep GET / for health/ops (Vercel, browsers).
+  app.setGlobalPrefix('api/v1', {
+    exclude: [{ path: '', method: RequestMethod.GET }],
+  });
 
   // Serve static files from uploads directory (only if it exists)
   // For Vercel/Production, we might need a different strategy (S3/Cloudinary)

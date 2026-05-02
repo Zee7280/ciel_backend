@@ -327,12 +327,14 @@ export class AdminService {
             const timesheets = await this.timesheetRepository.find({ where: { opportunityId: opp.id } });
             const hours = timesheets.filter(t => t.status === 'verified').reduce((sum, t) => sum + Number(t.hours || 0), 0);
 
-            const occupiedSeats = await this.participationRepository.count({
+            const participationSeats = await this.participationRepository.count({
                 where: {
                     projectId: opp.id,
                     status: In(OCCUPIED_SEAT_STATUSES),
                 },
             });
+            const pipelineSeats = await this.opportunityApplicationsService.countSeatsInFlight(opp.id);
+            const occupiedSeats = participationSeats + pipelineSeats;
 
             const volunteersRequired = Number(opp.timeline?.volunteers_required) || 0;
             const perVolunteerHours = Number(opp.timeline?.expected_hours) || opp.requiredHours || 0;

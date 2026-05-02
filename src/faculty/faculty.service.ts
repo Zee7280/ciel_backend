@@ -199,11 +199,10 @@ export class FacultyService {
                         )
                         .orWhere(
                             new Brackets((app) => {
-                                app.where('opportunity.creatorId IS NOT NULL').andWhere(
+                                app.where(
                                     `EXISTS (
                                         SELECT 1 FROM opportunity_applications oa
                                         WHERE oa.opportunity_id::text = opportunity.id::text
-                                          AND oa.student_user_id::text = opportunity."creatorId"::text
                                           AND oa.withdrawn_at IS NULL
                                           AND oa.internal_status = :oaPendingFac
                                           AND (
@@ -264,7 +263,6 @@ export class FacultyService {
                     `NOT EXISTS (
                         SELECT 1 FROM opportunity_applications oa
                         WHERE oa.opportunity_id::text = opportunity.id::text
-                          AND oa.student_user_id::text = opportunity."creatorId"::text
                           AND oa.withdrawn_at IS NULL
                           AND oa.internal_status = :histOaPendingFac
                           AND (
@@ -640,7 +638,8 @@ export class FacultyService {
                 }),
             )
             .andWhere('COALESCE(r.status, \'\') NOT IN (:...ex)', { ex: ['draft'] })
-            .orderBy('COALESCE(r.reportSubmittedAt, r.submission_date, r.updatedAt)', 'DESC')
+            .addSelect('COALESCE(r.reportSubmittedAt, r.submission_date, r.updatedAt)', 'report_recent_at')
+            .orderBy('report_recent_at', 'DESC')
             .take(12)
             .getMany();
 

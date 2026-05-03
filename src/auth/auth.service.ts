@@ -14,6 +14,7 @@ import { OtpService } from './otp.service';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { User } from '../users/entities/user.entity';
 import { UserRole } from '../users/enums/user-role.enum';
+import { PAKISTANI_UNIVERSITIES_SET } from './constants/pakistani-universities';
 
 @Injectable()
 export class AuthService {
@@ -97,6 +98,25 @@ export class AuthService {
             }
 
             await this.otpService.requireVerifiedEmailForSignup(email);
+
+            if (
+                userData.role === UserRole.UNIVERSITY ||
+                userData.role === UserRole.NGO ||
+                userData.role === UserRole.CORPORATE
+            ) {
+                userData.orgType = userData.role;
+            }
+
+            if (userData.role === UserRole.UNIVERSITY) {
+                const institution = (userData.orgName || '').trim();
+                if (!institution) {
+                    throw new BadRequestException('Institution name is required');
+                }
+                if (!PAKISTANI_UNIVERSITIES_SET.has(institution)) {
+                    throw new BadRequestException('Institution must be selected from the approved list');
+                }
+                userData.orgName = institution;
+            }
 
             const hashedPassword = await bcrypt.hash(password, 10);
 

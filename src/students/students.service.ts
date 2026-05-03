@@ -271,6 +271,45 @@ export class StudentsService {
         return `ind:${p.id}`;
     }
 
+    /**
+     * Full roster for My Projects team modal: same join batch (`applicationId`) and, for team applies,
+     * everyone with the same `teamId` on the project (teammates sometimes lack `applicationId`).
+     */
+    private async participationRowsForStudentProjectTeam(app: Participation): Promise<Participation[]> {
+        const projectId = app.projectId;
+        const merged = new Map<string, Participation>();
+
+        if (app.applicationId) {
+            const byApplication = await this.participantRepository.find({
+                where: { projectId, applicationId: app.applicationId },
+            });
+            for (const row of byApplication) {
+                merged.set(row.id, row);
+            }
+        }
+
+        const teamId = typeof app.teamId === 'string' ? app.teamId.trim() : '';
+        if (app.participationMode === 'team' && teamId) {
+            const byTeam = await this.participantRepository.find({
+                where: { projectId, teamId },
+            });
+            for (const row of byTeam) {
+                merged.set(row.id, row);
+            }
+        }
+
+        if (merged.size === 0) {
+            return [app];
+        }
+
+        return Array.from(merged.values()).sort((a, b) => {
+            if (a.isTeamLead !== b.isTeamLead) {
+                return a.isTeamLead ? -1 : 1;
+            }
+            return (a.fullName || '').localeCompare(b.fullName || '');
+        });
+    }
+
     /** Labels include keywords the student dashboard UI derives from when overview is absent. */
     private participationToDashboardStatus(status: string | null | undefined): string {
         switch (status) {
@@ -1217,19 +1256,16 @@ export class StudentsService {
 
         const fromParticipants = await Promise.all(
             applications.map(async (app) => {
-                const teamMembers = app.applicationId
-                    ? (
-                          await this.participantRepository.find({
-                              where: { applicationId: app.applicationId },
-                          })
-                      ).map((m) => ({
-                          name: m.fullName,
-                          email: m.email,
-                          mobile: m.mobile,
-                          university: m.universityName,
-                          is_verified: true,
-                      }))
-                    : [];
+                const roster = await this.participationRowsForStudentProjectTeam(app);
+                const teamMembers = roster.map((m) => ({
+                    name: m.fullName,
+                    role: m.isTeamLead ? 'Leader' : 'Member',
+                    cnic: m.cnicLast4 ? `••••${m.cnicLast4}` : '',
+                    email: m.email,
+                    mobile: m.mobile,
+                    university: m.universityName,
+                    is_verified: Boolean(m.emailVerified),
+                }));
 
                 const base = this.opportunityWorkflow.toStudentProjectCard(app.project, { teamMembers });
                 const participationStatus =

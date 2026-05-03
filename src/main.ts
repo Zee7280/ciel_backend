@@ -37,7 +37,12 @@ async function bootstrap() {
 
   // API routes live under /api/v1; keep GET / for health/ops (Vercel, browsers).
   app.setGlobalPrefix('api/v1', {
-    exclude: [{ path: '', method: RequestMethod.GET }],
+    exclude: [
+      { path: '', method: RequestMethod.GET },
+      // Browsers/bots hit backend origin for favicon — avoid 404 noise in logs (API has no UI asset).
+      { path: 'favicon.ico', method: RequestMethod.GET },
+      { path: 'favicon.ico', method: RequestMethod.HEAD },
+    ],
   });
 
   // Serve static files from uploads directory (only if it exists)

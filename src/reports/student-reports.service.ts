@@ -303,6 +303,32 @@ export class StudentReportsService {
         return false;
     }
 
+    /**
+     * Team applications: only `isTeamLead` may finalize submission so one canonical report is filed per team.
+     * Draft saves are unchanged. No participation row, non-team mode, or no flagged lead on the project → unchanged (legacy / creators).
+     */
+    private async assertTeamLeadMaySubmitReport(studentId: string, opportunityId: unknown): Promise<void> {
+        if (opportunityId === null || opportunityId === undefined || opportunityId === '') return;
+        const oid = String(opportunityId).trim();
+        if (!this.looksLikeUuid(oid)) return;
+
+        const mine = await this.participantRepository.findOne({
+            where: { studentId, projectId: oid },
+        });
+        if (!mine) return;
+        if (mine.participationMode !== 'team') return;
+        if (mine.isTeamLead) return;
+
+        const anyLead = await this.participantRepository.findOne({
+            where: { projectId: oid, participationMode: 'team', isTeamLead: true },
+        });
+        if (!anyLead) return;
+
+        throw new ForbiddenException(
+            'Only the team lead can submit the impact report for this team project. Your team lead should submit on behalf of the team.',
+        );
+    }
+
     async createReport(studentId: string, dto: any, files: any[], forceSubmit = false) {
         // Parse form data and convert dot notation to nested objects
         const parsedData = this.parseFormData(dto);
@@ -330,6 +356,10 @@ export class StudentReportsService {
                     );
                 }
             }
+        }
+
+        if (shouldSubmit && opportunityIdFromDto) {
+            await this.assertTeamLeadMaySubmitReport(studentId, opportunityIdFromDto);
         }
 
         // Upsert logic: Check if report already exists

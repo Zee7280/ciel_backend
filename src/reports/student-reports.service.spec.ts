@@ -18,7 +18,9 @@ describe('StudentReportsService', () => {
     const mockOpportunityRepository = {
         findOne: jest.fn(),
     };
-    const mockParticipantRepository = {};
+    const mockParticipantRepository = {
+        findOne: jest.fn().mockResolvedValue(null),
+    };
     const mockStudentReportsRepository = {
         findOne: jest.fn(),
         create: jest.fn(),
@@ -43,6 +45,9 @@ describe('StudentReportsService', () => {
 
     beforeEach(async () => {
         jest.clearAllMocks();
+
+        mockParticipantRepository.findOne.mockReset();
+        mockParticipantRepository.findOne.mockResolvedValue(null);
 
         mockOpportunityRepository.findOne.mockResolvedValue({
             id: 'opp-1',
@@ -112,6 +117,221 @@ describe('StudentReportsService', () => {
             }),
         );
         expect(mockMailService.sendAdminStudentReportSubmitted).toHaveBeenCalledTimes(1);
+    });
+
+    const SAMPLE_OPP_UUID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+
+    const TEAM_ONLY_GUARD_MESSAGE =
+        'Only the team lead can submit the impact report for this team project. Your team lead should submit on behalf of the team.';
+
+    function mockTeamMemberAndLeadOnProject() {
+        mockOpportunityRepository.findOne.mockResolvedValue({
+            id: SAMPLE_OPP_UUID,
+            title: 'Team Project',
+            isStudentCreated: false,
+            timeline: null,
+        });
+        mockParticipantRepository.findOne.mockImplementation((opts: { where?: Record<string, unknown> }) => {
+            const w = opts?.where ?? {};
+            if (w.studentId === 'student-member' && w.projectId === SAMPLE_OPP_UUID) {
+                return Promise.resolve({
+                    participationMode: 'team',
+                    isTeamLead: false,
+                    studentId: w.studentId,
+                    projectId: w.projectId,
+                });
+            }
+            if (
+                w.projectId === SAMPLE_OPP_UUID &&
+                w.participationMode === 'team' &&
+                w.isTeamLead === true
+            ) {
+                return Promise.resolve({ id: 'lead-participation' });
+            }
+            return Promise.resolve(null);
+        });
+    }
+
+    describe('team report submit authorization', () => {
+        it('blocks final submit for team members when a team lead exists on the project', async () => {
+            mockTeamMemberAndLeadOnProject();
+
+            await expect(
+                service.createReport(
+                    'student-member',
+                    {
+                        opportunityId: SAMPLE_OPP_UUID,
+                        section2: { problem_statement: 'test', baseline_evidence: 'Survey', discipline: 'CS' },
+                    },
+                    [],
+                    true,
+                ),
+            ).rejects.toThrow(TEAM_ONLY_GUARD_MESSAGE);
+        });
+
+        it('blocks submit when submit intent comes from body (not only forceSubmit)', async () => {
+            mockTeamMemberAndLeadOnProject();
+
+            await expect(
+                service.createReport(
+                    'student-member',
+                    {
+                        opportunityId: SAMPLE_OPP_UUID,
+                        submit: true,
+                        section2: { problem_statement: 'test', baseline_evidence: 'Survey', discipline: 'CS' },
+                    },
+                    [],
+                    false,
+                ),
+            ).rejects.toThrow(TEAM_ONLY_GUARD_MESSAGE);
+        });
+
+        it('does not block draft saves for team members when a lead exists', async () => {
+            mockTeamMemberAndLeadOnProject();
+
+            const result = await service.createReport(
+                'student-member',
+                {
+                    opportunityId: SAMPLE_OPP_UUID,
+                    section2: { problem_statement: 'test', baseline_evidence: 'Survey', discipline: 'CS' },
+                },
+                [],
+                false,
+            );
+
+            expect(result.message).toBe('Report saved as draft.');
+            expect(mockParticipantRepository.findOne).not.toHaveBeenCalled();
+        });
+
+        it('allows team lead to submit for team participation', async () => {
+            mockOpportunityRepository.findOne.mockResolvedValue({
+                id: SAMPLE_OPP_UUID,
+                title: 'Team Project',
+                isStudentCreated: false,
+                timeline: null,
+            });
+            mockParticipantRepository.findOne.mockImplementation((opts: { where?: Record<string, unknown> }) => {
+                const w = opts?.where ?? {};
+                if (w.studentId === 'team-lead-student' && w.projectId === SAMPLE_OPP_UUID) {
+                    return Promise.resolve({
+                        participationMode: 'team',
+                        isTeamLead: true,
+                        studentId: w.studentId,
+                        projectId: w.projectId,
+                    });
+                }
+                return Promise.resolve(null);
+            });
+
+            const result = await service.createReport(
+                'team-lead-student',
+                {
+                    opportunityId: SAMPLE_OPP_UUID,
+                    section2: { problem_statement: 'test', baseline_evidence: 'Survey', discipline: 'CS' },
+                },
+                [],
+                true,
+            );
+
+            expect(result.message).toBe('Report submitted successfully.');
+            expect(mockParticipantRepository.findOne).toHaveBeenCalledTimes(1);
+        });
+
+        it('allows team member submit when no lead row exists (legacy data)', async () => {
+            mockOpportunityRepository.findOne.mockResolvedValue({
+                id: SAMPLE_OPP_UUID,
+                title: 'Team Project',
+                isStudentCreated: false,
+                timeline: null,
+            });
+            mockParticipantRepository.findOne.mockImplementation((opts: { where?: Record<string, unknown> }) => {
+                const w = opts?.where ?? {};
+                if (w.studentId === 'legacy-member' && w.projectId === SAMPLE_OPP_UUID) {
+                    return Promise.resolve({
+                        participationMode: 'team',
+                        isTeamLead: false,
+                        studentId: w.studentId,
+                        projectId: w.projectId,
+                    });
+                }
+                if (
+                    w.projectId === SAMPLE_OPP_UUID &&
+                    w.participationMode === 'team' &&
+                    w.isTeamLead === true
+                ) {
+                    return Promise.resolve(null);
+                }
+                return Promise.resolve(null);
+            });
+
+            const result = await service.createReport(
+                'legacy-member',
+                {
+                    opportunityId: SAMPLE_OPP_UUID,
+                    section2: { problem_statement: 'test', baseline_evidence: 'Survey', discipline: 'CS' },
+                },
+                [],
+                true,
+            );
+
+            expect(result.message).toBe('Report submitted successfully.');
+        });
+
+        it('allows individual participation submit even when isTeamLead is false', async () => {
+            mockOpportunityRepository.findOne.mockResolvedValue({
+                id: SAMPLE_OPP_UUID,
+                title: 'Solo Project',
+                isStudentCreated: false,
+                timeline: null,
+            });
+            mockParticipantRepository.findOne.mockImplementation((opts: { where?: Record<string, unknown> }) => {
+                const w = opts?.where ?? {};
+                if (w.studentId === 'solo-student' && w.projectId === SAMPLE_OPP_UUID) {
+                    return Promise.resolve({
+                        participationMode: 'individual',
+                        isTeamLead: false,
+                        studentId: w.studentId,
+                        projectId: w.projectId,
+                    });
+                }
+                return Promise.resolve(null);
+            });
+
+            const result = await service.createReport(
+                'solo-student',
+                {
+                    opportunityId: SAMPLE_OPP_UUID,
+                    section2: { problem_statement: 'test', baseline_evidence: 'Survey', discipline: 'CS' },
+                },
+                [],
+                true,
+            );
+
+            expect(result.message).toBe('Report submitted successfully.');
+        });
+
+        it('allows submit when student has no participation row (creator / legacy)', async () => {
+            mockOpportunityRepository.findOne.mockResolvedValue({
+                id: SAMPLE_OPP_UUID,
+                title: 'Project',
+                isStudentCreated: false,
+                timeline: null,
+            });
+            mockParticipantRepository.findOne.mockResolvedValue(null);
+
+            const result = await service.createReport(
+                'no-participation-user',
+                {
+                    opportunityId: SAMPLE_OPP_UUID,
+                    section2: { problem_statement: 'test', baseline_evidence: 'Survey', discipline: 'CS' },
+                },
+                [],
+                true,
+            );
+
+            expect(result.message).toBe('Report submitted successfully.');
+            expect(mockParticipantRepository.findOne).toHaveBeenCalled();
+        });
     });
 
     it('marks no-partner reports verified when admin approves', async () => {

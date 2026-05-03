@@ -11,6 +11,7 @@ import {
     UseInterceptors,
     UploadedFiles,
     BadRequestException,
+    HttpException,
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -50,6 +51,10 @@ export class StudentReportsController {
                 files
             );
         } catch (error) {
+            if (error instanceof HttpException) {
+                const s = error.getStatus();
+                if (s === 403 || s === 401) throw error;
+            }
             if (error.response && error.response.message) {
                 throw new BadRequestException({
                     success: false,
@@ -92,7 +97,8 @@ export class StudentReportsController {
         return await this.studentReportsService.createReport(
             req.user.id,
             body,
-            files
+            files,
+            true,
         );
     }
 

@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Head, HttpCode, UseGuards, Request } from '@nestjs/common';
 import { AppService } from './app.service';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
@@ -12,6 +12,14 @@ export class AppController {
   @Get()
   getHello(): string {
     return this.appService.getHello();
+  }
+
+  /** Quiet probe requests to raw backend host (Vercel); real favicon lives on the web app. */
+  @Get('favicon.ico')
+  @Head('favicon.ico')
+  @HttpCode(204)
+  favicon(): void {
+    return;
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

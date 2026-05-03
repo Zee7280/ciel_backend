@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, Brackets } from 'typeorm';
 import { FacultyUniversityScopeAssignment } from './entities/faculty-university-scope-assignment.entity';
 import { User } from '../users/entities/user.entity';
 import { Organization } from '../organizations/entities/organization.entity';
@@ -62,7 +62,8 @@ export class FacultyUniversityScopeService {
     }
 
     /**
-     * Opportunity IDs involving at least one student from this university (by profile name match).
+     * Opportunity IDs faculty should see when delegated to a university org — aligned with
+     * {@link OrganizationsService.getUniversityAnalytics} linkage rules (not only student profile strings).
      */
     async resolveOpportunityIdsForUniversityOrganization(universityOrganizationId: string): Promise<string[]> {
         const org = await this.orgRepo.findOne({ where: { id: universityOrganizationId } });
@@ -79,6 +80,31 @@ export class FacultyUniversityScopeService {
                 { n },
             )
             .getRawMany();
+
+        const fromParticipationsStudentOrg = await this.participationRepo
+            .createQueryBuilder('p')
+            .innerJoin('p.student', 'u')
+            .select('DISTINCT p.projectId', 'id')
+            .where('u.role = :sr', { sr: UserRole.STUDENT })
+            .andWhere('u."organizationId"::text = :orgId', { orgId: universityOrganizationId })
+            .getRawMany();
+
+        /** Enrollment snapshot fields often carry institution text / occasional UUID; profile may differ or be empty. */
+        const fromEnrollmentOnParticipation = await this.participationRepo
+            .createQueryBuilder('p')
+            .select('DISTINCT p.projectId', 'id')
+            .where('p.student_id IS NOT NULL')
+            .andWhere(
+                new Brackets((b) => {
+                    b.where(`TRIM(COALESCE(p.universityId, '')) = :orgId`, {
+                        orgId: universityOrganizationId,
+                    })
+                        .orWhere(`LOWER(TRIM(COALESCE(p.universityName, ''))) = :n`, { n })
+                        .orWhere(`LOWER(TRIM(COALESCE(p.universityId, ''))) = :n`, { n });
+                }),
+            )
+            .getRawMany();
+
         const fromApps = await this.applicationRepo
             .createQueryBuilder('a')
             .innerJoin('a.studentUser', 'u')
@@ -89,6 +115,15 @@ export class FacultyUniversityScopeService {
                 { n },
             )
             .getRawMany();
+
+        const fromAppsStudentOrg = await this.applicationRepo
+            .createQueryBuilder('a')
+            .innerJoin('a.studentUser', 'u')
+            .select('DISTINCT a.opportunityId', 'id')
+            .where('u.role = :sr', { sr: UserRole.STUDENT })
+            .andWhere('u."organizationId"::text = :orgId', { orgId: universityOrganizationId })
+            .getRawMany();
+
         const fromCreators = await this.opportunityRepo
             .createQueryBuilder('o')
             .innerJoin(User, 'u', 'u.id::text = o."creatorId"::text')
@@ -100,10 +135,26 @@ export class FacultyUniversityScopeService {
             )
             .getRawMany();
 
+        const ownedByUniversityOrg = await this.opportunityRepo.find({
+            where: { organizationId: universityOrganizationId },
+            select: ['id'],
+        });
+
         const ids = new Set<string>();
-        for (const row of [...fromParticipations, ...fromApps, ...fromCreators]) {
-            const id = row?.id as string | undefined;
-            if (id) ids.add(id);
+        const merge = (rows: { id?: string }[]) => {
+            for (const row of rows) {
+                const id = row?.id as string | undefined;
+                if (id) ids.add(id);
+            }
+        };
+        merge(fromParticipations);
+        merge(fromParticipationsStudentOrg);
+        merge(fromEnrollmentOnParticipation);
+        merge(fromApps);
+        merge(fromAppsStudentOrg);
+        merge(fromCreators);
+        for (const o of ownedByUniversityOrg) {
+            if (o.id) ids.add(o.id);
         }
         return [...ids];
     }

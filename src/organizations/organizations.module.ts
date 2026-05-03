@@ -11,9 +11,14 @@ import { Report } from '../reports/entities/report.entity';
 import { Participation } from '../engagement/entities/participant.entity';
 
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
+import { FacultyUniversityScopeModule } from '../faculty-university-scope/faculty-university-scope.module';
 
 @Module({
-    imports: [TypeOrmModule.forFeature([Organization, User, Opportunity, Timesheet, Report, Participation]), AuditLogsModule],
+    imports: [
+        TypeOrmModule.forFeature([Organization, User, Opportunity, Timesheet, Report, Participation]),
+        AuditLogsModule,
+        FacultyUniversityScopeModule,
+    ],
     controllers: [OrganizationsController, AdminOrganizationsController],
     providers: [OrganizationsService],
     exports: [OrganizationsService],

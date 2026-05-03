@@ -18,6 +18,7 @@ import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { Report } from '../reports/entities/report.entity';
 import { Participation } from '../engagement/entities/participant.entity';
+import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
 
 @Injectable()
 export class OrganizationsService {
@@ -34,9 +35,151 @@ export class OrganizationsService {
         private reportsRepository: Repository<Report>,
         @InjectRepository(Participation)
         private participationRepository: Repository<Participation>,
+        private readonly facultyUniversityScopeService: FacultyUniversityScopeService,
     ) { }
 
+    /**
+     * Partner dashboard for university-type orgs: activity is usually on non-university-owned listings.
+     * Scope opportunity IDs the same way as faculty delegation / university analytics.
+     */
+    private async getPartnerDashboardStatsForUniversityOrg(orgId: string) {
+        const oppIds = await this.facultyUniversityScopeService.resolveOpportunityIdsForUniversityOrganization(orgId);
+
+        if (oppIds.length === 0) {
+            return {
+                success: true,
+                data: {
+                    stats: {
+                        activeOpportunities: 0,
+                        studentsEngaged: 0,
+                        verifiedHours: 0,
+                        reportsSubmitted: 0,
+                    },
+                    pendingVerifications: 0,
+                    pendingSummary: {
+                        total: 0,
+                        items: [
+                            {
+                                key: 'partner_pending_verifications',
+                                title: 'Pending verifications',
+                                count: 0,
+                                href: '/dashboard/partner/verification',
+                                tone: 'warning',
+                                description: 'Student hours or reports waiting for partner review.',
+                            },
+                            {
+                                key: 'partner_pending_opportunities',
+                                title: 'Requests under approval',
+                                count: 0,
+                                href: '/dashboard/partner/requests',
+                                tone: 'neutral',
+                                description: 'Your opportunities still moving through approval.',
+                            },
+                        ],
+                    },
+                    recentProjects: [],
+                    impactTarget: {
+                        percentage: 85,
+                        label: 'Goal Met',
+                    },
+                },
+            };
+        }
+
+        const activeOpportunities = await this.opportunitiesRepository.count({
+            where: { id: In(oppIds), status: 'active' },
+        });
+
+        const timesheets = await this.timesheetsRepository.find({
+            where: { opportunityId: In(oppIds) },
+            select: ['studentId'],
+        });
+        const studentsEngaged = new Set(timesheets.map((t) => t.studentId).filter(Boolean)).size;
+
+        const verifiedTimesheets = await this.timesheetsRepository.find({
+            where: { opportunityId: In(oppIds), status: 'verified' },
+        });
+        const verifiedHours = verifiedTimesheets.reduce((sum, t) => sum + t.hours, 0);
+
+        const reportsSubmitted = await this.reportsRepository
+            .createQueryBuilder('r')
+            .where(
+                new Brackets((qb) => {
+                    qb.where('r."organizationId"::text = :orgId', { orgId }).orWhere(
+                        'r."opportunityId" IN (:...oppIds)',
+                        { oppIds },
+                    );
+                }),
+            )
+            .getCount();
+
+        const pendingVerifications = await this.timesheetsRepository.count({
+            where: { opportunityId: In(oppIds), status: 'pending' },
+        });
+
+        const pendingOpportunities = await this.opportunitiesRepository.count({
+            where: { id: In(oppIds), status: 'pending_approval' },
+        });
+
+        const recentProjects = await this.opportunitiesRepository.find({
+            where: { id: In(oppIds) },
+            order: { createdAt: 'DESC' },
+            take: 3,
+        });
+
+        return {
+            success: true,
+            data: {
+                stats: {
+                    activeOpportunities,
+                    studentsEngaged,
+                    verifiedHours,
+                    reportsSubmitted,
+                },
+                pendingVerifications,
+                pendingSummary: {
+                    total: pendingVerifications + pendingOpportunities,
+                    items: [
+                        {
+                            key: 'partner_pending_verifications',
+                            title: 'Pending verifications',
+                            count: pendingVerifications,
+                            href: '/dashboard/partner/verification',
+                            tone: 'warning',
+                            description: 'Student hours or reports waiting for partner review.',
+                        },
+                        {
+                            key: 'partner_pending_opportunities',
+                            title: 'Requests under approval',
+                            count: pendingOpportunities,
+                            href: '/dashboard/partner/requests',
+                            tone: 'neutral',
+                            description: 'Your opportunities still moving through approval.',
+                        },
+                    ],
+                },
+                recentProjects: recentProjects.map((p) => ({
+                    id: p.id,
+                    title: p.title,
+                    location: p.location?.city || 'Unknown',
+                    volunteersNeeded: p.timeline?.volunteers_required || 0,
+                    volunteersApplied: 0,
+                    status: p.status,
+                })),
+                impactTarget: {
+                    percentage: 85,
+                    label: 'Goal Met',
+                },
+            },
+        };
+    }
+
     async getPartnerDashboardStats(orgId: string) {
+        const org = await this.organizationsRepository.findOne({ where: { id: orgId } });
+        if (org && this.isUniversityOrgType(org.orgType)) {
+            return this.getPartnerDashboardStatsForUniversityOrg(orgId);
+        }
+
         // Active Opportunities
         const activeOpportunities = await this.opportunitiesRepository.count({
             where: { organizationId: orgId, status: 'active' }
@@ -545,7 +688,8 @@ export class OrganizationsService {
 
     /**
      * University org analytics: participations linked to this org via enrollment `universityId`,
-     * opportunities owned by the org, or students whose user profile is tied to the org.
+     * `universityName` (often the same canonical institution string as `organizations.name`, not a UUID),
+     * opportunities owned by the org, students tied by `organizationId`, or profile `institution` / `university`.
      * Non-university org types receive 403.
      */
     async getUniversityAnalytics(orgId: string) {
@@ -556,6 +700,8 @@ export class OrganizationsService {
         if (!this.isUniversityOrgType(org.orgType)) {
             throw new ForbiddenException('University analytics are only available for university organizations.');
         }
+
+        const orgNameNorm = org.name.trim().toLowerCase();
 
         const st = [
             'pending',
@@ -579,7 +725,19 @@ export class OrganizationsService {
                 new Brackets((b) => {
                     b.where(`TRIM(COALESCE(p.universityId, '')) = :orgId`, { orgId })
                         .orWhere(`project."organizationId"::text = :orgId`, { orgId })
-                        .orWhere(`student."organizationId"::text = :orgId`, { orgId });
+                        .orWhere(`student."organizationId"::text = :orgId`, { orgId })
+                        .orWhere(`LOWER(TRIM(COALESCE(p.universityName, ''))) = :orgNameNorm`, {
+                            orgNameNorm,
+                        })
+                        .orWhere(`LOWER(TRIM(COALESCE(p.universityId, ''))) = :orgNameNorm`, {
+                            orgNameNorm,
+                        })
+                        .orWhere(`LOWER(TRIM(COALESCE(student.institution, ''))) = :orgNameNorm`, {
+                            orgNameNorm,
+                        })
+                        .orWhere(`LOWER(TRIM(COALESCE(student.university, ''))) = :orgNameNorm`, {
+                            orgNameNorm,
+                        });
                 }),
             )
             .getMany();
@@ -658,11 +816,116 @@ export class OrganizationsService {
         };
     }
 
+    /** Same shape as {@link getPartnerStudentsAnalytics} but scoped like university dashboard / analytics. */
+    private async getPartnerStudentsAnalyticsForUniversityOrg(orgId: string) {
+        const oppIds = await this.facultyUniversityScopeService.resolveOpportunityIdsForUniversityOrganization(orgId);
+        const st = [
+            'pending',
+            'pending_payment_approval',
+            'paid',
+            'pending_ciel_approval',
+            'pending_faculty_approval',
+            'approved',
+            'verified',
+            'accepted',
+            'finalized',
+        ];
+
+        if (oppIds.length === 0) {
+            return {
+                success: true,
+                data: {
+                    organization_id: orgId,
+                    total_students_assigned: 0,
+                    total_enrollments: 0,
+                    verified_students: 0,
+                    verification_rate_percent: 0,
+                    university_mix: [],
+                    degree_mix: [],
+                    total_required_hours: 0,
+                },
+            };
+        }
+
+        const participations = await this.participationRepository
+            .createQueryBuilder('p')
+            .innerJoinAndSelect('p.project', 'project')
+            .leftJoinAndSelect('p.student', 'student')
+            .where('p.student_id IS NOT NULL')
+            .andWhere('p.project_id IN (:...oppIds)', { oppIds })
+            .andWhere('p.status IN (:...st)', { st })
+            .getMany();
+
+        const total_enrollments = participations.length;
+        const distinctStudentIds = [
+            ...new Set(participations.map((p) => p.studentId).filter((id): id is string => Boolean(id))),
+        ];
+        const total_students_assigned = distinctStudentIds.length;
+
+        let verified_students = 0;
+        if (distinctStudentIds.length > 0) {
+            verified_students = await this.usersRepository.count({
+                where: {
+                    id: In(distinctStudentIds),
+                    profile_verified: true,
+                    identity_verified: true,
+                },
+            });
+        }
+
+        const verification_rate_percent =
+            total_students_assigned === 0 ? 0 : Math.round((100 * verified_students) / total_students_assigned);
+
+        const universityMap = new Map<string, number>();
+        const degreeMap = new Map<string, number>();
+        let total_required_hours = 0;
+
+        for (const p of participations) {
+            const uni =
+                (p.universityName || '').trim() ||
+                ((p.student as User | undefined)?.university || '').trim() ||
+                'Unspecified';
+            universityMap.set(uni, (universityMap.get(uni) || 0) + 1);
+
+            const deg = (p.academicProgram || '').trim() || 'Unspecified';
+            degreeMap.set(deg, (degreeMap.get(deg) || 0) + 1);
+
+            total_required_hours += this.resolveRequiredHoursPerStudentFromOpportunity(p.project);
+        }
+
+        const university_mix = [...universityMap.entries()]
+            .map(([university, count]) => ({ university, count }))
+            .sort((a, b) => b.count - a.count);
+
+        const degree_mix = [...degreeMap.entries()]
+            .map(([degree, count]) => ({ degree, count }))
+            .sort((a, b) => b.count - a.count);
+
+        return {
+            success: true,
+            data: {
+                organization_id: orgId,
+                total_students_assigned,
+                total_enrollments,
+                verified_students,
+                verification_rate_percent,
+                university_mix,
+                degree_mix,
+                total_required_hours: Math.round(total_required_hours * 10) / 10,
+            },
+        };
+    }
+
     /**
      * Partner (NGO) org: students on listings owned by this org (`opportunity.organizationId`).
      * Assignments = participation rows; distinct students and profile/identity verification match university analytics.
      */
     async getPartnerStudentsAnalytics(orgId: string) {
+        const org = await this.organizationsRepository.findOne({ where: { id: orgId } });
+        if (org && this.isUniversityOrgType(org.orgType)) {
+            return this.getPartnerStudentsAnalyticsForUniversityOrg(orgId);
+        }
+
         const st = [
             'pending',
             'pending_payment_approval',
@@ -766,8 +1029,112 @@ export class OrganizationsService {
         return parse(opp.sdg);
     }
 
+    private async getPartnerImpactMetricsForUniversityOrg(orgId: string) {
+        const oppIds = await this.facultyUniversityScopeService.resolveOpportunityIdsForUniversityOrganization(orgId);
+
+        const now = new Date();
+        const emptyMonthlyTrend: Array<{ month: string; beneficiaries: number; hours: number }> = [];
+        for (let i = 11; i >= 0; i--) {
+            const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+            emptyMonthlyTrend.push({
+                month: d.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' }),
+                hours: 0,
+                beneficiaries: 0,
+            });
+        }
+
+        if (oppIds.length === 0) {
+            return {
+                success: true,
+                data: {
+                    totalBeneficiaries: 0,
+                    totalProjects: 0,
+                    totalHours: 0,
+                    sdgDistribution: {},
+                    monthlyTrend: emptyMonthlyTrend,
+                },
+            };
+        }
+
+        const opps = await this.opportunitiesRepository.find({
+            where: { id: In(oppIds) },
+        });
+
+        const excluded = new Set(['draft', 'rejected']);
+        let totalBeneficiaries = 0;
+        const sdgCounts = new Map<number, number>();
+        let totalProjects = 0;
+
+        for (const o of opps) {
+            const st = String(o.status || '').toLowerCase();
+            if (!excluded.has(st)) {
+                totalProjects += 1;
+            }
+
+            const obj = o.objectives as { beneficiaries_count?: number; total_beneficiaries?: number } | null;
+            const b = Number(obj?.beneficiaries_count ?? obj?.total_beneficiaries ?? 0);
+            if (Number.isFinite(b) && b > 0) {
+                totalBeneficiaries += b;
+            }
+
+            const g = this.parsePrimarySdgGoalNumber(o);
+            if (g != null) {
+                sdgCounts.set(g, (sdgCounts.get(g) || 0) + 1);
+            }
+        }
+
+        const verifiedTs = await this.timesheetsRepository.find({
+            where: { opportunityId: In(oppIds), status: 'verified' },
+        });
+        const totalHours = verifiedTs.reduce((s, t) => s + (Number(t.hours) || 0), 0);
+
+        const totalSdgWeight = [...sdgCounts.values()].reduce((a, b) => a + b, 0);
+        const sdgDistribution: Record<string, number> = {};
+        if (totalSdgWeight > 0) {
+            for (const [k, v] of sdgCounts) {
+                sdgDistribution[String(k)] = Math.round((100 * v) / totalSdgWeight);
+            }
+        }
+
+        const byMonth = new Map<string, number>();
+        for (const t of verifiedTs) {
+            const d = t.updatedAt instanceof Date ? t.updatedAt : new Date(t.updatedAt);
+            const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+            byMonth.set(key, (byMonth.get(key) || 0) + (Number(t.hours) || 0));
+        }
+
+        const monthlyTrend: Array<{ month: string; beneficiaries: number; hours: number }> = [];
+        for (let i = 11; i >= 0; i--) {
+            const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+            const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+            const hoursRaw = byMonth.get(key) || 0;
+            const rounded = Math.round(hoursRaw * 10) / 10;
+            monthlyTrend.push({
+                month: d.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' }),
+                hours: rounded,
+                beneficiaries: Math.round(hoursRaw),
+            });
+        }
+
+        return {
+            success: true,
+            data: {
+                totalBeneficiaries: Math.round(totalBeneficiaries),
+                totalProjects,
+                totalHours: Math.round(totalHours * 10) / 10,
+                sdgDistribution,
+                monthlyTrend,
+            },
+        };
+    }
+
     /** Partner impact analytics: org opportunities, objectives beneficiaries, SDG tags, verified timesheet hours. */
     async getPartnerImpactMetrics(orgId: string) {
+        const org = await this.organizationsRepository.findOne({ where: { id: orgId } });
+        if (org && this.isUniversityOrgType(org.orgType)) {
+            return this.getPartnerImpactMetricsForUniversityOrg(orgId);
+        }
+
         const opps = await this.opportunitiesRepository.find({
             where: { organizationId: orgId },
         });

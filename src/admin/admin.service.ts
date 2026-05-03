@@ -15,6 +15,131 @@ import { In, IsNull, LessThan, Not } from 'typeorm';
 
 import { Setting } from '../settings/entities/setting.entity';
 
+/** Canonical Pakistan regions for stakeholder "participation by region" (sync spellings with ciel_frontend/src/utils/pakistanRegions.ts). */
+const STAKEHOLDER_REGION_CANONICAL = [
+    'Abbottabad',
+    'Attock',
+    'Azad Jammu and Kashmir',
+    'Bahawalnagar',
+    'Bahawalpur',
+    'Balochistan',
+    'Charsadda',
+    'Chiniot',
+    'Dera Ghazi Khan',
+    'Dera Ismail Khan',
+    'Faisalabad',
+    'Gilgit',
+    'Gilgit-Baltistan',
+    'Gujranwala',
+    'Gujrat',
+    'Haripur',
+    'Hyderabad',
+    'Islamabad',
+    'Islamabad Capital Territory',
+    'Jhang',
+    'Kamoke',
+    'Karachi',
+    'Kasur',
+    'Khyber Pakhtunkhwa',
+    'Kohat',
+    'Lahore',
+    'Larkana',
+    'Mandi Bahauddin',
+    'Mansehra',
+    'Mardan',
+    'Mingora',
+    'Mirpur Khas',
+    'Multan',
+    'Murree',
+    'Nawabshah',
+    'Okara',
+    'Peshawar',
+    'Punjab',
+    'Quetta',
+    'Rahim Yar Khan',
+    'Rawalpindi',
+    'Sahiwal',
+    'Sargodha',
+    'Sheikhupura',
+    'Sialkot',
+    'Skardu',
+    'Sindh',
+    'Sukkur',
+    'Swabi',
+    'Taxila',
+    'Wah Cantonment',
+] as const;
+
+const STAKEHOLDER_REGION_TYPO_TOKEN_FIX: Record<string, string> = {
+    lahors: 'lahore',
+    lhr: 'lahore',
+};
+
+const STAKEHOLDER_REGION_PHRASE_ALIASES: ReadonlyArray<{ readonly pattern: RegExp; readonly canonical: string }> = [
+    { pattern: /^lhr$/i, canonical: 'Lahore' },
+    { pattern: /^pakistan$/i, canonical: 'Lahore' },
+    { pattern: /\bkpk\b/i, canonical: 'Khyber Pakhtunkhwa' },
+    { pattern: /\bfata\b/i, canonical: 'Khyber Pakhtunkhwa' },
+    { pattern: /\bajk\b/i, canonical: 'Azad Jammu and Kashmir' },
+    { pattern: /\bagk\b/i, canonical: 'Azad Jammu and Kashmir' },
+    { pattern: /\bigb\b/i, canonical: 'Gilgit-Baltistan' },
+    { pattern: /\bgb\b/i, canonical: 'Gilgit-Baltistan' },
+    { pattern: /\bict\b/i, canonical: 'Islamabad Capital Territory' },
+];
+
+function escapeStakeholderRegionTokenForRegExp(s: string): string {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function titleCaseStakeholderRegionWords(s: string): string {
+    return s
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((w) => (w.length ? w.charAt(0).toUpperCase() + w.slice(1).toLowerCase() : ''))
+        .join(' ')
+        .trim();
+}
+
+function normalizeStakeholderRegionRawInput(raw: string): string {
+    return (raw ?? '')
+        .replace(/[\uFEFF\u200B-\u200D]/g, '')
+        .replace(/\u00A0/g, ' ')
+        .trim();
+}
+
+function normalizeStakeholderRegionLabel(raw: string): string {
+    let s = normalizeStakeholderRegionRawInput(raw);
+    if (!s) return 'Unspecified';
+
+    s = s.replace(/,\s*pakistan\s*$/i, '').replace(/,\s*pk\s*$/i, '').trim();
+    if (!s) return 'Unspecified';
+
+    for (const { pattern, canonical } of STAKEHOLDER_REGION_PHRASE_ALIASES) {
+        if (pattern.test(s)) return canonical;
+    }
+
+    const loweredFull = s.toLowerCase().replace(/\s+/g, ' ');
+
+    const byLen = [...STAKEHOLDER_REGION_CANONICAL].sort((a, b) => b.length - a.length);
+    for (const canon of byLen) {
+        const c = canon.toLowerCase();
+        const re = new RegExp(`(^|[^a-z0-9])${escapeStakeholderRegionTokenForRegExp(c)}([^a-z0-9]|$)`, 'i');
+        if (re.test(loweredFull)) return canon;
+    }
+
+    const tokens = loweredFull.replace(/[^a-z0-9]+/g, ' ').split(' ').filter(Boolean);
+    const canonLcToDisplay = new Map(STAKEHOLDER_REGION_CANONICAL.map((c) => [c.toLowerCase(), c]));
+    for (const tok of tokens) {
+        const fixed = STAKEHOLDER_REGION_TYPO_TOKEN_FIX[tok] || tok;
+        const hit = canonLcToDisplay.get(fixed);
+        if (hit) return hit;
+    }
+
+    const first = s.split(',')[0]?.trim() ?? '';
+    const titled = titleCaseStakeholderRegionWords(first);
+    return titled || 'Unspecified';
+}
+
 /** Non-rejected participation rows for CIEL-wide aggregates (matches university analytics scope). */
 const MASTER_ANALYTICS_PARTICIPATION_STATUSES = [
     'pending',
@@ -419,17 +544,20 @@ export class AdminService {
     private resolveParticipationRegionForStakeholder(p: Participation): string {
         const student = p.student as User | undefined;
         const fromStudent = (student?.city || '').trim();
-        if (fromStudent) return fromStudent;
 
         const loc = p.project?.location;
+        let fromProject = '';
         if (loc && typeof loc === 'object' && loc !== null) {
             const city = String((loc as { city?: string; province?: string }).city || '').trim();
-            if (city) return city;
-            const province = String((loc as { province?: string }).province || '').trim();
-            if (province) return province;
+            if (city) fromProject = city;
+            else {
+                const province = String((loc as { province?: string }).province || '').trim();
+                if (province) fromProject = province;
+            }
         }
 
-        return 'Unspecified';
+        const raw = fromStudent || fromProject;
+        return normalizeStakeholderRegionLabel(raw);
     }
 
     private resolveRequiredHoursPerStudentFromOpportunity(project: Opportunity | null | undefined): number {

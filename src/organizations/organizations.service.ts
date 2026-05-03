@@ -718,7 +718,7 @@ export class OrganizationsService {
         const participations = await this.participationRepository
             .createQueryBuilder('p')
             .leftJoinAndSelect('p.project', 'project')
-            .leftJoin('p.student', 'student')
+            .leftJoinAndSelect('p.student', 'student')
             .where('p.student_id IS NOT NULL')
             .andWhere('p.status IN (:...st)', { st })
             .andWhere(
@@ -771,7 +771,8 @@ export class OrganizationsService {
         let total_required_hours = 0;
 
         for (const p of participations) {
-            const deg = (p.academicProgram || '').trim() || 'Unspecified';
+            const majorFallback = ((p.student as User | undefined)?.major || '').trim();
+            const deg = (p.academicProgram || '').trim() || majorFallback || 'Unspecified';
             degreeMap.set(deg, (degreeMap.get(deg) || 0) + 1);
             const yr = (p.yearOfStudy || '').trim() || 'Unspecified';
             yearMap.set(yr, (yearMap.get(yr) || 0) + 1);
@@ -887,7 +888,8 @@ export class OrganizationsService {
                 'Unspecified';
             universityMap.set(uni, (universityMap.get(uni) || 0) + 1);
 
-            const deg = (p.academicProgram || '').trim() || 'Unspecified';
+            const majorFallback = ((p.student as User | undefined)?.major || '').trim();
+            const deg = (p.academicProgram || '').trim() || majorFallback || 'Unspecified';
             degreeMap.set(deg, (degreeMap.get(deg) || 0) + 1);
 
             total_required_hours += this.resolveRequiredHoursPerStudentFromOpportunity(p.project);
@@ -978,7 +980,8 @@ export class OrganizationsService {
                 'Unspecified';
             universityMap.set(uni, (universityMap.get(uni) || 0) + 1);
 
-            const deg = (p.academicProgram || '').trim() || 'Unspecified';
+            const majorFallbackNgo = ((p.student as User | undefined)?.major || '').trim();
+            const deg = (p.academicProgram || '').trim() || majorFallbackNgo || 'Unspecified';
             degreeMap.set(deg, (degreeMap.get(deg) || 0) + 1);
 
             total_required_hours += this.resolveRequiredHoursPerStudentFromOpportunity(p.project);

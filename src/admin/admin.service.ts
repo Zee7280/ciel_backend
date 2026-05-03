@@ -11,9 +11,10 @@ import { OpportunityApplicationsService } from '../opportunities/opportunity-app
 
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { UserRole } from '../users/enums/user-role.enum';
-import { In, IsNull, LessThan, Not } from 'typeorm';
+import { In, IsNull, LessThan, Not, SelectQueryBuilder } from 'typeorm';
 
 import { Setting } from '../settings/entities/setting.entity';
+import { MasterAnalyticsQueryDto } from './dto/master-analytics-query.dto';
 
 /** Canonical Pakistan regions for stakeholder "participation by region" (sync spellings with ciel_frontend/src/utils/pakistanRegions.ts). */
 const STAKEHOLDER_REGION_CANONICAL = [
@@ -303,49 +304,14 @@ export class AdminService {
     /**
      * CIEL Master dashboard: platform-wide student headcount, verification, universities, participation mix, required hours, growth.
      * Does not alter {@link getDashboardStats} payload.
+     *
+     * Optional query filters narrow metrics to participations matching every supplied dimension (AND).
+     * Without filters, behavior matches the original platform-wide aggregates.
      */
-    async getMasterAnalytics() {
-        const total_participants = await this.usersRepository.count({ where: { role: UserRole.STUDENT } });
+    async getMasterAnalytics(query?: MasterAnalyticsQueryDto) {
+        const filtersActive = Boolean(query && this.masterAnalyticsFiltersActive(query));
 
-        const verified_students = await this.usersRepository.count({
-            where: {
-                role: UserRole.STUDENT,
-                profile_verified: true,
-                identity_verified: true,
-            },
-        });
-
-        const verification_rate_percent =
-            total_participants === 0 ? 0 : Math.round((100 * verified_students) / total_participants);
-
-        const uniFromUsers = await this.usersRepository
-            .createQueryBuilder('u')
-            .select('DISTINCT TRIM(u.university)', 'name')
-            .where('u.role = :role', { role: UserRole.STUDENT })
-            .andWhere("TRIM(COALESCE(u.university, '')) <> ''")
-            .getRawMany();
-
-        const uniFromPart = await this.participationRepository
-            .createQueryBuilder('p')
-            .select('DISTINCT TRIM(p.universityName)', 'name')
-            .where('p.student_id IS NOT NULL')
-            .andWhere("TRIM(COALESCE(p.universityName, '')) <> ''")
-            .getRawMany();
-
-        const universityNames = new Set<string>();
-        for (const row of [...uniFromUsers, ...uniFromPart]) {
-            const n = String((row as { name?: string }).name || '').trim();
-            if (n) universityNames.add(n);
-        }
-        const total_universities = universityNames.size;
-
-        const participations = await this.participationRepository.find({
-            where: {
-                studentId: Not(IsNull()),
-                status: In(MASTER_ANALYTICS_PARTICIPATION_STATUSES),
-            },
-            relations: ['project'],
-        });
+        const participations = await this.loadMasterAnalyticsParticipations(filtersActive ? query : undefined);
 
         const typeCounts = new Map<string, number>();
         let total_required_hours = 0;
@@ -359,19 +325,103 @@ export class AdminService {
             .map(([participation_type, count]) => ({ participation_type, count }))
             .sort((a, b) => b.count - a.count);
 
-        const now = new Date();
-        const startOfThisMonthUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-        const previous_headcount = await this.usersRepository.count({
-            where: {
-                role: UserRole.STUDENT,
-                createdAt: LessThan(startOfThisMonthUtc),
-            },
-        });
+        if (!filtersActive) {
+            const now = new Date();
+            const startOfThisMonthUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+            const total_participants = await this.usersRepository.count({ where: { role: UserRole.STUDENT } });
 
-        const system_growth_rate_percent =
-            previous_headcount === 0
-                ? null
-                : Math.round(((total_participants - previous_headcount) / previous_headcount) * 1000) / 10;
+            const verified_students = await this.usersRepository.count({
+                where: {
+                    role: UserRole.STUDENT,
+                    profile_verified: true,
+                    identity_verified: true,
+                },
+            });
+
+            const verification_rate_percent =
+                total_participants === 0 ? 0 : Math.round((100 * verified_students) / total_participants);
+
+            const uniFromUsers = await this.usersRepository
+                .createQueryBuilder('u')
+                .select('DISTINCT TRIM(u.university)', 'name')
+                .where('u.role = :role', { role: UserRole.STUDENT })
+                .andWhere("TRIM(COALESCE(u.university, '')) <> ''")
+                .getRawMany();
+
+            const uniFromPart = await this.participationRepository
+                .createQueryBuilder('p')
+                .select('DISTINCT TRIM(p.universityName)', 'name')
+                .where('p.student_id IS NOT NULL')
+                .andWhere("TRIM(COALESCE(p.universityName, '')) <> ''")
+                .getRawMany();
+
+            const universityNames = new Set<string>();
+            for (const row of [...uniFromUsers, ...uniFromPart]) {
+                const n = String((row as { name?: string }).name || '').trim();
+                if (n) universityNames.add(n);
+            }
+            const total_universities = universityNames.size;
+
+            const previous_headcount = await this.usersRepository.count({
+                where: {
+                    role: UserRole.STUDENT,
+                    createdAt: LessThan(startOfThisMonthUtc),
+                },
+            });
+
+            const system_growth_rate_percent =
+                previous_headcount === 0
+                    ? null
+                    : Math.round(((total_participants - previous_headcount) / previous_headcount) * 1000) / 10;
+
+            return {
+                success: true,
+                data: {
+                    total_participants,
+                    verified_students,
+                    verification_rate_percent,
+                    total_universities,
+                    participation_type_mix,
+                    total_required_hours: Math.round(total_required_hours * 10) / 10,
+                    system_growth_rate_percent,
+                    growth_meta: {
+                        basis: 'student_accounts',
+                        formula: '(current_total - previous_total) / previous_total * 100',
+                        previous_total: previous_headcount,
+                        current_total: total_participants,
+                        previous_label: 'students_created_before_this_utc_month',
+                    },
+                    filter_meta: { active: false as const },
+                },
+            };
+        }
+
+        const cohortStudentIds = [
+            ...new Set(participations.map((p) => p.studentId).filter((id): id is string => Boolean(id))),
+        ];
+        const total_participants = cohortStudentIds.length;
+
+        const verified_students =
+            cohortStudentIds.length === 0
+                ? 0
+                : await this.usersRepository.count({
+                      where: {
+                          id: In(cohortStudentIds),
+                          role: UserRole.STUDENT,
+                          profile_verified: true,
+                          identity_verified: true,
+                      },
+                  });
+
+        const verification_rate_percent =
+            total_participants === 0 ? 0 : Math.round((100 * verified_students) / total_participants);
+
+        const universityNamesFiltered = new Set<string>();
+        for (const p of participations) {
+            const n = (p.universityName || '').trim();
+            if (n) universityNamesFiltered.add(n);
+        }
+        const total_universities = universityNamesFiltered.size;
 
         return {
             success: true,
@@ -382,16 +432,138 @@ export class AdminService {
                 total_universities,
                 participation_type_mix,
                 total_required_hours: Math.round(total_required_hours * 10) / 10,
-                system_growth_rate_percent,
+                system_growth_rate_percent: null,
                 growth_meta: {
-                    basis: 'student_accounts',
-                    formula: '(current_total - previous_total) / previous_total * 100',
-                    previous_total: previous_headcount,
+                    basis: 'filtered_participation_cohort',
+                    formula: null,
+                    previous_total: null,
                     current_total: total_participants,
-                    previous_label: 'students_created_before_this_utc_month',
+                    previous_label: null,
+                    note: 'Platform MoM growth is only computed without filters. Distinct students are counted from matching participation rows.',
+                },
+                filter_meta: {
+                    active: true as const,
+                    params: this.compactMasterAnalyticsFilterParams(query!),
                 },
             },
         };
+    }
+
+    private masterUtcEndOfDay(iso: string): Date {
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return d;
+        return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 23, 59, 59, 999));
+    }
+
+    private masterAnalyticsFiltersActive(query: MasterAnalyticsQueryDto): boolean {
+        return Object.entries(query).some(
+            ([, v]) => v !== undefined && v !== null && String(v).trim() !== '',
+        );
+    }
+
+    private compactMasterAnalyticsFilterParams(query: MasterAnalyticsQueryDto): Record<string, string> {
+        const out: Record<string, string> = {};
+        const keys = [
+            'university',
+            'degree_program',
+            'year_of_study',
+            'academic_integration_type',
+            'participation_type',
+            'project_id',
+            'faculty_email',
+            'partner_organization_id',
+            'verification_status',
+            'period_start',
+            'period_end',
+        ] as const;
+        for (const k of keys) {
+            const raw = query[k];
+            if (raw === undefined || raw === null) continue;
+            const s = String(raw).trim();
+            if (s !== '') out[k] = s;
+        }
+        return out;
+    }
+
+    private applyMasterAnalyticsQueryFilters(
+        qb: SelectQueryBuilder<Participation>,
+        query: MasterAnalyticsQueryDto,
+    ): void {
+        if (query.university?.trim()) {
+            qb.andWhere('TRIM(COALESCE(p.universityName, \'\')) = :uni', { uni: query.university.trim() });
+        }
+        if (query.degree_program?.trim()) {
+            qb.andWhere('TRIM(COALESCE(p.academicProgram, \'\')) = :deg', { deg: query.degree_program.trim() });
+        }
+        if (query.year_of_study?.trim()) {
+            qb.andWhere('p.yearOfStudy = :yos', { yos: query.year_of_study.trim() });
+        }
+        if (query.academic_integration_type?.trim()) {
+            qb.andWhere('p.academicIntegrationType = :ait', { ait: query.academic_integration_type.trim() });
+        }
+        if (query.participation_type?.trim()) {
+            qb.andWhere('LOWER(TRIM(p.participationMode)) = :pm', {
+                pm: query.participation_type.trim().toLowerCase(),
+            });
+        }
+        if (query.project_id) {
+            qb.andWhere('p.project_id = :pid', { pid: query.project_id });
+        }
+        if (query.faculty_email?.trim()) {
+            const fe = query.faculty_email.trim().toLowerCase();
+            qb.andWhere(
+                `(LOWER(TRIM(COALESCE(p.primaryFacultyEmail, ''))) = :fe OR LOWER(TRIM(COALESCE(p.facultySupervisorEmail, ''))) = :fe OR LOWER(TRIM(COALESCE(p.secondaryFacultyEmail, ''))) = :fe)`,
+                { fe },
+            );
+        }
+        if (query.partner_organization_id) {
+            qb.andWhere('proj.organizationId = :porg', { porg: query.partner_organization_id });
+        }
+        if (query.verification_status === 'verified') {
+            qb.andWhere('stu.profile_verified = true AND stu.identity_verified = true');
+        } else if (query.verification_status === 'unverified') {
+            qb.andWhere(
+                '(stu.id IS NULL OR COALESCE(stu.profile_verified, false) = false OR COALESCE(stu.identity_verified, false) = false)',
+            );
+        }
+        if (query.period_start?.trim()) {
+            const ps = new Date(query.period_start.trim());
+            if (!Number.isNaN(ps.getTime())) {
+                qb.andWhere('p.createdAt >= :pstart', { pstart: ps });
+            }
+        }
+        if (query.period_end?.trim()) {
+            const pe = this.masterUtcEndOfDay(query.period_end.trim());
+            if (!Number.isNaN(pe.getTime())) {
+                qb.andWhere('p.createdAt <= :pend', { pend: pe });
+            }
+        }
+    }
+
+    private async loadMasterAnalyticsParticipations(
+        query?: MasterAnalyticsQueryDto,
+    ): Promise<Participation[]> {
+        if (!query || !this.masterAnalyticsFiltersActive(query)) {
+            return this.participationRepository.find({
+                where: {
+                    studentId: Not(IsNull()),
+                    status: In(MASTER_ANALYTICS_PARTICIPATION_STATUSES),
+                },
+                relations: ['project'],
+            });
+        }
+
+        const qb = this.participationRepository
+            .createQueryBuilder('p')
+            .leftJoinAndSelect('p.project', 'proj')
+            .leftJoinAndSelect('proj.organization', 'org')
+            .leftJoin('p.student', 'stu')
+            .where('p.student_id IS NOT NULL')
+            .andWhere('p.status IN (:...mastSt)', { mastSt: MASTER_ANALYTICS_PARTICIPATION_STATUSES });
+
+        this.applyMasterAnalyticsQueryFilters(qb, query);
+
+        return qb.getMany();
     }
 
     /**

@@ -1183,6 +1183,32 @@ export class OpportunityApplicationsService {
         return { success: true, message: 'Application approved successfully', data: app };
     }
 
+    /**
+     * Lowercased emails from join `apply_payload.team_members` (not the lead). Used to reconcile My Projects
+     * roster when participation rows omit shared `applicationId` / `teamId`.
+     */
+    async findApplyPayloadTeamMemberEmails(applicationId: string): Promise<string[]> {
+        const app = await this.appRepo.findOne({
+            where: { id: applicationId, withdrawnAt: IsNull() },
+        });
+        if (!app?.applyPayload || typeof app.applyPayload !== 'object') return [];
+        const payload = app.applyPayload as Record<string, unknown>;
+        const raw = payload['team_members'];
+        if (!Array.isArray(raw)) return [];
+        const seen = new Set<string>();
+        const out: string[] = [];
+        for (const m of raw) {
+            if (!m || typeof m !== 'object') continue;
+            const em = String((m as Record<string, unknown>).email ?? '')
+                .trim()
+                .toLowerCase();
+            if (!em || seen.has(em)) continue;
+            seen.add(em);
+            out.push(em);
+        }
+        return out;
+    }
+
     async adminReject(id: string, adminUserId: string, reason: string) {
         const app = await this.appRepo.findOne({ where: { id, withdrawnAt: IsNull() } });
         if (!app) throw new NotFoundException('Application not found');

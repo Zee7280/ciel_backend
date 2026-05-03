@@ -2,6 +2,8 @@ import { Controller, Get, Query, Request, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { FacultyDashboardViewMode, FacultyService } from './faculty.service';
 
+import { FacultyAnalyticsQueryDto } from './dto/faculty-analytics-query.dto';
+
 function parseFacultyDashboardView(raw?: string): FacultyDashboardViewMode {
     const v = String(raw ?? '')
         .trim()
@@ -29,8 +31,14 @@ export class FacultyDashboardController {
     async getImpactAnalytics(
         @Request() req: { user: { id: string; email?: string } },
         @Query('view') viewRaw?: string,
+        @Query() analyticsQuery?: FacultyAnalyticsQueryDto,
     ) {
         const view = parseFacultyDashboardView(viewRaw);
-        return this.facultyService.getImpactAnalytics(req.user.id, req.user.email || '', view);
+        return this.facultyService.getImpactAnalytics(
+            req.user.id,
+            req.user.email || '',
+            view,
+            analyticsQuery,
+        );
     }
 }

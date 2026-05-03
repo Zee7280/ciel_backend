@@ -1,5 +1,6 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
+import { FacultyAnalyticsQueryDto } from './dto/faculty-analytics-query.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, In, IsNull, Not, Repository, SelectQueryBuilder } from 'typeorm';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
@@ -446,6 +447,245 @@ export class FacultyService {
         return val && String(val).trim() ? String(val).trim() : null;
     }
 
+    private facultyAnalyticsUtcEndOfDay(iso: string): Date {
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return d;
+        return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 23, 59, 59, 999));
+    }
+
+    private facultyAnalyticsParticipationDimensionFiltersActive(query: FacultyAnalyticsQueryDto): boolean {
+        return Boolean(
+            query.degree_program?.trim() ||
+                query.year_of_study?.trim() ||
+                query.academic_integration_type?.trim() ||
+                query.participation_type?.trim() ||
+                query.verification_status ||
+                query.period_start?.trim() ||
+                query.period_end?.trim(),
+        );
+    }
+
+    private facultyAnalyticsAnyFilterActive(query?: FacultyAnalyticsQueryDto): boolean {
+        if (!query) return false;
+        return Object.entries(query).some(([, v]) => v !== undefined && v !== null && String(v).trim() !== '');
+    }
+
+    private compactFacultyAnalyticsFilterParams(query: FacultyAnalyticsQueryDto): Record<string, string> {
+        const out: Record<string, string> = {};
+        const keys = [
+            'project_id',
+            'course_section',
+            'degree_program',
+            'year_of_study',
+            'academic_integration_type',
+            'participation_type',
+            'verification_status',
+            'period_start',
+            'period_end',
+        ] as const;
+        for (const k of keys) {
+            const raw = query[k];
+            if (raw === undefined || raw === null) continue;
+            const s = String(raw).trim();
+            if (s !== '') out[k] = s;
+        }
+        return out;
+    }
+
+    private async narrowFacultyAnalyticsOpportunityIds(
+        scopedIds: string[],
+        query?: FacultyAnalyticsQueryDto,
+    ): Promise<string[]> {
+        if (!scopedIds.length) return [];
+        const pid = query?.project_id?.trim();
+        if (pid) {
+            return scopedIds.includes(pid) ? [pid] : [];
+        }
+        const cs = query?.course_section?.trim();
+        if (!cs) return scopedIds;
+        const opps = await this.opportunitiesRepository.find({
+            where: { id: In(scopedIds) },
+            select: ['id', 'title', 'academic_linkage'],
+        });
+        const lower = cs.toLowerCase();
+        return opps
+            .filter((o) => {
+                const code = this.pickCourseCode(o)?.toLowerCase() ?? '';
+                const sem = this.pickSemester(o)?.toLowerCase() ?? '';
+                const title = (o.title || '').toLowerCase();
+                return code.includes(lower) || sem.includes(lower) || title.includes(lower);
+            })
+            .map((o) => o.id);
+    }
+
+    private applyFacultyAnalyticsParticipationFilters(
+        qb: SelectQueryBuilder<Participation>,
+        query?: FacultyAnalyticsQueryDto,
+        userAlias?: string,
+    ): void {
+        if (!query) return;
+        if (query.degree_program?.trim()) {
+            qb.andWhere('TRIM(COALESCE(p.academicProgram, \'\')) = :fafDeg', {
+                fafDeg: query.degree_program.trim(),
+            });
+        }
+        if (query.year_of_study?.trim()) {
+            qb.andWhere('p.yearOfStudy = :fafYos', { fafYos: query.year_of_study.trim() });
+        }
+        if (query.academic_integration_type?.trim()) {
+            qb.andWhere('p.academicIntegrationType = :fafAit', {
+                fafAit: query.academic_integration_type.trim(),
+            });
+        }
+        if (query.participation_type?.trim()) {
+            qb.andWhere('LOWER(TRIM(p.participationMode)) = :fafPm', {
+                fafPm: query.participation_type.trim().toLowerCase(),
+            });
+        }
+        if (query.period_start?.trim()) {
+            const ps = new Date(query.period_start.trim());
+            if (!Number.isNaN(ps.getTime())) qb.andWhere('p.createdAt >= :fafPs', { fafPs: ps });
+        }
+        if (query.period_end?.trim()) {
+            const pe = this.facultyAnalyticsUtcEndOfDay(query.period_end.trim());
+            if (!Number.isNaN(pe.getTime())) qb.andWhere('p.createdAt <= :fafPe', { fafPe: pe });
+        }
+        if (userAlias && query.verification_status === 'verified') {
+            qb.andWhere(
+                `${userAlias}.profile_verified = true AND ${userAlias}.identity_verified = true`,
+            );
+        } else if (userAlias && query.verification_status === 'unverified') {
+            qb.andWhere(
+                `(COALESCE(${userAlias}.profile_verified, false) = false OR COALESCE(${userAlias}.identity_verified, false) = false)`,
+            );
+        }
+    }
+
+    private appendFacultyTimesheetParticipationFilters(
+        qb: SelectQueryBuilder<Timesheet>,
+        timesheetAlias: string,
+        oppIds: string[],
+        st: readonly string[],
+        query?: FacultyAnalyticsQueryDto,
+    ): void {
+        if (!query || !this.facultyAnalyticsParticipationDimensionFiltersActive(query)) return;
+        const subParams: Record<string, unknown> = {
+            ftsOpp: oppIds,
+            ftsSt: [...st],
+        };
+        let sql = `
+      EXISTS (
+        SELECT 1 FROM participations p
+        INNER JOIN users u ON u.id = p.student_id
+        WHERE p.project_id = ${timesheetAlias}."opportunityId"
+        AND p.student_id = ${timesheetAlias}."studentId"
+        AND p.project_id IN (:...ftsOpp)
+        AND p.status IN (:...ftsSt)
+        AND p.student_id IS NOT NULL
+    `;
+        if (query.degree_program?.trim()) {
+            sql += ` AND TRIM(COALESCE(p.academicProgram, '')) = :ftsDeg`;
+            subParams.ftsDeg = query.degree_program.trim();
+        }
+        if (query.year_of_study?.trim()) {
+            sql += ` AND p.yearOfStudy = :ftsYos`;
+            subParams.ftsYos = query.year_of_study.trim();
+        }
+        if (query.academic_integration_type?.trim()) {
+            sql += ` AND p.academicIntegrationType = :ftsAit`;
+            subParams.ftsAit = query.academic_integration_type.trim();
+        }
+        if (query.participation_type?.trim()) {
+            sql += ` AND LOWER(TRIM(p.participationMode)) = :ftsPm`;
+            subParams.ftsPm = query.participation_type.trim().toLowerCase();
+        }
+        if (query.period_start?.trim()) {
+            const ps = new Date(query.period_start.trim());
+            if (!Number.isNaN(ps.getTime())) {
+                sql += ` AND p.createdAt >= :ftsPs`;
+                subParams.ftsPs = ps;
+            }
+        }
+        if (query.period_end?.trim()) {
+            const pe = this.facultyAnalyticsUtcEndOfDay(query.period_end.trim());
+            if (!Number.isNaN(pe.getTime())) {
+                sql += ` AND p.createdAt <= :ftsPe`;
+                subParams.ftsPe = pe;
+            }
+        }
+        if (query.verification_status === 'verified') {
+            sql += ` AND u.profile_verified = true AND u.identity_verified = true`;
+        } else if (query.verification_status === 'unverified') {
+            sql += ` AND (COALESCE(u.profile_verified, false) = false OR COALESCE(u.identity_verified, false) = false)`;
+        }
+        sql += ')';
+        qb.andWhere(sql, subParams);
+    }
+
+    private appendFacultyReportParticipationFilters(
+        qb: SelectQueryBuilder<StudentReport>,
+        reportAlias: string,
+        oppIds: string[],
+        st: readonly string[],
+        query?: FacultyAnalyticsQueryDto,
+    ): void {
+        if (!query || !this.facultyAnalyticsParticipationDimensionFiltersActive(query)) return;
+        const subParams: Record<string, unknown> = {
+            frOpp: oppIds,
+            frSt: [...st],
+        };
+        let sql = `
+      EXISTS (
+        SELECT 1 FROM participations p
+        INNER JOIN users u ON u.id = p.student_id
+        WHERE p.student_id = ${reportAlias}.studentId
+        AND (
+          (${reportAlias}."opportunityId" IS NOT NULL AND ${reportAlias}."opportunityId"::text = p.project_id)
+          OR (${reportAlias}.project_id IS NOT NULL AND TRIM(${reportAlias}.project_id) = p.project_id)
+        )
+        AND p.project_id IN (:...frOpp)
+        AND p.status IN (:...frSt)
+        AND p.student_id IS NOT NULL
+    `;
+        if (query.degree_program?.trim()) {
+            sql += ` AND TRIM(COALESCE(p.academicProgram, '')) = :frDeg`;
+            subParams.frDeg = query.degree_program.trim();
+        }
+        if (query.year_of_study?.trim()) {
+            sql += ` AND p.yearOfStudy = :frYos`;
+            subParams.frYos = query.year_of_study.trim();
+        }
+        if (query.academic_integration_type?.trim()) {
+            sql += ` AND p.academicIntegrationType = :frAit`;
+            subParams.frAit = query.academic_integration_type.trim();
+        }
+        if (query.participation_type?.trim()) {
+            sql += ` AND LOWER(TRIM(p.participationMode)) = :frPm`;
+            subParams.frPm = query.participation_type.trim().toLowerCase();
+        }
+        if (query.period_start?.trim()) {
+            const ps = new Date(query.period_start.trim());
+            if (!Number.isNaN(ps.getTime())) {
+                sql += ` AND p.createdAt >= :frPs`;
+                subParams.frPs = ps;
+            }
+        }
+        if (query.period_end?.trim()) {
+            const pe = this.facultyAnalyticsUtcEndOfDay(query.period_end.trim());
+            if (!Number.isNaN(pe.getTime())) {
+                sql += ` AND p.createdAt <= :frPe`;
+                subParams.frPe = pe;
+            }
+        }
+        if (query.verification_status === 'verified') {
+            sql += ` AND u.profile_verified = true AND u.identity_verified = true`;
+        } else if (query.verification_status === 'unverified') {
+            sql += ` AND (COALESCE(u.profile_verified, false) = false OR COALESCE(u.identity_verified, false) = false)`;
+        }
+        sql += ')';
+        qb.andWhere(sql, subParams);
+    }
+
     async getProjectDetail(facultyId: string, facultyEmail: string, opportunityId: string) {
         const scopedIds = await this.resolveFacultyScopedOpportunityIds(facultyId, facultyEmail);
         if (!scopedIds.includes(opportunityId)) {
@@ -869,14 +1109,21 @@ export class FacultyService {
     /**
      * Department / supervision analytics for Impact Analytics page.
      * Uses the same opportunity scope as `getDashboard` for the given `view`.
+     * Optional query params narrow metrics (AND); scope remains faculty-assigned opportunities only.
      */
     async getImpactAnalytics(
         facultyId: string,
         facultyEmail: string,
         view: FacultyDashboardViewMode = 'combined',
+        query?: FacultyAnalyticsQueryDto,
     ) {
         const { university_scope, effectiveView, scopedIds, faculty_view_modes_available } =
             await this.resolveFacultyScopedContext(facultyId, facultyEmail, view);
+
+        const filter_meta =
+            query && this.facultyAnalyticsAnyFilterActive(query)
+                ? { active: true as const, params: this.compactFacultyAnalyticsFilterParams(query) }
+                : { active: false as const };
 
         const buildEmpty = () => ({
             university_scope,
@@ -897,25 +1144,33 @@ export class FacultyService {
             avg_impact_score: 0,
             hours_trend: [] as { label: string; hours: number }[],
             impact_distribution: [] as { name: string; value: number; color: string }[],
+            filter_meta,
         });
 
         if (scopedIds.length === 0) {
             return { success: true, data: buildEmpty() };
         }
 
-        const idParams = { ids: scopedIds };
-        const st = [...ACTIVE_PARTICIPATION_STATUSES];
+        const oppIds = await this.narrowFacultyAnalyticsOpportunityIds(scopedIds, query);
+        if (oppIds.length === 0) {
+            return { success: true, data: buildEmpty() };
+        }
 
-        const totalStudentsRow = await this.participationRepository
+        const idParams = { ids: oppIds };
+        const st = [...ACTIVE_PARTICIPATION_STATUSES];
+        const partDimActive = Boolean(query && this.facultyAnalyticsParticipationDimensionFiltersActive(query));
+
+        const totalStudentsQb = this.participationRepository
             .createQueryBuilder('p')
+            .innerJoin('users', 'u', 'u.id = p.student_id')
             .select('COUNT(DISTINCT p.student_id)', 'cnt')
             .where('p.project_id IN (:...ids)', idParams)
             .andWhere('p.status IN (:...st)', { st })
-            .andWhere('p.student_id IS NOT NULL')
-            .getRawOne<{ cnt: string }>();
-        const totalStudents = Number(totalStudentsRow?.cnt ?? 0) || 0;
+            .andWhere('p.student_id IS NOT NULL');
+        this.applyFacultyAnalyticsParticipationFilters(totalStudentsQb, query, 'u');
+        const totalStudents = Number((await totalStudentsQb.getRawOne<{ cnt: string }>())?.cnt ?? 0) || 0;
 
-        const verifiedRow = await this.participationRepository
+        const verifiedRowQb = this.participationRepository
             .createQueryBuilder('p')
             .innerJoin('users', 'u', 'u.id = p.student_id')
             .select('COUNT(DISTINCT p.student_id)', 'cnt')
@@ -923,21 +1178,23 @@ export class FacultyService {
             .andWhere('p.status IN (:...st)', { st })
             .andWhere('p.student_id IS NOT NULL')
             .andWhere('u.profile_verified = true')
-            .andWhere('u.identity_verified = true')
-            .getRawOne<{ cnt: string }>();
-        const verifiedStudents = Number(verifiedRow?.cnt ?? 0) || 0;
+            .andWhere('u.identity_verified = true');
+        this.applyFacultyAnalyticsParticipationFilters(verifiedRowQb, query, 'u');
+        const verifiedStudents =
+            Number((await verifiedRowQb.getRawOne<{ cnt: string }>())?.cnt ?? 0) || 0;
 
         const verificationRatePercent =
             totalStudents === 0 ? 0 : Math.round((100 * verifiedStudents) / totalStudents);
 
-        const participations = await this.participationRepository.find({
-            where: {
-                projectId: In(scopedIds),
-                status: In([...st] as unknown as string[]),
-                studentId: Not(IsNull()),
-            },
-            relations: ['project'],
-        });
+        const participationsQb = this.participationRepository
+            .createQueryBuilder('p')
+            .innerJoin('users', 'u', 'u.id = p.student_id')
+            .leftJoinAndSelect('p.project', 'proj')
+            .where('p.project_id IN (:...ids)', idParams)
+            .andWhere('p.status IN (:...st)', { st })
+            .andWhere('p.student_id IS NOT NULL');
+        this.applyFacultyAnalyticsParticipationFilters(participationsQb, query, 'u');
+        const participations = await participationsQb.getMany();
 
         let individualParticipants = 0;
         let teamParticipants = 0;
@@ -959,44 +1216,49 @@ export class FacultyService {
             totalRequiredHours += this.resolveRequiredHoursPerStudent(p.project);
         }
 
-        const ceStudentsRow = await this.participationRepository
+        const ceStudentsRowQb = this.participationRepository
             .createQueryBuilder('p')
+            .innerJoin('users', 'u', 'u.id = p.student_id')
             .select('COUNT(DISTINCT p.student_id)', 'cnt')
             .where('p.project_id IN (:...ids)', idParams)
             .andWhere('p.status IN (:...st)', { st })
             .andWhere('p.student_id IS NOT NULL')
-            .andWhere('p.academicIntegrationType IN (:...ce)', { ce: [...COURSE_LINKED_ACADEMIC_TYPES] })
-            .getRawOne<{ cnt: string }>();
-        const ceStudentCount = Number(ceStudentsRow?.cnt ?? 0) || 0;
+            .andWhere('p.academicIntegrationType IN (:...ce)', { ce: [...COURSE_LINKED_ACADEMIC_TYPES] });
+        this.applyFacultyAnalyticsParticipationFilters(ceStudentsRowQb, query, 'u');
+        const ceStudentCount =
+            Number((await ceStudentsRowQb.getRawOne<{ cnt: string }>())?.cnt ?? 0) || 0;
         const courseLinkedCeRatioPercent =
             totalStudents === 0 ? 0 : Math.round((100 * ceStudentCount) / totalStudents);
 
-        const hoursRow = await this.timesheetsRepository
+        const hoursRowQb = this.timesheetsRepository
             .createQueryBuilder('t')
             .select('COALESCE(SUM(t.hours), 0)', 'sum')
             .where('t.status = :vs', { vs: 'verified' })
-            .andWhere('t.opportunityId IN (:...ids)', idParams)
-            .getRawOne<{ sum: string }>();
-        const hoursVerified = Number(hoursRow?.sum ?? 0) || 0;
+            .andWhere('t.opportunityId IN (:...ids)', idParams);
+        this.appendFacultyTimesheetParticipationFilters(hoursRowQb, 't', oppIds, st, query);
+        const hoursVerified = Number((await hoursRowQb.getRawOne<{ sum: string }>())?.sum ?? 0) || 0;
 
-        const projectsCompletedRow = await this.timesheetsRepository
+        const projectsCompletedRowQb = this.timesheetsRepository
             .createQueryBuilder('t')
             .select('COUNT(DISTINCT t.opportunityId)', 'cnt')
             .where('t.status = :vs', { vs: 'verified' })
-            .andWhere('t.opportunityId IN (:...ids)', idParams)
-            .getRawOne<{ cnt: string }>();
-        const projectsCompleted = Number(projectsCompletedRow?.cnt ?? 0) || 0;
+            .andWhere('t.opportunityId IN (:...ids)', idParams);
+        this.appendFacultyTimesheetParticipationFilters(projectsCompletedRowQb, 't', oppIds, st, query);
+        const projectsCompleted =
+            Number((await projectsCompletedRowQb.getRawOne<{ cnt: string }>())?.cnt ?? 0) || 0;
 
-        const trendRows = await this.timesheetsRepository
+        const trendRowsQb = this.timesheetsRepository
             .createQueryBuilder('t')
             .select(`date_trunc('month', t."updatedAt")`, 'bucket')
             .addSelect('SUM(t.hours)', 'hours')
             .where('t.status = :vs', { vs: 'verified' })
             .andWhere('t.opportunityId IN (:...ids)', idParams)
-            .andWhere(`t."updatedAt" >= NOW() - INTERVAL '13 months'`)
-            .groupBy('bucket')
-            .orderBy('bucket', 'ASC')
-            .getRawMany<{ bucket: Date; hours: string }>();
+            .andWhere(`t."updatedAt" >= NOW() - INTERVAL '13 months'`);
+        this.appendFacultyTimesheetParticipationFilters(trendRowsQb, 't', oppIds, st, query);
+        const trendRows = await trendRowsQb.groupBy('bucket').orderBy('bucket', 'ASC').getRawMany<{
+            bucket: Date;
+            hours: string;
+        }>();
 
         const hours_trend = trendRows.map((row) => {
             const d = row.bucket instanceof Date ? row.bucket : new Date(row.bucket);
@@ -1004,17 +1266,34 @@ export class FacultyService {
             return { label, hours: Number(row.hours) || 0 };
         });
 
-        const oppsForSdg = await this.opportunitiesRepository.find({
-            where: { id: In(scopedIds) },
-            select: ['id', 'sdg', 'sdg_info'],
-        });
+        let oppIdsForSdg = oppIds;
+        if (partDimActive) {
+            const sdgScopeQb = this.participationRepository
+                .createQueryBuilder('p')
+                .innerJoin('users', 'u', 'u.id = p.student_id')
+                .select('DISTINCT p.project_id', 'pid')
+                .where('p.project_id IN (:...ids)', idParams)
+                .andWhere('p.status IN (:...st)', { st })
+                .andWhere('p.student_id IS NOT NULL');
+            this.applyFacultyAnalyticsParticipationFilters(sdgScopeQb, query, 'u');
+            const rawPid = await sdgScopeQb.getRawMany<{ pid: string }>();
+            oppIdsForSdg = rawPid.map((r) => r.pid).filter(Boolean);
+        }
+
+        const oppsForSdg =
+            oppIdsForSdg.length > 0
+                ? await this.opportunitiesRepository.find({
+                      where: { id: In(oppIdsForSdg) },
+                      select: ['id', 'sdg', 'sdg_info'],
+                  })
+                : [];
         const sdgCounts = new Map<string, number>();
         for (const o of oppsForSdg) {
             const label = this.formatSdgLabel(o);
             sdgCounts.set(label, (sdgCounts.get(label) || 0) + 1);
         }
 
-        const reportSdgRows = await this.studentReportsRepository
+        const reportSdgQb = this.studentReportsRepository
             .createQueryBuilder('r')
             .select('r.primary_sdg_goal', 'g')
             .addSelect('COUNT(*)', 'c')
@@ -1027,9 +1306,9 @@ export class FacultyService {
                         idParams,
                     );
                 }),
-            )
-            .groupBy('r.primary_sdg_goal')
-            .getRawMany<{ g: number; c: string }>();
+            );
+        this.appendFacultyReportParticipationFilters(reportSdgQb, 'r', oppIds, st, query);
+        const reportSdgRows = await reportSdgQb.groupBy('r.primary_sdg_goal').getRawMany<{ g: number; c: string }>();
 
         for (const row of reportSdgRows) {
             const n = Number(row.g);
@@ -1047,7 +1326,7 @@ export class FacultyService {
             .sort((a, b) => b.value - a.value)
             .slice(0, 12);
 
-        const avgRow = await this.studentReportsRepository
+        const avgRowQb = this.studentReportsRepository
             .createQueryBuilder('r')
             .select(
                 `AVG(CAST(r.section11->>'ai_generated_impact_score' AS double precision))`,
@@ -1062,8 +1341,9 @@ export class FacultyService {
                 }),
             )
             .andWhere('COALESCE(r.status, \'\') NOT IN (:...ex)', { ex: ['draft', 'rejected'] })
-            .andWhere(`r.section11->>'ai_generated_impact_score' IS NOT NULL`)
-            .getRawOne<{ avg: string | null }>();
+            .andWhere(`r.section11->>'ai_generated_impact_score' IS NOT NULL`);
+        this.appendFacultyReportParticipationFilters(avgRowQb, 'r', oppIds, st, query);
+        const avgRow = await avgRowQb.getRawOne<{ avg: string | null }>();
         const avgImpactScore = Math.round((Number(avgRow?.avg ?? 0) || 0) * 10) / 10;
 
         return {
@@ -1087,6 +1367,7 @@ export class FacultyService {
                 avg_impact_score: avgImpactScore,
                 hours_trend,
                 impact_distribution,
+                filter_meta,
             },
         };
     }

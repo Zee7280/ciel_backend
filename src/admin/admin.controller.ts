@@ -9,6 +9,7 @@ import { Roles } from '../auth/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
 
 import { AdminService } from './admin.service';
+import { MasterAnalyticsQueryDto } from './dto/master-analytics-query.dto';
 import { OpportunitiesService } from '../opportunities/opportunities.service';
 import { StudentReportsService } from '../reports/student-reports.service';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
@@ -33,10 +34,10 @@ export class AdminController {
         return this.adminService.getDashboardStats();
     }
 
-    /** CIEL Master: platform-wide participants, verification, university diversity, participation mix, required hours, growth. */
+    /** CIEL Master: platform-wide participants, verification, university diversity, participation mix, required hours, growth. Optional query params AND-filter the participation cohort. */
     @Get('master-analytics')
-    getMasterAnalytics() {
-        return this.adminService.getMasterAnalytics();
+    getMasterAnalytics(@Query() query: MasterAnalyticsQueryDto) {
+        return this.adminService.getMasterAnalytics(query);
     }
 
     @Get('applications')

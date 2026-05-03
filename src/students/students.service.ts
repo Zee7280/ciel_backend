@@ -289,12 +289,28 @@ export class StudentsService {
         }
 
         const teamId = typeof app.teamId === 'string' ? app.teamId.trim() : '';
-        if (app.participationMode === 'team' && teamId) {
+        // Same-project roster by team slug — do not require participationMode === 'team' on every row (defaults stay `individual`).
+        if (teamId) {
             const byTeam = await this.participantRepository.find({
                 where: { projectId, teamId },
             });
             for (const row of byTeam) {
                 merged.set(row.id, row);
+            }
+        }
+
+        if (app.applicationId) {
+            const payloadEmails =
+                await this.opportunityApplicationsService.findApplyPayloadTeamMemberEmails(app.applicationId);
+            if (payloadEmails.length > 0) {
+                const byEmail = await this.participantRepository
+                    .createQueryBuilder('p')
+                    .where('p.projectId = :projectId', { projectId })
+                    .andWhere('LOWER(TRIM(COALESCE(p.email, \'\'))) IN (:...emails)', { emails: payloadEmails })
+                    .getMany();
+                for (const row of byEmail) {
+                    merged.set(row.id, row);
+                }
             }
         }
 

@@ -1,53 +1,54 @@
 import { AdminService } from './admin.service';
+import { MasterAnalyticsQueryDto } from './dto/master-analytics-query.dto';
 
-describe('AdminService impact analytics', () => {
-    const makeService = (overrides: Record<string, unknown> = {}) => {
-        const repositories = {
-            usersRepository: {
-                count: jest.fn().mockResolvedValue(0),
-            },
-            opportunityRepository: {
-                find: jest.fn().mockResolvedValue([]),
-            },
-            reportRepository: {},
-            timesheetRepository: {
-                find: jest.fn().mockResolvedValue([]),
-            },
-            auditLogsService: {
-                findPaginated: jest.fn().mockResolvedValue({
-                    logs: [],
-                    total: 0,
-                    page: 1,
-                    limit: 20,
-                }),
-            },
-            settingRepository: {},
-            participationRepository: {
-                find: jest.fn().mockResolvedValue([]),
-            },
-            studentReportRepository: {
-                find: jest.fn().mockResolvedValue([]),
-            },
-            opportunityApplicationsService: {},
-            ...overrides,
-        };
-
-        return new AdminService(
-            repositories.usersRepository as any,
-            repositories.opportunityRepository as any,
-            repositories.reportRepository as any,
-            repositories.timesheetRepository as any,
-            repositories.auditLogsService as any,
-            repositories.settingRepository as any,
-            repositories.participationRepository as any,
-            repositories.studentReportRepository as any,
-            repositories.opportunityApplicationsService as any,
-        );
+const makeAdminServiceForTests = (overrides: Record<string, unknown> = {}) => {
+    const repositories = {
+        usersRepository: {
+            count: jest.fn().mockResolvedValue(0),
+        },
+        opportunityRepository: {
+            find: jest.fn().mockResolvedValue([]),
+        },
+        reportRepository: {},
+        timesheetRepository: {
+            find: jest.fn().mockResolvedValue([]),
+        },
+        auditLogsService: {
+            findPaginated: jest.fn().mockResolvedValue({
+                logs: [],
+                total: 0,
+                page: 1,
+                limit: 20,
+            }),
+        },
+        settingRepository: {},
+        participationRepository: {
+            find: jest.fn().mockResolvedValue([]),
+        },
+        studentReportRepository: {
+            find: jest.fn().mockResolvedValue([]),
+        },
+        opportunityApplicationsService: {},
+        ...overrides,
     };
 
+    return new AdminService(
+        repositories.usersRepository as any,
+        repositories.opportunityRepository as any,
+        repositories.reportRepository as any,
+        repositories.timesheetRepository as any,
+        repositories.auditLogsService as any,
+        repositories.settingRepository as any,
+        repositories.participationRepository as any,
+        repositories.studentReportRepository as any,
+        repositories.opportunityApplicationsService as any,
+    );
+};
+
+describe('AdminService impact analytics', () => {
     it('builds trend, SDG impact, and beneficiaries from approved student reports', async () => {
         const submittedAt = new Date('2026-05-01T00:00:00.000Z');
-        const service = makeService({
+        const service = makeAdminServiceForTests({
             usersRepository: {
                 count: jest
                     .fn()
@@ -104,7 +105,7 @@ describe('AdminService impact analytics', () => {
 
     it('does not double-count report hours when verified timesheets cover the same student project', async () => {
         const createdAt = new Date('2026-04-10T00:00:00.000Z');
-        const service = makeService({
+        const service = makeAdminServiceForTests({
             usersRepository: {
                 count: jest
                     .fn()
@@ -147,7 +148,7 @@ describe('AdminService impact analytics', () => {
 
     it('includes admin-approved report hours when partner approval is not required', async () => {
         const submittedAt = new Date('2026-05-01T00:00:00.000Z');
-        const service = makeService({
+        const service = makeAdminServiceForTests({
             usersRepository: {
                 count: jest
                     .fn()
@@ -179,5 +180,79 @@ describe('AdminService impact analytics', () => {
 
         expect(result.data.hours_trend).toEqual([{ month: 'May', hours: 118.2 }]);
         expect(result.data.impact_by_sdg).toEqual([{ name: 'SDG 4', value: 118.2 }]);
+    });
+});
+
+describe('AdminService getMasterAnalytics', () => {
+    const qbChain = () => ({
+        leftJoinAndSelect: jest.fn().mockReturnThis(),
+        leftJoin: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([]),
+    });
+
+    const userQbEmpty = () => ({
+        select: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getRawMany: jest.fn().mockResolvedValue([]),
+    });
+
+    it('without filters uses participation find and returns filter_meta.active false', async () => {
+        const participationFind = jest.fn().mockResolvedValue([]);
+        const participationUniQb = {
+            select: jest.fn().mockReturnThis(),
+            where: jest.fn().mockReturnThis(),
+            andWhere: jest.fn().mockReturnThis(),
+            getRawMany: jest.fn().mockResolvedValue([]),
+        };
+        const service = makeAdminServiceForTests({
+            usersRepository: {
+                count: jest
+                    .fn()
+                    .mockResolvedValueOnce(100)
+                    .mockResolvedValueOnce(40)
+                    .mockResolvedValueOnce(90),
+                createQueryBuilder: jest.fn().mockImplementation(userQbEmpty),
+            },
+            participationRepository: {
+                find: participationFind,
+                createQueryBuilder: jest.fn().mockReturnValue(participationUniQb),
+            },
+        });
+
+        const result = await service.getMasterAnalytics({} as MasterAnalyticsQueryDto);
+
+        expect(participationFind).toHaveBeenCalled();
+        expect(participationUniQb.select).toHaveBeenCalled();
+        expect(result.data.filter_meta).toEqual({ active: false });
+        expect(result.data.growth_meta.basis).toBe('student_accounts');
+        expect(result.data.system_growth_rate_percent).not.toBeNull();
+    });
+
+    it('with filters uses query builder and returns filter_meta.active true', async () => {
+        const chain = qbChain();
+        const participationFind = jest.fn();
+        const participationQb = jest.fn().mockReturnValue(chain);
+        const service = makeAdminServiceForTests({
+            usersRepository: {
+                count: jest.fn().mockResolvedValue(0),
+                createQueryBuilder: jest.fn().mockImplementation(userQbEmpty),
+            },
+            participationRepository: {
+                find: participationFind,
+                createQueryBuilder: participationQb,
+            },
+        });
+
+        const result = await service.getMasterAnalytics({ university: 'LUMS' } as MasterAnalyticsQueryDto);
+
+        expect(participationFind).not.toHaveBeenCalled();
+        expect(participationQb).toHaveBeenCalledWith('p');
+        expect(chain.getMany).toHaveBeenCalled();
+        expect(result.data.filter_meta).toEqual({ active: true, params: { university: 'LUMS' } });
+        expect(result.data.system_growth_rate_percent).toBeNull();
+        expect(result.data.growth_meta.basis).toBe('filtered_participation_cohort');
     });
 });

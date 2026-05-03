@@ -33,6 +33,12 @@ export class AdminController {
         return this.adminService.getDashboardStats();
     }
 
+    /** CIEL Master: platform-wide participants, verification, university diversity, participation mix, required hours, growth. */
+    @Get('master-analytics')
+    getMasterAnalytics() {
+        return this.adminService.getMasterAnalytics();
+    }
+
     @Get('applications')
     getOpportunityApplications(@Query('status') status?: string) {
         return this.opportunityApplicationsService.adminList(status);
@@ -94,6 +100,11 @@ export class AdminController {
     @Get('projects')
     getProjects() {
         return this.adminService.getProjects();
+    }
+
+    @Get('analytics/impact-stakeholders')
+    getImpactStakeholderAnalytics() {
+        return this.adminService.getImpactStakeholderAnalytics();
     }
 
     @Get('analytics/impact')

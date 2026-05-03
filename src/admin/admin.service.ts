@@ -11,9 +11,22 @@ import { OpportunityApplicationsService } from '../opportunities/opportunity-app
 
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { UserRole } from '../users/enums/user-role.enum';
-import { In } from 'typeorm';
+import { In, IsNull, LessThan, Not } from 'typeorm';
 
 import { Setting } from '../settings/entities/setting.entity';
+
+/** Non-rejected participation rows for CIEL-wide aggregates (matches university analytics scope). */
+const MASTER_ANALYTICS_PARTICIPATION_STATUSES = [
+    'pending',
+    'pending_payment_approval',
+    'paid',
+    'pending_ciel_approval',
+    'pending_faculty_approval',
+    'approved',
+    'verified',
+    'accepted',
+    'finalized',
+];
 
 /** Same statuses as OpportunitiesService.getOccupiedSeats (seats counted toward enrollment). */
 const OCCUPIED_SEAT_STATUSES = [
@@ -160,6 +173,272 @@ export class AdminService {
                 recentActivity: [] // Optional
             }
         };
+    }
+
+    /**
+     * CIEL Master dashboard: platform-wide student headcount, verification, universities, participation mix, required hours, growth.
+     * Does not alter {@link getDashboardStats} payload.
+     */
+    async getMasterAnalytics() {
+        const total_participants = await this.usersRepository.count({ where: { role: UserRole.STUDENT } });
+
+        const verified_students = await this.usersRepository.count({
+            where: {
+                role: UserRole.STUDENT,
+                profile_verified: true,
+                identity_verified: true,
+            },
+        });
+
+        const verification_rate_percent =
+            total_participants === 0 ? 0 : Math.round((100 * verified_students) / total_participants);
+
+        const uniFromUsers = await this.usersRepository
+            .createQueryBuilder('u')
+            .select('DISTINCT TRIM(u.university)', 'name')
+            .where('u.role = :role', { role: UserRole.STUDENT })
+            .andWhere("TRIM(COALESCE(u.university, '')) <> ''")
+            .getRawMany();
+
+        const uniFromPart = await this.participationRepository
+            .createQueryBuilder('p')
+            .select('DISTINCT TRIM(p.universityName)', 'name')
+            .where('p.student_id IS NOT NULL')
+            .andWhere("TRIM(COALESCE(p.universityName, '')) <> ''")
+            .getRawMany();
+
+        const universityNames = new Set<string>();
+        for (const row of [...uniFromUsers, ...uniFromPart]) {
+            const n = String((row as { name?: string }).name || '').trim();
+            if (n) universityNames.add(n);
+        }
+        const total_universities = universityNames.size;
+
+        const participations = await this.participationRepository.find({
+            where: {
+                studentId: Not(IsNull()),
+                status: In(MASTER_ANALYTICS_PARTICIPATION_STATUSES),
+            },
+            relations: ['project'],
+        });
+
+        const typeCounts = new Map<string, number>();
+        let total_required_hours = 0;
+        for (const p of participations) {
+            const mode = (p.participationMode || 'individual').toLowerCase();
+            typeCounts.set(mode, (typeCounts.get(mode) || 0) + 1);
+            total_required_hours += this.resolveRequiredHoursPerStudentFromOpportunity(p.project);
+        }
+
+        const participation_type_mix = [...typeCounts.entries()]
+            .map(([participation_type, count]) => ({ participation_type, count }))
+            .sort((a, b) => b.count - a.count);
+
+        const now = new Date();
+        const startOfThisMonthUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+        const previous_headcount = await this.usersRepository.count({
+            where: {
+                role: UserRole.STUDENT,
+                createdAt: LessThan(startOfThisMonthUtc),
+            },
+        });
+
+        const system_growth_rate_percent =
+            previous_headcount === 0
+                ? null
+                : Math.round(((total_participants - previous_headcount) / previous_headcount) * 1000) / 10;
+
+        return {
+            success: true,
+            data: {
+                total_participants,
+                verified_students,
+                verification_rate_percent,
+                total_universities,
+                participation_type_mix,
+                total_required_hours: Math.round(total_required_hours * 10) / 10,
+                system_growth_rate_percent,
+                growth_meta: {
+                    basis: 'student_accounts',
+                    formula: '(current_total - previous_total) / previous_total * 100',
+                    previous_total: previous_headcount,
+                    current_total: total_participants,
+                    previous_label: 'students_created_before_this_utc_month',
+                },
+            },
+        };
+    }
+
+    /**
+     * HEC / Government / UN stakeholder slices for the admin impact dashboard.
+     * Uses non-rejected participations with a linked student plus platform student counts.
+     */
+    async getImpactStakeholderAnalytics() {
+        const total_students = await this.usersRepository.count({ where: { role: UserRole.STUDENT } });
+
+        const verified_students = await this.usersRepository.count({
+            where: {
+                role: UserRole.STUDENT,
+                profile_verified: true,
+                identity_verified: true,
+            },
+        });
+
+        const verification_rate_percent =
+            total_students === 0 ? 0 : Math.round((100 * verified_students) / total_students);
+
+        const uniFromUsers = await this.usersRepository
+            .createQueryBuilder('u')
+            .select('DISTINCT TRIM(u.university)', 'name')
+            .where('u.role = :role', { role: UserRole.STUDENT })
+            .andWhere("TRIM(COALESCE(u.university, '')) <> ''")
+            .getRawMany();
+
+        const uniFromPart = await this.participationRepository
+            .createQueryBuilder('p')
+            .select('DISTINCT TRIM(p.universityName)', 'name')
+            .where('p.student_id IS NOT NULL')
+            .andWhere("TRIM(COALESCE(p.universityName, '')) <> ''")
+            .getRawMany();
+
+        const universityNames = new Set<string>();
+        for (const row of [...uniFromUsers, ...uniFromPart]) {
+            const n = String((row as { name?: string }).name || '').trim();
+            if (n) universityNames.add(n);
+        }
+        const institution_count = universityNames.size;
+
+        const participations = await this.participationRepository.find({
+            where: {
+                studentId: Not(IsNull()),
+                status: In(MASTER_ANALYTICS_PARTICIPATION_STATUSES),
+            },
+            relations: ['project', 'student'],
+        });
+
+        const degreeMap = new Map<string, number>();
+        const integrationMap = new Map<string, number>();
+        const regionMap = new Map<string, number>();
+        const structureMap = new Map<string, number>();
+        let total_required_hours = 0;
+        let formal_enrollment_rows = 0;
+
+        for (const p of participations) {
+            const deg = (p.academicProgram || '').trim() || 'Unspecified';
+            degreeMap.set(deg, (degreeMap.get(deg) || 0) + 1);
+
+            const integRaw = p.academicIntegrationType;
+            const integLabel = (integRaw || '').trim() || 'Unspecified';
+            integrationMap.set(integLabel, (integrationMap.get(integLabel) || 0) + 1);
+
+            const region = this.resolveParticipationRegionForStakeholder(p);
+            regionMap.set(region, (regionMap.get(region) || 0) + 1);
+
+            const mode = (p.participationMode || 'individual').toLowerCase();
+            structureMap.set(mode, (structureMap.get(mode) || 0) + 1);
+
+            total_required_hours += this.resolveRequiredHoursPerStudentFromOpportunity(p.project);
+
+            if (
+                integRaw === 'Course-Linked' ||
+                integRaw === 'Credit-Bearing' ||
+                integRaw === 'Research-Integrated'
+            ) {
+                formal_enrollment_rows += 1;
+            }
+        }
+
+        const degree_distribution = [...degreeMap.entries()]
+            .map(([degree, count]) => ({ degree, count }))
+            .sort((a, b) => b.count - a.count);
+
+        const academic_integration_distribution = [...integrationMap.entries()]
+            .map(([academic_integration_type, count]) => ({ academic_integration_type, count }))
+            .sort((a, b) => b.count - a.count);
+
+        const participation_by_region = [...regionMap.entries()]
+            .map(([region, count]) => ({ region, count }))
+            .sort((a, b) => b.count - a.count);
+
+        const participation_structure = [...structureMap.entries()]
+            .map(([participation_type, count]) => ({ participation_type, count }))
+            .sort((a, b) => b.count - a.count);
+
+        const enrollment_total = participations.length;
+        const formal_integration_rate_percent =
+            enrollment_total === 0 ? 0 : Math.round((100 * formal_enrollment_rows) / enrollment_total);
+
+        const now = new Date();
+        const startOfThisMonthUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+        const previous_headcount = await this.usersRepository.count({
+            where: {
+                role: UserRole.STUDENT,
+                createdAt: LessThan(startOfThisMonthUtc),
+            },
+        });
+
+        const growth_rate_percent =
+            previous_headcount === 0
+                ? null
+                : Math.round(((total_students - previous_headcount) / previous_headcount) * 1000) / 10;
+
+        return {
+            success: true,
+            data: {
+                hec: {
+                    total_participants: total_students,
+                    verified_students,
+                    verification_rate_percent,
+                    institution_count,
+                    degree_distribution,
+                    academic_integration_distribution,
+                    total_required_hours: Math.round(total_required_hours * 10) / 10,
+                },
+                government: {
+                    total_engagement: total_students,
+                    participation_by_region,
+                    academic_integration_mix: academic_integration_distribution,
+                    growth_rate_percent,
+                    growth_meta: {
+                        previous_total: previous_headcount,
+                        current_total: total_students,
+                        previous_label: 'students_created_before_this_utc_month',
+                    },
+                },
+                un: {
+                    total_participants: total_students,
+                    formal_integration_rate_percent,
+                    formal_integration_enrollments: formal_enrollment_rows,
+                    formal_integration_denominator_enrollments: enrollment_total,
+                    participation_structure,
+                },
+            },
+        };
+    }
+
+    private resolveParticipationRegionForStakeholder(p: Participation): string {
+        const student = p.student as User | undefined;
+        const fromStudent = (student?.city || '').trim();
+        if (fromStudent) return fromStudent;
+
+        const loc = p.project?.location;
+        if (loc && typeof loc === 'object' && loc !== null) {
+            const city = String((loc as { city?: string; province?: string }).city || '').trim();
+            if (city) return city;
+            const province = String((loc as { province?: string }).province || '').trim();
+            if (province) return province;
+        }
+
+        return 'Unspecified';
+    }
+
+    private resolveRequiredHoursPerStudentFromOpportunity(project: Opportunity | null | undefined): number {
+        if (!project) return 0;
+        const raw = project.timeline?.expected_hours;
+        const fromT = Number(raw);
+        if (Number.isFinite(fromT) && fromT > 0) return fromT;
+        const rh = Number(project.requiredHours);
+        return Number.isFinite(rh) ? rh : 0;
     }
 
     private getSDGColor(sdg: string): string {

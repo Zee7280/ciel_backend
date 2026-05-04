@@ -511,7 +511,8 @@ export class AdminService {
             qb.andWhere('p.academicIntegrationType = :ait', { ait: query.academic_integration_type.trim() });
         }
         if (query.participation_type?.trim()) {
-            qb.andWhere('LOWER(TRIM(p.participationMode)) = :pm', {
+            // Postgres: TRIM/LOWER on native enum columns fails unless cast to text.
+            qb.andWhere('LOWER(TRIM(CAST(p.participationMode AS text))) = :pm', {
                 pm: query.participation_type.trim().toLowerCase(),
             });
         }

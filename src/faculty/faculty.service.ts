@@ -568,7 +568,7 @@ export class FacultyService {
             });
         }
         if (query.participation_type?.trim()) {
-            qb.andWhere('LOWER(TRIM(p.participationMode)) = :fafPm', {
+            qb.andWhere('LOWER(TRIM(CAST(p.participationMode AS text))) = :fafPm', {
                 fafPm: query.participation_type.trim().toLowerCase(),
             });
         }
@@ -626,7 +626,7 @@ export class FacultyService {
             subParams.ftsAit = query.academic_integration_type.trim();
         }
         if (query.participation_type?.trim()) {
-            sql += ` AND LOWER(TRIM(p.participationMode)) = :ftsPm`;
+            sql += ` AND LOWER(TRIM(CAST(p.participationMode AS text))) = :ftsPm`;
             subParams.ftsPm = query.participation_type.trim().toLowerCase();
         }
         if (query.period_start?.trim()) {
@@ -690,7 +690,7 @@ export class FacultyService {
             subParams.frAit = query.academic_integration_type.trim();
         }
         if (query.participation_type?.trim()) {
-            sql += ` AND LOWER(TRIM(p.participationMode)) = :frPm`;
+            sql += ` AND LOWER(TRIM(CAST(p.participationMode AS text))) = :frPm`;
             subParams.frPm = query.participation_type.trim().toLowerCase();
         }
         if (query.period_start?.trim()) {

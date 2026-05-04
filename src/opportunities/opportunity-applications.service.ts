@@ -74,6 +74,38 @@ export class OpportunityApplicationsService {
     }
 
     /**
+     * Teammates from join `apply_payload` for faculty lists (lead/applicant is shown separately via student_user).
+     */
+    private facultyJoinApplicationTeamMembersForDisplay(app: OpportunityApplication): {
+        participation_type: string;
+        team_members: { name: string; email: string }[];
+    } {
+        const payload =
+            app.applyPayload && typeof app.applyPayload === 'object'
+                ? (app.applyPayload as Record<string, unknown>)
+                : {};
+        const ptRaw = typeof payload['participation_type'] === 'string' ? payload['participation_type'].trim() : '';
+        const participation_type = ptRaw ? ptRaw.toLowerCase() : 'individual';
+        const leadNorm = this.normalizeEmail(app.studentUser?.email ?? '');
+        const raw = Array.isArray(payload['team_members'])
+            ? (payload['team_members'] as { email?: unknown; name?: unknown }[])
+            : [];
+        const team_members: { name: string; email: string }[] = [];
+        const seenNorm = new Set<string>();
+        for (const m of raw) {
+            const rawEmail = typeof m?.email === 'string' ? m.email.trim() : '';
+            if (!rawEmail) continue;
+            const norm = this.normalizeEmail(rawEmail);
+            if (seenNorm.has(norm)) continue;
+            seenNorm.add(norm);
+            if (norm === leadNorm) continue;
+            const name = typeof m?.name === 'string' && m.name.trim() ? m.name.trim() : '—';
+            team_members.push({ name, email: rawEmail });
+        }
+        return { participation_type, team_members };
+    }
+
+    /**
      * Normalized emails of everyone already tied to a non-withdrawn application:
      * the applicant (lead) plus every email listed in apply_payload.team_members.
      */
@@ -829,17 +861,22 @@ export class OpportunityApplicationsService {
         const rows = await qb.getMany();
         return {
             success: true,
-            data: rows.map((a) => ({
-                id: a.id,
-                opportunity_id: a.opportunityId,
-                opportunity_title: a.opportunity?.title,
-                student_name: a.studentUser?.name,
-                student_email: a.studentUser?.email,
-                internal_status: a.internalStatus,
-                application_status: this.toPublicApplicationStatus(a.internalStatus),
-                application_stage: this.applicationStage(a.internalStatus),
-                created_at: a.createdAt,
-            })),
+            data: rows.map((a) => {
+                const { participation_type, team_members } = this.facultyJoinApplicationTeamMembersForDisplay(a);
+                return {
+                    id: a.id,
+                    opportunity_id: a.opportunityId,
+                    opportunity_title: a.opportunity?.title,
+                    student_name: a.studentUser?.name,
+                    student_email: a.studentUser?.email,
+                    participation_type,
+                    team_members,
+                    internal_status: a.internalStatus,
+                    application_status: this.toPublicApplicationStatus(a.internalStatus),
+                    application_stage: this.applicationStage(a.internalStatus),
+                    created_at: a.createdAt,
+                };
+            }),
         };
     }
 

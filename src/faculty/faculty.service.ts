@@ -100,6 +100,36 @@ export class FacultyService {
         return (facultyEmail || '').trim().toLowerCase();
     }
 
+    /** Matches the first OR-branch of {@link buildFacultyApprovalsQuery} (assigned faculty or supervision emails). */
+    private opportunityMatchesNamedSupervisorPath(opportunity: Opportunity, facultyId: string, fe: string): boolean {
+        if (opportunity.facultyId != null && String(opportunity.facultyId) === String(facultyId)) {
+            return true;
+        }
+        if (!fe) return false;
+        const sup = opportunity.supervision as Record<string, unknown> | null | undefined;
+        if (!sup || typeof sup !== 'object') return false;
+        const contact =
+            typeof sup.contact === 'string' ? this.normalizeFacultyEmail(sup.contact) : '';
+        const official =
+            typeof sup.official_email === 'string' ? this.normalizeFacultyEmail(sup.official_email) : '';
+        return contact === fe || official === fe;
+    }
+
+    private approvalVisibilityForRow(
+        opportunity: Opportunity,
+        facultyId: string,
+        facultyEmail: string,
+        delegatedIds: Set<string>,
+    ): 'named_supervisor' | 'university_scope' | 'both' {
+        const fe = this.normalizeFacultyEmail(facultyEmail);
+        const named = this.opportunityMatchesNamedSupervisorPath(opportunity, facultyId, fe);
+        const uni = delegatedIds.has(opportunity.id);
+        if (named && uni) return 'both';
+        if (named) return 'named_supervisor';
+        if (uni) return 'university_scope';
+        return 'named_supervisor';
+    }
+
     private resolveRequiredHoursPerStudent(project: Opportunity | null | undefined): number {
         if (!project) return 0;
         const raw = project.timeline?.expected_hours;
@@ -749,11 +779,13 @@ export class FacultyService {
 
     async getApprovals(facultyId: string, facultyEmail: string, status?: string) {
         const delegatedOppIds = await this.resolveDelegatedOpportunityIds(facultyId);
+        const delegatedSet = new Set(delegatedOppIds);
         const query = this.buildFacultyApprovalsQuery(facultyId, facultyEmail, status, delegatedOppIds);
         const opportunities = await query.orderBy('opportunity.createdAt', 'DESC').getMany();
 
         const formatted = await Promise.all(
             opportunities.map(async (opp) => {
+                const approvalVisibility = this.approvalVisibilityForRow(opp, facultyId, facultyEmail, delegatedSet);
                 const student = await this.usersRepository.findOne({ where: { id: opp.creatorId } });
                 const latestReport =
                     opp.creatorId
@@ -800,6 +832,8 @@ export class FacultyService {
                     admin_approval_status: opp.adminApprovalStatus ?? null,
                     facultyVerified: opp.faculty_verified,
                     liaisonVerified: opp.liaisonVerified,
+                    approvalVisibility,
+                    approval_visibility: approvalVisibility,
                 };
             }),
         );
@@ -807,6 +841,10 @@ export class FacultyService {
         return {
             success: true,
             data: formatted,
+            meta: {
+                has_university_scope: delegatedOppIds.length > 0,
+                delegated_opportunity_count: delegatedOppIds.length,
+            },
         };
     }
 

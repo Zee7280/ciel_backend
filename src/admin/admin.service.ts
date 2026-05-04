@@ -401,17 +401,7 @@ export class AdminService {
         ];
         const total_participants = cohortStudentIds.length;
 
-        const verified_students =
-            cohortStudentIds.length === 0
-                ? 0
-                : await this.usersRepository.count({
-                      where: {
-                          id: In(cohortStudentIds),
-                          role: UserRole.STUDENT,
-                          profile_verified: true,
-                          identity_verified: true,
-                      },
-                  });
+        const verified_students = await this.countVerifiedStudentsInCohort(cohortStudentIds);
 
         const verification_rate_percent =
             total_participants === 0 ? 0 : Math.round((100 * verified_students) / total_participants);
@@ -453,6 +443,25 @@ export class AdminService {
         const d = new Date(iso);
         if (Number.isNaN(d.getTime())) return d;
         return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 23, 59, 59, 999));
+    }
+
+    /** Verified students in cohort; chunked {@link In} avoids PostgreSQL bind-parameter limits for large filtered cohorts. */
+    private async countVerifiedStudentsInCohort(cohortStudentIds: string[]): Promise<number> {
+        if (cohortStudentIds.length === 0) return 0;
+        const chunkSize = 8000;
+        let total = 0;
+        for (let i = 0; i < cohortStudentIds.length; i += chunkSize) {
+            const chunk = cohortStudentIds.slice(i, i + chunkSize);
+            total += await this.usersRepository.count({
+                where: {
+                    id: In(chunk),
+                    role: UserRole.STUDENT,
+                    profile_verified: true,
+                    identity_verified: true,
+                },
+            });
+        }
+        return total;
     }
 
     private masterAnalyticsFiltersActive(query: MasterAnalyticsQueryDto): boolean {

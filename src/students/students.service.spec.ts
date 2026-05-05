@@ -16,6 +16,9 @@ describe('StudentsService impact history', () => {
       opportunityWorkflow: {},
       opportunitiesService: {},
       opportunityApplicationsService: {},
+      studentReportsService: {
+        getMergedReportsForParticipant: jest.fn().mockResolvedValue([]),
+      },
       ...overrides,
     };
 
@@ -33,6 +36,7 @@ describe('StudentsService impact history', () => {
       repositories.opportunityWorkflow as any,
       repositories.opportunitiesService as any,
       repositories.opportunityApplicationsService as any,
+      repositories.studentReportsService as any,
     );
   };
 
@@ -235,6 +239,9 @@ describe('StudentsService getDashboard analytics', () => {
       {} as any,
       {} as any,
       {} as any,
+      {
+        getMergedReportsForParticipant: jest.fn().mockResolvedValue([]),
+      } as any,
     );
 
     const result = await service.getDashboard('student-1');
@@ -310,6 +317,9 @@ describe('StudentsService getDashboard analytics', () => {
       {} as any,
       {} as any,
       {} as any,
+      {
+        getMergedReportsForParticipant: jest.fn().mockResolvedValue([]),
+      } as any,
     );
 
     const result = await service.getDashboard('student-1');

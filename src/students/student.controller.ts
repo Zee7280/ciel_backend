@@ -17,6 +17,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { StudentsService } from './students.service';
 import { StudentReportsService } from '../reports/student-reports.service';
 import { CreateOpportunityDto } from '../opportunities/dto/create-opportunity.dto';
+import { UserRole } from '../users/enums/user-role.enum';
 import { FilesInterceptor, FileInterceptor } from '@nestjs/platform-express';
 
 @Controller('student')
@@ -107,8 +108,12 @@ export class StudentController {
     }
 
     @Get('reports/check')
-    checkReportStatus(@Query() query: { studentId: string; opportunityId?: string }) {
-        return this.studentReportsService.checkReportStatus(query.studentId, query.opportunityId);
+    checkReportStatus(@Request() req, @Query() query: { studentId?: string; opportunityId?: string }) {
+        const studentId = (query.studentId || '').trim() || req.user.id;
+        if (studentId !== req.user.id && req.user.role !== UserRole.SUPER_ADMIN) {
+            throw new BadRequestException('Unauthorized to query report status for another student');
+        }
+        return this.studentReportsService.checkReportStatus(studentId, query.opportunityId);
     }
 
     @Get('reports/:id')

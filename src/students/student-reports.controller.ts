@@ -16,6 +16,7 @@ import {
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { StudentReportsService } from '../reports/student-reports.service';
+import { UserRole } from '../users/enums/user-role.enum';
 
 @Controller('students/reports')
 @UseGuards(JwtAuthGuard)
@@ -137,11 +138,12 @@ export class StudentReportsController {
     }
 
     @Get('check')
-    async checkReportStatus(@Query() query: { studentId: string; opportunityId?: string }) {
-        return await this.studentReportsService.checkReportStatus(
-            query.studentId,
-            query.opportunityId
-        );
+    async checkReportStatus(@Request() req, @Query() query: { studentId?: string; opportunityId?: string }) {
+        const studentId = (query.studentId || '').trim() || req.user.id;
+        if (studentId !== req.user.id && req.user.role !== UserRole.SUPER_ADMIN) {
+            throw new BadRequestException('Unauthorized to query report status for another student');
+        }
+        return await this.studentReportsService.checkReportStatus(studentId, query.opportunityId);
     }
 
     @Get(':id')

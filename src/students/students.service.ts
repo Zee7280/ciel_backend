@@ -26,6 +26,7 @@ import { OpportunitiesService } from '../opportunities/opportunities.service';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 import { StudentReport } from '../reports/entities/student-report.entity';
+import { StudentReportsService } from '../reports/student-reports.service';
 
 @Injectable()
 export class StudentsService {
@@ -50,6 +51,7 @@ export class StudentsService {
         private readonly opportunityWorkflow: OpportunityWorkflowService,
         private readonly opportunitiesService: OpportunitiesService,
         private readonly opportunityApplicationsService: OpportunityApplicationsService,
+        private readonly studentReportsService: StudentReportsService,
     ) { }
 
     private normalize(str?: string | null) {
@@ -653,9 +655,7 @@ export class StudentsService {
             activeCourses,
             activeProjectsCount,
             pendingApprovalsCount,
-            reportsUnderReviewCount,
             activeApplications,
-            studentReports,
             studentUser,
         ] = await Promise.all([
             this.participantRepository.count({
@@ -667,23 +667,20 @@ export class StudentsService {
             this.participantRepository.count({
                 where: { studentId: userId, status: In([...pendingParticipationStatuses]) },
             }),
-            this.studentReportsRepository.count({
-                where: { studentId: userId, status: In([...reportUnderReviewStatuses]) },
-            }),
             this.participantRepository.find({
                 where: { studentId: userId, status: In([...participationDashboardStatuses]) },
                 relations: ['project', 'project.organization'],
                 order: { updatedAt: 'DESC' },
                 take: 50,
             }),
-            this.studentReportsRepository.find({
-                where: { studentId: userId },
-                relations: ['opportunity'],
-                order: { updatedAt: 'DESC' },
-                take: 200,
-            }),
             this.usersRepository.findOne({ where: { id: userId }, relations: ['organization'] }),
         ]);
+
+        const studentReports = await this.studentReportsService.getMergedReportsForParticipant(userId);
+
+        const reportsUnderReviewCount = studentReports.filter((r) =>
+            (reportUnderReviewStatuses as readonly string[]).includes(r.status),
+        ).length;
 
         const projectIdsForTeams = [...new Set(activeApplications.map((a) => a.projectId))];
         const teamSizeByKey = new Map<string, number>();
@@ -2115,6 +2112,79 @@ export class StudentsService {
         return 'verified';
     }
 
+    /** Matches student-reports team canonical rules (DB `participations`). */
+    private looksLikeImpactUuid(value?: string | null): boolean {
+        return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+            (value || '').trim(),
+        );
+    }
+
+    private async getTeamLeadParticipantStudentId(projectId: string): Promise<string | null> {
+        const pid = projectId.trim();
+        if (!this.looksLikeImpactUuid(pid)) return null;
+        const leadRow = await this.participantRepository.findOne({
+            where: { projectId: pid, participationMode: 'team', isTeamLead: true },
+        });
+        return leadRow?.studentId ?? null;
+    }
+
+    /**
+     * Canonical `student_reports` row for a project (team lead's) when the viewer is a teammate.
+     * Mirrors `StudentReportsService.resolveReportRecordForParticipantRead` for impact APIs.
+     */
+    private async resolveImpactReportCandidate(
+        viewerStudentId: string,
+        projectKey: string,
+    ): Promise<StudentReport | null> {
+        const key = projectKey.trim();
+        if (!this.looksLikeImpactUuid(key)) return null;
+
+        const mine = await this.participantRepository.findOne({
+            where: { studentId: viewerStudentId, projectId: key },
+        });
+
+        const fetchLatestRow = async (sid: string) =>
+            this.studentReportsRepository.findOne({
+                where: [
+                    { studentId: sid, opportunityId: key },
+                    { studentId: sid, project_id: key },
+                ],
+                relations: ['opportunity', 'opportunity.organization'],
+                order: { createdAt: 'DESC' },
+            });
+
+        if (mine?.participationMode === 'team' && !mine.isTeamLead) {
+            const leadId = await this.getTeamLeadParticipantStudentId(key);
+            if (leadId) {
+                const leaderReport = await fetchLatestRow(leadId);
+                if (leaderReport) return leaderReport;
+            }
+        }
+
+        return fetchLatestRow(viewerStudentId);
+    }
+
+    /** Teammates may read approved CII / certificates for the team lead's report on the same project. */
+    private async participantMayAccessApprovedTeamImpactReport(
+        requestingStudentId: string,
+        report: StudentReport,
+    ): Promise<boolean> {
+        if (!requestingStudentId || !report.studentId) return false;
+        if (report.studentId === requestingStudentId) return true;
+
+        const projKey = this.getReportProjectId(report);
+        const pid = (projKey || '').trim();
+        if (!this.looksLikeImpactUuid(pid)) return false;
+
+        const mine = await this.participantRepository.findOne({
+            where: { studentId: requestingStudentId, projectId: pid },
+        });
+        if (!mine || mine.participationMode !== 'team') return false;
+
+        const leadId = await this.getTeamLeadParticipantStudentId(pid);
+        return Boolean(leadId && leadId === report.studentId);
+    }
+
     private async getApprovedOwnedReport(
         requestingUserId: string,
         role: string | undefined,
@@ -2129,7 +2199,10 @@ export class StudentsService {
         if (!report) {
             throw new NotFoundException('Report not found');
         }
-        if (report.studentId !== studentId) {
+        const mayAccess =
+            report.studentId === studentId ||
+            (await this.participantMayAccessApprovedTeamImpactReport(studentId, report));
+        if (!mayAccess) {
             throw new ForbiddenException('Access denied');
         }
         if (!this.isApprovedImpactReport(report)) {
@@ -2162,7 +2235,24 @@ export class StudentsService {
         ]);
 
         const participationByProject = new Map(participations.map((p) => [p.projectId, p]));
-        const approvedReports = reports.filter((r) => this.isApprovedImpactReport(r));
+        const ownedApprovedReports = reports.filter((r) => this.isApprovedImpactReport(r));
+        const seenApprovedId = new Set(ownedApprovedReports.map((r) => r.id));
+        const approvedReports = [...ownedApprovedReports];
+        for (const p of participations) {
+            const pid = (p.projectId ?? '').trim();
+            if (!this.looksLikeImpactUuid(pid)) {
+                continue;
+            }
+            const cand = await this.resolveImpactReportCandidate(studentId, pid);
+            if (cand && this.isApprovedImpactReport(cand) && !seenApprovedId.has(cand.id)) {
+                seenApprovedId.add(cand.id);
+                approvedReports.push(cand);
+            }
+        }
+        approvedReports.sort(
+            (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+        );
+
         const verifiedTimesheets = timesheets.filter((t) => t.status === 'verified');
         const pendingTimesheets = timesheets.filter((t) => t.status === 'pending');
         const visibleReports = reports.filter((r) => r.status !== 'draft');
@@ -2476,11 +2566,9 @@ export class StudentsService {
         const verifiedTs = await this.timesheetsRepository.findOne({
             where: { studentId, opportunityId, status: 'verified' },
         });
-        const reports = await this.studentReportsRepository.find({
-            where: { studentId, opportunityId },
-            order: { createdAt: 'DESC' },
-        });
-        const approvedReport = reports.find((r) => this.isApprovedImpactReport(r));
+        const canonical = await this.resolveImpactReportCandidate(studentId, opportunityId);
+        const approvedReport =
+            canonical && this.isApprovedImpactReport(canonical) ? canonical : undefined;
         if (!verifiedTs && !approvedReport) {
             throw new NotFoundException('Results not available');
         }

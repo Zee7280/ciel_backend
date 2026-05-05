@@ -13,6 +13,8 @@ import { MailService } from '../mail/mail.service';
 import { UsersService } from '../users/users.service';
 
 const OTP_TTL_MS = 5 * 60 * 1000;
+/** Keep hashing so inserts work on DBs where otpHash is still NOT NULL; plain otp is stored in `otp`. */
+const BCRYPT_ROUNDS = 8;
 
 @Injectable()
 export class OtpService {
@@ -61,13 +63,14 @@ export class OtpService {
         await this.emailOtpRepository.delete({ email });
 
         const otp = this.generateSixDigitOtp();
+        const otpHash = await bcrypt.hash(otp, BCRYPT_ROUNDS);
         const expiresAt = new Date(Date.now() + OTP_TTL_MS);
 
         await this.emailOtpRepository.save(
             this.emailOtpRepository.create({
                 email,
                 otp,
-                otpHash: null,
+                otpHash,
                 expiresAt,
                 verified: false,
             }),

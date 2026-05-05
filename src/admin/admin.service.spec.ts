@@ -29,6 +29,9 @@ const makeAdminServiceForTests = (overrides: Record<string, unknown> = {}) => {
             find: jest.fn().mockResolvedValue([]),
         },
         opportunityApplicationsService: {},
+        studentsService: {
+            getAdminTeamRosterForParticipation: jest.fn().mockResolvedValue(null),
+        },
         ...overrides,
     };
 
@@ -42,6 +45,7 @@ const makeAdminServiceForTests = (overrides: Record<string, unknown> = {}) => {
         repositories.participationRepository as any,
         repositories.studentReportRepository as any,
         repositories.opportunityApplicationsService as any,
+        repositories.studentsService as any,
     );
 };
 

@@ -106,6 +106,35 @@ export class OpportunityApplicationsService {
     }
 
     /**
+     * Admin pending queue (`findPendingApplications`): lead + `apply_payload` teammates for browse/join team apps.
+     */
+    adminBrowseApplicationTeamSummaryForQueue(app: OpportunityApplication): {
+        team_member_count: number;
+        team_members: { name: string; email: string; is_team_lead: boolean }[];
+    } | null {
+        const { participation_type, team_members } = this.facultyJoinApplicationTeamMembersForDisplay(app);
+        if (participation_type !== 'team') {
+            return null;
+        }
+        const leadName = (app.studentUser?.name || '').trim() || '—';
+        const leadEmail = (app.studentUser?.email || '').trim() || '—';
+        const roster: { name: string; email: string; is_team_lead: boolean }[] = [
+            { name: leadName, email: leadEmail, is_team_lead: true },
+        ];
+        for (const m of team_members) {
+            roster.push({
+                name: m.name,
+                email: m.email,
+                is_team_lead: false,
+            });
+        }
+        return {
+            team_member_count: roster.length,
+            team_members: roster,
+        };
+    }
+
+    /**
      * Normalized emails of everyone already tied to a non-withdrawn application:
      * the applicant (lead) plus every email listed in apply_payload.team_members.
      */

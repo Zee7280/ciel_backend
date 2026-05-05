@@ -8,6 +8,7 @@ import { StudentReport } from '../reports/entities/student-report.entity';
 import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { Participation } from '../engagement/entities/participant.entity';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
+import { StudentsService } from '../students/students.service';
 
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { UserRole } from '../users/enums/user-role.enum';
@@ -185,6 +186,7 @@ export class AdminService {
         @InjectRepository(StudentReport)
         private studentReportRepository: Repository<StudentReport>,
         private readonly opportunityApplicationsService: OpportunityApplicationsService,
+        private readonly studentsService: StudentsService,
     ) { }
 
     async getSettings() {
@@ -1130,21 +1132,30 @@ export class AdminService {
 
         const browseApps = await this.opportunityApplicationsService.findPendingAdminApplicationsForQueue();
 
-        const fromParticipation = applications.map((app) => ({
-            id: app.id,
-            name: app.fullName || app.student?.name || 'Unknown',
-            email: app.email || app.student?.email || 'Unknown',
-            organization_type: app.participationMode === 'team' ? 'Team' : 'Individual',
-            opportunity: app.project?.title || 'Unknown',
-            status: app.status,
-            created_at: app.createdAt,
-            approval_kind: 'participation' as const,
-        }));
+        const fromParticipation = await Promise.all(
+            applications.map(async (app) => {
+                const base = {
+                    id: app.id,
+                    name: app.fullName || app.student?.name || 'Unknown',
+                    email: app.email || app.student?.email || 'Unknown',
+                    organization_type: app.participationMode === 'team' ? 'Team' : 'Individual',
+                    opportunity: app.project?.title || 'Unknown',
+                    status: app.status,
+                    created_at: app.createdAt,
+                    approval_kind: 'participation' as const,
+                };
+                if (app.participationMode !== 'team') {
+                    return base;
+                }
+                const team = await this.studentsService.getAdminTeamRosterForParticipation(app.id);
+                return team ? { ...base, ...team } : base;
+            }),
+        );
 
         const fromBrowse = browseApps.map((a) => {
             const payload = a.applyPayload || {};
             const ptype = (payload['participation_type'] as string) || 'individual';
-            return {
+            const base = {
                 id: a.id,
                 name: a.studentUser?.name || 'Unknown',
                 email: a.studentUser?.email || 'Unknown',
@@ -1154,6 +1165,11 @@ export class AdminService {
                 created_at: a.createdAt,
                 approval_kind: 'opportunity_application' as const,
             };
+            if (ptype !== 'team') {
+                return base;
+            }
+            const team = this.opportunityApplicationsService.adminBrowseApplicationTeamSummaryForQueue(a);
+            return team ? { ...base, ...team } : base;
         });
 
         const merged = [...fromParticipation, ...fromBrowse].sort(

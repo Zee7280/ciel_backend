@@ -328,6 +328,32 @@ export class StudentsService {
         });
     }
 
+    /**
+     * Admin pending-approval list: teammates for legacy `participations` team applies
+     * (same roster rules as the student "My Projects" team modal).
+     */
+    async getAdminTeamRosterForParticipation(
+        participationId: string,
+    ): Promise<{
+        team_member_count: number;
+        team_members: { name: string; email: string; is_team_lead: boolean }[];
+    } | null> {
+        const app = await this.participantRepository.findOne({ where: { id: participationId } });
+        if (!app || app.participationMode !== 'team') {
+            return null;
+        }
+        const rows = await this.participationRowsForStudentProjectTeam(app);
+        const team_members = rows.map((p) => ({
+            name: (p.fullName || '').trim() || '—',
+            email: (p.email || '').trim() || '—',
+            is_team_lead: p.isTeamLead === true,
+        }));
+        return {
+            team_member_count: team_members.length,
+            team_members,
+        };
+    }
+
     /** Labels include keywords the student dashboard UI derives from when overview is absent. */
     private participationToDashboardStatus(status: string | null | undefined): string {
         switch (status) {

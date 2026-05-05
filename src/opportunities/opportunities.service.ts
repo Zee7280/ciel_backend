@@ -2238,30 +2238,44 @@ export class OpportunitiesService {
         }
 
         if (opp.isStudentCreated) {
-            const awaitingStudentPartnerReview =
-                opp.faculty_verified &&
-                (opp.workflowStage === WORKFLOW_STAGE.PENDING_PARTNER ||
-                    opp.status === 'pending_partner' ||
-                    (opp.requiresPartnerApproval === true &&
-                        opp.partnerApprovalStatus === LINE_STATUS.PENDING &&
-                        !opp.partnerVerified));
-            if (!awaitingStudentPartnerReview) {
+            if (!opp.faculty_verified) {
                 throw new BadRequestException(
                     'Partner verification is only available after faculty approval.',
                 );
             }
+            if (!this.isAwaitingPartnerDashboardReview(opp)) {
+                throw new BadRequestException('This opportunity is not awaiting partner approval.');
+            }
             return;
         }
 
-        const awaitingPartnerReview =
-            opp.workflowStage === WORKFLOW_STAGE.PENDING_PARTNER ||
-            opp.status === 'pending_partner' ||
-            (opp.requiresPartnerApproval === true &&
-                opp.partnerApprovalStatus === LINE_STATUS.PENDING &&
-                !opp.partnerVerified);
-        if (!awaitingPartnerReview) {
+        if (!this.isAwaitingPartnerDashboardReview(opp)) {
             throw new BadRequestException('This opportunity is not awaiting partner approval.');
         }
+    }
+
+    /**
+     * Partner approve/reject and Faculty Hub `partner_ack` — true when the partner line is still open
+     * (covers `pending_execution` + null workflow where execution org is still pending but partner may act).
+     */
+    isAwaitingPartnerDashboardReview(opp: Opportunity): boolean {
+        if (!opp.requiresPartnerApproval || opp.partnerVerified) {
+            return false;
+        }
+        const pas = opp.partnerApprovalStatus;
+        if (pas === LINE_STATUS.APPROVED || pas === LINE_STATUS.REJECTED || pas === LINE_STATUS.SKIPPED) {
+            return false;
+        }
+        if (opp.workflowStage === WORKFLOW_STAGE.PENDING_PARTNER) {
+            return true;
+        }
+        if (opp.status === 'pending_partner' || opp.status === 'pending_execution') {
+            return true;
+        }
+        if (pas === LINE_STATUS.PENDING || pas == null || pas === '') {
+            return true;
+        }
+        return false;
     }
 
     async facultyDashboardApprove(opportunityId: string, facultyUserId: string, facultyEmail: string) {

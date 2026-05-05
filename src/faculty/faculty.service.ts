@@ -10,6 +10,8 @@ import { Participation } from '../engagement/entities/participant.entity';
 import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 import { UserRole } from '../users/enums/user-role.enum';
+import { OpportunitiesService } from '../opportunities/opportunities.service';
+import { WORKFLOW_STAGE, LINE_STATUS } from '../opportunities/opportunity-workflow.service';
 
 /** Participation statuses treated as “active” for faculty dashboard student counts. */
 const ACTIVE_PARTICIPATION_STATUSES = [
@@ -94,6 +96,7 @@ export class FacultyService {
         @InjectRepository(OpportunityApplication)
         private readonly opportunityApplicationsRepository: Repository<OpportunityApplication>,
         private readonly facultyUniversityScopeService: FacultyUniversityScopeService,
+        private readonly opportunitiesService: OpportunitiesService,
     ) {}
 
     private normalizeFacultyEmail(facultyEmail: string): string {
@@ -152,10 +155,9 @@ export class FacultyService {
         const resolvedPartner = this.resolvedPartnerReviewerEmail(opp);
         const partnerReviewerMatch = !!fe && !!resolvedPartner && fe === resolvedPartner;
         const partnerAckPending =
-            opp.requiresPartnerApproval &&
-            opp.partnerVerified === false &&
             partnerReviewerMatch &&
-            (!opp.isStudentCreated || opp.faculty_verified === true);
+            (!opp.isStudentCreated || opp.faculty_verified === true) &&
+            this.opportunitiesService.isAwaitingPartnerDashboardReview(opp);
 
         if (partnerAckPending) {
             return 'partner_ack';
@@ -464,6 +466,23 @@ export class FacultyService {
                                                     `LOWER(TRIM(COALESCE(opportunity.partner_organization->>'official_email', ''))) = :fePartner`,
                                                     { fePartner: fe },
                                                 );
+                                        }),
+                                    )
+                                    .andWhere(
+                                        new Brackets((gate) => {
+                                            gate.where('opportunity.workflowStage = :pGateWs', {
+                                                pGateWs: WORKFLOW_STAGE.PENDING_PARTNER,
+                                            })
+                                                .orWhere('opportunity.status = :pGateSt1', {
+                                                    pGateSt1: 'pending_partner',
+                                                })
+                                                .orWhere('opportunity.status = :pGateSt2', {
+                                                    pGateSt2: 'pending_execution',
+                                                })
+                                                .orWhere('opportunity.partnerApprovalStatus = :pGatePas', {
+                                                    pGatePas: LINE_STATUS.PENDING,
+                                                })
+                                                .orWhere('opportunity.partnerApprovalStatus IS NULL');
                                         }),
                                     );
                             }),

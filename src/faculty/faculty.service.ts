@@ -100,6 +100,82 @@ export class FacultyService {
         return (facultyEmail || '').trim().toLowerCase();
     }
 
+    /** Same source order as `OpportunitiesService.resolvePartnerEmail` (first valid email wins). */
+    private resolvedPartnerReviewerEmail(opp: Opportunity): string | null {
+        const collab = opp.external_partner_collaboration as { official_email?: string } | undefined;
+        const fromCollab =
+            collab && typeof collab.official_email === 'string' ? collab.official_email : undefined;
+        const sup = opp.supervision as
+            | { external_partner_email?: string; partner_email?: string }
+            | undefined;
+        const fromSupExt = sup && typeof sup.external_partner_email === 'string' ? sup.external_partner_email : undefined;
+        const fromSupPartner = sup && typeof sup.partner_email === 'string' ? sup.partner_email : undefined;
+        const ctx = opp.executing_context as { partner?: { official_email?: string } } | undefined;
+        const fromCtx =
+            ctx?.partner && typeof ctx.partner.official_email === 'string' ? ctx.partner.official_email : undefined;
+        const po = opp.partner_organization as { official_email?: string } | undefined;
+        const fromPo = po && typeof po.official_email === 'string' ? po.official_email : undefined;
+        for (const c of [fromCollab, fromSupExt, fromSupPartner, fromCtx, fromPo]) {
+            const e = this.normalizeFacultyEmail(c || '');
+            if (e && e.includes('@')) {
+                return e;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Whether this row should use partner approve/reject APIs from the Faculty Hub instead of faculty opportunity APIs.
+     */
+    private approvalActionForRow(
+        opp: Opportunity,
+        facultyId: string,
+        fe: string,
+        delegatedIds: Set<string>,
+        reportAwaitingFacultyGate: boolean,
+    ): 'faculty_review' | 'partner_ack' {
+        if (reportAwaitingFacultyGate) {
+            return 'faculty_review';
+        }
+        const awaitingFacultyOppGate =
+            !!opp.creatorId &&
+            (opp.status === 'pending_faculty' || opp.status === 'pending_verification') &&
+            !opp.faculty_verified;
+
+        const namedSupervisor = this.opportunityMatchesNamedSupervisorPath(opp, facultyId, fe);
+        const delegated = delegatedIds.has(opp.id);
+
+        if (awaitingFacultyOppGate && (namedSupervisor || delegated)) {
+            return 'faculty_review';
+        }
+
+        const resolvedPartner = this.resolvedPartnerReviewerEmail(opp);
+        const partnerReviewerMatch = !!fe && !!resolvedPartner && fe === resolvedPartner;
+        const partnerAckPending =
+            opp.requiresPartnerApproval &&
+            opp.partnerVerified === false &&
+            partnerReviewerMatch &&
+            (!opp.isStudentCreated || opp.faculty_verified === true);
+
+        if (partnerAckPending) {
+            return 'partner_ack';
+        }
+
+        return 'faculty_review';
+    }
+
+    private studentLeadReportNeedsFacultyFirst(latestReport: StudentReport | null, creatorId?: string | null): boolean {
+        if (!creatorId || !latestReport?.studentId) return false;
+        if (latestReport.studentId !== creatorId) return false;
+        const st = (latestReport.status || '').trim().toLowerCase();
+        if (st === 'draft' || st === 'rejected') return false;
+        const fs = latestReport.faculty_status;
+        if (fs === null || fs === undefined || fs === 'pending') {
+            return true;
+        }
+        return false;
+    }
+
     /**
      * Matches the first OR-branch of {@link buildFacultyApprovalsQuery}:
      * assigned faculty, supervision emails, or partner org official contact (same person may be both).
@@ -345,6 +421,51 @@ export class FacultyService {
                                         repRejected: 'rejected',
                                     },
                                 );
+                            }),
+                        )
+                        .orWhere(
+                            new Brackets((partnerQ) => {
+                                if (!fe) {
+                                    partnerQ.where('FALSE');
+                                    return;
+                                }
+                                partnerQ
+                                    .where('opportunity.creatorId IS NOT NULL')
+                                    .andWhere('opportunity.requiresPartnerApproval = :pReq', { pReq: true })
+                                    .andWhere('opportunity.partnerVerified = :pUnv', { pUnv: false })
+                                    .andWhere(
+                                        new Brackets((facultyCleared) => {
+                                            facultyCleared
+                                                .where('opportunity.isStudentCreated = :iscLegacy', {
+                                                    iscLegacy: false,
+                                                })
+                                                .orWhere('opportunity.faculty_verified = :fvOk', { fvOk: true });
+                                        }),
+                                    )
+                                    .andWhere(
+                                        new Brackets((emOr) => {
+                                            emOr.where(
+                                                `LOWER(TRIM(COALESCE(opportunity.external_partner_collaboration->>'official_email', ''))) = :fePartner`,
+                                                { fePartner: fe },
+                                            )
+                                                .orWhere(
+                                                    `LOWER(TRIM(COALESCE(opportunity.supervision->>'external_partner_email', ''))) = :fePartner`,
+                                                    { fePartner: fe },
+                                                )
+                                                .orWhere(
+                                                    `LOWER(TRIM(COALESCE(opportunity.supervision->>'partner_email', ''))) = :fePartner`,
+                                                    { fePartner: fe },
+                                                )
+                                                .orWhere(
+                                                    `LOWER(TRIM(COALESCE(opportunity.executing_context->'partner'->>'official_email', ''))) = :fePartner`,
+                                                    { fePartner: fe },
+                                                )
+                                                .orWhere(
+                                                    `LOWER(TRIM(COALESCE(opportunity.partner_organization->>'official_email', ''))) = :fePartner`,
+                                                    { fePartner: fe },
+                                                );
+                                        }),
+                                    );
                             }),
                         )
                         .orWhere(
@@ -804,6 +925,7 @@ export class FacultyService {
         const formatted = await Promise.all(
             opportunities.map(async (opp) => {
                 const approvalVisibility = this.approvalVisibilityForRow(opp, facultyId, facultyEmail, delegatedSet);
+                const normalizedEmail = this.normalizeFacultyEmail(facultyEmail);
                 const student = await this.usersRepository.findOne({ where: { id: opp.creatorId } });
                 const latestReport =
                     opp.creatorId
@@ -815,6 +937,14 @@ export class FacultyService {
                               order: { submission_date: 'DESC' },
                           })
                         : null;
+                const reportAwaitingFaculty = this.studentLeadReportNeedsFacultyFirst(latestReport, opp.creatorId);
+                const approval_action = this.approvalActionForRow(
+                    opp,
+                    facultyId,
+                    normalizedEmail,
+                    delegatedSet,
+                    reportAwaitingFaculty,
+                );
                 const metrics = (
                     latestReport?.section1 as
                         | { metrics?: { total_verified_hours?: number; eis_score?: number } }
@@ -852,6 +982,8 @@ export class FacultyService {
                     liaisonVerified: opp.liaisonVerified,
                     approvalVisibility,
                     approval_visibility: approvalVisibility,
+                    approval_action,
+                    approvalAction: approval_action,
                 };
             }),
         );

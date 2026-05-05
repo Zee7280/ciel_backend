@@ -311,7 +311,7 @@ export class OpportunitiesService {
         }
         const pe = this.resolvePartnerEmailFromOpportunity(opportunity);
         if (!pe || ue !== this.normalizeEmail(pe)) return false;
-        if (user.role === UserRole.STUDENT || user.role === UserRole.FACULTY) return false;
+        if (user.role === UserRole.STUDENT) return false;
         return true;
     }
 

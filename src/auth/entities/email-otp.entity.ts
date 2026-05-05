@@ -13,7 +13,8 @@ export class EmailOtp {
     @Column({ type: 'varchar', length: 16, nullable: true })
     otp: string | null;
 
-    @Column({ nullable: true })
+    /** bcrypt hash ($2b$…); explicit DB type avoids TypeORM inferring "Object" for string | null. */
+    @Column({ type: 'varchar', length: 72, nullable: true })
     otpHash: string | null;
 
     @Column({ type: 'timestamptz' })

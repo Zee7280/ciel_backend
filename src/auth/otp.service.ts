@@ -13,7 +13,6 @@ import { MailService } from '../mail/mail.service';
 import { UsersService } from '../users/users.service';
 
 const OTP_TTL_MS = 5 * 60 * 1000;
-const BCRYPT_ROUNDS = 8;
 
 @Injectable()
 export class OtpService {
@@ -35,6 +34,19 @@ export class OtpService {
         return n.toString().padStart(6, '0');
     }
 
+    private plainOtpMatches(stored: string, provided: string): boolean {
+        const a = String(stored);
+        const b = String(provided);
+        try {
+            if (a.length !== b.length) {
+                return false;
+            }
+            return crypto.timingSafeEqual(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8'));
+        } catch {
+            return false;
+        }
+    }
+
     async sendOtp(rawEmail: string) {
         const email = this.normalizeEmail(rawEmail);
         if (!email) {
@@ -49,13 +61,13 @@ export class OtpService {
         await this.emailOtpRepository.delete({ email });
 
         const otp = this.generateSixDigitOtp();
-        const otpHash = await bcrypt.hash(otp, BCRYPT_ROUNDS);
         const expiresAt = new Date(Date.now() + OTP_TTL_MS);
 
         await this.emailOtpRepository.save(
             this.emailOtpRepository.create({
                 email,
-                otpHash,
+                otp,
+                otpHash: null,
                 expiresAt,
                 verified: false,
             }),
@@ -82,8 +94,12 @@ export class OtpService {
             throw new BadRequestException('Invalid or expired OTP. Please request a new code.');
         }
 
-        const match = await bcrypt.compare(otp, row.otpHash);
-        if (!match) {
+        const valid = row.otp
+            ? this.plainOtpMatches(row.otp, otp)
+            : row.otpHash
+              ? await bcrypt.compare(otp, row.otpHash)
+              : false;
+        if (!valid) {
             throw new BadRequestException('Invalid OTP');
         }
 

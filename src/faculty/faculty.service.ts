@@ -100,19 +100,30 @@ export class FacultyService {
         return (facultyEmail || '').trim().toLowerCase();
     }
 
-    /** Matches the first OR-branch of {@link buildFacultyApprovalsQuery} (assigned faculty or supervision emails). */
+    /**
+     * Matches the first OR-branch of {@link buildFacultyApprovalsQuery}:
+     * assigned faculty, supervision emails, or partner org official contact (same person may be both).
+     */
     private opportunityMatchesNamedSupervisorPath(opportunity: Opportunity, facultyId: string, fe: string): boolean {
         if (opportunity.facultyId != null && String(opportunity.facultyId) === String(facultyId)) {
             return true;
         }
         if (!fe) return false;
         const sup = opportunity.supervision as Record<string, unknown> | null | undefined;
-        if (!sup || typeof sup !== 'object') return false;
-        const contact =
-            typeof sup.contact === 'string' ? this.normalizeFacultyEmail(sup.contact) : '';
-        const official =
-            typeof sup.official_email === 'string' ? this.normalizeFacultyEmail(sup.official_email) : '';
-        return contact === fe || official === fe;
+        if (sup && typeof sup === 'object') {
+            const contact =
+                typeof sup.contact === 'string' ? this.normalizeFacultyEmail(sup.contact) : '';
+            const official =
+                typeof sup.official_email === 'string' ? this.normalizeFacultyEmail(sup.official_email) : '';
+            if (contact === fe || official === fe) return true;
+        }
+        const po = opportunity.partner_organization as Record<string, unknown> | null | undefined;
+        if (po && typeof po === 'object') {
+            const pe =
+                typeof po.official_email === 'string' ? this.normalizeFacultyEmail(po.official_email) : '';
+            if (pe === fe) return true;
+        }
+        return false;
     }
 
     private approvalVisibilityForRow(
@@ -199,7 +210,8 @@ export class FacultyService {
     }
 
     /**
-     * Supervision + primary-faculty applications only (no admin-delegated university org expansion).
+     * Supervision / partner_organization official_email + primary-faculty applications only
+     * (no admin-delegated university org expansion).
      */
     private async resolveFacultyPersonalOpportunityIds(facultyId: string, facultyEmail: string): Promise<string[]> {
         const fe = this.normalizeFacultyEmail(facultyEmail);
@@ -207,10 +219,11 @@ export class FacultyService {
             new Brackets((qb) => {
                 qb.where('"o"."facultyId"::text = :facultyId', { facultyId });
                 if (fe) {
-                    qb.orWhere(`LOWER(TRIM(COALESCE(o.supervision->>'contact', ''))) = :fe`, { fe }).orWhere(
-                        `LOWER(TRIM(COALESCE(o.supervision->>'official_email', ''))) = :fe`,
-                        { fe },
-                    );
+                    qb.orWhere(`LOWER(TRIM(COALESCE(o.supervision->>'contact', ''))) = :fe`, { fe })
+                        .orWhere(`LOWER(TRIM(COALESCE(o.supervision->>'official_email', ''))) = :fe`, { fe })
+                        .orWhere(`LOWER(TRIM(COALESCE(o.partner_organization->>'official_email', ''))) = :fe`, {
+                            fe,
+                        });
                 }
             }),
         );
@@ -259,10 +272,15 @@ export class FacultyService {
                             qb.orWhere(
                                 `LOWER(TRIM(COALESCE(opportunity.supervision->>'contact', ''))) = :fe`,
                                 { fe },
-                            ).orWhere(
-                                `LOWER(TRIM(COALESCE(opportunity.supervision->>'official_email', ''))) = :fe`,
-                                { fe },
-                            );
+                            )
+                                .orWhere(
+                                    `LOWER(TRIM(COALESCE(opportunity.supervision->>'official_email', ''))) = :fe`,
+                                    { fe },
+                                )
+                                .orWhere(
+                                    `LOWER(TRIM(COALESCE(opportunity.partner_organization->>'official_email', ''))) = :fe`,
+                                    { fe },
+                                );
                         }
                     }),
                 );

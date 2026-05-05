@@ -304,7 +304,10 @@ export class OpportunitiesService {
             const sup = opportunity.supervision as Record<string, unknown> | undefined;
             const c = this.normalizeEmail(typeof sup?.contact === 'string' ? sup.contact : '');
             const oe = this.normalizeEmail(typeof sup?.official_email === 'string' ? sup.official_email : '');
-            return ue === c || (!!oe && ue === oe);
+            if (ue === c || (!!oe && ue === oe)) return true;
+            const po = opportunity.partner_organization as Record<string, unknown> | undefined;
+            const poe = this.normalizeEmail(typeof po?.official_email === 'string' ? po.official_email : '');
+            return !!poe && ue === poe;
         }
         const pe = this.resolvePartnerEmailFromOpportunity(opportunity);
         if (!pe || ue !== this.normalizeEmail(pe)) return false;
@@ -363,28 +366,40 @@ export class OpportunitiesService {
     }
 
     /**
-     * Liaison/partner links do not log the faculty in; ensure facultyId is set from supervision.contact
-     * so Project Approvals / history match the supervising faculty account.
+     * Liaison/partner links do not log the faculty in; set facultyId from supervision.contact first,
+     * then partner_organization.official_email if needed, so approvals/history bind to the faculty account.
      */
     private async assignFacultyIdFromSupervisionIfMissing(opp: Opportunity): Promise<void> {
         if (opp.facultyId) return;
+
+        const tryBindFacultyByEmail = async (raw: string): Promise<boolean> => {
+            const em = this.normalizeEmail(raw);
+            if (!em) return false;
+            const user = await this.usersRepository
+                .createQueryBuilder('u')
+                .where('LOWER(TRIM(u.email)) = :em', { em })
+                .andWhere('u.role = :role', { role: UserRole.FACULTY })
+                .getOne();
+            if (user) {
+                opp.facultyId = user.id;
+                return true;
+            }
+            return false;
+        };
+
         const sup = opp.supervision;
-        if (!sup || typeof sup !== 'object') return;
-        const o = sup as Record<string, unknown>;
-        const raw =
-            (typeof o.contact === 'string' && o.contact) ||
-            (typeof o.official_email === 'string' && o.official_email) ||
-            '';
-        const em = this.normalizeEmail(raw);
-        if (!em) return;
-        const user = await this.usersRepository
-            .createQueryBuilder('u')
-            .where('LOWER(TRIM(u.email)) = :em', { em })
-            .andWhere('u.role = :role', { role: UserRole.FACULTY })
-            .getOne();
-        if (user) {
-            opp.facultyId = user.id;
+        if (sup && typeof sup === 'object') {
+            const o = sup as Record<string, unknown>;
+            const rawSup =
+                (typeof o.contact === 'string' && o.contact) ||
+                (typeof o.official_email === 'string' && o.official_email) ||
+                '';
+            if (await tryBindFacultyByEmail(rawSup)) return;
         }
+
+        const po = opp.partner_organization as Record<string, unknown> | undefined;
+        const rawPo = po && typeof po.official_email === 'string' ? po.official_email : '';
+        await tryBindFacultyByEmail(rawPo);
     }
 
     /**
@@ -1365,7 +1380,8 @@ export class OpportunitiesService {
 
     /**
      * Faculty dashboard: opportunities this user created, is linked as `facultyId`,
-     * or is listed on an opportunity application as primary/secondary faculty email (verifier flow).
+     * is listed on supervision / partner_organization official_email, or appears on an application
+     * as primary/secondary faculty email (verifier flow).
      */
     async findMineForFaculty(userId: string) {
         const user = await this.usersRepository.findOne({ where: { id: userId } });
@@ -1404,6 +1420,25 @@ export class OpportunitiesService {
                 if (oid) {
                     idSet.add(oid);
                 }
+            }
+
+            const supOrPartnerLinked = await this.opportunitiesRepository
+                .createQueryBuilder('o')
+                .select('o.id')
+                .where(
+                    new Brackets((qb) => {
+                        qb.where(`LOWER(TRIM(COALESCE(o.supervision->>'contact', ''))) = :email`, { email })
+                            .orWhere(`LOWER(TRIM(COALESCE(o.supervision->>'official_email', ''))) = :email`, {
+                                email,
+                            })
+                            .orWhere(`LOWER(TRIM(COALESCE(o.partner_organization->>'official_email', ''))) = :email`, {
+                                email,
+                            });
+                    }),
+                )
+                .getMany();
+            for (const row of supOrPartnerLinked) {
+                idSet.add(row.id);
             }
         }
 
@@ -2157,7 +2192,8 @@ export class OpportunitiesService {
     }
 
     /**
-     * Faculty dashboard: must match assigned facultyId OR supervision.contact / official_email.
+     * Faculty dashboard: must match assigned facultyId OR supervision.contact / official_email /
+     * partner_organization.official_email (institutional partner contact using a faculty account).
      * Does not assert opportunity.status — see facultyDashboardApprove/Reject for pipeline vs application.
      */
     private assertFacultySupervisorForStudentOpportunity(
@@ -2168,10 +2204,16 @@ export class OpportunitiesService {
         const o = opp.supervision;
         const supContact = this.normalizeEmail(typeof o?.contact === 'string' ? o.contact : undefined);
         const supOfficial = this.normalizeEmail(typeof o?.official_email === 'string' ? o.official_email : undefined);
+        const po = opp.partner_organization as Record<string, unknown> | undefined;
+        const partnerOfficial = this.normalizeEmail(
+            typeof po?.official_email === 'string' ? po.official_email : undefined,
+        );
         const fe = this.normalizeEmail(facultyEmail);
         const idOk = !!opp.facultyId && opp.facultyId === facultyUserId;
         const emailOk =
-            (!!supContact && !!fe && supContact === fe) || (!!supOfficial && !!fe && supOfficial === fe);
+            (!!supContact && !!fe && supContact === fe) ||
+            (!!supOfficial && !!fe && supOfficial === fe) ||
+            (!!partnerOfficial && !!fe && partnerOfficial === fe);
         if (!idOk && !emailOk) {
             throw new ForbiddenException('You are not the assigned faculty supervisor for this opportunity');
         }

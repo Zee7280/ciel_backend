@@ -329,8 +329,7 @@ export class StudentsService {
     }
 
     /**
-     * Admin pending-approval list: teammates for legacy `participations` team applies
-     * (same roster rules as the student "My Projects" team modal).
+     * Admin pending participation queue (`findPendingApplications`): team roster aligned with browse queue shape.
      */
     async getAdminTeamRosterForParticipation(
         participationId: string,
@@ -343,10 +342,10 @@ export class StudentsService {
             return null;
         }
         const rows = await this.participationRowsForStudentProjectTeam(app);
-        const team_members = rows.map((p) => ({
-            name: (p.fullName || '').trim() || '—',
-            email: (p.email || '').trim() || '—',
-            is_team_lead: p.isTeamLead === true,
+        const team_members = rows.map((row) => ({
+            name: (row.fullName || '').trim() || '—',
+            email: (row.email || '').trim() || '—',
+            is_team_lead: !!row.isTeamLead,
         }));
         return {
             team_member_count: team_members.length,

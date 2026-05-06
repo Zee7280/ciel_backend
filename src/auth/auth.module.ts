@@ -11,12 +11,14 @@ import { JwtStrategy } from './jwt.strategy';
 import { EmailOtp } from './entities/email-otp.entity';
 import { OtpService } from './otp.service';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
+import { EngagementModule } from '../engagement/engagement.module';
 
 @Module({
     imports: [
         TypeOrmModule.forFeature([EmailOtp, Opportunity]),
         UsersModule,
         OrganizationsModule,
+        EngagementModule,
         PassportModule,
         JwtModule.registerAsync({
             imports: [ConfigModule],

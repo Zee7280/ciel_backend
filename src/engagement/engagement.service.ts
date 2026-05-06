@@ -52,6 +52,29 @@ export class EngagementService {
         return (email ?? '').trim().toLowerCase();
     }
 
+    /**
+     * Team seats approved before the student account existed are created with `student_id` NULL
+     * (`preRegister(null, …)`). Link them once the real user logs in or signs up (idempotent).
+     */
+    async linkOrphanParticipationsByEmail(userId: string, email: string | null | undefined): Promise<number> {
+        const norm = this.normalizeParticipantEmail(email);
+        if (!norm || !userId) {
+            return 0;
+        }
+        const res = await this.participantRepository
+            .createQueryBuilder()
+            .update(Participation)
+            .set({ studentId: userId })
+            .where('student_id IS NULL')
+            .andWhere('LOWER(TRIM(COALESCE(email, \'\'))) = :norm', { norm })
+            .execute();
+        const n = typeof res.affected === 'number' ? res.affected : 0;
+        if (n > 0) {
+            this.logger.log(`Linked ${n} orphan participation row(s) to student ${userId} (${norm})`);
+        }
+        return n;
+    }
+
     async preRegister(studentId: string | null, projectId: string, data: Partial<Participation>) {
         const opportunity = await this.opportunityRepository.findOne({ where: { id: projectId } });
         if (!opportunity) throw new NotFoundException('Project not found');

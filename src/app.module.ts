@@ -29,6 +29,7 @@ import { APP_FILTER } from '@nestjs/core';
 import { IssueLogsExceptionFilter } from './issue-logs/issue-logs.filter';
 import { IssueLogsModule } from './issue-logs/issue-logs.module';
 import { OrganizationMembershipModule } from './organization-membership/organization-membership.module';
+import { FeedbackModule } from './feedback/feedback.module';
 
 @Module({
   imports: [
@@ -78,6 +79,7 @@ import { OrganizationMembershipModule } from './organization-membership/organiza
     SupportModule,
     IssueLogsModule,
     OrganizationMembershipModule,
+    FeedbackModule,
     TypeOrmModule.forFeature([Setting])
 ],
   controllers: [AppController],

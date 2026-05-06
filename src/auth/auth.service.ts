@@ -15,6 +15,7 @@ import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { User } from '../users/entities/user.entity';
 import { UserRole } from '../users/enums/user-role.enum';
 import { PAKISTANI_UNIVERSITIES_SET } from './constants/pakistani-universities';
+import { EngagementService } from '../engagement/engagement.service';
 
 @Injectable()
 export class AuthService {
@@ -24,6 +25,7 @@ export class AuthService {
         private organizationsService: OrganizationsService,
         private mailService: MailService,
         private otpService: OtpService,
+        private engagementService: EngagementService,
         @InjectRepository(Opportunity)
         private opportunitiesRepository: Repository<Opportunity>,
     ) { }
@@ -149,6 +151,14 @@ export class AuthService {
             // Link any pre-existing opportunities that were awaiting this user's email
             await this.reconcileNewUser(user, organization);
 
+            if (user.role === UserRole.STUDENT) {
+                try {
+                    await this.engagementService.linkOrphanParticipationsByEmail(user.id, user.email);
+                } catch (e) {
+                    console.warn('Participation email link after signup failed (non-fatal):', (e as Error).message);
+                }
+            }
+
             return {
                 success: true,
                 message: needsMembershipFee
@@ -190,6 +200,14 @@ export class AuthService {
         const isPasswordValid = await bcrypt.compare(password, user.password);
         if (!isPasswordValid) {
             throw new UnauthorizedException('Invalid credentials');
+        }
+
+        if (user.role === UserRole.STUDENT) {
+            try {
+                await this.engagementService.linkOrphanParticipationsByEmail(user.id, user.email);
+            } catch (e) {
+                console.warn('Participation email link after login failed (non-fatal):', (e as Error).message);
+            }
         }
 
         const payload = {

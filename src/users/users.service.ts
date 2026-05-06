@@ -8,6 +8,35 @@ import * as bcrypt from 'bcrypt';
 import { NotificationsService } from '../notifications/notifications.service';
 import { OrganizationMembershipService } from '../organization-membership/organization-membership.service';
 
+function digitsOnly(s: string): string {
+    return s.replace(/\D/g, '');
+}
+
+/**
+ * Build a single international string for clients that read `contact` (e.g. student profile).
+ * Signup stores national digits in `phone` and dial code in `countryCode`; without this, UIs only see local digits.
+ */
+function composeContactFromUserPhone(
+    countryCode: string | null | undefined,
+    phone: string | null | undefined,
+): string | null {
+    const rawPhone = (phone ?? '').trim();
+    if (!rawPhone) return null;
+    if (rawPhone.startsWith('+')) return rawPhone;
+
+    const cc = (countryCode ?? '').trim();
+    const nationalDigits = digitsOnly(rawPhone);
+    if (!nationalDigits) return null;
+    if (!cc) return rawPhone;
+
+    const dialDigits = digitsOnly(cc);
+    if (!dialDigits) return rawPhone;
+    if (nationalDigits.startsWith(dialDigits)) {
+        return `+${nationalDigits}`;
+    }
+    return `+${dialDigits}${nationalDigits}`;
+}
+
 @Injectable()
 export class UsersService {
     constructor(
@@ -48,6 +77,7 @@ export class UsersService {
             type: user.role, // keeping for backward compatibility if frontend uses it
             avatar: user.avatar,
             phone: user.phone,
+            contact: composeContactFromUserPhone(user.countryCode, user.phone),
             city: user.city,
             institution: user.institution,
             department: user.department,

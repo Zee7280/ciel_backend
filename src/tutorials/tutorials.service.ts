@@ -12,6 +12,9 @@ const TUTORIAL_FOLDER = 'platform-tutorials/videos';
 const TUTORIAL_DOCS_FOLDER = 'platform-tutorials/documents';
 const TUTORIAL_POSTERS_FOLDER = 'platform-tutorials/posters';
 
+/** Multer / product cap: each tutorial file (video, document, poster) may be at most this size. */
+export const PLATFORM_TUTORIAL_MAX_FILE_BYTES = 500 * 1024 * 1024;
+
 @Injectable()
 export class TutorialsService {
     constructor(

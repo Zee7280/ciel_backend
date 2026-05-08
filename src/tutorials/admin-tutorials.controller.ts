@@ -18,7 +18,10 @@ import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
 import { AdminMutationAuditInterceptor } from '../audit-logs/admin-mutation-audit.interceptor';
-import { TutorialsService } from './tutorials.service';
+import {
+    PLATFORM_TUTORIAL_MAX_FILE_BYTES,
+    TutorialsService,
+} from './tutorials.service';
 
 const tutorialUpload = FileFieldsInterceptor(
     [
@@ -27,7 +30,7 @@ const tutorialUpload = FileFieldsInterceptor(
         { name: 'poster', maxCount: 1 },
     ],
     {
-        limits: { fileSize: 500 * 1024 * 1024 },
+        limits: { fileSize: PLATFORM_TUTORIAL_MAX_FILE_BYTES },
     },
 );
 

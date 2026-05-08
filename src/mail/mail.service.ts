@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
+import sanitizeHtml from 'sanitize-html';
 
 /** Optional structured summary for faculty/partner verification emails. */
 export interface OpportunityVerificationEmailDetails {
@@ -70,6 +71,192 @@ export class MailService {
       }
     });
   }
+
+  private wrapOfficialTemplate(opts: { heading: string; bodyHtml: string }): string {
+    const headingEsc = this.escHtmlPlain(opts.heading);
+    const logoUrl = this.buildFrontendLink('/iel-pk-logo.png', {});
+    return `
+      <div style="background: #f8fafc; padding: 32px 16px; font-family: Arial, sans-serif;">
+        <div style="max-width: 680px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+          
+          <!-- Header Section -->
+       
+            <div style="display: flex; align-items: center; gap: 16px;">
+                <div style="color: #ffffff; font-weight: 600; font-size: 14px; margin-bottom: 4px;">COMMUNITY IMPACT EDUCATION LAB</div>
+            </div>
+    
+
+          <!-- Content Section -->
+          <div style="padding: 28px;">
+            <div style="color: #374151; font-size: 15px; line-height: 1.6;">
+              ${opts.bodyHtml}
+            </div>
+
+            <!-- Separator -->
+            <div style="margin: 28px 0; height: 1px; background: #e5e7eb;"></div>
+
+            <!-- Support & Contact Section -->
+            <div style="background: #f9fafb; border-radius: 8px; padding: 20px; margin-bottom: 20px;">
+              <table role="presentation" width="100%" style="border-collapse: collapse;">
+                <tr>
+                  <td style="vertical-align: top; padding-right: 16px;">
+                    <p style="margin: 0 0 12px 0; color: #374151; font-size: 14px; font-weight: 600;">Need Help?</p>
+                    <div style="color: #6b7280; font-size: 13px; line-height: 1.5;">
+                      Email: <a href="mailto:support@cielpk.com" style="color: #3b82f6; text-decoration: none;">support@cielpk.com</a><br />
+                      Website: <a href="${this.buildFrontendLink('/', {})}" style="color: #3b82f6; text-decoration: none;">cielpk.com</a><br />
+                      WhatsApp (24/7): <a href="https://wa.me/923712243575" style="color: #059669; text-decoration: none;">0371-2243575</a>
+                    </div>
+                  </td>
+                  <td style="vertical-align: top; text-align: right;">
+                    <p style="margin: 0; color: #6b7280; font-size: 12px; line-height: 1.4;">
+                      Official communication from<br />
+                      <strong style="color: #374151;">Community Impact Education Lab (CIEL PK)</strong>
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </div>
+
+            <!-- Footer -->
+            <div style="text-align: center; padding: 16px 0;">
+              <p style="margin: 0; color: #374151; font-size: 14px; line-height: 1.5;">
+                Regards,<br />
+                <strong>CIEL PK Team</strong>
+              </p>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Footer Note -->
+        <div style="text-align: center; margin-top: 20px; color: #9ca3af; font-size: 12px;">
+          This email was sent by CIEL PK. Please do not reply to this email.
+        </div>
+      </div>
+    `;
+  }
+
+  async sendAdminComposedEmail(
+    to: string,
+    subject: string,
+    message: string,
+  ): Promise<void>;
+  async sendAdminComposedEmail(opts: {
+    to: string[];
+    subject: string;
+    messageHtml: string;
+    messageText?: string;
+    image?: Express.Multer.File;
+  }): Promise<void>;
+  async sendAdminComposedEmail(
+    arg1: string | { to: string[]; subject: string; messageHtml: string; messageText?: string; image?: Express.Multer.File },
+    arg2?: string,
+    arg3?: string,
+  ): Promise<void> {
+    const opts =
+      typeof arg1 === 'string'
+        ? {
+            to: [arg1],
+            subject: String(arg2 ?? ''),
+            messageHtml: `<p>${this.escHtmlPlain(String(arg3 ?? '')).replace(/\r?\n/g, '<br />')}</p>`,
+          }
+        : arg1;
+
+    const from =
+      this.configService.get<string>('MAIL_ADMIN_FROM') ||
+      'CIEL Admin <admin@cielpk.com>';
+    const subjectTrim = (opts.subject || '').trim();
+
+    const sanitizedBody = this.sanitizeAdminHtml(opts.messageHtml || '');
+    const bodyWrapped = this.wrapOfficialTemplate({
+      heading: subjectTrim || 'Official communication',
+      bodyHtml: `<div style="margin:0;color:#0f172a;font-size:14px;line-height:1.7;">${sanitizedBody}</div>`,
+    });
+
+    const text = (opts.messageText || this.htmlToText(sanitizedBody) || '').trim();
+    const toList = (opts.to || []).map((x) => String(x).trim()).filter(Boolean);
+
+    const attachments: any[] = [];
+    if (opts.image?.buffer?.length) {
+      attachments.push({
+        filename: opts.image.originalname || 'image',
+        content: opts.image.buffer,
+        contentType: opts.image.mimetype || 'application/octet-stream',
+      });
+    }
+
+    await this.transporter.sendMail({
+      from,
+      to: toList.join(','),
+      subject: subjectTrim || 'CIEL PK message',
+      replyTo: from,
+      text,
+      html: bodyWrapped,
+      attachments: attachments.length ? attachments : undefined,
+    });
+    this.logger.log(`Admin composed email sent to ${toList.join(', ')}`);
+  }
+
+  private sanitizeAdminHtml(html: string): string {
+    return sanitizeHtml(html, {
+      allowedTags: [
+        'p',
+        'br',
+        'strong',
+        'b',
+        'em',
+        'i',
+        'u',
+        'ul',
+        'ol',
+        'li',
+        'a',
+        'span',
+        'div',
+        'h1',
+        'h2',
+        'h3',
+        'blockquote',
+      ],
+      allowedAttributes: {
+        a: ['href', 'target', 'rel'],
+        span: ['style'],
+        div: ['style'],
+        p: ['style'],
+      },
+      allowedSchemes: ['http', 'https', 'mailto'],
+      transformTags: {
+        a: (tagName, attribs) => {
+          const href = attribs.href || '';
+          const safeRel = 'noopener noreferrer';
+          return {
+            tagName,
+            attribs: {
+              ...attribs,
+              href,
+              target: '_blank',
+              rel: safeRel,
+            },
+          };
+        },
+      },
+    });
+  }
+
+  private htmlToText(html: string): string {
+    return String(html)
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/p>/gi, '\n')
+      .replace(/<\/li>/gi, '\n')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .trim();
+  }
+
+  // (implementation lives in overload above)
 
   async sendWelcomeEmail(to: string, name: string) {
     const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';

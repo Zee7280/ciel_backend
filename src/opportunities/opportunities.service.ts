@@ -1645,7 +1645,7 @@ export class OpportunitiesService {
         const creator = opportunity.creatorId
             ? await this.usersRepository.findOne({
                   where: { id: opportunity.creatorId },
-                  select: ['id', 'name', 'email'],
+                  select: ['id', 'name', 'email', 'phone'],
               })
             : null;
 
@@ -1656,6 +1656,7 @@ export class OpportunitiesService {
                       id: creator.id,
                       name: creator.name,
                       email: creator.email,
+                      phone: creator.phone ?? null,
                   }
                 : null,
         };

@@ -82,6 +82,32 @@ export class TutorialsService {
         return { success: true, data: saved };
     }
 
+    async createFromDirectUrls(opts: {
+        title: string;
+        description: string;
+        category: string;
+        durationLabel?: string;
+        sortOrder: number;
+        videoUrl: string;
+        documentUrl?: string | null;
+        documentFilename?: string | null;
+        posterUrl?: string | null;
+    }) {
+        const row = this.repo.create({
+            title: opts.title.trim(),
+            description: (opts.description || '').trim(),
+            category: (opts.category || 'General').trim() || 'General',
+            videoUrl: opts.videoUrl,
+            posterUrl: opts.posterUrl ?? null,
+            durationLabel: opts.durationLabel?.trim() || null,
+            documentUrl: opts.documentUrl ?? null,
+            documentFilename: opts.documentFilename ?? null,
+            sortOrder: opts.sortOrder,
+        });
+        const saved = await this.repo.save(row);
+        return { success: true, data: saved };
+    }
+
     async remove(id: string) {
         const row = await this.repo.findOne({ where: { id } });
         if (!row) {

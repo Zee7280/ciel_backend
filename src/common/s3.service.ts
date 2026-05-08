@@ -1,6 +1,7 @@
 import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import * as crypto from 'crypto';
 import * as path from 'path';
 
@@ -21,6 +22,32 @@ export class S3Service {
                 secretAccessKey: this.configService.get<string>('AWS_SECRET_ACCESS_KEY')!,
             },
         });
+    }
+
+    /** Returns a presigned PUT URL and corresponding public URL for the configured bucket. */
+    async presignPutObject(opts: {
+        folder: string;
+        originalName: string;
+        contentType: string;
+        expiresInSeconds?: number;
+    }): Promise<{ uploadUrl: string; publicUrl: string; key: string }> {
+        const fileExt = path.extname(opts.originalName || '').slice(0, 12);
+        const key = `${opts.folder}/${crypto.randomUUID()}${fileExt}`;
+        try {
+            const command = new PutObjectCommand({
+                Bucket: this.bucket,
+                Key: key,
+                ContentType: opts.contentType,
+            });
+            const uploadUrl = await getSignedUrl(this.s3Client, command, {
+                expiresIn: opts.expiresInSeconds ?? 15 * 60,
+            });
+            const publicUrl = `https://${this.bucket}.s3.${this.region}.amazonaws.com/${key}`;
+            return { uploadUrl, publicUrl, key };
+        } catch (error) {
+            console.error('S3 Presign Error:', error);
+            throw new InternalServerErrorException('Failed to create S3 upload URL');
+        }
     }
 
     async uploadFile(file: Express.Multer.File, folder: string): Promise<string> {

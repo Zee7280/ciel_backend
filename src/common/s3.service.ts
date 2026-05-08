@@ -1,6 +1,6 @@
 import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import * as crypto from 'crypto';
 import * as path from 'path';
 
@@ -59,6 +59,26 @@ export class S3Service {
         } catch (error) {
             console.error('S3 Buffer Upload Error:', error);
             throw new InternalServerErrorException('Failed to upload buffer to S3');
+        }
+    }
+
+    /** Deletes an object whose public URL was produced by this service for the configured bucket. */
+    async deleteByPublicUrl(url: string | null | undefined): Promise<void> {
+        if (!url || typeof url !== 'string') return;
+        const prefix = `https://${this.bucket}.s3.${this.region}.amazonaws.com/`;
+        if (!url.startsWith(prefix)) {
+            return;
+        }
+        const key = decodeURIComponent(url.slice(prefix.length));
+        try {
+            await this.s3Client.send(
+                new DeleteObjectCommand({
+                    Bucket: this.bucket,
+                    Key: key,
+                }),
+            );
+        } catch (error) {
+            console.error('S3 Delete Error:', error);
         }
     }
 }

@@ -1060,21 +1060,26 @@ export class StudentReportsService {
                     } : undefined,
                     // Point 1 & 3: Dynamically fetch team members from the source of truth (Participants/Engagement table)
                     team_members: await this.engagementService.getProjectTeam(report.opportunityId || report.project_id),
-                    attendance_logs: attendanceLogs ? attendanceLogs.map(log => ({
-                        id: log.id,
-                        date: log.dateOfEngagement,
-                        start_time: log.startTime,
-                        end_time: log.endTime,
-                        location: log.organizationName, // Mapping as location
-                        activity_type: log.activityType,
-                        description: log.description,
-                        hours: Number(log.sessionHours),
-                        evidence_url: log.evidenceUrl,
-                        entryStatus: log.entryStatus,
-                        approval_status: (log as any).approvalStatus ?? null,
-                        assigned_approver_type: (log as any).assignedApproverType ?? null,
-                        opportunity_creator_kind: (log as any).opportunityCreatorKind ?? null,
-                    })) : (report.section1?.attendance_logs || [])
+                    attendance_logs:
+                        attendanceLogs.length > 0
+                            ? attendanceLogs.map((log) => ({
+                                  id: log.id,
+                                  participantId: log.participantId,
+                                  date: log.dateOfEngagement,
+                                  start_time: log.startTime,
+                                  end_time: log.endTime,
+                                  location: log.organizationName, // Mapping as location
+                                  activity_type: log.activityType,
+                                  description: log.description,
+                                  hours: Number(log.sessionHours),
+                                  evidence_url: log.evidenceUrl,
+                                  entryStatus: log.entryStatus,
+                                  approval_status: (log as any).approvalStatus ?? null,
+                                  approval_action_reason: (log as any).approvalActionReason ?? null,
+                                  assigned_approver_type: (log as any).assignedApproverType ?? null,
+                                  opportunity_creator_kind: (log as any).opportunityCreatorKind ?? null,
+                              }))
+                            : report.section1?.attendance_logs || [],
                 },
                 section2: report.section2,
                 section3: report.section3,

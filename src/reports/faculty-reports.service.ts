@@ -78,6 +78,7 @@ export class FacultyReportsService {
                 ...report,
                 attendance_logs: attendanceLogs.map(log => ({
                     id: log.id,
+                    participantId: log.participantId,
                     date: log.dateOfEngagement,
                     start_time: log.startTime,
                     end_time: log.endTime,
@@ -88,6 +89,7 @@ export class FacultyReportsService {
                     evidence_url: log.evidenceUrl,
                     entryStatus: log.entryStatus,
                     approval_status: (log as any).approvalStatus ?? null,
+                    approval_action_reason: (log as any).approvalActionReason ?? null,
                     assigned_approver_type: (log as any).assignedApproverType ?? null,
                     opportunity_creator_kind: (log as any).opportunityCreatorKind ?? null,
                 }))

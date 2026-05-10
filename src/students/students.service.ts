@@ -1511,6 +1511,12 @@ export class StudentsService {
                 opportunity.partnerApprovalStatus = opportunity.requiresPartnerApproval
                     ? LINE_STATUS.PENDING
                     : LINE_STATUS.NOT_APPLICABLE;
+            } else if (opportunity.adminApprovalStatus === LINE_STATUS.REJECTED) {
+                // Admin rejected after faculty (and optional partner) already approved — resubmit skips upstream gates.
+                opportunity.workflowStage = WORKFLOW_STAGE.PENDING_ADMIN;
+                opportunity.status = 'pending_approval';
+                opportunity.adminApprovalStatus = LINE_STATUS.PENDING;
+                opportunity.admin_approved = false;
             }
 
             // Keep admin lane as pending while resubmission goes back through review queues.

@@ -234,11 +234,19 @@ export class AuthService {
     }
 
     async forgotPassword(email: string) {
-        const user = await this.usersService.findByEmail(email);
+        const trimmed = typeof email === 'string' ? email.trim() : '';
+        if (!trimmed) {
+            throw new BadRequestException('Email is required.');
+        }
 
-        // Always return success to prevent email enumeration
+        const user = await this.usersService.findByEmail(trimmed.toLowerCase());
+
         if (!user) {
-            return { success: true, message: 'Reset link sent to email.' };
+            return {
+                success: false,
+                message:
+                    'No account exists for this email. Please check that you spelled it correctly or use the email you registered with.',
+            };
         }
 
         // Generate a secure random token
@@ -256,7 +264,7 @@ export class AuthService {
 
         return {
             success: true,
-            message: 'Reset link sent to email.',
+            message: 'We sent a password reset link to your email. Check your inbox and spam folder.',
         };
     }
 

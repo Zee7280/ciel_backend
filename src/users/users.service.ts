@@ -7,6 +7,7 @@ import { UserRole } from './enums/user-role.enum';
 import * as bcrypt from 'bcrypt';
 import { NotificationsService } from '../notifications/notifications.service';
 import { OrganizationMembershipService } from '../organization-membership/organization-membership.service';
+import { getProfileCompletionStatus } from './profile-completion.util';
 
 function digitsOnly(s: string): string {
     return s.replace(/\D/g, '');
@@ -145,6 +146,19 @@ export class UsersService {
 
     async findAll(): Promise<User[]> {
         return this.usersRepository.find();
+    }
+
+    /**
+     * Admin user table: includes `organization` for the same name/phone fallbacks as opportunity profile checks,
+     * plus `profile_complete` / `profile_missing_fields`. Omits password reset secrets from the payload.
+     */
+    async findAllForAdmin() {
+        const users = await this.usersRepository.find({ relations: ['organization'] });
+        return users.map((user) => {
+            const { password: _pw, passwordResetToken: _prt, passwordResetExpiry: _pre, ...rest } = user;
+            const { profile_complete, profile_missing_fields } = getProfileCompletionStatus(user);
+            return { ...rest, profile_complete, profile_missing_fields };
+        });
     }
 
     async findOne(id: string): Promise<User | null> {

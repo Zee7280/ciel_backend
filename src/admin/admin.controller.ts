@@ -187,7 +187,7 @@ export class AdminController {
 
     @Get('users')
     async findAll() {
-        const users = await this.usersService.findAll();
+        const users = await this.usersService.findAllForAdmin();
         return { success: true, data: users };
     }
 

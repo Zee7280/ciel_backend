@@ -9,6 +9,7 @@ import { OrganizationsService } from '../organizations/organizations.service';
 import { EngagementService } from '../engagement/engagement.service';
 import { User } from '../users/entities/user.entity';
 import { UserRole } from '../users/enums/user-role.enum';
+import { getProfileCompletionStatus, resolveDisplayNameForProfile } from '../users/profile-completion.util';
 import { MailService, OpportunityVerificationEmailDetails } from '../mail/mail.service';
 import { randomUUID } from 'crypto';
 import { OpportunityWorkflowService, WORKFLOW_STAGE, LINE_STATUS } from './opportunity-workflow.service';
@@ -531,37 +532,10 @@ export class OpportunitiesService {
         }
     }
 
-    /** Same semantics as profile completion checks: User.name OR linked Organization.contactName. */
-    private resolveCreatorDisplayName(user: User): string | undefined {
-        const fromUser = typeof user.name === 'string' ? user.name.trim() : '';
-        if (fromUser) return fromUser;
-        const fromOrg =
-            user.organization?.contactName != null ? String(user.organization.contactName).trim() : '';
-        return fromOrg || undefined;
-    }
-
     private ensureProfileComplete(user: User) {
-        const missing: string[] = [];
-        const requiresAcademicProfile = [UserRole.STUDENT, UserRole.FACULTY, UserRole.UNIVERSITY].includes(user.role);
-        const org = user.organization;
-        const resolvedName = this.resolveCreatorDisplayName(user) || '';
-        if (!resolvedName) missing.push('name');
-        const resolvedPhone =
-            (typeof user.phone === 'string' && user.phone.trim()) ||
-            (org?.contactPhone && String(org.contactPhone).trim()) ||
-            '';
-        if (!resolvedPhone) missing.push('phone');
-        if (!user.email) missing.push('email');
-        if (requiresAcademicProfile && !user.city) missing.push('city');
-        if (requiresAcademicProfile && !user.university && !user.institution) missing.push('university');
-        if (user.role === UserRole.STUDENT && !user.department) missing.push('department');
-        if (user.role === UserRole.FACULTY && !user.faculty_department) missing.push('faculty_department');
-        if (user.requires_cnic && !user.cnic) missing.push('cnic');
-        if (user.requires_profile_verification && !user.profile_verified) {
-            missing.push('profile_verified');
-        }
-        if (missing.length > 0) {
-            throw new ForbiddenException(`Profile incomplete: missing ${missing.join(', ')}`);
+        const { profile_complete, profile_missing_fields } = getProfileCompletionStatus(user);
+        if (!profile_complete) {
+            throw new ForbiddenException(`Profile incomplete: missing ${profile_missing_fields.join(', ')}`);
         }
     }
 
@@ -1105,7 +1079,7 @@ export class OpportunitiesService {
             if (pe) {
                 try {
                     const verifyDetails = this.buildOpportunityVerificationEmailDetails(saved as Opportunity, {
-                        facultyAuthorName: this.resolveCreatorDisplayName(user),
+                        facultyAuthorName: resolveDisplayNameForProfile(user),
                         facultyAuthorEmail: user.email || undefined,
                     });
                     await this.mailService.sendPartnerVerification(pe, saved.title, resolvedPartnerToken, verifyDetails, {
@@ -1231,7 +1205,7 @@ export class OpportunitiesService {
 
         const facultyTo = this.normalizeEmail(dto.supervision.contact);
         const studentVerifyDetails = this.buildOpportunityVerificationEmailDetails(saved as Opportunity, {
-            studentName: this.resolveCreatorDisplayName(user),
+            studentName: resolveDisplayNameForProfile(user),
             studentUniversity: user.university || user.institution || undefined,
         });
         try {

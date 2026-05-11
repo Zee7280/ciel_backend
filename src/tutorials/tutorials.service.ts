@@ -121,6 +121,7 @@ export class TutorialsService {
     }
 
     private toPublicDto(r: PlatformTutorial) {
+        const sortOrder = this.normalizeSortOrder((r as { sortOrder?: unknown }).sortOrder);
         return {
             id: r.id,
             title: r.title,
@@ -131,8 +132,14 @@ export class TutorialsService {
             duration: r.durationLabel ?? undefined,
             documentUrl: r.documentUrl ?? undefined,
             documentFilename: r.documentFilename ?? undefined,
-            sortOrder: r.sortOrder,
+            sortOrder,
         };
+    }
+
+    private normalizeSortOrder(value: unknown): number {
+        if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value);
+        const n = parseInt(String(value ?? '').trim(), 10);
+        return Number.isFinite(n) ? n : 0;
     }
 
     static assertVideoFile(file: Express.Multer.File | undefined) {

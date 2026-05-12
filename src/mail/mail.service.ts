@@ -1057,7 +1057,7 @@ export class MailService {
     }
   }
 
-  /** Sent when CIEL admin approves a student-created opportunity (fully live). */
+  /** Sent when CIEL admin approves a student-created opportunity (fully live); directs creator to Apply Now, team members, and report. */
   async sendStudentOpportunityFullyApprovedEmail(
     to: string,
     studentName: string,
@@ -1076,14 +1076,13 @@ export class MailService {
     const html = `
       <div style="font-family: Arial, Helvetica, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 10px; color: #1f2937; line-height: 1.55;">
         <p style="margin: 0 0 16px 0;">Dear ${nameEsc},</p>
-        <p style="margin: 0 0 16px 0;">Great news — your opportunity has been fully approved on CIEL PK and is now live.</p>
-        <p style="margin: 0 0 20px 0;">You may now begin your report and manage participation for your project through your dashboard.</p>
+        <h2 style="margin: 0 0 16px 0; font-size: 20px; color: #111827;">Your opportunity is now live!</h2>
+        <p style="margin: 0 0 20px 0;">Click <strong>Apply Now</strong> to join the project, add your group members, and start updating your report. Please ensure all team members are registered on the platform before adding them.</p>
         <p style="margin: 0 0 8px 0;"><strong>Opportunity Title:</strong> ${titleEsc}</p>
-        <p style="margin: 20px 0 16px 0;">Please click below to continue:</p>
+        <p style="margin: 20px 0 16px 0;">Use the button below to open your dashboard and apply:</p>
         <div style="text-align: center; margin: 28px 0;">
-          <a href="${startLink}" style="background-color: #16a34a; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">Start Report</a>
+          <a href="${startLink}" style="background-color: #16a34a; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">Apply Now</a>
         </div>
-        <p style="margin: 0 0 20px 0;">You can also track volunteer participation and project progress from your dashboard.</p>
         <p style="margin: 20px 0 0 0;">Best regards,<br><strong>CIEL PK Team</strong></p>
       </div>
     `;
@@ -1092,7 +1091,7 @@ export class MailService {
       await this.transporter.sendMail({
         from,
         to,
-        subject: `Your Opportunity Has Been Approved on CIEL PK!`,
+        subject: `Your opportunity is now live!`,
         html,
       });
       this.logger.log(`Student opportunity fully approved email sent to ${to}`);

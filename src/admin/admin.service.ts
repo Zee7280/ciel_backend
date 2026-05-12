@@ -1153,22 +1153,17 @@ export class AdminService {
         );
 
         const fromBrowse = browseApps.map((a) => {
-            const payload = a.applyPayload || {};
-            const ptype = (payload['participation_type'] as string) || 'individual';
+            const team = this.opportunityApplicationsService.adminBrowseApplicationTeamSummaryForQueue(a);
             const base = {
                 id: a.id,
                 name: a.studentUser?.name || 'Unknown',
                 email: a.studentUser?.email || 'Unknown',
-                organization_type: ptype === 'team' ? 'Team' : 'Individual',
+                organization_type: team ? 'Team' : 'Individual',
                 opportunity: a.opportunity?.title || 'Unknown',
                 status: 'pending_ciel_approval',
                 created_at: a.createdAt,
                 approval_kind: 'opportunity_application' as const,
             };
-            if (ptype !== 'team') {
-                return base;
-            }
-            const team = this.opportunityApplicationsService.adminBrowseApplicationTeamSummaryForQueue(a);
             return team ? { ...base, ...team } : base;
         });
 

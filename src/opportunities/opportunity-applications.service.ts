@@ -15,6 +15,7 @@ import { UserRole } from '../users/enums/user-role.enum';
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
 import { StudentReport } from '../reports/entities/student-report.entity';
 import { Payment } from '../payments/entities/payment.entity';
+import { isTeamApplyFromParticipationAndMembers } from './apply-team-payload.util';
 
 const PENDING_PIPELINE: OpportunityApplicationInternalStatus[] = [
     'pending_faculty',
@@ -85,11 +86,14 @@ export class OpportunityApplicationsService {
                 ? (app.applyPayload as Record<string, unknown>)
                 : {};
         const ptRaw = typeof payload['participation_type'] === 'string' ? payload['participation_type'].trim() : '';
-        const participation_type = ptRaw ? ptRaw.toLowerCase() : 'individual';
+        let participation_type = ptRaw ? ptRaw.toLowerCase() : 'individual';
         const leadNorm = this.normalizeEmail(app.studentUser?.email ?? '');
         const raw = Array.isArray(payload['team_members'])
             ? (payload['team_members'] as { email?: unknown; name?: unknown }[])
             : [];
+        if (isTeamApplyFromParticipationAndMembers(payload['participation_type'], raw)) {
+            participation_type = 'team';
+        }
         const team_members: { name: string; email: string }[] = [];
         const seenNorm = new Set<string>();
         for (const m of raw) {
@@ -335,8 +339,10 @@ export class OpportunityApplicationsService {
             const teamMembersRaw = Array.isArray(payload['team_members'])
                 ? (payload['team_members'] as Array<{ email?: string; name?: string }>)
                 : [];
-            const isTeamApply =
-                payload['participation_type'] === 'team' || teamMembersRaw.length > 0;
+            const isTeamApply = isTeamApplyFromParticipationAndMembers(
+                payload['participation_type'],
+                teamMembersRaw,
+            );
             if (!rawTeamId || !isTeamApply || coveredTeamIds.has(rawTeamId)) {
                 continue;
             }
@@ -1001,17 +1007,22 @@ export class OpportunityApplicationsService {
         const rows = await qb.getMany();
         return {
             success: true,
-            data: rows.map((a) => ({
-                id: a.id,
-                opportunity_id: a.opportunityId,
-                opportunity_title: a.opportunity?.title,
-                student_name: a.studentUser?.name,
-                student_email: a.studentUser?.email,
-                internal_status: a.internalStatus,
-                application_status: this.toPublicApplicationStatus(a.internalStatus),
-                application_stage: this.applicationStage(a.internalStatus),
-                created_at: a.createdAt,
-            })),
+            data: rows.map((a) => {
+                const { participation_type, team_members } = this.facultyJoinApplicationTeamMembersForDisplay(a);
+                return {
+                    id: a.id,
+                    opportunity_id: a.opportunityId,
+                    opportunity_title: a.opportunity?.title,
+                    student_name: a.studentUser?.name,
+                    student_email: a.studentUser?.email,
+                    participation_type,
+                    team_members,
+                    internal_status: a.internalStatus,
+                    application_status: this.toPublicApplicationStatus(a.internalStatus),
+                    application_stage: this.applicationStage(a.internalStatus),
+                    created_at: a.createdAt,
+                };
+            }),
         };
     }
 
@@ -1097,20 +1108,25 @@ export class OpportunityApplicationsService {
 
         return {
             success: true,
-            data: rows.map((a) => ({
-                id: a.id,
-                opportunity_id: a.opportunityId,
-                opportunity_title: a.opportunity?.title,
-                organization: a.opportunity?.organization?.name,
-                student_name: a.studentUser?.name,
-                student_email: a.studentUser?.email,
-                primary_faculty_email: a.primaryFacultyEmail,
-                secondary_faculty_email: a.secondaryFacultyEmail,
-                apply_payload: a.applyPayload,
-                created_at: a.createdAt,
-                internal_status: a.internalStatus,
-                application_status: this.toPublicApplicationStatus(a.internalStatus),
-            })),
+            data: rows.map((a) => {
+                const { participation_type, team_members } = this.facultyJoinApplicationTeamMembersForDisplay(a);
+                return {
+                    id: a.id,
+                    opportunity_id: a.opportunityId,
+                    opportunity_title: a.opportunity?.title,
+                    organization: a.opportunity?.organization?.name,
+                    student_name: a.studentUser?.name,
+                    student_email: a.studentUser?.email,
+                    primary_faculty_email: a.primaryFacultyEmail,
+                    secondary_faculty_email: a.secondaryFacultyEmail,
+                    participation_type,
+                    team_members,
+                    apply_payload: a.applyPayload,
+                    created_at: a.createdAt,
+                    internal_status: a.internalStatus,
+                    application_status: this.toPublicApplicationStatus(a.internalStatus),
+                };
+            }),
         };
     }
 

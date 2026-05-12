@@ -24,6 +24,7 @@ import {
 } from '../opportunities/opportunity-workflow.service';
 import { OpportunitiesService } from '../opportunities/opportunities.service';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
+import { isTeamApplyFromParticipationAndMembers } from '../opportunities/apply-team-payload.util';
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 import { StudentReport } from '../reports/entities/student-report.entity';
 import { StudentReportsService } from '../reports/student-reports.service';
@@ -1623,10 +1624,7 @@ export class StudentsService {
         }
 
         /** Must match payload reality: omitting participation_type must not bypass team checks if members are sent. */
-        const hasTeamMemberList =
-            Array.isArray(dto.team_members) &&
-            dto.team_members.some((m) => typeof m?.email === 'string' && m.email.trim() !== '');
-        const isTeamApply = this.normalize(dto.participation_type) === 'team' || hasTeamMemberList;
+        const isTeamApply = isTeamApplyFromParticipationAndMembers(dto.participation_type, dto.team_members);
 
         const attendanceApproverType = this.opportunityHasPartner(opportunity) ? 'partner' : 'faculty';
         if (attendanceApproverType === 'faculty' && !dto.primary_faculty_email) {

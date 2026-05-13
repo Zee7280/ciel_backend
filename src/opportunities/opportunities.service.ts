@@ -2253,13 +2253,26 @@ export class OpportunitiesService {
         return false;
     }
 
+    private isAwaitingFacultyDashboardReview(opp: Opportunity): boolean {
+        if (!opp.creatorId || opp.faculty_verified || opp.admin_approved) return false;
+        if (opp.workflowStage === WORKFLOW_STAGE.LIVE || opp.status === 'active' || opp.status === 'live') {
+            return false;
+        }
+        return (
+            opp.workflowStage === WORKFLOW_STAGE.PENDING_FACULTY ||
+            opp.status === 'pending_faculty' ||
+            opp.status === 'pending_verification' ||
+            opp.facultyApprovalStatus === LINE_STATUS.PENDING ||
+            opp.faculty_verification_status === WORKFLOW_STAGE.PENDING_FACULTY
+        );
+    }
+
     async facultyDashboardApprove(opportunityId: string, facultyUserId: string, facultyEmail: string) {
         const opp = await this.findOne(opportunityId);
         if (!opp) throw new NotFoundException('Opportunity not found');
         this.assertFacultySupervisorForStudentOpportunity(opp, facultyUserId, facultyEmail);
 
-        const oppAwaitingFaculty =
-            opp.status === 'pending_faculty' || opp.status === 'pending_verification';
+        const oppAwaitingFaculty = this.isAwaitingFacultyDashboardReview(opp);
         const pendingApp =
             await this.opportunityApplicationsService.findLatestPendingFacultyApplicationForDashboard(
                 opportunityId,
@@ -2273,6 +2286,7 @@ export class OpportunitiesService {
 
         if (oppAwaitingFaculty) {
             this.opportunityWorkflow.afterFacultyVerified(opp);
+            await this.assignFacultyIdFromSupervisionIfMissing(opp);
             const saved = await this.opportunitiesRepository.save(opp);
             await this.handleFacultyApprovedSideEffects(saved);
             return saved;
@@ -2298,8 +2312,7 @@ export class OpportunitiesService {
         if (!opp) throw new NotFoundException('Opportunity not found');
         this.assertFacultySupervisorForStudentOpportunity(opp, facultyUserId, facultyEmail);
 
-        const oppAwaitingFaculty =
-            opp.status === 'pending_faculty' || opp.status === 'pending_verification';
+        const oppAwaitingFaculty = this.isAwaitingFacultyDashboardReview(opp);
         const pendingApp =
             await this.opportunityApplicationsService.findLatestPendingFacultyApplicationForDashboard(
                 opportunityId,
@@ -2313,6 +2326,7 @@ export class OpportunitiesService {
 
         if (oppAwaitingFaculty) {
             this.opportunityWorkflow.afterFacultyRejected(opp, reason);
+            await this.assignFacultyIdFromSupervisionIfMissing(opp);
         } else {
             await this.opportunityApplicationsService.facultyReject(
                 pendingApp!.id,

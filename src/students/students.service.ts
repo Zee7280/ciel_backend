@@ -1497,13 +1497,13 @@ export class StudentsService {
             const wasFacultyRejected =
                 opportunity.facultyApprovalStatus === LINE_STATUS.REJECTED ||
                 opportunity.faculty_verification_status === 'rejected';
+            const needsFacultyReview =
+                wasFacultyRejected ||
+                (!opportunity.faculty_verified &&
+                    (opportunity.facultyApprovalStatus === LINE_STATUS.PENDING ||
+                        opportunity.faculty_verification_status === WORKFLOW_STAGE.PENDING_FACULTY));
 
-            if (wasPartnerRejected) {
-                opportunity.workflowStage = WORKFLOW_STAGE.PENDING_PARTNER;
-                opportunity.status = WORKFLOW_STAGE.PENDING_PARTNER;
-                opportunity.partnerApprovalStatus = LINE_STATUS.PENDING;
-                opportunity.partnerVerified = false;
-            } else if (wasFacultyRejected) {
+            if (needsFacultyReview) {
                 opportunity.workflowStage = WORKFLOW_STAGE.PENDING_FACULTY;
                 opportunity.status = WORKFLOW_STAGE.PENDING_FACULTY;
                 opportunity.facultyApprovalStatus = LINE_STATUS.PENDING;
@@ -1512,6 +1512,11 @@ export class StudentsService {
                 opportunity.partnerApprovalStatus = opportunity.requiresPartnerApproval
                     ? LINE_STATUS.PENDING
                     : LINE_STATUS.NOT_APPLICABLE;
+            } else if (wasPartnerRejected) {
+                opportunity.workflowStage = WORKFLOW_STAGE.PENDING_PARTNER;
+                opportunity.status = WORKFLOW_STAGE.PENDING_PARTNER;
+                opportunity.partnerApprovalStatus = LINE_STATUS.PENDING;
+                opportunity.partnerVerified = false;
             } else if (opportunity.adminApprovalStatus === LINE_STATUS.REJECTED) {
                 // Admin rejected after faculty (and optional partner) already approved — resubmit skips upstream gates.
                 opportunity.workflowStage = WORKFLOW_STAGE.PENDING_ADMIN;
@@ -1521,7 +1526,7 @@ export class StudentsService {
             }
 
             // Keep admin lane as pending while resubmission goes back through review queues.
-            if (wasPartnerRejected || wasFacultyRejected) {
+            if (wasPartnerRejected || needsFacultyReview) {
                 opportunity.adminApprovalStatus = LINE_STATUS.PENDING;
                 opportunity.admin_approved = false;
             }

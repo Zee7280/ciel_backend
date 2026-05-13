@@ -140,10 +140,7 @@ export class FacultyService {
         if (reportAwaitingFacultyGate) {
             return 'faculty_review';
         }
-        const awaitingFacultyOppGate =
-            !!opp.creatorId &&
-            (opp.status === 'pending_faculty' || opp.status === 'pending_verification') &&
-            !opp.faculty_verified;
+        const awaitingFacultyOppGate = this.opportunityNeedsFacultyReview(opp);
 
         const namedSupervisor = this.opportunityMatchesNamedSupervisorPath(opp, facultyId, fe);
         const delegated = delegatedIds.has(opp.id);
@@ -176,6 +173,18 @@ export class FacultyService {
             return true;
         }
         return false;
+    }
+
+    private opportunityNeedsFacultyReview(opp: Opportunity): boolean {
+        if (!opp.creatorId || opp.faculty_verified || opp.admin_approved) return false;
+        if (opp.workflowStage === WORKFLOW_STAGE.LIVE || opp.status === 'active' || opp.status === 'live') return false;
+        return (
+            opp.workflowStage === WORKFLOW_STAGE.PENDING_FACULTY ||
+            opp.status === 'pending_faculty' ||
+            opp.status === 'pending_verification' ||
+            opp.facultyApprovalStatus === LINE_STATUS.PENDING ||
+            opp.faculty_verification_status === WORKFLOW_STAGE.PENDING_FACULTY
+        );
     }
 
     /**
@@ -385,13 +394,40 @@ export class FacultyService {
                                 )
                                 .andWhere(
                                     new Brackets((s) => {
-                                        s.where('opportunity.status = :pf', { pf: 'pending_faculty' }).orWhere(
-                                            'opportunity.status = :pv',
-                                            { pv: 'pending_verification' },
-                                        );
+                                        s.where('opportunity.workflowStage = :facultyWorkflow', {
+                                            facultyWorkflow: WORKFLOW_STAGE.PENDING_FACULTY,
+                                        })
+                                            .orWhere('opportunity.status = :pf', { pf: 'pending_faculty' })
+                                            .orWhere('opportunity.status = :pv', { pv: 'pending_verification' })
+                                            .orWhere('opportunity.facultyApprovalStatus = :facultyLinePending', {
+                                                facultyLinePending: LINE_STATUS.PENDING,
+                                            })
+                                            .orWhere('opportunity.faculty_verification_status = :facultyStatusPending', {
+                                                facultyStatusPending: WORKFLOW_STAGE.PENDING_FACULTY,
+                                            });
                                     }),
                                 )
                                 .andWhere('opportunity.faculty_verified = :fvp', { fvp: false })
+                                .andWhere(
+                                    new Brackets((s) => {
+                                        s.where('opportunity.admin_approved = :adminApproved', {
+                                            adminApproved: false,
+                                        }).orWhere('opportunity.admin_approved IS NULL');
+                                    }),
+                                )
+                                .andWhere(
+                                    new Brackets((s) => {
+                                        s.where('opportunity.workflowStage IS NULL').orWhere(
+                                            'opportunity.workflowStage NOT IN (:...facultyExcludedWorkflows)',
+                                            {
+                                                facultyExcludedWorkflows: [
+                                                    WORKFLOW_STAGE.LIVE,
+                                                    WORKFLOW_STAGE.REJECTED,
+                                                ],
+                                            },
+                                        );
+                                    }),
+                                )
                                 .andWhere(
                                     new Brackets((s) => {
                                         s.where('opportunity.liaisonVerified = :lvp', { lvp: false }).orWhere(

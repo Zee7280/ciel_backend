@@ -189,6 +189,8 @@ export class OpportunityWorkflowService {
         return {
             id: opp.id,
             title: opp.title,
+            creator_id: opp.creatorId,
+            creatorId: opp.creatorId,
             organization: org?.name || 'Unknown',
             category: opp.sdg_info?.sdg_id || opp.sdg || 'General',
             status: this.responseStatus(opp),

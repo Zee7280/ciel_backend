@@ -438,30 +438,6 @@ export class FacultyService {
                         }),
                     )
                         .orWhere(
-                            new Brackets((rep) => {
-                                rep.where('opportunity.creatorId IS NOT NULL').andWhere(
-                                    `EXISTS (
-                                        SELECT 1 FROM student_reports sr
-                                        WHERE (
-                                            sr."opportunityId"::text = opportunity.id::text
-                                            OR (
-                                                sr.project_id IS NOT NULL
-                                                AND TRIM(sr.project_id)::text = opportunity.id::text
-                                            )
-                                        )
-                                          AND sr."studentId"::text = opportunity."creatorId"::text
-                                          AND (sr.faculty_status IS NULL OR sr.faculty_status = :repFacPending)
-                                          AND COALESCE(sr.status, '') NOT IN (:repDraft, :repRejected)
-                                    )`,
-                                    {
-                                        repFacPending: 'pending',
-                                        repDraft: 'draft',
-                                        repRejected: 'rejected',
-                                    },
-                                );
-                            }),
-                        )
-                        .orWhere(
                             new Brackets((partnerQ) => {
                                 if (!fe) {
                                     partnerQ.where('FALSE');

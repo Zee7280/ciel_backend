@@ -1369,7 +1369,10 @@ export class OpportunitiesService {
      * is listed on supervision / partner_organization official_email, or appears on an application
      * as primary/secondary faculty email (verifier flow).
      */
-    async findMineForFaculty(userId: string) {
+    async findMineForFaculty(
+        userId: string,
+        options?: { authoredOnly?: boolean },
+    ) {
         const user = await this.usersRepository.findOne({ where: { id: userId } });
         if (!user) {
             throw new ForbiddenException('User not found');
@@ -1381,17 +1384,29 @@ export class OpportunitiesService {
         const email = this.normalizeEmail(user.email);
         const idSet = new Set<string>();
 
-        const ownedOrLinked = await this.opportunitiesRepository
-            .createQueryBuilder('o')
-            .select('o.id')
-            // camelCase columns are quoted in DB; unquoted o.facultyId → facultyid (42703). Cast both as text for uuid/text param mix (42883).
-            .where('("o"."creatorId")::text = :uid OR ("o"."facultyId")::text = :uid', { uid: userId })
-            .getMany();
-        for (const o of ownedOrLinked) {
-            idSet.add(o.id);
+        if (options?.authoredOnly) {
+            /** Faculty create sets `creatorId` to the faculty user (student posts use the student id). */
+            const authored = await this.opportunitiesRepository
+                .createQueryBuilder('o')
+                .select('o.id')
+                .where('("o"."creatorId")::text = :uid', { uid: userId })
+                .getMany();
+            for (const o of authored) {
+                idSet.add(o.id);
+            }
+        } else {
+            const ownedOrLinked = await this.opportunitiesRepository
+                .createQueryBuilder('o')
+                .select('o.id')
+                // camelCase columns are quoted in DB; unquoted o.facultyId → facultyid (42703). Cast both as text for uuid/text param mix (42883).
+                .where('("o"."creatorId")::text = :uid OR ("o"."facultyId")::text = :uid', { uid: userId })
+                .getMany();
+            for (const o of ownedOrLinked) {
+                idSet.add(o.id);
+            }
         }
 
-        if (email) {
+        if (!options?.authoredOnly && email) {
             const appRepo = this.opportunitiesRepository.manager.getRepository(OpportunityApplication);
             const appRows = await appRepo
                 .createQueryBuilder('app')

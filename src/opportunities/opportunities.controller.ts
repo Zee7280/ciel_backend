@@ -51,9 +51,15 @@ export class OpportunitiesController {
      */
     @UseGuards(JwtAuthGuard)
     @Get('faculty/mine')
-    async findMineForFaculty(@Request() req) {
-        const data = await this.opportunitiesService.findMineForFaculty(req.user.id);
-        return { success: true, data };
+    async findMineForFaculty(
+        @Request() req,
+        @Query('scope') scope?: string,
+    ) {
+        const authoredOnly = scope === 'authored' || scope === 'created';
+        const result = await this.opportunitiesService.findMineForFaculty(req.user.id, {
+            authoredOnly,
+        });
+        return { success: true, data: result.items };
     }
 
     @UseGuards(JwtAuthGuard)

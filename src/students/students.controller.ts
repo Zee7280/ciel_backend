@@ -98,6 +98,19 @@ export class StudentsController {
         return this.studentsService.getRecommendedOpportunities(req.user.id);
     }
 
+    @Get('opportunities/similar')
+    findSimilarOpportunities(
+        @Request() req,
+        @Query('title') title?: string,
+        @Query('university') university?: string,
+        @Query('excludeId') excludeId?: string,
+    ) {
+        return this.studentsService.findSimilarStudentOpportunitiesForCreate(req.user.id, title || '', {
+            university,
+            excludeOpportunityId: excludeId,
+        });
+    }
+
     @Get('opportunities/:id')
     getOpportunityById(@Request() req, @Param('id') id: string) {
         return this.studentsService.getOpportunityById(id, req.user.id);

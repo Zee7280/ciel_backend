@@ -1413,6 +1413,32 @@ export class StudentsService {
         };
     }
 
+    async findSimilarStudentOpportunitiesForCreate(
+        userId: string,
+        title: string,
+        options?: { excludeOpportunityId?: string; university?: string },
+    ) {
+        const user = await this.usersRepository.findOne({ where: { id: userId } });
+        if (!user) throw new NotFoundException('User not found');
+
+        const university =
+            options?.university?.trim() ||
+            user.university?.trim() ||
+            user.institution?.trim() ||
+            '';
+
+        const similar = await this.opportunitiesService.findSimilarStudentCreatedOpportunities(
+            title,
+            university,
+            { excludeOpportunityId: options?.excludeOpportunityId, limit: 8 },
+        );
+
+        return {
+            success: true,
+            data: similar,
+        };
+    }
+
     async createStudentOpportunity(userId: string, dto: CreateOpportunityDto) {
         // Single CIEL workflow (faculty token + stages); avoids duplicate liaison-only rows that never sync with the dashboard.
         const result = await this.opportunitiesService.createStudentOpportunity(userId, dto);

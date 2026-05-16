@@ -63,6 +63,19 @@ export class StudentController {
         return this.studentsService.getOpportunities(query, req.user.id);
     }
 
+    @Get('opportunities/similar')
+    findSimilarOpportunities(
+        @Request() req,
+        @Query('title') title?: string,
+        @Query('university') university?: string,
+        @Query('excludeId') excludeId?: string,
+    ) {
+        return this.studentsService.findSimilarStudentOpportunitiesForCreate(req.user.id, title || '', {
+            university,
+            excludeOpportunityId: excludeId,
+        });
+    }
+
     @Post('opportunity')
     createIndependentProject(@Request() req, @Body() createOpportunityDto: CreateOpportunityDto) {
         return this.studentsService.createStudentOpportunity(req.user.id, createOpportunityDto);

@@ -13,6 +13,11 @@ import { getProfileCompletionStatus, resolveDisplayNameForProfile } from '../use
 import { MailService, OpportunityVerificationEmailDetails } from '../mail/mail.service';
 import { randomUUID } from 'crypto';
 import { OpportunityWorkflowService, WORKFLOW_STAGE, LINE_STATUS } from './opportunity-workflow.service';
+import {
+    normalizeOpportunityTitleForMatch,
+    opportunityMatchesUniversity,
+    opportunityTitlesAreSimilar,
+} from './opportunity-title-match.util';
 import { isProjectVerificationAuthRequired } from '../common/project-verification-auth.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { OpportunityApplication } from './entities/opportunity-application.entity';
@@ -1120,6 +1125,69 @@ export class OpportunitiesService {
         return saved;
     }
 
+    async findSimilarStudentCreatedOpportunities(
+        title: string,
+        universityName: string,
+        options?: { excludeOpportunityId?: string; limit?: number },
+    ) {
+        const trimmedTitle = String(title || '').trim();
+        const uniNorm = String(universityName || '').trim().toLowerCase();
+        if (trimmedTitle.length < 6) {
+            return [];
+        }
+
+        const excludeId = options?.excludeOpportunityId?.trim() || '';
+        const limit = Math.min(Math.max(options?.limit ?? 6, 1), 12);
+        const targetNorm = normalizeOpportunityTitleForMatch(trimmedTitle);
+
+        const deadStatuses = ['rejected', 'cancelled', 'archived'];
+        const candidates = await this.opportunitiesRepository
+            .createQueryBuilder('o')
+            .where('o.isStudentCreated = :isc', { isc: true })
+            .andWhere('(o.workflowStage IS NULL OR o.workflowStage != :rej)', {
+                rej: WORKFLOW_STAGE.REJECTED,
+            })
+            .andWhere('(o.status IS NULL OR o.status NOT IN (:...dead))', { dead: deadStatuses })
+            .orderBy('o.createdAt', 'DESC')
+            .take(300)
+            .getMany();
+
+        const matches: Array<{
+            id: string;
+            title: string;
+            status: string | null;
+            workflow_stage: string | null;
+            created_at: string;
+            match_strength: 'exact' | 'similar';
+        }> = [];
+
+        for (const opp of candidates) {
+            if (excludeId && opp.id === excludeId) continue;
+            if (!opportunityMatchesUniversity(opp, uniNorm)) continue;
+            if (!opportunityTitlesAreSimilar(trimmedTitle, opp.title || '')) continue;
+
+            const otherNorm = normalizeOpportunityTitleForMatch(opp.title || '');
+            matches.push({
+                id: opp.id,
+                title: opp.title,
+                status: this.getApiOpportunityStatus(opp),
+                workflow_stage: opp.workflowStage ?? null,
+                created_at: opp.createdAt?.toISOString?.() ?? new Date().toISOString(),
+                match_strength: otherNorm === targetNorm ? 'exact' : 'similar',
+            });
+            if (matches.length >= limit) break;
+        }
+
+        matches.sort((a, b) => {
+            if (a.match_strength !== b.match_strength) {
+                return a.match_strength === 'exact' ? -1 : 1;
+            }
+            return b.created_at.localeCompare(a.created_at);
+        });
+
+        return matches;
+    }
+
     async createStudentOpportunity(userId: string, dto: CreateOpportunityDto) {
         const user = await this.usersRepository.findOne({ where: { id: userId }, relations: ['organization'] });
         if (!user) throw new ForbiddenException('User not found');
@@ -1161,6 +1229,25 @@ export class OpportunitiesService {
                 'Partner approval is required for this submission but no valid partner email was found. Provide official_email in external_partner_collaboration, executing_context.partner, supervision.partner_email / external_partner_email, or partner_organization.',
             );
         }
+
+        const creatorUniversity =
+            dto.participation_scope?.creator_university_name?.trim() ||
+            user.university?.trim() ||
+            user.institution?.trim() ||
+            '';
+        const similarOnCreate = await this.findSimilarStudentCreatedOpportunities(
+            dto.title || '',
+            creatorUniversity,
+        );
+        if (similarOnCreate.length > 0) {
+            throw new ConflictException({
+                message:
+                    'Disclaimer: A project with a similar title already exists at your university. Only one team lead should create the listing. Other team members must join via Apply Now on the existing opportunity instead of creating another copy.',
+                code: 'SIMILAR_STUDENT_OPPORTUNITY_EXISTS',
+                similarOpportunities: similarOnCreate,
+            });
+        }
+
         const partnerToken = requiresPartner && partnerEmail ? randomUUID() : null;
 
         let organizationId: string | null = null;

@@ -18,7 +18,8 @@ import {
     opportunityMatchesUniversity,
     opportunityTitlesAreSimilar,
 } from './opportunity-title-match.util';
-import { STUDENT_RESPONSIBILITIES_MAX_LENGTH } from './opportunity-detail-view.util';
+import { buildOpportunityDetailView, STUDENT_RESPONSIBILITIES_MAX_LENGTH } from './opportunity-detail-view.util';
+import { purifyStudentOpportunityContent } from './opportunity-content-purify.util';
 import { isProjectVerificationAuthRequired } from '../common/project-verification-auth.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { OpportunityApplication } from './entities/opportunity-application.entity';
@@ -673,6 +674,7 @@ export class OpportunitiesService {
             submission_confirmations: opp.submission_confirmations,
             external_partner_collaboration: opp.external_partner_collaboration,
             academic_linkage: opp.academic_linkage,
+            detail_view: buildOpportunityDetailView(opp),
         };
     }
 
@@ -1193,6 +1195,7 @@ export class OpportunitiesService {
         const user = await this.usersRepository.findOne({ where: { id: userId }, relations: ['organization'] });
         if (!user) throw new ForbiddenException('User not found');
         this.ensureProfileComplete(user);
+        purifyStudentOpportunityContent(dto);
         dto.safety_declaration = this.resolveSafetyDeclarationPayload(dto);
         dto.safety_declaration = this.normalizeSafetyDeclaration(dto.safety_declaration);
         // validation rules for student flow

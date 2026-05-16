@@ -24,6 +24,7 @@ import {
 } from '../opportunities/opportunity-workflow.service';
 import { OpportunitiesService } from '../opportunities/opportunities.service';
 import { buildOpportunityDetailView } from '../opportunities/opportunity-detail-view.util';
+import { purifyStudentOpportunityContent } from '../opportunities/opportunity-content-purify.util';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
 import { isTeamApplyFromParticipationAndMembers } from '../opportunities/apply-team-payload.util';
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
@@ -1466,6 +1467,8 @@ export class StudentsService {
         if (opportunity.admin_approved || this.isLiveOpportunityStatus(opportunity.status)) {
             throw new BadRequestException('Approved opportunities cannot be updated');
         }
+
+        purifyStudentOpportunityContent(dto);
 
         const patchableFields: (keyof CreateOpportunityDto)[] = [
             'title',

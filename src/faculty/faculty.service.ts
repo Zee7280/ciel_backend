@@ -439,6 +439,8 @@ export class FacultyService {
                     )
                         .orWhere(
                             new Brackets((partnerQ) => {
+                                // Browse/join `pending_faculty` applications belong on Faculty → Join applications,
+                                // not here (avoids live / faculty-verified listings reappearing as "opportunity" pending).
                                 if (!fe) {
                                     partnerQ.where('FALSE');
                                     return;
@@ -497,27 +499,6 @@ export class FacultyService {
                                                 .orWhere('opportunity.partnerApprovalStatus IS NULL');
                                         }),
                                     );
-                            }),
-                        )
-                        .orWhere(
-                            new Brackets((app) => {
-                                if (!fe) {
-                                    app.where('FALSE');
-                                    return;
-                                }
-                                app.where(
-                                    `EXISTS (
-                                        SELECT 1 FROM opportunity_applications oa
-                                        WHERE oa.opportunity_id::text = opportunity.id::text
-                                          AND oa.withdrawn_at IS NULL
-                                          AND oa.internal_status = :oaPendingFac
-                                          AND LOWER(TRIM(oa.primary_faculty_email)) = :oaFacultyEmail
-                                    )`,
-                                    {
-                                        oaPendingFac: 'pending_faculty',
-                                        oaFacultyEmail: fe,
-                                    },
-                                );
                             }),
                         );
                 }),

@@ -14,6 +14,7 @@ import {
 } from '@nestjs/common';
 import { OpportunitiesService } from './opportunities.service';
 import { CreateOpportunityDto, UpdateOpportunityDto } from './dto/create-opportunity.dto';
+import { buildOpportunityDetailView } from './opportunity-detail-view.util';
 import { GetOpportunityDetailDto } from './dto/get-opportunity-detail.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
@@ -93,6 +94,7 @@ export class OpportunitiesController {
                         : data.workflowStage === 'revision'
                             ? 'revision'
                             : data.status;
+        const detailView = buildOpportunityDetailView(data);
         // Duplicate workflow keys in snake_case for frontend badges (entity fields are camelCase).
         return {
             success: true,
@@ -104,6 +106,7 @@ export class OpportunitiesController {
                 partner_approval_status: data.partnerApprovalStatus ?? null,
                 admin_approval_status: data.adminApprovalStatus ?? null,
                 requires_partner_approval: data.requiresPartnerApproval,
+                detail_view: detailView,
             },
         };
     }

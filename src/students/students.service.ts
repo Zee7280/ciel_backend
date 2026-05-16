@@ -23,6 +23,7 @@ import {
     WORKFLOW_STAGE,
 } from '../opportunities/opportunity-workflow.service';
 import { OpportunitiesService } from '../opportunities/opportunities.service';
+import { buildOpportunityDetailView } from '../opportunities/opportunity-detail-view.util';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
 import { isTeamApplyFromParticipationAndMembers } from '../opportunities/apply-team-payload.util';
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
@@ -1240,6 +1241,7 @@ export class StudentsService {
                 volunteersNeeded: volunteersRequired,
                 status: this.getApiOpportunityStatus(opportunity),
                 ...this.getWorkflowResponseFields(opportunity),
+                detail_view: buildOpportunityDetailView(opportunity),
             },
         };
     }

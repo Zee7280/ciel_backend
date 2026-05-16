@@ -18,6 +18,7 @@ import {
     opportunityMatchesUniversity,
     opportunityTitlesAreSimilar,
 } from './opportunity-title-match.util';
+import { STUDENT_RESPONSIBILITIES_MAX_LENGTH } from './opportunity-detail-view.util';
 import { isProjectVerificationAuthRequired } from '../common/project-verification-auth.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { OpportunityApplication } from './entities/opportunity-application.entity';
@@ -1202,6 +1203,15 @@ export class OpportunitiesService {
         this.validateSubmissionConfirmations(dto.submission_confirmations);
         this.validateParticipationScope(dto.participation_scope);
         this.validateSupervision(dto.supervision);
+        const responsibilitiesLen =
+            typeof dto.activity_details?.student_responsibilities === 'string'
+                ? dto.activity_details.student_responsibilities.length
+                : 0;
+        if (responsibilitiesLen > STUDENT_RESPONSIBILITIES_MAX_LENGTH) {
+            throw new BadRequestException(
+                `Detailed plan is too long (${responsibilitiesLen} characters). Please submit a concise bullet summary (max ${STUDENT_RESPONSIBILITIES_MAX_LENGTH} characters). Upload the full roadmap separately if needed.`,
+            );
+        }
         if (dto.external_partner_collaboration) {
             this.validateExternalPartner(dto.external_partner_collaboration);
         }

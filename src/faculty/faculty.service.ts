@@ -501,34 +501,23 @@ export class FacultyService {
                         )
                         .orWhere(
                             new Brackets((app) => {
-                                const appPred = hasDelegated
-                                    ? `EXISTS (
+                                if (!fe) {
+                                    app.where('FALSE');
+                                    return;
+                                }
+                                app.where(
+                                    `EXISTS (
                                         SELECT 1 FROM opportunity_applications oa
                                         WHERE oa.opportunity_id::text = opportunity.id::text
                                           AND oa.withdrawn_at IS NULL
                                           AND oa.internal_status = :oaPendingFac
-                                          AND (
-                                            :oaEmailFilterOff = true
-                                            OR LOWER(TRIM(oa.primary_faculty_email)) = :oaFacultyEmail
-                                            OR opportunity.id IN (:...delegatedOppIdsApp)
-                                          )
-                                    )`
-                                    : `EXISTS (
-                                        SELECT 1 FROM opportunity_applications oa
-                                        WHERE oa.opportunity_id::text = opportunity.id::text
-                                          AND oa.withdrawn_at IS NULL
-                                          AND oa.internal_status = :oaPendingFac
-                                          AND (
-                                            :oaEmailFilterOff = true
-                                            OR LOWER(TRIM(oa.primary_faculty_email)) = :oaFacultyEmail
-                                          )
-                                    )`;
-                                app.where(appPred, {
-                                    oaPendingFac: 'pending_faculty',
-                                    oaEmailFilterOff: !fe,
-                                    oaFacultyEmail: fe,
-                                    ...(hasDelegated ? { delegatedOppIdsApp: delegatedOpportunityIds } : {}),
-                                });
+                                          AND LOWER(TRIM(oa.primary_faculty_email)) = :oaFacultyEmail
+                                    )`,
+                                    {
+                                        oaPendingFac: 'pending_faculty',
+                                        oaFacultyEmail: fe,
+                                    },
+                                );
                             }),
                         );
                 }),
@@ -573,34 +562,21 @@ export class FacultyService {
                     },
                 )
                 .andWhere(
-                    hasDelegated
+                    fe
                         ? `NOT EXISTS (
                         SELECT 1 FROM opportunity_applications oa
                         WHERE oa.opportunity_id::text = opportunity.id::text
                           AND oa.withdrawn_at IS NULL
                           AND oa.internal_status = :histOaPendingFac
-                          AND (
-                            :histOaEmailFilterOff = true
-                            OR LOWER(TRIM(oa.primary_faculty_email)) = :histOaFacultyEmail
-                            OR opportunity.id IN (:...delegatedOppIdsHistApp)
-                          )
+                          AND LOWER(TRIM(oa.primary_faculty_email)) = :histOaFacultyEmail
                     )`
-                        : `NOT EXISTS (
-                        SELECT 1 FROM opportunity_applications oa
-                        WHERE oa.opportunity_id::text = opportunity.id::text
-                          AND oa.withdrawn_at IS NULL
-                          AND oa.internal_status = :histOaPendingFac
-                          AND (
-                            :histOaEmailFilterOff = true
-                            OR LOWER(TRIM(oa.primary_faculty_email)) = :histOaFacultyEmail
-                          )
-                    )`,
-                    {
-                        histOaPendingFac: 'pending_faculty',
-                        histOaEmailFilterOff: !fe,
-                        histOaFacultyEmail: fe,
-                        ...(hasDelegated ? { delegatedOppIdsHistApp: delegatedOpportunityIds } : {}),
-                    },
+                        : 'TRUE',
+                    fe
+                        ? {
+                              histOaPendingFac: 'pending_faculty',
+                              histOaFacultyEmail: fe,
+                          }
+                        : {},
                 );
         } else {
             query.andWhere('opportunity.status = :st', { st: status });

@@ -1492,7 +1492,13 @@ export class StudentsService {
         }
 
         // Edit & resubmit: restore actionable queue after faculty/partner rejection.
+        let notifyPartnerAfterStudentResubmit = false;
         if (opportunity.isStudentCreated && opportunity.workflowStage === WORKFLOW_STAGE.REJECTED) {
+            const requiresPartnerNow = this.opportunitiesService.studentCreatedPayloadRequiresPartner(
+                opportunity as unknown as CreateOpportunityDto,
+            );
+            opportunity.requiresPartnerApproval = requiresPartnerNow;
+
             const wasPartnerRejected = opportunity.partnerApprovalStatus === LINE_STATUS.REJECTED;
             const wasFacultyRejected =
                 opportunity.facultyApprovalStatus === LINE_STATUS.REJECTED ||
@@ -1509,20 +1515,33 @@ export class StudentsService {
                 opportunity.facultyApprovalStatus = LINE_STATUS.PENDING;
                 opportunity.faculty_verification_status = WORKFLOW_STAGE.PENDING_FACULTY;
                 opportunity.faculty_verified = false;
-                opportunity.partnerApprovalStatus = opportunity.requiresPartnerApproval
-                    ? LINE_STATUS.PENDING
-                    : LINE_STATUS.NOT_APPLICABLE;
+                opportunity.partnerApprovalStatus = requiresPartnerNow ? LINE_STATUS.PENDING : LINE_STATUS.NOT_APPLICABLE;
             } else if (wasPartnerRejected) {
                 opportunity.workflowStage = WORKFLOW_STAGE.PENDING_PARTNER;
                 opportunity.status = WORKFLOW_STAGE.PENDING_PARTNER;
                 opportunity.partnerApprovalStatus = LINE_STATUS.PENDING;
                 opportunity.partnerVerified = false;
             } else if (opportunity.adminApprovalStatus === LINE_STATUS.REJECTED) {
-                // Admin rejected after faculty (and optional partner) already approved — resubmit skips upstream gates.
-                opportunity.workflowStage = WORKFLOW_STAGE.PENDING_ADMIN;
-                opportunity.status = 'pending_approval';
-                opportunity.adminApprovalStatus = LINE_STATUS.PENDING;
                 opportunity.admin_approved = false;
+                const needsPartnerBeforeAdmin =
+                    requiresPartnerNow &&
+                    (!opportunity.partnerVerified || opportunity.partnerApprovalStatus !== LINE_STATUS.APPROVED);
+
+                if (needsPartnerBeforeAdmin) {
+                    opportunity.workflowStage = WORKFLOW_STAGE.PENDING_PARTNER;
+                    opportunity.status = WORKFLOW_STAGE.PENDING_PARTNER;
+                    opportunity.partnerApprovalStatus = LINE_STATUS.PENDING;
+                    opportunity.partnerVerified = false;
+                    opportunity.adminApprovalStatus = LINE_STATUS.PENDING;
+                    if (!opportunity.partnerToken) {
+                        opportunity.partnerToken = randomUUID();
+                    }
+                    notifyPartnerAfterStudentResubmit = true;
+                } else {
+                    opportunity.workflowStage = WORKFLOW_STAGE.PENDING_ADMIN;
+                    opportunity.status = 'pending_approval';
+                    opportunity.adminApprovalStatus = LINE_STATUS.PENDING;
+                }
             }
 
             // Keep admin lane as pending while resubmission goes back through review queues.
@@ -1533,6 +1552,10 @@ export class StudentsService {
         }
 
         const saved = await this.opportunitiesRepository.save(opportunity);
+
+        if (notifyPartnerAfterStudentResubmit) {
+            await this.opportunitiesService.notifyPartnerForStudentOpportunityPartnerQueue(saved);
+        }
 
         return {
             success: true,

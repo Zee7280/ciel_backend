@@ -822,25 +822,39 @@ export class OpportunityApplicationsService {
     }
 
     /**
-     * Browse/join: faculty dashboard uses opportunity id; resolve the row awaiting this faculty.
+     * Browse/join: faculty dashboard uses opportunity id; pick an application this faculty may approve
+     * (same rules as {@link facultyApprove}: primary supervisor email or university delegate).
      */
-    async findLatestPendingFacultyApplicationForDashboard(
+    async findActionablePendingFacultyApplicationForDashboard(
         opportunityId: string,
         facultyEmail: string,
-        studentUserId?: string | null,
+        facultyUserId: string,
     ): Promise<OpportunityApplication | null> {
         const email = this.normalizeEmail(facultyEmail);
-        const qb = this.appRepo
-            .createQueryBuilder('a')
-            .where('a.opportunityId = :oid', { oid: opportunityId })
-            .andWhere('a.withdrawnAt IS NULL')
-            .andWhere('a.internalStatus = :st', { st: 'pending_faculty' })
-            .andWhere('LOWER(TRIM(a.primaryFacultyEmail)) = :email', { email });
-        if (studentUserId) {
-            qb.andWhere('a.studentUserId = :sid', { sid: studentUserId });
+        const apps = await this.appRepo.find({
+            where: {
+                opportunityId,
+                withdrawnAt: IsNull(),
+                internalStatus: 'pending_faculty',
+            },
+            order: { createdAt: 'DESC' },
+            relations: ['studentUser'],
+        });
+        for (const app of apps) {
+            const okPrimary = this.normalizeEmail(app.primaryFacultyEmail) === email;
+            if (okPrimary) {
+                return app;
+            }
+            const okDelegated =
+                await this.facultyUniversityScopeService.canFacultyReviewApplicationAsUniversityDelegate(
+                    facultyUserId,
+                    app.studentUser,
+                );
+            if (okDelegated) {
+                return app;
+            }
         }
-        qb.orderBy('a.createdAt', 'DESC');
-        return qb.getOne();
+        return null;
     }
 
     async facultyList(

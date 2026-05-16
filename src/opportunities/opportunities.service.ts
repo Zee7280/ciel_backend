@@ -366,6 +366,18 @@ export class OpportunitiesService {
         return typePartner || hasCollab || hasSupPartnerLead || this.shouldRequirePartnerOrganizationAck(dto);
     }
 
+    /** Same rule as {@link createStudentOpportunity} — used when student edits/resubmits after rejection. */
+    studentCreatedPayloadRequiresPartner(dto: CreateOpportunityDto): boolean {
+        return this.studentOpportunityRequiresPartner(dto);
+    }
+
+    /**
+     * After student resubmit saved the row in `pending_partner` (faculty already cleared): send partner verify email.
+     */
+    async notifyPartnerForStudentOpportunityPartnerQueue(opportunity: Opportunity): Promise<void> {
+        await this.sendPartnerApprovalEmail(opportunity);
+    }
+
     /**
      * Liaison/partner links do not log the faculty in; set facultyId from supervision.contact first,
      * then partner_organization.official_email if needed, so approvals/history bind to the faculty account.
@@ -2274,10 +2286,10 @@ export class OpportunitiesService {
 
         const oppAwaitingFaculty = this.isAwaitingFacultyDashboardReview(opp);
         const pendingApp =
-            await this.opportunityApplicationsService.findLatestPendingFacultyApplicationForDashboard(
+            await this.opportunityApplicationsService.findActionablePendingFacultyApplicationForDashboard(
                 opportunityId,
                 facultyEmail,
-                opp.creatorId,
+                facultyUserId,
             );
 
         if (!oppAwaitingFaculty && !pendingApp) {
@@ -2314,10 +2326,10 @@ export class OpportunitiesService {
 
         const oppAwaitingFaculty = this.isAwaitingFacultyDashboardReview(opp);
         const pendingApp =
-            await this.opportunityApplicationsService.findLatestPendingFacultyApplicationForDashboard(
+            await this.opportunityApplicationsService.findActionablePendingFacultyApplicationForDashboard(
                 opportunityId,
                 facultyEmail,
-                opp.creatorId,
+                facultyUserId,
             );
 
         if (!oppAwaitingFaculty && !pendingApp) {

@@ -16,6 +16,10 @@ export class User {
     @Column()
     password: string;
 
+    /** Encrypted plaintext copy for super-admin recovery only (`select: false` hides from default queries). */
+    @Column({ name: 'password_record', type: 'text', nullable: true, select: false })
+    passwordRecord: string | null;
+
     @Column({ nullable: true })
     institution: string;
 

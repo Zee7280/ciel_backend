@@ -186,8 +186,9 @@ export class AdminController {
     }
 
     @Get('users')
-    async findAll() {
-        const users = await this.usersService.findAllForAdmin();
+    async findAll(@Request() req: { user?: { role?: string } }) {
+        const revealPasswords = req.user?.role === UserRole.SUPER_ADMIN;
+        const users = await this.usersService.findAllForAdmin(revealPasswords);
         return { success: true, data: users };
     }
 

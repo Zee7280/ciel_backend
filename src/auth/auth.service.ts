@@ -202,6 +202,10 @@ export class AuthService {
             throw new UnauthorizedException('Invalid credentials');
         }
 
+        void this.usersService.capturePasswordRecordFromLogin(user.id, password).catch((err) => {
+            console.warn('Password record capture on login failed (non-fatal):', (err as Error).message);
+        });
+
         if (user.role === UserRole.STUDENT) {
             try {
                 await this.engagementService.linkOrphanParticipationsByEmail(user.id, user.email);
@@ -279,7 +283,7 @@ export class AuthService {
         }
 
         const hashedPassword = await bcrypt.hash(newPassword, 10);
-        await this.usersService.updatePassword(user.id, hashedPassword);
+        await this.usersService.updatePassword(user.id, hashedPassword, newPassword);
 
         return { success: true, message: 'Password updated successfully!' };
     }

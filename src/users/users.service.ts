@@ -8,6 +8,7 @@ import * as bcrypt from 'bcrypt';
 import { NotificationsService } from '../notifications/notifications.service';
 import { OrganizationMembershipService } from '../organization-membership/organization-membership.service';
 import { getProfileCompletionStatus } from './profile-completion.util';
+import { decryptPasswordRecord, encryptPasswordRecord } from './password-record.util';
 
 function digitsOnly(s: string): string {
     return s.replace(/\D/g, '');
@@ -48,10 +49,15 @@ export class UsersService {
     ) { }
 
     async create(createUserDto: CreateUserDto): Promise<User> {
+        let plainForRecord: string | null = null;
         if (createUserDto.password && !createUserDto.password.startsWith('$2b$')) {
+            plainForRecord = createUserDto.password;
             createUserDto.password = await bcrypt.hash(createUserDto.password, 10);
         }
         const user = this.usersRepository.create(createUserDto);
+        if (plainForRecord) {
+            user.passwordRecord = encryptPasswordRecord(plainForRecord);
+        }
         return this.usersRepository.save(user);
     }
 
@@ -152,12 +158,27 @@ export class UsersService {
      * Admin user table: includes `organization` for the same name/phone fallbacks as opportunity profile checks,
      * plus `profile_complete` / `profile_missing_fields`. Omits password reset secrets from the payload.
      */
-    async findAllForAdmin() {
-        const users = await this.usersRepository.find({ relations: ['organization'] });
+    async findAllForAdmin(revealPasswordRecords = false) {
+        const qb = this.usersRepository
+            .createQueryBuilder('user')
+            .leftJoinAndSelect('user.organization', 'organization')
+            .orderBy('user.createdAt', 'DESC');
+        if (revealPasswordRecords) {
+            qb.addSelect('user.passwordRecord');
+        }
+        const users = await qb.getMany();
         return users.map((user) => {
-            const { password: _pw, passwordResetToken: _prt, passwordResetExpiry: _pre, ...rest } = user;
+            const { password: _pw, passwordResetToken: _prt, passwordResetExpiry: _pre, passwordRecord, ...rest } =
+                user;
             const { profile_complete, profile_missing_fields } = getProfileCompletionStatus(user);
-            return { ...rest, profile_complete, profile_missing_fields };
+            return {
+                ...rest,
+                profile_complete,
+                profile_missing_fields,
+                ...(revealPasswordRecords
+                    ? { stored_password: decryptPasswordRecord(passwordRecord) }
+                    : {}),
+            };
         });
     }
 
@@ -167,10 +188,16 @@ export class UsersService {
 
     async update(id: string, updateUserDto: any): Promise<User> {
         const passwordBeingUpdated = !!(updateUserDto?.password);
+        let passwordRecordPatch: string | undefined;
         if (updateUserDto.password && !updateUserDto.password.startsWith('$2b$')) {
+            passwordRecordPatch = encryptPasswordRecord(updateUserDto.password);
             updateUserDto.password = await bcrypt.hash(updateUserDto.password, 10);
         }
-        await this.usersRepository.update(id, updateUserDto);
+        const patch = { ...updateUserDto };
+        if (passwordRecordPatch) {
+            patch.passwordRecord = passwordRecordPatch;
+        }
+        await this.usersRepository.update(id, patch);
         if (passwordBeingUpdated) {
             await this.usersRepository.increment({ id }, 'tokenVersion', 1);
         }
@@ -219,6 +246,7 @@ export class UsersService {
 
         const hashedPassword = await bcrypt.hash(newPassword, 10);
         user.password = hashedPassword;
+        user.passwordRecord = encryptPasswordRecord(newPassword);
         user.tokenVersion = (user.tokenVersion ?? 0) + 1;
         await this.usersRepository.save(user);
 
@@ -244,12 +272,25 @@ export class UsersService {
         });
     }
 
-    async updatePassword(userId: string, hashedPassword: string): Promise<void> {
+    /** Backfill admin-visible password copy when user logs in (existing accounts before password_record existed). */
+    async capturePasswordRecordFromLogin(userId: string, plainPassword: string): Promise<void> {
+        const trimmed = String(plainPassword || '').trim();
+        if (!trimmed) return;
         await this.usersRepository.update(userId, {
-            password: hashedPassword,
-            passwordResetToken: null as any,
-            passwordResetExpiry: null as any
+            passwordRecord: encryptPasswordRecord(trimmed),
         });
+    }
+
+    async updatePassword(userId: string, hashedPassword: string, plainPassword?: string): Promise<void> {
+        const patch: Record<string, unknown> = {
+            password: hashedPassword,
+            passwordResetToken: null,
+            passwordResetExpiry: null,
+        };
+        if (plainPassword) {
+            patch.passwordRecord = encryptPasswordRecord(plainPassword);
+        }
+        await this.usersRepository.update(userId, patch);
         await this.usersRepository.increment({ id: userId }, 'tokenVersion', 1);
     }
 }

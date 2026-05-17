@@ -68,6 +68,7 @@ describe('EngagementService', () => {
         sendFacultyApprovalRequest: jest.fn(),
         sendFacultyCollaboratorNotice: jest.fn(),
         sendAttendancePendingPartnerReview: jest.fn(),
+        sendAttendancePendingReview: jest.fn(),
         sendAttendancePendingAdminReview: jest.fn(),
         sendAttendanceVerificationRequestNotice: jest.fn(),
     };
@@ -400,6 +401,7 @@ describe('EngagementService', () => {
                 projectId: 'proj1',
                 status: 'approved',
                 attendanceApproverType: 'partner',
+                email: 'student@example.com',
             };
             const dto = {
                 dateOfEngagement: '2023-10-01',
@@ -415,14 +417,17 @@ describe('EngagementService', () => {
                 id: 'proj1',
                 title: 'Project',
                 creatorId: 'partner-1',
+                isStudentCreated: false,
                 organization: null,
             });
-            mockUserRepository.findOne.mockResolvedValue({
-                id: 'partner-1',
-                email: 'partner@example.com',
-                name: 'Partner Owner',
-                role: UserRole.NGO,
-            });
+            mockUserRepository.findOne
+                .mockResolvedValueOnce({ id: 'u1', email: 'student@example.com', name: 'Student' })
+                .mockResolvedValueOnce({
+                    id: 'partner-1',
+                    email: 'partner@example.com',
+                    name: 'Partner Owner',
+                    role: UserRole.NGO,
+                });
             mockAttendanceLogRepository.create.mockReturnValue({ ...dto, participantId: 'p1', projectId: 'proj1', sessionHours: 3 });
             mockAttendanceLogRepository.save.mockResolvedValue({ id: 'log1', ...dto });
 
@@ -437,6 +442,235 @@ describe('EngagementService', () => {
                 assignedApproverType: 'partner',
                 assignedApproverUserId: 'partner-1',
             }));
+        });
+
+        it('should not email the student creator for student-created partner projects', async () => {
+            const mockParticipation = {
+                id: 'p1',
+                studentId: 'student-1',
+                email: 'zara@bnu.edu.pk',
+                projectId: 'proj1',
+                status: 'approved',
+                attendanceApproverType: 'partner',
+            };
+            const dto = {
+                dateOfEngagement: '2023-10-01',
+                startTime: '09:00',
+                endTime: '12:00',
+                description: 'Valid description with fewer than 40 words.',
+                organizationName: 'Org',
+                activityType: 'Activity',
+            } as any;
+
+            mockParticipationRepository.findOne.mockResolvedValue(mockParticipation);
+            mockOpportunityRepository.findOne.mockResolvedValue({
+                id: 'proj1',
+                title: 'Abroo Teaching Initiative',
+                creatorId: 'student-1',
+                isStudentCreated: true,
+                organizationId: 'org-1',
+                supervision: {
+                    partner_email: 'partner@ngo.org',
+                    partner_contact_person: 'Attia Nasir',
+                },
+                partner_organization: {
+                    official_email: 'partner@ngo.org',
+                    contact_person: 'Attia Nasir',
+                },
+            });
+
+            const partnerQb = {
+                where: jest.fn().mockReturnThis(),
+                andWhere: jest.fn().mockReturnThis(),
+                leftJoin: jest.fn().mockReturnThis(),
+                orderBy: jest.fn().mockReturnThis(),
+                getOne: jest.fn().mockResolvedValue({
+                    id: 'partner-user',
+                    email: 'partner@ngo.org',
+                    name: 'Attia Nasir',
+                    role: UserRole.NGO,
+                }),
+            };
+            mockUserRepository.createQueryBuilder.mockReturnValue(partnerQb as any);
+            mockUserRepository.findOne.mockImplementation(async (opts: { where?: { id?: string } }) => {
+                const id = opts?.where?.id;
+                if (id === 'student-1') {
+                    return {
+                        id: 'student-1',
+                        email: 'zara@bnu.edu.pk',
+                        name: 'Zara Ijaz',
+                        role: UserRole.STUDENT,
+                    };
+                }
+                if (id === 'partner-user') {
+                    return {
+                        id: 'partner-user',
+                        email: 'partner@ngo.org',
+                        name: 'Attia Nasir',
+                        role: UserRole.NGO,
+                    };
+                }
+                return null;
+            });
+            mockParticipationRepository.save.mockImplementation(async (p) => p);
+            mockAttendanceLogRepository.create.mockReturnValue({ ...dto, participantId: 'p1', projectId: 'proj1', sessionHours: 3 });
+            mockAttendanceLogRepository.save.mockResolvedValue({ id: 'log1', ...dto });
+            mockMailService.sendAttendancePendingReview.mockClear();
+
+            await service.addAttendanceLog('student-1', 'p1', dto);
+            await new Promise((resolve) => setImmediate(resolve));
+
+            expect(mockMailService.sendAttendancePendingReview).toHaveBeenCalledWith(
+                'partner@ngo.org',
+                expect.any(String),
+                'partner',
+                'Zara Ijaz',
+                'Abroo Teaching Initiative',
+                'proj1',
+            );
+            expect(mockMailService.sendAttendancePendingReview).not.toHaveBeenCalledWith(
+                'zara@bnu.edu.pk',
+                expect.anything(),
+                expect.anything(),
+                expect.anything(),
+                expect.anything(),
+                expect.anything(),
+            );
+            expect(mockAttendanceLogRepository.create).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    assignedApproverUserId: 'partner-user',
+                }),
+            );
+        });
+
+        it('should fall back to faculty routing when partner route has no partner contact but faculty emails exist', async () => {
+            const mockParticipation = {
+                id: 'p1',
+                studentId: 'student-1',
+                email: 'student@example.com',
+                projectId: 'proj1',
+                status: 'approved',
+                attendanceApproverType: 'partner',
+                primaryFacultyEmail: 'faculty@bnu.edu.pk',
+            };
+            const dto = {
+                dateOfEngagement: '2023-10-01',
+                startTime: '09:00',
+                endTime: '12:00',
+                description: 'Valid description with fewer than 40 words.',
+                organizationName: 'Org',
+                activityType: 'Activity',
+            } as any;
+
+            mockParticipationRepository.findOne.mockResolvedValue(mockParticipation);
+            mockOpportunityRepository.findOne.mockResolvedValue({
+                id: 'proj1',
+                title: 'Digital Payment Awareness Campaign',
+                creatorId: 'student-1',
+                isStudentCreated: true,
+                supervision: null,
+                partner_organization: null,
+                organization: null,
+            });
+
+            const partnerQb = {
+                where: jest.fn().mockReturnThis(),
+                andWhere: jest.fn().mockReturnThis(),
+                leftJoin: jest.fn().mockReturnThis(),
+                orderBy: jest.fn().mockReturnThis(),
+                getOne: jest.fn().mockResolvedValue(null),
+            };
+            const facultyQb = {
+                where: jest.fn().mockReturnThis(),
+                andWhere: jest.fn().mockReturnThis(),
+                getOne: jest.fn().mockResolvedValue({
+                    id: 'faculty-user',
+                    email: 'faculty@bnu.edu.pk',
+                    role: UserRole.FACULTY,
+                }),
+            };
+            mockUserRepository.createQueryBuilder
+                .mockReturnValueOnce(partnerQb as any)
+                .mockReturnValueOnce(facultyQb as any);
+            mockUserRepository.findOne.mockResolvedValue({
+                id: 'student-1',
+                email: 'student@example.com',
+                name: 'Student',
+                role: UserRole.STUDENT,
+            });
+            mockAttendanceLogRepository.create.mockReturnValue({ ...dto, participantId: 'p1', projectId: 'proj1', sessionHours: 3 });
+            mockAttendanceLogRepository.save.mockResolvedValue({ id: 'log1', ...dto });
+
+            await service.addAttendanceLog('student-1', 'p1', dto);
+
+            expect(mockAttendanceLogRepository.create).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    assignedApproverType: 'faculty',
+                    assignedApproverUserId: expect.stringMatching(/faculty/),
+                }),
+            );
+        });
+
+        it('should save partner attendance using organization contact email when JSON partner fields are empty', async () => {
+            const mockParticipation = {
+                id: 'p1',
+                studentId: 'student-1',
+                email: 'student@example.com',
+                projectId: 'proj1',
+                status: 'approved',
+                attendanceApproverType: 'partner',
+            };
+            const dto = {
+                dateOfEngagement: '2023-10-01',
+                startTime: '09:00',
+                endTime: '12:00',
+                description: 'Valid description with fewer than 40 words.',
+                organizationName: 'Org',
+                activityType: 'Activity',
+            } as any;
+
+            mockParticipationRepository.findOne.mockResolvedValue(mockParticipation);
+            mockOpportunityRepository.findOne.mockResolvedValue({
+                id: 'proj1',
+                title: 'Digital Payment Awareness Campaign',
+                creatorId: 'student-1',
+                isStudentCreated: true,
+                organizationId: 'org-1',
+                organization: { id: 'org-1', contactEmail: 'partner@ngo.org' },
+                supervision: {},
+                partner_organization: null,
+            });
+
+            const partnerQb = {
+                where: jest.fn().mockReturnThis(),
+                andWhere: jest.fn().mockReturnThis(),
+                leftJoin: jest.fn().mockReturnThis(),
+                orderBy: jest.fn().mockReturnThis(),
+                getOne: jest.fn().mockResolvedValue(null),
+            };
+            mockUserRepository.createQueryBuilder.mockReturnValue(partnerQb as any);
+            mockUserRepository.findOne.mockResolvedValue({
+                id: 'student-1',
+                email: 'student@example.com',
+                name: 'Student',
+                role: UserRole.STUDENT,
+            });
+            mockAttendanceLogRepository.create.mockReturnValue({ ...dto, participantId: 'p1', projectId: 'proj1', sessionHours: 3 });
+            mockAttendanceLogRepository.save.mockResolvedValue({ id: 'log1', ...dto });
+            mockMailService.sendAttendancePendingReview.mockClear();
+
+            await service.addAttendanceLog('student-1', 'p1', dto);
+            await new Promise((resolve) => setImmediate(resolve));
+
+            expect(mockAttendanceLogRepository.save).toHaveBeenCalled();
+            expect(mockMailService.sendAttendancePendingReview).toHaveBeenCalledWith(
+                'partner@ngo.org',
+                expect.any(String),
+                'partner',
+                expect.any(String),
+                'Digital Payment Awareness Campaign',
+                'proj1',
+            );
         });
 
         it('should throw when no faculty email on participation and project cannot resolve faculty', async () => {

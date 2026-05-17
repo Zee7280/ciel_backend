@@ -792,7 +792,24 @@ export class EngagementService {
             throw new NotFoundException('Project not found');
         }
 
-        const attendanceApproverType = await this.resolveAttendanceApproverTypeForParticipation(participation);
+        let attendanceApproverType = await this.resolveAttendanceApproverTypeForParticipation(participation);
+
+        if (attendanceApproverType === 'partner') {
+            const partnerUserId = await this.resolvePartnerOwnerUserId(opportunity);
+            const partnerEmails = this.extractPartnerOfficialEmails(opportunity);
+            const hasPartnerReviewer =
+                Boolean(partnerUserId) || partnerEmails.length > 0 || Boolean(opportunity.organizationId);
+            if (!hasPartnerReviewer) {
+                const facultyEmails = await this.resolveFacultyEmailsForAttendanceRouting(
+                    participation,
+                    opportunity,
+                );
+                if (facultyEmails.length > 0) {
+                    attendanceApproverType = 'faculty';
+                }
+            }
+        }
+
         let assignedFacultyUserId: string | null = null;
         let assignedPartnerUserId: string | null = null;
 
@@ -817,8 +834,11 @@ export class EngagementService {
             }
         } else {
             assignedPartnerUserId = await this.resolvePartnerOwnerUserId(opportunity);
-            if (!assignedPartnerUserId) {
-                throw new BadRequestException('Attendance approval needs a partner owner user for this project.');
+            const partnerEmails = this.extractPartnerOfficialEmails(opportunity);
+            if (!assignedPartnerUserId && partnerEmails.length === 0 && !opportunity.organizationId) {
+                throw new BadRequestException(
+                    'Attendance approval needs a partner contact email or registered partner account for this project.',
+                );
             }
         }
         const routing = resolveAttendanceApproverRouting(
@@ -859,6 +879,8 @@ export class EngagementService {
             : null;
         const studentLabel = student?.name || participation.fullName || participation.email || 'A participant';
 
+        const studentEmail = (student?.email || participation.email || '').trim().toLowerCase();
+
         if (routing.assignedApproverType === 'faculty') {
             const approver = routing.assignedApproverUserId
                 ? await this.userRepository.findOne({ where: { id: routing.assignedApproverUserId } })
@@ -868,10 +890,12 @@ export class EngagementService {
                 participation.primaryFacultyEmail ||
                 participation.facultySupervisorEmail ||
                 participation.secondaryFacultyEmail;
-            if (recipientEmail) {
-                await this.mailService.sendAttendancePendingPartnerReview(
-                    recipientEmail,
+            const normalizedRecipient = (recipientEmail || '').trim().toLowerCase();
+            if (normalizedRecipient && normalizedRecipient !== studentEmail) {
+                await this.mailService.sendAttendancePendingReview(
+                    normalizedRecipient,
                     approver?.name || 'Faculty',
+                    'faculty',
                     studentLabel,
                     title,
                     opportunity.id,
@@ -883,10 +907,15 @@ export class EngagementService {
             const approver = routing.assignedApproverUserId
                 ? await this.userRepository.findOne({ where: { id: routing.assignedApproverUserId } })
                 : null;
-            if (approver?.email) {
-                await this.mailService.sendAttendancePendingPartnerReview(
-                    approver.email,
-                    approver.name || 'Partner',
+            const partnerEmails = this.extractPartnerOfficialEmails(opportunity);
+            const recipientEmail = (approver?.email || partnerEmails[0] || '').trim().toLowerCase();
+            if (recipientEmail && recipientEmail !== studentEmail) {
+                await this.mailService.sendAttendancePendingReview(
+                    recipientEmail,
+                    approver?.name ||
+                        String(opportunity.partner_organization?.contact_person || '').trim() ||
+                        'Partner',
+                    'partner',
                     studentLabel,
                     title,
                     opportunity.id,
@@ -1010,7 +1039,7 @@ export class EngagementService {
 
     /** NGO / corporate / org-admin user may act only for opportunities hosted by them or their organization. */
     private partnerActorHostsOpportunity(actorUserId: string, actor: User | null, opportunity: Opportunity): boolean {
-        if (opportunity.creatorId === actorUserId) {
+        if (!opportunity.isStudentCreated && opportunity.creatorId === actorUserId) {
             return true;
         }
         const orgId = actor?.organization?.id ?? null;
@@ -1035,13 +1064,15 @@ export class EngagementService {
         }
 
         const actor = await this.userRepository.findOne({ where: { id: actorUserId } });
+        const opportunityCreatorFallback =
+            log.project?.isStudentCreated ? null : (log.project?.creatorId ?? null);
         const allowed = canUserActOnAttendanceQueue(
             actorUserId,
             actorRole,
             actor?.email || null,
             log,
             getParticipantFacultyEmails(log.participant || {}),
-            log.project?.creatorId ?? null,
+            opportunityCreatorFallback,
         );
         if (!allowed) {
             throw new ForbiddenException(
@@ -1533,22 +1564,108 @@ export class EngagementService {
         return resolved;
     }
 
-    private async resolvePartnerOwnerUserId(opportunity: Opportunity): Promise<string | null> {
-        if (opportunity.creatorId) {
-            return opportunity.creatorId;
-        }
+    private extractPartnerOfficialEmails(opportunity: Opportunity): string[] {
+        const supervision =
+            opportunity.supervision && typeof opportunity.supervision === 'object'
+                ? (opportunity.supervision as Record<string, unknown>)
+                : {};
+        const partnerOrg =
+            opportunity.partner_organization && typeof opportunity.partner_organization === 'object'
+                ? (opportunity.partner_organization as Record<string, unknown>)
+                : {};
+        const executingOrg =
+            opportunity.executing_organization && typeof opportunity.executing_organization === 'object'
+                ? (opportunity.executing_organization as Record<string, unknown>)
+                : {};
+        const externalCollab =
+            opportunity.external_partner_collaboration &&
+            typeof opportunity.external_partner_collaboration === 'object'
+                ? (opportunity.external_partner_collaboration as Record<string, unknown>)
+                : {};
+        const executingContext =
+            opportunity.executing_context && typeof opportunity.executing_context === 'object'
+                ? (opportunity.executing_context as Record<string, unknown>)
+                : {};
+        const contextPartner =
+            executingContext.partner && typeof executingContext.partner === 'object'
+                ? (executingContext.partner as Record<string, unknown>)
+                : {};
 
-        if (!opportunity.organizationId) {
-            return null;
-        }
+        return this.normalizeEmailList([
+            opportunity.organization?.contactEmail,
+            opportunity.partner_organization?.official_email,
+            typeof partnerOrg.official_email === 'string' ? partnerOrg.official_email : null,
+            typeof partnerOrg.officialEmail === 'string' ? partnerOrg.officialEmail : null,
+            typeof partnerOrg.email === 'string' ? partnerOrg.email : null,
+            typeof partnerOrg.contact_email === 'string' ? partnerOrg.contact_email : null,
+            opportunity.executing_organization?.official_email,
+            typeof executingOrg.official_email === 'string' ? executingOrg.official_email : null,
+            typeof executingOrg.officialEmail === 'string' ? executingOrg.officialEmail : null,
+            opportunity.external_partner_collaboration?.official_email,
+            typeof externalCollab.official_email === 'string' ? externalCollab.official_email : null,
+            typeof externalCollab.officialEmail === 'string' ? externalCollab.officialEmail : null,
+            typeof contextPartner.official_email === 'string' ? contextPartner.official_email : null,
+            typeof contextPartner.officialEmail === 'string' ? contextPartner.officialEmail : null,
+            typeof supervision.partner_email === 'string' ? supervision.partner_email : null,
+            typeof supervision.external_partner_email === 'string' ? supervision.external_partner_email : null,
+        ]);
+    }
 
-        const partnerUser = await this.userRepository
+    private async findPartnerRoleUserByEmail(email: string): Promise<User | null> {
+        const normalized = email.trim().toLowerCase();
+        if (!normalized) return null;
+        return this.userRepository
             .createQueryBuilder('user')
-            .leftJoin('user.organization', 'organization')
-            .where('organization.id = :organizationId', { organizationId: opportunity.organizationId })
-            .orderBy('user.createdAt', 'ASC')
+            .where('LOWER("user"."email") = :email', { email: normalized })
+            .andWhere('user.role IN (:...roles)', {
+                roles: [UserRole.NGO, UserRole.CORPORATE, UserRole.ORGANIZATION_ADMIN],
+            })
             .getOne();
-        return partnerUser?.id || null;
+    }
+
+    private async resolvePartnerOwnerUserId(opportunity: Opportunity): Promise<string | null> {
+        const partnerEmails = this.extractPartnerOfficialEmails(opportunity);
+        for (const email of partnerEmails) {
+            const partnerUser = await this.findPartnerRoleUserByEmail(email);
+            if (partnerUser?.id) {
+                return partnerUser.id;
+            }
+        }
+
+        if (opportunity.organizationId) {
+            const orgPartnerUser = await this.userRepository
+                .createQueryBuilder('user')
+                .leftJoin('user.organization', 'organization')
+                .where('organization.id = :organizationId', { organizationId: opportunity.organizationId })
+                .andWhere('user.role IN (:...roles)', {
+                    roles: [UserRole.NGO, UserRole.CORPORATE, UserRole.ORGANIZATION_ADMIN],
+                })
+                .orderBy('user.createdAt', 'ASC')
+                .getOne();
+            if (orgPartnerUser?.id) {
+                return orgPartnerUser.id;
+            }
+
+            const orgMemberUser = await this.userRepository
+                .createQueryBuilder('user')
+                .leftJoin('user.organization', 'organization')
+                .where('organization.id = :organizationId', { organizationId: opportunity.organizationId })
+                .andWhere('user.role != :studentRole', { studentRole: UserRole.STUDENT })
+                .orderBy('user.createdAt', 'ASC')
+                .getOne();
+            if (orgMemberUser?.id) {
+                return orgMemberUser.id;
+            }
+        }
+
+        if (!opportunity.isStudentCreated && opportunity.creatorId) {
+            const creator = await this.userRepository.findOne({ where: { id: opportunity.creatorId } });
+            if (creator && creator.role !== UserRole.STUDENT) {
+                return opportunity.creatorId;
+            }
+        }
+
+        return null;
     }
 
     private async resolveApplicationFacultyEmails(participation: Participation): Promise<string[]> {

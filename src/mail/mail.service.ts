@@ -1226,25 +1226,28 @@ export class MailService {
     }
   }
 
-  async sendAttendancePendingPartnerReview(
+  async sendAttendancePendingReview(
     to: string,
-    partnerName: string,
+    reviewerName: string,
+    reviewerType: 'faculty' | 'partner',
     studentLabel: string,
     projectTitle: string,
     opportunityId: string,
   ) {
     const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
-    const link = this.buildFrontendLink('/dashboard/partner', {
+    const dashboardPath = reviewerType === 'faculty' ? '/dashboard/faculty' : '/dashboard/partner';
+    const link = this.buildFrontendLink(dashboardPath, {
       opportunity: opportunityId,
       tab: 'attendance',
     });
     const titleEsc = this.escHtmlPlain(projectTitle);
+    const reviewerLabel = reviewerType === 'faculty' ? 'faculty reviewer' : 'partner reviewer';
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
         <h2 style="color: #333;">Attendance log needs your review</h2>
-        <p>Hello ${this.escHtmlPlain(partnerName)},</p>
+        <p>Hello ${this.escHtmlPlain(reviewerName)},</p>
         <p><strong>${this.escHtmlPlain(studentLabel)}</strong> logged hours against <strong>${titleEsc}</strong> on CIEL PK.</p>
-        <p>As the partner reviewer for this project, please sign in to confirm or return the entry so volunteer time stays accurate and auditable.</p>
+        <p>As the ${this.escHtmlPlain(reviewerLabel)} for this project, please sign in to confirm or return the entry so volunteer time stays accurate and auditable.</p>
         <div style="text-align: center; margin: 28px 0;">
           <a href="${link}" style="background-color: #16a34a; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-weight: bold;">Review attendance</a>
         </div>
@@ -1257,10 +1260,29 @@ export class MailService {
         subject: `CIEL PK — attendance review: ${projectTitle}`,
         html,
       });
-      this.logger.log(`Partner attendance pending email sent to ${to} for opportunity ${opportunityId}`);
+      this.logger.log(
+        `${reviewerType} attendance pending email sent to ${to} for opportunity ${opportunityId}`,
+      );
     } catch (error) {
-      this.logger.error(`Failed partner attendance pending email`, error.stack);
+      this.logger.error(`Failed ${reviewerType} attendance pending email`, error.stack);
     }
+  }
+
+  async sendAttendancePendingPartnerReview(
+    to: string,
+    partnerName: string,
+    studentLabel: string,
+    projectTitle: string,
+    opportunityId: string,
+  ) {
+    return this.sendAttendancePendingReview(
+      to,
+      partnerName,
+      'partner',
+      studentLabel,
+      projectTitle,
+      opportunityId,
+    );
   }
 
   async sendAttendanceVerificationRequestNotice(

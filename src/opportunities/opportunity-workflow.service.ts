@@ -167,9 +167,11 @@ export class OpportunityWorkflowService {
             return;
         }
 
-        // Legacy org / faculty flows
+        // Faculty / org postings: CIEL admin approval makes the listing live for students.
+        // Executing-org confirmation may still be pending (`execution_verified` false) but must not
+        // leave `status` stuck on `pending_execution` after final admin approve.
         opp.partnerVerified = true;
-        opp.status = opp.execution_verified ? 'active' : 'pending_execution';
+        opp.status = 'active';
     }
 
     afterAdminRejected(opp: Opportunity, reason?: string | null): void {

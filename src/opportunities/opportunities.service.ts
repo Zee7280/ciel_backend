@@ -716,10 +716,7 @@ export class OpportunitiesService {
         if (opp.requiresPartnerApproval && !opp.partnerVerified) return false;
         if (opp.status === 'pending_partner') return false;
         if (opp.workflowStage === WORKFLOW_STAGE.PENDING_PARTNER) return false;
-        // `pending_execution` is also used for org/faculty rows waiting on executing-org confirmation in
-        // parallel with CIEL review (`afterFacultyCreatedPartnerVerified`). Those must still allow final
-        // admin approval when a CIEL admin step exists; `afterAdminApproved` keeps the listing gated until
-        // execution verifies when needed.
+        // `pending_execution` blocks admin final approve only when no CIEL admin step is required.
         if (opp.status === 'pending_execution' && opp.admin_approval_required !== true) {
             return false;
         }
@@ -1899,6 +1896,11 @@ export class OpportunitiesService {
         if (!opp) throw new NotFoundException('Opportunity not found');
         // Idempotent: repeated approve (double-click, retried request) must not re-run side effects / emails.
         if (opp.admin_approved === true && opp.workflowStage === WORKFLOW_STAGE.LIVE) {
+            // Backfill legacy rows approved before status was set to active on admin approve.
+            if (opp.status === 'pending_execution') {
+                opp.status = 'active';
+                return this.opportunitiesRepository.save(opp);
+            }
             return opp;
         }
         if (!this.isOpportunityReadyForAdminFinalApprove(opp)) {

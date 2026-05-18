@@ -628,6 +628,7 @@ export class OpportunitiesService {
             types: opp.types,
             sdg: opp.sdg_info?.sdg_id || opp.sdg || null,
             sdg_info: opp.sdg_info,
+            secondary_sdgs: Array.isArray(opp.secondary_sdgs) ? opp.secondary_sdgs : [],
             organization_name: organizationName,
             organization,
             participant_count: occupiedSeats,

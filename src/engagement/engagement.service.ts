@@ -792,14 +792,28 @@ export class EngagementService {
             throw new NotFoundException('Project not found');
         }
 
-        let attendanceApproverType = await this.resolveAttendanceApproverTypeForParticipation(participation);
+        let attendanceApproverType = await this.resolveAttendanceApproverTypeForParticipation(
+            participation,
+            opportunity,
+        );
+
+        const partnerEmailsOnProject = this.extractPartnerOfficialEmails(opportunity);
+        if (
+            this.opportunityHasPartnerForAttendance(opportunity) &&
+            partnerEmailsOnProject.length > 0
+        ) {
+            attendanceApproverType = 'partner';
+            if (participation.attendanceApproverType !== 'partner') {
+                participation.attendanceApproverType = 'partner';
+                await this.participantRepository.save(participation);
+            }
+        }
 
         if (attendanceApproverType === 'partner') {
             const partnerUserId = await this.resolvePartnerOwnerUserId(opportunity);
             const partnerEmails = this.extractPartnerOfficialEmails(opportunity);
-            const hasPartnerReviewer =
-                Boolean(partnerUserId) || partnerEmails.length > 0 || Boolean(opportunity.organizationId);
-            if (!hasPartnerReviewer) {
+            const hasActionablePartner = Boolean(partnerUserId) || partnerEmails.length > 0;
+            if (!hasActionablePartner) {
                 const facultyEmails = await this.resolveFacultyEmailsForAttendanceRouting(
                     participation,
                     opportunity,
@@ -835,7 +849,7 @@ export class EngagementService {
         } else {
             assignedPartnerUserId = await this.resolvePartnerOwnerUserId(opportunity);
             const partnerEmails = this.extractPartnerOfficialEmails(opportunity);
-            if (!assignedPartnerUserId && partnerEmails.length === 0 && !opportunity.organizationId) {
+            if (!assignedPartnerUserId && partnerEmails.length === 0) {
                 throw new BadRequestException(
                     'Attendance approval needs a partner contact email or registered partner account for this project.',
                 );
@@ -1478,6 +1492,11 @@ export class EngagementService {
             }
         }
 
+        const linkageEmails = this.resolveOpportunityLinkageFacultyEmails(opportunity);
+        if (linkageEmails.length) {
+            return linkageEmails;
+        }
+
         const sup = opportunity.supervision;
         if (sup && typeof sup === 'object') {
             const o = sup as Record<string, unknown>;
@@ -1525,11 +1544,57 @@ export class EngagementService {
         return value === 'partner' ? 'partner' : 'faculty';
     }
 
+    /** Same rules as `StudentsService.opportunityHasPartner` on apply. */
+    private opportunityHasPartnerForAttendance(opportunity: Opportunity): boolean {
+        return Boolean(
+            opportunity.requiresPartnerApproval ||
+            opportunity.organizationId ||
+            this.hasMeaningfulObjectValue(opportunity.partner_organization) ||
+            this.hasMeaningfulObjectValue(opportunity.executing_organization),
+        );
+    }
+
+    private hasMeaningfulObjectValue(value: unknown): boolean {
+        if (value == null) return false;
+        if (typeof value === 'string') return value.trim().length > 0;
+        if (typeof value !== 'object') return false;
+        return Object.values(value as Record<string, unknown>).some((v) => {
+            if (Array.isArray(v)) return v.length > 0;
+            if (v && typeof v === 'object') return this.hasMeaningfulObjectValue(v);
+            return v != null && String(v).trim() !== '';
+        });
+    }
+
+    private resolveOpportunityLinkageFacultyEmails(opportunity: Opportunity): string[] {
+        const linkage = opportunity.visibility_and_academic_linkage;
+        if (!linkage || typeof linkage !== 'object') {
+            return [];
+        }
+        const rep = (linkage as Record<string, unknown>).faculty_institutional_representative;
+        if (!rep || typeof rep !== 'object') {
+            return [];
+        }
+        const o = rep as Record<string, unknown>;
+        return this.normalizeEmailList([
+            typeof o.email === 'string' ? o.email : null,
+            typeof o.official_email === 'string' ? o.official_email : null,
+            typeof o.faculty_email === 'string' ? o.faculty_email : null,
+        ]);
+    }
+
     private async resolveAttendanceApproverTypeForParticipation(
         participation: Participation,
+        opportunity?: Opportunity | null,
     ): Promise<'faculty' | 'partner'> {
         const stored = this.normalizeAttendanceApproverType(participation.attendanceApproverType);
         if (participation.attendanceApproverType) {
+            if (stored === 'partner' && opportunity) {
+                const partnerUserId = await this.resolvePartnerOwnerUserId(opportunity);
+                const partnerEmails = this.extractPartnerOfficialEmails(opportunity);
+                if (!partnerUserId && partnerEmails.length === 0) {
+                    return 'faculty';
+                }
+            }
             return stored;
         }
 
@@ -1598,6 +1663,10 @@ export class EngagementService {
             typeof partnerOrg.officialEmail === 'string' ? partnerOrg.officialEmail : null,
             typeof partnerOrg.email === 'string' ? partnerOrg.email : null,
             typeof partnerOrg.contact_email === 'string' ? partnerOrg.contact_email : null,
+            typeof partnerOrg.contactEmail === 'string' ? partnerOrg.contactEmail : null,
+            typeof supervision.contact === 'string' && supervision.contact.includes('@')
+                ? supervision.contact
+                : null,
             opportunity.executing_organization?.official_email,
             typeof executingOrg.official_email === 'string' ? executingOrg.official_email : null,
             typeof executingOrg.officialEmail === 'string' ? executingOrg.officialEmail : null,

@@ -15,6 +15,7 @@ import { UserRole } from '../users/enums/user-role.enum';
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
 import { StudentReport } from '../reports/entities/student-report.entity';
 import { Payment } from '../payments/entities/payment.entity';
+import { Opportunity } from './entities/opportunity.entity';
 import { isTeamApplyFromParticipationAndMembers } from './apply-team-payload.util';
 import { AdminPatchTeamMemberDto } from './dto/admin-patch-team-member.dto';
 
@@ -60,6 +61,8 @@ export class OpportunityApplicationsService {
     constructor(
         @InjectRepository(OpportunityApplication)
         private readonly appRepo: Repository<OpportunityApplication>,
+        @InjectRepository(Opportunity)
+        private readonly opportunityRepo: Repository<Opportunity>,
         @InjectRepository(Participation)
         private readonly participationRepo: Repository<Participation>,
         @InjectRepository(User)
@@ -259,6 +262,319 @@ export class OpportunityApplicationsService {
         };
     }
 
+    /** `pending:${applicationId}:m:${normalizedEmail}` teammate rows emitted by {@link adminListOpportunityTeams}. */
+    private parsePendingRosterSyntheticTeammateId(memberId: string): { applicationId: string; emailNormalized: string } | null {
+        const prefix = 'pending:';
+        if (!memberId.startsWith(prefix)) return null;
+        const sep = ':m:';
+        const k = memberId.indexOf(sep);
+        if (k < 0) return null;
+        const applicationId = memberId.slice(prefix.length, k).trim();
+        const emailNormalized = memberId.slice(k + sep.length).trim();
+        if (!applicationId || !emailNormalized) return null;
+        return { applicationId, emailNormalized };
+    }
+
+    /** Pending pipeline rows belong to exactly one roster team id carried in apply payload. */
+    private ensurePendingApplyPayloadMatchesTeam(payload: Record<string, unknown>, teamIdParam: string): void {
+        const rawTeamId = typeof payload['team_id'] === 'string' ? payload['team_id'].trim() : '';
+        const paramNorm = decodeURIComponent((teamIdParam || '').trim()).trim();
+        if (!rawTeamId || rawTeamId !== paramNorm) {
+            throw new BadRequestException(
+                `Team grouping mismatch (${paramNorm}). Refresh the roster and retry from the latest team id.`,
+            );
+        }
+    }
+
+    /** Lead-only academic fields stored on draft apply payload (`admin_correction`) until enrollment exists. */
+    private mergeLeadPayloadAdminCorrection(
+        payload: Record<string, unknown>,
+        dto: AdminPatchTeamMemberDto,
+    ): Record<string, unknown> {
+        const next = { ...payload };
+        const prev =
+            typeof next['admin_correction'] === 'object' &&
+            next['admin_correction'] !== null &&
+            !Array.isArray(next['admin_correction']) ?
+                { ...(next['admin_correction'] as Record<string, unknown>) }
+            :   {};
+        let changed = Boolean(Object.keys(prev).length);
+        if (dto.year_of_study) {
+            prev['year_of_study'] = dto.year_of_study;
+            changed = true;
+        }
+        if (dto.academic_integration_type) {
+            prev['academic_integration_type'] = dto.academic_integration_type;
+            changed = true;
+        }
+        if (changed) next['admin_correction'] = prev;
+        else delete next['admin_correction'];
+        return next;
+    }
+
+    private async adminPatchPendingSyntheticTeammate(
+        opportunityId: string,
+        teamIdParam: string,
+        decodedMemberId: string,
+        applicationId: string,
+        emailNormalized: string,
+        dto: AdminPatchTeamMemberDto,
+    ) {
+        const app = await this.appRepo.findOne({
+            where: { id: applicationId, opportunityId, withdrawnAt: IsNull() },
+            relations: ['studentUser'],
+        });
+        if (!app || !PENDING_PIPELINE.includes(app.internalStatus)) {
+            throw new NotFoundException('Pending application roster entry not found for this opportunity');
+        }
+        let payloadCopy: Record<string, unknown> = {
+            ...(app.applyPayload && typeof app.applyPayload === 'object' ? app.applyPayload : {}),
+        } as Record<string, unknown>;
+
+        this.ensurePendingApplyPayloadMatchesTeam(payloadCopy, teamIdParam);
+
+        const leadNorm = this.normalizeEmail(app.studentUser?.email ?? '');
+        if (leadNorm === this.normalizeEmail(emailNormalized)) {
+            throw new BadRequestException('Lead row is patched with the application member id — use Update on the lead line instead.');
+        }
+
+        const teamMembersRaw =
+            Array.isArray(payloadCopy['team_members']) ?
+                ([...(payloadCopy['team_members'] as Array<Record<string, unknown>>)] as Array<Record<string, unknown>>)
+            :   [];
+        const ix = teamMembersRaw.findIndex(
+            (row) =>
+                typeof row?.['email'] === 'string'
+                && this.normalizeEmail(row['email'] as string) === this.normalizeEmail(emailNormalized),
+        );
+        if (ix < 0) {
+            throw new NotFoundException('That teammate email is not on this application roster');
+        }
+        const row = { ...(teamMembersRaw[ix] as Record<string, unknown>) };
+        if (dto.full_name?.trim()) {
+            row.name = dto.full_name.trim();
+        }
+        if (dto.mobile !== undefined && dto.mobile.trim().length >= 6) {
+            row.mobile = dto.mobile.trim();
+        }
+        if (dto.cnic?.trim()) {
+            row.admin_cnic = dto.cnic.trim();
+        }
+        teamMembersRaw[ix] = row;
+        payloadCopy['team_members'] = teamMembersRaw;
+
+        const syncLinkedUserProfile = dto.sync_linked_user_profile !== false;
+        const mateEmailRaw = typeof row['email'] === 'string' ? (row['email'] as string).trim() : '';
+        const mateNorm = mateEmailRaw ? this.normalizeEmail(mateEmailRaw) : this.normalizeEmail(emailNormalized);
+        let linked: User | null = null;
+        if (syncLinkedUserProfile && mateNorm) {
+            linked = await this.userRepo
+                .createQueryBuilder('u')
+                .where('LOWER(TRIM(u.email)) = :e', { e: mateNorm })
+                .getOne();
+        }
+        if (linked) {
+            const patch: Record<string, unknown> = {};
+            if (dto.full_name?.trim()) patch.name = dto.full_name.trim();
+            if (dto.mobile !== undefined && dto.mobile.trim().length >= 6) {
+                const raw = dto.mobile.trim();
+                if (raw.startsWith('+')) {
+                    patch.phone = raw;
+                    patch.countryCode = null;
+                } else {
+                    patch.phone = raw;
+                }
+            }
+            if (dto.cnic?.trim()) {
+                const digitsUser = dto.cnic.replace(/\D/g, '');
+                if (digitsUser.length === 13) patch.cnic = digitsUser;
+            }
+            if (dto.university_name?.trim()) patch.university = dto.university_name.trim();
+            if (dto.academic_program?.trim()) patch.major = dto.academic_program.trim();
+            if (dto.department?.trim()) patch.department = dto.department.trim();
+            if (Object.keys(patch).length) await this.usersService.update(linked.id, patch);
+        }
+
+        app.applyPayload = payloadCopy;
+        await this.appRepo.save(app);
+
+        const hydrateNeedle = mateNorm;
+        let prof: User | null = null;
+        if (hydrateNeedle) {
+            prof =
+                linked
+                ?? (await this.userRepo
+                    .createQueryBuilder('u')
+                    .where('LOWER(TRIM(u.email)) = :e', { e: hydrateNeedle })
+                    .getOne());
+        }
+        const jsonPhone =
+            typeof row.mobile === 'string' && row.mobile.trim() ?
+                row.mobile.trim()
+            :   '';
+        const rawCnic =
+            typeof row.admin_cnic === 'string' && row.admin_cnic.trim()
+                ? row.admin_cnic.trim()
+                :   '';
+        const phoneMate =
+            prof?.phone?.trim().length ?
+                `${(prof.countryCode || '').trim()}${prof.phone.trim()}`.trim()
+            :   '';
+
+        const memberPayload: Record<string, unknown> = {
+            id: decodedMemberId,
+            supports_admin_patch: true,
+            member_source: 'pending_application',
+            name: typeof row.name === 'string' ? row.name : null,
+            email: mateEmailRaw || null,
+            role: 'member',
+            report_status: 'not_started',
+            report_available: false,
+            phone_number: jsonPhone || phoneMate || null,
+            cnic_display:
+                rawCnic ?
+                    this.formatPakCnicDigitsDisplay(rawCnic.replace(/\D/g, ''))
+                : prof?.cnic ?
+                    this.formatPakCnicDigitsDisplay(prof.cnic.replace(/\D/g, ''))
+                : null,
+            university_id: null,
+            university_name: prof?.university ?? prof?.institution ?? null,
+            academic_program: prof?.major ?? null,
+            department: prof?.department ?? null,
+            year_of_study: null,
+            academic_integration_type: null,
+        };
+
+        return { success: true, data: { member: memberPayload } };
+    }
+
+    private async adminPatchPendingApplicationLead(
+        app: OpportunityApplication,
+        teamIdParam: string,
+        dto: AdminPatchTeamMemberDto,
+        decodedMemberId: string,
+    ) {
+        if (!PENDING_PIPELINE.includes(app.internalStatus)) {
+            throw new NotFoundException('Pending application roster entry not found for this opportunity');
+        }
+        const payloadCopy: Record<string, unknown> = {
+            ...(app.applyPayload && typeof app.applyPayload === 'object' ? app.applyPayload : {}),
+        };
+
+        this.ensurePendingApplyPayloadMatchesTeam(payloadCopy, teamIdParam);
+
+        if (dto.cnic?.trim()) {
+            const normalizedCnicDigits = dto.cnic.replace(/\D/g, '');
+            const hash = this.engagementService.getCnicHashForNormalizedDigits(normalizedCnicDigits);
+            const conflict = await this.participationRepo.findOne({
+                where: { projectId: app.opportunityId, cnicHash: hash },
+            });
+            if (conflict) {
+                throw new BadRequestException(
+                    'Another enrollment on this project already uses this CNIC. Withdraw or correct that seat first.',
+                );
+            }
+        }
+
+        let nextPayload =
+            dto.year_of_study || dto.academic_integration_type
+                ? this.mergeLeadPayloadAdminCorrection(payloadCopy, dto)
+                : payloadCopy;
+
+        if (dto.mobile !== undefined && dto.mobile.trim().length >= 6) {
+            nextPayload = { ...nextPayload, contact_phone_e164: dto.mobile.trim() };
+        }
+
+        const syncLinkedUserProfile = dto.sync_linked_user_profile !== false;
+        if (syncLinkedUserProfile && app.studentUserId) {
+            const uPatch: Record<string, unknown> = {};
+            if (dto.full_name?.trim()) uPatch.name = dto.full_name.trim();
+            if (dto.mobile !== undefined && dto.mobile.trim().length >= 6) {
+                const raw = dto.mobile.trim();
+                if (raw.startsWith('+')) {
+                    uPatch.phone = raw;
+                    uPatch.countryCode = null;
+                } else {
+                    uPatch.phone = raw;
+                }
+            }
+            if (dto.cnic?.trim()) {
+                const digitsUser = dto.cnic.replace(/\D/g, '');
+                if (digitsUser.length === 13) uPatch.cnic = digitsUser;
+            }
+            if (dto.university_name?.trim()) uPatch.university = dto.university_name.trim();
+            if (dto.academic_program?.trim()) uPatch.major = dto.academic_program.trim();
+            if (dto.department?.trim()) uPatch.department = dto.department.trim();
+            if (Object.keys(uPatch).length) {
+                await this.usersService.update(app.studentUserId, uPatch);
+            }
+        }
+
+        app.applyPayload = nextPayload;
+        await this.appRepo.save(app);
+
+        const fresh = await this.appRepo.findOne({
+            where: { id: app.id },
+            relations: ['studentUser'],
+        });
+        if (!fresh?.studentUser) {
+            throw new NotFoundException('Application no longer exists after update');
+        }
+        const mergedPayload =
+            fresh.applyPayload && typeof fresh.applyPayload === 'object'
+                ? (fresh.applyPayload as Record<string, unknown>)
+                : {};
+        const leadProfile = fresh.studentUser;
+        const leadUser = leadProfile;
+
+        const phoneFromApply =
+            typeof mergedPayload['contact_phone_e164'] === 'string'
+                ? (mergedPayload['contact_phone_e164'] as string).trim()
+                : '';
+        const phoneFromUser =
+            leadProfile?.phone?.trim().length ?
+                `${(leadProfile.countryCode || '').trim()}${leadProfile.phone.trim()}`.trim()
+            :   '';
+        const adminCorr =
+            typeof mergedPayload['admin_correction'] === 'object'
+            && mergedPayload['admin_correction'] !== null
+            && !Array.isArray(mergedPayload['admin_correction']) ?
+                (mergedPayload['admin_correction'] as Record<string, unknown>)
+            :   {};
+        const yearFromCorr =
+            typeof adminCorr.year_of_study === 'string' && (adminCorr.year_of_study as string).trim() ?
+                (adminCorr.year_of_study as string).trim()
+            :   null;
+        const integFromCorr =
+            typeof adminCorr.academic_integration_type === 'string'
+            && (adminCorr.academic_integration_type as string).trim() ?
+                (adminCorr.academic_integration_type as string).trim()
+            :   null;
+
+        const memberPayload: Record<string, unknown> = {
+            id: decodedMemberId,
+            supports_admin_patch: true,
+            member_source: 'pending_application',
+            name: leadUser?.name ?? null,
+            email: leadUser?.email ?? null,
+            role: 'lead',
+            report_status: 'not_started',
+            report_available: false,
+            phone_number: phoneFromApply || phoneFromUser || null,
+            cnic_display: leadProfile?.cnic
+                ? this.formatPakCnicDigitsDisplay(leadProfile.cnic.replace(/\D/g, ''))
+                : null,
+            university_id: null,
+            university_name: leadProfile?.university ?? leadProfile?.institution ?? null,
+            academic_program: leadProfile?.major ?? null,
+            department: leadProfile?.department ?? null,
+            year_of_study: yearFromCorr,
+            academic_integration_type: integFromCorr,
+        };
+
+        return { success: true, data: { member: memberPayload } };
+    }
+
     private pickLatestReportForStudent(reports: StudentReport[], studentId: string): StudentReport | null {
         const forStudent = reports.filter((r) => r.studentId === studentId);
         if (!forStudent.length) return null;
@@ -427,10 +743,25 @@ export class OpportunityApplicationsService {
                 leadProfile?.phone?.trim().length ?
                     `${(leadProfile.countryCode || '').trim()}${leadProfile.phone.trim()}`.trim()
                 :   '';
+            const adminCorr =
+                typeof payload['admin_correction'] === 'object' &&
+                payload['admin_correction'] !== null &&
+                !Array.isArray(payload['admin_correction']) ?
+                    (payload['admin_correction'] as Record<string, unknown>)
+                :   {};
+            const yearFromCorr =
+                typeof adminCorr.year_of_study === 'string' && adminCorr.year_of_study.trim() ?
+                    adminCorr.year_of_study.trim()
+                :   null;
+            const integFromCorr =
+                typeof adminCorr.academic_integration_type === 'string' && adminCorr.academic_integration_type.trim() ?
+                    adminCorr.academic_integration_type.trim()
+                :   null;
             const memberPayload: Array<Record<string, unknown>> = [
                 {
                     id: app.id,
-                    supports_admin_patch: false,
+                    supports_admin_patch: true,
+                    member_source: 'pending_application',
                     name: leadUser?.name ?? null,
                     email: leadUser?.email ?? null,
                     role: 'lead',
@@ -444,29 +775,42 @@ export class OpportunityApplicationsService {
                     university_name: leadProfile?.university ?? leadProfile?.institution ?? null,
                     academic_program: leadProfile?.major ?? null,
                     department: leadProfile?.department ?? null,
-                    year_of_study: null,
-                    academic_integration_type: null,
+                    year_of_study: yearFromCorr,
+                    academic_integration_type: integFromCorr,
                 },
             ];
             for (const m of teamMembersRaw) {
                 const em = typeof m?.email === 'string' ? this.normalizeEmail(m.email) : '';
                 if (!em || em === leadEmail) continue;
                 const prof = pendingUserByEmail.get(em);
+                const mExt = m as Record<string, unknown>;
+                const jsonPhone =
+                    typeof mExt.mobile === 'string' && mExt.mobile.trim() ?
+                        mExt.mobile.trim()
+                    :   '';
+                const rawCnic =
+                    typeof mExt.admin_cnic === 'string' && mExt.admin_cnic.trim() ?
+                        mExt.admin_cnic.trim()
+                    :   '';
                 const phoneMate =
                     prof?.phone?.trim().length ?
                         `${(prof.countryCode || '').trim()}${prof.phone.trim()}`.trim()
                     :   '';
                 memberPayload.push({
                     id: `pending:${app.id}:m:${em}`,
-                    supports_admin_patch: false,
+                    supports_admin_patch: true,
+                    member_source: 'pending_application',
                     name: typeof m?.name === 'string' ? m.name : null,
                     email: typeof m?.email === 'string' ? m.email.trim() : null,
                     role: 'member',
                     report_status: 'not_started',
                     report_available: false,
-                    phone_number: phoneMate || null,
-                    cnic_display: prof?.cnic
-                        ? this.formatPakCnicDigitsDisplay(prof.cnic.replace(/\D/g, ''))
+                    phone_number: jsonPhone || phoneMate || null,
+                    cnic_display:
+                        rawCnic ?
+                            this.formatPakCnicDigitsDisplay(rawCnic.replace(/\D/g, ''))
+                        : prof?.cnic ?
+                            this.formatPakCnicDigitsDisplay(prof.cnic.replace(/\D/g, ''))
                         : null,
                     university_id: null,
                     university_name: prof?.university ?? prof?.institution ?? null,
@@ -489,11 +833,56 @@ export class OpportunityApplicationsService {
             });
         }
 
+        const opp = await this.opportunityRepo.findOne({ where: { id: opportunityId } });
+        const pipelineCountRows = await this.appRepo
+            .createQueryBuilder('a')
+            .select('a.internalStatus', 'status')
+            .addSelect('COUNT(*)', 'cnt')
+            .where('a.opportunityId = :oid', { oid: opportunityId })
+            .andWhere('a.withdrawnAt IS NULL')
+            .groupBy('a.internalStatus')
+            .getRawMany();
+
+        const appsByStatus: Record<string, number> = {
+            pending_faculty: 0,
+            pending_partner: 0,
+            pending_admin: 0,
+            approved: 0,
+            faculty_rejected: 0,
+            partner_rejected: 0,
+            admin_rejected: 0,
+        };
+        for (const r of pipelineCountRows) {
+            const key = String((r as { status?: unknown }).status ?? '').trim();
+            if (key in appsByStatus) appsByStatus[key] = Number((r as { cnt?: unknown }).cnt) || 0;
+        }
+        const awaitingSide =
+            opp?.faculty_verification_status === 'pending_faculty'
+                ? 'faculty_gate'
+                : opp && !opp.execution_verified && opp.execution_verification_status === 'pending_execution'
+                  ? 'execution_partner_gate'
+                  : null;
+
         return {
             summary: {
                 registered_teams: data.length,
                 completed_reports: completedReports,
                 reports_available: reportsAvailable,
+                opportunity: opp
+                    ? {
+                          title: opp.title,
+                          status: opp.status,
+                          admin_approved: opp.admin_approved,
+                          faculty_verification_status: opp.faculty_verification_status,
+                          faculty_verified: opp.faculty_verified,
+                          execution_verification_status: opp.execution_verification_status,
+                          execution_verified: opp.execution_verified,
+                          /** Human hint: coarse approval lane for the listing (detail still in applications_by_internal_status). */
+                          awaiting_partner_or_faculty: awaitingSide,
+                      }
+                    : null,
+                applications_by_internal_status: appsByStatus,
+                applications_pipeline_total_non_withdrawn: Object.values(appsByStatus).reduce((s, n) => s + n, 0),
             },
             data,
         };
@@ -619,21 +1008,43 @@ export class OpportunityApplicationsService {
         memberId: string,
         dto: AdminPatchTeamMemberDto,
     ) {
-        if (memberId.startsWith('pending:')) {
-            throw new BadRequestException(
-                'Cannot edit roster entries that are still in the approvals pipeline — wait until seats are issued, then edit enrollment records.',
-            );
-        }
+        const decodedMemberId = decodeURIComponent((memberId || '').trim());
 
         const participation = await this.participationRepo.findOne({
             where: {
-                id: memberId,
+                id: decodedMemberId,
                 projectId: opportunityId,
                 status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
             },
             relations: ['student'],
         });
+
         if (!participation) {
+            const pendingSynth = this.parsePendingRosterSyntheticTeammateId(decodedMemberId);
+            if (pendingSynth) {
+                return this.adminPatchPendingSyntheticTeammate(
+                    opportunityId,
+                    teamIdParam,
+                    decodedMemberId,
+                    pendingSynth.applicationId,
+                    pendingSynth.emailNormalized,
+                    dto,
+                );
+            }
+
+            const pendingLead = await this.appRepo.findOne({
+                where: {
+                    id: decodedMemberId,
+                    opportunityId,
+                    withdrawnAt: IsNull(),
+                    internalStatus: In(PENDING_PIPELINE),
+                },
+                relations: ['studentUser'],
+            });
+            if (pendingLead) {
+                return this.adminPatchPendingApplicationLead(pendingLead, teamIdParam, dto, decodedMemberId);
+            }
+
             throw new NotFoundException('Team member enrollment not found for this opportunity');
         }
 

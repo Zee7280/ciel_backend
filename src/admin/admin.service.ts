@@ -1093,6 +1093,7 @@ export class AdminService {
                     location: opp.location?.city || 'Unknown',
                     supervision: opp.supervision,
                     timeline: opp.timeline,
+                    participation_scope: opp.participation_scope,
                     creator,
                 };
                 if (normalizedEmail) {

@@ -68,8 +68,9 @@ export class Participation {
     @Column({ default: false })
     emailVerified: boolean;
 
-    @Column({ nullable: true })
-    universityId: string;
+    /** Explicit DB type: `string | null` alone makes TypeORM infer `Object` on Postgres. */
+    @Column({ type: 'varchar', nullable: true })
+    universityId: string | null;
 
     @Column({ nullable: true })
     universityName: string;

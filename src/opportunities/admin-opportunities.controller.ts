@@ -20,6 +20,7 @@ import { UsersService } from '../users/users.service';
 import { OpportunityApplicationsService } from './opportunity-applications.service';
 
 import { AdminMutationAuditInterceptor } from '../audit-logs/admin-mutation-audit.interceptor';
+import { AdminPatchTeamMemberDto } from './dto/admin-patch-team-member.dto';
 
 @Controller('admin/opportunities')
 @UseGuards(JwtAuthGuard)
@@ -112,6 +113,16 @@ export class AdminOpportunitiesController {
         @Param('teamId') teamId: string,
     ) {
         await this.opportunityApplicationsService.adminDeleteOpportunityTeam(opportunityId, teamId);
+    }
+
+    @Patch(':id/teams/:teamId/members/:memberId')
+    async patchTeamMember(
+        @Param('id') opportunityId: string,
+        @Param('teamId') teamId: string,
+        @Param('memberId') memberId: string,
+        @Body() dto: AdminPatchTeamMemberDto,
+    ) {
+        return this.opportunityApplicationsService.adminPatchOpportunityTeamMember(opportunityId, teamId, memberId, dto);
     }
 
     @Delete(':id/teams/:teamId/members/:memberId')

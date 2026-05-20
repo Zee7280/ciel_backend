@@ -16,6 +16,7 @@ import { FacultyUniversityScopeService } from '../faculty-university-scope/facul
 import { StudentReport } from '../reports/entities/student-report.entity';
 import { Payment } from '../payments/entities/payment.entity';
 import { isTeamApplyFromParticipationAndMembers } from './apply-team-payload.util';
+import { AdminPatchTeamMemberDto } from './dto/admin-patch-team-member.dto';
 
 const PENDING_PIPELINE: OpportunityApplicationInternalStatus[] = [
     'pending_faculty',
@@ -224,6 +225,40 @@ export class OpportunityApplicationsService {
         return 'not_started';
     }
 
+    /** Matches `TeamOverviewRow.id` emitted by {@link adminListOpportunityTeams} for DELETE/PATCH routing. */
+    private participationListingGroupId(p: Participation): string {
+        const tid = (p.teamId || '').trim();
+        return tid || `individual:${((p.studentId || p.id) || '').trim()}`;
+    }
+
+    private formatPakCnicDigitsDisplay(digits: string): string | null {
+        const d = (digits || '').replace(/\D/g, '');
+        if (d.length !== 13) {
+            return d.length ? d : null;
+        }
+        return `${d.slice(0, 5)}-${d.slice(5, 12)}-${d.slice(12)}`;
+    }
+
+    private participationMobileAndCnicSnapshot(member: Participation) {
+        const decrypted = member.cnic ? this.engagementService.decryptCnicInternal(member.cnic) : '';
+        const digitCnic = (decrypted || '').replace(/\D/g, '');
+        return {
+            phone_number: member.mobile?.trim() || null,
+            cnic_display: this.formatPakCnicDigitsDisplay(digitCnic),
+        };
+    }
+
+    private academicSnapshot(member: Participation) {
+        return {
+            university_id: member.universityId ?? null,
+            university_name: member.universityName ?? null,
+            academic_program: member.academicProgram ?? null,
+            department: member.department ?? null,
+            year_of_study: member.yearOfStudy ?? null,
+            academic_integration_type: member.academicIntegrationType ?? null,
+        };
+    }
+
     private pickLatestReportForStudent(reports: StudentReport[], studentId: string): StudentReport | null {
         const forStudent = reports.filter((r) => r.studentId === studentId);
         if (!forStudent.length) return null;
@@ -289,13 +324,18 @@ export class OpportunityApplicationsService {
                     ? this.pickLatestReportForStudent(reports, member.studentId)
                     : null;
                 const reportStatus = this.toTeamReportStatus(rep?.status);
+                const snap = this.participationMobileAndCnicSnapshot(member);
                 return {
                     id: member.id,
+                    supports_admin_patch: true,
                     name: member.student?.name ?? member.fullName ?? null,
                     email: member.student?.email ?? member.email ?? null,
                     role: isIndividualEntry || member.isTeamLead ? 'lead' : 'member',
                     report_status: reportStatus,
                     report_available: reportStatus !== 'not_started',
+                    phone_number: snap.phone_number,
+                    cnic_display: snap.cnic_display,
+                    ...this.academicSnapshot(member),
                 };
             });
             const teamReportStatus = this.aggregateTeamReportStatus(
@@ -332,6 +372,34 @@ export class OpportunityApplicationsService {
             order: { createdAt: 'ASC' },
         });
 
+        /** Best-effort profile hints while team is still awaiting approval/seat creation. */
+        const pendingHydrationEmails = new Set<string>();
+        for (const app of pendingPipelineApps) {
+            const payload = app.applyPayload || {};
+            const teamMembersRaw = Array.isArray(payload['team_members'])
+                ? (payload['team_members'] as Array<{ email?: string; name?: string }>)
+                : [];
+            const ln = this.normalizeEmail(app.studentUser?.email ?? '');
+            if (ln) pendingHydrationEmails.add(ln);
+            for (const m of teamMembersRaw) {
+                const em = typeof m?.email === 'string' ? this.normalizeEmail(m.email) : '';
+                if (em) pendingHydrationEmails.add(em);
+            }
+        }
+        const hydrationNeedles = [...pendingHydrationEmails].filter(Boolean);
+        const pendingUserByEmail = new Map<string, User>();
+        if (hydrationNeedles.length) {
+            const usersBatch = await this.userRepo
+                .createQueryBuilder('u')
+                .where(`LOWER(TRIM(u.email)) IN (:...emails)`, {
+                    emails: hydrationNeedles,
+                })
+                .getMany();
+            for (const u of usersBatch) {
+                pendingUserByEmail.set(this.normalizeEmail(u.email), u);
+            }
+        }
+
         for (const app of pendingPipelineApps) {
             const payload = app.applyPayload || {};
             const rawTeamId =
@@ -350,26 +418,62 @@ export class OpportunityApplicationsService {
 
             const leadUser = app.studentUser;
             const leadEmail = this.normalizeEmail(leadUser?.email ?? '');
+            const leadProfile = leadEmail ? pendingUserByEmail.get(leadEmail) : undefined;
+            const phoneFromApply =
+                typeof payload['contact_phone_e164'] === 'string'
+                    ? payload['contact_phone_e164'].trim()
+                    : '';
+            const phoneFromUser =
+                leadProfile?.phone?.trim().length ?
+                    `${(leadProfile.countryCode || '').trim()}${leadProfile.phone.trim()}`.trim()
+                :   '';
             const memberPayload: Array<Record<string, unknown>> = [
                 {
                     id: app.id,
+                    supports_admin_patch: false,
                     name: leadUser?.name ?? null,
                     email: leadUser?.email ?? null,
                     role: 'lead',
                     report_status: 'not_started',
                     report_available: false,
+                    phone_number: phoneFromApply || phoneFromUser || null,
+                    cnic_display: leadProfile?.cnic
+                        ? this.formatPakCnicDigitsDisplay(leadProfile.cnic.replace(/\D/g, ''))
+                        : null,
+                    university_id: null,
+                    university_name: leadProfile?.university ?? leadProfile?.institution ?? null,
+                    academic_program: leadProfile?.major ?? null,
+                    department: leadProfile?.department ?? null,
+                    year_of_study: null,
+                    academic_integration_type: null,
                 },
             ];
             for (const m of teamMembersRaw) {
                 const em = typeof m?.email === 'string' ? this.normalizeEmail(m.email) : '';
                 if (!em || em === leadEmail) continue;
+                const prof = pendingUserByEmail.get(em);
+                const phoneMate =
+                    prof?.phone?.trim().length ?
+                        `${(prof.countryCode || '').trim()}${prof.phone.trim()}`.trim()
+                    :   '';
                 memberPayload.push({
                     id: `pending:${app.id}:m:${em}`,
+                    supports_admin_patch: false,
                     name: typeof m?.name === 'string' ? m.name : null,
                     email: typeof m?.email === 'string' ? m.email.trim() : null,
                     role: 'member',
                     report_status: 'not_started',
                     report_available: false,
+                    phone_number: phoneMate || null,
+                    cnic_display: prof?.cnic
+                        ? this.formatPakCnicDigitsDisplay(prof.cnic.replace(/\D/g, ''))
+                        : null,
+                    university_id: null,
+                    university_name: prof?.university ?? prof?.institution ?? null,
+                    academic_program: prof?.major ?? null,
+                    department: prof?.department ?? null,
+                    year_of_study: null,
+                    academic_integration_type: null,
                 });
             }
 
@@ -507,6 +611,155 @@ export class OpportunityApplicationsService {
                 await em.save(nextLead);
             }
         });
+    }
+
+    async adminPatchOpportunityTeamMember(
+        opportunityId: string,
+        teamIdParam: string,
+        memberId: string,
+        dto: AdminPatchTeamMemberDto,
+    ) {
+        if (memberId.startsWith('pending:')) {
+            throw new BadRequestException(
+                'Cannot edit roster entries that are still in the approvals pipeline — wait until seats are issued, then edit enrollment records.',
+            );
+        }
+
+        const participation = await this.participationRepo.findOne({
+            where: {
+                id: memberId,
+                projectId: opportunityId,
+                status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
+            },
+            relations: ['student'],
+        });
+        if (!participation) {
+            throw new NotFoundException('Team member enrollment not found for this opportunity');
+        }
+
+        const expectedGroupId = this.participationListingGroupId(participation);
+        const paramNorm = decodeURIComponent(teamIdParam || '').trim();
+        if (paramNorm !== expectedGroupId) {
+            throw new BadRequestException(
+                `Team grouping mismatch (${paramNorm}). Refresh the roster and retry from the newest team id.`,
+            );
+        }
+
+        if (dto.cnic?.trim()) {
+            const normalizedCnicDigits = dto.cnic.replace(/\D/g, '');
+            const hash = this.engagementService.getCnicHashForNormalizedDigits(normalizedCnicDigits);
+            const conflict = await this.participationRepo.findOne({
+                where: { projectId: opportunityId, cnicHash: hash },
+            });
+            if (conflict && conflict.id !== participation.id) {
+                throw new BadRequestException(
+                    'Another enrollment on this project already uses this CNIC. Withdraw or correct that seat first.',
+                );
+            }
+        }
+
+        const syncLinkedUserProfile = dto.sync_linked_user_profile !== false;
+
+        if (dto.full_name?.trim()) {
+            participation.fullName = dto.full_name.trim();
+            if (syncLinkedUserProfile && participation.studentId) {
+                await this.usersService.update(participation.studentId, { name: dto.full_name.trim() });
+            }
+        }
+
+        if (dto.mobile !== undefined && dto.mobile.trim().length >= 6) {
+            participation.mobile = dto.mobile.trim();
+            if (syncLinkedUserProfile && participation.studentId) {
+                const raw = dto.mobile.trim();
+                if (raw.startsWith('+')) {
+                    await this.usersService.update(participation.studentId, { phone: raw, countryCode: null });
+                } else {
+                    await this.usersService.update(participation.studentId, { phone: raw });
+                }
+            }
+        }
+
+        if (dto.cnic?.trim()) {
+            this.engagementService.applyNormalizedCnicToParticipation(participation, dto.cnic);
+            const digitsUser = dto.cnic.replace(/\D/g, '');
+            if (syncLinkedUserProfile && participation.studentId && digitsUser.length === 13) {
+                await this.usersService.update(participation.studentId, { cnic: digitsUser });
+            }
+        }
+
+        if (dto.university_id !== undefined) {
+            const v = dto.university_id.trim();
+            participation.universityId = v || null;
+        }
+        if (dto.university_name?.trim()) {
+            participation.universityName = dto.university_name.trim();
+            if (syncLinkedUserProfile && participation.studentId) {
+                await this.usersService.update(participation.studentId, {
+                    university: dto.university_name.trim(),
+                });
+            }
+        }
+        if (dto.academic_program?.trim()) {
+            participation.academicProgram = dto.academic_program.trim();
+            if (syncLinkedUserProfile && participation.studentId) {
+                await this.usersService.update(participation.studentId, { major: dto.academic_program.trim() });
+            }
+        }
+        if (dto.department?.trim()) {
+            participation.department = dto.department.trim();
+            if (syncLinkedUserProfile && participation.studentId) {
+                await this.usersService.update(participation.studentId, {
+                    department: dto.department.trim(),
+                });
+            }
+        }
+        if (dto.year_of_study) {
+            participation.yearOfStudy = dto.year_of_study;
+        }
+        if (dto.academic_integration_type) {
+            participation.academicIntegrationType = dto.academic_integration_type;
+        }
+
+        await this.participationRepo.save(participation);
+
+        const refreshed = await this.participationRepo.findOne({
+            where: { id: participation.id },
+            relations: ['student'],
+        });
+        const p = refreshed ?? participation;
+
+        let reportStatusRet: 'not_started' | 'in_progress' | 'completed' = 'not_started';
+        if (p.studentId) {
+            const reports = await this.findReportsForOpportunityAndStudents(opportunityId, [
+                p.studentId,
+            ]);
+            const latest = this.pickLatestReportForStudent(reports, p.studentId);
+            reportStatusRet = this.toTeamReportStatus(latest?.status);
+        }
+
+        const snap = this.participationMobileAndCnicSnapshot(p);
+        const mode = String(p.participationMode ?? '')
+            .trim()
+            .toLowerCase();
+        const isIndividualSeat = !(p.teamId || '').trim().length || mode === 'individual';
+
+        const memberPayload: Record<string, unknown> = {
+            id: p.id,
+            supports_admin_patch: true,
+            name: p.student?.name ?? p.fullName ?? null,
+            email: p.student?.email ?? p.email ?? null,
+            role: isIndividualSeat || p.isTeamLead ? 'lead' : 'member',
+            report_status: reportStatusRet,
+            report_available: reportStatusRet !== 'not_started',
+            phone_number: snap.phone_number,
+            cnic_display: snap.cnic_display,
+            ...this.academicSnapshot(p),
+        };
+
+        return {
+            success: true,
+            data: { member: memberPayload },
+        };
     }
 
     /**

@@ -99,8 +99,8 @@ export class AdminController {
     }
 
     @Get('projects')
-    getProjects() {
-        return this.adminService.getProjects();
+    getProjects(@Query('student_email') studentEmail?: string) {
+        return this.adminService.getProjects(studentEmail);
     }
 
     @Get('analytics/impact-stakeholders')

@@ -1391,6 +1391,25 @@ export class EngagementService {
         return crypto.createHash('sha256').update(str).digest('hex');
     }
 
+    /** Admin / cross-service: stable hash for CNIC uniqueness checks at the participation row layer. */
+    getCnicHashForNormalizedDigits(normalizedDigits13: string): string {
+        return this.hashString((normalizedDigits13 || '').trim());
+    }
+
+    /**
+     * Stores encrypted CNIC + hash metadata on an existing participation seat (digits-only storage).
+     * @throws BadRequestException when stripped digits length is not 13.
+     */
+    applyNormalizedCnicToParticipation(participation: Participation, normalizedDigits13: string): void {
+        const digits = String(normalizedDigits13 || '').replace(/\D/g, '');
+        if (digits.length !== 13) {
+            throw new BadRequestException('CNIC must contain exactly 13 digits.');
+        }
+        participation.cnicHash = this.hashString(digits);
+        participation.cnic = this.encrypt(digits);
+        participation.cnicLast4 = digits.slice(-4);
+    }
+
     private encrypt(text: string): string {
         const iv = crypto.randomBytes(16);
         const cipher = crypto.createCipheriv(this.ALGORITHM, this.KEY, iv);

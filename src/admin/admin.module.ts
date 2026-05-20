@@ -15,6 +15,7 @@ import { OpportunitiesModule } from '../opportunities/opportunities.module';
 import { StudentsModule } from '../students/students.module';
 import { IssueLogsModule } from '../issue-logs/issue-logs.module';
 import { FacultyUniversityScopeModule } from '../faculty-university-scope/faculty-university-scope.module';
+import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 
 @Module({
     imports: [
@@ -24,7 +25,7 @@ import { FacultyUniversityScopeModule } from '../faculty-university-scope/facult
         IssueLogsModule,
         FacultyUniversityScopeModule,
         AuditLogsModule,
-        TypeOrmModule.forFeature([User, Opportunity, Report, StudentReport, Timesheet, Setting, Participation]),
+        TypeOrmModule.forFeature([User, Opportunity, Report, StudentReport, Timesheet, Setting, Participation, OpportunityApplication]),
     ],
     controllers: [AdminController],
     providers: [AdminService],

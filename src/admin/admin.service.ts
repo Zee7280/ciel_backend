@@ -8,11 +8,13 @@ import { StudentReport } from '../reports/entities/student-report.entity';
 import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { Participation } from '../engagement/entities/participant.entity';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
+import { isTeamApplyFromParticipationAndMembers } from '../opportunities/apply-team-payload.util';
+import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 import { StudentsService } from '../students/students.service';
 
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { UserRole } from '../users/enums/user-role.enum';
-import { In, IsNull, LessThan, Not, SelectQueryBuilder } from 'typeorm';
+import { In, IsNull, LessThan, Not, SelectQueryBuilder, Brackets } from 'typeorm';
 
 import { Setting } from '../settings/entities/setting.entity';
 import { MasterAnalyticsQueryDto } from './dto/master-analytics-query.dto';
@@ -187,6 +189,8 @@ export class AdminService {
         private studentReportRepository: Repository<StudentReport>,
         private readonly opportunityApplicationsService: OpportunityApplicationsService,
         private readonly studentsService: StudentsService,
+        @InjectRepository(OpportunityApplication)
+        private opportunityApplicationRepository: Repository<OpportunityApplication>,
     ) { }
 
     async getSettings() {
@@ -909,50 +913,176 @@ export class AdminService {
         );
     }
 
-    async getProjects() {
-        const opportunities = await this.opportunityRepository.find({
-            relations: ['organization']
+    private normalizeStudentEmailFilter(raw?: string | null): string | null {
+        const e = String(raw ?? '')
+            .trim()
+            .toLowerCase();
+        return e.length ? e : null;
+    }
+
+    private deriveParticipationStudentRole(p: Participation): string {
+        const tid = (p.teamId || '').trim();
+        const mode = String(p.participationMode ?? '')
+            .trim()
+            .toLowerCase();
+        if (!tid || mode === 'individual') {
+            return 'Individual participant';
+        }
+        return p.isTeamLead ? 'Team lead' : 'Team member';
+    }
+
+    private mergeEnrollmentRoles(a: string, b: string): string {
+        const rank = (r: string) => (r === 'Team lead' ? 3 : r === 'Team member' ? 2 : 1);
+        return rank(a) >= rank(b) ? a : b;
+    }
+
+    private deriveApplicationStudentRole(app: OpportunityApplication, em: string): string {
+        const payload = app.applyPayload || {};
+        const teamMembersRaw = Array.isArray(payload['team_members'])
+            ? (payload['team_members'] as Array<{ email?: string }>)
+            : [];
+        const isTeamApply = isTeamApplyFromParticipationAndMembers(payload['participation_type'], teamMembersRaw);
+        const leadNorm = (app.studentUser?.email ?? '')
+            .trim()
+            .toLowerCase();
+        if (leadNorm === em) {
+            return isTeamApply ? 'Team lead' : 'Individual participant';
+        }
+        return 'Team member';
+    }
+
+    /** Projects where email matches seated participation row or non-withdrawn application (lead or listed teammate). */
+    private async buildStudentEmailProjectMatchMap(
+        normalizedEmail: string,
+    ): Promise<Map<string, { role: string; match_source: 'enrollment' | 'application_pipeline' }>> {
+        const matchByOppId = new Map<
+            string,
+            { role: string; match_source: 'enrollment' | 'application_pipeline' }
+        >();
+
+        const enrollmentRows = await this.participationRepository
+            .createQueryBuilder('p')
+            .leftJoinAndSelect('p.student', 'student')
+            .where('p.status IN (:...sts)', { sts: OCCUPIED_SEAT_STATUSES })
+            .andWhere(
+                new Brackets((qb) => {
+                    qb.where('LOWER(TRIM(p.email)) = :em', { em: normalizedEmail }).orWhere(
+                        'LOWER(TRIM(student.email)) = :em',
+                        { em: normalizedEmail },
+                    );
+                }),
+            )
+            .getMany();
+
+        for (const row of enrollmentRows) {
+            const role = this.deriveParticipationStudentRole(row);
+            const prev = matchByOppId.get(row.projectId);
+            if (!prev) {
+                matchByOppId.set(row.projectId, { role, match_source: 'enrollment' });
+            } else {
+                matchByOppId.set(row.projectId, {
+                    role: this.mergeEnrollmentRoles(prev.role, role),
+                    match_source: 'enrollment',
+                });
+            }
+        }
+
+        const applicationRows = await this.opportunityApplicationRepository
+            .createQueryBuilder('app')
+            .leftJoinAndSelect('app.studentUser', 'studentUser')
+            .where('app.withdrawnAt IS NULL')
+            .andWhere(
+                new Brackets((qb) => {
+                    qb.where('LOWER(TRIM(studentUser.email)) = :em', { em: normalizedEmail }).orWhere(
+                        `EXISTS (
+              SELECT 1 FROM jsonb_array_elements(
+                COALESCE(app.apply_payload->'team_members', '[]'::jsonb)
+              ) tm
+              WHERE LOWER(TRIM(COALESCE(tm->>'email', ''))) = :em
+            )`,
+                        { em: normalizedEmail },
+                    );
+                }),
+            )
+            .getMany();
+
+        for (const app of applicationRows) {
+            if (matchByOppId.has(app.opportunityId)) continue;
+            matchByOppId.set(app.opportunityId, {
+                role: this.deriveApplicationStudentRole(app, normalizedEmail),
+                match_source: 'application_pipeline',
+            });
+        }
+
+        return matchByOppId;
+    }
+
+    async getProjects(studentEmailRaw?: string) {
+        const normalizedEmail = this.normalizeStudentEmailFilter(studentEmailRaw ?? undefined);
+
+        let matchByOppId = new Map<
+            string,
+            { role: string; match_source: 'enrollment' | 'application_pipeline' }
+        >();
+        if (normalizedEmail) {
+            matchByOppId = await this.buildStudentEmailProjectMatchMap(normalizedEmail);
+        }
+
+        let opportunities = await this.opportunityRepository.find({
+            relations: ['organization'],
         });
 
-        const projects = await Promise.all(opportunities.map(async (opp) => {
-            const timesheets = await this.timesheetRepository.find({ where: { opportunityId: opp.id } });
-            const hours = timesheets.filter(t => t.status === 'verified').reduce((sum, t) => sum + Number(t.hours || 0), 0);
+        if (normalizedEmail) {
+            const allowIds = matchByOppId;
+            opportunities = opportunities.filter((o) => allowIds.has(o.id));
+        }
 
-            const participationSeats = await this.participationRepository.count({
-                where: {
-                    projectId: opp.id,
-                    status: In(OCCUPIED_SEAT_STATUSES),
-                },
-            });
-            const pipelineSeats = await this.opportunityApplicationsService.countSeatsInFlight(opp.id);
-            const occupiedSeats = participationSeats + pipelineSeats;
+        const projects = await Promise.all(
+            opportunities.map(async (opp) => {
+                const timesheets = await this.timesheetRepository.find({ where: { opportunityId: opp.id } });
+                const hours = timesheets.filter((t) => t.status === 'verified').reduce((sum, t) => sum + Number(t.hours || 0), 0);
 
-            const volunteersRequired = Number(opp.timeline?.volunteers_required) || 0;
-            const perVolunteerHours = Number(opp.timeline?.expected_hours) || opp.requiredHours || 0;
-            let targetHours = 0;
-            if (volunteersRequired > 0 && perVolunteerHours > 0) {
-                targetHours = volunteersRequired * perVolunteerHours;
-            } else if (occupiedSeats > 0 && perVolunteerHours > 0) {
-                targetHours = occupiedSeats * perVolunteerHours;
-            }
+                const participationSeats = await this.participationRepository.count({
+                    where: {
+                        projectId: opp.id,
+                        status: In(OCCUPIED_SEAT_STATUSES),
+                    },
+                });
+                const pipelineSeats = await this.opportunityApplicationsService.countSeatsInFlight(opp.id);
+                const occupiedSeats = participationSeats + pipelineSeats;
 
-            const remainingSeats = Math.max(0, volunteersRequired - occupiedSeats);
-            const remainingHours = Math.max(0, targetHours - hours);
+                const volunteersRequired = Number(opp.timeline?.volunteers_required) || 0;
+                const perVolunteerHours = Number(opp.timeline?.expected_hours) || opp.requiredHours || 0;
+                let targetHours = 0;
+                if (volunteersRequired > 0 && perVolunteerHours > 0) {
+                    targetHours = volunteersRequired * perVolunteerHours;
+                } else if (occupiedSeats > 0 && perVolunteerHours > 0) {
+                    targetHours = occupiedSeats * perVolunteerHours;
+                }
 
-            return {
-                id: opp.id,
-                title: opp.title,
-                org: opp.organization?.name || 'Unknown',
-                status: opp.status,
-                volunteers: occupiedSeats,
-                volunteers_required: volunteersRequired,
-                hours,
-                remaining_hours: remainingHours,
-                remaining_seats: remainingSeats,
-                remaining_members: remainingSeats,
-                location: opp.location?.city || 'Unknown',
-            };
-        }));
+                const remainingSeats = Math.max(0, volunteersRequired - occupiedSeats);
+                const remainingHours = Math.max(0, targetHours - hours);
+
+                const row: Record<string, unknown> = {
+                    id: opp.id,
+                    title: opp.title,
+                    org: opp.organization?.name || 'Unknown',
+                    status: opp.status,
+                    volunteers: occupiedSeats,
+                    volunteers_required: volunteersRequired,
+                    hours,
+                    remaining_hours: remainingHours,
+                    remaining_seats: remainingSeats,
+                    remaining_members: remainingSeats,
+                    location: opp.location?.city || 'Unknown',
+                };
+                if (normalizedEmail) {
+                    const meta = matchByOppId.get(opp.id);
+                    if (meta) row['student_match'] = meta;
+                }
+                return row;
+            }),
+        );
 
         return { success: true, data: projects };
     }

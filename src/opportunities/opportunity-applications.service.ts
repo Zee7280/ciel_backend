@@ -1499,13 +1499,46 @@ export class OpportunityApplicationsService {
             applyPayload: params.applyPayload,
         });
         try {
-            return await this.appRepo.save(row);
+            const saved = await this.appRepo.save(row);
+            return await this.autoCompleteFacultyStepForNewApplication(saved, primary);
         } catch (e: any) {
             if (e?.code === '23505') {
                 throw new BadRequestException('Already applied to this opportunity');
             }
             throw e;
         }
+    }
+
+    /**
+     * Join/apply pipeline defaults the faculty queue to "approved": same next step as {@link facultyApprove}
+     * (pending_admin, faculty decision timestamps) without requiring a manual faculty click.
+     */
+    private async autoCompleteFacultyStepForNewApplication(
+        saved: OpportunityApplication,
+        primaryEmail: string | null,
+    ): Promise<OpportunityApplication> {
+        if (saved.internalStatus !== 'pending_faculty') {
+            return saved;
+        }
+        const decidedBy = primaryEmail ? await this.resolveFacultyUserIdByPrimaryEmail(primaryEmail) : null;
+        saved.internalStatus = 'pending_admin';
+        saved.facultyDecidedAt = new Date();
+        saved.facultyDecidedBy = decidedBy;
+        saved.facultyComment = null;
+        return this.appRepo.save(saved);
+    }
+
+    private async resolveFacultyUserIdByPrimaryEmail(email: string): Promise<string | null> {
+        const e = this.normalizeEmail(email);
+        if (!e) {
+            return null;
+        }
+        const fu = await this.userRepo
+            .createQueryBuilder('u')
+            .where('LOWER(TRIM(u.email)) = :em', { em: e })
+            .andWhere('u.role = :r', { r: UserRole.FACULTY })
+            .getOne();
+        return fu?.id ?? null;
     }
 
     async withdraw(studentUserId: string, id: string) {

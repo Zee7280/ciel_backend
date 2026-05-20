@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException, Logger } from '@nestjs/common';
 import { S3Service } from '../common/s3.service';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, IsNull } from 'typeorm';
+import { Brackets, In, IsNull, Repository } from 'typeorm';
 import { Participation } from './entities/participant.entity';
 import { AttendanceLog } from './entities/attendance-log.entity';
 import { RegisterParticipantDto } from './dto/register-participant.dto';
@@ -472,6 +472,12 @@ export class EngagementService {
 
     private async findParticipationByIdentifier(participantId: string, relations: string[] = []): Promise<Participation> {
         this.logger.debug(`Searching for participation with identifier: ${participantId}`);
+        const trimmed = (participantId || '').trim();
+        if (/^pending:/i.test(trimmed)) {
+            throw new BadRequestException(
+                'Invalid participation reference (draft roster id). Reload the page and use your enrolled participation id for attendance.',
+            );
+        }
         const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
         // 1. Direct Lookup in Participations Table
@@ -942,7 +948,10 @@ export class EngagementService {
         const trimmed = typeof projectId === 'string' ? projectId.trim() : '';
         const scopedProjectId = trimmed.length > 0 ? trimmed : undefined;
 
-        const actor = await this.userRepository.findOne({ where: { id: actorUserId } });
+        const actor = await this.userRepository.findOne({
+            where: { id: actorUserId },
+            relations: ['organization'],
+        });
         const actorEmail = (actor?.email || '').trim().toLowerCase();
 
         if (scopedProjectId) {
@@ -995,7 +1004,22 @@ export class EngagementService {
             qb.andWhere('log.assignedApproverType = :adminType', { adminType: 'admin' });
         } else {
             qb.andWhere('log.assignedApproverType = :partnerType', { partnerType: 'partner' });
-            qb.andWhere('"log"."assignedApproverUserId"::text = :uid', { uid: actorUserId });
+            const actorOrgId = actor?.organization?.id ?? null;
+            qb.andWhere(
+                new Brackets((w) => {
+                    w.where('"log"."assignedApproverUserId"::text = :uid', { uid: actorUserId });
+                    if (actorOrgId) {
+                        w.orWhere(
+                            new Brackets((w2) => {
+                                w2.where('"log"."assignedApproverUserId" IS NULL').andWhere(
+                                    'project.organizationId = :actorOrgId',
+                                    { actorOrgId },
+                                );
+                            }),
+                        );
+                    }
+                }),
+            );
         }
 
         const logs = await qb.orderBy('log.createdAt', 'DESC').getMany();
@@ -1077,9 +1101,19 @@ export class EngagementService {
             );
         }
 
-        const actor = await this.userRepository.findOne({ where: { id: actorUserId } });
+        const actor = await this.userRepository.findOne({
+            where: { id: actorUserId },
+            relations: ['organization'],
+        });
         const opportunityCreatorFallback =
             log.project?.isStudentCreated ? null : (log.project?.creatorId ?? null);
+        const partnerOrgHostsOpportunity = Boolean(
+            log.assignedApproverType === 'partner'
+            && !log.assignedApproverUserId
+            && actor?.organization?.id
+            && log.project?.organizationId
+            && actor.organization.id === log.project.organizationId,
+        );
         const allowed = canUserActOnAttendanceQueue(
             actorUserId,
             actorRole,
@@ -1087,6 +1121,7 @@ export class EngagementService {
             log,
             getParticipantFacultyEmails(log.participant || {}),
             opportunityCreatorFallback,
+            partnerOrgHostsOpportunity,
         );
         if (!allowed) {
             throw new ForbiddenException(
@@ -1711,12 +1746,27 @@ export class EngagementService {
             .getOne();
     }
 
+    /** Any account tied to a partner contact email — used only to attach `assignedApproverUserId` for queue routing. */
+    private async findUserIdByPartnerContactEmail(email: string): Promise<string | null> {
+        const normalized = email.trim().toLowerCase();
+        if (!normalized) return null;
+        const u = await this.userRepository
+            .createQueryBuilder('user')
+            .where('LOWER(TRIM("user"."email")) = :email', { email: normalized })
+            .getOne();
+        return u?.id ?? null;
+    }
+
     private async resolvePartnerOwnerUserId(opportunity: Opportunity): Promise<string | null> {
         const partnerEmails = this.extractPartnerOfficialEmails(opportunity);
         for (const email of partnerEmails) {
             const partnerUser = await this.findPartnerRoleUserByEmail(email);
             if (partnerUser?.id) {
                 return partnerUser.id;
+            }
+            const byContact = await this.findUserIdByPartnerContactEmail(email);
+            if (byContact) {
+                return byContact;
             }
         }
 
@@ -1798,6 +1848,17 @@ export class EngagementService {
         opportunity: Opportunity,
         participant: Participation,
     ): Promise<{ reviewerType: 'faculty' | 'partner'; reviewerEmail: string }> {
+        const partnerEmails = this.extractPartnerOfficialEmails(opportunity);
+        const partnerFirst =
+            this.opportunityHasPartnerForAttendance(opportunity) && partnerEmails.length > 0;
+
+        if (partnerFirst) {
+            return {
+                reviewerType: 'partner',
+                reviewerEmail: partnerEmails[0]!.trim().toLowerCase(),
+            };
+        }
+
         const facultyEmails = await this.resolveFacultyEmailsForAttendanceRouting(participant, opportunity);
         if (facultyEmails.length > 0) {
             return { reviewerType: 'faculty', reviewerEmail: facultyEmails[0] };

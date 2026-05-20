@@ -1773,7 +1773,7 @@ export class StudentsService {
             applyPayload,
         });
 
-        if (dto.primary_faculty_email) {
+        if (dto.primary_faculty_email && saved.internalStatus === 'pending_faculty') {
             await this.mailService.sendFacultyApprovalRequest(
                 dto.primary_faculty_email,
                 user.name,

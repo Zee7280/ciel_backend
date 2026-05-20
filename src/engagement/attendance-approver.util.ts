@@ -53,8 +53,10 @@ export function canUserActOnAttendanceQueue(
         approvalStatus: string | null | undefined;
     },
     participantFacultyEmails: string[],
-    /** For legacy logs routed to the opportunity creator (partner queue). */
+    /** For legacy rows routed to the opportunity creator (partner queue). */
     opportunityCreatorId?: string | null,
+    /** Partner org member acting on attendance logs with no `assignedApproverUserId` but same organization as the project. */
+    partnerOrgHostsOpportunity?: boolean,
 ): boolean {
     if (log.approvalStatus && log.approvalStatus !== 'pending') {
         return false;
@@ -62,6 +64,14 @@ export function canUserActOnAttendanceQueue(
 
     // Legacy rows before faculty-only routing: partner (NGO/creator) or CIEL admin queue.
     if (log.assignedApproverType === 'partner') {
+        if (
+            partnerOrgHostsOpportunity &&
+            (userRole === UserRole.NGO ||
+                userRole === UserRole.CORPORATE ||
+                userRole === UserRole.ORGANIZATION_ADMIN)
+        ) {
+            return true;
+        }
         const target = log.assignedApproverUserId || opportunityCreatorId || null;
         return !!target && target === userId;
     }

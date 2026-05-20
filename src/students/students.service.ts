@@ -1163,6 +1163,8 @@ export class StudentsService {
                     description: o.objectives?.description || 'No description',
                     application_status: applicationStatus,
                     application_stage: app ? this.opportunityApplicationsService.applicationStage(app.internalStatus) : null,
+                    /** Authoritative join-pipeline row; prefer over `application_stage` for UI labels. */
+                    application_internal_status: app?.internalStatus ?? null,
                     has_applied: hasApplied,
                     hasApplied,
                     payment_status: part ? part.paymentStatus : null,
@@ -1198,6 +1200,7 @@ export class StudentsService {
         let paymentProofUrl: string | null = null;
         let hasApplied = false;
         let applicationStage: 'faculty' | 'partner' | 'admin' | null = null;
+        let applicationInternalStatus: string | null = null;
 
         if (userId) {
             const part = await this.participantRepository.findOne({
@@ -1209,6 +1212,7 @@ export class StudentsService {
             const app = await this.opportunityApplicationsService.findLatestForStudentOpportunity(userId, id);
 
             if (app) {
+                applicationInternalStatus = app.internalStatus;
                 applicationStage = this.opportunityApplicationsService.applicationStage(app.internalStatus);
                 applicationStatus = this.opportunityApplicationsService.toPublicApplicationStatus(
                     app.internalStatus,
@@ -1234,6 +1238,7 @@ export class StudentsService {
                 ...opportunity,
                 application_status: applicationStatus,
                 application_stage: applicationStage,
+                application_internal_status: applicationInternalStatus,
                 payment_status: paymentStatus,
                 payment_proof_url: paymentProofUrl,
                 has_applied: hasApplied,
@@ -1328,6 +1333,7 @@ export class StudentsService {
                     application_stage: oa
                         ? this.opportunityApplicationsService.applicationStage(oa.internalStatus)
                         : null,
+                    application_internal_status: oa?.internalStatus ?? null,
                     has_applied: true,
                     hasApplied: true,
                 };
@@ -1348,6 +1354,7 @@ export class StudentsService {
                 organization: oa.opportunity.organization?.name || 'Unknown',
                 application_status: st,
                 application_stage: this.opportunityApplicationsService.applicationStage(oa.internalStatus),
+                application_internal_status: oa.internalStatus,
                 has_applied: true,
                 hasApplied: true,
             });
@@ -1796,7 +1803,9 @@ export class StudentsService {
             success: true,
             data: {
                 application_id: saved.id,
-                application_status: 'pending_approval',
+                application_status: this.opportunityApplicationsService.toPublicApplicationStatus(saved.internalStatus),
+                application_stage: this.opportunityApplicationsService.applicationStage(saved.internalStatus),
+                application_internal_status: saved.internalStatus,
             },
             message: 'Application submitted successfully',
         };

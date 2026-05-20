@@ -22,6 +22,19 @@ import { ConfigService } from '@nestjs/config';
 import { MailService } from '../mail/mail.service';
 import * as crypto from 'crypto';
 
+/** Roster rows partners/faculty need for attendance UI (exclude only rejected). Aligned with join-enrollment “active seat” statuses. */
+const PROJECT_TEAM_VISIBILITY_STATUSES: readonly string[] = [
+    'pending',
+    'accepted',
+    'approved',
+    'verified',
+    'paid',
+    'pending_payment_approval',
+    'pending_ciel_approval',
+    'pending_faculty_approval',
+    'finalized',
+];
+
 @Injectable()
 export class EngagementService {
     private readonly logger = new Logger(EngagementService.name);
@@ -361,11 +374,11 @@ export class EngagementService {
 
     async getProjectTeam(projectId: string) {
         const participants = await this.participantRepository.find({
-            where: { 
+            where: {
                 projectId,
-                status: In(['approved', 'finalized', 'pending_ciel_approval']) // Including pending for visibility if needed, but user said "verified".
+                status: In([...PROJECT_TEAM_VISIBILITY_STATUSES]),
             },
-            order: { createdAt: 'ASC' }
+            order: { createdAt: 'ASC' },
         });
         return Promise.all(
             participants.map((p) =>

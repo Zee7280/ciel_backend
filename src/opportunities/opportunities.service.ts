@@ -1609,6 +1609,11 @@ export class OpportunitiesService {
             }
         }
 
+        /** Never return the full catalogue when explicitly scoped as this partner (`me`) but we could not resolve org or email. */
+        if (filters.partner_id === 'me' && !filterOrgId && !filterPartnerEmail) {
+            return [];
+        }
+
         if (filterOrgId && filterPartnerEmail) {
             // Org-owned opportunities OR student-submitted opportunities that mention this partner's email
             query.andWhere(

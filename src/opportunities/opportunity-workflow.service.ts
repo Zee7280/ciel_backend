@@ -209,6 +209,7 @@ export class OpportunityWorkflowService {
             faculty_verification_status: opp.faculty_verification_status,
             requires_partner_approval: opp.requiresPartnerApproval,
             liaison_verified: opp.liaisonVerified,
+            rejection_reason: opp.rejectionReason ?? null,
         };
     }
 

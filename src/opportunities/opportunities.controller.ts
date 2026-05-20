@@ -106,6 +106,7 @@ export class OpportunitiesController {
                 partner_approval_status: data.partnerApprovalStatus ?? null,
                 admin_approval_status: data.adminApprovalStatus ?? null,
                 requires_partner_approval: data.requiresPartnerApproval,
+                rejection_reason: data.rejectionReason ?? null,
                 detail_view: detailView,
             },
         };

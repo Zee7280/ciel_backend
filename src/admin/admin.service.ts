@@ -1063,6 +1063,22 @@ export class AdminService {
                 const remainingSeats = Math.max(0, volunteersRequired - occupiedSeats);
                 const remainingHours = Math.max(0, targetHours - hours);
 
+                let creator: { id: string; name: string; email: string; phone: string | null } | null = null;
+                if (opp.creatorId) {
+                    const creatorUser = await this.usersRepository.findOne({
+                        where: { id: opp.creatorId },
+                        select: ['id', 'name', 'email', 'phone'],
+                    });
+                    if (creatorUser) {
+                        creator = {
+                            id: creatorUser.id,
+                            name: creatorUser.name,
+                            email: creatorUser.email,
+                            phone: creatorUser.phone ?? null,
+                        };
+                    }
+                }
+
                 const row: Record<string, unknown> = {
                     id: opp.id,
                     title: opp.title,
@@ -1075,6 +1091,9 @@ export class AdminService {
                     remaining_seats: remainingSeats,
                     remaining_members: remainingSeats,
                     location: opp.location?.city || 'Unknown',
+                    supervision: opp.supervision,
+                    timeline: opp.timeline,
+                    creator,
                 };
                 if (normalizedEmail) {
                     const meta = matchByOppId.get(opp.id);

@@ -275,6 +275,12 @@ export class OpportunityApplicationsService {
         return { applicationId, emailNormalized };
     }
 
+    /** Participation primary keys are UUIDs — never bind synthetic roster ids to `uuid` columns. */
+    private looksLikeUuidParam(value: string): boolean {
+        const s = value.trim();
+        return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+    }
+
     /** Pending pipeline rows belong to exactly one roster team id carried in apply payload. */
     private ensurePendingApplyPayloadMatchesTeam(payload: Record<string, unknown>, teamIdParam: string): void {
         const rawTeamId = typeof payload['team_id'] === 'string' ? payload['team_id'].trim() : '';
@@ -944,10 +950,19 @@ export class OpportunityApplicationsService {
     }
 
     async adminDeleteOpportunityTeamMember(opportunityId: string, teamId: string, memberId: string) {
+        const decodedMemberId = decodeURIComponent((memberId || '').trim());
+        if (decodedMemberId.startsWith('pending:')) {
+            throw new BadRequestException(
+                'This line is roster-only until seats are issued. Withdraw the student application instead of deleting a member seat.',
+            );
+        }
+        if (!this.looksLikeUuidParam(decodedMemberId)) {
+            throw new BadRequestException('Invalid member id for removal.');
+        }
         await this.appRepo.manager.transaction(async (em) => {
             const member = await em.findOne(Participation, {
                 where: {
-                    id: memberId,
+                    id: decodedMemberId,
                     projectId: opportunityId,
                     teamId,
                     status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
@@ -1010,6 +1025,24 @@ export class OpportunityApplicationsService {
     ) {
         const decodedMemberId = decodeURIComponent((memberId || '').trim());
 
+        const pendingSynth = this.parsePendingRosterSyntheticTeammateId(decodedMemberId);
+        if (pendingSynth) {
+            return this.adminPatchPendingSyntheticTeammate(
+                opportunityId,
+                teamIdParam,
+                decodedMemberId,
+                pendingSynth.applicationId,
+                pendingSynth.emailNormalized,
+                dto,
+            );
+        }
+
+        if (!this.looksLikeUuidParam(decodedMemberId)) {
+            throw new BadRequestException(
+                'Invalid member identifier. Reload Teams & enrollments and retry from the current roster.',
+            );
+        }
+
         const participation = await this.participationRepo.findOne({
             where: {
                 id: decodedMemberId,
@@ -1020,18 +1053,6 @@ export class OpportunityApplicationsService {
         });
 
         if (!participation) {
-            const pendingSynth = this.parsePendingRosterSyntheticTeammateId(decodedMemberId);
-            if (pendingSynth) {
-                return this.adminPatchPendingSyntheticTeammate(
-                    opportunityId,
-                    teamIdParam,
-                    decodedMemberId,
-                    pendingSynth.applicationId,
-                    pendingSynth.emailNormalized,
-                    dto,
-                );
-            }
-
             const pendingLead = await this.appRepo.findOne({
                 where: {
                     id: decodedMemberId,
@@ -1421,14 +1442,31 @@ export class OpportunityApplicationsService {
         });
     }
 
+    /**
+     * People represented by pending (non‑withdrawn) applications on this opportunity.
+     * Team applies count lead + teammate emails in `apply_payload.team_members`; individual applies count as 1.
+     * Approved applications are omitted — those seats should appear under participations instead.
+     */
     async countSeatsInFlight(opportunityId: string): Promise<number> {
-        return this.appRepo.count({
+        const apps = await this.appRepo.find({
             where: {
                 opportunityId,
                 withdrawnAt: IsNull(),
-                internalStatus: In(['pending_faculty', 'pending_partner', 'pending_admin']),
+                internalStatus: In(PENDING_PIPELINE),
             },
+            relations: ['studentUser'],
         });
+
+        let total = 0;
+        for (const app of apps) {
+            const teamSummary = this.adminBrowseApplicationTeamSummaryForQueue(app);
+            if (teamSummary && teamSummary.team_member_count >= 1) {
+                total += teamSummary.team_member_count;
+            } else {
+                total += 1;
+            }
+        }
+        return total;
     }
 
     async countPendingAdmin(): Promise<number> {

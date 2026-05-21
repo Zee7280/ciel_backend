@@ -8,6 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, In, IsNull, Not, Repository } from 'typeorm';
 import { OpportunityApplication, OpportunityApplicationInternalStatus } from './entities/opportunity-application.entity';
 import { Participation } from '../engagement/entities/participant.entity';
+import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import { EngagementService } from '../engagement/engagement.service';
 import { UsersService } from '../users/users.service';
 import { User } from '../users/entities/user.entity';
@@ -69,6 +70,8 @@ export class OpportunityApplicationsService {
         private readonly userRepo: Repository<User>,
         @InjectRepository(StudentReport)
         private readonly studentReportRepo: Repository<StudentReport>,
+        @InjectRepository(AttendanceLog)
+        private readonly attendanceLogRepo: Repository<AttendanceLog>,
         private readonly engagementService: EngagementService,
         private readonly usersService: UsersService,
         private readonly facultyUniversityScopeService: FacultyUniversityScopeService,
@@ -587,6 +590,110 @@ export class OpportunityApplicationsService {
         return [...forStudent].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0] ?? null;
     }
 
+    private attendanceLogNeedsPartnerOrFacultyReview(log: AttendanceLog): boolean {
+        const route = log.approvalStatus?.trim() || '';
+        if (route === 'approved' || route === 'rejected') return false;
+        if (route === 'pending' || route === 'flagged') return true;
+        return log.entryStatus === 'pending' || log.entryStatus === 'flagged';
+    }
+
+    private async rollupAttendanceReviewsForParticipants(
+        projectId: string,
+        participantIds: string[],
+    ): Promise<Map<string, { sessions_total: number; sessions_pending_review: number }>> {
+        const out = new Map<string, { sessions_total: number; sessions_pending_review: number }>();
+        const dedup = [...new Set(participantIds.filter((id) => Boolean(id?.trim())))];
+        for (const id of dedup) {
+            out.set(id, { sessions_total: 0, sessions_pending_review: 0 });
+        }
+        if (!dedup.length) return out;
+
+        const logs = await this.attendanceLogRepo.find({
+            where: { projectId, participantId: In(dedup) },
+            select: ['participantId', 'entryStatus', 'approvalStatus'],
+        });
+
+        for (const log of logs) {
+            const agg = out.get(log.participantId);
+            if (!agg) continue;
+            agg.sessions_total += 1;
+            if (this.attendanceLogNeedsPartnerOrFacultyReview(log)) {
+                agg.sessions_pending_review += 1;
+            }
+        }
+
+        return out;
+    }
+
+    /** Admin tracker: human join-queue label (never null for enrollments workflow). */
+    private trackerJoinApplicationsStageLabel(internal: OpportunityApplicationInternalStatus): string {
+        switch (internal) {
+            case 'approved':
+                return 'Approved — enrollment complete';
+            case 'pending_faculty':
+                return 'Join queue · awaiting faculty';
+            case 'pending_partner':
+                return 'Join queue · awaiting partner / org';
+            case 'pending_admin':
+                return 'Join queue · awaiting admin';
+            case 'faculty_rejected':
+                return 'Rejected · faculty';
+            case 'partner_rejected':
+                return 'Rejected · partner / org';
+            case 'admin_rejected':
+                return 'Rejected · admin';
+            default:
+                return String(internal || 'unknown').replace(/_/g, ' ');
+        }
+    }
+
+    private trackerImpactReportEnrollmentFields(report: StudentReport | null): Record<string, unknown> {
+        if (!report) {
+            return {
+                impact_report_started: false,
+                impact_report_status: null,
+                impact_report_summary: 'No impact report yet',
+                impact_report_partner_status: null,
+                impact_report_admin_status: null,
+                impact_report_faculty_status: null,
+            };
+        }
+        const st = this.mapReportStatusForAdminList(report.status);
+        const ps = report.partner_status || 'pending';
+        const ads = report.admin_status || 'pending';
+        const fs = report.faculty_status || 'pending';
+
+        let summary: string;
+        if (st === 'verified' || st === 'paid') {
+            summary = 'Impact report verified · complete';
+        } else if (st === 'rejected') {
+            summary = 'Impact report rejected';
+        } else if (st === 'draft' || !st) {
+            summary = 'Impact report draft / not submitted';
+        } else if (st === 'payment_pending' || st === 'payment_under_review') {
+            summary = 'Payment / final review pending';
+        } else if (st === 'submitted') {
+            if (ps === 'pending') {
+                summary = 'Submitted · partner approval pending';
+            } else if (ads === 'pending') {
+                summary = 'Submitted · admin approval pending';
+            } else {
+                summary = `Submitted (${st})`;
+            }
+        } else {
+            summary = `In progress (${st})`;
+        }
+
+        return {
+            impact_report_started: true,
+            impact_report_status: st,
+            impact_report_summary: summary,
+            impact_report_partner_status: ps,
+            impact_report_admin_status: ads,
+            impact_report_faculty_status: fs,
+        };
+    }
+
     async adminListOpportunityTeams(opportunityId: string) {
         const rows = await this.participationRepo
             .createQueryBuilder('p')
@@ -877,18 +984,73 @@ export class OpportunityApplicationsService {
             relations: ['studentUser'],
             order: { createdAt: 'ASC' },
         });
+
+        const participantPkIds = [...new Set(rows.map((pr) => pr.id).filter((id): id is string => Boolean(id)))];
+        const attendanceRollupByParticipant =
+            participantPkIds.length > 0
+                ? await this.rollupAttendanceReviewsForParticipants(opportunityId, participantPkIds)
+                : new Map<string, { sessions_total: number; sessions_pending_review: number }>();
+
+        const participationByApplicationId = new Map<string, Participation>();
+        const participationByStudentUserIdFirst = new Map<string, Participation>();
+        for (const seat of rows) {
+            const aid = (seat.applicationId || '').trim();
+            if (aid && !participationByApplicationId.has(aid)) {
+                participationByApplicationId.set(aid, seat);
+            }
+            const sid = seat.studentId?.trim();
+            if (sid && !participationByStudentUserIdFirst.has(sid)) {
+                participationByStudentUserIdFirst.set(sid, seat);
+            }
+        }
+
         const applications_roster = allApplications.map((a) => {
             const { participation_type, team_members } = this.facultyJoinApplicationTeamMembersForDisplay(a);
+            let enrollment_tracking: Record<string, unknown> | null = null;
+
+            const seatRow =
+                participationByApplicationId.get(a.id)
+                ?? (a.studentUserId ? participationByStudentUserIdFirst.get(a.studentUserId) : undefined);
+
+            if (a.internalStatus === 'approved') {
+                if (seatRow) {
+                    const latestReport = seatRow.studentId
+                        ? this.pickLatestReportForStudent(reports, seatRow.studentId)
+                        : null;
+                    const att = attendanceRollupByParticipant.get(seatRow.id) ?? {
+                        sessions_total: 0,
+                        sessions_pending_review: 0,
+                    };
+                    enrollment_tracking = {
+                        participation_id: seatRow.id,
+                        attendance_sessions_total: att.sessions_total,
+                        attendance_sessions_pending_review: att.sessions_pending_review,
+                        attendance_approver_type: seatRow.attendanceApproverType ?? null,
+                        ...this.trackerImpactReportEnrollmentFields(latestReport),
+                    };
+                } else {
+                    enrollment_tracking = {
+                        enrollment_warning:
+                            'Application marked approved — participation seat not matched (reload or reconcile).',
+                        attendance_sessions_total: 0,
+                        attendance_sessions_pending_review: 0,
+                        ...this.trackerImpactReportEnrollmentFields(null),
+                    };
+                }
+            }
+
             return {
                 id: a.id,
                 student_name: a.studentUser?.name ?? null,
                 student_email: a.studentUser?.email ?? null,
                 internal_status: a.internalStatus,
-                application_status: this.toPublicApplicationStatus(a.internalStatus),
+                application_status: this.toPublicApplicationStatus(a.internalStatus, seatRow),
                 application_stage: this.applicationStage(a.internalStatus),
+                join_stage_display: this.trackerJoinApplicationsStageLabel(a.internalStatus),
                 participation_type,
                 team_members,
                 created_at: a.createdAt,
+                enrollment_tracking,
             };
         });
 

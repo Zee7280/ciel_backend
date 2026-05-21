@@ -10,6 +10,7 @@ import { OpportunityApplication } from './entities/opportunity-application.entit
 import { OpportunityApplicationsService } from './opportunity-applications.service';
 import { Organization } from '../organizations/entities/organization.entity';
 import { Participation } from '../engagement/entities/participant.entity';
+import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import { OrganizationsModule } from '../organizations/organizations.module';
 import { UsersModule } from '../users/users.module';
 import { EngagementModule } from '../engagement/engagement.module';
@@ -32,6 +33,7 @@ import { FacultyUniversityScopeModule } from '../faculty-university-scope/facult
             User,
             OpportunityApplication,
             StudentReport,
+            AttendanceLog,
         ]),
         OrganizationsModule,
         UsersModule,

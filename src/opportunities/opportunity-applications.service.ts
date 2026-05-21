@@ -625,6 +625,67 @@ export class OpportunityApplicationsService {
         return out;
     }
 
+    /** Per-session breakdown for admin project tracker (newest first, capped per seat). */
+    private serializeAttendanceSessionForTracker(log: AttendanceLog): Record<string, unknown> {
+        const desc = (log.description || '').trim();
+        return {
+            id: log.id,
+            date_of_engagement: log.dateOfEngagement,
+            start_time: log.startTime,
+            end_time: log.endTime,
+            session_hours: Number(log.sessionHours),
+            activity_type: log.activityType ?? null,
+            organization_name: log.organizationName ?? null,
+            description: desc.length > 280 ? `${desc.slice(0, 277)}…` : desc || null,
+            entry_status: log.entryStatus,
+            approval_status: log.approvalStatus ?? null,
+            assigned_approver_type: log.assignedApproverType ?? null,
+            evidence_uploaded: log.evidenceUploaded,
+            needs_review: this.attendanceLogNeedsPartnerOrFacultyReview(log),
+        };
+    }
+
+    private async attendanceSessionsPreviewByParticipant(
+        projectId: string,
+        participantIds: string[],
+        maxPerSeat: number,
+    ): Promise<Map<string, Record<string, unknown>[]>> {
+        const empty = new Map<string, Record<string, unknown>[]>();
+        const dedup = [...new Set(participantIds.filter((id) => Boolean(id?.trim())))];
+        for (const id of dedup) {
+            empty.set(id, []);
+        }
+        if (!dedup.length) return empty;
+
+        const logs = await this.attendanceLogRepo.find({
+            where: { projectId, participantId: In(dedup) },
+        });
+
+        const grouped = new Map<string, AttendanceLog[]>();
+        for (const l of logs) {
+            const pid = l.participantId;
+            if (!grouped.has(pid)) grouped.set(pid, []);
+            grouped.get(pid)!.push(l);
+        }
+
+        const cap = Math.max(1, Math.min(maxPerSeat, 60));
+        const out = new Map<string, Record<string, unknown>[]>();
+        for (const id of dedup) {
+            const arr = grouped.get(id) ?? [];
+            arr.sort((a, b) => {
+                const da = String(a.dateOfEngagement || '');
+                const db = String(b.dateOfEngagement || '');
+                if (da !== db) return db.localeCompare(da);
+                const sa = String(a.startTime || '');
+                const sb = String(b.startTime || '');
+                if (sa !== sb) return sb.localeCompare(sa);
+                return (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0);
+            });
+            out.set(id, arr.slice(0, cap).map((log) => this.serializeAttendanceSessionForTracker(log)));
+        }
+        return out;
+    }
+
     /** Admin tracker: human join-queue label (never null for enrollments workflow). */
     private trackerJoinApplicationsStageLabel(internal: OpportunityApplicationInternalStatus): string {
         switch (internal) {
@@ -991,6 +1052,11 @@ export class OpportunityApplicationsService {
                 ? await this.rollupAttendanceReviewsForParticipants(opportunityId, participantPkIds)
                 : new Map<string, { sessions_total: number; sessions_pending_review: number }>();
 
+        const attendancePreviewByParticipant =
+            participantPkIds.length > 0
+                ? await this.attendanceSessionsPreviewByParticipant(opportunityId, participantPkIds, 35)
+                : new Map<string, Record<string, unknown>[]>();
+
         const participationByApplicationId = new Map<string, Participation>();
         const participationByStudentUserIdFirst = new Map<string, Participation>();
         for (const seat of rows) {
@@ -1025,6 +1091,8 @@ export class OpportunityApplicationsService {
                         participation_id: seatRow.id,
                         attendance_sessions_total: att.sessions_total,
                         attendance_sessions_pending_review: att.sessions_pending_review,
+                        attendance_sessions_preview:
+                            attendancePreviewByParticipant.get(seatRow.id) ?? [],
                         attendance_approver_type: seatRow.attendanceApproverType ?? null,
                         ...this.trackerImpactReportEnrollmentFields(latestReport),
                     };
@@ -1034,6 +1102,7 @@ export class OpportunityApplicationsService {
                             'Application marked approved — participation seat not matched (reload or reconcile).',
                         attendance_sessions_total: 0,
                         attendance_sessions_pending_review: 0,
+                        attendance_sessions_preview: [],
                         ...this.trackerImpactReportEnrollmentFields(null),
                     };
                 }

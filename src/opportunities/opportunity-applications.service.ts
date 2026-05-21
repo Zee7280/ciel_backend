@@ -1053,17 +1053,20 @@ export class OpportunityApplicationsService {
         });
 
         if (!participation) {
-            const pendingLead = await this.appRepo.findOne({
-                where: {
-                    id: decodedMemberId,
-                    opportunityId,
-                    withdrawnAt: IsNull(),
-                    internalStatus: In(PENDING_PIPELINE),
-                },
-                relations: ['studentUser'],
-            });
-            if (pendingLead) {
-                return this.adminPatchPendingApplicationLead(pendingLead, teamIdParam, dto, decodedMemberId);
+            // Application PK is uuid — never query with synthetic `pending:…` roster ids (avoids PG 500).
+            if (this.looksLikeUuidParam(decodedMemberId)) {
+                const pendingLead = await this.appRepo.findOne({
+                    where: {
+                        id: decodedMemberId,
+                        opportunityId,
+                        withdrawnAt: IsNull(),
+                        internalStatus: In(PENDING_PIPELINE),
+                    },
+                    relations: ['studentUser'],
+                });
+                if (pendingLead) {
+                    return this.adminPatchPendingApplicationLead(pendingLead, teamIdParam, dto, decodedMemberId);
+                }
             }
 
             throw new NotFoundException('Team member enrollment not found for this opportunity');
@@ -1510,8 +1513,8 @@ export class OpportunityApplicationsService {
     }
 
     /**
-     * Join/apply pipeline defaults the faculty queue to "approved": same next step as {@link facultyApprove}
-     * (pending_admin, faculty decision timestamps) without requiring a manual faculty click.
+     * Join/apply pipeline auto-advances past faculty (individual and team): same next step as {@link facultyApprove}
+     * without requiring a manual faculty click.
      */
     private async autoCompleteFacultyStepForNewApplication(
         saved: OpportunityApplication,
@@ -1526,6 +1529,28 @@ export class OpportunityApplicationsService {
         saved.facultyDecidedBy = decidedBy;
         saved.facultyComment = null;
         return this.appRepo.save(saved);
+    }
+
+    /** Primary supervisor on the application or official email on the opportunity listing. */
+    private facultyEmailMatchesApplicationGate(
+        facultyEmail: string,
+        app: OpportunityApplication,
+    ): boolean {
+        const email = this.normalizeEmail(facultyEmail);
+        if (!email) {
+            return false;
+        }
+        if (this.normalizeEmail(app.primaryFacultyEmail) === email) {
+            return true;
+        }
+        const opp = app.opportunity;
+        const sup =
+            opp?.supervision && typeof opp.supervision === 'object'
+                ? (opp.supervision as Record<string, unknown>)
+                : null;
+        const listingContact =
+            sup && typeof sup.contact === 'string' ? this.normalizeEmail(sup.contact) : '';
+        return listingContact !== '' && listingContact === email;
     }
 
     private async resolveFacultyUserIdByPrimaryEmail(email: string): Promise<string | null> {
@@ -1573,11 +1598,10 @@ export class OpportunityApplicationsService {
                 internalStatus: 'pending_faculty',
             },
             order: { createdAt: 'DESC' },
-            relations: ['studentUser'],
+            relations: ['studentUser', 'opportunity'],
         });
         for (const app of apps) {
-            const okPrimary = this.normalizeEmail(app.primaryFacultyEmail) === email;
-            if (okPrimary) {
+            if (this.facultyEmailMatchesApplicationGate(facultyEmail, app)) {
                 return app;
             }
             const okDelegated =
@@ -1611,6 +1635,10 @@ export class OpportunityApplicationsService {
             .andWhere(
                 new Brackets((outer) => {
                     outer.where('lower(a.primaryFacultyEmail) = :email', { email });
+                    outer.orWhere(
+                        "LOWER(TRIM(COALESCE(o.supervision->>'contact', ''))) = :email",
+                        { email },
+                    );
                     if (orgNorm) {
                         outer.orWhere(
                             new Brackets((inner) => {
@@ -1671,9 +1699,9 @@ export class OpportunityApplicationsService {
             relations: ['opportunity', 'studentUser'],
         });
         if (!app) throw new NotFoundException('Application not found');
-        const okPrimary = this.normalizeEmail(app.primaryFacultyEmail) === email;
+        const okGate = this.facultyEmailMatchesApplicationGate(facultyEmail, app);
         const okDelegated =
-            okPrimary ||
+            okGate ||
             (await this.facultyUniversityScopeService.canFacultyReviewApplicationAsUniversityDelegate(
                 facultyUserId,
                 app.studentUser,
@@ -1698,15 +1726,14 @@ export class OpportunityApplicationsService {
     }
 
     async facultyReject(id: string, facultyEmail: string, facultyUserId: string, reason: string) {
-        const email = this.normalizeEmail(facultyEmail);
         const app = await this.appRepo.findOne({
             where: { id, withdrawnAt: IsNull() },
-            relations: ['studentUser'],
+            relations: ['studentUser', 'opportunity'],
         });
         if (!app) throw new NotFoundException('Application not found');
-        const okPrimary = this.normalizeEmail(app.primaryFacultyEmail) === email;
+        const okGate = this.facultyEmailMatchesApplicationGate(facultyEmail, app);
         const okDelegated =
-            okPrimary ||
+            okGate ||
             (await this.facultyUniversityScopeService.canFacultyReviewApplicationAsUniversityDelegate(
                 facultyUserId,
                 app.studentUser,

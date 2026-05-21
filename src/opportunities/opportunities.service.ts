@@ -1718,10 +1718,14 @@ export class OpportunitiesService {
     }
 
     async getPublicOpportunityById(id: string) {
+        const trimmed = (id || '').trim();
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)) {
+            throw new NotFoundException('Opportunity not found or not public');
+        }
         const opp = await this.opportunitiesRepository.findOne({
             where: [
-                { id, admin_approved: true, status: In(this.publicLiveStatuses) },
-                { id, admin_approved: true, workflowStage: WORKFLOW_STAGE.LIVE },
+                { id: trimmed, admin_approved: true, status: In(this.publicLiveStatuses) },
+                { id: trimmed, admin_approved: true, workflowStage: WORKFLOW_STAGE.LIVE },
             ],
             relations: ['organization'],
         });

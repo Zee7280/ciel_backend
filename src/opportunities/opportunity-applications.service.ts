@@ -839,7 +839,10 @@ export class OpportunityApplicationsService {
             });
         }
 
-        const opp = await this.opportunityRepo.findOne({ where: { id: opportunityId } });
+        const opp = await this.opportunityRepo.findOne({
+            where: { id: opportunityId },
+            relations: ['organization'],
+        });
         const pipelineCountRows = await this.appRepo
             .createQueryBuilder('a')
             .select('a.internalStatus', 'status')
@@ -869,6 +872,39 @@ export class OpportunityApplicationsService {
                   ? 'execution_partner_gate'
                   : null;
 
+        const allApplications = await this.appRepo.find({
+            where: { opportunityId, withdrawnAt: IsNull() },
+            relations: ['studentUser'],
+            order: { createdAt: 'ASC' },
+        });
+        const applications_roster = allApplications.map((a) => {
+            const { participation_type, team_members } = this.facultyJoinApplicationTeamMembersForDisplay(a);
+            return {
+                id: a.id,
+                student_name: a.studentUser?.name ?? null,
+                student_email: a.studentUser?.email ?? null,
+                internal_status: a.internalStatus,
+                application_status: this.toPublicApplicationStatus(a.internalStatus),
+                application_stage: this.applicationStage(a.internalStatus),
+                participation_type,
+                team_members,
+                created_at: a.createdAt,
+            };
+        });
+
+        const execOrg =
+            opp?.executing_organization && typeof opp.executing_organization === 'object'
+                ? (opp.executing_organization as Record<string, unknown>)
+                : null;
+        const partnerOrg =
+            opp?.partner_organization && typeof opp.partner_organization === 'object'
+                ? (opp.partner_organization as Record<string, unknown>)
+                : null;
+        const supervision =
+            opp?.supervision && typeof opp.supervision === 'object'
+                ? (opp.supervision as Record<string, unknown>)
+                : null;
+
         return {
             summary: {
                 registered_teams: data.length,
@@ -878,17 +914,55 @@ export class OpportunityApplicationsService {
                     ? {
                           title: opp.title,
                           status: opp.status,
+                          mode: opp.mode ?? null,
+                          location: opp.location ?? null,
+                          timeline: opp.timeline ?? null,
                           admin_approved: opp.admin_approved,
                           faculty_verification_status: opp.faculty_verification_status,
                           faculty_verified: opp.faculty_verified,
                           execution_verification_status: opp.execution_verification_status,
                           execution_verified: opp.execution_verified,
+                          organization_id: opp.organizationId ?? null,
+                          organization_name: opp.organization?.name ?? null,
+                          executing_organization_name:
+                              typeof execOrg?.name === 'string' && execOrg.name.trim()
+                                  ? execOrg.name.trim()
+                                  : typeof execOrg?.organization_name === 'string' && execOrg.organization_name.trim()
+                                    ? execOrg.organization_name.trim()
+                                    : null,
+                          executing_organization_email:
+                              typeof execOrg?.official_email === 'string' && execOrg.official_email.trim()
+                                  ? execOrg.official_email.trim()
+                                  : null,
+                          partner_organization_name:
+                              typeof partnerOrg?.organization_name === 'string' && partnerOrg.organization_name.trim()
+                                  ? partnerOrg.organization_name.trim()
+                                  : typeof partnerOrg?.name === 'string' && partnerOrg.name.trim()
+                                    ? partnerOrg.name.trim()
+                                    : typeof supervision?.partner_org_name === 'string' && supervision.partner_org_name.trim()
+                                      ? supervision.partner_org_name.trim()
+                                      : null,
+                          partner_organization_email:
+                              typeof partnerOrg?.official_email === 'string' && partnerOrg.official_email.trim()
+                                  ? partnerOrg.official_email.trim()
+                                  : typeof supervision?.partner_email === 'string' && supervision.partner_email.trim()
+                                    ? supervision.partner_email.trim()
+                                    : null,
+                          faculty_supervisor_name:
+                              typeof supervision?.supervisor_name === 'string' && supervision.supervisor_name.trim()
+                                  ? supervision.supervisor_name.trim()
+                                  : null,
+                          faculty_supervisor_email:
+                              typeof supervision?.contact === 'string' && supervision.contact.trim()
+                                  ? supervision.contact.trim()
+                                  : null,
                           /** Human hint: coarse approval lane for the listing (detail still in applications_by_internal_status). */
                           awaiting_partner_or_faculty: awaitingSide,
                       }
                     : null,
                 applications_by_internal_status: appsByStatus,
                 applications_pipeline_total_non_withdrawn: Object.values(appsByStatus).reduce((s, n) => s + n, 0),
+                applications_roster,
             },
             data,
         };

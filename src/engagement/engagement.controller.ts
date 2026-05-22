@@ -6,6 +6,10 @@ import { CreateAttendanceLogDto } from './dto/create-attendance-log.dto';
 import { PatchAttendanceApprovalDto } from './dto/patch-attendance-approval.dto';
 import { CreateAttendanceVerifyRequestDto } from './dto/create-attendance-verify-request.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import {
+    studentReportMulterFileFilter,
+    studentReportUploadMulterLimits,
+} from '../common/student-report-file-upload';
 
 @Controller('engagement')
 @UseGuards(JwtAuthGuard)
@@ -83,7 +87,12 @@ export class EngagementController {
     }
 
     @Post(':id/attendance')
-    @UseInterceptors(FileInterceptor('evidence'))
+    @UseInterceptors(
+        FileInterceptor('evidence', {
+            limits: studentReportUploadMulterLimits(),
+            fileFilter: studentReportMulterFileFilter,
+        }),
+    )
     async addAttendance(
         @Request() req,
         @Param('id') id: string,

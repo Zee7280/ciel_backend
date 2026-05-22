@@ -19,6 +19,10 @@ import { StudentReportsService } from '../reports/student-reports.service';
 import { CreateOpportunityDto } from '../opportunities/dto/create-opportunity.dto';
 import { UserRole } from '../users/enums/user-role.enum';
 import { FilesInterceptor, FileInterceptor } from '@nestjs/platform-express';
+import {
+    studentReportMulterFileFilter,
+    studentReportUploadMulterLimits,
+} from '../common/student-report-file-upload';
 
 @Controller('student')
 @UseGuards(JwtAuthGuard)
@@ -137,16 +141,8 @@ export class StudentController {
 
     @Post('reports/upload')
     @UseInterceptors(FileInterceptor('file', {
-        limits: { fileSize: 10 * 1024 * 1024, fieldSize: 50 * 1024 * 1024 },
-        fileFilter: (_req, file, callback) => {
-            const allowed = ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx'];
-            const ext = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
-            if (allowed.includes(ext)) {
-                callback(null, true);
-            } else {
-                callback(new BadRequestException(`File type ${ext} is not allowed`), false);
-            }
-        },
+        limits: studentReportUploadMulterLimits(),
+        fileFilter: studentReportMulterFileFilter,
     }))
     async uploadFile(@Request() req, @UploadedFile() file: any, @Body('section') section: string) {
         if (!file) {
@@ -161,16 +157,8 @@ export class StudentController {
 
     @Post('reports/:projectId/evidence')
     @UseInterceptors(FileInterceptor('file', {
-        limits: { fileSize: 10 * 1024 * 1024, fieldSize: 50 * 1024 * 1024 },
-        fileFilter: (req, file, callback) => {
-            const allowedExtensions = ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx'];
-            const ext = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
-            if (allowedExtensions.includes(ext)) {
-                callback(null, true);
-            } else {
-                callback(new BadRequestException(`File type ${ext} is not allowed`), false);
-            }
-        },
+        limits: studentReportUploadMulterLimits(),
+        fileFilter: studentReportMulterFileFilter,
     }))
     async uploadEvidenceFile(
         @Request() req,
@@ -206,16 +194,8 @@ export class StudentController {
 
     @Post('reports')
     @UseInterceptors(FilesInterceptor('files', 50, {
-        limits: { fileSize: 10 * 1024 * 1024, fieldSize: 50 * 1024 * 1024 },
-        fileFilter: (req, file, callback) => {
-            const allowedExtensions = ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx'];
-            const ext = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
-            if (allowedExtensions.includes(ext)) {
-                callback(null, true);
-            } else {
-                callback(new BadRequestException(`File type ${ext} is not allowed`), false);
-            }
-        },
+        limits: studentReportUploadMulterLimits(),
+        fileFilter: studentReportMulterFileFilter,
     }))
     async submitReport(@Request() req, @Body() body: any, @UploadedFiles() files: any[]) {
         return this.studentReportsService.createReport(req.user.id, body, files, false);
@@ -223,16 +203,8 @@ export class StudentController {
 
     @Post('reports/:id/submit')
     @UseInterceptors(FilesInterceptor('files', 50, {
-        limits: { fileSize: 10 * 1024 * 1024, fieldSize: 50 * 1024 * 1024 },
-        fileFilter: (req, file, callback) => {
-            const allowedExtensions = ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx'];
-            const ext = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
-            if (allowedExtensions.includes(ext)) {
-                callback(null, true);
-            } else {
-                callback(new BadRequestException(`File type ${ext} is not allowed`), false);
-            }
-        },
+        limits: studentReportUploadMulterLimits(),
+        fileFilter: studentReportMulterFileFilter,
     }))
     async submitReportWithId(@Request() req, @Param('id') id: string, @Body() body: any, @UploadedFiles() files: any[]) {
         // If opportunityId is not in body, use the one from URL
@@ -242,16 +214,8 @@ export class StudentController {
 
     @Post('reports/draft')
     @UseInterceptors(FilesInterceptor('files', 50, {
-        limits: { fileSize: 10 * 1024 * 1024, fieldSize: 50 * 1024 * 1024 },
-        fileFilter: (req, file, callback) => {
-            const allowedExtensions = ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx'];
-            const ext = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
-            if (allowedExtensions.includes(ext)) {
-                callback(null, true);
-            } else {
-                callback(new BadRequestException(`File type ${ext} is not allowed`), false);
-            }
-        },
+        limits: studentReportUploadMulterLimits(),
+        fileFilter: studentReportMulterFileFilter,
     }))
     async saveDraft(@Request() req, @Body() body: any, @UploadedFiles() files: any[]) {
         return this.studentReportsService.saveDraft(req.user.id, body, files);
@@ -259,16 +223,8 @@ export class StudentController {
 
     @Post('reports/:id/draft')
     @UseInterceptors(FilesInterceptor('files', 50, {
-        limits: { fileSize: 10 * 1024 * 1024, fieldSize: 50 * 1024 * 1024 },
-        fileFilter: (req, file, callback) => {
-            const allowedExtensions = ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx'];
-            const ext = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
-            if (allowedExtensions.includes(ext)) {
-                callback(null, true);
-            } else {
-                callback(new BadRequestException(`File type ${ext} is not allowed`), false);
-            }
-        },
+        limits: studentReportUploadMulterLimits(),
+        fileFilter: studentReportMulterFileFilter,
     }))
     async saveDraftWithId(@Request() req, @Param('id') id: string, @Body() body: any, @UploadedFiles() files: any[]) {
         if (!body.opportunityId) body.opportunityId = id;

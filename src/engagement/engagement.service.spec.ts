@@ -244,6 +244,104 @@ describe('EngagementService', () => {
         });
     });
 
+    describe('listPendingAttendanceLogs', () => {
+        const qbStub = (): any => ({
+            leftJoinAndSelect: jest.fn().mockReturnThis(),
+            where: jest.fn().mockReturnThis(),
+            andWhere: jest.fn().mockReturnThis(),
+            orderBy: jest.fn().mockReturnThis(),
+            getMany: jest.fn(),
+        });
+
+        let qbChain: ReturnType<typeof qbStub>;
+
+        beforeEach(() => {
+            qbChain = qbStub();
+            (mockAttendanceLogRepository as unknown as Record<string, unknown>).createQueryBuilder = jest
+                .fn()
+                .mockReturnValue(qbChain);
+            mockParticipationRepository.find.mockReset();
+        });
+
+        afterEach(() => {
+            delete (mockAttendanceLogRepository as unknown as Record<string, unknown>).createQueryBuilder;
+        });
+
+        it('hydrates missing participant.teamId / team_id from roster parity before returning logs', async () => {
+            mockUserRepository.findOne.mockResolvedValue({
+                id: 'partner-actor',
+                email: 'ngo.owner@partner.test',
+                organization: { id: 'ngo-org-1' },
+            });
+
+            mockOpportunityRepository.findOne.mockResolvedValue({ id: 'proj-pending-roster-parity' });
+
+            const rosterLead: Partial<Participation> & { id: string; projectId: string } = {
+                id: 'lead-p',
+                projectId: 'proj-pending-roster-parity',
+                isTeamLead: true,
+                teamId: 'TM-ROSTER-TEST',
+                applicationId: undefined,
+                participationMode: 'team',
+                status: 'approved',
+            };
+
+            const rosterMember: Partial<Participation> & {
+                id: string;
+                projectId: string;
+                email?: string;
+            } = {
+                id: 'member-p',
+                projectId: 'proj-pending-roster-parity',
+                isTeamLead: false,
+                teamId: null as unknown as string,
+                applicationId: undefined,
+                participationMode: 'team',
+                status: 'approved',
+                email: 'student.member@univ.test',
+            };
+
+            mockParticipationRepository.find.mockResolvedValue([rosterLead, rosterMember] as Participation[]);
+
+            const attendeeParticipant = {
+                ...rosterMember,
+                studentId: 'student-db-uuid-1',
+            } as Participation;
+
+            const attendanceLogStub = {
+                id: 'log-p1',
+                projectId: 'proj-pending-roster-parity',
+                approvalStatus: 'pending',
+                assignedApproverType: 'partner',
+                assignedApproverUserId: 'partner-actor',
+                participant: attendeeParticipant,
+                project: { organizationId: 'ngo-org-1' },
+            } as unknown as AttendanceLog;
+
+            qbChain.getMany.mockResolvedValue([attendanceLogStub]);
+
+            const result = await service.listPendingAttendanceLogs(
+                'partner-actor',
+                UserRole.NGO,
+                'proj-pending-roster-parity',
+            );
+
+            expect(mockAttendanceLogRepository.createQueryBuilder).toHaveBeenCalled();
+            expect(mockParticipationRepository.find).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    where: expect.objectContaining({ projectId: 'proj-pending-roster-parity' }),
+                    order: { createdAt: 'ASC' },
+                }),
+            );
+            expect(result.pending).toHaveLength(1);
+
+            type PartWithLegacy = Participation & { team_id?: string | null };
+
+            expect((result.pending![0].participant as PartWithLegacy).teamId).toBe('TM-ROSTER-TEST');
+            expect((result.pending![0].participant as PartWithLegacy).team_id).toBe('TM-ROSTER-TEST');
+        });
+    });
+
     describe('EIS Engine Logic', () => {
         it('should give 100 for perfect engagement', async () => {
             const mockLogs: any[] = [];

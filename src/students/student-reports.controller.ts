@@ -14,6 +14,10 @@ import {
     HttpException,
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
+import {
+    studentReportMulterFileFilter,
+    studentReportUploadMulterLimits,
+} from '../common/student-report-file-upload';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { StudentReportsService } from '../reports/student-reports.service';
 import { UserRole } from '../users/enums/user-role.enum';
@@ -25,20 +29,8 @@ export class StudentReportsController {
 
     @Post()
     @UseInterceptors(FilesInterceptor('files', 50, {
-        limits: {
-            fileSize: 10 * 1024 * 1024, // 10 MB per file
-            fieldSize: 50 * 1024 * 1024,
-        },
-        fileFilter: (req, file, callback) => {
-            const allowedExtensions = ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx'];
-            const ext = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
-
-            if (allowedExtensions.includes(ext)) {
-                callback(null, true);
-            } else {
-                callback(new BadRequestException(`File type ${ext} is not allowed. Allowed types: ${allowedExtensions.join(', ')}`), false);
-            }
-        },
+        limits: studentReportUploadMulterLimits(),
+        fileFilter: studentReportMulterFileFilter,
     }))
     async submitReport(
         @Request() req,
@@ -74,16 +66,8 @@ export class StudentReportsController {
 
     @Post(':projectId/submit')
     @UseInterceptors(FilesInterceptor('files', 50, {
-        limits: { fileSize: 10 * 1024 * 1024, fieldSize: 50 * 1024 * 1024 },
-        fileFilter: (req, file, callback) => {
-            const allowedExtensions = ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx'];
-            const ext = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
-            if (allowedExtensions.includes(ext)) {
-                callback(null, true);
-            } else {
-                callback(new BadRequestException(`File type ${ext} is not allowed.`), false);
-            }
-        },
+        limits: studentReportUploadMulterLimits(),
+        fileFilter: studentReportMulterFileFilter,
     }))
     async submitReportSpecific(
         @Request() req,
@@ -105,20 +89,8 @@ export class StudentReportsController {
 
     @Post('draft')
     @UseInterceptors(FilesInterceptor('files', 50, {
-        limits: {
-            fileSize: 10 * 1024 * 1024,
-            fieldSize: 50 * 1024 * 1024,
-        },
-        fileFilter: (req, file, callback) => {
-            const allowedExtensions = ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx'];
-            const ext = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
-
-            if (allowedExtensions.includes(ext)) {
-                callback(null, true);
-            } else {
-                callback(new BadRequestException(`File type ${ext} is not allowed`), false);
-            }
-        },
+        limits: studentReportUploadMulterLimits(),
+        fileFilter: studentReportMulterFileFilter,
     }))
     async saveDraft(
         @Request() req,

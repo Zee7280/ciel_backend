@@ -20,16 +20,19 @@ import { CreateOpportunityDto } from '../opportunities/dto/create-opportunity.dt
 import { UserRole } from '../users/enums/user-role.enum';
 import { FilesInterceptor, FileInterceptor } from '@nestjs/platform-express';
 import {
+    assertStudentReportUploadMeta,
     studentReportMulterFileFilter,
     studentReportUploadMulterLimits,
 } from '../common/student-report-file-upload';
+import { S3Service } from '../common/s3.service';
 
 @Controller('student')
 @UseGuards(JwtAuthGuard)
 export class StudentController {
     constructor(
         private readonly studentsService: StudentsService,
-        private readonly studentReportsService: StudentReportsService
+        private readonly studentReportsService: StudentReportsService,
+        private readonly s3Service: S3Service,
     ) { }
 
     @Get('dashboard')
@@ -155,6 +158,25 @@ export class StudentController {
         return { success: true, data: { url } };
     }
 
+    @Post('reports/upload/presign')
+    async presignUploadFile(
+        @Request() req,
+        @Body() body: { section?: string; filename?: string; contentType?: string; size?: number | string },
+    ) {
+        if (!body.section) {
+            throw new BadRequestException('Section is required (e.g., section8)');
+        }
+
+        const meta = assertStudentReportUploadMeta(body);
+        const signed = await this.s3Service.presignPutObject({
+            folder: `student-reports-temp/${req.user.id}/${body.section}`,
+            originalName: meta.filename,
+            contentType: meta.contentType,
+        });
+
+        return { success: true, data: { ...signed, url: signed.publicUrl } };
+    }
+
     @Post('reports/:projectId/evidence')
     @UseInterceptors(FileInterceptor('file', {
         limits: studentReportUploadMulterLimits(),
@@ -190,6 +212,48 @@ export class StudentController {
         const folder = `${projectId}/${body.section}/${body.field}`;
         const url = await this.studentReportsService.uploadFile(file, folder, req.user.id);
         return { url };
+    }
+
+    @Post('reports/:projectId/evidence/presign')
+    async presignEvidenceFile(
+        @Request() req,
+        @Param('projectId') projectId: string,
+        @Body()
+        body: {
+            project_id?: string;
+            section?: string;
+            field?: string;
+            filename?: string;
+            contentType?: string;
+            size?: number | string;
+        },
+    ) {
+        if (!body.project_id) {
+            throw new BadRequestException('project_id is required');
+        }
+
+        if (body.project_id !== projectId) {
+            throw new BadRequestException('project_id must match projectId parameter');
+        }
+
+        if (body.section !== 'section8') {
+            throw new BadRequestException('section must be section8');
+        }
+
+        const allowedFields = ['evidence_files', 'partner_verification_files'];
+        if (!body.field || !allowedFields.includes(body.field)) {
+            throw new BadRequestException(`field must be one of: ${allowedFields.join(', ')}`);
+        }
+
+        const meta = assertStudentReportUploadMeta(body);
+        const folder = `student-reports-temp/${req.user.id}/${projectId}/${body.section}/${body.field}`;
+        const signed = await this.s3Service.presignPutObject({
+            folder,
+            originalName: meta.filename,
+            contentType: meta.contentType,
+        });
+
+        return { success: true, data: { ...signed, url: signed.publicUrl } };
     }
 
     @Post('reports')

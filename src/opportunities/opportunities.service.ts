@@ -422,6 +422,139 @@ export class OpportunitiesService {
         await tryBindFacultyByEmail(rawPo);
     }
 
+    private getFacultyEmailFromOpportunity(opp: Opportunity): string | null {
+        const sup = opp.supervision as Record<string, unknown> | undefined;
+        const raw =
+            (sup && typeof sup.contact === 'string' && sup.contact) ||
+            (sup && typeof sup.official_email === 'string' && sup.official_email) ||
+            '';
+        const em = this.normalizeEmail(raw);
+        return em && this.isValidEmail(em) ? em : null;
+    }
+
+    /** Snapshot before student PATCH — used to detect faculty/partner assignment changes on resubmit. */
+    snapshotStudentOpportunityResubmit(opp: Opportunity): {
+        facultyEmail: string | null;
+        partnerEmail: string | null;
+        requiresPartner: boolean;
+    } {
+        return {
+            facultyEmail: this.getFacultyEmailFromOpportunity(opp),
+            partnerEmail: this.resolvePartnerEmailFromOpportunity(opp),
+            requiresPartner: this.studentCreatedPayloadRequiresPartner(opp as unknown as CreateOpportunityDto),
+        };
+    }
+
+    /**
+     * After a student saves edits while `workflowStage === revision`, rewind the correct queue and
+     * invalidate stale approvals when faculty/partner assignments changed.
+     */
+    async applyStudentCreatedOpportunityResubmit(
+        opp: Opportunity,
+        before: { facultyEmail: string | null; partnerEmail: string | null; requiresPartner: boolean },
+    ): Promise<{ notifyFaculty: boolean; notifyPartner: boolean }> {
+        const dto = opp as unknown as CreateOpportunityDto;
+        const requiresPartnerNow = this.studentCreatedPayloadRequiresPartner(dto);
+        opp.requiresPartnerApproval = requiresPartnerNow;
+
+        const facultyEmailNow = this.getFacultyEmailFromOpportunity(opp);
+        const partnerEmailNow = this.resolvePartnerEmailFromOpportunity(opp);
+        const facultyEmailChanged =
+            this.normalizeEmail(before.facultyEmail || '') !== this.normalizeEmail(facultyEmailNow || '');
+        const partnerEmailChanged =
+            this.normalizeEmail(before.partnerEmail || '') !== this.normalizeEmail(partnerEmailNow || '');
+        const requiresPartnerChanged = before.requiresPartner !== requiresPartnerNow;
+        const partnerNowRequired = requiresPartnerNow && !!partnerEmailNow;
+
+        if (partnerNowRequired && !partnerEmailNow) {
+            throw new BadRequestException(
+                'Partner approval is required for this submission but no valid partner email was found.',
+            );
+        }
+
+        const facultyLineNeedsReview =
+            facultyEmailChanged ||
+            opp.facultyApprovalStatus === LINE_STATUS.REJECTED ||
+            opp.facultyApprovalStatus === LINE_STATUS.REVISION_REQUESTED ||
+            opp.faculty_verification_status === 'rejected' ||
+            !opp.faculty_verified ||
+            opp.facultyApprovalStatus === LINE_STATUS.PENDING ||
+            opp.faculty_verification_status === WORKFLOW_STAGE.PENDING_FACULTY;
+
+        if (facultyLineNeedsReview) {
+            opp.workflowStage = WORKFLOW_STAGE.PENDING_FACULTY;
+            opp.status = WORKFLOW_STAGE.PENDING_FACULTY;
+            opp.facultyApprovalStatus = LINE_STATUS.PENDING;
+            opp.faculty_verification_status = WORKFLOW_STAGE.PENDING_FACULTY;
+            opp.faculty_verified = false;
+            opp.faculty_verification_token = randomUUID();
+            if (facultyEmailChanged) {
+                opp.facultyId = null;
+                await this.assignFacultyIdFromSupervisionIfMissing(opp);
+            }
+            opp.partnerApprovalStatus = partnerNowRequired ? LINE_STATUS.PENDING : LINE_STATUS.NOT_APPLICABLE;
+            opp.partnerVerified = !partnerNowRequired;
+            opp.adminApprovalStatus = LINE_STATUS.PENDING;
+            opp.admin_approved = false;
+            return { notifyFaculty: true, notifyPartner: false };
+        }
+
+        const partnerLineNeedsReview =
+            partnerNowRequired &&
+            (requiresPartnerChanged ||
+                partnerEmailChanged ||
+                opp.partnerApprovalStatus === LINE_STATUS.REJECTED ||
+                opp.partnerApprovalStatus === LINE_STATUS.REVISION_REQUESTED ||
+                !opp.partnerVerified ||
+                opp.partnerApprovalStatus !== LINE_STATUS.APPROVED);
+
+        if (partnerLineNeedsReview) {
+            opp.workflowStage = WORKFLOW_STAGE.PENDING_PARTNER;
+            opp.status = WORKFLOW_STAGE.PENDING_PARTNER;
+            opp.partnerApprovalStatus = LINE_STATUS.PENDING;
+            opp.partnerVerified = false;
+            if (partnerEmailChanged || !opp.partnerToken) {
+                opp.partnerToken = randomUUID();
+            }
+            opp.adminApprovalStatus = LINE_STATUS.PENDING;
+            opp.admin_approved = false;
+            return { notifyFaculty: false, notifyPartner: true };
+        }
+
+        opp.workflowStage = WORKFLOW_STAGE.PENDING_ADMIN;
+        opp.status = 'pending_approval';
+        opp.adminApprovalStatus = LINE_STATUS.PENDING;
+        opp.admin_approved = false;
+        return { notifyFaculty: false, notifyPartner: false };
+    }
+
+    /** Faculty verification email after student resubmit reaches `pending_faculty`. */
+    async notifyFacultyForStudentOpportunityVerification(opportunity: Opportunity): Promise<void> {
+        const facultyTo = this.getFacultyEmailFromOpportunity(opportunity);
+        if (!facultyTo || !opportunity.faculty_verification_token) return;
+
+        const creator = await this.getOpportunityCreatorContact(opportunity);
+        const studentVerifyDetails = this.buildOpportunityVerificationEmailDetails(opportunity, {
+            studentName: creator ? resolveDisplayNameForProfile(creator) : undefined,
+            studentUniversity: creator?.university || creator?.institution || undefined,
+        });
+
+        try {
+            await this.mailService.sendFacultyStudentOpportunityVerification(
+                facultyTo,
+                opportunity.title,
+                opportunity.faculty_verification_token,
+                studentVerifyDetails,
+                {
+                    path: '/verify/faculty',
+                    returnTo: this.getFacultyApprovalReturnTo(opportunity.id),
+                },
+            );
+        } catch (e) {
+            console.warn('Failed to send faculty verification email on resubmit', (e as Error).message);
+        }
+    }
+
     /**
      * One new organization row per student opportunity when there is no named partner org.
      * Same student creating many opportunities → many placeholder orgs (no shared dummy).
@@ -1931,12 +2064,31 @@ export class OpportunitiesService {
         const saved = await this.opportunitiesRepository.save(opp);
         if (saved.isStudentCreated) {
             await this.notifyStudentOpportunityUpdate(saved, {
-                title: 'Admin Rejected',
-                message: 'Your opportunity was rejected during admin review.',
-                emailSubject: 'Admin rejected your opportunity',
+                title: 'Opportunity closed',
+                message:
+                    'Your opportunity was permanently rejected during admin review and can no longer be edited.',
+                emailSubject: 'Your opportunity was permanently rejected',
                 reason,
             });
         }
+        return saved;
+    }
+
+    async revise(id: string, reason: string) {
+        const opp = await this.findOne(id);
+        if (!opp) throw new NotFoundException('Opportunity not found');
+        if (!opp.isStudentCreated) {
+            throw new BadRequestException('Revision is only supported for student-created opportunities');
+        }
+        this.opportunityWorkflow.afterAdminRevision(opp, reason);
+        const saved = await this.opportunitiesRepository.save(opp);
+        await this.notifyStudentOpportunityUpdate(saved, {
+            title: 'Revision requested',
+            message:
+                'CIEL admin asked you to update your opportunity. Open your dashboard, make the changes, and save to resubmit.',
+            emailSubject: 'Please revise your opportunity',
+            reason,
+        });
         return saved;
     }
 
@@ -2481,8 +2633,8 @@ export class OpportunitiesService {
             try {
                 await this.notificationsService.createApprovalNotification(
                     opp.creatorId,
-                    'Faculty Rejected',
-                    'Your opportunity was rejected during faculty review.',
+                    'Opportunity closed',
+                    'Your opportunity was permanently rejected during faculty review and can no longer be edited.',
                 );
             } catch (e) {
                 console.warn(
@@ -2510,6 +2662,37 @@ export class OpportunitiesService {
                     );
                 }
             }
+        }
+        return saved;
+    }
+
+    async facultyDashboardRevise(
+        opportunityId: string,
+        facultyUserId: string,
+        facultyEmail: string,
+        reason?: string,
+    ) {
+        const opp = await this.findOne(opportunityId);
+        if (!opp) throw new NotFoundException('Opportunity not found');
+        this.assertFacultySupervisorForStudentOpportunity(opp, facultyUserId, facultyEmail);
+
+        const oppAwaitingFaculty = this.isAwaitingFacultyDashboardReview(opp);
+        if (!oppAwaitingFaculty) {
+            throw new BadRequestException('This opportunity is not awaiting faculty approval');
+        }
+
+        this.opportunityWorkflow.afterFacultyRevision(opp, reason);
+        await this.assignFacultyIdFromSupervisionIfMissing(opp);
+        const saved = await this.opportunitiesRepository.save(opp);
+
+        if (saved.isStudentCreated) {
+            await this.notifyStudentOpportunityUpdate(saved, {
+                title: 'Revision requested',
+                message:
+                    'Your faculty supervisor asked you to update your opportunity. Save your changes to resubmit for review.',
+                emailSubject: 'Faculty requested revisions on your opportunity',
+                reason,
+            });
         }
         return saved;
     }
@@ -2550,12 +2733,40 @@ export class OpportunitiesService {
 
         if (saved.isStudentCreated) {
             await this.notifyStudentOpportunityUpdate(saved, {
-                title: 'Partner Rejected',
-                message: 'Your opportunity was rejected during partner review.',
-                emailSubject: 'Partner rejected your opportunity',
+                title: 'Opportunity closed',
+                message:
+                    'Your opportunity was permanently rejected during partner review and can no longer be edited.',
+                emailSubject: 'Your opportunity was permanently rejected',
                 reason,
             });
         }
+
+        return saved;
+    }
+
+    async partnerDashboardRevise(
+        opportunityId: string,
+        partner: { email: string; organizationId?: string | null },
+        reason?: string,
+    ) {
+        const opp = await this.findOne(opportunityId);
+        if (!opp) throw new NotFoundException('Opportunity not found');
+
+        this.assertPartnerCanReviewOpportunity(opp, partner.email, partner.organizationId);
+        if (!opp.isStudentCreated) {
+            throw new BadRequestException('Revision is only supported for student-created opportunities');
+        }
+
+        this.opportunityWorkflow.afterPartnerRevision(opp, reason);
+        const saved = await this.opportunitiesRepository.save(opp);
+
+        await this.notifyStudentOpportunityUpdate(saved, {
+            title: 'Revision requested',
+            message:
+                'Your partner organization asked you to update your opportunity. Save your changes to resubmit for review.',
+            emailSubject: 'Partner requested revisions on your opportunity',
+            reason,
+        });
 
         return saved;
     }

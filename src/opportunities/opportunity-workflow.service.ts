@@ -15,6 +15,8 @@ export const LINE_STATUS = {
     PENDING: 'pending',
     APPROVED: 'approved',
     REJECTED: 'rejected',
+    /** Reviewer asked the student to update and resubmit (not a terminal reject). */
+    REVISION_REQUESTED: 'revision_requested',
     SKIPPED: 'skipped',
     NOT_APPLICABLE: 'not_applicable',
     NOT_REQUIRED: 'not_required',
@@ -178,6 +180,52 @@ export class OpportunityWorkflowService {
         opp.adminApprovalStatus = LINE_STATUS.REJECTED;
         opp.workflowStage = WORKFLOW_STAGE.REJECTED;
         opp.status = 'rejected';
+        if (reason) {
+            opp.rejectionReason = reason;
+        }
+    }
+
+    /** Faculty asks the student to update supervision/details and resubmit. */
+    afterFacultyRevision(opp: Opportunity, reason?: string | null): void {
+        if (opp.isStudentCreated) {
+            opp.faculty_verified = false;
+            opp.faculty_verification_status = WORKFLOW_STAGE.PENDING_FACULTY;
+            opp.facultyApprovalStatus = LINE_STATUS.REVISION_REQUESTED;
+            opp.workflowStage = WORKFLOW_STAGE.REVISION;
+            opp.status = 'revision';
+            if (reason) {
+                opp.rejectionReason = reason;
+            }
+            return;
+        }
+        opp.faculty_verification_status = WORKFLOW_STAGE.PENDING_FACULTY;
+        opp.facultyApprovalStatus = LINE_STATUS.REVISION_REQUESTED;
+        opp.workflowStage = WORKFLOW_STAGE.REVISION;
+        opp.status = 'revision';
+        if (reason) {
+            opp.rejectionReason = reason;
+        }
+    }
+
+    /** Partner asks the student to update partner/execution details and resubmit. */
+    afterPartnerRevision(opp: Opportunity, reason?: string | null): void {
+        if (!opp.isStudentCreated) return;
+
+        opp.partnerVerified = false;
+        opp.partnerApprovalStatus = LINE_STATUS.REVISION_REQUESTED;
+        opp.workflowStage = WORKFLOW_STAGE.REVISION;
+        opp.status = 'revision';
+        if (reason) {
+            opp.rejectionReason = reason;
+        }
+    }
+
+    /** CIEL admin asks the student to update before final approval (faculty/partner lines may stay approved). */
+    afterAdminRevision(opp: Opportunity, reason?: string | null): void {
+        opp.admin_approved = false;
+        opp.adminApprovalStatus = LINE_STATUS.REVISION_REQUESTED;
+        opp.workflowStage = WORKFLOW_STAGE.REVISION;
+        opp.status = 'revision';
         if (reason) {
             opp.rejectionReason = reason;
         }

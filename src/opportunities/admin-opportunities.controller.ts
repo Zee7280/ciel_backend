@@ -83,6 +83,21 @@ export class AdminOpportunitiesController {
         return { success: true, data: {} };
     }
 
+    @Post(':id/revise')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.SUPER_ADMIN)
+    async revise(@Param('id') id: string, @Body() body: { reason: string }) {
+        const saved = await this.opportunitiesService.revise(id, body.reason);
+        return {
+            success: true,
+            data: {
+                id: saved.id,
+                workflow_stage: saved.workflowStage,
+                admin_approval_status: saved.adminApprovalStatus,
+            },
+        };
+    }
+
     /** Same JWT guard stack as `GET /admin/projects` (class-level `JwtAuthGuard` only). */
     @Get(':opportunityId/incomplete-report-applicants')
     incompleteReportApplicants(@Param('opportunityId') opportunityId: string) {

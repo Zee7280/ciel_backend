@@ -1475,6 +1475,17 @@ export class StudentsService {
             throw new BadRequestException('Approved opportunities cannot be updated');
         }
 
+        if (opportunity.workflowStage === WORKFLOW_STAGE.REJECTED) {
+            throw new BadRequestException(
+                'This opportunity was permanently rejected and cannot be edited. Submit a new opportunity if needed.',
+            );
+        }
+
+        const resubmitSnapshot =
+            opportunity.isStudentCreated && opportunity.workflowStage === WORKFLOW_STAGE.REVISION
+                ? this.opportunitiesService.snapshotStudentOpportunityResubmit(opportunity)
+                : null;
+
         purifyStudentOpportunityContent(dto);
 
         const patchableFields: (keyof CreateOpportunityDto)[] = [
@@ -1529,76 +1540,33 @@ export class StudentsService {
             opportunity.sdg = dto.sdg_info.sdg_id || opportunity.sdg;
         }
 
-        // Edit & resubmit: restore actionable queue after faculty/partner rejection.
-        let notifyPartnerAfterStudentResubmit = false;
-        if (opportunity.isStudentCreated && opportunity.workflowStage === WORKFLOW_STAGE.REJECTED) {
-            const requiresPartnerNow = this.opportunitiesService.studentCreatedPayloadRequiresPartner(
-                opportunity as unknown as CreateOpportunityDto,
+        let notifyFacultyAfterResubmit = false;
+        let notifyPartnerAfterResubmit = false;
+        if (resubmitSnapshot) {
+            const plan = await this.opportunitiesService.applyStudentCreatedOpportunityResubmit(
+                opportunity,
+                resubmitSnapshot,
             );
-            opportunity.requiresPartnerApproval = requiresPartnerNow;
-
-            const wasPartnerRejected = opportunity.partnerApprovalStatus === LINE_STATUS.REJECTED;
-            const wasFacultyRejected =
-                opportunity.facultyApprovalStatus === LINE_STATUS.REJECTED ||
-                opportunity.faculty_verification_status === 'rejected';
-            const needsFacultyReview =
-                wasFacultyRejected ||
-                (!opportunity.faculty_verified &&
-                    (opportunity.facultyApprovalStatus === LINE_STATUS.PENDING ||
-                        opportunity.faculty_verification_status === WORKFLOW_STAGE.PENDING_FACULTY));
-
-            if (needsFacultyReview) {
-                opportunity.workflowStage = WORKFLOW_STAGE.PENDING_FACULTY;
-                opportunity.status = WORKFLOW_STAGE.PENDING_FACULTY;
-                opportunity.facultyApprovalStatus = LINE_STATUS.PENDING;
-                opportunity.faculty_verification_status = WORKFLOW_STAGE.PENDING_FACULTY;
-                opportunity.faculty_verified = false;
-                opportunity.partnerApprovalStatus = requiresPartnerNow ? LINE_STATUS.PENDING : LINE_STATUS.NOT_APPLICABLE;
-            } else if (wasPartnerRejected) {
-                opportunity.workflowStage = WORKFLOW_STAGE.PENDING_PARTNER;
-                opportunity.status = WORKFLOW_STAGE.PENDING_PARTNER;
-                opportunity.partnerApprovalStatus = LINE_STATUS.PENDING;
-                opportunity.partnerVerified = false;
-            } else if (opportunity.adminApprovalStatus === LINE_STATUS.REJECTED) {
-                opportunity.admin_approved = false;
-                const needsPartnerBeforeAdmin =
-                    requiresPartnerNow &&
-                    (!opportunity.partnerVerified || opportunity.partnerApprovalStatus !== LINE_STATUS.APPROVED);
-
-                if (needsPartnerBeforeAdmin) {
-                    opportunity.workflowStage = WORKFLOW_STAGE.PENDING_PARTNER;
-                    opportunity.status = WORKFLOW_STAGE.PENDING_PARTNER;
-                    opportunity.partnerApprovalStatus = LINE_STATUS.PENDING;
-                    opportunity.partnerVerified = false;
-                    opportunity.adminApprovalStatus = LINE_STATUS.PENDING;
-                    if (!opportunity.partnerToken) {
-                        opportunity.partnerToken = randomUUID();
-                    }
-                    notifyPartnerAfterStudentResubmit = true;
-                } else {
-                    opportunity.workflowStage = WORKFLOW_STAGE.PENDING_ADMIN;
-                    opportunity.status = 'pending_approval';
-                    opportunity.adminApprovalStatus = LINE_STATUS.PENDING;
-                }
-            }
-
-            // Keep admin lane as pending while resubmission goes back through review queues.
-            if (wasPartnerRejected || needsFacultyReview) {
-                opportunity.adminApprovalStatus = LINE_STATUS.PENDING;
-                opportunity.admin_approved = false;
-            }
+            notifyFacultyAfterResubmit = plan.notifyFaculty;
+            notifyPartnerAfterResubmit = plan.notifyPartner;
+            opportunity.rejectionReason = null;
         }
 
         const saved = await this.opportunitiesRepository.save(opportunity);
 
-        if (notifyPartnerAfterStudentResubmit) {
+        if (notifyFacultyAfterResubmit) {
+            await this.opportunitiesService.notifyFacultyForStudentOpportunityVerification(saved);
+        }
+        if (notifyPartnerAfterResubmit) {
             await this.opportunitiesService.notifyPartnerForStudentOpportunityPartnerQueue(saved);
         }
 
         return {
             success: true,
             data: saved,
-            message: 'Opportunity updated successfully',
+            message: resubmitSnapshot
+                ? 'Opportunity updated and resubmitted for review'
+                : 'Opportunity updated successfully',
         };
     }
 

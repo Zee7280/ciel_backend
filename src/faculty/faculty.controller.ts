@@ -64,7 +64,7 @@ export class FacultyController {
         );
         return {
             success: true,
-            message: 'Faculty rejection submitted',
+            message: 'Faculty permanent rejection submitted',
             data: {
                 id: saved.id,
                 status:
@@ -78,6 +78,34 @@ export class FacultyController {
                                 : saved.workflowStage === 'revision'
                                     ? 'revision'
                                     : saved.status,
+                workflow_stage: saved.workflowStage,
+            },
+        };
+    }
+
+    @Post(':id/revise')
+    async revise(
+        @Request() req,
+        @Param('id') id: string,
+        @Body() body: { reason?: string; comment?: string },
+    ) {
+        const saved = await this.opportunitiesService.facultyDashboardRevise(
+            id,
+            req.user.id,
+            req.user.email || '',
+            body?.reason ?? body?.comment,
+        );
+        return {
+            success: true,
+            message: 'Faculty revision request submitted',
+            data: {
+                id: saved.id,
+                status:
+                    saved.workflowStage === 'revision'
+                        ? 'revision'
+                        : saved.workflowStage === 'rejected'
+                            ? 'rejected'
+                            : saved.status,
                 workflow_stage: saved.workflowStage,
             },
         };

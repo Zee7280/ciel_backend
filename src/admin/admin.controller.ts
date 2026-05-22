@@ -93,6 +93,19 @@ export class AdminController {
         return { success: true, data: {} };
     }
 
+    @Post('opportunities/:id/revise')
+    async reviseOpportunity(@Param('id') id: string, @Body() body: { reason: string }) {
+        const saved = await this.opportunitiesService.revise(id, body.reason);
+        return {
+            success: true,
+            data: {
+                id: saved.id,
+                workflow_stage: saved.workflowStage,
+                admin_approval_status: saved.adminApprovalStatus,
+            },
+        };
+    }
+
     @Delete('opportunities/:id')
     removeOpportunity(@Param('id') id: string) {
         return this.opportunitiesService.remove(id);

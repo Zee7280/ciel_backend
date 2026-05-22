@@ -295,7 +295,32 @@ export class PartnersController {
         );
         return {
             success: true,
-            message: 'Partner rejection submitted',
+            message: 'Partner permanent rejection submitted',
+            data: {
+                id: saved.id,
+                partner_approval_status: saved.partnerApprovalStatus,
+                workflow_stage: saved.workflowStage,
+            },
+        };
+    }
+
+    @Post('approvals/:id/revise')
+    async reviseOpportunity(
+        @Request() req,
+        @Param('id') id: string,
+        @Body() body: { reason?: string },
+    ) {
+        const saved = await this.opportunitiesService.partnerDashboardRevise(
+            id,
+            {
+                email: req.user.email || '',
+                organizationId: req.user.organizationId || null,
+            },
+            body?.reason,
+        );
+        return {
+            success: true,
+            message: 'Partner revision request submitted',
             data: {
                 id: saved.id,
                 partner_approval_status: saved.partnerApprovalStatus,
@@ -441,7 +466,32 @@ export class PartnerAliasController {
         );
         return {
             success: true,
-            message: 'Partner rejection submitted',
+            message: 'Partner permanent rejection submitted',
+            data: {
+                id: saved.id,
+                partner_approval_status: saved.partnerApprovalStatus,
+                workflow_stage: saved.workflowStage,
+            },
+        };
+    }
+
+    @Post('approvals/:id/revise')
+    async reviseOpportunity(
+        @Request() req,
+        @Param('id') id: string,
+        @Body() body: { reason?: string },
+    ) {
+        const saved = await this.opportunitiesService.partnerDashboardRevise(
+            id,
+            {
+                email: req.user.email || '',
+                organizationId: req.user.organizationId || null,
+            },
+            body?.reason,
+        );
+        return {
+            success: true,
+            message: 'Partner revision request submitted',
             data: {
                 id: saved.id,
                 partner_approval_status: saved.partnerApprovalStatus,

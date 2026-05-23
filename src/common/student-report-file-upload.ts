@@ -31,8 +31,8 @@ const ALLOWED_MIMETYPES = new Set([
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 ]);
 
-export const STUDENT_REPORT_MAX_FILE_BYTES = 15 * 1024 * 1024;
-export const STUDENT_REPORT_MAX_FIELD_BYTES = 52 * 1024 * 1024;
+export const STUDENT_REPORT_MAX_FILE_BYTES = 50 * 1024 * 1024;
+export const STUDENT_REPORT_MAX_FIELD_BYTES = 55 * 1024 * 1024;
 
 function normalizeMime(raw: string | undefined): string {
     return (raw || '').toLowerCase().split(';')[0].trim();
@@ -76,7 +76,7 @@ export function assertStudentReportUploadMeta(meta: {
     }
 
     if (size !== undefined && size > STUDENT_REPORT_MAX_FILE_BYTES) {
-        throw new BadRequestException('File too large. Maximum report upload size is 15MB.');
+        throw new BadRequestException('File too large. Maximum report upload size is 50MB.');
     }
 
     if (!isAllowedStudentReportFile(filename, contentType)) {

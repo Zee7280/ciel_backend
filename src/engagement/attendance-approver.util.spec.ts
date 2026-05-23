@@ -1,5 +1,43 @@
-import { canUserActOnAttendanceQueue } from './attendance-approver.util';
+import {
+    canUserActOnAttendanceQueue,
+    extractPartnerContactEmailsForAttendance,
+    opportunityHasActionablePartnerForAttendance,
+    resolveEffectiveAttendanceApproverType,
+} from './attendance-approver.util';
 import { UserRole } from '../users/enums/user-role.enum';
+
+describe('attendance partner routing', () => {
+    it('does not treat host organizationId alone as partner attendance', () => {
+        expect(
+            opportunityHasActionablePartnerForAttendance({
+                organization: { contactEmail: 'host@university.edu' },
+                partner_organization: { organization_name: 'Abroo' },
+            }),
+        ).toBe(false);
+    });
+
+    it('routes to partner when partner_organization has official_email', () => {
+        expect(
+            extractPartnerContactEmailsForAttendance({
+                partner_organization: { official_email: 'partner@ngo.org' },
+            }),
+        ).toEqual(['partner@ngo.org']);
+        expect(
+            resolveEffectiveAttendanceApproverType('partner', {
+                partner_organization: { official_email: 'partner@ngo.org' },
+            }),
+        ).toBe('partner');
+    });
+
+    it('corrects stored partner route to faculty for student-created projects without partner contact', () => {
+        expect(
+            resolveEffectiveAttendanceApproverType('partner', {
+                isStudentCreated: true,
+                organization: { contactEmail: 'host@university.edu' },
+            }),
+        ).toBe('faculty');
+    });
+});
 
 describe('canUserActOnAttendanceQueue', () => {
     const pendingLog = {

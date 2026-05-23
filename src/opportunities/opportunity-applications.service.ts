@@ -10,6 +10,10 @@ import { OpportunityApplication, OpportunityApplicationInternalStatus } from './
 import { Participation } from '../engagement/entities/participant.entity';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import { EngagementService } from '../engagement/engagement.service';
+import {
+    effectiveAssignedApproverTypeForLog,
+    resolveEffectiveAttendanceApproverType,
+} from '../engagement/attendance-approver.util';
 import { UsersService } from '../users/users.service';
 import { User } from '../users/entities/user.entity';
 import { UserRole } from '../users/enums/user-role.enum';
@@ -627,7 +631,10 @@ export class OpportunityApplicationsService {
     }
 
     /** Per-session breakdown for admin project tracker (newest first, capped per seat). */
-    private serializeAttendanceSessionForTracker(log: AttendanceLog): Record<string, unknown> {
+    private serializeAttendanceSessionForTracker(
+        log: AttendanceLog,
+        opportunity: Opportunity | null,
+    ): Record<string, unknown> {
         const desc = (log.description || '').trim();
         return {
             id: log.id,
@@ -640,7 +647,10 @@ export class OpportunityApplicationsService {
             description: desc.length > 280 ? `${desc.slice(0, 277)}…` : desc || null,
             entry_status: log.entryStatus,
             approval_status: log.approvalStatus ?? null,
-            assigned_approver_type: log.assignedApproverType ?? null,
+            assigned_approver_type: effectiveAssignedApproverTypeForLog(
+                log.assignedApproverType,
+                opportunity,
+            ),
             evidence_uploaded: log.evidenceUploaded,
             needs_review: this.attendanceLogNeedsPartnerOrFacultyReview(log),
         };
@@ -650,6 +660,7 @@ export class OpportunityApplicationsService {
         projectId: string,
         participantIds: string[],
         maxPerSeat: number,
+        opportunity: Opportunity | null,
     ): Promise<Map<string, Record<string, unknown>[]>> {
         const empty = new Map<string, Record<string, unknown>[]>();
         const dedup = [...new Set(participantIds.filter((id) => Boolean(id?.trim())))];
@@ -682,7 +693,10 @@ export class OpportunityApplicationsService {
                 if (sa !== sb) return sb.localeCompare(sa);
                 return (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0);
             });
-            out.set(id, arr.slice(0, cap).map((log) => this.serializeAttendanceSessionForTracker(log)));
+            out.set(
+                id,
+                arr.slice(0, cap).map((log) => this.serializeAttendanceSessionForTracker(log, opportunity)),
+            );
         }
         return out;
     }
@@ -1012,6 +1026,9 @@ export class OpportunityApplicationsService {
             where: { id: opportunityId },
             relations: ['organization'],
         });
+        if (opp) {
+            await this.engagementService.reconcileMisroutedPartnerAttendanceForOpportunity(opp);
+        }
         const pipelineCountRows = await this.appRepo
             .createQueryBuilder('a')
             .select('a.internalStatus', 'status')
@@ -1055,7 +1072,7 @@ export class OpportunityApplicationsService {
 
         const attendancePreviewByParticipant =
             participantPkIds.length > 0
-                ? await this.attendanceSessionsPreviewByParticipant(opportunityId, participantPkIds, 35)
+                ? await this.attendanceSessionsPreviewByParticipant(opportunityId, participantPkIds, 35, opp)
                 : new Map<string, Record<string, unknown>[]>();
 
         const participationByApplicationId = new Map<string, Participation>();
@@ -1094,7 +1111,10 @@ export class OpportunityApplicationsService {
                         attendance_sessions_pending_review: att.sessions_pending_review,
                         attendance_sessions_preview:
                             attendancePreviewByParticipant.get(seatRow.id) ?? [],
-                        attendance_approver_type: seatRow.attendanceApproverType ?? null,
+                        attendance_approver_type: resolveEffectiveAttendanceApproverType(
+                            seatRow.attendanceApproverType,
+                            opp,
+                        ),
                         ...this.trackerImpactReportEnrollmentFields(latestReport),
                     };
                 } else {

@@ -16,8 +16,11 @@ import { UserRole } from '../users/enums/user-role.enum';
 import {
     attendanceCountsTowardProgress,
     canUserActOnAttendanceQueue,
+    extractPartnerContactEmailsForAttendance,
     getParticipantFacultyEmails,
+    opportunityHasActionablePartnerForAttendance,
     resolveAttendanceApproverRouting,
+    resolveEffectiveAttendanceApproverType,
 } from './attendance-approver.util';
 import { ConfigService } from '@nestjs/config';
 import { MailService } from '../mail/mail.service';
@@ -835,35 +838,23 @@ export class EngagementService {
             throw new NotFoundException('Project not found');
         }
 
+        const hasPartnerContact = opportunityHasActionablePartnerForAttendance(opportunity);
         let attendanceApproverType = await this.resolveAttendanceApproverTypeForParticipation(
             participation,
             opportunity,
         );
 
-        const partnerEmailsOnProject = this.extractPartnerOfficialEmails(opportunity);
-        if (
-            this.opportunityHasPartnerForAttendance(opportunity) &&
-            partnerEmailsOnProject.length > 0
-        ) {
+        if (hasPartnerContact) {
             attendanceApproverType = 'partner';
             if (participation.attendanceApproverType !== 'partner') {
                 participation.attendanceApproverType = 'partner';
                 await this.participantRepository.save(participation);
             }
-        }
-
-        if (attendanceApproverType === 'partner') {
-            const partnerUserId = await this.resolvePartnerOwnerUserId(opportunity);
-            const partnerEmails = this.extractPartnerOfficialEmails(opportunity);
-            const hasActionablePartner = Boolean(partnerUserId) || partnerEmails.length > 0;
-            if (!hasActionablePartner) {
-                const facultyEmails = await this.resolveFacultyEmailsForAttendanceRouting(
-                    participation,
-                    opportunity,
-                );
-                if (facultyEmails.length > 0) {
-                    attendanceApproverType = 'faculty';
-                }
+        } else if (opportunity.isStudentCreated) {
+            attendanceApproverType = 'faculty';
+            if (participation.attendanceApproverType === 'partner') {
+                participation.attendanceApproverType = 'faculty';
+                await this.participantRepository.save(participation);
             }
         }
 
@@ -1008,6 +999,9 @@ export class EngagementService {
                     throw new ForbiddenException(
                         'This projectId is valid but you are not listed as faculty or supervisor for that opportunity, so pending attendance cannot be loaded for it.',
                     );
+                }
+                if (opportunity.isStudentCreated) {
+                    await this.reconcileMisroutedPartnerAttendanceForOpportunity(opportunity);
                 }
             }
         }
@@ -1635,16 +1629,6 @@ export class EngagementService {
         return value === 'partner' ? 'partner' : 'faculty';
     }
 
-    /** Same rules as `StudentsService.opportunityHasPartner` on apply. */
-    private opportunityHasPartnerForAttendance(opportunity: Opportunity): boolean {
-        return Boolean(
-            opportunity.requiresPartnerApproval ||
-            opportunity.organizationId ||
-            this.hasMeaningfulObjectValue(opportunity.partner_organization) ||
-            this.hasMeaningfulObjectValue(opportunity.executing_organization),
-        );
-    }
-
     private hasMeaningfulObjectValue(value: unknown): boolean {
         if (value == null) return false;
         if (typeof value === 'string') return value.trim().length > 0;
@@ -1679,14 +1663,7 @@ export class EngagementService {
     ): Promise<'faculty' | 'partner'> {
         const stored = this.normalizeAttendanceApproverType(participation.attendanceApproverType);
         if (participation.attendanceApproverType) {
-            if (stored === 'partner' && opportunity) {
-                const partnerUserId = await this.resolvePartnerOwnerUserId(opportunity);
-                const partnerEmails = this.extractPartnerOfficialEmails(opportunity);
-                if (!partnerUserId && partnerEmails.length === 0) {
-                    return 'faculty';
-                }
-            }
-            return stored;
+            return resolveEffectiveAttendanceApproverType(stored, opportunity);
         }
 
         let app: OpportunityApplication | null = null;
@@ -1715,59 +1692,17 @@ export class EngagementService {
         const resolved = this.normalizeAttendanceApproverType(
             app?.attendanceApproverType || payload.attendance_approver_type,
         );
-        participation.attendanceApproverType = resolved;
+        const effective = resolveEffectiveAttendanceApproverType(resolved, opportunity);
+        participation.attendanceApproverType = effective;
         await this.participantRepository.save(participation);
-        return resolved;
+        return effective;
     }
 
+    /** Partner contacts for routing plus legacy host-org contact used only to resolve assignee user id. */
     private extractPartnerOfficialEmails(opportunity: Opportunity): string[] {
-        const supervision =
-            opportunity.supervision && typeof opportunity.supervision === 'object'
-                ? (opportunity.supervision as Record<string, unknown>)
-                : {};
-        const partnerOrg =
-            opportunity.partner_organization && typeof opportunity.partner_organization === 'object'
-                ? (opportunity.partner_organization as Record<string, unknown>)
-                : {};
-        const executingOrg =
-            opportunity.executing_organization && typeof opportunity.executing_organization === 'object'
-                ? (opportunity.executing_organization as Record<string, unknown>)
-                : {};
-        const externalCollab =
-            opportunity.external_partner_collaboration &&
-            typeof opportunity.external_partner_collaboration === 'object'
-                ? (opportunity.external_partner_collaboration as Record<string, unknown>)
-                : {};
-        const executingContext =
-            opportunity.executing_context && typeof opportunity.executing_context === 'object'
-                ? (opportunity.executing_context as Record<string, unknown>)
-                : {};
-        const contextPartner =
-            executingContext.partner && typeof executingContext.partner === 'object'
-                ? (executingContext.partner as Record<string, unknown>)
-                : {};
-
         return this.normalizeEmailList([
+            ...extractPartnerContactEmailsForAttendance(opportunity),
             opportunity.organization?.contactEmail,
-            opportunity.partner_organization?.official_email,
-            typeof partnerOrg.official_email === 'string' ? partnerOrg.official_email : null,
-            typeof partnerOrg.officialEmail === 'string' ? partnerOrg.officialEmail : null,
-            typeof partnerOrg.email === 'string' ? partnerOrg.email : null,
-            typeof partnerOrg.contact_email === 'string' ? partnerOrg.contact_email : null,
-            typeof partnerOrg.contactEmail === 'string' ? partnerOrg.contactEmail : null,
-            typeof supervision.contact === 'string' && supervision.contact.includes('@')
-                ? supervision.contact
-                : null,
-            opportunity.executing_organization?.official_email,
-            typeof executingOrg.official_email === 'string' ? executingOrg.official_email : null,
-            typeof executingOrg.officialEmail === 'string' ? executingOrg.officialEmail : null,
-            opportunity.external_partner_collaboration?.official_email,
-            typeof externalCollab.official_email === 'string' ? externalCollab.official_email : null,
-            typeof externalCollab.officialEmail === 'string' ? externalCollab.officialEmail : null,
-            typeof contextPartner.official_email === 'string' ? contextPartner.official_email : null,
-            typeof contextPartner.officialEmail === 'string' ? contextPartner.officialEmail : null,
-            typeof supervision.partner_email === 'string' ? supervision.partner_email : null,
-            typeof supervision.external_partner_email === 'string' ? supervision.external_partner_email : null,
         ]);
     }
 
@@ -1885,11 +1820,8 @@ export class EngagementService {
         opportunity: Opportunity,
         participant: Participation,
     ): Promise<{ reviewerType: 'faculty' | 'partner'; reviewerEmail: string }> {
-        const partnerEmails = this.extractPartnerOfficialEmails(opportunity);
-        const partnerFirst =
-            this.opportunityHasPartnerForAttendance(opportunity) && partnerEmails.length > 0;
-
-        if (partnerFirst) {
+        if (opportunityHasActionablePartnerForAttendance(opportunity)) {
+            const partnerEmails = extractPartnerContactEmailsForAttendance(opportunity);
             return {
                 reviewerType: 'partner',
                 reviewerEmail: partnerEmails[0]!.trim().toLowerCase(),
@@ -1901,27 +1833,61 @@ export class EngagementService {
             return { reviewerType: 'faculty', reviewerEmail: facultyEmails[0] };
         }
 
-        const partnerUser = opportunity.organizationId
-            ? await this.userRepository
-                  .createQueryBuilder('user')
-                  .leftJoin('user.organization', 'organization')
-                  .where('organization.id = :organizationId', { organizationId: opportunity.organizationId })
-                  .orderBy('user.createdAt', 'ASC')
-                  .getOne()
-            : null;
-        const partnerUserEmail = (partnerUser?.email || '').trim().toLowerCase();
-        if (partnerUserEmail) {
-            return { reviewerType: 'partner', reviewerEmail: partnerUserEmail };
-        }
-
-        const partnerEmailFromMeta =
-            String(opportunity?.partner_organization?.official_email || '').trim().toLowerCase() ||
-            String(opportunity?.executing_organization?.official_email || '').trim().toLowerCase() ||
-            String(opportunity?.supervision?.partner_email || '').trim().toLowerCase();
-        if (partnerEmailFromMeta) {
-            return { reviewerType: 'partner', reviewerEmail: partnerEmailFromMeta };
-        }
-
         throw new BadRequestException('Unable to resolve reviewer for this project');
+    }
+
+    /**
+     * Pending attendance routed to partner when the project has no partner contact email
+     * (e.g. only host organizationId). Reassigns logs and seats to faculty review.
+     */
+    async reconcileMisroutedPartnerAttendanceForOpportunity(opportunity: Opportunity): Promise<void> {
+        if (!opportunity.isStudentCreated || opportunityHasActionablePartnerForAttendance(opportunity)) {
+            return;
+        }
+
+        const pendingPartnerLogs = await this.attendanceLogRepository.find({
+            where: {
+                projectId: opportunity.id,
+                approvalStatus: 'pending',
+                assignedApproverType: 'partner',
+            },
+            relations: ['participant'],
+        });
+
+        await this.participantRepository.update(
+            { projectId: opportunity.id, attendanceApproverType: 'partner' },
+            { attendanceApproverType: 'faculty' },
+        );
+
+        if (!pendingPartnerLogs.length) {
+            return;
+        }
+
+        for (const log of pendingPartnerLogs) {
+            let assignedFacultyUserId: string | null = null;
+            if (log.participant) {
+                const facultyEmails = await this.resolveFacultyEmailsForAttendanceRouting(
+                    log.participant,
+                    opportunity,
+                );
+                for (const facultyEmail of facultyEmails) {
+                    const facultyUser = await this.userRepository
+                        .createQueryBuilder('user')
+                        .where('LOWER("user"."email") = :facultyEmail', { facultyEmail })
+                        .andWhere('"user"."role" = :facultyRole', { facultyRole: UserRole.FACULTY })
+                        .getOne();
+                    if (facultyUser?.id) {
+                        assignedFacultyUserId = facultyUser.id;
+                        break;
+                    }
+                }
+            }
+
+            log.assignedApproverType = 'faculty';
+            log.assignedApproverUserId = assignedFacultyUserId;
+            log.opportunityCreatorKind = 'faculty';
+        }
+
+        await this.attendanceLogRepository.save(pendingPartnerLogs);
     }
 }

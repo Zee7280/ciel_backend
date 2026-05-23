@@ -17,6 +17,7 @@ import { Otp } from './entities/otp.entity';
 import { UsersService } from '../users/users.service';
 import { MailService } from '../mail/mail.service';
 import { EngagementService } from '../engagement/engagement.service';
+import { opportunityHasActionablePartnerForAttendance } from '../engagement/attendance-approver.util';
 import {
     LINE_STATUS,
     OpportunityWorkflowService,
@@ -59,24 +60,6 @@ export class StudentsService {
 
     private normalize(str?: string | null) {
         return (str || '').trim().toLowerCase();
-    }
-
-    private hasMeaningfulObjectValue(value: unknown): boolean {
-        if (!value || typeof value !== 'object') return false;
-        return Object.values(value as Record<string, unknown>).some((v) => {
-            if (Array.isArray(v)) return v.length > 0;
-            if (v && typeof v === 'object') return this.hasMeaningfulObjectValue(v);
-            return v !== null && v !== undefined && String(v).trim() !== '';
-        });
-    }
-
-    private opportunityHasPartner(opportunity: Opportunity): boolean {
-        return Boolean(
-            opportunity.organizationId ||
-            this.hasMeaningfulObjectValue(opportunity.partner_organization) ||
-            this.hasMeaningfulObjectValue(opportunity.executing_organization) ||
-            opportunity.requiresPartnerApproval,
-        );
     }
 
     private async getOccupiedSeats(opportunityId: string): Promise<number> {
@@ -1686,7 +1669,9 @@ export class StudentsService {
         /** Must match payload reality: omitting participation_type must not bypass team checks if members are sent. */
         const isTeamApply = isTeamApplyFromParticipationAndMembers(dto.participation_type, dto.team_members);
 
-        const attendanceApproverType = this.opportunityHasPartner(opportunity) ? 'partner' : 'faculty';
+        const attendanceApproverType = opportunityHasActionablePartnerForAttendance(opportunity)
+            ? 'partner'
+            : 'faculty';
         if (attendanceApproverType === 'faculty' && !dto.primary_faculty_email) {
             throw new BadRequestException('Primary faculty email is required when attendance approval is routed to faculty');
         }

@@ -1377,20 +1377,34 @@ export class StudentsService {
         }
 
         let statusForReport = (opportunity.status || '').toLowerCase();
+        let applicationStatus: string | null = null;
+        let applicationStage: 'faculty' | 'partner' | 'admin' | null = null;
+        let applicationInternalStatus: string | null = null;
+        let hasApplied = false;
+        const isStudentOwner = Boolean(studentUserId && opportunity.creatorId === studentUserId);
 
         if (studentUserId) {
-            const oa = await this.opportunityApplicationsService.findLatestForStudentOpportunity(
-                studentUserId,
-                opportunityId,
-            );
             const part = await this.participantRepository.findOne({
                 where: { studentId: studentUserId, projectId: opportunityId },
             });
-            const joinApproved =
-                oa?.internalStatus === 'approved' ||
-                (!!part && ['approved', 'verified'].includes(part.status));
+            const overlay = await this.opportunityApplicationsService.resolveStudentJoinOverlay(
+                studentUserId,
+                opportunity,
+                part,
+            );
+            applicationStatus = overlay.applicationStatus;
+            applicationStage = overlay.applicationStage;
+            applicationInternalStatus = overlay.applicationInternalStatus;
+            hasApplied = overlay.hasApplied;
 
-            if (joinApproved) {
+            const joinCleared =
+                overlay.applicationStatus === 'approved' ||
+                overlay.applicationStatus === 'verified' ||
+                (!!part && ['approved', 'verified'].includes(part.status)) ||
+                (isStudentOwner &&
+                    this.opportunityApplicationsService.isCreatorOwnLiveListing(opportunity, studentUserId));
+
+            if (joinCleared) {
                 if (part?.status === 'verified') {
                     statusForReport = 'verified';
                 } else {
@@ -1408,6 +1422,18 @@ export class StudentsService {
                 organizationId: opportunity.organizationId,
                 logoUrl: opportunity.organization?.logoUrl || null,
                 status: statusForReport,
+                creator_id: opportunity.creatorId,
+                creatorId: opportunity.creatorId,
+                is_student_owner: isStudentOwner,
+                isStudentOwner,
+                admin_approved: opportunity.admin_approved,
+                workflow_stage: opportunity.workflowStage,
+                workflowStage: opportunity.workflowStage,
+                application_status: applicationStatus,
+                application_stage: applicationStage,
+                application_internal_status: applicationInternalStatus,
+                has_applied: hasApplied,
+                hasApplied,
                 mode: opportunity.mode,
                 types: opportunity.types,
                 location: opportunity.location,

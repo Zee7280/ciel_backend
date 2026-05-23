@@ -9,6 +9,7 @@ import { CreateAttendanceLogDto } from './dto/create-attendance-log.dto';
 import { PatchAttendanceApprovalDto } from './dto/patch-attendance-approval.dto';
 import { CreateAttendanceVerifyRequestDto } from './dto/create-attendance-verify-request.dto';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
+import { WORKFLOW_STAGE } from '../opportunities/opportunity-workflow.service';
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 import { User } from '../users/entities/user.entity';
 import { UserRole } from '../users/enums/user-role.enum';
@@ -589,6 +590,18 @@ export class EngagementService {
         throw new NotFoundException('Participation record not found');
     }
 
+    private creatorOwnLiveListingAllowsAttendance(
+        participation: Participation,
+        studentId: string,
+        opportunity: Opportunity | null,
+    ): boolean {
+        if (!opportunity?.creatorId || opportunity.creatorId !== studentId) return false;
+        if (!opportunity.admin_approved) return false;
+        if (opportunity.workflowStage === WORKFLOW_STAGE.LIVE) return true;
+        const st = (opportunity.status || '').toLowerCase();
+        return ['active', 'live', 'open', 'recruiting'].includes(st);
+    }
+
     async addAttendanceLog(studentId: string, participantId: string, dto: CreateAttendanceLogDto, file?: Express.Multer.File) {
         const participation = await this.findParticipationByIdentifier(participantId, ['attendanceLogs']);
         if (!participation) throw new NotFoundException('Participation record not found');
@@ -761,8 +774,23 @@ export class EngagementService {
             }
         }
 
-        // Check if participation is approved
-        if (!['approved', 'verified', 'accepted', 'finalized'].includes(participation.status)) {
+        const opportunity = participation.projectId
+            ? await this.opportunityRepository.findOne({
+                  where: { id: participation.projectId },
+                  relations: ['organization'],
+              })
+            : null;
+        const creatorLiveBypass = this.creatorOwnLiveListingAllowsAttendance(
+            participation,
+            studentId,
+            opportunity,
+        );
+
+        // Check if participation is approved (creator on own live listing may log despite stale rejected row)
+        if (
+            !creatorLiveBypass &&
+            !['approved', 'verified', 'accepted', 'finalized'].includes(participation.status)
+        ) {
             this.logger.warn(`Attendance logging attempt for record ${participation.id} in status: ${participation.status}`);
             throw new BadRequestException(`Attendance logging is only allowed for approved/verified records (Current status: ${participation.status})`);
         }
@@ -803,10 +831,6 @@ export class EngagementService {
             evidenceUploaded = true;
         }
 
-        const opportunity = await this.opportunityRepository.findOne({
-            where: { id: participation.projectId },
-            relations: ['organization'],
-        });
         if (!opportunity) {
             throw new NotFoundException('Project not found');
         }

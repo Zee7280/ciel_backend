@@ -1115,6 +1115,7 @@ export class StudentsService {
             appByOpp = await this.opportunityApplicationsService.mapCurrentApplicationsForOpportunities(
                 studentContextId,
                 opportunityIds,
+                new Map(opportunities.map((o) => [o.id, o])),
             );
         }
 
@@ -1145,13 +1146,16 @@ export class StudentsService {
             success: true,
             data: await Promise.all(paginated.map(async o => {
                 const part = participationByOpp.get(o.id);
-                const app = appByOpp.get(o.id);
+                const overlay = await this.opportunityApplicationsService.resolveStudentJoinOverlay(
+                    studentContextId,
+                    o,
+                    part ?? null,
+                );
                 const occupiedSeats = await this.getOccupiedSeats(o.id);
                 const volunteersRequired = o.timeline?.volunteers_required || 0;
-                const applicationStatus = app
-                    ? this.opportunityApplicationsService.toPublicApplicationStatus(app.internalStatus, part)
-                    : this.normalizeApplicationStatus(part?.status || null);
-                const hasApplied = !!(app || part);
+                const applicationStatus = overlay.applicationStatus;
+                const hasApplied = overlay.hasApplied;
+                const app = overlay.app;
                 const organizationName = o.organization?.name || 'Unknown';
 
                 return {
@@ -1209,24 +1213,17 @@ export class StudentsService {
                     projectId: id,
                 },
             });
-            const app = await this.opportunityApplicationsService.findLatestForStudentOpportunity(userId, id);
-
-            if (app) {
-                applicationInternalStatus = app.internalStatus;
-                applicationStage = this.opportunityApplicationsService.applicationStage(app.internalStatus);
-                applicationStatus = this.opportunityApplicationsService.toPublicApplicationStatus(
-                    app.internalStatus,
-                    part,
-                );
-            } else if (part) {
-                applicationStatus = this.normalizeApplicationStatus(part.status);
-            }
-
-            if (app || part) {
-                hasApplied = true;
-                paymentStatus = part?.paymentStatus ?? null;
-                paymentProofUrl = part?.paymentProofUrl ?? null;
-            }
+            const overlay = await this.opportunityApplicationsService.resolveStudentJoinOverlay(
+                userId,
+                opportunity,
+                part,
+            );
+            applicationStatus = overlay.applicationStatus;
+            applicationStage = overlay.applicationStage;
+            applicationInternalStatus = overlay.applicationInternalStatus;
+            hasApplied = overlay.hasApplied;
+            paymentStatus = part?.paymentStatus ?? null;
+            paymentProofUrl = part?.paymentProofUrl ?? null;
         }
 
         const occupiedSeats = await this.getOccupiedSeats(id);
@@ -1318,10 +1315,11 @@ export class StudentsService {
                 const participationStatus =
                     app.status === 'approved' || app.status === 'verified' ? 'active' : app.status;
 
-                const oa = latestAppByOpp.get(app.projectId);
-                const applicationStatus = oa
-                    ? this.opportunityApplicationsService.toPublicApplicationStatus(oa.internalStatus, app)
-                    : this.normalizeApplicationStatus(app.status);
+                const overlay = await this.opportunityApplicationsService.resolveStudentJoinOverlay(
+                    studentId,
+                    app.project,
+                    app,
+                );
 
                 return {
                     ...base,
@@ -1329,13 +1327,11 @@ export class StudentsService {
                     organization: app.project.organization?.name || 'Unknown',
                     payment_status: app.paymentStatus,
                     payment_proof_url: app.paymentProofUrl,
-                    application_status: applicationStatus,
-                    application_stage: oa
-                        ? this.opportunityApplicationsService.applicationStage(oa.internalStatus)
-                        : null,
-                    application_internal_status: oa?.internalStatus ?? null,
-                    has_applied: true,
-                    hasApplied: true,
+                    application_status: overlay.applicationStatus,
+                    application_stage: overlay.applicationStage,
+                    application_internal_status: overlay.applicationInternalStatus,
+                    has_applied: overlay.hasApplied,
+                    hasApplied: overlay.hasApplied,
                 };
             }),
         );
@@ -1346,17 +1342,21 @@ export class StudentsService {
         for (const oa of latestAppByOpp.values()) {
             if (participantOppIds.has(oa.opportunityId)) continue;
             if (!oa.opportunity) continue;
-            const st = this.opportunityApplicationsService.toPublicApplicationStatus(oa.internalStatus, null);
+            const overlay = await this.opportunityApplicationsService.resolveStudentJoinOverlay(
+                studentId,
+                oa.opportunity,
+                null,
+            );
             const base = this.opportunityWorkflow.toStudentProjectCard(oa.opportunity, { teamMembers: [] });
             fromPipelineOnly.push({
                 ...base,
-                status: st,
+                status: overlay.applicationStatus ?? base.status,
                 organization: oa.opportunity.organization?.name || 'Unknown',
-                application_status: st,
-                application_stage: this.opportunityApplicationsService.applicationStage(oa.internalStatus),
-                application_internal_status: oa.internalStatus,
-                has_applied: true,
-                hasApplied: true,
+                application_status: overlay.applicationStatus,
+                application_stage: overlay.applicationStage,
+                application_internal_status: overlay.applicationInternalStatus,
+                has_applied: overlay.hasApplied,
+                hasApplied: overlay.hasApplied,
             });
         }
 

@@ -17,6 +17,7 @@ import { FacultyUniversityScopeService } from '../faculty-university-scope/facul
 import { StudentReport } from '../reports/entities/student-report.entity';
 import { Payment } from '../payments/entities/payment.entity';
 import { Opportunity } from './entities/opportunity.entity';
+import { WORKFLOW_STAGE } from './opportunity-workflow.service';
 import { isTeamApplyFromParticipationAndMembers } from './apply-team-payload.util';
 import { AdminPatchTeamMemberDto } from './dto/admin-patch-team-member.dto';
 
@@ -1700,6 +1701,108 @@ export class OpportunityApplicationsService {
         return rows[0] || null;
     }
 
+    private static readonly LIVE_LISTING_STATUSES = ['active', 'live', 'open', 'recruiting'];
+
+    /** Student owns a listing that has passed admin review and is publicly live. */
+    isCreatorOwnLiveListing(
+        opportunity: Pick<Opportunity, 'creatorId' | 'admin_approved' | 'workflowStage' | 'status'>,
+        studentUserId: string,
+    ): boolean {
+        if (!opportunity.creatorId || opportunity.creatorId !== studentUserId) return false;
+        if (!opportunity.admin_approved) return false;
+        if (opportunity.workflowStage === WORKFLOW_STAGE.LIVE) return true;
+        const st = (opportunity.status || '').toLowerCase();
+        return OpportunityApplicationsService.LIVE_LISTING_STATUSES.includes(st);
+    }
+
+    /**
+     * Join / participation overlay for student UI (browse, project detail, My Projects).
+     * Listing approval (`opportunities.admin_approved` + live) is separate from join pipeline rows.
+     */
+    async resolveStudentJoinOverlay(
+        studentUserId: string,
+        opportunity: Pick<Opportunity, 'id' | 'creatorId' | 'admin_approved' | 'workflowStage' | 'status'>,
+        participation?: Participation | null,
+    ): Promise<{
+        app: OpportunityApplication | null;
+        applicationStatus: string | null;
+        applicationStage: 'faculty' | 'partner' | 'admin' | null;
+        applicationInternalStatus: string | null;
+        hasApplied: boolean;
+    }> {
+        const rows = await this.appRepo.find({
+            where: { studentUserId, opportunityId: opportunity.id, withdrawnAt: IsNull() },
+            order: { createdAt: 'DESC' },
+        });
+
+        const ownLive = this.isCreatorOwnLiveListing(opportunity, studentUserId);
+
+        if (ownLive) {
+            const pending = rows.find((r) => PENDING_PIPELINE.includes(r.internalStatus));
+            if (pending) {
+                return {
+                    app: pending,
+                    applicationStatus: this.toPublicApplicationStatus(pending.internalStatus, participation),
+                    applicationStage: this.applicationStage(pending.internalStatus),
+                    applicationInternalStatus: pending.internalStatus,
+                    hasApplied: true,
+                };
+            }
+            const approvedApp = rows.find((r) => r.internalStatus === 'approved');
+            return {
+                app: approvedApp ?? rows[0] ?? null,
+                applicationStatus: this.toPublicApplicationStatus('approved', participation),
+                applicationStage: approvedApp ? this.applicationStage(approvedApp.internalStatus) : null,
+                applicationInternalStatus: approvedApp?.internalStatus ?? null,
+                hasApplied: !!(rows.length || participation),
+            };
+        }
+
+        const app = rows[0] ?? null;
+        if (app) {
+            return {
+                app,
+                applicationStatus: this.toPublicApplicationStatus(app.internalStatus, participation),
+                applicationStage: this.applicationStage(app.internalStatus),
+                applicationInternalStatus: app.internalStatus,
+                hasApplied: true,
+            };
+        }
+
+        if (participation) {
+            const st = (participation.status || '').toLowerCase();
+            let applicationStatus: string | null = null;
+            if (['pending', 'pending_payment_approval', 'pending_ciel_approval', 'pending_faculty_approval'].includes(st)) {
+                applicationStatus = 'pending_approval';
+            } else if (st === 'verified') {
+                applicationStatus = 'verified';
+            } else if (['approved', 'accepted', 'paid', 'finalized'].includes(st)) {
+                applicationStatus = 'approved';
+            } else if (['rejected', 'not_approved', 'denied', 'declined'].includes(st)) {
+                applicationStatus = 'rejected';
+            } else if (st === 'withdrawn') {
+                applicationStatus = 'withdrawn';
+            } else if (st) {
+                applicationStatus = st;
+            }
+            return {
+                app: null,
+                applicationStatus,
+                applicationStage: null,
+                applicationInternalStatus: null,
+                hasApplied: true,
+            };
+        }
+
+        return {
+            app: null,
+            applicationStatus: null,
+            applicationStage: null,
+            applicationInternalStatus: null,
+            hasApplied: false,
+        };
+    }
+
     async hasOpenPipelineApplication(studentUserId: string, opportunityId: string): Promise<boolean> {
         return this.appRepo.exists({
             where: {
@@ -1717,6 +1820,7 @@ export class OpportunityApplicationsService {
     async mapCurrentApplicationsForOpportunities(
         studentUserId: string,
         opportunityIds: string[],
+        opportunitiesById?: Map<string, Pick<Opportunity, 'id' | 'creatorId' | 'admin_approved' | 'workflowStage' | 'status'>>,
     ): Promise<Map<string, OpportunityApplication>> {
         const result = new Map<string, OpportunityApplication>();
         if (!studentUserId || !opportunityIds.length) return result;
@@ -1736,7 +1840,14 @@ export class OpportunityApplicationsService {
             const list = grouped.get(oppId);
             if (!list?.length) continue;
             const sorted = [...list].sort((x, y) => y.createdAt.getTime() - x.createdAt.getTime());
-            const current = sorted[0];
+            const opp = opportunitiesById?.get(oppId);
+            let current = sorted[0];
+            if (opp && this.isCreatorOwnLiveListing(opp, studentUserId)) {
+                current =
+                    sorted.find((r) => r.internalStatus === 'approved') ??
+                    sorted.find((r) => PENDING_PIPELINE.includes(r.internalStatus)) ??
+                    sorted[0];
+            }
             if (current) result.set(oppId, current);
         }
         return result;

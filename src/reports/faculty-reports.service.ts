@@ -26,6 +26,7 @@ export class FacultyReportsService {
             .leftJoinAndSelect('report.opportunity', 'opportunity')
             .leftJoinAndSelect('opportunity.organization', 'organization')
             .where(new Brackets((qb) => this.applyFacultyAccessFilter(qb, facultyId)))
+            .andWhere('report.admin_status = :adminApproved', { adminApproved: 'approved' })
             .orderBy('report.submission_date', 'DESC')
             .getMany();
 
@@ -56,10 +57,13 @@ export class FacultyReportsService {
             .leftJoinAndSelect('opportunity.organization', 'organization')
             .where('report.id = :id', { id })
             .andWhere(new Brackets((qb) => this.applyFacultyAccessFilter(qb, facultyId)))
+            .andWhere('report.admin_status = :adminApproved', { adminApproved: 'approved' })
             .getOne();
 
         if (!report) {
-            throw new NotFoundException('Report not found or not assigned to you');
+            throw new NotFoundException(
+                'Report not found, not assigned to you, or not yet approved by CIEL Admin',
+            );
         }
 
         return this.studentReportsService.buildDetailResponse(report);
@@ -71,10 +75,13 @@ export class FacultyReportsService {
             .leftJoin('report.opportunity', 'opportunity')
             .where('report.id = :id', { id })
             .andWhere(new Brackets((qb) => this.applyFacultyAccessFilter(qb, facultyId)))
+            .andWhere('report.admin_status = :adminApproved', { adminApproved: 'approved' })
             .getOne();
 
         if (!report) {
-            throw new NotFoundException('Report not found or not assigned to you');
+            throw new NotFoundException(
+                'Report not found, not assigned to you, or not yet approved by CIEL Admin',
+            );
         }
 
         report.faculty_status = status;

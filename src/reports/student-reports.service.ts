@@ -874,6 +874,11 @@ export class StudentReportsService {
         return await this.formatReportResponse(report);
     }
 
+    /** Same dossier payload as admin/partner detail, for role-scoped controllers that already verified access. */
+    async buildDetailResponse(report: StudentReport, attendanceParticipantStudentId?: string) {
+        return this.formatReportResponse(report, attendanceParticipantStudentId);
+    }
+
     async findOneForPartner(id: string, organizationId: string) {
         const report = await this.studentReportsRepository.findOne({
             where: { id },
@@ -1043,6 +1048,8 @@ export class StudentReportsService {
                 payment_verified,
                 ...paymentRest,
                 partner_status: report.partner_status,
+                faculty_status: report.faculty_status,
+                faculty_remarks: report.faculty_remarks,
                 admin_status: adminStatus,
                 admin_approval_status: adminStatus,
                 submission_date: report.submission_date,

@@ -2,15 +2,14 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, Repository, WhereExpressionBuilder } from 'typeorm';
 import { StudentReport } from './entities/student-report.entity';
-import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
+import { StudentReportsService } from './student-reports.service';
 
 @Injectable()
 export class FacultyReportsService {
     constructor(
         @InjectRepository(StudentReport)
         private studentReportsRepository: Repository<StudentReport>,
-        @InjectRepository(AttendanceLog)
-        private readonly attendanceLogsRepository: Repository<AttendanceLog>,
+        private readonly studentReportsService: StudentReportsService,
     ) { }
 
     private applyFacultyAccessFilter(qb: WhereExpressionBuilder, facultyId: string) {
@@ -63,38 +62,7 @@ export class FacultyReportsService {
             throw new NotFoundException('Report not found or not assigned to you');
         }
 
-        // Fetch attendance logs for this student and opportunity for complete review context
-        const attendanceLogs = await this.attendanceLogsRepository.find({
-            where: {
-                participant: { studentId: report.studentId },
-                projectId: report.opportunityId || report.project_id
-            },
-            order: { dateOfEngagement: 'ASC', startTime: 'ASC' }
-        });
-
-        return {
-            success: true,
-            data: {
-                ...report,
-                attendance_logs: attendanceLogs.map(log => ({
-                    id: log.id,
-                    participantId: log.participantId,
-                    date: log.dateOfEngagement,
-                    start_time: log.startTime,
-                    end_time: log.endTime,
-                    location: log.organizationName,
-                    activity_type: log.activityType,
-                    description: log.description,
-                    hours: Number(log.sessionHours),
-                    evidence_url: log.evidenceUrl,
-                    entryStatus: log.entryStatus,
-                    approval_status: (log as any).approvalStatus ?? null,
-                    approval_action_reason: (log as any).approvalActionReason ?? null,
-                    assigned_approver_type: (log as any).assignedApproverType ?? null,
-                    opportunity_creator_kind: (log as any).opportunityCreatorKind ?? null,
-                }))
-            }
-        };
+        return this.studentReportsService.buildDetailResponse(report);
     }
 
     async updateAction(id: string, facultyId: string, status: 'approved' | 'rejected', remarks?: string) {

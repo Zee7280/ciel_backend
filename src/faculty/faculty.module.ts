@@ -15,6 +15,7 @@ import { OpportunityApplication } from '../opportunities/entities/opportunity-ap
 import { OpportunitiesModule } from '../opportunities/opportunities.module';
 import { FacultyApplicationsController } from './faculty-applications.controller';
 import { FacultyUniversityScopeModule } from '../faculty-university-scope/faculty-university-scope.module';
+import { StudentsModule } from '../students/students.module';
 
 @Module({
     imports: [
@@ -29,6 +30,7 @@ import { FacultyUniversityScopeModule } from '../faculty-university-scope/facult
         ]),
         OpportunitiesModule,
         FacultyUniversityScopeModule,
+        StudentsModule,
     ],
     controllers: [
         FacultyReportsController,

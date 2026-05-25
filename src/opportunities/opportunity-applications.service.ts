@@ -242,6 +242,51 @@ export class OpportunityApplicationsService {
         return tid || `individual:${((p.studentId || p.id) || '').trim()}`;
     }
 
+    private decodeAdminTeamRouteId(teamIdParam: string): string {
+        return decodeURIComponent((teamIdParam || '').trim());
+    }
+
+    /** `individual:{studentId|participationId}` rows from admin team listing — not stored in `teamId` column. */
+    private parseIndividualListingTeamKey(teamIdParam: string): string | null {
+        const norm = this.decodeAdminTeamRouteId(teamIdParam);
+        const prefix = 'individual:';
+        if (!norm.startsWith(prefix)) return null;
+        const key = norm.slice(prefix.length).trim();
+        return key || null;
+    }
+
+    private async findActiveParticipationsForAdminTeamRoute(
+        opportunityId: string,
+        teamIdParam: string,
+        em?: import('typeorm').EntityManager,
+    ): Promise<Participation[]> {
+        const repo = em ? em.getRepository(Participation) : this.participationRepo;
+        const paramNorm = this.decodeAdminTeamRouteId(teamIdParam);
+        const individualKey = this.parseIndividualListingTeamKey(teamIdParam);
+
+        if (individualKey) {
+            const base = {
+                projectId: opportunityId,
+                status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
+            };
+            const byStudent = await repo.find({
+                where: { ...base, studentId: individualKey, teamId: IsNull() },
+            });
+            if (byStudent.length) return byStudent;
+            return repo.find({
+                where: { ...base, id: individualKey, teamId: IsNull() },
+            });
+        }
+
+        return repo.find({
+            where: {
+                projectId: opportunityId,
+                teamId: paramNorm,
+                status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
+            },
+        });
+    }
+
     private formatPakCnicDigitsDisplay(digits: string): string | null {
         const d = (digits || '').replace(/\D/g, '');
         if (d.length !== 13) {
@@ -1222,13 +1267,7 @@ export class OpportunityApplicationsService {
 
     async adminDeleteOpportunityTeam(opportunityId: string, teamId: string) {
         await this.appRepo.manager.transaction(async (em) => {
-            const members = await em.find(Participation, {
-                where: {
-                    projectId: opportunityId,
-                    teamId,
-                    status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
-                },
-            });
+            const members = await this.findActiveParticipationsForAdminTeamRoute(opportunityId, teamId, em);
             if (!members.length) {
                 throw new NotFoundException('Team not found for this opportunity');
             }
@@ -1277,6 +1316,7 @@ export class OpportunityApplicationsService {
 
     async adminDeleteOpportunityTeamMember(opportunityId: string, teamId: string, memberId: string) {
         const decodedMemberId = decodeURIComponent((memberId || '').trim());
+        const paramNorm = this.decodeAdminTeamRouteId(teamId);
         if (decodedMemberId.startsWith('pending:')) {
             throw new BadRequestException(
                 'This line is roster-only until seats are issued. Withdraw the student application instead of deleting a member seat.',
@@ -1285,19 +1325,27 @@ export class OpportunityApplicationsService {
         if (!this.looksLikeUuidParam(decodedMemberId)) {
             throw new BadRequestException('Invalid member id for removal.');
         }
-        await this.appRepo.manager.transaction(async (em) => {
-            const member = await em.findOne(Participation, {
-                where: {
-                    id: decodedMemberId,
-                    projectId: opportunityId,
-                    teamId,
-                    status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
-                },
-            });
-            if (!member) {
-                throw new NotFoundException('Team member not found for this opportunity');
-            }
 
+        const member = await this.participationRepo.findOne({
+            where: {
+                id: decodedMemberId,
+                projectId: opportunityId,
+                status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
+            },
+        });
+        if (!member) {
+            throw new NotFoundException('Team member not found for this opportunity');
+        }
+        const expectedGroupId = this.participationListingGroupId(member);
+        if (paramNorm !== expectedGroupId) {
+            throw new BadRequestException(
+                `Team grouping mismatch (${paramNorm}). Refresh the roster and retry from the newest team id.`,
+            );
+        }
+
+        const dbTeamId = (member.teamId || '').trim() || null;
+
+        await this.appRepo.manager.transaction(async (em) => {
             if (member.studentId) {
                 const reports = await em
                     .getRepository(StudentReport)
@@ -1327,14 +1375,16 @@ export class OpportunityApplicationsService {
                     .execute();
             }
 
-            const remainingTeamMembers = await em.find(Participation, {
-                where: {
-                    projectId: opportunityId,
-                    teamId,
-                    status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
-                },
-                order: { createdAt: 'ASC' },
-            });
+            const remainingTeamMembers = dbTeamId
+                ? await em.find(Participation, {
+                      where: {
+                          projectId: opportunityId,
+                          teamId: dbTeamId,
+                          status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
+                      },
+                      order: { createdAt: 'ASC' },
+                  })
+                : [];
             if (remainingTeamMembers.length && !remainingTeamMembers.some((p) => p.isTeamLead)) {
                 const nextLead = remainingTeamMembers[0];
                 nextLead.isTeamLead = true;

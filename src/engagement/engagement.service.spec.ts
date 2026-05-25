@@ -36,6 +36,7 @@ describe('EngagementService', () => {
         create: jest.fn(),
         save: jest.fn(),
         delete: jest.fn(),
+        createQueryBuilder: jest.fn(),
     };
 
     const mockOpportunityRepository = {
@@ -264,14 +265,12 @@ describe('EngagementService', () => {
 
         beforeEach(() => {
             qbChain = qbStub();
-            (mockAttendanceLogRepository as unknown as Record<string, unknown>).createQueryBuilder = jest
-                .fn()
-                .mockReturnValue(qbChain);
+            mockAttendanceLogRepository.createQueryBuilder.mockReturnValue(qbChain);
             mockParticipationRepository.find.mockReset();
         });
 
         afterEach(() => {
-            delete (mockAttendanceLogRepository as unknown as Record<string, unknown>).createQueryBuilder;
+            mockAttendanceLogRepository.createQueryBuilder.mockReset();
         });
 
         it.skip('hydrates missing participant.teamId / team_id from roster parity before returning logs', async () => {

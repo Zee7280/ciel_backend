@@ -175,6 +175,12 @@ export class FacultyService {
         return false;
     }
 
+    /** Impact report hours/EIS are faculty-visible only after CIEL Admin final approval. */
+    private reportImpactMetricsReleasedToFaculty(report: StudentReport | null): boolean {
+        if (!report) return false;
+        return (report.admin_status || '').trim().toLowerCase() === 'approved';
+    }
+
     private opportunityNeedsFacultyReview(opp: Opportunity): boolean {
         if (!opp.creatorId || opp.faculty_verified || opp.admin_approved) return false;
         if (opp.workflowStage === WORKFLOW_STAGE.LIVE || opp.status === 'active' || opp.status === 'live') return false;
@@ -933,18 +939,26 @@ export class FacultyService {
                     delegatedSet,
                     reportAwaitingFaculty,
                 );
-                const metrics = (
-                    latestReport?.section1 as
-                        | { metrics?: { total_verified_hours?: number; eis_score?: number } }
-                        | undefined
-                )?.metrics;
-                const totalHours = Number(metrics?.total_verified_hours ?? 0) || 0;
-                const eisScore = Number(metrics?.eis_score ?? 0) || 0;
-                const impactScore =
-                    Number(
-                        (latestReport?.section11 as { ai_generated_impact_score?: number } | undefined)
-                            ?.ai_generated_impact_score ?? 0,
-                    ) || 0;
+                const metricsReleased = this.reportImpactMetricsReleasedToFaculty(latestReport);
+                const metrics = metricsReleased
+                    ? (
+                          latestReport?.section1 as
+                              | { metrics?: { total_verified_hours?: number; eis_score?: number } }
+                              | undefined
+                      )?.metrics
+                    : undefined;
+                const totalHours = metricsReleased
+                    ? Number(metrics?.total_verified_hours ?? 0) || undefined
+                    : undefined;
+                const eisScore = metricsReleased
+                    ? Number(metrics?.eis_score ?? 0) || undefined
+                    : undefined;
+                const impactScore = metricsReleased
+                    ? Number(
+                          (latestReport?.section11 as { ai_generated_impact_score?: number } | undefined)
+                              ?.ai_generated_impact_score ?? 0,
+                      ) || undefined
+                    : undefined;
 
                 return {
                     id: opp.id,
@@ -958,6 +972,7 @@ export class FacultyService {
                     totalHours,
                     eisScore,
                     impactScore,
+                    impact_metrics_released: metricsReleased,
                     sdg: opp.sdg || opp.sdg_info?.sdg_id || 'N/A',
                     opportunityStatus: opp.status,
                     workflowStage: opp.workflowStage ?? null,

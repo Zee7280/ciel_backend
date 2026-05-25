@@ -14,6 +14,7 @@ import { MailService } from '../mail/mail.service';
 
 import { EngagementService } from '../engagement/engagement.service';
 import { Payment, PaymentStatus } from '../payments/entities/payment.entity';
+import { formatCertificateVerificationCode } from './certificate-verification-code.util';
 
 @Injectable()
 export class StudentReportsService {
@@ -103,6 +104,16 @@ export class StudentReportsService {
             .replace(/\/+$/, '');
         const pathAndSlug = `${pathSeg}/${encodeURIComponent(s)}`;
         return base ? `${base}${pathAndSlug}` : pathAndSlug;
+    }
+
+    /** QR URL + DB slug + display code for certificates (single source of truth). */
+    private reportVerificationPayload(report: StudentReport) {
+        const slug = report.verificationPublicSlug?.trim() || null;
+        return {
+            verification_public_slug: slug,
+            certificate_verification_code: formatCertificateVerificationCode(slug),
+            impact_verify_url: this.buildImpactVerifyUrl(slug),
+        };
     }
 
     /** Aligns legacy DB values with student UI / frontend lifecycle names. */
@@ -660,7 +671,7 @@ export class StudentReportsService {
             message: shouldSubmit ? 'Report submitted successfully.' : 'Report saved as draft.',
             data: {
                 report_id: report.id,
-                impact_verify_url: this.buildImpactVerifyUrl(report.verificationPublicSlug),
+                ...this.reportVerificationPayload(report),
                 project_id: report.project_id,
                 submitted_at: report.submission_date,
                 report_submitted_at: report.reportSubmittedAt,
@@ -757,7 +768,7 @@ export class StudentReportsService {
             data: {
                 draft_id: report.id,
                 report_id: report.id,
-                impact_verify_url: this.buildImpactVerifyUrl(report.verificationPublicSlug),
+                ...this.reportVerificationPayload(report),
                 last_saved: report.updatedAt,
             },
         };
@@ -1027,7 +1038,7 @@ export class StudentReportsService {
             data: {
                 id: report.id,
                 report_id: report.id,
-                impact_verify_url: this.buildImpactVerifyUrl(report.verificationPublicSlug),
+                ...this.reportVerificationPayload(report),
                 student: {
                     id: report.student?.id,
                     name: report.student?.name,
@@ -1220,7 +1231,7 @@ export class StudentReportsService {
                     payment_verified,
                     ...paymentRest,
                     report_id: r.id,
-                    impact_verify_url: this.buildImpactVerifyUrl(r.verificationPublicSlug),
+                    ...this.reportVerificationPayload(r),
                     project_id: r.project_id,
                     projectId: projectKey,
                     opportunity_id: r.opportunityId,
@@ -1271,7 +1282,7 @@ export class StudentReportsService {
                 payment_verified,
                 ...paymentRest,
                 report_id: report.id,
-                impact_verify_url: this.buildImpactVerifyUrl(report.verificationPublicSlug),
+                ...this.reportVerificationPayload(report),
                 project_id: report.project_id,
                 projectId: report.opportunityId || report.project_id,
                 opportunity_id: report.opportunityId,

@@ -191,7 +191,11 @@ export class AdminProjectEvidenceService {
             );
         }
 
-        await archive.finalize();
+        await new Promise<void>((resolve, reject) => {
+            archive.once('end', () => resolve());
+            archive.once('error', (err) => reject(err));
+            archive.finalize();
+        });
     }
 
     private buildZipEntries(

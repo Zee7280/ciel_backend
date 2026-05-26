@@ -22,6 +22,7 @@ import { FilesInterceptor, FileInterceptor } from '@nestjs/platform-express';
 import {
     assertStudentReportUploadMeta,
     studentReportMulterFileFilter,
+    studentReportPresignExpiresInSeconds,
     studentReportUploadMulterLimits,
 } from '../common/student-report-file-upload';
 import { S3Service } from '../common/s3.service';
@@ -172,6 +173,7 @@ export class StudentController {
             folder: `student-reports-temp/${req.user.id}/${body.section}`,
             originalName: meta.filename,
             contentType: meta.contentType,
+            expiresInSeconds: studentReportPresignExpiresInSeconds(meta.size),
         });
 
         return { success: true, data: { ...signed, url: signed.publicUrl } };
@@ -251,6 +253,7 @@ export class StudentController {
             folder,
             originalName: meta.filename,
             contentType: meta.contentType,
+            expiresInSeconds: studentReportPresignExpiresInSeconds(meta.size),
         });
 
         return { success: true, data: { ...signed, url: signed.publicUrl } };

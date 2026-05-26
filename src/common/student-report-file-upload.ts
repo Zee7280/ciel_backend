@@ -18,6 +18,37 @@ export const STUDENT_REPORT_ALLOWED_EXTENSIONS = new Set([
     '.docx',
 ]);
 
+/** Common video containers — also accept any `video/*` MIME from the client. */
+export const STUDENT_REPORT_VIDEO_EXTENSIONS = new Set([
+    '.mp4',
+    '.m4v',
+    '.mov',
+    '.qt',
+    '.webm',
+    '.avi',
+    '.mkv',
+    '.wmv',
+    '.flv',
+    '.mpeg',
+    '.mpg',
+    '.mp2',
+    '.mpe',
+    '.mpv',
+    '.3gp',
+    '.3g2',
+    '.ogv',
+    '.ogg',
+    '.mts',
+    '.m2ts',
+    '.ts',
+    '.vob',
+    '.asf',
+    '.rm',
+    '.rmvb',
+    '.f4v',
+    '.divx',
+]);
+
 const ALLOWED_MIMETYPES = new Set([
     'image/jpeg',
     'image/jpg',
@@ -31,8 +62,17 @@ const ALLOWED_MIMETYPES = new Set([
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 ]);
 
-export const STUDENT_REPORT_MAX_FILE_BYTES = 50 * 1024 * 1024;
-export const STUDENT_REPORT_MAX_FIELD_BYTES = 55 * 1024 * 1024;
+export const STUDENT_REPORT_MAX_FILE_BYTES = 500 * 1024 * 1024;
+export const STUDENT_REPORT_MAX_FIELD_BYTES = 510 * 1024 * 1024;
+export const STUDENT_REPORT_MAX_FILE_LABEL = '500MB';
+
+/** Presigned PUT window — scale up for large evidence uploads (up to 500MB). */
+export function studentReportPresignExpiresInSeconds(sizeBytes?: number): number {
+    const size = sizeBytes ?? 0;
+    if (size > 100 * 1024 * 1024) return 2 * 60 * 60;
+    if (size > 10 * 1024 * 1024) return 60 * 60;
+    return 15 * 60;
+}
 
 function normalizeMime(raw: string | undefined): string {
     return (raw || '').toLowerCase().split(';')[0].trim();
@@ -54,7 +94,15 @@ function isAllowedStudentReportFile(filename: string | undefined, contentType: s
         return true;
     }
 
-    /* Mobile clients sometimes omit an extension — accept only trusted image/doc MIME types. */
+    if (STUDENT_REPORT_VIDEO_EXTENSIONS.has(ext)) {
+        return true;
+    }
+
+    if (mime.startsWith('video/')) {
+        return true;
+    }
+
+    /* Mobile clients sometimes omit an extension — accept trusted image/doc MIME types. */
     return !ext && ALLOWED_MIMETYPES.has(mime);
 }
 
@@ -76,13 +124,15 @@ export function assertStudentReportUploadMeta(meta: {
     }
 
     if (size !== undefined && size > STUDENT_REPORT_MAX_FILE_BYTES) {
-        throw new BadRequestException('File too large. Maximum report upload size is 50MB.');
+        throw new BadRequestException(
+            `File too large. Maximum report upload size is ${STUDENT_REPORT_MAX_FILE_LABEL}.`,
+        );
     }
 
     if (!isAllowedStudentReportFile(filename, contentType)) {
         const label = path.extname(filename).toLowerCase() || contentType || '(unknown type)';
         throw new BadRequestException(
-            `File type not allowed (${label}). Use photos (JPG, PNG, HEIC, WebP) or PDF/Word.`,
+            `File type not allowed (${label}). Use photos, PDF/Word, or common video formats (MP4, MOV, WebM, etc.).`,
         );
     }
 
@@ -109,7 +159,7 @@ export function studentReportMulterFileFilter(
     const label = ext || mime || '(unknown type)';
     callback(
         new BadRequestException(
-            `File type not allowed (${label}). Use photos (JPG, PNG, HEIC, WebP) or PDF/Word.`,
+            `File type not allowed (${label}). Use photos, PDF/Word, or common video formats (MP4, MOV, WebM, etc.).`,
         ),
         false,
     );

@@ -1,4 +1,18 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Query, Request, UseInterceptors } from '@nestjs/common';
+import {
+    Controller,
+    Get,
+    Post,
+    Body,
+    Patch,
+    Param,
+    Delete,
+    UseGuards,
+    Query,
+    Request,
+    UseInterceptors,
+    Res,
+} from '@nestjs/common';
+import type { Response } from 'express';
 import { AdminMutationAuditInterceptor } from '../audit-logs/admin-mutation-audit.interceptor';
 import { UsersService } from '../users/users.service';
 import { CreateUserDto } from '../users/dto/create-user.dto';
@@ -9,6 +23,7 @@ import { Roles } from '../auth/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
 
 import { AdminService } from './admin.service';
+import { AdminProjectEvidenceService } from './admin-project-evidence.service';
 import { MasterAnalyticsQueryDto } from './dto/master-analytics-query.dto';
 import { OpportunitiesService } from '../opportunities/opportunities.service';
 import { StudentReportsService } from '../reports/student-reports.service';
@@ -27,6 +42,7 @@ export class AdminController {
         private readonly studentReportsService: StudentReportsService,
         private readonly opportunityApplicationsService: OpportunityApplicationsService,
         private readonly issueLogsService: IssueLogsService,
+        private readonly adminProjectEvidenceService: AdminProjectEvidenceService,
     ) { }
 
     @Get('dashboard')
@@ -109,6 +125,19 @@ export class AdminController {
     @Delete('opportunities/:id')
     removeOpportunity(@Param('id') id: string) {
         return this.opportunitiesService.remove(id);
+    }
+
+    @Get('projects/evidence-overview')
+    getProjectsEvidenceOverview() {
+        return this.adminProjectEvidenceService.getEvidenceOverview();
+    }
+
+    @Get('projects/:opportunityId/evidence/download')
+    downloadProjectEvidence(
+        @Param('opportunityId') opportunityId: string,
+        @Res() res: Response,
+    ) {
+        return this.adminProjectEvidenceService.streamProjectEvidenceZip(opportunityId, res);
     }
 
     @Get('projects')

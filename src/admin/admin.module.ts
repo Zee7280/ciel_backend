@@ -16,6 +16,8 @@ import { StudentsModule } from '../students/students.module';
 import { IssueLogsModule } from '../issue-logs/issue-logs.module';
 import { FacultyUniversityScopeModule } from '../faculty-university-scope/faculty-university-scope.module';
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
+import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
+import { AdminProjectEvidenceService } from './admin-project-evidence.service';
 
 @Module({
     imports: [
@@ -25,9 +27,19 @@ import { OpportunityApplication } from '../opportunities/entities/opportunity-ap
         IssueLogsModule,
         FacultyUniversityScopeModule,
         AuditLogsModule,
-        TypeOrmModule.forFeature([User, Opportunity, Report, StudentReport, Timesheet, Setting, Participation, OpportunityApplication]),
+        TypeOrmModule.forFeature([
+            User,
+            Opportunity,
+            Report,
+            StudentReport,
+            Timesheet,
+            Setting,
+            Participation,
+            OpportunityApplication,
+            AttendanceLog,
+        ]),
     ],
     controllers: [AdminController],
-    providers: [AdminService],
+    providers: [AdminService, AdminProjectEvidenceService],
 })
 export class AdminModule { }

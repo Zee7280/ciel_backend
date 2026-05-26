@@ -1,6 +1,12 @@
 import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import {
+    S3Client,
+    PutObjectCommand,
+    DeleteObjectCommand,
+    GetObjectCommand,
+} from '@aws-sdk/client-s3';
+import { Readable } from 'stream';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import * as crypto from 'crypto';
 import * as path from 'path';
@@ -89,14 +95,56 @@ export class S3Service {
         }
     }
 
+    keyFromPublicUrl(url: string | null | undefined): string | null {
+        if (!url || typeof url !== 'string') return null;
+        const prefix = `https://${this.bucket}.s3.${this.region}.amazonaws.com/`;
+        if (!url.startsWith(prefix)) {
+            return null;
+        }
+        return decodeURIComponent(url.slice(prefix.length));
+    }
+
+    async getObjectBufferByPublicUrl(
+        url: string,
+    ): Promise<{ buffer: Buffer; contentType?: string } | null> {
+        const key = this.keyFromPublicUrl(url);
+        if (!key) return null;
+        try {
+            const response = await this.s3Client.send(
+                new GetObjectCommand({
+                    Bucket: this.bucket,
+                    Key: key,
+                }),
+            );
+            const buffer = await this.bodyToBuffer(response.Body);
+            return { buffer, contentType: response.ContentType };
+        } catch (error) {
+            console.error('S3 GetObject Error:', error);
+            return null;
+        }
+    }
+
+    private async bodyToBuffer(body: unknown): Promise<Buffer> {
+        if (!body) return Buffer.alloc(0);
+        if (Buffer.isBuffer(body)) return body;
+        if (body instanceof Uint8Array) return Buffer.from(body);
+        if (body instanceof Readable) {
+            const chunks: Buffer[] = [];
+            for await (const chunk of body) {
+                chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+            }
+            return Buffer.concat(chunks);
+        }
+        return Buffer.alloc(0);
+    }
+
     /** Deletes an object whose public URL was produced by this service for the configured bucket. */
     async deleteByPublicUrl(url: string | null | undefined): Promise<void> {
         if (!url || typeof url !== 'string') return;
-        const prefix = `https://${this.bucket}.s3.${this.region}.amazonaws.com/`;
-        if (!url.startsWith(prefix)) {
+        const key = this.keyFromPublicUrl(url);
+        if (!key) {
             return;
         }
-        const key = decodeURIComponent(url.slice(prefix.length));
         try {
             await this.s3Client.send(
                 new DeleteObjectCommand({

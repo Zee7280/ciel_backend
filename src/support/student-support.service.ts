@@ -45,8 +45,12 @@ export class StudentSupportService {
         };
     }
 
-    async createTicket(studentUserId: string, dto: CreateSupportTicketDto) {
-        const reference = await this.nextReference();
+    async createTicket(
+        studentUserId: string,
+        dto: CreateSupportTicketDto,
+        referencePrefix = 'ST',
+    ) {
+        const reference = await this.nextReference(referencePrefix);
         const entity = this.ticketRepo.create({
             reference,
             studentUserId,
@@ -113,9 +117,10 @@ export class StudentSupportService {
         return ticket ?? null;
     }
 
-    private async nextReference(): Promise<string> {
+    private async nextReference(prefix: string): Promise<string> {
+        const safe = prefix.trim().toUpperCase().replace(/[^A-Z0-9]/g, '') || 'ST';
         for (let attempt = 0; attempt < 8; attempt++) {
-            const ref = `ST-${randomBytes(4).toString('hex').toUpperCase()}`;
+            const ref = `${safe}-${randomBytes(4).toString('hex').toUpperCase()}`;
             const taken = await this.ticketRepo.findOne({
                 where: { reference: ref },
                 withDeleted: true,

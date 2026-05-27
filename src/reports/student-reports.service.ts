@@ -791,6 +791,7 @@ export class StudentReportsService {
                 student_name: r.student?.name || 'Unknown',
                 student_email: r.student?.email || 'Unknown',
                 project_title: r.opportunity?.title || r.project_id,
+                organization_id: r.opportunity?.organizationId ?? r.opportunity?.organization?.id ?? null,
                 organization_name: r.opportunity?.organization?.name || 'N/A',
                 status: this.toPublicReportStatus(r.status),
                 partner_status: r.partner_status,
@@ -857,12 +858,19 @@ export class StudentReportsService {
             relations: ['student', 'opportunity', 'opportunity.organization'],
             skip,
             take: limitNum,
-            order: { submission_date: 'DESC' },
+            order: { submission_date: 'DESC', createdAt: 'DESC' },
+        });
+
+        const mapped = reports.map(mapListing);
+        mapped.sort((a, b) => {
+            const aMs = new Date(a.report_submitted_at ?? a.submitted_at ?? a.submission_date ?? 0).getTime();
+            const bMs = new Date(b.report_submitted_at ?? b.submitted_at ?? b.submission_date ?? 0).getTime();
+            return bMs - aMs;
         });
 
         return {
             success: true,
-            data: reports.map(mapListing),
+            data: mapped,
             pagination: {
                 total,
                 page: pageNum,

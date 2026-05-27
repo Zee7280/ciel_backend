@@ -4,6 +4,7 @@ import {
     Post,
     Body,
     Param,
+    Query,
     UseGuards,
     UseInterceptors,
     Patch,
@@ -32,30 +33,50 @@ export class AdminOpportunitiesController {
         private readonly opportunityApplicationsService: OpportunityApplicationsService,
     ) { }
 
+    private async enrichAdminQueueRows(
+        opps: Awaited<ReturnType<OpportunitiesService['findAdminApprovalQueue']>>,
+    ) {
+        return Promise.all(
+            opps.map(async (opp) => {
+                let primaryContactId: string | null = null;
+                if (opp.organizationId) {
+                    const primaryUser = await this.usersService.findOrganizationPrimaryUser(opp.organizationId);
+                    primaryContactId = primaryUser?.id || null;
+                }
+
+                return {
+                    ...opp,
+                    partner_name: opp.organization?.name,
+                    submitted_at: opp.createdAt,
+                    primary_contact_id: primaryContactId,
+                };
+            }),
+        );
+    }
+
     @Get('pending')
     @UseGuards(RolesGuard)
     @Roles(UserRole.SUPER_ADMIN)
     async findAllPending() {
         const opps = await this.opportunitiesService.findAllPending();
-
-        const data = await Promise.all(opps.map(async (opp) => {
-            let primaryContactId: string | null = null;
-            if (opp.organizationId) {
-                const primaryUser = await this.usersService.findOrganizationPrimaryUser(opp.organizationId);
-                primaryContactId = primaryUser?.id || null;
-            }
-
-            return {
-                ...opp,
-                partner_name: opp.organization?.name,
-                submitted_at: opp.createdAt,
-                primary_contact_id: primaryContactId
-            };
-        }));
-
+        const data = await this.enrichAdminQueueRows(opps);
         return {
             success: true,
-            data
+            data,
+        };
+    }
+
+    @Get('approval-queue')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.SUPER_ADMIN)
+    async findApprovalQueue(@Query('queue') queue?: string, @Query('limit') limit?: string) {
+        const parsedLimit = Math.min(Math.max(parseInt(limit || '500', 10) || 500, 1), 500);
+        const opps = await this.opportunitiesService.findAdminApprovalQueue(queue, parsedLimit);
+        const data = await this.enrichAdminQueueRows(opps);
+        return {
+            success: true,
+            data,
+            queue: queue?.trim().toLowerCase() || 'pending',
         };
     }
 

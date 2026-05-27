@@ -1904,54 +1904,110 @@ export class OpportunitiesService {
     }
 
     // Admin methods
-    async findAllPending() {
-        // CIEL admin queue: final review (`pending_approval`) plus student-created rows still with faculty/partner
-        // so admins can track the pipeline (`flow_status`, `admin_can_approve`).
-        // Treat NULL admin_approved like false (older rows).
-        const opportunities = await this.opportunitiesRepository
-            .createQueryBuilder('opportunity')
-            .leftJoinAndSelect('opportunity.organization', 'organization')
-            .where(
-                new Brackets((qb) => {
-                    qb.where(
-                        new Brackets((inner) => {
-                            inner
-                                .where('opportunity.status = :st', { st: 'pending_approval' })
-                                .andWhere(
-                                    '(opportunity.admin_approved = :aa OR opportunity.admin_approved IS NULL)',
-                                    { aa: false },
-                                );
-                        }),
-                    ).orWhere(
-                        new Brackets((inner) => {
-                            inner
-                                .where('opportunity.isStudentCreated = :isc', { isc: true })
-                                .andWhere(
-                                    '(opportunity.admin_approved = :aa OR opportunity.admin_approved IS NULL)',
-                                    { aa: false },
-                                )
-                                .andWhere('opportunity.status IN (:...early)', {
-                                    early: ['pending_faculty', 'pending_partner', 'pending_verification'],
-                                });
-                        }),
-                    ).orWhere(
-                        new Brackets((inner) => {
-                            inner
-                                .where('opportunity.isStudentCreated = :isc2', { isc2: false })
-                                .andWhere(
-                                    '(opportunity.admin_approved = :aa2 OR opportunity.admin_approved IS NULL)',
-                                    { aa2: false },
-                                )
-                                .andWhere('opportunity.status IN (:...partnerOrg)', {
-                                    partnerOrg: ['pending_execution', 'pending_partner'],
-                                });
-                        }),
-                    );
+    /** Admin approvals UI queue filter (`GET /admin/opportunities/approval-queue?queue=`). */
+    private adminPendingQueueWhere(): Brackets {
+        return new Brackets((qb) => {
+            qb.where(
+                new Brackets((inner) => {
+                    inner
+                        .where('opportunity.status = :st', { st: 'pending_approval' })
+                        .andWhere(
+                            '(opportunity.admin_approved = :aa OR opportunity.admin_approved IS NULL)',
+                            { aa: false },
+                        );
                 }),
             )
-            .orderBy('opportunity.createdAt', 'DESC')
+                .orWhere(
+                    new Brackets((inner) => {
+                        inner
+                            .where('opportunity.isStudentCreated = :isc', { isc: true })
+                            .andWhere(
+                                '(opportunity.admin_approved = :aa OR opportunity.admin_approved IS NULL)',
+                                { aa: false },
+                            )
+                            .andWhere('opportunity.status IN (:...early)', {
+                                early: ['pending_faculty', 'pending_partner', 'pending_verification'],
+                            });
+                    }),
+                )
+                .orWhere(
+                    new Brackets((inner) => {
+                        inner
+                            .where('opportunity.isStudentCreated = :isc2', { isc2: false })
+                            .andWhere(
+                                '(opportunity.admin_approved = :aa2 OR opportunity.admin_approved IS NULL)',
+                                { aa2: false },
+                            )
+                            .andWhere('opportunity.status IN (:...partnerOrg)', {
+                                partnerOrg: ['pending_execution', 'pending_partner'],
+                            });
+                    }),
+                );
+        });
+    }
+
+    private normalizeAdminApprovalQueue(queue?: string): 'pending' | 'approved' | 'rejected' | 'revision' | 'all' {
+        const q = (queue || 'pending').trim().toLowerCase();
+        if (q === 'approved' || q === 'live') return 'approved';
+        if (q === 'rejected') return 'rejected';
+        if (q === 'revision' || q === 'revise') return 'revision';
+        if (q === 'all') return 'all';
+        return 'pending';
+    }
+
+    async findAdminApprovalQueue(queue?: string, limit = 500) {
+        const normalizedQueue = this.normalizeAdminApprovalQueue(queue);
+        const take = Math.min(Math.max(Number(limit) || 500, 1), 500);
+
+        const qb = this.opportunitiesRepository
+            .createQueryBuilder('opportunity')
+            .leftJoinAndSelect('opportunity.organization', 'organization');
+
+        if (normalizedQueue === 'pending') {
+            qb.where(this.adminPendingQueueWhere());
+        } else if (normalizedQueue === 'approved') {
+            qb.where('opportunity.admin_approved = :aa', { aa: true }).andWhere(
+                'opportunity.workflowStage = :live',
+                { live: WORKFLOW_STAGE.LIVE },
+            );
+        } else if (normalizedQueue === 'rejected') {
+            qb.where('opportunity.workflowStage = :rej', { rej: WORKFLOW_STAGE.REJECTED });
+        } else if (normalizedQueue === 'revision') {
+            qb.where('opportunity.workflowStage = :rev', { rev: WORKFLOW_STAGE.REVISION });
+        } else {
+            qb.where(
+                new Brackets((outer) => {
+                    outer
+                        .where(this.adminPendingQueueWhere())
+                        .orWhere(
+                            new Brackets((inner) => {
+                                inner
+                                    .where('opportunity.admin_approved = :aaAll', { aaAll: true })
+                                    .andWhere('opportunity.workflowStage = :liveAll', {
+                                        liveAll: WORKFLOW_STAGE.LIVE,
+                                    });
+                            }),
+                        )
+                        .orWhere('opportunity.workflowStage = :rejAll', { rejAll: WORKFLOW_STAGE.REJECTED })
+                        .orWhere('opportunity.workflowStage = :revAll', { revAll: WORKFLOW_STAGE.REVISION });
+                }),
+            );
+        }
+
+        const opportunities = await qb
+            .orderBy('opportunity.updatedAt', 'DESC')
+            .addOrderBy('opportunity.createdAt', 'DESC')
+            .take(take)
             .getMany();
 
+        return this.mapOpportunitiesForAdminQueue(opportunities);
+    }
+
+    async findAllPending() {
+        return this.findAdminApprovalQueue('pending', 500);
+    }
+
+    private async mapOpportunitiesForAdminQueue(opportunities: Opportunity[]) {
         const creatorIds = [...new Set(opportunities.map((o) => o.creatorId).filter(Boolean))] as string[];
         const creators =
             creatorIds.length > 0
@@ -2077,8 +2133,10 @@ export class OpportunitiesService {
     async revise(id: string, reason: string) {
         const opp = await this.findOne(id);
         if (!opp) throw new NotFoundException('Opportunity not found');
-        if (!opp.isStudentCreated) {
-            throw new BadRequestException('Revision is only supported for student-created opportunities');
+        if (!opp.isStudentCreated && opp.admin_approved !== true) {
+            throw new BadRequestException(
+                'Revision is only supported for student-created opportunities, or to correct a completed admin approval.',
+            );
         }
         this.opportunityWorkflow.afterAdminRevision(opp, reason);
         const saved = await this.opportunitiesRepository.save(opp);

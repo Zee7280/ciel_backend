@@ -45,16 +45,20 @@ describe('StudentReportsService', () => {
         get: jest.fn().mockReturnValue(''),
     };
     let reportPartnerGateGloballyEnabled = true;
+    const evaluateGate = (report: unknown, hasMeaningful: (v: unknown) => boolean) =>
+        evaluateReportRequiresPartnerApproval(
+            report as Parameters<typeof evaluateReportRequiresPartnerApproval>[0],
+            reportPartnerGateGloballyEnabled,
+            hasMeaningful,
+        );
     const mockReportPartnerApprovalSettings = {
         onModuleInit: jest.fn(),
         reportRequiresPartnerApproval: jest.fn().mockImplementation(async (report: unknown, hasMeaningful: (v: unknown) => boolean) =>
-            evaluateReportRequiresPartnerApproval(
-                report as Parameters<typeof evaluateReportRequiresPartnerApproval>[0],
-                reportPartnerGateGloballyEnabled,
-                hasMeaningful,
-            ),
+            evaluateGate(report, hasMeaningful),
         ),
-        reportRequiresPartnerApprovalSync: jest.fn(),
+        reportRequiresPartnerApprovalSync: jest.fn().mockImplementation((report: unknown, hasMeaningful: (v: unknown) => boolean) =>
+            evaluateGate(report, hasMeaningful),
+        ),
         isEnabled: jest.fn().mockResolvedValue(true),
         isEnabledCached: jest.fn().mockImplementation(() => reportPartnerGateGloballyEnabled),
     };

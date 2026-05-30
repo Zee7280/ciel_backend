@@ -12,7 +12,8 @@ import {
 @Injectable()
 export class ReportPartnerApprovalSettingsService implements OnModuleInit {
     private cache: { enabled: boolean; expiresAt: number } | null = null;
-    private readonly cacheTtlMs = 30_000;
+    /** Rarely changes; long TTL avoids repeated settings reads under report verify load. */
+    private readonly cacheTtlMs = 300_000;
 
     constructor(
         @InjectRepository(Setting)

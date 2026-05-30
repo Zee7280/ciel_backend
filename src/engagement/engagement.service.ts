@@ -428,6 +428,26 @@ export class EngagementService {
         };
     }
 
+    /**
+     * Report verify / dossier roster: one participations query, no per-member application lookups.
+     */
+    async getProjectTeamForReportDossier(projectId: string) {
+        const participants = await this.participantRepository.find({
+            where: {
+                projectId,
+                status: In([...PROJECT_TEAM_VISIBILITY_STATUSES]),
+            },
+            relations: ['student'],
+            order: { createdAt: 'ASC' },
+        });
+        return participants.map((p) => {
+            const decrypted = this.decryptParticipation(p);
+            const enriched = this.enrichParticipationForReportDossier(decrypted, participants);
+            return this.mapParticipationForReportRoster(decrypted, enriched);
+        });
+    }
+
+    /** Engagement UI team list; resolves application faculty emails only when missing on rows. */
     async getProjectTeam(projectId: string) {
         const participants = await this.participantRepository.find({
             where: {
@@ -446,6 +466,35 @@ export class EngagementService {
         );
     }
 
+    /** In-memory faculty/team fields for report dossiers (no opportunity_application queries). */
+    private enrichParticipationForReportDossier(
+        participation: Participation,
+        projectParticipants: Participation[],
+    ): Record<string, unknown> {
+        const projectRows = projectParticipants.length ? projectParticipants : [participation];
+        const teamLeads = projectRows.filter((p) => p.isTeamLead);
+        const fallbackLead = this.findFallbackTeamLead(participation, teamLeads);
+        const responseTeamId = this.resolveResponseTeamId(participation, fallbackLead, teamLeads);
+        const participantEmails = getParticipantFacultyEmails(participation);
+        const facultyEmails = this.normalizeEmailList(
+            participantEmails.length
+                ? participantEmails
+                : getParticipantFacultyEmails(fallbackLead || {}),
+        );
+
+        return {
+            ...participation,
+            teamId: participation.teamId || responseTeamId,
+            team_id: participation.teamId || responseTeamId,
+            primaryFacultyEmail: participation.primaryFacultyEmail || facultyEmails[0] || null,
+            secondaryFacultyEmail: participation.secondaryFacultyEmail || facultyEmails[1] || null,
+            facultyEmail:
+                facultyEmails[0] || participation.primaryFacultyEmail || participation.facultySupervisorEmail || null,
+            primary_faculty_email: participation.primaryFacultyEmail || facultyEmails[0] || null,
+            secondary_faculty_email: participation.secondaryFacultyEmail || facultyEmails[1] || null,
+        };
+    }
+
     private async enrichParticipationForTeamResponse(
         participation: Participation,
         projectParticipants: Participation[],
@@ -455,12 +504,18 @@ export class EngagementService {
         const fallbackLead = this.findFallbackTeamLead(participation, teamLeads);
         const responseTeamId = this.resolveResponseTeamId(participation, fallbackLead, teamLeads);
         const participantEmails = getParticipantFacultyEmails(participation);
-        const facultyEmails = participantEmails.length
-            ? participantEmails
-            : [
+        const fallbackEmails = getParticipantFacultyEmails(fallbackLead || {});
+        let facultyEmails: string[];
+        if (participantEmails.length) {
+            facultyEmails = participantEmails;
+        } else if (fallbackEmails.length) {
+            facultyEmails = fallbackEmails;
+        } else {
+            facultyEmails = [
                 ...(await this.resolveApplicationFacultyEmails(participation)),
-                ...getParticipantFacultyEmails(fallbackLead || {}),
+                ...fallbackEmails,
             ];
+        }
         const uniqueFacultyEmails = this.normalizeEmailList(facultyEmails);
 
         return {

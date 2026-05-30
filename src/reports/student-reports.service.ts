@@ -49,7 +49,7 @@ export class StudentReportsService {
         });
     }
 
-    private async getPublicReportApprovalContext(report: StudentReport) {
+    private getPublicReportApprovalContext(report: StudentReport) {
         const partners = Array.isArray(report.section7?.partners) ? report.section7.partners : [];
         const hasSectionPartner =
             report.section7?.has_partners === 'yes' ||
@@ -63,7 +63,7 @@ export class StudentReportsService {
             return type.includes('ngo') || type.includes('non-government');
         });
         const hasPartner = Boolean(hasSectionPartner || hasOpportunityPartner || report.opportunity?.requiresPartnerApproval);
-        const requiresPartnerApproval = await this.reportPartnerApprovalSettings.reportRequiresPartnerApproval(
+        const requiresPartnerApproval = this.reportPartnerApprovalSettings.reportRequiresPartnerApprovalSync(
             report,
             (value) => this.hasMeaningfulObjectValue(value),
         );
@@ -309,7 +309,7 @@ export class StudentReportsService {
             report.admin_status === 'approved' && (report.status === 'verified' || report.status === 'paid');
 
         if (!verified) {
-            const approvalContext = await this.getPublicReportApprovalContext(report);
+            const approvalContext = this.getPublicReportApprovalContext(report);
             const paymentPending =
                 report.status === 'payment_pending' ||
                 report.status === 'payment_under_review' ||
@@ -986,7 +986,7 @@ export class StudentReportsService {
                             program: studentProfile?.major || '',
                             verified: true
                         },
-                        team_members: await this.engagementService.getProjectTeam(id),
+                        team_members: await this.engagementService.getProjectTeamForReportDossier(id),
                         attendance_logs: [],
                         metrics: {
                             total_verified_hours: 0,
@@ -1027,7 +1027,7 @@ export class StudentReportsService {
             report.status,
             adminStatus,
         );
-        const approvalContext = await this.getPublicReportApprovalContext(report);
+        const approvalContext = this.getPublicReportApprovalContext(report);
 
         return {
             success: true,
@@ -1074,7 +1074,9 @@ export class StudentReportsService {
                         cnic: this.engagementService.decryptCnicInternal(report.section1.team_lead.cnic)
                     } : undefined,
                     // Point 1 & 3: Dynamically fetch team members from the source of truth (Participants/Engagement table)
-                    team_members: await this.engagementService.getProjectTeam(report.opportunityId || report.project_id),
+                    team_members: await this.engagementService.getProjectTeamForReportDossier(
+                        report.opportunityId || report.project_id,
+                    ),
                     attendance_logs:
                         attendanceLogs.length > 0
                             ? attendanceLogs.map((log) => ({
@@ -1181,7 +1183,7 @@ export class StudentReportsService {
             } else if (role === 'admin') {
                 report.admin_status = 'approved';
                 report.adminApprovedAt = decisionStamp;
-                const requiresPartner = await this.reportPartnerApprovalSettings.reportRequiresPartnerApproval(
+                const requiresPartner = this.reportPartnerApprovalSettings.reportRequiresPartnerApprovalSync(
                     report,
                     (value) => this.hasMeaningfulObjectValue(value),
                 );

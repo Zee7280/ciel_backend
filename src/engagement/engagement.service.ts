@@ -411,6 +411,20 @@ export class EngagementService {
             degree: degreeBase || undefined,
             year: participation.yearOfStudy || undefined,
             yearOfStudy: participation.yearOfStudy || undefined,
+            academicIntegrationType: participation.academicIntegrationType || null,
+            academic_integration_type: participation.academicIntegrationType || null,
+            universityId: participation.universityId || null,
+            university_id: participation.universityId || null,
+            emailVerified: participation.emailVerified,
+            email_verified: participation.emailVerified,
+            mobileVerified: participation.mobileVerified,
+            mobile_verified: participation.mobileVerified,
+            facultySupervisorEmail: participation.facultySupervisorEmail || null,
+            faculty_supervisor_email: participation.facultySupervisorEmail || null,
+            registrationNumber: student?.registrationNumber || null,
+            registration_number: student?.registrationNumber || null,
+            participationMode: participation.participationMode,
+            participation_mode: participation.participationMode,
         };
     }
 

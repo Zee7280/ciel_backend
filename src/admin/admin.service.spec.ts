@@ -1,5 +1,6 @@
 import { AdminService } from './admin.service';
 import { MasterAnalyticsQueryDto } from './dto/master-analytics-query.dto';
+import { ReportPartnerApprovalSettingsService } from '../reports/report-partner-approval-settings.service';
 
 const makeAdminServiceForTests = (overrides: Record<string, unknown> = {}) => {
     const repositories = {
@@ -32,6 +33,13 @@ const makeAdminServiceForTests = (overrides: Record<string, unknown> = {}) => {
         studentsService: {
             getAdminTeamRosterForParticipation: jest.fn().mockResolvedValue(null),
         },
+        opportunityApplicationRepository: {},
+        reportPartnerApprovalSettings: {
+            reportRequiresPartnerApprovalSync: jest.fn().mockImplementation((report: { opportunity?: { requiresPartnerApproval?: boolean } }) =>
+                Boolean(report?.opportunity?.requiresPartnerApproval),
+            ),
+            isEnabledCached: jest.fn().mockReturnValue(true),
+        },
         ...overrides,
     };
 
@@ -46,6 +54,8 @@ const makeAdminServiceForTests = (overrides: Record<string, unknown> = {}) => {
         repositories.studentReportRepository as any,
         repositories.opportunityApplicationsService as any,
         repositories.studentsService as any,
+        repositories.opportunityApplicationRepository as any,
+        repositories.reportPartnerApprovalSettings as any,
     );
 };
 

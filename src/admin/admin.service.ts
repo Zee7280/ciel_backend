@@ -18,6 +18,11 @@ import { In, IsNull, LessThan, Not, SelectQueryBuilder, Brackets } from 'typeorm
 
 import { Setting } from '../settings/entities/setting.entity';
 import { MasterAnalyticsQueryDto } from './dto/master-analytics-query.dto';
+import { ReportPartnerApprovalSettingsService } from '../reports/report-partner-approval-settings.service';
+import {
+    isReportPartnerStepSatisfied,
+    REPORT_PARTNER_APPROVAL_SETTING_KEY,
+} from '../reports/report-partner-approval.util';
 
 /** Canonical Pakistan regions for stakeholder "participation by region" (sync spellings with ciel_frontend/src/utils/pakistanRegions.ts). */
 const STAKEHOLDER_REGION_CANONICAL = [
@@ -191,6 +196,7 @@ export class AdminService {
         private readonly studentsService: StudentsService,
         @InjectRepository(OpportunityApplication)
         private opportunityApplicationRepository: Repository<OpportunityApplication>,
+        private readonly reportPartnerApprovalSettings: ReportPartnerApprovalSettingsService,
     ) { }
 
     async getSettings() {
@@ -209,6 +215,10 @@ export class AdminService {
             setting = this.settingRepository.create({ key, value });
         }
         await this.settingRepository.save(setting);
+        if (key === REPORT_PARTNER_APPROVAL_SETTING_KEY) {
+            this.reportPartnerApprovalSettings.invalidateCache();
+            await this.reportPartnerApprovalSettings.refreshCache();
+        }
         return {
             success: true,
             data: setting
@@ -808,16 +818,8 @@ export class AdminService {
     }
 
     private reportRequiresPartnerApproval(report: StudentReport): boolean {
-        const partners = Array.isArray(report.section7?.partners) ? report.section7.partners : [];
-        const hasDeclaredPartner =
-            report.section7?.has_partners === 'yes' ||
-            report.section8?.partner_verification === true ||
-            partners.some((partner) => this.hasMeaningfulAnalyticsObjectValue(partner));
-
-        return Boolean(
-            report.opportunity?.requiresPartnerApproval ||
-            hasDeclaredPartner ||
-            report.partner_status === 'approved',
+        return this.reportPartnerApprovalSettings.reportRequiresPartnerApprovalSync(report, (value) =>
+            this.hasMeaningfulAnalyticsObjectValue(value),
         );
     }
 
@@ -830,7 +832,8 @@ export class AdminService {
             report.status === 'verified' ||
             report.status === 'paid' ||
             (report.admin_status === 'approved' && ['submitted', 'partner_verified'].includes(report.status));
-        const partnerApproved = !this.reportRequiresPartnerApproval(report) || report.partner_status === 'approved';
+        const partnerApproved =
+            !this.reportRequiresPartnerApproval(report) || isReportPartnerStepSatisfied(report.partner_status);
 
         return hasFinalStatus && partnerApproved && report.admin_status === 'approved';
     }

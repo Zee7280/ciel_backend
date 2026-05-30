@@ -31,6 +31,8 @@ import { isTeamApplyFromParticipationAndMembers } from '../opportunities/apply-t
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 import { StudentReport } from '../reports/entities/student-report.entity';
 import { StudentReportsService } from '../reports/student-reports.service';
+import { ReportPartnerApprovalSettingsService } from '../reports/report-partner-approval-settings.service';
+import { isReportPartnerStepSatisfied } from '../reports/report-partner-approval.util';
 
 @Injectable()
 export class StudentsService {
@@ -56,6 +58,7 @@ export class StudentsService {
         private readonly opportunitiesService: OpportunitiesService,
         private readonly opportunityApplicationsService: OpportunityApplicationsService,
         private readonly studentReportsService: StudentReportsService,
+        private readonly reportPartnerApprovalSettings: ReportPartnerApprovalSettingsService,
     ) { }
 
     private normalize(str?: string | null) {
@@ -2016,16 +2019,8 @@ export class StudentsService {
     }
 
     private reportRequiresPartnerApproval(report: StudentReport): boolean {
-        const partners = Array.isArray(report.section7?.partners) ? report.section7.partners : [];
-        const hasDeclaredPartner =
-            report.section7?.has_partners === 'yes' ||
-            report.section8?.partner_verification === true ||
-            partners.some((partner) => this.hasMeaningfulImpactObjectValue(partner));
-
-        return Boolean(
-            report.opportunity?.requiresPartnerApproval ||
-            hasDeclaredPartner ||
-            report.partner_status === 'approved',
+        return this.reportPartnerApprovalSettings.reportRequiresPartnerApprovalSync(report, (value) =>
+            this.hasMeaningfulImpactObjectValue(value),
         );
     }
 
@@ -2038,7 +2033,8 @@ export class StudentsService {
             r.status === 'verified' ||
             r.status === 'paid' ||
             (r.admin_status === 'approved' && ['submitted', 'partner_verified'].includes(r.status));
-        const partnerApproved = !this.reportRequiresPartnerApproval(r) || r.partner_status === 'approved';
+        const partnerApproved =
+            !this.reportRequiresPartnerApproval(r) || isReportPartnerStepSatisfied(r.partner_status);
 
         return hasFinalStatus && partnerApproved && r.admin_status === 'approved';
     }

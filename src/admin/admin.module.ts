@@ -18,12 +18,14 @@ import { FacultyUniversityScopeModule } from '../faculty-university-scope/facult
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import { AdminProjectEvidenceService } from './admin-project-evidence.service';
+import { ReportPartnerApprovalModule } from '../reports/report-partner-approval.module';
 
 @Module({
     imports: [
         UsersModule,
         OpportunitiesModule,
         StudentsModule,
+        ReportPartnerApprovalModule,
         IssueLogsModule,
         FacultyUniversityScopeModule,
         AuditLogsModule,

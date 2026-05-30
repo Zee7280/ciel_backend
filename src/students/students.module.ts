@@ -19,6 +19,7 @@ import { Payment } from '../payments/entities/payment.entity';
 
 import { EngagementModule } from '../engagement/engagement.module';
 import { OpportunitiesModule } from '../opportunities/opportunities.module';
+import { ReportPartnerApprovalModule } from '../reports/report-partner-approval.module';
 
 @Module({
     imports: [
@@ -36,6 +37,7 @@ import { OpportunitiesModule } from '../opportunities/opportunities.module';
         UsersModule,
         EngagementModule,
         OpportunitiesModule,
+        ReportPartnerApprovalModule,
     ],
     controllers: [StudentsController, StudentReportsController, StudentController, PublicImpactReportsController],
     providers: [StudentsService, StudentReportsService],

@@ -11,6 +11,8 @@ import { S3Service } from '../common/s3.service';
 import { EngagementService } from '../engagement/engagement.service';
 import { MailService } from '../mail/mail.service';
 import { ConfigService } from '@nestjs/config';
+import { ReportPartnerApprovalSettingsService } from './report-partner-approval-settings.service';
+import { evaluateReportRequiresPartnerApproval } from './report-partner-approval.util';
 
 describe('StudentReportsService', () => {
     let service: StudentReportsService;
@@ -42,9 +44,24 @@ describe('StudentReportsService', () => {
     const mockConfigService = {
         get: jest.fn().mockReturnValue(''),
     };
+    let reportPartnerGateGloballyEnabled = true;
+    const mockReportPartnerApprovalSettings = {
+        onModuleInit: jest.fn(),
+        reportRequiresPartnerApproval: jest.fn().mockImplementation(async (report: unknown, hasMeaningful: (v: unknown) => boolean) =>
+            evaluateReportRequiresPartnerApproval(
+                report as Parameters<typeof evaluateReportRequiresPartnerApproval>[0],
+                reportPartnerGateGloballyEnabled,
+                hasMeaningful,
+            ),
+        ),
+        reportRequiresPartnerApprovalSync: jest.fn(),
+        isEnabled: jest.fn().mockResolvedValue(true),
+        isEnabledCached: jest.fn().mockImplementation(() => reportPartnerGateGloballyEnabled),
+    };
 
     beforeEach(async () => {
         jest.clearAllMocks();
+        reportPartnerGateGloballyEnabled = true;
 
         mockParticipantRepository.findOne.mockReset();
         mockParticipantRepository.findOne.mockResolvedValue(null);
@@ -77,6 +94,10 @@ describe('StudentReportsService', () => {
                 { provide: EngagementService, useValue: mockEngagementService },
                 { provide: MailService, useValue: mockMailService },
                 { provide: ConfigService, useValue: mockConfigService },
+                {
+                    provide: ReportPartnerApprovalSettingsService,
+                    useValue: mockReportPartnerApprovalSettings,
+                },
             ],
         }).compile();
 
@@ -352,6 +373,27 @@ describe('StudentReportsService', () => {
         expect(report.admin_status).toBe('approved');
         expect(result.data.status).toBe('verified');
         expect(mockStudentReportsRepository.save).toHaveBeenCalledWith(report);
+    });
+
+    it('marks partner-required reports verified on admin approve when platform partner gate is disabled', async () => {
+        reportPartnerGateGloballyEnabled = false;
+        const report = {
+            id: 'report-1',
+            status: 'submitted',
+            partner_status: 'pending',
+            admin_status: 'pending',
+            partnerApprovedAt: null,
+            adminApprovedAt: null,
+            opportunity: { requiresPartnerApproval: true },
+            section7: { has_partners: 'yes' },
+        };
+        mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+        const result = await service.verifyReport('report-1', 'approve', 'admin');
+
+        expect(report.status).toBe('verified');
+        expect(report.partner_status).toBe('not_applicable');
+        expect(result.data.status).toBe('verified');
     });
 
     it('keeps reports pending partner approval when that approval is required', async () => {

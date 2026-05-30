@@ -15,6 +15,8 @@ import { MailService } from '../mail/mail.service';
 import { EngagementService } from '../engagement/engagement.service';
 import { Payment, PaymentStatus } from '../payments/entities/payment.entity';
 import { formatCertificateVerificationCode } from './certificate-verification-code.util';
+import { ReportPartnerApprovalSettingsService } from './report-partner-approval-settings.service';
+import { isReportPartnerStepSatisfied } from './report-partner-approval.util';
 
 @Injectable()
 export class StudentReportsService {
@@ -35,6 +37,7 @@ export class StudentReportsService {
         private readonly engagementService: EngagementService,
         private readonly mailService: MailService,
         private readonly configService: ConfigService,
+        private readonly reportPartnerApprovalSettings: ReportPartnerApprovalSettingsService,
     ) { }
 
     private hasMeaningfulObjectValue(value: any): boolean {
@@ -46,26 +49,7 @@ export class StudentReportsService {
         });
     }
 
-    private reportRequiresPartnerApproval(report: StudentReport): boolean {
-        const partners = Array.isArray(report.section7?.partners) ? report.section7.partners : [];
-        const hasSectionPartner =
-            report.section7?.has_partners === 'yes' ||
-            report.section8?.partner_verification === true ||
-            partners.some((partner: any) => this.hasMeaningfulObjectValue(partner));
-        const hasNgo = partners.some((partner: any) => {
-            const type = String(partner?.type || partner?.name || '').toLowerCase();
-            return type.includes('ngo') || type.includes('non-government');
-        });
-
-        return Boolean(
-            report.opportunity?.requiresPartnerApproval ||
-            hasSectionPartner ||
-            hasNgo ||
-            report.partner_status === 'approved',
-        );
-    }
-
-    private getPublicReportApprovalContext(report: StudentReport) {
+    private async getPublicReportApprovalContext(report: StudentReport) {
         const partners = Array.isArray(report.section7?.partners) ? report.section7.partners : [];
         const hasSectionPartner =
             report.section7?.has_partners === 'yes' ||
@@ -79,7 +63,10 @@ export class StudentReportsService {
             return type.includes('ngo') || type.includes('non-government');
         });
         const hasPartner = Boolean(hasSectionPartner || hasOpportunityPartner || report.opportunity?.requiresPartnerApproval);
-        const requiresPartnerApproval = this.reportRequiresPartnerApproval(report);
+        const requiresPartnerApproval = await this.reportPartnerApprovalSettings.reportRequiresPartnerApproval(
+            report,
+            (value) => this.hasMeaningfulObjectValue(value),
+        );
 
         return {
             has_partner: hasPartner,
@@ -322,13 +309,13 @@ export class StudentReportsService {
             report.admin_status === 'approved' && (report.status === 'verified' || report.status === 'paid');
 
         if (!verified) {
-            const approvalContext = this.getPublicReportApprovalContext(report);
+            const approvalContext = await this.getPublicReportApprovalContext(report);
             const paymentPending =
                 report.status === 'payment_pending' ||
                 report.status === 'payment_under_review' ||
                 paymentStatus === PaymentStatus.PENDING;
             const workflowStage =
-                approvalContext.requires_partner_approval && report.partner_status !== 'approved'
+                approvalContext.requires_partner_approval && !isReportPartnerStepSatisfied(report.partner_status)
                     ? 'pending_partner'
                     : 'pending_admin';
 
@@ -1040,6 +1027,7 @@ export class StudentReportsService {
             report.status,
             adminStatus,
         );
+        const approvalContext = await this.getPublicReportApprovalContext(report);
 
         return {
             success: true,
@@ -1067,6 +1055,7 @@ export class StudentReportsService {
                 payment_verified,
                 ...paymentRest,
                 partner_status: report.partner_status,
+                ...approvalContext,
                 faculty_status: report.faculty_status,
                 faculty_remarks: report.faculty_remarks,
                 admin_status: adminStatus,
@@ -1192,8 +1181,18 @@ export class StudentReportsService {
             } else if (role === 'admin') {
                 report.admin_status = 'approved';
                 report.adminApprovedAt = decisionStamp;
-                if (report.partner_status === 'approved' || !this.reportRequiresPartnerApproval(report)) {
+                const requiresPartner = await this.reportPartnerApprovalSettings.reportRequiresPartnerApproval(
+                    report,
+                    (value) => this.hasMeaningfulObjectValue(value),
+                );
+                if (isReportPartnerStepSatisfied(report.partner_status) || !requiresPartner) {
                     report.status = 'verified';
+                    if (
+                        !requiresPartner &&
+                        report.partner_status === 'pending'
+                    ) {
+                        report.partner_status = 'not_applicable';
+                    }
                 }
             }
         }

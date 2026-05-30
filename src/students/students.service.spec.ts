@@ -1,4 +1,5 @@
 import { StudentsService } from './students.service';
+import { ReportPartnerApprovalSettingsService } from '../reports/report-partner-approval-settings.service';
 
 describe('StudentsService impact history', () => {
   const makeService = (overrides: Record<string, unknown> = {}) => {
@@ -19,6 +20,12 @@ describe('StudentsService impact history', () => {
       studentReportsService: {
         getMergedReportsForParticipant: jest.fn().mockResolvedValue([]),
       },
+      reportPartnerApprovalSettings: {
+        reportRequiresPartnerApprovalSync: jest.fn().mockImplementation((report: { opportunity?: { requiresPartnerApproval?: boolean } }) =>
+          Boolean(report?.opportunity?.requiresPartnerApproval),
+        ),
+        isEnabledCached: jest.fn().mockReturnValue(true),
+      },
       ...overrides,
     };
 
@@ -37,6 +44,7 @@ describe('StudentsService impact history', () => {
       repositories.opportunitiesService as any,
       repositories.opportunityApplicationsService as any,
       repositories.studentReportsService as any,
+      repositories.reportPartnerApprovalSettings as any,
     );
   };
 

@@ -376,18 +376,59 @@ export class EngagementService {
         );
     }
 
+    /** Degree / program line for report dossiers (participation row + linked student profile). */
+    private resolveParticipationProgramLine(p: Participation): string {
+        const student = p.student as User | undefined;
+        const prog = (p.academicProgram || '').trim();
+        const dept = (p.department || '').trim();
+        const major = (student?.major || '').trim();
+        const userDept = (student?.department || '').trim();
+        const base = prog || dept || major || userDept;
+        const year = (p.yearOfStudy || '').trim();
+        if (base && year) return `${base} · ${year}`;
+        if (base) return base;
+        return year;
+    }
+
+    private mapParticipationForReportRoster(
+        participation: Participation,
+        enriched: Record<string, unknown>,
+    ): Record<string, unknown> {
+        const programLine = this.resolveParticipationProgramLine(participation);
+        const student = participation.student as User | undefined;
+        const degreeBase =
+            (participation.academicProgram || '').trim() ||
+            (student?.major || '').trim() ||
+            (participation.department || '').trim() ||
+            (student?.department || '').trim() ||
+            '';
+        return {
+            ...enriched,
+            program: programLine,
+            academicProgram: participation.academicProgram || degreeBase || null,
+            academic_program: participation.academicProgram || degreeBase || null,
+            department: participation.department || student?.department || null,
+            degree: degreeBase || undefined,
+            year: participation.yearOfStudy || undefined,
+            yearOfStudy: participation.yearOfStudy || undefined,
+        };
+    }
+
     async getProjectTeam(projectId: string) {
         const participants = await this.participantRepository.find({
             where: {
                 projectId,
                 status: In([...PROJECT_TEAM_VISIBILITY_STATUSES]),
             },
+            relations: ['student'],
             order: { createdAt: 'ASC' },
         });
         return Promise.all(
-            participants.map((p) =>
-                this.enrichParticipationForTeamResponse(this.decryptParticipation(p), participants),
-            ),
+            participants.map(async (p) => {
+                const decrypted = this.decryptParticipation(p);
+                const enriched = await this.enrichParticipationForTeamResponse(decrypted, participants);
+                return this.mapParticipationForReportRoster(decrypted, enriched);
+            }),
         );
     }
 

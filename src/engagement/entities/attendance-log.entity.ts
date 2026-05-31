@@ -1,6 +1,7 @@
 import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn } from 'typeorm';
 import { Participation } from './participant.entity';
 import { Opportunity } from '../../opportunities/entities/opportunity.entity';
+import { ATTENDANCE_DESCRIPTION_MAX_CHARS } from '../attendance-description.constants';
 
 @Entity('attendance_logs')
 export class AttendanceLog {
@@ -39,8 +40,8 @@ export class AttendanceLog {
     @Column()
     activityType: string;
 
-    @Column({ type: 'varchar', length: 300 })
-    description: string; // Validated for max 40 words in service
+    @Column({ type: 'varchar', length: ATTENDANCE_DESCRIPTION_MAX_CHARS })
+    description: string;
 
     @Column({ default: false })
     evidenceUploaded: boolean;

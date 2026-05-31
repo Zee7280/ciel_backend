@@ -10,12 +10,14 @@ import { OpportunityApplication } from '../opportunities/entities/opportunity-ap
 import { User } from '../users/entities/user.entity';
 
 import { MailModule } from '../mail/mail.module';
+import { IssueLogsModule } from '../issue-logs/issue-logs.module';
 
 @Module({
     imports: [
         TypeOrmModule.forFeature([Participation, AttendanceLog, Opportunity, OpportunityApplication, User]),
         StorageModule,
         MailModule,
+        IssueLogsModule,
     ],
     providers: [
         EngagementService

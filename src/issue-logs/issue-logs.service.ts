@@ -8,12 +8,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'crypto';
 import { Request } from 'express';
 import {
-  Between,
-  FindOptionsWhere,
-  LessThanOrEqual,
-  Like,
-  MoreThanOrEqual,
+  Brackets,
   Repository,
+  SelectQueryBuilder,
 } from 'typeorm';
 import { IssueLog } from './entities/issue-log.entity';
 
@@ -165,14 +162,12 @@ export class IssueLogsService {
     const page = this.toPositiveInt(query.page, 1);
     const limit = Math.min(this.toPositiveInt(query.limit, 20), 100);
     const skip = (page - 1) * limit;
-    const where = this.buildWhere(query);
 
-    const [logs, total] = await this.issueLogRepository.findAndCount({
-      where,
-      order: { createdAt: 'DESC' },
-      skip,
-      take: limit,
-    });
+    const qb = this.issueLogRepository.createQueryBuilder('log');
+    this.applyIssueLogListFilters(qb, query);
+    qb.orderBy('log.createdAt', 'DESC');
+
+    const [logs, total] = await qb.skip(skip).take(limit).getManyAndCount();
 
     return {
       success: true,
@@ -185,12 +180,167 @@ export class IssueLogsService {
     };
   }
 
+  /** Module dropdown aliases (student vs students) and shared student routes. */
+  private resolveModuleFilterValues(module: string): string[] {
+    const key = module.trim().toLowerCase();
+    if (key === 'student' || key === 'students') {
+      return ['student', 'students'];
+    }
+    return [module.trim()];
+  }
+
+  private applyIssueLogListFilters(
+    qb: SelectQueryBuilder<IssueLog>,
+    query: IssueLogListQuery,
+  ): void {
+    if (query.userId) {
+      qb.andWhere('log.userId = :userId', { userId: query.userId });
+    }
+    if (query.userEmail?.trim()) {
+      qb.andWhere('log.userEmail ILIKE :userEmail', {
+        userEmail: `%${query.userEmail.trim()}%`,
+      });
+    }
+    if (query.module?.trim()) {
+      const modules = this.resolveModuleFilterValues(query.module);
+      if (modules.length === 1) {
+        qb.andWhere('log.module = :module', { module: modules[0] });
+      } else {
+        qb.andWhere('log.module IN (:...modules)', { modules });
+      }
+    }
+    if (query.action?.trim()) {
+      qb.andWhere('log.action ILIKE :action', {
+        action: `%${query.action.trim()}%`,
+      });
+    }
+    if (query.stage?.trim()) {
+      qb.andWhere('log.stage = :stage', { stage: query.stage.trim() });
+    }
+    if (query.severity?.trim()) {
+      qb.andWhere('log.severity = :severity', {
+        severity: query.severity.trim(),
+      });
+    }
+    if (query.statusCode) {
+      const statusCode = this.toPositiveInt(query.statusCode, 0);
+      if (statusCode > 0) {
+        qb.andWhere('log.statusCode = :statusCode', { statusCode });
+      }
+    }
+    if (query.method?.trim()) {
+      qb.andWhere('log.method = :method', {
+        method: query.method.trim().toUpperCase(),
+      });
+    }
+    if (query.path?.trim()) {
+      qb.andWhere('log.path ILIKE :path', {
+        path: `%${query.path.trim()}%`,
+      });
+    }
+    if (query.requestId?.trim()) {
+      qb.andWhere('log.requestId = :requestId', {
+        requestId: query.requestId.trim(),
+      });
+    }
+    if (query.dateFrom && query.dateTo) {
+      qb.andWhere('log.createdAt BETWEEN :dateFrom AND :dateTo', {
+        dateFrom: new Date(query.dateFrom),
+        dateTo: new Date(query.dateTo),
+      });
+    } else if (query.dateFrom) {
+      qb.andWhere('log.createdAt >= :dateFrom', {
+        dateFrom: new Date(query.dateFrom),
+      });
+    } else if (query.dateTo) {
+      qb.andWhere('log.createdAt <= :dateTo', {
+        dateTo: new Date(query.dateTo),
+      });
+    }
+
+    const search = (query.search || '').trim();
+    if (search) {
+      const term = `%${search}%`;
+      qb.andWhere(
+        new Brackets((sub) => {
+          sub
+            .where('log.message ILIKE :term', { term })
+            .orWhere('log.userEmail ILIKE :term', { term })
+            .orWhere('log.path ILIKE :term', { term })
+            .orWhere('log.requestId ILIKE :term', { term })
+            .orWhere('log.targetId ILIKE :term', { term })
+            .orWhere('log.module ILIKE :term', { term })
+            .orWhere('log.stage ILIKE :term', { term })
+            .orWhere('log.errorName ILIKE :term', { term })
+            .orWhere('log.action ILIKE :term', { term })
+            .orWhere('log.userRole ILIKE :term', { term });
+        }),
+      );
+    }
+  }
+
   async findOne(id: string) {
     const log = await this.issueLogRepository.findOne({ where: { id } });
     return {
       success: Boolean(log),
       data: log,
     };
+  }
+
+  /**
+   * Structured issue row for attendance (and similar) business-rule failures.
+   * Fire-and-forget from services; never throws to callers.
+   */
+  async logOperationalIssue(input: {
+    eventType?: string;
+    severity?: 'warning' | 'error' | 'info';
+    module: string;
+    stage: string;
+    message: string;
+    statusCode?: number;
+    method?: string | null;
+    path?: string | null;
+    userId?: string | null;
+    userEmail?: string | null;
+    userRole?: string | null;
+    targetType?: string | null;
+    targetId?: string | null;
+    requestId?: string | null;
+    metadata?: Record<string, unknown>;
+  }): Promise<void> {
+    try {
+      const log = this.issueLogRepository.create({
+        eventType: input.eventType ?? 'operational_failure',
+        severity: input.severity ?? 'warning',
+        module: input.module,
+        action: input.path
+          ? `${input.method ?? 'POST'} ${input.path}`.trim()
+          : null,
+        stage: input.stage,
+        statusCode: input.statusCode ?? null,
+        method: input.method ?? null,
+        path: input.path ?? null,
+        message: input.message,
+        errorName: null,
+        stack: null,
+        userId: input.userId ?? null,
+        userEmail: input.userEmail ?? null,
+        userRole: input.userRole ?? null,
+        targetType: input.targetType ?? null,
+        targetId: input.targetId ?? null,
+        requestId: input.requestId ?? randomUUID(),
+        ip: null,
+        userAgent: null,
+        metadata: this.compactMetadata(
+          this.sanitizeForLog(input.metadata ?? {}) as Record<string, unknown>,
+        ),
+      });
+      await this.issueLogRepository.save(log);
+    } catch (logError) {
+      this.logger.warn(
+        `Operational issue log write failed: ${this.getErrorMessage(logError)}`,
+      );
+    }
   }
 
   private summarizeRequestRouting(request: Request): Record<string, unknown> {
@@ -284,48 +434,6 @@ export class IssueLogsService {
     }
 
     return chain;
-  }
-
-  private buildWhere(
-    query: IssueLogListQuery,
-  ): FindOptionsWhere<IssueLog>[] | FindOptionsWhere<IssueLog> {
-    const base: FindOptionsWhere<IssueLog> = {};
-
-    if (query.userId) base.userId = query.userId;
-    if (query.userEmail) base.userEmail = Like(`%${query.userEmail}%`);
-    if (query.module) base.module = query.module;
-    if (query.action) base.action = Like(`%${query.action}%`);
-    if (query.stage) base.stage = query.stage;
-    if (query.severity) base.severity = query.severity;
-    if (query.statusCode)
-      base.statusCode = this.toPositiveInt(query.statusCode, 0);
-    if (query.method) base.method = query.method.toUpperCase();
-    if (query.path) base.path = Like(`%${query.path}%`);
-    if (query.requestId) base.requestId = query.requestId;
-
-    if (query.dateFrom && query.dateTo) {
-      base.createdAt = Between(
-        new Date(query.dateFrom),
-        new Date(query.dateTo),
-      );
-    } else if (query.dateFrom) {
-      base.createdAt = MoreThanOrEqual(new Date(query.dateFrom));
-    } else if (query.dateTo) {
-      base.createdAt = LessThanOrEqual(new Date(query.dateTo));
-    }
-
-    if (!query.search) {
-      return base;
-    }
-
-    const search = Like(`%${query.search}%`);
-    return [
-      { ...base, message: search },
-      { ...base, userEmail: search },
-      { ...base, path: search },
-      { ...base, requestId: search },
-      { ...base, targetId: search },
-    ];
   }
 
   private getStatusCode(exception: unknown): number {
@@ -432,12 +540,15 @@ export class IssueLogsService {
     if (cleanPath.includes('/reports') && cleanPath.includes('/submit'))
       return 'report_submit';
     if (cleanPath.includes('/reports')) return 'report_flow';
+    if (cleanPath.includes('/engagement') && cleanPath.includes('/attendance'))
+      return 'attendance_submit';
     return null;
   }
 
   private getTargetType(path?: string): string | null {
     const cleanPath = path?.toLowerCase() ?? '';
     if (cleanPath.includes('/reports')) return 'report';
+    if (cleanPath.includes('/engagement')) return 'participation';
     if (cleanPath.includes('/projects') || cleanPath.includes('/opportunit'))
       return 'project';
     if (cleanPath.includes('/payments')) return 'payment';
@@ -448,6 +559,7 @@ export class IssueLogsService {
   private getTargetId(params?: any, body?: any, query?: any): string | null {
     const value =
       params?.id ??
+      params?.participantId ??
       params?.projectId ??
       body?.report_id ??
       body?.reportId ??

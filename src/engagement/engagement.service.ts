@@ -1,4 +1,9 @@
-import { Injectable, BadRequestException, NotFoundException, ForbiddenException, Logger } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ForbiddenException, Logger, Optional } from '@nestjs/common';
+import { IssueLogsService } from '../issue-logs/issue-logs.service';
+import {
+    ATTENDANCE_DESCRIPTION_MAX_CHARS,
+    ATTENDANCE_DESCRIPTION_MAX_WORDS,
+} from './attendance-description.constants';
 import { S3Service } from '../common/s3.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, In, IsNull, Repository } from 'typeorm';
@@ -59,6 +64,7 @@ export class EngagementService {
         private configService: ConfigService,
         private s3Service: S3Service,
         private mailService: MailService,
+        @Optional() private readonly issueLogsService?: IssueLogsService,
     ) {
         const secret = this.configService.get<string>('ENCRYPTION_KEY') || 'default-secret-key-32-chars-long!!';
         this.KEY = crypto.scryptSync(secret, 'salt', 32);
@@ -715,7 +721,55 @@ export class EngagementService {
         return ['active', 'live', 'open', 'recruiting'].includes(st);
     }
 
+    /** Non-blocking issue_logs row for attendance submit failures (admin Issue Logs UI). */
+    private recordAttendanceFailure(
+        reasonCode: string,
+        message: string,
+        statusCode: number,
+        studentId: string,
+        participantId: string,
+        extra?: Record<string, unknown>,
+    ): void {
+        if (!this.issueLogsService) return;
+        void (async () => {
+            let userEmail: string | null = null;
+            let userRole: string | null = null;
+            try {
+                const user = await this.userRepository.findOne({
+                    where: { id: studentId },
+                    select: ['email', 'role'],
+                });
+                userEmail = user?.email ?? null;
+                userRole = user?.role ?? null;
+            } catch {
+                /* best-effort */
+            }
+            await this.issueLogsService!.logOperationalIssue({
+                eventType: 'attendance_submit_failure',
+                severity: statusCode >= 500 ? 'error' : 'warning',
+                module: 'engagement',
+                stage: 'attendance_submit',
+                message,
+                statusCode,
+                method: 'POST',
+                path: `/api/v1/engagement/${participantId}/attendance`,
+                userId: studentId,
+                userEmail,
+                userRole,
+                targetType: 'participation',
+                targetId: participantId,
+                metadata: {
+                    reasonCode,
+                    participationId: extra?.participationId ?? null,
+                    projectId: extra?.projectId ?? null,
+                    ...extra,
+                },
+            });
+        })();
+    }
+
     async addAttendanceLog(studentId: string, participantId: string, dto: CreateAttendanceLogDto, file?: Express.Multer.File) {
+        const hasEvidence = Boolean(file) || String(dto.evidenceUploaded) === 'true';
         const participation = await this.findParticipationByIdentifier(participantId, ['attendanceLogs']);
         if (!participation) throw new NotFoundException('Participation record not found');
         
@@ -882,6 +936,18 @@ export class EngagementService {
 
                 if (!isAuthorizedAsLead) {
                     this.logger.error(`Not authorized: User ${studentId} (email: ${user?.email}, cnicHash: ${userCnicHash?.slice(-6)}) tried logging attendance for record ${participation.id} (owner: ${participation.studentId}, email: ${participation.email}, cnicHash: ${participation.cnicHash?.slice(-6)})`);
+                    this.recordAttendanceFailure(
+                        'not_authorized',
+                        'Not authorized',
+                        400,
+                        studentId,
+                        participantId,
+                        {
+                            hasEvidence,
+                            participationId: participation.id,
+                            projectId: participation.projectId,
+                        },
+                    );
                     throw new BadRequestException('Not authorized');
                 }
             }
@@ -905,12 +971,37 @@ export class EngagementService {
             !['approved', 'verified', 'accepted', 'finalized'].includes(participation.status)
         ) {
             this.logger.warn(`Attendance logging attempt for record ${participation.id} in status: ${participation.status}`);
-            throw new BadRequestException(`Attendance logging is only allowed for approved/verified records (Current status: ${participation.status})`);
+            const statusMsg = `Attendance logging is only allowed for approved/verified records (Current status: ${participation.status})`;
+            this.recordAttendanceFailure(
+                'participation_not_approved',
+                statusMsg,
+                400,
+                studentId,
+                participantId,
+                {
+                    hasEvidence,
+                    participationId: participation.id,
+                    projectId: participation.projectId,
+                    participationStatus: participation.status,
+                    creatorLiveBypass,
+                },
+            );
+            throw new BadRequestException(statusMsg);
         }
 
         // Rule 1: Date Validation (Not in future)
         const date = new Date(dto.dateOfEngagement);
-        if (date > new Date()) throw new BadRequestException('Attendance date cannot be in the future');
+        if (date > new Date()) {
+            this.recordAttendanceFailure(
+                'date_in_future',
+                'Attendance date cannot be in the future',
+                400,
+                studentId,
+                participantId,
+                { hasEvidence, participationId: participation.id, projectId: participation.projectId },
+            );
+            throw new BadRequestException('Attendance date cannot be in the future');
+        }
 
         // Handle Flexible Project 4-month window
         if (participation.attendanceLogs && participation.attendanceLogs.length > 0) {
@@ -919,32 +1010,110 @@ export class EngagementService {
             fourMonthsLater.setMonth(fourMonthsLater.getMonth() + 4);
 
             if (date > fourMonthsLater) {
-                throw new BadRequestException('Attendance entries must fall within 4 months from the first log for flexible projects.');
+                const windowMsg =
+                    'Attendance entries must fall within 4 months from the first log for flexible projects.';
+                this.recordAttendanceFailure(
+                    'outside_four_month_window',
+                    windowMsg,
+                    400,
+                    studentId,
+                    participantId,
+                    { hasEvidence, participationId: participation.id, projectId: participation.projectId },
+                );
+                throw new BadRequestException(windowMsg);
             }
         }
 
         // Rule 2: Time Validation (End > Start and Max 12h)
         const { startTime, endTime } = dto;
         const sessionHours = this.calculateSessionHours(startTime, endTime);
-        if (sessionHours <= 0) throw new BadRequestException('End time must be after start time');
-        if (sessionHours > 12) throw new BadRequestException('Daily attendance cannot exceed 12 hours');
+        if (sessionHours <= 0) {
+            this.recordAttendanceFailure(
+                'invalid_session_times',
+                'End time must be after start time',
+                400,
+                studentId,
+                participantId,
+                { hasEvidence, participationId: participation.id, projectId: participation.projectId, startTime, endTime },
+            );
+            throw new BadRequestException('End time must be after start time');
+        }
+        if (sessionHours > 12) {
+            this.recordAttendanceFailure(
+                'session_exceeds_twelve_hours',
+                'Daily attendance cannot exceed 12 hours',
+                400,
+                studentId,
+                participantId,
+                { hasEvidence, participationId: participation.id, projectId: participation.projectId, sessionHours },
+            );
+            throw new BadRequestException('Daily attendance cannot exceed 12 hours');
+        }
 
-        // Rule 3: Word Count Validation (Max 40 words)
+        // Rule 3: Word count (chars capped by DTO @MaxLength + DB column)
         const wordCount = dto.description.trim().split(/\s+/).length;
-        if (wordCount > 40) throw new BadRequestException('Description cannot exceed 40 words');
+        if (wordCount > ATTENDANCE_DESCRIPTION_MAX_WORDS) {
+            const wordMsg = `Description cannot exceed ${ATTENDANCE_DESCRIPTION_MAX_WORDS} words`;
+            this.recordAttendanceFailure(
+                'description_word_limit',
+                wordMsg,
+                400,
+                studentId,
+                participantId,
+                {
+                    hasEvidence,
+                    participationId: participation.id,
+                    projectId: participation.projectId,
+                    wordCount,
+                    maxChars: ATTENDANCE_DESCRIPTION_MAX_CHARS,
+                },
+            );
+            throw new BadRequestException(wordMsg);
+        }
 
         let evidenceUrl: string | null = null;
         let evidenceUploaded: boolean = false;
 
         // Process file if provided
         if (file) {
-            evidenceUrl = await this.s3Service.uploadFile(file, 'attendance-evidence');
-            evidenceUploaded = true;
+            try {
+                evidenceUrl = await this.s3Service.uploadFile(file, 'attendance-evidence');
+                evidenceUploaded = true;
+            } catch (uploadErr) {
+                const uploadMsg =
+                    uploadErr instanceof Error && uploadErr.message
+                        ? uploadErr.message
+                        : 'Failed to upload file to S3';
+                this.recordAttendanceFailure(
+                    's3_upload_failed',
+                    uploadMsg,
+                    500,
+                    studentId,
+                    participantId,
+                    {
+                        hasEvidence: true,
+                        participationId: participation.id,
+                        projectId: participation.projectId,
+                        fileName: file.originalname,
+                        fileSize: file.size,
+                        mimeType: file.mimetype,
+                    },
+                );
+                throw uploadErr;
+            }
         } else if (String(dto.evidenceUploaded) === 'true') {
             evidenceUploaded = true;
         }
 
         if (!opportunity) {
+            this.recordAttendanceFailure(
+                'project_not_found',
+                'Project not found',
+                404,
+                studentId,
+                participantId,
+                { hasEvidence, participationId: participation.id, projectId: participation.projectId },
+            );
             throw new NotFoundException('Project not found');
         }
 
@@ -974,9 +1143,22 @@ export class EngagementService {
         if (attendanceApproverType === 'faculty') {
             const facultyEmails = await this.resolveFacultyEmailsForAttendanceRouting(participation, opportunity);
             if (!facultyEmails.length) {
-                throw new BadRequestException(
-                    'Attendance approval needs a supervising faculty: add primary or secondary faculty email on registration, or ensure the project has faculty (linked faculty account or supervision contact matching a faculty user).',
+                const facultyMsg =
+                    'Attendance approval needs a supervising faculty: add primary or secondary faculty email on registration, or ensure the project has faculty (linked faculty account or supervision contact matching a faculty user).';
+                this.recordAttendanceFailure(
+                    'faculty_routing_missing',
+                    facultyMsg,
+                    400,
+                    studentId,
+                    participantId,
+                    {
+                        hasEvidence,
+                        participationId: participation.id,
+                        projectId: participation.projectId,
+                        attendanceApproverType,
+                    },
                 );
+                throw new BadRequestException(facultyMsg);
             }
 
             for (const facultyEmail of facultyEmails) {
@@ -994,9 +1176,22 @@ export class EngagementService {
             assignedPartnerUserId = await this.resolvePartnerOwnerUserId(opportunity);
             const partnerEmails = this.extractPartnerOfficialEmails(opportunity);
             if (!assignedPartnerUserId && partnerEmails.length === 0) {
-                throw new BadRequestException(
-                    'Attendance approval needs a partner contact email or registered partner account for this project.',
+                const partnerMsg =
+                    'Attendance approval needs a partner contact email or registered partner account for this project.';
+                this.recordAttendanceFailure(
+                    'partner_routing_missing',
+                    partnerMsg,
+                    400,
+                    studentId,
+                    participantId,
+                    {
+                        hasEvidence,
+                        participationId: participation.id,
+                        projectId: participation.projectId,
+                        attendanceApproverType,
+                    },
                 );
+                throw new BadRequestException(partnerMsg);
             }
         }
         const routing = resolveAttendanceApproverRouting(

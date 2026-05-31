@@ -1,4 +1,8 @@
 import { IsString, IsDecimal, IsISO8601, MaxLength, Matches, IsOptional, IsBooleanString, IsBoolean } from 'class-validator';
+import {
+    ATTENDANCE_DESCRIPTION_MAX_CHARS,
+    ATTENDANCE_DESCRIPTION_MAX_WORDS,
+} from '../attendance-description.constants';
 
 export class CreateAttendanceLogDto {
     @IsISO8601()
@@ -19,7 +23,9 @@ export class CreateAttendanceLogDto {
     activityType: string;
 
     @IsString()
-    @MaxLength(300)
+    @MaxLength(ATTENDANCE_DESCRIPTION_MAX_CHARS, {
+        message: `Brief description must be ${ATTENDANCE_DESCRIPTION_MAX_CHARS} characters or fewer. Keep it concise (max ${ATTENDANCE_DESCRIPTION_MAX_WORDS} words).`,
+    })
     description: string;
 
     @IsOptional()

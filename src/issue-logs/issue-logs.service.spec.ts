@@ -9,11 +9,23 @@ describe('IssueLogsService', () => {
       }),
     }) as any;
 
-  const makeRepository = () => ({
+  const makeQueryBuilder = (rows: unknown[] = [], total = 0) => {
+    const chain = {
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getManyAndCount: jest.fn().mockResolvedValue([rows, total]),
+    };
+    return chain;
+  };
+
+  const makeRepository = (qb = makeQueryBuilder()) => ({
     create: jest.fn((value) => value),
     save: jest.fn().mockResolvedValue(undefined),
     findAndCount: jest.fn().mockResolvedValue([[], 0]),
     findOne: jest.fn().mockResolvedValue(null),
+    createQueryBuilder: jest.fn().mockReturnValue(qb),
   });
 
   it('logs user-facing report errors with safe metadata', async () => {
@@ -113,8 +125,40 @@ describe('IssueLogsService', () => {
     ).resolves.toBeUndefined();
   });
 
-  it('caps admin list page size', async () => {
+  it('logs operational attendance failures with reason metadata', async () => {
     const repository = makeRepository();
+    const service = new IssueLogsService(repository as any);
+
+    await service.logOperationalIssue({
+      eventType: 'attendance_submit_failure',
+      module: 'engagement',
+      stage: 'attendance_submit',
+      message: 'Not authorized',
+      statusCode: 400,
+      userId: 'student-1',
+      userEmail: 'student@example.com',
+      targetType: 'participation',
+      targetId: 'part-1',
+      metadata: { reasonCode: 'not_authorized', hasEvidence: true },
+    });
+
+    expect(repository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: 'attendance_submit_failure',
+        module: 'engagement',
+        stage: 'attendance_submit',
+        statusCode: 400,
+        targetId: 'part-1',
+      }),
+    );
+    expect(repository.save.mock.calls[0][0].metadata).toEqual(
+      expect.objectContaining({ reasonCode: 'not_authorized', hasEvidence: true }),
+    );
+  });
+
+  it('caps admin list page size', async () => {
+    const qb = makeQueryBuilder([], 0);
+    const repository = makeRepository(qb);
     const service = new IssueLogsService(repository as any);
 
     await service.findAll({
@@ -123,11 +167,27 @@ describe('IssueLogsService', () => {
       userEmail: 'student@example.com',
     });
 
-    expect(repository.findAndCount).toHaveBeenCalledWith(
-      expect.objectContaining({
-        skip: 100,
-        take: 100,
-      }),
-    );
+    expect(qb.skip).toHaveBeenCalledWith(100);
+    expect(qb.take).toHaveBeenCalledWith(100);
+  });
+
+  it('applies search and module filters via query builder', async () => {
+    const qb = makeQueryBuilder([{ id: 'log-1' }], 1);
+    const repository = makeRepository(qb);
+    const service = new IssueLogsService(repository as any);
+
+    const result = await service.findAll({
+      search: 'Invalid credentials',
+      module: 'student',
+      severity: 'warning',
+      page: '1',
+      limit: '20',
+    });
+
+    expect(repository.createQueryBuilder).toHaveBeenCalledWith('log');
+    expect(qb.andWhere).toHaveBeenCalled();
+    expect(qb.orderBy).toHaveBeenCalledWith('log.createdAt', 'DESC');
+    expect(result.meta?.total).toBe(1);
+    expect(result.data).toHaveLength(1);
   });
 });

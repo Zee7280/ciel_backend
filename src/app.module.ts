@@ -31,6 +31,7 @@ import { IssueLogsModule } from './issue-logs/issue-logs.module';
 import { OrganizationMembershipModule } from './organization-membership/organization-membership.module';
 import { FeedbackModule } from './feedback/feedback.module';
 import { TutorialsModule } from './tutorials/tutorials.module';
+import { AnalyticsModule } from './analytics/analytics.module';
 
 @Module({
   imports: [
@@ -82,6 +83,7 @@ import { TutorialsModule } from './tutorials/tutorials.module';
     OrganizationMembershipModule,
     FeedbackModule,
     TutorialsModule,
+    AnalyticsModule,
     TypeOrmModule.forFeature([Setting])
 ],
   controllers: [AppController],

@@ -110,6 +110,69 @@ export class StudentReportsService {
         return raw ?? 'draft';
     }
 
+    /** Statuses where draft saves must not rewind lifecycle (rejected/revision are editable). */
+    private lockedReportStatusesForStudentWrite(): Set<string> {
+        return new Set([
+            'submitted',
+            'partner_verified',
+            'payment_pending',
+            'payment_under_review',
+            'verified',
+            'paid',
+        ]);
+    }
+
+    private isReportRejectedForRevision(report: Pick<StudentReport, 'status' | 'admin_status' | 'partner_status'>): boolean {
+        const st = String(report.status || '').toLowerCase();
+        const adm = String(report.admin_status || '').toLowerCase();
+        const partner = String(report.partner_status || '').toLowerCase();
+        return (
+            st === 'rejected' ||
+            st === 'revision' ||
+            adm === 'rejected' ||
+            partner === 'rejected'
+        );
+    }
+
+    /** Student may edit when in draft/revision or when an approver returned the report for fixes. */
+    private isReportEditableForStudent(report: Pick<StudentReport, 'status' | 'admin_status' | 'partner_status'>): boolean {
+        if (this.isReportRejectedForRevision(report)) return true;
+        const st = String(report.status || '').toLowerCase();
+        return st === 'draft' || st === 'continue' || st === '';
+    }
+
+    /**
+     * Legacy rows may have admin_status=rejected while status stayed submitted; expose revision to the UI.
+     */
+    private resolveStudentFacingReportStatus(
+        rawReportStatus: string | null | undefined,
+        adminStatus?: string | null,
+        partnerStatus?: string | null,
+    ): string {
+        const raw = String(rawReportStatus || '').toLowerCase();
+        const adm = String(adminStatus || '').toLowerCase();
+        const partner = String(partnerStatus || '').toLowerCase();
+        if (raw === 'rejected') return 'revision';
+        if ((adm === 'rejected' || partner === 'rejected') && (raw === 'submitted' || raw === 'partner_verified')) {
+            return 'revision';
+        }
+        return this.toPublicReportStatus(rawReportStatus);
+    }
+
+    private buildStudentReportFeedback(report: StudentReport): string | null {
+        const direct = report.admin_feedback?.trim();
+        if (direct) return direct;
+        const section11 = report.section11 as Record<string, unknown> | null | undefined;
+        const meta = section11?.audit_meta;
+        if (meta && typeof meta === 'object' && !Array.isArray(meta)) {
+            const studentFeedback = (meta as { student_feedback?: unknown }).student_feedback;
+            if (typeof studentFeedback === 'string' && studentFeedback.trim()) {
+                return studentFeedback.trim();
+            }
+        }
+        return null;
+    }
+
     private isPartnerReviewerRole(role: string | null | undefined): boolean {
         return ['partner', 'ngo', 'corporate', 'organization_admin'].includes(role ?? '');
     }
@@ -392,7 +455,7 @@ export class StudentReportsService {
         rawReportStatus: string,
         adminStatus?: string | null,
     ) {
-        const publicStatus = this.toPublicReportStatus(rawReportStatus);
+        const publicStatus = this.resolveStudentFacingReportStatus(rawReportStatus, adminStatus);
         const payment_verified =
             latest?.status === PaymentStatus.APPROVED ||
             rawReportStatus === 'paid';
@@ -511,22 +574,24 @@ export class StudentReportsService {
             }
         });
         const priorReportStatus = report?.status ?? null;
-        const lockedReportStatuses = new Set([
-            'submitted',
-            'partner_verified',
-            'payment_pending',
-            'payment_under_review',
-            'verified',
-            'paid',
-            'rejected',
-        ]);
+        const lockedReportStatuses = this.lockedReportStatusesForStudentWrite();
 
         if (report) {
             // Update existing report
             if (shouldSubmit) {
+                if (this.isReportRejectedForRevision(report)) {
+                    report.admin_status = 'pending';
+                    if (String(report.partner_status || '').toLowerCase() === 'rejected') {
+                        report.partner_status = 'pending';
+                    }
+                    report.adminApprovedAt = null;
+                    report.partnerApprovedAt = null;
+                }
                 report.status = 'submitted';
             } else if (!lockedReportStatuses.has(report.status)) {
                 report.status = 'draft';
+            } else if (this.isReportRejectedForRevision(report)) {
+                report.status = 'revision';
             }
             if (parsedData.section1) report.section1 = parsedData.section1;
             if (parsedData.section2) report.section2 = parsedData.section2;
@@ -679,19 +744,13 @@ export class StudentReportsService {
             }
         });
 
-        const lockedReportStatuses = new Set([
-            'submitted',
-            'partner_verified',
-            'payment_pending',
-            'payment_under_review',
-            'verified',
-            'paid',
-            'rejected',
-        ]);
+        const lockedReportStatuses = this.lockedReportStatusesForStudentWrite();
 
         if (report) {
             if (!lockedReportStatuses.has(report.status)) {
                 report.status = 'draft';
+            } else if (this.isReportRejectedForRevision(report)) {
+                report.status = 'revision';
             }
             if (parsedData.project_id) report.project_id = parsedData.project_id;
             if (parsedData.section1) report.section1 = parsedData.section1;
@@ -1028,6 +1087,8 @@ export class StudentReportsService {
             adminStatus,
         );
         const approvalContext = this.getPublicReportApprovalContext(report);
+        const feedback = this.buildStudentReportFeedback(report);
+        const isEditable = this.isReportEditableForStudent(report);
 
         return {
             success: true,
@@ -1035,6 +1096,9 @@ export class StudentReportsService {
                 id: report.id,
                 report_id: report.id,
                 ...this.reportVerificationPayload(report),
+                is_editable: isEditable,
+                feedback,
+                admin_feedback: report.admin_feedback,
                 student: {
                     id: report.student?.id,
                     name: report.student?.name,
@@ -1108,7 +1172,6 @@ export class StudentReportsService {
                 section9: report.section9,
                 section10: report.section10,
                 section11: report.section11,
-                admin_feedback: report.admin_feedback,
                 created_at: report.createdAt,
                 updated_at: report.updatedAt,
             },
@@ -1168,12 +1231,13 @@ export class StudentReportsService {
             if (!reason?.trim()) {
                 throw new BadRequestException('feedback or reason is required when rejecting');
             }
-            report.status = 'rejected';
+            report.status = 'revision';
             if (role === 'admin') report.admin_status = 'rejected';
             if (isPartnerReviewer) {
                 report.partner_status = 'rejected';
                 report.partnerApprovedAt = null;
             }
+            report.adminApprovedAt = null;
             report.admin_feedback = reason.trim();
         } else if (action === 'approve') {
             if (isPartnerReviewer) {
@@ -1235,6 +1299,7 @@ export class StudentReportsService {
                     r.status,
                     adminStatus,
                 );
+                const feedback = this.buildStudentReportFeedback(r);
                 data.push({
                     status,
                     payment_verified,
@@ -1248,7 +1313,9 @@ export class StudentReportsService {
                     admin_status: adminStatus,
                     admin_approval_status: adminStatus,
                     partner_status: r.partner_status,
-                    feedback: null,
+                    feedback,
+                    admin_feedback: r.admin_feedback,
+                    is_editable: this.isReportEditableForStudent(r),
                     submission_date: r.submission_date,
                     report_submitted_at: r.reportSubmittedAt,
                     partner_approved_at: r.partnerApprovedAt,
@@ -1283,6 +1350,7 @@ export class StudentReportsService {
             report.status,
             adminStatus,
         );
+        const feedback = this.buildStudentReportFeedback(report);
 
         return {
             success: true,
@@ -1298,7 +1366,9 @@ export class StudentReportsService {
                 admin_status: adminStatus,
                 admin_approval_status: adminStatus,
                 partner_status: report.partner_status,
-                feedback: null,
+                feedback,
+                admin_feedback: report.admin_feedback,
+                is_editable: this.isReportEditableForStudent(report),
                 submission_date: report.submission_date,
                 report_submitted_at: report.reportSubmittedAt,
                 partner_approved_at: report.partnerApprovedAt,

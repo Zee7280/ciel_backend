@@ -32,7 +32,9 @@ describe('StudentReportsService', () => {
     const mockUsersRepository = {
         findOne: jest.fn(),
     };
-    const mockPaymentRepository = {};
+    const mockPaymentRepository = {
+        findOne: jest.fn().mockResolvedValue(null),
+    };
     const mockS3Service = {
         uploadFile: jest.fn(),
     };
@@ -436,5 +438,53 @@ describe('StudentReportsService', () => {
         expect(report.status).toBe('verified');
         expect(report.partner_status).toBe('approved');
         expect(result.data.status).toBe('verified');
+    });
+
+    it('sets revision status when admin rejects so students can edit', async () => {
+        const report = {
+            id: 'report-1',
+            status: 'submitted',
+            partner_status: 'pending',
+            admin_status: 'pending',
+            partnerApprovedAt: null,
+            adminApprovedAt: new Date('2026-05-01T00:00:00.000Z'),
+            opportunity: { requiresPartnerApproval: false },
+        };
+        mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+        await service.verifyReport('report-1', 'reject', 'admin', 'Please fix attendance hours.');
+
+        expect(report.status).toBe('revision');
+        expect(report.admin_status).toBe('rejected');
+        expect(report.admin_feedback).toBe('Please fix attendance hours.');
+        expect(report.adminApprovedAt).toBeNull();
+    });
+
+    it('returns admin feedback and editable flag from checkReportStatus', async () => {
+        const OPP = '582da802-e41e-488d-bd3d-d6dee59982b7';
+        const report = {
+            id: 'report-1',
+            studentId: 'student-1',
+            opportunityId: OPP,
+            project_id: OPP,
+            status: 'submitted',
+            admin_status: 'rejected',
+            partner_status: 'pending',
+            admin_feedback: 'Revise Section 4 outputs.',
+            section11: null,
+            submission_date: new Date(),
+            reportSubmittedAt: new Date(),
+            partnerApprovedAt: null,
+            adminApprovedAt: null,
+            opportunity: { title: 'Test' },
+        };
+        mockParticipantRepository.findOne.mockResolvedValue(null);
+        mockStudentReportsRepository.findOne.mockImplementation(async () => report);
+
+        const result = await service.checkReportStatus('student-1', OPP);
+
+        expect(result.data.feedback).toBe('Revise Section 4 outputs.');
+        expect(result.data.is_editable).toBe(true);
+        expect(result.data.status).toBe('revision');
     });
 });

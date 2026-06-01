@@ -7,14 +7,20 @@ import { PatchAttendanceApprovalDto } from './dto/patch-attendance-approval.dto'
 import { CreateAttendanceVerifyRequestDto } from './dto/create-attendance-verify-request.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import {
+    assertStudentReportUploadMeta,
     studentReportMulterFileFilter,
+    studentReportPresignExpiresInSeconds,
     studentReportUploadMulterLimits,
 } from '../common/student-report-file-upload';
+import { S3Service } from '../common/s3.service';
 
 @Controller('engagement')
 @UseGuards(JwtAuthGuard)
 export class EngagementController {
-    constructor(private readonly engagementService: EngagementService) { }
+    constructor(
+        private readonly engagementService: EngagementService,
+        private readonly s3Service: S3Service,
+    ) { }
 
     @Get('my')
     async getMy(@Request() req) {
@@ -74,6 +80,22 @@ export class EngagementController {
             success: true,
             ...result,
         };
+    }
+
+  /** JSON-only presign — browser uploads attendance photo direct to S3 (bypasses serverless body limits). */
+    @Post('attendance/evidence/presign')
+    async presignAttendanceEvidence(
+        @Request() req,
+        @Body() body: { filename?: string; contentType?: string; size?: number | string },
+    ) {
+        const meta = assertStudentReportUploadMeta(body);
+        const signed = await this.s3Service.presignPutObject({
+            folder: `attendance-evidence/${req.user.id}`,
+            originalName: meta.filename,
+            contentType: meta.contentType,
+            expiresInSeconds: studentReportPresignExpiresInSeconds(meta.size),
+        });
+        return { success: true, data: { ...signed, url: signed.publicUrl } };
     }
 
     @Post('register')

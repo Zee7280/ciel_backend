@@ -30,4 +30,9 @@ export class CreateAttendanceLogDto {
 
     @IsOptional()
     evidenceUploaded?: any;
+
+    /** Set after client uploads via presigned PUT (avoids Vercel/API body limits on phone photos). */
+    @IsOptional()
+    @IsString()
+    evidenceUrl?: string;
 }

@@ -1074,7 +1074,12 @@ export class EngagementService {
         let evidenceUrl: string | null = null;
         let evidenceUploaded: boolean = false;
 
-        // Process file if provided
+        const presignedUrl =
+            typeof dto.evidenceUrl === 'string' && dto.evidenceUrl.trim()
+                ? dto.evidenceUrl.trim()
+                : null;
+
+        // Process file if provided (legacy multipart — prefer presigned evidenceUrl on mobile)
         if (file) {
             try {
                 evidenceUrl = await this.s3Service.uploadFile(file, 'attendance-evidence');
@@ -1101,6 +1106,9 @@ export class EngagementService {
                 );
                 throw uploadErr;
             }
+        } else if (presignedUrl) {
+            evidenceUrl = presignedUrl;
+            evidenceUploaded = true;
         } else if (String(dto.evidenceUploaded) === 'true') {
             evidenceUploaded = true;
         }

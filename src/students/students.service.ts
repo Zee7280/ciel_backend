@@ -1367,6 +1367,8 @@ export class StudentsService {
         let applicationStage: 'faculty' | 'partner' | 'admin' | null = null;
         let applicationInternalStatus: string | null = null;
         let hasApplied = false;
+        let participationType: string = 'individual';
+        let teamSize = 1;
         const isStudentOwner = Boolean(studentUserId && opportunity.creatorId === studentUserId);
 
         if (studentUserId) {
@@ -1382,6 +1384,16 @@ export class StudentsService {
             applicationStage = overlay.applicationStage;
             applicationInternalStatus = overlay.applicationInternalStatus;
             hasApplied = overlay.hasApplied;
+            participationType = part?.participationMode || participationType;
+
+            if (part) {
+                if (part.participationMode === 'team') {
+                    const teamRows = await this.participationRowsForStudentProjectTeam(part);
+                    teamSize = teamRows.length > 0 ? teamRows.length : 1;
+                } else {
+                    teamSize = 1;
+                }
+            }
 
             const joinCleared =
                 overlay.applicationStatus === 'approved' ||
@@ -1422,6 +1434,10 @@ export class StudentsService {
                 hasApplied,
                 mode: opportunity.mode,
                 types: opportunity.types,
+                participation_type: participationType,
+                participationType,
+                team_size: teamSize,
+                teamSize,
                 location: opportunity.location,
                 timeline: opportunity.timeline,
                 sdg_info: opportunity.sdg_info,

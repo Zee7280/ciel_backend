@@ -28,11 +28,11 @@ import { buildOpportunityDetailView } from '../opportunities/opportunity-detail-
 import { purifyStudentOpportunityContent } from '../opportunities/opportunity-content-purify.util';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
 import { isTeamApplyFromParticipationAndMembers } from '../opportunities/apply-team-payload.util';
+import { isReportPartnerStepSatisfied } from '../reports/report-partner-approval.util';
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 import { StudentReport } from '../reports/entities/student-report.entity';
 import { StudentReportsService } from '../reports/student-reports.service';
 import { ReportPartnerApprovalSettingsService } from '../reports/report-partner-approval-settings.service';
-import { isReportPartnerStepSatisfied } from '../reports/report-partner-approval.util';
 
 @Injectable()
 export class StudentsService {
@@ -370,10 +370,13 @@ export class StudentsService {
      * Public `report_status` for dashboard lists (distinct from legacy DB-only labels).
      * `pending_payment` = student must pay / submit proof (`partner_verified`, legacy `payment_pending`).
      */
-    private dashboardPublicReportStatus(raw: string | null | undefined): string | null {
+    private dashboardPublicReportStatus(
+        raw: string | null | undefined,
+        partnerStatus?: string | null,
+    ): string | null {
         if (!raw) return null;
         if (raw === 'continue') return 'draft';
-        if (raw === 'partner_verified' || raw === 'payment_pending') return 'pending_payment';
+        if (raw === 'payment_pending' || raw === 'submitted') return 'pending_payment';
         if (raw === 'payment_under_review') return 'payment_under_review';
         return raw;
     }
@@ -762,7 +765,9 @@ export class StudentsService {
                     : 'General';
 
             const rep = reportByProjectId.get(String(app.projectId));
-            const reportStatus = rep ? this.dashboardPublicReportStatus(rep.status) : null;
+            const reportStatus = rep
+                ? this.dashboardPublicReportStatus(rep.status, rep.partner_status)
+                : null;
 
             const teamSize =
                 teamSizeByKey.get(`${app.projectId}|${this.participationTeamBucketKey(app)}`) ?? 1;
@@ -847,9 +852,10 @@ export class StudentsService {
         );
         const continueProjectId = draftReport?.opportunityId || draftReport?.project_id;
 
-        const paymentDueReport = studentReports.find((r) =>
-            ['partner_verified', 'payment_pending'].includes(r.status),
-        );
+        const paymentDueReport = studentReports.find((r) => {
+            const st = String(r.status || '').toLowerCase();
+            return st === 'payment_pending' || st === 'submitted';
+        });
         const paymentDueProjectId = paymentDueReport ? this.reportProjectKey(paymentDueReport) : null;
 
         const resultsReport = studentReports.find((r) => ['verified', 'paid'].includes(r.status));

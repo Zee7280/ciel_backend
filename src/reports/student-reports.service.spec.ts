@@ -137,10 +137,11 @@ describe('StudentReportsService', () => {
         );
 
         expect(result.message).toBe('Report submitted successfully.');
-        expect(mockStudentReportsRepository.create).toHaveBeenCalledWith(
+        expect(mockStudentReportsRepository.save).toHaveBeenCalledWith(
             expect.objectContaining({
-                status: 'submitted',
+                status: 'payment_pending',
                 opportunityId: 'opp-1',
+                project_id: 'opp-1',
             }),
         );
         expect(mockMailService.sendAdminStudentReportSubmitted).toHaveBeenCalledTimes(1);
@@ -361,10 +362,29 @@ describe('StudentReportsService', () => {
         });
     });
 
+    it('blocks partner or admin approve until reporting fee is cleared', async () => {
+        const report = {
+            id: 'report-1',
+            status: 'payment_pending',
+            partner_status: 'pending',
+            admin_status: 'pending',
+            studentId: 'student-1',
+            opportunityId: 'opp-1',
+            project_id: 'opp-1',
+            opportunity: { requiresPartnerApproval: false },
+        };
+        mockStudentReportsRepository.findOne.mockResolvedValue(report);
+        mockPaymentRepository.findOne.mockResolvedValue(null);
+
+        await expect(service.verifyReport('report-1', 'approve', 'admin')).rejects.toThrow(
+            'Reporting fee must be submitted and approved',
+        );
+    });
+
     it('marks no-partner reports verified when admin approves', async () => {
         const report = {
             id: 'report-1',
-            status: 'submitted',
+            status: 'paid',
             partner_status: 'pending',
             admin_status: 'pending',
             partnerApprovedAt: null,
@@ -385,7 +405,7 @@ describe('StudentReportsService', () => {
         reportPartnerGateGloballyEnabled = false;
         const report = {
             id: 'report-1',
-            status: 'submitted',
+            status: 'paid',
             partner_status: 'pending',
             admin_status: 'pending',
             partnerApprovedAt: null,
@@ -405,7 +425,7 @@ describe('StudentReportsService', () => {
     it('keeps reports pending partner approval when that approval is required', async () => {
         const report = {
             id: 'report-1',
-            status: 'submitted',
+            status: 'paid',
             partner_status: 'pending',
             admin_status: 'pending',
             partnerApprovedAt: null,
@@ -416,15 +436,15 @@ describe('StudentReportsService', () => {
 
         const result = await service.verifyReport('report-1', 'approve', 'admin');
 
-        expect(report.status).toBe('submitted');
+        expect(report.status).toBe('paid');
         expect(report.admin_status).toBe('approved');
-        expect(result.data.status).toBe('submitted');
+        expect(result.data.status).toBe('paid');
     });
 
     it('marks partner-required reports verified when partner approves after admin', async () => {
         const report = {
             id: 'report-1',
-            status: 'submitted',
+            status: 'paid',
             partner_status: 'pending',
             admin_status: 'approved',
             partnerApprovedAt: null,

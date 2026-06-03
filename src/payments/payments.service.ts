@@ -281,9 +281,10 @@ export class PaymentsService {
 
         if (report) {
             if (status === PaymentStatus.APPROVED) {
-                report.status = 'verified';
+                // Fee cleared — partner/admin review may proceed (final verify is separate).
+                report.status = 'paid';
             } else if (status === PaymentStatus.REJECTED) {
-                report.status = 'submitted'; // Revert back so they can Pay again
+                report.status = 'payment_pending';
             }
             await this.studentReportRepository.save(report);
         }

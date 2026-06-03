@@ -105,7 +105,7 @@ export class StudentReportsService {
 
     /** Aligns legacy DB values with student UI / frontend lifecycle names. */
     private toPublicReportStatus(raw: string | null | undefined): string {
-        if (raw === 'payment_pending') return 'payment_under_review';
+        if (raw === 'payment_pending') return 'pending_payment';
         if (raw === 'continue') return 'draft';
         return raw ?? 'draft';
     }
@@ -156,7 +156,40 @@ export class StudentReportsService {
         if ((adm === 'rejected' || partner === 'rejected') && (raw === 'submitted' || raw === 'partner_verified')) {
             return 'revision';
         }
+        if (raw === 'payment_pending') return 'pending_payment';
+        if (raw === 'submitted') return 'pending_payment';
         return this.toPublicReportStatus(rawReportStatus);
+    }
+
+    /** Reporting fee approved (manual payment row or terminal paid statuses). */
+    private async isReportFeeClearedForApprovals(report: StudentReport): Promise<boolean> {
+        const st = String(report.status || '').toLowerCase();
+        if (['paid', 'partner_verified', 'verified'].includes(st)) return true;
+        const latest = await this.findLatestManualPayment(
+            report.studentId,
+            report.opportunityId || report.project_id,
+        );
+        return latest?.status === PaymentStatus.APPROVED;
+    }
+
+    private async assertReportFeeClearedBeforeApproval(report: StudentReport): Promise<void> {
+        if (await this.isReportFeeClearedForApprovals(report)) return;
+        throw new BadRequestException(
+            'Reporting fee must be submitted and approved before partner or admin can review this report.',
+        );
+    }
+
+    /** After final submit: payment is required before any partner/admin approval. */
+    private applyStatusAfterStudentSubmit(report: StudentReport): void {
+        report.status = 'payment_pending';
+    }
+
+    private syncReportProjectId(report: StudentReport): void {
+        const oppId = report.opportunityId?.trim();
+        if (!oppId) return;
+        if (!report.project_id?.trim()) {
+            report.project_id = oppId;
+        }
     }
 
     private buildStudentReportFeedback(report: StudentReport): string | null {
@@ -373,14 +406,20 @@ export class StudentReportsService {
 
         if (!verified) {
             const approvalContext = this.getPublicReportApprovalContext(report);
+            const feeCleared = await this.isReportFeeClearedForApprovals(report);
             const paymentPending =
+                !feeCleared ||
                 report.status === 'payment_pending' ||
                 report.status === 'payment_under_review' ||
                 paymentStatus === PaymentStatus.PENDING;
             const workflowStage =
-                approvalContext.requires_partner_approval && !isReportPartnerStepSatisfied(report.partner_status)
+                feeCleared &&
+                approvalContext.requires_partner_approval &&
+                !isReportPartnerStepSatisfied(report.partner_status)
                     ? 'pending_partner'
-                    : 'pending_admin';
+                    : feeCleared
+                      ? 'pending_admin'
+                      : undefined;
 
             return {
                 success: true,
@@ -588,6 +627,7 @@ export class StudentReportsService {
                     report.partnerApprovedAt = null;
                 }
                 report.status = 'submitted';
+                this.applyStatusAfterStudentSubmit(report);
             } else if (!lockedReportStatuses.has(report.status)) {
                 report.status = 'draft';
             } else if (this.isReportRejectedForRevision(report)) {
@@ -676,7 +716,12 @@ export class StudentReportsService {
             const submitStamp = new Date();
             report.reportSubmittedAt = submitStamp;
             report.submission_date = submitStamp;
+            if (report.status === 'submitted') {
+                this.applyStatusAfterStudentSubmit(report);
+            }
         }
+
+        this.syncReportProjectId(report);
 
         // Save report to get ID (verification_public_slug filled in entity @BeforeInsert/@BeforeUpdate)
         await this.studentReportsRepository.save(report);
@@ -899,13 +944,22 @@ export class StudentReportsService {
             whereClause.opportunity = { organizationId };
         }
 
-        const [reports, total] = await this.studentReportsRepository.findAndCount({
+        let [reports, total] = await this.studentReportsRepository.findAndCount({
             where: whereClause,
             relations: ['student', 'opportunity', 'opportunity.organization'],
             skip,
             take: limitNum,
             order: { submission_date: 'DESC', createdAt: 'DESC' },
         });
+
+        if (organizationId) {
+            const cleared: StudentReport[] = [];
+            for (const row of reports) {
+                if (await this.isReportFeeClearedForApprovals(row)) cleared.push(row);
+            }
+            reports = cleared;
+            total = cleared.length;
+        }
 
         const mapped = reports.map(mapListing);
         mapped.sort((a, b) => {
@@ -1240,6 +1294,7 @@ export class StudentReportsService {
             report.adminApprovedAt = null;
             report.admin_feedback = reason.trim();
         } else if (action === 'approve') {
+            await this.assertReportFeeClearedBeforeApproval(report);
             if (isPartnerReviewer) {
                 report.partner_status = 'approved';
                 report.partnerApprovedAt = decisionStamp;

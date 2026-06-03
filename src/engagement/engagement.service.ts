@@ -1598,7 +1598,9 @@ export class EngagementService {
     async deleteAttendanceLog(studentId: string, participantId: string, logId: string) {
         const participation = await this.findParticipationByIdentifier(participantId);
         if (!participation) throw new NotFoundException('Participation record not found');
-        if (participation.studentId !== studentId) throw new BadRequestException('Not authorized');
+        if (participation.studentId !== studentId) {
+            throw new ForbiddenException('You can only delete your own attendance entries');
+        }
 
         const log = await this.attendanceLogRepository.findOne({ where: { id: logId, participantId: participation.id } });
         if (!log) throw new NotFoundException('Attendance log not found');

@@ -22,6 +22,7 @@ describe('StudentReportsService', () => {
     };
     const mockParticipantRepository = {
         findOne: jest.fn().mockResolvedValue(null),
+        find: jest.fn().mockResolvedValue([]),
     };
     const mockStudentReportsRepository = {
         findOne: jest.fn(),
@@ -71,6 +72,8 @@ describe('StudentReportsService', () => {
 
         mockParticipantRepository.findOne.mockReset();
         mockParticipantRepository.findOne.mockResolvedValue(null);
+        mockParticipantRepository.find.mockReset();
+        mockParticipantRepository.find.mockResolvedValue([]);
 
         mockOpportunityRepository.findOne.mockResolvedValue({
             id: 'opp-1',
@@ -152,6 +155,31 @@ describe('StudentReportsService', () => {
     const TEAM_ONLY_GUARD_MESSAGE =
         'Only the team lead can submit the impact report for this team project. Your team lead should submit on behalf of the team.';
 
+    const TEAM_SCOPE = { teamId: 'team-scope-1', applicationId: 'app-scope-1' };
+
+    function mockCanonicalLeadRows(leadStudentId: string, createdAt = '2020-01-01T00:00:00.000Z') {
+        mockParticipantRepository.find.mockImplementation((opts: { where?: Record<string, unknown> }) => {
+            const w = opts?.where ?? {};
+            if (
+                w.projectId === SAMPLE_OPP_UUID &&
+                w.participationMode === 'team' &&
+                w.isTeamLead === true
+            ) {
+                return Promise.resolve([
+                    {
+                        id: 'lead-participation',
+                        studentId: leadStudentId,
+                        createdAt: new Date(createdAt),
+                        isTeamLead: true,
+                        participationMode: 'team',
+                        ...TEAM_SCOPE,
+                    },
+                ]);
+            }
+            return Promise.resolve([]);
+        });
+    }
+
     function mockTeamMemberAndLeadOnProject() {
         mockOpportunityRepository.findOne.mockResolvedValue({
             id: SAMPLE_OPP_UUID,
@@ -159,6 +187,7 @@ describe('StudentReportsService', () => {
             isStudentCreated: false,
             timeline: null,
         });
+        mockCanonicalLeadRows('team-lead-student');
         mockParticipantRepository.findOne.mockImplementation((opts: { where?: Record<string, unknown> }) => {
             const w = opts?.where ?? {};
             if (w.studentId === 'student-member' && w.projectId === SAMPLE_OPP_UUID) {
@@ -167,14 +196,8 @@ describe('StudentReportsService', () => {
                     isTeamLead: false,
                     studentId: w.studentId,
                     projectId: w.projectId,
+                    ...TEAM_SCOPE,
                 });
-            }
-            if (
-                w.projectId === SAMPLE_OPP_UUID &&
-                w.participationMode === 'team' &&
-                w.isTeamLead === true
-            ) {
-                return Promise.resolve({ id: 'lead-participation' });
             }
             return Promise.resolve(null);
         });
@@ -214,7 +237,7 @@ describe('StudentReportsService', () => {
             ).rejects.toThrow(TEAM_ONLY_GUARD_MESSAGE);
         });
 
-        it('does not block draft saves for team members when a lead exists', async () => {
+        it('saves team member drafts on the canonical team lead report row', async () => {
             mockTeamMemberAndLeadOnProject();
 
             const result = await service.createReport(
@@ -228,7 +251,12 @@ describe('StudentReportsService', () => {
             );
 
             expect(result.message).toBe('Report saved as draft.');
-            expect(mockParticipantRepository.findOne).not.toHaveBeenCalled();
+            expect(mockStudentReportsRepository.create).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    studentId: 'team-lead-student',
+                    opportunityId: SAMPLE_OPP_UUID,
+                }),
+            );
         });
 
         it('allows team lead to submit for team participation', async () => {
@@ -238,6 +266,7 @@ describe('StudentReportsService', () => {
                 isStudentCreated: false,
                 timeline: null,
             });
+            mockCanonicalLeadRows('team-lead-student');
             mockParticipantRepository.findOne.mockImplementation((opts: { where?: Record<string, unknown> }) => {
                 const w = opts?.where ?? {};
                 if (w.studentId === 'team-lead-student' && w.projectId === SAMPLE_OPP_UUID) {
@@ -246,6 +275,7 @@ describe('StudentReportsService', () => {
                         isTeamLead: true,
                         studentId: w.studentId,
                         projectId: w.projectId,
+                        ...TEAM_SCOPE,
                     });
                 }
                 return Promise.resolve(null);
@@ -262,7 +292,41 @@ describe('StudentReportsService', () => {
             );
 
             expect(result.message).toBe('Report submitted successfully.');
-            expect(mockParticipantRepository.findOne).toHaveBeenCalledTimes(1);
+        });
+
+        it('blocks submit for a duplicate team lead when an earlier canonical lead exists', async () => {
+            mockOpportunityRepository.findOne.mockResolvedValue({
+                id: SAMPLE_OPP_UUID,
+                title: 'Team Project',
+                isStudentCreated: false,
+                timeline: null,
+            });
+            mockCanonicalLeadRows('hamza-lead', '2019-06-01T00:00:00.000Z');
+            mockParticipantRepository.findOne.mockImplementation((opts: { where?: Record<string, unknown> }) => {
+                const w = opts?.where ?? {};
+                if (w.studentId === 'moeez-duplicate-lead' && w.projectId === SAMPLE_OPP_UUID) {
+                    return Promise.resolve({
+                        participationMode: 'team',
+                        isTeamLead: true,
+                        studentId: w.studentId,
+                        projectId: w.projectId,
+                        ...TEAM_SCOPE,
+                    });
+                }
+                return Promise.resolve(null);
+            });
+
+            await expect(
+                service.createReport(
+                    'moeez-duplicate-lead',
+                    {
+                        opportunityId: SAMPLE_OPP_UUID,
+                        section2: { problem_statement: 'test', baseline_evidence: 'Survey', discipline: 'CS' },
+                    },
+                    [],
+                    true,
+                ),
+            ).rejects.toThrow(TEAM_ONLY_GUARD_MESSAGE);
         });
 
         it('allows team member submit when no lead row exists (legacy data)', async () => {
@@ -272,6 +336,7 @@ describe('StudentReportsService', () => {
                 isStudentCreated: false,
                 timeline: null,
             });
+            mockParticipantRepository.find.mockResolvedValue([]);
             mockParticipantRepository.findOne.mockImplementation((opts: { where?: Record<string, unknown> }) => {
                 const w = opts?.where ?? {};
                 if (w.studentId === 'legacy-member' && w.projectId === SAMPLE_OPP_UUID) {
@@ -281,13 +346,6 @@ describe('StudentReportsService', () => {
                         studentId: w.studentId,
                         projectId: w.projectId,
                     });
-                }
-                if (
-                    w.projectId === SAMPLE_OPP_UUID &&
-                    w.participationMode === 'team' &&
-                    w.isTeamLead === true
-                ) {
-                    return Promise.resolve(null);
                 }
                 return Promise.resolve(null);
             });

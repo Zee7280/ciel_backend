@@ -24,6 +24,7 @@ import { Opportunity } from './entities/opportunity.entity';
 import { WORKFLOW_STAGE } from './opportunity-workflow.service';
 import { isTeamApplyFromParticipationAndMembers } from './apply-team-payload.util';
 import { AdminPatchTeamMemberDto } from './dto/admin-patch-team-member.dto';
+import { pickCanonicalTeamLeadFromMembers } from '../engagement/team-lead-canonical.util';
 
 const PENDING_PIPELINE: OpportunityApplicationInternalStatus[] = [
     'pending_faculty',
@@ -234,6 +235,26 @@ export class OpportunityApplicationsService {
         if (statuses.every((s) => s === 'completed')) return 'completed';
         if (statuses.some((s) => s !== 'not_started')) return 'in_progress';
         return 'not_started';
+    }
+
+
+    /** Self-heal legacy rows where multiple teammates were saved with `isTeamLead = true`. */
+    private async reconcileDuplicateTeamLeads(
+        opportunityId: string,
+        teamId: string,
+        canonicalLeadId: string,
+    ): Promise<void> {
+        const tid = teamId.trim();
+        if (!tid) return;
+        const extras = await this.participationRepo.find({
+            where: { projectId: opportunityId, teamId: tid, isTeamLead: true },
+        });
+        const toDemote = extras.filter((p) => p.id !== canonicalLeadId);
+        if (!toDemote.length) return;
+        for (const row of toDemote) {
+            row.isTeamLead = false;
+        }
+        await this.participationRepo.save(toDemote);
     }
 
     /** Matches `TeamOverviewRow.id` emitted by {@link adminListOpportunityTeams} for DELETE/PATCH routing. */
@@ -846,7 +867,21 @@ export class OpportunityApplicationsService {
         for (const [groupId, members] of rowsByTeamId.entries()) {
             const actualTeamId = (members[0]?.teamId || '').trim() || null;
             const isIndividualEntry = !actualTeamId;
-            const lead = members.find((m) => m.isTeamLead) ?? members[0];
+            const canonicalLead = pickCanonicalTeamLeadFromMembers(members);
+            const lead = canonicalLead;
+            if (!isIndividualEntry && actualTeamId) {
+                const leadCount = members.filter((m) => m.isTeamLead).length;
+                if (leadCount > 1) {
+                    await this.reconcileDuplicateTeamLeads(opportunityId, actualTeamId, canonicalLead.id);
+                    for (const m of members) {
+                        if (m.id !== canonicalLead.id) {
+                            m.isTeamLead = false;
+                        } else {
+                            m.isTeamLead = true;
+                        }
+                    }
+                }
+            }
 
             /** One dashboard row per person (legacy duplicates share email / student id). */
             const dedupMembers: Participation[] = [];
@@ -880,7 +915,8 @@ export class OpportunityApplicationsService {
                     supports_admin_patch: true,
                     name: member.student?.name ?? member.fullName ?? null,
                     email: member.student?.email ?? member.email ?? null,
-                    role: isIndividualEntry || member.isTeamLead ? 'lead' : 'member',
+                    role:
+                        isIndividualEntry || member.id === canonicalLead.id ? 'lead' : 'member',
                     report_status: reportStatus,
                     report_available: reportStatus !== 'not_started',
                     phone_number: snap.phone_number,

@@ -1235,5 +1235,60 @@ describe('EngagementService', () => {
                 'new-id',
             );
         });
+
+        it('rejects a second team lead on the same teamId', async () => {
+            const t = fx('register-second-lead');
+            const studentId = t.id.u2;
+            const projectId = t.id.project;
+            const teamId = t.id.teamId;
+            const dto = {
+                projectId,
+                participationMode: 'team',
+                isTeamLead: true,
+                email: t.email.member,
+                fullName: 'Second Lead',
+                cnic: '9876543210987',
+                mobile: '03009876543',
+                team_id: teamId,
+            } as any;
+
+            const mockOpportunity = { id: projectId, title: t.title, status: 'active', admin_approved: true };
+            const existingLead = {
+                id: 'lead-row-1',
+                projectId,
+                teamId,
+                isTeamLead: true,
+                email: t.email.rosterMember,
+            };
+
+            const conflictQb = {
+                where: jest.fn().mockReturnThis(),
+                andWhere: jest.fn().mockReturnThis(),
+                getOne: jest.fn().mockResolvedValue(existingLead),
+            };
+            const memberQb = mockParticipationQueryBuilder(null);
+            let qbCalls = 0;
+            const mockManager = {
+                findOne: jest.fn()
+                    .mockResolvedValueOnce(null)
+                    .mockResolvedValueOnce(mockOpportunity)
+                    .mockResolvedValueOnce(null),
+                createQueryBuilder: jest.fn().mockImplementation(() => {
+                    qbCalls += 1;
+                    return qbCalls === 1 ? memberQb : conflictQb;
+                }),
+                create: jest.fn().mockReturnValue({ id: 'new-participation' }),
+                save: jest.fn(),
+            };
+
+            (mockParticipationRepository as any).manager = {
+                transaction: jest.fn().mockImplementation((cb) => cb(mockManager)),
+            };
+
+            await expect(service.registerParticipant(studentId, dto)).rejects.toThrow(
+                'This team already has a team lead',
+            );
+            expect(mockManager.save).not.toHaveBeenCalled();
+        });
     });
 });

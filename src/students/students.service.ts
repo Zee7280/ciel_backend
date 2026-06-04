@@ -17,6 +17,7 @@ import { Otp } from './entities/otp.entity';
 import { UsersService } from '../users/users.service';
 import { MailService } from '../mail/mail.service';
 import { EngagementService } from '../engagement/engagement.service';
+import { findCanonicalTeamLeadStudentId } from '../engagement/team-lead-canonical.util';
 import { opportunityHasActionablePartnerForAttendance } from '../engagement/attendance-approver.util';
 import {
     LINE_STATUS,
@@ -2213,13 +2214,11 @@ export class StudentsService {
         );
     }
 
-    private async getTeamLeadParticipantStudentId(projectId: string): Promise<string | null> {
-        const pid = projectId.trim();
-        if (!this.looksLikeImpactUuid(pid)) return null;
-        const leadRow = await this.participantRepository.findOne({
-            where: { projectId: pid, participationMode: 'team', isTeamLead: true },
-        });
-        return leadRow?.studentId ?? null;
+    private async getTeamLeadParticipantStudentId(
+        projectId: string,
+        scope?: { teamId?: string | null; applicationId?: string | null },
+    ): Promise<string | null> {
+        return findCanonicalTeamLeadStudentId(this.participantRepository, projectId, scope);
     }
 
     /**
@@ -2247,9 +2246,12 @@ export class StudentsService {
                 order: { createdAt: 'DESC' },
             });
 
-        if (mine?.participationMode === 'team' && !mine.isTeamLead) {
-            const leadId = await this.getTeamLeadParticipantStudentId(key);
-            if (leadId) {
+        if (mine?.participationMode === 'team') {
+            const leadId = await this.getTeamLeadParticipantStudentId(key, {
+                teamId: mine.teamId,
+                applicationId: mine.applicationId,
+            });
+            if (leadId && leadId !== viewerStudentId) {
                 const leaderReport = await fetchLatestRow(leadId);
                 if (leaderReport) return leaderReport;
             }
@@ -2275,7 +2277,10 @@ export class StudentsService {
         });
         if (!mine || mine.participationMode !== 'team') return false;
 
-        const leadId = await this.getTeamLeadParticipantStudentId(pid);
+        const leadId = await this.getTeamLeadParticipantStudentId(pid, {
+            teamId: mine.teamId,
+            applicationId: mine.applicationId,
+        });
         return Boolean(leadId && leadId === report.studentId);
     }
 

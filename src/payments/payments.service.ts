@@ -1,7 +1,8 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, type FindOptionsWhere } from 'typeorm';
 import { Participation } from '../engagement/entities/participant.entity';
+import { findCanonicalTeamLeadStudentId } from '../engagement/team-lead-canonical.util';
 import { Setting } from '../settings/entities/setting.entity';
 import { S3Service } from '../common/s3.service';
 
@@ -117,6 +118,48 @@ export class PaymentsService {
 
     // --- NEW MANUAL PAYMENT FLOW ---
 
+    private looksLikeUuid(value: string): boolean {
+        return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.trim());
+    }
+
+    /** Match student-reports resolution: opportunityId or project_id; team members use team-lead row. */
+    private async findStudentReportForPayment(
+        studentId: string,
+        projectId: string,
+    ): Promise<StudentReport | null> {
+        const key = projectId.trim();
+        if (!this.looksLikeUuid(key)) {
+            return null;
+        }
+
+        const fetchLatestRow = async (sid: string) =>
+            this.studentReportRepository.findOne({
+                where: [
+                    { studentId: sid, opportunityId: key },
+                    { studentId: sid, project_id: key },
+                ] as FindOptionsWhere<StudentReport>[],
+                order: { createdAt: 'DESC' },
+            });
+
+        const mine = await this.participantRepository.findOne({
+            where: { studentId, projectId: key },
+        });
+
+        if (mine?.participationMode === 'team') {
+            const leadId = await findCanonicalTeamLeadStudentId(this.participantRepository, key, {
+                teamId: mine.teamId,
+                applicationId: mine.applicationId,
+            });
+            const reportStudentId = leadId && leadId !== studentId ? leadId : studentId;
+            const teamReport = await fetchLatestRow(reportStudentId);
+            if (teamReport) {
+                return teamReport;
+            }
+        }
+
+        return fetchLatestRow(studentId);
+    }
+
     async submitManualPayment(
         studentId: string,
         projectId: string,
@@ -139,9 +182,7 @@ export class PaymentsService {
         await this.paymentRepository.save(payment);
 
         // 3. Update reports.status (student UI: payment_under_review)
-        const report = await this.studentReportRepository.findOne({
-            where: { studentId, opportunityId: projectId },
-        });
+        const report = await this.findStudentReportForPayment(studentId, projectId);
 
         if (report) {
             report.status = 'payment_under_review';
@@ -173,6 +214,8 @@ export class PaymentsService {
     private mapManualPaymentRow(p: Payment) {
         return {
             id: p.id,
+            projectId: p.projectId,
+            project_id: p.projectId,
             studentName: p.student?.name || 'Unknown',
             studentEmail: p.student?.email || 'Unknown',
             projectTitle: p.opportunity?.title || 'Unknown',
@@ -275,9 +318,7 @@ export class PaymentsService {
         await this.paymentRepository.save(payment);
 
         // Update corresponding report status
-        const report = await this.studentReportRepository.findOne({
-            where: { studentId: payment.studentId, opportunityId: payment.projectId },
-        });
+        const report = await this.findStudentReportForPayment(payment.studentId, payment.projectId);
 
         if (report) {
             if (status === PaymentStatus.APPROVED) {
@@ -316,9 +357,7 @@ export class PaymentsService {
         payment.feedback = null;
         await this.paymentRepository.save(payment);
 
-        const report = await this.studentReportRepository.findOne({
-            where: { studentId: payment.studentId, opportunityId: payment.projectId },
-        });
+        const report = await this.findStudentReportForPayment(payment.studentId, payment.projectId);
 
         if (report && report.status === 'verified') {
             report.status = 'payment_under_review';

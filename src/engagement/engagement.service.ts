@@ -8,6 +8,7 @@ import { S3Service } from '../common/s3.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, In, IsNull, Repository } from 'typeorm';
 import { Participation } from './entities/participant.entity';
+import { demoteExtraTeamLeadsInScope } from './team-lead-canonical.util';
 import { AttendanceLog } from './entities/attendance-log.entity';
 import { RegisterParticipantDto } from './dto/register-participant.dto';
 import { CreateAttendanceLogDto } from './dto/create-attendance-log.dto';
@@ -150,6 +151,14 @@ export class EngagementService {
                 existing.cnicLast4 = normalizedCnic.slice(-4);
             }
             const saved = await this.participantRepository.save(existing);
+            if (saved.isTeamLead) {
+                await demoteExtraTeamLeadsInScope(
+                    this.participantRepository,
+                    opportunity.id,
+                    { teamId: saved.teamId, applicationId: saved.applicationId },
+                    saved.id,
+                );
+            }
             return this.decryptParticipation(saved);
         }
 
@@ -176,6 +185,14 @@ export class EngagementService {
         }
 
         const saved = await this.participantRepository.save(participation);
+        if (saved.isTeamLead) {
+            await demoteExtraTeamLeadsInScope(
+                this.participantRepository,
+                opportunity.id,
+                { teamId: saved.teamId, applicationId: saved.applicationId },
+                saved.id,
+            );
+        }
         return this.decryptParticipation(saved);
     }
 
@@ -295,6 +312,26 @@ export class EngagementService {
             }
             const { primary_faculty_email, secondary_faculty_email, team_id, ...registrationFields } = dto;
 
+            if (dto.participationMode === 'team' && dto.isTeamLead) {
+                if (!teamId) {
+                    throw new BadRequestException(
+                        'A team ID is required to register as team lead. Use the team link from your approved application.',
+                    );
+                }
+                const conflictingLead = await manager
+                    .createQueryBuilder(Participation, 'p')
+                    .where('p.projectId = :projectId', { projectId: opportunity.id })
+                    .andWhere('p.teamId = :teamId', { teamId })
+                    .andWhere('p.isTeamLead = true')
+                    .andWhere('p.id != :keepId', { keepId: participation.id })
+                    .getOne();
+                if (conflictingLead) {
+                    throw new BadRequestException(
+                        'This team already has a team lead on this project. Register as a team member instead.',
+                    );
+                }
+            }
+
             Object.assign(participation, {
                 ...registrationFields,
                 ...facultyFields,
@@ -310,6 +347,29 @@ export class EngagementService {
             });
 
             const saved = await manager.save(Participation, participation);
+            if (saved.isTeamLead) {
+                const savedTeamId = (saved.teamId || '').trim();
+                const savedApplicationId = (saved.applicationId || '').trim();
+                if (savedTeamId || savedApplicationId) {
+                    const demoteQb = manager
+                        .createQueryBuilder(Participation, 'p')
+                        .where('p.projectId = :projectId', { projectId: opportunity.id })
+                        .andWhere('p.isTeamLead = true')
+                        .andWhere('p.id != :keepId', { keepId: saved.id });
+                    if (savedTeamId) {
+                        demoteQb.andWhere('p.teamId = :teamId', { teamId: savedTeamId });
+                    } else {
+                        demoteQb.andWhere('p.applicationId = :applicationId', {
+                            applicationId: savedApplicationId,
+                        });
+                    }
+                    const others = await demoteQb.getMany();
+                    for (const row of others) {
+                        row.isTeamLead = false;
+                        await manager.save(Participation, row);
+                    }
+                }
+            }
             this.logger.log(`Participation ${saved.id} successfully PERSISTED within transaction for student ${targetStudentId || 'Guest'}`);
             
             // 3. Trigger Faculty Emails (Post-save within transaction, though ideally should be after commit)

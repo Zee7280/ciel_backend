@@ -13,6 +13,10 @@ import { User } from '../users/entities/user.entity';
 import { MailService } from '../mail/mail.service';
 
 import { EngagementService } from '../engagement/engagement.service';
+import {
+    findCanonicalTeamLeadParticipation,
+    findCanonicalTeamLeadStudentId,
+} from '../engagement/team-lead-canonical.util';
 import { Payment, PaymentStatus } from '../payments/entities/payment.entity';
 import { formatCertificateVerificationCode } from './certificate-verification-code.util';
 import { ReportPartnerApprovalSettingsService } from './report-partner-approval-settings.service';
@@ -214,15 +218,22 @@ export class StudentReportsService {
         return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.trim());
     }
 
-    private async getTeamLeadStudentId(projectId: string): Promise<string | null> {
-        const pid = projectId.trim();
-        if (!this.looksLikeUuid(pid)) {
-            return null;
-        }
-        const leadRow = await this.participantRepository.findOne({
-            where: { projectId: pid, participationMode: 'team', isTeamLead: true },
+    /** Team projects store one report row under the canonical team lead's `studentId`. */
+    private async resolveTeamReportOwnerStudentId(
+        submitterId: string,
+        opportunityId: string,
+    ): Promise<string> {
+        const mine = await this.participantRepository.findOne({
+            where: { studentId: submitterId, projectId: opportunityId.trim() },
         });
-        return leadRow?.studentId ?? null;
+        if (!mine || mine.participationMode !== 'team') {
+            return submitterId;
+        }
+        const canonicalId = await findCanonicalTeamLeadStudentId(this.participantRepository, opportunityId, {
+            teamId: mine.teamId,
+            applicationId: mine.applicationId,
+        });
+        return canonicalId ?? submitterId;
     }
 
     /** Team projects: teammates may read the canonical report row owned by `team lead` (`studentId`). */
@@ -243,7 +254,12 @@ export class StudentReportsService {
         if (!mine || mine.participationMode !== 'team') {
             return false;
         }
-        const leadId = await this.getTeamLeadStudentId(String(projKey).trim());
+        const scope = { teamId: mine.teamId, applicationId: mine.applicationId };
+        const leadId = await findCanonicalTeamLeadStudentId(
+            this.participantRepository,
+            String(projKey).trim(),
+            scope,
+        );
         return Boolean(leadId && leadId === report.studentId);
     }
 
@@ -275,9 +291,12 @@ export class StudentReportsService {
             });
 
         const isTeam = mine?.participationMode === 'team';
-        if (isTeam && !mine!.isTeamLead) {
-            const leadId = await this.getTeamLeadStudentId(key);
-            if (leadId) {
+        if (isTeam && mine) {
+            const leadId = await findCanonicalTeamLeadStudentId(this.participantRepository, key, {
+                teamId: mine.teamId,
+                applicationId: mine.applicationId,
+            });
+            if (leadId && leadId !== viewerStudentId) {
                 const leaderReport = await fetchLatestRow(leadId);
                 if (leaderReport) {
                     return { report: leaderReport, attendanceStudentId: viewerStudentId };
@@ -560,16 +579,20 @@ export class StudentReportsService {
         });
         if (!mine) return;
         if (mine.participationMode !== 'team') return;
-        if (mine.isTeamLead) return;
 
-        const anyLead = await this.participantRepository.findOne({
-            where: { projectId: oid, participationMode: 'team', isTeamLead: true },
+        const canonicalLead = await findCanonicalTeamLeadParticipation(this.participantRepository, oid, {
+            teamId: mine.teamId,
+            applicationId: mine.applicationId,
         });
-        if (!anyLead) return;
-
-        throw new ForbiddenException(
-            'Only the team lead can submit the impact report for this team project. Your team lead should submit on behalf of the team.',
-        );
+        if (!canonicalLead?.studentId) {
+            if (mine.isTeamLead) return;
+            return;
+        }
+        if (canonicalLead.studentId !== studentId) {
+            throw new ForbiddenException(
+                'Only the team lead can submit the impact report for this team project. Your team lead should submit on behalf of the team.',
+            );
+        }
     }
 
     async createReport(studentId: string, dto: any, files: any[], forceSubmit = false) {
@@ -605,10 +628,15 @@ export class StudentReportsService {
             await this.assertTeamLeadMaySubmitReport(studentId, opportunityIdFromDto);
         }
 
+        const reportOwnerId =
+            opportunityIdFromDto ?
+                await this.resolveTeamReportOwnerStudentId(studentId, String(opportunityIdFromDto))
+            :   studentId;
+
         // Upsert logic: Check if report already exists
         let report = await this.studentReportsRepository.findOne({
             where: {
-                studentId,
+                studentId: reportOwnerId,
                 opportunityId: opportunityIdFromDto
             }
         });
@@ -653,7 +681,7 @@ export class StudentReportsService {
         } else {
             // Create new report entity
             report = this.studentReportsRepository.create({
-                studentId,
+                studentId: reportOwnerId,
                 opportunityId: opportunityIdFromDto,
                 status: shouldSubmit ? 'submitted' : 'draft',
                 section1: parsedData.section1, // Participation & Attendance
@@ -782,9 +810,14 @@ export class StudentReportsService {
     async saveDraft(studentId: string, dto: any, files: any[]) {
         const parsedData = this.parseFormData(dto);
 
+        const reportOwnerId =
+            parsedData.opportunityId ?
+                await this.resolveTeamReportOwnerStudentId(studentId, String(parsedData.opportunityId))
+            :   studentId;
+
         let report = await this.studentReportsRepository.findOne({
             where: {
-                studentId,
+                studentId: reportOwnerId,
                 opportunityId: parsedData.opportunityId
             }
         });
@@ -817,7 +850,7 @@ export class StudentReportsService {
                 this.assertStudentOpportunityReportableForWrite(opp);
             }
             report = this.studentReportsRepository.create({
-                studentId,
+                studentId: reportOwnerId,
                 project_id: parsedData.project_id,
                 opportunityId: parsedData.opportunityId,
                 status: 'draft',

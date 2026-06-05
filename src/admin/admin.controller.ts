@@ -217,6 +217,14 @@ export class AdminController {
         return this.studentReportsService.verifyReport(id, body.action, 'admin', body.reason || body.feedback);
     }
 
+    @Patch('reports/:id/ai-score')
+    updateReportAiScore(
+        @Param('id') id: string,
+        @Body() body: { section11?: Record<string, unknown>; cii_index?: Record<string, unknown> },
+    ) {
+        return this.studentReportsService.updateReportAiScore(id, body);
+    }
+
     @Delete('reports/:id')
     removeReport(@Param('id') id: string) {
         return this.studentReportsService.removeReport(id);

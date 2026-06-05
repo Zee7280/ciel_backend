@@ -26,10 +26,13 @@ describe('StudentReportsService', () => {
     };
     const mockStudentReportsRepository = {
         findOne: jest.fn(),
+        find: jest.fn().mockResolvedValue([]),
         create: jest.fn(),
         save: jest.fn(),
     };
-    const mockAttendanceLogsRepository = {};
+    const mockAttendanceLogsRepository = {
+        find: jest.fn().mockResolvedValue([]),
+    };
     const mockUsersRepository = {
         findOne: jest.fn(),
     };
@@ -39,7 +42,10 @@ describe('StudentReportsService', () => {
     const mockS3Service = {
         uploadFile: jest.fn(),
     };
-    const mockEngagementService = {};
+    const mockEngagementService = {
+        getProjectTeamForReportDossier: jest.fn().mockResolvedValue([]),
+        decryptCnicInternal: jest.fn((v: string) => v),
+    };
     const mockMailService = {
         sendAdminStudentReportSubmitted: jest.fn().mockResolvedValue(undefined),
         sendFacultyInvite: jest.fn().mockResolvedValue(undefined),
@@ -564,5 +570,99 @@ describe('StudentReportsService', () => {
         expect(result.data.feedback).toBe('Revise Section 4 outputs.');
         expect(result.data.is_editable).toBe(true);
         expect(result.data.status).toBe('revision');
+    });
+
+    it('persists admin-regenerated section11 AI score', async () => {
+        const report = {
+            id: 'report-ai-1',
+            studentId: 'student-1',
+            opportunityId: 'opp-1',
+            project_id: 'opp-1',
+            status: 'submitted',
+            section11: { summary_text: 'Old summary' },
+            student: { name: 'Student' },
+            opportunity: { id: 'opp-1', title: 'Test' },
+        };
+        mockStudentReportsRepository.findOne.mockResolvedValue(report);
+        mockStudentReportsRepository.save.mockImplementation(async (row) => row);
+
+        const result = await service.updateReportAiScore('report-ai-1', {
+            section11: {
+                summary_text: 'New AI audit',
+                is_ai_generated: true,
+            },
+            cii_index: { totalScore: 82, level: 'High Impact Engagement' },
+        });
+
+        expect(mockStudentReportsRepository.save).toHaveBeenCalled();
+        expect((report.section11 as { ai_generated_impact_score?: number }).ai_generated_impact_score).toBe(82);
+        expect(result.success).toBe(true);
+    });
+
+    it('admin findAll returns only canonical team lead report per team project', async () => {
+        const opp = '582da802-e41e-488d-bd3d-d6dee59982b8';
+        const leadReport = {
+            id: 'report-lead',
+            studentId: 'lead-student',
+            opportunityId: opp,
+            project_id: opp,
+            status: 'submitted',
+            partner_status: 'pending',
+            admin_status: 'pending',
+            submission_date: new Date(),
+            reportSubmittedAt: new Date(),
+            createdAt: new Date(),
+            student: { name: 'Lead', email: 'lead@test.com' },
+            opportunity: { title: 'Team Project', organizationId: 'org-1', organization: { name: 'Org' } },
+            section11: null,
+        };
+        const memberReport = {
+            ...leadReport,
+            id: 'report-member',
+            studentId: 'member-student',
+            status: 'draft',
+            student: { name: 'Member', email: 'member@test.com' },
+        };
+
+        mockStudentReportsRepository.find.mockResolvedValue([memberReport, leadReport]);
+        mockParticipantRepository.find
+            .mockResolvedValueOnce([
+                {
+                    studentId: 'lead-student',
+                    projectId: opp,
+                    participationMode: 'team',
+                    teamId: 'TEAM-1',
+                    isTeamLead: true,
+                    createdAt: new Date(1),
+                    id: 'p-lead',
+                },
+                {
+                    studentId: 'member-student',
+                    projectId: opp,
+                    participationMode: 'team',
+                    teamId: 'TEAM-1',
+                    isTeamLead: false,
+                    createdAt: new Date(2),
+                    id: 'p-member',
+                },
+            ])
+            .mockResolvedValueOnce([
+                {
+                    studentId: 'lead-student',
+                    projectId: opp,
+                    participationMode: 'team',
+                    teamId: 'TEAM-1',
+                    isTeamLead: true,
+                    createdAt: new Date(1),
+                    id: 'p-lead',
+                },
+            ]);
+
+        const result = await service.findAll({ page: 1, limit: 50 });
+
+        expect(result.success).toBe(true);
+        expect(result.data).toHaveLength(1);
+        expect(result.data[0].id).toBe('report-lead');
+        expect(result.pagination.total).toBe(1);
     });
 });

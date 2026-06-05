@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { StudentReport } from './entities/student-report.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { Participation } from '../engagement/entities/participant.entity';
@@ -188,12 +188,101 @@ export class StudentReportsService {
         report.status = 'payment_pending';
     }
 
-    private syncReportProjectId(report: StudentReport): void {
-        const oppId = report.opportunityId?.trim();
-        if (!oppId) return;
-        if (!report.project_id?.trim()) {
+    private async syncReportProjectKeys(report: StudentReport): Promise<void> {
+        const oppId = report.opportunityId?.trim() || '';
+        const projId = report.project_id?.trim() || '';
+
+        if (oppId && !projId) {
+            report.project_id = oppId;
+            return;
+        }
+
+        if (!oppId && projId && this.looksLikeUuid(projId)) {
+            const opp = await this.opportunitiesRepository.findOne({ where: { id: projId } });
+            if (opp) {
+                report.opportunityId = opp.id;
+                report.project_id = opp.id;
+            }
+            return;
+        }
+
+        if (oppId && projId && oppId !== projId) {
             report.project_id = oppId;
         }
+    }
+
+    private resolveLinkedOpportunity(
+        report: StudentReport,
+        opportunityByProjectId?: Map<string, Opportunity>,
+    ): Opportunity | null | undefined {
+        if (report.opportunity) return report.opportunity;
+        const projectKey = report.project_id?.trim();
+        if (!projectKey || !opportunityByProjectId) return report.opportunity;
+        return opportunityByProjectId.get(projectKey) ?? report.opportunity;
+    }
+
+    private async loadOpportunitiesForReports(reports: StudentReport[]): Promise<Map<string, Opportunity>> {
+        const ids = new Set<string>();
+        for (const report of reports) {
+            if (report.opportunity) continue;
+            const projectKey = report.project_id?.trim();
+            if (projectKey && this.looksLikeUuid(projectKey)) {
+                ids.add(projectKey);
+            }
+        }
+        if (ids.size === 0) return new Map();
+
+        const opportunities = await this.opportunitiesRepository.find({
+            where: { id: In([...ids]) },
+            relations: ['organization'],
+        });
+        return new Map(opportunities.map((opp) => [opp.id, opp]));
+    }
+
+    private mapReportListing(report: StudentReport, opportunityByProjectId?: Map<string, Opportunity>) {
+        const section3 = report.section3 as any;
+        const section4 = report.section4 as any;
+        const sdgs = section3?.sdgs ?? section3?.secondary_sdgs ?? [];
+        const opportunity = this.resolveLinkedOpportunity(report, opportunityByProjectId);
+
+        return {
+            id: report.id,
+            student_name: report.student?.name || 'Unknown',
+            student_email: report.student?.email || 'Unknown',
+            project_title: opportunity?.title || report.project_id,
+            organization_id: opportunity?.organizationId ?? opportunity?.organization?.id ?? null,
+            organization_name: opportunity?.organization?.name || 'N/A',
+            status: this.toPublicReportStatus(report.status),
+            partner_status: report.partner_status,
+            admin_status: report.admin_status,
+            submission_date: report.submission_date,
+            submitted_at: report.reportSubmittedAt ?? report.submission_date ?? report.createdAt,
+            report_submitted_at: report.reportSubmittedAt,
+            partner_approved_at: report.partnerApprovedAt,
+            admin_approved_at: report.adminApprovedAt,
+            section1: {
+                metrics: {
+                    total_verified_hours: report.section1?.metrics?.total_verified_hours ?? 0,
+                },
+            },
+            section3: {
+                sdgs,
+            },
+            section4: {
+                project_summary: {
+                    distinct_total_beneficiaries:
+                        section4?.project_summary?.distinct_total_beneficiaries ??
+                        section4?.distinct_total_beneficiaries ??
+                        section4?.total_beneficiaries ??
+                        null,
+                },
+            },
+            sdgs,
+            cii_score: this.resolveCiiScoreFromPayload(
+                (report.section11 as Record<string, unknown> | null | undefined) ?? null,
+            ),
+            created_at: report.createdAt,
+        };
     }
 
     private buildStudentReportFeedback(report: StudentReport): string | null {
@@ -306,6 +395,92 @@ export class StudentReportsService {
 
         const own = await fetchLatestRow(viewerStudentId);
         return { report: own, attendanceStudentId: viewerStudentId };
+    }
+
+    private reportProjectKey(report: StudentReport): string {
+        return (report.opportunityId || report.project_id || '').trim();
+    }
+
+    private participationScopeKey(projectId: string, participation: Participation): string {
+        return `${projectId}|${(participation.teamId || '').trim()}|${(participation.applicationId || '').trim()}`;
+    }
+
+    /**
+     * Admin/partner queues: one visible row per team project (canonical team lead report).
+     * Hides teammate orphan rows and duplicate non-canonical lead reports until DB cleanup.
+     */
+    private async filterReportsForAdminPartnerQueue(reports: StudentReport[]): Promise<StudentReport[]> {
+        if (reports.length === 0) {
+            return reports;
+        }
+
+        const projectKeys = new Set<string>();
+        const studentIds = new Set<string>();
+        for (const report of reports) {
+            studentIds.add(report.studentId);
+            const key = this.reportProjectKey(report);
+            if (this.looksLikeUuid(key)) {
+                projectKeys.add(key);
+            }
+        }
+
+        if (projectKeys.size === 0) {
+            return reports;
+        }
+
+        const participations = await this.participantRepository.find({
+            where: {
+                studentId: In([...studentIds]),
+                projectId: In([...projectKeys]),
+            },
+        });
+
+        const participationByStudentProject = new Map<string, Participation>();
+        for (const row of participations) {
+            participationByStudentProject.set(`${row.studentId}:${row.projectId}`, row);
+        }
+
+        const canonicalLeadByScope = new Map<string, string | null>();
+        const filtered: StudentReport[] = [];
+
+        for (const report of reports) {
+            const projectKey = this.reportProjectKey(report);
+            if (!this.looksLikeUuid(projectKey)) {
+                filtered.push(report);
+                continue;
+            }
+
+            const participation = participationByStudentProject.get(`${report.studentId}:${projectKey}`);
+            if (!participation || participation.participationMode !== 'team') {
+                filtered.push(report);
+                continue;
+            }
+
+            const scopeKey = this.participationScopeKey(projectKey, participation);
+            if (!canonicalLeadByScope.has(scopeKey)) {
+                const canonicalId = await findCanonicalTeamLeadStudentId(
+                    this.participantRepository,
+                    projectKey,
+                    {
+                        teamId: participation.teamId,
+                        applicationId: participation.applicationId,
+                    },
+                );
+                canonicalLeadByScope.set(scopeKey, canonicalId);
+            }
+
+            const canonicalLeadId = canonicalLeadByScope.get(scopeKey);
+            if (!canonicalLeadId) {
+                filtered.push(report);
+                continue;
+            }
+
+            if (report.studentId === canonicalLeadId) {
+                filtered.push(report);
+            }
+        }
+
+        return filtered;
     }
 
     /**
@@ -749,7 +924,7 @@ export class StudentReportsService {
             }
         }
 
-        this.syncReportProjectId(report);
+        await this.syncReportProjectKeys(report);
 
         // Save report to get ID (verification_public_slug filled in entity @BeforeInsert/@BeforeUpdate)
         await this.studentReportsRepository.save(report);
@@ -878,6 +1053,8 @@ export class StudentReportsService {
             await this.handleFacultyAssignment(report, report.section1.faculty_supervisor_email);
         }
 
+        await this.syncReportProjectKeys(report);
+
         await this.studentReportsRepository.save(report);
 
         if (files && files.length > 0) {
@@ -905,48 +1082,6 @@ export class StudentReportsService {
         const pageNum = typeof page === 'number' ? page : Math.max(1, parseInt(String(page), 10) || 1);
         const skip = (pageNum - 1) * limitNum;
 
-        const mapListing = (r: StudentReport) => {
-            const section3 = r.section3 as any;
-            const section4 = r.section4 as any;
-            const sdgs = section3?.sdgs ?? section3?.secondary_sdgs ?? [];
-
-            return {
-                id: r.id,
-                student_name: r.student?.name || 'Unknown',
-                student_email: r.student?.email || 'Unknown',
-                project_title: r.opportunity?.title || r.project_id,
-                organization_id: r.opportunity?.organizationId ?? r.opportunity?.organization?.id ?? null,
-                organization_name: r.opportunity?.organization?.name || 'N/A',
-                status: this.toPublicReportStatus(r.status),
-                partner_status: r.partner_status,
-                admin_status: r.admin_status,
-                submission_date: r.submission_date,
-                submitted_at: r.reportSubmittedAt ?? r.submission_date ?? r.createdAt,
-                report_submitted_at: r.reportSubmittedAt,
-                partner_approved_at: r.partnerApprovedAt,
-                admin_approved_at: r.adminApprovedAt,
-                section1: {
-                    metrics: {
-                        total_verified_hours: r.section1?.metrics?.total_verified_hours ?? 0,
-                    },
-                },
-                section3: {
-                    sdgs,
-                },
-                section4: {
-                    project_summary: {
-                        distinct_total_beneficiaries:
-                            section4?.project_summary?.distinct_total_beneficiaries ??
-                            section4?.distinct_total_beneficiaries ??
-                            section4?.total_beneficiaries ??
-                            null,
-                    },
-                },
-                sdgs,
-                created_at: r.createdAt,
-            };
-        };
-
         if (studentId) {
             let rows = await this.loadMergedReportEntitiesForStudent(studentId);
             if (organizationId) {
@@ -957,9 +1092,10 @@ export class StudentReportsService {
             }
             const total = rows.length;
             const paginated = rows.slice(skip, skip + limitNum);
+            const opportunityByProjectId = await this.loadOpportunitiesForReports(paginated);
             return {
                 success: true,
-                data: paginated.map(mapListing),
+                data: paginated.map((r) => this.mapReportListing(r, opportunityByProjectId)),
                 pagination: {
                     total,
                     page: pageNum,
@@ -977,13 +1113,13 @@ export class StudentReportsService {
             whereClause.opportunity = { organizationId };
         }
 
-        let [reports, total] = await this.studentReportsRepository.findAndCount({
+        let reports = await this.studentReportsRepository.find({
             where: whereClause,
             relations: ['student', 'opportunity', 'opportunity.organization'],
-            skip,
-            take: limitNum,
             order: { submission_date: 'DESC', createdAt: 'DESC' },
         });
+
+        reports = await this.filterReportsForAdminPartnerQueue(reports);
 
         if (organizationId) {
             const cleared: StudentReport[] = [];
@@ -991,10 +1127,13 @@ export class StudentReportsService {
                 if (await this.isReportFeeClearedForApprovals(row)) cleared.push(row);
             }
             reports = cleared;
-            total = cleared.length;
         }
 
-        const mapped = reports.map(mapListing);
+        const total = reports.length;
+        const paginated = reports.slice(skip, skip + limitNum);
+
+        const opportunityByProjectId = await this.loadOpportunitiesForReports(paginated);
+        const mapped = paginated.map((r) => this.mapReportListing(r, opportunityByProjectId));
         mapped.sort((a, b) => {
             const aMs = new Date(a.report_submitted_at ?? a.submitted_at ?? a.submission_date ?? 0).getTime();
             const bMs = new Date(b.report_submitted_at ?? b.submitted_at ?? b.submission_date ?? 0).getTime();
@@ -1639,5 +1778,81 @@ export class StudentReportsService {
 
             await this.mailService.sendFacultyInvite(email, student?.name || 'A Student', projectTitle);
         }
+    }
+
+    private resolveCiiScoreFromPayload(
+        section11?: Record<string, unknown> | null,
+        ciiIndex?: Record<string, unknown> | null,
+    ): number | null {
+        const readScore = (value: unknown): number | null => {
+            if (typeof value === 'number' && Number.isFinite(value)) {
+                return Math.min(100, Math.max(0, Math.round(value)));
+            }
+            if (typeof value === 'string') {
+                const match = value.trim().match(/\d+(?:\.\d+)?/);
+                if (!match) return null;
+                const parsed = Number(match[0]);
+                return Number.isFinite(parsed) ? Math.min(100, Math.max(0, Math.round(parsed))) : null;
+            }
+            return null;
+        };
+
+        const cii = (ciiIndex ?? section11?.cii_index) as Record<string, unknown> | undefined;
+        const fromCii =
+            readScore(cii?.totalScore) ??
+            readScore(cii?.total_score) ??
+            readScore(cii?.score) ??
+            readScore(section11?.ai_generated_impact_score);
+
+        if (fromCii !== null) return fromCii;
+
+        const summary = typeof section11?.summary_text === 'string' ? section11.summary_text : '';
+        const patterns = [
+            /\bFinal\s+Adjusted\s+CII\s+Score\s*[:=-]?\s*(\d+(?:\.\d+)?)/i,
+            /\bCII\s+Index\s+Score\s*[:=-]?\s*(\d+(?:\.\d+)?)/i,
+            /\bCII\s+Score\s*[:=-]?\s*(\d+(?:\.\d+)?)/i,
+        ];
+        for (const pattern of patterns) {
+            const match = summary.match(pattern);
+            const score = match?.[1] ? readScore(match[1]) : null;
+            if (score !== null) return score;
+        }
+
+        return null;
+    }
+
+    /** Admin-only: persist regenerated Section 11 AI audit + CII score. */
+    async updateReportAiScore(
+        reportId: string,
+        body: { section11?: Record<string, unknown>; cii_index?: Record<string, unknown> },
+    ) {
+        const report = await this.studentReportsRepository.findOne({
+            where: { id: reportId },
+            relations: ['student', 'opportunity'],
+        });
+
+        if (!report) {
+            throw new NotFoundException('Report not found');
+        }
+
+        const incomingSection11 = body.section11 && typeof body.section11 === 'object' ? body.section11 : {};
+        const mergedSection11: Record<string, unknown> = {
+            ...((report.section11 as Record<string, unknown> | null | undefined) ?? {}),
+            ...incomingSection11,
+        };
+
+        if (body.cii_index && typeof body.cii_index === 'object') {
+            mergedSection11.cii_index = body.cii_index;
+        }
+
+        const score = this.resolveCiiScoreFromPayload(mergedSection11, body.cii_index ?? null);
+        if (score !== null) {
+            mergedSection11.ai_generated_impact_score = score;
+        }
+
+        report.section11 = mergedSection11 as StudentReport['section11'];
+        await this.studentReportsRepository.save(report);
+
+        return this.formatReportResponse(report);
     }
 }

@@ -21,6 +21,8 @@ import { Payment, PaymentStatus } from '../payments/entities/payment.entity';
 import { formatCertificateVerificationCode } from './certificate-verification-code.util';
 import { ReportPartnerApprovalSettingsService } from './report-partner-approval-settings.service';
 import { isReportPartnerStepSatisfied } from './report-partner-approval.util';
+import { collectReportEvidenceFiles } from './collect-report-evidence.util';
+import { buildCielPkAiEvaluationPayload } from './build-ciel-pk-ai-evaluation-payload.util';
 
 @Injectable()
 export class StudentReportsService {
@@ -641,38 +643,7 @@ export class StudentReportsService {
     }
 
     private collectEvidenceUrls(report: StudentReport): string[] {
-        const urls = new Set<string>();
-        const sections = [
-            report.section1,
-            report.section2,
-            report.section3,
-            report.section4,
-            report.section5,
-            report.section6,
-            report.section7,
-            report.section8,
-            report.section9,
-            report.section10,
-        ];
-
-        for (const section of sections) {
-            const mediaUrls = Array.isArray(section?.media_urls) ? section.media_urls : [];
-            for (const url of mediaUrls) {
-                if (url) urls.add(url);
-            }
-        }
-
-        const attendanceLogs = Array.isArray(report.section1?.attendance_logs)
-            ? report.section1.attendance_logs
-            : [];
-        for (const log of attendanceLogs) {
-            const evidenceUrl = (log as any)?.evidence_url;
-            if (evidenceUrl) {
-                urls.add(evidenceUrl);
-            }
-        }
-
-        return Array.from(urls);
+        return collectReportEvidenceFiles(report).map((file) => file.url);
     }
 
     private async findLatestManualPayment(studentId: string, projectId: string | null | undefined) {
@@ -1819,6 +1790,57 @@ export class StudentReportsService {
         }
 
         return null;
+    }
+
+    /** Admin-only: canonical Master AI Prompt input payload (no legacy CII / CNIC). */
+    async buildAiEvaluationPayload(reportId: string) {
+        const report = await this.studentReportsRepository.findOne({
+            where: { id: reportId },
+            relations: ['student', 'opportunity'],
+        });
+        if (!report) {
+            throw new NotFoundException('Report not found');
+        }
+
+        const projectKey = report.opportunityId || report.project_id;
+        const attendanceLogs = await this.attendanceLogsRepository.find({
+            where: {
+                participant: { studentId: report.studentId },
+                projectId: projectKey,
+            },
+            order: { dateOfEngagement: 'ASC', startTime: 'ASC' },
+        });
+
+        const hydratedSection1 = {
+            ...(report.section1 ?? {}),
+            team_members: await this.engagementService.getProjectTeamForReportDossier(projectKey),
+            attendance_logs:
+                attendanceLogs.length > 0
+                    ? attendanceLogs.map((log) => ({
+                          id: log.id,
+                          participantId: log.participantId,
+                          date: log.dateOfEngagement,
+                          start_time: log.startTime,
+                          end_time: log.endTime,
+                          location: log.organizationName,
+                          activity_type: log.activityType,
+                          description: log.description,
+                          hours: Number(log.sessionHours),
+                          evidence_url: log.evidenceUrl,
+                          entryStatus: log.entryStatus,
+                          approval_status: (log as any).approvalStatus ?? null,
+                      }))
+                    : report.section1?.attendance_logs || [],
+        };
+
+        const payloadReport = Object.assign(new StudentReport(), report, {
+            section1: hydratedSection1,
+        });
+
+        return {
+            success: true,
+            data: buildCielPkAiEvaluationPayload(payloadReport),
+        };
     }
 
     /** Admin-only: persist regenerated Section 11 AI audit + CII score. */

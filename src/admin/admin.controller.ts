@@ -217,6 +217,11 @@ export class AdminController {
         return this.studentReportsService.verifyReport(id, body.action, 'admin', body.reason || body.feedback);
     }
 
+    @Get('reports/:id/ai-evaluation-payload')
+    getReportAiEvaluationPayload(@Param('id') id: string) {
+        return this.studentReportsService.buildAiEvaluationPayload(id);
+    }
+
     @Patch('reports/:id/ai-score')
     updateReportAiScore(
         @Param('id') id: string,

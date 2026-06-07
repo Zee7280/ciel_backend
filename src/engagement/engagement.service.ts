@@ -6,7 +6,7 @@ import {
 } from './attendance-description.constants';
 import { S3Service } from '../common/s3.service';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, In, IsNull, Repository } from 'typeorm';
+import { Brackets, EntityManager, In, IsNull, Repository } from 'typeorm';
 import { Participation } from './entities/participant.entity';
 import { demoteExtraTeamLeadsInScope } from './team-lead-canonical.util';
 import { AttendanceLog } from './entities/attendance-log.entity';
@@ -299,7 +299,13 @@ export class EngagementService {
                 dto.secondaryFacultyEmail || dto.secondary_faculty_email,
             );
             const teamId = this.normalizeOptionalString(dto.teamId || dto.team_id);
-            const effectiveTeamId = teamId || this.normalizeOptionalString(participation.teamId);
+            const effectiveTeamId = await this.resolveTeamIdForRegistration(
+                manager,
+                participation,
+                opportunity.id,
+                targetStudentId,
+                teamId,
+            );
             const facultyFields: Partial<Participation> = {};
             if (primaryFacultyEmail) {
                 facultyFields.primaryFacultyEmail = primaryFacultyEmail;
@@ -1999,6 +2005,52 @@ export class EngagementService {
     private normalizeOptionalString(value: string | null | undefined): string | undefined {
         const normalized = (value || '').trim();
         return normalized || undefined;
+    }
+
+    private readTeamIdFromApplyPayload(payload: unknown): string | undefined {
+        if (!payload || typeof payload !== 'object') return undefined;
+        const record = payload as Record<string, unknown>;
+        const raw = record.team_id ?? record.teamId;
+        return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined;
+    }
+
+    /** Resolve team slug for team-lead register when legacy rows omitted `teamId`. */
+    private async resolveTeamIdForRegistration(
+        manager: EntityManager,
+        participation: Participation,
+        projectId: string,
+        studentId: string | null,
+        dtoTeamId?: string,
+    ): Promise<string | undefined> {
+        const direct =
+            dtoTeamId ||
+            this.normalizeOptionalString(participation.teamId);
+        if (direct) return direct;
+
+        if (participation.applicationId) {
+            const linkedApp = await manager.findOne(OpportunityApplication, {
+                where: { id: participation.applicationId, withdrawnAt: IsNull() },
+            });
+            const fromLinked = this.readTeamIdFromApplyPayload(linkedApp?.applyPayload);
+            if (fromLinked) return fromLinked;
+            return participation.applicationId;
+        }
+
+        if (studentId) {
+            const approvedApp = await manager
+                .createQueryBuilder(OpportunityApplication, 'a')
+                .where('a.studentUserId = :studentId', { studentId })
+                .andWhere('a.opportunityId = :projectId', { projectId })
+                .andWhere('a.internalStatus = :status', { status: 'approved' })
+                .andWhere('a.withdrawnAt IS NULL')
+                .orderBy('a.createdAt', 'DESC')
+                .getOne();
+            const fromApp = this.readTeamIdFromApplyPayload(approvedApp?.applyPayload);
+            if (fromApp) return fromApp;
+            if (approvedApp?.id) return approvedApp.id;
+        }
+
+        return undefined;
     }
 
     private normalizeAttendanceApproverType(value: unknown): 'faculty' | 'partner' {

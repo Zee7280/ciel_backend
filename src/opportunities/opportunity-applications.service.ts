@@ -2489,6 +2489,10 @@ export class OpportunityApplicationsService {
                 existingLead.secondaryFacultyEmail = normalizedSecondaryFaculty;
                 changed = true;
             }
+            if (!existingLead.teamId && teamId) {
+                existingLead.teamId = teamId;
+                changed = true;
+            }
             if (changed) {
                 await this.participationRepo.save(existingLead);
             }

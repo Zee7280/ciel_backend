@@ -299,6 +299,7 @@ export class EngagementService {
                 dto.secondaryFacultyEmail || dto.secondary_faculty_email,
             );
             const teamId = this.normalizeOptionalString(dto.teamId || dto.team_id);
+            const effectiveTeamId = teamId || this.normalizeOptionalString(participation.teamId);
             const facultyFields: Partial<Participation> = {};
             if (primaryFacultyEmail) {
                 facultyFields.primaryFacultyEmail = primaryFacultyEmail;
@@ -307,13 +308,13 @@ export class EngagementService {
                 facultyFields.secondaryFacultyEmail = secondaryFacultyEmail;
             }
             const teamFields: Partial<Participation> = {};
-            if (teamId) {
-                teamFields.teamId = teamId;
+            if (effectiveTeamId) {
+                teamFields.teamId = effectiveTeamId;
             }
             const { primary_faculty_email, secondary_faculty_email, team_id, ...registrationFields } = dto;
 
             if (dto.participationMode === 'team' && dto.isTeamLead) {
-                if (!teamId) {
+                if (!effectiveTeamId) {
                     throw new BadRequestException(
                         'A team ID is required to register as team lead. Use the team link from your approved application.',
                     );
@@ -321,7 +322,7 @@ export class EngagementService {
                 const conflictingLead = await manager
                     .createQueryBuilder(Participation, 'p')
                     .where('p.projectId = :projectId', { projectId: opportunity.id })
-                    .andWhere('p.teamId = :teamId', { teamId })
+                    .andWhere('p.teamId = :teamId', { teamId: effectiveTeamId })
                     .andWhere('p.isTeamLead = true')
                     .andWhere('p.id != :keepId', { keepId: participation.id })
                     .getOne();

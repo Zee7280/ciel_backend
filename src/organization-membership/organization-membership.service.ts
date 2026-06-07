@@ -5,7 +5,7 @@ import {
     NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Brackets, Repository, In } from 'typeorm';
 import { OrganizationMembershipFee } from './entities/organization-membership-fee.entity';
 import { User } from '../users/entities/user.entity';
 import { Setting } from '../settings/entities/setting.entity';
@@ -100,6 +100,18 @@ export class OrganizationMembershipService {
             };
         }
         const amount = await this.getExpectedFeePkr(user.role);
+        const approvedSubmission = await this.latestSubmissionForUserOrOrganization(user, 'approved');
+        if (approvedSubmission) {
+            if (user.status === 'pending_membership_payment') {
+                await this.activateMembershipAccounts(user.id, user.organization?.id ?? approvedSubmission.organizationId);
+                user.status = 'active';
+            }
+            return {
+                requires_membership_payment: false,
+                membership_fee_submission_status: 'approved',
+                membership_fee_amount_pkr: amount,
+            };
+        }
         if (user.status !== 'pending_membership_payment') {
             return {
                 requires_membership_payment: false,
@@ -107,10 +119,7 @@ export class OrganizationMembershipService {
                 membership_fee_amount_pkr: amount,
             };
         }
-        const latest = await this.feeRepo.findOne({
-            where: { userId: user.id },
-            order: { createdAt: 'DESC' },
-        });
+        const latest = await this.latestSubmissionForUserOrOrganization(user);
         let membership_fee_submission_status: MembershipFeeSubmissionUi = 'none';
         if (latest) {
             if (latest.status === 'pending_review') {
@@ -126,6 +135,40 @@ export class OrganizationMembershipService {
             membership_fee_submission_status,
             membership_fee_amount_pkr: amount,
         };
+    }
+
+    private latestSubmissionForUserOrOrganization(
+        user: User,
+        status?: OrganizationMembershipFee['status'],
+    ): Promise<OrganizationMembershipFee | null> {
+        const organizationId = user.organization?.id;
+        const qb = this.feeRepo
+            .createQueryBuilder('fee')
+            .where(
+                new Brackets((sub) => {
+                    sub.where('fee.userId = :userId', { userId: user.id });
+                    if (organizationId) {
+                        sub.orWhere('fee.organizationId = :organizationId', { organizationId });
+                    }
+                }),
+            );
+        if (status) {
+            qb.andWhere('fee.status = :status', { status });
+        }
+        return qb.orderBy('fee.createdAt', 'DESC').getOne();
+    }
+
+    private async activateMembershipAccounts(userId: string, organizationId?: string | null) {
+        await this.userRepo.update(userId, { status: 'active' });
+        if (organizationId) {
+            await this.userRepo
+                .createQueryBuilder()
+                .update(User)
+                .set({ status: 'active' })
+                .where('organizationId = :organizationId', { organizationId })
+                .andWhere('status = :status', { status: 'pending_membership_payment' })
+                .execute();
+        }
     }
 
     async submitProof(userId: string, proofUrl: string, paidAmountRaw?: string): Promise<{ success: boolean; message: string }> {
@@ -259,7 +302,7 @@ export class OrganizationMembershipService {
         row.reviewedByUserId = adminUserId;
         row.reviewedAt = new Date();
         await this.feeRepo.save(row);
-        await this.userRepo.update(row.userId, { status: 'active' });
+        await this.activateMembershipAccounts(row.userId, row.organizationId);
         return row;
     }
 

@@ -299,13 +299,17 @@ export class EngagementService {
                 dto.secondaryFacultyEmail || dto.secondary_faculty_email,
             );
             const teamId = this.normalizeOptionalString(dto.teamId || dto.team_id);
-            const effectiveTeamId = await this.resolveTeamIdForRegistration(
-                manager,
-                participation,
-                opportunity.id,
-                targetStudentId,
-                teamId,
-            );
+            const effectiveTeamId =
+                (await this.resolveTeamIdForRegistration(
+                    manager,
+                    participation,
+                    opportunity.id,
+                    targetStudentId,
+                    teamId,
+                )) ||
+                (dto.participationMode === 'team' && dto.isTeamLead
+                    ? this.generateTeamId()
+                    : undefined);
             const facultyFields: Partial<Participation> = {};
             if (primaryFacultyEmail) {
                 facultyFields.primaryFacultyEmail = primaryFacultyEmail;
@@ -2012,6 +2016,13 @@ export class EngagementService {
         const record = payload as Record<string, unknown>;
         const raw = record.team_id ?? record.teamId;
         return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined;
+    }
+
+    private generateTeamId(): string {
+        const year = new Date().getFullYear();
+        const a = crypto.randomBytes(4).toString('hex').toUpperCase();
+        const b = crypto.randomBytes(2).toString('hex').toUpperCase();
+        return `TM-${year}-${a}-${b}`;
     }
 
     /** Resolve team slug for team-lead register when legacy rows omitted `teamId`. */

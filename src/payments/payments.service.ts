@@ -211,13 +211,126 @@ export class PaymentsService {
         return n;
     }
 
-    private mapManualPaymentRow(p: Payment) {
+    private async getReportingFeePerMemberPkr(): Promise<number> {
+        const raw = await this.getSetting('REPORTING_FEE_PKR', '200');
+        const n = parseInt(String(raw).replace(/[^\d]/g, ''), 10);
+        return Number.isFinite(n) && n > 0 ? n : 200;
+    }
+
+    /** Same team bucket as My Projects roster (applicationId + teamId on project). */
+    private async loadTeamRosterForSubmitter(
+        studentId: string,
+        projectId: string,
+    ): Promise<{ participation: Participation | null; roster: Participation[] }> {
+        const participation = await this.participantRepository.findOne({
+            where: { studentId, projectId },
+        });
+        if (!participation) {
+            return { participation: null, roster: [] };
+        }
+
+        const merged = new Map<string, Participation>();
+        merged.set(participation.id, participation);
+
+        if (participation.applicationId) {
+            const byApplication = await this.participantRepository.find({
+                where: { projectId, applicationId: participation.applicationId },
+            });
+            for (const row of byApplication) {
+                merged.set(row.id, row);
+            }
+        }
+
+        const teamId = typeof participation.teamId === 'string' ? participation.teamId.trim() : '';
+        if (teamId) {
+            const byTeam = await this.participantRepository.find({
+                where: { projectId, teamId },
+            });
+            for (const row of byTeam) {
+                merged.set(row.id, row);
+            }
+        }
+
+        const roster = Array.from(merged.values()).sort((a, b) => {
+            if (a.isTeamLead !== b.isTeamLead) {
+                return a.isTeamLead ? -1 : 1;
+            }
+            return (a.fullName || '').localeCompare(b.fullName || '');
+        });
+
+        return { participation, roster };
+    }
+
+    private async buildManualPaymentTeamContext(p: Payment): Promise<{
+        participation_mode: 'individual' | 'team';
+        submitted_by: {
+            student_id: string;
+            name: string;
+            email: string;
+            is_team_lead: boolean;
+        };
+        team_member_count: number;
+        team_members: { name: string; email: string; is_team_lead: boolean }[];
+        reporting_fee_per_member_pkr: number;
+        expected_paid_amount_pkr: number;
+    }> {
+        const { participation, roster } = await this.loadTeamRosterForSubmitter(p.studentId, p.projectId);
+        const perMember = await this.getReportingFeePerMemberPkr();
+
+        const submitterRow = roster.find((r) => r.studentId === p.studentId) ?? participation;
+        const isTeamLead = submitterRow?.isTeamLead === true;
+        const participationMode =
+            participation?.participationMode === 'team' || roster.length > 1 ? 'team' : 'individual';
+
+        const teamMembers =
+            roster.length > 0
+                ? roster.map((row) => ({
+                      name: (row.fullName || '').trim() || '—',
+                      email: (row.email || '').trim() || '—',
+                      is_team_lead: !!row.isTeamLead,
+                  }))
+                : [];
+
+        const teamMemberCount = participationMode === 'team' ? Math.max(1, teamMembers.length) : 1;
+        const expectedPaid = perMember * teamMemberCount;
+
+        return {
+            participation_mode: participationMode,
+            submitted_by: {
+                student_id: p.studentId,
+                name: p.student?.name || submitterRow?.fullName || 'Unknown',
+                email: p.student?.email || submitterRow?.email || 'Unknown',
+                is_team_lead: isTeamLead,
+            },
+            team_member_count: teamMemberCount,
+            team_members: teamMembers,
+            reporting_fee_per_member_pkr: perMember,
+            expected_paid_amount_pkr: expectedPaid,
+        };
+    }
+
+    private async mapManualPaymentRow(p: Payment) {
+        const teamCtx = await this.buildManualPaymentTeamContext(p);
         return {
             id: p.id,
             projectId: p.projectId,
             project_id: p.projectId,
-            studentName: p.student?.name || 'Unknown',
-            studentEmail: p.student?.email || 'Unknown',
+            studentId: p.studentId,
+            student_id: p.studentId,
+            studentName: p.student?.name || teamCtx.submitted_by.name,
+            studentEmail: p.student?.email || teamCtx.submitted_by.email,
+            submitted_by: teamCtx.submitted_by,
+            submittedBy: teamCtx.submitted_by,
+            participation_mode: teamCtx.participation_mode,
+            participationMode: teamCtx.participation_mode,
+            team_member_count: teamCtx.team_member_count,
+            teamMemberCount: teamCtx.team_member_count,
+            team_members: teamCtx.team_members,
+            teamMembers: teamCtx.team_members,
+            reporting_fee_per_member_pkr: teamCtx.reporting_fee_per_member_pkr,
+            reportingFeePerMemberPkr: teamCtx.reporting_fee_per_member_pkr,
+            expected_paid_amount_pkr: teamCtx.expected_paid_amount_pkr,
+            expectedPaidAmountPkr: teamCtx.expected_paid_amount_pkr,
             projectTitle: p.opportunity?.title || 'Unknown',
             organization: p.opportunity?.organization?.name || 'Unknown',
             amount: p.amount,
@@ -291,7 +404,7 @@ export class PaymentsService {
             order: { created_at: 'DESC' },
         });
 
-        return payments.map(p => this.mapManualPaymentRow(p));
+        return Promise.all(payments.map((p) => this.mapManualPaymentRow(p)));
     }
 
     async findManualPaymentsByStatus(status: PaymentStatus.APPROVED | PaymentStatus.REJECTED) {
@@ -301,7 +414,7 @@ export class PaymentsService {
             order: { created_at: 'DESC' },
         });
 
-        return payments.map(p => this.mapManualPaymentRow(p));
+        return Promise.all(payments.map((p) => this.mapManualPaymentRow(p)));
     }
 
     async verifyManualPayment(id: string, status: PaymentStatus, feedback?: string) {
@@ -371,7 +484,9 @@ export class PaymentsService {
 
         return {
             success: true,
-            data: updated ? this.mapManualPaymentRow(updated) : { id: paymentId, status: PaymentStatus.PENDING },
+            data: updated
+                ? await this.mapManualPaymentRow(updated)
+                : { id: paymentId, status: PaymentStatus.PENDING },
         };
     }
 }

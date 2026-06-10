@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto';
 import {
     Injectable,
     BadRequestException,
@@ -24,6 +25,7 @@ import { Opportunity } from './entities/opportunity.entity';
 import { WORKFLOW_STAGE } from './opportunity-workflow.service';
 import { isTeamApplyFromParticipationAndMembers } from './apply-team-payload.util';
 import { AdminPatchTeamMemberDto } from './dto/admin-patch-team-member.dto';
+import { AdminMergeTeamMembersDto } from './dto/admin-merge-team-members.dto';
 import { pickCanonicalTeamLeadFromMembers } from '../engagement/team-lead-canonical.util';
 
 const PENDING_PIPELINE: OpportunityApplicationInternalStatus[] = [
@@ -833,6 +835,201 @@ export class OpportunityApplicationsService {
             impact_report_partner_status: ps,
             impact_report_admin_status: ads,
             impact_report_faculty_status: fs,
+        };
+    }
+
+    private generateAdminTeamId(): string {
+        const year = new Date().getFullYear();
+        const a = randomBytes(4).toString('hex').toUpperCase();
+        const b = randomBytes(2).toString('hex').toUpperCase();
+        return `TM-${year}-${a}-${b}`;
+    }
+
+    private async findReportsForOpportunityStudents(
+        opportunityId: string,
+        studentIds: string[],
+    ): Promise<StudentReport[]> {
+        if (!studentIds.length) return [];
+        return this.studentReportRepo
+            .createQueryBuilder('r')
+            .where('r.studentId IN (:...studentIds)', { studentIds })
+            .andWhere(
+                '(r.opportunityId = :oid OR (r.project_id IS NOT NULL AND TRIM(r.project_id) = CAST(:oid AS varchar)))',
+                { oid: opportunityId },
+            )
+            .getMany();
+    }
+
+    private isLowProgressReportStatus(status: string | null | undefined): boolean {
+        const st = String(status || '').trim().toLowerCase();
+        return !st || st === 'draft' || st === 'revision' || st === 'continue' || st === 'rejected';
+    }
+
+    private isBlockingReportStatusForTeamMerge(status: string | null | undefined): boolean {
+        const st = String(status || '').trim().toLowerCase();
+        return [
+            'submitted',
+            'payment_under_review',
+            'payment_pending',
+            'partner_verified',
+            'paid',
+            'verified',
+        ].includes(st);
+    }
+
+    /**
+     * Admin Teams & enrollments: merge individual + team buckets into one persisted teamId.
+     */
+    async adminMergeOpportunityTeamMembers(opportunityId: string, dto: AdminMergeTeamMembersDto) {
+        const memberIds = [...new Set(dto.member_participation_ids.map((id) => id.trim()).filter(Boolean))];
+        const leadId = dto.lead_participation_id.trim();
+        const reassignDraft = dto.reassign_draft_report_to_lead !== false;
+        const deleteNonLeadDrafts = dto.delete_non_lead_draft_reports !== false;
+
+        if (memberIds.length < 2) {
+            throw new BadRequestException('Select at least two enrollments to merge.');
+        }
+        if (!memberIds.includes(leadId)) {
+            throw new BadRequestException('lead_participation_id must be included in member_participation_ids.');
+        }
+
+        const opportunity = await this.opportunityRepo.findOne({ where: { id: opportunityId } });
+        if (!opportunity) {
+            throw new NotFoundException('Opportunity not found');
+        }
+
+        const members = await this.participationRepo.find({
+            where: {
+                id: In(memberIds),
+                projectId: opportunityId,
+                status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
+            },
+            relations: ['student'],
+        });
+
+        if (members.length !== memberIds.length) {
+            const found = new Set(members.map((m) => m.id));
+            const missing = memberIds.filter((id) => !found.has(id));
+            throw new BadRequestException(
+                `Enrollment not found on this project: ${missing.join(', ')}`,
+            );
+        }
+
+        const leadRow = members.find((m) => m.id === leadId);
+        if (!leadRow) {
+            throw new BadRequestException('Lead enrollment not found.');
+        }
+
+        const nonLeadStudentIds = members
+            .filter((m) => m.id !== leadId && m.studentId)
+            .map((m) => m.studentId as string);
+        if (nonLeadStudentIds.length) {
+            const nonLeadReports = await this.findReportsForOpportunityStudents(
+                opportunityId,
+                nonLeadStudentIds,
+            );
+            const blocking = nonLeadReports.filter((r) =>
+                this.isBlockingReportStatusForTeamMerge(r.status),
+            );
+            if (blocking.length) {
+                throw new BadRequestException(
+                    'Cannot merge: a non-lead member already has a submitted or verified report. Resolve manually first.',
+                );
+            }
+        }
+
+        let targetTeamId = (dto.target_team_id || '').trim();
+        if (!targetTeamId) {
+            const leadTeam = (leadRow.teamId || '').trim();
+            const fromMembers = members
+                .map((m) => (m.teamId || '').trim())
+                .filter(Boolean)
+                .sort((a, b) => a.localeCompare(b));
+            targetTeamId = leadTeam || fromMembers[0] || this.generateAdminTeamId();
+        }
+
+        const leadApplicationId = leadRow.applicationId;
+
+        await this.participationRepo.manager.transaction(async (em) => {
+            const participationRepo = em.getRepository(Participation);
+            const reportRepo = em.getRepository(StudentReport);
+
+            for (const row of members) {
+                row.teamId = targetTeamId;
+                row.participationMode = 'team';
+                row.isTeamLead = row.id === leadId;
+                if (leadApplicationId) {
+                    row.applicationId = leadApplicationId;
+                }
+            }
+            await participationRepo.save(members);
+
+            const extraLeads = await participationRepo.find({
+                where: { projectId: opportunityId, teamId: targetTeamId, isTeamLead: true },
+            });
+            const toDemote = extraLeads.filter((p) => p.id !== leadId);
+            if (toDemote.length) {
+                for (const row of toDemote) {
+                    row.isTeamLead = false;
+                }
+                await participationRepo.save(toDemote);
+            }
+
+            const leadStudentId = leadRow.studentId;
+            if (!leadStudentId) return;
+
+            const allStudentIds = members
+                .map((m) => m.studentId)
+                .filter((id): id is string => Boolean(id));
+            const reports = await reportRepo
+                .createQueryBuilder('r')
+                .where('r.studentId IN (:...allStudentIds)', { allStudentIds })
+                .andWhere(
+                    '(r.opportunityId = :oid OR (r.project_id IS NOT NULL AND TRIM(r.project_id) = CAST(:oid AS varchar)))',
+                    { oid: opportunityId },
+                )
+                .getMany();
+
+            const leadReports = reports.filter((r) => r.studentId === leadStudentId);
+            const leadHasReport = leadReports.length > 0;
+
+            if (reassignDraft && !leadHasReport) {
+                const donor = reports
+                    .filter(
+                        (r) =>
+                            r.studentId !== leadStudentId &&
+                            this.isLowProgressReportStatus(r.status),
+                    )
+                    .sort(
+                        (a, b) =>
+                            (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0) ||
+                            (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0),
+                    )[0];
+                if (donor) {
+                    donor.studentId = leadStudentId;
+                    await reportRepo.save(donor);
+                }
+            }
+
+            if (deleteNonLeadDrafts) {
+                const toDelete = reports.filter(
+                    (r) =>
+                        r.studentId !== leadStudentId &&
+                        this.isLowProgressReportStatus(r.status),
+                );
+                if (toDelete.length) {
+                    await reportRepo.remove(toDelete);
+                }
+            }
+        });
+
+        const refreshed = await this.adminListOpportunityTeams(opportunityId);
+        return {
+            success: true,
+            message: `Merged ${memberIds.length} enrollments into team ${targetTeamId}.`,
+            team_id: targetTeamId,
+            lead_participation_id: leadId,
+            ...refreshed,
         };
     }
 

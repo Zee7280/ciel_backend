@@ -22,6 +22,7 @@ import { OpportunityApplicationsService } from './opportunity-applications.servi
 
 import { AdminMutationAuditInterceptor } from '../audit-logs/admin-mutation-audit.interceptor';
 import { AdminPatchTeamMemberDto } from './dto/admin-patch-team-member.dto';
+import { AdminMergeTeamMembersDto } from './dto/admin-merge-team-members.dto';
 
 @Controller('admin/opportunities')
 @UseGuards(JwtAuthGuard)
@@ -140,6 +141,11 @@ export class AdminOpportunitiesController {
     @Get(':id/teams')
     async listTeams(@Param('id') opportunityId: string) {
         return this.opportunityApplicationsService.adminListOpportunityTeams(opportunityId);
+    }
+
+    @Post(':id/teams/merge')
+    async mergeTeams(@Param('id') opportunityId: string, @Body() dto: AdminMergeTeamMembersDto) {
+        return this.opportunityApplicationsService.adminMergeOpportunityTeamMembers(opportunityId, dto);
     }
 
     @Delete(':id/teams/:teamId')

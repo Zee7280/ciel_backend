@@ -27,6 +27,7 @@ import { AdminProjectEvidenceService } from './admin-project-evidence.service';
 import { MasterAnalyticsQueryDto } from './dto/master-analytics-query.dto';
 import { OpportunitiesService } from '../opportunities/opportunities.service';
 import { StudentReportsService } from '../reports/student-reports.service';
+import { AdminMergeReportsDto } from '../reports/dto/admin-merge-reports.dto';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
 import { IssueLogsService } from '../issue-logs/issue-logs.service';
 import type { IssueLogListQuery } from '../issue-logs/issue-logs.service';
@@ -202,6 +203,11 @@ export class AdminController {
         }
         // As per new spec, this endpoint now serves student reports
         return this.studentReportsService.findAll(query);
+    }
+
+    @Post('reports/merge')
+    mergeReports(@Body() dto: AdminMergeReportsDto) {
+        return this.studentReportsService.adminMergeReports(dto);
     }
 
     @Get('reports/:id')

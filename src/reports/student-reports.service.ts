@@ -241,6 +241,132 @@ export class StudentReportsService {
         return new Map(opportunities.map((opp) => [opp.id, opp]));
     }
 
+    private resolveReportProjectKeyForMerge(report: Pick<StudentReport, 'opportunityId' | 'project_id'>): string {
+        const key = (report.opportunityId || report.project_id || '').trim();
+        return this.looksLikeUuid(key) ? key.toLowerCase() : key;
+    }
+
+    private isReportSafeToRemoveInAdminMerge(report: StudentReport): boolean {
+        const st = String(report.status || '').trim().toLowerCase();
+        const adm = String(report.admin_status || '').trim().toLowerCase();
+        if (st === 'verified' || st === 'paid') return false;
+        if (adm === 'approved') return false;
+        return true;
+    }
+
+    private shallowMergeReportFields(keeper: StudentReport, donors: StudentReport[]): void {
+        const jsonKeys = [
+            'section1',
+            'section2',
+            'section3',
+            'section4',
+            'section5',
+            'section6',
+            'section7',
+            'section8',
+            'section9',
+            'section10',
+            'section11',
+        ] as const;
+        for (const donor of donors) {
+            for (const key of jsonKeys) {
+                const current = keeper[key];
+                const incoming = donor[key];
+                if (current == null && incoming != null) {
+                    Object.assign(keeper, { [key]: incoming });
+                }
+            }
+            if (!keeper.summary_text_generated?.trim() && donor.summary_text_generated?.trim()) {
+                keeper.summary_text_generated = donor.summary_text_generated;
+            }
+        }
+    }
+
+    /**
+     * Admin Student Reports: merge duplicate rows for the same project into one keeper report.
+     */
+    async adminMergeReports(dto: { report_ids: string[]; keep_report_id: string }) {
+        const reportIds = [...new Set(dto.report_ids.map((id) => id.trim()).filter(Boolean))];
+        const keepId = dto.keep_report_id.trim();
+
+        if (reportIds.length < 2) {
+            throw new BadRequestException('Select at least two reports to merge.');
+        }
+        if (!reportIds.includes(keepId)) {
+            throw new BadRequestException('keep_report_id must be included in report_ids.');
+        }
+
+        const reports = await this.studentReportsRepository.find({
+            where: { id: In(reportIds) },
+            relations: ['student', 'opportunity'],
+        });
+
+        if (reports.length !== reportIds.length) {
+            const found = new Set(reports.map((r) => r.id));
+            const missing = reportIds.filter((id) => !found.has(id));
+            throw new BadRequestException(`Report not found: ${missing.join(', ')}`);
+        }
+
+        const projectKeys = new Set(
+            reports.map((r) => this.resolveReportProjectKeyForMerge(r)).filter(Boolean),
+        );
+        if (projectKeys.size !== 1) {
+            throw new BadRequestException(
+                'All selected reports must belong to the same project / opportunity.',
+            );
+        }
+        const projectKey = [...projectKeys][0];
+
+        const keeper = reports.find((r) => r.id === keepId);
+        if (!keeper) {
+            throw new BadRequestException('Keeper report not found.');
+        }
+
+        const donors = reports.filter((r) => r.id !== keepId);
+        const unsafe = donors.filter((r) => !this.isReportSafeToRemoveInAdminMerge(r));
+        if (unsafe.length) {
+            throw new BadRequestException(
+                'Cannot merge: a duplicate report is verified, paid, or admin-approved. Keep that row instead or resolve manually.',
+            );
+        }
+
+        this.shallowMergeReportFields(keeper, donors);
+
+        await this.studentReportsRepository.manager.transaction(async (em) => {
+            const reportRepo = em.getRepository(StudentReport);
+            const paymentRepo = em.getRepository(Payment);
+
+            await reportRepo.save(keeper);
+
+            for (const donor of donors) {
+                if (donor.studentId && donor.studentId !== keeper.studentId) {
+                    await paymentRepo.update(
+                        { projectId: projectKey, studentId: donor.studentId },
+                        { studentId: keeper.studentId },
+                    );
+                }
+                await reportRepo.remove(donor);
+            }
+        });
+
+        const refreshed = await this.studentReportsRepository.findOne({
+            where: { id: keepId },
+            relations: ['student', 'opportunity', 'opportunity.organization'],
+        });
+
+        const opportunityByProjectId = refreshed
+            ? await this.loadOpportunitiesForReports([refreshed])
+            : new Map<string, Opportunity>();
+
+        return {
+            success: true,
+            message: `Merged ${donors.length} duplicate report(s) into the selected keeper.`,
+            kept_report_id: keepId,
+            removed_report_ids: donors.map((d) => d.id),
+            data: refreshed ? this.mapReportListing(refreshed, opportunityByProjectId) : null,
+        };
+    }
+
     private mapReportListing(report: StudentReport, opportunityByProjectId?: Map<string, Opportunity>) {
         const section3 = report.section3 as any;
         const section4 = report.section4 as any;
@@ -249,6 +375,9 @@ export class StudentReportsService {
 
         return {
             id: report.id,
+            student_id: report.studentId,
+            opportunity_id: report.opportunityId ?? null,
+            project_id: report.project_id ?? null,
             student_name: report.student?.name || 'Unknown',
             student_email: report.student?.email || 'Unknown',
             project_title: opportunity?.title || report.project_id,

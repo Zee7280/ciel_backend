@@ -159,7 +159,7 @@ describe('StudentReportsService', () => {
     const SAMPLE_OPP_UUID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 
     const TEAM_ONLY_GUARD_MESSAGE =
-        'Only the team lead can submit the impact report for this team project. Your team lead should submit on behalf of the team.';
+        'Only the team lead can edit and submit the impact report for this team project. You may update your attendance in Section 1; your team lead files the report.';
 
     const TEAM_SCOPE = { teamId: 'team-scope-1', applicationId: 'app-scope-1' };
 
@@ -243,26 +243,20 @@ describe('StudentReportsService', () => {
             ).rejects.toThrow(TEAM_ONLY_GUARD_MESSAGE);
         });
 
-        it('saves team member drafts on the canonical team lead report row', async () => {
+        it('blocks draft save for team members when a team lead exists on the project', async () => {
             mockTeamMemberAndLeadOnProject();
 
-            const result = await service.createReport(
-                'student-member',
-                {
-                    opportunityId: SAMPLE_OPP_UUID,
-                    section2: { problem_statement: 'test', baseline_evidence: 'Survey', discipline: 'CS' },
-                },
-                [],
-                false,
-            );
-
-            expect(result.message).toBe('Report saved as draft.');
-            expect(mockStudentReportsRepository.create).toHaveBeenCalledWith(
-                expect.objectContaining({
-                    studentId: 'team-lead-student',
-                    opportunityId: SAMPLE_OPP_UUID,
-                }),
-            );
+            await expect(
+                service.createReport(
+                    'student-member',
+                    {
+                        opportunityId: SAMPLE_OPP_UUID,
+                        section2: { problem_statement: 'test', baseline_evidence: 'Survey', discipline: 'CS' },
+                    },
+                    [],
+                    false,
+                ),
+            ).rejects.toThrow(TEAM_ONLY_GUARD_MESSAGE);
         });
 
         it('allows team lead to submit for team participation', async () => {

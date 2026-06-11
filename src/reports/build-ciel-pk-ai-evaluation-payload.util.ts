@@ -2,7 +2,7 @@ import { collectReportEvidenceFiles } from './collect-report-evidence.util';
 import { StudentReport } from './entities/student-report.entity';
 
 export const CIEL_PK_AI_EVALUATION_SCHEMA_VERSION = 'ciel_pk_ai_evaluation_v1.0';
-export const CIEL_PK_MASTER_PROMPT_VERSION = 'CIEL_PK_Master_AI_Prompt_v2';
+export const CIEL_PK_MASTER_PROMPT_VERSION = 'CIEL_PK_Master_AI_Prompt_v4';
 
 type UnknownRecord = Record<string, unknown>;
 

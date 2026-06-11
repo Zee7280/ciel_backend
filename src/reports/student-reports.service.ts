@@ -611,7 +611,200 @@ export class StudentReportsService {
             }
         }
 
-        return filtered;
+        return this.collapseDuplicateTeamProjectReports(filtered);
+    }
+
+    private asUnknownRecord(value: unknown): Record<string, unknown> {
+        return value && typeof value === 'object' && !Array.isArray(value)
+            ? (value as Record<string, unknown>)
+            : {};
+    }
+
+    private pickTrimmedString(value: unknown): string {
+        if (typeof value === 'string') return value.trim();
+        if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+        return '';
+    }
+
+    private pickTeamLeadReportBySection1(group: StudentReport[]): StudentReport | undefined {
+        for (const report of group) {
+            const section1 = this.asUnknownRecord(report.section1);
+            const lead = this.asUnknownRecord(section1.team_lead);
+            const leadEmail = this.pickTrimmedString(lead.email).toLowerCase();
+            const studentEmail = this.pickTrimmedString(report.student?.email).toLowerCase();
+            if (leadEmail && studentEmail && leadEmail === studentEmail) {
+                return report;
+            }
+        }
+        return undefined;
+    }
+
+    private pickPreferredTeamReportRow(group: StudentReport[]): StudentReport {
+        const statusRank = (status: string | null | undefined): number => {
+            const st = String(status || '').trim().toLowerCase();
+            if (['submitted', 'payment_pending', 'pending_payment', 'paid', 'verified', 'finalized'].includes(st)) {
+                return 3;
+            }
+            if (st === 'revision') return 2;
+            return 1;
+        };
+        return [...group].sort((a, b) => {
+            const byStatus = statusRank(b.status) - statusRank(a.status);
+            if (byStatus !== 0) return byStatus;
+            return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        })[0];
+    }
+
+    /**
+     * When multiple report rows exist for one team project (legacy member drafts), keep one canonical row.
+     */
+    private async collapseDuplicateTeamProjectReports(reports: StudentReport[]): Promise<StudentReport[]> {
+        const byProject = new Map<string, StudentReport[]>();
+        const passthrough: StudentReport[] = [];
+
+        for (const report of reports) {
+            const projectKey = this.reportProjectKey(report);
+            if (!this.looksLikeUuid(projectKey)) {
+                passthrough.push(report);
+                continue;
+            }
+            const bucket = byProject.get(projectKey) ?? [];
+            bucket.push(report);
+            byProject.set(projectKey, bucket);
+        }
+
+        const collapsed: StudentReport[] = [...passthrough];
+        for (const [projectKey, group] of byProject) {
+            if (group.length <= 1) {
+                collapsed.push(group[0]);
+                continue;
+            }
+
+            const teamRows = await this.participantRepository.find({
+                where: { projectId: projectKey, participationMode: 'team' },
+                order: { createdAt: 'ASC' },
+            });
+            const isTeamProject =
+                teamRows.length > 0 ||
+                group.some(
+                    (r) =>
+                        this.pickTrimmedString(this.asUnknownRecord(r.section1).participation_type).toLowerCase() ===
+                        'team',
+                );
+
+            if (!isTeamProject) {
+                collapsed.push(...group);
+                continue;
+            }
+
+            const scopeRow = teamRows[0];
+            const canonicalId = scopeRow
+                ? await findCanonicalTeamLeadStudentId(this.participantRepository, projectKey, {
+                      teamId: scopeRow.teamId,
+                      applicationId: scopeRow.applicationId,
+                  })
+                : null;
+
+            const keeper =
+                (canonicalId ? group.find((r) => r.studentId === canonicalId) : undefined) ??
+                this.pickTeamLeadReportBySection1(group) ??
+                this.pickPreferredTeamReportRow(group);
+
+            if (keeper) {
+                collapsed.push(keeper);
+            }
+        }
+
+        return collapsed;
+    }
+
+    private summarizeTeamRosterForListing(
+        roster: Record<string, unknown>[],
+        report: StudentReport,
+    ): {
+        participation_mode: 'team' | 'individual';
+        team_member_count: number;
+        team_lead: { name: string; email: string; student_id: string | null } | null;
+        team_members: Array<{ name: string; email: string; is_team_lead: boolean }>;
+    } {
+        const section1 = this.asUnknownRecord(report.section1);
+        const declaredTeam =
+            this.pickTrimmedString(section1.participation_type).toLowerCase() === 'team' || roster.length > 1;
+
+        if (!declaredTeam) {
+            return {
+                participation_mode: 'individual',
+                team_member_count: 1,
+                team_lead: null,
+                team_members: [],
+            };
+        }
+
+        const teamMembers = roster.map((row) => {
+            const student = this.asUnknownRecord(row.student);
+            const name =
+                this.pickTrimmedString(student.name) ||
+                this.pickTrimmedString(row.name) ||
+                this.pickTrimmedString(row.fullName) ||
+                '—';
+            const email = this.pickTrimmedString(student.email) || this.pickTrimmedString(row.email) || '—';
+            const isTeamLead = row.isTeamLead === true || row.is_team_lead === true;
+            const studentId = this.pickTrimmedString(student.id) || this.pickTrimmedString(row.studentId) || null;
+            return { name, email, is_team_lead: isTeamLead, student_id: studentId };
+        });
+
+        const leadRow =
+            teamMembers.find((m) => m.is_team_lead) ??
+            teamMembers.find((m) => m.student_id && m.student_id === report.studentId) ??
+            teamMembers[0];
+
+        return {
+            participation_mode: 'team',
+            team_member_count: Math.max(teamMembers.length, 1),
+            team_lead: leadRow
+                ? {
+                      name: leadRow.name,
+                      email: leadRow.email,
+                      student_id: leadRow.student_id,
+                  }
+                : null,
+            team_members: teamMembers.map(({ name, email, is_team_lead }) => ({
+                name,
+                email,
+                is_team_lead,
+            })),
+        };
+    }
+
+    private async mapReportListingsWithTeam(
+        reports: StudentReport[],
+        opportunityByProjectId?: Map<string, Opportunity>,
+    ) {
+        const rosterCache = new Map<string, Record<string, unknown>[]>();
+        const projectIds = [
+            ...new Set(
+                reports
+                    .map((r) => this.reportProjectKey(r))
+                    .filter((key) => this.looksLikeUuid(key)),
+            ),
+        ];
+
+        await Promise.all(
+            projectIds.map(async (projectId) => {
+                const roster = await this.engagementService.getProjectTeamForReportDossier(projectId);
+                rosterCache.set(projectId, roster as Record<string, unknown>[]);
+            }),
+        );
+
+        return reports.map((report) => {
+            const base = this.mapReportListing(report, opportunityByProjectId);
+            const projectKey = this.reportProjectKey(report);
+            const roster = rosterCache.get(projectKey) ?? [];
+            return {
+                ...base,
+                ...this.summarizeTeamRosterForListing(roster, report),
+            };
+        });
     }
 
     /**
@@ -841,10 +1034,10 @@ export class StudentReportsService {
     }
 
     /**
-     * Team applications: only `isTeamLead` may finalize submission so one canonical report is filed per team.
-     * Draft saves are unchanged. No participation row, non-team mode, or no flagged lead on the project → unchanged (legacy / creators).
+     * Team projects: only the canonical team lead may edit or submit the shared report body.
+     * Teammates update attendance via engagement APIs only.
      */
-    private async assertTeamLeadMaySubmitReport(studentId: string, opportunityId: unknown): Promise<void> {
+    private async assertTeamLeadMayWriteReport(studentId: string, opportunityId: unknown): Promise<void> {
         if (opportunityId === null || opportunityId === undefined || opportunityId === '') return;
         const oid = String(opportunityId).trim();
         if (!this.looksLikeUuid(oid)) return;
@@ -865,9 +1058,13 @@ export class StudentReportsService {
         }
         if (canonicalLead.studentId !== studentId) {
             throw new ForbiddenException(
-                'Only the team lead can submit the impact report for this team project. Your team lead should submit on behalf of the team.',
+                'Only the team lead can edit and submit the impact report for this team project. You may update your attendance in Section 1; your team lead files the report.',
             );
         }
+    }
+
+    private async assertTeamLeadMaySubmitReport(studentId: string, opportunityId: unknown): Promise<void> {
+        await this.assertTeamLeadMayWriteReport(studentId, opportunityId);
     }
 
     async createReport(studentId: string, dto: any, files: any[], forceSubmit = false) {
@@ -899,8 +1096,8 @@ export class StudentReportsService {
             }
         }
 
-        if (shouldSubmit && opportunityIdFromDto) {
-            await this.assertTeamLeadMaySubmitReport(studentId, opportunityIdFromDto);
+        if (opportunityIdFromDto) {
+            await this.assertTeamLeadMayWriteReport(studentId, opportunityIdFromDto);
         }
 
         const reportOwnerId =
@@ -1085,6 +1282,10 @@ export class StudentReportsService {
     async saveDraft(studentId: string, dto: any, files: any[]) {
         const parsedData = this.parseFormData(dto);
 
+        if (parsedData.opportunityId) {
+            await this.assertTeamLeadMayWriteReport(studentId, parsedData.opportunityId);
+        }
+
         const reportOwnerId =
             parsedData.opportunityId ?
                 await this.resolveTeamReportOwnerStudentId(studentId, String(parsedData.opportunityId))
@@ -1233,7 +1434,7 @@ export class StudentReportsService {
         const paginated = reports.slice(skip, skip + limitNum);
 
         const opportunityByProjectId = await this.loadOpportunitiesForReports(paginated);
-        const mapped = paginated.map((r) => this.mapReportListing(r, opportunityByProjectId));
+        const mapped = await this.mapReportListingsWithTeam(paginated, opportunityByProjectId);
         mapped.sort((a, b) => {
             const aMs = new Date(a.report_submitted_at ?? a.submitted_at ?? a.submission_date ?? 0).getTime();
             const bMs = new Date(b.report_submitted_at ?? b.submitted_at ?? b.submission_date ?? 0).getTime();
@@ -1353,25 +1554,58 @@ export class StudentReportsService {
 
         if (application) {
             const studentProfile = await this.usersRepository.findOne({ where: { id: studentId } });
+            const roster = await this.engagementService.getProjectTeamForReportDossier(id);
+            const isTeam = application.participationMode === 'team';
+            const canonicalLeadId = isTeam
+                ? await findCanonicalTeamLeadStudentId(this.participantRepository, id, {
+                      teamId: application.teamId,
+                      applicationId: application.applicationId,
+                  })
+                : null;
+            const leadProfile =
+                canonicalLeadId && canonicalLeadId !== studentId
+                    ? await this.usersRepository.findOne({ where: { id: canonicalLeadId } })
+                    : studentProfile;
+            const viewerIsLead = !isTeam || application.isTeamLead === true || studentId === canonicalLeadId;
+            const teamMembers = Array.isArray(roster)
+                ? roster.filter((m: { isTeamLead?: boolean; is_team_lead?: boolean }) => {
+                      const flagged = m?.isTeamLead === true || (m as { is_team_lead?: boolean })?.is_team_lead === true;
+                      return !flagged;
+                  })
+                : [];
             return {
                 success: true,
                 data: {
                     project_id: id,
                     opportunityId: id,
                     status: 'none',
+                    report_access: {
+                        participation_mode: isTeam ? 'team' : 'individual',
+                        is_team_lead: viewerIsLead,
+                        can_edit_report_body: viewerIsLead,
+                        can_submit_report: viewerIsLead,
+                        team_member_count: Math.max(isTeam ? teamMembers.length + 1 : 1, 1),
+                        team_lead: isTeam
+                            ? {
+                                  name: leadProfile?.name || '',
+                                  email: leadProfile?.email || '',
+                                  student_id: canonicalLeadId || studentId,
+                              }
+                            : null,
+                    },
                     section1: {
                         participation_type: application.participationMode || 'individual',
                         team_lead: {
-                            name: studentProfile?.name || '',
-                            fullName: studentProfile?.name || '',
-                            email: studentProfile?.email || '',
-                            mobile: studentProfile?.phone || '',
-                            cnic: studentProfile?.cnic || '',
-                            university: studentProfile?.university || '',
-                            program: studentProfile?.major || '',
-                            verified: true
+                            name: leadProfile?.name || '',
+                            fullName: leadProfile?.name || '',
+                            email: leadProfile?.email || '',
+                            mobile: leadProfile?.phone || '',
+                            cnic: leadProfile?.cnic || '',
+                            university: leadProfile?.university || '',
+                            program: leadProfile?.major || '',
+                            verified: true,
                         },
-                        team_members: await this.engagementService.getProjectTeamForReportDossier(id),
+                        team_members: teamMembers,
                         attendance_logs: [],
                         metrics: {
                             total_verified_hours: 0,
@@ -1381,10 +1615,10 @@ export class StudentReportsService {
                             weekly_continuity: 0,
                             eis_score: 0,
                             engagement_category: 'Introductory Engagement',
-                            hec_compliance: 'below'
-                        }
-                    }
-                }
+                            hec_compliance: 'below',
+                        },
+                    },
+                },
             };
         }
 
@@ -1394,9 +1628,59 @@ export class StudentReportsService {
         };
     }
 
+    private async buildReportAccessForViewer(viewerStudentId: string, report: StudentReport) {
+        const projectKey = (report.opportunityId || report.project_id || '').trim();
+        const roster =
+            this.looksLikeUuid(projectKey) ?
+                await this.engagementService.getProjectTeamForReportDossier(projectKey)
+            :   [];
+
+        const mine =
+            this.looksLikeUuid(projectKey) ?
+                await this.participantRepository.findOne({
+                    where: { studentId: viewerStudentId, projectId: projectKey },
+                })
+            :   null;
+
+        if (!mine || mine.participationMode !== 'team') {
+            return {
+                participation_mode: 'individual' as const,
+                is_team_lead: true,
+                can_edit_report_body: true,
+                can_submit_report: true,
+                team_member_count: 1,
+                team_lead: null,
+            };
+        }
+
+        const canonicalLeadId = await findCanonicalTeamLeadStudentId(this.participantRepository, projectKey, {
+            teamId: mine.teamId,
+            applicationId: mine.applicationId,
+        });
+        const isLead = canonicalLeadId ? viewerStudentId === canonicalLeadId : mine.isTeamLead === true;
+        const leadUser =
+            canonicalLeadId ?
+                await this.usersRepository.findOne({ where: { id: canonicalLeadId } })
+            :   report.student;
+
+        return {
+            participation_mode: 'team' as const,
+            is_team_lead: isLead,
+            can_edit_report_body: isLead,
+            can_submit_report: isLead,
+            team_member_count: Math.max(Array.isArray(roster) ? roster.length : 0, 1),
+            team_lead: {
+                name: leadUser?.name || '',
+                email: leadUser?.email || '',
+                student_id: canonicalLeadId || report.studentId,
+            },
+        };
+    }
+
     private async formatReportResponse(report: StudentReport, attendanceParticipantStudentId?: string) {
         const pid = report.opportunityId || report.project_id;
         const attendeeId = attendanceParticipantStudentId ?? report.studentId;
+        const reportAccess = await this.buildReportAccessForViewer(attendeeId, report);
         const attendanceLogs = await this.attendanceLogsRepository.find({
             where: {
                 participant: { studentId: attendeeId },
@@ -1423,6 +1707,7 @@ export class StudentReportsService {
                 report_id: report.id,
                 ...this.reportVerificationPayload(report),
                 is_editable: isEditable,
+                report_access: reportAccess,
                 feedback,
                 admin_feedback: report.admin_feedback,
                 student: {

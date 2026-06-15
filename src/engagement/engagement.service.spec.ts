@@ -953,18 +953,83 @@ describe('EngagementService', () => {
             );
         });
 
-        it('should throw error if session exceeds 12 hours', async () => {
+        it('should throw error if session exceeds 9 hours', async () => {
             const mockParticipation = { id: 'p1', studentId: 'u1', status: 'approved' };
             const dto = {
                 dateOfEngagement: '2023-10-01',
                 startTime: '08:00',
-                endTime: '21:00',
+                endTime: '18:00',
                 description: 'Desc',
             } as any;
 
             mockParticipationRepository.findOne.mockResolvedValue(mockParticipation);
 
-            await expect(service.addAttendanceLog('u1', 'p1', dto)).rejects.toThrow('Daily attendance cannot exceed 12 hours');
+            await expect(service.addAttendanceLog('u1', 'p1', dto)).rejects.toThrow('Daily attendance cannot exceed 9 hours');
+        });
+
+        it('should throw error if same-day total would exceed 9 hours', async () => {
+            const mockParticipation = {
+                id: 'p1',
+                studentId: 'u1',
+                status: 'approved',
+                attendanceLogs: [
+                    { dateOfEngagement: '2023-10-01', sessionHours: 6 },
+                ],
+            };
+            const dto = {
+                dateOfEngagement: '2023-10-01',
+                startTime: '14:00',
+                endTime: '18:00',
+                description: 'Desc',
+            } as any;
+
+            mockParticipationRepository.findOne.mockResolvedValue(mockParticipation);
+
+            await expect(service.addAttendanceLog('u1', 'p1', dto)).rejects.toThrow('Daily attendance cannot exceed 9 hours');
+        });
+
+        it('should allow a session that brings same-day total to exactly 9 hours', async () => {
+            const t = fx('attendance-daily-cap-ok');
+            const mockParticipation = {
+                id: t.id.participation,
+                studentId: t.id.u1,
+                projectId: t.id.project,
+                status: 'approved',
+                primaryFacultyEmail: t.email.faculty,
+                attendanceLogs: [
+                    { dateOfEngagement: '2023-10-01', sessionHours: 5 },
+                ],
+            };
+            const dto = {
+                dateOfEngagement: '2023-10-01',
+                startTime: '14:00',
+                endTime: '18:00',
+                description: 'Desc',
+                organizationName: 'Org',
+                activityType: 'Field Visit',
+            } as any;
+
+            mockParticipationRepository.findOne.mockResolvedValue(mockParticipation);
+            mockOpportunityRepository.findOne.mockResolvedValue({
+                id: t.id.project,
+                title: t.title,
+                creatorId: t.id.faculty,
+                organization: null,
+            });
+            mockUserRepository.findOne.mockResolvedValue({
+                id: t.id.faculty,
+                role: 'faculty',
+                name: t.name.faculty,
+            });
+            mockAttendanceLogRepository.create.mockReturnValue({
+                ...dto,
+                participantId: t.id.participation,
+                projectId: t.id.project,
+                sessionHours: 4,
+            });
+            mockAttendanceLogRepository.save.mockResolvedValue({ id: `log-${t.tag}`, ...dto });
+
+            await expect(service.addAttendanceLog(t.id.u1, t.id.participation, dto)).resolves.toBeDefined();
         });
 
         it('should throw error if participation is not approved', async () => {

@@ -3,6 +3,8 @@ import { IssueLogsService } from '../issue-logs/issue-logs.service';
 import {
     ATTENDANCE_DESCRIPTION_MAX_CHARS,
     ATTENDANCE_DESCRIPTION_MAX_WORDS,
+    MAX_DAILY_ATTENDANCE_HOURS,
+    dailyAttendanceCapMessage,
 } from './attendance-description.constants';
 import { S3Service } from '../common/s3.service';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -1095,9 +1097,10 @@ export class EngagementService {
             }
         }
 
-        // Rule 2: Time Validation (End > Start and Max 12h)
+        // Rule 2: Time Validation (End > Start and max daily cap per session + same-day total)
         const { startTime, endTime } = dto;
         const sessionHours = this.calculateSessionHours(startTime, endTime);
+        const dailyCapMessage = dailyAttendanceCapMessage();
         if (sessionHours <= 0) {
             this.recordAttendanceFailure(
                 'invalid_session_times',
@@ -1109,16 +1112,46 @@ export class EngagementService {
             );
             throw new BadRequestException('End time must be after start time');
         }
-        if (sessionHours > 12) {
+        if (sessionHours > MAX_DAILY_ATTENDANCE_HOURS) {
             this.recordAttendanceFailure(
-                'session_exceeds_twelve_hours',
-                'Daily attendance cannot exceed 12 hours',
+                'session_exceeds_daily_cap',
+                dailyCapMessage,
                 400,
                 studentId,
                 participantId,
-                { hasEvidence, participationId: participation.id, projectId: participation.projectId, sessionHours },
+                {
+                    hasEvidence,
+                    participationId: participation.id,
+                    projectId: participation.projectId,
+                    sessionHours,
+                    maxDailyHours: MAX_DAILY_ATTENDANCE_HOURS,
+                },
             );
-            throw new BadRequestException('Daily attendance cannot exceed 12 hours');
+            throw new BadRequestException(dailyCapMessage);
+        }
+
+        const engagementDateKey = dto.dateOfEngagement.split('T')[0];
+        const existingDailyHours = (participation.attendanceLogs ?? [])
+            .filter((log) => String(log.dateOfEngagement).split('T')[0] === engagementDateKey)
+            .reduce((sum, log) => sum + (Number(log.sessionHours) || 0), 0);
+        if (existingDailyHours + sessionHours > MAX_DAILY_ATTENDANCE_HOURS) {
+            this.recordAttendanceFailure(
+                'daily_total_exceeds_cap',
+                dailyCapMessage,
+                400,
+                studentId,
+                participantId,
+                {
+                    hasEvidence,
+                    participationId: participation.id,
+                    projectId: participation.projectId,
+                    sessionHours,
+                    existingDailyHours,
+                    maxDailyHours: MAX_DAILY_ATTENDANCE_HOURS,
+                    dateOfEngagement: engagementDateKey,
+                },
+            );
+            throw new BadRequestException(dailyCapMessage);
         }
 
         // Rule 3: Word count (chars capped by DTO @MaxLength + DB column)

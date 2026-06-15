@@ -1,4 +1,6 @@
+import { MAX_DAILY_ATTENDANCE_HOURS } from '../engagement/attendance-description.constants';
 import { collectReportEvidenceFiles } from './collect-report-evidence.util';
+import { getReportScoringConfig } from './cii-section-weights.constants';
 import { StudentReport } from './entities/student-report.entity';
 
 export const CIEL_PK_AI_EVALUATION_SCHEMA_VERSION = 'ciel_pk_ai_evaluation_v1.0';
@@ -237,6 +239,7 @@ function buildAttendanceSummary(section1: UnknownRecord, requiredHours: number):
         total_verified_team_hours: verifiedHours,
         required_hours_met: studentsBelowRequiredHours.length === 0,
         minimum_required_hours_per_student: requiredHours,
+        max_daily_attendance_hours_per_student: MAX_DAILY_ATTENDANCE_HOURS,
         students_below_required_hours: studentsBelowRequiredHours,
         verified_session_count: pickNumber(asRecord(section1.metrics).verified_session_count) ?? logs.length,
     };
@@ -530,6 +533,7 @@ function buildSystemValidation(
         legacy_score_removed: true,
         ready_for_ai_evaluation: requiredSectionsPresent && warnings.length === 0,
         validation_warnings: warnings,
+        scoring_rubric: getReportScoringConfig(),
     };
 }
 

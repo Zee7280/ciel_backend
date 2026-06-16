@@ -4,7 +4,7 @@ import { getReportScoringConfig } from './cii-section-weights.constants';
 import { StudentReport } from './entities/student-report.entity';
 
 export const CIEL_PK_AI_EVALUATION_SCHEMA_VERSION = 'ciel_pk_ai_evaluation_v1.0';
-export const CIEL_PK_MASTER_PROMPT_VERSION = 'CIEL_PK_AI_Evaluator_Prompt_v8_1';
+export const CIEL_PK_MASTER_PROMPT_VERSION = 'CIEL_PK_AI_Evaluator_Prompt_v8_2';
 
 type UnknownRecord = Record<string, unknown>;
 

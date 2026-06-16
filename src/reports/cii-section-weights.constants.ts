@@ -47,6 +47,6 @@ export function getReportScoringConfig() {
         cii_section_max_total: CII_SECTION_MAX_TOTAL,
         max_daily_attendance_hours_per_student: MAX_DAILY_ATTENDANCE_HOURS,
         daily_attendance_cap_message: dailyAttendanceCapMessage(),
-        ai_evaluator_framework_version: 'v8.1',
+        ai_evaluator_framework_version: 'v8.2',
     };
 }

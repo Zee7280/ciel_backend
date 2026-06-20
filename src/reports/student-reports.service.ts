@@ -55,6 +55,69 @@ export class StudentReportsService {
         });
     }
 
+    private parseOptionalInteger(value: unknown): number | null {
+        if (typeof value === 'number' && Number.isFinite(value)) return value;
+        if (typeof value === 'string') {
+            const trimmed = value.trim();
+            if (!trimmed) return null;
+            const parsed = Number(trimmed);
+            return Number.isFinite(parsed) ? parsed : null;
+        }
+        return null;
+    }
+
+    private pickOptionalString(value: unknown): string | null {
+        if (value === null || value === undefined) return null;
+        const trimmed = String(value).trim();
+        return trimmed || null;
+    }
+
+    private formatBaselineEvidenceSource(section2?: StudentReport['section2']): string {
+        if (!section2) return 'Unknown';
+        if (section2.baseline_evidence === 'Other') {
+            return section2.baseline_evidence_other?.trim() || 'Other Sources';
+        }
+
+        const raw = section2.baseline_evidence as string | string[] | undefined;
+        if (Array.isArray(raw)) {
+            return raw.map((entry) => String(entry).trim()).filter(Boolean).join(', ') || 'Unknown';
+        }
+
+        return raw?.trim() || 'Unknown';
+    }
+
+    private syncSection3Metadata(report: StudentReport, section3: any): void {
+        const primarySdg = section3?.primary_sdg;
+        const goalNumber = this.parseOptionalInteger(primarySdg?.goal_number);
+        const targetCode = this.pickOptionalString(primarySdg?.target_code ?? primarySdg?.target_id);
+        const indicatorCode = this.pickOptionalString(primarySdg?.indicator_code ?? primarySdg?.indicator_id);
+
+        if (section3) {
+            report.section3 = {
+                ...section3,
+                primary_sdg: primarySdg
+                    ? {
+                          ...primarySdg,
+                          goal_number: goalNumber,
+                          target_code: targetCode ?? primarySdg.target_code ?? primarySdg.target_id ?? '',
+                          indicator_code: indicatorCode ?? primarySdg.indicator_code ?? primarySdg.indicator_id ?? '',
+                      }
+                    : section3.primary_sdg,
+            };
+        } else {
+            report.section3 = section3;
+        }
+
+        report.primary_sdg_goal = goalNumber;
+        report.primary_sdg_target = targetCode;
+        report.primary_sdg_indicator = indicatorCode;
+        report.contribution_intent_statement = section3?.contribution_intent_statement;
+
+        if (report.contribution_intent_statement) {
+            report.section3.summary_text = this.generateSDGStage1Summary(report);
+        }
+    }
+
     private getPublicReportApprovalContext(report: StudentReport) {
         const partners = Array.isArray(report.section7?.partners) ? report.section7.partners : [];
         const hasSectionPartner =
@@ -1173,16 +1236,7 @@ export class StudentReportsService {
         }
 
         // Sync Section 3 (SDG Mapping)
-        report.section3 = parsedData.section3;
-        report.primary_sdg_goal = parsedData.section3?.primary_sdg?.goal_number;
-        report.primary_sdg_target = parsedData.section3?.primary_sdg?.target_code;
-        report.primary_sdg_indicator = parsedData.section3?.primary_sdg?.indicator_code;
-        report.contribution_intent_statement = parsedData.section3?.contribution_intent_statement;
-
-        // Regenerate Stage 1 Summary if Section 3 is present
-        if (report.contribution_intent_statement) {
-            report.section3.summary_text = this.generateSDGStage1Summary(report);
-        }
+        this.syncSection3Metadata(report, parsedData.section3);
 
         // Sync Summary Fields (Section 2)
         // Re-generate in backend to ensure consistency
@@ -1192,7 +1246,7 @@ export class StudentReportsService {
 
         report.problem_category = this.classifyProblem(report.section2?.problem_statement);
         report.primary_beneficiary = this.detectBeneficiary(report.section2?.problem_statement);
-        report.baseline_evidence_source = (report.section2?.baseline_evidence === 'Other' ? report.section2.baseline_evidence_other : report.section2?.baseline_evidence) || 'Unknown';
+        report.baseline_evidence_source = this.formatBaselineEvidenceSource(report.section2);
         report.discipline_alignment = report.section2?.discipline || 'Not specified';
 
         report.summary_text_generated = this.generateSection2Summary(report, opportunityForSummary || undefined);
@@ -1352,6 +1406,10 @@ export class StudentReportsService {
         // Handle Faculty Assignment if faculty email is provided in Section 1
         if (report.section1?.faculty_supervisor_email) {
             await this.handleFacultyAssignment(report, report.section1.faculty_supervisor_email);
+        }
+
+        if (parsedData.section3) {
+            this.syncSection3Metadata(report, parsedData.section3);
         }
 
         await this.syncReportProjectKeys(report);
@@ -2042,9 +2100,7 @@ export class StudentReportsService {
 
         const location = `${district}, ${province}, ${country}`;
 
-        const evidence = report.section2?.baseline_evidence === 'Other'
-            ? (report.section2?.baseline_evidence_other || 'Other Sources')
-            : report.section2?.baseline_evidence;
+        const evidence = this.formatBaselineEvidenceSource(report.section2);
 
         const discipline = report.section2?.discipline || "Academic Alignment";
 

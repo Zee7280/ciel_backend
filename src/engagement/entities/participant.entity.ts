@@ -136,6 +136,10 @@ export class Participation {
     @Column({ default: false })
     attendanceLocked: boolean;
 
+    /** CIEL admin override: allow attendance logging even when identity/verification gates are incomplete. */
+    @Column({ name: 'admin_attendance_editable', default: false })
+    adminAttendanceEditable: boolean;
+
     @Column({ type: 'timestamp', nullable: true })
     attendanceVerificationRequestedAt: Date | null;
 

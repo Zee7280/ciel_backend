@@ -156,6 +156,80 @@ describe('StudentReportsService', () => {
         expect(mockMailService.sendAdminStudentReportSubmitted).toHaveBeenCalledTimes(1);
     });
 
+    it('stores null primary_sdg_goal when section3 goal_number is an empty string', async () => {
+        mockStudentReportsRepository.findOne.mockResolvedValue({
+            id: 'report-1',
+            studentId: 'student-1',
+            opportunityId: 'opp-1',
+            status: 'draft',
+            section3: null,
+        });
+
+        await service.createReport(
+            'student-1',
+            {
+                opportunityId: 'opp-1',
+                section2: { problem_statement: 'test', baseline_evidence: 'Survey', discipline: 'CS' },
+                section3: {
+                    primary_sdg: { target_id: '', goal_number: '', indicator_id: '' },
+                    contribution_intent_statement: 'Contribution logic statement',
+                },
+            },
+            [],
+            false,
+        );
+
+        expect(mockStudentReportsRepository.save).toHaveBeenCalledWith(
+            expect.objectContaining({
+                primary_sdg_goal: null,
+                primary_sdg_target: null,
+                primary_sdg_indicator: null,
+                section3: expect.objectContaining({
+                    primary_sdg: expect.objectContaining({
+                        goal_number: null,
+                    }),
+                }),
+            }),
+        );
+    });
+
+    it('submits successfully with array baseline_evidence and blank SDG fields (production-like payload)', async () => {
+        mockStudentReportsRepository.findOne.mockResolvedValue({
+            id: '84c78cd8-1614-47a0-8db4-1e201266010b',
+            studentId: 'student-1',
+            opportunityId: 'opp-1',
+            status: 'draft',
+        });
+
+        const result = await service.createReport(
+            'student-1',
+            {
+                opportunityId: 'opp-1',
+                section2: {
+                    problem_statement: 'Mental health awareness among students',
+                    baseline_evidence: ['Survey Data', '__o_0', '__o_1', '__o_2'],
+                    baseline_evidence_other: 'Clinical psychologist consultation',
+                    discipline: 'Education',
+                },
+                section3: {
+                    primary_sdg: { target_id: '', goal_number: '', indicator_id: '' },
+                    contribution_intent_statement: 'Contribution logic for SDG 3',
+                },
+            },
+            [],
+            true,
+        );
+
+        expect(result.message).toBe('Report submitted successfully.');
+        expect(mockStudentReportsRepository.save).toHaveBeenCalledWith(
+            expect.objectContaining({
+                status: 'payment_pending',
+                primary_sdg_goal: null,
+                baseline_evidence_source: 'Survey Data, __o_0, __o_1, __o_2',
+            }),
+        );
+    });
+
     const SAMPLE_OPP_UUID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 
     const TEAM_ONLY_GUARD_MESSAGE =

@@ -269,4 +269,49 @@ describe('AdminService getMasterAnalytics', () => {
         expect(result.data.system_growth_rate_percent).toBeNull();
         expect(result.data.growth_meta.basis).toBe('filtered_participation_cohort');
     });
+
+    it('enables admin attendance override for a team member participation', async () => {
+        const participation = {
+            id: 'part-1',
+            projectId: 'proj-1',
+            studentId: 'stu-1',
+            fullName: 'Team Member',
+            email: 'member@test.com',
+            participationMode: 'team',
+            isTeamLead: false,
+            teamId: 'team-1',
+            attendanceLocked: true,
+            attendanceVerificationRequested: true,
+            adminAttendanceEditable: false,
+            student: {
+                profile_verified: false,
+                identity_verified: false,
+            },
+        };
+
+        const findOne = jest.fn().mockResolvedValue(participation);
+        const save = jest.fn().mockImplementation(async (row) => row);
+        const find = jest.fn().mockResolvedValue([participation]);
+
+        const service = makeAdminServiceForTests({
+            participationRepository: {
+                findOne,
+                save,
+                find,
+            },
+        });
+
+        const result = await service.setParticipationAttendanceEditable('part-1', true);
+
+        expect(save).toHaveBeenCalledWith(
+            expect.objectContaining({
+                adminAttendanceEditable: true,
+                attendanceLocked: false,
+                attendanceVerificationRequested: false,
+            }),
+        );
+        expect(result.data.admin_attendance_editable).toBe(true);
+        expect(result.data.attendance_logging_unlock_status.unlocked).toBe(true);
+        expect(result.data.attendance_logging_unlock_status.admin_override).toBe(true);
+    });
 });

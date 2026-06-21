@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from '../users/entities/user.entity';
@@ -23,6 +23,10 @@ import {
     isReportPartnerStepSatisfied,
     REPORT_PARTNER_APPROVAL_SETTING_KEY,
 } from '../reports/report-partner-approval.util';
+import {
+    isTeamConfigurationComplete,
+    resolveAttendanceUnlockStatus,
+} from '../engagement/attendance-unlock.util';
 
 /** Canonical Pakistan regions for stakeholder "participation by region" (sync spellings with ciel_frontend/src/utils/pakistanRegions.ts). */
 const STAKEHOLDER_REGION_CANONICAL = [
@@ -1020,6 +1024,130 @@ export class AdminService {
         return matchByOppId;
     }
 
+    private groupTeamMembersForParticipation(
+        projectEnrollments: Participation[],
+        anchor: Participation,
+    ): Participation[] {
+        if (anchor.participationMode !== 'team') return [anchor];
+        if (anchor.teamId) {
+            return projectEnrollments.filter((row) => row.teamId === anchor.teamId);
+        }
+        if (anchor.applicationId) {
+            return projectEnrollments.filter((row) => row.applicationId === anchor.applicationId);
+        }
+        return projectEnrollments.filter((row) => row.participationMode === 'team');
+    }
+
+    private formatAdminEnrollmentSummary(
+        participation: Participation,
+        projectEnrollments: Participation[],
+    ) {
+        const teamMembers = this.groupTeamMembersForParticipation(projectEnrollments, participation);
+        const teamConfigured = isTeamConfigurationComplete(teamMembers);
+        const attendanceUnlock = resolveAttendanceUnlockStatus(
+            participation.student,
+            participation,
+            teamConfigured,
+        );
+
+        return {
+            participation_id: participation.id,
+            project_id: participation.projectId,
+            student_id: participation.studentId,
+            full_name: participation.fullName,
+            email: participation.email,
+            role: this.deriveParticipationStudentRole(participation),
+            participation_mode: participation.participationMode,
+            is_team_lead: participation.isTeamLead === true,
+            attendance_locked: participation.attendanceLocked === true,
+            attendance_verification_requested: participation.attendanceVerificationRequested === true,
+            admin_attendance_editable: participation.adminAttendanceEditable === true,
+            attendance_logging_unlock_status: attendanceUnlock,
+        };
+    }
+
+    private async loadOccupiedEnrollmentsByProject(
+        projectIds: string[],
+    ): Promise<Map<string, Participation[]>> {
+        const grouped = new Map<string, Participation[]>();
+        if (!projectIds.length) return grouped;
+
+        const enrollments = await this.participationRepository.find({
+            where: {
+                projectId: In(projectIds),
+                status: In(OCCUPIED_SEAT_STATUSES),
+            },
+            relations: ['student'],
+            order: { isTeamLead: 'DESC', fullName: 'ASC' },
+        });
+
+        for (const row of enrollments) {
+            const bucket = grouped.get(row.projectId) ?? [];
+            bucket.push(row);
+            grouped.set(row.projectId, bucket);
+        }
+        return grouped;
+    }
+
+    async getProjectEnrollments(opportunityId: string) {
+        const opportunity = await this.opportunityRepository.findOne({ where: { id: opportunityId } });
+        if (!opportunity) {
+            throw new NotFoundException('Project not found');
+        }
+
+        const enrollments = await this.participationRepository.find({
+            where: {
+                projectId: opportunityId,
+                status: In(OCCUPIED_SEAT_STATUSES),
+            },
+            relations: ['student'],
+            order: { isTeamLead: 'DESC', fullName: 'ASC' },
+        });
+
+        return {
+            success: true,
+            data: {
+                project_id: opportunityId,
+                project_title: opportunity.title,
+                enrollments: enrollments.map((row) => this.formatAdminEnrollmentSummary(row, enrollments)),
+            },
+        };
+    }
+
+    async setParticipationAttendanceEditable(participationId: string, editable: boolean) {
+        const participation = await this.participationRepository.findOne({
+            where: { id: participationId },
+            relations: ['student'],
+        });
+        if (!participation) {
+            throw new NotFoundException('Participation not found');
+        }
+
+        participation.adminAttendanceEditable = editable;
+        if (editable) {
+            participation.attendanceLocked = false;
+            participation.attendanceVerificationRequested = false;
+        }
+        await this.participationRepository.save(participation);
+
+        const projectEnrollments = await this.participationRepository.find({
+            where: {
+                projectId: participation.projectId,
+                status: In(OCCUPIED_SEAT_STATUSES),
+            },
+            relations: ['student'],
+            order: { isTeamLead: 'DESC', fullName: 'ASC' },
+        });
+
+        return {
+            success: true,
+            message: editable
+                ? 'Attendance editing enabled for this team member'
+                : 'Admin attendance override removed',
+            data: this.formatAdminEnrollmentSummary(participation, projectEnrollments),
+        };
+    }
+
     async getProjects(studentEmailRaw?: string) {
         const normalizedEmail = this.normalizeStudentEmailFilter(studentEmailRaw ?? undefined);
 
@@ -1039,6 +1167,10 @@ export class AdminService {
             const allowIds = matchByOppId;
             opportunities = opportunities.filter((o) => allowIds.has(o.id));
         }
+
+        const enrollmentsByProject = await this.loadOccupiedEnrollmentsByProject(
+            opportunities.map((opp) => opp.id),
+        );
 
         const projects = await Promise.all(
             opportunities.map(async (opp) => {
@@ -1098,6 +1230,9 @@ export class AdminService {
                     timeline: opp.timeline,
                     participation_scope: opp.participation_scope,
                     creator,
+                    team_enrollments: (enrollmentsByProject.get(opp.id) ?? []).map((row) =>
+                        this.formatAdminEnrollmentSummary(row, enrollmentsByProject.get(opp.id) ?? []),
+                    ),
                 };
                 if (normalizedEmail) {
                     const meta = matchByOppId.get(opp.id);

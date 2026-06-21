@@ -28,6 +28,7 @@ import { MasterAnalyticsQueryDto } from './dto/master-analytics-query.dto';
 import { OpportunitiesService } from '../opportunities/opportunities.service';
 import { StudentReportsService } from '../reports/student-reports.service';
 import { AdminMergeReportsDto } from '../reports/dto/admin-merge-reports.dto';
+import { SetAttendanceEditableDto } from './dto/set-attendance-editable.dto';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
 import { IssueLogsService } from '../issue-logs/issue-logs.service';
 import type { IssueLogListQuery } from '../issue-logs/issue-logs.service';
@@ -144,6 +145,19 @@ export class AdminController {
     @Get('projects')
     getProjects(@Query('student_email') studentEmail?: string) {
         return this.adminService.getProjects(studentEmail);
+    }
+
+    @Get('projects/:opportunityId/enrollments')
+    getProjectEnrollments(@Param('opportunityId') opportunityId: string) {
+        return this.adminService.getProjectEnrollments(opportunityId);
+    }
+
+    @Patch('participations/:participationId/attendance-editable')
+    setParticipationAttendanceEditable(
+        @Param('participationId') participationId: string,
+        @Body() body: SetAttendanceEditableDto,
+    ) {
+        return this.adminService.setParticipationAttendanceEditable(participationId, body.editable);
     }
 
     @Get('analytics/impact-stakeholders')

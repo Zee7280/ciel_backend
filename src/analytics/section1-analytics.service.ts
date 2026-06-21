@@ -11,6 +11,7 @@ import { UserRole } from '../users/enums/user-role.enum';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { Participation } from '../engagement/entities/participant.entity';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
+import { resolveAttendanceUnlockStatus } from '../engagement/attendance-unlock.util';
 import { StudentReport } from '../reports/entities/student-report.entity';
 import { Organization } from '../organizations/entities/organization.entity';
 import { EmailOtp } from '../auth/entities/email-otp.entity';
@@ -916,19 +917,7 @@ export class Section1AnalyticsService {
         participation: Participation | undefined,
         teamStats: ReturnType<Section1AnalyticsService['computeTeamStats']>,
     ) {
-        const identityOk = this.resolveIdentityStatus(user, participation) === 'verified';
-        const academicOk = (this.computeAcademicCompletion(participation, user)?.percent ?? 0) >= 80;
-        const teamOk = participation?.participationMode !== 'team' || teamStats.configured;
-        const unlocked = identityOk && academicOk && teamOk && participation?.attendanceLocked !== true;
-        return {
-            unlocked,
-            status: unlocked ? 'Unlocked' : 'Locked',
-            missing: [
-                !identityOk ? 'identity_verification' : null,
-                !academicOk ? 'academic_info' : null,
-                !teamOk ? 'team_setup' : null,
-            ].filter(Boolean),
-        };
+        return resolveAttendanceUnlockStatus(user, participation, teamStats.configured);
     }
 
     private verifyLinkButtonStatus(

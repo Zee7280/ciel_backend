@@ -94,13 +94,13 @@ export class StudentReport {
     discipline_alignment: string;
 
     // Section 3: SDG Mapping Metadata
-    @Column({ nullable: true })
+    @Column({ type: 'int', nullable: true })
     primary_sdg_goal: number | null;
 
-    @Column({ nullable: true })
+    @Column({ type: 'varchar', nullable: true })
     primary_sdg_target: string | null;
 
-    @Column({ nullable: true })
+    @Column({ type: 'varchar', nullable: true })
     primary_sdg_indicator: string | null;
 
     @Column({ type: 'text', nullable: true })

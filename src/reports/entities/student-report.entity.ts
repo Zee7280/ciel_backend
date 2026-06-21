@@ -95,13 +95,13 @@ export class StudentReport {
 
     // Section 3: SDG Mapping Metadata
     @Column({ nullable: true })
-    primary_sdg_goal: number;
+    primary_sdg_goal: number | null;
 
     @Column({ nullable: true })
-    primary_sdg_target: string;
+    primary_sdg_target: string | null;
 
     @Column({ nullable: true })
-    primary_sdg_indicator: string;
+    primary_sdg_indicator: string | null;
 
     @Column({ type: 'text', nullable: true })
     contribution_intent_statement: string;

@@ -12,6 +12,7 @@ import { EmailOtp } from './entities/email-otp.entity';
 import { OtpService } from './otp.service';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { EngagementModule } from '../engagement/engagement.module';
+import { OrganizationMembershipModule } from '../organization-membership/organization-membership.module';
 
 @Module({
     imports: [
@@ -19,6 +20,7 @@ import { EngagementModule } from '../engagement/engagement.module';
         UsersModule,
         OrganizationsModule,
         EngagementModule,
+        OrganizationMembershipModule,
         PassportModule,
         JwtModule.registerAsync({
             imports: [ConfigModule],

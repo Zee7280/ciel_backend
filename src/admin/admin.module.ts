@@ -19,6 +19,7 @@ import { OpportunityApplication } from '../opportunities/entities/opportunity-ap
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import { AdminProjectEvidenceService } from './admin-project-evidence.service';
 import { ReportPartnerApprovalModule } from '../reports/report-partner-approval.module';
+import { OrganizationMembershipModule } from '../organization-membership/organization-membership.module';
 
 @Module({
     imports: [
@@ -26,6 +27,7 @@ import { ReportPartnerApprovalModule } from '../reports/report-partner-approval.
         OpportunitiesModule,
         StudentsModule,
         ReportPartnerApprovalModule,
+        OrganizationMembershipModule,
         IssueLogsModule,
         FacultyUniversityScopeModule,
         AuditLogsModule,

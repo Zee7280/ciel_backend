@@ -40,6 +40,13 @@ const makeAdminServiceForTests = (overrides: Record<string, unknown> = {}) => {
             ),
             isEnabledCached: jest.fn().mockReturnValue(true),
         },
+        organizationMembershipService: {
+            releasePendingPartnerMembershipAccounts: jest.fn().mockResolvedValue(0),
+        },
+        partnerMembershipSettings: {
+            invalidateCache: jest.fn(),
+            refreshCache: jest.fn().mockResolvedValue(false),
+        },
         ...overrides,
     };
 
@@ -56,6 +63,8 @@ const makeAdminServiceForTests = (overrides: Record<string, unknown> = {}) => {
         repositories.studentsService as any,
         repositories.opportunityApplicationRepository as any,
         repositories.reportPartnerApprovalSettings as any,
+        repositories.organizationMembershipService as any,
+        repositories.partnerMembershipSettings as any,
     );
 };
 

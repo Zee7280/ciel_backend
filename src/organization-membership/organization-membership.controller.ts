@@ -26,7 +26,8 @@ export class OrganizationMembershipController {
     @Get('fee')
     async getMyFee(@Request() req: any) {
         const role = req.user.role as UserRole;
-        if (role !== UserRole.UNIVERSITY && role !== UserRole.CORPORATE) {
+        const applies = await this.membershipService.roleRequiresMembershipPayment(role);
+        if (!applies) {
             return {
                 success: true,
                 data: { applies: false, amount_pkr: null },

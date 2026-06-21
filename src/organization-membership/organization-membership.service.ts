@@ -11,9 +11,11 @@ import { User } from '../users/entities/user.entity';
 import { Setting } from '../settings/entities/setting.entity';
 import { UserRole } from '../users/enums/user-role.enum';
 import { MEMBERSHIP_FEE_DEFAULT_PKR } from './membership-fee.defaults';
+import { PartnerMembershipSettingsService } from './partner-membership-settings.service';
 
 const SETTING_KEY_UNI = 'MEMBERSHIP_FEE_UNIVERSITY_PKR';
 const SETTING_KEY_CORP = 'MEMBERSHIP_FEE_CORPORATE_PKR';
+const SETTING_KEY_PARTNER = 'MEMBERSHIP_FEE_PARTNER_PKR';
 
 export type MembershipFeeSubmissionUi = 'none' | 'pending_review' | 'approved' | 'rejected';
 
@@ -72,15 +74,50 @@ export class OrganizationMembershipService {
         private readonly userRepo: Repository<User>,
         @InjectRepository(Setting)
         private readonly settingRepo: Repository<Setting>,
+        private readonly partnerMembershipSettings: PartnerMembershipSettingsService,
     ) { }
+
+    async roleRequiresMembershipPayment(role: UserRole): Promise<boolean> {
+        if (role === UserRole.UNIVERSITY || role === UserRole.CORPORATE) {
+            return true;
+        }
+        if (role === UserRole.NGO) {
+            return this.partnerMembershipSettings.isPartnerMembershipRequired();
+        }
+        return false;
+    }
+
+    roleRequiresMembershipPaymentSync(role: UserRole): boolean {
+        if (role === UserRole.UNIVERSITY || role === UserRole.CORPORATE) {
+            return true;
+        }
+        if (role === UserRole.NGO) {
+            return this.partnerMembershipSettings.isPartnerMembershipRequiredCached();
+        }
+        return false;
+    }
+
+    async releasePendingPartnerMembershipAccounts(): Promise<number> {
+        const result = await this.userRepo.update(
+            { role: UserRole.NGO, status: 'pending_membership_payment' },
+            { status: 'active' },
+        );
+        return result.affected ?? 0;
+    }
 
     async getExpectedFeePkr(role: UserRole): Promise<number> {
         const key =
-            role === UserRole.UNIVERSITY ? SETTING_KEY_UNI : SETTING_KEY_CORP;
+            role === UserRole.UNIVERSITY
+                ? SETTING_KEY_UNI
+                : role === UserRole.CORPORATE
+                  ? SETTING_KEY_CORP
+                  : SETTING_KEY_PARTNER;
         const envFallback =
             role === UserRole.UNIVERSITY
                 ? process.env.MEMBERSHIP_FEE_UNIVERSITY_PKR
-                : process.env.MEMBERSHIP_FEE_CORPORATE_PKR;
+                : role === UserRole.CORPORATE
+                  ? process.env.MEMBERSHIP_FEE_CORPORATE_PKR
+                  : process.env.MEMBERSHIP_FEE_PARTNER_PKR;
         const row = await this.settingRepo.findOne({ where: { key } });
         const raw = row?.value ?? envFallback ?? String(MEMBERSHIP_FEE_DEFAULT_PKR);
         const n = parseInt(String(raw).replace(/[^\d]/g, ''), 10);
@@ -92,7 +129,7 @@ export class OrganizationMembershipService {
         membership_fee_submission_status: MembershipFeeSubmissionUi | null;
         membership_fee_amount_pkr: number | null;
     }> {
-        if (user.role !== UserRole.UNIVERSITY && user.role !== UserRole.CORPORATE) {
+        if (!(await this.roleRequiresMembershipPayment(user.role))) {
             return {
                 requires_membership_payment: false,
                 membership_fee_submission_status: null,
@@ -179,8 +216,8 @@ export class OrganizationMembershipService {
         if (!user) {
             throw new NotFoundException('User not found');
         }
-        if (user.role !== UserRole.UNIVERSITY && user.role !== UserRole.CORPORATE) {
-            throw new BadRequestException('Membership fee applies only to university and corporate accounts');
+        if (!(await this.roleRequiresMembershipPayment(user.role))) {
+            throw new BadRequestException('Membership fee does not apply to this account');
         }
         if (user.status !== 'pending_membership_payment') {
             throw new BadRequestException('No membership payment is required for this account');

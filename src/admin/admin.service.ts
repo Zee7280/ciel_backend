@@ -23,6 +23,9 @@ import {
     isReportPartnerStepSatisfied,
     REPORT_PARTNER_APPROVAL_SETTING_KEY,
 } from '../reports/report-partner-approval.util';
+import { OrganizationMembershipService } from '../organization-membership/organization-membership.service';
+import { PartnerMembershipSettingsService } from '../organization-membership/partner-membership-settings.service';
+import { PARTNER_MEMBERSHIP_REQUIRED_KEY } from '../organization-membership/partner-membership.util';
 import {
     isTeamConfigurationComplete,
     resolveAttendanceUnlockStatus,
@@ -201,6 +204,8 @@ export class AdminService {
         @InjectRepository(OpportunityApplication)
         private opportunityApplicationRepository: Repository<OpportunityApplication>,
         private readonly reportPartnerApprovalSettings: ReportPartnerApprovalSettingsService,
+        private readonly organizationMembershipService: OrganizationMembershipService,
+        private readonly partnerMembershipSettings: PartnerMembershipSettingsService,
     ) { }
 
     async getSettings() {
@@ -222,6 +227,13 @@ export class AdminService {
         if (key === REPORT_PARTNER_APPROVAL_SETTING_KEY) {
             this.reportPartnerApprovalSettings.invalidateCache();
             await this.reportPartnerApprovalSettings.refreshCache();
+        }
+        if (key === PARTNER_MEMBERSHIP_REQUIRED_KEY) {
+            this.partnerMembershipSettings.invalidateCache();
+            const enabled = await this.partnerMembershipSettings.refreshCache();
+            if (!enabled) {
+                await this.organizationMembershipService.releasePendingPartnerMembershipAccounts();
+            }
         }
         return {
             success: true,

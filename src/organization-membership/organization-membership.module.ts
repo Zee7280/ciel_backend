@@ -7,6 +7,7 @@ import { OrganizationMembershipService } from './organization-membership.service
 import { OrganizationMembershipController } from './organization-membership.controller';
 import { AdminOrganizationMembershipController } from './admin-organization-membership.controller';
 import { MembershipActiveGuard } from './membership-active.guard';
+import { PartnerMembershipSettingsService } from './partner-membership-settings.service';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 
 @Module({
@@ -15,7 +16,7 @@ import { AuditLogsModule } from '../audit-logs/audit-logs.module';
         AuditLogsModule,
     ],
     controllers: [OrganizationMembershipController, AdminOrganizationMembershipController],
-    providers: [OrganizationMembershipService, MembershipActiveGuard],
-    exports: [OrganizationMembershipService, MembershipActiveGuard],
+    providers: [OrganizationMembershipService, MembershipActiveGuard, PartnerMembershipSettingsService],
+    exports: [OrganizationMembershipService, MembershipActiveGuard, PartnerMembershipSettingsService],
 })
 export class OrganizationMembershipModule { }

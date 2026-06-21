@@ -16,6 +16,7 @@ import { User } from '../users/entities/user.entity';
 import { UserRole } from '../users/enums/user-role.enum';
 import { PAKISTANI_UNIVERSITIES_SET } from './constants/pakistani-universities';
 import { EngagementService } from '../engagement/engagement.service';
+import { OrganizationMembershipService } from '../organization-membership/organization-membership.service';
 
 @Injectable()
 export class AuthService {
@@ -26,6 +27,7 @@ export class AuthService {
         private mailService: MailService,
         private otpService: OtpService,
         private engagementService: EngagementService,
+        private organizationMembershipService: OrganizationMembershipService,
         @InjectRepository(Opportunity)
         private opportunitiesRepository: Repository<Opportunity>,
     ) { }
@@ -132,7 +134,7 @@ export class AuthService {
 
             const needsMembershipFee =
                 !!organization &&
-                (userData.role === UserRole.UNIVERSITY || userData.role === UserRole.CORPORATE);
+                (await this.organizationMembershipService.roleRequiresMembershipPayment(userData.role));
 
             const user = await this.usersService.create({
                 ...userData,

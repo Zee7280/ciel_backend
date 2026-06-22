@@ -273,7 +273,7 @@ describe('EngagementService', () => {
             mockAttendanceLogRepository.createQueryBuilder.mockReset();
         });
 
-        it.skip('hydrates missing participant.teamId / team_id from roster parity before returning logs', async () => {
+        it('hydrates missing participant.teamId / team_id from roster parity before returning logs', async () => {
             const t = fx('pending-roster-hydrate');
             mockUserRepository.findOne.mockResolvedValue({
                 id: t.id.partnerActor,

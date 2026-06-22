@@ -1471,7 +1471,83 @@ export class EngagementService {
         }
 
         const logs = await qb.orderBy('log.createdAt', 'DESC').getMany();
+        if (scopedProjectId) {
+            await this.hydratePendingAttendanceParticipantTeamIds(logs, scopedProjectId);
+        }
         return this.formatPendingAttendanceResponse(logs, scopedProjectId);
+    }
+
+    /**
+     * Partner team filters key off `participant.teamId`. Legacy rows often omit it on the
+     * joined participant even though roster `/team` has the cohort — hydrate from roster parity.
+     */
+    private async hydratePendingAttendanceParticipantTeamIds(
+        logs: AttendanceLog[],
+        projectId: string,
+    ): Promise<void> {
+        if (!logs.length) return;
+        const roster = await this.participantRepository.find({
+            where: { projectId },
+            order: { createdAt: 'ASC' },
+        });
+        if (!roster.length) return;
+
+        const byId = new Map<string, Participation>();
+        const byEmail = new Map<string, Participation>();
+        for (const row of roster) {
+            byId.set(row.id, row);
+            const email = (row.email || '').trim().toLowerCase();
+            if (email) byEmail.set(email, row);
+        }
+
+        for (const log of logs) {
+            const participant = log.participant;
+            if (!participant) continue;
+
+            const existing = this.normalizeOptionalString(participant.teamId);
+            if (existing) {
+                (participant as Participation & { team_id?: string }).team_id = existing;
+                continue;
+            }
+
+            const rosterRow =
+                byId.get(participant.id) ||
+                (participant.email
+                    ? byEmail.get(String(participant.email).trim().toLowerCase())
+                    : undefined);
+            if (!rosterRow) continue;
+
+            const resolved = this.resolveTeamIdFromRosterRow(rosterRow, roster);
+            if (!resolved) continue;
+            participant.teamId = resolved;
+            (participant as Participation & { team_id?: string }).team_id = resolved;
+        }
+    }
+
+    private resolveTeamIdFromRosterRow(member: Participation, roster: Participation[]): string | null {
+        const own = this.normalizeOptionalString(member.teamId);
+        if (own) return own;
+
+        const appId = this.normalizeOptionalString(member.applicationId);
+        if (appId) {
+            const peer = roster.find(
+                (r) =>
+                    this.normalizeOptionalString(r.applicationId) === appId &&
+                    this.normalizeOptionalString(r.teamId),
+            );
+            const peerTeam = peer ? this.normalizeOptionalString(peer.teamId) : null;
+            if (peerTeam) return peerTeam;
+        }
+
+        if (member.isTeamLead) return null;
+
+        const lead = roster.find(
+            (r) =>
+                r.isTeamLead &&
+                this.normalizeOptionalString(r.teamId) &&
+                (!appId || this.normalizeOptionalString(r.applicationId) === appId),
+        );
+        return lead ? (this.normalizeOptionalString(lead.teamId) ?? null) : null;
     }
 
     /** Normalized payload: plain arrays plus aliases for older clients (`data.items`, `data.pending`). */

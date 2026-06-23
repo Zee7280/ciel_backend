@@ -131,6 +131,21 @@ export class EngagementService {
                 where: { cnicHash, projectId: opportunity.id }
             });
         }
+
+        // Same student, different apply email — avoid a second seat (Ryan / Hassan duplicate rows).
+        if (!existing && normalizedEmailLookup) {
+            const account = await this.userRepository
+                .createQueryBuilder('user')
+                .where('LOWER(TRIM(user.email)) = :emailNorm', { emailNorm: normalizedEmailLookup })
+                .getOne();
+            const resolvedStudentId = studentId ?? account?.id ?? null;
+            if (resolvedStudentId) {
+                existing = await this.participantRepository.findOne({
+                    where: { studentId: resolvedStudentId, projectId: opportunity.id },
+                });
+            }
+        }
+
         if (existing) {
             // Update existing record if new info is provided
             Object.assign(existing, {
@@ -1399,8 +1414,16 @@ export class EngagementService {
         });
         const actorEmail = (actor?.email || '').trim().toLowerCase();
 
+        const isPartnerActor =
+            actorRole === UserRole.NGO ||
+            actorRole === UserRole.CORPORATE ||
+            actorRole === UserRole.ORGANIZATION_ADMIN;
+
         if (scopedProjectId) {
-            const opportunity = await this.opportunityRepository.findOne({ where: { id: scopedProjectId } });
+            const opportunity = await this.opportunityRepository.findOne({
+                where: { id: scopedProjectId },
+                relations: ['organization'],
+            });
             if (!opportunity) {
                 throw new NotFoundException(
                     'No opportunity exists for this projectId. Use the same opportunity id as in your faculty list or attendance email links (the project UUID).',
@@ -1420,6 +1443,16 @@ export class EngagementService {
                 if (opportunity.isStudentCreated) {
                     await this.reconcileMisroutedPartnerAttendanceForOpportunity(opportunity);
                 }
+            } else if (isPartnerActor) {
+                await this.reconcilePartnerAttendanceAssigneeForOpportunity(opportunity);
+            }
+        } else if (isPartnerActor && actor?.organization?.id) {
+            const orgOpportunities = await this.opportunityRepository.find({
+                where: { organizationId: actor.organization.id },
+                relations: ['organization'],
+            });
+            for (const opportunity of orgOpportunities) {
+                await this.reconcilePartnerAttendanceAssigneeForOpportunity(opportunity);
             }
         }
 
@@ -2382,6 +2415,42 @@ export class EngagementService {
         }
 
         throw new BadRequestException('Unable to resolve reviewer for this project');
+    }
+
+    /**
+     * Pending partner attendance still pointing at a stale `assignedApproverUserId` after the
+     * project partner contact or org owner changed — rebind to the current partner queue owner.
+     */
+    async reconcilePartnerAttendanceAssigneeForOpportunity(opportunity: Opportunity): Promise<void> {
+        if (!opportunityHasActionablePartnerForAttendance(opportunity)) {
+            return;
+        }
+
+        const expectedUserId = await this.resolvePartnerOwnerUserId(opportunity);
+        if (!expectedUserId) {
+            return;
+        }
+
+        const pendingPartnerLogs = await this.attendanceLogRepository.find({
+            where: {
+                projectId: opportunity.id,
+                approvalStatus: 'pending',
+                assignedApproverType: 'partner',
+            },
+        });
+
+        const stale = pendingPartnerLogs.filter(
+            (log) => log.assignedApproverUserId !== expectedUserId,
+        );
+        if (!stale.length) {
+            return;
+        }
+
+        for (const log of stale) {
+            log.assignedApproverUserId = expectedUserId;
+            log.opportunityCreatorKind = 'partner';
+        }
+        await this.attendanceLogRepository.save(stale);
     }
 
     /**

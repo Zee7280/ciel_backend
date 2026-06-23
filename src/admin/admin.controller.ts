@@ -29,6 +29,7 @@ import { OpportunitiesService } from '../opportunities/opportunities.service';
 import { StudentReportsService } from '../reports/student-reports.service';
 import { AdminMergeReportsDto } from '../reports/dto/admin-merge-reports.dto';
 import { SetAttendanceEditableDto } from './dto/set-attendance-editable.dto';
+import { AdminDedupeStudentSeatsDto } from './dto/admin-dedupe-student-seats.dto';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
 import { IssueLogsService } from '../issue-logs/issue-logs.service';
 import type { IssueLogListQuery } from '../issue-logs/issue-logs.service';
@@ -150,6 +151,14 @@ export class AdminController {
     @Get('projects/:opportunityId/enrollments')
     getProjectEnrollments(@Param('opportunityId') opportunityId: string) {
         return this.adminService.getProjectEnrollments(opportunityId);
+    }
+
+    @Post('projects/:opportunityId/dedupe-student-seats')
+    dedupeStudentParticipationSeats(
+        @Param('opportunityId') opportunityId: string,
+        @Body() body: AdminDedupeStudentSeatsDto,
+    ) {
+        return this.adminService.dedupeStudentParticipationSeats(opportunityId, body.student_user_id);
     }
 
     @Patch('participations/:participationId/attendance-editable')

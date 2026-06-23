@@ -1034,6 +1034,8 @@ export class OpportunityApplicationsService {
     }
 
     async adminListOpportunityTeams(opportunityId: string) {
+        await this.reconcileMissingTeamMemberSeatsForOpportunity(opportunityId);
+
         const rows = await this.participationRepo
             .createQueryBuilder('p')
             .leftJoinAndSelect('p.student', 'student')
@@ -1056,6 +1058,13 @@ export class OpportunityApplicationsService {
             .map((r) => r.studentId)
             .filter((id): id is string => Boolean(id));
         const reports = await this.findReportsForOpportunityAndStudents(opportunityId, studentIds);
+
+        const seatCountByStudentId = new Map<string, number>();
+        for (const row of rows) {
+            const sid = row.studentId?.trim();
+            if (!sid) continue;
+            seatCountByStudentId.set(sid, (seatCountByStudentId.get(sid) ?? 0) + 1);
+        }
 
         const data: Array<Record<string, unknown>> = [];
         let completedReports = 0;
@@ -1118,6 +1127,10 @@ export class OpportunityApplicationsService {
                     report_available: reportStatus !== 'not_started',
                     phone_number: snap.phone_number,
                     cnic_display: snap.cnic_display,
+                    student_user_id: member.studentId ?? null,
+                    duplicate_seat_count: member.studentId
+                        ? (seatCountByStudentId.get(member.studentId) ?? 1)
+                        : 1,
                     ...this.academicSnapshot(member),
                 };
             });
@@ -1183,6 +1196,15 @@ export class OpportunityApplicationsService {
             }
         }
 
+        const enrolledStudentIds = new Set(
+            rows.map((r) => r.studentId).filter((id): id is string => Boolean(id?.trim())),
+        );
+        const enrolledEmails = new Set(
+            rows
+                .map((r) => this.normalizeEmail(r.student?.email ?? r.email ?? ''))
+                .filter((email) => email.length > 0),
+        );
+
         for (const app of pendingPipelineApps) {
             const payload = app.applyPayload || {};
             const rawTeamId =
@@ -1194,14 +1216,80 @@ export class OpportunityApplicationsService {
                 payload['participation_type'],
                 teamMembersRaw,
             );
-            if (!rawTeamId || !isTeamApply || coveredTeamIds.has(rawTeamId)) {
-                continue;
-            }
-            coveredTeamIds.add(rawTeamId);
 
             const leadUser = app.studentUser;
             const leadEmail = this.normalizeEmail(leadUser?.email ?? '');
             const leadProfile = leadEmail ? pendingUserByEmail.get(leadEmail) : undefined;
+
+            if (!isTeamApply) {
+                if (
+                    (app.studentUserId && enrolledStudentIds.has(app.studentUserId)) ||
+                    (leadEmail && enrolledEmails.has(leadEmail))
+                ) {
+                    continue;
+                }
+                const phoneFromApplyIndividual =
+                    typeof payload['contact_phone_e164'] === 'string'
+                        ? payload['contact_phone_e164'].trim()
+                        : '';
+                const phoneFromUserIndividual =
+                    leadProfile?.phone?.trim().length
+                        ? `${(leadProfile.countryCode || '').trim()}${leadProfile.phone.trim()}`.trim()
+                        : '';
+                const adminCorrIndividual =
+                    typeof payload['admin_correction'] === 'object' &&
+                    payload['admin_correction'] !== null &&
+                    !Array.isArray(payload['admin_correction'])
+                        ? (payload['admin_correction'] as Record<string, unknown>)
+                        : {};
+                const yearFromCorrIndividual =
+                    typeof adminCorrIndividual.year_of_study === 'string' &&
+                    adminCorrIndividual.year_of_study.trim()
+                        ? adminCorrIndividual.year_of_study.trim()
+                        : null;
+                const integFromCorrIndividual =
+                    typeof adminCorrIndividual.academic_integration_type === 'string' &&
+                    adminCorrIndividual.academic_integration_type.trim()
+                        ? adminCorrIndividual.academic_integration_type.trim()
+                        : null;
+                data.push({
+                    id: `pending-individual:${app.id}`,
+                    team_id: `pending-individual:${app.id}`,
+                    team_name: leadUser?.name ?? 'Pending applicant',
+                    lead_name: leadUser?.name ?? null,
+                    participation_mode: 'individual',
+                    report_status: 'not_started',
+                    report_available: false,
+                    members: [
+                        {
+                            id: `pending:${app.id}`,
+                            supports_admin_patch: true,
+                            member_source: 'pending_application',
+                            name: leadUser?.name ?? null,
+                            email: leadUser?.email ?? null,
+                            role: 'lead',
+                            report_status: 'not_started',
+                            report_available: false,
+                            phone_number: phoneFromApplyIndividual || phoneFromUserIndividual || null,
+                            cnic_display: leadProfile?.cnic
+                                ? this.formatPakCnicDigitsDisplay(leadProfile.cnic.replace(/\D/g, ''))
+                                : null,
+                            university_id: null,
+                            university_name: leadProfile?.university ?? leadProfile?.institution ?? null,
+                            academic_program: leadProfile?.major ?? null,
+                            department: leadProfile?.department ?? null,
+                            year_of_study: yearFromCorrIndividual,
+                            academic_integration_type: integFromCorrIndividual,
+                        },
+                    ],
+                });
+                continue;
+            }
+
+            if (!rawTeamId || coveredTeamIds.has(rawTeamId)) {
+                continue;
+            }
+            coveredTeamIds.add(rawTeamId);
             const phoneFromApply =
                 typeof payload['contact_phone_e164'] === 'string'
                     ? payload['contact_phone_e164'].trim()
@@ -1306,6 +1394,7 @@ export class OpportunityApplicationsService {
         });
         if (opp) {
             await this.engagementService.reconcileMisroutedPartnerAttendanceForOpportunity(opp);
+            await this.engagementService.reconcilePartnerAttendanceAssigneeForOpportunity(opp);
         }
         const pipelineCountRows = await this.appRepo
             .createQueryBuilder('a')
@@ -1545,6 +1634,93 @@ export class OpportunityApplicationsService {
                     .execute();
             }
         });
+    }
+
+    /**
+     * Collapse multiple participation seats for the same student on one project
+     * (legacy duplicate preRegister rows). Keeps lead / attendance / earliest seat.
+     */
+    async adminDedupeStudentParticipationSeats(opportunityId: string, studentUserId: string) {
+        const studentId = (studentUserId || '').trim();
+        if (!this.looksLikeUuidParam(studentId)) {
+            throw new BadRequestException('student_user_id must be a valid UUID');
+        }
+
+        const seats = await this.participationRepo.find({
+            where: {
+                projectId: opportunityId,
+                studentId,
+                status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
+            },
+            order: { createdAt: 'ASC' },
+        });
+
+        if (!seats.length) {
+            throw new NotFoundException('No active enrollment seats found for this student on the project');
+        }
+        if (seats.length === 1) {
+            return {
+                success: true,
+                message: 'No duplicate seats to remove',
+                data: {
+                    kept_participation_id: seats[0].id,
+                    removed_count: 0,
+                    removed_participation_ids: [] as string[],
+                },
+            };
+        }
+
+        const attendanceCounts = new Map<string, number>();
+        for (const seat of seats) {
+            const count = await this.attendanceLogRepo.count({
+                where: { participantId: seat.id },
+            });
+            attendanceCounts.set(seat.id, count);
+        }
+
+        const ranked = [...seats].sort((a, b) => {
+            const attA = attendanceCounts.get(a.id) ?? 0;
+            const attB = attendanceCounts.get(b.id) ?? 0;
+            if (attB !== attA) return attB - attA;
+            if (Boolean(b.applicationId) !== Boolean(a.applicationId)) {
+                return Boolean(b.applicationId) ? 1 : -1;
+            }
+            if (Boolean(b.isTeamLead) !== Boolean(a.isTeamLead)) {
+                return Boolean(b.isTeamLead) ? 1 : -1;
+            }
+            return a.createdAt.getTime() - b.createdAt.getTime();
+        });
+
+        const keep = ranked[0]!;
+        const dupes = ranked.slice(1);
+
+        await this.appRepo.manager.transaction(async (em) => {
+            for (const dupe of dupes) {
+                await em
+                    .getRepository(AttendanceLog)
+                    .createQueryBuilder()
+                    .update(AttendanceLog)
+                    .set({ participantId: keep.id })
+                    .where('participantId = :dupeId', { dupeId: dupe.id })
+                    .execute();
+                await em.remove(dupe);
+            }
+
+            if (!keep.isTeamLead && dupes.some((d) => d.isTeamLead)) {
+                keep.isTeamLead = true;
+                await em.save(keep);
+            }
+        });
+
+        return {
+            success: true,
+            message: `Removed ${dupes.length} duplicate seat(s) for this student`,
+            data: {
+                kept_participation_id: keep.id,
+                removed_count: dupes.length,
+                removed_participation_ids: dupes.map((d) => d.id),
+            },
+        };
     }
 
     async adminDeleteOpportunityTeamMember(opportunityId: string, teamId: string, memberId: string) {
@@ -2625,18 +2801,15 @@ export class OpportunityApplicationsService {
         };
     }
 
-    async adminApprove(id: string, adminUserId: string) {
-        const app = await this.appRepo.findOne({
-            where: { id, withdrawnAt: IsNull() },
-            relations: ['opportunity', 'studentUser'],
-        });
-        if (!app) throw new NotFoundException('Application not found');
-        if (app.internalStatus !== 'pending_admin' && app.internalStatus !== 'pending_partner') {
-            throw new BadRequestException('Application is not awaiting admin review');
-        }
-
+    /**
+     * Idempotent seat provisioning for an approved application — lead plus every teammate email.
+     * Heals legacy rows where the lead was provisioned early but teammates were skipped.
+     */
+    private async provisionApprovedApplicationSeats(app: OpportunityApplication): Promise<void> {
         const user = app.studentUser || (await this.userRepo.findOne({ where: { id: app.studentUserId } }));
-        if (!user) throw new NotFoundException('Student not found');
+        if (!user) {
+            throw new NotFoundException('Student not found');
+        }
 
         const payload = app.applyPayload || {};
         const participationType = (payload['participation_type'] as string) || 'individual';
@@ -2668,7 +2841,11 @@ export class OpportunityApplicationsService {
         const existingLead = await this.participationRepo.findOne({
             where: { studentId: app.studentUserId, projectId: app.opportunityId },
         });
-        if (existingLead && ['approved', 'verified', 'accepted', 'finalized'].includes(existingLead.status)) {
+        const leadAlreadyProvisioned =
+            existingLead &&
+            ['approved', 'verified', 'accepted', 'finalized'].includes(existingLead.status);
+
+        if (leadAlreadyProvisioned && existingLead) {
             let changed = false;
             if (!existingLead.applicationId) {
                 existingLead.applicationId = app.id;
@@ -2693,37 +2870,30 @@ export class OpportunityApplicationsService {
             if (changed) {
                 await this.participationRepo.save(existingLead);
             }
-            app.internalStatus = 'approved';
-            app.adminDecidedAt = new Date();
-            app.adminDecidedBy = adminUserId;
-            await this.appRepo.save(app);
-            return { success: true, message: 'Application was already provisioned', data: app };
+        } else {
+            await this.engagementService.preRegister(app.studentUserId, app.opportunityId, {
+                applicationId: app.id,
+                fullName: user.name,
+                email: user.email,
+                mobile: contactPhone || user.phone || '',
+                cnic: user.cnic || '',
+                universityName: user.university || '',
+                universityId: user.university || '',
+                academicProgram: user.major || '',
+                yearOfStudy: '1st Year',
+                department: 'Other',
+                academicIntegrationType: 'Voluntary',
+                participationMode: participationType,
+                isTeamLead: true,
+                emailVerified: true,
+                mobileVerified: true,
+                status: 'approved',
+                primaryFacultyEmail: normalizedPrimaryFaculty,
+                secondaryFacultyEmail: normalizedSecondaryFaculty,
+                attendanceApproverType,
+                teamId,
+            } as any);
         }
-
-        const applicationCorrelationId = app.id;
-
-        await this.engagementService.preRegister(app.studentUserId, app.opportunityId, {
-            applicationId: applicationCorrelationId,
-            fullName: user.name,
-            email: user.email,
-            mobile: contactPhone || user.phone || '',
-            cnic: user.cnic || '',
-            universityName: user.university || '',
-            universityId: user.university || '',
-            academicProgram: user.major || '',
-            yearOfStudy: '1st Year',
-            department: 'Other',
-            academicIntegrationType: 'Voluntary',
-            participationMode: participationType,
-            isTeamLead: true,
-            emailVerified: true,
-            mobileVerified: true,
-            status: 'approved',
-            primaryFacultyEmail: normalizedPrimaryFaculty,
-            secondaryFacultyEmail: normalizedSecondaryFaculty,
-            attendanceApproverType,
-            teamId,
-        } as any);
 
         if (participationType === 'team' && teamMembersUnique.length > 0) {
             for (const m of teamMembersUnique) {
@@ -2732,7 +2902,7 @@ export class OpportunityApplicationsService {
                     continue;
                 }
                 await this.engagementService.preRegister(memberUser?.id || null, app.opportunityId, {
-                    applicationId: applicationCorrelationId,
+                    applicationId: app.id,
                     fullName: m.name,
                     email: m.email,
                     mobile: m.mobile || '',
@@ -2754,6 +2924,30 @@ export class OpportunityApplicationsService {
                 } as any);
             }
         }
+    }
+
+    /** Self-heal approved team applications missing teammate participation rows. */
+    private async reconcileMissingTeamMemberSeatsForOpportunity(opportunityId: string): Promise<void> {
+        const approvedApps = await this.appRepo.find({
+            where: { opportunityId, internalStatus: 'approved', withdrawnAt: IsNull() },
+            relations: ['studentUser'],
+        });
+        for (const app of approvedApps) {
+            await this.provisionApprovedApplicationSeats(app);
+        }
+    }
+
+    async adminApprove(id: string, adminUserId: string) {
+        const app = await this.appRepo.findOne({
+            where: { id, withdrawnAt: IsNull() },
+            relations: ['opportunity', 'studentUser'],
+        });
+        if (!app) throw new NotFoundException('Application not found');
+        if (app.internalStatus !== 'pending_admin' && app.internalStatus !== 'pending_partner') {
+            throw new BadRequestException('Application is not awaiting admin review');
+        }
+
+        await this.provisionApprovedApplicationSeats(app);
 
         app.internalStatus = 'approved';
         app.adminDecidedAt = new Date();

@@ -1160,6 +1160,13 @@ export class AdminService {
         };
     }
 
+    dedupeStudentParticipationSeats(opportunityId: string, studentUserId: string) {
+        return this.opportunityApplicationsService.adminDedupeStudentParticipationSeats(
+            opportunityId,
+            studentUserId,
+        );
+    }
+
     async getProjects(studentEmailRaw?: string) {
         const normalizedEmail = this.normalizeStudentEmailFilter(studentEmailRaw ?? undefined);
 

@@ -146,6 +146,30 @@ export class EngagementService {
             }
         }
 
+        // Never overwrite another account's row when email matched a ghost duplicate seat.
+        if (existing && studentId && existing.studentId && existing.studentId !== studentId) {
+            const ownSeat = await this.participantRepository.findOne({
+                where: { studentId, projectId: opportunity.id },
+            });
+            existing = ownSeat ?? undefined;
+        }
+        if (existing && !studentId && normalizedEmailLookup) {
+            const emailOwner = await this.userRepository
+                .createQueryBuilder('user')
+                .where('LOWER(TRIM(user.email)) = :emailNorm', { emailNorm: normalizedEmailLookup })
+                .getOne();
+            if (
+                emailOwner?.id &&
+                existing.studentId &&
+                existing.studentId !== emailOwner.id
+            ) {
+                const ownSeat = await this.participantRepository.findOne({
+                    where: { studentId: emailOwner.id, projectId: opportunity.id },
+                });
+                existing = ownSeat ?? undefined;
+            }
+        }
+
         if (existing) {
             // Update existing record if new info is provided
             Object.assign(existing, {
@@ -299,7 +323,16 @@ export class EngagementService {
                 existingByStudent &&
                 (!existingByTarget || existingByTarget.id !== existingByStudent.id)
             ) {
-                if (existingByTarget && existingByTarget.id !== existingByStudent.id) {
+                if (
+                    existingByTarget &&
+                    existingByTarget.id !== existingByStudent.id &&
+                    existingByTarget.studentId &&
+                    existingByTarget.studentId !== targetStudentId &&
+                    existingByTarget.studentId !== existingByStudent.studentId
+                ) {
+                    // Do not delete another student's enrollment when collapsing duplicate lead seats.
+                    existingByTarget = existingByStudent;
+                } else if (existingByTarget && existingByTarget.id !== existingByStudent.id) {
                     this.logger.log(
                         `Merging duplicate email seat ${existingByTarget.id} into student seat ${existingByStudent.id} on project ${opportunity.id}`,
                     );
@@ -308,8 +341,9 @@ export class EngagementService {
                     existingByStudent.teamId = existingByStudent.teamId || existingByTarget.teamId;
                     await manager.remove(Participation, existingByTarget);
                     existingByTarget = null;
+                } else {
+                    existingByTarget = existingByStudent;
                 }
-                existingByTarget = existingByStudent;
             }
 
             // Team: a new member must not reuse the team lead's row (e.g. lead's email sent again by mistake)
@@ -346,14 +380,20 @@ export class EngagementService {
                 // If we also had a target record that was separate, 
                 // merge its non-empty fields and delete it.
                 if (existingByTarget && existingByTarget.id !== participation.id) {
-                    this.logger.log(`Merging duplicate records for student ${targetStudentId}: KEEPING ${participation.id}, REMOVING ${existingByTarget.id}`);
+                    const sameAccount =
+                        !existingByTarget.studentId ||
+                        !participation.studentId ||
+                        existingByTarget.studentId === participation.studentId ||
+                        (targetStudentId != null && existingByTarget.studentId === targetStudentId);
+                    if (sameAccount) {
+                        this.logger.log(`Merging duplicate records for student ${targetStudentId}: KEEPING ${participation.id}, REMOVING ${existingByTarget.id}`);
                     
-                    // PRESERVE fields from the record we are removing if they are missing on the one we keep
-                    participation.applicationId = participation.applicationId || existingByTarget.applicationId;
-                    participation.teamId = participation.teamId || existingByTarget.teamId;
-                    participation.participationMode = participation.participationMode || existingByTarget.participationMode;
+                        participation.applicationId = participation.applicationId || existingByTarget.applicationId;
+                        participation.teamId = participation.teamId || existingByTarget.teamId;
+                        participation.participationMode = participation.participationMode || existingByTarget.participationMode;
                     
-                    await manager.remove(Participation, existingByTarget);
+                        await manager.remove(Participation, existingByTarget);
+                    }
                 }
             } else if (existingByTarget) {
                 participation = existingByTarget;

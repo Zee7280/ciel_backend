@@ -1033,8 +1033,10 @@ export class OpportunityApplicationsService {
         };
     }
 
-    async adminListOpportunityTeams(opportunityId: string) {
-        await this.reconcileMissingTeamMemberSeatsForOpportunity(opportunityId);
+    async adminListOpportunityTeams(opportunityId: string, options?: { reconcile?: boolean }) {
+        if (options?.reconcile === true) {
+            await this.reconcileMissingTeamMemberSeatsForOpportunity(opportunityId);
+        }
 
         const rows = await this.participationRepo
             .createQueryBuilder('p')
@@ -1838,8 +1840,61 @@ export class OpportunityApplicationsService {
     }
 
     /**
-     * Admin safe heal: provision missing teammate seats from approved applications only.
-     * Does NOT delete duplicate seats — use Clean dupes per row for that (with salvage).
+     * Salvage teammate seats from duplicate rows without deleting anything (safe auto-fix step).
+     */
+    private async salvageAllDuplicateAccountSeatsWithoutDelete(opportunityId: string): Promise<number> {
+        const rows = await this.participationRepo.find({
+            where: {
+                projectId: opportunityId,
+                status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
+            },
+            order: { createdAt: 'ASC' },
+        });
+
+        const byStudent = new Map<string, Participation[]>();
+        for (const row of rows) {
+            const sid = row.studentId?.trim();
+            if (!sid) continue;
+            if (!byStudent.has(sid)) byStudent.set(sid, []);
+            byStudent.get(sid)!.push(row);
+        }
+
+        let salvaged = 0;
+        for (const [studentId, seats] of byStudent.entries()) {
+            if (seats.length < 2) continue;
+            const attendanceCounts = new Map<string, number>();
+            for (const seat of seats) {
+                attendanceCounts.set(
+                    seat.id,
+                    await this.attendanceLogRepo.count({ where: { participantId: seat.id } }),
+                );
+            }
+            const ranked = [...seats].sort((a, b) => {
+                const attA = attendanceCounts.get(a.id) ?? 0;
+                const attB = attendanceCounts.get(b.id) ?? 0;
+                if (attB !== attA) return attB - attA;
+                if (Boolean(b.applicationId) !== Boolean(a.applicationId)) {
+                    return Boolean(b.applicationId) ? 1 : -1;
+                }
+                if (Boolean(b.isTeamLead) !== Boolean(a.isTeamLead)) {
+                    return Boolean(b.isTeamLead) ? 1 : -1;
+                }
+                return a.createdAt.getTime() - b.createdAt.getTime();
+            });
+            const keep = ranked[0]!;
+            const dupes = ranked.slice(1);
+            salvaged += await this.salvageTeammateSeatsFromDuplicateRows(
+                opportunityId,
+                studentId,
+                keep,
+                dupes,
+            );
+        }
+        return salvaged;
+    }
+
+    /**
+     * Admin safe heal: salvage + provision only — never deletes participations.
      */
     async adminReconcileOpportunityEnrollments(opportunityId: string) {
         const opportunity = await this.opportunityRepo.findOne({ where: { id: opportunityId } });
@@ -1847,6 +1902,7 @@ export class OpportunityApplicationsService {
             throw new NotFoundException('Opportunity not found');
         }
 
+        const salvaged = await this.salvageAllDuplicateAccountSeatsWithoutDelete(opportunityId);
         await this.reconcileMissingTeamMemberSeatsForOpportunity(opportunityId);
 
         const rows = await this.participationRepo.find({
@@ -1867,13 +1923,15 @@ export class OpportunityApplicationsService {
         return {
             success: true,
             message:
-                duplicateAccountCount > 0
-                    ? `Restored missing team seats from applications. ${duplicateAccountCount} account(s) still have duplicate seats — use Clean dupes on each row (does not affect other members).`
-                    : 'Restored missing team seats from applications where applicable.',
+                salvaged > 0
+                    ? `Restored ${salvaged} teammate seat(s) from duplicate rows and application data. No enrollments were deleted.`
+                    : duplicateAccountCount > 0
+                      ? `Restored seats from applications. ${duplicateAccountCount} account(s) still have duplicate rows — use Clean dupes only if you intend to remove ghost seats.`
+                      : 'Restored missing team seats from applications. No enrollments were deleted.',
             data: {
                 duplicate_accounts_remaining: duplicateAccountCount,
                 seats_removed: 0,
-                teammates_salvaged: 0,
+                teammates_salvaged: salvaged,
                 ...refreshed,
             },
         };

@@ -1637,6 +1637,107 @@ export class OpportunityApplicationsService {
     }
 
     /**
+     * Ghost duplicate rows often carry a teammate's email under the lead's student_id.
+     * Before deleting dupes, provision real seats for distinct non-lead emails.
+     */
+    private async salvageTeammateSeatsFromDuplicateRows(
+        opportunityId: string,
+        leadStudentId: string,
+        keep: Participation,
+        dupes: Participation[],
+    ): Promise<number> {
+        if (!dupes.length) return 0;
+
+        const leadUser = await this.userRepo.findOne({ where: { id: leadStudentId } });
+        const blockedEmails = new Set<string>();
+        for (const raw of [leadUser?.email, keep.email]) {
+            const n = this.normalizeEmail(raw ?? '');
+            if (n) blockedEmails.add(n);
+        }
+
+        let teamId = (keep.teamId || '').trim();
+        if (!teamId) {
+            teamId = dupes.map((d) => (d.teamId || '').trim()).find(Boolean) || '';
+        }
+        if (!teamId) {
+            teamId = this.generateAdminTeamId();
+        }
+
+        const dupeIds = dupes.map((d) => d.id);
+        let salvaged = 0;
+        const seenSalvageEmails = new Set<string>();
+
+        for (const dupe of dupes) {
+            const em = this.normalizeEmail(dupe.email ?? '');
+            if (!em || blockedEmails.has(em) || seenSalvageEmails.has(em)) continue;
+            seenSalvageEmails.add(em);
+
+            const memberUser = await this.usersService.findByEmail(em);
+            if (memberUser?.id === leadStudentId) continue;
+
+            if (memberUser?.id) {
+                const already = await this.participationRepo.findOne({
+                    where: { studentId: memberUser.id, projectId: opportunityId },
+                });
+                if (already) continue;
+            } else {
+                const seatedElsewhere = await this.participationRepo
+                    .createQueryBuilder('p')
+                    .where('p.projectId = :projectId', { projectId: opportunityId })
+                    .andWhere('LOWER(TRIM(COALESCE(p.email, \'\'))) = :em', { em })
+                    .andWhere('p.id NOT IN (:...dupeIds)', { dupeIds })
+                    .getOne();
+                if (seatedElsewhere) continue;
+            }
+
+            await this.engagementService.preRegister(memberUser?.id ?? null, opportunityId, {
+                applicationId: keep.applicationId ?? undefined,
+                fullName: (dupe.fullName || memberUser?.name || em).trim(),
+                email: em,
+                mobile: dupe.mobile || memberUser?.phone || '',
+                cnic: memberUser?.cnic || '',
+                universityName: dupe.universityName || memberUser?.university || '',
+                universityId: dupe.universityId || memberUser?.university || '',
+                academicProgram: dupe.academicProgram || memberUser?.major || '',
+                yearOfStudy: dupe.yearOfStudy || '1st Year',
+                department: dupe.department || 'Other',
+                academicIntegrationType: dupe.academicIntegrationType || 'Voluntary',
+                participationMode: 'team',
+                isTeamLead: false,
+                emailVerified: true,
+                mobileVerified: true,
+                status: 'approved',
+                teamId,
+                primaryFacultyEmail: keep.primaryFacultyEmail ?? undefined,
+                secondaryFacultyEmail: keep.secondaryFacultyEmail ?? undefined,
+                attendanceApproverType: keep.attendanceApproverType ?? undefined,
+            } as Partial<Participation>);
+            salvaged += 1;
+        }
+
+        if (salvaged > 0) {
+            let keepChanged = false;
+            if (keep.participationMode !== 'team') {
+                keep.participationMode = 'team';
+                keepChanged = true;
+            }
+            if (!(keep.teamId || '').trim()) {
+                keep.teamId = teamId;
+                keepChanged = true;
+            }
+            if (!keep.isTeamLead) {
+                keep.isTeamLead = true;
+                keepChanged = true;
+            }
+            if (keepChanged) {
+                await this.participationRepo.save(keep);
+            }
+        }
+
+        return salvaged;
+    }
+
+    /**
      * Collapse multiple participation seats for the same student on one project
      * (legacy duplicate preRegister rows). Keeps lead / attendance / earliest seat.
      */
@@ -1694,6 +1795,13 @@ export class OpportunityApplicationsService {
         const keep = ranked[0]!;
         const dupes = ranked.slice(1);
 
+        const salvagedTeammates = await this.salvageTeammateSeatsFromDuplicateRows(
+            opportunityId,
+            studentId,
+            keep,
+            dupes,
+        );
+
         await this.appRepo.manager.transaction(async (em) => {
             for (const dupe of dupes) {
                 await em
@@ -1716,24 +1824,30 @@ export class OpportunityApplicationsService {
 
         return {
             success: true,
-            message: `Removed ${dupes.length} duplicate seat(s) for this student`,
+            message:
+                salvagedTeammates > 0
+                    ? `Removed ${dupes.length} duplicate seat(s) and restored ${salvagedTeammates} teammate seat(s) from duplicate rows.`
+                    : `Removed ${dupes.length} duplicate seat(s) for this student`,
             data: {
                 kept_participation_id: keep.id,
                 removed_count: dupes.length,
                 removed_participation_ids: dupes.map((d) => d.id),
+                salvaged_teammate_count: salvagedTeammates,
             },
         };
     }
 
     /**
-     * Admin one-click heal: dedupe every duplicate account on a project, then provision
-     * missing teammate seats from approved applications (no student re-register needed).
+     * Admin safe heal: provision missing teammate seats from approved applications only.
+     * Does NOT delete duplicate seats — use Clean dupes per row for that (with salvage).
      */
     async adminReconcileOpportunityEnrollments(opportunityId: string) {
         const opportunity = await this.opportunityRepo.findOne({ where: { id: opportunityId } });
         if (!opportunity) {
             throw new NotFoundException('Opportunity not found');
         }
+
+        await this.reconcileMissingTeamMemberSeatsForOpportunity(opportunityId);
 
         const rows = await this.participationRepo.find({
             where: {
@@ -1743,47 +1857,23 @@ export class OpportunityApplicationsService {
             select: ['id', 'studentId'],
         });
 
-        const countByStudent = new Map<string, number>();
-        for (const row of rows) {
+        const duplicateAccountCount = [...rows.reduce((acc, row) => {
             const sid = row.studentId?.trim();
-            if (!sid) continue;
-            countByStudent.set(sid, (countByStudent.get(sid) ?? 0) + 1);
-        }
-
-        const dupedStudentIds = [...countByStudent.entries()]
-            .filter(([, count]) => count > 1)
-            .map(([studentId]) => studentId);
-
-        const dedupeDetails: Array<Record<string, unknown>> = [];
-        let totalRemoved = 0;
-        for (const studentUserId of dupedStudentIds) {
-            const result = await this.adminDedupeStudentParticipationSeats(
-                opportunityId,
-                studentUserId,
-            );
-            const removed = Number(result.data?.removed_count) || 0;
-            totalRemoved += removed;
-            dedupeDetails.push({
-                student_user_id: studentUserId,
-                removed_count: removed,
-                kept_participation_id: result.data?.kept_participation_id ?? null,
-            });
-        }
-
-        if (!dupedStudentIds.length) {
-            await this.reconcileMissingTeamMemberSeatsForOpportunity(opportunityId);
-        }
+            if (sid) acc.set(sid, (acc.get(sid) ?? 0) + 1);
+            return acc;
+        }, new Map<string, number>()).values()].filter((n) => n > 1).length;
 
         const refreshed = await this.adminListOpportunityTeams(opportunityId);
         return {
             success: true,
-            message: dupedStudentIds.length
-                ? `Removed ${totalRemoved} duplicate seat(s) across ${dupedStudentIds.length} account(s) and restored missing team seats from applications.`
-                : 'No duplicate seats found; restored missing team seats from applications where applicable.',
+            message:
+                duplicateAccountCount > 0
+                    ? `Restored missing team seats from applications. ${duplicateAccountCount} account(s) still have duplicate seats — use Clean dupes on each row (does not affect other members).`
+                    : 'Restored missing team seats from applications where applicable.',
             data: {
-                duplicate_accounts_fixed: dupedStudentIds.length,
-                seats_removed: totalRemoved,
-                dedupe_details: dedupeDetails,
+                duplicate_accounts_remaining: duplicateAccountCount,
+                seats_removed: 0,
+                teammates_salvaged: 0,
                 ...refreshed,
             },
         };

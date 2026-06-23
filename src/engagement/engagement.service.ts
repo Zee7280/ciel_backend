@@ -192,6 +192,31 @@ export class EngagementService {
             participationData.studentId = studentId;
         }
 
+        if (participationData.studentId) {
+            const clash = await this.participantRepository.findOne({
+                where: {
+                    studentId: participationData.studentId,
+                    projectId: opportunity.id,
+                },
+            });
+            if (clash) {
+                Object.assign(clash, {
+                    ...data,
+                    ...(normalizedEmailLookup ? { email: normalizedEmailLookup } : {}),
+                    emailVerified: true,
+                    mobileVerified: true,
+                });
+                if (data.cnic) {
+                    const normalizedCnic = (data.cnic || '').replace(/\D/g, '');
+                    clash.cnicHash = this.hashString(normalizedCnic);
+                    clash.cnic = this.encrypt(normalizedCnic);
+                    clash.cnicLast4 = normalizedCnic.slice(-4);
+                }
+                const saved = await this.participantRepository.save(clash);
+                return this.decryptParticipation(saved);
+            }
+        }
+
         const participation = this.participantRepository.create(participationData as Partial<Participation>);
 
         if (data.cnic) {
@@ -228,9 +253,13 @@ export class EngagementService {
                 targetStudentId = userByEmail?.id || null;
             }
 
-            // Lead adding a teammate: do not attach the seat to the logged-in lead account.
             if (!targetStudentId) {
                 targetStudentId = isTeamMemberRegistration ? null : studentId;
+            }
+
+            // Lead logged in while registering a teammate must not attach seat to the lead account.
+            if (isTeamMemberRegistration && targetStudentId === studentId) {
+                targetStudentId = null;
             }
 
             const opportunity = await manager.findOne(Opportunity, { where: { id: dto.projectId } });
@@ -328,6 +357,16 @@ export class EngagementService {
                 }
             } else if (existingByTarget) {
                 participation = existingByTarget;
+            } else if (targetStudentId) {
+                const existingStudentSeat = await manager.findOne(Participation, {
+                    where: { studentId: targetStudentId, projectId: opportunity.id },
+                });
+                participation =
+                    existingStudentSeat ??
+                    manager.create(Participation, {
+                        projectId: opportunity.id,
+                        status: 'pending',
+                    });
             } else {
                 participation = manager.create(Participation, {
                     projectId: opportunity.id,

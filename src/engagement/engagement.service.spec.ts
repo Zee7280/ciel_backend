@@ -82,6 +82,11 @@ describe('EngagementService', () => {
         getOne: jest.fn().mockResolvedValue(result),
     });
 
+    const mockUserQueryBuilder = (result: { id: string } | null) => ({
+        where: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue(result),
+    });
+
     beforeEach(async () => {
         mockOpportunityApplicationRepository.findOne.mockResolvedValue(null);
         mockOpportunityApplicationRepository.find.mockResolvedValue([]);
@@ -1176,7 +1181,7 @@ describe('EngagementService', () => {
     });
 
     describe('registerParticipant', () => {
-        it('should create a NEW record if the email is different, even for same studentId', async () => {
+        it('reuses the existing seat when the same student registers with a different email', async () => {
             const t = fx('register-new-email');
             const studentId = t.id.u1;
             const projectId = t.id.project;
@@ -1189,16 +1194,26 @@ describe('EngagementService', () => {
             } as any;
 
             const mockOpportunity = { id: projectId, title: t.title, status: 'active', admin_approved: true };
-            
-            // Mock transaction manager
+            const existingStudentSeat = {
+                id: `existing-${t.tag}`,
+                studentId,
+                projectId,
+                email: t.email.existing,
+                teamId: t.id.teamId,
+            };
+
             const mockManager = {
                 findOne: jest.fn()
-                    .mockResolvedValueOnce(null) // User by email
                     .mockResolvedValueOnce(mockOpportunity) // Opportunity
-                    .mockResolvedValueOnce(null), // existingByCnic
-                createQueryBuilder: jest.fn().mockReturnValue(mockParticipationQueryBuilder(null)),
+                    .mockResolvedValueOnce(null) // existingByCnic
+                    .mockResolvedValueOnce(existingStudentSeat), // existingByStudent
+                createQueryBuilder: jest
+                    .fn()
+                    .mockReturnValueOnce(mockUserQueryBuilder(null))
+                    .mockReturnValueOnce(mockParticipationQueryBuilder(null)),
                 create: jest.fn().mockReturnValue({}),
-                save: jest.fn().mockImplementation((entity, data) => ({ id: 'new-id', ...data })),
+                save: jest.fn().mockImplementation((entity, data) => ({ ...existingStudentSeat, ...data })),
+                remove: jest.fn(),
             };
 
             (mockParticipationRepository as any).manager = {
@@ -1208,8 +1223,14 @@ describe('EngagementService', () => {
             const result = await service.registerParticipant(studentId, dto);
 
             expect(result).toBeDefined();
-            expect(mockManager.create).toHaveBeenCalled();
-            expect(mockManager.save).toHaveBeenCalled();
+            expect(mockManager.create).not.toHaveBeenCalled();
+            expect(mockManager.save).toHaveBeenCalledWith(
+                expect.anything(),
+                expect.objectContaining({
+                    fullName: t.name.teamMember,
+                    email: normalizeTestEmail(t.email.newParticipant),
+                }),
+            );
         });
 
         it('should OVERRIDE if the email matches', async () => {
@@ -1225,17 +1246,23 @@ describe('EngagementService', () => {
             } as any;
 
             const mockOpportunity = { id: projectId, title: t.title, status: 'active', admin_approved: true };
-            const existingParticipation = { id: `old-${t.tag}`, email: t.email.existing };
+            const existingParticipation = {
+                id: `old-${t.tag}`,
+                studentId,
+                email: t.email.existing,
+                teamId: t.id.teamId,
+            };
 
             // Mock transaction manager
             const mockManager = {
                 findOne: jest.fn()
-                    .mockResolvedValueOnce(null) // User by email
                     .mockResolvedValueOnce(mockOpportunity) // Opportunity
-                    .mockResolvedValueOnce(null), // existingByCnic
+                    .mockResolvedValueOnce(null) // existingByCnic
+                    .mockResolvedValueOnce(existingParticipation), // existingByStudent
                 createQueryBuilder: jest
                     .fn()
-                    .mockReturnValue(mockParticipationQueryBuilder(existingParticipation as Participation)),
+                    .mockReturnValueOnce(mockUserQueryBuilder(null))
+                    .mockReturnValueOnce(mockParticipationQueryBuilder(existingParticipation as Participation)),
                 create: jest.fn(),
                 save: jest.fn().mockImplementation((entity, data) => ({ ...data })),
             };
@@ -1273,11 +1300,12 @@ describe('EngagementService', () => {
             const mockOpportunity = { id: projectId, title: t.title, status: 'active', admin_approved: true };
             const mockManager = {
                 findOne: jest.fn()
-                    .mockResolvedValueOnce(null) // User by email
                     .mockResolvedValueOnce(mockOpportunity) // Opportunity
-                    .mockResolvedValueOnce(null) // existingByCnic
-                    .mockResolvedValueOnce({ name: t.name.teamMember }), // Student for email display
-                createQueryBuilder: jest.fn().mockReturnValue(mockParticipationQueryBuilder(null)),
+                    .mockResolvedValueOnce(null), // existingByCnic
+                createQueryBuilder: jest
+                    .fn()
+                    .mockReturnValueOnce(mockUserQueryBuilder(null))
+                    .mockReturnValueOnce(mockParticipationQueryBuilder(null)),
                 create: jest.fn().mockReturnValue({}),
                 save: jest.fn().mockImplementation((entity, data) => ({ id: 'new-id', ...data })),
             };
@@ -1335,12 +1363,14 @@ describe('EngagementService', () => {
             let qbCalls = 0;
             const mockManager = {
                 findOne: jest.fn()
-                    .mockResolvedValueOnce(null)
                     .mockResolvedValueOnce(mockOpportunity)
+                    .mockResolvedValueOnce(null)
                     .mockResolvedValueOnce(null),
                 createQueryBuilder: jest.fn().mockImplementation(() => {
                     qbCalls += 1;
-                    return qbCalls === 1 ? memberQb : conflictQb;
+                    if (qbCalls === 1) return mockUserQueryBuilder(null);
+                    if (qbCalls === 2) return memberQb;
+                    return conflictQb;
                 }),
                 create: jest.fn().mockReturnValue({ id: 'new-participation' }),
                 save: jest.fn(),

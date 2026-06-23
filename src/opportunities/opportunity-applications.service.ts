@@ -1712,6 +1712,8 @@ export class OpportunityApplicationsService {
             }
         });
 
+        await this.reconcileMissingTeamMemberSeatsForOpportunity(opportunityId);
+
         return {
             success: true,
             message: `Removed ${dupes.length} duplicate seat(s) for this student`,
@@ -1719,6 +1721,70 @@ export class OpportunityApplicationsService {
                 kept_participation_id: keep.id,
                 removed_count: dupes.length,
                 removed_participation_ids: dupes.map((d) => d.id),
+            },
+        };
+    }
+
+    /**
+     * Admin one-click heal: dedupe every duplicate account on a project, then provision
+     * missing teammate seats from approved applications (no student re-register needed).
+     */
+    async adminReconcileOpportunityEnrollments(opportunityId: string) {
+        const opportunity = await this.opportunityRepo.findOne({ where: { id: opportunityId } });
+        if (!opportunity) {
+            throw new NotFoundException('Opportunity not found');
+        }
+
+        const rows = await this.participationRepo.find({
+            where: {
+                projectId: opportunityId,
+                status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
+            },
+            select: ['id', 'studentId'],
+        });
+
+        const countByStudent = new Map<string, number>();
+        for (const row of rows) {
+            const sid = row.studentId?.trim();
+            if (!sid) continue;
+            countByStudent.set(sid, (countByStudent.get(sid) ?? 0) + 1);
+        }
+
+        const dupedStudentIds = [...countByStudent.entries()]
+            .filter(([, count]) => count > 1)
+            .map(([studentId]) => studentId);
+
+        const dedupeDetails: Array<Record<string, unknown>> = [];
+        let totalRemoved = 0;
+        for (const studentUserId of dupedStudentIds) {
+            const result = await this.adminDedupeStudentParticipationSeats(
+                opportunityId,
+                studentUserId,
+            );
+            const removed = Number(result.data?.removed_count) || 0;
+            totalRemoved += removed;
+            dedupeDetails.push({
+                student_user_id: studentUserId,
+                removed_count: removed,
+                kept_participation_id: result.data?.kept_participation_id ?? null,
+            });
+        }
+
+        if (!dupedStudentIds.length) {
+            await this.reconcileMissingTeamMemberSeatsForOpportunity(opportunityId);
+        }
+
+        const refreshed = await this.adminListOpportunityTeams(opportunityId);
+        return {
+            success: true,
+            message: dupedStudentIds.length
+                ? `Removed ${totalRemoved} duplicate seat(s) across ${dupedStudentIds.length} account(s) and restored missing team seats from applications.`
+                : 'No duplicate seats found; restored missing team seats from applications where applicable.',
+            data: {
+                duplicate_accounts_fixed: dupedStudentIds.length,
+                seats_removed: totalRemoved,
+                dedupe_details: dedupeDetails,
+                ...refreshed,
             },
         };
     }

@@ -1167,6 +1167,10 @@ export class AdminService {
         );
     }
 
+    reconcileOpportunityEnrollments(opportunityId: string) {
+        return this.opportunityApplicationsService.adminReconcileOpportunityEnrollments(opportunityId);
+    }
+
     async getProjects(studentEmailRaw?: string) {
         const normalizedEmail = this.normalizeStudentEmailFilter(studentEmailRaw ?? undefined);
 

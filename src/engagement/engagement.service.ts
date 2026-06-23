@@ -215,15 +215,22 @@ export class EngagementService {
 
     async registerParticipant(studentId: string, dto: RegisterParticipantDto) {
         return await this.participantRepository.manager.transaction(async (manager) => {
+            const dtoEmailNorm = this.normalizeParticipantEmail(dto.email);
+            const isTeamMemberRegistration =
+                dto.participationMode === 'team' && dto.isTeamLead !== true;
+
             let targetStudentId: string | null = dto.studentId || null;
-            if (!targetStudentId) {
-                const userByEmail = await manager.findOne(User, { where: { email: dto.email } });
+            if (!targetStudentId && dtoEmailNorm) {
+                const userByEmail = await manager
+                    .createQueryBuilder(User, 'user')
+                    .where('LOWER(TRIM(user.email)) = :emailNorm', { emailNorm: dtoEmailNorm })
+                    .getOne();
                 targetStudentId = userByEmail?.id || null;
             }
 
-            // Fallback to the logged-in user if no ID is resolved yet
+            // Lead adding a teammate: do not attach the seat to the logged-in lead account.
             if (!targetStudentId) {
-                targetStudentId = studentId;
+                targetStudentId = isTeamMemberRegistration ? null : studentId;
             }
 
             const opportunity = await manager.findOne(Opportunity, { where: { id: dto.projectId } });
@@ -242,7 +249,6 @@ export class EngagementService {
             // 2. Check if a record already exists for THIS user/email in this project
             let existingByTarget: Participation | null = null;
 
-            const dtoEmailNorm = this.normalizeParticipantEmail(dto.email);
             // Try by email (normalized; avoids duplicate rows when casing differs)
             if (dtoEmailNorm) {
                 existingByTarget = await manager
@@ -251,6 +257,30 @@ export class EngagementService {
                     .andWhere('LOWER(TRIM(COALESCE(p.email, \'\'))) = :emailNorm', { emailNorm: dtoEmailNorm })
                     .orderBy('p.createdAt', 'DESC')
                     .getOne();
+            }
+
+            // Same student account, different apply email — reuse seat (Hassan / Ryan duplicate rows).
+            let existingByStudent: Participation | null = null;
+            if (targetStudentId) {
+                existingByStudent = await manager.findOne(Participation, {
+                    where: { studentId: targetStudentId, projectId: opportunity.id },
+                });
+            }
+            if (
+                existingByStudent &&
+                (!existingByTarget || existingByTarget.id !== existingByStudent.id)
+            ) {
+                if (existingByTarget && existingByTarget.id !== existingByStudent.id) {
+                    this.logger.log(
+                        `Merging duplicate email seat ${existingByTarget.id} into student seat ${existingByStudent.id} on project ${opportunity.id}`,
+                    );
+                    existingByStudent.applicationId =
+                        existingByStudent.applicationId || existingByTarget.applicationId;
+                    existingByStudent.teamId = existingByStudent.teamId || existingByTarget.teamId;
+                    await manager.remove(Participation, existingByTarget);
+                    existingByTarget = null;
+                }
+                existingByTarget = existingByStudent;
             }
 
             // Team: a new member must not reuse the team lead's row (e.g. lead's email sent again by mistake)

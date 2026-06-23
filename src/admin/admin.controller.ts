@@ -161,6 +161,11 @@ export class AdminController {
         return this.adminService.dedupeStudentParticipationSeats(opportunityId, body.student_user_id);
     }
 
+    @Post('projects/:opportunityId/reconcile-enrollments')
+    reconcileOpportunityEnrollments(@Param('opportunityId') opportunityId: string) {
+        return this.adminService.reconcileOpportunityEnrollments(opportunityId);
+    }
+
     @Patch('participations/:participationId/attendance-editable')
     setParticipationAttendanceEditable(
         @Param('participationId') participationId: string,

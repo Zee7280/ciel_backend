@@ -1147,7 +1147,7 @@ export class OpportunityApplicationsService {
             data.push({
                 id: actualTeamId || groupId,
                 team_id: actualTeamId || groupId,
-                team_name: actualTeamId ? `Team ${actualTeamId.slice(0, 8)}` : fallbackTeamName,
+                team_name: actualTeamId ? `Team ${actualTeamId}` : fallbackTeamName,
                 lead_name: lead?.student?.name ?? lead?.fullName ?? null,
                 participation_mode: isIndividualEntry ? 'individual' : 'team',
                 report_status: teamReportStatus,
@@ -1381,7 +1381,7 @@ export class OpportunityApplicationsService {
             data.push({
                 id: rawTeamId,
                 team_id: rawTeamId,
-                team_name: `Team ${rawTeamId.slice(0, 8)}`,
+                team_name: `Team ${rawTeamId}`,
                 lead_name: leadUser?.name ?? null,
                 participation_mode: 'team',
                 report_status: 'not_started',

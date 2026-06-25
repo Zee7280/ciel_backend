@@ -30,6 +30,7 @@ import {
     isTeamConfigurationComplete,
     resolveAttendanceUnlockStatus,
 } from '../engagement/attendance-unlock.util';
+import { FeedbackService } from '../feedback/feedback.service';
 
 /** Canonical Pakistan regions for stakeholder "participation by region" (sync spellings with ciel_frontend/src/utils/pakistanRegions.ts). */
 const STAKEHOLDER_REGION_CANONICAL = [
@@ -206,6 +207,7 @@ export class AdminService {
         private readonly reportPartnerApprovalSettings: ReportPartnerApprovalSettingsService,
         private readonly organizationMembershipService: OrganizationMembershipService,
         private readonly partnerMembershipSettings: PartnerMembershipSettingsService,
+        private readonly feedbackService: FeedbackService,
     ) { }
 
     async getSettings() {
@@ -1407,6 +1409,10 @@ export class AdminService {
                 created_at: r.createdAt
             }))
         };
+    }
+
+    async getCepExperienceFeedback(page?: number, limit?: number) {
+        return this.feedbackService.listCepExperienceForAdmin(page ?? 1, limit ?? 20);
     }
 
     async getAuditLogs(page?: number, limit?: number) {

@@ -20,6 +20,7 @@ import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import { AdminProjectEvidenceService } from './admin-project-evidence.service';
 import { ReportPartnerApprovalModule } from '../reports/report-partner-approval.module';
 import { OrganizationMembershipModule } from '../organization-membership/organization-membership.module';
+import { FeedbackModule } from '../feedback/feedback.module';
 
 @Module({
     imports: [
@@ -31,6 +32,7 @@ import { OrganizationMembershipModule } from '../organization-membership/organiz
         IssueLogsModule,
         FacultyUniversityScopeModule,
         AuditLogsModule,
+        FeedbackModule,
         TypeOrmModule.forFeature([
             User,
             Opportunity,

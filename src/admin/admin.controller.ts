@@ -202,6 +202,20 @@ export class AdminController {
         );
     }
 
+    /** Post-report CEP experience survey submissions (students after report + payment). */
+    @Get('cep-feedback')
+    getCepExperienceFeedback(
+        @Query('page') page?: string,
+        @Query('limit') limit?: string,
+    ) {
+        const pg = Number.parseInt(page ?? '', 10);
+        const lim = Number.parseInt(limit ?? '', 10);
+        return this.adminService.getCepExperienceFeedback(
+            Number.isFinite(pg) ? pg : undefined,
+            Number.isFinite(lim) ? lim : undefined,
+        );
+    }
+
     @Get('issue-logs')
     getIssueLogs(@Query() query: IssueLogListQuery) {
         return this.issueLogsService.findAll(query);

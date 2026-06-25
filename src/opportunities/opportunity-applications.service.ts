@@ -1072,6 +1072,25 @@ export class OpportunityApplicationsService {
             seatCountByStudentId.set(sid, (seatCountByStudentId.get(sid) ?? 0) + 1);
         }
 
+        const allEmails = [
+            ...new Set(
+                rows
+                    .map((r) => this.normalizeEmail(r.student?.email ?? r.email ?? ''))
+                    .filter(Boolean),
+            ),
+        ];
+        const emailOwnerByEmail = new Map<string, string>();
+        if (allEmails.length) {
+            const owners = await this.userRepo
+                .createQueryBuilder('u')
+                .where('LOWER(TRIM(u.email)) IN (:...emails)', { emails: allEmails })
+                .getMany();
+            for (const owner of owners) {
+                const em = this.normalizeEmail(owner.email);
+                if (em) emailOwnerByEmail.set(em, owner.id);
+            }
+        }
+
         const data: Array<Record<string, unknown>> = [];
         let completedReports = 0;
         let reportsAvailable = 0;
@@ -1116,12 +1135,30 @@ export class OpportunityApplicationsService {
                 dedupMembers.push(member);
             }
 
+            const seatCountByEmailInGroup = new Map<string, number>();
+            for (const member of members) {
+                const em = this.normalizeEmail(member.student?.email ?? member.email ?? '');
+                if (!em) continue;
+                seatCountByEmailInGroup.set(em, (seatCountByEmailInGroup.get(em) ?? 0) + 1);
+            }
+
             const memberPayload = dedupMembers.map((member) => {
                 const rep = member.studentId
                     ? this.pickLatestReportForStudent(reports, member.studentId)
                     : null;
                 const reportStatus = this.toTeamReportStatus(rep?.status);
                 const snap = this.participationMobileAndCnicSnapshot(member);
+                const memberEmail = this.normalizeEmail(member.student?.email ?? member.email ?? '');
+                const byStudent = member.studentId
+                    ? (seatCountByStudentId.get(member.studentId) ?? 1)
+                    : 1;
+                const byEmail = memberEmail ? (seatCountByEmailInGroup.get(memberEmail) ?? 1) : 1;
+                const emailOwnerId = memberEmail ? emailOwnerByEmail.get(memberEmail) : undefined;
+                const studentIdMislinked = Boolean(
+                    emailOwnerId &&
+                        member.studentId?.trim() &&
+                        emailOwnerId !== member.studentId.trim(),
+                );
                 return {
                     id: member.id,
                     supports_admin_patch: true,
@@ -1134,9 +1171,8 @@ export class OpportunityApplicationsService {
                     phone_number: snap.phone_number,
                     cnic_display: snap.cnic_display,
                     student_user_id: member.studentId ?? null,
-                    duplicate_seat_count: member.studentId
-                        ? (seatCountByStudentId.get(member.studentId) ?? 1)
-                        : 1,
+                    duplicate_seat_count: Math.max(byStudent, byEmail),
+                    student_id_mislinked: studentIdMislinked,
                     ...this.academicSnapshot(member),
                 };
             });

@@ -26,7 +26,11 @@ import { WORKFLOW_STAGE } from './opportunity-workflow.service';
 import { isTeamApplyFromParticipationAndMembers } from './apply-team-payload.util';
 import { AdminPatchTeamMemberDto } from './dto/admin-patch-team-member.dto';
 import { AdminMergeTeamMembersDto } from './dto/admin-merge-team-members.dto';
-import { pickCanonicalTeamLeadFromMembers } from '../engagement/team-lead-canonical.util';
+import {
+    demoteExtraTeamLeadsInScope,
+    findCanonicalTeamLeadParticipation,
+    pickCanonicalTeamLeadFromMembers,
+} from '../engagement/team-lead-canonical.util';
 
 const PENDING_PIPELINE: OpportunityApplicationInternalStatus[] = [
     'pending_faculty',
@@ -1926,7 +1930,7 @@ export class OpportunityApplicationsService {
                 salvaged > 0
                     ? `Restored ${salvaged} teammate seat(s) from duplicate rows and application data. No enrollments were deleted.`
                     : duplicateAccountCount > 0
-                      ? `Restored seats from applications. ${duplicateAccountCount} account(s) still have duplicate rows — use Clean dupes only if you intend to remove ghost seats.`
+                      ? `Restored seats from applications. ${duplicateAccountCount} account(s) still have duplicate rows — use Repair enrollments or Clean dupes on a row.`
                       : 'Restored missing team seats from applications. No enrollments were deleted.',
             data: {
                 duplicate_accounts_remaining: duplicateAccountCount,
@@ -1935,6 +1939,334 @@ export class OpportunityApplicationsService {
                 ...refreshed,
             },
         };
+    }
+
+    /**
+     * Admin one-click heal: restore missing seats, dedupe ghost/duplicate rows, fix wrong student_id links,
+     * and normalize team leads. Does not delete whole teams.
+     */
+    async adminHealOpportunityTeamEnrollments(opportunityId: string) {
+        const opportunity = await this.opportunityRepo.findOne({ where: { id: opportunityId } });
+        if (!opportunity) {
+            throw new NotFoundException('Opportunity not found');
+        }
+
+        const summary = {
+            teammates_salvaged: 0,
+            report_members_restored: 0,
+            duplicate_student_seats_removed: 0,
+            duplicate_email_rows_removed: 0,
+            student_id_links_repaired: 0,
+            team_leads_demoted: 0,
+            team_leads_promoted: 0,
+        };
+
+        summary.teammates_salvaged = await this.salvageAllDuplicateAccountSeatsWithoutDelete(opportunityId);
+        await this.reconcileMissingTeamMemberSeatsForOpportunity(opportunityId);
+        summary.report_members_restored = await this.provisionMissingMembersFromReportSection1(opportunityId);
+
+        const activeSeats = await this.participationRepo.find({
+            where: {
+                projectId: opportunityId,
+                status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
+            },
+            order: { createdAt: 'ASC' },
+        });
+
+        const byStudent = new Map<string, Participation[]>();
+        for (const seat of activeSeats) {
+            const sid = seat.studentId?.trim();
+            if (!sid) continue;
+            if (!byStudent.has(sid)) byStudent.set(sid, []);
+            byStudent.get(sid)!.push(seat);
+        }
+        for (const [studentId, seats] of byStudent.entries()) {
+            if (seats.length < 2) continue;
+            const result = await this.adminDedupeStudentParticipationSeats(opportunityId, studentId);
+            summary.duplicate_student_seats_removed +=
+                Number((result as { data?: { removed_count?: number } }).data?.removed_count) || 0;
+        }
+
+        const refreshedSeats = await this.participationRepo.find({
+            where: {
+                projectId: opportunityId,
+                status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
+            },
+            order: { createdAt: 'ASC' },
+        });
+
+        const emailGroups = new Map<string, Participation[]>();
+        for (const seat of refreshedSeats) {
+            const em = this.normalizeEmail(seat.email);
+            if (!em) continue;
+            if (!emailGroups.has(em)) emailGroups.set(em, []);
+            emailGroups.get(em)!.push(seat);
+        }
+
+        for (const [, group] of emailGroups.entries()) {
+            if (group.length < 2) continue;
+            const ranked = await this.rankParticipationSeatsForHeal(group);
+            const keep = ranked[0]!;
+            const dupes = ranked.slice(1);
+            for (const dupe of dupes) {
+                await this.moveAttendanceLogsToParticipant(dupe.id, keep.id);
+                await this.participationRepo.remove(dupe);
+                summary.duplicate_email_rows_removed += 1;
+            }
+        }
+
+        const afterEmailDedupe = await this.participationRepo.find({
+            where: {
+                projectId: opportunityId,
+                status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
+            },
+        });
+
+        for (const seat of afterEmailDedupe) {
+            const em = this.normalizeEmail(seat.email);
+            if (!em) continue;
+            const owner = await this.userRepo
+                .createQueryBuilder('u')
+                .where('LOWER(TRIM(u.email)) = :em', { em })
+                .getOne();
+            if (!owner?.id || seat.studentId === owner.id) continue;
+
+            const ownerSeat = await this.participationRepo.findOne({
+                where: { projectId: opportunityId, studentId: owner.id },
+            });
+            if (ownerSeat && ownerSeat.id !== seat.id) {
+                const [keepScore, dropScore] = await Promise.all([
+                    this.scoreParticipationSeatForHeal(ownerSeat, owner),
+                    this.scoreParticipationSeatForHeal(seat, owner),
+                ]);
+                const keep = keepScore >= dropScore ? ownerSeat : seat;
+                const drop = keep.id === ownerSeat.id ? seat : ownerSeat;
+                await this.moveAttendanceLogsToParticipant(drop.id, keep.id);
+                await this.participationRepo.remove(drop);
+                summary.duplicate_email_rows_removed += 1;
+                if (keep.id === seat.id) {
+                    seat.studentId = owner.id;
+                    seat.fullName = owner.name || seat.fullName;
+                    seat.email = this.normalizeEmail(owner.email);
+                    await this.participationRepo.save(seat);
+                    summary.student_id_links_repaired += 1;
+                }
+                continue;
+            }
+
+            seat.studentId = owner.id;
+            seat.fullName = owner.name || seat.fullName;
+            seat.email = this.normalizeEmail(owner.email);
+            if (owner.phone) seat.mobile = owner.phone;
+            if (owner.university) {
+                seat.universityName = owner.university;
+                seat.universityId = owner.university;
+            }
+            if (owner.major) seat.academicProgram = owner.major;
+            await this.participationRepo.save(seat);
+            summary.student_id_links_repaired += 1;
+        }
+
+        const teamIds = new Set<string>();
+        const finalSeats = await this.participationRepo.find({
+            where: {
+                projectId: opportunityId,
+                status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
+            },
+        });
+        for (const seat of finalSeats) {
+            const tid = (seat.teamId || '').trim();
+            if (tid) teamIds.add(tid);
+        }
+
+        for (const teamId of teamIds) {
+            const canonical = await findCanonicalTeamLeadParticipation(
+                this.participationRepo,
+                opportunityId,
+                { teamId },
+            );
+            if (!canonical) continue;
+            if (!canonical.isTeamLead) {
+                canonical.isTeamLead = true;
+                await this.participationRepo.save(canonical);
+                summary.team_leads_promoted += 1;
+            }
+            summary.team_leads_demoted += await demoteExtraTeamLeadsInScope(
+                this.participationRepo,
+                opportunityId,
+                { teamId },
+                canonical.id,
+            );
+        }
+
+        const duplicateAccountsRemaining = [
+            ...finalSeats
+                .reduce((acc, row) => {
+                    const sid = row.studentId?.trim();
+                    if (sid) acc.set(sid, (acc.get(sid) ?? 0) + 1);
+                    return acc;
+                }, new Map<string, number>())
+                .values(),
+        ].filter((n) => n > 1).length;
+
+        const refreshed = await this.adminListOpportunityTeams(opportunityId);
+        const totalFixes =
+            summary.duplicate_student_seats_removed +
+            summary.duplicate_email_rows_removed +
+            summary.student_id_links_repaired +
+            summary.report_members_restored +
+            summary.teammates_salvaged;
+
+        return {
+            success: true,
+            message:
+                totalFixes > 0
+                    ? `Repaired enrollments: ${summary.report_members_restored} restored from reports, ${summary.duplicate_student_seats_removed + summary.duplicate_email_rows_removed} duplicate row(s) removed, ${summary.student_id_links_repaired} account link(s) fixed, team leads normalized.`
+                    : duplicateAccountsRemaining > 0
+                      ? 'Roster checked. Some duplicate accounts may still need manual review.'
+                      : 'Roster checked — no repairs were needed.',
+            data: {
+                ...summary,
+                duplicate_accounts_remaining: duplicateAccountsRemaining,
+                ...refreshed,
+            },
+        };
+    }
+
+    private async scoreParticipationSeatForHeal(
+        seat: Participation,
+        emailOwner: User | null,
+    ): Promise<number> {
+        const attendance = await this.attendanceLogRepo.count({
+            where: { participantId: seat.id },
+        });
+        let score = attendance * 10;
+        if (emailOwner?.id && seat.studentId === emailOwner.id) score += 1000;
+        if (seat.isTeamLead) score += 50;
+        if (seat.applicationId) score += 5;
+        score -= seat.createdAt.getTime() / 1_000_000_000_000;
+        return score;
+    }
+
+    private async rankParticipationSeatsForHeal(seats: Participation[]): Promise<Participation[]> {
+        const ranked = await Promise.all(
+            seats.map(async (seat) => {
+                const owner = await this.userRepo
+                    .createQueryBuilder('u')
+                    .where('LOWER(TRIM(u.email)) = :em', { em: this.normalizeEmail(seat.email) })
+                    .getOne();
+                return {
+                    seat,
+                    score: await this.scoreParticipationSeatForHeal(seat, owner),
+                };
+            }),
+        );
+        return ranked.sort((a, b) => b.score - a.score).map((r) => r.seat);
+    }
+
+    private async moveAttendanceLogsToParticipant(fromId: string, toId: string): Promise<void> {
+        if (!fromId || !toId || fromId === toId) return;
+        await this.attendanceLogRepo
+            .createQueryBuilder()
+            .update(AttendanceLog)
+            .set({ participantId: toId })
+            .where('participantId = :fromId', { fromId })
+            .execute();
+    }
+
+    /** Legacy reports may still store section1.team_members — provision any missing emails. */
+    private async provisionMissingMembersFromReportSection1(opportunityId: string): Promise<number> {
+        const reports = await this.studentReportRepo
+            .createQueryBuilder('sr')
+            .where('sr.opportunityId = :oid', { oid: opportunityId })
+            .orWhere("trim(sr.project_id) = :oidText", { oidText: opportunityId })
+            .orderBy('sr.updatedAt', 'DESC')
+            .getMany();
+
+        const rosterEmails = new Map<string, { name: string; mobile?: string }>();
+        for (const report of reports) {
+            const section1 =
+                report.section1 && typeof report.section1 === 'object'
+                    ? (report.section1 as Record<string, unknown>)
+                    : {};
+            const lead = section1['team_lead'];
+            if (lead && typeof lead === 'object') {
+                const o = lead as Record<string, unknown>;
+                const em = this.normalizeEmail(String(o['email'] ?? ''));
+                const name = String(o['fullName'] ?? o['name'] ?? '').trim();
+                if (em && !rosterEmails.has(em)) rosterEmails.set(em, { name });
+            }
+            const members = section1['team_members'];
+            if (!Array.isArray(members)) continue;
+            for (const raw of members) {
+                if (!raw || typeof raw !== 'object') continue;
+                const m = raw as Record<string, unknown>;
+                const em = this.normalizeEmail(String(m['email'] ?? ''));
+                const name = String(m['fullName'] ?? m['name'] ?? m['full_name'] ?? '').trim();
+                const mobile = String(m['mobile'] ?? '').trim();
+                if (!em || rosterEmails.has(em)) continue;
+                rosterEmails.set(em, { name, mobile: mobile || undefined });
+            }
+        }
+        if (!rosterEmails.size) return 0;
+
+        const leadSeat =
+            (await findCanonicalTeamLeadParticipation(this.participationRepo, opportunityId, {})) ??
+            (await this.participationRepo.findOne({
+                where: {
+                    projectId: opportunityId,
+                    isTeamLead: true,
+                    status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
+                },
+                order: { createdAt: 'ASC' },
+            }));
+
+        const teamId = (leadSeat?.teamId || '').trim() || this.generateAdminTeamId();
+        const applicationId = leadSeat?.applicationId ?? undefined;
+        let restored = 0;
+
+        for (const [email, meta] of rosterEmails.entries()) {
+            const memberUser = await this.usersService.findByEmail(email);
+            const seated = await this.participationRepo
+                .createQueryBuilder('p')
+                .where('p.projectId = :projectId', { projectId: opportunityId })
+                .andWhere(
+                    new Brackets((qb) => {
+                        qb.where('LOWER(TRIM(COALESCE(p.email, \'\'))) = :em', { em: email });
+                        if (memberUser?.id) {
+                            qb.orWhere('p.student_id = :sid', { sid: memberUser.id });
+                        }
+                    }),
+                )
+                .getOne();
+            if (seated) continue;
+
+            await this.engagementService.preRegister(memberUser?.id ?? null, opportunityId, {
+                applicationId,
+                fullName: meta.name || memberUser?.name || email,
+                email,
+                mobile: meta.mobile || memberUser?.phone || '',
+                cnic: memberUser?.cnic || '',
+                universityName: memberUser?.university || '',
+                universityId: memberUser?.university || '',
+                academicProgram: memberUser?.major || '',
+                yearOfStudy: '1st Year',
+                department: 'Other',
+                academicIntegrationType: 'Voluntary',
+                participationMode: 'team',
+                isTeamLead: false,
+                emailVerified: true,
+                mobileVerified: true,
+                status: 'approved',
+                teamId,
+                primaryFacultyEmail: leadSeat?.primaryFacultyEmail ?? undefined,
+                secondaryFacultyEmail: leadSeat?.secondaryFacultyEmail ?? undefined,
+                attendanceApproverType: leadSeat?.attendanceApproverType ?? undefined,
+            } as Partial<Participation>);
+            restored += 1;
+        }
+
+        return restored;
     }
 
     async adminDeleteOpportunityTeamMember(opportunityId: string, teamId: string, memberId: string) {

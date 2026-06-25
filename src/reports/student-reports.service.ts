@@ -689,6 +689,125 @@ export class StudentReportsService {
         return '';
     }
 
+    private mapRosterRowToSection1Participant(
+        row: Record<string, unknown>,
+        storedLead?: Record<string, unknown>,
+    ): Record<string, unknown> {
+        const student = this.asUnknownRecord(row.student);
+        const email =
+            this.pickTrimmedString(row.email) || this.pickTrimmedString(student.email);
+        const storedEmail = storedLead ? this.pickTrimmedString(storedLead.email).toLowerCase() : '';
+        const useStoredLeadFields =
+            Boolean(storedLead) && storedEmail && storedEmail === email.toLowerCase();
+        const isLead = row.isTeamLead === true || row.is_team_lead === true;
+        const fullName =
+            this.pickTrimmedString(row.fullName) ||
+            this.pickTrimmedString(row.name) ||
+            this.pickTrimmedString(student.name);
+
+        return {
+            id: row.id,
+            fullName,
+            name: fullName,
+            email,
+            mobile: this.pickTrimmedString(row.mobile) || this.pickTrimmedString(student.phone),
+            cnic: this.engagementService.decryptCnicInternal(this.pickTrimmedString(row.cnic)),
+            university:
+                this.pickTrimmedString(row.universityName) ||
+                this.pickTrimmedString(row.university) ||
+                this.pickTrimmedString(student.university),
+            degree:
+                this.pickTrimmedString(row.academicProgram) ||
+                this.pickTrimmedString(row.degree) ||
+                this.pickTrimmedString(student.major),
+            program: this.pickTrimmedString(row.program),
+            year: this.pickTrimmedString(row.yearOfStudy) || this.pickTrimmedString(row.year),
+            role: isLead ? 'Team Lead' : 'Team member',
+            verified: row.emailVerified === true || row.verified === true,
+            hours: useStoredLeadFields ? storedLead?.hours : row.hours,
+            consent: useStoredLeadFields ? storedLead?.consent : row.consent,
+            teamId: row.teamId ?? row.team_id,
+            team_id: row.teamId ?? row.team_id,
+            isTeamLead: isLead,
+        };
+    }
+
+    /** Live enrollment roster scoped to the report author's team (certificate / dossier source of truth). */
+    private async buildLiveSection1TeamFields(report: StudentReport): Promise<{
+        team_lead?: Record<string, unknown>;
+        team_members: Record<string, unknown>[];
+        participation_type: string;
+    }> {
+        const projectKey = (report.opportunityId || report.project_id || '').trim();
+        const storedSection1 = this.asUnknownRecord(report.section1);
+        const storedLead = this.asUnknownRecord(storedSection1.team_lead);
+
+        if (!this.looksLikeUuid(projectKey)) {
+            return {
+                team_members: [],
+                participation_type: this.pickTrimmedString(storedSection1.participation_type) || 'individual',
+            };
+        }
+
+        const allRoster = (await this.engagementService.getProjectTeamForReportDossier(
+            projectKey,
+        )) as Record<string, unknown>[];
+
+        const authorPart = await this.participantRepository.findOne({
+            where: { studentId: report.studentId, projectId: projectKey },
+        });
+
+        const storedTeamId = this.pickTrimmedString(
+            storedSection1.team_id ??
+                storedSection1.teamId ??
+                storedLead.team_id ??
+                storedLead.teamId,
+        );
+        const teamId = (authorPart?.teamId || storedTeamId || '').trim();
+        const applicationId = (authorPart?.applicationId || '').trim();
+
+        let scoped = allRoster;
+        if (teamId) {
+            scoped = allRoster.filter(
+                (row) => this.pickTrimmedString(row.teamId ?? row.team_id) === teamId,
+            );
+        } else if (applicationId) {
+            scoped = allRoster.filter(
+                (row) => this.pickTrimmedString(row.applicationId) === applicationId,
+            );
+        }
+
+        const isTeam =
+            authorPart?.participationMode === 'team' ||
+            this.pickTrimmedString(storedSection1.participation_type).toLowerCase() === 'team' ||
+            scoped.length > 1;
+
+        if (!isTeam || scoped.length === 0) {
+            return {
+                team_members: [],
+                participation_type: this.pickTrimmedString(storedSection1.participation_type) || 'individual',
+            };
+        }
+
+        const canonicalLeadPart = await findCanonicalTeamLeadParticipation(
+            this.participantRepository,
+            projectKey,
+            { teamId: teamId || undefined, applicationId: applicationId || undefined },
+        );
+        const leadRow =
+            scoped.find((row) => row.id === canonicalLeadPart?.id) ??
+            scoped.find((row) => row.isTeamLead === true || row.is_team_lead === true) ??
+            scoped[0];
+        const leadId = this.pickTrimmedString(leadRow?.id);
+        const memberRows = scoped.filter((row) => this.pickTrimmedString(row.id) !== leadId);
+
+        return {
+            participation_type: 'team',
+            team_lead: leadRow ? this.mapRosterRowToSection1Participant(leadRow, storedLead) : undefined,
+            team_members: memberRows.map((row) => this.mapRosterRowToSection1Participant(row)),
+        };
+    }
+
     private pickTeamLeadReportBySection1(group: StudentReport[]): StudentReport | undefined {
         for (const report of group) {
             const section1 = this.asUnknownRecord(report.section1);
@@ -1757,6 +1876,14 @@ export class StudentReportsService {
         const approvalContext = this.getPublicReportApprovalContext(report);
         const feedback = this.buildStudentReportFeedback(report);
         const isEditable = this.isReportEditableForStudent(report);
+        const liveTeamFields = await this.buildLiveSection1TeamFields(report);
+        const storedTeamLead = report.section1?.team_lead
+            ? {
+                  ...report.section1.team_lead,
+                  fullName: report.section1.team_lead.fullName || report.section1.team_lead.name || '',
+                  cnic: this.engagementService.decryptCnicInternal(report.section1.team_lead.cnic),
+              }
+            : undefined;
 
         return {
             success: true,
@@ -1801,15 +1928,15 @@ export class StudentReportsService {
                 evidence_urls: this.collectEvidenceUrls(report),
                 section1: {
                     ...report.section1,
-                    team_lead: report.section1?.team_lead ? {
-                        ...report.section1.team_lead,
-                        fullName: report.section1.team_lead.fullName || report.section1.team_lead.name || '',
-                        cnic: this.engagementService.decryptCnicInternal(report.section1.team_lead.cnic)
-                    } : undefined,
-                    // Point 1 & 3: Dynamically fetch team members from the source of truth (Participants/Engagement table)
-                    team_members: await this.engagementService.getProjectTeamForReportDossier(
-                        report.opportunityId || report.project_id,
-                    ),
+                    participation_type:
+                        liveTeamFields.participation_type || report.section1?.participation_type,
+                    team_lead: liveTeamFields.team_lead ?? storedTeamLead,
+                    team_members:
+                        liveTeamFields.team_members.length > 0
+                            ? liveTeamFields.team_members
+                            : await this.engagementService.getProjectTeamForReportDossier(
+                                  report.opportunityId || report.project_id,
+                              ),
                     attendance_logs:
                         attendanceLogs.length > 0
                             ? attendanceLogs.map((log) => ({

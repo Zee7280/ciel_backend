@@ -166,6 +166,11 @@ export class AdminController {
         return this.adminService.reconcileOpportunityEnrollments(opportunityId);
     }
 
+    @Post('projects/:opportunityId/heal-team-enrollments')
+    healOpportunityTeamEnrollments(@Param('opportunityId') opportunityId: string) {
+        return this.adminService.healOpportunityTeamEnrollments(opportunityId);
+    }
+
     @Patch('participations/:participationId/attendance-editable')
     setParticipationAttendanceEditable(
         @Param('participationId') participationId: string,

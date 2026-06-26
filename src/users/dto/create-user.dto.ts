@@ -29,6 +29,14 @@ export class CreateUserDto {
 
     @IsOptional()
     @IsString()
+    organizationCategory?: string;
+
+    @IsOptional()
+    @IsString()
+    legalRegistrationType?: string;
+
+    @IsOptional()
+    @IsString()
     contactPerson?: string;
 
     @IsOptional()

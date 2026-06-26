@@ -272,7 +272,11 @@ export class Section1AnalyticsService {
             ? participations.filter((p) => p.studentId === studentId)
             : participations;
 
-        const primaryParticipation = targetParticipations[0] ?? participations[0];
+        const primaryParticipation =
+            targetParticipations.find((p) => p.adminAttendanceEditable === true) ??
+            targetParticipations[0] ??
+            participations.find((p) => p.adminAttendanceEditable === true) ??
+            participations[0];
         const studentUser = primaryParticipation?.studentId
             ? await this.usersRepository.findOne({
                   where: { id: primaryParticipation.studentId },

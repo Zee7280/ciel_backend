@@ -43,6 +43,22 @@ describe('attendance-unlock.util', () => {
         });
     });
 
+    it('does not unlock when only a teammate has admin override', () => {
+        const result = resolveAttendanceUnlockStatus(
+            baseUser,
+            {
+                ...baseParticipation,
+                isTeamLead: true,
+                adminAttendanceEditable: false,
+                attendanceLocked: true,
+            } as Participation,
+            true,
+        );
+
+        expect(result.unlocked).toBe(false);
+        expect(result.admin_override).toBeUndefined();
+    });
+
     it('locks when identity verification is incomplete', () => {
         const result = resolveAttendanceUnlockStatus(
             { ...baseUser, identity_verified: false } as User,

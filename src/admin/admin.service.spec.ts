@@ -280,6 +280,23 @@ describe('AdminService getMasterAnalytics', () => {
     });
 
     it('enables admin attendance override for a team member participation', async () => {
+        const teamLead = {
+            id: 'lead-1',
+            projectId: 'proj-1',
+            studentId: 'lead-stu',
+            fullName: 'Team Lead',
+            email: 'lead@test.com',
+            participationMode: 'team',
+            isTeamLead: true,
+            teamId: 'team-1',
+            attendanceLocked: true,
+            attendanceVerificationRequested: true,
+            adminAttendanceEditable: false,
+            student: {
+                profile_verified: true,
+                identity_verified: true,
+            },
+        };
         const participation = {
             id: 'part-1',
             projectId: 'proj-1',
@@ -297,10 +314,27 @@ describe('AdminService getMasterAnalytics', () => {
                 identity_verified: false,
             },
         };
+        const teammate = {
+            id: 'part-2',
+            projectId: 'proj-1',
+            studentId: 'stu-2',
+            fullName: 'Other Member',
+            email: 'other@test.com',
+            participationMode: 'team',
+            isTeamLead: false,
+            teamId: 'team-1',
+            attendanceLocked: true,
+            attendanceVerificationRequested: true,
+            adminAttendanceEditable: false,
+            student: {
+                profile_verified: false,
+                identity_verified: false,
+            },
+        };
 
         const findOne = jest.fn().mockResolvedValue(participation);
         const save = jest.fn().mockImplementation(async (row) => row);
-        const find = jest.fn().mockResolvedValue([participation]);
+        const find = jest.fn().mockResolvedValue([teamLead, participation, teammate]);
 
         const service = makeAdminServiceForTests({
             participationRepository: {
@@ -314,9 +348,23 @@ describe('AdminService getMasterAnalytics', () => {
 
         expect(save).toHaveBeenCalledWith(
             expect.objectContaining({
+                id: 'part-1',
                 adminAttendanceEditable: true,
                 attendanceLocked: false,
                 attendanceVerificationRequested: false,
+            }),
+        );
+        expect(save).toHaveBeenCalledWith(
+            expect.objectContaining({
+                id: 'lead-1',
+                adminAttendanceEditable: true,
+                attendanceLocked: false,
+                attendanceVerificationRequested: false,
+            }),
+        );
+        expect(save).not.toHaveBeenCalledWith(
+            expect.objectContaining({
+                id: 'part-2',
             }),
         );
         expect(result.data.admin_attendance_editable).toBe(true);

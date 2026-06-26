@@ -205,8 +205,8 @@ export class EngagementController {
     }
 
     @Delete(':id')
-    async deleteParticipant(@Param('id') id: string) {
-        await this.engagementService.deleteParticipant(id);
+    async deleteParticipant(@Request() req, @Param('id') id: string) {
+        await this.engagementService.deleteParticipant(req.user.id, id);
         return {
             success: true,
             message: 'Member removed from project participation',

@@ -776,13 +776,52 @@ export class EngagementService {
         return latest ? this.decryptParticipation(latest) : null;
     }
 
-    async deleteParticipant(participantId: string) {
+    async deleteParticipant(requesterUserId: string, participantId: string) {
         const participation = await this.participantRepository.findOne({
-            where: { id: participantId }
+            where: { id: participantId },
+            relations: ['attendanceLogs'],
         });
 
         if (!participation) {
             throw new NotFoundException('Participation record not found');
+        }
+
+        const requester = await this.userRepository.findOne({ where: { id: requesterUserId } });
+        if (!requester) {
+            throw new ForbiddenException('Not authorized to remove this team member');
+        }
+
+        const requesterEmail = (requester.email || '').trim().toLowerCase();
+        const targetEmail = (participation.email || '').trim().toLowerCase();
+        const isSelf =
+            (participation.studentId && participation.studentId === requesterUserId) ||
+            (requesterEmail && targetEmail && requesterEmail === targetEmail);
+
+        if (!isSelf) {
+            const requesterParticipation = await this.participantRepository.findOne({
+                where: [
+                    { projectId: participation.projectId, studentId: requesterUserId },
+                    ...(requesterEmail ? [{ projectId: participation.projectId, email: requesterEmail }] : []),
+                ],
+                order: { isTeamLead: 'DESC', createdAt: 'ASC' },
+            });
+
+            const sameTeam = Boolean(
+                requesterParticipation?.isTeamLead &&
+                    participation.participationMode === 'team' &&
+                    requesterParticipation.participationMode === 'team' &&
+                    !participation.isTeamLead &&
+                    ((participation.teamId &&
+                        requesterParticipation.teamId &&
+                        participation.teamId === requesterParticipation.teamId) ||
+                        (participation.applicationId &&
+                            requesterParticipation.applicationId &&
+                            participation.applicationId === requesterParticipation.applicationId)),
+            );
+
+            if (!sameTeam) {
+                throw new ForbiddenException('Only the team lead or the member themselves can remove this seat');
+            }
         }
 
         await this.participantRepository.remove(participation);
@@ -1162,9 +1201,11 @@ export class EngagementService {
             opportunity,
         );
 
-        // Check if participation is approved (creator on own live listing may log despite stale rejected row)
+        // Check if participation is approved (creator on own live listing may log despite stale rejected row).
+        // CIEL admin override on this seat bypasses enrollment status gates.
         if (
             !creatorLiveBypass &&
+            participation.adminAttendanceEditable !== true &&
             !['approved', 'verified', 'accepted', 'finalized'].includes(participation.status)
         ) {
             this.logger.warn(`Attendance logging attempt for record ${participation.id} in status: ${participation.status}`);

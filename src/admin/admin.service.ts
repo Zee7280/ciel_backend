@@ -1141,6 +1141,7 @@ export class AdminService {
         if (editable) {
             participation.attendanceLocked = false;
             participation.attendanceVerificationRequested = false;
+            participation.attendanceVerificationRequestedAt = null;
         }
         await this.participationRepository.save(participation);
 
@@ -1152,6 +1153,18 @@ export class AdminService {
             relations: ['student'],
             order: { isTeamLead: 'DESC', fullName: 'ASC' },
         });
+
+        if (editable && participation.participationMode === 'team') {
+            const teamGroup = this.groupTeamMembersForParticipation(projectEnrollments, participation);
+            const teamLead = teamGroup.find((row) => row.isTeamLead) ?? teamGroup[0];
+            if (teamLead && teamLead.id !== participation.id) {
+                teamLead.adminAttendanceEditable = true;
+                teamLead.attendanceLocked = false;
+                teamLead.attendanceVerificationRequested = false;
+                teamLead.attendanceVerificationRequestedAt = null;
+                await this.participationRepository.save(teamLead);
+            }
+        }
 
         return {
             success: true,

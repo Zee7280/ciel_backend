@@ -13,6 +13,13 @@ export class Organization {
     @Column()
     orgType: string; // NGO, CORPORATE, UNIVERSITY
 
+    /** Detailed sector (e.g. Healthcare Organization). Role bucket stays in `orgType`. */
+    @Column({ nullable: true })
+    organizationCategory: string;
+
+    @Column({ nullable: true })
+    legalRegistrationType: string;
+
     @Column({ type: 'text', nullable: true })
     description: string;
 

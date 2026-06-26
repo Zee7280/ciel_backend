@@ -17,6 +17,10 @@ import { UserRole } from '../users/enums/user-role.enum';
 import { PAKISTANI_UNIVERSITIES_SET } from './constants/pakistani-universities';
 import { EngagementService } from '../engagement/engagement.service';
 import { OrganizationMembershipService } from '../organization-membership/organization-membership.service';
+import {
+    LEGAL_REGISTRATION_TYPE_SET,
+    ORGANIZATION_CATEGORY_SET,
+} from '../organizations/organization-taxonomy.constants';
 
 @Injectable()
 export class AuthService {
@@ -122,22 +126,49 @@ export class AuthService {
                 userData.orgName = institution;
             }
 
+            const organizationCategory = (userData.organizationCategory || '').trim();
+            const legalRegistrationType = (userData.legalRegistrationType || '').trim();
+            const isOrgSignup =
+                userData.role === UserRole.UNIVERSITY ||
+                userData.role === UserRole.NGO ||
+                userData.role === UserRole.CORPORATE;
+
+            if (isOrgSignup) {
+                if (!organizationCategory) {
+                    throw new BadRequestException('Organization type is required');
+                }
+                if (!ORGANIZATION_CATEGORY_SET.has(organizationCategory)) {
+                    throw new BadRequestException('Invalid organization type');
+                }
+                if (!legalRegistrationType) {
+                    throw new BadRequestException('Legal registration type is required');
+                }
+                if (!LEGAL_REGISTRATION_TYPE_SET.has(legalRegistrationType)) {
+                    throw new BadRequestException('Invalid legal registration type');
+                }
+            }
+
+            const { organizationCategory: _oc, legalRegistrationType: _lrt, ...userCreateData } = userData;
+
             const hashedPassword = await bcrypt.hash(password, 10);
 
             let organization: Organization | null = null;
-            if (userData.orgName && userData.orgType) {
+            if (userCreateData.orgName && userCreateData.orgType) {
                 organization = await this.organizationsService.create({
-                    name: userData.orgName,
-                    orgType: userData.orgType,
+                    name: userCreateData.orgName,
+                    orgType: userCreateData.orgType,
+                    ...(isOrgSignup
+                        ? { organizationCategory, legalRegistrationType }
+                        : {}),
                 });
             }
 
             const needsMembershipFee =
                 !!organization &&
-                (await this.organizationMembershipService.roleRequiresMembershipPayment(userData.role));
+                (await this.organizationMembershipService.roleRequiresMembershipPayment(userCreateData.role));
 
             const user = await this.usersService.create({
-                ...userData,
+                ...userCreateData,
                 email,
                 password: hashedPassword,
                 organization,

@@ -1,4 +1,8 @@
-import { IsString, IsEmail, IsOptional, IsBoolean } from 'class-validator';
+import { IsString, IsEmail, IsOptional, IsBoolean, IsIn } from 'class-validator';
+import {
+    LEGAL_REGISTRATION_TYPES,
+    ORGANIZATION_CATEGORIES,
+} from '../organization-taxonomy.constants';
 
 export class CreateOrganizationDto {
     @IsString()
@@ -6,6 +10,16 @@ export class CreateOrganizationDto {
 
     @IsString()
     orgType: string;
+
+    @IsOptional()
+    @IsString()
+    @IsIn([...ORGANIZATION_CATEGORIES])
+    organizationCategory?: string;
+
+    @IsOptional()
+    @IsString()
+    @IsIn([...LEGAL_REGISTRATION_TYPES])
+    legalRegistrationType?: string;
 
     @IsString()
     @IsOptional()

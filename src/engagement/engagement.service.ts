@@ -643,11 +643,12 @@ export class EngagementService {
             relations: ['student'],
             order: { createdAt: 'ASC' },
         });
-        return participants.map((p) => {
+        const mapped = participants.map((p) => {
             const decrypted = this.decryptParticipation(p);
             const enriched = this.enrichParticipationForReportDossier(decrypted, participants);
             return this.mapParticipationForReportRoster(decrypted, enriched);
         });
+        return this.dedupeProjectTeamRosterRows(mapped);
     }
 
     /** Engagement UI team list; resolves application faculty emails only when missing on rows. */
@@ -660,13 +661,58 @@ export class EngagementService {
             relations: ['student'],
             order: { createdAt: 'ASC' },
         });
-        return Promise.all(
+        const mapped = await Promise.all(
             participants.map(async (p) => {
                 const decrypted = this.decryptParticipation(p);
                 const enriched = await this.enrichParticipationForTeamResponse(decrypted, participants);
                 return this.mapParticipationForReportRoster(decrypted, enriched);
             }),
         );
+        return this.dedupeProjectTeamRosterRows(mapped);
+    }
+
+    /** Remove ghost duplicate seats (same email/student as team lead but non-lead row). */
+    private dedupeProjectTeamRosterRows(rows: Record<string, unknown>[]): Record<string, unknown>[] {
+        const leadEmailsByTeam = new Map<string, Set<string>>();
+        const leadStudentIdsByTeam = new Map<string, Set<string>>();
+        for (const row of rows) {
+            if (row.isTeamLead !== true && row.is_team_lead !== true) continue;
+            const teamKey = String(row.teamId ?? row.team_id ?? row.applicationId ?? 'default');
+            const em = String(row.email ?? '').trim().toLowerCase();
+            const sid = String(row.studentId ?? row.student_id ?? '').trim();
+            if (em) {
+                if (!leadEmailsByTeam.has(teamKey)) leadEmailsByTeam.set(teamKey, new Set());
+                leadEmailsByTeam.get(teamKey)!.add(em);
+            }
+            if (sid) {
+                if (!leadStudentIdsByTeam.has(teamKey)) leadStudentIdsByTeam.set(teamKey, new Set());
+                leadStudentIdsByTeam.get(teamKey)!.add(sid);
+            }
+        }
+
+        const seen = new Set<string>();
+        const out: Record<string, unknown>[] = [];
+        for (const row of rows) {
+            const teamKey = String(row.teamId ?? row.team_id ?? row.applicationId ?? 'default');
+            const em = String(row.email ?? '').trim().toLowerCase();
+            const sid = String(row.studentId ?? row.student_id ?? '').trim();
+            const isLead = row.isTeamLead === true || row.is_team_lead === true;
+            if (!isLead) {
+                const leadEmails = leadEmailsByTeam.get(teamKey);
+                const leadStudentIds = leadStudentIdsByTeam.get(teamKey);
+                if (em && leadEmails?.has(em)) continue;
+                if (sid && leadStudentIds?.has(sid)) continue;
+            }
+            const dedupeKey = sid
+                ? `s:${sid}:${teamKey}`
+                : em
+                  ? `e:${em}:${teamKey}`
+                  : `id:${String(row.id ?? row.participantId ?? '')}`;
+            if (seen.has(dedupeKey)) continue;
+            seen.add(dedupeKey);
+            out.push(row);
+        }
+        return out;
     }
 
     /** In-memory faculty/team fields for report dossiers (no opportunity_application queries). */

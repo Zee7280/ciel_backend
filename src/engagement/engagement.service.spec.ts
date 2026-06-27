@@ -211,6 +211,33 @@ describe('EngagementService', () => {
             ]);
         });
 
+        it('should drop ghost duplicate member rows that share the team lead email', async () => {
+            const t = fx('team-lead-ghost-dup');
+            mockParticipationRepository.find.mockResolvedValue([
+                {
+                    id: t.id.lead,
+                    projectId: t.id.project,
+                    studentId: t.id.u1,
+                    email: t.email.lead,
+                    isTeamLead: true,
+                    teamId: t.id.team,
+                },
+                {
+                    id: t.id.ghost,
+                    projectId: t.id.project,
+                    studentId: t.id.u1,
+                    email: t.email.lead,
+                    isTeamLead: false,
+                    teamId: t.id.team,
+                },
+            ]);
+
+            const result = await service.getProjectTeam(t.id.project);
+
+            expect(result).toHaveLength(1);
+            expect(result[0]).toEqual(expect.objectContaining({ id: t.id.lead, isTeamLead: true }));
+        });
+
         it('should include team aliases in my participation response', async () => {
             const t = fx('my-participation-aliases');
             mockParticipationRepository.find

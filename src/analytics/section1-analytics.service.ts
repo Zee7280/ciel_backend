@@ -11,7 +11,7 @@ import { UserRole } from '../users/enums/user-role.enum';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { Participation } from '../engagement/entities/participant.entity';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
-import { resolveAttendanceUnlockStatus } from '../engagement/attendance-unlock.util';
+import { resolveAttendanceUnlockStatus, resolveParticipationForAttendanceUnlock } from '../engagement/attendance-unlock.util';
 import { StudentReport } from '../reports/entities/student-report.entity';
 import { Organization } from '../organizations/entities/organization.entity';
 import { EmailOtp } from '../auth/entities/email-otp.entity';
@@ -322,6 +322,7 @@ export class Section1AnalyticsService {
             studentUser,
             primaryParticipation,
             teamStats,
+            teamMembers,
         );
         const duplicateCnic = await this.countDuplicateCnicHashes(participations);
         const duplicateTeamMembers = this.countDuplicateTeamMembers(teamMembers);
@@ -920,8 +921,10 @@ export class Section1AnalyticsService {
         user: User | null,
         participation: Participation | undefined,
         teamStats: ReturnType<Section1AnalyticsService['computeTeamStats']>,
+        teamMembers: Participation[] = [],
     ) {
-        return resolveAttendanceUnlockStatus(user, participation, teamStats.configured);
+        const effective = resolveParticipationForAttendanceUnlock(participation, teamMembers);
+        return resolveAttendanceUnlockStatus(user, effective, teamStats.configured);
     }
 
     private verifyLinkButtonStatus(

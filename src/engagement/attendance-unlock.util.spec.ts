@@ -3,6 +3,7 @@ import {
     isTeamConfigurationComplete,
     resolveAttendanceUnlockStatus,
     resolveIdentityVerificationStatus,
+    resolveParticipationForAttendanceUnlock,
 } from './attendance-unlock.util';
 import { Participation } from './entities/participant.entity';
 import { User } from '../users/entities/user.entity';
@@ -57,6 +58,31 @@ describe('attendance-unlock.util', () => {
 
         expect(result.unlocked).toBe(false);
         expect(result.admin_override).toBeUndefined();
+    });
+
+    it('inherits team lead admin override for teammates on the same team', () => {
+        const member = {
+            ...baseParticipation,
+            id: 'member-1',
+            isTeamLead: false,
+            teamId: 'team-1',
+            adminAttendanceEditable: false,
+            attendanceLocked: true,
+        } as Participation;
+        const lead = {
+            ...baseParticipation,
+            id: 'lead-1',
+            isTeamLead: true,
+            teamId: 'team-1',
+            adminAttendanceEditable: true,
+            attendanceLocked: true,
+        } as Participation;
+
+        const effective = resolveParticipationForAttendanceUnlock(member, [member, lead]);
+        const result = resolveAttendanceUnlockStatus(baseUser, effective, true);
+
+        expect(result.unlocked).toBe(true);
+        expect(result.admin_override).toBe(true);
     });
 
     it('locks when identity verification is incomplete', () => {

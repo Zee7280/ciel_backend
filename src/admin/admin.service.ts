@@ -1156,13 +1156,27 @@ export class AdminService {
 
         if (editable && participation.participationMode === 'team') {
             const teamGroup = this.groupTeamMembersForParticipation(projectEnrollments, participation);
-            const teamLead = teamGroup.find((row) => row.isTeamLead) ?? teamGroup[0];
-            if (teamLead && teamLead.id !== participation.id) {
-                teamLead.adminAttendanceEditable = true;
-                teamLead.attendanceLocked = false;
-                teamLead.attendanceVerificationRequested = false;
-                teamLead.attendanceVerificationRequestedAt = null;
-                await this.participationRepository.save(teamLead);
+            const rowsToUnlock: Participation[] = [];
+
+            if (participation.isTeamLead) {
+                for (const row of teamGroup) {
+                    if (row.id !== participation.id) {
+                        rowsToUnlock.push(row);
+                    }
+                }
+            } else {
+                const teamLead = teamGroup.find((row) => row.isTeamLead) ?? teamGroup[0];
+                if (teamLead && teamLead.id !== participation.id) {
+                    rowsToUnlock.push(teamLead);
+                }
+            }
+
+            for (const row of rowsToUnlock) {
+                row.adminAttendanceEditable = true;
+                row.attendanceLocked = false;
+                row.attendanceVerificationRequested = false;
+                row.attendanceVerificationRequestedAt = null;
+                await this.participationRepository.save(row);
             }
         }
 

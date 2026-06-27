@@ -41,6 +41,33 @@ export function isTeamConfigurationComplete(members: Participation[]): boolean {
     return members.length > 0 && (members[0].participationMode !== 'team' || members.length > 1);
 }
 
+/** Teammates inherit team lead admin override when grouped on the same application/team. */
+export function resolveParticipationForAttendanceUnlock(
+    participation: Participation | null | undefined,
+    teamMembers: Participation[] = [],
+): Participation | null | undefined {
+    if (!participation || participation.adminAttendanceEditable === true) {
+        return participation;
+    }
+    if (participation.participationMode !== 'team' || participation.isTeamLead) {
+        return participation;
+    }
+
+    const teamLeadOverride = teamMembers.find((member) => {
+        if (!member.isTeamLead || member.adminAttendanceEditable !== true) return false;
+        if (participation.teamId && member.teamId) {
+            return participation.teamId === member.teamId;
+        }
+        if (participation.applicationId && member.applicationId) {
+            return participation.applicationId === member.applicationId;
+        }
+        return false;
+    });
+
+    if (!teamLeadOverride) return participation;
+    return { ...participation, adminAttendanceEditable: true };
+}
+
 export function resolveAttendanceUnlockStatus(
     user: User | null | undefined,
     participation: Participation | null | undefined,

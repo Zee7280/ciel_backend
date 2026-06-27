@@ -47,6 +47,7 @@ const makeAdminServiceForTests = (overrides: Record<string, unknown> = {}) => {
             invalidateCache: jest.fn(),
             refreshCache: jest.fn().mockResolvedValue(false),
         },
+        feedbackService: {},
         ...overrides,
     };
 
@@ -65,6 +66,7 @@ const makeAdminServiceForTests = (overrides: Record<string, unknown> = {}) => {
         repositories.reportPartnerApprovalSettings as any,
         repositories.organizationMembershipService as any,
         repositories.partnerMembershipSettings as any,
+        repositories.feedbackService as any,
     );
 };
 
@@ -370,5 +372,96 @@ describe('AdminService getMasterAnalytics', () => {
         expect(result.data.admin_attendance_editable).toBe(true);
         expect(result.data.attendance_logging_unlock_status.unlocked).toBe(true);
         expect(result.data.attendance_logging_unlock_status.admin_override).toBe(true);
+    });
+
+    it('enables admin attendance override for teammates when team lead is enabled', async () => {
+        const teamLead = {
+            id: 'lead-1',
+            projectId: 'proj-1',
+            studentId: 'lead-stu',
+            fullName: 'Team Lead',
+            email: 'lead@test.com',
+            participationMode: 'team',
+            isTeamLead: true,
+            teamId: 'team-1',
+            attendanceLocked: true,
+            attendanceVerificationRequested: true,
+            adminAttendanceEditable: false,
+            student: {
+                profile_verified: true,
+                identity_verified: true,
+            },
+        };
+        const teammate = {
+            id: 'part-1',
+            projectId: 'proj-1',
+            studentId: 'stu-1',
+            fullName: 'Team Member',
+            email: 'member@test.com',
+            participationMode: 'team',
+            isTeamLead: false,
+            teamId: 'team-1',
+            attendanceLocked: true,
+            attendanceVerificationRequested: true,
+            adminAttendanceEditable: false,
+            student: {
+                profile_verified: false,
+                identity_verified: false,
+            },
+        };
+        const otherMember = {
+            id: 'part-2',
+            projectId: 'proj-1',
+            studentId: 'stu-2',
+            fullName: 'Other Member',
+            email: 'other@test.com',
+            participationMode: 'team',
+            isTeamLead: false,
+            teamId: 'team-2',
+            attendanceLocked: true,
+            attendanceVerificationRequested: true,
+            adminAttendanceEditable: false,
+            student: {
+                profile_verified: false,
+                identity_verified: false,
+            },
+        };
+
+        const findOne = jest.fn().mockResolvedValue(teamLead);
+        const save = jest.fn().mockImplementation(async (row) => row);
+        const find = jest.fn().mockResolvedValue([teamLead, teammate, otherMember]);
+
+        const service = makeAdminServiceForTests({
+            participationRepository: {
+                findOne,
+                save,
+                find,
+            },
+        });
+
+        const result = await service.setParticipationAttendanceEditable('lead-1', true);
+
+        expect(save).toHaveBeenCalledWith(
+            expect.objectContaining({
+                id: 'lead-1',
+                adminAttendanceEditable: true,
+                attendanceLocked: false,
+                attendanceVerificationRequested: false,
+            }),
+        );
+        expect(save).toHaveBeenCalledWith(
+            expect.objectContaining({
+                id: 'part-1',
+                adminAttendanceEditable: true,
+                attendanceLocked: false,
+                attendanceVerificationRequested: false,
+            }),
+        );
+        expect(save).not.toHaveBeenCalledWith(
+            expect.objectContaining({
+                id: 'part-2',
+            }),
+        );
+        expect(result.data.admin_attendance_editable).toBe(true);
     });
 });

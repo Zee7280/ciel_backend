@@ -628,6 +628,12 @@ export class EngagementService {
             registration_number: student?.registrationNumber || null,
             participationMode: participation.participationMode,
             participation_mode: participation.participationMode,
+            adminAttendanceEditable: participation.adminAttendanceEditable === true,
+            admin_attendance_editable: participation.adminAttendanceEditable === true,
+            attendanceLocked: participation.attendanceLocked === true,
+            attendance_locked: participation.attendanceLocked === true,
+            attendanceVerificationRequested: participation.attendanceVerificationRequested === true,
+            attendance_verification_requested: participation.attendanceVerificationRequested === true,
         };
     }
 

@@ -454,6 +454,51 @@ export class MailService {
     }
   }
 
+  async sendTeamMemberAddedToProject(params: {
+    to: string;
+    leadName: string;
+    projectTitle: string;
+    teamDisplayName?: string | null;
+    projectId: string;
+  }) {
+    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const portalLink = this.buildFrontendLink(
+      `/dashboard/student/projects/${encodeURIComponent(params.projectId)}/participation`,
+      {},
+    );
+    const leadEsc = this.escHtmlPlain(params.leadName?.trim() || 'Your team lead');
+    const titleEsc = this.escHtmlPlain(params.projectTitle);
+    const teamLine = params.teamDisplayName?.trim()
+      ? `<p>Team: <strong>${this.escHtmlPlain(params.teamDisplayName.trim())}</strong></p>`
+      : '';
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">You were added to a project team</h2>
+        <p>${leadEsc} added you to <strong>${titleEsc}</strong> on CIEL PK.</p>
+        ${teamLine}
+        <p>Open your member portal to log attendance. Your team lead submits the final report.</p>
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${portalLink}" style="background-color: #4CAF50; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Open member portal</a>
+        </div>
+        <p style="font-size:13px;color:#666;">Questions? <a href="mailto:support@cielpk.com">support@cielpk.com</a></p>
+        <p>Best regards,<br><strong>The CIEL PK Team</strong></p>
+      </div>
+    `;
+
+    try {
+      await this.transporter.sendMail({
+        from,
+        to: params.to,
+        subject: `${params.leadName} added you to ${params.projectTitle}`,
+        html,
+      });
+      this.logger.log(`Team member added email sent to ${params.to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send team member added email to ${params.to}`, error.stack);
+    }
+  }
+
   async sendFacultyApprovalRequest(
     to: string,
     studentName: string,

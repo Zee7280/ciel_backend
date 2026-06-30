@@ -1,163 +1,218 @@
-import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn, OneToMany } from 'typeorm';
+import {
+  Entity,
+  Column,
+  PrimaryGeneratedColumn,
+  CreateDateColumn,
+  UpdateDateColumn,
+  ManyToOne,
+  JoinColumn,
+  OneToMany,
+} from 'typeorm';
 import { User } from '../../users/entities/user.entity';
 import { Opportunity } from '../../opportunities/entities/opportunity.entity';
 import { AttendanceLog } from './attendance-log.entity';
 
 @Entity('participations')
 export class Participation {
-    @PrimaryGeneratedColumn('uuid')
-    id: string;
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
 
-    @ManyToOne(() => Opportunity, { onDelete: 'CASCADE' })
-    @JoinColumn({ name: 'project_id' })
-    project: Opportunity;
+  @ManyToOne(() => Opportunity, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'project_id' })
+  project: Opportunity;
 
-    @Column({ name: 'project_id' })
-    projectId: string;
+  @Column({ name: 'project_id' })
+  projectId: string;
 
-    @ManyToOne(() => User, { onDelete: 'CASCADE' })
-    @JoinColumn({ name: 'student_id' })
-    student: User;
+  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'student_id' })
+  student: User;
 
-    @Column({ name: 'student_id', nullable: true })
-    studentId: string;
+  @Column({ name: 'student_id', nullable: true })
+  studentId: string;
 
-    @Column({ nullable: true })
-    facultySupervisorEmail: string;
+  @Column({ nullable: true })
+  facultySupervisorEmail: string;
 
-    @Column({ nullable: true })
-    primaryFacultyEmail: string;
+  @Column({ nullable: true })
+  primaryFacultyEmail: string;
 
-    @Column({ nullable: true })
-    secondaryFacultyEmail: string;
+  @Column({ nullable: true })
+  secondaryFacultyEmail: string;
 
-    @Column({ nullable: true })
-    teamId: string;
+  @Column({ nullable: true })
+  teamId: string;
 
-    @Column({
-        type: 'enum',
-        enum: ['individual', 'team'],
-        default: 'individual'
-    })
-    participationMode: string;
+  /** Human-readable label aligned with project title (internal grouping remains `teamId`). */
+  @Column({
+    name: 'team_display_name',
+    type: 'varchar',
+    length: 120,
+    nullable: true,
+  })
+  teamDisplayName: string | null;
 
-    @Column({ default: false })
-    isTeamLead: boolean;
+  @Column({
+    name: 'formation_source',
+    type: 'varchar',
+    length: 32,
+    nullable: true,
+  })
+  formationSource: 'apply' | 'report' | 'admin_merge' | null;
 
-    @Column()
-    fullName: string;
+  @Column({
+    type: 'enum',
+    enum: ['individual', 'team'],
+    default: 'individual',
+  })
+  participationMode: string;
 
-    @Column({ nullable: true })
-    cnicHash: string; // SHA-256 hash for duplicate checking
+  @Column({ default: false })
+  isTeamLead: boolean;
 
-    @Column({ nullable: true })
-    cnic: string; // AES-256 encrypted CNIC
+  @Column()
+  fullName: string;
 
-    @Column({ nullable: true })
-    cnicLast4: string; // For searching/displaying last 4 digits
+  @Column({ nullable: true })
+  cnicHash: string; // SHA-256 hash for duplicate checking
 
-    @Column()
-    mobile: string;
+  @Column({ nullable: true })
+  cnic: string; // AES-256 encrypted CNIC
 
-    @Column({ default: false })
-    mobileVerified: boolean;
+  @Column({ nullable: true })
+  cnicLast4: string; // For searching/displaying last 4 digits
 
-    @Column()
-    email: string;
+  @Column()
+  mobile: string;
 
-    @Column({ default: false })
-    emailVerified: boolean;
+  @Column({ default: false })
+  mobileVerified: boolean;
 
-    /** Explicit DB type: `string | null` alone makes TypeORM infer `Object` on Postgres. */
-    @Column({ type: 'varchar', nullable: true })
-    universityId: string | null;
+  @Column()
+  email: string;
 
-    @Column({ nullable: true })
-    universityName: string;
+  @Column({ default: false })
+  emailVerified: boolean;
 
-    @Column({ nullable: true })
-    academicProgram: string;
+  /** Explicit DB type: `string | null` alone makes TypeORM infer `Object` on Postgres. */
+  @Column({ type: 'varchar', nullable: true })
+  universityId: string | null;
 
-    @Column({
-        type: 'enum',
-        enum: ['1st Year', '2nd Year', '3rd Year', '4th Year', 'Graduate', 'Postgraduate'],
-        nullable: true
-    })
-    yearOfStudy: string;
+  @Column({ nullable: true })
+  universityName: string;
 
-    @Column({ nullable: true })
-    department: string;
+  @Column({ nullable: true })
+  academicProgram: string;
 
-    @Column({
-        type: 'enum',
-        enum: ['Voluntary', 'Course-Linked', 'Credit-Bearing', 'Capstone / Thesis', 'Research-Integrated'],
-        nullable: true
-    })
-    academicIntegrationType: string;
+  @Column({
+    type: 'enum',
+    enum: [
+      '1st Year',
+      '2nd Year',
+      '3rd Year',
+      '4th Year',
+      'Graduate',
+      'Postgraduate',
+    ],
+    nullable: true,
+  })
+  yearOfStudy: string;
 
-    @Column({
-        type: 'enum',
-        enum: ['pending', 'pending_payment_approval', 'paid', 'pending_ciel_approval', 'pending_faculty_approval', 'approved', 'rejected', 'finalized', 'verified', 'accepted'],
-        default: 'pending'
-    })
-    status: string;
+  @Column({ nullable: true })
+  department: string;
 
-    @Column({
-        type: 'enum',
-        enum: ['pending', 'pending_payment_approval', 'paid', 'rejected'],
-        default: 'pending'
-    })
-    paymentStatus: string;
+  @Column({
+    type: 'enum',
+    enum: [
+      'Voluntary',
+      'Course-Linked',
+      'Credit-Bearing',
+      'Capstone / Thesis',
+      'Research-Integrated',
+    ],
+    nullable: true,
+  })
+  academicIntegrationType: string;
 
-    @Column({ nullable: true })
-    paymentProofUrl: string;
+  @Column({
+    type: 'enum',
+    enum: [
+      'pending',
+      'pending_payment_approval',
+      'paid',
+      'pending_ciel_approval',
+      'pending_faculty_approval',
+      'approved',
+      'rejected',
+      'finalized',
+      'verified',
+      'accepted',
+    ],
+    default: 'pending',
+  })
+  status: string;
 
-    @Column({ type: 'timestamp', nullable: true })
-    paymentDate: Date;
+  @Column({
+    type: 'enum',
+    enum: ['pending', 'pending_payment_approval', 'paid', 'rejected'],
+    default: 'pending',
+  })
+  paymentStatus: string;
 
-    @Column({ type: 'float', nullable: true })
-    eisScore: number;
+  @Column({ nullable: true })
+  paymentProofUrl: string;
 
-    @Column({ nullable: true })
-    hecStatus: string;
+  @Column({ type: 'timestamp', nullable: true })
+  paymentDate: Date;
 
-    @Column({ type: 'timestamp', nullable: true })
-    finalizedAt: Date;
+  @Column({ type: 'float', nullable: true })
+  eisScore: number;
 
-    @OneToMany(() => AttendanceLog, (log) => log.participant)
-    attendanceLogs: AttendanceLog[];
+  @Column({ nullable: true })
+  hecStatus: string;
 
-    @Column({ nullable: true })
-    applicationId: string;
+  @Column({ type: 'timestamp', nullable: true })
+  finalizedAt: Date;
 
-    @Column({ default: false })
-    attendanceVerificationRequested: boolean;
+  @OneToMany(() => AttendanceLog, (log) => log.participant)
+  attendanceLogs: AttendanceLog[];
 
-    @Column({ default: false })
-    attendanceLocked: boolean;
+  @Column({ nullable: true })
+  applicationId: string;
 
-    /** CIEL admin override: allow attendance logging even when identity/verification gates are incomplete. */
-    @Column({ name: 'admin_attendance_editable', default: false })
-    adminAttendanceEditable: boolean;
+  @Column({ default: false })
+  attendanceVerificationRequested: boolean;
 
-    @Column({ type: 'timestamp', nullable: true })
-    attendanceVerificationRequestedAt: Date | null;
+  @Column({ default: false })
+  attendanceLocked: boolean;
 
-    @Column({ type: 'timestamp', nullable: true })
-    attendanceVerificationEmailSentAt: Date | null;
+  /** CIEL admin override: allow attendance logging even when identity/verification gates are incomplete. */
+  @Column({ name: 'admin_attendance_editable', default: false })
+  adminAttendanceEditable: boolean;
 
-    @Column({ name: 'attendance_approver_type', type: 'varchar', length: 16, nullable: true })
-    attendanceApproverType: 'faculty' | 'partner' | null;
+  @Column({ type: 'timestamp', nullable: true })
+  attendanceVerificationRequestedAt: Date | null;
 
-    @Column({ type: 'varchar', length: 16, nullable: true })
-    attendanceVerificationReviewerType: 'faculty' | 'partner' | null;
+  @Column({ type: 'timestamp', nullable: true })
+  attendanceVerificationEmailSentAt: Date | null;
 
-    @Column({ type: 'varchar', length: 320, nullable: true })
-    attendanceVerificationReviewerEmail: string | null;
+  @Column({
+    name: 'attendance_approver_type',
+    type: 'varchar',
+    length: 16,
+    nullable: true,
+  })
+  attendanceApproverType: 'faculty' | 'partner' | null;
 
-    @CreateDateColumn()
-    createdAt: Date;
+  @Column({ type: 'varchar', length: 16, nullable: true })
+  attendanceVerificationReviewerType: 'faculty' | 'partner' | null;
 
-    @UpdateDateColumn()
-    updatedAt: Date;
+  @Column({ type: 'varchar', length: 320, nullable: true })
+  attendanceVerificationReviewerEmail: string | null;
+
+  @CreateDateColumn()
+  createdAt: Date;
+
+  @UpdateDateColumn()
+  updatedAt: Date;
 }

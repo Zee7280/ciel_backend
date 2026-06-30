@@ -2828,4 +2828,15 @@ export class OpportunitiesService {
 
         return saved;
     }
+
+    async setAttendanceRoutingOverride(
+        opportunityId: string,
+        override: 'auto' | 'partner' | 'faculty',
+    ) {
+        const opp = await this.findOne(opportunityId);
+        if (!opp) throw new NotFoundException('Opportunity not found');
+        opp.attendanceRoutingOverride = override;
+        await this.opportunitiesRepository.save(opp);
+        return { success: true, data: { attendance_routing_override: override } };
+    }
 }

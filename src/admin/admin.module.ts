@@ -21,31 +21,33 @@ import { AdminProjectEvidenceService } from './admin-project-evidence.service';
 import { ReportPartnerApprovalModule } from '../reports/report-partner-approval.module';
 import { OrganizationMembershipModule } from '../organization-membership/organization-membership.module';
 import { FeedbackModule } from '../feedback/feedback.module';
+import { JobsModule } from '../jobs/jobs.module';
 
 @Module({
-    imports: [
-        UsersModule,
-        OpportunitiesModule,
-        StudentsModule,
-        ReportPartnerApprovalModule,
-        OrganizationMembershipModule,
-        IssueLogsModule,
-        FacultyUniversityScopeModule,
-        AuditLogsModule,
-        FeedbackModule,
-        TypeOrmModule.forFeature([
-            User,
-            Opportunity,
-            Report,
-            StudentReport,
-            Timesheet,
-            Setting,
-            Participation,
-            OpportunityApplication,
-            AttendanceLog,
-        ]),
-    ],
-    controllers: [AdminController],
-    providers: [AdminService, AdminProjectEvidenceService],
+  imports: [
+    UsersModule,
+    OpportunitiesModule,
+    StudentsModule,
+    ReportPartnerApprovalModule,
+    OrganizationMembershipModule,
+    IssueLogsModule,
+    FacultyUniversityScopeModule,
+    AuditLogsModule,
+    FeedbackModule,
+    JobsModule,
+    TypeOrmModule.forFeature([
+      User,
+      Opportunity,
+      Report,
+      StudentReport,
+      Timesheet,
+      Setting,
+      Participation,
+      OpportunityApplication,
+      AttendanceLog,
+    ]),
+  ],
+  controllers: [AdminController],
+  providers: [AdminService, AdminProjectEvidenceService],
 })
-export class AdminModule { }
+export class AdminModule {}

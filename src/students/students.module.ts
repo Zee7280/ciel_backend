@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { StudentsController } from './students.controller';
 import { StudentController } from './student.controller';
+import { StudentParticipationService } from './student-participation.service';
 import { StudentsService } from './students.service';
 import { User } from '../users/entities/user.entity';
 import { Participation } from '../engagement/entities/participant.entity';
@@ -23,31 +24,39 @@ import { OpportunitiesModule } from '../opportunities/opportunities.module';
 import { ReportPartnerApprovalModule } from '../reports/report-partner-approval.module';
 
 @Module({
-    imports: [
-        TypeOrmModule.forFeature([
-            User,
-            Participation,
-            Opportunity,
-            Timesheet,
-            StudentReport,
-            Otp,
-            AttendanceLog,
-            Organization,
-            Payment,
-        ]),
-        UsersModule,
-        EngagementModule,
-        OpportunitiesModule,
-        ReportPartnerApprovalModule,
-    ],
-    controllers: [
-        StudentsController,
-        StudentReportsController,
-        StudentController,
-        PublicImpactReportsController,
-        PublicReportScoringController,
-    ],
-    providers: [StudentsService, StudentReportsService],
-    exports: [StudentsService, StudentReportsService],
+  imports: [
+    TypeOrmModule.forFeature([
+      User,
+      Participation,
+      Opportunity,
+      Timesheet,
+      StudentReport,
+      Otp,
+      AttendanceLog,
+      Organization,
+      Payment,
+    ]),
+    UsersModule,
+    EngagementModule,
+    OpportunitiesModule,
+    ReportPartnerApprovalModule,
+  ],
+  controllers: [
+    StudentsController,
+    StudentReportsController,
+    StudentController,
+    PublicImpactReportsController,
+    PublicReportScoringController,
+  ],
+  providers: [
+    StudentsService,
+    StudentReportsService,
+    StudentParticipationService,
+  ],
+  exports: [
+    StudentsService,
+    StudentReportsService,
+    StudentParticipationService,
+  ],
 })
-export class StudentsModule { }
+export class StudentsModule {}

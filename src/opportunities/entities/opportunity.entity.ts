@@ -160,6 +160,10 @@ export class Opportunity {
     @Column({ type: 'text', nullable: true })
     rejectionReason: string | null;
 
+    /** Admin override for attendance approver routing (`auto` | `partner` | `faculty`). */
+    @Column({ type: 'varchar', length: 16, default: 'auto' })
+    attendanceRoutingOverride: 'auto' | 'partner' | 'faculty';
+
     @CreateDateColumn()
     createdAt: Date;
 

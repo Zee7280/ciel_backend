@@ -32,6 +32,7 @@ import { OrganizationMembershipModule } from './organization-membership/organiza
 import { FeedbackModule } from './feedback/feedback.module';
 import { TutorialsModule } from './tutorials/tutorials.module';
 import { AnalyticsModule } from './analytics/analytics.module';
+import { JobsModule } from './jobs/jobs.module';
 
 @Module({
   imports: [
@@ -47,11 +48,16 @@ import { AnalyticsModule } from './analytics/analytics.module';
         username: configService.get<string>('DB_USERNAME'),
         password: configService.get<string>('DB_PASSWORD'),
         database: configService.get<string>('DB_NAME'),
-        ssl: (process.env.NODE_ENV === 'production' || process.env.VERCEL) ? {
-          rejectUnauthorized: false
-        } : (configService.get<string>('DB_SSL') === 'true' ? {
-          rejectUnauthorized: false,
-        } : undefined),
+        ssl:
+          process.env.NODE_ENV === 'production' || process.env.VERCEL
+            ? {
+                rejectUnauthorized: false,
+              }
+            : configService.get<string>('DB_SSL') === 'true'
+              ? {
+                  rejectUnauthorized: false,
+                }
+              : undefined,
         synchronize: true,
         autoLoadEntities: true,
         logging: false,
@@ -84,8 +90,9 @@ import { AnalyticsModule } from './analytics/analytics.module';
     FeedbackModule,
     TutorialsModule,
     AnalyticsModule,
-    TypeOrmModule.forFeature([Setting])
-],
+    JobsModule,
+    TypeOrmModule.forFeature([Setting]),
+  ],
   controllers: [AppController],
   providers: [
     AppService,
@@ -95,4 +102,4 @@ import { AnalyticsModule } from './analytics/analytics.module';
     },
   ],
 })
-export class AppModule { }
+export class AppModule {}

@@ -14,6 +14,16 @@ import { ConfigService } from '@nestjs/config';
 import { ReportPartnerApprovalSettingsService } from './report-partner-approval-settings.service';
 import { evaluateReportRequiresPartnerApproval } from './report-partner-approval.util';
 
+/** Minimal section6/8/10 payload that passes server submit validation. */
+const MIN_VALID_SUBMIT_SECTIONS = {
+    section6: { use_resources: 'no' as const },
+    section8: { has_evidence: 'no' as const },
+    section10: {
+        continuation_status: 'no' as const,
+        continuation_details: 'word '.repeat(100).trim(),
+    },
+};
+
 describe('StudentReportsService', () => {
     let service: StudentReportsService;
 
@@ -140,7 +150,11 @@ describe('StudentReportsService', () => {
     it('submits when forceSubmit is true (submit route behavior)', async () => {
         const result = await service.createReport(
             'student-1',
-            { opportunityId: 'opp-1', section2: { problem_statement: 'test', baseline_evidence: 'Survey', discipline: 'CS' } },
+            {
+                opportunityId: 'opp-1',
+                section2: { problem_statement: 'test', baseline_evidence: 'Survey', discipline: 'CS' },
+                ...MIN_VALID_SUBMIT_SECTIONS,
+            },
             [],
             true,
         );
@@ -215,6 +229,7 @@ describe('StudentReportsService', () => {
                     primary_sdg: { target_id: '', goal_number: '', indicator_id: '' },
                     contribution_intent_statement: 'Contribution logic for SDG 3',
                 },
+                ...MIN_VALID_SUBMIT_SECTIONS,
             },
             [],
             true,
@@ -360,6 +375,7 @@ describe('StudentReportsService', () => {
                 {
                     opportunityId: SAMPLE_OPP_UUID,
                     section2: { problem_statement: 'test', baseline_evidence: 'Survey', discipline: 'CS' },
+                    ...MIN_VALID_SUBMIT_SECTIONS,
                 },
                 [],
                 true,
@@ -429,6 +445,7 @@ describe('StudentReportsService', () => {
                 {
                     opportunityId: SAMPLE_OPP_UUID,
                     section2: { problem_statement: 'test', baseline_evidence: 'Survey', discipline: 'CS' },
+                    ...MIN_VALID_SUBMIT_SECTIONS,
                 },
                 [],
                 true,
@@ -462,6 +479,7 @@ describe('StudentReportsService', () => {
                 {
                     opportunityId: SAMPLE_OPP_UUID,
                     section2: { problem_statement: 'test', baseline_evidence: 'Survey', discipline: 'CS' },
+                    ...MIN_VALID_SUBMIT_SECTIONS,
                 },
                 [],
                 true,
@@ -484,6 +502,7 @@ describe('StudentReportsService', () => {
                 {
                     opportunityId: SAMPLE_OPP_UUID,
                     section2: { problem_statement: 'test', baseline_evidence: 'Survey', discipline: 'CS' },
+                    ...MIN_VALID_SUBMIT_SECTIONS,
                 },
                 [],
                 true,
@@ -732,5 +751,88 @@ describe('StudentReportsService', () => {
         expect(result.data).toHaveLength(1);
         expect(result.data[0].id).toBe('report-lead');
         expect(result.pagination.total).toBe(1);
+    });
+
+    it('admin findAll returns one report per team when multiple teams share a project', async () => {
+        const opp = '582da802-e41e-488d-bd3d-d6dee59982b8';
+        const teamOneLeadReport = {
+            id: 'report-team-one',
+            studentId: 'lead-team-one',
+            opportunityId: opp,
+            project_id: opp,
+            status: 'submitted',
+            partner_status: 'pending',
+            admin_status: 'pending',
+            submission_date: new Date(),
+            reportSubmittedAt: new Date(),
+            createdAt: new Date(),
+            student: { name: 'Lead One', email: 'lead1@test.com' },
+            opportunity: { title: 'Shared Project', organizationId: 'org-1', organization: { name: 'Org' } },
+            section11: null,
+        };
+        const teamTwoLeadReport = {
+            ...teamOneLeadReport,
+            id: 'report-team-two',
+            studentId: 'lead-team-two',
+            student: { name: 'Lead Two', email: 'lead2@test.com' },
+        };
+
+        mockStudentReportsRepository.find.mockResolvedValue([
+            teamTwoLeadReport,
+            teamOneLeadReport,
+        ]);
+
+        const participationRows = [
+            {
+                studentId: 'lead-team-one',
+                projectId: opp,
+                participationMode: 'team',
+                teamId: 'TEAM-ONE',
+                isTeamLead: true,
+                createdAt: new Date(1),
+                id: 'p-lead-one',
+            },
+            {
+                studentId: 'lead-team-two',
+                projectId: opp,
+                participationMode: 'team',
+                teamId: 'TEAM-TWO',
+                isTeamLead: true,
+                createdAt: new Date(2),
+                id: 'p-lead-two',
+            },
+        ];
+        mockParticipantRepository.find.mockImplementation((opts: { where?: Record<string, unknown> }) => {
+            const w = opts?.where ?? {};
+            const matches = (row: Record<string, unknown>) => {
+                for (const [key, value] of Object.entries(w)) {
+                    if (value === undefined) continue;
+                    if ((row as Record<string, unknown>)[key] !== value) return false;
+                }
+                return true;
+            };
+            if (Array.isArray(w.studentId) || Array.isArray(w.projectId)) {
+                const studentIds = Array.isArray(w.studentId) ? w.studentId : [w.studentId];
+                const projectIds = Array.isArray(w.projectId) ? w.projectId : [w.projectId];
+                return Promise.resolve(
+                    participationRows.filter(
+                        (row) =>
+                            studentIds.includes(row.studentId) &&
+                            projectIds.includes(row.projectId),
+                    ),
+                );
+            }
+            return Promise.resolve(participationRows.filter((row) => matches(row)));
+        });
+
+        const result = await service.findAll({ page: 1, limit: 50 });
+
+        expect(result.success).toBe(true);
+        expect(result.data).toHaveLength(2);
+        expect(result.data.map((r: { id: string }) => r.id).sort()).toEqual([
+            'report-team-one',
+            'report-team-two',
+        ]);
+        expect(result.pagination.total).toBe(2);
     });
 });

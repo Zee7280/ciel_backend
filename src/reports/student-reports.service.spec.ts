@@ -48,6 +48,7 @@ describe('StudentReportsService', () => {
     };
     const mockPaymentRepository = {
         findOne: jest.fn().mockResolvedValue(null),
+        find: jest.fn().mockResolvedValue([]),
     };
     const mockS3Service = {
         uploadFile: jest.fn(),

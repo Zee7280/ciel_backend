@@ -1208,6 +1208,81 @@ export class StudentReportsService {
     };
   }
 
+  private async loadLatestPaymentsForReports(
+    reports: StudentReport[],
+  ): Promise<Map<string, Payment>> {
+    const studentIds = new Set<string>();
+    const projectIds = new Set<string>();
+    for (const report of reports) {
+      const projectId = (report.opportunityId || report.project_id || '').trim();
+      if (
+        report.studentId &&
+        projectId &&
+        this.looksLikeUuid(projectId)
+      ) {
+        studentIds.add(report.studentId);
+        projectIds.add(projectId);
+      }
+    }
+    if (!studentIds.size || !projectIds.size) {
+      return new Map();
+    }
+
+    const rows = await this.paymentRepository.find({
+      where: {
+        studentId: In([...studentIds]),
+        projectId: In([...projectIds]),
+      },
+      order: { created_at: 'DESC' },
+    });
+
+    const latestByStudentProject = new Map<string, Payment>();
+    for (const row of rows) {
+      const key = `${row.studentId}:${row.projectId}`;
+      if (!latestByStudentProject.has(key)) {
+        latestByStudentProject.set(key, row);
+      }
+    }
+    return latestByStudentProject;
+  }
+
+  private resolveAdminListingPaymentStatus(
+    report: StudentReport,
+    latest: Payment | null | undefined,
+  ): {
+    payment_status: string | null;
+    payment_verified: boolean;
+  } {
+    const derived = this.paymentDerivedFields(
+      latest,
+      report.status,
+      report.admin_status,
+    );
+    if (derived.payment_verified) {
+      return {
+        payment_verified: true,
+        payment_status: 'paid',
+      };
+    }
+    if (latest?.status) {
+      return {
+        payment_verified: false,
+        payment_status: latest.status,
+      };
+    }
+    const raw = String(report.status || '').toLowerCase();
+    if (raw === 'payment_pending' || raw === 'payment_under_review') {
+      return { payment_verified: false, payment_status: 'awaiting_payment' };
+    }
+    if (raw === 'draft') {
+      return { payment_verified: false, payment_status: null };
+    }
+    return {
+      payment_verified: false,
+      payment_status: derived.payment_status,
+    };
+  }
+
   private async mapReportListingsWithTeam(
     reports: StudentReport[],
     opportunityByProjectId?: Map<string, Opportunity>,
@@ -1231,13 +1306,25 @@ export class StudentReportsService {
       }),
     );
 
+    const paymentByStudentProject =
+      await this.loadLatestPaymentsForReports(reports);
+
     return reports.map((report) => {
       const base = this.mapReportListing(report, opportunityByProjectId);
       const projectKey = this.reportProjectKey(report);
       const roster = rosterCache.get(projectKey) ?? [];
+      const latestPayment =
+        paymentByStudentProject.get(`${report.studentId}:${projectKey}`) ??
+        null;
+      const payment = this.resolveAdminListingPaymentStatus(
+        report,
+        latestPayment,
+      );
       return {
         ...base,
         ...this.summarizeTeamRosterForListing(roster, report),
+        payment_verified: payment.payment_verified,
+        payment_status: payment.payment_status,
       };
     });
   }

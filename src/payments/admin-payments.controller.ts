@@ -36,6 +36,14 @@ export class AdminPaymentsController {
         };
     }
 
+    @Get(':paymentId/submissions')
+    async getPaymentSubmissions(@Param('paymentId') paymentId: string) {
+        return {
+            success: true,
+            data: await this.paymentsService.getSubmissionHistoryByPaymentId(paymentId),
+        };
+    }
+
     @Get()
     async listByStatus(@Query('status') status?: string) {
         if (!status) {

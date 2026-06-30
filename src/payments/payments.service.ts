@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, type FindOptionsWhere } from 'typeorm';
+import { In, Repository, type FindOptionsWhere } from 'typeorm';
 import { Participation } from '../engagement/entities/participant.entity';
 import { findCanonicalTeamLeadStudentId } from '../engagement/team-lead-canonical.util';
 import { Setting } from '../settings/entities/setting.entity';
@@ -309,7 +309,63 @@ export class PaymentsService {
         };
     }
 
-    private async mapManualPaymentRow(p: Payment) {
+    private paymentScopeKey(studentId: string, projectId: string): string {
+        return `${studentId}:${projectId}`;
+    }
+
+    private async buildSubmissionMetaForPayments(
+        payments: Payment[],
+    ): Promise<Map<string, { submissionNumber: number; totalInScope: number }>> {
+        const meta = new Map<string, { submissionNumber: number; totalInScope: number }>();
+        if (!payments.length) {
+            return meta;
+        }
+
+        const scopeKeys = new Set<string>();
+        const studentIds = new Set<string>();
+        const projectIds = new Set<string>();
+        for (const payment of payments) {
+            studentIds.add(payment.studentId);
+            projectIds.add(payment.projectId);
+            scopeKeys.add(this.paymentScopeKey(payment.studentId, payment.projectId));
+        }
+
+        const allRows = await this.paymentRepository.find({
+            where: {
+                studentId: In([...studentIds]),
+                projectId: In([...projectIds]),
+            },
+            order: { created_at: 'ASC' },
+            select: ['id', 'studentId', 'projectId', 'created_at'],
+        });
+
+        const byScope = new Map<string, typeof allRows>();
+        for (const row of allRows) {
+            const key = this.paymentScopeKey(row.studentId, row.projectId);
+            if (!scopeKeys.has(key)) {
+                continue;
+            }
+            const list = byScope.get(key) ?? [];
+            list.push(row);
+            byScope.set(key, list);
+        }
+
+        for (const list of byScope.values()) {
+            for (let i = 0; i < list.length; i++) {
+                meta.set(list[i].id, {
+                    submissionNumber: i + 1,
+                    totalInScope: list.length,
+                });
+            }
+        }
+
+        return meta;
+    }
+
+    private async mapManualPaymentRow(
+        p: Payment,
+        submissionMeta?: { submissionNumber: number; totalInScope: number },
+    ) {
         const teamCtx = await this.buildManualPaymentTeamContext(p);
         return {
             id: p.id,
@@ -338,6 +394,10 @@ export class PaymentsService {
             proofUrl: p.proof_url,
             submittedAt: p.created_at,
             status: p.status,
+            submission_number: submissionMeta?.submissionNumber,
+            submissionNumber: submissionMeta?.submissionNumber,
+            submission_total: submissionMeta?.totalInScope,
+            submissionTotal: submissionMeta?.totalInScope,
         };
     }
 
@@ -404,7 +464,10 @@ export class PaymentsService {
             order: { created_at: 'DESC' },
         });
 
-        return Promise.all(payments.map((p) => this.mapManualPaymentRow(p)));
+        const submissionMeta = await this.buildSubmissionMetaForPayments(payments);
+        return Promise.all(
+            payments.map((p) => this.mapManualPaymentRow(p, submissionMeta.get(p.id))),
+        );
     }
 
     async findManualPaymentsByStatus(status: PaymentStatus.APPROVED | PaymentStatus.REJECTED) {
@@ -414,7 +477,35 @@ export class PaymentsService {
             order: { created_at: 'DESC' },
         });
 
-        return Promise.all(payments.map((p) => this.mapManualPaymentRow(p)));
+        const submissionMeta = await this.buildSubmissionMetaForPayments(payments);
+        return Promise.all(
+            payments.map((p) => this.mapManualPaymentRow(p, submissionMeta.get(p.id))),
+        );
+    }
+
+    /** All slips for the same student + project (oldest first). */
+    async getSubmissionHistoryByPaymentId(paymentId: string) {
+        const payment = await this.paymentRepository.findOne({
+            where: { id: paymentId },
+        });
+
+        if (!payment) {
+            throw new NotFoundException('Payment record not found');
+        }
+
+        const rows = await this.paymentRepository.find({
+            where: {
+                studentId: payment.studentId,
+                projectId: payment.projectId,
+            },
+            relations: ['student', 'opportunity', 'opportunity.organization'],
+            order: { created_at: 'ASC' },
+        });
+
+        const submissionMeta = await this.buildSubmissionMetaForPayments(rows);
+        return Promise.all(
+            rows.map((p) => this.mapManualPaymentRow(p, submissionMeta.get(p.id))),
+        );
     }
 
     async verifyManualPayment(id: string, status: PaymentStatus, feedback?: string) {

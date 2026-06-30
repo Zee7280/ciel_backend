@@ -836,4 +836,133 @@ describe('StudentReportsService', () => {
         ]);
         expect(result.pagination.total).toBe(2);
     });
+
+    it('admin findAll marks payment as paid for verified reports without a manual payment row', async () => {
+        const opp = '582da802-e41e-488d-bd3d-d6dee59982b8';
+        const verifiedReport = {
+            id: 'report-verified',
+            studentId: 'student-1',
+            opportunityId: opp,
+            project_id: opp,
+            status: 'verified',
+            partner_status: 'approved',
+            admin_status: 'approved',
+            submission_date: new Date(),
+            reportSubmittedAt: new Date(),
+            createdAt: new Date(),
+            student: { name: 'Raouf', email: 'raouf@test.com' },
+            opportunity: { title: 'Climate Campaign', organizationId: 'org-1', organization: { name: 'School' } },
+            section11: null,
+        };
+
+        mockStudentReportsRepository.find.mockResolvedValue([verifiedReport]);
+        mockPaymentRepository.find.mockResolvedValue([]);
+
+        const result = await service.findAll({ page: 1, limit: 50 });
+
+        expect(result.success).toBe(true);
+        expect(result.data).toHaveLength(1);
+        expect(result.data[0].payment_verified).toBe(true);
+        expect(result.data[0].payment_status).toBe('paid');
+    });
+
+    it('admin findAll keeps separate reports when three teams share applicationId without teamId', async () => {
+        const opp = '582da802-e41e-488d-bd3d-d6dee59982b8';
+        const sharedApp = 'shared-app-1';
+        const reports = ['lead-a', 'lead-b', 'lead-c'].map((leadId, index) => ({
+            id: `report-${leadId}`,
+            studentId: leadId,
+            opportunityId: opp,
+            project_id: opp,
+            status: 'submitted',
+            partner_status: 'pending',
+            admin_status: 'pending',
+            submission_date: new Date(index),
+            reportSubmittedAt: new Date(index),
+            createdAt: new Date(index),
+            student: { name: `Lead ${index + 1}`, email: `${leadId}@test.com` },
+            opportunity: {
+                title: 'Shared Project',
+                organizationId: 'org-1',
+                organization: { name: 'Org' },
+            },
+            section11: null,
+        }));
+
+        mockStudentReportsRepository.find.mockResolvedValue(reports);
+
+        const participationRows = reports.map((report, index) => ({
+            studentId: report.studentId,
+            projectId: opp,
+            participationMode: 'team',
+            teamId: '',
+            applicationId: sharedApp,
+            isTeamLead: true,
+            createdAt: new Date(index),
+            id: `p-${index}`,
+            fullName: report.student.name,
+            email: report.student.email,
+        }));
+
+        mockParticipantRepository.find.mockImplementation((opts: { where?: Record<string, unknown> }) => {
+            const w = opts?.where ?? {};
+            if (Array.isArray(w.studentId) || Array.isArray(w.projectId)) {
+                const studentIds = Array.isArray(w.studentId) ? w.studentId : [w.studentId];
+                const projectIds = Array.isArray(w.projectId) ? w.projectId : [w.projectId];
+                return Promise.resolve(
+                    participationRows.filter(
+                        (row) =>
+                            studentIds.includes(row.studentId) &&
+                            projectIds.includes(row.projectId),
+                    ),
+                );
+            }
+            if (w.projectId && w.applicationId) {
+                return Promise.resolve(
+                    participationRows.filter(
+                        (row) =>
+                            row.projectId === w.projectId &&
+                            row.applicationId === w.applicationId,
+                    ),
+                );
+            }
+            if (w.projectId && w.teamId) {
+                return Promise.resolve(
+                    participationRows.filter(
+                        (row) => row.projectId === w.projectId && row.teamId === w.teamId,
+                    ),
+                );
+            }
+            if (w.studentId && w.projectId) {
+                return Promise.resolve(
+                    participationRows.filter(
+                        (row) =>
+                            row.studentId === w.studentId && row.projectId === w.projectId,
+                    ),
+                );
+            }
+            return Promise.resolve(participationRows);
+        });
+        mockParticipantRepository.findOne.mockImplementation((opts: { where?: Record<string, unknown> }) => {
+            const w = opts?.where ?? {};
+            const row = participationRows.find(
+                (part) =>
+                    part.studentId === w.studentId && part.projectId === w.projectId,
+            );
+            return Promise.resolve(row ?? null);
+        });
+
+        const result = await service.findAll({ page: 1, limit: 50 });
+
+        expect(result.success).toBe(true);
+        expect(result.data).toHaveLength(3);
+        expect(result.data.map((r: { id: string }) => r.id).sort()).toEqual([
+            'report-lead-a',
+            'report-lead-b',
+            'report-lead-c',
+        ]);
+        expect(
+            new Set(result.data.map((r: { team_lead?: { email?: string } }) => r.team_lead?.email)),
+        ).toEqual(new Set(['lead-a@test.com', 'lead-b@test.com', 'lead-c@test.com']));
+    });
 });

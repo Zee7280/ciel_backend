@@ -710,11 +710,15 @@ export class StudentReportsService {
     const teamId = (participation.teamId || '').trim();
     const applicationId = (participation.applicationId || '').trim();
     const studentId = (participation.studentId || '').trim();
-    if (teamId || applicationId) {
-      return `team:${projectId}:${teamId}:${applicationId}`;
+
+    if (teamId) {
+      return `team:${projectId}:${teamId}`;
     }
-    if (participation.participationMode === 'team') {
+    if (participation.participationMode === 'team' && studentId) {
       return `lead:${projectId}:${studentId}`;
+    }
+    if (applicationId && studentId) {
+      return `app:${projectId}:${applicationId}:${studentId}`;
     }
     return `individual:${projectId}:${studentId}`;
   }
@@ -745,17 +749,86 @@ export class StudentReportsService {
     if (kind === 'lead') {
       return parts[2] || null;
     }
+    if (kind === 'app') {
+      return parts[3] || null;
+    }
     if (kind === 'team') {
       const projectKey = parts[1];
       const teamId = parts[2] || null;
-      const applicationId = parts[3] || null;
       return findCanonicalTeamLeadStudentId(
         this.participantRepository,
         projectKey,
-        { teamId, applicationId },
+        { teamId, applicationId: null },
       );
     }
     return null;
+  }
+
+  /** Team roster for admin listing — scoped to one team, never the whole project. */
+  private async loadParticipationRosterForListing(
+    studentId: string,
+    projectId: string,
+  ): Promise<Participation[]> {
+    const participation = await this.participantRepository.findOne({
+      where: { studentId, projectId },
+      relations: ['student'],
+    });
+    if (!participation) {
+      return [];
+    }
+
+    const teamId = (participation.teamId || '').trim();
+    if (teamId) {
+      return this.participantRepository.find({
+        where: { projectId, teamId },
+        relations: ['student'],
+        order: { createdAt: 'ASC' },
+      });
+    }
+
+    if (participation.participationMode !== 'team') {
+      return [participation];
+    }
+
+    const applicationId = (participation.applicationId || '').trim();
+    if (applicationId) {
+      const byApplication = await this.participantRepository.find({
+        where: { projectId, applicationId },
+        relations: ['student'],
+        order: { createdAt: 'ASC' },
+      });
+      const leads = byApplication.filter((row) => row.isTeamLead);
+      if (leads.length > 1) {
+        const leadRow = byApplication.find(
+          (row) => row.studentId === studentId && row.isTeamLead,
+        );
+        return leadRow ? [leadRow] : [participation];
+      }
+      return byApplication;
+    }
+
+    return [participation];
+  }
+
+  private mapParticipationsToListingRoster(
+    rows: Participation[],
+  ): Record<string, unknown>[] {
+    return rows.map((row) => {
+      const student = row.student;
+      return {
+        id: row.id,
+        studentId: row.studentId,
+        student_id: row.studentId,
+        name: row.fullName || student?.name || '',
+        fullName: row.fullName || student?.name || '',
+        email: row.email || student?.email || '',
+        isTeamLead: row.isTeamLead,
+        is_team_lead: row.isTeamLead,
+        teamId: row.teamId,
+        team_id: row.teamId,
+        applicationId: row.applicationId,
+      };
+    });
   }
 
   /**
@@ -948,6 +1021,15 @@ export class StudentReportsService {
       scoped = allRoster.filter(
         (row) => this.pickTrimmedString(row.applicationId) === applicationId,
       );
+      const leadsInScope = scoped.filter(
+        (row) => row.isTeamLead === true || row.is_team_lead === true,
+      );
+      if (leadsInScope.length > 1) {
+        scoped = scoped.filter((row) => {
+          const sid = this.pickTrimmedString(row.studentId ?? row.student_id);
+          return sid === report.studentId;
+        });
+      }
     }
 
     const isTeam =
@@ -1153,7 +1235,11 @@ export class StudentReportsService {
     const section1 = this.asUnknownRecord(report.section1);
     const declaredTeam =
       this.pickTrimmedString(section1.participation_type).toLowerCase() ===
-        'team' || roster.length > 1;
+        'team' ||
+      roster.length > 1 ||
+      roster.some(
+        (row) => row.isTeamLead === true || row.is_team_lead === true,
+      );
 
     if (!declaredTeam) {
       return {
@@ -1271,6 +1357,9 @@ export class StudentReportsService {
       };
     }
     const raw = String(report.status || '').toLowerCase();
+    if (['paid', 'partner_verified', 'verified'].includes(raw)) {
+      return { payment_verified: true, payment_status: 'paid' };
+    }
     if (raw === 'payment_pending' || raw === 'payment_under_review') {
       return { payment_verified: false, payment_status: 'awaiting_payment' };
     }
@@ -1288,21 +1377,51 @@ export class StudentReportsService {
     opportunityByProjectId?: Map<string, Opportunity>,
   ) {
     const rosterCache = new Map<string, Record<string, unknown>[]>();
-    const projectIds = [
+    const participationCache = new Map<string, Participation | null>();
+
+    const projectKeys = [
       ...new Set(
         reports
           .map((r) => this.reportProjectKey(r))
           .filter((key) => this.looksLikeUuid(key)),
       ),
     ];
+    const studentIds = [...new Set(reports.map((r) => r.studentId))];
+
+    if (projectKeys.length && studentIds.length) {
+      const participations = await this.participantRepository.find({
+        where: {
+          studentId: In(studentIds),
+          projectId: In(projectKeys),
+        },
+      });
+      for (const row of participations) {
+        participationCache.set(`${row.studentId}:${row.projectId}`, row);
+      }
+    }
 
     await Promise.all(
-      projectIds.map(async (projectId) => {
-        const roster =
-          await this.engagementService.getProjectTeamForReportDossier(
-            projectId,
-          );
-        rosterCache.set(projectId, roster);
+      reports.map(async (report) => {
+        const projectKey = this.reportProjectKey(report);
+        if (!this.looksLikeUuid(projectKey)) {
+          return;
+        }
+        const participation =
+          participationCache.get(`${report.studentId}:${projectKey}`) ?? null;
+        const scopeKey = participation
+          ? this.participationScopeKey(projectKey, participation)
+          : `individual:${projectKey}:${report.studentId}`;
+        if (rosterCache.has(scopeKey)) {
+          return;
+        }
+        const rosterRows = await this.loadParticipationRosterForListing(
+          report.studentId,
+          projectKey,
+        );
+        rosterCache.set(
+          scopeKey,
+          this.mapParticipationsToListingRoster(rosterRows),
+        );
       }),
     );
 
@@ -1312,7 +1431,12 @@ export class StudentReportsService {
     return reports.map((report) => {
       const base = this.mapReportListing(report, opportunityByProjectId);
       const projectKey = this.reportProjectKey(report);
-      const roster = rosterCache.get(projectKey) ?? [];
+      const participation =
+        participationCache.get(`${report.studentId}:${projectKey}`) ?? null;
+      const scopeKey = participation
+        ? this.participationScopeKey(projectKey, participation)
+        : `individual:${projectKey}:${report.studentId}`;
+      const roster = rosterCache.get(scopeKey) ?? [];
       const latestPayment =
         paymentByStudentProject.get(`${report.studentId}:${projectKey}`) ??
         null;
@@ -1323,6 +1447,7 @@ export class StudentReportsService {
       return {
         ...base,
         ...this.summarizeTeamRosterForListing(roster, report),
+        team_scope_key: scopeKey,
         payment_verified: payment.payment_verified,
         payment_status: payment.payment_status,
       };
@@ -1524,8 +1649,10 @@ export class StudentReportsService {
       rawReportStatus,
       adminStatus,
     );
+    const reportStatus = String(rawReportStatus || '').toLowerCase();
     const payment_verified =
-      latest?.status === PaymentStatus.APPROVED || rawReportStatus === 'paid';
+      latest?.status === PaymentStatus.APPROVED ||
+      ['paid', 'partner_verified', 'verified'].includes(reportStatus);
     const adminApproved = adminStatus === 'approved';
     const payment_status = payment_verified ? 'paid' : (latest?.status ?? null);
     const status = payment_verified

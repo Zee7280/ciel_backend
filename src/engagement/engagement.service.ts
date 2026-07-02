@@ -3162,4 +3162,100 @@ export class EngagementService {
 
     await this.attendanceLogRepository.save(pendingPartnerLogs);
   }
+
+  /** Rebind pending faculty attendance to the current supervising faculty after admin contact edits. */
+  async reconcileFacultyAttendanceAssigneeForOpportunity(
+    opportunity: Opportunity,
+  ): Promise<void> {
+    const pendingFacultyLogs = await this.attendanceLogRepository.find({
+      where: {
+        projectId: opportunity.id,
+        approvalStatus: 'pending',
+        assignedApproverType: 'faculty',
+      },
+      relations: ['participant'],
+    });
+    if (!pendingFacultyLogs.length) {
+      return;
+    }
+
+    let changed = false;
+    for (const log of pendingFacultyLogs) {
+      let assignedFacultyUserId: string | null = null;
+      if (log.participant) {
+        const facultyEmails =
+          await this.resolveFacultyEmailsForAttendanceRouting(
+            log.participant,
+            opportunity,
+          );
+        for (const facultyEmail of facultyEmails) {
+          const facultyUser = await this.userRepository
+            .createQueryBuilder('user')
+            .where('LOWER("user"."email") = :facultyEmail', { facultyEmail })
+            .andWhere('"user"."role" = :facultyRole', {
+              facultyRole: UserRole.FACULTY,
+            })
+            .getOne();
+          if (facultyUser?.id) {
+            assignedFacultyUserId = facultyUser.id;
+            break;
+          }
+        }
+      }
+
+      if (log.assignedApproverUserId !== assignedFacultyUserId) {
+        log.assignedApproverUserId = assignedFacultyUserId;
+        log.opportunityCreatorKind = 'faculty';
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      await this.attendanceLogRepository.save(pendingFacultyLogs);
+    }
+  }
+
+  /**
+   * After admin updates faculty/partner contacts on a project, refresh seat routing and
+   * pending attendance assignees without touching approved logs or historical reports.
+   */
+  async reconcilePendingAttendanceAfterOpportunityContactChange(
+    opportunity: Opportunity,
+  ): Promise<void> {
+    const opp =
+      opportunity.organization != null
+        ? opportunity
+        : await this.opportunityRepository.findOne({
+            where: { id: opportunity.id },
+            relations: ['organization'],
+          });
+    if (!opp) {
+      return;
+    }
+
+    await this.reconcileMisroutedPartnerAttendanceForOpportunity(opp);
+    await this.reconcilePartnerAttendanceAssigneeForOpportunity(opp);
+    await this.reconcileFacultyAttendanceAssigneeForOpportunity(opp);
+
+    const participations = await this.participantRepository.find({
+      where: { projectId: opp.id },
+    });
+    for (const participation of participations) {
+      const effective = await this.resolveAttendanceApproverTypeForParticipation(
+        participation,
+        opp,
+      );
+      const override = (opp.attendanceRoutingOverride || 'auto').trim().toLowerCase();
+      const target =
+        override === 'partner'
+          ? 'partner'
+          : override === 'faculty'
+            ? 'faculty'
+            : effective;
+      if (participation.attendanceApproverType !== target) {
+        participation.attendanceApproverType = target;
+        await this.participantRepository.save(participation);
+      }
+    }
+  }
 }

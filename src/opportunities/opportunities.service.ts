@@ -1,10 +1,11 @@
 import { Injectable, NotFoundException, ForbiddenException, UnauthorizedException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, DeepPartial, Brackets, EntityManager, ObjectLiteral, QueryFailedError } from 'typeorm';
+import { Repository, In, DeepPartial, Brackets, EntityManager, ObjectLiteral, QueryFailedError, IsNull } from 'typeorm';
 import { Opportunity } from './entities/opportunity.entity';
 import { Organization } from '../organizations/entities/organization.entity';
 import { Participation } from '../engagement/entities/participant.entity';
 import { CreateOpportunityDto, UpdateOpportunityDto } from './dto/create-opportunity.dto';
+import { AdminSetOpportunityContactsDto } from './dto/admin-set-opportunity-contacts.dto';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { EngagementService } from '../engagement/engagement.service';
 import { User } from '../users/entities/user.entity';
@@ -383,6 +384,29 @@ export class OpportunitiesService {
      */
     async notifyPartnerForStudentOpportunityPartnerQueue(opportunity: Opportunity): Promise<void> {
         await this.sendPartnerApprovalEmail(opportunity);
+    }
+
+    /**
+     * Bind `facultyId` to the registered FACULTY user whose email matches supervision.contact.
+     * If no account exists yet, clears facultyId so signup reconciliation can link later.
+     */
+    private async syncOpportunityFacultyIdToSupervisionEmail(
+        opp: Opportunity,
+    ): Promise<string | null> {
+        const email = this.getFacultyEmailFromOpportunity(opp);
+        if (!email) {
+            opp.facultyId = null;
+            return null;
+        }
+
+        const facultyUser = await this.usersRepository
+            .createQueryBuilder('u')
+            .where('LOWER(TRIM(u.email)) = :em', { em: email })
+            .andWhere('u.role = :role', { role: UserRole.FACULTY })
+            .getOne();
+
+        opp.facultyId = facultyUser?.id ?? null;
+        return facultyUser?.id ?? null;
     }
 
     /**
@@ -2827,6 +2851,377 @@ export class OpportunitiesService {
         });
 
         return saved;
+    }
+
+    /**
+     * Admin Project Tracker: update faculty supervisor and/or partner contact fields on the
+     * opportunity JSON, rebind facultyId, reconcile approval queues when still pending, and
+     * refresh pending attendance assignees without unpublishing live listings.
+     */
+    async adminUpdateOpportunityContacts(
+        opportunityId: string,
+        dto: AdminSetOpportunityContactsDto,
+    ) {
+        const hasFaculty =
+            dto.faculty_supervisor_name !== undefined ||
+            dto.faculty_supervisor_email !== undefined;
+        const hasPartner =
+            dto.partner_organization_name !== undefined ||
+            dto.partner_contact_person !== undefined ||
+            dto.partner_contact_email !== undefined;
+        if (!hasFaculty && !hasPartner) {
+            throw new BadRequestException('Provide at least one faculty or partner field to update.');
+        }
+
+        const opp = await this.opportunitiesRepository.findOne({
+            where: { id: opportunityId },
+            relations: ['organization'],
+        });
+        if (!opp) throw new NotFoundException('Opportunity not found');
+
+        const before = this.snapshotStudentOpportunityResubmit(opp);
+        const previousFacultyUserId = opp.facultyId ?? null;
+
+        if (hasFaculty) {
+            const sup = {
+                ...((opp.supervision as Record<string, unknown>) || {}),
+            };
+            if (dto.faculty_supervisor_name !== undefined) {
+                sup.supervisor_name = dto.faculty_supervisor_name.trim();
+            }
+            if (dto.faculty_supervisor_email !== undefined) {
+                const email = dto.faculty_supervisor_email.trim();
+                if (email && !this.isValidEmail(email)) {
+                    throw new BadRequestException('Invalid faculty supervisor email.');
+                }
+                sup.contact = email;
+            }
+            opp.supervision = sup;
+        }
+
+        if (hasPartner) {
+            const po = {
+                ...((opp.partner_organization as Record<string, unknown>) || {}),
+            };
+            const sup = {
+                ...((opp.supervision as Record<string, unknown>) || {}),
+            };
+            if (dto.partner_organization_name !== undefined) {
+                const name = dto.partner_organization_name.trim();
+                po.organization_name = name;
+                sup.partner_org_name = name;
+            }
+            if (dto.partner_contact_person !== undefined) {
+                const person = dto.partner_contact_person.trim();
+                po.contact_person = person;
+                sup.partner_contact_person = person;
+            }
+            if (dto.partner_contact_email !== undefined) {
+                const email = dto.partner_contact_email.trim();
+                if (email && !this.isValidEmail(email)) {
+                    throw new BadRequestException('Invalid partner contact email.');
+                }
+                po.official_email = email;
+                sup.partner_email = email;
+            }
+            opp.partner_organization = po;
+            opp.supervision = sup;
+        }
+
+        const facultyEmailNow = this.getFacultyEmailFromOpportunity(opp);
+        const facultyEmailChanged =
+            this.normalizeEmail(before.facultyEmail || '') !==
+            this.normalizeEmail(facultyEmailNow || '');
+
+        opp.requiresPartnerApproval = this.studentCreatedPayloadRequiresPartner(
+            opp as unknown as CreateOpportunityDto,
+        );
+
+        if (hasFaculty) {
+            await this.syncOpportunityFacultyIdToSupervisionEmail(opp);
+        }
+
+        if (!opp.admin_approved) {
+            await this.applyStudentCreatedOpportunityResubmit(opp, before);
+        }
+
+        await this.opportunitiesRepository.save(opp);
+
+        const refreshed = await this.opportunitiesRepository.findOne({
+            where: { id: opportunityId },
+            relations: ['organization'],
+        });
+        if (refreshed) {
+            const propagation = await this.propagateContactChangeBindings(
+                opportunityId,
+                {
+                    oldFacultyEmail: before.facultyEmail,
+                    newFacultyEmail: facultyEmailNow,
+                    oldFacultyUserId: previousFacultyUserId,
+                    newFacultyUserId: refreshed.facultyId ?? null,
+                    facultyEmailChanged,
+                },
+            );
+            await this.engagementService.reconcilePendingAttendanceAfterOpportunityContactChange(
+                refreshed,
+            );
+
+            const supervision = refreshed.supervision as Record<string, unknown> | undefined;
+            const partnerOrg = refreshed.partner_organization as
+                | Record<string, unknown>
+                | undefined;
+
+            return {
+                success: true,
+                data: {
+                    faculty_supervisor_name:
+                        typeof supervision?.supervisor_name === 'string'
+                            ? supervision.supervisor_name.trim()
+                            : null,
+                    faculty_supervisor_email:
+                        typeof supervision?.contact === 'string'
+                            ? supervision.contact.trim()
+                            : null,
+                    partner_organization_name:
+                        typeof partnerOrg?.organization_name === 'string'
+                            ? partnerOrg.organization_name.trim()
+                            : typeof supervision?.partner_org_name === 'string'
+                              ? supervision.partner_org_name.trim()
+                              : null,
+                    partner_contact_email:
+                        typeof partnerOrg?.official_email === 'string'
+                            ? partnerOrg.official_email.trim()
+                            : typeof supervision?.partner_email === 'string'
+                              ? supervision.partner_email.trim()
+                              : null,
+                    partner_contact_person:
+                        typeof partnerOrg?.contact_person === 'string'
+                            ? partnerOrg.contact_person.trim()
+                            : typeof supervision?.partner_contact_person === 'string'
+                              ? supervision.partner_contact_person.trim()
+                              : null,
+                    attendance_routing_override: refreshed.attendanceRoutingOverride ?? 'auto',
+                    faculty_user_id: refreshed.facultyId ?? null,
+                    faculty_account_linked: !!refreshed.facultyId,
+                    propagation,
+                },
+            };
+        }
+
+        return {
+            success: true,
+            data: {
+                faculty_supervisor_name: null,
+                faculty_supervisor_email: null,
+                partner_organization_name: null,
+                partner_contact_email: null,
+                partner_contact_person: null,
+                attendance_routing_override: 'auto',
+                propagation: {
+                    participations_updated: 0,
+                    applications_updated: 0,
+                    reports_updated: 0,
+                },
+            },
+        };
+    }
+
+    /**
+     * After admin edits project faculty, rebind enrollments, join applications, and open
+     * impact-report faculty lines that still pointed at the previous supervisor.
+     */
+    private async propagateContactChangeBindings(
+        opportunityId: string,
+        params: {
+            oldFacultyEmail: string | null;
+            newFacultyEmail: string | null;
+            oldFacultyUserId: string | null;
+            newFacultyUserId: string | null;
+            facultyEmailChanged: boolean;
+        },
+    ): Promise<{
+        participations_updated: number;
+        applications_updated: number;
+        reports_updated: number;
+    }> {
+        if (!params.facultyEmailChanged) {
+            return {
+                participations_updated: 0,
+                applications_updated: 0,
+                reports_updated: 0,
+            };
+        }
+
+        const oldFe = this.normalizeEmail(params.oldFacultyEmail || '');
+        const newFe = this.normalizeEmail(params.newFacultyEmail || '');
+
+        const replaceProjectFacultyEmail = (
+            current: string | null | undefined,
+        ): string | null | undefined => {
+            const normalized = this.normalizeEmail(current || '');
+            if (!newFe) {
+                return normalized === oldFe ? '' : current;
+            }
+            if (!normalized) {
+                return newFe;
+            }
+            if (oldFe && normalized === oldFe) {
+                return newFe;
+            }
+            return current;
+        };
+
+        let participationsUpdated = 0;
+        const participations = await this.participationRepository.find({
+            where: { projectId: opportunityId },
+        });
+        for (const participation of participations) {
+            const nextPrimary = replaceProjectFacultyEmail(participation.primaryFacultyEmail);
+            const nextSupervisor = replaceProjectFacultyEmail(
+                participation.facultySupervisorEmail,
+            );
+            const nextSecondary = replaceProjectFacultyEmail(
+                participation.secondaryFacultyEmail,
+            );
+            const changed =
+                nextPrimary !== participation.primaryFacultyEmail ||
+                nextSupervisor !== participation.facultySupervisorEmail ||
+                nextSecondary !== participation.secondaryFacultyEmail;
+            if (!changed) {
+                continue;
+            }
+            participation.primaryFacultyEmail = (nextPrimary ?? '') as string;
+            participation.facultySupervisorEmail = (nextSupervisor ?? '') as string;
+            participation.secondaryFacultyEmail = (nextSecondary ?? '') as string;
+            await this.participationRepository.save(participation);
+            participationsUpdated += 1;
+        }
+
+        let applicationsUpdated = 0;
+        const appRepo =
+            this.opportunitiesRepository.manager.getRepository(OpportunityApplication);
+        const applications = await appRepo.find({
+            where: { opportunityId, withdrawnAt: IsNull() },
+        });
+        for (const application of applications) {
+            const nextPrimary = replaceProjectFacultyEmail(application.primaryFacultyEmail);
+            const nextSecondary = replaceProjectFacultyEmail(
+                application.secondaryFacultyEmail,
+            );
+            const payload =
+                application.applyPayload && typeof application.applyPayload === 'object'
+                    ? { ...(application.applyPayload as Record<string, unknown>) }
+                    : {};
+            let payloadChanged = false;
+            for (const key of [
+                'primary_faculty_email',
+                'secondary_faculty_email',
+                'faculty_supervisor_email',
+            ]) {
+                const raw = payload[key];
+                if (typeof raw !== 'string') {
+                    continue;
+                }
+                const next = replaceProjectFacultyEmail(raw);
+                if (next !== raw) {
+                    payload[key] = next ?? '';
+                    payloadChanged = true;
+                }
+            }
+
+            const changed =
+                nextPrimary !== application.primaryFacultyEmail ||
+                nextSecondary !== application.secondaryFacultyEmail ||
+                payloadChanged;
+            if (!changed) {
+                continue;
+            }
+            application.primaryFacultyEmail = (nextPrimary as string) || null;
+            application.secondaryFacultyEmail = (nextSecondary as string) || null;
+            if (payloadChanged) {
+                application.applyPayload = payload;
+            }
+            await appRepo.save(application);
+            applicationsUpdated += 1;
+        }
+
+        let reportsUpdated = 0;
+        const reportRepo =
+            this.opportunitiesRepository.manager.getRepository(StudentReport);
+        const reports = await reportRepo
+            .createQueryBuilder('report')
+            .where('report.opportunityId = :opportunityId', { opportunityId })
+            .orWhere('TRIM(COALESCE(report.project_id, \'\')) = :opportunityId', {
+                opportunityId,
+            })
+            .getMany();
+
+        for (const report of reports) {
+            const facultyStatus = (report.faculty_status || 'pending').toLowerCase();
+            if (facultyStatus === 'approved' || facultyStatus === 'rejected') {
+                continue;
+            }
+
+            const section1 =
+                report.section1 && typeof report.section1 === 'object'
+                    ? { ...report.section1 }
+                    : null;
+            const currentSectionEmail = section1?.faculty_supervisor_email;
+            const nextSectionEmail = replaceProjectFacultyEmail(currentSectionEmail);
+            const sectionChanged =
+                !!section1 &&
+                nextSectionEmail !== currentSectionEmail &&
+                typeof nextSectionEmail === 'string' &&
+                !!nextSectionEmail;
+
+            const boundToOldFacultyUser =
+                !!params.oldFacultyUserId &&
+                report.facultyId === params.oldFacultyUserId;
+            const shouldRebindFacultyUser =
+                !!newFe &&
+                (sectionChanged || boundToOldFacultyUser || !report.facultyId);
+
+            if (!sectionChanged && !shouldRebindFacultyUser) {
+                continue;
+            }
+
+            if (sectionChanged && section1) {
+                section1.faculty_supervisor_email = nextSectionEmail;
+                report.section1 = section1;
+            }
+
+            if (shouldRebindFacultyUser) {
+                const linkedFacultyId = await this.resolveFacultyUserIdByEmail(newFe);
+                report.facultyId = linkedFacultyId;
+                if (report.faculty_status !== 'pending') {
+                    report.faculty_status = 'pending';
+                }
+            }
+
+            await reportRepo.save(report);
+            reportsUpdated += 1;
+        }
+
+        return {
+            participations_updated: participationsUpdated,
+            applications_updated: applicationsUpdated,
+            reports_updated: reportsUpdated,
+        };
+    }
+
+    private async resolveFacultyUserIdByEmail(
+        email: string | null | undefined,
+    ): Promise<string | null> {
+        const normalized = this.normalizeEmail(email || '');
+        if (!normalized) {
+            return null;
+        }
+        const facultyUser = await this.usersRepository
+            .createQueryBuilder('u')
+            .where('LOWER(TRIM(u.email)) = :em', { em: normalized })
+            .andWhere('u.role = :role', { role: UserRole.FACULTY })
+            .getOne();
+        return facultyUser?.id ?? null;
     }
 
     async setAttendanceRoutingOverride(

@@ -1809,6 +1809,14 @@ export class OpportunityApplicationsService {
                       supervision.partner_email.trim()
                     ? supervision.partner_email.trim()
                     : null,
+              partner_contact_person:
+                typeof partnerOrg?.contact_person === 'string' &&
+                partnerOrg.contact_person.trim()
+                  ? partnerOrg.contact_person.trim()
+                  : typeof supervision?.partner_contact_person === 'string' &&
+                      supervision.partner_contact_person.trim()
+                    ? supervision.partner_contact_person.trim()
+                    : null,
               faculty_supervisor_name:
                 typeof supervision?.supervisor_name === 'string' &&
                 supervision.supervisor_name.trim()

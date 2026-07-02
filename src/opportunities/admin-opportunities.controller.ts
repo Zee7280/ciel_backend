@@ -24,6 +24,7 @@ import { AdminMutationAuditInterceptor } from '../audit-logs/admin-mutation-audi
 import { AdminPatchTeamMemberDto } from './dto/admin-patch-team-member.dto';
 import { AdminMergeTeamMembersDto } from './dto/admin-merge-team-members.dto';
 import { SetAttendanceRoutingDto } from './dto/set-attendance-routing.dto';
+import { AdminSetOpportunityContactsDto } from './dto/admin-set-opportunity-contacts.dto';
 
 @Controller('admin/opportunities')
 @UseGuards(JwtAuthGuard)
@@ -151,6 +152,16 @@ export class AdminOpportunitiesController {
       opportunityId,
       applicationId,
     );
+  }
+
+  @Patch(':id/contacts')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  async updateContacts(
+    @Param('id') id: string,
+    @Body() dto: AdminSetOpportunityContactsDto,
+  ) {
+    return this.opportunitiesService.adminUpdateOpportunityContacts(id, dto);
   }
 
   @Patch(':id/attendance-routing')

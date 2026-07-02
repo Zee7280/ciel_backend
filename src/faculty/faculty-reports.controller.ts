@@ -9,12 +9,12 @@ export class FacultyReportsController {
 
     @Get()
     async getAssignedReports(@Request() req) {
-        return await this.facultyReportsService.findAll(req.user.id);
+        return await this.facultyReportsService.findAll(req.user.id, req.user.email);
     }
 
     @Get(':id')
     async getReportById(@Request() req, @Param('id') id: string) {
-        return await this.facultyReportsService.findOne(id, req.user.id);
+        return await this.facultyReportsService.findOne(id, req.user.id, req.user.email);
     }
 
     @Post(':id/action')
@@ -26,6 +26,7 @@ export class FacultyReportsController {
         return await this.facultyReportsService.updateAction(
             id,
             req.user.id,
+            req.user.email,
             body.status,
             body.remarks
         );

@@ -1,8 +1,9 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, Repository, WhereExpressionBuilder } from 'typeorm';
+import { Brackets, Repository, SelectQueryBuilder, WhereExpressionBuilder } from 'typeorm';
 import { StudentReport } from './entities/student-report.entity';
 import { StudentReportsService } from './student-reports.service';
+import { FacultyService } from '../faculty/faculty.service';
 
 @Injectable()
 export class FacultyReportsService {
@@ -10,29 +11,119 @@ export class FacultyReportsService {
         @InjectRepository(StudentReport)
         private studentReportsRepository: Repository<StudentReport>,
         private readonly studentReportsService: StudentReportsService,
-    ) { }
+        private readonly facultyService: FacultyService,
+    ) {}
 
-    private applyFacultyAccessFilter(qb: WhereExpressionBuilder, facultyId: string) {
+    private normalizeFacultyEmail(facultyEmail: string): string {
+        return (facultyEmail || '').trim().toLowerCase();
+    }
+
+    /**
+     * Align report visibility with faculty dashboard / approvals scope:
+     * UUID assignment, scoped opportunities, supervision emails, applications, participations.
+     */
+    private applyFacultyAccessFilter(
+        qb: WhereExpressionBuilder,
+        facultyId: string,
+        facultyEmail: string,
+        scopedOpportunityIds: string[],
+    ) {
+        const fe = this.normalizeFacultyEmail(facultyEmail);
+
         qb.where('report.facultyId = :facultyId', { facultyId }).orWhere(
             'opportunity.facultyId = :facultyId',
             { facultyId },
         );
+
+        if (scopedOpportunityIds.length > 0) {
+            qb.orWhere('report."opportunityId"::text IN (:...scopedOppIds)', {
+                scopedOppIds: scopedOpportunityIds,
+            }).orWhere(`TRIM(COALESCE(report.project_id, '')) IN (:...scopedOppIds)`, {
+                scopedOppIds: scopedOpportunityIds,
+            });
+        }
+
+        if (!fe) {
+            return;
+        }
+
+        qb.orWhere(
+            `LOWER(TRIM(COALESCE(report.section1->>'faculty_supervisor_email', ''))) = :fe`,
+            { fe },
+        )
+            .orWhere(
+                `LOWER(TRIM(COALESCE(opportunity.supervision->>'contact', ''))) = :fe`,
+                { fe },
+            )
+            .orWhere(
+                `LOWER(TRIM(COALESCE(opportunity.supervision->>'official_email', ''))) = :fe`,
+                { fe },
+            )
+            .orWhere(
+                `LOWER(TRIM(COALESCE(opportunity.partner_organization->>'official_email', ''))) = :fe`,
+                { fe },
+            )
+            .orWhere(
+                `EXISTS (
+                    SELECT 1 FROM participations p
+                    WHERE (
+                        p.project_id::text = report."opportunityId"::text
+                        OR p.project_id::text = TRIM(COALESCE(report.project_id, ''))
+                    )
+                    AND (
+                        LOWER(TRIM(COALESCE(p."facultySupervisorEmail", ''))) = :fe
+                        OR LOWER(TRIM(COALESCE(p."primaryFacultyEmail", ''))) = :fe
+                        OR LOWER(TRIM(COALESCE(p."secondaryFacultyEmail", ''))) = :fe
+                    )
+                )`,
+                { fe },
+            )
+            .orWhere(
+                `EXISTS (
+                    SELECT 1 FROM opportunity_applications app
+                    WHERE app.opportunity_id::text = report."opportunityId"::text
+                    AND app.withdrawn_at IS NULL
+                    AND (
+                        LOWER(TRIM(COALESCE(app.primary_faculty_email, ''))) = :fe
+                        OR LOWER(TRIM(COALESCE(app.secondary_faculty_email, ''))) = :fe
+                    )
+                )`,
+                { fe },
+            );
     }
 
-    async findAll(facultyId: string) {
-        const reports = await this.studentReportsRepository
+    private baseReportQuery(): SelectQueryBuilder<StudentReport> {
+        return this.studentReportsRepository
             .createQueryBuilder('report')
             .leftJoinAndSelect('report.student', 'student')
             .leftJoinAndSelect('report.opportunity', 'opportunity')
-            .leftJoinAndSelect('opportunity.organization', 'organization')
-            .where(new Brackets((qb) => this.applyFacultyAccessFilter(qb, facultyId)))
+            .leftJoinAndSelect('opportunity.organization', 'organization');
+    }
+
+    async findAll(facultyId: string, facultyEmail: string) {
+        const scopedOpportunityIds = await this.facultyService.getScopedOpportunityIds(
+            facultyId,
+            facultyEmail,
+        );
+
+        const reports = await this.baseReportQuery()
+            .where(
+                new Brackets((qb) =>
+                    this.applyFacultyAccessFilter(
+                        qb,
+                        facultyId,
+                        facultyEmail,
+                        scopedOpportunityIds,
+                    ),
+                ),
+            )
             .andWhere('report.admin_status = :adminApproved', { adminApproved: 'approved' })
             .orderBy('report.submission_date', 'DESC')
             .getMany();
 
         return {
             success: true,
-            data: reports.map(r => ({
+            data: reports.map((r) => ({
                 id: r.id,
                 student_name: r.student?.name || 'Unknown',
                 student_email: r.student?.email || 'Unknown',
@@ -49,14 +140,24 @@ export class FacultyReportsService {
         };
     }
 
-    async findOne(id: string, facultyId: string) {
-        const report = await this.studentReportsRepository
-            .createQueryBuilder('report')
-            .leftJoinAndSelect('report.student', 'student')
-            .leftJoinAndSelect('report.opportunity', 'opportunity')
-            .leftJoinAndSelect('opportunity.organization', 'organization')
+    async findOne(id: string, facultyId: string, facultyEmail: string) {
+        const scopedOpportunityIds = await this.facultyService.getScopedOpportunityIds(
+            facultyId,
+            facultyEmail,
+        );
+
+        const report = await this.baseReportQuery()
             .where('report.id = :id', { id })
-            .andWhere(new Brackets((qb) => this.applyFacultyAccessFilter(qb, facultyId)))
+            .andWhere(
+                new Brackets((qb) =>
+                    this.applyFacultyAccessFilter(
+                        qb,
+                        facultyId,
+                        facultyEmail,
+                        scopedOpportunityIds,
+                    ),
+                ),
+            )
             .andWhere('report.admin_status = :adminApproved', { adminApproved: 'approved' })
             .getOne();
 
@@ -69,12 +170,32 @@ export class FacultyReportsService {
         return this.studentReportsService.buildDetailResponse(report);
     }
 
-    async updateAction(id: string, facultyId: string, status: 'approved' | 'rejected', remarks?: string) {
+    async updateAction(
+        id: string,
+        facultyId: string,
+        facultyEmail: string,
+        status: 'approved' | 'rejected',
+        remarks?: string,
+    ) {
+        const scopedOpportunityIds = await this.facultyService.getScopedOpportunityIds(
+            facultyId,
+            facultyEmail,
+        );
+
         const report = await this.studentReportsRepository
             .createQueryBuilder('report')
             .leftJoin('report.opportunity', 'opportunity')
             .where('report.id = :id', { id })
-            .andWhere(new Brackets((qb) => this.applyFacultyAccessFilter(qb, facultyId)))
+            .andWhere(
+                new Brackets((qb) =>
+                    this.applyFacultyAccessFilter(
+                        qb,
+                        facultyId,
+                        facultyEmail,
+                        scopedOpportunityIds,
+                    ),
+                ),
+            )
             .andWhere('report.admin_status = :adminApproved', { adminApproved: 'approved' })
             .getOne();
 
@@ -89,9 +210,6 @@ export class FacultyReportsService {
             report.faculty_remarks = remarks;
         }
 
-        // If faculty approves, we might want to update the overall status if institutional approval is a blocker
-        // For now, we just update the faculty_status fields as per plan.
-        
         await this.studentReportsRepository.save(report);
 
         return {

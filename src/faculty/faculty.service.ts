@@ -849,6 +849,11 @@ export class FacultyService {
         qb.andWhere(sql, subParams);
     }
 
+    /** Personal + delegated university opportunity IDs (dashboard, analytics, project detail, reports). */
+    async getScopedOpportunityIds(facultyId: string, facultyEmail: string): Promise<string[]> {
+        return this.resolveFacultyScopedOpportunityIds(facultyId, facultyEmail);
+    }
+
     async getProjectDetail(facultyId: string, facultyEmail: string, opportunityId: string) {
         const scopedIds = await this.resolveFacultyScopedOpportunityIds(facultyId, facultyEmail);
         if (!scopedIds.includes(opportunityId)) {

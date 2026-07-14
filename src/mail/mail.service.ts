@@ -1363,6 +1363,44 @@ export class MailService {
     this.logger.log(`Attendance verification request email sent to ${to} for opportunity ${opportunityId}`);
   }
 
+  async sendAttendanceDecisionNoticeToStudent(
+    to: string,
+    decision: 'approved' | 'rejected',
+    projectTitle: string,
+    opportunityId: string,
+    reason?: string | null,
+  ) {
+    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const link = this.buildFrontendLink('/dashboard/student/report', {
+      project: opportunityId,
+    });
+    const titleEsc = this.escHtmlPlain(projectTitle);
+    const approved = decision === 'approved';
+    const reasonHtml =
+      !approved && reason
+        ? `<p><strong>Reason:</strong> ${this.escHtmlPlain(reason)}</p>`
+        : '';
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">Attendance session ${approved ? 'approved' : 'rejected'}</h2>
+        <p>A reviewer has <strong>${approved ? 'approved' : 'rejected'}</strong> an attendance session for <strong>${titleEsc}</strong>.</p>
+        ${reasonHtml}
+        <div style="text-align: center; margin: 28px 0;">
+          <a href="${link}" style="background-color: ${approved ? '#16a34a' : '#dc2626'}; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-weight: bold;">Open your report</a>
+        </div>
+      </div>
+    `;
+    await this.transporter.sendMail({
+      from,
+      to,
+      subject: `CIEL PK — attendance ${decision}: ${projectTitle}`,
+      html,
+    });
+    this.logger.log(
+      `Attendance ${decision} notice sent to student ${to} for opportunity ${opportunityId}`,
+    );
+  }
+
   async sendAttendancePendingAdminReview(
     projectTitle: string,
     opportunityId: string,

@@ -35,6 +35,7 @@ describe('EngagementService', () => {
   const mockAttendanceLogRepository = {
     create: jest.fn(),
     save: jest.fn(),
+    find: jest.fn(),
     delete: jest.fn(),
     createQueryBuilder: jest.fn(),
   };
@@ -73,6 +74,7 @@ describe('EngagementService', () => {
     sendAttendancePendingReview: jest.fn(),
     sendAttendancePendingAdminReview: jest.fn(),
     sendAttendanceVerificationRequestNotice: jest.fn(),
+    sendAttendanceDecisionNoticeToStudent: jest.fn(),
   };
 
   const mockParticipationQueryBuilder = (result: Participation | null) => ({

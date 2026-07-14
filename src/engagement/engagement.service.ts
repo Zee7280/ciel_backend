@@ -2224,7 +2224,27 @@ export class EngagementService {
     log.approvalActorUserId = actorUserId;
     log.approvalActionAt = now;
 
-    return await this.attendanceLogRepository.save(log);
+    const saved = await this.attendanceLogRepository.save(log);
+
+    // Non-blocking student notice after reviewer acts on a session.
+    const studentEmail = (log.participant?.email || '').trim();
+    if (studentEmail && (dto.action === 'approve' || dto.action === 'reject')) {
+      try {
+        await this.mailService.sendAttendanceDecisionNoticeToStudent(
+          studentEmail,
+          dto.action === 'approve' ? 'approved' : 'rejected',
+          log.project?.title || 'Project',
+          log.projectId,
+          dto.reason ?? null,
+        );
+      } catch (error) {
+        this.logger.warn(
+          `Attendance decision email to student failed for log ${logId}: ${error?.message || error}`,
+        );
+      }
+    }
+
+    return saved;
   }
 
   async createAttendanceVerifyRequest(
@@ -2305,11 +2325,7 @@ export class EngagementService {
       );
     }
 
-    const reviewer = await this.resolveAttendanceVerificationReviewer(
-      opportunity,
-      participant,
-    );
-
+    // Idempotent: already-requested seats never fail on the newer oath/min-hours gates.
     if (participant.attendanceVerificationRequested) {
       if (!participant.attendanceLocked) {
         participant.attendanceLocked = true;
@@ -2317,18 +2333,76 @@ export class EngagementService {
       }
       return {
         emailNotified: Boolean(participant.attendanceVerificationEmailSentAt),
-        reviewerType:
-          participant.attendanceVerificationReviewerType ||
-          reviewer.reviewerType,
+        reviewerType: participant.attendanceVerificationReviewerType || null,
         type: 'already_requested',
       };
     }
+
+    const usesNewApprovalWorkflow =
+      dto.attendanceApproverType === 'faculty' ||
+      dto.attendanceApproverType === 'partner' ||
+      dto.oathCompleted === true;
+
+    // New UI always sends both fields — enforce fully. Legacy clients omit them.
+    if (usesNewApprovalWorkflow) {
+      if (dto.oathCompleted !== true) {
+        throw new BadRequestException(
+          'Complete the oath (confirmation checklist) before requesting attendance verification.',
+        );
+      }
+      if (
+        dto.attendanceApproverType !== 'faculty' &&
+        dto.attendanceApproverType !== 'partner'
+      ) {
+        throw new BadRequestException(
+          'Select who should approve attendance: Faculty or Partner.',
+        );
+      }
+      await this.assertAllParticipantsMeetMinimumHoursForVerify(
+        opportunity,
+        projectId,
+      );
+    }
+
+    const preferredApproverType =
+      dto.attendanceApproverType === 'faculty' ||
+      dto.attendanceApproverType === 'partner'
+        ? dto.attendanceApproverType
+        : undefined;
+    const preferredFacultyEmail =
+      typeof dto.facultyEmail === 'string' ? dto.facultyEmail.trim() : '';
+
+    const reviewer = await this.resolveAttendanceVerificationReviewer(
+      opportunity,
+      participant,
+      preferredApproverType,
+      preferredFacultyEmail || undefined,
+    );
+
+    // Persist student choice so pending logs + future reviews follow the selected queue.
+    if (participant.attendanceApproverType !== reviewer.reviewerType) {
+      participant.attendanceApproverType = reviewer.reviewerType;
+    }
+    await this.reassignPendingAttendanceLogsToReviewerType(
+      opportunity,
+      participant,
+      reviewer.reviewerType,
+      preferredFacultyEmail || undefined,
+    );
 
     participant.attendanceVerificationRequested = true;
     participant.attendanceLocked = true;
     participant.attendanceVerificationRequestedAt = requestedAt;
     participant.attendanceVerificationReviewerType = reviewer.reviewerType;
     participant.attendanceVerificationReviewerEmail = reviewer.reviewerEmail;
+
+    if (
+      reviewer.reviewerType === 'faculty' &&
+      preferredFacultyEmail &&
+      preferredFacultyEmail.includes('@')
+    ) {
+      participant.primaryFacultyEmail = reviewer.reviewerEmail;
+    }
 
     let emailNotified = false;
     try {
@@ -3036,23 +3110,109 @@ export class EngagementService {
     ]);
   }
 
+  /**
+   * One-time verification requires every project participant to have logged
+   * at least `opportunity.requiredHours` (default 16), counting all non-rejected sessions.
+   */
+  private async assertAllParticipantsMeetMinimumHoursForVerify(
+    opportunity: Opportunity,
+    projectId: string,
+  ): Promise<void> {
+    const requiredHours = Number(opportunity.requiredHours) || 16;
+    const participants = await this.participantRepository.find({
+      where: { projectId },
+    });
+    if (!participants.length) {
+      throw new BadRequestException(
+        'No participants found for this project. Add team members before requesting verification.',
+      );
+    }
+
+    const logs = await this.attendanceLogRepository.find({
+      where: { projectId },
+    });
+
+    const hoursByParticipant = new Map<string, number>();
+    for (const log of logs) {
+      const status = String(log.approvalStatus ?? '')
+        .trim()
+        .toLowerCase();
+      if (status === 'rejected') continue;
+      const hours = Number(log.sessionHours) || 0;
+      hoursByParticipant.set(
+        log.participantId,
+        (hoursByParticipant.get(log.participantId) || 0) + hours,
+      );
+    }
+
+    const shortfall = participants.filter((p) => {
+      const hours = hoursByParticipant.get(p.id) || 0;
+      return hours + 1e-9 < requiredHours;
+    });
+
+    if (shortfall.length > 0) {
+      const labels = shortfall
+        .slice(0, 5)
+        .map((p) => (p.name || p.email || p.id).trim())
+        .filter(Boolean);
+      throw new BadRequestException(
+        `Every student must reach at least ${requiredHours} hours before one-time verification. Still short: ${labels.join(', ')}${shortfall.length > 5 ? ` (+${shortfall.length - 5} more)` : ''}.`,
+      );
+    }
+  }
+
   private async resolveAttendanceVerificationReviewer(
     opportunity: Opportunity,
     participant: Participation,
+    preferredType?: 'faculty' | 'partner',
+    preferredFacultyEmail?: string,
   ): Promise<{ reviewerType: 'faculty' | 'partner'; reviewerEmail: string }> {
-    if (opportunityHasActionablePartnerForAttendance(opportunity)) {
-      const partnerEmails =
-        extractPartnerContactEmailsForAttendance(opportunity);
+    const hasPartner =
+      opportunityHasActionablePartnerForAttendance(opportunity);
+    const partnerEmails = hasPartner
+      ? extractPartnerContactEmailsForAttendance(opportunity)
+      : [];
+    const facultyEmails = await this.resolveFacultyEmailsForAttendanceRouting(
+      participant,
+      opportunity,
+    );
+
+    if (preferredType === 'partner') {
+      if (!hasPartner || partnerEmails.length === 0) {
+        throw new BadRequestException(
+          'Partner attendance approval is not available for this project. Select Faculty, or add a partner contact email on the opportunity.',
+        );
+      }
       return {
         reviewerType: 'partner',
         reviewerEmail: partnerEmails[0].trim().toLowerCase(),
       };
     }
 
-    const facultyEmails = await this.resolveFacultyEmailsForAttendanceRouting(
-      participant,
-      opportunity,
-    );
+    if (preferredType === 'faculty') {
+      const overridden = (preferredFacultyEmail || '').trim().toLowerCase();
+      if (overridden) {
+        if (!overridden.includes('@')) {
+          throw new BadRequestException('Enter a valid faculty email address.');
+        }
+        return { reviewerType: 'faculty', reviewerEmail: overridden };
+      }
+      if (facultyEmails.length === 0) {
+        throw new BadRequestException(
+          'Faculty attendance approval needs a supervising faculty email. Enter a faculty email or ensure primary faculty is set on this participation.',
+        );
+      }
+      return { reviewerType: 'faculty', reviewerEmail: facultyEmails[0] };
+    }
+
+    // Default (backward compatible): partner when linked, otherwise faculty.
+    if (hasPartner && partnerEmails.length > 0) {
+      return {
+        reviewerType: 'partner',
+        reviewerEmail: partnerEmails[0].trim().toLowerCase(),
+      };
+    }
+
     if (facultyEmails.length > 0) {
       return { reviewerType: 'faculty', reviewerEmail: facultyEmails[0] };
     }
@@ -3060,6 +3220,65 @@ export class EngagementService {
     throw new BadRequestException(
       'Unable to resolve reviewer for this project',
     );
+  }
+
+  /**
+   * When the student picks faculty vs partner at verify-request time, move this
+   * project's pending attendance logs into that reviewer's queue.
+   */
+  private async reassignPendingAttendanceLogsToReviewerType(
+    opportunity: Opportunity,
+    participant: Participation,
+    reviewerType: 'faculty' | 'partner',
+    preferredFacultyEmail?: string,
+  ): Promise<void> {
+    const pendingLogs = await this.attendanceLogRepository.find({
+      where: {
+        projectId: opportunity.id,
+        approvalStatus: 'pending',
+      },
+      relations: ['participant'],
+    });
+    if (!pendingLogs.length) return;
+
+    let assignedFacultyUserId: string | null = null;
+    let assignedPartnerUserId: string | null = null;
+
+    if (reviewerType === 'faculty') {
+      const preferred = (preferredFacultyEmail || '').trim().toLowerCase();
+      const facultyEmails = preferred
+        ? [preferred]
+        : await this.resolveFacultyEmailsForAttendanceRouting(
+            participant,
+            opportunity,
+          );
+      for (const facultyEmail of facultyEmails) {
+        const facultyUser = await this.userRepository
+          .createQueryBuilder('user')
+          .where('LOWER("user"."email") = :facultyEmail', { facultyEmail })
+          .andWhere('"user"."role" = :facultyRole', {
+            facultyRole: UserRole.FACULTY,
+          })
+          .getOne();
+        if (facultyUser?.id) {
+          assignedFacultyUserId = facultyUser.id;
+          break;
+        }
+      }
+    } else {
+      assignedPartnerUserId = await this.resolvePartnerOwnerUserId(opportunity);
+    }
+
+    for (const log of pendingLogs) {
+      log.assignedApproverType = reviewerType;
+      log.assignedApproverUserId =
+        reviewerType === 'faculty'
+          ? assignedFacultyUserId
+          : assignedPartnerUserId;
+      log.opportunityCreatorKind =
+        reviewerType === 'partner' ? 'partner' : 'student';
+    }
+    await this.attendanceLogRepository.save(pendingLogs);
   }
 
   /**

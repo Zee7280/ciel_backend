@@ -2,6 +2,9 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Section1AnalyticsService } from './section1-analytics.service';
 import { Section1AnalyticsController } from './section1-analytics.controller';
+import { SectionReportAnalyticsService } from './section-report-analytics.service';
+import { SectionReportAnalyticsController } from './section-report-analytics.controller';
+import { AnalyticsScopeService } from './shared/analytics-scope.service';
 import { User } from '../users/entities/user.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { Participation } from '../engagement/entities/participant.entity';
@@ -26,8 +29,15 @@ import { FacultyUniversityScopeModule } from '../faculty-university-scope/facult
             Otp,
         ]),
     ],
-    controllers: [Section1AnalyticsController],
-    providers: [Section1AnalyticsService],
-    exports: [Section1AnalyticsService],
+    controllers: [
+        Section1AnalyticsController,
+        SectionReportAnalyticsController,
+    ],
+    providers: [
+        Section1AnalyticsService,
+        SectionReportAnalyticsService,
+        AnalyticsScopeService,
+    ],
+    exports: [Section1AnalyticsService, SectionReportAnalyticsService],
 })
 export class AnalyticsModule {}

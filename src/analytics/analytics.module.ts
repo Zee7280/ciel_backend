@@ -14,30 +14,34 @@ import { Organization } from '../organizations/entities/organization.entity';
 import { EmailOtp } from '../auth/entities/email-otp.entity';
 import { Otp } from '../students/entities/otp.entity';
 import { FacultyUniversityScopeModule } from '../faculty-university-scope/faculty-university-scope.module';
+import { UnifiedAnalyticsController } from './unified-analytics.controller';
+import { UnifiedAnalyticsService } from './unified-analytics.service';
 
 @Module({
-    imports: [
-        FacultyUniversityScopeModule,
-        TypeOrmModule.forFeature([
-            User,
-            Opportunity,
-            Participation,
-            AttendanceLog,
-            StudentReport,
-            Organization,
-            EmailOtp,
-            Otp,
-        ]),
-    ],
-    controllers: [
-        Section1AnalyticsController,
-        SectionReportAnalyticsController,
-    ],
-    providers: [
-        Section1AnalyticsService,
-        SectionReportAnalyticsService,
-        AnalyticsScopeService,
-    ],
-    exports: [Section1AnalyticsService, SectionReportAnalyticsService],
+  imports: [
+    FacultyUniversityScopeModule,
+    TypeOrmModule.forFeature([
+      User,
+      Opportunity,
+      Participation,
+      AttendanceLog,
+      StudentReport,
+      Organization,
+      EmailOtp,
+      Otp,
+    ]),
+  ],
+  controllers: [
+    Section1AnalyticsController,
+    SectionReportAnalyticsController,
+    UnifiedAnalyticsController,
+  ],
+  providers: [
+    Section1AnalyticsService,
+    SectionReportAnalyticsService,
+    AnalyticsScopeService,
+    UnifiedAnalyticsService,
+  ],
+  exports: [Section1AnalyticsService, SectionReportAnalyticsService],
 })
 export class AnalyticsModule {}

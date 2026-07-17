@@ -3153,7 +3153,7 @@ export class EngagementService {
     if (shortfall.length > 0) {
       const labels = shortfall
         .slice(0, 5)
-        .map((p) => (p.name || p.email || p.id).trim())
+        .map((p) => (p.fullName || p.email || p.id).trim())
         .filter(Boolean);
       throw new BadRequestException(
         `Every student must reach at least ${requiredHours} hours before one-time verification. Still short: ${labels.join(', ')}${shortfall.length > 5 ? ` (+${shortfall.length - 5} more)` : ''}.`,

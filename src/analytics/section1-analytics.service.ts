@@ -692,22 +692,15 @@ export class Section1AnalyticsService {
     let totalVerifiedHours = 0;
 
     for (const p of participations) {
-      const uni =
-        (
-          p.universityName ||
-          p.student?.university ||
-          p.student?.institution ||
-          'Unspecified'
-        ).trim() || 'Unspecified';
+      const uni = this.safeLabel(
+        p.universityName || p.student?.university || p.student?.institution,
+      );
       uniMap.set(uni, (uniMap.get(uni) || 0) + 1);
-      const deg =
-        (p.academicProgram || p.student?.major || 'Unspecified').trim() ||
-        'Unspecified';
+      const deg = this.safeLabel(p.academicProgram || p.student?.major);
       degreeMap.set(deg, (degreeMap.get(deg) || 0) + 1);
-      const yr = (p.yearOfStudy || 'Unspecified').trim() || 'Unspecified';
+      const yr = this.safeLabel(p.yearOfStudy);
       yearMap.set(yr, (yearMap.get(yr) || 0) + 1);
-      const integ =
-        (p.academicIntegrationType || 'Unspecified').trim() || 'Unspecified';
+      const integ = this.safeLabel(p.academicIntegrationType);
       integrationMap.set(integ, (integrationMap.get(integ) || 0) + 1);
       if (p.academicIntegrationType === 'Course-Linked') courseLinked += 1;
       if (p.mobileVerified) mobileVerified += 1;
@@ -1049,9 +1042,7 @@ export class Section1AnalyticsService {
     for (const m of members) {
       const role = m.isTeamLead ? 'Team Lead' : 'Active Contributor';
       roleMap.set(role, (roleMap.get(role) || 0) + 1);
-      const uni =
-        (m.universityName || m.student?.university || 'Unspecified').trim() ||
-        'Unspecified';
+      const uni = this.safeLabel(m.universityName || m.student?.university);
       uniMap.set(uni, (uniMap.get(uni) || 0) + 1);
     }
     const configured =
@@ -1161,6 +1152,17 @@ export class Section1AnalyticsService {
     if (percent >= 100) return 'Completed';
     if (percent > 0) return 'In Progress';
     return 'Pending';
+  }
+
+  private safeLabel(value: unknown, fallback = 'Unspecified'): string {
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      return trimmed || fallback;
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      return String(value);
+    }
+    return fallback;
   }
 
   private toDistribution(entries: Array<[string, number]>): DistributionRow[] {

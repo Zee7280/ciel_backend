@@ -1,9 +1,50 @@
 import {
+    AnalyticsCategoryCounts,
+    AnalyticsFieldCategory,
     AnalyticsFieldDefinition,
     AnalyticsFieldMeta,
+    AnalyticsFieldsByCategory,
     AnalyticsFieldValues,
     AnalyticsStakeholder,
 } from './section-analytics.types';
+
+const EMPTY_CATEGORY_BUCKETS = (): AnalyticsFieldsByCategory => ({
+    basic: {},
+    premium: {},
+    restricted: {},
+});
+
+const EMPTY_CATEGORY_COUNTS = (): AnalyticsCategoryCounts => ({
+    basic: 0,
+    premium: 0,
+    restricted: 0,
+});
+
+/**
+ * Groups already-filtered fields by meta.category for UI bands.
+ * Additive only — callers keep returning flat `fields` + `meta` unchanged.
+ */
+export function groupFieldsByCategory(
+    fields: AnalyticsFieldValues,
+    meta: Record<string, { category?: AnalyticsFieldCategory }>,
+): {
+    fields_by_category: AnalyticsFieldsByCategory;
+    category_counts: AnalyticsCategoryCounts;
+} {
+    const fields_by_category = EMPTY_CATEGORY_BUCKETS();
+    const category_counts = EMPTY_CATEGORY_COUNTS();
+
+    for (const [key, value] of Object.entries(fields)) {
+        const category: AnalyticsFieldCategory =
+            meta[key]?.category === 'premium' || meta[key]?.category === 'restricted'
+                ? meta[key].category
+                : 'basic';
+        fields_by_category[category][key] = value;
+        category_counts[category] += 1;
+    }
+
+    return { fields_by_category, category_counts };
+}
 
 const ALL: AnalyticsStakeholder[] = [
     'ciel',
@@ -145,7 +186,12 @@ export function filterFieldsForStakeholder(
     section: number,
     stakeholder: AnalyticsStakeholder,
     values: AnalyticsFieldValues,
-): { fields: AnalyticsFieldValues; meta: Record<string, AnalyticsFieldMeta> } {
+): {
+    fields: AnalyticsFieldValues;
+    meta: Record<string, AnalyticsFieldMeta>;
+    fields_by_category: AnalyticsFieldsByCategory;
+    category_counts: AnalyticsCategoryCounts;
+} {
     const defs = SECTION_FIELD_DEFINITIONS[section] ?? [];
     const byKey = new Map(defs.map((d) => [d.key, d]));
     const fields: AnalyticsFieldValues = {};
@@ -157,7 +203,8 @@ export function filterFieldsForStakeholder(
         fields[key] = value;
         meta[key] = { category: def.category, presentation: def.presentation };
     }
-    return { fields, meta };
+    const grouped = groupFieldsByCategory(fields, meta);
+    return { fields, meta, ...grouped };
 }
 
 export function sanitizeForStakeholder(

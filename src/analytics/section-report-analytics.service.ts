@@ -112,11 +112,8 @@ export class SectionReportAnalyticsService {
     }
 
     const sanitized = sanitizeForStakeholder(stakeholder, raw);
-    const { fields, meta } = filterFieldsForStakeholder(
-      section,
-      stakeholder,
-      sanitized,
-    );
+    const { fields, meta, fields_by_category, category_counts } =
+      filterFieldsForStakeholder(section, stakeholder, sanitized);
 
     return {
       success: true,
@@ -129,6 +126,8 @@ export class SectionReportAnalyticsService {
         organization_id: requester.organizationId ?? undefined,
         fields,
         meta,
+        fields_by_category,
+        category_counts,
       },
     };
   }
@@ -152,11 +151,8 @@ export class SectionReportAnalyticsService {
       },
     );
     const sanitized = sanitizeForStakeholder('un_government', raw);
-    const { fields, meta } = filterFieldsForStakeholder(
-      section,
-      'un_government',
-      sanitized,
-    );
+    const { fields, meta, fields_by_category, category_counts } =
+      filterFieldsForStakeholder(section, 'un_government', sanitized);
     return {
       success: true,
       data: {
@@ -165,6 +161,8 @@ export class SectionReportAnalyticsService {
         scope: 'aggregate',
         fields: { slice, ...fields },
         meta,
+        fields_by_category,
+        category_counts,
       },
     };
   }

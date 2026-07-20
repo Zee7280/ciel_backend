@@ -178,6 +178,8 @@ export class Section1AnalyticsService {
           ...filtered.fields,
         },
         meta: filtered.meta,
+        fields_by_category: filtered.fields_by_category,
+        category_counts: filtered.category_counts,
       },
     };
   }
@@ -194,10 +196,8 @@ export class Section1AnalyticsService {
       input.stakeholder,
       input.rawValues,
     );
-    const { fields, meta } = filterSection1AnalyticsForStakeholder(
-      input.stakeholder,
-      sanitized,
-    );
+    const { fields, meta, fields_by_category, category_counts } =
+      filterSection1AnalyticsForStakeholder(input.stakeholder, sanitized);
     return {
       success: true,
       data: {
@@ -208,6 +208,8 @@ export class Section1AnalyticsService {
         organization_id: input.organizationId,
         fields,
         meta,
+        fields_by_category,
+        category_counts,
       },
     };
   }

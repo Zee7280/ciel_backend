@@ -24,6 +24,14 @@ export interface Section1AnalyticsFieldMeta {
     presentation: string;
 }
 
+/** Additive grouping for UI bands — does not replace `fields` / `meta`. */
+export type Section1FieldsByCategory = Record<
+    Section1AnalyticsFieldCategory,
+    Section1AnalyticsFieldValues
+>;
+
+export type Section1CategoryCounts = Record<Section1AnalyticsFieldCategory, number>;
+
 export interface Section1AnalyticsResponse {
     success: true;
     data: {
@@ -34,6 +42,9 @@ export interface Section1AnalyticsResponse {
         organization_id?: string;
         fields: Section1AnalyticsFieldValues;
         meta: Record<string, Section1AnalyticsFieldMeta>;
+        /** UI helper: same values as `fields`, split by `meta.category`. */
+        fields_by_category: Section1FieldsByCategory;
+        category_counts: Section1CategoryCounts;
     };
 }
 

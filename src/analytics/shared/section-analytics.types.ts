@@ -24,6 +24,14 @@ export interface AnalyticsFieldMeta {
     presentation: string;
 }
 
+/** Additive grouping for UI bands — does not replace `fields` / `meta`. */
+export type AnalyticsFieldsByCategory = Record<
+    AnalyticsFieldCategory,
+    AnalyticsFieldValues
+>;
+
+export type AnalyticsCategoryCounts = Record<AnalyticsFieldCategory, number>;
+
 export interface SectionAnalyticsResponse {
     success: true;
     data: {
@@ -35,6 +43,9 @@ export interface SectionAnalyticsResponse {
         organization_id?: string;
         fields: AnalyticsFieldValues;
         meta: Record<string, AnalyticsFieldMeta>;
+        /** UI helper: same values as `fields`, split by `meta.category`. */
+        fields_by_category: AnalyticsFieldsByCategory;
+        category_counts: AnalyticsCategoryCounts;
     };
 }
 

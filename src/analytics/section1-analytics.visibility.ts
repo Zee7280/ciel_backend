@@ -1,9 +1,14 @@
+import { groupFieldsByCategory } from './shared/section-analytics.visibility';
 import {
   Section1AnalyticsFieldDefinition,
   Section1AnalyticsFieldMeta,
   Section1AnalyticsFieldValues,
   Section1AnalyticsStakeholder,
+  Section1CategoryCounts,
+  Section1FieldsByCategory,
 } from './section1-analytics.types';
+
+export { groupFieldsByCategory };
 
 const ALL_STAKEHOLDERS: Section1AnalyticsStakeholder[] = [
   'ciel',
@@ -378,6 +383,8 @@ export function filterSection1AnalyticsForStakeholder(
 ): {
   fields: Section1AnalyticsFieldValues;
   meta: Record<string, Section1AnalyticsFieldMeta>;
+  fields_by_category: Section1FieldsByCategory;
+  category_counts: Section1CategoryCounts;
 } {
   const fields: Section1AnalyticsFieldValues = {};
   const meta: Record<string, Section1AnalyticsFieldMeta> = {};
@@ -394,7 +401,13 @@ export function filterSection1AnalyticsForStakeholder(
     };
   }
 
-  return { fields, meta };
+  const grouped = groupFieldsByCategory(fields, meta);
+  return {
+    fields,
+    meta,
+    fields_by_category: grouped.fields_by_category as Section1FieldsByCategory,
+    category_counts: grouped.category_counts as Section1CategoryCounts,
+  };
 }
 
 /** Strip restricted PII before partner / UN / government aggregate responses. */

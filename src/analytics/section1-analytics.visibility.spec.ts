@@ -50,14 +50,30 @@ describe('Section1 analytics visibility', () => {
       'un_government',
       sampleValues,
     );
-    const { fields, meta } = filterSection1AnalyticsForStakeholder(
-      'un_government',
-      sanitized,
-    );
+    const { fields, meta, fields_by_category, category_counts } =
+      filterSection1AnalyticsForStakeholder('un_government', sanitized);
     expect(fields.hours_status_in_header).toBeDefined();
     expect(fields.team_member_count).toBeDefined();
     expect(fields.cnic_completion).toBeUndefined();
     expect(meta.hours_status_in_header?.category).toBe('basic');
+    expect(fields_by_category.basic.hours_status_in_header).toBeDefined();
+    expect(fields_by_category.restricted.cnic_completion).toBeUndefined();
+    expect(category_counts.basic).toBeGreaterThan(0);
+  });
+
+  it('groups filtered fields by category without dropping flat fields', () => {
+    const { fields, meta, fields_by_category, category_counts } =
+      filterSection1AnalyticsForStakeholder('ciel', sampleValues);
+    expect(fields.project_title).toBe('Clean Campus Drive');
+    expect(fields_by_category.basic.project_title).toBe('Clean Campus Drive');
+    expect(fields_by_category.restricted.cnic_completion).toBeDefined();
+    expect(category_counts.restricted).toBeGreaterThan(0);
+    expect(
+      category_counts.basic +
+        category_counts.premium +
+        category_counts.restricted,
+    ).toBe(Object.keys(fields).length);
+    expect(meta.cnic_completion?.category).toBe('restricted');
   });
 
   it('allows student-only operational button state for student stakeholder', () => {

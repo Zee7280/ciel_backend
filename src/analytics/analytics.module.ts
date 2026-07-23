@@ -16,6 +16,8 @@ import { Otp } from '../students/entities/otp.entity';
 import { FacultyUniversityScopeModule } from '../faculty-university-scope/faculty-university-scope.module';
 import { UnifiedAnalyticsController } from './unified-analytics.controller';
 import { UnifiedAnalyticsService } from './unified-analytics.service';
+import { AllFieldsConsoleController } from './all-fields-console.controller';
+import { AllFieldsConsoleService } from './all-fields-console.service';
 
 @Module({
   imports: [
@@ -35,12 +37,14 @@ import { UnifiedAnalyticsService } from './unified-analytics.service';
     Section1AnalyticsController,
     SectionReportAnalyticsController,
     UnifiedAnalyticsController,
+    AllFieldsConsoleController,
   ],
   providers: [
     Section1AnalyticsService,
     SectionReportAnalyticsService,
     AnalyticsScopeService,
     UnifiedAnalyticsService,
+    AllFieldsConsoleService,
   ],
   exports: [Section1AnalyticsService, SectionReportAnalyticsService],
 })

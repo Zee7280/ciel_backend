@@ -2174,10 +2174,19 @@ export class OpportunitiesService {
         return saved;
     }
 
-    async remove(id: string) {
+    async remove(id: string, requestingUserId?: string) {
         const opportunity = await this.opportunitiesRepository.findOne({ where: { id } });
         if (!opportunity) {
             throw new NotFoundException(`Opportunity with ID "${id}" not found`);
+        }
+
+        if (requestingUserId) {
+            const requester = await this.usersRepository.findOne({ where: { id: requestingUserId } });
+            const isCreator = opportunity.creatorId === requestingUserId;
+            const isAdmin = requester?.role === UserRole.SUPER_ADMIN;
+            if (!isCreator && !isAdmin) {
+                throw new ForbiddenException('You do not have permission to delete this opportunity');
+            }
         }
 
         try {

@@ -121,7 +121,7 @@ export class OpportunitiesController {
 
     @UseGuards(JwtAuthGuard)
     @Delete(':id')
-    remove(@Param('id') id: string) {
-        return this.opportunitiesService.remove(id);
+    remove(@Request() req, @Param('id') id: string) {
+        return this.opportunitiesService.remove(id, req.user.id);
     }
 }

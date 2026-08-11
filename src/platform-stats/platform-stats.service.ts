@@ -20,7 +20,11 @@ export type PlatformStatsPayload = {
     sdgs_covered: number;
     active_projects: number;
     avg_cii_score: number;
+    verified_records: number;
+    people_reached: number;
 };
+
+const VERIFIED_RECORD_STATUSES = ['verified', 'paid'];
 
 const PUBLIC_LIVE_STATUSES = ['active', 'live', 'open', 'recruiting'];
 
@@ -69,8 +73,16 @@ export class PlatformStatsService {
     ) {}
 
     async getAggregatedStats(): Promise<PlatformStatsPayload> {
-        const [contributors, studentsEnrolled, universities, opportunities, engagementHours, avgCiiScore] =
-            await Promise.all([
+        const [
+            contributors,
+            studentsEnrolled,
+            universities,
+            opportunities,
+            engagementHours,
+            avgCiiScore,
+            verifiedRecords,
+            peopleReached,
+        ] = await Promise.all([
                 this.countDistinctContributors(),
                 this.countStudentsEnrolled(),
                 this.countApprovedUniversities(),
@@ -88,6 +100,8 @@ export class PlatformStatsService {
                 }),
                 this.sumEngagementHours(),
                 this.getAverageCiiScore(),
+                this.countVerifiedRecords(),
+                this.sumPeopleReached(),
             ]);
 
         const sdgSet = new Set<number>();
@@ -127,7 +141,68 @@ export class PlatformStatsService {
             sdgs_covered: sdgsImpacted,
             active_projects: activeProjects,
             avg_cii_score: avgCiiScore,
+            verified_records: verifiedRecords,
+            people_reached: peopleReached,
         };
+    }
+
+    private toBeneficiaryCount(value: unknown): number {
+        const n = Number(value);
+        return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+    }
+
+    /** A "record" is a student report that has cleared verification. */
+    private async countVerifiedRecords(): Promise<number> {
+        return this.studentReportsRepository.count({
+            where: VERIFIED_RECORD_STATUSES.map((status) => ({ status })),
+        });
+    }
+
+    /** Mirrors the admin analytics beneficiary rollup: report-declared beneficiaries, falling back to the opportunity's own count for live opportunities no verified report has already covered. */
+    private async sumPeopleReached(): Promise<number> {
+        const [reports, opportunities] = await Promise.all([
+            this.studentReportsRepository.find({
+                where: VERIFIED_RECORD_STATUSES.map((status) => ({ status })),
+                select: ['opportunityId', 'project_id', 'section4'],
+            }),
+            this.opportunitiesRepository.find({
+                where: { status: In(PUBLIC_LIVE_STATUSES) },
+                select: ['id', 'objectives'],
+            }),
+        ]);
+
+        const projectIdsFromReports = new Set<string>();
+        const reportBeneficiaries = reports.reduce((sum, report) => {
+            const projectId = report.opportunityId || report.project_id || null;
+            if (projectId) projectIdsFromReports.add(projectId);
+            const section4 = report.section4 as
+                | {
+                      project_summary?: { distinct_total_beneficiaries?: unknown };
+                      distinct_total_beneficiaries?: unknown;
+                      total_beneficiaries?: unknown;
+                      my_beneficiaries?: unknown;
+                  }
+                | undefined;
+            const beneficiaries =
+                this.toBeneficiaryCount(section4?.project_summary?.distinct_total_beneficiaries) ||
+                this.toBeneficiaryCount(section4?.distinct_total_beneficiaries) ||
+                this.toBeneficiaryCount(section4?.total_beneficiaries) ||
+                this.toBeneficiaryCount(section4?.my_beneficiaries);
+            return sum + beneficiaries;
+        }, 0);
+
+        const opportunityBeneficiaries = opportunities.reduce((sum, opportunity) => {
+            if (projectIdsFromReports.has(opportunity.id)) return sum;
+            const objectives = opportunity.objectives as
+                | { beneficiaries_count?: unknown; total_beneficiaries?: unknown }
+                | undefined;
+            const beneficiaries =
+                this.toBeneficiaryCount(objectives?.beneficiaries_count) ||
+                this.toBeneficiaryCount(objectives?.total_beneficiaries);
+            return sum + beneficiaries;
+        }, 0);
+
+        return reportBeneficiaries + opportunityBeneficiaries;
     }
 
     /** Verified students ∪ students with at least one approved participation (deduped; no PII in response). */

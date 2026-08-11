@@ -4,12 +4,13 @@ import {
     NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, Not, Repository } from 'typeorm';
+import { In, IsNull, Not, Repository } from 'typeorm';
 import type { Response } from 'express';
 import archiver from 'archiver';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { StudentReport } from '../reports/entities/student-report.entity';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
+import { User } from '../users/entities/user.entity';
 import { S3Service } from '../common/s3.service';
 import {
     collectReportEvidenceFiles,
@@ -22,6 +23,12 @@ type ZipEntry = ReportEvidenceFileRef & {
     zipPath: string;
 };
 
+type FacultyInfo = {
+    faculty_id: string | null;
+    faculty_name: string | null;
+    faculty_email: string | null;
+};
+
 @Injectable()
 export class AdminProjectEvidenceService {
     constructor(
@@ -31,6 +38,8 @@ export class AdminProjectEvidenceService {
         private readonly studentReportRepository: Repository<StudentReport>,
         @InjectRepository(AttendanceLog)
         private readonly attendanceLogRepository: Repository<AttendanceLog>,
+        @InjectRepository(User)
+        private readonly usersRepository: Repository<User>,
         private readonly s3Service: S3Service,
     ) { }
 
@@ -48,6 +57,22 @@ export class AdminProjectEvidenceService {
             where: { evidenceUrl: Not(IsNull()) },
             relations: ['participant'],
         });
+
+        const facultyIds = [
+            ...new Set(
+                opportunities
+                    .map((opp) => opp.facultyId?.trim())
+                    .filter((id): id is string => Boolean(id)),
+            ),
+        ];
+        const facultyUsers =
+            facultyIds.length > 0
+                ? await this.usersRepository.find({
+                      where: { id: In(facultyIds) },
+                      select: ['id', 'name', 'email'],
+                  })
+                : [];
+        const facultyById = new Map(facultyUsers.map((u) => [u.id, u]));
 
         const reportsByProject = new Map<string, StudentReport[]>();
         for (const report of reports) {
@@ -80,6 +105,11 @@ export class AdminProjectEvidenceService {
                 if (log.evidenceUrl) fileUrls.add(log.evidenceUrl);
             }
 
+            const faculty = this.resolveFacultyInfo(
+                opp,
+                opp.facultyId ? facultyById.get(opp.facultyId) : undefined,
+            );
+
             return {
                 id: opp.id,
                 title: opp.title,
@@ -87,10 +117,36 @@ export class AdminProjectEvidenceService {
                 organization_name: opp.organization?.name ?? 'Unknown',
                 report_count: projectReports.length,
                 evidence_file_count: fileUrls.size,
+                ...faculty,
             };
         });
 
         return { success: true, data: { projects } };
+    }
+
+    private resolveFacultyInfo(
+        opp: Opportunity,
+        linkedUser?: Pick<User, 'id' | 'name' | 'email'>,
+    ): FacultyInfo {
+        const sup =
+            opp.supervision && typeof opp.supervision === 'object'
+                ? (opp.supervision as Record<string, unknown>)
+                : null;
+        const supervisionName =
+            typeof sup?.supervisor_name === 'string' ? sup.supervisor_name.trim() : '';
+        const supervisionContact =
+            typeof sup?.contact === 'string' ? sup.contact.trim() : '';
+        const supervisionEmail = supervisionContact.includes('@')
+            ? supervisionContact.toLowerCase()
+            : '';
+
+        const faculty_id = opp.facultyId?.trim() || linkedUser?.id || null;
+        const faculty_name =
+            supervisionName || linkedUser?.name?.trim() || null;
+        const faculty_email =
+            supervisionEmail || linkedUser?.email?.trim()?.toLowerCase() || null;
+
+        return { faculty_id, faculty_name, faculty_email };
     }
 
     async streamProjectEvidenceZip(opportunityId: string, res: Response): Promise<void> {

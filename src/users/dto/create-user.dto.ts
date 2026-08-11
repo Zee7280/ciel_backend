@@ -21,6 +21,15 @@ export class CreateUserDto {
 
     @IsOptional()
     @IsString()
+    enrollmentYear?: string;
+
+    /** Optional student ID / roll number, stored on the existing `registrationNumber` column. */
+    @IsOptional()
+    @IsString()
+    registrationNumber?: string;
+
+    @IsOptional()
+    @IsString()
     orgName?: string;
 
     @IsOptional()

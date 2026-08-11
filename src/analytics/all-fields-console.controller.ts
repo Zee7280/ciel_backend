@@ -28,6 +28,10 @@ export class AllFieldsConsoleController {
    */
   @Get('view-as')
   getViewAs(@Request() req, @Query() query: AllFieldsConsoleViewAsQueryDto) {
-    return this.consoleService.getViewAs(req.user, query.role, query.section);
+    return this.consoleService.getViewAs(req.user, query.role, query.section, {
+      project_id: query.project_id,
+      university: query.university,
+      scope: query.scope,
+    });
   }
 }

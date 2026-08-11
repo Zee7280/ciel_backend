@@ -142,14 +142,38 @@ export class AllFieldsConsoleService {
     },
     role: AllFieldsConsoleRole,
     section: number,
+    filters?: {
+      project_id?: string;
+      university?: string;
+      scope?: 'aggregate' | 'project';
+    },
   ) {
     const stakeholder = consoleRoleToStakeholder(role);
     const sectionTitle =
       REPORT_SECTION_TITLES[section] ?? `Section ${section}`;
 
+    const projectId = (filters?.project_id || '').trim() || undefined;
+    const university = (filters?.university || '').trim() || undefined;
+    const scope: 'aggregate' | 'project' =
+      projectId || filters?.scope === 'project' ? 'project' : 'aggregate';
+
+    if (scope === 'project' && !projectId) {
+      return {
+        success: false as const,
+        message: 'project_id is required when scope=project',
+      };
+    }
+
+    const analyticsQuery = {
+      scope,
+      ...(projectId ? { project_id: projectId } : {}),
+      ...(university ? { university } : {}),
+    };
+
     let analyticsPayload: {
       stakeholder: string;
       scope: string;
+      project_id?: string;
       fields: AnalyticsFieldValues;
       meta: Record<string, { category?: AnalyticsFieldCategory; presentation?: string }>;
       fields_by_category?: unknown;
@@ -159,7 +183,7 @@ export class AllFieldsConsoleService {
     if (section === 1) {
       const full = await this.section1AnalyticsService.getSection1Analytics(
         requester,
-        { scope: 'aggregate' },
+        analyticsQuery,
         'ciel',
       );
       const raw = full.data.fields;
@@ -180,7 +204,8 @@ export class AllFieldsConsoleService {
       );
       analyticsPayload = {
         stakeholder: role === 'faculty' ? 'faculty_mirror' : stakeholder,
-        scope: 'aggregate',
+        scope,
+        project_id: projectId,
         fields: roleFiltered.fields,
         meta: roleFiltered.meta,
         fields_by_category: roleFiltered.fields_by_category,
@@ -191,7 +216,7 @@ export class AllFieldsConsoleService {
         await this.sectionReportAnalyticsService.getSectionAnalytics(
           section,
           requester,
-          { scope: 'aggregate' },
+          analyticsQuery,
           'ciel',
         );
       const sanitized = sanitizeForStakeholder(stakeholder, full.data.fields);
@@ -208,7 +233,8 @@ export class AllFieldsConsoleService {
       );
       analyticsPayload = {
         stakeholder: role === 'faculty' ? 'faculty_mirror' : stakeholder,
-        scope: 'aggregate',
+        scope,
+        project_id: projectId,
         fields: roleFiltered.fields,
         meta: roleFiltered.meta,
         fields_by_category: roleFiltered.fields_by_category,
@@ -224,6 +250,10 @@ export class AllFieldsConsoleService {
       }),
     );
 
+    const filterBits: string[] = [];
+    if (university) filterBits.push(`university=${university}`);
+    if (projectId) filterBits.push(`project=${projectId}`);
+
     return {
       success: true as const,
       data: {
@@ -234,10 +264,20 @@ export class AllFieldsConsoleService {
         section,
         section_title: sectionTitle,
         primary_owner: 'super_admin' as const,
+        filters: {
+          scope,
+          university: university ?? null,
+          project_id: projectId ?? null,
+          active: filterBits.length > 0,
+        },
         note:
           role === 'faculty'
-            ? 'Faculty mirror uses university/student field visibility on the platform aggregate — not a live faculty account session.'
-            : `Read-only mirror of the ${ROLE_META[role].label} field lens on the Super Admin master ledger.`,
+            ? 'Faculty mirror uses university/student field visibility on the Super Admin ledger — not a live faculty account session.'
+            : `Read-only mirror of the ${ROLE_META[role].label} field lens${
+                filterBits.length
+                  ? ` (filters: ${filterBits.join(', ')})`
+                  : ' on the platform aggregate'
+              }.`,
         analytics: analyticsPayload,
         underlying_fields,
       },

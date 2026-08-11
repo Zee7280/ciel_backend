@@ -27,6 +27,9 @@ export class User {
     department: string;
 
     @Column({ nullable: true })
+    enrollmentYear: string;
+
+    @Column({ nullable: true })
     faculty_department: string;
 
     @Column({ nullable: true })

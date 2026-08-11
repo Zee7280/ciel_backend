@@ -33,6 +33,8 @@ import { FeedbackModule } from './feedback/feedback.module';
 import { TutorialsModule } from './tutorials/tutorials.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { JobsModule } from './jobs/jobs.module';
+import { PathsModule } from './paths/paths.module';
+import { ImpactSummaryModule } from './impact-summary/impact-summary.module';
 
 @Module({
   imports: [
@@ -91,6 +93,8 @@ import { JobsModule } from './jobs/jobs.module';
     TutorialsModule,
     AnalyticsModule,
     JobsModule,
+    PathsModule,
+    ImpactSummaryModule,
     TypeOrmModule.forFeature([Setting]),
   ],
   controllers: [AppController],

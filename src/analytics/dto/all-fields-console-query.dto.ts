@@ -1,4 +1,4 @@
-import { IsIn, IsInt, IsOptional, Max, Min } from 'class-validator';
+import { IsIn, IsInt, IsOptional, IsString, IsUUID, Max, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 
 /** Console “View as” roles (mockup). Mapped onto analytics stakeholder lenses. */
@@ -22,7 +22,17 @@ export class AllFieldsConsoleViewAsQueryDto {
   @Max(10)
   section!: number;
 
+  /** When project_id is set, scope becomes project; otherwise aggregate. */
   @IsOptional()
-  @IsIn(['aggregate'])
-  scope?: 'aggregate';
+  @IsIn(['aggregate', 'project'])
+  scope?: 'aggregate' | 'project';
+
+  @IsOptional()
+  @IsUUID()
+  project_id?: string;
+
+  /** Case-insensitive university name filter on enrolments / reports. */
+  @IsOptional()
+  @IsString()
+  university?: string;
 }

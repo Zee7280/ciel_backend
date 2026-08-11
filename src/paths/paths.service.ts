@@ -1,6 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { CourseProjectEntry } from './entities/course-project-entry.entity';
 import { DEFAULT_FYP_MILESTONES, FypEntry } from './entities/fyp-entry.entity';
 import { VentureEntry } from './entities/venture-entry.entity';
@@ -8,6 +8,7 @@ import { UpdateCourseProjectDto } from './dto/update-course-project.dto';
 import { AddFypDeliverableDto, UpdateFypDto } from './dto/update-fyp.dto';
 import { UpdateVentureDto } from './dto/update-venture.dto';
 import { ventureCompletenessPercent, ventureMissingItems, VENTURE_VISIBILITY_THRESHOLD } from './venture-completeness.constants';
+import { User } from '../users/entities/user.entity';
 
 @Injectable()
 export class PathsService {
@@ -18,6 +19,8 @@ export class PathsService {
         private readonly fypRepo: Repository<FypEntry>,
         @InjectRepository(VentureEntry)
         private readonly ventureRepo: Repository<VentureEntry>,
+        @InjectRepository(User)
+        private readonly usersRepo: Repository<User>,
     ) { }
 
     // ---------- Course Project ----------
@@ -37,6 +40,103 @@ export class PathsService {
         if (dto.stepCompleted !== undefined) entry.stepCompleted = dto.stepCompleted;
         if (dto.status !== undefined) entry.status = dto.status;
         return this.courseProjectRepo.save(entry);
+    }
+
+    async listCourseProjectsForAdmin(status?: 'draft' | 'submitted') {
+        const entries = await this.courseProjectRepo.find({
+            where: status ? { status } : {},
+            order: { updatedAt: 'DESC' },
+        });
+        if (!entries.length) return [];
+
+        const users = await this.usersRepo.find({
+            where: { id: In(entries.map((e) => e.userId)) },
+            select: ['id', 'name', 'email', 'institution', 'department'],
+        });
+        const userById = new Map(users.map((u) => [u.id, u]));
+
+        return entries.map((entry) => ({
+            ...entry,
+            student: userById.get(entry.userId) ?? null,
+        }));
+    }
+
+    async getCourseProjectForAdmin(id: string) {
+        const entry = await this.courseProjectRepo.findOne({ where: { id } });
+        if (!entry) throw new NotFoundException('Course project entry not found');
+        const student = await this.usersRepo.findOne({
+            where: { id: entry.userId },
+            select: ['id', 'name', 'email', 'institution', 'department'],
+        });
+        return { ...entry, student: student ?? null };
+    }
+
+    private async attachStudents<T extends { userId: string }>(entries: T[]) {
+        if (!entries.length) return [];
+        const users = await this.usersRepo.find({
+            where: { id: In(entries.map((e) => e.userId)) },
+            select: ['id', 'name', 'email', 'institution', 'department'],
+        });
+        const userById = new Map(users.map((u) => [u.id, u]));
+        return entries.map((entry) => ({
+            ...entry,
+            student: userById.get(entry.userId) ?? null,
+        }));
+    }
+
+    private enrichFypForAdmin(entry: FypEntry) {
+        const total = entry.milestones?.length || DEFAULT_FYP_MILESTONES.length;
+        const complete = entry.milestones?.filter((m) => m.status === 'complete').length ?? 0;
+        return {
+            ...entry,
+            milestonesComplete: complete,
+            milestonesTotal: total,
+            deliverablesCount: entry.deliverables?.length ?? 0,
+            progressStatus: complete >= total && total > 0 ? 'complete' as const : 'in_progress' as const,
+        };
+    }
+
+    async listFypForAdmin(progress?: 'complete' | 'in_progress') {
+        const entries = await this.fypRepo.find({ order: { updatedAt: 'DESC' } });
+        const enriched = entries.map((entry) => this.enrichFypForAdmin(entry));
+        const filtered = progress
+            ? enriched.filter((entry) => entry.progressStatus === progress)
+            : enriched;
+        return this.attachStudents(filtered);
+    }
+
+    async getFypForAdmin(id: string) {
+        const entry = await this.fypRepo.findOne({ where: { id } });
+        if (!entry) throw new NotFoundException('FYP entry not found');
+        const [withStudent] = await this.attachStudents([this.enrichFypForAdmin(entry)]);
+        return withStudent;
+    }
+
+    private enrichVentureForAdmin(entry: VentureEntry) {
+        return {
+            ...entry,
+            completenessPercent: ventureCompletenessPercent(entry),
+            missingItems: ventureMissingItems(entry),
+        };
+    }
+
+    async listVenturesForAdmin(visibility?: 'visible' | 'private') {
+        const where =
+            visibility === 'visible'
+                ? { isVisible: true }
+                : visibility === 'private'
+                    ? { isVisible: false }
+                    : {};
+        const entries = await this.ventureRepo.find({ where, order: { updatedAt: 'DESC' } });
+        const enriched = entries.map((entry) => this.enrichVentureForAdmin(entry));
+        return this.attachStudents(enriched);
+    }
+
+    async getVentureForAdmin(id: string) {
+        const entry = await this.ventureRepo.findOne({ where: { id } });
+        if (!entry) throw new NotFoundException('Venture entry not found');
+        const [withStudent] = await this.attachStudents([this.enrichVentureForAdmin(entry)]);
+        return withStudent;
     }
 
     // ---------- FYP / Thesis ----------

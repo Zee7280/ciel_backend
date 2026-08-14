@@ -158,23 +158,18 @@ export class PlatformStatsService {
         });
     }
 
-    /** Mirrors the admin analytics beneficiary rollup: report-declared beneficiaries, falling back to the opportunity's own count for live opportunities no verified report has already covered. */
+    /**
+     * Public "not estimates" claim means this must only count beneficiaries from verified student
+     * reports — unlike the admin analytics rollup, it deliberately excludes opportunities' own
+     * self-reported `beneficiaries_count` (set by whoever created the listing, never audited).
+     */
     private async sumPeopleReached(): Promise<number> {
-        const [reports, opportunities] = await Promise.all([
-            this.studentReportsRepository.find({
-                where: VERIFIED_RECORD_STATUSES.map((status) => ({ status })),
-                select: ['opportunityId', 'project_id', 'section4'],
-            }),
-            this.opportunitiesRepository.find({
-                where: { status: In(PUBLIC_LIVE_STATUSES) },
-                select: ['id', 'objectives'],
-            }),
-        ]);
+        const reports = await this.studentReportsRepository.find({
+            where: VERIFIED_RECORD_STATUSES.map((status) => ({ status })),
+            select: ['section4'],
+        });
 
-        const projectIdsFromReports = new Set<string>();
-        const reportBeneficiaries = reports.reduce((sum, report) => {
-            const projectId = report.opportunityId || report.project_id || null;
-            if (projectId) projectIdsFromReports.add(projectId);
+        return reports.reduce((sum, report) => {
             const section4 = report.section4 as
                 | {
                       project_summary?: { distinct_total_beneficiaries?: unknown };
@@ -190,19 +185,6 @@ export class PlatformStatsService {
                 this.toBeneficiaryCount(section4?.my_beneficiaries);
             return sum + beneficiaries;
         }, 0);
-
-        const opportunityBeneficiaries = opportunities.reduce((sum, opportunity) => {
-            if (projectIdsFromReports.has(opportunity.id)) return sum;
-            const objectives = opportunity.objectives as
-                | { beneficiaries_count?: unknown; total_beneficiaries?: unknown }
-                | undefined;
-            const beneficiaries =
-                this.toBeneficiaryCount(objectives?.beneficiaries_count) ||
-                this.toBeneficiaryCount(objectives?.total_beneficiaries);
-            return sum + beneficiaries;
-        }, 0);
-
-        return reportBeneficiaries + opportunityBeneficiaries;
     }
 
     /** Verified students ∪ students with at least one approved participation (deduped; no PII in response). */
@@ -249,13 +231,17 @@ export class PlatformStatsService {
             .getCount();
     }
 
+    /** Same "verified" definition used throughout section1-analytics.service.ts — approvalStatus alone
+     * is null for any row that predates the approval-request workflow (see AttendanceLog entity), so it
+     * must never be treated as verified on its own; entryStatus is the field that actually defaults to
+     * 'pending' and only flips to 'verified' once reviewed. */
     private async sumEngagementHours(): Promise<number> {
         const row = await this.attendanceLogsRepository
             .createQueryBuilder('log')
             .select('COALESCE(SUM(log.sessionHours), 0)', 'total')
-            .where('(log.approvalStatus IS NULL OR log.approvalStatus = :empty OR log.approvalStatus = :approved)', {
-                empty: '',
+            .where('(log.approvalStatus = :approved OR log.entryStatus = :verified)', {
                 approved: 'approved',
+                verified: 'verified',
             })
             .getRawOne<{ total: string | number | null }>();
 

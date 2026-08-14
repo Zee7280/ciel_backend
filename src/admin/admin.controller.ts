@@ -351,10 +351,22 @@ export class AdminController {
   }
 
   @Get('users')
-  async findAll(@Request() req: { user?: { role?: string } }) {
+  async findAll(
+    @Request() req: { user?: { role?: string } },
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('search') search?: string,
+    @Query('role') role?: string,
+  ) {
     const revealPasswords = req.user?.role === UserRole.SUPER_ADMIN;
-    const users = await this.usersService.findAllForAdmin(revealPasswords);
-    return { success: true, data: users };
+    const result = await this.usersService.findAllForAdmin({
+      revealPasswordRecords: revealPasswords,
+      page: page ? parseInt(page, 10) : undefined,
+      limit: limit ? parseInt(limit, 10) : undefined,
+      search,
+      role,
+    });
+    return { success: true, ...result };
   }
 
   @Get('users/:id')

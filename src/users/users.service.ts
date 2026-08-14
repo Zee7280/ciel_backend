@@ -158,16 +158,46 @@ export class UsersService {
      * Admin user table: includes `organization` for the same name/phone fallbacks as opportunity profile checks,
      * plus `profile_complete` / `profile_missing_fields`. Omits password reset secrets from the payload.
      */
-    async findAllForAdmin(revealPasswordRecords = false) {
+    async findAllForAdmin(options: {
+        revealPasswordRecords?: boolean;
+        page?: number;
+        limit?: number;
+        search?: string;
+        role?: string;
+    } = {}) {
+        const revealPasswordRecords = options.revealPasswordRecords ?? false;
+        // Pagination is opt-in via explicit page/limit — other admin screens (email composer,
+        // faculty-university scope picker) call this endpoint expecting the full unpaginated list.
+        const paginate = options.page != null || options.limit != null;
+        const page = Math.max(1, Math.floor(options.page ?? 1));
+        const limit = Math.min(100, Math.max(1, Math.floor(options.limit ?? 20)));
+        const search = options.search?.trim();
+        const role = options.role?.trim();
+
+        // Only the org fields getProfileCompletionStatus/the admin list actually read — the rest of
+        // Organization's ~24 columns were being fetched and discarded on every single row.
         const qb = this.usersRepository
             .createQueryBuilder('user')
-            .leftJoinAndSelect('user.organization', 'organization')
+            .leftJoin('user.organization', 'organization')
+            .addSelect(['organization.id', 'organization.name', 'organization.contactName', 'organization.contactPhone', 'organization.city'])
             .orderBy('user.createdAt', 'DESC');
+
+        if (paginate) {
+            qb.skip((page - 1) * limit).take(limit);
+        }
+
+        if (search) {
+            qb.andWhere('(user.name ILIKE :search OR user.email ILIKE :search)', { search: `%${search}%` });
+        }
+        if (role && role !== 'all') {
+            qb.andWhere('user.role = :role', { role });
+        }
         if (revealPasswordRecords) {
             qb.addSelect('user.passwordRecord');
         }
-        const users = await qb.getMany();
-        return users.map((user) => {
+
+        const [users, total] = await qb.getManyAndCount();
+        const data = users.map((user) => {
             const { password: _pw, passwordResetToken: _prt, passwordResetExpiry: _pre, passwordRecord, ...rest } =
                 user;
             const { profile_complete, profile_missing_fields } = getProfileCompletionStatus(user);
@@ -180,6 +210,7 @@ export class UsersService {
                     : {}),
             };
         });
+        return paginate ? { data, total, page, limit } : { data, total, page: 1, limit: total };
     }
 
     async findOne(id: string): Promise<User | null> {

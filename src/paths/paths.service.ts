@@ -37,6 +37,16 @@ export class PathsService {
         if (dto.projectDescription !== undefined) entry.projectDescription = dto.projectDescription;
         if (dto.sdgs !== undefined) entry.sdgs = dto.sdgs;
         if (dto.evidenceUrls !== undefined) entry.evidenceUrls = dto.evidenceUrls;
+        if (dto.studentInfo !== undefined) entry.studentInfo = { ...entry.studentInfo, ...dto.studentInfo };
+        if (dto.assignmentInfo !== undefined) entry.assignmentInfo = { ...entry.assignmentInfo, ...dto.assignmentInfo };
+        if (dto.aimsInfo !== undefined) entry.aimsInfo = { ...entry.aimsInfo, ...dto.aimsInfo };
+        if (dto.processInfo !== undefined) entry.processInfo = { ...entry.processInfo, ...dto.processInfo };
+        if (dto.resultsInfo !== undefined) entry.resultsInfo = { ...entry.resultsInfo, ...dto.resultsInfo };
+        if (dto.sdgMapping !== undefined) entry.sdgMapping = { ...entry.sdgMapping, ...dto.sdgMapping };
+        if (dto.reflectionInfo !== undefined) entry.reflectionInfo = { ...entry.reflectionInfo, ...dto.reflectionInfo };
+        if (dto.moduleInclusion !== undefined) entry.moduleInclusion = { ...entry.moduleInclusion, ...dto.moduleInclusion };
+        if (dto.sectionSummaries !== undefined) entry.sectionSummaries = { ...entry.sectionSummaries, ...dto.sectionSummaries };
+        if (dto.addedNote !== undefined) entry.addedNote = dto.addedNote;
         if (dto.stepCompleted !== undefined) entry.stepCompleted = dto.stepCompleted;
         if (dto.status !== undefined) entry.status = dto.status;
         return this.courseProjectRepo.save(entry);

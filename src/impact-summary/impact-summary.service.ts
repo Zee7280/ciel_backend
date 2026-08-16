@@ -12,6 +12,9 @@ import { ventureCompletenessPercent, VENTURE_VISIBILITY_THRESHOLD } from '../pat
 
 const WORKING_PARTICIPATION_STATUSES = ['approved', 'verified', 'paid', 'accepted'] as const;
 
+/** Must match the frontend Course Project wizard's STEPS.length (course-project/[id]/page.tsx). */
+const COURSE_PROJECT_TOTAL_STEPS = 8;
+
 export type PathState = 'not_started' | 'active' | 'complete';
 
 export interface PathStatusEntry {
@@ -112,7 +115,7 @@ export class ImpactSummaryService {
     }
 
     private async getPathsStatus(userId: string): Promise<Record<string, PathStatusEntry>> {
-        const [communityServiceCount, unsentAttendanceCount, courseProject, fyp, venture] = await Promise.all([
+        const [communityServiceCount, unsentAttendanceCount, courseProjects, fyp, venture] = await Promise.all([
             this.participationRepo.count({ where: { studentId: userId } }),
             this.attendanceLogRepo
                 .createQueryBuilder('log')
@@ -121,7 +124,7 @@ export class ImpactSummaryService {
                 .andWhere('log.approvalStatus IS NULL')
                 .andWhere("log.entryStatus = 'pending'")
                 .getCount(),
-            this.courseProjectRepo.findOne({ where: { userId } }),
+            this.courseProjectRepo.find({ where: { userId }, order: { updatedAt: 'DESC' } }),
             this.fypRepo.findOne({ where: { userId } }),
             this.ventureRepo.findOne({ where: { userId } }),
         ]);
@@ -141,12 +144,7 @@ export class ImpactSummaryService {
                 progress: Math.min(100, communityServiceCount * 25),
                 detail: communityServiceCount > 0 ? `${communityServiceCount} active engagement${communityServiceCount === 1 ? '' : 's'}` : 'No engagements yet',
             },
-            courseProject: {
-                state: !courseProject ? 'not_started' : courseProject.status === 'submitted' ? 'complete' : 'active',
-                needsAction: !!courseProject && courseProject.status === 'draft' && courseProject.stepCompleted < 4,
-                progress: Math.round(((courseProject?.stepCompleted ?? 0) / 4) * 100),
-                detail: courseProject ? `${courseProject.stepCompleted}/4 steps complete` : 'Not started',
-            },
+            courseProject: this.courseProjectPathStatus(courseProjects),
             fypThesis: {
                 state: !fyp
                     ? 'not_started'
@@ -163,6 +161,26 @@ export class ImpactSummaryService {
                 progress: ventureCompleteness,
                 detail: venture ? `${ventureCompleteness}% profile complete` : 'Not started',
             },
+        };
+    }
+
+    /** A student can hold a whole deck of coursework reports now, not just one — summarize across all of them. */
+    private courseProjectPathStatus(entries: CourseProjectEntry[]): PathStatusEntry {
+        if (entries.length === 0) {
+            return { state: 'not_started', needsAction: false, progress: 0, detail: 'Not started' };
+        }
+        const submittedCount = entries.filter((e) => e.status === 'submitted').length;
+        const draftCount = entries.length - submittedCount;
+        // entries is ordered updatedAt DESC, so this is whichever draft the student touched most recently.
+        const latestDraft = entries.find((e) => e.status !== 'submitted');
+        return {
+            state: 'active',
+            needsAction: !!latestDraft && latestDraft.stepCompleted < COURSE_PROJECT_TOTAL_STEPS,
+            progress: Math.round(((latestDraft?.stepCompleted ?? COURSE_PROJECT_TOTAL_STEPS) / COURSE_PROJECT_TOTAL_STEPS) * 100),
+            detail:
+                draftCount > 0
+                    ? `${submittedCount} verified · ${draftCount} in progress`
+                    : `${submittedCount} verified report${submittedCount === 1 ? '' : 's'}`,
         };
     }
 }

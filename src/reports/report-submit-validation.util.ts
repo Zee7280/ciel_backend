@@ -4,11 +4,6 @@ export type ReportSubmitValidationIssue = {
   message: string;
 };
 
-function countWords(value: unknown): number {
-  if (typeof value !== 'string') return 0;
-  return value.trim().split(/\s+/).filter(Boolean).length;
-}
-
 function pickUseResources(
   section6: Record<string, unknown> | null | undefined,
 ): string {
@@ -46,18 +41,11 @@ export function validateReportSectionsForSubmit(report: {
       resources.forEach((entry, index) => {
         if (!entry || typeof entry !== 'object') return;
         const res = entry as Record<string, unknown>;
-        const purposeWords = countWords(res.purpose);
-        if (purposeWords < 50) {
+        if (!stringField(res.purpose).trim()) {
           issues.push({
             section: 6,
             field: `resources.${index}.purpose`,
-            message: `Purpose is too short (${purposeWords}/50 words min)`,
-          });
-        } else if (purposeWords > 200) {
-          issues.push({
-            section: 6,
-            field: `resources.${index}.purpose`,
-            message: `Purpose is too long (${purposeWords}/200 words max)`,
+            message: 'Say what this resource made possible',
           });
         }
       });
@@ -87,12 +75,11 @@ export function validateReportSectionsForSubmit(report: {
         message: 'At least one evidence type is mandatory',
       });
     }
-    const descriptionWords = countWords(section8.description);
-    if (descriptionWords < 100 || descriptionWords > 200) {
+    if (!stringField(section8.description).trim()) {
       issues.push({
         section: 8,
         field: 'description',
-        message: `Description must be between 100 and 200 words (currently ${descriptionWords})`,
+        message: 'Say what your evidence shows',
       });
     }
     const mediaVisible = section8.media_visible ?? section8.media_usage;
@@ -152,12 +139,11 @@ export function validateReportSectionsForSubmit(report: {
   const continuationDetails = stringField(
     section10.continuation_details ?? section10.sustainability_plan,
   );
-  const detailWords = countWords(continuationDetails);
-  if (detailWords < 100 || detailWords > 200) {
+  if (!continuationDetails.trim()) {
     issues.push({
       section: 10,
       field: 'continuation_details',
-      message: `Sustainability roadmap must be 100-200 words (${detailWords} current)`,
+      message: 'Say what will keep going, or what will happen next',
     });
   }
   const mechanisms = Array.isArray(section10.mechanisms)

@@ -19,7 +19,8 @@ export class VentureEntry {
     @PrimaryGeneratedColumn('uuid')
     id: string;
 
-    @Index()
+    /** One venture record per student — enforced at the DB level so a race between two saves can never create a duplicate row that silently shadows the other. */
+    @Index({ unique: true })
     @Column()
     userId: string;
 

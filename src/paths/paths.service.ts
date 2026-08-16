@@ -25,13 +25,7 @@ export class PathsService {
 
     // ---------- Course Project ----------
 
-    async getCourseProject(userId: string) {
-        return this.courseProjectRepo.findOne({ where: { userId } });
-    }
-
-    async upsertCourseProject(userId: string, dto: UpdateCourseProjectDto) {
-        let entry = await this.courseProjectRepo.findOne({ where: { userId } });
-        if (!entry) entry = this.courseProjectRepo.create({ userId });
+    private applyCourseProjectPatch(entry: CourseProjectEntry, dto: UpdateCourseProjectDto): CourseProjectEntry {
         if (dto.course !== undefined) entry.course = dto.course;
         if (dto.projectTitle !== undefined) entry.projectTitle = dto.projectTitle;
         if (dto.projectDescription !== undefined) entry.projectDescription = dto.projectDescription;
@@ -49,7 +43,59 @@ export class PathsService {
         if (dto.addedNote !== undefined) entry.addedNote = dto.addedNote;
         if (dto.stepCompleted !== undefined) entry.stepCompleted = dto.stepCompleted;
         if (dto.status !== undefined) entry.status = dto.status;
-        return this.courseProjectRepo.save(entry);
+        return entry;
+    }
+
+    /** @deprecated single-entry accessor, kept for backward compatibility — returns the most recently touched entry. */
+    async getCourseProject(userId: string) {
+        return this.courseProjectRepo.findOne({ where: { userId }, order: { updatedAt: 'DESC' } });
+    }
+
+    /** @deprecated single-entry upsert, kept for backward compatibility — use create/update-by-id for multi-entry decks. */
+    async upsertCourseProject(userId: string, dto: UpdateCourseProjectDto) {
+        let entry = await this.courseProjectRepo.findOne({ where: { userId }, order: { updatedAt: 'DESC' } });
+        if (!entry) entry = this.courseProjectRepo.create({ userId });
+        return this.courseProjectRepo.save(this.applyCourseProjectPatch(entry, dto));
+    }
+
+    /** One student can have many coursework reports (one per assignment) — this is their full deck. */
+    async listCourseProjects(userId: string) {
+        return this.courseProjectRepo.find({ where: { userId }, order: { updatedAt: 'DESC' } });
+    }
+
+    async createCourseProject(userId: string) {
+        return this.courseProjectRepo.save(this.courseProjectRepo.create({ userId }));
+    }
+
+    async getCourseProjectByIdForUser(userId: string, id: string) {
+        const entry = await this.courseProjectRepo.findOne({ where: { id, userId } });
+        if (!entry) throw new NotFoundException('Course project entry not found');
+        return entry;
+    }
+
+    async updateCourseProjectByIdForUser(userId: string, id: string, dto: UpdateCourseProjectDto) {
+        const entry = await this.getCourseProjectByIdForUser(userId, id);
+        return this.courseProjectRepo.save(this.applyCourseProjectPatch(entry, dto));
+    }
+
+    async deleteCourseProjectByIdForUser(userId: string, id: string) {
+        const entry = await this.getCourseProjectByIdForUser(userId, id);
+        if (entry.status === 'submitted') {
+            throw new NotFoundException('Submitted reports cannot be deleted');
+        }
+        await this.courseProjectRepo.delete({ id, userId });
+    }
+
+    /** Cards from students this teacher supervises — matched on the email they entered in step 1, scoped to submitted reports only. */
+    async listCourseProjectsForTeacher(teacherEmail: string) {
+        const email = teacherEmail.trim().toLowerCase();
+        if (!email) return [];
+        const entries = await this.courseProjectRepo.find({
+            where: { status: 'submitted' },
+            order: { updatedAt: 'DESC' },
+        });
+        const matched = entries.filter((e) => (e.studentInfo?.teacherEmail || '').trim().toLowerCase() === email);
+        return this.attachStudents(matched);
     }
 
     async listCourseProjectsForAdmin(status?: 'draft' | 'submitted') {

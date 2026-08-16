@@ -35,7 +35,8 @@ export class FypEntry {
     @PrimaryGeneratedColumn('uuid')
     id: string;
 
-    @Index()
+    /** One FYP/Thesis record per student (unlike Course Project's multi-entry deck) — enforced at the DB level so a race between two saves can never create a duplicate row that silently shadows the other. */
+    @Index({ unique: true })
     @Column()
     userId: string;
 

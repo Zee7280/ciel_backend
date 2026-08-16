@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Patch, Post, Request, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Request, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { S3Service } from '../common/s3.service';
 import { assertStudentReportUploadMeta, studentReportPresignExpiresInSeconds } from '../common/student-report-file-upload';
@@ -43,6 +43,44 @@ export class PathsController {
     async updateCourseProject(@Request() req, @Body() dto: UpdateCourseProjectDto) {
         const data = await this.pathsService.upsertCourseProject(req.user.id, dto);
         return { success: true, data };
+    }
+
+    /** A student's full coursework deck — every report they've submitted or drafted. */
+    @Get('course-projects')
+    async listCourseProjects(@Request() req) {
+        const data = await this.pathsService.listCourseProjects(req.user.id);
+        return { success: true, data };
+    }
+
+    @Post('course-projects')
+    async createCourseProject(@Request() req) {
+        const data = await this.pathsService.createCourseProject(req.user.id);
+        return { success: true, data };
+    }
+
+    /** Cards from students who named this teacher as their supervisor — the faculty deck. */
+    @Get('course-projects/supervised')
+    async listSupervisedCourseProjects(@Request() req) {
+        const data = await this.pathsService.listCourseProjectsForTeacher(req.user.email);
+        return { success: true, data };
+    }
+
+    @Get('course-projects/:id')
+    async getCourseProjectById(@Request() req, @Param('id') id: string) {
+        const data = await this.pathsService.getCourseProjectByIdForUser(req.user.id, id);
+        return { success: true, data };
+    }
+
+    @Patch('course-projects/:id')
+    async updateCourseProjectById(@Request() req, @Param('id') id: string, @Body() dto: UpdateCourseProjectDto) {
+        const data = await this.pathsService.updateCourseProjectByIdForUser(req.user.id, id, dto);
+        return { success: true, data };
+    }
+
+    @Delete('course-projects/:id')
+    async deleteCourseProjectById(@Request() req, @Param('id') id: string) {
+        await this.pathsService.deleteCourseProjectByIdForUser(req.user.id, id);
+        return { success: true };
     }
 
     // ---------- FYP / Thesis ----------

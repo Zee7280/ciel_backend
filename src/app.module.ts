@@ -35,6 +35,7 @@ import { AnalyticsModule } from './analytics/analytics.module';
 import { JobsModule } from './jobs/jobs.module';
 import { PathsModule } from './paths/paths.module';
 import { ImpactSummaryModule } from './impact-summary/impact-summary.module';
+import { AiModule } from './ai/ai.module';
 
 @Module({
   imports: [
@@ -95,6 +96,7 @@ import { ImpactSummaryModule } from './impact-summary/impact-summary.module';
     JobsModule,
     PathsModule,
     ImpactSummaryModule,
+    AiModule,
     TypeOrmModule.forFeature([Setting]),
   ],
   controllers: [AppController],

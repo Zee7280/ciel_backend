@@ -28,16 +28,38 @@ describe('validateReportSectionsForSubmit', () => {
     expect(issues.some((i) => i.section === 8)).toBe(false);
   });
 
-  it('validates section10 continuation details word count', () => {
+  it('rejects an empty or whitespace-only section10 continuation_details', () => {
+    const issues = validateReportSectionsForSubmit({
+      section6: { use_resources: 'no' },
+      section8: { has_evidence: 'no' },
+      section10: {
+        continuation_status: 'yes',
+        continuation_details: '   ',
+        mechanisms: ['community ownership'],
+      },
+    });
+    expect(
+      issues.some(
+        (i) => i.section === 10 && i.field === 'continuation_details',
+      ),
+    ).toBe(true);
+  });
+
+  it('accepts a short (no minimum word count) section10 continuation_details', () => {
     const issues = validateReportSectionsForSubmit({
       section6: { use_resources: 'no' },
       section8: { has_evidence: 'no' },
       section10: {
         continuation_status: 'yes',
         continuation_details: 'too short',
+        mechanisms: ['community ownership'],
       },
     });
-    expect(issues.some((i) => i.section === 10)).toBe(true);
+    expect(
+      issues.some(
+        (i) => i.section === 10 && i.field === 'continuation_details',
+      ),
+    ).toBe(false);
   });
 
   it('requires continuation_status before other section10 checks', () => {

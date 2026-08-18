@@ -1,5 +1,8 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Request, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
+import { UserRole } from '../users/enums/user-role.enum';
 import { S3Service } from '../common/s3.service';
 import { assertStudentReportUploadMeta, studentReportPresignExpiresInSeconds } from '../common/student-report-file-upload';
 import { PathsService } from './paths.service';
@@ -60,6 +63,8 @@ export class PathsController {
 
     /** Cards from students who named this teacher as their supervisor — the faculty deck. */
     @Get('course-projects/supervised')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.FACULTY)
     async listSupervisedCourseProjects(@Request() req) {
         const data = await this.pathsService.listCourseProjectsForTeacher(req.user.email);
         return { success: true, data };

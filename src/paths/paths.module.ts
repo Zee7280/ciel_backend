@@ -7,11 +7,12 @@ import { CourseProjectEntry } from './entities/course-project-entry.entity';
 import { FypEntry } from './entities/fyp-entry.entity';
 import { VentureEntry } from './entities/venture-entry.entity';
 import { User } from '../users/entities/user.entity';
+import { Organization } from '../organizations/entities/organization.entity';
 import { StorageModule } from '../common/storage.module';
 
 @Module({
     imports: [
-        TypeOrmModule.forFeature([CourseProjectEntry, FypEntry, VentureEntry, User]),
+        TypeOrmModule.forFeature([CourseProjectEntry, FypEntry, VentureEntry, User, Organization]),
         StorageModule,
     ],
     controllers: [PathsController, AdminPathsController],

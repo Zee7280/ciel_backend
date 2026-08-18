@@ -15,6 +15,7 @@ import {
   ventureCompletenessPercent,
   VENTURE_VISIBILITY_THRESHOLD,
 } from '../paths/venture-completeness.constants';
+import { computeVentureGates } from '../paths/venture-gates.util';
 
 const WORKING_PARTICIPATION_STATUSES = [
   'approved',
@@ -28,6 +29,9 @@ const COURSE_PROJECT_TOTAL_STEPS = 8;
 
 /** Must match the frontend FYP/Thesis wizard's STEPS.length (fyp-thesis/page.tsx). */
 const FYP_TOTAL_STEPS = 9;
+
+/** Must match the frontend Enterprise Path wizard's STEPS.length (startup-business/page.tsx). */
+const VENTURE_TOTAL_STEPS = 8;
 
 export type PathState = 'not_started' | 'active' | 'complete';
 
@@ -186,10 +190,6 @@ export class ImpactSummaryService {
       this.ventureRepo.findOne({ where: { userId } }),
     ]);
 
-    const ventureCompleteness = venture
-      ? ventureCompletenessPercent(venture)
-      : 0;
-
     return {
       communityService: {
         state: communityServiceCount > 0 ? 'active' : 'not_started',
@@ -202,21 +202,42 @@ export class ImpactSummaryService {
       },
       courseProject: this.courseProjectPathStatus(courseProjects),
       fypThesis: this.fypThesisPathStatus(fyp),
-      startupBusiness: {
-        state: !venture
-          ? 'not_started'
-          : venture.isVisible
-            ? 'complete'
-            : 'active',
-        needsAction:
-          !!venture &&
-          !venture.isVisible &&
-          ventureCompleteness >= VENTURE_VISIBILITY_THRESHOLD,
+      startupBusiness: this.startupBusinessPathStatus(venture),
+    };
+  }
+
+  /** Driven by the 8-step guided wizard's gates once it's been used at all — the legacy
+   * completeness checklist (description/materialUrls) is no longer fully populated by it,
+   * so it's kept only as a fallback for entries that predate the wizard. */
+  private startupBusinessPathStatus(
+    venture: VentureEntry | null,
+  ): PathStatusEntry {
+    if (!venture) {
+      return { state: 'not_started', needsAction: false, progress: 0, detail: 'Not started' };
+    }
+    const usesWizard = venture.stepCompleted > 0 || venture.status === 'submitted';
+    if (!usesWizard) {
+      const ventureCompleteness = ventureCompletenessPercent(venture);
+      return {
+        state: venture.isVisible ? 'complete' : 'active',
+        needsAction: !venture.isVisible && ventureCompleteness >= VENTURE_VISIBILITY_THRESHOLD,
         progress: ventureCompleteness,
-        detail: venture
-          ? `${ventureCompleteness}% profile complete`
-          : 'Not started',
-      },
+        detail: `${ventureCompleteness}% profile complete`,
+      };
+    }
+    const gates = computeVentureGates(venture);
+    return {
+      state: gates.showcaseOk ? 'complete' : 'active',
+      needsAction: venture.status !== 'submitted' && venture.stepCompleted < VENTURE_TOTAL_STEPS,
+      progress: Math.round((venture.stepCompleted / VENTURE_TOTAL_STEPS) * 100),
+      detail:
+        venture.status === 'submitted'
+          ? gates.investmentReadyOk
+            ? 'Investment Ready'
+            : gates.showcaseOk
+              ? 'Showcase Ready'
+              : 'Submitted for review'
+          : `Step ${venture.stepCompleted}/${VENTURE_TOTAL_STEPS} complete`,
     };
   }
 

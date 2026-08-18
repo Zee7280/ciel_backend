@@ -8,7 +8,7 @@ import { assertStudentReportUploadMeta, studentReportPresignExpiresInSeconds } f
 import { PathsService } from './paths.service';
 import { UpdateCourseProjectDto } from './dto/update-course-project.dto';
 import { AddFypDeliverableDto, UpdateFypDto } from './dto/update-fyp.dto';
-import { SetVentureVisibilityDto, UpdateVentureDto } from './dto/update-venture.dto';
+import { AddVentureDocumentDto, SetVentureVisibilityDto, UpdateVentureDto } from './dto/update-venture.dto';
 
 @Controller('paths')
 @UseGuards(JwtAuthGuard)
@@ -67,6 +67,15 @@ export class PathsController {
     @Roles(UserRole.FACULTY)
     async listSupervisedCourseProjects(@Request() req) {
         const data = await this.pathsService.listCourseProjectsForTeacher(req.user.email);
+        return { success: true, data };
+    }
+
+    /** Cards from students linked to this university partner org — the university showcase deck. */
+    @Get('course-projects/university')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN)
+    async listUniversityCourseProjects(@Request() req) {
+        const data = await this.pathsService.listCourseProjectsForUniversity(req.user.organizationId);
         return { success: true, data };
     }
 
@@ -129,5 +138,11 @@ export class PathsController {
             return { success: false, ...result };
         }
         return { success: true, data: result.data };
+    }
+
+    @Post('startup-business/documents')
+    async addVentureDocument(@Request() req, @Body() dto: AddVentureDocumentDto) {
+        const data = await this.pathsService.addVentureDocument(req.user.id, dto);
+        return { success: true, data };
     }
 }

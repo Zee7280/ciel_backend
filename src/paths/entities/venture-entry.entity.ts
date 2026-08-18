@@ -13,7 +13,134 @@ export interface VentureTeamMember {
     email?: string;
 }
 
-/** One record per student — Startup / Business path: venture profile, traction, team, materials, visibility. */
+// ── 8-step guided wizard groups (additive — the legacy fields above are untouched) ──
+
+export interface VentureAcademicSetup {
+    submissionType?: string;
+    university?: string;
+    campus?: string;
+    faculty?: string;
+    department?: string;
+    program?: string;
+    academicYear?: string;
+    semester?: string;
+    courseCode?: string;
+    groupId?: string;
+    supervisorName?: string;
+    coSupervisor?: string;
+    deadline?: string;
+    teamType?: string;
+    industrySponsor?: string;
+    ethicsApproval?: string;
+    confidentialityStatus?: string;
+    ipOwnership?: string;
+    founderName?: string;
+    founderRole?: string;
+    founderCredentials?: string;
+}
+
+export interface VentureDocument {
+    type: string;
+    version: number;
+    fileUrl: string;
+    uploadedAt: string;
+}
+
+export interface VentureIdeaInfo {
+    problem?: string;
+    proofFact?: string;
+    payerWho?: string;
+    userWho?: string;
+    beneficiaryWho?: string;
+    sector?: string;
+    city?: string;
+    pitch?: string;
+}
+
+export interface VentureSolutionInfo {
+    solution?: string;
+    alternative?: string;
+    advantage?: string;
+    revenue?: string;
+    costPerSale?: string;
+    milestone12mo?: string;
+    marketWho?: string;
+    marketSize?: string;
+    marketSource?: string;
+}
+
+export interface VentureSdgEntry {
+    goalNumber: number;
+    targets: string[];
+    how?: string;
+}
+export interface VentureIndicator {
+    indicator?: string;
+    forGoal?: string;
+    target12mo?: string;
+    verifiedBy?: string;
+}
+export interface VentureSdgMapping {
+    entries?: VentureSdgEntry[];
+    mode?: 'map' | 'review' | 'none';
+    howImpact?: string;
+    indicators?: VentureIndicator[];
+}
+
+export interface VentureEvidenceInfo {
+    interviews?: number;
+    surveyResponses?: number;
+    willingToTest?: number;
+    testers?: number;
+    pilotPartners?: number;
+    preOrders?: number;
+    customers?: number;
+    revenueToDate?: number;
+    monthlyGrowthPercent?: number;
+    repeatPercent?: number;
+    partnerships?: number;
+    lettersOfIntent?: number;
+    fundingSought?: number;
+    useOfFunds?: string;
+    expectedResult?: string;
+    openTo?: string[];
+}
+
+export interface VentureReviewPipeline {
+    declarationWork?: boolean;
+    declarationConsent?: boolean;
+    studentDeclaredAt?: string;
+    supervisorStatus?: 'not_started' | 'pending' | 'approved' | 'revisions_requested';
+    universityStatus?: 'not_started' | 'pending' | 'approved';
+    sdgReviewStatus?: 'not_started' | 'pending' | 'approved';
+}
+
+export interface VenturePublishSettings {
+    audience?: 'private' | 'university' | 'partners' | 'investors';
+    showName?: boolean;
+    showTeam?: boolean;
+    showUniversity?: boolean;
+    showTraction?: boolean;
+    showAsk?: boolean;
+    acceptIntros?: boolean;
+}
+
+export interface VentureTeamConsentEntry {
+    name: string;
+    consented: boolean;
+}
+
+export interface VentureSectionSummaries {
+    opportunity?: string;
+    advantage?: string;
+    business?: string;
+    traction?: string;
+    impact?: string;
+    ask?: string;
+    founder?: string;
+}
+
+/** One record per student — Startup / Business path: venture profile, traction, team, materials, visibility, plus the 8-step guided wizard record. */
 @Entity('venture_entries')
 export class VentureEntry {
     @PrimaryGeneratedColumn('uuid')
@@ -42,8 +169,45 @@ export class VentureEntry {
     @Column({ type: 'simple-array', nullable: true })
     materialUrls: string[];
 
+    /** Derived, not directly student-toggled once the guided wizard has been used — see upsertVenture/computeShowcaseReady. */
     @Column({ default: false })
     isVisible: boolean;
+
+    @Column({ type: 'jsonb', nullable: true })
+    academicSetup: VentureAcademicSetup | null;
+
+    @Column({ type: 'jsonb', default: () => "'[]'" })
+    documents: VentureDocument[];
+
+    @Column({ type: 'jsonb', nullable: true })
+    ideaInfo: VentureIdeaInfo | null;
+
+    @Column({ type: 'jsonb', nullable: true })
+    solutionInfo: VentureSolutionInfo | null;
+
+    @Column({ type: 'jsonb', nullable: true })
+    sdgMapping: VentureSdgMapping | null;
+
+    @Column({ type: 'jsonb', nullable: true })
+    evidenceInfo: VentureEvidenceInfo | null;
+
+    @Column({ type: 'jsonb', nullable: true })
+    reviewPipeline: VentureReviewPipeline | null;
+
+    @Column({ type: 'jsonb', nullable: true })
+    publishSettings: VenturePublishSettings | null;
+
+    @Column({ type: 'jsonb', default: () => "'[]'" })
+    teamConsent: VentureTeamConsentEntry[];
+
+    @Column({ type: 'jsonb', nullable: true })
+    sectionSummaries: VentureSectionSummaries | null;
+
+    @Column({ type: 'int', default: 0 })
+    stepCompleted: number;
+
+    @Column({ type: 'varchar', default: 'draft' })
+    status: 'draft' | 'submitted';
 
     @CreateDateColumn()
     createdAt: Date;

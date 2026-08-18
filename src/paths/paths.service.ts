@@ -1,18 +1,20 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { Brackets, In, Repository } from 'typeorm';
 import { CourseProjectEntry } from './entities/course-project-entry.entity';
 import { DEFAULT_FYP_MILESTONES, FypEntry } from './entities/fyp-entry.entity';
 import { VentureEntry } from './entities/venture-entry.entity';
 import { UpdateCourseProjectDto } from './dto/update-course-project.dto';
 import { AddFypDeliverableDto, UpdateFypDto } from './dto/update-fyp.dto';
-import { UpdateVentureDto } from './dto/update-venture.dto';
+import { AddVentureDocumentDto, UpdateVentureDto } from './dto/update-venture.dto';
 import {
   ventureCompletenessPercent,
   ventureMissingItems,
   VENTURE_VISIBILITY_THRESHOLD,
 } from './venture-completeness.constants';
+import { computeVentureGates, deriveVentureIsVisible } from './venture-gates.util';
 import { User } from '../users/entities/user.entity';
+import { Organization } from '../organizations/entities/organization.entity';
 
 @Injectable()
 export class PathsService {
@@ -25,6 +27,8 @@ export class PathsService {
     private readonly ventureRepo: Repository<VentureEntry>,
     @InjectRepository(User)
     private readonly usersRepo: Repository<User>,
+    @InjectRepository(Organization)
+    private readonly organizationsRepo: Repository<Organization>,
   ) {}
 
   // ---------- Course Project ----------
@@ -157,6 +161,32 @@ export class PathsService {
     return this.attachStudents(matched);
   }
 
+  /** The university showcase deck — submitted reports from students linked to this university org,
+   * either formally (organizationId) or by the university name they entered in step 1. Same
+   * scoping approach as the university analytics endpoint, so the two stay consistent. */
+  async listCourseProjectsForUniversity(organizationId: string) {
+    const org = await this.organizationsRepo.findOne({
+      where: { id: organizationId },
+    });
+    if (!org) return [];
+    const orgNameNorm = org.name.trim().toLowerCase();
+    const entries = await this.courseProjectRepo
+      .createQueryBuilder('e')
+      .leftJoin('users', 'u', 'u.id::text = e."userId"')
+      .where('e.status = :status', { status: 'submitted' })
+      .andWhere(
+        new Brackets((b) => {
+          b.where('u."organizationId"::text = :orgId', { orgId: organizationId }).orWhere(
+            `LOWER(TRIM(COALESCE(e."studentInfo"->>'universityName', ''))) = :orgNameNorm`,
+            { orgNameNorm },
+          );
+        }),
+      )
+      .orderBy('e."updatedAt"', 'DESC')
+      .getMany();
+    return this.attachStudents(entries);
+  }
+
   async listCourseProjectsForAdmin(status?: 'draft' | 'submitted') {
     const entries = await this.courseProjectRepo.find({
       where: status ? { status } : {},
@@ -249,6 +279,7 @@ export class PathsService {
       ...entry,
       completenessPercent: ventureCompletenessPercent(entry),
       missingItems: ventureMissingItems(entry),
+      gates: computeVentureGates(entry),
     };
   }
 
@@ -370,12 +401,60 @@ export class PathsService {
         if (dto.team !== undefined) entry.team = dto.team;
         if (dto.materialUrls !== undefined)
           entry.materialUrls = dto.materialUrls;
+        // 8-step guided wizard — frontend sends each group fully merged, so a straight assign is safe.
+        if (dto.academicSetup !== undefined)
+          entry.academicSetup = dto.academicSetup;
+        if (dto.ideaInfo !== undefined) entry.ideaInfo = dto.ideaInfo;
+        if (dto.solutionInfo !== undefined)
+          entry.solutionInfo = dto.solutionInfo;
+        if (dto.sdgMapping !== undefined) entry.sdgMapping = dto.sdgMapping;
+        if (dto.evidenceInfo !== undefined)
+          entry.evidenceInfo = dto.evidenceInfo;
+        if (dto.reviewPipeline !== undefined)
+          entry.reviewPipeline = dto.reviewPipeline;
+        if (dto.publishSettings !== undefined)
+          entry.publishSettings = dto.publishSettings;
+        if (dto.teamConsent !== undefined) entry.teamConsent = dto.teamConsent;
+        if (dto.sectionSummaries !== undefined)
+          entry.sectionSummaries = dto.sectionSummaries;
+        if (dto.stepCompleted !== undefined)
+          entry.stepCompleted = dto.stepCompleted;
+        if (dto.status !== undefined) entry.status = dto.status;
+        // isVisible is earned, not self-toggled, once the guided wizard is in use — recomputed
+        // on every save so it always reflects the current Showcase-Ready + audience state.
+        entry.isVisible = deriveVentureIsVisible(entry);
         return repo.save(entry);
       },
     );
     return this.withCompleteness(saved);
   }
 
+  async addVentureDocument(userId: string, dto: AddVentureDocumentDto) {
+    return this.ventureRepo.manager.transaction(async (manager) => {
+      const repo = manager.getRepository(VentureEntry);
+      let entry = await repo.findOne({
+        where: { userId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!entry) entry = repo.create({ userId });
+      const priorVersions = (entry.documents ?? []).filter(
+        (d) => d.type === dto.type,
+      ).length;
+      entry.documents = [
+        ...(entry.documents ?? []),
+        {
+          type: dto.type,
+          version: priorVersions + 1,
+          fileUrl: dto.fileUrl,
+          uploadedAt: new Date().toISOString(),
+        },
+      ];
+      const saved = await repo.save(entry);
+      return this.withCompleteness(saved);
+    });
+  }
+
+  /** @deprecated the guided wizard derives isVisible automatically — kept only for the legacy 4-tab flow's manual toggle on older entries. */
   async setVentureVisibility(userId: string, isVisible: boolean) {
     return this.ventureRepo.manager.transaction(async (manager) => {
       const repo = manager.getRepository(VentureEntry);
@@ -384,6 +463,14 @@ export class PathsService {
         lock: { mode: 'pessimistic_write' },
       });
       if (!entry) entry = repo.create({ userId });
+      if (entry.stepCompleted > 0 || entry.status === 'submitted') {
+        return {
+          error: 'wizard_managed',
+          message:
+            'Visibility is now earned automatically through the guided wizard — reach Showcase Ready and choose an audience in the publish step.',
+          data: this.withCompleteness(entry),
+        };
+      }
       const percent = ventureCompletenessPercent(entry);
       if (isVisible && percent < VENTURE_VISIBILITY_THRESHOLD) {
         return {
@@ -404,6 +491,7 @@ export class PathsService {
       ...entry,
       completenessPercent: ventureCompletenessPercent(entry),
       missingItems: ventureMissingItems(entry),
+      gates: computeVentureGates(entry),
     };
   }
 }

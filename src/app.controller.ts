@@ -1,9 +1,5 @@
-import { Controller, Get, Head, HttpCode, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Head, HttpCode } from '@nestjs/common';
 import { AppService } from './app.service';
-import { JwtAuthGuard } from './auth/jwt-auth.guard';
-import { RolesGuard } from './auth/roles.guard';
-import { Roles } from './auth/roles.decorator';
-import { UserRole } from './users/enums/user-role.enum';
 
 @Controller()
 export class AppController {
@@ -20,15 +16,5 @@ export class AppController {
   @HttpCode(204)
   favicon(): void {
     return;
-  }
-
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.SUPER_ADMIN, UserRole.STUDENT)
-  @Get('profile')
-  getProfile(@Request() req) {
-    return {
-      message: 'You are authorized!',
-      user: req.user
-    };
   }
 }

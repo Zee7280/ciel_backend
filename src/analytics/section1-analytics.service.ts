@@ -232,6 +232,12 @@ export class Section1AnalyticsService {
           'Students may only view their own project analytics',
         );
       }
+      // Faculty are mapped to the 'university' stakeholder above but aren't linked to an
+      // organizationId (that's an org-account concept) — they view cohort aggregates via
+      // their own facultyId instead, so they're exempt from the org-membership requirement.
+      if (ctx.requesterRole === UserRole.FACULTY) {
+        return;
+      }
       if (ctx.stakeholder === 'partner' || ctx.stakeholder === 'university') {
         if (!ctx.organizationId) {
           throw new ForbiddenException('Organization membership required');

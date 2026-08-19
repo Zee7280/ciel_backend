@@ -294,7 +294,9 @@ export class AdminService {
         u.orgType?.toLowerCase().includes('corporate') ||
         u.role === UserRole.CORPORATE,
     ).length;
-    const totalUsers = totalStudents + orgUsers.length;
+    // Every account on the platform, not just students + a hand-picked subset of org roles
+    // (that list previously omitted University and Faculty accounts entirely).
+    const totalUsers = await this.usersRepository.count();
 
     const totalOpportunities = await this.opportunityRepository.count();
     const totalReports = await this.reportRepository.count();
@@ -452,7 +454,8 @@ export class AdminService {
 
       const universityNames = new Set<string>();
       for (const row of [...uniFromUsers, ...uniFromPart]) {
-        const n = String((row as { name?: string }).name || '').trim();
+        // Lowercase so "NUST" / "Nust" / "nust" collapse to one university, not three.
+        const n = String((row as { name?: string }).name || '').trim().toLowerCase();
         if (n) universityNames.add(n);
       }
       const total_universities = universityNames.size;
@@ -513,7 +516,7 @@ export class AdminService {
 
     const universityNamesFiltered = new Set<string>();
     for (const p of participations) {
-      const n = (p.universityName || '').trim();
+      const n = (p.universityName || '').trim().toLowerCase();
       if (n) universityNamesFiltered.add(n);
     }
     const total_universities = universityNamesFiltered.size;
@@ -544,6 +547,26 @@ export class AdminService {
     };
   }
 
+  /** CIEL's real users are in Pakistan (UTC+5) — semester/cohort date filters must use PKT day
+   * boundaries, not UTC, or the first/last ~5 hours of the intended range are silently excluded. */
+  private static readonly PKT_UTC_OFFSET_HOURS = 5;
+
+  private masterPktStartOfDay(iso: string): Date {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return d;
+    return new Date(
+      Date.UTC(
+        d.getUTCFullYear(),
+        d.getUTCMonth(),
+        d.getUTCDate(),
+        -AdminService.PKT_UTC_OFFSET_HOURS,
+        0,
+        0,
+        0,
+      ),
+    );
+  }
+
   private masterUtcEndOfDay(iso: string): Date {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return d;
@@ -552,7 +575,7 @@ export class AdminService {
         d.getUTCFullYear(),
         d.getUTCMonth(),
         d.getUTCDate(),
-        23,
+        23 - AdminService.PKT_UTC_OFFSET_HOURS,
         59,
         59,
         999,
@@ -620,8 +643,8 @@ export class AdminService {
     query: MasterAnalyticsQueryDto,
   ): void {
     if (query.university?.trim()) {
-      qb.andWhere("TRIM(COALESCE(p.universityName, '')) = :uni", {
-        uni: query.university.trim(),
+      qb.andWhere("LOWER(TRIM(COALESCE(p.universityName, ''))) = :uni", {
+        uni: query.university.trim().toLowerCase(),
       });
     }
     if (query.degree_program?.trim()) {
@@ -668,7 +691,7 @@ export class AdminService {
       );
     }
     if (query.period_start?.trim()) {
-      const ps = new Date(query.period_start.trim());
+      const ps = this.masterPktStartOfDay(query.period_start.trim());
       if (!Number.isNaN(ps.getTime())) {
         qb.andWhere('p.createdAt >= :pstart', { pstart: ps });
       }
@@ -747,7 +770,8 @@ export class AdminService {
 
     const universityNames = new Set<string>();
     for (const row of [...uniFromUsers, ...uniFromPart]) {
-      const n = String((row as { name?: string }).name || '').trim();
+      // Lowercase so case-variant spellings of the same university aren't counted twice.
+      const n = String((row as { name?: string }).name || '').trim().toLowerCase();
       if (n) universityNames.add(n);
     }
     const institution_count = universityNames.size;

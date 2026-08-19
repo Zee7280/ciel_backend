@@ -1,7 +1,10 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, In, Repository } from 'typeorm';
-import { CourseProjectEntry } from './entities/course-project-entry.entity';
+import {
+  CourseProjectEntry,
+  CourseProjectStudentInfo,
+} from './entities/course-project-entry.entity';
 import { DEFAULT_FYP_MILESTONES, FypEntry } from './entities/fyp-entry.entity';
 import { VentureEntry } from './entities/venture-entry.entity';
 import { UpdateCourseProjectDto } from './dto/update-course-project.dto';
@@ -44,7 +47,10 @@ export class PathsService {
     if (dto.sdgs !== undefined) entry.sdgs = dto.sdgs;
     if (dto.evidenceUrls !== undefined) entry.evidenceUrls = dto.evidenceUrls;
     if (dto.studentInfo !== undefined)
-      entry.studentInfo = { ...entry.studentInfo, ...dto.studentInfo };
+      entry.studentInfo = {
+        ...entry.studentInfo,
+        ...dto.studentInfo,
+      } as CourseProjectStudentInfo;
     if (dto.assignmentInfo !== undefined)
       entry.assignmentInfo = { ...entry.assignmentInfo, ...dto.assignmentInfo };
     if (dto.aimsInfo !== undefined)
@@ -99,26 +105,64 @@ export class PathsService {
     });
   }
 
-  /** One student can have many coursework reports (one per assignment) — this is their full deck. */
-  async listCourseProjects(userId: string) {
-    return this.courseProjectRepo.find({
-      where: { userId },
-      order: { updatedAt: 'DESC' },
-    });
+  /** Postgres JSONB match: does this entry's studentInfo.groupMembers list include userEmailNorm?
+   * groupMembers elements may be a plain string (legacy) or {name, email} — jsonb_typeof guards the
+   * ->>'email' lookup so legacy string entries (not JSON objects) don't error the whole query. */
+  private static readonly TEAM_MEMBER_EMAIL_MATCH = `EXISTS (
+      SELECT 1 FROM jsonb_array_elements(COALESCE("studentInfo"->'groupMembers', '[]'::jsonb)) AS gm
+      WHERE jsonb_typeof(gm) = 'object'
+        AND LOWER(TRIM(COALESCE(gm->>'email', ''))) = :teamEmail
+    )`;
+
+  /** A teammate only sees the report once it's submitted (not a mid-draft in progress) — same
+   * "visible once official" moment as Community Service's team members (there it's approval;
+   * here, since there's no separate approval step, submission is the equivalent trigger). */
+  private static readonly TEAM_VISIBLE_STATUS = `e.status = 'submitted'`;
+
+  /** One student can have many coursework reports (one per assignment) — this is their own deck, plus any
+   * teammate's *submitted* report they were named on by email. */
+  async listCourseProjects(userId: string, userEmail?: string) {
+    const email = (userEmail || '').trim().toLowerCase();
+    const qb = this.courseProjectRepo
+      .createQueryBuilder('e')
+      .where('e."userId" = :userId', { userId });
+    if (email) {
+      qb.orWhere(
+        `(${PathsService.TEAM_VISIBLE_STATUS} AND ${PathsService.TEAM_MEMBER_EMAIL_MATCH})`,
+        { teamEmail: email },
+      );
+    }
+    const entries = await qb.orderBy('e."updatedAt"', 'DESC').getMany();
+    return entries.map((e) => ({ ...e, isOwner: e.userId === userId }));
   }
 
   async createCourseProject(userId: string) {
-    return this.courseProjectRepo.save(
+    const saved = await this.courseProjectRepo.save(
       this.courseProjectRepo.create({ userId }),
     );
+    return { ...saved, isOwner: true };
   }
 
-  async getCourseProjectByIdForUser(userId: string, id: string) {
-    const entry = await this.courseProjectRepo.findOne({
-      where: { id, userId },
-    });
+  /** Owner gets full access at any stage; a named team member can only read it once submitted. */
+  async getCourseProjectByIdForUser(userId: string, userEmail: string, id: string) {
+    const email = (userEmail || '').trim().toLowerCase();
+    const qb = this.courseProjectRepo
+      .createQueryBuilder('e')
+      .where('e.id = :id', { id })
+      .andWhere(
+        new Brackets((b) => {
+          b.where('e."userId" = :userId', { userId });
+          if (email) {
+            b.orWhere(
+              `(${PathsService.TEAM_VISIBLE_STATUS} AND ${PathsService.TEAM_MEMBER_EMAIL_MATCH})`,
+              { teamEmail: email },
+            );
+          }
+        }),
+      );
+    const entry = await qb.getOne();
     if (!entry) throw new NotFoundException('Course project entry not found');
-    return entry;
+    return { ...entry, isOwner: entry.userId === userId };
   }
 
   async updateCourseProjectByIdForUser(
@@ -135,12 +179,16 @@ export class PathsService {
       });
       if (!entry)
         throw new NotFoundException('Course project entry not found');
-      return repo.save(this.applyCourseProjectPatch(entry, dto));
+      const saved = await repo.save(this.applyCourseProjectPatch(entry, dto));
+      // where: {id, userId} above means this only ever succeeds for the owner.
+      return { ...saved, isOwner: true };
     });
   }
 
   async deleteCourseProjectByIdForUser(userId: string, id: string) {
-    const entry = await this.getCourseProjectByIdForUser(userId, id);
+    // Delete is owner-only regardless — the final .delete({id, userId}) call below enforces
+    // that on its own, so no team-member email is needed for this existence/status check.
+    const entry = await this.getCourseProjectByIdForUser(userId, '', id);
     if (entry.status === 'submitted') {
       throw new NotFoundException('Submitted reports cannot be deleted');
     }

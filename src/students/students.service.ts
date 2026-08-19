@@ -2830,12 +2830,37 @@ export class StudentsService {
       ? Math.max(...scoresFromReports)
       : null;
 
-    const impactScore =
-      maxReportScore != null
-        ? Math.round(maxReportScore)
-        : Math.round(totalHours * 10 + projectsCompleted * 50);
+    // No fabricated fallback: an impact score is a 0-100 CII value only a verified report
+    // produces. Without one, we report null rather than a made-up number in that range.
+    const impactScore = maxReportScore != null ? Math.round(maxReportScore) : null;
 
-    const impactPercentile = 'Top 10%';
+    let impactPercentile: string | null = null;
+    if (impactScore != null) {
+      const scoredStudents = await this.studentReportsRepository
+        .createQueryBuilder('r')
+        .select('r.studentId', 'studentId')
+        .addSelect(
+          `MAX((r.section11->>'ai_generated_impact_score')::numeric)`,
+          'maxScore',
+        )
+        .where('r.status = :status', { status: 'verified' })
+        .andWhere(`r.section11->>'ai_generated_impact_score' IS NOT NULL`)
+        .groupBy('r.studentId')
+        .getRawMany<{ studentId: string; maxScore: string }>();
+      const totalScored = scoredStudents.length;
+      if (totalScored > 0) {
+        const scoredBelowOrEqual = scoredStudents.filter(
+          (s) => Number(s.maxScore) <= impactScore,
+        ).length;
+        const percentileRank = Math.round(
+          (100 * scoredBelowOrEqual) / totalScored,
+        );
+        impactPercentile =
+          totalScored < 5
+            ? null // too few peers scored yet for a percentile to mean anything
+            : `Top ${Math.max(1, 100 - percentileRank)}%`;
+      }
+    }
 
     const basePrefix = '/api/v1/students/impact';
 

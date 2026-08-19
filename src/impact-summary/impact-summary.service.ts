@@ -107,8 +107,10 @@ export class ImpactSummaryService {
   }
 
   private async averageReportScore(userId: string): Promise<number> {
+    // Only fully verified (or paid, which implies verified) reports — an abandoned draft or a
+    // rejected report's stale AI score must not drag down a student's composite score.
     const reports = await this.studentReportRepo.find({
-      where: { studentId: userId },
+      where: { studentId: userId, status: In(['verified', 'paid']) },
     });
     const scores: number[] = [];
     for (const report of reports) {
@@ -285,7 +287,9 @@ export class ImpactSummaryService {
     // entries is ordered updatedAt DESC, so this is whichever draft the student touched most recently.
     const latestDraft = entries.find((e) => e.status !== 'submitted');
     return {
-      state: 'active',
+      // Matches fypThesisPathStatus/startupBusinessPathStatus: 'complete' once nothing is left
+      // in draft — previously hardcoded 'active' even when every report had been submitted.
+      state: draftCount > 0 ? 'active' : 'complete',
       needsAction:
         !!latestDraft && latestDraft.stepCompleted < COURSE_PROJECT_TOTAL_STEPS,
       progress: Math.round(

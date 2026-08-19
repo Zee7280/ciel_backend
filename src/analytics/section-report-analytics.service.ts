@@ -299,12 +299,10 @@ export class SectionReportAnalyticsService {
           sections_with_data: sections.filter((s) => s.status !== 'empty')
             .length,
           average_completion_percent: avg,
-          verified_reports: reports.filter(
-            (r) =>
-              r.status === 'verified' ||
-              r.admin_status === 'approved' ||
-              r.partner_status === 'approved',
-          ).length,
+          // A report that only has partner OR admin sign-off (not both) isn't fully verified yet —
+          // status only reaches 'verified' once the whole approval chain has completed.
+          verified_reports: reports.filter((r) => r.status === 'verified')
+            .length,
           total_reports: reports.length,
         },
       },
@@ -430,24 +428,24 @@ export class SectionReportAnalyticsService {
     let secondary = 0;
     for (const r of withSec)
       secondary += r.section3?.secondary_sdgs?.length ?? 0;
-    const validation = this.dist(
-      withSec.map((r) => r.sdg_validation_status || 'pending'),
-    );
     const goals = new Set(
       withSec
         .map((r) => r.section3?.primary_sdg?.goal_number ?? r.primary_sdg_goal)
         .filter((g): g is number => g != null),
     );
-    const statements = withSec.filter(
-      (r) =>
-        this.asText(
-          r.section3?.contribution_intent_statement ||
-            r.contribution_intent_statement,
-        ).trim().length >= 40,
-    ).length;
-    const weak = withSec.filter(
-      (r) => r.sdg_validation_status === 'weak',
-    ).length;
+    // sdg_validation_status is never actually set to 'validated'/'weak' anywhere in the report
+    // pipeline (it's reset to 'pending' on every save) — a real, already-computed quality
+    // signal is whether the student backed their SDG pick with a substantive justification.
+    const isSubstantive = (r: StudentReport) =>
+      this.asText(
+        r.section3?.contribution_intent_statement ||
+          r.contribution_intent_statement,
+      ).trim().length >= 40;
+    const statements = withSec.filter(isSubstantive).length;
+    const weak = withSec.length - statements;
+    const validation = this.dist(
+      withSec.map((r) => (isSubstantive(r) ? 'substantive' : 'thin_justification')),
+    );
     return {
       project_title: projectTitle,
       section_completion_rate: this.pctObj(withSec.length, reports.length),

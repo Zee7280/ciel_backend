@@ -4,6 +4,7 @@ import { IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, Max, Min, Valida
 export class CourseProjectStudentInfoDto {
     @IsOptional() @IsString() studentName?: string;
     @IsOptional() @IsString() rollNumber?: string;
+    @IsOptional() @IsString() studentEmail?: string;
     @IsOptional() @IsString() universityName?: string;
     @IsOptional() @IsString() disciplineName?: string;
     @IsOptional() @IsString() department?: string;
@@ -11,7 +12,8 @@ export class CourseProjectStudentInfoDto {
     @IsOptional() @IsString() courseCode?: string;
     @IsOptional() @IsString() semester?: string;
     @IsOptional() @IsString() teamMode?: string;
-    @IsOptional() @IsArray() groupMembers?: string[];
+    /** {name, email?} per member going forward — kept loosely typed since older clients may still send plain strings. */
+    @IsOptional() @IsArray() groupMembers?: unknown[];
     @IsOptional() @IsString() courseworkType?: string;
     @IsOptional() @IsString() courseworkTypeOther?: string;
     @IsOptional() @IsString() teacherName?: string;

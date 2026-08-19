@@ -15,10 +15,23 @@ import { UserRole } from '../users/enums/user-role.enum';
 import * as bcrypt from 'bcrypt';
 
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
+import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { Report } from '../reports/entities/report.entity';
 import { Participation } from '../engagement/entities/participant.entity';
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
+
+const UNIVERSITY_SCOPED_PARTICIPATION_STATUSES = [
+    'pending',
+    'pending_payment_approval',
+    'paid',
+    'pending_ciel_approval',
+    'pending_faculty_approval',
+    'approved',
+    'verified',
+    'accepted',
+    'finalized',
+];
 
 @Injectable()
 export class OrganizationsService {
@@ -29,6 +42,8 @@ export class OrganizationsService {
         private usersRepository: Repository<User>,
         @InjectRepository(Opportunity)
         private opportunitiesRepository: Repository<Opportunity>,
+        @InjectRepository(OpportunityApplication)
+        private opportunityApplicationsRepository: Repository<OpportunityApplication>,
         @InjectRepository(Timesheet)
         private timesheetsRepository: Repository<Timesheet>,
         @InjectRepository(Report)
@@ -39,10 +54,54 @@ export class OrganizationsService {
     ) { }
 
     /**
+     * Distinct student IDs genuinely affiliated with this university (same match rules as
+     * getUniversityAnalytics's proven participation-level query) — used to filter dashboard/impact
+     * stats so a university doesn't inherit every co-participant of an opportunity its students
+     * merely joined alongside people from other schools.
+     */
+    private async resolveUniversityAffiliatedStudentIds(orgId: string, orgName: string): Promise<Set<string>> {
+        const orgNameNorm = orgName.trim().toLowerCase();
+        const rows = await this.participationRepository
+            .createQueryBuilder('p')
+            .leftJoin('p.project', 'project')
+            .leftJoin('p.student', 'student')
+            .select('p.student_id', 'studentId')
+            .where('p.student_id IS NOT NULL')
+            .andWhere('p.status IN (:...st)', { st: UNIVERSITY_SCOPED_PARTICIPATION_STATUSES })
+            .andWhere(
+                new Brackets((b) => {
+                    b.where(`TRIM(COALESCE(p.universityId, '')) = :orgId`, { orgId })
+                        .orWhere(`project."organizationId"::text = :orgId`, { orgId })
+                        .orWhere(`student."organizationId"::text = :orgId`, { orgId })
+                        .orWhere(`LOWER(TRIM(COALESCE(p.universityName, ''))) = :orgNameNorm`, { orgNameNorm })
+                        .orWhere(`LOWER(TRIM(COALESCE(p.universityId, ''))) = :orgNameNorm`, { orgNameNorm })
+                        .orWhere(`LOWER(TRIM(COALESCE(student.institution, ''))) = :orgNameNorm`, { orgNameNorm })
+                        .orWhere(`LOWER(TRIM(COALESCE(student.university, ''))) = :orgNameNorm`, { orgNameNorm });
+                }),
+            )
+            .getRawMany<{ studentId: string }>();
+        return new Set(rows.map((r) => r.studentId).filter(Boolean));
+    }
+
+    /** Real applicant counts per opportunity (excludes withdrawn) — replaces a hardcoded volunteersApplied: 0. */
+    private async countApplicantsByOpportunity(oppIds: string[]): Promise<Map<string, number>> {
+        if (oppIds.length === 0) return new Map();
+        const rows = await this.opportunityApplicationsRepository
+            .createQueryBuilder('a')
+            .select('a.opportunityId', 'opportunityId')
+            .addSelect('COUNT(*)', 'count')
+            .where('a.opportunityId IN (:...oppIds)', { oppIds })
+            .andWhere('a.withdrawnAt IS NULL')
+            .groupBy('a.opportunityId')
+            .getRawMany<{ opportunityId: string; count: string }>();
+        return new Map(rows.map((r) => [r.opportunityId, Number(r.count) || 0]));
+    }
+
+    /**
      * Partner dashboard for university-type orgs: activity is usually on non-university-owned listings.
      * Scope opportunity IDs the same way as faculty delegation / university analytics.
      */
-    private async getPartnerDashboardStatsForUniversityOrg(orgId: string) {
+    private async getPartnerDashboardStatsForUniversityOrg(orgId: string, orgName: string) {
         const oppIds = await this.facultyUniversityScopeService.resolveOpportunityIdsForUniversityOrganization(orgId);
 
         if (oppIds.length === 0) {
@@ -78,44 +137,39 @@ export class OrganizationsService {
                         ],
                     },
                     recentProjects: [],
-                    impactTarget: {
-                        percentage: 85,
-                        label: 'Goal Met',
-                    },
+                    verificationProgress: { percentage: 0, label: 'No submissions yet' },
                 },
             };
         }
+
+        const affiliatedStudentIds = await this.resolveUniversityAffiliatedStudentIds(orgId, orgName);
 
         const activeOpportunities = await this.opportunitiesRepository.count({
             where: { id: In(oppIds), status: 'active' },
         });
 
-        const timesheets = await this.timesheetsRepository.find({
+        const timesheetsAll = await this.timesheetsRepository.find({
             where: { opportunityId: In(oppIds) },
-            select: ['studentId'],
+            select: ['studentId', 'status', 'hours'],
         });
-        const studentsEngaged = new Set(timesheets.map((t) => t.studentId).filter(Boolean)).size;
+        // Restrict to this university's own students — the resolved opportunity IDs can include
+        // listings shared with other schools' students, who must not count toward this dashboard.
+        const timesheets = timesheetsAll.filter((t) => t.studentId && affiliatedStudentIds.has(t.studentId));
+        const studentsEngaged = new Set(timesheets.map((t) => t.studentId)).size;
 
-        const verifiedTimesheets = await this.timesheetsRepository.find({
-            where: { opportunityId: In(oppIds), status: 'verified' },
-        });
+        const verifiedTimesheets = timesheets.filter((t) => t.status === 'verified');
         const verifiedHours = verifiedTimesheets.reduce((sum, t) => sum + t.hours, 0);
+        const pendingTimesheets = timesheets.filter((t) => t.status === 'pending');
 
-        const reportsSubmitted = await this.reportsRepository
-            .createQueryBuilder('r')
-            .where(
-                new Brackets((qb) => {
-                    qb.where('r."organizationId"::text = :orgId', { orgId }).orWhere(
-                        'r."opportunityId" IN (:...oppIds)',
-                        { oppIds },
-                    );
-                }),
-            )
-            .getCount();
+        const reportsSubmitted = affiliatedStudentIds.size
+            ? await this.reportsRepository
+                  .createQueryBuilder('r')
+                  .where('r."opportunityId" IN (:...oppIds)', { oppIds })
+                  .andWhere('r."studentId" IN (:...studentIds)', { studentIds: [...affiliatedStudentIds] })
+                  .getCount()
+            : 0;
 
-        const pendingVerifications = await this.timesheetsRepository.count({
-            where: { opportunityId: In(oppIds), status: 'pending' },
-        });
+        const pendingVerifications = pendingTimesheets.length;
 
         const pendingOpportunities = await this.opportunitiesRepository.count({
             where: { id: In(oppIds), status: 'pending_approval' },
@@ -126,6 +180,11 @@ export class OrganizationsService {
             order: { createdAt: 'DESC' },
             take: 3,
         });
+        const applicantCounts = await this.countApplicantsByOpportunity(recentProjects.map((p) => p.id));
+
+        const verifiedCount = verifiedTimesheets.length;
+        const decidedCount = verifiedCount + pendingTimesheets.length;
+        const verificationPercentage = decidedCount === 0 ? 0 : Math.round((100 * verifiedCount) / decidedCount);
 
         return {
             success: true,
@@ -163,12 +222,12 @@ export class OrganizationsService {
                     title: p.title,
                     location: p.location?.city || 'Unknown',
                     volunteersNeeded: p.timeline?.volunteers_required || 0,
-                    volunteersApplied: 0,
+                    volunteersApplied: applicantCounts.get(p.id) ?? 0,
                     status: p.status,
                 })),
-                impactTarget: {
-                    percentage: 85,
-                    label: 'Goal Met',
+                verificationProgress: {
+                    percentage: verificationPercentage,
+                    label: decidedCount === 0 ? 'No submissions yet' : `${verifiedCount} of ${decidedCount} verified`,
                 },
             },
         };
@@ -177,7 +236,7 @@ export class OrganizationsService {
     async getPartnerDashboardStats(orgId: string) {
         const org = await this.organizationsRepository.findOne({ where: { id: orgId } });
         if (org && this.isUniversityOrgType(org.orgType)) {
-            return this.getPartnerDashboardStatsForUniversityOrg(orgId);
+            return this.getPartnerDashboardStatsForUniversityOrg(orgId, org.name);
         }
 
         // Active Opportunities
@@ -188,30 +247,22 @@ export class OrganizationsService {
         // Students Engaged (Distinct students in timesheets for this org)
         const timesheets = await this.timesheetsRepository.find({
             where: { organizationId: orgId },
-            select: ['studentId']
+            select: ['studentId', 'status', 'hours']
         });
         const studentsEngaged = new Set(timesheets.map(t => t.studentId)).size;
 
         // Verified Hours
-        const verifiedTimesheets = await this.timesheetsRepository.find({
-            where: { organizationId: orgId, status: 'verified' }
-        });
+        const verifiedTimesheets = timesheets.filter(t => t.status === 'verified');
         const verifiedHours = verifiedTimesheets.reduce((sum, t) => sum + t.hours, 0);
+        const pendingTimesheetsForRate = timesheets.filter(t => t.status === 'pending');
 
-        // Reports Submitted (By organization/partner user?)
-        // Assuming reports linked to organizationId are the ones submitted BY or TO the organization?
-        // Prompt says "Reports Submitted". Usually partners submit reports TO admin? 
-        // Or students submit reports TO partner?
-        // If "Reports Submitted" by partner, then query where organizationId = orgId.
-        // Let's assume reports linked to org via organizationId.
+        // Reports Submitted (submitted BY students to this partner org)
         const reportsSubmitted = await this.reportsRepository.count({
             where: { organizationId: orgId }
         });
 
         // Pending Verifications (Timesheets pending)
-        const pendingVerifications = await this.timesheetsRepository.count({
-            where: { organizationId: orgId, status: 'pending' }
-        });
+        const pendingVerifications = pendingTimesheetsForRate.length;
 
         const pendingOpportunities = await this.opportunitiesRepository.count({
             where: { organizationId: orgId, status: 'pending_approval' }
@@ -223,6 +274,11 @@ export class OrganizationsService {
             order: { createdAt: 'DESC' },
             take: 3
         });
+        const applicantCounts = await this.countApplicantsByOpportunity(recentProjects.map((p) => p.id));
+
+        const verifiedCount = verifiedTimesheets.length;
+        const decidedCount = verifiedCount + pendingTimesheetsForRate.length;
+        const verificationPercentage = decidedCount === 0 ? 0 : Math.round((100 * verifiedCount) / decidedCount);
 
         return {
             success: true,
@@ -260,13 +316,13 @@ export class OrganizationsService {
                     title: p.title,
                     location: p.location?.city || 'Unknown',
                     volunteersNeeded: p.timeline?.volunteers_required || 0,
-                    volunteersApplied: 0, // Need to count?
+                    volunteersApplied: applicantCounts.get(p.id) ?? 0,
                     status: p.status
                 })),
-                impactTarget: {
-                    percentage: 85,
-                    label: "Goal Met"
-                }
+                verificationProgress: {
+                    percentage: verificationPercentage,
+                    label: decidedCount === 0 ? 'No submissions yet' : `${verifiedCount} of ${decidedCount} verified`,
+                },
             }
         };
     }
@@ -1032,7 +1088,7 @@ export class OrganizationsService {
         return parse(opp.sdg);
     }
 
-    private async getPartnerImpactMetricsForUniversityOrg(orgId: string) {
+    private async getPartnerImpactMetricsForUniversityOrg(orgId: string, orgName: string) {
         const oppIds = await this.facultyUniversityScopeService.resolveOpportunityIdsForUniversityOrganization(orgId);
 
         const now = new Date();
@@ -1086,9 +1142,13 @@ export class OrganizationsService {
             }
         }
 
-        const verifiedTs = await this.timesheetsRepository.find({
+        const affiliatedStudentIds = await this.resolveUniversityAffiliatedStudentIds(orgId, orgName);
+        const verifiedTsAll = await this.timesheetsRepository.find({
             where: { opportunityId: In(oppIds), status: 'verified' },
         });
+        // Same population fix as the dashboard stats — a shared opportunity's other-school
+        // participants must not inflate this university's own impact numbers.
+        const verifiedTs = verifiedTsAll.filter((t) => t.studentId && affiliatedStudentIds.has(t.studentId));
         const totalHours = verifiedTs.reduce((s, t) => s + (Number(t.hours) || 0), 0);
 
         const totalSdgWeight = [...sdgCounts.values()].reduce((a, b) => a + b, 0);
@@ -1135,7 +1195,7 @@ export class OrganizationsService {
     async getPartnerImpactMetrics(orgId: string) {
         const org = await this.organizationsRepository.findOne({ where: { id: orgId } });
         if (org && this.isUniversityOrgType(org.orgType)) {
-            return this.getPartnerImpactMetricsForUniversityOrg(orgId);
+            return this.getPartnerImpactMetricsForUniversityOrg(orgId, org.name);
         }
 
         const opps = await this.opportunitiesRepository.find({

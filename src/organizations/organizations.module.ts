@@ -6,6 +6,7 @@ import { AdminOrganizationsController } from './admin-organizations.controller';
 import { Organization } from './entities/organization.entity';
 import { User } from '../users/entities/user.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
+import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { Report } from '../reports/entities/report.entity';
 import { Participation } from '../engagement/entities/participant.entity';
@@ -15,7 +16,7 @@ import { FacultyUniversityScopeModule } from '../faculty-university-scope/facult
 
 @Module({
     imports: [
-        TypeOrmModule.forFeature([Organization, User, Opportunity, Timesheet, Report, Participation]),
+        TypeOrmModule.forFeature([Organization, User, Opportunity, OpportunityApplication, Timesheet, Report, Participation]),
         AuditLogsModule,
         FacultyUniversityScopeModule,
     ],

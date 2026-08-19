@@ -1,8 +1,14 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Index } from 'typeorm';
 
+export interface CourseProjectGroupMember {
+    name: string;
+    email?: string;
+}
+
 export interface CourseProjectStudentInfo {
     studentName?: string;
     rollNumber?: string;
+    studentEmail?: string;
     universityName?: string;
     disciplineName?: string;
     /** School / department free text — distinct from disciplineName (HEC programme search), added for the 8-step "final form" wizard. */
@@ -12,7 +18,8 @@ export interface CourseProjectStudentInfo {
     courseCode?: string;
     semester?: string;
     teamMode?: string; // 'Individual' | 'Pair' | 'Group / Team' | 'Whole class' | 'Interdisciplinary team' (legacy data may say 'Solo' | 'Group')
-    groupMembers?: string[];
+    /** Older entries may still hold plain name strings from before email capture was added — read via normalizeGroupMembers, don't assume objects. */
+    groupMembers?: (string | CourseProjectGroupMember)[];
     /** What type of coursework this was (assignment, semester project, case study, ...) — distinct from assignmentInfo.format (the output's shape). */
     courseworkType?: string;
     courseworkTypeOther?: string;

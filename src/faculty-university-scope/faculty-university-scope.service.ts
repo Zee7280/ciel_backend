@@ -110,6 +110,7 @@ export class FacultyUniversityScopeService {
             .innerJoin('a.studentUser', 'u')
             .select('DISTINCT a.opportunityId', 'id')
             .where('u.role = :sr', { sr: UserRole.STUDENT })
+            .andWhere('a.withdrawnAt IS NULL')
             .andWhere(
                 '(LOWER(TRIM(COALESCE(u.university, \'\'))) = :n OR LOWER(TRIM(COALESCE(u.institution, \'\'))) = :n)',
                 { n },
@@ -121,6 +122,7 @@ export class FacultyUniversityScopeService {
             .innerJoin('a.studentUser', 'u')
             .select('DISTINCT a.opportunityId', 'id')
             .where('u.role = :sr', { sr: UserRole.STUDENT })
+            .andWhere('a.withdrawnAt IS NULL')
             .andWhere('u."organizationId"::text = :orgId', { orgId: universityOrganizationId })
             .getRawMany();
 

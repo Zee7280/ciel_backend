@@ -48,10 +48,11 @@ export class PathsController {
         return { success: true, data };
     }
 
-    /** A student's full coursework deck — every report they've submitted or drafted. */
+    /** A student's full coursework deck — every report they've submitted or drafted, plus any
+     * teammate's submitted report they were named on in step 1. */
     @Get('course-projects')
     async listCourseProjects(@Request() req) {
-        const data = await this.pathsService.listCourseProjects(req.user.id);
+        const data = await this.pathsService.listCourseProjects(req.user.id, req.user.email);
         return { success: true, data };
     }
 
@@ -81,7 +82,7 @@ export class PathsController {
 
     @Get('course-projects/:id')
     async getCourseProjectById(@Request() req, @Param('id') id: string) {
-        const data = await this.pathsService.getCourseProjectByIdForUser(req.user.id, id);
+        const data = await this.pathsService.getCourseProjectByIdForUser(req.user.id, req.user.email, id);
         return { success: true, data };
     }
 

@@ -303,8 +303,11 @@ export class FacultyService {
     }
 
     /**
-     * Supervision / partner_organization official_email + primary-faculty applications only
-     * (no admin-delegated university org expansion).
+     * Supervision / partner_organization official_email + faculty applications (primary or
+     * secondary) + participation/report-level supervisor email fields — same match rules as
+     * {@link FacultyReportsService.applyFacultyAccessFilter} so a student who shows up in
+     * Faculty → Reports also shows up in Faculty → Analytics, not one tab only.
+     * (No admin-delegated university org expansion — that's layered on separately.)
      */
     private async resolveFacultyPersonalOpportunityIds(facultyId: string, facultyEmail: string): Promise<string[]> {
         const fe = this.normalizeFacultyEmail(facultyEmail);
@@ -321,17 +324,48 @@ export class FacultyService {
             }),
         );
         const fromOpps = (await oppQ.getMany()).map((r) => r.id);
-        const fromApps = fe
-            ? (
-                  await this.opportunityApplicationsRepository
-                      .createQueryBuilder('a')
-                      .select('DISTINCT a.opportunityId', 'opportunityId')
-                      .where('LOWER(TRIM(a.primaryFacultyEmail)) = :fe', { fe })
-                      .andWhere('a.withdrawnAt IS NULL')
-                      .getRawMany()
-              ).map((r: { opportunityId: string }) => r.opportunityId)
-            : [];
-        return [...new Set([...fromOpps, ...fromApps])];
+
+        let fromApps: string[] = [];
+        let fromParticipations: string[] = [];
+        let fromReports: string[] = [];
+        if (fe) {
+            fromApps = (
+                await this.opportunityApplicationsRepository
+                    .createQueryBuilder('a')
+                    .select('DISTINCT a.opportunityId', 'opportunityId')
+                    .where(
+                        '(LOWER(TRIM(a.primaryFacultyEmail)) = :fe OR LOWER(TRIM(COALESCE(a.secondaryFacultyEmail, \'\'))) = :fe)',
+                        { fe },
+                    )
+                    .andWhere('a.withdrawnAt IS NULL')
+                    .getRawMany()
+            ).map((r: { opportunityId: string }) => r.opportunityId);
+
+            fromParticipations = (
+                await this.participationRepository
+                    .createQueryBuilder('p')
+                    .select('DISTINCT p.projectId', 'projectId')
+                    .where(
+                        `(LOWER(TRIM(COALESCE(p."facultySupervisorEmail", ''))) = :fe
+                          OR LOWER(TRIM(COALESCE(p."primaryFacultyEmail", ''))) = :fe
+                          OR LOWER(TRIM(COALESCE(p."secondaryFacultyEmail", ''))) = :fe)`,
+                        { fe },
+                    )
+                    .getRawMany()
+            ).map((r: { projectId: string }) => r.projectId);
+
+            const reportRows = await this.studentReportsRepository
+                .createQueryBuilder('r')
+                .select('r.opportunityId', 'opportunityId')
+                .addSelect('r.project_id', 'projectId')
+                .where(`LOWER(TRIM(COALESCE(r.section1->>'faculty_supervisor_email', ''))) = :fe`, { fe })
+                .getRawMany();
+            fromReports = reportRows
+                .map((r: { opportunityId?: string; projectId?: string }) => r.opportunityId || r.projectId)
+                .filter((id): id is string => Boolean(id));
+        }
+
+        return [...new Set([...fromOpps, ...fromApps, ...fromParticipations, ...fromReports])];
     }
 
     /** Personal opportunities plus delegated university-org visibility (combined default). */
@@ -1099,16 +1133,13 @@ export class FacultyService {
             where: { id: In(scopedIds) },
             select: ['id', 'sdg', 'sdg_info'],
         });
-        const sdgCounts = new Map<string, number>();
-        for (const o of oppsForSdg) {
-            const label = this.formatSdgLabel(o);
-            sdgCounts.set(label, (sdgCounts.get(label) || 0) + 1);
-        }
 
+        // Individual rows (not pre-aggregated) so we know which opportunity each report-level
+        // SDG count belongs to — needed to avoid counting the same opportunity twice below.
         const reportSdgRows = await this.studentReportsRepository
             .createQueryBuilder('r')
             .select('r.primary_sdg_goal', 'g')
-            .addSelect('COUNT(*)', 'c')
+            .addSelect(`COALESCE(r."opportunityId"::text, TRIM(r.project_id))`, 'oppId')
             .where('COALESCE(r.status, \'\') NOT IN (:...draftish)', { draftish: ['draft', 'rejected'] })
             .andWhere('r.primary_sdg_goal IS NOT NULL')
             .andWhere(
@@ -1119,14 +1150,24 @@ export class FacultyService {
                     );
                 }),
             )
-            .groupBy('r.primary_sdg_goal')
-            .getRawMany<{ g: number; c: string }>();
+            .getRawMany<{ g: number; oppId: string }>();
+
+        const sdgCounts = new Map<string, number>();
+        // An opportunity's own declared SDG tag only counts when it has no submitted report yet —
+        // once a report exists, its primary_sdg_goal is the more accurate (evidence-backed) signal,
+        // and counting both would double a single opportunity's contribution.
+        const oppIdsWithReportSdg = new Set(reportSdgRows.map((r) => r.oppId).filter(Boolean));
+        for (const o of oppsForSdg) {
+            if (oppIdsWithReportSdg.has(o.id)) continue;
+            const label = this.formatSdgLabel(o);
+            sdgCounts.set(label, (sdgCounts.get(label) || 0) + 1);
+        }
 
         for (const row of reportSdgRows) {
             const n = Number(row.g);
             if (!Number.isFinite(n) || n < 1 || n > 17) continue;
             const label = `SDG ${n} – ${SDG_SHORT_NAMES[n]}`;
-            sdgCounts.set(label, (sdgCounts.get(label) || 0) + Number(row.c));
+            sdgCounts.set(label, (sdgCounts.get(label) || 0) + 1);
         }
 
         const impact_distribution = [...sdgCounts.entries()]
@@ -1483,16 +1524,11 @@ export class FacultyService {
                       select: ['id', 'sdg', 'sdg_info'],
                   })
                 : [];
-        const sdgCounts = new Map<string, number>();
-        for (const o of oppsForSdg) {
-            const label = this.formatSdgLabel(o);
-            sdgCounts.set(label, (sdgCounts.get(label) || 0) + 1);
-        }
 
         const reportSdgQb = this.studentReportsRepository
             .createQueryBuilder('r')
             .select('r.primary_sdg_goal', 'g')
-            .addSelect('COUNT(*)', 'c')
+            .addSelect(`COALESCE(r."opportunityId"::text, TRIM(r.project_id))`, 'oppId')
             .where('COALESCE(r.status, \'\') NOT IN (:...draftish)', { draftish: ['draft', 'rejected'] })
             .andWhere('r.primary_sdg_goal IS NOT NULL')
             .andWhere(
@@ -1504,13 +1540,23 @@ export class FacultyService {
                 }),
             );
         this.appendFacultyReportParticipationFilters(reportSdgQb, 'r', oppIds, st, query);
-        const reportSdgRows = await reportSdgQb.groupBy('r.primary_sdg_goal').getRawMany<{ g: number; c: string }>();
+        const reportSdgRows = await reportSdgQb.getRawMany<{ g: number; oppId: string }>();
+
+        const sdgCounts = new Map<string, number>();
+        // An opportunity's own declared SDG tag only counts when it has no submitted report yet —
+        // once a report exists, its primary_sdg_goal is the more accurate (evidence-backed) signal.
+        const oppIdsWithReportSdg = new Set(reportSdgRows.map((r) => r.oppId).filter(Boolean));
+        for (const o of oppsForSdg) {
+            if (oppIdsWithReportSdg.has(o.id)) continue;
+            const label = this.formatSdgLabel(o);
+            sdgCounts.set(label, (sdgCounts.get(label) || 0) + 1);
+        }
 
         for (const row of reportSdgRows) {
             const n = Number(row.g);
             if (!Number.isFinite(n) || n < 1 || n > 17) continue;
             const label = `SDG ${n} – ${SDG_SHORT_NAMES[n]}`;
-            sdgCounts.set(label, (sdgCounts.get(label) || 0) + Number(row.c));
+            sdgCounts.set(label, (sdgCounts.get(label) || 0) + 1);
         }
 
         const impact_distribution = [...sdgCounts.entries()]

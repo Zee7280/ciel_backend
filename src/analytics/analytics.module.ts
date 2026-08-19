@@ -14,6 +14,7 @@ import { Organization } from '../organizations/entities/organization.entity';
 import { EmailOtp } from '../auth/entities/email-otp.entity';
 import { Otp } from '../students/entities/otp.entity';
 import { FacultyUniversityScopeModule } from '../faculty-university-scope/faculty-university-scope.module';
+import { FacultyModule } from '../faculty/faculty.module';
 import { UnifiedAnalyticsController } from './unified-analytics.controller';
 import { UnifiedAnalyticsService } from './unified-analytics.service';
 import { AllFieldsConsoleController } from './all-fields-console.controller';
@@ -22,6 +23,7 @@ import { AllFieldsConsoleService } from './all-fields-console.service';
 @Module({
   imports: [
     FacultyUniversityScopeModule,
+    FacultyModule,
     TypeOrmModule.forFeature([
       User,
       Opportunity,

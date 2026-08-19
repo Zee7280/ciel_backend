@@ -20,6 +20,7 @@ import { Organization } from '../organizations/entities/organization.entity';
 import { EmailOtp } from '../auth/entities/email-otp.entity';
 import { Otp } from '../students/entities/otp.entity';
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
+import { FacultyService } from '../faculty/faculty.service';
 import {
   filterSection1AnalyticsForStakeholder,
   sanitizeRestrictedValuesForStakeholder,
@@ -67,6 +68,7 @@ export class Section1AnalyticsService {
     private readonly emailOtpRepository: Repository<EmailOtp>,
     @InjectRepository(Otp) private readonly otpRepository: Repository<Otp>,
     private readonly facultyUniversityScopeService: FacultyUniversityScopeService,
+    private readonly facultyService: FacultyService,
   ) {}
 
   resolveStakeholderFromRole(
@@ -96,6 +98,7 @@ export class Section1AnalyticsService {
       role: string;
       organizationId?: string | null;
       orgType?: string | null;
+      email?: string | null;
     },
     query: Section1AnalyticsQueryDto,
     forcedStakeholder?: Section1AnalyticsStakeholder,
@@ -140,6 +143,16 @@ export class Section1AnalyticsService {
       universityOrgId: requester.organizationId ?? undefined,
     });
 
+    let facultyScopedProjectIds: string[] | undefined;
+    if (scope === 'aggregate' && requester.role === UserRole.FACULTY) {
+      // Same personal + delegated opportunity scope Faculty → Reports/Dashboard/Impact use —
+      // keeps "my students" consistent across every faculty screen.
+      facultyScopedProjectIds = await this.facultyService.getScopedOpportunityIds(
+        requester.id,
+        requester.email ?? '',
+      );
+    }
+
     const rawValues =
       scope === 'project'
         ? await this.computeProjectMetrics(query.project_id!, studentId)
@@ -147,6 +160,7 @@ export class Section1AnalyticsService {
             stakeholder,
             requester.organizationId ?? undefined,
             query,
+            facultyScopedProjectIds,
           );
 
     return this.buildResponse({
@@ -640,12 +654,28 @@ export class Section1AnalyticsService {
     stakeholder: Section1AnalyticsStakeholder,
     organizationId?: string,
     query?: Section1AnalyticsQueryDto,
+    facultyScopedProjectIds?: string[],
   ): Promise<Section1AnalyticsFieldValues> {
     let participations: Participation[] = [];
 
     if (organizationId) {
       participations =
         await this.loadUniversityScopedParticipations(organizationId);
+    } else if (facultyScopedProjectIds) {
+      // Faculty aren't linked to an organizationId — scope to the same personal + delegated
+      // opportunity set Faculty → Reports/Dashboard use, otherwise this falls through to the
+      // platform-wide branch below and leaks every university's data onto one faculty
+      // member's dashboard.
+      participations = facultyScopedProjectIds.length
+        ? await this.participationRepository
+            .createQueryBuilder('p')
+            .leftJoinAndSelect('p.student', 'student')
+            .leftJoinAndSelect('p.project', 'project')
+            .where('p.student_id IS NOT NULL')
+            .andWhere('p.status IN (:...st)', { st: ACTIVE_PARTICIPATION_STATUSES })
+            .andWhere('p.project_id IN (:...pids)', { pids: facultyScopedProjectIds })
+            .getMany()
+        : [];
     } else {
       participations = await this.participationRepository
         .createQueryBuilder('p')
@@ -730,6 +760,7 @@ export class Section1AnalyticsService {
       if (r.section1?.privacy_consent) acknowledged += 1;
     }
 
+    let auditReadyProjectCount = 0;
     if (projectIds.length > 0) {
       const hoursRow = await this.attendanceLogsRepository
         .createQueryBuilder('log')
@@ -740,9 +771,36 @@ export class Section1AnalyticsService {
         )
         .getRawOne<{ sum: string }>();
       totalVerifiedHours = Number(hoursRow?.sum ?? 0) || 0;
-      withAttendanceProfile =
-        totalVerifiedHours > 0 ? distinctStudents.length : 0;
+
+      // Students who individually have verified/approved attendance hours — not "every
+      // student in scope" just because the scope's total is non-zero somewhere.
+      const perStudentHours = await this.attendanceLogsRepository
+        .createQueryBuilder('log')
+        .innerJoin('log.participant', 'participant')
+        .select('participant.studentId', 'studentId')
+        .where('log.projectId IN (:...ids)', { ids: projectIds })
+        .andWhere(
+          `(log.approvalStatus = 'approved' OR log.entryStatus = 'verified')`,
+        )
+        .groupBy('participant.studentId')
+        .having('SUM(log.sessionHours) > 0')
+        .getRawMany<{ studentId: string }>();
+      withAttendanceProfile = perStudentHours.length;
+
+      const auditReadyProjects = await this.attendanceLogsRepository
+        .createQueryBuilder('log')
+        .select('log.projectId', 'projectId')
+        .where('log.projectId IN (:...ids)', { ids: projectIds })
+        .andWhere(
+          `(log.approvalStatus = 'approved' OR log.entryStatus = 'verified')`,
+        )
+        .groupBy('log.projectId')
+        .getRawMany<{ projectId: string }>();
+      auditReadyProjectCount = auditReadyProjects.length;
     }
+    const hecCompliantCount = participations.filter(
+      (p) => !p.attendanceLocked || p.attendanceVerificationRequested,
+    ).length;
 
     const total = participations.length || 1;
     const pct = (n: number, d: number) =>
@@ -798,8 +856,7 @@ export class Section1AnalyticsService {
         ),
       },
       verified_participation_via_audit_ready_logs: {
-        projects_with_audit_ready_logs:
-          projectIds.length > 0 ? projectIds.length : 0,
+        projects_with_audit_ready_logs: auditReadyProjectCount,
         total_projects: projectIds.length,
       },
       academic_linkage_to_official_student_records: {
@@ -808,9 +865,9 @@ export class Section1AnalyticsService {
         percent: pct(linkedRecords, participations.length),
       },
       attendance_integrity_hec_compliant_tracking: {
-        projects_with_tracking: projectIds.length,
-        total_projects: projectIds.length,
-        percent: projectIds.length > 0 ? 100 : 0,
+        projects_with_tracking: hecCompliantCount,
+        total_projects: participations.length,
+        percent: pct(hecCompliantCount, participations.length),
       },
       individual_accountability_for_community_hours: {
         students_with_attendance_profile: withAttendanceProfile,

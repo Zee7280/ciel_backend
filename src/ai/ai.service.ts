@@ -1387,31 +1387,6 @@ Keep the full response under 180 words.`;
       case 'section11_master_rubric':
         return buildSection11MasterRubricUserMessage(data);
 
-      // =====================================================
-      // COURSE PROJECT DECK CURATOR
-      // =====================================================
-      case 'course_project_curator':
-        return `You are CIEL's Deck Curator. You receive every flash card on one coursework deck
-(a student's, a teacher's, or a university's).
-
-CARDS:
-${JSON.stringify(data.cards)}
-
-Score each card 0-100 using ONLY these weights:
-- Evidence attached & verifiable ..... 30
-- Student-initiated SDG link ......... 25
-- Impact shown (not just claimed) .... 25
-- Reflection depth & honesty ......... 20
-
-Never rank on writing style, English fluency, or length.
-
-Return ONLY a JSON object with this exact shape, no markdown, no commentary:
-{
-  "ranking": [{ "id": "<card id>", "score": <0-100 integer> }, ...one entry per card, all cards included...],
-  "top3": [{ "id": "<card id>", "reason": "<one sentence, starts with why it leads>" }, ...up to 3, highest score first...],
-  "pattern": "<one sentence: a pattern the deck-owner should see across their strongest cards>"
-}`;
-
       default:
         return `Summarize project data professionally: ${JSON.stringify(data)}`;
     }
@@ -1426,7 +1401,6 @@ Return ONLY a JSON object with this exact shape, no markdown, no commentary:
 
     const isSection11Evaluation =
       section === 'section11' || section === 'section11_master_rubric';
-    const isCourseProjectCurator = section === 'course_project_curator';
 
     const openAiOpts: OpenAiCompletionOpts | undefined = isSection11Evaluation
       ? {
@@ -1439,13 +1413,7 @@ Return ONLY a JSON object with this exact shape, no markdown, no commentary:
               ? `${SECTION11_MASTER_RUBRIC_EVALUATOR_PROMPT}\n\n${SECTION11_MASTER_RUBRIC_JSON_ONLY_DEPLOYMENT_NOTE}`
               : `${SECTION11_EVALUATOR_PROMPT}\n\n${SECTION11_JSON_ONLY_DEPLOYMENT_NOTE}`,
         }
-      : isCourseProjectCurator
-        ? {
-            temperature: 0.3,
-            maxTokens: 2000,
-            responseFormat: { type: 'json_object' },
-          }
-        : undefined;
+      : undefined;
 
     let text: string;
     try {

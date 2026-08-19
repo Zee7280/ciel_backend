@@ -6,9 +6,14 @@ export class CourseProjectStudentInfoDto {
     @IsOptional() @IsString() rollNumber?: string;
     @IsOptional() @IsString() universityName?: string;
     @IsOptional() @IsString() disciplineName?: string;
+    @IsOptional() @IsString() department?: string;
+    @IsOptional() @IsString() programme?: string;
+    @IsOptional() @IsString() courseCode?: string;
     @IsOptional() @IsString() semester?: string;
     @IsOptional() @IsString() teamMode?: string;
     @IsOptional() @IsArray() groupMembers?: string[];
+    @IsOptional() @IsString() courseworkType?: string;
+    @IsOptional() @IsString() courseworkTypeOther?: string;
     @IsOptional() @IsString() teacherName?: string;
     @IsOptional() @IsString() teacherEmail?: string;
     @IsOptional() @IsString() notes?: string;
@@ -17,6 +22,7 @@ export class CourseProjectStudentInfoDto {
 export class CourseProjectAssignmentInfoDto {
     @IsOptional() @IsString() format?: string;
     @IsOptional() @IsString() formatOther?: string;
+    @IsOptional() @IsArray() formats?: string[];
     @IsOptional() @IsString() whatAsked?: string;
     @IsOptional() @IsString() realWorldIssue?: string;
     @IsOptional() @IsString() notes?: string;
@@ -25,6 +31,8 @@ export class CourseProjectAssignmentInfoDto {
 export class CourseProjectAimsInfoDto {
     @IsOptional() @IsString() aimStatement?: string;
     @IsOptional() @IsArray() objectives?: string[];
+    @IsOptional() @IsArray() beneficiaries?: string[];
+    @IsOptional() @IsString() beneficiariesOther?: string;
     @IsOptional() @IsString() notes?: string;
 }
 
@@ -34,6 +42,8 @@ export class CourseProjectProcessInfoDto {
     @IsOptional() @IsArray() methods?: string[];
     @IsOptional() @IsString() methodsOther?: string;
     @IsOptional() @IsString() sampleScale?: string;
+    @IsOptional() @IsArray() stakeholders?: string[];
+    @IsOptional() @IsString() stakeholdersOther?: string;
     @IsOptional() @IsString() notes?: string;
 }
 
@@ -43,6 +53,11 @@ export class CourseProjectResultsInfoDto {
     @IsOptional() @IsString() outputDescription?: string;
     @IsOptional() @IsArray() findings?: string[];
     @IsOptional() @IsString() measurableImpact?: string;
+    @IsOptional() @IsString() evidenceStatus?: string;
+    @IsOptional() @IsString() metricName?: string;
+    @IsOptional() @IsString() metricValue?: string;
+    @IsOptional() @IsString() metricUnit?: string;
+    @IsOptional() @IsString() numberRepresents?: string;
     @IsOptional() @IsString() limitationType?: string;
     @IsOptional() @IsString() limitationOther?: string;
     @IsOptional() @IsString() limitationDetail?: string;
@@ -53,6 +68,7 @@ export class CourseProjectSdgEntryDto {
     @IsInt() goalNumber: number;
     @IsArray() targets: string[];
     @IsOptional() @IsString() how?: string;
+    @IsOptional() @IsString() strength?: string;
 }
 
 export class CourseProjectSdgMappingDto {
@@ -68,8 +84,11 @@ export class CourseProjectSdgMappingDto {
 export class CourseProjectReflectionInfoDto {
     @IsOptional() @IsString() lessonLearned?: string;
     @IsOptional() @IsString() sdgLinkHonesty?: string;
+    @IsOptional() @IsString() integrationLevel?: string;
     @IsOptional() @IsArray() skills?: string[];
     @IsOptional() @IsString() skillsOther?: string;
+    @IsOptional() @IsString() nextSteps?: string;
+    @IsOptional() @IsString() nextStepsOther?: string;
     @IsOptional() @IsString() whatsNext?: string;
     @IsOptional() @IsString() adviceNextSemester?: string;
     @IsOptional() @IsString() notes?: string;

@@ -5,17 +5,28 @@ export interface CourseProjectStudentInfo {
     rollNumber?: string;
     universityName?: string;
     disciplineName?: string;
+    /** School / department free text — distinct from disciplineName (HEC programme search), added for the 8-step "final form" wizard. */
+    department?: string;
+    /** Programme, e.g. "BBA" — added for the "final form" wizard. */
+    programme?: string;
+    courseCode?: string;
     semester?: string;
-    teamMode?: string; // 'Solo' | 'Group'
+    teamMode?: string; // 'Individual' | 'Pair' | 'Group / Team' | 'Whole class' | 'Interdisciplinary team' (legacy data may say 'Solo' | 'Group')
     groupMembers?: string[];
+    /** What type of coursework this was (assignment, semester project, case study, ...) — distinct from assignmentInfo.format (the output's shape). */
+    courseworkType?: string;
+    courseworkTypeOther?: string;
     teacherName?: string;
     teacherEmail?: string;
     notes?: string;
 }
 
 export interface CourseProjectAssignmentInfo {
+    /** Legacy single-select format — kept in sync with formats[0] for back-compat with admin views and CourseworkCard. */
     format?: string;
     formatOther?: string;
+    /** Multi-select formats — first pick is primary/leads. Added for the "final form" wizard. */
+    formats?: string[];
     whatAsked?: string;
     realWorldIssue?: string;
     notes?: string;
@@ -24,6 +35,9 @@ export interface CourseProjectAssignmentInfo {
 export interface CourseProjectAimsInfo {
     aimStatement?: string;
     objectives?: string[];
+    /** Who/what the work was intended to benefit, influence or improve. */
+    beneficiaries?: string[];
+    beneficiariesOther?: string;
     notes?: string;
 }
 
@@ -33,6 +47,9 @@ export interface CourseProjectProcessInfo {
     methods?: string[];
     methodsOther?: string;
     sampleScale?: string;
+    /** Who the student engaged or worked with while doing the work. */
+    stakeholders?: string[];
+    stakeholdersOther?: string;
     notes?: string;
 }
 
@@ -42,6 +59,13 @@ export interface CourseProjectResultsInfo {
     outputDescription?: string;
     findings?: string[];
     measurableImpact?: string;
+    /** Structured evidence honesty taxonomy — replaces relying on measurableImpact alone. */
+    evidenceStatus?: string;
+    metricName?: string;
+    metricValue?: string;
+    metricUnit?: string;
+    /** What the metric value represents: Baseline | Target | Estimated / projected | Actual measured result. */
+    numberRepresents?: string;
     limitationType?: string;
     limitationOther?: string;
     limitationDetail?: string;
@@ -52,6 +76,8 @@ export interface CourseProjectSdgEntry {
     goalNumber: number;
     targets: string[];
     how?: string;
+    /** 'Direct' | 'Supporting' — the first entry in the array is always the primary SDG. */
+    strength?: string;
 }
 
 export interface CourseProjectSdgMapping {
@@ -62,9 +88,16 @@ export interface CourseProjectSdgMapping {
 
 export interface CourseProjectReflectionInfo {
     lessonLearned?: string;
+    /** Legacy honesty rating — superseded by integrationLevel in the "final form" wizard, kept for older entries. */
     sdgLinkHonesty?: string;
+    /** How strongly sustainability was connected to the actual work (new taxonomy). */
+    integrationLevel?: string;
     skills?: string[];
     skillsOther?: string;
+    /** Structured "what's next" choice, e.g. "Recommended for implementation". */
+    nextSteps?: string;
+    nextStepsOther?: string;
+    /** Optional one-line elaboration on what's next — free text, shown alongside nextSteps. */
     whatsNext?: string;
     adviceNextSemester?: string;
     notes?: string;

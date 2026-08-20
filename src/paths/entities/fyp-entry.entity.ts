@@ -78,6 +78,10 @@ export interface FypProjectInfo {
   studentName?: string;
   studentEmail?: string;
   rollNumber?: string;
+  /** HEC allows splitting the FYP across the final year — which semester(s) it spans. */
+  span?: string;
+  /** Typically 6 under HEC policy — optional, not validated server-side. */
+  creditHours?: string;
   /** Older entries may hold plain name strings — read via normalizeFypTeamMembers, don't assume objects. */
   teamMembers?: (string | FypTeamMember)[];
   supervisorName?: string;
@@ -144,6 +148,9 @@ export interface FypRouteDetails {
   clientOrg?: string;
   engagementBasis?: string;
   recommendationStatus?: string;
+  // scholar route — discussion & conclusion (the HEC thesis chain's closing step)
+  discussion?: string;
+  conclusion?: string;
 }
 export interface FypSdgEntry {
   goalNumber: number;

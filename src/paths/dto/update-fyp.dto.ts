@@ -65,6 +65,8 @@ export class FypProjectInfoDto {
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) studentName?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) studentEmail?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) rollNumber?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) span?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) creditHours?: string;
   /** {name, email?, role?} per member — kept loosely typed since older clients may still send plain strings. */
   @IsOptional() @IsArray() @ArrayMaxSize(LIST_MAX) teamMembers?: unknown[];
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) supervisorName?: string;
@@ -123,6 +125,8 @@ export class FypRouteDetailsDto {
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) clientOrg?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) engagementBasis?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) recommendationStatus?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) discussion?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) conclusion?: string;
 }
 export class FypSdgEntryDto {
   @IsNumber() goalNumber: number;

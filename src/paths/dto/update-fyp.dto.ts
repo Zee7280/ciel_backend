@@ -61,8 +61,16 @@ export class FypProjectInfoDto {
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) school?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) degree?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) graduationYear?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) projectType?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) studentName?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) studentEmail?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) rollNumber?: string;
+  /** {name, email?, role?} per member — kept loosely typed since older clients may still send plain strings. */
+  @IsOptional() @IsArray() @ArrayMaxSize(LIST_MAX) teamMembers?: unknown[];
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) supervisorName?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) supervisorEmail?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) coSupervisorName?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) coSupervisorEmail?: string;
 }
 export class FypBackgroundInfoDto {
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) problem?: string;
@@ -72,7 +80,9 @@ export class FypBackgroundInfoDto {
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) audienceOther?: string;
 }
 export class FypObjectivesInfoDto {
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) aim?: string;
   @IsOptional() @IsArray() @ArrayMaxSize(LIST_MAX) @IsString({ each: true }) @MaxLength(FREE_TEXT_MAX, { each: true }) objectives?: string[];
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) scope?: string;
 }
 export class FypLiteratureInfoDto {
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) sourcesReviewed?: string;
@@ -86,12 +96,33 @@ export class FypMethodologyInfoDto {
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) methodsOther?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) sampleScale?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) tools?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) periodFrom?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) periodTo?: string;
 }
 export class FypFindingsInfoDto {
   @IsOptional() @IsArray() @ArrayMaxSize(LIST_MAX) @IsString({ each: true }) @MaxLength(FREE_TEXT_MAX, { each: true }) findings?: string[];
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) measurableImpact?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) limitationType?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) limitationDetail?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) evidenceStatus?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) metricName?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) metricValue?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) metricUnit?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) numberRepresents?: string;
+}
+export class FypRouteDetailsDto {
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) showMonth?: string;
+  @IsOptional() @IsNumber() piecesShown?: number;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) juryExaminer?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) buildStatus?: string;
+  @IsOptional() @IsNumber() testersCount?: number;
+  @IsOptional() @IsNumber() iterationsCount?: number;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) screeningMonth?: string;
+  @IsOptional() @IsNumber() audienceReached?: number;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) runtimeFormat?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) clientOrg?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) engagementBasis?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) recommendationStatus?: string;
 }
 export class FypSdgEntryDto {
   @IsNumber() goalNumber: number;
@@ -178,6 +209,10 @@ export class UpdateFypDto {
   @ValidateNested()
   @Type(() => FypFindingsInfoDto)
   findings?: FypFindingsInfoDto;
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => FypRouteDetailsDto)
+  routeDetails?: FypRouteDetailsDto;
   @IsOptional()
   @ValidateNested()
   @Type(() => FypSdgMappingDto)

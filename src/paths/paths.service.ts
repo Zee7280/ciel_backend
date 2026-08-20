@@ -5,7 +5,11 @@ import {
   CourseProjectEntry,
   CourseProjectStudentInfo,
 } from './entities/course-project-entry.entity';
-import { DEFAULT_FYP_MILESTONES, FypEntry } from './entities/fyp-entry.entity';
+import {
+  DEFAULT_FYP_MILESTONES,
+  FypEntry,
+  FypProjectInfo,
+} from './entities/fyp-entry.entity';
 import { VentureEntry } from './entities/venture-entry.entity';
 import { UpdateCourseProjectDto } from './dto/update-course-project.dto';
 import { AddFypDeliverableDto, UpdateFypDto } from './dto/update-fyp.dto';
@@ -357,8 +361,61 @@ export class PathsService {
 
   // ---------- FYP / Thesis ----------
 
-  async getFyp(userId: string) {
-    return this.fypRepo.findOne({ where: { userId } });
+  /** Same jsonb email-match pattern as Course Project's TEAM_MEMBER_EMAIL_MATCH, scoped to
+   * projectInfo.teamMembers instead of studentInfo.groupMembers. */
+  private static readonly FYP_TEAM_MEMBER_EMAIL_MATCH = `EXISTS (
+      SELECT 1 FROM jsonb_array_elements(COALESCE("projectInfo"->'teamMembers', '[]'::jsonb)) AS tm
+      WHERE jsonb_typeof(tm) = 'object'
+        AND LOWER(TRIM(COALESCE(tm->>'email', ''))) = :teamEmail
+    )`;
+
+  /** FYP is one record per student — a co-author with no record of their own sees the lead's
+   * *submitted* record on their own dashboard instead (read-only), same "visible once official"
+   * trigger as Course Project's team-sharing. A student's own record always takes priority. */
+  async getFyp(userId: string, userEmail?: string) {
+    const own = await this.fypRepo.findOne({ where: { userId } });
+    if (own) return { ...own, isOwner: true };
+    const email = (userEmail || '').trim().toLowerCase();
+    if (!email) return null;
+    const shared = await this.fypRepo
+      .createQueryBuilder('e')
+      .where(`e.status = 'submitted'`)
+      .andWhere(PathsService.FYP_TEAM_MEMBER_EMAIL_MATCH, { teamEmail: email })
+      .getOne();
+    return shared ? { ...shared, isOwner: false } : null;
+  }
+
+  /** The faculty supervision deck — submitted FYP records naming this supervisor by email, same
+   * scoping as listCourseProjectsForTeacher. */
+  async listFypForTeacher(supervisorEmail: string) {
+    const email = supervisorEmail.trim().toLowerCase();
+    if (!email) return [];
+    const entries = await this.fypRepo.find({
+      where: { status: 'submitted' },
+      order: { updatedAt: 'DESC' },
+    });
+    const matched = entries.filter(
+      (e) => (e.projectInfo?.supervisorEmail || '').trim().toLowerCase() === email,
+    );
+    return this.attachStudents(matched);
+  }
+
+  /** The university showcase deck — submitted FYP records from students formally affiliated with
+   * this university org (via their account's organizationId). Unlike Course Project, FYP has no
+   * free-text university-name field on the entry itself to fall back on. */
+  async listFypForUniversity(organizationId: string) {
+    const org = await this.organizationsRepo.findOne({
+      where: { id: organizationId },
+    });
+    if (!org) return [];
+    const entries = await this.fypRepo
+      .createQueryBuilder('e')
+      .leftJoin('users', 'u', 'u.id::text = e."userId"')
+      .where('e.status = :status', { status: 'submitted' })
+      .andWhere('u."organizationId"::text = :orgId', { orgId: organizationId })
+      .orderBy('e."updatedAt"', 'DESC')
+      .getMany();
+    return this.attachStudents(entries);
   }
 
   async upsertFyp(userId: string, dto: UpdateFypDto) {
@@ -378,13 +435,15 @@ export class PathsService {
       if (dto.communityLinkage !== undefined)
         entry.communityLinkage = dto.communityLinkage;
       // 9-step guided wizard — frontend sends each group fully merged, so a straight assign is safe.
-      if (dto.projectInfo !== undefined) entry.projectInfo = dto.projectInfo;
+      if (dto.projectInfo !== undefined)
+        entry.projectInfo = dto.projectInfo as FypProjectInfo;
       if (dto.background !== undefined) entry.background = dto.background;
       if (dto.objectivesInfo !== undefined)
         entry.objectivesInfo = dto.objectivesInfo;
       if (dto.literature !== undefined) entry.literature = dto.literature;
       if (dto.methodology !== undefined) entry.methodology = dto.methodology;
       if (dto.findings !== undefined) entry.findings = dto.findings;
+      if (dto.routeDetails !== undefined) entry.routeDetails = dto.routeDetails;
       if (dto.sdgMapping !== undefined) entry.sdgMapping = dto.sdgMapping;
       if (dto.reflectionInfo !== undefined)
         entry.reflectionInfo = dto.reflectionInfo;
@@ -395,7 +454,8 @@ export class PathsService {
       if (dto.stepCompleted !== undefined)
         entry.stepCompleted = dto.stepCompleted;
       if (dto.status !== undefined) entry.status = dto.status;
-      return repo.save(entry);
+      const saved = await repo.save(entry);
+      return { ...saved, isOwner: true };
     });
   }
 

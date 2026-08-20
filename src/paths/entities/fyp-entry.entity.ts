@@ -63,13 +63,27 @@ export const DEFAULT_FYP_MILESTONES: FypMilestone[] = [
 
 // ── 9-step guided wizard groups (additive — the legacy milestone-timeline fields above are untouched) ──
 
+export interface FypTeamMember {
+  name: string;
+  email?: string;
+  role?: string;
+}
 export interface FypProjectInfo {
   title?: string;
   school?: string;
   degree?: string;
   graduationYear?: string;
+  /** Drives the adaptive-vocabulary "route" (scholar/maker/builder/storyteller/consultant) on the frontend — purely a relabeling key, not validated server-side. */
+  projectType?: string;
+  studentName?: string;
+  studentEmail?: string;
+  rollNumber?: string;
+  /** Older entries may hold plain name strings — read via normalizeFypTeamMembers, don't assume objects. */
+  teamMembers?: (string | FypTeamMember)[];
   supervisorName?: string;
   supervisorEmail?: string;
+  coSupervisorName?: string;
+  coSupervisorEmail?: string;
 }
 export interface FypBackgroundInfo {
   problem?: string;
@@ -79,7 +93,10 @@ export interface FypBackgroundInfo {
   audienceOther?: string;
 }
 export interface FypObjectivesInfo {
+  aim?: string;
   objectives?: string[];
+  /** What was deliberately excluded from the work's coverage — optional but strengthens the record. */
+  scope?: string;
 }
 export interface FypLiteratureInfo {
   sourcesReviewed?: string;
@@ -93,12 +110,40 @@ export interface FypMethodologyInfo {
   methodsOther?: string;
   sampleScale?: string;
   tools?: string;
+  /** Month strings ("YYYY-MM") — when the work was actually carried out. */
+  periodFrom?: string;
+  periodTo?: string;
 }
 export interface FypFindingsInfo {
   findings?: string[];
   measurableImpact?: string;
   limitationType?: string;
   limitationDetail?: string;
+  /** Evidence-quality ladder, mirrors Course Project's resultsInfo.evidenceStatus. */
+  evidenceStatus?: string;
+  metricName?: string;
+  metricValue?: string;
+  metricUnit?: string;
+  numberRepresents?: string;
+}
+/** Route-specific extras shown only for the matching project type — a degree-show collection needs different fields than a software build. */
+export interface FypRouteDetails {
+  // maker route — degree show / exhibition
+  showMonth?: string;
+  piecesShown?: number;
+  juryExaminer?: string;
+  // builder route — build status
+  buildStatus?: string;
+  testersCount?: number;
+  iterationsCount?: number;
+  // storyteller route — screening / release
+  screeningMonth?: string;
+  audienceReached?: number;
+  runtimeFormat?: string;
+  // consultant route — client engagement
+  clientOrg?: string;
+  engagementBasis?: string;
+  recommendationStatus?: string;
 }
 export interface FypSdgEntry {
   goalNumber: number;
@@ -179,6 +224,9 @@ export class FypEntry {
 
   @Column({ type: 'jsonb', nullable: true })
   findings: FypFindingsInfo | null;
+
+  @Column({ type: 'jsonb', nullable: true })
+  routeDetails: FypRouteDetails | null;
 
   @Column({ type: 'jsonb', nullable: true })
   sdgMapping: FypSdgMapping | null;

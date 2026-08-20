@@ -102,7 +102,7 @@ export class PathsController {
 
     @Get('fyp-thesis')
     async getFyp(@Request() req) {
-        const data = await this.pathsService.getFyp(req.user.id);
+        const data = await this.pathsService.getFyp(req.user.id, req.user.email);
         return { success: true, data };
     }
 
@@ -115,6 +115,24 @@ export class PathsController {
     @Post('fyp-thesis/deliverables')
     async addFypDeliverable(@Request() req, @Body() dto: AddFypDeliverableDto) {
         const data = await this.pathsService.addFypDeliverable(req.user.id, dto);
+        return { success: true, data };
+    }
+
+    /** Records from students who named this teacher as their supervisor — the faculty deck. */
+    @Get('fyp-thesis/supervised')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.FACULTY)
+    async listSupervisedFyp(@Request() req) {
+        const data = await this.pathsService.listFypForTeacher(req.user.email);
+        return { success: true, data };
+    }
+
+    /** Records from students formally linked to this university partner org — the university showcase deck. */
+    @Get('fyp-thesis/university')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN)
+    async listUniversityFyp(@Request() req) {
+        const data = await this.pathsService.listFypForUniversity(req.user.organizationId);
         return { success: true, data };
     }
 

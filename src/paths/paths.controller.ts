@@ -6,7 +6,7 @@ import { UserRole } from '../users/enums/user-role.enum';
 import { S3Service } from '../common/s3.service';
 import { assertStudentReportUploadMeta, studentReportPresignExpiresInSeconds } from '../common/student-report-file-upload';
 import { PathsService } from './paths.service';
-import { UpdateCourseProjectDto } from './dto/update-course-project.dto';
+import { FacultyReviewCourseProjectDto, UpdateCourseProjectDto } from './dto/update-course-project.dto';
 import { AddFypDeliverableDto, UpdateFypDto } from './dto/update-fyp.dto';
 import { AddVentureDocumentDto, SetVentureVisibilityDto, UpdateVentureDto } from './dto/update-venture.dto';
 
@@ -68,6 +68,15 @@ export class PathsController {
     @Roles(UserRole.FACULTY)
     async listSupervisedCourseProjects(@Request() req) {
         const data = await this.pathsService.listCourseProjectsForTeacher(req.user.email);
+        return { success: true, data };
+    }
+
+    /** Faculty approve/reject a submitted student's Course Project entry — the gate for Merit Model ranking/showcase eligibility. */
+    @Patch('course-projects/:id/faculty-review')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.FACULTY)
+    async facultyReviewCourseProject(@Request() req, @Param('id') id: string, @Body() dto: FacultyReviewCourseProjectDto) {
+        const data = await this.pathsService.facultyReviewCourseProject(req.user.email, id, dto.action, dto.note);
         return { success: true, data };
     }
 

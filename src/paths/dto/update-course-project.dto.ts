@@ -1,6 +1,12 @@
 import { Type } from 'class-transformer';
 import { IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, Max, Min, ValidateNested } from 'class-validator';
 
+export class FacultyReviewCourseProjectDto {
+    @IsIn(['approve', 'reject'])
+    action: 'approve' | 'reject';
+    @IsOptional() @IsString() note?: string;
+}
+
 export class CourseProjectStudentInfoDto {
     @IsOptional() @IsString() studentName?: string;
     @IsOptional() @IsString() rollNumber?: string;
@@ -25,6 +31,7 @@ export class CourseProjectAssignmentInfoDto {
     @IsOptional() @IsString() format?: string;
     @IsOptional() @IsString() formatOther?: string;
     @IsOptional() @IsArray() formats?: string[];
+    @IsOptional() @IsString() leadRoute?: string;
     @IsOptional() @IsString() whatAsked?: string;
     @IsOptional() @IsString() realWorldIssue?: string;
     @IsOptional() @IsString() notes?: string;
@@ -49,21 +56,50 @@ export class CourseProjectProcessInfoDto {
     @IsOptional() @IsString() notes?: string;
 }
 
+export class CourseProjectMetricDto {
+    @IsString() id: string;
+    @IsOptional() @IsString() name?: string;
+    @IsOptional() @IsString() type?: string;
+    @IsOptional() @IsString() value?: string;
+    @IsOptional() @IsString() unit?: string;
+    @IsOptional() @IsString() status?: string;
+    @IsOptional() @IsString() meaning?: string;
+    @IsOptional() @IsString() sample?: string;
+    @IsOptional() @IsString() periodFrom?: string;
+    @IsOptional() @IsString() periodTo?: string;
+    @IsOptional() @IsString() source?: string;
+    @IsOptional() @IsString() character?: string;
+    @IsOptional() @IsString() verifier?: string;
+    @IsOptional() @IsBoolean() comparedBeforeAfter?: boolean;
+    @IsOptional() @IsString() baseline?: string;
+    @IsOptional() @IsBoolean() evidenceAttached?: boolean;
+}
+
 export class CourseProjectResultsInfoDto {
     @IsOptional() @IsArray() outputs?: string[];
     @IsOptional() @IsString() outputsOther?: string;
     @IsOptional() @IsString() outputDescription?: string;
     @IsOptional() @IsArray() findings?: string[];
+    @IsOptional() @IsString() measured?: string;
+    @IsOptional()
+    @IsArray()
+    @ValidateNested({ each: true })
+    @Type(() => CourseProjectMetricDto)
+    metrics?: CourseProjectMetricDto[];
     @IsOptional() @IsString() measurableImpact?: string;
+    @IsOptional() @IsString() limitationType?: string;
+    @IsOptional() @IsString() limitationOther?: string;
+    @IsOptional() @IsString() limitationDetail?: string;
+    @IsOptional() @IsString() limitationInterpretation?: string;
+    @IsOptional() @IsArray() recommendations?: string[];
+    @IsOptional() @IsString() resultsSummary?: string;
+    @IsOptional() @IsString() notes?: string;
+    /** @deprecated pre-multi-metric shape — still accepted for entries submitted before this system existed. */
     @IsOptional() @IsString() evidenceStatus?: string;
     @IsOptional() @IsString() metricName?: string;
     @IsOptional() @IsString() metricValue?: string;
     @IsOptional() @IsString() metricUnit?: string;
     @IsOptional() @IsString() numberRepresents?: string;
-    @IsOptional() @IsString() limitationType?: string;
-    @IsOptional() @IsString() limitationOther?: string;
-    @IsOptional() @IsString() limitationDetail?: string;
-    @IsOptional() @IsString() notes?: string;
 }
 
 export class CourseProjectSdgEntryDto {
@@ -75,6 +111,7 @@ export class CourseProjectSdgEntryDto {
 
 export class CourseProjectSdgMappingDto {
     @IsOptional() @IsString() origin?: string;
+    @IsOptional() @IsBoolean() notApplicable?: boolean;
     @IsOptional()
     @IsArray()
     @ValidateNested({ each: true })
@@ -136,6 +173,10 @@ export class UpdateCourseProjectDto {
     @IsOptional()
     @IsArray()
     evidenceUrls?: string[];
+
+    @IsOptional()
+    @IsString()
+    assignmentFileUrl?: string;
 
     // Step-grouped fields
     @IsOptional()

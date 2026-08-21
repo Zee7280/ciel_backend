@@ -35,6 +35,8 @@ export interface CourseProjectAssignmentInfo {
     formatOther?: string;
     /** Multi-select formats — first pick is primary/leads. Added for the "final form" wizard. */
     formats?: string[];
+    /** Explicit student override of which pathway leads when formats span more than one — unset means "first pick leads". */
+    leadRoute?: string;
     whatAsked?: string;
     realWorldIssue?: string;
     notes?: string;
@@ -61,23 +63,57 @@ export interface CourseProjectProcessInfo {
     notes?: string;
 }
 
+/** One measured/estimated result inside resultsInfo.metrics — up to 5 per entry. */
+export interface CourseProjectMetric {
+    id: string;
+    name?: string;
+    type?: string;
+    value?: string;
+    unit?: string;
+    /** "Actual — measured" | "Target — intended future result" | "Estimated / projected" | "Proposed — not yet tested" */
+    status?: string;
+    meaning?: string;
+    sample?: string;
+    periodFrom?: string;
+    periodTo?: string;
+    source?: string;
+    character?: string;
+    verifier?: string;
+    comparedBeforeAfter?: boolean;
+    baseline?: string;
+    evidenceAttached?: boolean;
+}
+
 export interface CourseProjectResultsInfo {
     outputs?: string[];
     outputsOther?: string;
     outputDescription?: string;
     findings?: string[];
+    /** "Did you measure a result?" — Yes / Partly / No (findings-only) / Not yet. Drives whether `metrics` applies. */
+    measured?: string;
+    /** Up to 5 structured results — replaces the older single evidenceStatus/metricName/metricValue/metricUnit/numberRepresents fields below. */
+    metrics?: CourseProjectMetric[];
     measurableImpact?: string;
-    /** Structured evidence honesty taxonomy — replaces relying on measurableImpact alone. */
-    evidenceStatus?: string;
-    metricName?: string;
-    metricValue?: string;
-    metricUnit?: string;
-    /** What the metric value represents: Baseline | Target | Estimated / projected | Actual measured result. */
-    numberRepresents?: string;
     limitationType?: string;
     limitationOther?: string;
     limitationDetail?: string;
+    /** "How should this limitation be considered when reading your results?" */
+    limitationInterpretation?: string;
+    /** Up to 3 optional next-step recommendations. */
+    recommendations?: string[];
+    /** 2-3 sentence summary of the most important result. */
+    resultsSummary?: string;
     notes?: string;
+    /** @deprecated pre-multi-metric shape — still read for entries submitted before this system existed. */
+    evidenceStatus?: string;
+    /** @deprecated see evidenceStatus */
+    metricName?: string;
+    /** @deprecated see evidenceStatus */
+    metricValue?: string;
+    /** @deprecated see evidenceStatus */
+    metricUnit?: string;
+    /** @deprecated see evidenceStatus */
+    numberRepresents?: string;
 }
 
 export interface CourseProjectSdgEntry {
@@ -90,6 +126,8 @@ export interface CourseProjectSdgEntry {
 
 export interface CourseProjectSdgMapping {
     origin?: string;
+    /** Honestly declared "no genuine SDG link" — flagged for teacher confirmation rather than force-mapped; the record still counts fully. */
+    notApplicable?: boolean;
     entries?: CourseProjectSdgEntry[];
     notes?: string;
 }
@@ -157,6 +195,20 @@ export class CourseProjectEntry {
 
     @Column({ type: 'simple-array', nullable: true })
     evidenceUrls: string[];
+
+    /** The primary uploaded assignment file (essay/deck/design file/code link) — distinct from evidenceUrls' supporting files. Drives half the Verifiability score. */
+    @Column({ nullable: true })
+    assignmentFileUrl: string;
+
+    /** Faculty review gate — only "approved" entries count toward Merit Model rankings/AI picks/showcase, mirroring FYP's eligibility gate. */
+    @Column({ default: 'pending' })
+    facultyApprovalStatus: string; // pending | approved | rejected
+
+    @Column({ type: 'text', nullable: true })
+    facultyApprovalNote: string | null;
+
+    @Column({ type: 'timestamp', nullable: true })
+    facultyApprovalAt: Date | null;
 
     // ---------- Step 1: You & the course ----------
     @Column({ type: 'jsonb', nullable: true })

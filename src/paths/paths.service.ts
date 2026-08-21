@@ -50,6 +50,8 @@ export class PathsService {
       entry.projectDescription = dto.projectDescription;
     if (dto.sdgs !== undefined) entry.sdgs = dto.sdgs;
     if (dto.evidenceUrls !== undefined) entry.evidenceUrls = dto.evidenceUrls;
+    if (dto.assignmentFileUrl !== undefined)
+      entry.assignmentFileUrl = dto.assignmentFileUrl;
     if (dto.studentInfo !== undefined)
       entry.studentInfo = {
         ...entry.studentInfo,
@@ -81,7 +83,37 @@ export class PathsService {
     if (dto.stepCompleted !== undefined)
       entry.stepCompleted = dto.stepCompleted;
     if (dto.status !== undefined) entry.status = dto.status;
+    // Editing a previously-approved report after the fact invalidates that approval — send it
+    // back to the teacher's queue rather than silently keeping stale content "live".
+    if (entry.status === 'submitted' && entry.facultyApprovalStatus === 'approved') {
+      entry.facultyApprovalStatus = 'pending';
+      entry.facultyApprovalNote = null;
+      entry.facultyApprovalAt = null;
+    }
     return entry;
+  }
+
+  /** Faculty approve/reject a submitted Course Project entry — only "approved" entries are eligible for Merit Model ranking/showcase. Matched the same way as listCourseProjectsForTeacher: the teacher email the student entered in step 1. */
+  async facultyReviewCourseProject(
+    facultyEmail: string,
+    id: string,
+    action: 'approve' | 'reject',
+    note?: string,
+  ) {
+    const email = (facultyEmail || '').trim().toLowerCase();
+    if (!email) throw new NotFoundException('Course project entry not found');
+    const entry = await this.courseProjectRepo.findOne({ where: { id } });
+    if (
+      !entry ||
+      entry.status !== 'submitted' ||
+      (entry.studentInfo?.teacherEmail || '').trim().toLowerCase() !== email
+    ) {
+      throw new NotFoundException('Course project entry not found');
+    }
+    entry.facultyApprovalStatus = action === 'approve' ? 'approved' : 'rejected';
+    entry.facultyApprovalNote = note ?? null;
+    entry.facultyApprovalAt = new Date();
+    return this.courseProjectRepo.save(entry);
   }
 
   /** @deprecated single-entry accessor, kept for backward compatibility — returns the most recently touched entry. */

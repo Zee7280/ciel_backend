@@ -21,9 +21,11 @@ export interface CourseProjectStudentInfo {
     teamMode?: string; // 'Individual' | 'Pair' | 'Group / Team' | 'Whole class' | 'Interdisciplinary team' (legacy data may say 'Solo' | 'Group')
     /** Older entries may still hold plain name strings from before email capture was added — read via normalizeGroupMembers, don't assume objects. */
     groupMembers?: (string | CourseProjectGroupMember)[];
-    /** What type of coursework this was (assignment, semester project, case study, ...) — distinct from assignmentInfo.format (the output's shape). */
-    courseworkType?: string;
+    /** What type(s) of coursework this was (assignment, semester project, case study, ...) — distinct from assignmentInfo.format (the output's shape). Tap all that apply. */
+    courseworkTypes?: string[];
     courseworkTypeOther?: string;
+    /** @deprecated pre-multi-select shape — still read for entries submitted before this was a tap-all field. */
+    courseworkType?: string;
     teacherName?: string;
     teacherEmail?: string;
     notes?: string;

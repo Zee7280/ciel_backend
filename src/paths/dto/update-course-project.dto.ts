@@ -20,8 +20,10 @@ export class CourseProjectStudentInfoDto {
     @IsOptional() @IsString() teamMode?: string;
     /** {name, email?} per member going forward — kept loosely typed since older clients may still send plain strings. */
     @IsOptional() @IsArray() groupMembers?: unknown[];
-    @IsOptional() @IsString() courseworkType?: string;
+    @IsOptional() @IsArray() courseworkTypes?: string[];
     @IsOptional() @IsString() courseworkTypeOther?: string;
+    /** @deprecated pre-multi-select shape */
+    @IsOptional() @IsString() courseworkType?: string;
     @IsOptional() @IsString() teacherName?: string;
     @IsOptional() @IsString() teacherEmail?: string;
     @IsOptional() @IsString() notes?: string;

@@ -3,6 +3,7 @@ import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateCol
 export interface CourseProjectGroupMember {
     name: string;
     email?: string;
+    rollNumber?: string;
 }
 
 export interface CourseProjectStudentInfo {

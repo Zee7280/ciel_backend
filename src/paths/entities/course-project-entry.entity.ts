@@ -70,8 +70,10 @@ export interface CourseProjectMetric {
     id: string;
     name?: string;
     type?: string;
+    typeOther?: string;
     value?: string;
     unit?: string;
+    unitOther?: string;
     /** "Actual — measured" | "Target — intended future result" | "Estimated / projected" | "Proposed — not yet tested" */
     status?: string;
     meaning?: string;
@@ -79,8 +81,10 @@ export interface CourseProjectMetric {
     periodFrom?: string;
     periodTo?: string;
     source?: string;
+    sourceOther?: string;
     character?: string;
     verifier?: string;
+    verifierOther?: string;
     comparedBeforeAfter?: boolean;
     baseline?: string;
     evidenceAttached?: boolean;

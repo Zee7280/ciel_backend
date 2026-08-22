@@ -39,6 +39,8 @@ import {
   resolveParticipationForAttendanceUnlock,
 } from '../engagement/attendance-unlock.util';
 import { FeedbackService } from '../feedback/feedback.service';
+import { MailService } from '../mail/mail.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 /** Canonical Pakistan regions for stakeholder "participation by region" (sync spellings with ciel_frontend/src/utils/pakistanRegions.ts). */
 const STAKEHOLDER_REGION_CANONICAL = [
@@ -234,6 +236,8 @@ export class AdminService {
     private readonly organizationMembershipService: OrganizationMembershipService,
     private readonly partnerMembershipSettings: PartnerMembershipSettingsService,
     private readonly feedbackService: FeedbackService,
+    private readonly mailService: MailService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   async getSettings() {
@@ -1529,6 +1533,84 @@ export class AdminService {
     );
 
     return { success: true, data: projects };
+  }
+
+  /** Emails + notifies every enrolled student on opportunities with 0 verified hours logged. */
+  async remindStudentsOnZeroHourProjects() {
+    const opportunities = await this.opportunityRepository.find({
+      select: ['id', 'title'],
+    });
+
+    const verifiedHoursByOpportunity = await this.timesheetRepository
+      .createQueryBuilder('t')
+      .select('t.opportunityId', 'opportunityId')
+      .addSelect('SUM(t.hours)', 'verifiedHours')
+      .where('t.status = :status', { status: 'verified' })
+      .groupBy('t.opportunityId')
+      .getRawMany<{ opportunityId: string; verifiedHours: string }>();
+
+    const verifiedHoursByOppId = new Map(
+      verifiedHoursByOpportunity.map((row) => [
+        row.opportunityId,
+        Number(row.verifiedHours) || 0,
+      ]),
+    );
+
+    const zeroHourOpportunities = opportunities.filter(
+      (opp) => (verifiedHoursByOppId.get(opp.id) ?? 0) <= 0,
+    );
+
+    if (!zeroHourOpportunities.length) {
+      return {
+        success: true,
+        opportunities_scanned: opportunities.length,
+        opportunities_with_zero_hours: 0,
+        students_notified: 0,
+      };
+    }
+
+    const opportunityTitleById = new Map(
+      zeroHourOpportunities.map((opp) => [opp.id, opp.title]),
+    );
+
+    const participations = await this.participationRepository.find({
+      where: {
+        projectId: In(zeroHourOpportunities.map((opp) => opp.id)),
+        status: In(OCCUPIED_SEAT_STATUSES),
+      },
+    });
+
+    let studentsNotified = 0;
+    for (const participation of participations) {
+      const email = participation.email?.trim();
+      if (!email) continue;
+      const projectTitle =
+        opportunityTitleById.get(participation.projectId) ?? 'your project';
+
+      await this.mailService.sendHoursLoggingReminder(
+        email,
+        participation.fullName || 'Student',
+        projectTitle,
+      );
+      if (participation.studentId) {
+        await this.notificationsService.createNotification(
+          participation.studentId,
+          {
+            type: 'reminder',
+            title: 'Log your volunteer hours',
+            message: `You have 0 verified hours logged on "${projectTitle}". Please submit your timesheet so your contribution can be verified.`,
+          },
+        );
+      }
+      studentsNotified += 1;
+    }
+
+    return {
+      success: true,
+      opportunities_scanned: opportunities.length,
+      opportunities_with_zero_hours: zeroHourOpportunities.length,
+      students_notified: studentsNotified,
+    };
   }
 
   async getImpactAnalytics() {

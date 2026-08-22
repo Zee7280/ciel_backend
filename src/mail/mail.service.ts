@@ -643,6 +643,40 @@ export class MailService {
     }
   }
 
+  async sendHoursLoggingReminder(
+    to: string,
+    studentName: string,
+    projectTitle: string,
+  ) {
+    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const studentEsc = this.escHtmlPlain(studentName?.trim() ? studentName.trim() : 'there');
+    const titleEsc = this.escHtmlPlain(projectTitle);
+    const dashboardLink = this.buildFrontendLink('/dashboard/student/engagement', {});
+    const html = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+            <h2 style="color: #333;">Log your volunteer hours</h2>
+            <p>Dear ${studentEsc},</p>
+            <p>We haven't received any verified hours yet for <strong>${titleEsc}</strong>. Please submit your timesheet so your contribution can be reviewed and verified.</p>
+            <div style="text-align: center; margin: 30px 0;">
+                <a href="${dashboardLink}" style="background-color: #4CAF50; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Log my hours</a>
+            </div>
+            <p>Best regards,<br><strong>CIEL PK Team</strong><br><span style="font-size:13px;color:#666;">Community Impact Education Lab</span></p>
+        </div>
+    `;
+
+    try {
+      await this.transporter.sendMail({
+        from,
+        to,
+        subject: `CIEL PK — reminder: log your hours for ${projectTitle}`,
+        html,
+      });
+      this.logger.log(`Hours logging reminder email sent to ${to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send hours logging reminder email to ${to}`, error.stack);
+    }
+  }
+
   async sendFacultyInvite(to: string, studentName: string, projectName: string) {
     const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
     const signupLink = this.buildFrontendLink('/signup', {

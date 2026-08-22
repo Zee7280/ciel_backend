@@ -185,6 +185,13 @@ export class AdminController {
     return this.adminService.getProjects(studentEmail);
   }
 
+  @Post('projects/remind-zero-hours')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  remindStudentsOnZeroHourProjects() {
+    return this.adminService.remindStudentsOnZeroHourProjects();
+  }
+
   @Get('projects/:opportunityId/enrollments')
   getProjectEnrollments(@Param('opportunityId') opportunityId: string) {
     return this.adminService.getProjectEnrollments(opportunityId);

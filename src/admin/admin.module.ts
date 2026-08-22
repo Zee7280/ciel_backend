@@ -22,6 +22,7 @@ import { ReportPartnerApprovalModule } from '../reports/report-partner-approval.
 import { OrganizationMembershipModule } from '../organization-membership/organization-membership.module';
 import { FeedbackModule } from '../feedback/feedback.module';
 import { JobsModule } from '../jobs/jobs.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { JobsModule } from '../jobs/jobs.module';
     AuditLogsModule,
     FeedbackModule,
     JobsModule,
+    NotificationsModule,
     TypeOrmModule.forFeature([
       User,
       Opportunity,

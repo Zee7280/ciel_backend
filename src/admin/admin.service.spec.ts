@@ -51,6 +51,12 @@ const makeAdminServiceForTests = (overrides: Record<string, unknown> = {}) => {
       refreshCache: jest.fn().mockResolvedValue(false),
     },
     feedbackService: {},
+    mailService: {
+      sendHoursLoggingReminder: jest.fn().mockResolvedValue(undefined),
+    },
+    notificationsService: {
+      createNotification: jest.fn().mockResolvedValue(undefined),
+    },
     ...overrides,
   };
 
@@ -70,6 +76,8 @@ const makeAdminServiceForTests = (overrides: Record<string, unknown> = {}) => {
     repositories.organizationMembershipService as any,
     repositories.partnerMembershipSettings as any,
     repositories.feedbackService as any,
+    repositories.mailService as any,
+    repositories.notificationsService as any,
   );
 };
 

@@ -13,6 +13,7 @@ import {
 import { VentureEntry } from './entities/venture-entry.entity';
 import { UpdateCourseProjectDto } from './dto/update-course-project.dto';
 import { AddFypDeliverableDto, UpdateFypDto } from './dto/update-fyp.dto';
+import { FypMeritModelQueryDto } from './dto/fyp-merit-model-query.dto';
 import { AddVentureDocumentDto, UpdateVentureDto } from './dto/update-venture.dto';
 import {
   ventureCompletenessPercent,
@@ -22,6 +23,12 @@ import {
 import { computeVentureGates, deriveVentureIsVisible } from './venture-gates.util';
 import { User } from '../users/entities/user.entity';
 import { Organization } from '../organizations/entities/organization.entity';
+import { UserRole } from '../users/enums/user-role.enum';
+import { MeritModelQueryDto } from './dto/merit-model-query.dto';
+import { byMerit, computeMeritCard, deriveMeritYear } from './merit-model/merit-model.util';
+import { RankedMeritCard } from './merit-model/merit-model.types';
+import { byFypMerit, computeFypMeritCard, deriveFypCompletionMonth, deriveFypRoute } from './merit-model/fyp-merit-model.util';
+import { RankedFypMeritCard } from './merit-model/fyp-merit-model.types';
 
 @Injectable()
 export class PathsService {
@@ -50,6 +57,8 @@ export class PathsService {
       entry.projectDescription = dto.projectDescription;
     if (dto.sdgs !== undefined) entry.sdgs = dto.sdgs;
     if (dto.evidenceUrls !== undefined) entry.evidenceUrls = dto.evidenceUrls;
+    if (dto.evidenceTypes !== undefined)
+      entry.evidenceTypes = dto.evidenceTypes;
     if (dto.assignmentFileUrl !== undefined)
       entry.assignmentFileUrl = dto.assignmentFileUrl;
     if (dto.studentInfo !== undefined)
@@ -300,6 +309,119 @@ export class PathsService {
     return { ...entry, student: student ?? null };
   }
 
+  /** The Merit Model — 100pt, 7-criterion rubric ranking of eligible (submitted + faculty-approved)
+   * Course Project entries. The base pool and which filters apply are scoped by the caller's real
+   * role, reusing the same scoping as listCourseProjectsForTeacher/University/Admin above rather
+   * than a client-selectable role switch. */
+  async getCourseProjectMeritModel(
+    user: { role: string; email: string; organizationId?: string },
+    filters: MeritModelQueryDto,
+  ) {
+    const role = user.role;
+    let pool: Array<CourseProjectEntry & { student: User | null }> = [];
+    let scopeLabel = 'No scope';
+    const honorsWideFilters =
+      role === UserRole.UNIVERSITY || role === UserRole.ORGANIZATION_ADMIN || role === UserRole.SUPER_ADMIN;
+
+    if (role === UserRole.FACULTY) {
+      pool = await this.listCourseProjectsForTeacher(user.email);
+      scopeLabel = 'Faculty supervision';
+    } else if (role === UserRole.UNIVERSITY || role === UserRole.ORGANIZATION_ADMIN) {
+      if (user.organizationId) {
+        pool = await this.listCourseProjectsForUniversity(user.organizationId);
+        const org = await this.organizationsRepo.findOne({ where: { id: user.organizationId } });
+        scopeLabel = org?.name ?? 'University';
+      }
+    } else if (role === UserRole.SUPER_ADMIN) {
+      if (filters.university) {
+        pool = await this.listCourseProjectsForUniversity(filters.university);
+        const org = await this.organizationsRepo.findOne({ where: { id: filters.university } });
+        scopeLabel = org?.name ?? 'CIEL — all universities';
+      } else {
+        pool = await this.listCourseProjectsForAdmin('submitted');
+        scopeLabel = 'CIEL — all universities';
+      }
+    } else {
+      return {
+        scope: { role, label: scopeLabel, mode: filters.mode ?? 'overall', filters: {} },
+        cohortAverage: 0,
+        count: 0,
+        entries: [],
+      };
+    }
+
+    // Eligibility gate — only faculty-approved, submitted entries count toward the Merit Model.
+    let eligible = pool.filter((e) => e.facultyApprovalStatus === 'approved');
+
+    if (honorsWideFilters) {
+      if (filters.discipline) {
+        const target = filters.discipline.trim().toLowerCase();
+        eligible = eligible.filter((e) => (e.studentInfo?.disciplineName || '').trim().toLowerCase() === target);
+      }
+      if (filters.faculty) {
+        const target = filters.faculty.trim().toLowerCase();
+        eligible = eligible.filter((e) => (e.studentInfo?.teacherEmail || '').trim().toLowerCase() === target);
+      }
+      if (filters.year) {
+        eligible = eligible.filter((e) => String(deriveMeritYear(e)) === filters.year);
+      }
+      if (filters.teamType) {
+        const wantsInterdisciplinary = filters.teamType === 'interdisciplinary';
+        eligible = eligible.filter(
+          (e) => (e.studentInfo?.teamMode === 'Interdisciplinary team') === wantsInterdisciplinary,
+        );
+      }
+    }
+    if (filters.semesterFrom || filters.semesterTo) {
+      const from = filters.semesterFrom ? parseInt(filters.semesterFrom.replace(/\D/g, ''), 10) : -Infinity;
+      const to = filters.semesterTo ? parseInt(filters.semesterTo.replace(/\D/g, ''), 10) : Infinity;
+      eligible = eligible.filter((e) => {
+        const sem = parseInt((e.studentInfo?.semester || '').replace(/\D/g, ''), 10);
+        return !Number.isNaN(sem) && sem >= from && sem <= to;
+      });
+    }
+
+    const mode: 'overall' | 'discipline' = filters.mode === 'discipline' ? 'discipline' : 'overall';
+    const cards = eligible.map((e) => ({ ...computeMeritCard(e), student: e.student }));
+    const cohortAverage = cards.length
+      ? Math.round(cards.reduce((sum, c) => sum + c.scorecard.total, 0) / cards.length)
+      : 0;
+    const appliedFilters = Object.fromEntries(Object.entries(filters).filter(([, v]) => v !== undefined));
+
+    if (mode === 'discipline') {
+      const groups = new Map<string, typeof cards>();
+      for (const card of cards) {
+        const key = card.discipline || 'Unspecified';
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key)!.push(card);
+      }
+      const rankedGroups = [...groups.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([discipline, groupCards]) => {
+          const sorted = [...groupCards].sort(byMerit);
+          const ranked: RankedMeritCard[] = sorted.map((card, i) => ({ ...card, rank: i + 1, isTopPick: i === 0 }));
+          return { discipline, count: ranked.length, entries: ranked };
+        });
+      return {
+        scope: { role, label: scopeLabel, mode, filters: appliedFilters },
+        cohortAverage,
+        count: cards.length,
+        groups: rankedGroups,
+      };
+    }
+
+    const sorted = [...cards].sort(byMerit);
+    // Overall mode highlights the top 10 as AI picks (matches the prototype's `ranked && i<10`);
+    // discipline mode above highlights only the #1 pick per group (matches its `j===0`).
+    const ranked: RankedMeritCard[] = sorted.map((card, i) => ({ ...card, rank: i + 1, isTopPick: i < 10 }));
+    return {
+      scope: { role, label: scopeLabel, mode, filters: appliedFilters },
+      cohortAverage,
+      count: ranked.length,
+      entries: ranked,
+    };
+  }
+
   private async attachStudents<T extends { userId: string }>(entries: T[]) {
     if (!entries.length) return [];
     const users = await this.usersRepo.find({
@@ -486,9 +608,151 @@ export class PathsService {
       if (dto.stepCompleted !== undefined)
         entry.stepCompleted = dto.stepCompleted;
       if (dto.status !== undefined) entry.status = dto.status;
+      // Editing a previously-approved record after the fact invalidates that approval — same
+      // rule as Course Project's applyCourseProjectPatch, see the comment there.
+      if (entry.status === 'submitted' && entry.supervisorApprovalStatus === 'approved') {
+        entry.supervisorApprovalStatus = 'pending';
+        entry.supervisorApprovalNote = null;
+        entry.supervisorApprovalAt = null;
+      }
       const saved = await repo.save(entry);
       return { ...saved, isOwner: true };
     });
+  }
+
+  /** Supervisor approve/reject a submitted FYP entry — only "approved" entries are eligible for
+   * Merit Model ranking/showcase. Matched the same way as listFypForTeacher: the supervisor email
+   * the student entered in step 1. */
+  async supervisorReviewFyp(
+    supervisorEmail: string,
+    id: string,
+    action: 'approve' | 'reject',
+    note?: string,
+  ) {
+    const email = (supervisorEmail || '').trim().toLowerCase();
+    if (!email) throw new NotFoundException('FYP entry not found');
+    const entry = await this.fypRepo.findOne({ where: { id } });
+    if (
+      !entry ||
+      entry.status !== 'submitted' ||
+      (entry.projectInfo?.supervisorEmail || '').trim().toLowerCase() !== email
+    ) {
+      throw new NotFoundException('FYP entry not found');
+    }
+    entry.supervisorApprovalStatus = action === 'approve' ? 'approved' : 'rejected';
+    entry.supervisorApprovalNote = note ?? null;
+    entry.supervisorApprovalAt = new Date();
+    return this.fypRepo.save(entry);
+  }
+
+  /** The FYP Merit Model — 100pt, 7-criterion route-adjusted rubric ranking of eligible (submitted +
+   * supervisor-approved) FYP entries. Base pool and which filters apply are scoped by the caller's
+   * real role, reusing the same scoping as listFypForTeacher/University above. */
+  async getFypMeritModel(
+    user: { role: string; email: string; organizationId?: string },
+    filters: FypMeritModelQueryDto,
+  ) {
+    const role = user.role;
+    let pool: Array<FypEntry & { student: User | null }> = [];
+    let scopeLabel = 'No scope';
+    const honorsSupervisorFilter = role !== UserRole.FACULTY;
+
+    if (role === UserRole.FACULTY) {
+      pool = await this.listFypForTeacher(user.email);
+      scopeLabel = 'Faculty supervision';
+    } else if (role === UserRole.UNIVERSITY || role === UserRole.ORGANIZATION_ADMIN) {
+      if (user.organizationId) {
+        pool = await this.listFypForUniversity(user.organizationId);
+        const org = await this.organizationsRepo.findOne({ where: { id: user.organizationId } });
+        scopeLabel = org?.name ?? 'University';
+      }
+    } else if (role === UserRole.SUPER_ADMIN) {
+      if (filters.university) {
+        pool = await this.listFypForUniversity(filters.university);
+        const org = await this.organizationsRepo.findOne({ where: { id: filters.university } });
+        scopeLabel = org?.name ?? 'CIEL — all universities';
+      } else {
+        const entries = await this.fypRepo.find({
+          where: { status: 'submitted' },
+          order: { updatedAt: 'DESC' },
+        });
+        pool = await this.attachStudents(entries);
+        scopeLabel = 'CIEL — all universities';
+      }
+    } else {
+      return {
+        scope: { role, label: scopeLabel, filters: {} },
+        cohortAverage: 0,
+        routeFairness: [],
+        count: 0,
+        entries: [],
+      };
+    }
+
+    // Eligibility gate — only supervisor-approved, submitted entries count toward the Merit Model.
+    let eligible = pool.filter((e) => e.supervisorApprovalStatus === 'approved');
+
+    if (filters.route) {
+      eligible = eligible.filter((e) => deriveFypRoute(e) === filters.route);
+    }
+    if (filters.school) {
+      const target = filters.school.trim().toLowerCase();
+      eligible = eligible.filter((e) => (e.projectInfo?.school || '').trim().toLowerCase() === target);
+    }
+    if (filters.semester) {
+      const target = filters.semester.trim().toLowerCase();
+      eligible = eligible.filter((e) => (e.projectInfo?.span || '').trim().toLowerCase() === target);
+    }
+    if (honorsSupervisorFilter && filters.supervisor) {
+      const target = filters.supervisor.trim().toLowerCase();
+      eligible = eligible.filter((e) => (e.projectInfo?.supervisorEmail || '').trim().toLowerCase() === target);
+    }
+    if (filters.year) {
+      eligible = eligible.filter((e) => deriveFypCompletionMonth(e).slice(0, 4) === filters.year);
+    }
+    if (filters.from) {
+      eligible = eligible.filter((e) => deriveFypCompletionMonth(e) >= filters.from!);
+    }
+    if (filters.to) {
+      eligible = eligible.filter((e) => deriveFypCompletionMonth(e) <= filters.to!);
+    }
+    // `university` (organizationId) is only meaningful for CIEL scope — it's already applied above
+    // when resolving the SUPER_ADMIN pool; for other roles it's silently ignored, matching the
+    // prototype's control panel where the university dropdown is hidden entirely outside CIEL scope.
+
+    const cards = eligible.map((e) => ({ ...computeFypMeritCard(e), student: e.student }));
+    const cohortAverage = cards.length
+      ? Math.round(cards.reduce((sum, c) => sum + c.scorecard.total, 0) / cards.length)
+      : 0;
+
+    const appliedFilters = Object.fromEntries(Object.entries(filters).filter(([, v]) => v !== undefined));
+    const sorted = [...cards].sort(byFypMerit);
+    const ranked: RankedFypMeritCard[] = sorted.map((card, i) => ({
+      ...card,
+      rank: i + 1,
+      isTopPick: i < 10,
+    }));
+
+    // Route-fairness averages — built from the merit-sorted list, same first-seen insertion order
+    // as the prototype's `F.forEach` (which runs after `F.sort(...)`), not re-sorted by average.
+    const routeTotals = new Map<string, number[]>();
+    for (const card of sorted) {
+      if (!routeTotals.has(card.route)) routeTotals.set(card.route, []);
+      routeTotals.get(card.route)!.push(card.scorecard.total);
+    }
+    const routeFairness = [...routeTotals.entries()].map(([route, totals]) => ({
+      route,
+      average: Math.round(totals.reduce((s, t) => s + t, 0) / totals.length),
+      count: totals.length,
+    }));
+
+    return {
+      scope: { role, label: scopeLabel, filters: appliedFilters },
+      cohortAverage,
+      routeFairness,
+      count: ranked.length,
+      entries: ranked,
+    };
   }
 
   async addFypDeliverable(userId: string, dto: AddFypDeliverableDto) {

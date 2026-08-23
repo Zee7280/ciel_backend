@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Request, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Request, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -7,7 +7,9 @@ import { S3Service } from '../common/s3.service';
 import { assertStudentReportUploadMeta, studentReportPresignExpiresInSeconds } from '../common/student-report-file-upload';
 import { PathsService } from './paths.service';
 import { FacultyReviewCourseProjectDto, UpdateCourseProjectDto } from './dto/update-course-project.dto';
-import { AddFypDeliverableDto, UpdateFypDto } from './dto/update-fyp.dto';
+import { MeritModelQueryDto } from './dto/merit-model-query.dto';
+import { AddFypDeliverableDto, SupervisorReviewFypDto, UpdateFypDto } from './dto/update-fyp.dto';
+import { FypMeritModelQueryDto } from './dto/fyp-merit-model-query.dto';
 import { AddVentureDocumentDto, SetVentureVisibilityDto, UpdateVentureDto } from './dto/update-venture.dto';
 
 @Controller('paths')
@@ -89,6 +91,16 @@ export class PathsController {
         return { success: true, data };
     }
 
+    /** The Merit Model — 100pt rubric ranking of eligible (submitted + faculty-approved) Course
+     * Project entries, scoped by the caller's real role (faculty supervision / university / CIEL). */
+    @Get('course-projects/merit-model')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.FACULTY, UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN, UserRole.SUPER_ADMIN)
+    async getCourseProjectMeritModel(@Request() req, @Query() query: MeritModelQueryDto) {
+        const data = await this.pathsService.getCourseProjectMeritModel(req.user, query);
+        return { success: true, data };
+    }
+
     @Get('course-projects/:id')
     async getCourseProjectById(@Request() req, @Param('id') id: string) {
         const data = await this.pathsService.getCourseProjectByIdForUser(req.user.id, req.user.email, id);
@@ -142,6 +154,25 @@ export class PathsController {
     @Roles(UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN)
     async listUniversityFyp(@Request() req) {
         const data = await this.pathsService.listFypForUniversity(req.user.organizationId);
+        return { success: true, data };
+    }
+
+    /** Supervisor approve/reject a submitted student's FYP entry — the gate for Merit Model ranking/showcase eligibility. */
+    @Patch('fyp-thesis/:id/supervisor-review')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.FACULTY)
+    async supervisorReviewFyp(@Request() req, @Param('id') id: string, @Body() dto: SupervisorReviewFypDto) {
+        const data = await this.pathsService.supervisorReviewFyp(req.user.email, id, dto.action, dto.note);
+        return { success: true, data };
+    }
+
+    /** The FYP Merit Model — 100pt route-adjusted rubric ranking of eligible (submitted + supervisor-
+     * approved) FYP entries, scoped by the caller's real role (faculty supervision / university / CIEL). */
+    @Get('fyp-thesis/merit-model')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.FACULTY, UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN, UserRole.SUPER_ADMIN)
+    async getFypMeritModel(@Request() req, @Query() query: FypMeritModelQueryDto) {
+        const data = await this.pathsService.getFypMeritModel(req.user, query);
         return { success: true, data };
     }
 

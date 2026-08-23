@@ -36,6 +36,12 @@ export class FypMilestoneDto {
   completedAt?: string | null;
 }
 
+export class SupervisorReviewFypDto {
+  @IsIn(['approve', 'reject'])
+  action: 'approve' | 'reject';
+  @IsOptional() @IsString() note?: string;
+}
+
 export class FypCommunityLinkageDto {
   @IsOptional()
   @IsString()
@@ -58,10 +64,13 @@ export class FypCommunityLinkageDto {
 
 export class FypProjectInfoDto {
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) title?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) university?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) school?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) degree?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) graduationYear?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) projectType?: string;
+  @IsOptional() @IsArray() @ArrayMaxSize(LIST_MAX) @IsString({ each: true }) @MaxLength(FREE_TEXT_MAX, { each: true }) projectTypes?: string[];
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) leadRoute?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) studentName?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) studentEmail?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) rollNumber?: string;
@@ -92,24 +101,61 @@ export class FypLiteratureInfoDto {
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) sourceTypesOther?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) gap?: string;
 }
+export class FypScaleEntryDto {
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) n?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) unit?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) unitOther?: string;
+}
 export class FypMethodologyInfoDto {
   @IsOptional() @IsArray() @ArrayMaxSize(LIST_MAX) @IsString({ each: true }) @MaxLength(FREE_TEXT_MAX, { each: true }) approaches?: string[];
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) approachesOther?: string;
   @IsOptional() @IsArray() @ArrayMaxSize(LIST_MAX) @IsString({ each: true }) @MaxLength(FREE_TEXT_MAX, { each: true }) methods?: string[];
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) methodsOther?: string;
+  /** @deprecated see scaleEntries */
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) sampleScale?: string;
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(6)
+  @ValidateNested({ each: true })
+  @Type(() => FypScaleEntryDto)
+  scaleEntries?: FypScaleEntryDto[];
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) tools?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) periodFrom?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) periodTo?: string;
+  @IsOptional() @IsBoolean() periodDayPrecision?: boolean;
+}
+export class FypMetricDto {
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) id?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) name?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) value?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) unit?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) unitOther?: string;
+  @IsOptional() @IsIn(['Measured', 'Estimated', 'Target']) status?: string;
 }
 export class FypFindingsInfoDto {
+  @IsOptional() @IsArray() @ArrayMaxSize(LIST_MAX) @IsString({ each: true }) @MaxLength(FREE_TEXT_MAX, { each: true }) outputs?: string[];
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) outputsOther?: string;
   @IsOptional() @IsArray() @ArrayMaxSize(LIST_MAX) @IsString({ each: true }) @MaxLength(FREE_TEXT_MAX, { each: true }) findings?: string[];
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) measurableImpact?: string;
+  /** @deprecated see limitation */
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) limitationType?: string;
+  /** @deprecated see limitation */
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) limitationDetail?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) limitation?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) evidenceStatus?: string;
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(3)
+  @ValidateNested({ each: true })
+  @Type(() => FypMetricDto)
+  metrics?: FypMetricDto[];
+  /** @deprecated see metrics */
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) metricName?: string;
+  /** @deprecated see metrics */
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) metricValue?: string;
+  /** @deprecated see metrics */
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) metricUnit?: string;
+  /** @deprecated see metrics */
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) numberRepresents?: string;
 }
 export class FypRouteDetailsDto {
@@ -142,6 +188,7 @@ export class FypSdgMappingDto {
   entries?: FypSdgEntryDto[];
 
   @IsOptional() @IsBoolean() noSdgApplies?: boolean;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) notes?: string;
 }
 export class FypReflectionInfoDto {
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) biggestLesson?: string;

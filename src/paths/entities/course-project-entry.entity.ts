@@ -155,13 +155,16 @@ export interface CourseProjectReflectionInfo {
     notes?: string;
 }
 
-/** Which optional modules apply to this assignment's format (Aim, Activities, Methods, Findings, Impact, Limitations). */
+/** Which optional modules apply to this assignment's format (Aim, Activities, Method, Findings, Results/evidence, Limitations). */
 export interface CourseProjectModuleInclusion {
     aim?: boolean;
     act?: boolean;
     meth?: boolean;
     find?: boolean;
+    /** @deprecated the final-form wizard's tile is "Results / evidence" (key `res`), not "Impact" — kept for older entries. */
     imp?: boolean;
+    /** Results / evidence — whether this section applies to the declared format. */
+    res?: boolean;
     lim?: boolean;
 }
 
@@ -201,6 +204,10 @@ export class CourseProjectEntry {
 
     @Column({ type: 'simple-array', nullable: true })
     evidenceUrls: string[];
+
+    /** What the uploaded files include (report, slides, poster, photos, video, etc.) — student-declared, shown alongside the upload boxes at review. */
+    @Column({ type: 'simple-array', nullable: true })
+    evidenceTypes: string[];
 
     /** The primary uploaded assignment file (essay/deck/design file/code link) — distinct from evidenceUrls' supporting files. Drives half the Verifiability score. */
     @Column({ nullable: true })

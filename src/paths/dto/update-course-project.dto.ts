@@ -144,7 +144,9 @@ export class CourseProjectModuleInclusionDto {
     @IsOptional() @IsBoolean() act?: boolean;
     @IsOptional() @IsBoolean() meth?: boolean;
     @IsOptional() @IsBoolean() find?: boolean;
+    /** @deprecated see res */
     @IsOptional() @IsBoolean() imp?: boolean;
+    @IsOptional() @IsBoolean() res?: boolean;
     @IsOptional() @IsBoolean() lim?: boolean;
 }
 
@@ -179,6 +181,10 @@ export class UpdateCourseProjectDto {
     @IsOptional()
     @IsArray()
     evidenceUrls?: string[];
+
+    @IsOptional()
+    @IsArray()
+    evidenceTypes?: string[];
 
     @IsOptional()
     @IsString()

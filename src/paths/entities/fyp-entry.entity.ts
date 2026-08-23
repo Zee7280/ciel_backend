@@ -67,14 +67,21 @@ export interface FypTeamMember {
   name: string;
   email?: string;
   role?: string;
+  rollNumber?: string;
 }
 export interface FypProjectInfo {
   title?: string;
+  /** The final-form's first, required field — mirrors CourseProjectStudentInfo.universityName. */
+  university?: string;
   school?: string;
   degree?: string;
   graduationYear?: string;
   /** Drives the adaptive-vocabulary "route" (scholar/maker/builder/storyteller/consultant) on the frontend — purely a relabeling key, not validated server-side. */
   projectType?: string;
+  /** Multi-select project type(s) — supersedes the single projectType above; first pick leads unless leadRoute overrides. */
+  projectTypes?: string[];
+  /** Explicit override of which route leads when projectTypes span more than one route — unset means "first pick leads". */
+  leadRoute?: string;
   studentName?: string;
   studentEmail?: string;
   rollNumber?: string;
@@ -108,26 +115,61 @@ export interface FypLiteratureInfo {
   sourceTypesOther?: string;
   gap?: string;
 }
+/** One "how many / of what" line in the standardized scale-builder — up to 6 per entry. */
+export interface FypScaleEntry {
+  n?: string;
+  unit?: string;
+  unitOther?: string;
+}
 export interface FypMethodologyInfo {
   approaches?: string[];
+  approachesOther?: string;
   methods?: string[];
   methodsOther?: string;
+  /** @deprecated free-text predecessor of scaleEntries — still read as a fallback for older entries. */
   sampleScale?: string;
+  /** Structured scale/scope builder (up to 6 entries) — supersedes the free-text sampleScale above. */
+  scaleEntries?: FypScaleEntry[];
   tools?: string;
-  /** Month strings ("YYYY-MM") — when the work was actually carried out. */
+  /** Month strings ("YYYY-MM"), or day strings ("YYYY-MM-DD") when periodDayPrecision is set — when the work was actually carried out. */
   periodFrom?: string;
   periodTo?: string;
+  /** When true, periodFrom/periodTo carry day precision instead of month precision. */
+  periodDayPrecision?: boolean;
+}
+/** One measured/estimated/target number inside findings.metrics — up to 3 per entry. */
+export interface FypMetric {
+  id?: string;
+  name?: string;
+  value?: string;
+  unit?: string;
+  unitOther?: string;
+  /** 'Measured' | 'Estimated' | 'Target' */
+  status?: string;
 }
 export interface FypFindingsInfo {
+  /** What did the work produce? (thesis, prototype, collection, app, dataset, ...) */
+  outputs?: string[];
+  outputsOther?: string;
   findings?: string[];
   measurableImpact?: string;
+  /** @deprecated superseded by the single `limitation` field below — still read as a fallback. */
   limitationType?: string;
+  /** @deprecated see limitationType */
   limitationDetail?: string;
+  /** The one honest limitation line — supersedes limitationType/limitationDetail. */
+  limitation?: string;
   /** Evidence-quality ladder, mirrors Course Project's resultsInfo.evidenceStatus. */
   evidenceStatus?: string;
+  /** Up to 3 structured results, each status-tagged Measured/Estimated/Target — supersedes the flat metricName/metricValue/metricUnit/numberRepresents fields below. */
+  metrics?: FypMetric[];
+  /** @deprecated pre-multi-metric shape — still read for entries submitted before this system existed. */
   metricName?: string;
+  /** @deprecated see metricName */
   metricValue?: string;
+  /** @deprecated see metricName */
   metricUnit?: string;
+  /** @deprecated see metricName */
   numberRepresents?: string;
 }
 /** Route-specific extras shown only for the matching project type — a degree-show collection needs different fields than a software build. */
@@ -160,6 +202,9 @@ export interface FypSdgEntry {
 export interface FypSdgMapping {
   entries?: FypSdgEntry[];
   noSdgApplies?: boolean;
+  /** The one shared "briefly explain the connection" line, covering all selected SDGs together
+   * (the final-form has no per-SDG explanation field) — mirrors Course Project's sdgMapping.notes. */
+  notes?: string;
 }
 export interface FypReflectionInfo {
   biggestLesson?: string;
@@ -201,6 +246,17 @@ export class FypEntry {
 
   @Column({ type: 'text', nullable: true })
   overview: string;
+
+  /** Supervisor review gate — same pattern as Course Project's facultyApprovalStatus: only "approved"
+   * entries count toward Merit Model rankings/AI picks/showcase. */
+  @Column({ default: 'pending' })
+  supervisorApprovalStatus: string; // pending | approved | rejected
+
+  @Column({ type: 'text', nullable: true })
+  supervisorApprovalNote: string | null;
+
+  @Column({ type: 'timestamp', nullable: true })
+  supervisorApprovalAt: Date | null;
 
   @Column({
     type: 'jsonb',

@@ -454,6 +454,56 @@ export class MailService {
     }
   }
 
+  private escapeHtml(value: string): string {
+    return value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  /** Real, clickable team-member invite for Course Project / FYP / Startup-Business path reports —
+   * the recipient must sign in with this exact email and click "Accept" before the report links to
+   * their dashboard. Distinct from sendTeamMemberInvite above, which is a login-only nudge for the
+   * unrelated Opportunities team-formation flow. */
+  async sendPathTeamInvite(
+    to: string,
+    params: { inviterName: string; kindLabel: string; title: string; token: string },
+  ) {
+    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const inviteLink = this.buildFrontendLink('/verify/team-invite', { token: params.token });
+    const inviterName = this.escapeHtml(params.inviterName || 'A fellow student');
+    const title = this.escapeHtml(params.title || 'their report');
+    const kindLabel = this.escapeHtml(params.kindLabel);
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">${inviterName} named you as a team member</h2>
+        <p>${inviterName} listed you as a team member on their ${kindLabel} <strong>"${title}"</strong> on CIEL PK.</p>
+        <p>Nothing appears on your dashboard until you confirm — click below, sign in (or create an account) with this email address, and accept the invite.</p>
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${inviteLink}" style="background-color: #4CAF50; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Review &amp; accept invite</a>
+        </div>
+        <p style="font-size:13px;color:#666;">This link expires in 30 days. If you weren't expecting this, you can ignore this email — nothing is linked to your account until you accept.</p>
+        <p style="font-size:13px;color:#666;">Questions? <a href="mailto:support@cielpk.com">support@cielpk.com</a></p>
+        <p>Best regards,<br><strong>The CIEL PK Team</strong></p>
+      </div>
+    `;
+
+    try {
+      await this.transporter.sendMail({
+        from,
+        to,
+        subject: `${params.inviterName || 'A fellow student'} named you as a team member on CIEL PK`,
+        html,
+      });
+      this.logger.log(`Path team invite email sent to ${to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send path team invite email to ${to}`, error.stack);
+    }
+  }
+
   async sendTeamMemberAddedToProject(params: {
     to: string;
     leadName: string;

@@ -1,6 +1,12 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, In, Repository } from 'typeorm';
+import { randomUUID } from 'crypto';
 import {
   CourseProjectEntry,
   CourseProjectStudentInfo,
@@ -11,6 +17,10 @@ import {
   FypProjectInfo,
 } from './entities/fyp-entry.entity';
 import { VentureEntry } from './entities/venture-entry.entity';
+import {
+  TeamMemberInvite,
+  TeamMemberInviteKind,
+} from './entities/team-member-invite.entity';
 import { UpdateCourseProjectDto } from './dto/update-course-project.dto';
 import { AddFypDeliverableDto, UpdateFypDto } from './dto/update-fyp.dto';
 import { FypMeritModelQueryDto } from './dto/fyp-merit-model-query.dto';
@@ -24,6 +34,7 @@ import { computeVentureGates, deriveVentureIsVisible } from './venture-gates.uti
 import { User } from '../users/entities/user.entity';
 import { Organization } from '../organizations/entities/organization.entity';
 import { UserRole } from '../users/enums/user-role.enum';
+import { MailService } from '../mail/mail.service';
 import { MeritModelQueryDto } from './dto/merit-model-query.dto';
 import { byMerit, computeMeritCard, deriveMeritYear } from './merit-model/merit-model.util';
 import { RankedMeritCard } from './merit-model/merit-model.types';
@@ -39,11 +50,211 @@ export class PathsService {
     private readonly fypRepo: Repository<FypEntry>,
     @InjectRepository(VentureEntry)
     private readonly ventureRepo: Repository<VentureEntry>,
+    @InjectRepository(TeamMemberInvite)
+    private readonly teamMemberInviteRepo: Repository<TeamMemberInvite>,
     @InjectRepository(User)
     private readonly usersRepo: Repository<User>,
     @InjectRepository(Organization)
     private readonly organizationsRepo: Repository<Organization>,
+    private readonly mailService: MailService,
   ) {}
+
+  // ---------- Team-member invites (shared across Course Project / FYP / Venture) ----------
+
+  private static readonly INVITE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+  /** Pulls valid-looking, deduped emails out of a groupMembers/teamMembers/team array — entries
+   * may be a plain legacy string (no email) or an object with an optional email field. */
+  private extractMemberEmails(members: unknown[] | undefined | null): string[] {
+    if (!members?.length) return [];
+    const emails = new Set<string>();
+    for (const m of members) {
+      if (m && typeof m === 'object' && 'email' in (m as Record<string, unknown>)) {
+        const raw = (m as { email?: unknown }).email;
+        if (typeof raw === 'string' && raw.trim()) emails.add(raw.trim().toLowerCase());
+      }
+    }
+    return [...emails];
+  }
+
+  /** Fires a real, verifiable invite email to any newly-named team member with an email that
+   * hasn't already been invited for this exact (kind, entryId, email) — dedup makes this safe to
+   * call on every autosave without re-sending mail each time. Best-effort: a failed row/email must
+   * never block the report save that triggered it. */
+  private async syncTeamInvites(
+    kind: TeamMemberInviteKind,
+    entryId: string,
+    invitedByUserId: string,
+    inviterName: string,
+    kindLabel: string,
+    title: string,
+    members: unknown[] | undefined | null,
+  ): Promise<void> {
+    const emails = this.extractMemberEmails(members);
+    if (!emails.length) return;
+    const existing = await this.teamMemberInviteRepo.find({ where: { kind, entryId } });
+    const existingEmails = new Set(existing.map((i) => i.email));
+    const toInvite = emails.filter((e) => !existingEmails.has(e));
+    for (const email of toInvite) {
+      try {
+        const invite = this.teamMemberInviteRepo.create({
+          kind,
+          entryId,
+          email,
+          token: randomUUID(),
+          status: 'pending',
+          invitedByUserId,
+          expiresAt: new Date(Date.now() + PathsService.INVITE_TTL_MS),
+        });
+        await this.teamMemberInviteRepo.save(invite);
+        await this.mailService.sendPathTeamInvite(email, {
+          inviterName,
+          kindLabel,
+          title,
+          token: invite.token,
+        });
+      } catch {
+        // best-effort — see docstring
+      }
+    }
+  }
+
+  /** Annotates each entry's group/team member array with `inviteStatus` ('pending' | 'accepted')
+   * from team_member_invites, so owners (and faculty/admin views) can see real confirmation state
+   * instead of the old always-on fake badge. Never exposes the invite token. */
+  private async annotateInviteStatus<T extends { id: string }>(
+    entries: T[],
+    kind: TeamMemberInviteKind,
+    getMembers: (entry: T) => unknown[] | undefined | null,
+    setMembers: (entry: T, members: unknown[]) => T,
+  ): Promise<T[]> {
+    if (!entries.length) return entries;
+    const ids = entries.map((e) => e.id);
+    const invites = await this.teamMemberInviteRepo.find({
+      where: { kind, entryId: In(ids) },
+    });
+    if (!invites.length) return entries;
+    const statusByKey = new Map(invites.map((i) => [`${i.entryId}::${i.email}`, i.status]));
+    return entries.map((entry) => {
+      const members = getMembers(entry);
+      if (!members?.length) return entry;
+      const annotated = members.map((m) => {
+        if (!m || typeof m !== 'object' || !('email' in (m as Record<string, unknown>))) return m;
+        const raw = (m as { email?: unknown }).email;
+        if (typeof raw !== 'string' || !raw.trim()) return m;
+        const status = statusByKey.get(`${entry.id}::${raw.trim().toLowerCase()}`);
+        return status ? { ...(m as object), inviteStatus: status } : m;
+      });
+      return setMembers(entry, annotated);
+    });
+  }
+
+  private async describeInvite(invite: TeamMemberInvite): Promise<{
+    title: string;
+    inviterName: string;
+    kindLabel: string;
+  }> {
+    const inviter = await this.usersRepo.findOne({
+      where: { id: invite.invitedByUserId },
+      select: ['name'],
+    });
+    const inviterName = inviter?.name || 'A fellow student';
+    if (invite.kind === 'course_project') {
+      const entry = await this.courseProjectRepo.findOne({ where: { id: invite.entryId } });
+      return {
+        title: entry?.projectTitle || entry?.course || 'a Course Project report',
+        inviterName,
+        kindLabel: 'Course Project',
+      };
+    }
+    if (invite.kind === 'fyp') {
+      const entry = await this.fypRepo.findOne({ where: { id: invite.entryId } });
+      return {
+        title: entry?.projectTitle || 'an FYP / Thesis record',
+        inviterName,
+        kindLabel: 'FYP / Thesis',
+      };
+    }
+    const entry = await this.ventureRepo.findOne({ where: { id: invite.entryId } });
+    return {
+      title: entry?.ventureName || 'a Startup / Business venture',
+      inviterName,
+      kindLabel: 'Startup / Business',
+    };
+  }
+
+  /** Public preview shown on the /verify/team-invite landing page before the teammate accepts. */
+  async getTeamInvitePreview(token: string) {
+    const invite = await this.teamMemberInviteRepo.findOne({ where: { token } });
+    if (!invite) throw new NotFoundException('Invite not found');
+    const { title, inviterName, kindLabel } = await this.describeInvite(invite);
+    return {
+      kind: invite.kind,
+      entryId: invite.entryId,
+      email: invite.email,
+      status: invite.status,
+      expired: invite.status === 'pending' && invite.expiresAt < new Date(),
+      inviterName,
+      title,
+      kindLabel,
+    };
+  }
+
+  /** The only way a team member's email becomes query-matchable for read access — requires the
+   * accepting account's own (already-verified-at-signup) email to exactly match the invite's
+   * target email, so this doubles as ownership proof without a second OTP step. */
+  async acceptTeamInvite(token: string, userId: string, userEmail: string) {
+    const invite = await this.teamMemberInviteRepo.findOne({ where: { token } });
+    if (!invite) throw new NotFoundException('Invite not found');
+    const email = (userEmail || '').trim().toLowerCase();
+    if (!email || email !== invite.email) {
+      throw new ForbiddenException(
+        'This invite was sent to a different email address — sign in with that email to accept it.',
+      );
+    }
+    if (invite.status === 'pending' && invite.expiresAt < new Date()) {
+      throw new BadRequestException(
+        'This invite has expired — ask the report owner to resend it.',
+      );
+    }
+    if (invite.status !== 'accepted') {
+      invite.status = 'accepted';
+      invite.acceptedByUserId = userId;
+      invite.acceptedAt = new Date();
+      await this.teamMemberInviteRepo.save(invite);
+    }
+    const { title, kindLabel } = await this.describeInvite(invite);
+    return { kind: invite.kind, entryId: invite.entryId, title, kindLabel };
+  }
+
+  /** Owner-triggered resend — looked up by (kind, entryId, email) rather than token, since the
+   * owner's own view of their report never exposes teammates' invite tokens. */
+  async resendTeamInvite(
+    requesterUserId: string,
+    kind: TeamMemberInviteKind,
+    entryId: string,
+    email: string,
+  ) {
+    const normEmail = (email || '').trim().toLowerCase();
+    const invite = await this.teamMemberInviteRepo.findOne({
+      where: { kind, entryId, email: normEmail },
+    });
+    if (!invite) throw new NotFoundException('Invite not found');
+    if (invite.invitedByUserId !== requesterUserId) {
+      throw new ForbiddenException('Only the report owner can resend this invite');
+    }
+    if (invite.status === 'accepted') return { success: true, alreadyAccepted: true };
+    invite.expiresAt = new Date(Date.now() + PathsService.INVITE_TTL_MS);
+    await this.teamMemberInviteRepo.save(invite);
+    const { title, inviterName, kindLabel } = await this.describeInvite(invite);
+    await this.mailService.sendPathTeamInvite(normEmail, {
+      inviterName,
+      kindLabel,
+      title,
+      token: invite.token,
+    });
+    return { success: true };
+  }
 
   // ---------- Course Project ----------
 
@@ -102,6 +313,30 @@ export class PathsService {
     return entry;
   }
 
+  private courseProjectAnnotate(entries: CourseProjectEntry[]) {
+    return this.annotateInviteStatus(
+      entries,
+      'course_project',
+      (e) => e.studentInfo?.groupMembers,
+      (e, members) => ({
+        ...e,
+        studentInfo: { ...e.studentInfo, groupMembers: members } as CourseProjectStudentInfo,
+      }),
+    );
+  }
+
+  private async syncCourseProjectInvites(entry: CourseProjectEntry, invitedByUserId: string) {
+    await this.syncTeamInvites(
+      'course_project',
+      entry.id,
+      invitedByUserId,
+      entry.studentInfo?.studentName || 'A fellow student',
+      'Course Project',
+      entry.projectTitle || entry.course || 'a Course Project report',
+      entry.studentInfo?.groupMembers,
+    );
+  }
+
   /** Faculty approve/reject a submitted Course Project entry — only "approved" entries are eligible for Merit Model ranking/showcase. Matched the same way as listCourseProjectsForTeacher: the teacher email the student entered in step 1. */
   async facultyReviewCourseProject(
     facultyEmail: string,
@@ -138,7 +373,7 @@ export class PathsService {
     // Locked read-modify-write: without this, two near-simultaneous saves (autosave + a manual
     // click, or two open tabs) can both read the same pre-image and the second save silently
     // discards the first's changes. The lock serializes them so the second read sees the first's write.
-    return this.courseProjectRepo.manager.transaction(async (manager) => {
+    const saved = await this.courseProjectRepo.manager.transaction(async (manager) => {
       const repo = manager.getRepository(CourseProjectEntry);
       let entry = await repo.findOne({
         where: { userId },
@@ -148,15 +383,28 @@ export class PathsService {
       if (!entry) entry = repo.create({ userId });
       return repo.save(this.applyCourseProjectPatch(entry, dto));
     });
+    await this.syncCourseProjectInvites(saved, userId);
+    const [annotated] = await this.courseProjectAnnotate([saved]);
+    return annotated;
   }
 
-  /** Postgres JSONB match: does this entry's studentInfo.groupMembers list include userEmailNorm?
-   * groupMembers elements may be a plain string (legacy) or {name, email} — jsonb_typeof guards the
-   * ->>'email' lookup so legacy string entries (not JSON objects) don't error the whole query. */
-  private static readonly TEAM_MEMBER_EMAIL_MATCH = `EXISTS (
-      SELECT 1 FROM jsonb_array_elements(COALESCE("studentInfo"->'groupMembers', '[]'::jsonb)) AS gm
-      WHERE jsonb_typeof(gm) = 'object'
-        AND LOWER(TRIM(COALESCE(gm->>'email', ''))) = :teamEmail
+  /** Postgres JSONB match: does this entry's studentInfo.groupMembers list include userEmailNorm,
+   * AND has that exact (entry, email) pair been through a real accept — not just typed by the
+   * owner? Both conditions must hold, so removing someone from the list revokes their access even
+   * if their invite row stays accepted. groupMembers elements may be a plain string (legacy) or
+   * {name, email} — jsonb_typeof guards the ->>'email' lookup so legacy string entries don't error
+   * the whole query. */
+  private static readonly TEAM_MEMBER_EMAIL_MATCH = `(
+      EXISTS (
+        SELECT 1 FROM jsonb_array_elements(COALESCE("studentInfo"->'groupMembers', '[]'::jsonb)) AS gm
+        WHERE jsonb_typeof(gm) = 'object'
+          AND LOWER(TRIM(COALESCE(gm->>'email', ''))) = :teamEmail
+      )
+      AND EXISTS (
+        SELECT 1 FROM team_member_invites ti
+        WHERE ti."entryId" = e.id::text AND ti.kind = 'course_project'
+          AND ti.status = 'accepted' AND ti.email = :teamEmail
+      )
     )`;
 
   /** A teammate only sees the report once it's submitted (not a mid-draft in progress) — same
@@ -165,7 +413,7 @@ export class PathsService {
   private static readonly TEAM_VISIBLE_STATUS = `e.status = 'submitted'`;
 
   /** One student can have many coursework reports (one per assignment) — this is their own deck, plus any
-   * teammate's *submitted* report they were named on by email. */
+   * teammate's *submitted* report they were named on by email and have accepted. */
   async listCourseProjects(userId: string, userEmail?: string) {
     const email = (userEmail || '').trim().toLowerCase();
     const qb = this.courseProjectRepo
@@ -178,7 +426,8 @@ export class PathsService {
       );
     }
     const entries = await qb.orderBy('e."updatedAt"', 'DESC').getMany();
-    return entries.map((e) => ({ ...e, isOwner: e.userId === userId }));
+    const annotated = await this.courseProjectAnnotate(entries);
+    return annotated.map((e) => ({ ...e, isOwner: e.userId === userId }));
   }
 
   async createCourseProject(userId: string) {
@@ -188,7 +437,8 @@ export class PathsService {
     return { ...saved, isOwner: true };
   }
 
-  /** Owner gets full access at any stage; a named team member can only read it once submitted. */
+  /** Owner gets full access at any stage; a named team member who has accepted their invite can
+   * only read it once submitted. */
   async getCourseProjectByIdForUser(userId: string, userEmail: string, id: string) {
     const email = (userEmail || '').trim().toLowerCase();
     const qb = this.courseProjectRepo
@@ -207,7 +457,8 @@ export class PathsService {
       );
     const entry = await qb.getOne();
     if (!entry) throw new NotFoundException('Course project entry not found');
-    return { ...entry, isOwner: entry.userId === userId };
+    const [annotated] = await this.courseProjectAnnotate([entry]);
+    return { ...annotated, isOwner: entry.userId === userId };
   }
 
   async updateCourseProjectByIdForUser(
@@ -216,7 +467,7 @@ export class PathsService {
     dto: UpdateCourseProjectDto,
   ) {
     // Same locked read-modify-write as upsertCourseProject — see comment there.
-    return this.courseProjectRepo.manager.transaction(async (manager) => {
+    const saved = await this.courseProjectRepo.manager.transaction(async (manager) => {
       const repo = manager.getRepository(CourseProjectEntry);
       const entry = await repo.findOne({
         where: { id, userId },
@@ -224,10 +475,12 @@ export class PathsService {
       });
       if (!entry)
         throw new NotFoundException('Course project entry not found');
-      const saved = await repo.save(this.applyCourseProjectPatch(entry, dto));
       // where: {id, userId} above means this only ever succeeds for the owner.
-      return { ...saved, isOwner: true };
+      return repo.save(this.applyCourseProjectPatch(entry, dto));
     });
+    await this.syncCourseProjectInvites(saved, userId);
+    const [annotated] = await this.courseProjectAnnotate([saved]);
+    return { ...annotated, isOwner: true };
   }
 
   async deleteCourseProjectByIdForUser(userId: string, id: string) {
@@ -251,7 +504,8 @@ export class PathsService {
     const matched = entries.filter(
       (e) => (e.studentInfo?.teacherEmail || '').trim().toLowerCase() === email,
     );
-    return this.attachStudents(matched);
+    const annotated = await this.courseProjectAnnotate(matched);
+    return this.attachStudents(annotated);
   }
 
   /** The university showcase deck — submitted reports from students linked to this university org,
@@ -277,7 +531,8 @@ export class PathsService {
       )
       .orderBy('e."updatedAt"', 'DESC')
       .getMany();
-    return this.attachStudents(entries);
+    const annotated = await this.courseProjectAnnotate(entries);
+    return this.attachStudents(annotated);
   }
 
   async listCourseProjectsForAdmin(status?: 'draft' | 'submitted') {
@@ -287,13 +542,14 @@ export class PathsService {
     });
     if (!entries.length) return [];
 
+    const annotated = await this.courseProjectAnnotate(entries);
     const users = await this.usersRepo.find({
       where: { id: In(entries.map((e) => e.userId)) },
       select: ['id', 'name', 'email', 'institution', 'department'],
     });
     const userById = new Map(users.map((u) => [u.id, u]));
 
-    return entries.map((entry) => ({
+    return annotated.map((entry) => ({
       ...entry,
       student: userById.get(entry.userId) ?? null,
     }));
@@ -302,11 +558,12 @@ export class PathsService {
   async getCourseProjectForAdmin(id: string) {
     const entry = await this.courseProjectRepo.findOne({ where: { id } });
     if (!entry) throw new NotFoundException('Course project entry not found');
+    const [annotated] = await this.courseProjectAnnotate([entry]);
     const student = await this.usersRepo.findOne({
       where: { id: entry.userId },
       select: ['id', 'name', 'email', 'institution', 'department'],
     });
-    return { ...entry, student: student ?? null };
+    return { ...annotated, student: student ?? null };
   }
 
   /** The Merit Model — 100pt, 7-criterion rubric ranking of eligible (submitted + faculty-approved)
@@ -464,7 +721,8 @@ export class PathsService {
 
   async listFypForAdmin(progress?: 'complete' | 'in_progress') {
     const entries = await this.fypRepo.find({ order: { updatedAt: 'DESC' } });
-    const enriched = entries.map((entry) => this.enrichFypForAdmin(entry));
+    const annotated = await this.fypAnnotate(entries);
+    const enriched = annotated.map((entry) => this.enrichFypForAdmin(entry));
     const filtered = progress
       ? enriched.filter((entry) => entry.progressStatus === progress)
       : enriched;
@@ -474,8 +732,9 @@ export class PathsService {
   async getFypForAdmin(id: string) {
     const entry = await this.fypRepo.findOne({ where: { id } });
     if (!entry) throw new NotFoundException('FYP entry not found');
+    const [annotated] = await this.fypAnnotate([entry]);
     const [withStudent] = await this.attachStudents([
-      this.enrichFypForAdmin(entry),
+      this.enrichFypForAdmin(annotated),
     ]);
     return withStudent;
   }
@@ -500,35 +759,73 @@ export class PathsService {
       where,
       order: { updatedAt: 'DESC' },
     });
-    const enriched = entries.map((entry) => this.enrichVentureForAdmin(entry));
+    const annotated = await this.ventureAnnotate(entries);
+    const enriched = annotated.map((entry) => this.enrichVentureForAdmin(entry));
     return this.attachStudents(enriched);
   }
 
   async getVentureForAdmin(id: string) {
     const entry = await this.ventureRepo.findOne({ where: { id } });
     if (!entry) throw new NotFoundException('Venture entry not found');
+    const [annotated] = await this.ventureAnnotate([entry]);
     const [withStudent] = await this.attachStudents([
-      this.enrichVentureForAdmin(entry),
+      this.enrichVentureForAdmin(annotated),
     ]);
     return withStudent;
   }
 
   // ---------- FYP / Thesis ----------
 
+  private fypAnnotate(entries: FypEntry[]) {
+    return this.annotateInviteStatus(
+      entries,
+      'fyp',
+      (e) => e.projectInfo?.teamMembers,
+      (e, members) => ({
+        ...e,
+        projectInfo: { ...e.projectInfo, teamMembers: members } as FypProjectInfo,
+      }),
+    );
+  }
+
+  private async syncFypInvites(entry: FypEntry, invitedByUserId: string) {
+    await this.syncTeamInvites(
+      'fyp',
+      entry.id,
+      invitedByUserId,
+      entry.projectInfo?.studentName || 'A fellow student',
+      'FYP / Thesis',
+      entry.projectTitle || entry.projectInfo?.title || 'an FYP / Thesis record',
+      entry.projectInfo?.teamMembers,
+    );
+  }
+
   /** Same jsonb email-match pattern as Course Project's TEAM_MEMBER_EMAIL_MATCH, scoped to
-   * projectInfo.teamMembers instead of studentInfo.groupMembers. */
-  private static readonly FYP_TEAM_MEMBER_EMAIL_MATCH = `EXISTS (
-      SELECT 1 FROM jsonb_array_elements(COALESCE("projectInfo"->'teamMembers', '[]'::jsonb)) AS tm
-      WHERE jsonb_typeof(tm) = 'object'
-        AND LOWER(TRIM(COALESCE(tm->>'email', ''))) = :teamEmail
+   * projectInfo.teamMembers instead of studentInfo.groupMembers, and gated the same way on a real
+   * accepted invite rather than just the typed string. */
+  private static readonly FYP_TEAM_MEMBER_EMAIL_MATCH = `(
+      EXISTS (
+        SELECT 1 FROM jsonb_array_elements(COALESCE("projectInfo"->'teamMembers', '[]'::jsonb)) AS tm
+        WHERE jsonb_typeof(tm) = 'object'
+          AND LOWER(TRIM(COALESCE(tm->>'email', ''))) = :teamEmail
+      )
+      AND EXISTS (
+        SELECT 1 FROM team_member_invites ti
+        WHERE ti."entryId" = e.id::text AND ti.kind = 'fyp'
+          AND ti.status = 'accepted' AND ti.email = :teamEmail
+      )
     )`;
 
   /** FYP is one record per student — a co-author with no record of their own sees the lead's
    * *submitted* record on their own dashboard instead (read-only), same "visible once official"
-   * trigger as Course Project's team-sharing. A student's own record always takes priority. */
+   * trigger as Course Project's team-sharing, gated on a real accepted invite. A student's own
+   * record always takes priority. */
   async getFyp(userId: string, userEmail?: string) {
     const own = await this.fypRepo.findOne({ where: { userId } });
-    if (own) return { ...own, isOwner: true };
+    if (own) {
+      const [annotated] = await this.fypAnnotate([own]);
+      return { ...annotated, isOwner: true };
+    }
     const email = (userEmail || '').trim().toLowerCase();
     if (!email) return null;
     const shared = await this.fypRepo
@@ -536,7 +833,9 @@ export class PathsService {
       .where(`e.status = 'submitted'`)
       .andWhere(PathsService.FYP_TEAM_MEMBER_EMAIL_MATCH, { teamEmail: email })
       .getOne();
-    return shared ? { ...shared, isOwner: false } : null;
+    if (!shared) return null;
+    const [annotated] = await this.fypAnnotate([shared]);
+    return { ...annotated, isOwner: false };
   }
 
   /** The faculty supervision deck — submitted FYP records naming this supervisor by email, same
@@ -551,7 +850,8 @@ export class PathsService {
     const matched = entries.filter(
       (e) => (e.projectInfo?.supervisorEmail || '').trim().toLowerCase() === email,
     );
-    return this.attachStudents(matched);
+    const annotated = await this.fypAnnotate(matched);
+    return this.attachStudents(annotated);
   }
 
   /** The university showcase deck — submitted FYP records from students formally affiliated with
@@ -569,12 +869,13 @@ export class PathsService {
       .andWhere('u."organizationId"::text = :orgId', { orgId: organizationId })
       .orderBy('e."updatedAt"', 'DESC')
       .getMany();
-    return this.attachStudents(entries);
+    const annotated = await this.fypAnnotate(entries);
+    return this.attachStudents(annotated);
   }
 
   async upsertFyp(userId: string, dto: UpdateFypDto) {
     // Locked read-modify-write — see comment on upsertCourseProject for why this matters.
-    return this.fypRepo.manager.transaction(async (manager) => {
+    const saved = await this.fypRepo.manager.transaction(async (manager) => {
       const repo = manager.getRepository(FypEntry);
       let entry = await repo.findOne({
         where: { userId },
@@ -615,9 +916,11 @@ export class PathsService {
         entry.supervisorApprovalNote = null;
         entry.supervisorApprovalAt = null;
       }
-      const saved = await repo.save(entry);
-      return { ...saved, isOwner: true };
+      return repo.save(entry);
     });
+    await this.syncFypInvites(saved, userId);
+    const [annotated] = await this.fypAnnotate([saved]);
+    return { ...annotated, isOwner: true };
   }
 
   /** Supervisor approve/reject a submitted FYP entry — only "approved" entries are eligible for
@@ -676,7 +979,8 @@ export class PathsService {
           where: { status: 'submitted' },
           order: { updatedAt: 'DESC' },
         });
-        pool = await this.attachStudents(entries);
+        const annotated = await this.fypAnnotate(entries);
+        pool = await this.attachStudents(annotated);
         scopeLabel = 'CIEL — all universities';
       }
     } else {
@@ -782,9 +1086,57 @@ export class PathsService {
 
   // ---------- Startup / Business ----------
 
-  async getVenture(userId: string) {
-    const entry = await this.ventureRepo.findOne({ where: { userId } });
-    return this.withCompleteness(entry);
+  private ventureAnnotate(entries: VentureEntry[]) {
+    return this.annotateInviteStatus(
+      entries,
+      'venture',
+      (e) => e.team,
+      (e, members) => ({ ...e, team: members as VentureEntry['team'] }),
+    );
+  }
+
+  private async syncVentureInvites(entry: VentureEntry, invitedByUserId: string) {
+    await this.syncTeamInvites(
+      'venture',
+      entry.id,
+      invitedByUserId,
+      entry.academicSetup?.founderName || 'A fellow student',
+      'Startup / Business',
+      entry.ventureName || 'a Startup / Business venture',
+      entry.team,
+    );
+  }
+
+  /** Same jsonb email-match pattern as Course Project/FYP, scoped to the top-level `team` column
+   * (Venture has no legacy plain-string members, so no jsonb_typeof guard is needed here). */
+  private static readonly VENTURE_TEAM_MEMBER_EMAIL_MATCH = `(
+      EXISTS (
+        SELECT 1 FROM jsonb_array_elements(COALESCE("team", '[]'::jsonb)) AS tm
+        WHERE LOWER(TRIM(COALESCE(tm->>'email', ''))) = :teamEmail
+      )
+      AND EXISTS (
+        SELECT 1 FROM team_member_invites ti
+        WHERE ti."entryId" = e.id::text AND ti.kind = 'venture'
+          AND ti.status = 'accepted' AND ti.email = :teamEmail
+      )
+    )`;
+
+  /** Venture is one record per student — a named teammate with no venture of their own sees the
+   * founder's *submitted* venture on their own dashboard instead (read-only), gated on a real
+   * accepted invite, same pattern as getFyp. A student's own record always takes priority. */
+  async getVenture(userId: string, userEmail?: string) {
+    const own = await this.ventureRepo.findOne({ where: { userId } });
+    if (own) return { ...this.withCompleteness((await this.ventureAnnotate([own]))[0]), isOwner: true };
+    const email = (userEmail || '').trim().toLowerCase();
+    if (!email) return null;
+    const shared = await this.ventureRepo
+      .createQueryBuilder('e')
+      .where(`e.status = 'submitted'`)
+      .andWhere(PathsService.VENTURE_TEAM_MEMBER_EMAIL_MATCH, { teamEmail: email })
+      .getOne();
+    if (!shared) return null;
+    const [annotated] = await this.ventureAnnotate([shared]);
+    return { ...this.withCompleteness(annotated), isOwner: false };
   }
 
   async upsertVenture(userId: string, dto: UpdateVentureDto) {
@@ -830,7 +1182,9 @@ export class PathsService {
         return repo.save(entry);
       },
     );
-    return this.withCompleteness(saved);
+    await this.syncVentureInvites(saved, userId);
+    const [annotated] = await this.ventureAnnotate([saved]);
+    return this.withCompleteness(annotated);
   }
 
   async addVentureDocument(userId: string, dto: AddVentureDocumentDto) {

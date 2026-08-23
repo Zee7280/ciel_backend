@@ -6,14 +6,17 @@ import { PathsService } from './paths.service';
 import { CourseProjectEntry } from './entities/course-project-entry.entity';
 import { FypEntry } from './entities/fyp-entry.entity';
 import { VentureEntry } from './entities/venture-entry.entity';
+import { TeamMemberInvite } from './entities/team-member-invite.entity';
 import { User } from '../users/entities/user.entity';
 import { Organization } from '../organizations/entities/organization.entity';
 import { StorageModule } from '../common/storage.module';
+import { MailModule } from '../mail/mail.module';
 
 @Module({
     imports: [
-        TypeOrmModule.forFeature([CourseProjectEntry, FypEntry, VentureEntry, User, Organization]),
+        TypeOrmModule.forFeature([CourseProjectEntry, FypEntry, VentureEntry, TeamMemberInvite, User, Organization]),
         StorageModule,
+        MailModule,
     ],
     controllers: [PathsController, AdminPathsController],
     providers: [PathsService],

@@ -68,6 +68,9 @@ export interface FypTeamMember {
   email?: string;
   role?: string;
   rollNumber?: string;
+  /** Server-computed from team_member_invites — 'accepted' only once the named co-author has
+   * clicked their emailed invite link while signed in with this exact email. Ignored on write. */
+  inviteStatus?: 'pending' | 'accepted';
 }
 export interface FypProjectInfo {
   title?: string;

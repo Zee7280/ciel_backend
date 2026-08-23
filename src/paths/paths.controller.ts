@@ -11,6 +11,7 @@ import { MeritModelQueryDto } from './dto/merit-model-query.dto';
 import { AddFypDeliverableDto, SupervisorReviewFypDto, UpdateFypDto } from './dto/update-fyp.dto';
 import { FypMeritModelQueryDto } from './dto/fyp-merit-model-query.dto';
 import { AddVentureDocumentDto, SetVentureVisibilityDto, UpdateVentureDto } from './dto/update-venture.dto';
+import { ResendTeamInviteDto } from './dto/team-invite.dto';
 
 @Controller('paths')
 @UseGuards(JwtAuthGuard)
@@ -176,11 +177,35 @@ export class PathsController {
         return { success: true, data };
     }
 
+    // ---------- Team-member invites (Course Project / FYP / Startup-Business) ----------
+
+    /** Preview shown on the /verify/team-invite landing page before the teammate accepts. */
+    @Get('team-invites/:token')
+    async getTeamInvitePreview(@Param('token') token: string) {
+        const data = await this.pathsService.getTeamInvitePreview(token);
+        return { success: true, data };
+    }
+
+    /** The invited teammate accepts — must be signed in with the exact email the invite was sent to. */
+    @Post('team-invites/:token/accept')
+    async acceptTeamInvite(@Request() req, @Param('token') token: string) {
+        const data = await this.pathsService.acceptTeamInvite(token, req.user.id, req.user.email);
+        return { success: true, data };
+    }
+
+    /** The report owner resends a still-pending invite — looked up by (kind, entryId, email), not
+     * token, since the owner's own view never exposes a teammate's invite token. */
+    @Post('team-invites/resend')
+    async resendTeamInvite(@Request() req, @Body() dto: ResendTeamInviteDto) {
+        const data = await this.pathsService.resendTeamInvite(req.user.id, dto.kind, dto.entryId, dto.email);
+        return { success: true, data };
+    }
+
     // ---------- Startup / Business ----------
 
     @Get('startup-business')
     async getVenture(@Request() req) {
-        const data = await this.pathsService.getVenture(req.user.id);
+        const data = await this.pathsService.getVenture(req.user.id, req.user.email);
         return { success: true, data };
     }
 

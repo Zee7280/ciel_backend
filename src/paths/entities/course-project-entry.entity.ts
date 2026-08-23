@@ -4,6 +4,9 @@ export interface CourseProjectGroupMember {
     name: string;
     email?: string;
     rollNumber?: string;
+    /** Server-computed from team_member_invites — 'accepted' only once the named teammate has
+     * clicked their emailed invite link while signed in with this exact email. Ignored on write. */
+    inviteStatus?: 'pending' | 'accepted';
 }
 
 export interface CourseProjectStudentInfo {

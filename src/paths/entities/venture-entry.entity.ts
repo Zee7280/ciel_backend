@@ -11,6 +11,9 @@ export interface VentureTeamMember {
     name: string;
     role: string;
     email?: string;
+    /** Server-computed from team_member_invites — 'accepted' only once the named teammate has
+     * clicked their emailed invite link while signed in with this exact email. Ignored on write. */
+    inviteStatus?: 'pending' | 'accepted';
 }
 
 // ── 8-step guided wizard groups (additive — the legacy fields above are untouched) ──

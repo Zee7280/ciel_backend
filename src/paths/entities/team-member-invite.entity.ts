@@ -34,7 +34,7 @@ export class TeamMemberInvite {
     @Column()
     invitedByUserId: string;
 
-    @Column({ nullable: true })
+    @Column({ type: 'varchar', nullable: true })
     acceptedByUserId: string | null;
 
     @Column({ type: 'timestamp' })

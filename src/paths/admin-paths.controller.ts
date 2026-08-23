@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, ParseUUIDPipe, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -19,7 +19,7 @@ export class AdminPathsController {
     }
 
     @Get('course-projects/:id')
-    async getCourseProject(@Param('id') id: string) {
+    async getCourseProject(@Param('id', ParseUUIDPipe) id: string) {
         const data = await this.pathsService.getCourseProjectForAdmin(id);
         return { success: true, data };
     }
@@ -32,7 +32,7 @@ export class AdminPathsController {
     }
 
     @Get('fyp-thesis/:id')
-    async getFyp(@Param('id') id: string) {
+    async getFyp(@Param('id', ParseUUIDPipe) id: string) {
         const data = await this.pathsService.getFypForAdmin(id);
         return { success: true, data };
     }
@@ -45,7 +45,7 @@ export class AdminPathsController {
     }
 
     @Get('startup-business/:id')
-    async getVenture(@Param('id') id: string) {
+    async getVenture(@Param('id', ParseUUIDPipe) id: string) {
         const data = await this.pathsService.getVentureForAdmin(id);
         return { success: true, data };
     }

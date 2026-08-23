@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Request, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Query, Request, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -78,7 +78,7 @@ export class PathsController {
     @Patch('course-projects/:id/faculty-review')
     @UseGuards(RolesGuard)
     @Roles(UserRole.FACULTY)
-    async facultyReviewCourseProject(@Request() req, @Param('id') id: string, @Body() dto: FacultyReviewCourseProjectDto) {
+    async facultyReviewCourseProject(@Request() req, @Param('id', ParseUUIDPipe) id: string, @Body() dto: FacultyReviewCourseProjectDto) {
         const data = await this.pathsService.facultyReviewCourseProject(req.user.email, id, dto.action, dto.note);
         return { success: true, data };
     }
@@ -103,19 +103,19 @@ export class PathsController {
     }
 
     @Get('course-projects/:id')
-    async getCourseProjectById(@Request() req, @Param('id') id: string) {
+    async getCourseProjectById(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
         const data = await this.pathsService.getCourseProjectByIdForUser(req.user.id, req.user.email, id);
         return { success: true, data };
     }
 
     @Patch('course-projects/:id')
-    async updateCourseProjectById(@Request() req, @Param('id') id: string, @Body() dto: UpdateCourseProjectDto) {
+    async updateCourseProjectById(@Request() req, @Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateCourseProjectDto) {
         const data = await this.pathsService.updateCourseProjectByIdForUser(req.user.id, id, dto);
         return { success: true, data };
     }
 
     @Delete('course-projects/:id')
-    async deleteCourseProjectById(@Request() req, @Param('id') id: string) {
+    async deleteCourseProjectById(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
         await this.pathsService.deleteCourseProjectByIdForUser(req.user.id, id);
         return { success: true };
     }
@@ -162,7 +162,7 @@ export class PathsController {
     @Patch('fyp-thesis/:id/supervisor-review')
     @UseGuards(RolesGuard)
     @Roles(UserRole.FACULTY)
-    async supervisorReviewFyp(@Request() req, @Param('id') id: string, @Body() dto: SupervisorReviewFypDto) {
+    async supervisorReviewFyp(@Request() req, @Param('id', ParseUUIDPipe) id: string, @Body() dto: SupervisorReviewFypDto) {
         const data = await this.pathsService.supervisorReviewFyp(req.user.email, id, dto.action, dto.note);
         return { success: true, data };
     }

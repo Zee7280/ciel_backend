@@ -258,10 +258,25 @@ export class PathsService {
 
   // ---------- Course Project ----------
 
+  /** class-transformer instantiates every declared DTO field as an own property, `undefined`
+   * for whatever the caller didn't send — so `{...entry.group, ...dto.group}` silently wipes
+   * previously-saved sibling fields on any partial patch (e.g. patching just `groupMembers`
+   * would erase `teacherEmail`, `studentName`, etc.). Stripping the `undefined` keys first
+   * restores real partial-merge (PATCH) semantics. */
+  private static withoutUndefined<T extends object>(obj: T | undefined): Partial<T> {
+    if (!obj) return {};
+    const out: Partial<T> = {};
+    for (const key of Object.keys(obj) as (keyof T)[]) {
+      if (obj[key] !== undefined) out[key] = obj[key];
+    }
+    return out;
+  }
+
   private applyCourseProjectPatch(
     entry: CourseProjectEntry,
     dto: UpdateCourseProjectDto,
   ): CourseProjectEntry {
+    const keep = PathsService.withoutUndefined;
     if (dto.course !== undefined) entry.course = dto.course;
     if (dto.projectTitle !== undefined) entry.projectTitle = dto.projectTitle;
     if (dto.projectDescription !== undefined)
@@ -275,29 +290,29 @@ export class PathsService {
     if (dto.studentInfo !== undefined)
       entry.studentInfo = {
         ...entry.studentInfo,
-        ...dto.studentInfo,
+        ...keep(dto.studentInfo),
       } as CourseProjectStudentInfo;
     if (dto.assignmentInfo !== undefined)
-      entry.assignmentInfo = { ...entry.assignmentInfo, ...dto.assignmentInfo };
+      entry.assignmentInfo = { ...entry.assignmentInfo, ...keep(dto.assignmentInfo) };
     if (dto.aimsInfo !== undefined)
-      entry.aimsInfo = { ...entry.aimsInfo, ...dto.aimsInfo };
+      entry.aimsInfo = { ...entry.aimsInfo, ...keep(dto.aimsInfo) };
     if (dto.processInfo !== undefined)
-      entry.processInfo = { ...entry.processInfo, ...dto.processInfo };
+      entry.processInfo = { ...entry.processInfo, ...keep(dto.processInfo) };
     if (dto.resultsInfo !== undefined)
-      entry.resultsInfo = { ...entry.resultsInfo, ...dto.resultsInfo };
+      entry.resultsInfo = { ...entry.resultsInfo, ...keep(dto.resultsInfo) };
     if (dto.sdgMapping !== undefined)
-      entry.sdgMapping = { ...entry.sdgMapping, ...dto.sdgMapping };
+      entry.sdgMapping = { ...entry.sdgMapping, ...keep(dto.sdgMapping) };
     if (dto.reflectionInfo !== undefined)
-      entry.reflectionInfo = { ...entry.reflectionInfo, ...dto.reflectionInfo };
+      entry.reflectionInfo = { ...entry.reflectionInfo, ...keep(dto.reflectionInfo) };
     if (dto.moduleInclusion !== undefined)
       entry.moduleInclusion = {
         ...entry.moduleInclusion,
-        ...dto.moduleInclusion,
+        ...keep(dto.moduleInclusion),
       };
     if (dto.sectionSummaries !== undefined)
       entry.sectionSummaries = {
         ...entry.sectionSummaries,
-        ...dto.sectionSummaries,
+        ...keep(dto.sectionSummaries),
       };
     if (dto.addedNote !== undefined) entry.addedNote = dto.addedNote;
     if (dto.stepCompleted !== undefined)

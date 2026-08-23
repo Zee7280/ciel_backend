@@ -1882,6 +1882,14 @@ export class EngagementService {
   ) {
     const trimmed = typeof projectId === 'string' ? projectId.trim() : '';
     const scopedProjectId = trimmed.length > 0 ? trimmed : undefined;
+    if (
+      scopedProjectId &&
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        scopedProjectId,
+      )
+    ) {
+      throw new BadRequestException('Invalid projectId — expected a UUID.');
+    }
 
     const actor = await this.userRepository.findOne({
       where: { id: actorUserId },
@@ -2594,7 +2602,12 @@ export class EngagementService {
     });
   }
 
-  async facultyApprove(participationId: string, status: string) {
+  async facultyApprove(
+    actorUserId: string,
+    actorRole: string | undefined,
+    participationId: string,
+    status: string,
+  ) {
     const participation = await this.participantRepository.findOne({
       where: { id: participationId },
     });
@@ -2602,6 +2615,20 @@ export class EngagementService {
 
     if (!['approved', 'rejected'].includes(status)) {
       throw new BadRequestException('Invalid status for faculty approval');
+    }
+
+    const actor = await this.userRepository.findOne({
+      where: { id: actorUserId },
+    });
+    const actorEmail = (actor?.email || '').trim().toLowerCase();
+    const allowed =
+      actorRole === UserRole.SUPER_ADMIN ||
+      (actorRole === UserRole.FACULTY &&
+        getParticipantFacultyEmails(participation).includes(actorEmail));
+    if (!allowed) {
+      throw new ForbiddenException(
+        'You cannot approve this participation. Sign in as the faculty member listed as its supervisor.',
+      );
     }
 
     participation.status = status;

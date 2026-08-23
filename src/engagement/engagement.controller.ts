@@ -12,6 +12,7 @@ import {
   UseInterceptors,
   UploadedFile,
   NotFoundException,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { EngagementService } from './engagement.service';
@@ -79,7 +80,7 @@ export class EngagementController {
   @Patch('attendance/:logId')
   async patchAttendanceApproval(
     @Request() req,
-    @Param('logId') logId: string,
+    @Param('logId', ParseUUIDPipe) logId: string,
     @Body() dto: PatchAttendanceApprovalDto,
   ) {
     const result = await this.engagementService.patchAttendanceApproval(
@@ -98,7 +99,7 @@ export class EngagementController {
   @Post('project/:projectId/attendance/verify-request')
   async createAttendanceVerifyRequest(
     @Request() req,
-    @Param('projectId') projectId: string,
+    @Param('projectId', ParseUUIDPipe) projectId: string,
     @Body() dto: CreateAttendanceVerifyRequestDto,
   ) {
     const result = await this.engagementService.createAttendanceVerifyRequest(
@@ -192,7 +193,7 @@ export class EngagementController {
   async deleteAttendance(
     @Request() req,
     @Param('id') id: string,
-    @Param('logId') logId: string,
+    @Param('logId', ParseUUIDPipe) logId: string,
   ) {
     const result = await this.engagementService.deleteAttendanceLog(
       req.user.id,
@@ -239,10 +240,16 @@ export class EngagementController {
 
   @Post(':id/faculty-approve')
   async facultyApprove(
-    @Param('id') id: string,
+    @Request() req,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body('status') status: string,
   ) {
-    const result = await this.engagementService.facultyApprove(id, status);
+    const result = await this.engagementService.facultyApprove(
+      req.user.id,
+      req.user.role,
+      id,
+      status,
+    );
     return {
       success: true,
       data: result,
@@ -251,7 +258,7 @@ export class EngagementController {
   }
 
   @Get('project/:projectId/team')
-  async getProjectTeam(@Param('projectId') projectId: string) {
+  async getProjectTeam(@Param('projectId', ParseUUIDPipe) projectId: string) {
     const result = await this.engagementService.getProjectTeam(projectId);
     return {
       success: true,
@@ -260,7 +267,7 @@ export class EngagementController {
   }
 
   @Get('project/:projectId/attendance-logs')
-  async getProjectAttendance(@Param('projectId') projectId: string) {
+  async getProjectAttendance(@Param('projectId', ParseUUIDPipe) projectId: string) {
     const result =
       await this.engagementService.getProjectAttendanceLogs(projectId);
     return {
@@ -270,7 +277,7 @@ export class EngagementController {
   }
 
   @Delete(':id')
-  async deleteParticipant(@Request() req, @Param('id') id: string) {
+  async deleteParticipant(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
     await this.engagementService.deleteParticipant(req.user.id, id);
     return {
       success: true,

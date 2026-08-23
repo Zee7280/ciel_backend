@@ -19,7 +19,10 @@ export interface VentureTeamMember {
 // ── 8-step guided wizard groups (additive — the legacy fields above are untouched) ──
 
 export interface VentureAcademicSetup {
+    /** @deprecated single-select predecessor of submissionTypes — still read as a fallback for older entries. */
     submissionType?: string;
+    /** Multi-select submission type(s) — a venture can legitimately be both e.g. a Final-Year Project and started as coursework. Supersedes submissionType above. */
+    submissionTypes?: string[];
     university?: string;
     campus?: string;
     faculty?: string;

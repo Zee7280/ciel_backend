@@ -57,6 +57,7 @@ export class VentureTeamMemberDto {
 
 export class VentureAcademicSetupDto {
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) submissionType?: string;
+    @IsOptional() @IsArray() @ArrayMaxSize(LIST_MAX) @IsString({ each: true }) @MaxLength(FREE_TEXT_MAX, { each: true }) submissionTypes?: string[];
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) university?: string;
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) campus?: string;
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) faculty?: string;

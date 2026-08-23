@@ -618,6 +618,7 @@ describe('StudentReportsService', () => {
             status: 'submitted',
             partner_status: 'pending',
             admin_status: 'pending',
+            admin_feedback: null as string | null,
             partnerApprovedAt: null,
             adminApprovedAt: new Date('2026-05-01T00:00:00.000Z'),
             opportunity: { requiresPartnerApproval: false },
@@ -654,10 +655,11 @@ describe('StudentReportsService', () => {
         mockStudentReportsRepository.findOne.mockImplementation(async () => report);
 
         const result = await service.checkReportStatus('student-1', OPP);
+        const data = result.data as { feedback?: string; is_editable?: boolean; status?: string };
 
-        expect(result.data.feedback).toBe('Revise Section 4 outputs.');
-        expect(result.data.is_editable).toBe(true);
-        expect(result.data.status).toBe('revision');
+        expect(data.feedback).toBe('Revise Section 4 outputs.');
+        expect(data.is_editable).toBe(true);
+        expect(data.status).toBe('revision');
     });
 
     it('persists admin-regenerated section11 AI score', async () => {
@@ -862,8 +864,9 @@ describe('StudentReportsService', () => {
 
         expect(result.success).toBe(true);
         expect(result.data).toHaveLength(1);
-        expect(result.data[0].payment_verified).toBe(true);
-        expect(result.data[0].payment_status).toBe('paid');
+        const row = result.data[0] as { payment_verified?: boolean; payment_status?: string };
+        expect(row.payment_verified).toBe(true);
+        expect(row.payment_status).toBe('paid');
     });
 
     it('admin findAll keeps separate reports when three teams share applicationId without teamId', async () => {
@@ -962,7 +965,11 @@ describe('StudentReportsService', () => {
             'report-lead-c',
         ]);
         expect(
-            new Set(result.data.map((r: { team_lead?: { email?: string } }) => r.team_lead?.email)),
+            new Set(
+                (result.data as Array<{ team_lead?: { email?: string } }>).map(
+                    (r) => r.team_lead?.email,
+                ),
+            ),
         ).toEqual(new Set(['lead-a@test.com', 'lead-b@test.com', 'lead-c@test.com']));
     });
 });

@@ -34,7 +34,7 @@ describe('getProfileCompletionStatus (university partners)', () => {
             organization: {
                 ...baseUniversityUser().organization!,
                 city: undefined,
-            } as Organization,
+            } as unknown as Organization,
         });
         const status = getProfileCompletionStatus(user);
         expect(status.profile_missing_fields).toContain('city');

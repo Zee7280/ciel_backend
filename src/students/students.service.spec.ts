@@ -50,6 +50,14 @@ describe('StudentsService impact history', () => {
 
   it('uses approved report hours when no verified timesheet exists', async () => {
     const now = new Date();
+    const queryBuilder = {
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue([]),
+    };
     const service = makeService({
       studentReportsRepository: {
         find: jest.fn().mockResolvedValue([
@@ -66,6 +74,7 @@ describe('StudentsService impact history', () => {
             section11: { ai_generated_impact_score: 88 },
           },
         ]),
+        createQueryBuilder: jest.fn().mockReturnValue(queryBuilder),
       },
     });
 
@@ -250,6 +259,7 @@ describe('StudentsService getDashboard analytics', () => {
       {
         getMergedReportsForParticipant: jest.fn().mockResolvedValue([]),
       } as any,
+      {} as any,
     );
 
     const result = await service.getDashboard('student-1');
@@ -328,6 +338,7 @@ describe('StudentsService getDashboard analytics', () => {
       {
         getMergedReportsForParticipant: jest.fn().mockResolvedValue([]),
       } as any,
+      {} as any,
     );
 
     const result = await service.getDashboard('student-1');

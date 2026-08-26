@@ -12,6 +12,8 @@ import { OpportunitiesService } from '../opportunities/opportunities.service';
 import { GetApplicantsDto } from './dto/get-applicants.dto';
 import { UpdateApplicantDto } from './dto/update-applicant.dto';
 import { StudentReportsService } from '../reports/student-reports.service';
+import { CommunityAwardService } from '../reports/community-award.service';
+import { NotifyCommunityAwardDto } from '../reports/dto/notify-community-award.dto';
 import { S3Service } from '../common/s3.service';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
 
@@ -26,6 +28,7 @@ export class PartnersController {
         private readonly studentReportsService: StudentReportsService,
         private readonly s3Service: S3Service,
         private readonly opportunityApplicationsService: OpportunityApplicationsService,
+        private readonly communityAward: CommunityAwardService,
     ) { }
 
     @Get('me')
@@ -114,6 +117,38 @@ export class PartnersController {
             throw new BadRequestException('User is not linked to an organization');
         }
         return this.organizationsService.getPartnerDashboardStats(orgId);
+    }
+
+    @Get('community-service/award-cards')
+    async communityAwardCards(@Request() req) {
+        if (!req.user.organizationId) {
+            throw new BadRequestException('User is not linked to an organization');
+        }
+        const org = await this.organizationsService.getMyOrganization(req.user.id);
+        const isUni = String(org?.orgType || '').toLowerCase().includes('university');
+        const data = isUni
+            ? await this.communityAward.listForUniversity(req.user.organizationId)
+            : await this.communityAward.listForPartnerOrg(req.user.organizationId);
+        return { success: true, data, scope: isUni ? 'university' : 'partner' };
+    }
+
+    @Post('community-service/award-notify')
+    async communityAwardNotify(@Request() req, @Body() dto: NotifyCommunityAwardDto) {
+        if (!req.user.organizationId) {
+            throw new BadRequestException('User is not linked to an organization');
+        }
+        const org = await this.organizationsService.getMyOrganization(req.user.id);
+        const isUni = String(org?.orgType || '').toLowerCase().includes('university');
+        const pool = isUni
+            ? await this.communityAward.listForUniversity(req.user.organizationId)
+            : await this.communityAward.listForPartnerOrg(req.user.organizationId);
+        const kind = isUni ? 'uni' : 'par';
+        const data = await this.communityAward.notifyFromPool(pool, {
+            ...dto,
+            kind,
+            scopeLabel: dto.scopeLabel || org?.name,
+        });
+        return { success: true, data };
     }
 
     /** University-organization participation & verification analytics (403 for non-university orgs). */

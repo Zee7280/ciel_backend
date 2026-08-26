@@ -560,6 +560,8 @@ export class StudentReportsService {
         },
       },
       sdgs,
+      faculty_status: report.faculty_status,
+      awardBadges: report.awardBadges ?? [],
       cii_score: this.resolveCiiScoreFromPayload(
         (report.section11 as Record<string, unknown> | null | undefined) ??
           null,

@@ -27,6 +27,8 @@ import { AdminProjectEvidenceService } from './admin-project-evidence.service';
 import { MasterAnalyticsQueryDto } from './dto/master-analytics-query.dto';
 import { OpportunitiesService } from '../opportunities/opportunities.service';
 import { StudentReportsService } from '../reports/student-reports.service';
+import { CommunityAwardService } from '../reports/community-award.service';
+import { NotifyCommunityAwardDto } from '../reports/dto/notify-community-award.dto';
 import { AdminMergeReportsDto } from '../reports/dto/admin-merge-reports.dto';
 import { SetAttendanceEditableDto } from './dto/set-attendance-editable.dto';
 import { AdminDedupeStudentSeatsDto } from './dto/admin-dedupe-student-seats.dto';
@@ -44,6 +46,7 @@ export class AdminController {
     private readonly adminService: AdminService,
     private readonly opportunitiesService: OpportunitiesService,
     private readonly studentReportsService: StudentReportsService,
+    private readonly communityAward: CommunityAwardService,
     private readonly opportunityApplicationsService: OpportunityApplicationsService,
     private readonly issueLogsService: IssueLogsService,
     private readonly adminProjectEvidenceService: AdminProjectEvidenceService,
@@ -290,6 +293,27 @@ export class AdminController {
   @Post('settings')
   updateSetting(@Body() body: { key: string; value: string }) {
     return this.adminService.updateSetting(body.key, body.value);
+  }
+
+  @Get('community-service/award-cards')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  async communityAwardCards() {
+    const data = await this.communityAward.listForAdmin();
+    return { success: true, data };
+  }
+
+  @Post('community-service/award-notify')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  async communityAwardNotify(@Body() dto: NotifyCommunityAwardDto) {
+    const pool = await this.communityAward.listForAdmin();
+    const data = await this.communityAward.notifyFromPool(pool, {
+      ...dto,
+      kind: 'ciel',
+      scopeLabel: dto.scopeLabel || 'CIEL PK',
+    });
+    return { success: true, data };
   }
 
   @Get('reports')

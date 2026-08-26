@@ -35,8 +35,10 @@ describe('PathsService — team member invites', () => {
     const makeService = (overrides: { inviteRepo?: ReturnType<typeof makeInviteRepo> } = {}) => {
         const inviteRepo = overrides.inviteRepo ?? makeInviteRepo();
         const mailService = { sendPathTeamInvite: jest.fn().mockResolvedValue(undefined) };
+        const notificationsService = { createNotification: jest.fn().mockResolvedValue(undefined) };
         const courseProjectRepo = {
             findOne: jest.fn().mockResolvedValue({ id: 'entry-1', projectTitle: 'My Report', course: null }),
+            save: jest.fn(async (row: Record<string, unknown>) => row),
         };
         const fypRepo = { findOne: jest.fn().mockResolvedValue(null) };
         const ventureRepo = { findOne: jest.fn().mockResolvedValue(null) };
@@ -51,8 +53,9 @@ describe('PathsService — team member invites', () => {
             usersRepo as any,
             organizationsRepo as any,
             mailService as any,
+            notificationsService as any,
         );
-        return { service, inviteRepo, mailService, courseProjectRepo };
+        return { service, inviteRepo, mailService, courseProjectRepo, notificationsService };
     };
 
     it('creates exactly one invite for a set of member emails, deduped case/whitespace-insensitively, and skips members with no email', async () => {
@@ -258,5 +261,86 @@ describe('PathsService — team member invites', () => {
         inviteRepo.rows[0].expiresAt = new Date(Date.now() - 1000);
         const preview2 = await service.getTeamInvitePreview('tok-1');
         expect(preview2.expired).toBe(false);
+    });
+});
+
+describe('PathsService — coursework merit notify', () => {
+    const makeNotifyService = () => {
+        const notificationsService = { createNotification: jest.fn().mockResolvedValue(undefined) };
+        const courseProjectRepo = {
+            findOne: jest.fn(),
+            save: jest.fn(async (row: Record<string, unknown>) => row),
+        };
+        const service = new PathsService(
+            courseProjectRepo as any,
+            {} as any,
+            {} as any,
+            makeInviteRepo() as any,
+            {} as any,
+            {} as any,
+            { sendPathTeamInvite: jest.fn() } as any,
+            notificationsService as any,
+        );
+        return { service, notificationsService, courseProjectRepo };
+    };
+
+    it('pins the UI rank on the card and notifies the owner; ignores ids outside the caller pool', async () => {
+        const { service, notificationsService, courseProjectRepo } = makeNotifyService();
+        jest.spyOn(service, 'getCourseProjectMeritModel').mockResolvedValue({
+            scope: { label: 'Faculty supervision' },
+            entries: [{ id: 'entry-1', rank: 9 }],
+        } as any);
+        courseProjectRepo.findOne.mockResolvedValue({
+            id: 'entry-1',
+            userId: 'student-1',
+            projectTitle: 'Solar audit',
+            facultyApprovalStatus: 'approved',
+            studentInfo: { studentName: 'Ali Khan' },
+        });
+
+        const result = await service.notifyCourseProjectMeritRanks(
+            { role: 'faculty', email: 'teacher@test.com' },
+            {
+                picks: [
+                    { entryId: 'entry-1', rank: 1, of: 8, total: 91 },
+                    { entryId: 'other-cohort', rank: 2, of: 8, total: 80 },
+                ],
+                scopeLabel: 'Your cohort',
+            },
+        );
+
+        expect(result.notified).toBe(1);
+        expect(courseProjectRepo.save).toHaveBeenCalledWith(expect.objectContaining({
+            meritRibbon: expect.objectContaining({ rank: 1, of: 8, scope: 'Your cohort', total: 91 }),
+        }));
+        expect(notificationsService.createNotification).toHaveBeenCalledTimes(1);
+        expect(notificationsService.createNotification).toHaveBeenCalledWith(
+            'student-1',
+            expect.objectContaining({ title: 'Your coursework ranked #1' }),
+        );
+    });
+
+    it('does not spam a second notification when the same ribbon is already pinned', async () => {
+        const { service, notificationsService, courseProjectRepo } = makeNotifyService();
+        jest.spyOn(service, 'getCourseProjectMeritModel').mockResolvedValue({
+            scope: { label: 'Your cohort' },
+            entries: [{ id: 'entry-1', rank: 1 }],
+        } as any);
+        courseProjectRepo.findOne.mockResolvedValue({
+            id: 'entry-1',
+            userId: 'student-1',
+            projectTitle: 'Solar audit',
+            facultyApprovalStatus: 'approved',
+            studentInfo: { studentName: 'Ali Khan' },
+            meritRibbon: { rank: 1, of: 8, scope: 'Your cohort', total: 91, at: '2026-01-01' },
+        });
+
+        const result = await service.notifyCourseProjectMeritRanks(
+            { role: 'faculty', email: 'teacher@test.com' },
+            { picks: [{ entryId: 'entry-1', rank: 1, of: 8, total: 91 }], scopeLabel: 'Your cohort' },
+        );
+
+        expect(result.notified).toBe(1);
+        expect(notificationsService.createNotification).not.toHaveBeenCalled();
     });
 });

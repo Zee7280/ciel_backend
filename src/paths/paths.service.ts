@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -35,7 +36,8 @@ import { User } from '../users/entities/user.entity';
 import { Organization } from '../organizations/entities/organization.entity';
 import { UserRole } from '../users/enums/user-role.enum';
 import { MailService } from '../mail/mail.service';
-import { MeritModelQueryDto } from './dto/merit-model-query.dto';
+import { NotificationsService } from '../notifications/notifications.service';
+import { MeritModelQueryDto, NotifyMeritRanksDto } from './dto/merit-model-query.dto';
 import { byMerit, computeMeritCard, deriveMeritYear } from './merit-model/merit-model.util';
 import { RankedMeritCard } from './merit-model/merit-model.types';
 import { byFypMerit, computeFypMeritCard, deriveFypCompletionMonth, deriveFypRoute } from './merit-model/fyp-merit-model.util';
@@ -43,6 +45,8 @@ import { RankedFypMeritCard } from './merit-model/fyp-merit-model.types';
 
 @Injectable()
 export class PathsService {
+  private readonly logger = new Logger(PathsService.name);
+
   constructor(
     @InjectRepository(CourseProjectEntry)
     private readonly courseProjectRepo: Repository<CourseProjectEntry>,
@@ -57,6 +61,7 @@ export class PathsService {
     @InjectRepository(Organization)
     private readonly organizationsRepo: Repository<Organization>,
     private readonly mailService: MailService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   // ---------- Team-member invites (shared across Course Project / FYP / Venture) ----------
@@ -113,8 +118,14 @@ export class PathsService {
           title,
           token: invite.token,
         });
-      } catch {
-        // best-effort — see docstring
+      } catch (err) {
+        // best-effort — see docstring — but must still be visible, or a stuck
+        // invite (e.g. a bad row insert) silently pins the student's badge on
+        // "Will invite on save" forever with no way to diagnose why.
+        this.logger.error(
+          `syncTeamInvites failed for ${kind}/${entryId}/${email}: ${(err as Error)?.message ?? err}`,
+          (err as Error)?.stack,
+        );
       }
     }
   }
@@ -320,10 +331,17 @@ export class PathsService {
     if (dto.status !== undefined) entry.status = dto.status;
     // Editing a previously-approved report after the fact invalidates that approval — send it
     // back to the teacher's queue rather than silently keeping stale content "live".
+    // Same for a returned (rejected) report: fix & resubmit should land as a fresh review,
+    // not stay stuck on "returned". Keep the teacher's notes so the student still sees them.
     if (entry.status === 'submitted' && entry.facultyApprovalStatus === 'approved') {
       entry.facultyApprovalStatus = 'pending';
       entry.facultyApprovalNote = null;
       entry.facultyApprovalAt = null;
+      entry.meritRibbon = null;
+    } else if (entry.status === 'submitted' && entry.facultyApprovalStatus === 'rejected') {
+      entry.facultyApprovalStatus = 'pending';
+      entry.facultyApprovalAt = null;
+      entry.meritRibbon = null;
     }
     return entry;
   }
@@ -372,7 +390,31 @@ export class PathsService {
     entry.facultyApprovalStatus = action === 'approve' ? 'approved' : 'rejected';
     entry.facultyApprovalNote = note ?? null;
     entry.facultyApprovalAt = new Date();
-    return this.courseProjectRepo.save(entry);
+    if (action !== 'approve') entry.meritRibbon = null;
+    const saved = await this.courseProjectRepo.save(entry);
+    const first = saved.studentInfo?.studentName?.split(' ')[0] || 'there';
+    const title = saved.projectTitle || 'Untitled';
+    try {
+      if (action === 'approve') {
+        await this.notificationsService.createNotification(saved.userId, {
+          type: 'approval',
+          title: 'Your coursework was approved',
+          message: `${first}, “${title}” is live. It now hangs on My Impact Wall and can be ranked in the analyzer.`,
+        });
+      } else {
+        const extra = (note || '').trim();
+        await this.notificationsService.createNotification(saved.userId, {
+          type: 'update',
+          title: 'Your coursework needs changes',
+          message: extra
+            ? `${first}, “${title}” was returned. ${extra} Open the report, fix, and resubmit — nothing is penalised.`
+            : `${first}, “${title}” was returned with notes. Open the report, fix, and resubmit — nothing is penalised.`,
+        });
+      }
+    } catch (err) {
+      this.logger.warn(`Coursework review notification failed for ${saved.id}: ${(err as Error).message}`);
+    }
+    return saved;
   }
 
   /** @deprecated single-entry accessor, kept for backward compatibility — returns the most recently touched entry. */
@@ -692,6 +734,60 @@ export class PathsService {
       count: ranked.length,
       entries: ranked,
     };
+  }
+
+  /** Notify owners of analyzer top-picks. Only ids in this caller's eligible (approved) pool are sent — a faculty member cannot notify another cohort. Ranks come from the UI so filtered runs match what students see. */
+  async notifyCourseProjectMeritRanks(
+    user: { role: string; email: string; organizationId?: string },
+    dto: NotifyMeritRanksDto,
+  ) {
+    const model = await this.getCourseProjectMeritModel(user, {});
+    const ranked: RankedMeritCard[] = Array.isArray(model.entries)
+      ? model.entries
+      : Array.isArray((model as { groups?: { entries: RankedMeritCard[] }[] }).groups)
+        ? (model as { groups: { entries: RankedMeritCard[] }[] }).groups.flatMap((g) => g.entries)
+        : [];
+    const allowed = new Set(ranked.map((c) => c.id));
+    const scope = (dto.scopeLabel || model.scope?.label || 'this ranking').trim();
+    const picks = (dto.picks?.length
+      ? dto.picks
+      : (dto.entryIds || []).map((entryId, i) => ({ entryId, rank: i + 1, of: ranked.length, total: undefined as number | undefined }))
+    )
+      .filter((p) => p.entryId && allowed.has(p.entryId))
+      .slice(0, 3);
+    const seen = new Set<string>();
+    let sent = 0;
+    for (const pick of picks) {
+      if (seen.has(pick.entryId)) continue;
+      seen.add(pick.entryId);
+      const entry = await this.courseProjectRepo.findOne({ where: { id: pick.entryId } });
+      if (!entry || entry.facultyApprovalStatus !== 'approved') continue;
+      const of = pick.of || ranked.length;
+      const rank = pick.rank;
+      const ribbon = { rank, of, scope, total: pick.total, at: new Date().toISOString() };
+      const already =
+        entry.meritRibbon?.rank === rank &&
+        entry.meritRibbon?.of === of &&
+        entry.meritRibbon?.scope === scope;
+      entry.meritRibbon = ribbon;
+      await this.courseProjectRepo.save(entry);
+      if (already) {
+        sent += 1;
+        continue;
+      }
+      const first = entry.studentInfo?.studentName?.split(' ')[0] || 'there';
+      try {
+        await this.notificationsService.createNotification(entry.userId, {
+          type: 'update',
+          title: `Your coursework ranked #${rank}`,
+          message: `${first}, your coursework “${entry.projectTitle || 'Untitled'}” ranked #${rank} of ${of} in ${scope}. Open Coursework → My Impact Wall to see the ribbon.`,
+        });
+        sent += 1;
+      } catch (err) {
+        this.logger.warn(`Merit rank notification failed for ${entry.id}: ${(err as Error).message}`);
+      }
+    }
+    return { notified: sent, scope };
   }
 
   private async attachStudents<T extends { userId: string }>(entries: T[]) {

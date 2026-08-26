@@ -100,7 +100,7 @@ export class FacultyReportsService {
             .leftJoinAndSelect('opportunity.organization', 'organization');
     }
 
-    async findAll(facultyId: string, facultyEmail: string) {
+    async listAssignedReports(facultyId: string, facultyEmail: string) {
         const scopedOpportunityIds = await this.facultyService.getScopedOpportunityIds(
             facultyId,
             facultyEmail,
@@ -120,6 +120,12 @@ export class FacultyReportsService {
             .andWhere('report.admin_status = :adminApproved', { adminApproved: 'approved' })
             .orderBy('report.submission_date', 'DESC')
             .getMany();
+
+        return reports;
+    }
+
+    async findAll(facultyId: string, facultyEmail: string) {
+        const reports = await this.listAssignedReports(facultyId, facultyEmail);
 
         return {
             success: true,

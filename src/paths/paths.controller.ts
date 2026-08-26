@@ -7,7 +7,7 @@ import { S3Service } from '../common/s3.service';
 import { assertStudentReportUploadMeta, studentReportPresignExpiresInSeconds } from '../common/student-report-file-upload';
 import { PathsService } from './paths.service';
 import { FacultyReviewCourseProjectDto, UpdateCourseProjectDto } from './dto/update-course-project.dto';
-import { MeritModelQueryDto } from './dto/merit-model-query.dto';
+import { MeritModelQueryDto, NotifyMeritRanksDto } from './dto/merit-model-query.dto';
 import { AddFypDeliverableDto, SupervisorReviewFypDto, UpdateFypDto } from './dto/update-fyp.dto';
 import { FypMeritModelQueryDto } from './dto/fyp-merit-model-query.dto';
 import { AddVentureDocumentDto, SetVentureVisibilityDto, UpdateVentureDto } from './dto/update-venture.dto';
@@ -99,6 +99,15 @@ export class PathsController {
     @Roles(UserRole.FACULTY, UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN, UserRole.SUPER_ADMIN)
     async getCourseProjectMeritModel(@Request() req, @Query() query: MeritModelQueryDto) {
         const data = await this.pathsService.getCourseProjectMeritModel(req.user, query);
+        return { success: true, data };
+    }
+
+    /** After a faculty/university/admin analyzer run — notify the owners of the top-ranked cards. Scoped to the caller's own eligible pool. */
+    @Post('course-projects/merit-model/notify')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.FACULTY, UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN, UserRole.SUPER_ADMIN)
+    async notifyCourseProjectMeritRanks(@Request() req, @Body() dto: NotifyMeritRanksDto) {
+        const data = await this.pathsService.notifyCourseProjectMeritRanks(req.user, dto);
         return { success: true, data };
     }
 

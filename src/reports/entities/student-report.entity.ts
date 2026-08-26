@@ -77,6 +77,18 @@ export class StudentReport {
     @Column({ type: 'text', nullable: true })
     admin_feedback: string;
 
+    /** Badges pinned when a stakeholder runs the community-service award model (faculty / partner / university / CIEL). */
+    @Column({ type: 'jsonb', nullable: true })
+    awardBadges?: Array<{
+        kind: 'fac' | 'par' | 'uni' | 'ciel';
+        label: string;
+        rank: number;
+        of: number;
+        score: number;
+        scope: string;
+        at: string;
+    }> | null;
+
     // Auto-Generated Summary Fields (Section 2 Context)
     @Column({ type: 'text', nullable: true })
     summary_text_generated: string;

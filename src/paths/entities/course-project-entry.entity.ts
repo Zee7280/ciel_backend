@@ -226,6 +226,10 @@ export class CourseProjectEntry {
     @Column({ type: 'timestamp', nullable: true })
     facultyApprovalAt: Date | null;
 
+    /** Pinned by the last analyzer notify in this card's eligible pool — shown on the student's Impact Wall. */
+    @Column({ type: 'jsonb', nullable: true })
+    meritRibbon?: { rank: number; of: number; scope: string; total?: number; at: string } | null;
+
     // ---------- Step 1: You & the course ----------
     @Column({ type: 'jsonb', nullable: true })
     studentInfo: CourseProjectStudentInfo | null;

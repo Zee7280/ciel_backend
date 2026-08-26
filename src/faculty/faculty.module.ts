@@ -16,6 +16,8 @@ import { OpportunitiesModule } from '../opportunities/opportunities.module';
 import { FacultyApplicationsController } from './faculty-applications.controller';
 import { FacultyUniversityScopeModule } from '../faculty-university-scope/faculty-university-scope.module';
 import { StudentsModule } from '../students/students.module';
+import { CommunityAwardModule } from '../reports/community-award.module';
+import { FacultyCommunityServiceController } from './faculty-community-service.controller';
 
 @Module({
     imports: [
@@ -31,9 +33,11 @@ import { StudentsModule } from '../students/students.module';
         OpportunitiesModule,
         FacultyUniversityScopeModule,
         StudentsModule,
+        CommunityAwardModule,
     ],
     controllers: [
         FacultyReportsController,
+        FacultyCommunityServiceController,
         FacultyController,
         FacultyDashboardController,
         FacultyApplicationsController,

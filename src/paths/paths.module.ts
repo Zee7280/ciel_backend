@@ -11,12 +11,14 @@ import { User } from '../users/entities/user.entity';
 import { Organization } from '../organizations/entities/organization.entity';
 import { StorageModule } from '../common/storage.module';
 import { MailModule } from '../mail/mail.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
     imports: [
         TypeOrmModule.forFeature([CourseProjectEntry, FypEntry, VentureEntry, TeamMemberInvite, User, Organization]),
         StorageModule,
         MailModule,
+        NotificationsModule,
     ],
     controllers: [PathsController, AdminPathsController],
     providers: [PathsService],

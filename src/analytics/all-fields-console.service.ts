@@ -16,6 +16,7 @@ import {
   AnalyticsFieldValues,
   AnalyticsStakeholder,
   REPORT_SECTION_TITLES,
+  analyticsSectionUiMark,
 } from './shared/section-analytics.types';
 import {
   AllFieldsConsoleRole,
@@ -107,7 +108,7 @@ export class AllFieldsConsoleService {
       sections.push({
         section,
         name: REPORT_SECTION_TITLES[section] ?? `Section ${section}`,
-        short_label: `S${section}`,
+        short_label: `S${analyticsSectionUiMark(section)}`,
         field_count: fields.length,
         fields,
       });

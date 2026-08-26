@@ -79,11 +79,19 @@ export const REPORT_SECTION_TITLES: Record<number, string> = {
     1: 'Participation & attendance',
     2: 'Project context',
     3: 'SDG alignment',
-    4: 'Activities & outputs',
-    5: 'Outcomes',
+    4: 'Activities & outputs (Part A)',
+    5: 'Outcomes (Part B)',
     6: 'Resources & mobilization',
     7: 'Partnerships & collaboration',
     8: 'Evidence & credibility',
     9: 'Reflection & competencies',
     10: 'Sustainability & continuation',
 };
+
+/** Display mark for stored section ids (APIs still use 1–10). */
+export function analyticsSectionUiMark(section: number): string {
+    if (section === 4) return '4A';
+    if (section === 5) return '4B';
+    if (section >= 6 && section <= 10) return String(section - 1);
+    return String(section);
+}

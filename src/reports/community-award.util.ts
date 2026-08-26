@@ -90,3 +90,35 @@ export function awardBadgeLabel(kind: CommunityAwardKind, scope: string) {
 export function awardTopN(kind: CommunityAwardKind) {
     return kind === 'par' || kind === 'fac' ? 1 : 3;
 }
+
+const LIVE_STATUS = new Set(['approved', 'verified']);
+const BLOCKED_STATUS = new Set(['draft', 'rejected', 'declined']);
+
+/**
+ * Live deck = faculty or admin actually signed off.
+ * Hours and “paid” (reporting fee) must not skip the waiting inbox —
+ * a submitted report with attendance still needs approval.
+ */
+export function isCommunityAwardLiveReport(input: {
+    status?: string | null;
+    faculty_status?: string | null;
+    hours?: number | null;
+}): boolean {
+    const overall = String(input.status || '').trim().toLowerCase();
+    const faculty = String(input.faculty_status || '').trim().toLowerCase();
+    if (BLOCKED_STATUS.has(overall) || BLOCKED_STATUS.has(faculty)) return false;
+    return LIVE_STATUS.has(faculty) || LIVE_STATUS.has(overall);
+}
+
+/** Medal / approved-opportunities vault — both faculty and admin must have signed off. */
+export function isCommunityAwardMedalReport(input: {
+    status?: string | null;
+    faculty_status?: string | null;
+    admin_status?: string | null;
+}): boolean {
+    const overall = String(input.status || '').trim().toLowerCase();
+    const faculty = String(input.faculty_status || '').trim().toLowerCase();
+    const admin = String(input.admin_status || '').trim().toLowerCase();
+    if (BLOCKED_STATUS.has(overall) || BLOCKED_STATUS.has(faculty) || BLOCKED_STATUS.has(admin)) return false;
+    return LIVE_STATUS.has(faculty) && (LIVE_STATUS.has(admin) || LIVE_STATUS.has(overall));
+}

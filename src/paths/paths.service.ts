@@ -26,6 +26,7 @@ import { UpdateCourseProjectDto } from './dto/update-course-project.dto';
 import { AddFypDeliverableDto, UpdateFypDto } from './dto/update-fyp.dto';
 import { FypMeritModelQueryDto } from './dto/fyp-merit-model-query.dto';
 import { AddVentureDocumentDto, UpdateVentureDto } from './dto/update-venture.dto';
+import { ventureMatchesFaculty } from './venture-faculty-scope.util';
 import {
   ventureCompletenessPercent,
   ventureMissingItems,
@@ -1296,6 +1297,59 @@ export class PathsService {
     await this.syncVentureInvites(saved, userId);
     const [annotated] = await this.ventureAnnotate([saved]);
     return this.withCompleteness(annotated);
+  }
+
+  /** Submitted ventures that name this teacher — email first, then stripped supervisor name. */
+  async listVenturesForTeacher(facultyEmail: string, facultyUserId?: string) {
+    const email = (facultyEmail || '').trim().toLowerCase();
+    if (!email) return [];
+    const faculty = facultyUserId
+      ? await this.usersRepo.findOne({ where: { id: facultyUserId } })
+      : await this.usersRepo.findOne({ where: { email } });
+    const facultyName = faculty?.name ?? null;
+    const entries = await this.ventureRepo.find({
+      where: { status: 'submitted' },
+      order: { updatedAt: 'DESC' },
+    });
+    const matched = entries.filter((e) =>
+      ventureMatchesFaculty(e.academicSetup, { email, name: facultyName }),
+    );
+    const annotated = await this.ventureAnnotate(matched);
+    const enriched = annotated.map((entry) => this.withCompleteness(entry)!);
+    return this.attachStudents(enriched);
+  }
+
+  /** Supervisor approve / request-changes for a submitted venture — same gate students already wait on. */
+  async supervisorReviewVenture(
+    facultyEmail: string,
+    id: string,
+    action: 'approve' | 'reject',
+    note?: string,
+    facultyUserId?: string,
+  ) {
+    const email = (facultyEmail || '').trim().toLowerCase();
+    if (!email) throw new NotFoundException('Venture entry not found');
+    const entry = await this.ventureRepo.findOne({ where: { id } });
+    const faculty = facultyUserId
+      ? await this.usersRepo.findOne({ where: { id: facultyUserId } })
+      : await this.usersRepo.findOne({ where: { email } });
+    if (
+      !entry ||
+      entry.status !== 'submitted' ||
+      !ventureMatchesFaculty(entry.academicSetup, { email, name: faculty?.name ?? null })
+    ) {
+      throw new NotFoundException('Venture entry not found');
+    }
+    entry.reviewPipeline = {
+      ...entry.reviewPipeline,
+      supervisorStatus: action === 'approve' ? 'approved' : 'revisions_requested',
+      supervisorNote: action === 'approve' ? null : note?.trim() || entry.reviewPipeline?.supervisorNote || null,
+    };
+    entry.isVisible = deriveVentureIsVisible(entry);
+    const saved = await this.ventureRepo.save(entry);
+    const [annotated] = await this.ventureAnnotate([saved]);
+    const [withStudent] = await this.attachStudents([this.withCompleteness(annotated)!]);
+    return withStudent;
   }
 
   async addVentureDocument(userId: string, dto: AddVentureDocumentDto) {

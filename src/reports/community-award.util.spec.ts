@@ -1,4 +1,4 @@
-import { scoreCommunityAward } from './community-award.util';
+import { isCommunityAwardLiveReport, isCommunityAwardMedalReport, scoreCommunityAward } from './community-award.util';
 
 describe('community-award.util', () => {
     it('scores CII as 40% of the 100-point index and caps each band', () => {
@@ -28,5 +28,56 @@ describe('community-award.util', () => {
             partnerCount: 0,
         });
         expect(thin.total).toBeLessThan(15);
+    });
+});
+
+describe('isCommunityAwardLiveReport', () => {
+    it('keeps faculty-approved and verified reports on the live deck', () => {
+        expect(isCommunityAwardLiveReport({ faculty_status: 'approved', status: 'submitted', hours: 0 })).toBe(true);
+        expect(isCommunityAwardLiveReport({ faculty_status: 'pending', status: 'verified', hours: 0 })).toBe(true);
+    });
+
+    it('keeps submitted reports in the waiting inbox even when hours are already logged', () => {
+        expect(isCommunityAwardLiveReport({ faculty_status: 'pending', status: 'submitted', hours: 16 })).toBe(false);
+        expect(isCommunityAwardLiveReport({ faculty_status: 'pending', status: 'submitted', hours: 0 })).toBe(false);
+        expect(isCommunityAwardLiveReport({ faculty_status: 'pending', status: 'paid', hours: 16 })).toBe(false);
+    });
+
+    it('excludes drafts and rejections', () => {
+        expect(isCommunityAwardLiveReport({ faculty_status: 'pending', status: 'draft', hours: 20 })).toBe(false);
+        expect(isCommunityAwardLiveReport({ faculty_status: 'rejected', status: 'submitted', hours: 20 })).toBe(false);
+    });
+});
+
+describe('isCommunityAwardMedalReport', () => {
+    it('requires faculty and admin sign-off for the award vault', () => {
+        expect(
+            isCommunityAwardMedalReport({
+                faculty_status: 'approved',
+                admin_status: 'approved',
+                status: 'submitted',
+            }),
+        ).toBe(true);
+        expect(
+            isCommunityAwardMedalReport({
+                faculty_status: 'approved',
+                admin_status: 'pending',
+                status: 'submitted',
+            }),
+        ).toBe(false);
+        expect(
+            isCommunityAwardMedalReport({
+                faculty_status: 'pending',
+                admin_status: 'approved',
+                status: 'verified',
+            }),
+        ).toBe(false);
+        expect(
+            isCommunityAwardMedalReport({
+                faculty_status: 'approved',
+                admin_status: 'pending',
+                status: 'verified',
+            }),
+        ).toBe(true);
     });
 });

@@ -1726,7 +1726,18 @@ export class OpportunitiesService {
                     sdg: opp.sdg_info?.sdg_id || opp.sdg,
                     applicants_count: occupiedSeats,
                     remaining_seats: Math.max(0, volunteersRequired - occupiedSeats),
+                    volunteers_required: volunteersRequired,
+                    expected_hours: Number(opp.timeline?.expected_hours) || 0,
                     organization_name: opp.organization?.name || null,
+                    partner_name:
+                        (typeof opp.partner_organization?.organization_name === 'string' &&
+                            opp.partner_organization.organization_name) ||
+                        (typeof opp.partner_organization?.name === 'string' && opp.partner_organization.name) ||
+                        (typeof opp.external_partner_collaboration?.organization_name === 'string' &&
+                            opp.external_partner_collaboration.organization_name) ||
+                        null,
+                    admin_approved: opp.admin_approved === true,
+                    rejection_reason: opp.rejectionReason ?? null,
                 };
             }),
         );

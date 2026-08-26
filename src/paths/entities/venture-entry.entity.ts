@@ -33,6 +33,8 @@ export interface VentureAcademicSetup {
     courseCode?: string;
     groupId?: string;
     supervisorName?: string;
+    /** Optional — used to match the faculty cohort deck the same way FYP uses supervisorEmail. */
+    supervisorEmail?: string;
     coSupervisor?: string;
     deadline?: string;
     teamType?: string;
@@ -117,6 +119,7 @@ export interface VentureReviewPipeline {
     declarationConsent?: boolean;
     studentDeclaredAt?: string;
     supervisorStatus?: 'not_started' | 'pending' | 'approved' | 'revisions_requested';
+    supervisorNote?: string | null;
     universityStatus?: 'not_started' | 'pending' | 'approved';
     sdgReviewStatus?: 'not_started' | 'pending' | 'approved';
 }

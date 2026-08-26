@@ -68,6 +68,7 @@ export class VentureAcademicSetupDto {
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) courseCode?: string;
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) groupId?: string;
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) supervisorName?: string;
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) supervisorEmail?: string;
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) coSupervisor?: string;
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) deadline?: string;
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) teamType?: string;
@@ -250,6 +251,12 @@ export class UpdateVentureDto {
     stepCompleted?: number;
 
     @IsOptional() @IsIn(['draft', 'submitted']) status?: 'draft' | 'submitted';
+}
+
+export class SupervisorReviewVentureDto {
+    @IsIn(['approve', 'reject'])
+    action: 'approve' | 'reject';
+    @IsOptional() @IsString() note?: string;
 }
 
 export class AddVentureDocumentDto extends VentureDocumentDto {}

@@ -10,7 +10,7 @@ import { FacultyReviewCourseProjectDto, UpdateCourseProjectDto } from './dto/upd
 import { MeritModelQueryDto, NotifyMeritRanksDto } from './dto/merit-model-query.dto';
 import { AddFypDeliverableDto, SupervisorReviewFypDto, UpdateFypDto } from './dto/update-fyp.dto';
 import { FypMeritModelQueryDto } from './dto/fyp-merit-model-query.dto';
-import { AddVentureDocumentDto, SetVentureVisibilityDto, UpdateVentureDto } from './dto/update-venture.dto';
+import { AddVentureDocumentDto, SetVentureVisibilityDto, SupervisorReviewVentureDto, UpdateVentureDto } from './dto/update-venture.dto';
 import { ResendTeamInviteDto } from './dto/team-invite.dto';
 
 @Controller('paths')
@@ -211,6 +211,24 @@ export class PathsController {
     }
 
     // ---------- Startup / Business ----------
+
+    /** Ventures from students who named this teacher as supervisor — the faculty cohort deck. */
+    @Get('startup-business/supervised')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.FACULTY)
+    async listSupervisedVentures(@Request() req) {
+        const data = await this.pathsService.listVenturesForTeacher(req.user.email, req.user.id);
+        return { success: true, data };
+    }
+
+    /** Supervisor approve / request-changes — the gate students already wait on in reviewPipeline. */
+    @Patch('startup-business/:id/supervisor-review')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.FACULTY)
+    async supervisorReviewVenture(@Request() req, @Param('id', ParseUUIDPipe) id: string, @Body() dto: SupervisorReviewVentureDto) {
+        const data = await this.pathsService.supervisorReviewVenture(req.user.email, id, dto.action, dto.note, req.user.id);
+        return { success: true, data };
+    }
 
     @Get('startup-business')
     async getVenture(@Request() req) {

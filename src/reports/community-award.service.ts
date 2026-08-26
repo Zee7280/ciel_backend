@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, Repository } from 'typeorm';
+import { Brackets, Repository, SelectQueryBuilder } from 'typeorm';
 import { StudentReport } from './entities/student-report.entity';
 import { Organization } from '../organizations/entities/organization.entity';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -11,6 +11,7 @@ import {
     countMedia,
     readCii,
     scoreCommunityAward,
+    isCommunityAwardMedalReport,
     type CommunityAwardKind,
 } from './community-award.util';
 
@@ -111,21 +112,46 @@ export class CommunityAwardService {
     }
 
     private facultyApproved(report: StudentReport) {
-        return (report.faculty_status || '').toLowerCase() === 'approved';
+        return isCommunityAwardMedalReport({
+            status: report.status,
+            faculty_status: report.faculty_status,
+            admin_status: report.admin_status,
+        });
     }
 
     cardsFrom(reports: StudentReport[], approvedOnly = true): CommunityAwardCard[] {
         return reports.filter((r) => (approvedOnly ? this.facultyApproved(r) : true)).map((r) => this.toCard(r));
     }
 
+    private applyLiveDeckWhere(qb: SelectQueryBuilder<StudentReport>) {
+        qb.andWhere(`LOWER(TRIM(COALESCE(report.status, ''))) NOT IN (:...blockedStatus)`, {
+            blockedStatus: ['draft', 'rejected', 'declined'],
+        })
+            .andWhere(`LOWER(TRIM(COALESCE(report.faculty_status, ''))) IN (:...liveFaculty)`, {
+                liveFaculty: ['approved', 'verified'],
+            })
+            .andWhere(
+                new Brackets((q) => {
+                    q.where(`LOWER(TRIM(COALESCE(report.admin_status, ''))) IN (:...liveAdmin)`, {
+                        liveAdmin: ['approved', 'verified'],
+                    }).orWhere(`LOWER(TRIM(COALESCE(report.status, ''))) IN (:...liveStatus)`, {
+                        liveStatus: ['approved', 'verified'],
+                    });
+                }),
+            );
+    }
+
     async listForPartnerOrg(organizationId: string): Promise<CommunityAwardCard[]> {
         if (!organizationId) return [];
-        const rows = await this.reports.find({
-            where: { faculty_status: 'approved', admin_status: 'approved' },
-            relations: ['student', 'opportunity', 'opportunity.organization'],
-            order: { submission_date: 'DESC' },
-        });
-        return rows.filter((r) => r.opportunity?.organizationId === organizationId).map((r) => this.toCard(r));
+        const qb = this.reports
+            .createQueryBuilder('report')
+            .leftJoinAndSelect('report.student', 'student')
+            .leftJoinAndSelect('report.opportunity', 'opportunity')
+            .leftJoinAndSelect('opportunity.organization', 'organization')
+            .where('opportunity.organizationId = :oid', { oid: organizationId });
+        this.applyLiveDeckWhere(qb);
+        const rows = await qb.orderBy('report.submission_date', 'DESC').getMany();
+        return rows.filter((r) => this.facultyApproved(r)).map((r) => this.toCard(r));
     }
 
     async listForUniversity(organizationId: string): Promise<CommunityAwardCard[]> {
@@ -138,34 +164,35 @@ export class CommunityAwardService {
             .leftJoin('student.organization', 'studentOrg')
             .leftJoinAndSelect('report.opportunity', 'opportunity')
             .leftJoinAndSelect('opportunity.organization', 'organization')
-            .where('LOWER(TRIM(report.faculty_status)) = :fa', { fa: 'approved' })
-            .andWhere('LOWER(TRIM(report.admin_status)) = :aa', { aa: 'approved' })
-            .andWhere(
+            .where(
                 new Brackets((q) => {
                     q.where('studentOrg.id = :oid', { oid: organizationId }).orWhere(
                         'opportunity.organizationId = :oid',
                         { oid: organizationId },
                     );
                     if (name) {
-                        q.orWhere('LOWER(TRIM(COALESCE(student.university, student.institution, \'\'))) = :n', { n: name }).orWhere(
-                            `LOWER(TRIM(COALESCE(report.section1->'team_lead'->>'university', ''))) = :n`,
-                            { n: name },
-                        );
+                        q.orWhere('LOWER(TRIM(COALESCE(student.university, student.institution, \'\'))) = :n', {
+                            n: name,
+                        }).orWhere(`LOWER(TRIM(COALESCE(report.section1->'team_lead'->>'university', ''))) = :n`, {
+                            n: name,
+                        });
                     }
                 }),
-            )
-            .orderBy('report.submission_date', 'DESC');
-        const rows = await qb.getMany();
-        return rows.map((r) => this.toCard(r));
+            );
+        this.applyLiveDeckWhere(qb);
+        const rows = await qb.orderBy('report.submission_date', 'DESC').getMany();
+        return rows.filter((r) => this.facultyApproved(r)).map((r) => this.toCard(r));
     }
 
     async listForAdmin(): Promise<CommunityAwardCard[]> {
-        const rows = await this.reports.find({
-            where: { faculty_status: 'approved', admin_status: 'approved' },
-            relations: ['student', 'opportunity', 'opportunity.organization'],
-            order: { submission_date: 'DESC' },
-        });
-        return rows.map((r) => this.toCard(r));
+        const qb = this.reports
+            .createQueryBuilder('report')
+            .leftJoinAndSelect('report.student', 'student')
+            .leftJoinAndSelect('report.opportunity', 'opportunity')
+            .leftJoinAndSelect('opportunity.organization', 'organization');
+        this.applyLiveDeckWhere(qb);
+        const rows = await qb.orderBy('report.submission_date', 'DESC').getMany();
+        return rows.filter((r) => this.facultyApproved(r)).map((r) => this.toCard(r));
     }
 
     async notifyFromPool(

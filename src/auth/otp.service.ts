@@ -88,8 +88,10 @@ export class OtpService {
         const email = this.normalizeEmail(rawEmail);
         const otp = String(rawOtp || '').trim();
 
+        // Latest row for this email — including already-verified — so a retry after a
+        // failed signup (duplicate, validation, etc.) does not look like an expired code.
         const row = await this.emailOtpRepository.findOne({
-            where: { email, verified: false },
+            where: { email },
             order: { createdAt: 'DESC' },
         });
 
@@ -106,8 +108,10 @@ export class OtpService {
             throw new BadRequestException('Invalid OTP');
         }
 
-        row.verified = true;
-        await this.emailOtpRepository.save(row);
+        if (!row.verified) {
+            row.verified = true;
+            await this.emailOtpRepository.save(row);
+        }
 
         return {
             success: true,
@@ -123,10 +127,9 @@ export class OtpService {
         });
 
         if (!row) {
-            throw new ForbiddenException({
-                success: false,
-                message: 'Email not verified. Please complete OTP verification first.',
-            });
+            throw new ForbiddenException(
+                'Email not verified. Please complete OTP verification first.',
+            );
         }
     }
 

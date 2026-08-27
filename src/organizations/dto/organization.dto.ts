@@ -24,6 +24,18 @@ export class CreateOrganizationDto {
     @IsString()
     @IsOptional()
     city?: string;
+
+    @IsOptional()
+    @IsString()
+    contactName?: string;
+
+    @IsOptional()
+    @IsEmail()
+    contactEmail?: string;
+
+    @IsOptional()
+    @IsString()
+    contactPhone?: string;
 }
 
 export class UpdateOrganizationDto {

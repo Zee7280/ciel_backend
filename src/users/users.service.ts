@@ -147,7 +147,15 @@ export class UsersService {
     }
 
     async findByEmail(email: string): Promise<User | null> {
-        return this.usersRepository.findOne({ where: { email }, relations: ['organization'] });
+        const normalized = String(email || '')
+            .trim()
+            .toLowerCase();
+        if (!normalized) return null;
+        return this.usersRepository
+            .createQueryBuilder('user')
+            .leftJoinAndSelect('user.organization', 'organization')
+            .where('LOWER(user.email) = :email', { email: normalized })
+            .getOne();
     }
 
     async findAll(): Promise<User[]> {

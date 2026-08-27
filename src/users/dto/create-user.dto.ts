@@ -17,7 +17,15 @@ export class CreateUserDto {
 
     @IsOptional()
     @IsString()
+    university?: string;
+
+    @IsOptional()
+    @IsString()
     department?: string;
+
+    @IsOptional()
+    @IsString()
+    faculty_department?: string;
 
     @IsOptional()
     @IsString()

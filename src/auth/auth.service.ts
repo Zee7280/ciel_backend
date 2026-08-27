@@ -21,6 +21,13 @@ import {
     LEGAL_REGISTRATION_TYPE_SET,
     ORGANIZATION_CATEGORY_SET,
 } from '../organizations/organization-taxonomy.constants';
+import {
+    applyAcademicSignupFields,
+    composeSignupContactPhone,
+    isOrgSignupRole,
+    isPublicSignupRole,
+    resolveOrgSignupAccount,
+} from './org-signup.util';
 
 @Injectable()
 export class AuthService {
@@ -99,6 +106,10 @@ export class AuthService {
             const { status: _clientStatus, ...userData } = rawUserData as SignupDto & { status?: string };
             const email = rawEmail.trim().toLowerCase();
 
+            if (!isPublicSignupRole(userData.role)) {
+                throw new BadRequestException('Invalid account type');
+            }
+
             // Check if user already exists
             const existingUser = await this.usersService.findByEmail(email);
             if (existingUser) {
@@ -107,21 +118,23 @@ export class AuthService {
 
             await this.otpService.requireVerifiedEmailForSignup(email);
 
-            if (
-                userData.role === UserRole.UNIVERSITY ||
-                userData.role === UserRole.NGO ||
-                userData.role === UserRole.CORPORATE
-            ) {
+            if (isOrgSignupRole(userData.role)) {
                 userData.orgType = userData.role;
+            }
+
+            const academic = applyAcademicSignupFields(userData);
+            if (academic.university) userData.university = academic.university;
+            if (academic.faculty_department) {
+                userData.faculty_department = academic.faculty_department;
             }
 
             if (userData.role === UserRole.UNIVERSITY) {
                 const institution = (userData.orgName || '').trim();
                 if (!institution) {
-                    throw new BadRequestException('Institution name is required');
+                    throw new BadRequestException('Org name is required');
                 }
                 if (!PAKISTANI_UNIVERSITIES_SET.has(institution)) {
-                    throw new BadRequestException('Institution must be selected from the approved list');
+                    throw new BadRequestException('Org name must be selected from the approved list');
                 }
                 userData.orgName = institution;
             }
@@ -134,6 +147,23 @@ export class AuthService {
                 userData.role === UserRole.CORPORATE;
 
             if (isOrgSignup) {
+                const mapped = resolveOrgSignupAccount({
+                    role: userData.role,
+                    name: userData.name,
+                    contactPerson: userData.contactPerson,
+                    orgName: userData.orgName,
+                });
+                if (!mapped.orgName) {
+                    throw new BadRequestException('Org name is required');
+                }
+                if (!mapped.name) {
+                    throw new BadRequestException('Lead official is required');
+                }
+                userData.name = mapped.name;
+                userData.contactPerson = mapped.contactPerson;
+                userData.orgName = mapped.orgName;
+                if (mapped.institution) userData.institution = mapped.institution;
+                if (mapped.university) userData.university = mapped.university;
                 if (!organizationCategory) {
                     throw new BadRequestException('Organization type is required');
                 }
@@ -152,6 +182,11 @@ export class AuthService {
 
             const hashedPassword = await bcrypt.hash(password, 10);
 
+            const contactPhone = composeSignupContactPhone(userCreateData.countryCode, userCreateData.phone);
+            if (contactPhone) {
+                userCreateData.phone = contactPhone;
+            }
+
             let organization: Organization | null = null;
             if (userCreateData.orgName && userCreateData.orgType) {
                 organization = await this.organizationsService.create({
@@ -159,6 +194,13 @@ export class AuthService {
                     orgType: userCreateData.orgType,
                     ...(isOrgSignup
                         ? { organizationCategory, legalRegistrationType }
+                        : {}),
+                    ...(isOrgSignup
+                        ? {
+                              contactName: userCreateData.contactPerson,
+                              contactEmail: email,
+                              ...(contactPhone ? { contactPhone } : {}),
+                          }
                         : {}),
                 });
             }

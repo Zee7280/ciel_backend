@@ -52,7 +52,7 @@ function deriveEvidence(entry: CourseProjectEntry): { evs: string; num: string; 
         return { evs: 'Qualitative evidence', num: '', numOk };
     }
     if (measured.startsWith('Not yet')) return { evs: 'Not measured yet', num: '', numOk };
-    if (entry.moduleInclusion?.find === false) return { evs: 'Not applicable', num: '', numOk };
+    if (entry.moduleInclusion?.find === false && findingsCount === 0) return { evs: 'Not applicable', num: '', numOk };
     return { evs: 'Not measured yet', num: '', numOk };
 }
 

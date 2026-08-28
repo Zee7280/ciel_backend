@@ -15,6 +15,9 @@ import {
     BadRequestException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
+import { UserRole } from '../users/enums/user-role.enum';
 import { StudentsService } from './students.service';
 import { StudentReportsService } from '../reports/student-reports.service';
 import { ApplyOpportunityDto } from './dto/apply-opportunity.dto';
@@ -24,7 +27,8 @@ import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { S3Service } from '../common/s3.service';
 
 @Controller('students')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.STUDENT, UserRole.SUPER_ADMIN)
 export class StudentsController {
     constructor(
         private readonly studentsService: StudentsService,

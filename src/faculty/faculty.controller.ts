@@ -1,10 +1,14 @@
 import { Controller, Get, Post, Body, Query, Param, UseGuards, Request } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
+import { UserRole } from '../users/enums/user-role.enum';
 import { FacultyService } from './faculty.service';
 import { OpportunitiesService } from '../opportunities/opportunities.service';
 
 @Controller('faculty/approvals')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.FACULTY)
 export class FacultyController {
     constructor(
         private readonly facultyService: FacultyService,

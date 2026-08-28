@@ -14,6 +14,8 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
 import { StudentsService } from './students.service';
 import { StudentParticipationService } from './student-participation.service';
 import { StudentReportsService } from '../reports/student-reports.service';
@@ -29,7 +31,8 @@ import {
 import { S3Service } from '../common/s3.service';
 
 @Controller('student')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.STUDENT, UserRole.SUPER_ADMIN)
 export class StudentController {
   constructor(
     private readonly studentsService: StudentsService,

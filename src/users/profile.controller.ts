@@ -15,15 +15,8 @@ export class ProfileController {
 
     @Put()
     async updateProfile(@Request() req, @Body() body: any) {
-        // Only allow updating certain fields
-        const { name, phone, avatar } = body;
-        const updateData: any = {};
-        if (name) updateData.name = name;
-        if (phone) updateData.phone = phone;
-        if (avatar) updateData.avatar = avatar;
-
-        const updatedUser = await this.usersService.update(req.user.id, updateData);
-        return { success: true, data: await this.usersService.formatUserResponse(updatedUser) };
+        const result = await this.usersService.updateGenericProfile(req.user.id, body);
+        return { success: true, data: result.data };
     }
 
     @Post('change-password')

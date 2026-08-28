@@ -187,9 +187,6 @@ export class StudentController {
 
   @Get('reports/:id')
   getReportById(@Request() req, @Param('id') id: string) {
-    console.log(
-      `[StudentController] getReportById HIT! ID: ${id}, User: ${req.user.id}`,
-    );
     return this.studentReportsService.findOneByOpportunityOrId(id, req.user.id);
   }
 

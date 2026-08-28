@@ -1537,7 +1537,6 @@ export class OpportunitiesService {
                 throw new ForbiddenException('User must belong to an organization to update opportunities');
             }
             if (opportunity.organizationId !== orgId) {
-                console.log(`Access Denied: Org ID mismatch. UserOrg: ${orgId}, OpportunityOrg: ${opportunity.organizationId}`);
                 throw new ForbiddenException('You do not have access to this opportunity');
             }
         }
@@ -2146,6 +2145,20 @@ export class OpportunitiesService {
         const saved = await this.opportunitiesRepository.save(opp);
         await this.handleAdminApprovedSideEffects(saved);
         return saved;
+    }
+
+    /** Lightweight admin status toggle from the projects list dropdown — a raw `status` field set,
+     * deliberately distinct from approve/reject/revise above (which encode the full admin-approval
+     * workflow with its own preconditions, notifications and idempotency rules). */
+    async setStatus(id: string, status: string) {
+        const allowed = ['active', 'closed', 'draft', 'pending_approval', 'rejected'];
+        if (!allowed.includes(status)) {
+            throw new BadRequestException(`Invalid status. Must be one of: ${allowed.join(', ')}`);
+        }
+        const opp = await this.findOne(id);
+        if (!opp) throw new NotFoundException('Opportunity not found');
+        opp.status = status;
+        return this.opportunitiesRepository.save(opp);
     }
 
     async reject(id: string, reason: string) {

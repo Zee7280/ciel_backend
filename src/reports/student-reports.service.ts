@@ -2261,12 +2261,6 @@ export class StudentReportsService {
   }
 
   async findOneByOpportunityOrId(id: string, studentId: string) {
-    console.log(
-      `[StudentReportsService] findOneByOpportunityOrId search started:`,
-    );
-    console.log(`  - Target ID (URL): ${id}`);
-    console.log(`  - Student ID (from JWT): ${studentId}`);
-
     // Try finding by primary key (Report ID) first
     let report = await this.studentReportsRepository.findOne({
       where: { id, studentId },
@@ -2274,10 +2268,6 @@ export class StudentReportsService {
     });
 
     let attendanceParticipantId = studentId;
-
-    if (report) {
-      console.log(`  - Match found by Primary Key (Report ID)`);
-    }
 
     if (!report && this.looksLikeUuid(id)) {
       const byPk = await this.studentReportsRepository.findOne({
@@ -2294,9 +2284,6 @@ export class StudentReportsService {
         where: { verificationPublicSlug: id, studentId },
         relations: ['student', 'opportunity'],
       });
-      if (report) {
-        console.log(`  - Match found by verification_public_slug`);
-      }
     }
 
     if (!report) {
@@ -2314,9 +2301,6 @@ export class StudentReportsService {
 
     // If not found, resolve canonical team report or own row by opportunityId / project_id
     if (!report) {
-      console.log(
-        `  - Not found by Report ID. Searching by opportunityId or project_id...`,
-      );
       const resolved = await this.resolveReportRecordForParticipantRead(
         studentId,
         id,

@@ -856,31 +856,33 @@ export class PathsService {
     if (!resolved) return { unlimited: true, used: 0, limit: 0 };
     const academicYear = new Date().getFullYear();
     const limit = 3;
-    let row = await this.graderRunRepo.findOne({
-      where: { scope: resolved.scope, scopeKey: resolved.key, academicYear },
+    // Locked read-modify-write — without this, two near-simultaneous "Run" clicks from the same
+    // scope+year can both read the same pre-image and both save runCount+1, undercounting by one.
+    const runCount = await this.graderRunRepo.manager.transaction(async (manager) => {
+      const repo = manager.getRepository(CourseworkGraderRun);
+      let row = await repo.findOne({
+        where: { scope: resolved.scope, scopeKey: resolved.key, academicYear },
+        lock: { mode: 'pessimistic_write' },
+      });
+      const used = row?.runCount ?? 0;
+      if (used >= limit) {
+        throw new ForbiddenException({
+          success: false,
+          code: 'GRADER_RUNS_EXHAUSTED',
+          message: `No AI Grader runs left this year (used ${used} of ${limit}). Runs reset next academic year.`,
+          used,
+          limit,
+        });
+      }
+      if (!row) {
+        row = repo.create({ scope: resolved.scope, scopeKey: resolved.key, academicYear, runCount: 0 });
+      }
+      row.runCount = used + 1;
+      row.lastRunAt = new Date();
+      const saved = await repo.save(row);
+      return saved.runCount;
     });
-    const used = row?.runCount ?? 0;
-    if (used >= limit) {
-      throw new ForbiddenException({
-        success: false,
-        code: 'GRADER_RUNS_EXHAUSTED',
-        message: `No AI Grader runs left this year (used ${used} of ${limit}). Runs reset next academic year.`,
-        used,
-        limit,
-      });
-    }
-    if (!row) {
-      row = this.graderRunRepo.create({
-        scope: resolved.scope,
-        scopeKey: resolved.key,
-        academicYear,
-        runCount: 0,
-      });
-    }
-    row.runCount = used + 1;
-    row.lastRunAt = new Date();
-    await this.graderRunRepo.save(row);
-    return { unlimited: false, used: row.runCount, limit };
+    return { unlimited: false, used: runCount, limit };
   }
 
   /** Notify owners of analyzer top-picks. Only ids in this caller's eligible (approved) pool are sent — a faculty member cannot notify another cohort. Ranks come from the UI so filtered runs match what students see. */
@@ -1233,10 +1235,15 @@ export class PathsService {
         entry.stepCompleted = dto.stepCompleted;
       if (dto.status !== undefined) entry.status = dto.status;
       // Editing a previously-approved record after the fact invalidates that approval — same
-      // rule as Course Project's applyCourseProjectPatch, see the comment there.
+      // rule as Course Project's applyCourseProjectPatch, see the comment there. Same for a
+      // rejected record: fix & resubmit should land as a fresh review, not stay stuck on
+      // "rejected". Keep the supervisor's note so the student still sees it.
       if (entry.status === 'submitted' && entry.supervisorApprovalStatus === 'approved') {
         entry.supervisorApprovalStatus = 'pending';
         entry.supervisorApprovalNote = null;
+        entry.supervisorApprovalAt = null;
+      } else if (entry.status === 'submitted' && entry.supervisorApprovalStatus === 'rejected') {
+        entry.supervisorApprovalStatus = 'pending';
         entry.supervisorApprovalAt = null;
       }
       return repo.save(entry);

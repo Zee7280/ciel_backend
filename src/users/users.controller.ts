@@ -19,10 +19,10 @@ export class UsersController {
         return this.usersService.getProfile(req.user.id);
     }
 
+    @UseGuards(JwtAuthGuard)
     @Post('me')
-    getProfilePost(@Body() body: { userId: string }) {
-        console.log('getProfilePost body:', JSON.stringify(body));
-        return this.usersService.getProfile(body.userId);
+    getProfilePost(@Request() req) {
+        return this.usersService.getProfile(req.user.id);
     }
 
     @Post('update')

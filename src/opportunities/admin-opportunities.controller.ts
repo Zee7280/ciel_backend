@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Put,
   Body,
   Param,
   Query,
@@ -109,6 +110,14 @@ export class AdminOpportunitiesController {
   async approvePatch(@Param('id') id: string) {
     await this.opportunitiesService.approve(id);
     return { success: true, data: {} };
+  }
+
+  @Put(':id/status')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  async setStatus(@Param('id') id: string, @Body() body: { status: string }) {
+    const saved = await this.opportunitiesService.setStatus(id, body.status);
+    return { success: true, data: { id: saved.id, status: saved.status } };
   }
 
   @Post(':id/reject')

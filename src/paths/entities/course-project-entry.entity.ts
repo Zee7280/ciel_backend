@@ -1,4 +1,5 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Index } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Index, BeforeInsert, BeforeUpdate } from 'typeorm';
+import { randomUUID } from 'crypto';
 
 export interface CourseProjectGroupMember {
     name: string;
@@ -286,9 +287,22 @@ export class CourseProjectEntry {
     @Column({ default: 'draft' })
     status: string; // draft | submitted
 
+    /** Unique public key for the badge's QR/share verify link — assigned once, never overwritten,
+     * mirrors StudentReport's verificationPublicSlug mechanism. */
+    @Column({ type: 'varchar', length: 36, nullable: true, unique: true })
+    verificationPublicSlug: string | null;
+
     @CreateDateColumn()
     createdAt: Date;
 
     @UpdateDateColumn()
     updatedAt: Date;
+
+    @BeforeInsert()
+    @BeforeUpdate()
+    assignVerificationPublicSlugIfNeeded(): void {
+        if (!this.verificationPublicSlug?.trim()) {
+            this.verificationPublicSlug = randomUUID();
+        }
+    }
 }

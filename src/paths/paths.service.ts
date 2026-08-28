@@ -22,6 +22,8 @@ import {
   TeamMemberInvite,
   TeamMemberInviteKind,
 } from './entities/team-member-invite.entity';
+import { CourseworkGraderRun, CourseworkGraderRunScope } from './entities/coursework-grader-run.entity';
+import { formatCertificateVerificationCode } from '../reports/certificate-verification-code.util';
 import { UpdateCourseProjectDto } from './dto/update-course-project.dto';
 import { AddFypDeliverableDto, UpdateFypDto } from './dto/update-fyp.dto';
 import { FypMeritModelQueryDto } from './dto/fyp-merit-model-query.dto';
@@ -63,6 +65,8 @@ export class PathsService {
     private readonly organizationsRepo: Repository<Organization>,
     private readonly mailService: MailService,
     private readonly notificationsService: NotificationsService,
+    @InjectRepository(CourseworkGraderRun)
+    private readonly graderRunRepo: Repository<CourseworkGraderRun>,
   ) {}
 
   // ---------- Team-member invites (shared across Course Project / FYP / Venture) ----------
@@ -390,10 +394,11 @@ export class PathsService {
       entries,
       'course_project',
       (e) => e.studentInfo?.groupMembers,
-      (e, members) => ({
-        ...e,
-        studentInfo: { ...e.studentInfo, groupMembers: members } as CourseProjectStudentInfo,
-      }),
+      (e, members) =>
+        ({
+          ...e,
+          studentInfo: { ...e.studentInfo, groupMembers: members } as CourseProjectStudentInfo,
+        }) as CourseProjectEntry,
     );
   }
 
@@ -673,10 +678,13 @@ export class PathsService {
     });
     const userById = new Map(users.map((u) => [u.id, u]));
 
-    return annotated.map((entry) => ({
-      ...entry,
-      student: userById.get(entry.userId) ?? null,
-    }));
+    return annotated.map(
+      (entry) =>
+        ({
+          ...entry,
+          student: userById.get(entry.userId) ?? null,
+        }) as CourseProjectEntry & { student: User | null },
+    );
   }
 
   async getCourseProjectForAdmin(id: string) {
@@ -703,6 +711,7 @@ export class PathsService {
     let scopeLabel = 'No scope';
     const honorsWideFilters =
       role === UserRole.UNIVERSITY || role === UserRole.ORGANIZATION_ADMIN || role === UserRole.SUPER_ADMIN;
+    const graderRuns = await this.peekGraderRunUsage(user);
 
     if (role === UserRole.FACULTY) {
       pool = await this.listCourseProjectsForTeacher(user.email);
@@ -728,6 +737,7 @@ export class PathsService {
         cohortAverage: 0,
         count: 0,
         entries: [],
+        graderRuns,
       };
     }
 
@@ -788,6 +798,7 @@ export class PathsService {
         cohortAverage,
         count: cards.length,
         groups: rankedGroups,
+        graderRuns,
       };
     }
 
@@ -800,7 +811,76 @@ export class PathsService {
       cohortAverage,
       count: ranked.length,
       entries: ranked,
+      graderRuns,
     };
+  }
+
+  /** Which grader-run scope (and key) this caller consumes against — null means unlimited (CIEL/admin). */
+  private resolveGraderRunScope(user: {
+    role: string;
+    email: string;
+    organizationId?: string;
+  }): { scope: CourseworkGraderRunScope; key: string } | null {
+    if (user.role === UserRole.FACULTY) {
+      return { scope: 'faculty', key: (user.email || '').trim().toLowerCase() };
+    }
+    if ((user.role === UserRole.UNIVERSITY || user.role === UserRole.ORGANIZATION_ADMIN) && user.organizationId) {
+      return { scope: 'university', key: user.organizationId };
+    }
+    return null;
+  }
+
+  /** Read-only peek at this caller's grader-run usage — never creates/increments a row. */
+  private async peekGraderRunUsage(user: {
+    role: string;
+    email: string;
+    organizationId?: string;
+  }): Promise<{ unlimited: boolean; used: number; limit: number }> {
+    const resolved = this.resolveGraderRunScope(user);
+    if (!resolved) return { unlimited: true, used: 0, limit: 0 };
+    const academicYear = new Date().getFullYear();
+    const row = await this.graderRunRepo.findOne({
+      where: { scope: resolved.scope, scopeKey: resolved.key, academicYear },
+    });
+    return { unlimited: false, used: row?.runCount ?? 0, limit: 3 };
+  }
+
+  /** Checks and atomically consumes one grader run for this caller's scope+year — throws
+   * GRADER_RUNS_EXHAUSTED (403) once the cap of 3/year is reached. CIEL/admin is unlimited. */
+  private async checkAndConsumeGraderRun(user: {
+    role: string;
+    email: string;
+    organizationId?: string;
+  }): Promise<{ unlimited: boolean; used: number; limit: number }> {
+    const resolved = this.resolveGraderRunScope(user);
+    if (!resolved) return { unlimited: true, used: 0, limit: 0 };
+    const academicYear = new Date().getFullYear();
+    const limit = 3;
+    let row = await this.graderRunRepo.findOne({
+      where: { scope: resolved.scope, scopeKey: resolved.key, academicYear },
+    });
+    const used = row?.runCount ?? 0;
+    if (used >= limit) {
+      throw new ForbiddenException({
+        success: false,
+        code: 'GRADER_RUNS_EXHAUSTED',
+        message: `No AI Grader runs left this year (used ${used} of ${limit}). Runs reset next academic year.`,
+        used,
+        limit,
+      });
+    }
+    if (!row) {
+      row = this.graderRunRepo.create({
+        scope: resolved.scope,
+        scopeKey: resolved.key,
+        academicYear,
+        runCount: 0,
+      });
+    }
+    row.runCount = used + 1;
+    row.lastRunAt = new Date();
+    await this.graderRunRepo.save(row);
+    return { unlimited: false, used: row.runCount, limit };
   }
 
   /** Notify owners of analyzer top-picks. Only ids in this caller's eligible (approved) pool are sent — a faculty member cannot notify another cohort. Ranks come from the UI so filtered runs match what students see. */
@@ -822,6 +902,9 @@ export class PathsService {
     )
       .filter((p) => p.entryId && allowed.has(p.entryId))
       .slice(0, 3);
+    const graderRuns = picks.length
+      ? await this.checkAndConsumeGraderRun(user)
+      : await this.peekGraderRunUsage(user);
     const seen = new Set<string>();
     let sent = 0;
     for (const pick of picks) {
@@ -870,7 +953,7 @@ export class PathsService {
         this.logger.warn(`Merit rank notification failed for ${entry.id}: ${(err as Error).message}`);
       }
     }
-    return { notified: sent, scope };
+    return { notified: sent, scope, graderRuns };
   }
 
   /** Coursework Merit badge tier — a display label derived purely from rank/of, no separate score:
@@ -889,6 +972,34 @@ export class PathsService {
     if (percentile <= 0.3) return 'Silver';
     if (percentile <= 0.6) return 'Bronze';
     return 'Participant';
+  }
+
+  /** Public, unauthenticated badge-verification lookup for a coursework entry's QR/share link —
+   * mirrors StudentReport's getPublicImpactReportVerification. PII-minimal: no student name/email
+   * on the verified branch, matching that precedent. */
+  async getPublicCourseworkVerification(verificationKey: string) {
+    const key = (verificationKey || '').trim();
+    if (!key) throw new NotFoundException('Verification link not found');
+    let entry = await this.courseProjectRepo.findOne({ where: { verificationPublicSlug: key } });
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(key);
+    if (!entry && isUuid) {
+      entry = await this.courseProjectRepo.findOne({ where: { id: key } });
+    }
+    if (!entry) throw new NotFoundException('Verification link not found');
+    if (entry.facultyApprovalStatus !== 'approved') {
+      return { success: true, verified: false, status: entry.facultyApprovalStatus };
+    }
+    return {
+      success: true,
+      verified: true,
+      project_title: entry.projectTitle || 'Untitled coursework',
+      badge_level: entry.meritRibbon?.badgeLevel ?? null,
+      rank: entry.meritRibbon?.rank ?? null,
+      of: entry.meritRibbon?.of ?? null,
+      scope: entry.meritRibbon?.scope ?? null,
+      verification_code: formatCertificateVerificationCode(entry.verificationPublicSlug),
+      verified_at: entry.facultyApprovalAt,
+    };
   }
 
   private async attachStudents<T extends { userId: string }>(entries: T[]) {

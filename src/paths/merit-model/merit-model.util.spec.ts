@@ -27,10 +27,12 @@ function fixture(overrides: Partial<CourseProjectEntry>): CourseProjectEntry {
         addedNote: null as any,
         stepCompleted: 8,
         status: 'submitted',
+        verificationPublicSlug: null,
         createdAt: new Date('2026-01-01T00:00:00Z'),
         updatedAt: new Date('2026-01-10T00:00:00Z'),
+        assignVerificationPublicSlugIfNeeded: () => {},
     };
-    return { ...base, ...overrides };
+    return { ...base, ...overrides } as CourseProjectEntry;
 }
 
 describe('merit-model.util', () => {

@@ -54,6 +54,7 @@ describe('PathsService — team member invites', () => {
             organizationsRepo as any,
             mailService as any,
             notificationsService as any,
+            {} as any,
         );
         return { service, inviteRepo, mailService, courseProjectRepo, notificationsService };
     };
@@ -276,6 +277,11 @@ describe('PathsService — coursework merit notify', () => {
             sendPathTeamInvite: jest.fn(),
             sendCourseworkRankNotification: jest.fn().mockResolvedValue(undefined),
         };
+        const graderRunRepo = {
+            findOne: jest.fn().mockResolvedValue(null),
+            create: jest.fn((data: Record<string, unknown>) => ({ ...data })),
+            save: jest.fn(async (row: Record<string, unknown>) => row),
+        };
         const service = new PathsService(
             courseProjectRepo as any,
             {} as any,
@@ -285,8 +291,9 @@ describe('PathsService — coursework merit notify', () => {
             {} as any,
             mailService as any,
             notificationsService as any,
+            graderRunRepo as any,
         );
-        return { service, notificationsService, courseProjectRepo, usersRepo, mailService };
+        return { service, notificationsService, courseProjectRepo, usersRepo, mailService, graderRunRepo };
     };
 
     it('pins the UI rank on the card and notifies the owner; ignores ids outside the caller pool', async () => {
@@ -433,6 +440,7 @@ describe('PathsService — coursework faculty review', () => {
             {} as any,
             mailService as any,
             notificationsService as any,
+            {} as any,
         );
         return { service, notificationsService, courseProjectRepo, mailService };
     };
@@ -497,6 +505,7 @@ describe('PathsService — coursework submit/resubmit emails', () => {
             {} as any,
             mailService as any,
             notificationsService as any,
+            {} as any,
         );
         jest.spyOn(service as any, 'syncCourseProjectInvites').mockResolvedValue(undefined);
         jest.spyOn(service as any, 'courseProjectAnnotate').mockImplementation(async (entries: unknown) => entries as any);
@@ -525,5 +534,162 @@ describe('PathsService — coursework submit/resubmit emails', () => {
 
         await service.updateCourseProjectByIdForUser('student-1', 'entry-1', { addedNote: 'fixed again' } as any);
         expect(mailService.sendCourseworkResubmittedForReview).toHaveBeenCalledTimes(1);
+    });
+});
+
+function makeGraderRunRepo() {
+    const rows: Array<Record<string, unknown>> = [];
+    return {
+        rows,
+        findOne: jest.fn(async (opts: { where?: Record<string, unknown> } = {}) =>
+            rows.find((r) => matchesWhere(r, opts.where ?? {})) ?? null,
+        ),
+        create: jest.fn((data: Record<string, unknown>) => ({ ...data })),
+        save: jest.fn(async (row: Record<string, unknown>) => {
+            const idx = rows.findIndex(
+                (r) => r.scope === row.scope && r.scopeKey === row.scopeKey && r.academicYear === row.academicYear,
+            );
+            if (idx === -1) rows.push(row);
+            else rows[idx] = row;
+            return row;
+        }),
+    };
+}
+
+describe('PathsService — coursework grader run limit', () => {
+    const makeGraderService = (graderRunRepo = makeGraderRunRepo()) => {
+        const notificationsService = { createNotification: jest.fn().mockResolvedValue(undefined) };
+        const courseProjectRepo = {
+            findOne: jest.fn().mockResolvedValue({
+                id: 'entry-1',
+                userId: 'student-1',
+                projectTitle: 'Solar audit',
+                facultyApprovalStatus: 'approved',
+                studentInfo: { studentName: 'Ali Khan' },
+            }),
+            save: jest.fn(async (row: Record<string, unknown>) => row),
+        };
+        const usersRepo = { findOne: jest.fn().mockResolvedValue({ email: 'student@test.com' }) };
+        const mailService = { sendCourseworkRankNotification: jest.fn().mockResolvedValue(undefined) };
+        const service = new PathsService(
+            courseProjectRepo as any,
+            {} as any,
+            {} as any,
+            makeInviteRepo() as any,
+            usersRepo as any,
+            {} as any,
+            mailService as any,
+            notificationsService as any,
+            graderRunRepo as any,
+        );
+        jest.spyOn(service, 'getCourseProjectMeritModel').mockResolvedValue({
+            scope: { label: 'Your cohort' },
+            entries: [{ id: 'entry-1', rank: 1 }],
+        } as any);
+        return { service, graderRunRepo };
+    };
+
+    const notifyOnce = (service: PathsService, user: Record<string, unknown>) =>
+        service.notifyCourseProjectMeritRanks(user as any, {
+            picks: [{ entryId: 'entry-1', rank: 1, of: 5, total: 90 }],
+        } as any);
+
+    it('allows exactly 3 runs per academic year for a faculty scope, then blocks the 4th', async () => {
+        const { service } = makeGraderService();
+        const user = { role: 'faculty', email: 'teacher@test.com' };
+
+        const r1 = await notifyOnce(service, user);
+        expect((r1 as any).graderRuns).toEqual({ unlimited: false, used: 1, limit: 3 });
+        const r2 = await notifyOnce(service, user);
+        expect((r2 as any).graderRuns.used).toBe(2);
+        const r3 = await notifyOnce(service, user);
+        expect((r3 as any).graderRuns.used).toBe(3);
+
+        await expect(notifyOnce(service, user)).rejects.toMatchObject({
+            response: expect.objectContaining({ code: 'GRADER_RUNS_EXHAUSTED', used: 3, limit: 3 }),
+        });
+    });
+
+    it('scopes the cap independently per faculty email', async () => {
+        const graderRunRepo = makeGraderRunRepo();
+        const { service } = makeGraderService(graderRunRepo);
+        await notifyOnce(service, { role: 'faculty', email: 'teacher-a@test.com' });
+        await notifyOnce(service, { role: 'faculty', email: 'teacher-a@test.com' });
+        await notifyOnce(service, { role: 'faculty', email: 'teacher-a@test.com' });
+        // teacher-a is now exhausted, but teacher-b has an independent counter.
+        await expect(notifyOnce(service, { role: 'faculty', email: 'teacher-a@test.com' })).rejects.toBeDefined();
+        const rB = await notifyOnce(service, { role: 'faculty', email: 'teacher-b@test.com' });
+        expect((rB as any).graderRuns).toEqual({ unlimited: false, used: 1, limit: 3 });
+    });
+
+    it('scopes the cap independently per university organizationId', async () => {
+        const { service } = makeGraderService();
+        const rUni = await notifyOnce(service, { role: 'university', organizationId: 'org-1' });
+        expect((rUni as any).graderRuns).toEqual({ unlimited: false, used: 1, limit: 3 });
+    });
+
+    it('never blocks SUPER_ADMIN (unlimited runs)', async () => {
+        const { service } = makeGraderService();
+        const admin = { role: 'admin', email: 'admin@ciel.pk' };
+        for (let i = 0; i < 5; i++) {
+            const r = await notifyOnce(service, admin);
+            expect((r as any).graderRuns).toEqual({ unlimited: true, used: 0, limit: 0 });
+        }
+    });
+});
+
+describe('PathsService — public coursework verification', () => {
+    const makeVerifyService = (entry: Record<string, unknown> | null) => {
+        const courseProjectRepo = { findOne: jest.fn().mockResolvedValue(entry) };
+        const service = new PathsService(
+            courseProjectRepo as any,
+            {} as any,
+            {} as any,
+            makeInviteRepo() as any,
+            {} as any,
+            {} as any,
+            {} as any,
+            {} as any,
+            {} as any,
+        );
+        return { service, courseProjectRepo };
+    };
+
+    it('returns a PII-minimal verified payload for an approved entry', async () => {
+        const { service } = makeVerifyService({
+            id: 'entry-1',
+            projectTitle: 'Solar audit',
+            facultyApprovalStatus: 'approved',
+            facultyApprovalAt: new Date('2026-01-01'),
+            verificationPublicSlug: 'abc-123',
+            meritRibbon: { rank: 1, of: 8, scope: 'Your cohort', badgeLevel: 'Gold' },
+        });
+        const result = await service.getPublicCourseworkVerification('abc-123');
+        expect(result).toMatchObject({
+            success: true,
+            verified: true,
+            project_title: 'Solar audit',
+            badge_level: 'Gold',
+            rank: 1,
+            of: 8,
+        });
+        expect(result).not.toHaveProperty('student_name');
+        expect(result).not.toHaveProperty('studentInfo');
+    });
+
+    it('returns verified:false with only a status for a pending entry', async () => {
+        const { service } = makeVerifyService({
+            id: 'entry-1',
+            projectTitle: 'Solar audit',
+            facultyApprovalStatus: 'pending',
+            verificationPublicSlug: 'abc-123',
+        });
+        const result = await service.getPublicCourseworkVerification('abc-123');
+        expect(result).toEqual({ success: true, verified: false, status: 'pending' });
+    });
+
+    it('throws NotFoundException for an unknown key', async () => {
+        const { service } = makeVerifyService(null);
+        await expect(service.getPublicCourseworkVerification('nope')).rejects.toThrow(NotFoundException);
     });
 });

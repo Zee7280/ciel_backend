@@ -218,7 +218,7 @@ export class CourseProjectEntry {
 
     /** Faculty review gate — only "approved" entries count toward Merit Model rankings/AI picks/showcase, mirroring FYP's eligibility gate. */
     @Column({ default: 'pending' })
-    facultyApprovalStatus: string; // pending | approved | rejected
+    facultyApprovalStatus: string; // pending | approved | rejected | revision_requested
 
     @Column({ type: 'text', nullable: true })
     facultyApprovalNote: string | null;
@@ -226,9 +226,20 @@ export class CourseProjectEntry {
     @Column({ type: 'timestamp', nullable: true })
     facultyApprovalAt: Date | null;
 
-    /** Pinned by the last analyzer notify in this card's eligible pool — shown on the student's Impact Wall. */
+    /** Pinned by the last analyzer notify in this card's eligible pool — shown on the student's Impact Wall.
+     * badgeLevel is a rank-percentile tier (see PathsService.computeCourseworkBadgeLevel); previousRank is
+     * this card's rank the last time it was ranked, captured just before being overwritten by a new run —
+     * null/undefined means this is the first-ever ranked run. */
     @Column({ type: 'jsonb', nullable: true })
-    meritRibbon?: { rank: number; of: number; scope: string; total?: number; at: string } | null;
+    meritRibbon?: {
+        rank: number;
+        of: number;
+        scope: string;
+        total?: number;
+        badgeLevel?: 'Gold' | 'Silver' | 'Bronze' | 'Participant';
+        previousRank?: number | null;
+        at: string;
+    } | null;
 
     // ---------- Step 1: You & the course ----------
     @Column({ type: 'jsonb', nullable: true })

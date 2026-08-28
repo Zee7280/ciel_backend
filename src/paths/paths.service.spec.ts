@@ -271,17 +271,22 @@ describe('PathsService — coursework merit notify', () => {
             findOne: jest.fn(),
             save: jest.fn(async (row: Record<string, unknown>) => row),
         };
+        const usersRepo = { findOne: jest.fn().mockResolvedValue({ email: 'student@test.com' }) };
+        const mailService = {
+            sendPathTeamInvite: jest.fn(),
+            sendCourseworkRankNotification: jest.fn().mockResolvedValue(undefined),
+        };
         const service = new PathsService(
             courseProjectRepo as any,
             {} as any,
             {} as any,
             makeInviteRepo() as any,
+            usersRepo as any,
             {} as any,
-            {} as any,
-            { sendPathTeamInvite: jest.fn() } as any,
+            mailService as any,
             notificationsService as any,
         );
-        return { service, notificationsService, courseProjectRepo };
+        return { service, notificationsService, courseProjectRepo, usersRepo, mailService };
     };
 
     it('pins the UI rank on the card and notifies the owner; ignores ids outside the caller pool', async () => {
@@ -342,5 +347,183 @@ describe('PathsService — coursework merit notify', () => {
 
         expect(result.notified).toBe(1);
         expect(notificationsService.createNotification).not.toHaveBeenCalled();
+    });
+
+    it('computes a badge tier, captures previousRank, and emails the student on a genuine pin', async () => {
+        const { service, courseProjectRepo, mailService } = makeNotifyService();
+        jest.spyOn(service, 'getCourseProjectMeritModel').mockResolvedValue({
+            scope: { label: 'Your cohort' },
+            entries: [{ id: 'entry-1', rank: 1 }],
+        } as any);
+        courseProjectRepo.findOne.mockResolvedValue({
+            id: 'entry-1',
+            userId: 'student-1',
+            projectTitle: 'Solar audit',
+            facultyApprovalStatus: 'approved',
+            studentInfo: { studentName: 'Ali Khan' },
+            meritRibbon: { rank: 3, of: 8, scope: 'Your cohort', total: 70, at: '2026-01-01' },
+        });
+
+        const result = await service.notifyCourseProjectMeritRanks(
+            { role: 'faculty', email: 'teacher@test.com' },
+            { picks: [{ entryId: 'entry-1', rank: 1, of: 8, total: 91 }], scopeLabel: 'Your cohort' },
+        );
+
+        expect(result.notified).toBe(1);
+        expect(courseProjectRepo.save).toHaveBeenCalledWith(expect.objectContaining({
+            meritRibbon: expect.objectContaining({ rank: 1, of: 8, badgeLevel: 'Silver', previousRank: 3 }),
+        }));
+        expect(mailService.sendCourseworkRankNotification).toHaveBeenCalledWith(
+            'student@test.com', 'Ali', 'Solar audit', 1, 8, 'Your cohort', 'Silver', 3,
+        );
+    });
+
+    it('does not email the student when the ribbon is unchanged (already-dedup)', async () => {
+        const { service, mailService, courseProjectRepo } = makeNotifyService();
+        jest.spyOn(service, 'getCourseProjectMeritModel').mockResolvedValue({
+            scope: { label: 'Your cohort' },
+            entries: [{ id: 'entry-1', rank: 1 }],
+        } as any);
+        courseProjectRepo.findOne.mockResolvedValue({
+            id: 'entry-1',
+            userId: 'student-1',
+            projectTitle: 'Solar audit',
+            facultyApprovalStatus: 'approved',
+            studentInfo: { studentName: 'Ali Khan' },
+            meritRibbon: { rank: 1, of: 8, scope: 'Your cohort', total: 91, at: '2026-01-01' },
+        });
+
+        await service.notifyCourseProjectMeritRanks(
+            { role: 'faculty', email: 'teacher@test.com' },
+            { picks: [{ entryId: 'entry-1', rank: 1, of: 8, total: 91 }], scopeLabel: 'Your cohort' },
+        );
+
+        expect(mailService.sendCourseworkRankNotification).not.toHaveBeenCalled();
+    });
+});
+
+describe('PathsService — coursework faculty review', () => {
+    const makeReviewService = () => {
+        const notificationsService = { createNotification: jest.fn().mockResolvedValue(undefined) };
+        const entry: Record<string, unknown> = {
+            id: 'entry-1',
+            userId: 'student-1',
+            status: 'submitted',
+            projectTitle: 'Solar audit',
+            facultyApprovalStatus: 'pending',
+            studentInfo: { studentName: 'Ali Khan', teacherEmail: 'teacher@test.com' },
+            meritRibbon: { rank: 1, of: 8, scope: 'x', at: '2026-01-01' },
+        };
+        const courseProjectRepo = {
+            findOne: jest.fn().mockResolvedValue(entry),
+            save: jest.fn(async (row: Record<string, unknown>) => row),
+        };
+        const usersRepo = { findOne: jest.fn().mockResolvedValue({ email: 'student@test.com' }) };
+        const mailService = {
+            sendCourseworkApproved: jest.fn().mockResolvedValue(undefined),
+            sendCourseworkRevisionRequested: jest.fn().mockResolvedValue(undefined),
+            sendCourseworkRejected: jest.fn().mockResolvedValue(undefined),
+        };
+        const service = new PathsService(
+            courseProjectRepo as any,
+            {} as any,
+            {} as any,
+            makeInviteRepo() as any,
+            usersRepo as any,
+            {} as any,
+            mailService as any,
+            notificationsService as any,
+        );
+        return { service, notificationsService, courseProjectRepo, mailService };
+    };
+
+    it('approve sets facultyApprovalStatus=approved and emails the student', async () => {
+        const { service, courseProjectRepo, mailService } = makeReviewService();
+        const saved = await service.facultyReviewCourseProject('teacher@test.com', 'entry-1', 'approve');
+        expect((saved as any).facultyApprovalStatus).toBe('approved');
+        expect(courseProjectRepo.save).toHaveBeenCalled();
+        expect(mailService.sendCourseworkApproved).toHaveBeenCalledWith('student@test.com', 'Ali', 'Solar audit');
+    });
+
+    it('revision sets facultyApprovalStatus=revision_requested, clears the ribbon, and emails the student', async () => {
+        const { service, mailService } = makeReviewService();
+        const saved = await service.facultyReviewCourseProject('teacher@test.com', 'entry-1', 'revision', 'Add more evidence');
+        expect((saved as any).facultyApprovalStatus).toBe('revision_requested');
+        expect((saved as any).meritRibbon).toBeNull();
+        expect(mailService.sendCourseworkRevisionRequested).toHaveBeenCalledWith(
+            'student@test.com', 'Ali', 'Solar audit', 'Add more evidence',
+        );
+    });
+
+    it('reject sets facultyApprovalStatus=rejected and emails the student', async () => {
+        const { service, mailService } = makeReviewService();
+        const saved = await service.facultyReviewCourseProject('teacher@test.com', 'entry-1', 'reject', 'Not enough SDG linkage');
+        expect((saved as any).facultyApprovalStatus).toBe('rejected');
+        expect(mailService.sendCourseworkRejected).toHaveBeenCalledWith(
+            'student@test.com', 'Ali', 'Solar audit', 'Not enough SDG linkage',
+        );
+    });
+});
+
+describe('PathsService — coursework submit/resubmit emails', () => {
+    const makeSubmitService = (initialEntry: Record<string, unknown> | null) => {
+        const notificationsService = { createNotification: jest.fn().mockResolvedValue(undefined) };
+        const rows: Record<string, unknown>[] = initialEntry ? [{ ...initialEntry }] : [];
+        const manager = {
+            getRepository: () => ({
+                findOne: jest.fn(async () => rows[0] ?? null),
+                create: jest.fn((data: Record<string, unknown>) => ({ status: 'draft', ...data })),
+                save: jest.fn(async (row: Record<string, unknown>) => {
+                    rows[0] = row;
+                    return row;
+                }),
+            }),
+        };
+        const courseProjectRepo = {
+            manager: { transaction: jest.fn(async (fn: (m: unknown) => unknown) => fn(manager)) },
+        };
+        const usersRepo = { findOne: jest.fn().mockResolvedValue({ email: 'student@test.com' }) };
+        const mailService = {
+            sendCourseworkSubmittedForReview: jest.fn().mockResolvedValue(undefined),
+            sendCourseworkSubmissionConfirmation: jest.fn().mockResolvedValue(undefined),
+            sendCourseworkResubmittedForReview: jest.fn().mockResolvedValue(undefined),
+        };
+        const service = new PathsService(
+            courseProjectRepo as any,
+            {} as any,
+            {} as any,
+            makeInviteRepo() as any,
+            usersRepo as any,
+            {} as any,
+            mailService as any,
+            notificationsService as any,
+        );
+        jest.spyOn(service as any, 'syncCourseProjectInvites').mockResolvedValue(undefined);
+        jest.spyOn(service as any, 'courseProjectAnnotate').mockImplementation(async (entries: unknown) => entries as any);
+        return { service, mailService };
+    };
+
+    it('first submission emails faculty and the student exactly once', async () => {
+        const { service, mailService } = makeSubmitService({
+            id: 'entry-1', userId: 'student-1', status: 'draft', projectTitle: 'Solar audit',
+            facultyApprovalStatus: 'pending', studentInfo: { studentName: 'Ali Khan', teacherEmail: 'teacher@test.com' },
+        });
+        await service.updateCourseProjectByIdForUser('student-1', 'entry-1', { status: 'submitted' } as any);
+        expect(mailService.sendCourseworkSubmittedForReview).toHaveBeenCalledTimes(1);
+        expect(mailService.sendCourseworkSubmissionConfirmation).toHaveBeenCalledTimes(1);
+        expect(mailService.sendCourseworkResubmittedForReview).not.toHaveBeenCalled();
+    });
+
+    it('a patch to a rejected, already-submitted entry emails faculty once (resubmission), not again on the next patch', async () => {
+        const { service, mailService } = makeSubmitService({
+            id: 'entry-1', userId: 'student-1', status: 'submitted', projectTitle: 'Solar audit',
+            facultyApprovalStatus: 'rejected', facultyApprovalNote: 'fix this',
+            studentInfo: { studentName: 'Ali Khan', teacherEmail: 'teacher@test.com' },
+        });
+        await service.updateCourseProjectByIdForUser('student-1', 'entry-1', { addedNote: 'fixed' } as any);
+        expect(mailService.sendCourseworkResubmittedForReview).toHaveBeenCalledTimes(1);
+
+        await service.updateCourseProjectByIdForUser('student-1', 'entry-1', { addedNote: 'fixed again' } as any);
+        expect(mailService.sendCourseworkResubmittedForReview).toHaveBeenCalledTimes(1);
     });
 });

@@ -1655,4 +1655,201 @@ export class MailService {
       throw error;
     }
   }
+
+  async sendCourseworkSubmittedForReview(to: string, studentName: string, projectTitle: string): Promise<void> {
+    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const reviewLink = this.buildFrontendLink('/dashboard/faculty/coursework-projects', {});
+    const studentEsc = this.escHtmlPlain(studentName?.trim() ? studentName.trim() : 'A student');
+    const titleEsc = this.escHtmlPlain(projectTitle);
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">Coursework awaiting your review</h2>
+        <p><strong>${studentEsc}</strong> submitted a coursework project naming you as the reviewing faculty.</p>
+        <p style="font-size:16px;"><strong>${titleEsc}</strong></p>
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${reviewLink}" style="background-color: #4CAF50; color: white; padding: 14px 30px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">Open Coursework Review</a>
+        </div>
+        <p style="margin-top:24px;">Regards,<br><strong>CIEL PK Team</strong><br><span style="font-size:13px;color:#64748b;">Community Impact Education Lab</span></p>
+      </div>
+    `;
+    try {
+      await this.transporter.sendMail({ from, to, subject: `CIEL PK — coursework awaiting your review: ${projectTitle}`, html });
+      this.logger.log(`Coursework submission review email sent to ${to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send coursework submission review email to ${to}`, error.stack);
+    }
+  }
+
+  async sendCourseworkSubmissionConfirmation(to: string, studentFirstName: string, projectTitle: string): Promise<void> {
+    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const titleEsc = this.escHtmlPlain(projectTitle);
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">Your coursework was submitted</h2>
+        <p>${this.escHtmlPlain(studentFirstName)}, your coursework project has been sent to your faculty for review:</p>
+        <p style="font-size:16px;"><strong>${titleEsc}</strong></p>
+        <p style="margin-top:20px;color:#555;">You'll be notified as soon as a decision is made.</p>
+        <p style="margin-top:24px;">Regards,<br><strong>CIEL PK Team</strong><br><span style="font-size:13px;color:#64748b;">Community Impact Education Lab</span></p>
+      </div>
+    `;
+    try {
+      await this.transporter.sendMail({ from, to, subject: `CIEL PK — your coursework was submitted: ${projectTitle}`, html });
+      this.logger.log(`Coursework submission confirmation sent to ${to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send coursework submission confirmation to ${to}`, error.stack);
+    }
+  }
+
+  async sendCourseworkResubmittedForReview(to: string, studentName: string, projectTitle: string): Promise<void> {
+    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const reviewLink = this.buildFrontendLink('/dashboard/faculty/coursework-projects', {});
+    const studentEsc = this.escHtmlPlain(studentName?.trim() ? studentName.trim() : 'A student');
+    const titleEsc = this.escHtmlPlain(projectTitle);
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">Coursework resubmitted for review</h2>
+        <p><strong>${studentEsc}</strong> updated and resubmitted a coursework project you're reviewing:</p>
+        <p style="font-size:16px;"><strong>${titleEsc}</strong></p>
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${reviewLink}" style="background-color: #4CAF50; color: white; padding: 14px 30px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">Open Coursework Review</a>
+        </div>
+        <p style="margin-top:24px;">Regards,<br><strong>CIEL PK Team</strong><br><span style="font-size:13px;color:#64748b;">Community Impact Education Lab</span></p>
+      </div>
+    `;
+    try {
+      await this.transporter.sendMail({ from, to, subject: `CIEL PK — coursework resubmitted for review: ${projectTitle}`, html });
+      this.logger.log(`Coursework resubmission review email sent to ${to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send coursework resubmission review email to ${to}`, error.stack);
+    }
+  }
+
+  async sendCourseworkApproved(to: string, studentFirstName: string, projectTitle: string): Promise<void> {
+    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const wallLink = this.buildFrontendLink('/dashboard/student/paths/course-project', { view: 'wall' });
+    const titleEsc = this.escHtmlPlain(projectTitle);
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">Coursework approved 🎉</h2>
+        <p>${this.escHtmlPlain(studentFirstName)}, your coursework project has been approved:</p>
+        <p style="font-size:16px;"><strong>${titleEsc}</strong></p>
+        <p>It now hangs on your Impact Wall. Please wait for the end-of-semester AI ranking and badge allocation.</p>
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${wallLink}" style="background-color: #4CAF50; color: white; padding: 14px 30px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">Open My Impact Wall</a>
+        </div>
+        <p style="margin-top:24px;">Regards,<br><strong>CIEL PK Team</strong><br><span style="font-size:13px;color:#64748b;">Community Impact Education Lab</span></p>
+      </div>
+    `;
+    try {
+      await this.transporter.sendMail({ from, to, subject: `CIEL PK — coursework approved: ${projectTitle}`, html });
+      this.logger.log(`Coursework approval email sent to ${to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send coursework approval email to ${to}`, error.stack);
+    }
+  }
+
+  async sendCourseworkRevisionRequested(
+    to: string,
+    studentFirstName: string,
+    projectTitle: string,
+    note?: string | null,
+  ): Promise<void> {
+    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const titleEsc = this.escHtmlPlain(projectTitle);
+    const feedbackBlock =
+      note && note.trim()
+        ? `<p style="margin:16px 0 0 0;"><strong>Notes from your faculty:</strong></p><p style="background:#fffbeb;border-left:4px solid #f59e0b;padding:12px 14px;margin:8px 0 0 0;color:#374151;">${this.escHtmlPlain(note.trim())}</p>`
+        : '';
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">Revision requested on your coursework</h2>
+        <p>${this.escHtmlPlain(studentFirstName)}, your coursework needs a revision before it can be approved:</p>
+        <p style="font-size:16px;"><strong>${titleEsc}</strong></p>
+        ${feedbackBlock}
+        <p style="margin-top:20px;color:#555;">Open the report, fix, and resubmit — nothing is penalised.</p>
+        <p style="margin-top:24px;">Regards,<br><strong>CIEL PK Team</strong><br><span style="font-size:13px;color:#64748b;">Community Impact Education Lab</span></p>
+      </div>
+    `;
+    try {
+      await this.transporter.sendMail({ from, to, subject: `CIEL PK — revision requested on your coursework: ${projectTitle}`, html });
+      this.logger.log(`Coursework revision-requested email sent to ${to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send coursework revision-requested email to ${to}`, error.stack);
+    }
+  }
+
+  async sendCourseworkRejected(
+    to: string,
+    studentFirstName: string,
+    projectTitle: string,
+    note?: string | null,
+  ): Promise<void> {
+    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const titleEsc = this.escHtmlPlain(projectTitle);
+    const feedbackBlock =
+      note && note.trim()
+        ? `<p style="margin:16px 0 0 0;"><strong>Feedback from your faculty:</strong></p><p style="background:#f9fafb;border-left:4px solid #ef4444;padding:12px 14px;margin:8px 0 0 0;color:#374151;">${this.escHtmlPlain(note.trim())}</p>`
+        : '';
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">Coursework not approved</h2>
+        <p>${this.escHtmlPlain(studentFirstName)}, your coursework project was not approved:</p>
+        <p style="font-size:16px;"><strong>${titleEsc}</strong></p>
+        ${feedbackBlock}
+        <p style="margin-top:20px;color:#555;">Open the report, fix, and resubmit — nothing is penalised.</p>
+        <p style="margin-top:24px;">Regards,<br><strong>CIEL PK Team</strong><br><span style="font-size:13px;color:#64748b;">Community Impact Education Lab</span></p>
+      </div>
+    `;
+    try {
+      await this.transporter.sendMail({ from, to, subject: `CIEL PK — coursework not approved: ${projectTitle}`, html });
+      this.logger.log(`Coursework rejection email sent to ${to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send coursework rejection email to ${to}`, error.stack);
+    }
+  }
+
+  async sendCourseworkRankNotification(
+    to: string,
+    studentFirstName: string,
+    projectTitle: string,
+    rank: number,
+    of: number,
+    scope: string,
+    badgeLevel: string,
+    previousRank?: number | null,
+  ): Promise<void> {
+    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const wallLink = this.buildFrontendLink('/dashboard/student/paths/course-project', { view: 'wall' });
+    const titleEsc = this.escHtmlPlain(projectTitle);
+    const movementLine =
+      previousRank == null
+        ? ''
+        : previousRank > rank
+          ? `<p style="color:#16a34a;margin:8px 0 0 0;">↑ Up from #${previousRank}</p>`
+          : previousRank < rank
+            ? `<p style="color:#dc2626;margin:8px 0 0 0;">↓ Down from #${previousRank}</p>`
+            : `<p style="color:#64748b;margin:8px 0 0 0;">— Unchanged</p>`;
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">Your coursework ranked #${rank} 🏅</h2>
+        <p>${this.escHtmlPlain(studentFirstName)}, your coursework project ranked in ${this.escHtmlPlain(scope)}:</p>
+        <p style="font-size:16px;"><strong>${titleEsc}</strong></p>
+        <div style="background-color: #f9f9f9; padding: 15px; border-left: 4px solid #f59e0b; margin: 20px 0;">
+          <p style="margin:0;"><strong>Rank:</strong> #${rank} of ${of}</p>
+          <p style="margin:4px 0 0 0;"><strong>Badge:</strong> ${this.escHtmlPlain(badgeLevel)}</p>
+          ${movementLine}
+        </div>
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${wallLink}" style="background-color: #4CAF50; color: white; padding: 14px 30px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">Open My Impact Wall</a>
+        </div>
+        <p style="margin-top:24px;">Regards,<br><strong>CIEL PK Team</strong><br><span style="font-size:13px;color:#64748b;">Community Impact Education Lab</span></p>
+      </div>
+    `;
+    try {
+      await this.transporter.sendMail({ from, to, subject: `CIEL PK — your coursework ranked #${rank}: ${projectTitle}`, html });
+      this.logger.log(`Coursework rank notification email sent to ${to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send coursework rank notification email to ${to}`, error.stack);
+    }
+  }
 }

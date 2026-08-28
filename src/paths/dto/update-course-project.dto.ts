@@ -2,8 +2,8 @@ import { Type } from 'class-transformer';
 import { IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, Max, Min, ValidateNested } from 'class-validator';
 
 export class FacultyReviewCourseProjectDto {
-    @IsIn(['approve', 'reject'])
-    action: 'approve' | 'reject';
+    @IsIn(['approve', 'reject', 'revision'])
+    action: 'approve' | 'reject' | 'revision';
     @IsOptional() @IsString() note?: string;
 }
 

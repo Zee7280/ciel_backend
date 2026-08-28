@@ -287,8 +287,9 @@ export class PathsService {
   private applyCourseProjectPatch(
     entry: CourseProjectEntry,
     dto: UpdateCourseProjectDto,
-  ): CourseProjectEntry {
+  ): { entry: CourseProjectEntry; notify: 'first_submission' | 'resubmission' | null } {
     const keep = PathsService.withoutUndefined;
+    const previousStatus = entry.status;
     if (dto.course !== undefined) entry.course = dto.course;
     if (dto.projectTitle !== undefined) entry.projectTitle = dto.projectTitle;
     if (dto.projectDescription !== undefined)
@@ -332,19 +333,56 @@ export class PathsService {
     if (dto.status !== undefined) entry.status = dto.status;
     // Editing a previously-approved report after the fact invalidates that approval — send it
     // back to the teacher's queue rather than silently keeping stale content "live".
-    // Same for a returned (rejected) report: fix & resubmit should land as a fresh review,
-    // not stay stuck on "returned". Keep the teacher's notes so the student still sees them.
+    // Same for a returned (rejected/revision-requested) report: fix & resubmit should land as a
+    // fresh review, not stay stuck on "returned". Keep the teacher's notes so the student still sees them.
+    let notify: 'first_submission' | 'resubmission' | null = null;
     if (entry.status === 'submitted' && entry.facultyApprovalStatus === 'approved') {
       entry.facultyApprovalStatus = 'pending';
       entry.facultyApprovalNote = null;
       entry.facultyApprovalAt = null;
       entry.meritRibbon = null;
-    } else if (entry.status === 'submitted' && entry.facultyApprovalStatus === 'rejected') {
+      notify = 'resubmission';
+    } else if (
+      entry.status === 'submitted' &&
+      (entry.facultyApprovalStatus === 'rejected' || entry.facultyApprovalStatus === 'revision_requested')
+    ) {
       entry.facultyApprovalStatus = 'pending';
       entry.facultyApprovalAt = null;
       entry.meritRibbon = null;
+      notify = 'resubmission';
+    } else if (previousStatus !== 'submitted' && entry.status === 'submitted') {
+      notify = 'first_submission';
     }
-    return entry;
+    return { entry, notify };
+  }
+
+  /** Best-effort — a submission/resubmission email failure must never fail the student's save. */
+  private async notifyCourseworkTransition(
+    entry: CourseProjectEntry,
+    transition: 'first_submission' | 'resubmission' | null,
+  ): Promise<void> {
+    if (!transition) return;
+    const studentName = entry.studentInfo?.studentName?.trim() || 'Student';
+    const title = entry.projectTitle || 'Untitled coursework';
+    const teacherEmail = (entry.studentInfo?.teacherEmail || '').trim();
+    try {
+      if (transition === 'first_submission') {
+        if (teacherEmail) {
+          await this.mailService.sendCourseworkSubmittedForReview(teacherEmail, studentName, title);
+        }
+        const student = await this.usersRepo.findOne({ where: { id: entry.userId }, select: ['email'] });
+        if (student?.email) {
+          const first = studentName.split(' ')[0];
+          await this.mailService.sendCourseworkSubmissionConfirmation(student.email, first, title);
+        }
+      } else if (teacherEmail) {
+        await this.mailService.sendCourseworkResubmittedForReview(teacherEmail, studentName, title);
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Coursework transition email failed for ${entry.id} (${transition}): ${(err as Error).message}`,
+      );
+    }
   }
 
   private courseProjectAnnotate(entries: CourseProjectEntry[]) {
@@ -375,7 +413,7 @@ export class PathsService {
   async facultyReviewCourseProject(
     facultyEmail: string,
     id: string,
-    action: 'approve' | 'reject',
+    action: 'approve' | 'reject' | 'revision',
     note?: string,
   ) {
     const email = (facultyEmail || '').trim().toLowerCase();
@@ -388,7 +426,8 @@ export class PathsService {
     ) {
       throw new NotFoundException('Course project entry not found');
     }
-    entry.facultyApprovalStatus = action === 'approve' ? 'approved' : 'rejected';
+    entry.facultyApprovalStatus =
+      action === 'approve' ? 'approved' : action === 'revision' ? 'revision_requested' : 'rejected';
     entry.facultyApprovalNote = note ?? null;
     entry.facultyApprovalAt = new Date();
     if (action !== 'approve') entry.meritRibbon = null;
@@ -400,17 +439,36 @@ export class PathsService {
         await this.notificationsService.createNotification(saved.userId, {
           type: 'approval',
           title: 'Your coursework was approved',
-          message: `${first}, “${title}” is live. It now hangs on My Impact Wall and can be ranked in the analyzer.`,
+          message: `${first}, “${title}” is live. It now hangs on My Impact Wall — wait for end-of-semester ranking and badge allocation.`,
+        });
+      } else if (action === 'revision') {
+        const extra = (note || '').trim();
+        await this.notificationsService.createNotification(saved.userId, {
+          type: 'update',
+          title: 'Revision requested on your coursework',
+          message: extra
+            ? `${first}, “${title}” needs a revision before it can be approved. ${extra} Open the report, fix, and resubmit — nothing is penalised.`
+            : `${first}, “${title}” needs a revision before it can be approved. Open the report, fix, and resubmit — nothing is penalised.`,
         });
       } else {
         const extra = (note || '').trim();
         await this.notificationsService.createNotification(saved.userId, {
           type: 'update',
-          title: 'Your coursework needs changes',
+          title: 'Your coursework was rejected',
           message: extra
-            ? `${first}, “${title}” was returned. ${extra} Open the report, fix, and resubmit — nothing is penalised.`
-            : `${first}, “${title}” was returned with notes. Open the report, fix, and resubmit — nothing is penalised.`,
+            ? `${first}, “${title}” was rejected. ${extra} Open the report, fix, and resubmit — nothing is penalised.`
+            : `${first}, “${title}” was rejected. Open the report, fix, and resubmit — nothing is penalised.`,
         });
+      }
+      const student = await this.usersRepo.findOne({ where: { id: saved.userId }, select: ['email'] });
+      if (student?.email) {
+        if (action === 'approve') {
+          await this.mailService.sendCourseworkApproved(student.email, first, title);
+        } else if (action === 'revision') {
+          await this.mailService.sendCourseworkRevisionRequested(student.email, first, title, note);
+        } else {
+          await this.mailService.sendCourseworkRejected(student.email, first, title, note);
+        }
       }
     } catch (err) {
       this.logger.warn(`Coursework review notification failed for ${saved.id}: ${(err as Error).message}`);
@@ -431,6 +489,7 @@ export class PathsService {
     // Locked read-modify-write: without this, two near-simultaneous saves (autosave + a manual
     // click, or two open tabs) can both read the same pre-image and the second save silently
     // discards the first's changes. The lock serializes them so the second read sees the first's write.
+    let notify: 'first_submission' | 'resubmission' | null = null;
     const saved = await this.courseProjectRepo.manager.transaction(async (manager) => {
       const repo = manager.getRepository(CourseProjectEntry);
       let entry = await repo.findOne({
@@ -439,9 +498,12 @@ export class PathsService {
         lock: { mode: 'pessimistic_write' },
       });
       if (!entry) entry = repo.create({ userId });
-      return repo.save(this.applyCourseProjectPatch(entry, dto));
+      const patched = this.applyCourseProjectPatch(entry, dto);
+      notify = patched.notify;
+      return repo.save(patched.entry);
     });
     await this.syncCourseProjectInvites(saved, userId);
+    await this.notifyCourseworkTransition(saved, notify);
     const [annotated] = await this.courseProjectAnnotate([saved]);
     return annotated;
   }
@@ -525,6 +587,7 @@ export class PathsService {
     dto: UpdateCourseProjectDto,
   ) {
     // Same locked read-modify-write as upsertCourseProject — see comment there.
+    let notify: 'first_submission' | 'resubmission' | null = null;
     const saved = await this.courseProjectRepo.manager.transaction(async (manager) => {
       const repo = manager.getRepository(CourseProjectEntry);
       const entry = await repo.findOne({
@@ -534,9 +597,12 @@ export class PathsService {
       if (!entry)
         throw new NotFoundException('Course project entry not found');
       // where: {id, userId} above means this only ever succeeds for the owner.
-      return repo.save(this.applyCourseProjectPatch(entry, dto));
+      const patched = this.applyCourseProjectPatch(entry, dto);
+      notify = patched.notify;
+      return repo.save(patched.entry);
     });
     await this.syncCourseProjectInvites(saved, userId);
+    await this.notifyCourseworkTransition(saved, notify);
     const [annotated] = await this.courseProjectAnnotate([saved]);
     return { ...annotated, isOwner: true };
   }
@@ -765,7 +831,9 @@ export class PathsService {
       if (!entry || entry.facultyApprovalStatus !== 'approved') continue;
       const of = pick.of || ranked.length;
       const rank = pick.rank;
-      const ribbon = { rank, of, scope, total: pick.total, at: new Date().toISOString() };
+      const previousRank = entry.meritRibbon?.rank ?? null;
+      const badgeLevel = PathsService.computeCourseworkBadgeLevel(rank, of);
+      const ribbon = { rank, of, scope, total: pick.total, badgeLevel, previousRank, at: new Date().toISOString() };
       const already =
         entry.meritRibbon?.rank === rank &&
         entry.meritRibbon?.of === of &&
@@ -777,18 +845,50 @@ export class PathsService {
         continue;
       }
       const first = entry.studentInfo?.studentName?.split(' ')[0] || 'there';
+      const title = entry.projectTitle || 'Untitled';
       try {
         await this.notificationsService.createNotification(entry.userId, {
           type: 'update',
           title: `Your coursework ranked #${rank}`,
-          message: `${first}, your coursework “${entry.projectTitle || 'Untitled'}” ranked #${rank} of ${of} in ${scope}. Open Coursework → My Impact Wall to see the ribbon.`,
+          message: `${first}, your coursework “${title}” ranked #${rank} of ${of} in ${scope} (${badgeLevel}). Open Coursework → My Impact Wall to see the ribbon.`,
         });
+        const student = await this.usersRepo.findOne({ where: { id: entry.userId }, select: ['email'] });
+        if (student?.email) {
+          await this.mailService.sendCourseworkRankNotification(
+            student.email,
+            first,
+            title,
+            rank,
+            of,
+            scope,
+            badgeLevel,
+            previousRank,
+          );
+        }
         sent += 1;
       } catch (err) {
         this.logger.warn(`Merit rank notification failed for ${entry.id}: ${(err as Error).message}`);
       }
     }
     return { notified: sent, scope };
+  }
+
+  /** Coursework Merit badge tier — a display label derived purely from rank/of, no separate score:
+   *  top 10% of the ranked pool     -> Gold
+   *  top 30%                        -> Silver
+   *  top 60%                        -> Bronze
+   *  everyone else in a ranked pick -> Participant
+   * Percentile is rank/of so rank 1 of a small cohort still lands correctly (e.g. of=2 -> rank1 Gold, rank2 Bronze). */
+  private static computeCourseworkBadgeLevel(
+    rank: number,
+    of: number,
+  ): 'Gold' | 'Silver' | 'Bronze' | 'Participant' {
+    if (!rank || !of || rank <= 0 || of <= 0) return 'Participant';
+    const percentile = rank / of;
+    if (percentile <= 0.1) return 'Gold';
+    if (percentile <= 0.3) return 'Silver';
+    if (percentile <= 0.6) return 'Bronze';
+    return 'Participant';
   }
 
   private async attachStudents<T extends { userId: string }>(entries: T[]) {

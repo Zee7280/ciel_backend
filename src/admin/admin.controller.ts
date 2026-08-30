@@ -38,7 +38,8 @@ import type { IssueLogListQuery } from '../issue-logs/issue-logs.service';
 import { PlatformJobsService } from '../jobs/platform-jobs.service';
 
 @Controller('admin')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.SUPER_ADMIN)
 @UseInterceptors(AdminMutationAuditInterceptor)
 export class AdminController {
   constructor(

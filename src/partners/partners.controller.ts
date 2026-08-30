@@ -3,6 +3,9 @@ import { UsersService } from '../users/users.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { UpdateOrganizationDto } from '../organizations/dto/organization.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
+import { UserRole } from '../users/enums/user-role.enum';
 import { MembershipActiveGuard } from '../organization-membership/membership-active.guard';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ReportsService } from '../reports/reports.service';
@@ -18,7 +21,8 @@ import { S3Service } from '../common/s3.service';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
 
 @Controller('partners')
-@UseGuards(JwtAuthGuard, MembershipActiveGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, MembershipActiveGuard)
+@Roles(UserRole.UNIVERSITY, UserRole.NGO, UserRole.CORPORATE, UserRole.ORGANIZATION_ADMIN)
 export class PartnersController {
     constructor(
         private readonly usersService: UsersService,
@@ -367,7 +371,8 @@ export class PartnersController {
 
 // Explicit alias controller for singular /partner routes
 @Controller('partner')
-@UseGuards(JwtAuthGuard, MembershipActiveGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, MembershipActiveGuard)
+@Roles(UserRole.UNIVERSITY, UserRole.NGO, UserRole.CORPORATE, UserRole.ORGANIZATION_ADMIN)
 export class PartnerAliasController {
     constructor(
         private readonly studentReportsService: StudentReportsService,

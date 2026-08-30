@@ -143,8 +143,9 @@ export class AdminOpportunitiesController {
     };
   }
 
-  /** Same JWT guard stack as `GET /admin/projects` (class-level `JwtAuthGuard` only). */
   @Get(':opportunityId/incomplete-report-applicants')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
   incompleteReportApplicants(@Param('opportunityId') opportunityId: string) {
     return this.opportunityApplicationsService.adminListIncompleteReportApplicants(
       opportunityId,
@@ -152,6 +153,8 @@ export class AdminOpportunitiesController {
   }
 
   @Delete(':opportunityId/applications/:applicationId')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
   @HttpCode(HttpStatus.NO_CONTENT)
   async deleteApplicationForIncompleteReport(
     @Param('opportunityId') opportunityId: string,
@@ -187,6 +190,8 @@ export class AdminOpportunitiesController {
   }
 
   @Get(':id/teams')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
   async listTeams(@Param('id') opportunityId: string) {
     return this.opportunityApplicationsService.adminListOpportunityTeams(
       opportunityId,
@@ -194,6 +199,8 @@ export class AdminOpportunitiesController {
   }
 
   @Post(':id/teams/merge')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
   async mergeTeams(
     @Param('id') opportunityId: string,
     @Body() dto: AdminMergeTeamMembersDto,
@@ -205,6 +212,8 @@ export class AdminOpportunitiesController {
   }
 
   @Delete(':id/teams/:teamId')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
   @HttpCode(HttpStatus.NO_CONTENT)
   async deleteTeam(
     @Param('id') opportunityId: string,
@@ -217,6 +226,8 @@ export class AdminOpportunitiesController {
   }
 
   @Patch(':id/teams/:teamId/members/:memberId')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
   async patchTeamMember(
     @Param('id') opportunityId: string,
     @Param('teamId') teamId: string,
@@ -232,6 +243,8 @@ export class AdminOpportunitiesController {
   }
 
   @Delete(':id/teams/:teamId/members/:memberId')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
   @HttpCode(HttpStatus.NO_CONTENT)
   async deleteTeamMember(
     @Param('id') opportunityId: string,

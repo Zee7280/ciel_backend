@@ -19,6 +19,8 @@ import {
     studentReportUploadMulterLimits,
 } from '../common/student-report-file-upload';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
 import { StudentReportsService } from '../reports/student-reports.service';
 import { UserRole } from '../users/enums/user-role.enum';
 
@@ -127,7 +129,11 @@ export class StudentReportsController {
         return await this.studentReportsService.findOneByOpportunityOrId(id, req.user.id);
     }
 
+    /** Not called by any frontend (admin/partner review goes through their own dedicated routes) —
+     * guarded rather than removed, in case something outside this repo still depends on it. */
     @Patch(':id/verify')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.SUPER_ADMIN)
     async verifyReport(
         @Request() req,
         @Param('id') id: string,

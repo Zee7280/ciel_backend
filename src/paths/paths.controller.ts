@@ -41,12 +41,16 @@ export class PathsController {
     // ---------- Course Project ----------
 
     @Get('course-project')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.STUDENT)
     async getCourseProject(@Request() req) {
         const data = await this.pathsService.getCourseProject(req.user.id);
         return { success: true, data };
     }
 
     @Patch('course-project')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.STUDENT)
     async updateCourseProject(@Request() req, @Body() dto: UpdateCourseProjectDto) {
         const data = await this.pathsService.upsertCourseProject(req.user.id, dto);
         return { success: true, data };
@@ -55,12 +59,16 @@ export class PathsController {
     /** A student's full coursework deck — every report they've submitted or drafted, plus any
      * teammate's submitted report they were named on in step 1. */
     @Get('course-projects')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.STUDENT)
     async listCourseProjects(@Request() req) {
         const data = await this.pathsService.listCourseProjects(req.user.id, req.user.email);
         return { success: true, data };
     }
 
     @Post('course-projects')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.STUDENT)
     async createCourseProject(@Request() req) {
         const data = await this.pathsService.createCourseProject(req.user.id);
         return { success: true, data };
@@ -113,18 +121,24 @@ export class PathsController {
     }
 
     @Get('course-projects/:id')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.STUDENT)
     async getCourseProjectById(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
         const data = await this.pathsService.getCourseProjectByIdForUser(req.user.id, req.user.email, id);
         return { success: true, data };
     }
 
     @Patch('course-projects/:id')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.STUDENT)
     async updateCourseProjectById(@Request() req, @Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateCourseProjectDto) {
         const data = await this.pathsService.updateCourseProjectByIdForUser(req.user.id, id, dto);
         return { success: true, data };
     }
 
     @Delete('course-projects/:id')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.STUDENT)
     async deleteCourseProjectById(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
         await this.pathsService.deleteCourseProjectByIdForUser(req.user.id, id);
         return { success: true };
@@ -133,18 +147,24 @@ export class PathsController {
     // ---------- FYP / Thesis ----------
 
     @Get('fyp-thesis')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.STUDENT)
     async getFyp(@Request() req) {
         const data = await this.pathsService.getFyp(req.user.id, req.user.email);
         return { success: true, data };
     }
 
     @Patch('fyp-thesis')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.STUDENT)
     async updateFyp(@Request() req, @Body() dto: UpdateFypDto) {
         const data = await this.pathsService.upsertFyp(req.user.id, dto);
         return { success: true, data };
     }
 
     @Post('fyp-thesis/deliverables')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.STUDENT)
     async addFypDeliverable(@Request() req, @Body() dto: AddFypDeliverableDto) {
         const data = await this.pathsService.addFypDeliverable(req.user.id, dto);
         return { success: true, data };
@@ -260,18 +280,24 @@ export class PathsController {
     }
 
     @Get('startup-business')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.STUDENT)
     async getVenture(@Request() req) {
         const data = await this.pathsService.getVenture(req.user.id, req.user.email);
         return { success: true, data };
     }
 
     @Patch('startup-business')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.STUDENT)
     async updateVenture(@Request() req, @Body() dto: UpdateVentureDto) {
         const data = await this.pathsService.upsertVenture(req.user.id, dto);
         return { success: true, data };
     }
 
     @Patch('startup-business/visibility')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.STUDENT)
     async setVentureVisibility(@Request() req, @Body() dto: SetVentureVisibilityDto) {
         const result = await this.pathsService.setVentureVisibility(req.user.id, dto.isVisible);
         if (result.error) {
@@ -281,6 +307,8 @@ export class PathsController {
     }
 
     @Post('startup-business/documents')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.STUDENT)
     async addVentureDocument(@Request() req, @Body() dto: AddVentureDocumentDto) {
         const data = await this.pathsService.addVentureDocument(req.user.id, dto);
         return { success: true, data };

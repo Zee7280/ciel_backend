@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, Max, Min, ValidateNested } from 'class-validator';
+import { IsArray, IsBoolean, IsEmail, IsIn, IsInt, IsOptional, IsString, Max, Min, ValidateIf, ValidateNested } from 'class-validator';
 
 export class FacultyReviewCourseProjectDto {
     @IsIn(['approve', 'reject', 'revision'])
@@ -25,7 +25,9 @@ export class CourseProjectStudentInfoDto {
     /** @deprecated pre-multi-select shape */
     @IsOptional() @IsString() courseworkType?: string;
     @IsOptional() @IsString() teacherName?: string;
-    @IsOptional() @IsString() teacherEmail?: string;
+    /** Self-declared by the student, matched verbatim against the reviewing faculty's own login
+     * email in facultyReviewCourseProject — format-checked only, never verified against a roster. */
+    @IsOptional() @ValidateIf((o) => !!o.teacherEmail) @IsEmail() teacherEmail?: string;
     @IsOptional() @IsString() notes?: string;
 }
 

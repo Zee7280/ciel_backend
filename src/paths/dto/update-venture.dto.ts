@@ -3,6 +3,7 @@ import {
     ArrayMaxSize,
     IsArray,
     IsBoolean,
+    IsEmail,
     IsIn,
     IsInt,
     IsNumber,
@@ -11,6 +12,7 @@ import {
     Max,
     MaxLength,
     Min,
+    ValidateIf,
     ValidateNested,
 } from 'class-validator';
 
@@ -68,7 +70,9 @@ export class VentureAcademicSetupDto {
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) courseCode?: string;
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) groupId?: string;
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) supervisorName?: string;
-    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) supervisorEmail?: string;
+    /** Self-declared by the student, matched verbatim against the reviewing faculty's own login
+     * email in supervisorReviewVenture — format-checked only, never verified against a roster. */
+    @IsOptional() @ValidateIf((o) => !!o.supervisorEmail) @IsEmail() @MaxLength(FREE_TEXT_MAX) supervisorEmail?: string;
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) coSupervisor?: string;
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) deadline?: string;
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) teamType?: string;

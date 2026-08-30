@@ -3,6 +3,7 @@ import {
   ArrayMaxSize,
   IsArray,
   IsBoolean,
+  IsEmail,
   IsIn,
   IsInt,
   IsNumber,
@@ -11,6 +12,7 @@ import {
   Max,
   MaxLength,
   Min,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 
@@ -79,9 +81,11 @@ export class FypProjectInfoDto {
   /** {name, email?, role?} per member — kept loosely typed since older clients may still send plain strings. */
   @IsOptional() @IsArray() @ArrayMaxSize(LIST_MAX) teamMembers?: unknown[];
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) supervisorName?: string;
-  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) supervisorEmail?: string;
+  /** Self-declared by the student, matched verbatim against the reviewing faculty's own login
+   * email in supervisorReviewFyp — format-checked only, never verified against a roster. */
+  @IsOptional() @ValidateIf((o) => !!o.supervisorEmail) @IsEmail() @MaxLength(FREE_TEXT_MAX) supervisorEmail?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) coSupervisorName?: string;
-  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) coSupervisorEmail?: string;
+  @IsOptional() @ValidateIf((o) => !!o.coSupervisorEmail) @IsEmail() @MaxLength(FREE_TEXT_MAX) coSupervisorEmail?: string;
 }
 export class FypBackgroundInfoDto {
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) problem?: string;

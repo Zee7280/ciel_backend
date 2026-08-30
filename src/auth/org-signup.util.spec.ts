@@ -66,6 +66,19 @@ describe('org signup mapping', () => {
         expect(applyAcademicSignupFields({ role: 'ngo', institution: 'X', department: 'Y' })).toEqual({});
     });
 
+    it('keeps faculty department mapping when an optional employee id is also present', () => {
+        expect(
+            applyAcademicSignupFields({
+                role: 'faculty',
+                institution: 'Beaconhouse National University (BNU)',
+                department: 'School of Management Sciences',
+            }),
+        ).toEqual({
+            university: 'Beaconhouse National University (BNU)',
+            faculty_department: 'School of Management Sciences',
+        });
+    });
+
     it('composes E.164 from dial code + national digits', () => {
         expect(composeSignupContactPhone('+92', '3001234567')).toBe('+923001234567');
         expect(composeSignupContactPhone('+92', '+923001234567')).toBe('+923001234567');

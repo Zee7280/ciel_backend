@@ -8,7 +8,7 @@ import { CourseProjectEntry } from './entities/course-project-entry.entity';
 import { FypEntry } from './entities/fyp-entry.entity';
 import { VentureEntry } from './entities/venture-entry.entity';
 import { TeamMemberInvite } from './entities/team-member-invite.entity';
-import { CourseworkGraderRun } from './entities/coursework-grader-run.entity';
+import { PathGraderRun } from './entities/path-grader-run.entity';
 import { User } from '../users/entities/user.entity';
 import { Organization } from '../organizations/entities/organization.entity';
 import { StorageModule } from '../common/storage.module';
@@ -22,7 +22,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
             FypEntry,
             VentureEntry,
             TeamMemberInvite,
-            CourseworkGraderRun,
+            PathGraderRun,
             User,
             Organization,
         ]),

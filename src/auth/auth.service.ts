@@ -178,7 +178,18 @@ export class AuthService {
                 }
             }
 
-            const { organizationCategory: _oc, legalRegistrationType: _lrt, ...userCreateData } = userData;
+            const {
+                organizationCategory: _oc,
+                legalRegistrationType: _lrt,
+                affiliationProofUrl,
+                affiliationProofKind,
+                affiliationProofLabel,
+                ...userCreateData
+            } = userData as typeof userData & {
+                affiliationProofUrl?: string;
+                affiliationProofKind?: string;
+                affiliationProofLabel?: string;
+            };
 
             const hashedPassword = await bcrypt.hash(password, 10);
 
@@ -200,6 +211,18 @@ export class AuthService {
                               contactName: userCreateData.contactPerson,
                               contactEmail: email,
                               ...(contactPhone ? { contactPhone } : {}),
+                          }
+                        : {}),
+                    ...(isOrgSignup && (affiliationProofUrl || affiliationProofKind || affiliationProofLabel)
+                        ? {
+                              ...(affiliationProofUrl?.trim() ? { websiteUrl: affiliationProofUrl.trim() } : {}),
+                              verificationNotes: [
+                                  affiliationProofKind ? `Signup proof method: ${affiliationProofKind}` : '',
+                                  affiliationProofLabel ? `Signup proof detail: ${affiliationProofLabel}` : '',
+                                  affiliationProofUrl ? `Signup proof URL: ${affiliationProofUrl.trim()}` : '',
+                              ]
+                                  .filter(Boolean)
+                                  .join('\n'),
                           }
                         : {}),
                 });

@@ -29,6 +29,7 @@ import { isReportPartnerStepSatisfied } from './report-partner-approval.util';
 import { collectReportEvidenceFiles } from './collect-report-evidence.util';
 import { buildCielPkAiEvaluationPayload } from './build-ciel-pk-ai-evaluation-payload.util';
 import { validateReportSectionsForSubmit } from './report-submit-validation.util';
+import { scoreCommunityAward, readCii, countMedia, communityServiceLevel } from './community-award.util';
 
 @Injectable()
 export class StudentReportsService {
@@ -566,8 +567,42 @@ export class StudentReportsService {
         (report.section11 as Record<string, unknown> | null | undefined) ??
           null,
       ),
+      ...this.computeCommunityAwardTotal(report),
       created_at: report.createdAt,
     };
+  }
+
+  /** Same 0-100 total + standing Level badge every faculty/partner/admin community-award view
+   * already computes via CommunityAwardService.toCard() — reuses the identical pure scoring
+   * functions (not the service itself, to avoid a cross-module DI dependency) so the student's own
+   * wall shows the exact same total/level, never a second, drifting computation. */
+  private computeCommunityAwardTotal(report: StudentReport): { total: number; level: ReturnType<typeof communityServiceLevel> } {
+    const s1 = report.section1 as StudentReport['section1'] | null;
+    const s2 = report.section2 as StudentReport['section2'] | null;
+    const s3 = report.section3 as StudentReport['section3'] | null;
+    const s4 = report.section4 as Record<string, unknown> | null;
+    const s5 = report.section5 as StudentReport['section5'] | null;
+    const s7 = report.section7 as StudentReport['section7'] | null;
+    const s8 = report.section8 as StudentReport['section8'] | null;
+    const s10 = report.section10 as StudentReport['section10'] | null;
+    const hours = Number(s1?.metrics?.total_verified_hours ?? 0) || 0;
+    const sessions = Number(s4?.total_sessions ?? s4?.my_sessions ?? s1?.metrics?.total_active_days ?? 0) || 0;
+    const evidenceCount = countMedia([s1, s2, s3, s4 as { media_urls?: unknown }, s5, s7, s8, s10]);
+    const baseline = String(s5?.baseline ?? '').trim();
+    const endline = String(s5?.endline ?? '').trim();
+    const change = String(s5?.observed_change ?? '').trim();
+    const scored = scoreCommunityAward({
+      cii: readCii(report.section11 as Record<string, unknown> | null),
+      hours,
+      sessions,
+      evidenceCount,
+      hasBaseline: !!baseline,
+      hasEndline: !!endline,
+      hasMeasuredChange: !!change,
+      continuation: (s10?.continuation_status as 'yes' | 'partially' | 'no' | '') || '',
+      partnerCount: Array.isArray(s7?.partners) ? s7.partners.length : 0,
+    });
+    return { total: scored.total, level: communityServiceLevel(scored.total) };
   }
 
   private buildStudentReportFeedback(report: StudentReport): string | null {

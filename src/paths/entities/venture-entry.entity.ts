@@ -118,7 +118,7 @@ export interface VentureReviewPipeline {
     declarationWork?: boolean;
     declarationConsent?: boolean;
     studentDeclaredAt?: string;
-    supervisorStatus?: 'not_started' | 'pending' | 'approved' | 'revisions_requested';
+    supervisorStatus?: 'not_started' | 'pending' | 'approved' | 'revisions_requested' | 'rejected';
     supervisorNote?: string | null;
     universityStatus?: 'not_started' | 'pending' | 'approved';
     sdgReviewStatus?: 'not_started' | 'pending' | 'approved';
@@ -217,6 +217,18 @@ export class VentureEntry {
 
     @Column({ type: 'varchar', default: 'draft' })
     status: 'draft' | 'submitted';
+
+    /** Pinned by the venture merit-model notify — same shape as Course Project's meritRibbon. */
+    @Column({ type: 'jsonb', nullable: true })
+    meritRibbon?: {
+        rank: number;
+        of: number;
+        scope: string;
+        total?: number;
+        badgeLevel?: 'Gold' | 'Silver' | 'Bronze' | 'Participant';
+        previousRank?: number | null;
+        at: string;
+    } | null;
 
     @CreateDateColumn()
     createdAt: Date;

@@ -1,4 +1,4 @@
-import { isCommunityAwardLiveReport, isCommunityAwardMedalReport, scoreCommunityAward } from './community-award.util';
+import { communityServiceLevel, isCommunityAwardLiveReport, isCommunityAwardMedalReport, scoreCommunityAward } from './community-award.util';
 
 describe('community-award.util', () => {
     it('scores CII as 40% of the 100-point index and caps each band', () => {
@@ -79,5 +79,18 @@ describe('isCommunityAwardMedalReport', () => {
                 status: 'verified',
             }),
         ).toBe(true);
+    });
+});
+
+describe('communityServiceLevel', () => {
+    it('bands the 4 tiers at the 85/70/50 thresholds, inclusive lower bound', () => {
+        expect(communityServiceLevel(100)).toBe('Transformative');
+        expect(communityServiceLevel(85)).toBe('Transformative');
+        expect(communityServiceLevel(84)).toBe('Distinguished');
+        expect(communityServiceLevel(70)).toBe('Distinguished');
+        expect(communityServiceLevel(69)).toBe('Strong');
+        expect(communityServiceLevel(50)).toBe('Strong');
+        expect(communityServiceLevel(49)).toBe('Developing');
+        expect(communityServiceLevel(0)).toBe('Developing');
     });
 });

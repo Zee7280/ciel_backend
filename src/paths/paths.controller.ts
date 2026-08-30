@@ -11,6 +11,7 @@ import { MeritModelQueryDto, NotifyMeritRanksDto } from './dto/merit-model-query
 import { AddFypDeliverableDto, SupervisorReviewFypDto, UpdateFypDto } from './dto/update-fyp.dto';
 import { FypMeritModelQueryDto } from './dto/fyp-merit-model-query.dto';
 import { AddVentureDocumentDto, SetVentureVisibilityDto, SupervisorReviewVentureDto, UpdateVentureDto } from './dto/update-venture.dto';
+import { VentureMeritModelQueryDto } from './dto/venture-merit-model-query.dto';
 import { ResendTeamInviteDto } from './dto/team-invite.dto';
 
 @Controller('paths')
@@ -186,6 +187,15 @@ export class PathsController {
         return { success: true, data };
     }
 
+    /** After a faculty/university/admin FYP merit-model run — notify the owners of the top-ranked cards. */
+    @Post('fyp-thesis/merit-model/notify')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.FACULTY, UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN, UserRole.SUPER_ADMIN)
+    async notifyFypMeritRanks(@Request() req, @Body() dto: NotifyMeritRanksDto) {
+        const data = await this.pathsService.notifyFypMeritRanks(req.user, dto);
+        return { success: true, data };
+    }
+
     // ---------- Team-member invites (Course Project / FYP / Startup-Business) ----------
 
     /** Preview shown on the /verify/team-invite landing page before the teammate accepts. */
@@ -227,6 +237,25 @@ export class PathsController {
     @Roles(UserRole.FACULTY)
     async supervisorReviewVenture(@Request() req, @Param('id', ParseUUIDPipe) id: string, @Body() dto: SupervisorReviewVentureDto) {
         const data = await this.pathsService.supervisorReviewVenture(req.user.email, id, dto.action, dto.note, req.user.id);
+        return { success: true, data };
+    }
+
+    /** The Venture Merit Model — 100pt rubric ranking of eligible (submitted + supervisor-approved)
+     * ventures. Phase A+B scope: faculty + CIEL only. */
+    @Get('startup-business/merit-model')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.FACULTY, UserRole.SUPER_ADMIN)
+    async getVentureMeritModel(@Request() req, @Query() query: VentureMeritModelQueryDto) {
+        const data = await this.pathsService.getVentureMeritModel(req.user, query);
+        return { success: true, data };
+    }
+
+    /** After a faculty/admin venture merit-model run — notify the owners of the top-ranked cards. */
+    @Post('startup-business/merit-model/notify')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.FACULTY, UserRole.SUPER_ADMIN)
+    async notifyVentureMeritRanks(@Request() req, @Body() dto: NotifyMeritRanksDto) {
+        const data = await this.pathsService.notifyVentureMeritRanks(req.user, dto);
         return { success: true, data };
     }
 

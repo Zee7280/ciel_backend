@@ -22,11 +22,12 @@ import {
   TeamMemberInvite,
   TeamMemberInviteKind,
 } from './entities/team-member-invite.entity';
-import { CourseworkGraderRun, CourseworkGraderRunScope } from './entities/coursework-grader-run.entity';
+import { PathGraderRun, PathGraderRunScope, PathGraderRunKind } from './entities/path-grader-run.entity';
 import { formatCertificateVerificationCode } from '../reports/certificate-verification-code.util';
 import { UpdateCourseProjectDto } from './dto/update-course-project.dto';
 import { AddFypDeliverableDto, UpdateFypDto } from './dto/update-fyp.dto';
 import { FypMeritModelQueryDto } from './dto/fyp-merit-model-query.dto';
+import { VentureMeritModelQueryDto } from './dto/venture-merit-model-query.dto';
 import { AddVentureDocumentDto, UpdateVentureDto } from './dto/update-venture.dto';
 import { ventureMatchesFaculty } from './venture-faculty-scope.util';
 import {
@@ -45,6 +46,8 @@ import { byMerit, computeMeritCard, deriveMeritYear } from './merit-model/merit-
 import { RankedMeritCard } from './merit-model/merit-model.types';
 import { byFypMerit, computeFypMeritCard, deriveFypCompletionMonth, deriveFypRoute } from './merit-model/fyp-merit-model.util';
 import { RankedFypMeritCard } from './merit-model/fyp-merit-model.types';
+import { byVentureMerit, computeVentureMeritCard } from './merit-model/venture-merit-model.util';
+import { RankedVentureMeritCard } from './merit-model/venture-merit-model.types';
 
 @Injectable()
 export class PathsService {
@@ -65,8 +68,8 @@ export class PathsService {
     private readonly organizationsRepo: Repository<Organization>,
     private readonly mailService: MailService,
     private readonly notificationsService: NotificationsService,
-    @InjectRepository(CourseworkGraderRun)
-    private readonly graderRunRepo: Repository<CourseworkGraderRun>,
+    @InjectRepository(PathGraderRun)
+    private readonly graderRunRepo: Repository<PathGraderRun>,
   ) {}
 
   // ---------- Team-member invites (shared across Course Project / FYP / Venture) ----------
@@ -711,7 +714,7 @@ export class PathsService {
     let scopeLabel = 'No scope';
     const honorsWideFilters =
       role === UserRole.UNIVERSITY || role === UserRole.ORGANIZATION_ADMIN || role === UserRole.SUPER_ADMIN;
-    const graderRuns = await this.peekGraderRunUsage(user);
+    const graderRuns = await this.peekGraderRunUsage('coursework', user);
 
     if (role === UserRole.FACULTY) {
       pool = await this.listCourseProjectsForTeacher(user.email);
@@ -820,7 +823,7 @@ export class PathsService {
     role: string;
     email: string;
     organizationId?: string;
-  }): { scope: CourseworkGraderRunScope; key: string } | null {
+  }): { scope: PathGraderRunScope; key: string } | null {
     if (user.role === UserRole.FACULTY) {
       return { scope: 'faculty', key: (user.email || '').trim().toLowerCase() };
     }
@@ -830,38 +833,37 @@ export class PathsService {
     return null;
   }
 
-  /** Read-only peek at this caller's grader-run usage — never creates/increments a row. */
-  private async peekGraderRunUsage(user: {
-    role: string;
-    email: string;
-    organizationId?: string;
-  }): Promise<{ unlimited: boolean; used: number; limit: number }> {
+  /** Read-only peek at this caller's grader-run usage for one path — never creates/increments a row. */
+  private async peekGraderRunUsage(
+    pathKind: PathGraderRunKind,
+    user: { role: string; email: string; organizationId?: string },
+  ): Promise<{ unlimited: boolean; used: number; limit: number }> {
     const resolved = this.resolveGraderRunScope(user);
     if (!resolved) return { unlimited: true, used: 0, limit: 0 };
     const academicYear = new Date().getFullYear();
     const row = await this.graderRunRepo.findOne({
-      where: { scope: resolved.scope, scopeKey: resolved.key, academicYear },
+      where: { pathKind, scope: resolved.scope, scopeKey: resolved.key, academicYear },
     });
     return { unlimited: false, used: row?.runCount ?? 0, limit: 3 };
   }
 
-  /** Checks and atomically consumes one grader run for this caller's scope+year — throws
-   * GRADER_RUNS_EXHAUSTED (403) once the cap of 3/year is reached. CIEL/admin is unlimited. */
-  private async checkAndConsumeGraderRun(user: {
-    role: string;
-    email: string;
-    organizationId?: string;
-  }): Promise<{ unlimited: boolean; used: number; limit: number }> {
+  /** Checks and atomically consumes one grader run for this caller's pathKind+scope+year — throws
+   * GRADER_RUNS_EXHAUSTED (403) once the cap of 3/year is reached. CIEL/admin is unlimited. Each
+   * path (coursework/fyp/startup) has its own independent counter. */
+  private async checkAndConsumeGraderRun(
+    pathKind: PathGraderRunKind,
+    user: { role: string; email: string; organizationId?: string },
+  ): Promise<{ unlimited: boolean; used: number; limit: number }> {
     const resolved = this.resolveGraderRunScope(user);
     if (!resolved) return { unlimited: true, used: 0, limit: 0 };
     const academicYear = new Date().getFullYear();
     const limit = 3;
     // Locked read-modify-write — without this, two near-simultaneous "Run" clicks from the same
-    // scope+year can both read the same pre-image and both save runCount+1, undercounting by one.
+    // pathKind+scope+year can both read the same pre-image and both save runCount+1, undercounting by one.
     const runCount = await this.graderRunRepo.manager.transaction(async (manager) => {
-      const repo = manager.getRepository(CourseworkGraderRun);
+      const repo = manager.getRepository(PathGraderRun);
       let row = await repo.findOne({
-        where: { scope: resolved.scope, scopeKey: resolved.key, academicYear },
+        where: { pathKind, scope: resolved.scope, scopeKey: resolved.key, academicYear },
         lock: { mode: 'pessimistic_write' },
       });
       const used = row?.runCount ?? 0;
@@ -875,7 +877,7 @@ export class PathsService {
         });
       }
       if (!row) {
-        row = repo.create({ scope: resolved.scope, scopeKey: resolved.key, academicYear, runCount: 0 });
+        row = repo.create({ pathKind, scope: resolved.scope, scopeKey: resolved.key, academicYear, runCount: 0 });
       }
       row.runCount = used + 1;
       row.lastRunAt = new Date();
@@ -905,8 +907,8 @@ export class PathsService {
       .filter((p) => p.entryId && allowed.has(p.entryId))
       .slice(0, 3);
     const graderRuns = picks.length
-      ? await this.checkAndConsumeGraderRun(user)
-      : await this.peekGraderRunUsage(user);
+      ? await this.checkAndConsumeGraderRun('coursework', user)
+      : await this.peekGraderRunUsage('coursework', user);
     const seen = new Set<string>();
     let sent = 0;
     for (const pick of picks) {
@@ -917,7 +919,7 @@ export class PathsService {
       const of = pick.of || ranked.length;
       const rank = pick.rank;
       const previousRank = entry.meritRibbon?.rank ?? null;
-      const badgeLevel = PathsService.computeCourseworkBadgeLevel(rank, of);
+      const badgeLevel = PathsService.computeRankBadgeLevel(rank, of);
       const ribbon = { rank, of, scope, total: pick.total, badgeLevel, previousRank, at: new Date().toISOString() };
       const already =
         entry.meritRibbon?.rank === rank &&
@@ -958,13 +960,14 @@ export class PathsService {
     return { notified: sent, scope, graderRuns };
   }
 
-  /** Coursework Merit badge tier — a display label derived purely from rank/of, no separate score:
+  /** Rank badge tier shared by Coursework/FYP/Startup ribbons — a display label derived purely
+   * from rank/of, no separate score:
    *  top 10% of the ranked pool     -> Gold
    *  top 30%                        -> Silver
    *  top 60%                        -> Bronze
    *  everyone else in a ranked pick -> Participant
    * Percentile is rank/of so rank 1 of a small cohort still lands correctly (e.g. of=2 -> rank1 Gold, rank2 Bronze). */
-  private static computeCourseworkBadgeLevel(
+  private static computeRankBadgeLevel(
     rank: number,
     of: number,
   ): 'Gold' | 'Silver' | 'Bronze' | 'Participant' {
@@ -1242,9 +1245,14 @@ export class PathsService {
         entry.supervisorApprovalStatus = 'pending';
         entry.supervisorApprovalNote = null;
         entry.supervisorApprovalAt = null;
-      } else if (entry.status === 'submitted' && entry.supervisorApprovalStatus === 'rejected') {
+        entry.meritRibbon = null;
+      } else if (
+        entry.status === 'submitted' &&
+        (entry.supervisorApprovalStatus === 'rejected' || entry.supervisorApprovalStatus === 'revision_requested')
+      ) {
         entry.supervisorApprovalStatus = 'pending';
         entry.supervisorApprovalAt = null;
+        entry.meritRibbon = null;
       }
       return repo.save(entry);
     });
@@ -1259,7 +1267,7 @@ export class PathsService {
   async supervisorReviewFyp(
     supervisorEmail: string,
     id: string,
-    action: 'approve' | 'reject',
+    action: 'approve' | 'reject' | 'revision',
     note?: string,
   ) {
     const email = (supervisorEmail || '').trim().toLowerCase();
@@ -1272,10 +1280,44 @@ export class PathsService {
     ) {
       throw new NotFoundException('FYP entry not found');
     }
-    entry.supervisorApprovalStatus = action === 'approve' ? 'approved' : 'rejected';
+    entry.supervisorApprovalStatus =
+      action === 'approve' ? 'approved' : action === 'revision' ? 'revision_requested' : 'rejected';
     entry.supervisorApprovalNote = note ?? null;
     entry.supervisorApprovalAt = new Date();
-    return this.fypRepo.save(entry);
+    if (action !== 'approve') entry.meritRibbon = null;
+    const saved = await this.fypRepo.save(entry);
+    const first = saved.projectInfo?.studentName?.split(' ')[0] || 'there';
+    const title = saved.projectTitle || 'Untitled FYP';
+    try {
+      if (action === 'approve') {
+        await this.notificationsService.createNotification(saved.userId, {
+          type: 'approval',
+          title: 'Your FYP was approved',
+          message: `${first}, “${title}” is live. It now hangs on My Impact Wall — wait for end-of-semester ranking and badge allocation.`,
+        });
+      } else if (action === 'revision') {
+        const extra = (note || '').trim();
+        await this.notificationsService.createNotification(saved.userId, {
+          type: 'update',
+          title: 'Revision requested on your FYP',
+          message: extra
+            ? `${first}, “${title}” needs a revision before it can be approved. ${extra} Open the report, fix, and resubmit — nothing is penalised.`
+            : `${first}, “${title}” needs a revision before it can be approved. Open the report, fix, and resubmit — nothing is penalised.`,
+        });
+      } else {
+        const extra = (note || '').trim();
+        await this.notificationsService.createNotification(saved.userId, {
+          type: 'update',
+          title: 'Your FYP was rejected',
+          message: extra
+            ? `${first}, “${title}” was rejected. ${extra} Open the report, fix, and resubmit — nothing is penalised.`
+            : `${first}, “${title}” was rejected. Open the report, fix, and resubmit — nothing is penalised.`,
+        });
+      }
+    } catch (err) {
+      this.logger.warn(`FYP review notification failed for ${saved.id}: ${(err as Error).message}`);
+    }
+    return saved;
   }
 
   /** The FYP Merit Model — 100pt, 7-criterion route-adjusted rubric ranking of eligible (submitted +
@@ -1289,6 +1331,7 @@ export class PathsService {
     let pool: Array<FypEntry & { student: User | null }> = [];
     let scopeLabel = 'No scope';
     const honorsSupervisorFilter = role !== UserRole.FACULTY;
+    const graderRuns = await this.peekGraderRunUsage('fyp', user);
 
     if (role === UserRole.FACULTY) {
       pool = await this.listFypForTeacher(user.email);
@@ -1320,6 +1363,7 @@ export class PathsService {
         routeFairness: [],
         count: 0,
         entries: [],
+        graderRuns,
       };
     }
 
@@ -1386,7 +1430,65 @@ export class PathsService {
       routeFairness,
       count: ranked.length,
       entries: ranked,
+      graderRuns,
     };
+  }
+
+  /** Notify owners of FYP merit-model top-picks. Mirrors notifyCourseProjectMeritRanks exactly —
+   * only ids in this caller's eligible (approved) pool are sent, ranks come from the UI. */
+  async notifyFypMeritRanks(
+    user: { role: string; email: string; organizationId?: string },
+    dto: NotifyMeritRanksDto,
+  ) {
+    const model = await this.getFypMeritModel(user, {});
+    const ranked: RankedFypMeritCard[] = Array.isArray(model.entries) ? model.entries : [];
+    const allowed = new Set(ranked.map((c) => c.id));
+    const scope = (dto.scopeLabel || model.scope?.label || 'this ranking').trim();
+    const picks = (dto.picks?.length
+      ? dto.picks
+      : (dto.entryIds || []).map((entryId, i) => ({ entryId, rank: i + 1, of: ranked.length, total: undefined as number | undefined }))
+    )
+      .filter((p) => p.entryId && allowed.has(p.entryId))
+      .slice(0, 3);
+    const graderRuns = picks.length
+      ? await this.checkAndConsumeGraderRun('fyp', user)
+      : await this.peekGraderRunUsage('fyp', user);
+    const seen = new Set<string>();
+    let sent = 0;
+    for (const pick of picks) {
+      if (seen.has(pick.entryId)) continue;
+      seen.add(pick.entryId);
+      const entry = await this.fypRepo.findOne({ where: { id: pick.entryId } });
+      if (!entry || entry.supervisorApprovalStatus !== 'approved') continue;
+      const of = pick.of || ranked.length;
+      const rank = pick.rank;
+      const previousRank = entry.meritRibbon?.rank ?? null;
+      const badgeLevel = PathsService.computeRankBadgeLevel(rank, of);
+      const ribbon = { rank, of, scope, total: pick.total, badgeLevel, previousRank, at: new Date().toISOString() };
+      const already =
+        entry.meritRibbon?.rank === rank &&
+        entry.meritRibbon?.of === of &&
+        entry.meritRibbon?.scope === scope;
+      entry.meritRibbon = ribbon;
+      await this.fypRepo.save(entry);
+      if (already) {
+        sent += 1;
+        continue;
+      }
+      const first = entry.projectInfo?.studentName?.split(' ')[0] || 'there';
+      const title = entry.projectTitle || 'Untitled';
+      try {
+        await this.notificationsService.createNotification(entry.userId, {
+          type: 'update',
+          title: `Your FYP ranked #${rank}`,
+          message: `${first}, your FYP “${title}” ranked #${rank} of ${of} in ${scope} (${badgeLevel}). Open FYP / Thesis → My Impact Wall to see the ribbon.`,
+        });
+        sent += 1;
+      } catch (err) {
+        this.logger.warn(`FYP merit rank notification failed for ${entry.id}: ${(err as Error).message}`);
+      }
+    }
+    return { notified: sent, scope, graderRuns };
   }
 
   async addFypDeliverable(userId: string, dto: AddFypDeliverableDto) {
@@ -1506,6 +1608,17 @@ export class PathsService {
         if (dto.stepCompleted !== undefined)
           entry.stepCompleted = dto.stepCompleted;
         if (dto.status !== undefined) entry.status = dto.status;
+        // Editing a previously-reviewed record after the fact invalidates that review — same rule
+        // as Course Project/FYP: fix & resubmit should land as a fresh review. Keep the supervisor's
+        // note so the student still sees it.
+        const priorStatus = entry.reviewPipeline?.supervisorStatus;
+        if (
+          entry.status === 'submitted' &&
+          (priorStatus === 'approved' || priorStatus === 'rejected' || priorStatus === 'revisions_requested')
+        ) {
+          entry.reviewPipeline = { ...entry.reviewPipeline, supervisorStatus: 'pending' };
+          entry.meritRibbon = null;
+        }
         // isVisible is earned, not self-toggled, once the guided wizard is in use — recomputed
         // on every save so it always reflects the current Showcase-Ready + audience state.
         entry.isVisible = deriveVentureIsVisible(entry);
@@ -1537,11 +1650,13 @@ export class PathsService {
     return this.attachStudents(enriched);
   }
 
-  /** Supervisor approve / request-changes for a submitted venture — same gate students already wait on. */
+  /** Supervisor approve / request-revision / reject for a submitted venture — same gate students
+   * already wait on. 'revision' keeps its existing 'revisions_requested' meaning (fix & resubmit);
+   * 'reject' is a genuinely new, harder terminal state — additive, not a rename. */
   async supervisorReviewVenture(
     facultyEmail: string,
     id: string,
-    action: 'approve' | 'reject',
+    action: 'approve' | 'reject' | 'revision',
     note?: string,
     facultyUserId?: string,
   ) {
@@ -1558,16 +1673,155 @@ export class PathsService {
     ) {
       throw new NotFoundException('Venture entry not found');
     }
+    const supervisorStatus = action === 'approve' ? 'approved' : action === 'revision' ? 'revisions_requested' : 'rejected';
     entry.reviewPipeline = {
       ...entry.reviewPipeline,
-      supervisorStatus: action === 'approve' ? 'approved' : 'revisions_requested',
+      supervisorStatus,
       supervisorNote: action === 'approve' ? null : note?.trim() || entry.reviewPipeline?.supervisorNote || null,
     };
     entry.isVisible = deriveVentureIsVisible(entry);
+    if (action !== 'approve') entry.meritRibbon = null;
     const saved = await this.ventureRepo.save(entry);
+    const student = await this.usersRepo.findOne({ where: { id: saved.userId }, select: ['name'] });
+    const first = student?.name?.split(' ')[0] || 'there';
+    const title = saved.ventureName || 'your venture';
+    try {
+      if (action === 'approve') {
+        await this.notificationsService.createNotification(saved.userId, {
+          type: 'approval',
+          title: 'Your venture was approved',
+          message: `${first}, “${title}” is live. It now hangs on My Impact Wall — wait for end-of-semester ranking and badge allocation.`,
+        });
+      } else if (action === 'revision') {
+        const extra = (note || '').trim();
+        await this.notificationsService.createNotification(saved.userId, {
+          type: 'update',
+          title: 'Revision requested on your venture',
+          message: extra
+            ? `${first}, “${title}” needs a revision before it can be approved. ${extra} Open the report, fix, and resubmit — nothing is penalised.`
+            : `${first}, “${title}” needs a revision before it can be approved. Open the report, fix, and resubmit — nothing is penalised.`,
+        });
+      } else {
+        const extra = (note || '').trim();
+        await this.notificationsService.createNotification(saved.userId, {
+          type: 'update',
+          title: 'Your venture was rejected',
+          message: extra
+            ? `${first}, “${title}” was rejected. ${extra} Open the report, fix, and resubmit — nothing is penalised.`
+            : `${first}, “${title}” was rejected. Open the report, fix, and resubmit — nothing is penalised.`,
+        });
+      }
+    } catch (err) {
+      this.logger.warn(`Venture review notification failed for ${saved.id}: ${(err as Error).message}`);
+    }
     const [annotated] = await this.ventureAnnotate([saved]);
     const [withStudent] = await this.attachStudents([this.withCompleteness(annotated)!]);
     return withStudent;
+  }
+
+  /** The Venture Merit Model — 100pt rubric ranking of eligible (submitted + supervisor-approved)
+   * ventures. Phase A+B scope: faculty + CIEL only — no listVenturesForUniversity exists yet, so
+   * university/org-admin roles fall through to the same empty "No scope" shape Coursework/FYP use
+   * elsewhere. Follow-on: add university scoping once that listing method exists. */
+  async getVentureMeritModel(
+    user: { role: string; email: string; organizationId?: string },
+    _filters: VentureMeritModelQueryDto,
+  ) {
+    const role = user.role;
+    let pool: Array<VentureEntry & { student: User | null }> = [];
+    let scopeLabel = 'No scope';
+    const graderRuns = await this.peekGraderRunUsage('startup', user);
+
+    if (role === UserRole.FACULTY) {
+      pool = await this.listVenturesForTeacher(user.email);
+      scopeLabel = 'Faculty supervision';
+    } else if (role === UserRole.SUPER_ADMIN) {
+      pool = await this.listVenturesForAdmin();
+      scopeLabel = 'CIEL — all universities';
+    } else {
+      return {
+        scope: { role, label: scopeLabel, filters: {} },
+        cohortAverage: 0,
+        count: 0,
+        entries: [],
+        graderRuns,
+      };
+    }
+
+    // Eligibility gate — only supervisor-approved, submitted entries count toward the Merit Model.
+    const eligible = pool.filter((e) => e.reviewPipeline?.supervisorStatus === 'approved');
+
+    const cards = eligible.map((e) => ({ ...computeVentureMeritCard(e), student: e.student }));
+    const cohortAverage = cards.length
+      ? Math.round(cards.reduce((sum, c) => sum + c.scorecard.total, 0) / cards.length)
+      : 0;
+    const sorted = [...cards].sort(byVentureMerit);
+    const ranked: RankedVentureMeritCard[] = sorted.map((card, i) => ({ ...card, rank: i + 1, isTopPick: i < 10 }));
+
+    return {
+      scope: { role, label: scopeLabel, filters: {} },
+      cohortAverage,
+      count: ranked.length,
+      entries: ranked,
+      graderRuns,
+    };
+  }
+
+  /** Notify owners of venture merit-model top-picks. Mirrors notifyCourseProjectMeritRanks exactly. */
+  async notifyVentureMeritRanks(
+    user: { role: string; email: string; organizationId?: string },
+    dto: NotifyMeritRanksDto,
+  ) {
+    const model = await this.getVentureMeritModel(user, {});
+    const ranked: RankedVentureMeritCard[] = Array.isArray(model.entries) ? model.entries : [];
+    const allowed = new Set(ranked.map((c) => c.id));
+    const scope = (dto.scopeLabel || model.scope?.label || 'this ranking').trim();
+    const picks = (dto.picks?.length
+      ? dto.picks
+      : (dto.entryIds || []).map((entryId, i) => ({ entryId, rank: i + 1, of: ranked.length, total: undefined as number | undefined }))
+    )
+      .filter((p) => p.entryId && allowed.has(p.entryId))
+      .slice(0, 3);
+    const graderRuns = picks.length
+      ? await this.checkAndConsumeGraderRun('startup', user)
+      : await this.peekGraderRunUsage('startup', user);
+    const seen = new Set<string>();
+    let sent = 0;
+    for (const pick of picks) {
+      if (seen.has(pick.entryId)) continue;
+      seen.add(pick.entryId);
+      const entry = await this.ventureRepo.findOne({ where: { id: pick.entryId } });
+      if (!entry || entry.reviewPipeline?.supervisorStatus !== 'approved') continue;
+      const of = pick.of || ranked.length;
+      const rank = pick.rank;
+      const previousRank = entry.meritRibbon?.rank ?? null;
+      const badgeLevel = PathsService.computeRankBadgeLevel(rank, of);
+      const ribbon = { rank, of, scope, total: pick.total, badgeLevel, previousRank, at: new Date().toISOString() };
+      const already =
+        entry.meritRibbon?.rank === rank &&
+        entry.meritRibbon?.of === of &&
+        entry.meritRibbon?.scope === scope;
+      entry.meritRibbon = ribbon;
+      await this.ventureRepo.save(entry);
+      if (already) {
+        sent += 1;
+        continue;
+      }
+      const student = await this.usersRepo.findOne({ where: { id: entry.userId }, select: ['name'] });
+      const first = student?.name?.split(' ')[0] || 'there';
+      const title = entry.ventureName || 'Untitled venture';
+      try {
+        await this.notificationsService.createNotification(entry.userId, {
+          type: 'update',
+          title: `Your venture ranked #${rank}`,
+          message: `${first}, your venture “${title}” ranked #${rank} of ${of} in ${scope} (${badgeLevel}). Open Startup / Business → My Impact Wall to see the ribbon.`,
+        });
+        sent += 1;
+      } catch (err) {
+        this.logger.warn(`Venture merit rank notification failed for ${entry.id}: ${(err as Error).message}`);
+      }
+    }
+    return { notified: sent, scope, graderRuns };
   }
 
   async addVentureDocument(userId: string, dto: AddVentureDocumentDto) {

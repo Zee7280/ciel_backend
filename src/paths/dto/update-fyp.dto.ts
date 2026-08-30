@@ -37,8 +37,8 @@ export class FypMilestoneDto {
 }
 
 export class SupervisorReviewFypDto {
-  @IsIn(['approve', 'reject'])
-  action: 'approve' | 'reject';
+  @IsIn(['approve', 'reject', 'revision'])
+  action: 'approve' | 'reject' | 'revision';
   @IsOptional() @IsString() note?: string;
 }
 

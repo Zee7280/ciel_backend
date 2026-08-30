@@ -253,13 +253,25 @@ export class FypEntry {
   /** Supervisor review gate — same pattern as Course Project's facultyApprovalStatus: only "approved"
    * entries count toward Merit Model rankings/AI picks/showcase. */
   @Column({ default: 'pending' })
-  supervisorApprovalStatus: string; // pending | approved | rejected
+  supervisorApprovalStatus: string; // pending | approved | rejected | revision_requested
 
   @Column({ type: 'text', nullable: true })
   supervisorApprovalNote: string | null;
 
   @Column({ type: 'timestamp', nullable: true })
   supervisorApprovalAt: Date | null;
+
+  /** Pinned by the FYP merit-model notify — same shape as Course Project's meritRibbon. */
+  @Column({ type: 'jsonb', nullable: true })
+  meritRibbon?: {
+    rank: number;
+    of: number;
+    scope: string;
+    total?: number;
+    badgeLevel?: 'Gold' | 'Silver' | 'Bronze' | 'Participant';
+    previousRank?: number | null;
+    at: string;
+  } | null;
 
   @Column({
     type: 'jsonb',

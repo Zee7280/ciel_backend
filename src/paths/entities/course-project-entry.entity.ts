@@ -228,7 +228,7 @@ export class CourseProjectEntry {
     facultyApprovalAt: Date | null;
 
     /** Pinned by the last analyzer notify in this card's eligible pool — shown on the student's Impact Wall.
-     * badgeLevel is a rank-percentile tier (see PathsService.computeCourseworkBadgeLevel); previousRank is
+     * badgeLevel is a rank-percentile tier (see PathsService.computeRankBadgeLevel); previousRank is
      * this card's rank the last time it was ranked, captured just before being overwritten by a new run —
      * null/undefined means this is the first-ever ranked run. */
     @Column({ type: 'jsonb', nullable: true })

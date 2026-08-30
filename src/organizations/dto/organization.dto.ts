@@ -36,6 +36,14 @@ export class CreateOrganizationDto {
     @IsOptional()
     @IsString()
     contactPhone?: string;
+
+    @IsOptional()
+    @IsString()
+    websiteUrl?: string;
+
+    @IsOptional()
+    @IsString()
+    verificationNotes?: string;
 }
 
 export class UpdateOrganizationDto {

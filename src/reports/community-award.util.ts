@@ -80,6 +80,18 @@ export function scoreCommunityAward(input: CommunityAwardInputs): { pts: number[
     return { pts, total: pts.reduce((a, b) => a + b, 0) };
 }
 
+export type CommunityServiceLevel = 'Transformative' | 'Distinguished' | 'Strong' | 'Developing';
+
+/** A standing score-band grade shown on every approved report regardless of ranking — distinct
+ * from awardBadgeLabel above, which only fires when a report is explicitly picked as a top-N
+ * award winner. "Developing & Below" is a display-only wrapper for the 'Developing' value. */
+export function communityServiceLevel(total: number): CommunityServiceLevel {
+    if (total >= 85) return 'Transformative';
+    if (total >= 70) return 'Distinguished';
+    if (total >= 50) return 'Strong';
+    return 'Developing';
+}
+
 export function awardBadgeLabel(kind: CommunityAwardKind, scope: string) {
     if (kind === 'fac') return `Faculty Choice — ${scope}`;
     if (kind === 'par') return `Partner’s Best Project — ${scope}`;

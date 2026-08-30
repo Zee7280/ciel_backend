@@ -743,4 +743,341 @@ describe('PathsService — FYP resubmission after rejection', () => {
         expect((saved as any).supervisorApprovalAt).toBeNull();
         expect((saved as any).supervisorApprovalNote).toBe('needs more literature review');
     });
+
+    it('also resets a revision_requested entry to pending on the next edit', async () => {
+        const rows: Record<string, unknown>[] = [
+            {
+                id: 'fyp-2',
+                userId: 'student-1',
+                status: 'submitted',
+                supervisorApprovalStatus: 'revision_requested',
+                supervisorApprovalNote: 'tighten the methodology section',
+                supervisorApprovalAt: new Date('2026-01-01'),
+                meritRibbon: { rank: 2, of: 5, scope: 'x', at: '2026-01-01' },
+            },
+        ];
+        const manager = {
+            getRepository: () => ({
+                findOne: jest.fn(async () => rows[0] ?? null),
+                create: jest.fn((data: Record<string, unknown>) => ({ ...data })),
+                save: jest.fn(async (row: Record<string, unknown>) => {
+                    rows[0] = row;
+                    return row;
+                }),
+            }),
+        };
+        const fypRepo = { manager: { transaction: jest.fn(async (fn: (m: unknown) => unknown) => fn(manager)) } };
+        const service = new PathsService(
+            {} as any, fypRepo as any, {} as any, makeInviteRepo() as any, {} as any, {} as any, {} as any,
+            { createNotification: jest.fn() } as any, {} as any,
+        );
+        jest.spyOn(service as any, 'syncFypInvites').mockResolvedValue(undefined);
+        jest.spyOn(service as any, 'fypAnnotate').mockImplementation(async (entries: unknown) => entries as any);
+
+        const saved = await service.upsertFyp('student-1', { addedNote: 'fixed' } as any);
+
+        expect((saved as any).supervisorApprovalStatus).toBe('pending');
+        expect((saved as any).supervisorApprovalAt).toBeNull();
+        expect((saved as any).meritRibbon).toBeNull();
+        expect((saved as any).supervisorApprovalNote).toBe('tighten the methodology section');
+    });
+});
+
+describe('PathsService — FYP supervisor review', () => {
+    const makeReviewService = () => {
+        const notificationsService = { createNotification: jest.fn().mockResolvedValue(undefined) };
+        const entry: Record<string, unknown> = {
+            id: 'fyp-1',
+            userId: 'student-1',
+            status: 'submitted',
+            projectTitle: 'Circular Economy Study',
+            supervisorApprovalStatus: 'pending',
+            projectInfo: { studentName: 'Ali Khan', supervisorEmail: 'supervisor@test.com' },
+            meritRibbon: { rank: 1, of: 8, scope: 'x', at: '2026-01-01' },
+        };
+        const fypRepo = {
+            findOne: jest.fn().mockResolvedValue(entry),
+            save: jest.fn(async (row: Record<string, unknown>) => row),
+        };
+        const usersRepo = { findOne: jest.fn().mockResolvedValue({ name: 'Ali Khan' }) };
+        const service = new PathsService(
+            {} as any, fypRepo as any, {} as any, makeInviteRepo() as any, usersRepo as any, {} as any, {} as any,
+            notificationsService as any, {} as any,
+        );
+        return { service, notificationsService, fypRepo };
+    };
+
+    it('approve sets supervisorApprovalStatus=approved and notifies the student', async () => {
+        const { service, notificationsService } = makeReviewService();
+        const saved = await service.supervisorReviewFyp('supervisor@test.com', 'fyp-1', 'approve');
+        expect((saved as any).supervisorApprovalStatus).toBe('approved');
+        expect(notificationsService.createNotification).toHaveBeenCalledWith(
+            'student-1',
+            expect.objectContaining({ title: 'Your FYP was approved' }),
+        );
+    });
+
+    it('revision sets supervisorApprovalStatus=revision_requested, clears the ribbon, and notifies the student', async () => {
+        const { service, notificationsService } = makeReviewService();
+        const saved = await service.supervisorReviewFyp('supervisor@test.com', 'fyp-1', 'revision', 'Add more evidence');
+        expect((saved as any).supervisorApprovalStatus).toBe('revision_requested');
+        expect((saved as any).meritRibbon).toBeNull();
+        expect(notificationsService.createNotification).toHaveBeenCalledWith(
+            'student-1',
+            expect.objectContaining({ title: 'Revision requested on your FYP' }),
+        );
+    });
+
+    it('reject sets supervisorApprovalStatus=rejected and notifies the student', async () => {
+        const { service, notificationsService } = makeReviewService();
+        const saved = await service.supervisorReviewFyp('supervisor@test.com', 'fyp-1', 'reject', 'Not enough rigor');
+        expect((saved as any).supervisorApprovalStatus).toBe('rejected');
+        expect(notificationsService.createNotification).toHaveBeenCalledWith(
+            'student-1',
+            expect.objectContaining({ title: 'Your FYP was rejected' }),
+        );
+    });
+});
+
+describe('PathsService — FYP merit notify', () => {
+    const makeNotifyService = () => {
+        const notificationsService = { createNotification: jest.fn().mockResolvedValue(undefined) };
+        const fypRepo = {
+            findOne: jest.fn(),
+            save: jest.fn(async (row: Record<string, unknown>) => row),
+        };
+        const usersRepo = { findOne: jest.fn().mockResolvedValue({ email: 'student@test.com' }) };
+        const graderRunRepo = makeGraderRunRepo();
+        const service = new PathsService(
+            {} as any, fypRepo as any, {} as any, makeInviteRepo() as any, usersRepo as any, {} as any, {} as any,
+            notificationsService as any, graderRunRepo as any,
+        );
+        return { service, notificationsService, fypRepo, graderRunRepo };
+    };
+
+    it('pins the UI rank on the FYP card and notifies the owner', async () => {
+        const { service, notificationsService, fypRepo } = makeNotifyService();
+        jest.spyOn(service, 'getFypMeritModel').mockResolvedValue({
+            scope: { label: 'Faculty supervision' },
+            entries: [{ id: 'fyp-1', rank: 1 }],
+        } as any);
+        fypRepo.findOne.mockResolvedValue({
+            id: 'fyp-1',
+            userId: 'student-1',
+            projectTitle: 'Circular Economy Study',
+            supervisorApprovalStatus: 'approved',
+            projectInfo: { studentName: 'Ali Khan' },
+        });
+
+        const result = await service.notifyFypMeritRanks(
+            { role: 'faculty', email: 'teacher@test.com' } as any,
+            { picks: [{ entryId: 'fyp-1', rank: 1, of: 5, total: 91 }], scopeLabel: 'Your cohort' } as any,
+        );
+
+        expect(result.notified).toBe(1);
+        expect(fypRepo.save).toHaveBeenCalledWith(expect.objectContaining({
+            meritRibbon: expect.objectContaining({ rank: 1, of: 5, scope: 'Your cohort', badgeLevel: 'Silver' }),
+        }));
+        expect(notificationsService.createNotification).toHaveBeenCalledWith(
+            'student-1',
+            expect.objectContaining({ title: 'Your FYP ranked #1' }),
+        );
+    });
+
+    it('does not spam a second notification when the same ribbon is already pinned', async () => {
+        const { service, notificationsService, fypRepo } = makeNotifyService();
+        jest.spyOn(service, 'getFypMeritModel').mockResolvedValue({
+            scope: { label: 'Your cohort' },
+            entries: [{ id: 'fyp-1', rank: 1 }],
+        } as any);
+        fypRepo.findOne.mockResolvedValue({
+            id: 'fyp-1',
+            userId: 'student-1',
+            projectTitle: 'Circular Economy Study',
+            supervisorApprovalStatus: 'approved',
+            meritRibbon: { rank: 1, of: 5, scope: 'Your cohort', total: 91, at: '2026-01-01' },
+        });
+
+        const result = await service.notifyFypMeritRanks(
+            { role: 'faculty', email: 'teacher@test.com' } as any,
+            { picks: [{ entryId: 'fyp-1', rank: 1, of: 5, total: 91 }], scopeLabel: 'Your cohort' } as any,
+        );
+
+        expect(result.notified).toBe(1);
+        expect(notificationsService.createNotification).not.toHaveBeenCalled();
+    });
+});
+
+describe('PathsService — venture supervisor review', () => {
+    const makeReviewService = () => {
+        const notificationsService = { createNotification: jest.fn().mockResolvedValue(undefined) };
+        const entry: Record<string, unknown> = {
+            id: 'venture-1',
+            userId: 'student-1',
+            status: 'submitted',
+            ventureName: 'EcoPack Pakistan',
+            academicSetup: { supervisorEmail: 'supervisor@test.com' },
+            reviewPipeline: { supervisorStatus: 'pending' },
+            meritRibbon: { rank: 1, of: 8, scope: 'x', at: '2026-01-01' },
+        };
+        const ventureRepo = {
+            findOne: jest.fn().mockResolvedValue(entry),
+            save: jest.fn(async (row: Record<string, unknown>) => row),
+        };
+        const usersRepo = {
+            findOne: jest.fn().mockImplementation(async ({ where }: { where: Record<string, unknown> }) =>
+                where.email ? { name: 'Dr. Supervisor', email: 'supervisor@test.com' } : { name: 'Ali Khan' },
+            ),
+        };
+        const service = new PathsService(
+            {} as any, {} as any, ventureRepo as any, makeInviteRepo() as any, usersRepo as any, {} as any, {} as any,
+            notificationsService as any, {} as any,
+        );
+        jest.spyOn(service as any, 'ventureAnnotate').mockImplementation(async (entries: unknown) => entries as any);
+        jest.spyOn(service as any, 'attachStudents').mockImplementation(async (entries: unknown) => entries as any);
+        jest.spyOn(service as any, 'withCompleteness').mockImplementation((entry: unknown) => entry);
+        return { service, notificationsService, ventureRepo };
+    };
+
+    it('approve sets reviewPipeline.supervisorStatus=approved and notifies the student', async () => {
+        const { service, notificationsService } = makeReviewService();
+        const saved: any = await service.supervisorReviewVenture('supervisor@test.com', 'venture-1', 'approve');
+        expect(saved.reviewPipeline.supervisorStatus).toBe('approved');
+        expect(notificationsService.createNotification).toHaveBeenCalledWith(
+            'student-1',
+            expect.objectContaining({ title: 'Your venture was approved' }),
+        );
+    });
+
+    it('revision keeps the existing revisions_requested meaning, clears the ribbon, and notifies the student', async () => {
+        const { service, notificationsService } = makeReviewService();
+        const saved: any = await service.supervisorReviewVenture('supervisor@test.com', 'venture-1', 'revision', 'Add traction evidence');
+        expect(saved.reviewPipeline.supervisorStatus).toBe('revisions_requested');
+        expect(saved.meritRibbon).toBeNull();
+        expect(notificationsService.createNotification).toHaveBeenCalledWith(
+            'student-1',
+            expect.objectContaining({ title: 'Revision requested on your venture' }),
+        );
+    });
+
+    it('reject sets a genuinely new terminal rejected state and notifies the student', async () => {
+        const { service, notificationsService } = makeReviewService();
+        const saved: any = await service.supervisorReviewVenture('supervisor@test.com', 'venture-1', 'reject', 'Not viable yet');
+        expect(saved.reviewPipeline.supervisorStatus).toBe('rejected');
+        expect(notificationsService.createNotification).toHaveBeenCalledWith(
+            'student-1',
+            expect.objectContaining({ title: 'Your venture was rejected' }),
+        );
+    });
+});
+
+describe('PathsService — venture merit notify', () => {
+    const makeNotifyService = () => {
+        const notificationsService = { createNotification: jest.fn().mockResolvedValue(undefined) };
+        const ventureRepo = {
+            findOne: jest.fn(),
+            save: jest.fn(async (row: Record<string, unknown>) => row),
+        };
+        const usersRepo = { findOne: jest.fn().mockResolvedValue({ name: 'Ali Khan' }) };
+        const graderRunRepo = makeGraderRunRepo();
+        const service = new PathsService(
+            {} as any, {} as any, ventureRepo as any, makeInviteRepo() as any, usersRepo as any, {} as any, {} as any,
+            notificationsService as any, graderRunRepo as any,
+        );
+        return { service, notificationsService, ventureRepo, graderRunRepo };
+    };
+
+    it('pins the UI rank on the venture card and notifies the owner', async () => {
+        const { service, notificationsService, ventureRepo } = makeNotifyService();
+        jest.spyOn(service, 'getVentureMeritModel').mockResolvedValue({
+            scope: { label: 'Faculty supervision' },
+            entries: [{ id: 'venture-1', rank: 1 }],
+        } as any);
+        ventureRepo.findOne.mockResolvedValue({
+            id: 'venture-1',
+            userId: 'student-1',
+            ventureName: 'EcoPack Pakistan',
+            reviewPipeline: { supervisorStatus: 'approved' },
+        });
+
+        const result = await service.notifyVentureMeritRanks(
+            { role: 'faculty', email: 'teacher@test.com' } as any,
+            { picks: [{ entryId: 'venture-1', rank: 1, of: 5, total: 91 }], scopeLabel: 'Your cohort' } as any,
+        );
+
+        expect(result.notified).toBe(1);
+        expect(ventureRepo.save).toHaveBeenCalledWith(expect.objectContaining({
+            meritRibbon: expect.objectContaining({ rank: 1, of: 5, scope: 'Your cohort', badgeLevel: 'Silver' }),
+        }));
+        expect(notificationsService.createNotification).toHaveBeenCalledWith(
+            'student-1',
+            expect.objectContaining({ title: 'Your venture ranked #1' }),
+        );
+    });
+
+    it('does not rank an entry whose supervisor status is not approved', async () => {
+        const { service, notificationsService, ventureRepo } = makeNotifyService();
+        jest.spyOn(service, 'getVentureMeritModel').mockResolvedValue({
+            scope: { label: 'Faculty supervision' },
+            entries: [{ id: 'venture-1', rank: 1 }],
+        } as any);
+        ventureRepo.findOne.mockResolvedValue({
+            id: 'venture-1',
+            userId: 'student-1',
+            ventureName: 'EcoPack Pakistan',
+            reviewPipeline: { supervisorStatus: 'revisions_requested' },
+        });
+
+        const result = await service.notifyVentureMeritRanks(
+            { role: 'faculty', email: 'teacher@test.com' } as any,
+            { picks: [{ entryId: 'venture-1', rank: 1, of: 5, total: 91 }], scopeLabel: 'Your cohort' } as any,
+        );
+
+        expect(result.notified).toBe(0);
+        expect(notificationsService.createNotification).not.toHaveBeenCalled();
+    });
+});
+
+describe('PathsService — grader run limit is independent per path', () => {
+    it('exhausting coursework runs for a faculty email does not block that same email\'s FYP runs', async () => {
+        const graderRunRepo = makeGraderRunRepo();
+        const notificationsService = { createNotification: jest.fn().mockResolvedValue(undefined) };
+        const courseProjectRepo = {
+            findOne: jest.fn().mockResolvedValue({
+                id: 'entry-1', userId: 'student-1', projectTitle: 'x', facultyApprovalStatus: 'approved',
+            }),
+            save: jest.fn(async (row: Record<string, unknown>) => row),
+        };
+        const fypRepo = {
+            findOne: jest.fn().mockResolvedValue({
+                id: 'fyp-1', userId: 'student-1', projectTitle: 'x', supervisorApprovalStatus: 'approved',
+            }),
+            save: jest.fn(async (row: Record<string, unknown>) => row),
+        };
+        const usersRepo = { findOne: jest.fn().mockResolvedValue({ email: 'student@test.com', name: 'Student' }) };
+        const mailService = { sendCourseworkRankNotification: jest.fn().mockResolvedValue(undefined) };
+        const service = new PathsService(
+            courseProjectRepo as any, fypRepo as any, {} as any, makeInviteRepo() as any, usersRepo as any, {} as any,
+            mailService as any, notificationsService as any, graderRunRepo as any,
+        );
+        const user = { role: 'faculty', email: 'teacher@test.com' };
+        jest.spyOn(service, 'getCourseProjectMeritModel').mockResolvedValue({
+            scope: { label: 'x' }, entries: [{ id: 'entry-1', rank: 1 }],
+        } as any);
+        jest.spyOn(service, 'getFypMeritModel').mockResolvedValue({
+            scope: { label: 'x' }, entries: [{ id: 'fyp-1', rank: 1 }],
+        } as any);
+
+        const coursePick = { picks: [{ entryId: 'entry-1', rank: 1, of: 5, total: 90 }] } as any;
+        await service.notifyCourseProjectMeritRanks(user as any, coursePick);
+        await service.notifyCourseProjectMeritRanks(user as any, coursePick);
+        await service.notifyCourseProjectMeritRanks(user as any, coursePick);
+        await expect(service.notifyCourseProjectMeritRanks(user as any, coursePick)).rejects.toBeDefined();
+
+        const fypResult = await service.notifyFypMeritRanks(
+            user as any,
+            { picks: [{ entryId: 'fyp-1', rank: 1, of: 5, total: 90 }] } as any,
+        );
+        expect((fypResult as any).graderRuns).toEqual({ unlimited: false, used: 1, limit: 3 });
+    });
 });

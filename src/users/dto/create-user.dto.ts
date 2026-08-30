@@ -31,7 +31,7 @@ export class CreateUserDto {
     @IsString()
     enrollmentYear?: string;
 
-    /** Optional student ID / roll number, stored on the existing `registrationNumber` column. */
+    /** Optional student ID / faculty-employee ID, stored on the existing `registrationNumber` column. */
     @IsOptional()
     @IsString()
     registrationNumber?: string;
@@ -67,6 +67,19 @@ export class CreateUserDto {
     @IsOptional()
     @IsString()
     countryCode?: string;
+
+    /** Public verification link or uploaded-proof URL from institution signup. Not stored on the user. */
+    @IsOptional()
+    @IsString()
+    affiliationProofUrl?: string;
+
+    @IsOptional()
+    @IsString()
+    affiliationProofKind?: string;
+
+    @IsOptional()
+    @IsString()
+    affiliationProofLabel?: string;
 
     @IsEnum(UserRole)
     role: UserRole;

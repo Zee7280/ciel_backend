@@ -12,7 +12,9 @@ import {
     readCii,
     scoreCommunityAward,
     isCommunityAwardMedalReport,
+    communityServiceLevel,
     type CommunityAwardKind,
+    type CommunityServiceLevel,
 } from './community-award.util';
 
 export type CommunityAwardCard = {
@@ -38,6 +40,7 @@ export type CommunityAwardCard = {
     cii: number | null;
     pts: number[];
     total: number;
+    level: CommunityServiceLevel;
     awardBadges: NonNullable<StudentReport['awardBadges']>;
 };
 
@@ -107,6 +110,7 @@ export class CommunityAwardService {
             cii: readCii(report.section11 as Record<string, unknown> | null),
             pts: scored.pts,
             total: scored.total,
+            level: communityServiceLevel(scored.total),
             awardBadges: report.awardBadges ?? [],
         };
     }

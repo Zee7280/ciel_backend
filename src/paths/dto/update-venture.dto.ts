@@ -254,8 +254,8 @@ export class UpdateVentureDto {
 }
 
 export class SupervisorReviewVentureDto {
-    @IsIn(['approve', 'reject'])
-    action: 'approve' | 'reject';
+    @IsIn(['approve', 'reject', 'revision'])
+    action: 'approve' | 'reject' | 'revision';
     @IsOptional() @IsString() note?: string;
 }
 

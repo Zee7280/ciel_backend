@@ -65,6 +65,30 @@ export class VerificationsController {
         return { success: true, data };
     }
 
+    /** Fully public — no guard at all. The partner contact previews the opportunity before ever
+     * having a CIEL account, so this never attempts JWT auth and never requires one. */
+    @Get('verifications/partner-preview')
+    @Header('Cache-Control', 'no-store, no-cache, must-revalidate, private')
+    @Header('Pragma', 'no-cache')
+    async getPartnerVerificationPreview(@Query('token') token: string) {
+        const t = typeof token === 'string' ? token.trim() : '';
+        if (!t) {
+            throw new HttpException(
+                { success: false, message: 'Token is required' },
+                HttpStatus.BAD_REQUEST,
+            );
+        }
+        try {
+            const data = await this.opportunitiesService.getPublicPartnerVerificationPreview(t);
+            return { success: true, data };
+        } catch (error) {
+            if (error instanceof NotFoundException) {
+                throw new HttpException({ success: false, message: error.message }, HttpStatus.NOT_FOUND);
+            }
+            throw error;
+        }
+    }
+
     @UseGuards(VerificationVerifyAuthGuard)
     @Get('verifications/verify')
     @Header('Cache-Control', 'no-store, no-cache, must-revalidate, private')

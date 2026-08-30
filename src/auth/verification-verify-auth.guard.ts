@@ -1,17 +1,21 @@
-import { ExecutionContext, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
-import { isProjectVerificationAuthRequired } from '../common/project-verification-auth.util';
 
 /**
- * When {@link isProjectVerificationAuthRequired} is true, verify endpoints require a valid JWT.
- * See util for env / NODE_ENV rules.
+ * Never blocks the request — it always reaches the controller. If a valid JWT is present,
+ * `req.user` is populated; otherwise `req.user` is left undefined instead of throwing 401 here.
+ *
+ * Real authorization for each magic-link kind lives in
+ * OpportunitiesService.assertVerificationIdentityIfRequired: partner-token verification is
+ * intentionally anonymous (the partner contact is an external stakeholder with no CIEL account —
+ * the emailed token itself is their credential), while faculty/liaison tokens still require a
+ * matching login when {@link isProjectVerificationAuthRequired} is true. Gating that decision here
+ * would require the guard to look up the opportunity before the controller even runs, which is
+ * exactly the job the service layer already does once it knows the token's kind.
  */
 @Injectable()
 export class VerificationVerifyAuthGuard extends AuthGuard('jwt') {
-    canActivate(context: ExecutionContext) {
-        if (!isProjectVerificationAuthRequired()) {
-            return true;
-        }
-        return super.canActivate(context) as boolean | Promise<boolean>;
+    handleRequest<TUser = any>(_err: any, user: any): TUser {
+        return (user || undefined) as TUser;
     }
 }

@@ -326,18 +326,21 @@ export class OpportunitiesService {
 
     /**
      * When VERIFICATION_REQUIRE_AUTH is enabled, the logged-in user must match the email / faculty
-     * binding for the magic link (partner vs faculty vs legacy liaison).
+     * binding for the magic link (faculty vs legacy liaison). Partner-token links are exempt —
+     * the partner contact is an external stakeholder with no CIEL account, so the emailed token
+     * itself is their credential and this must stay anonymous regardless of that setting.
      */
     private assertVerificationIdentityIfRequired(
         opportunity: Opportunity,
         token: string,
         user?: { id: string; email: string; role: string },
     ): void {
+        const kind = this.projectVerificationTokenKind(opportunity, token);
+        if (kind === 'partner') return;
         if (!this.verificationAuthRequired()) return;
         if (!user?.id) {
             throw new UnauthorizedException('Login required to verify this link.');
         }
-        const kind = this.projectVerificationTokenKind(opportunity, token);
         if (!kind) return;
         if (!this.verificationUserMatchesToken(opportunity, kind, user)) {
             throw new ForbiddenException('Ye link is account se link nahi hai');
@@ -1015,7 +1018,7 @@ export class OpportunitiesService {
                 opportunity.partnerToken,
                 details,
                 {
-                    path: '/verify-project',
+                    path: '/verify/partner',
                     returnTo: this.getPartnerApprovalReturnTo(opportunity.id),
                     introText:
                         `The faculty supervisor has approved <strong>${this.escHtml(opportunity.title)}</strong>. ` +
@@ -1258,7 +1261,7 @@ export class OpportunitiesService {
                         facultyAuthorEmail: user.email || undefined,
                     });
                     await this.mailService.sendPartnerVerification(pe, saved.title, resolvedPartnerToken, verifyDetails, {
-                        path: '/verify-project',
+                        path: '/verify/partner',
                         returnTo: this.getPartnerApprovalReturnTo(saved.id),
                     });
                 } catch (e) {
@@ -1498,7 +1501,7 @@ export class OpportunitiesService {
                     partnerToken,
                     studentVerifyDetails,
                     {
-                        path: '/verify-project',
+                        path: '/verify/partner',
                         returnTo: this.getPartnerApprovalReturnTo(saved.id),
                     },
                 );
@@ -2333,6 +2336,24 @@ export class OpportunitiesService {
         await this.participationRepository.save(participant);
 
         return { success: true, message: 'Applicant status updated successfully' };
+    }
+
+    /**
+     * Fully public read — no login, no identity check. The partner contact clicks the emailed link
+     * before ever creating a CIEL account, so this must resolve strictly by `partnerToken` (never
+     * the faculty/liaison tokens) and return only opportunity-summary data, never participant lists
+     * or other students' information.
+     */
+    async getPublicPartnerVerificationPreview(token: string) {
+        const opportunity = await this.opportunitiesRepository.findOne({ where: { partnerToken: token } });
+        if (!opportunity) {
+            throw new NotFoundException('Invalid or expired verification link.');
+        }
+        return {
+            title: opportunity.title,
+            alreadyVerified: !!opportunity.partnerVerified,
+            detail: buildOpportunityDetailView(opportunity),
+        };
     }
 
     async verifyOpportunityToken(token: string, user?: { id: string; email: string; role: string }) {

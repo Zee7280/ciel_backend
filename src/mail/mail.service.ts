@@ -963,17 +963,11 @@ export class MailService {
           <li style="margin-bottom: 6px;"><strong>Volunteers Required:</strong> ${volunteersEsc}</li>
         </ul>
         ${facultyFirstNote}
-        <p style="margin: 0 0 16px 0;">Please click the button below to review the full project details:</p>
+        <p style="margin: 0 0 16px 0;">Please click the button below to review the full project details and confirm your organisation&rsquo;s involvement:</p>
         <div style="text-align: center; margin: 28px 0;">
           <a href="${verifyLink}" style="background-color: #16a34a; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">${this.escHtmlPlain(ctaLabel)}</a>
         </div>
-        ${this.verificationSignInHintHtml()}
-        <p style="margin: 20px 0 8px 0;">After reviewing the opportunity in CIEL PK, you may:</p>
-        <ul style="margin: 0 0 20px 0; padding-left: 20px; color: #374151;">
-          <li style="margin-bottom: 4px;"><strong>Approve</strong> if the description matches your organisation&rsquo;s involvement</li>
-          <li style="margin-bottom: 4px;"><strong>Reject</strong> if you do not recognise the project or partnership</li>
-          <li style="margin-bottom: 4px;"><strong>Request revision</strong> so the student or faculty contact can update details before you verify again</li>
-        </ul>
+        <p style="font-size: 13px; color: #475569; margin: 0 0 16px 0; line-height: 1.5;"><strong>No account needed:</strong> this link opens the opportunity details directly — no sign-in required. If you do not recognise this project or partnership, you can simply ignore this email.</p>
         <p style="margin: 0 0 20px 0;">Your verification is required before CIEL PK can complete the approval chain for this opportunity.</p>
         <p style="margin: 0 0 4px 0;">Thank you for your collaboration.</p>
         <p style="margin: 20px 0 0 0;">Best regards,<br><strong>CIEL PK Team</strong></p>

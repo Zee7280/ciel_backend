@@ -38,6 +38,7 @@ describe('opportunity-detail-view.util', () => {
                 partner_org_name: 'Rukh Foundation',
                 partner_contact_person: 'Mam Rukhsana',
                 partner_email: 'partner@test.com',
+                whatsapp_e164: '+923001234567',
                 safe_environment: true,
                 supervised: true,
             },
@@ -49,6 +50,37 @@ describe('opportunity-detail-view.util', () => {
         expect(view.supervision.faculty.name).toBe('Imran Khan');
         expect(view.supervision.partner.organization).toBe('Rukh Foundation');
         expect(view.objectives.description_items.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('surfaces an optional WhatsApp contact for the primary supervision contact, null when absent', () => {
+        const withWhatsapp = {
+            title: 'UpliftED',
+            types: ['Community Service'],
+            mode: 'Hybrid',
+            timeline: {},
+            location: {},
+            objectives: {},
+            sdg_info: {},
+            secondary_sdgs: [],
+            activity_details: {},
+            supervision: {
+                supervisor_name: 'Imran Khan',
+                contact: 'imran@bnu.edu.pk',
+                whatsapp_e164: '+923001234567',
+            },
+            participation_scope: {},
+            verification_method: [],
+        } as unknown as Opportunity;
+
+        const view = buildOpportunityDetailView(withWhatsapp);
+        expect(view.supervision.faculty.whatsapp).toBe('+923001234567');
+
+        const withoutWhatsapp = {
+            ...withWhatsapp,
+            supervision: { supervisor_name: 'Imran Khan', contact: 'imran@bnu.edu.pk' },
+        } as unknown as Opportunity;
+        const bareView = buildOpportunityDetailView(withoutWhatsapp);
+        expect(bareView.supervision.faculty.whatsapp).toBeNull();
     });
 
     it('exports responsibilities max length constant', () => {

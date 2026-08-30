@@ -49,6 +49,7 @@ export type OpportunityDetailView = {
             email: string | null;
             department: string | null;
             university: string | null;
+            whatsapp: string | null;
         };
         partner: {
             organization: string | null;
@@ -204,6 +205,7 @@ export function buildOpportunityDetailView(opp: Opportunity): OpportunityDetailV
                 email: pickStr(sup.contact) || null,
                 department: pickStr(sup.faculty_department) || null,
                 university: pickStr(sup.faculty_university_name) || null,
+                whatsapp: pickStr(sup.whatsapp_e164) || null,
             },
             partner: {
                 organization: partnerOrg || null,

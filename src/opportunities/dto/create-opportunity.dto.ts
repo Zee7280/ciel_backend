@@ -80,6 +80,12 @@ export class SupervisionDto {
     @IsString()
     @IsOptional()
     faculty_university_name?: string;
+
+    /** Optional WhatsApp contact (E.164, e.g. +923001234567) for the contact listed above — the
+     * faculty supervisor, or the executing-organization contact person on a partner-created opportunity. */
+    @IsString()
+    @IsOptional()
+    whatsapp_e164?: string;
 }
 
 export class CreateOpportunityDto {

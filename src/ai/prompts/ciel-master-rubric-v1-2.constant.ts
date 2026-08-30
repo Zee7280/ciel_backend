@@ -3,7 +3,7 @@ export const CIEL_MASTER_RUBRIC_V1_2_BODY = `# CIEL PK — MASTER EVALUATION RUB
 
 **Document Status:** Master Rubric v1.2
 **Issued by:** CIEL PK — Pakistan's first Community Impact Education Lab
-**Total Sections:** 10 | **Total Points:** 100 | **Master bonuses:** up to +5 (added individually to obtained) | **Badge Levels:** 7
+**Total Sections:** 9 (Section 4 in two parts — 4A Activities & Output Scale, 4B Outcomes & Measurable Change) | **Total Points:** 100 | **Master bonuses:** up to +5 (added individually to obtained) | **Badge Levels:** 7
 
 ---
 
@@ -27,7 +27,7 @@ usually reaches at least **Level 3 (Emerging Community Contributor)**. A student
 Do not evaluate only by numbers. A project serving **10 beneficiaries** can still be strong if it shows depth, consistency, preparation, skill, and meaningful change. A project serving **100 beneficiaries** can score higher if the larger scale is real, verified, organized, and meaningful. **Small scale with strong quality must be credited. Large scale with weak evidence must be moderated. Large scale with strong evidence and real impact must be rewarded.**
 
 ### 0.4 Do Not Penalize Meaningful Small Projects
-If a student worked with a small group but provided deep support — teaching, mentoring, counseling, training, feeding, awareness building, or skill development — give appropriate credit. *Example:* A student teaching 10 children over multiple sessions with learning material and visible improvement may receive a strong Section 4 score even though the beneficiary number is small.
+If a student worked with a small group but provided deep support — teaching, mentoring, counseling, training, feeding, awareness building, or skill development — give appropriate credit. *Example:* A student teaching 10 children over multiple sessions with learning material and visible improvement may receive a strong Section 4A score even though the beneficiary number is small.
 
 The evaluator recognizes: depth of engagement, continuity, preparation, care, skill-based contribution, beneficiary interaction, visible improvement, and reflection.
 
@@ -53,7 +53,7 @@ Score each report independently first. Use cohort comparison only to explain rel
 
 ## PART 1 — THE COMPOSITE IMPACT INDEX (CII)
 
-The **Composite Impact Index** is a single **0–100** score. First sum the 10 section scores into an **obtained** base (Section 6 internal bonus is scored inside Section 6 only). Then evaluate **each** master-level bonus from Part 4 individually, sum them (max +5), add to obtained, subtract penalties, and clamp to 100.
+The **Composite Impact Index** is a single **0–100** score. First sum the 10 section scores into an **obtained** base (Section 5 internal bonus is scored inside Section 5 only). Then evaluate **each** master-level bonus from Part 4 individually, sum them (max +5), add to obtained, subtract penalties, and clamp to 100.
 
 \`\`\`
 Obtained_Score        = min( Σ Section_Scores , 100 )
@@ -63,7 +63,7 @@ CII                   = clamp( Obtained_Score + Master_Bonus_Total − Penalty_T
 
 Where:
   Σ Section_Scores      = sum of all 10 final section scores
-                          (Section 6 may score up to 18 internally, but Obtained_Score never exceeds 100)
+                          (Section 5 may score up to 18 internally, but Obtained_Score never exceeds 100)
   Individual_Master_Bonuses = Part 4 categories #1–#5, each awarded on its own merits
 
 Final CII is rounded to one decimal.
@@ -71,7 +71,7 @@ Badge level boundaries are UNCHANGED (Level 7 = 92+, etc.).
 Practical reach for excellent reports: 88–100.
 \`\`\`
 
-> **Note on Section 6 special status:** Section 6 (Resource Mobilization) is the only section that may exceed its face weight via an internal bonus pool of up to +3. CIEL PK designed this exception because resource mobilization — whether financial, in-kind, skill-based, time-based, or creative — is the most consistently undervalued form of student contribution. See Section 6 detail in Part 7.
+> **Note on Section 5 special status:** Section 5 (Resource Mobilization) is the only section that may exceed its face weight via an internal bonus pool of up to +3. CIEL PK designed this exception because resource mobilization — whether financial, in-kind, skill-based, time-based, or creative — is the most consistently undervalued form of student contribution. See Section 5 detail in Part 7.
 
 ### 1.1 The Seven Badge Levels
 
@@ -94,20 +94,20 @@ Practical reach for excellent reports: 88–100.
 | 1 | Identity & Participation | **10** | 7.0 |
 | 2 | Project Context & Discipline | **10** | 5.5 |
 | 3 | SDG Strategy & Intent | **10** | 5.5 |
-| 4 | Activities & Output Scale | **15** | 8.0 |
-| 5 | Outcomes & Measurable Change | **10** | 5.5 |
-| 6 | Resource Mobilization | **15 (+3 internal bonus → 18 max)** | 8.0 |
-| 7 | Partnerships & Collaboration | **10** | 5.5 |
-| 8 | Evidence & Verification | **10** | 5.5 |
-| 9 | Personal & Academic Reflection | **5** | 2.7 |
-| 10 | Sustainability & Continuation | **5** | 2.7 |
+| 4A | Activities & Output Scale | **15** | 8.0 |
+| 4B | Outcomes & Measurable Change | **10** | 5.5 |
+| 5 | Resource Mobilization | **15 (+3 internal bonus → 18 max)** | 8.0 |
+| 6 | Partnerships & Collaboration | **10** | 5.5 |
+| 7 | Evidence & Verification | **10** | 5.5 |
+| 8 | Personal & Academic Reflection | **5** | 2.7 |
+| 9 | Sustainability & Continuation | **5** | 2.7 |
 | | **TOTAL (face)** | **100** | **55.9** |
 
-**Obtained cap:** \`Obtained_Score = min(Σ Section_Scores, 100)\`. Section 6 may score up to 18 on its own line, but the section sum used for CII obtained is capped at 100 before master bonuses are added.
+**Obtained cap:** \`Obtained_Score = min(Σ Section_Scores, 100)\`. Section 5 may score up to 18 on its own line, but the section sum used for CII obtained is capped at 100 before master bonuses are added.
 
 **Recognition floor rule:** If a section is **attempted with substantive content**, the score should not fall below the recognition floor. A completely blank section receives 0. The floor applies unless the section is blank, contradictory, fabricated, or structurally invalid.
 
-**Section 6 special status:** Section 6 carries an internal bonus pool of up to +3 inside its own section score (max 18). Master-Level bonuses (Part 4) are calculated **individually** and added only to \`Obtained_Score\`; they do not inflate section weights beyond the 100 obtained cap.
+**Section 5 special status:** Section 5 carries an internal bonus pool of up to +3 inside its own section score (max 18). Master-Level bonuses (Part 4) are calculated **individually** and added only to \`Obtained_Score\`; they do not inflate section weights beyond the 100 obtained cap.
 
 ---
 
@@ -173,7 +173,7 @@ If the student has all of the following:
 - verified identity (Section 1 Criterion A passes),
 - meets required individual hours,
 - has at least one real activity,
-- has some evidence (Section 8 not bypassed),
+- has some evidence (Section 7 not bypassed),
 - has completed at least 7 of 10 sections,
 
 then the final CII should normally **not fall below 58** unless serious integrity issues exist. This protects honest students from demoralizing scores.
@@ -204,24 +204,24 @@ In these cases: assign the accurate CII and set badge readiness to **Resubmissio
 
 Bonuses are applied AFTER all section scores and lenient calibration. **Evaluate each master bonus category (Part 4) individually.** List every awarded bonus in the \`bonuses\` array with its amount. **Total master bonus pool is capped at +5 across all categories combined.** Add the capped bonus sum to \`Obtained_Score\` only — then clamp final CII to 100.
 
-> **Layered bonuses (platform rule):** Section 6 internal bonus (up to +3) is included **inside** \`Section_6_Score\` and therefore inside \`Obtained_Score\`. Part 4 master bonuses (#1–#5) are **separate line items** — each calculated on its own, summed (max +5), then added to obtained. Final CII never exceeds 100.
+> **Layered bonuses (platform rule):** Section 5 internal bonus (up to +3) is included **inside** \`Section_5_Score\` and therefore inside \`Obtained_Score\`. Part 4 master bonuses (#1–#5) are **separate line items** — each calculated on its own, summed (max +5), then added to obtained. Final CII never exceeds 100.
 
 | # | Bonus Category | Max | Awarded When |
 |---|----------------|-----|--------------|
-| **1** | **Resource Mobilization Bonus** | **+1.5** | Meaningful cash, goods, skills, digital support, volunteer coordination, OR sponsor support is documented in Section 6. This master-level bonus is in addition to the Section 6 internal bonus pool. Even if the student has earned all 3 internal bonus points in Section 6, this +1.5 still applies if criteria are met. |
-| **2** | **Partnership Bonus** | **+1.0** | Verified partner involvement OR partner-supported continuation documented in Section 7 + 8. Single deeply-engaged partner counts. |
+| **1** | **Resource Mobilization Bonus** | **+1.5** | Meaningful cash, goods, skills, digital support, volunteer coordination, OR sponsor support is documented in Section 5. This master-level bonus is in addition to the Section 5 internal bonus pool. Even if the student has earned all 3 internal bonus points in Section 5, this +1.5 still applies if criteria are met. |
+| **2** | **Partnership Bonus** | **+1.0** | Verified partner involvement OR partner-supported continuation documented in Section 6 + 7. Single deeply-engaged partner counts. |
 | **3** | **Evidence Strength Bonus** | **+1.0** | Strong file evidence: partner confirmation, receipts, attendance sheets, photos, videos — backing major claims across sections. |
-| **4** | **Outcome Measurement Bonus** | **+1.0** | Baseline/endline measurements, beneficiary feedback instruments, OR partner-confirmed outcomes present in Section 5. |
+| **4** | **Outcome Measurement Bonus** | **+1.0** | Baseline/endline measurements, beneficiary feedback instruments, OR partner-confirmed outcomes present in Section 4B. |
 | **5** | **Leadership Bonus** | **+0.5** | Clear evidence of team leadership, coordination, planning, OR execution by the reporting student. |
 
 **Master Bonus 1 tiered scale (explicit):**
 
 | Tier | Trigger | Master Bonus 1 Value |
 |------|---------|----------------------|
-| **Full (+1.5)** | Section 6 base ≥ 12 OR Section 6 final ≥ 14 AND ≥3 categories with credible narrative (evidence not required) |
-| **Strong (+1.0)** | Section 6 base ≥ 10 OR final ≥ 12 AND ≥2 categories |
-| **Moderate (+0.5)** | Section 6 base ≥ 8 (floor met) AND ≥1 category with meaningful resource |
-| **None (0)** | Section 6 base below floor or blank |
+| **Full (+1.5)** | Section 5 base ≥ 12 OR Section 5 final ≥ 14 AND ≥3 categories with credible narrative (evidence not required) |
+| **Strong (+1.0)** | Section 5 base ≥ 10 OR final ≥ 12 AND ≥2 categories |
+| **Moderate (+0.5)** | Section 5 base ≥ 8 (floor met) AND ≥1 category with meaningful resource |
+| **None (0)** | Section 5 base below floor or blank |
 
 **Cap rule:** Even if all five master categories are eligible at maximum, total master bonus is capped at +5.
 
@@ -285,7 +285,7 @@ Both tracks sum into a single \`Penalty_Total\`, which is capped at **−5 globa
 - forced_alignment / duplicate_sdg (Medium → −0.5 section deduction)
 - discipline_mismatch (Medium)
 - integration_depth_mismatch (Medium)
-- coherence_failure — S5 references activities not in S4 (High)
+- coherence_failure — S4B references activities not in S4A (High)
 - scope_mismatch (Medium)
 
 **Sustainability flags:**
@@ -312,7 +312,7 @@ Each section has its own catalogue of inconsistency triggers — small deduction
 
 | Trigger | Penalty | Description |
 |---------|---------|-------------|
-| **attendance_S1_S4_date_mismatch** | −1.0 | Dates logged in S1 attendance don't match S4 activity dates |
+| **attendance_S1_S4A_date_mismatch** | −1.0 | Dates logged in S1 attendance don't match S4A activity dates |
 | **unrealistic_daily_hours** | −1.0 | More than 12 hours logged on a single date (excess invalidated) |
 | **duplicate_session_logs** | −1.0 | Same date + location + description appears twice |
 | **gps_missing_majority** | −0.5 | GPS pin missing on ≥60% of attendance entries |
@@ -332,10 +332,10 @@ Each section has its own catalogue of inconsistency triggers — small deduction
 |---------|---------|-------------|
 | **target_drift** | −1.0 | 3.1.1 logic describes a different SDG Target than the locked one |
 | **activities_only_language** | −1.0 | Contribution logic lists activities without causal pathway |
-| **scope_mismatch** | −1.0 | SDG/Target chosen doesn't align with Section 4 activities |
+| **scope_mismatch** | −1.0 | SDG/Target chosen doesn't align with Section 4A activities |
 | **duplicate_sdg_across_slots** | −0.5 | Same SDG selected in multiple slots (already factored once in 3.E; do not double-count) |
 
-#### Section 4 — Activities & Output Scale (cap: −3.0)
+#### Section 4A — Activities & Output Scale (cap: −3.0)
 
 | Trigger | Penalty | Description |
 |---------|---------|-------------|
@@ -343,67 +343,67 @@ Each section has its own catalogue of inconsistency triggers — small deduction
 | **mode_mismatch** | −1.0 | Declared mode contradicts the activity description |
 | **number_inflation** | −1.0 | Beneficiary count implausible given outputs and sessions |
 | **project_count_math_error** | −1.0 | 4.6 distinct total > sum of per-activity reaches |
-| **padding_low_quality_activity** | −0.5 | Per padded activity (T_i < 4.0); capped within Section 4 cap |
+| **padding_low_quality_activity** | −0.5 | Per padded activity (T_i < 4.0); capped within Section 4A cap |
 | **scale_overclaim** | −0.5 | Geographic reach exceeds what the activity could plausibly cover |
 
-#### Section 5 — Outcomes & Measurable Change (cap: −3.0)
+#### Section 4B — Outcomes & Measurable Change (cap: −3.0)
 
 | Trigger | Penalty | Description |
 |---------|---------|-------------|
-| **orphan_outcome** | −0.5 | Per outcome that can't be mapped to a Section 4 activity |
+| **orphan_outcome** | −0.5 | Per outcome that can't be mapped to a Section 4A activity |
 | **category_metric_mismatch** | −0.5 | Per outcome where Category × Metric Group is incompatible (per Appendix B) |
-| **confidence_overclaim** | −1.0 | "Directly Measured" claimed when Section 4 verification is weak |
-| **coherence_failure** | −1.0 | 5.1 narrative references activities not in Section 4 |
+| **confidence_overclaim** | −1.0 | "Directly Measured" claimed when Section 4A verification is weak |
+| **coherence_failure** | −1.0 | 4B.1 narrative references activities not in Section 4A |
 | **baseline_endline_regression** | −0.5 | Endline < Baseline without learning-outcome framing |
-| **no_challenges_claim** | −0.5 | 5.3 asserts no challenges or word count <50 |
+| **no_challenges_claim** | −0.5 | 4B.3 asserts no challenges or word count <50 |
 
-#### Section 6 — Resource Mobilization (cap: −2.0)
+#### Section 5 — Resource Mobilization (cap: −2.0)
 
-> Section 6 has a deliberately *lower* penalty cap because of CIEL PK's high-appreciation principle. Inconsistency penalties here are narrow and trigger only for clear inconsistencies, not for missing evidence.
+> Section 5 has a deliberately *lower* penalty cap because of CIEL PK's high-appreciation principle. Inconsistency penalties here are narrow and trigger only for clear inconsistencies, not for missing evidence.
 
 | Trigger | Penalty | Description |
 |---------|---------|-------------|
 | **resource_claims_unsupported** | −1.0 | Cash claim ≥₨50,000 with vague narrative AND no evidence (both must apply) |
 | **artificial_splitting** | −1.0 | Single donation split across multiple same-source same-date entries to inflate count |
-| **source_contradicts_S7** | −0.5 | Sponsor named as source in S6 but not appearing as Partner in S7 |
+| **source_contradicts_S6** | −0.5 | Sponsor named as source in S5 but not appearing as Partner in S6 |
 
-#### Section 7 — Partnerships & Collaboration (cap: −3.0)
+#### Section 6 — Partnerships & Collaboration (cap: −3.0)
 
 | Trigger | Penalty | Description |
 |---------|---------|-------------|
 | **ghost_partner** | −1.0 | Per ghost (no contact, no docs, self-reported only) |
 | **duplicate_evidence_across_partners** | −1.0 | Same evidence file used for multiple distinct partners |
-| **partner_role_contradicts_S4** | −0.5 | Partner role described doesn't appear in Section 4 activities |
+| **partner_role_contradicts_S4A** | −0.5 | Partner role described doesn't appear in Section 4A activities |
 | **possible_same_entity** | −0.5 | Two partners look like the same organization under different names |
 
-#### Section 8 — Evidence & Verification (cap: −3.0)
+#### Section 7 — Evidence & Verification (cap: −3.0)
 
-> Critical flags here (internal_duplicate, stock_or_web_image, fabricated_document) already cap Section 8 at 4/10 via separate hard-gate mechanism. These cap-mechanisms do **not** also draw from the global penalty pool. Only the inconsistency triggers below do.
+> Critical flags here (internal_duplicate, stock_or_web_image, fabricated_document) already cap Section 7 at 4/10 via separate hard-gate mechanism. These cap-mechanisms do **not** also draw from the global penalty pool. Only the inconsistency triggers below do.
 
 | Trigger | Penalty | Description |
 |---------|---------|-------------|
 | **minor_consent_gap** | −1.0 | Minors visible without consent indication AND Public visibility selected |
 | **dignity_concern** | −1.0 | Beneficiaries shown in undignified situations |
-| **claim_evidence_mismatch** | −0.5 | Per major claim from S4/S5/S6/S7 that has no matching evidence file (cap 1.5 total) |
+| **claim_evidence_mismatch** | −0.5 | Per major claim from S4A/S4B/S5/S6 that has no matching evidence file (cap 1.5 total) |
 | **geographic_impossibility** | −1.0 | File metadata or visible context shows location far from claimed area |
 
-#### Section 9 — Personal & Academic Reflection (cap: −2.0)
+#### Section 8 — Personal & Academic Reflection (cap: −2.0)
 
 | Trigger | Penalty | Description |
 |---------|---------|-------------|
-| **description_as_reflection** | −1.0 | ≥60% of 9.1 or 9.2 text recounts activities rather than reflecting |
-| **integration_depth_mismatch** | −1.0 | 9.0 claims Capstone/Research-Integrated but 9.2 shows only voluntary-level depth |
-| **competency_evidence_gap** | −0.5 | High-rated competency (4–5) with no narrative trace in 9.1/9.2 |
+| **description_as_reflection** | −1.0 | ≥60% of 8.1 or 8.2 text recounts activities rather than reflecting |
+| **integration_depth_mismatch** | −1.0 | 8.0 claims Capstone/Research-Integrated but 8.2 shows only voluntary-level depth |
+| **competency_evidence_gap** | −0.5 | High-rated competency (4–5) with no narrative trace in 8.1/8.2 |
 | **unsubstantiated_inflation** | −0.5 | Mean rating ≥4.5 with no advanced competency evidence |
 
-#### Section 10 — Sustainability & Continuation (cap: −2.0)
+#### Section 9 — Sustainability & Continuation (cap: −2.0)
 
 | Trigger | Penalty | Description |
 |---------|---------|-------------|
 | **status_explanation_mismatch** | −1.0 | YES claimed but explanation describes only dependencies and limitations |
 | **vague_partial** | −0.5 | PARTIAL selected with no specific dependencies named |
-| **contradicted_by_section_7** | −1.0 | "Partner-led Continuation" selected but no S7 partner with ongoing role |
-| **mechanism_overclaim** | −0.5 | Mechanism ticked but no corresponding evidence in S8 (per mechanism, cap 1.5 total) |
+| **contradicted_by_section_6** | −1.0 | "Partner-led Continuation" selected but no S6 partner with ongoing role |
+| **mechanism_overclaim** | −0.5 | Mechanism ticked but no corresponding evidence in S7 (per mechanism, cap 1.5 total) |
 
 > *Per-section cap totals (5.3 catalogue):* 3.0 + 2.5 + 3.0 + 3.0 + 3.0 + 2.0 + 3.0 + 3.0 + 2.0 + 2.0 = **26.5 maximum theoretical accumulation**, which is far higher than the global cap of −5. The global cap (5.4) ensures penalties never overwhelm recognition.
 
@@ -461,7 +461,7 @@ The Final Score Table (Output Component B) must show:
 Example penalty report row:
 
 \`\`\`
-Section 4: triggered type_category_mismatch (−1.0)
+Section 4A: triggered type_category_mismatch (−1.0)
   → "Output type 'Sessions Conducted' was paired with the activity
      category 'Resource Distribution', which is incompatible. Please
      select a matching output type next time."
@@ -558,8 +558,8 @@ If Compliance_Ratio < 1.0 → report cannot be finalized;
 - Identity OTP claimed verified but no audit log → Critical flag.
 
 ### 1.E Cross-Section Ties
-- Activity dates here must align with Section 4 activity dates and Section 8 evidence dates.
-- Team members listed here must reconcile with Section 4 implementation models.
+- Activity dates here must align with Section 4A activity dates and Section 7 evidence dates.
+- Team members listed here must reconcile with Section 4A implementation models.
 
 ### 1.F Commentary Must Include
 - Whether identity is verified.
@@ -725,7 +725,7 @@ Section_Deductions: −0.5 per FAKE slot.
 
 ---
 
-## SECTION 4 — ACTIVITIES & OUTPUT SCALE
+## SECTION 4A — ACTIVITIES & OUTPUT SCALE
 
 **Weight:** 15 points | **Recognition Floor:** 8.0 | **Defining feature:** 70/30 Quality–Quantity split.
 
@@ -789,7 +789,7 @@ Score_4.4N (per activity) = (raw_band/100) × mode_factor × overlap_mult × 4.5
 If number_inflation: cap at 50% of computed value.
 \`\`\`
 
-### 4.D Section 4 Aggregate
+### 4.D Section 4A Aggregate
 
 \`\`\`
 For each activity i:
@@ -802,7 +802,7 @@ mean_T = sum(T_i) / n
 breadth_factor = min(1.0 + 0.05 × (n-1), 1.10)   # cap at n=3
 coherence_multiplier from 4.6 / 4.7 (0.80 – 1.00)
 
-Section_4_score = mean_T × breadth_factor × coherence_multiplier
+Section_4A_score = mean_T × breadth_factor × coherence_multiplier
 Clamp to [0.0, 15.0].
 \`\`\`
 
@@ -817,32 +817,32 @@ Mismatch triggers \`type_category_mismatch\` flag and **−20 internal** on that
 
 ---
 
-## SECTION 5 — OUTCOMES & MEASURABLE CHANGE
+## SECTION 4B — OUTCOMES & MEASURABLE CHANGE
 
 **Weight:** 10 points | **Recognition Floor:** 5.5 | **Defining feature:** 70/30 split + confidence-adjusted outcome scoring.
 
-### 5.A Components
+### 4B.A Components
 
 | # | Component | Scope | Dimension | Points |
 |---|-----------|-------|-----------|--------|
-| 5.1 | Observed Change Narrative (100–200 words) | Project-level | Quality | 2.5 |
-| 5.2 | Measurable Outcomes (per outcome) | Per outcome | Quality + Quantity | 3.0 Q + 3.0 N per outcome (mean) |
-| 5.3 | Challenges & Limitations (50–200 words) | Project-level | Quality (honesty) | 1.5 |
-| — | Section 4 Coherence Check | Cross-section | Multiplier | × 0.80 – 1.00 |
+| 4B.1 | Observed Change Narrative (100–200 words) | Project-level | Quality | 2.5 |
+| 4B.2 | Measurable Outcomes (per outcome) | Per outcome | Quality + Quantity | 3.0 Q + 3.0 N per outcome (mean) |
+| 4B.3 | Challenges & Limitations (50–200 words) | Project-level | Quality (honesty) | 1.5 |
+| — | Section 4A Coherence Check | Cross-section | Multiplier | × 0.80 – 1.00 |
 
-### 5.B Critical Rule: Output ≠ Outcome
+### 4B.B Critical Rule: Output ≠ Outcome
 - **Output:** "50 students attended a session."
 - **Outcome:** "35 students improved their understanding from baseline to endline."
 
-### 5.C Component 5.1 — Observed Change Narrative
+### 4B.C Component 4B.1 — Observed Change Narrative
 
 Elements:
 - **A. Before (Baseline)** — pre-project state stated specifically.
 - **B. After (Change)** — post-project state with comparable measure.
-- **C. Link to Section 4 activities** — names which activity produced the change.
+- **C. Link to Section 4A activities** — names which activity produced the change.
 - **D. What beneficiaries can now do differently** — concrete behavioural change.
 
-### 5.D Component 5.2 — Measurable Outcomes (per outcome)
+### 4B.D Component 4B.2 — Measurable Outcomes (per outcome)
 
 **Quality (3.0 pts/outcome):**
 - A. Outcome Category fit (16 options)
@@ -888,58 +888,58 @@ Elements:
 Score_5.2N (per outcome) = (raw_band/100) × confidence_mult × 3.0
 
 If number_inflation_unverified (500%+ with Observed/Estimated): × 0.5
-If confidence_overclaim (DM claimed but Section 4 verification weak):
+If confidence_overclaim (DM claimed but Section 4A verification weak):
    confidence_mult forced to 0.65 (Observed level)
 \`\`\`
 
-### 5.E Section 4 Coherence Multiplier
+### 4B.E Section 4A Coherence Multiplier
 
 | Coherence Result | Multiplier |
 |------------------|------------|
-| Full — outcomes trace cleanly to S4 activities; confidence aligns with verification | 1.00 |
+| Full — outcomes trace cleanly to S4A activities; confidence aligns with verification | 1.00 |
 | Minor — one weak link | 0.95 |
 | Notable — multiple weak links; "DM" used liberally | 0.90 |
-| Error — 5.1 references activities not in S4; or reach > S4 total | 0.80 + coherence_failure flag |
+| Error — 4B.1 references activities not in S4A; or reach > S4A total | 0.80 + coherence_failure flag |
 
-### 5.F Section 5 Aggregate
+### 4B.F Section 4B Aggregate
 
 \`\`\`
 mean_T = sum(T_outcomes) / n
 breadth_factor = min(1.0 + 0.05 × (n-1), 1.10)
-weighted_5.2 = min(mean_T × breadth_factor, 6.0)
+weighted_4B.2 = min(mean_T × breadth_factor, 6.0)
 
-Section_5_raw = Score_5.1 + weighted_5.2 + Score_5.3
-Section_5_score = Section_5_raw × coherence_multiplier
+Section_4B_raw = Score_4B.1 + weighted_4B.2 + Score_4B.3
+Section_4B_score = Section_4B_raw × coherence_multiplier
 Clamp to [0.0, 10.0].
 \`\`\`
 
-### 5.G Section-Level Flags
+### 4B.G Section-Level Flags
 \`orphan_outcome\`, \`category_metric_mismatch\`, \`confidence_overclaim\`, \`number_inflation_unverified\`, \`baseline_endline_regression\`, \`no_challenges_claim\`, \`coherence_failure\`, \`duplicate_outcome\`, \`padding_low_quality_outcome\`.
 
-### 5.H Student-Facing Example
+### 4B.H Student-Facing Example
 > *"The report shows that beneficiaries were engaged and some learning change is described. The score is limited because the outcome is mostly narrative. A short pre/post form, partner confirmation, or beneficiary feedback would raise this section."*
 
 ---
 
-## SECTION 6 — RESOURCE MOBILIZATION
+## SECTION 5 — RESOURCE MOBILIZATION
 
 **Weight:** 15 points base + up to **+3 section-internal bonus** = **max 18 points** | **Recognition Floor:** 8.0 | **Principle:** This is the **most generously-scored section** in the CIEL rubric. CIEL PK believes that *any* form of resource a student mobilizes — financial, in-kind, skill-based, digital, creative, human, time — deserves substantial appreciation. Evidence strengthens the score; absence of evidence does **not** crush it.
 
-> **Section-specific design:** Section 6 is the only section where students can earn points BEYOND the section's face weight via an **internal bonus pool of up to +3**. This is in addition to the Master-Level Resource Mobilization Bonus (+1.5) in Part 4. A student who mobilizes meaningful resources across multiple categories can earn up to **18/15 base + 1.5 master = 19.5 total contribution to CII** from Section 6.
+> **Section-specific design:** Section 5 is the only section where students can earn points BEYOND the section's face weight via an **internal bonus pool of up to +3**. This is in addition to the Master-Level Resource Mobilization Bonus (+1.5) in Part 4. A student who mobilizes meaningful resources across multiple categories can earn up to **18/15 base + 1.5 master = 19.5 total contribution to CII** from Section 5.
 
-### 6.A Form-Field Mapping
+### 5.A Form-Field Mapping
 
 | Field | What It Captures |
 |-------|------------------|
-| 6.2.1 | Resource Type (16 categories: Financial, In-kind, Equipment, Infrastructure, Digital, Human Resources, Transport, Energy, Communication/Media, Policy/Legal, Research/Data, Community Mobilization, Corporate/CSR, Government, International Dev, Other) |
-| 6.2.2 / 6.2.3 | Amount + Unit (PKR, USD, Number, Hours, Units, Kg, Liters, Sessions, Licenses, Devices, Kits, Other) |
-| 6.2.4 | Source (Students, Partner Org, University, Government, Private Sponsor, Corporate/CSR, Community, International, Self-Funded, Other) |
-| 6.2.5 | Purpose (50–200 words) |
-| 6.2.6 | Verification Status (Evidence Uploaded, Partner Confirmed, University Confirmed, Official Documentation, Self-Reported, Pending) |
-| 6.3 | Optional Evidence Upload |
+| 5.2.1 | Resource Type (16 categories: Financial, In-kind, Equipment, Infrastructure, Digital, Human Resources, Transport, Energy, Communication/Media, Policy/Legal, Research/Data, Community Mobilization, Corporate/CSR, Government, International Dev, Other) |
+| 5.2.2 / 5.2.3 | Amount + Unit (PKR, USD, Number, Hours, Units, Kg, Liters, Sessions, Licenses, Devices, Kits, Other) |
+| 5.2.4 | Source (Students, Partner Org, University, Government, Private Sponsor, Corporate/CSR, Community, International, Self-Funded, Other) |
+| 5.2.5 | Purpose (50–200 words) |
+| 5.2.6 | Verification Status (Evidence Uploaded, Partner Confirmed, University Confirmed, Official Documentation, Self-Reported, Pending) |
+| 5.3 | Optional Evidence Upload |
 | "+ Add Resource Entry" | Multiple entries supported |
 
-### 6.B Base Rubric (15 pts) — 5 Criteria, each worth up to 3.0 pts
+### 5.B Base Rubric (15 pts) — 5 Criteria, each worth up to 3.0 pts
 
 Each criterion is scored on a **6-step half-point scale: 0.0 / 0.5 / 1.0 / 1.5 / 2.0 / 2.5 / 3.0**. This provides mathematical precision and rewards even partial fulfilment.
 
@@ -983,7 +983,7 @@ Each criterion is scored on a **6-step half-point scale: 0.0 / 0.5 / 1.0 / 1.5 /
 
 | Score | Description |
 |-------|-------------|
-| **3.0** | Each resource explicitly linked to specific Section 4 activity AND specific Section 5 outcome; purpose text 100–200 words, specific |
+| **3.0** | Each resource explicitly linked to specific Section 4A activity AND specific Section 4B outcome; purpose text 100–200 words, specific |
 | **2.5** | Most resources linked to specific activities; purpose 100+ words |
 | **2.0** | Resources linked to activities at general level; purpose 50–100 words |
 | **1.5** | Some linkage shown; purpose written but generic |
@@ -1005,50 +1005,50 @@ Each criterion is scored on a **6-step half-point scale: 0.0 / 0.5 / 1.0 / 1.5 /
 
 > **EVIDENCE-LENIENT RULE (mandatory):** If evidence is absent but the contribution narrative is **specific** (names amounts, types, sources, purposes) AND **credible** (consistent with the student's role, project scope, and other sections), Criterion E receives **at least 1.5**. The absence of receipts/photos does NOT push Criterion E below 1.5 when the rest of the report is solid. This is a deliberate CIEL PK policy — students who genuinely mobilized resources but didn't keep paperwork are still recognized.
 
-### 6.C Base Score Formula
+### 5.C Base Score Formula
 
 \`\`\`
-Base_Score_Section_6 = Criterion_A + Criterion_B + Criterion_C + Criterion_D + Criterion_E
+Base_Score_Section_5 = Criterion_A + Criterion_B + Criterion_C + Criterion_D + Criterion_E
                      (each 0.0 – 3.0, half-point steps)
 Maximum Base_Score = 15.0
 Apply Recognition Floor 8.0 if any substantive content exists.
 \`\`\`
 
-### 6.D Section-Internal Bonus Pool (up to +3.0)
+### 5.D Section-Internal Bonus Pool (up to +3.0)
 
-This is a Section 6-specific bonus pool — separate from and additive to the Master-Level Bonus 1 (Resource Mobilization, +1.5). Students who go above and beyond in mobilizing resources earn extra points HERE first, before any master-level bonus is considered.
+This is a Section 5-specific bonus pool — separate from and additive to the Master-Level Bonus 1 (Resource Mobilization, +1.5). Students who go above and beyond in mobilizing resources earn extra points HERE first, before any master-level bonus is considered.
 
 | Bonus # | Trigger | Max |
 |---------|---------|-----|
-| **6.B1 — Multi-Category Breadth** | 4+ distinct resource categories mobilized across the project (across all entries combined) | **+0.5** |
-| **6.B2 — Multi-Source Coordination** | 3+ distinct sources successfully tapped (e.g., Personal + Sponsor + Partner + Community) | **+0.5** |
-| **6.B3 — High-Value Personal Contribution** | Student personally contributed ANY ONE of: ≥40 hours of skilled work (teaching/coordination/design/technical); OR personally raised ≥₨25,000 from sponsors; OR designed/built a meaningful asset (toolkit, curriculum, website, training materials) | **+1.0** |
-| **6.B4 — In-Kind Resource Excellence** | Mobilized in-kind goods (books, equipment, food, clothing, hygiene kits, teaching materials) with declared value ≥₨50,000 equivalent | **+0.5** |
-| **6.B5 — Digital / Creative Resources** | Created and deployed digital or creative assets for the project: social media campaigns, photography, video editing, website/app, training materials, design work | **+0.5** |
-| **6.B6 — Sustained Commitment** | Resource contribution sustained across the entire project timeline (not one-time) — evidenced by multiple dated entries or ongoing engagement | **+0.5** |
-| **6.B7 — Sponsor / External Mobilization** | Successfully secured external sponsor support (corporate, foundation, government, international) — even modest amounts count | **+0.5** |
+| **5.B1 — Multi-Category Breadth** | 4+ distinct resource categories mobilized across the project (across all entries combined) | **+0.5** |
+| **5.B2 — Multi-Source Coordination** | 3+ distinct sources successfully tapped (e.g., Personal + Sponsor + Partner + Community) | **+0.5** |
+| **5.B3 — High-Value Personal Contribution** | Student personally contributed ANY ONE of: ≥40 hours of skilled work (teaching/coordination/design/technical); OR personally raised ≥₨25,000 from sponsors; OR designed/built a meaningful asset (toolkit, curriculum, website, training materials) | **+1.0** |
+| **5.B4 — In-Kind Resource Excellence** | Mobilized in-kind goods (books, equipment, food, clothing, hygiene kits, teaching materials) with declared value ≥₨50,000 equivalent | **+0.5** |
+| **5.B5 — Digital / Creative Resources** | Created and deployed digital or creative assets for the project: social media campaigns, photography, video editing, website/app, training materials, design work | **+0.5** |
+| **5.B6 — Sustained Commitment** | Resource contribution sustained across the entire project timeline (not one-time) — evidenced by multiple dated entries or ongoing engagement | **+0.5** |
+| **5.B7 — Sponsor / External Mobilization** | Successfully secured external sponsor support (corporate, foundation, government, international) — even modest amounts count | **+0.5** |
 | | **TOTAL CAP** | **+3.0** |
 
 **Bonus pool capped at +3.0** even if more bonuses apply. List all earned bonuses transparently in evaluator notes; cap the sum.
 
-### 6.E Section 6 Final Score Formula
+### 5.E Section 5 Final Score Formula
 
 \`\`\`
-Section_6_Score = clamp( Base_Score + Section_Internal_Bonus,  0,  18 )
+Section_5_Score = clamp( Base_Score + Section_Internal_Bonus,  0,  18 )
 
 Where:
   Base_Score                = Σ Criteria A–E (max 15.0)
-  Section_Internal_Bonus    = Σ Bonuses 6.B1–6.B7 (max 3.0)
+  Section_Internal_Bonus    = Σ Bonuses 5.B1–5.B7 (max 3.0)
   Apply Recognition Floor 8.0 if any substantive content (replaces Base_Score
     if Base_Score < 8.0).
 
-Section 6 may exceed its nominal 15-point weight by up to +3 via
+Section 5 may exceed its nominal 15-point weight by up to +3 via
 the internal bonus pool. This is the ONLY section permitted to do so.
 
-The Master-Level Resource Mobilization Bonus (Part 4, +1.5) is evaluated **individually** after section scoring. It is added to \`Obtained_Score\` with other Part 4 bonuses (not inside Section 6's line score). Final CII is always clamped to 100.
+The Master-Level Resource Mobilization Bonus (Part 4, +1.5) is evaluated **individually** after section scoring. It is added to \`Obtained_Score\` with other Part 4 bonuses (not inside Section 5's line score). Final CII is always clamped to 100.
 \`\`\`
 
-### 6.F Worked Examples
+### 5.F Worked Examples
 
 **Example 1 — Generous credit for time-rich, evidence-light contribution:**
 - Student contributed 60 hours of teaching (Human Resources)
@@ -1060,17 +1060,17 @@ Scoring:
 - Criterion A: 3.0 (3 distinct types)
 - Criterion B: 2.5 (all quantified: 60h, 40 pages, 8 days)
 - Criterion C: 2.0 (Student + Community sources)
-- Criterion D: 2.5 (linked to S4 activities)
+- Criterion D: 2.5 (linked to S4A activities)
 - Criterion E: 1.5 (evidence-lenient floor for honest reporting)
 - **Base = 11.5 / 15**
 
 Bonuses:
-- 6.B3 (≥40h skilled work): +1.0
-- 6.B5 (created a workbook): +0.5
-- 6.B6 (sustained across timeline): +0.5
+- 5.B3 (≥40h skilled work): +1.0
+- 5.B5 (created a workbook): +0.5
+- 5.B6 (sustained across timeline): +0.5
 - **Bonus = +2.0** (capped at 3.0)
 
-**Section 6 Score = 13.5 / 15** (still under the +18 cap; Section 6 contributes 13.5 to CII)
+**Section 5 Score = 13.5 / 15** (still under the +18 cap; Section 5 contributes 13.5 to CII)
 Plus Master Bonus 1 may apply (+1.5 to CII separately).
 
 **Example 2 — Strong financial mobilization with full evidence:**
@@ -1082,43 +1082,43 @@ Scoring:
 - Criterion A: 2.5 (Financial + In-kind = 2 strong types)
 - Criterion B: 3.0 (precise amounts and units)
 - Criterion C: 2.5 (Student + Corporate Sponsor)
-- Criterion D: 3.0 (purpose tied to S4 activity)
+- Criterion D: 3.0 (purpose tied to S4A activity)
 - Criterion E: 3.0 (full verification)
 - **Base = 14.0 / 15**
 
 Bonuses:
-- 6.B3 (raised ≥₨25,000): +1.0
-- 6.B4 (in-kind ≥₨50,000): +0.5
-- 6.B7 (sponsor secured): +0.5
+- 5.B3 (raised ≥₨25,000): +1.0
+- 5.B4 (in-kind ≥₨50,000): +0.5
+- 5.B7 (sponsor secured): +0.5
 - **Bonus = +2.0** (capped at 3.0)
 
-**Section 6 Score = 16.0 / 15** (above face weight via internal bonuses)
-Plus Master Bonus 1: +1.5 → Section 6 contributes 16.0 + master bonus on aggregate.
+**Section 5 Score = 16.0 / 15** (above face weight via internal bonuses)
+Plus Master Bonus 1: +1.5 → Section 5 contributes 16.0 + master bonus on aggregate.
 
-### 6.G Section-Specific Considerations
+### 5.G Section-Specific Considerations
 - **Lenient rule (mandatory):** Time, digital work, teaching, coordination, design, OR volunteer effort → at least Anchor 2 (8.0 floor applies).
 - **Strict rule:** Cash claims ≥ ₨50,000 without ANY supporting narrative or evidence trail → \`resource_claims_unsupported\` + Medium flag. Note: narrative alone (without evidence) is still sufficient to credit the claim if specific and credible.
 - Same evidence file across multiple entries claiming distinct resources → \`internal_duplicate\` (Critical → manual review).
-- Splitting one ₨50,000 donation into 5 ₨10,000 entries with same source/date/purpose → \`artificial_splitting\` flag; counted as ONE entry for bonus 6.B1.
+- Splitting one ₨50,000 donation into 5 ₨10,000 entries with same source/date/purpose → \`artificial_splitting\` flag; counted as ONE entry for bonus 5.B1.
 
-### 6.H Cross-Section Ties
-- Resources here should support activities described in Section 4 (verify cross-reference).
-- Sponsors named here should appear consistently in Section 7 (Partnerships) if they played an ongoing partner role.
-- Evidence supporting resources lives in Section 8; cross-referenced via the Section 8 Claim Matrix.
+### 5.H Cross-Section Ties
+- Resources here should support activities described in Section 4A (verify cross-reference).
+- Sponsors named here should appear consistently in Section 6 (Partnerships) if they played an ongoing partner role.
+- Evidence supporting resources lives in Section 7; cross-referenced via the Section 7 Claim Matrix.
 
-### 6.I Section-Level Flags
+### 5.I Section-Level Flags
 \`resource_claims_unsupported\` (Medium), \`internal_duplicate\` (Critical), \`artificial_splitting\` (Medium), \`funding_secured_no_doc\` (Low — not a penalty here; rewarded via Criterion D narrative).
 
-### 6.J Student-Facing Example
+### 5.J Student-Facing Example
 > *"You deserve significant credit for the resources you mobilized — time, skills, digital work, and coordination are all genuine contributions. CIEL PK highly appreciates this. Your section is strong even without full receipts; if you can add even a few photos or partner messages confirming what was arranged, the score can rise further."*
 
 ---
 
-## SECTION 7 — PARTNERSHIPS & COLLABORATION
+## SECTION 6 — PARTNERSHIPS & COLLABORATION
 
 **Weight:** 10 points | **Recognition Floor:** 5.5 | **Principle:** One genuine partner is a meaningful achievement. Right-size verification by partner type.
 
-### 7.A Form-Field Mapping
+### 6.A Form-Field Mapping
 - Partner Name (Official Registered Name) — required
 - Contact Name, Number, Email
 - Partner Type (19 categories: NGO, School/University, Government, Private Company, Public Limited, Community Group, Non-profit/Charity, Social Enterprise, Local Business, Hospital, Religious Org, International Org, Volunteer Network, Environmental Org, Youth Org, Local Council, Foundation/Trust, Research Institute, Other)
@@ -1128,7 +1128,7 @@ Plus Master Bonus 1: +1.5 → Section 6 contributes 16.0 + master bonus on aggre
 - Formalization Status (MOU, Letter of Collaboration, Official Email, Government Approval, None)
 - Evidence uploads
 
-### 7.B Right-Sized Verification Standards
+### 6.B Right-Sized Verification Standards
 
 | Standard | Partner Types | Authenticity Threshold |
 |----------|---------------|------------------------|
@@ -1136,7 +1136,7 @@ Plus Master Bonus 1: +1.5 → Section 6 contributes 16.0 + master bonus on aggre
 | **MODERATE** | NGO, Non-profit/Charity, Foundation/Trust, Private Company, Social Enterprise, Environmental Org | ≥60 for VERIFIED |
 | **LENIENT** | Local Business / Small Enterprise, Community Group, Religious Org, Volunteer Network, Youth Org, Small Clinic | ≥40 for VERIFIED (informal evidence accepted: photo + WhatsApp + handwritten note) |
 
-### 7.C Anchor Guidance
+### 6.C Anchor Guidance
 
 | Anchor | Description |
 |--------|-------------|
@@ -1147,7 +1147,7 @@ Plus Master Bonus 1: +1.5 → Section 6 contributes 16.0 + master bonus on aggre
 | **1 (4.0 → 5.5 floor)** | Informal support only or very vague partner mention. |
 | **0** | No partner or collaboration. |
 
-### 7.D Partner Benchmarking Quick Reference
+### 6.D Partner Benchmarking Quick Reference
 - **No partner:** Credit self-led effort only.
 - **Informal support:** Basic collaboration credit.
 - **One named partner:** Appreciate meaningfully.
@@ -1155,43 +1155,43 @@ Plus Master Bonus 1: +1.5 → Section 6 contributes 16.0 + master bonus on aggre
 - **Multiple meaningful partners:** High credit.
 - **Partner co-designed or verified outcomes:** Very high credit.
 
-### 7.E Cross-Section Ties
-- Partner-led Continuation in Section 10 requires a Section 7 partner with ongoing role.
-- Partner verification language here feeds Section 5 outcome confidence checks.
-- Partner letters live in Section 8 evidence.
+### 6.E Cross-Section Ties
+- Partner-led Continuation in Section 9 requires a Section 6 partner with ongoing role.
+- Partner verification language here feeds Section 4B outcome confidence checks.
+- Partner letters live in Section 7 evidence.
 
-### 7.F Section-Level Flags
+### 6.F Section-Level Flags
 \`ghost_partner\` (entry with no docs/contact/self-reported), \`duplicate_evidence_across_partners\`, \`possible_same_entity\`, \`partner_named_but_not_verified\`.
 
-### 7.G Student-Facing Example
+### 6.G Student-Facing Example
 > *"Bringing in a partner organization is a strong part of your report. The score can improve further if you upload a partner letter, email, or WhatsApp confirmation explaining their role."*
 
 ---
 
-## SECTION 8 — EVIDENCE & VERIFICATION
+## SECTION 7 — EVIDENCE & VERIFICATION
 
 **Weight:** 10 points | **Recognition Floor:** 5.5 | **Defining role:** This is where claims meet proof. AI does cross-section verification here.
 
-### 8.A Form-Field Mapping
-- **8.1** "Do you have evidence?" (Yes / No)
-- **8.2** Evidence Type categories (8 multi-select): Activity photos, Attendance sheet, Training materials, Partner letter/email, Survey results, Media coverage, Resource delivery proof, Other
-- **8.3** Evidence Description (100–200 words mandatory)
-- **8.4** Ethical Declaration (4 boxes, all required)
-- **8.5** Media Visibility Preference (Public / Limited / Internal)
-- **8.6** Partner Verification (Yes / No)
+### 7.A Form-Field Mapping
+- **7.1** "Do you have evidence?" (Yes / No)
+- **7.2** Evidence Type categories (8 multi-select): Activity photos, Attendance sheet, Training materials, Partner letter/email, Survey results, Media coverage, Resource delivery proof, Other
+- **7.3** Evidence Description (100–200 words mandatory)
+- **7.4** Ethical Declaration (4 boxes, all required)
+- **7.5** Media Visibility Preference (Public / Limited / Internal)
+- **7.6** Partner Verification (Yes / No)
 
-### 8.B Anchor Guidance
+### 7.B Anchor Guidance
 
 | Anchor | Description |
 |--------|-------------|
 | **5 (9.5)** | Strong evidence across hours, activities, outputs, resources, outcomes, partner role. |
-| **4 (8.2)** | Evidence supports most major claims. |
+| **4 (7.2)** | Evidence supports most major claims. |
 | **3 (6.8)** | Some evidence supports activities but not all claims. |
 | **2 (5.5)** | Thin evidence exists but leaves gaps. |
 | **1 (4.0 → 5.5 floor)** | Evidence missing or weak, but report has some self-reported detail. |
 | **0** | No evidence and no verification. |
 
-### 8.C Evidence Tiers (Quality of Evidence)
+### 7.C Evidence Tiers (Quality of Evidence)
 - **Weak:** Self-reported only.
 - **Basic:** Photos or screenshots without context.
 - **Moderate:** Photos + attendance, receipts, or communication trail.
@@ -1199,7 +1199,7 @@ Plus Master Bonus 1: +1.5 → Section 6 contributes 16.0 + master bonus on aggre
 - **Excellent:** Partner letter, attendance, receipts, photos/videos, beneficiary feedback.
 - **Transformative:** Independent verification, measurable outcome proof, continuation proof.
 
-### 8.D The Cross-Section Claim-to-Evidence Matrix (Core Mechanism)
+### 7.D The Cross-Section Claim-to-Evidence Matrix (Core Mechanism)
 
 The AI builds an explicit matrix matching each claim from prior sections to evidence files. For each claim:
 - \`matched_file_ids\` — files supporting it
@@ -1217,71 +1217,71 @@ The AI builds an explicit matrix matching each claim from prior sections to evid
 - "Trained students in classroom" → \`depicted_setting = classroom\` AND \`depicted_activity = teaching/training\`.
 - "₨20,000 spent on kits" → receipt with extracted amount near 20,000 OR delivery photo with kits visible.
 
-### 8.E Ethical Compliance Image Check
+### 7.E Ethical Compliance Image Check
 - Minors visible AND faces not blurred AND no consent form → \`minor_consent_gap\` (High flag, especially with Public visibility).
 - Dignity concerns / exploitation framing → \`dignity_concern\`.
-- These cap Section 8 Criterion D regardless of ethical box ticks.
+- These cap Section 7 Criterion D regardless of ethical box ticks.
 
-### 8.F Lenient Rule
+### 7.F Lenient Rule
 Do not erase real work because evidence is weak. Instead, reduce **Evidence Confidence** and **Badge Readiness**. Section can still score moderately if the work was real.
 
-### 8.G Hard Gates
-- "No — I do not have evidence" → Section 8 capped at 6/10.
+### 7.G Hard Gates
+- "No — I do not have evidence" → Section 7 capped at 6/10.
 - Any of {\`internal_duplicate\`, \`stock_or_web_image\`, \`fabricated_document\`} → capped at 4/10 + manual review required.
 
-### 8.H Section-Level Flags
+### 7.H Section-Level Flags
 \`internal_duplicate\`, \`stock_or_web_image\`, \`fabricated_document\`, \`minor_consent_gap\`, \`identity_mismatch\`, \`geographic_impossibility\`, \`dignity_concern\`.
 
-### 8.I Student-Facing Example
+### 7.I Student-Facing Example
 > *"The evidence shows that some activity took place, but it does not yet fully verify the beneficiary count or your individual contribution. Uploading student-level attendance, partner confirmation, and activity photos would raise both confidence and badge readiness."*
 
 ---
 
-## SECTION 9 — PERSONAL & ACADEMIC REFLECTION
+## SECTION 8 — PERSONAL & ACADEMIC REFLECTION
 
 **Weight:** 5 points | **Recognition Floor:** 2.7 | **Scoring philosophy:** Authentic reflection, not polished writing.
 
-### 9.A Components
+### 8.A Components
 
 | # | Component | Status | Points |
 |---|-----------|--------|--------|
-| 9.0 | Academic Integration Level | Mandatory single-select | 0.5 |
-| 9.1 | Personal Learning Reflection (100–200 words) | Mandatory | 1.75 |
-| 9.2 | Academic Application & Discipline Contribution (100–200 words) | Mandatory | 1.75 |
-| 9.3 | Competency Self-Assessment (12 ratings, 1–5 scale) | Mandatory | 1.0 |
+| 8.0 | Academic Integration Level | Mandatory single-select | 0.5 |
+| 8.1 | Personal Learning Reflection (100–200 words) | Mandatory | 1.75 |
+| 8.2 | Academic Application & Discipline Contribution (100–200 words) | Mandatory | 1.75 |
+| 8.3 | Competency Self-Assessment (12 ratings, 1–5 scale) | Mandatory | 1.0 |
 
-### 9.B Reflection vs Description (The Headline Anti-Pattern)
-If a paragraph could fit unchanged into Section 4 (Activities), it does NOT count as reflection. **Description ≠ Reflection.**
+### 8.B Reflection vs Description (The Headline Anti-Pattern)
+If a paragraph could fit unchanged into Section 4A (Activities), it does NOT count as reflection. **Description ≠ Reflection.**
 
 | Description (does NOT count) | Reflection (counts) |
 |------------------------------|---------------------|
 | "We organised three classroom-painting sessions." | "I had assumed turnout would track enthusiasm, but it tracked transport. That changed how I think about access in volunteer programs." |
 | "I learned about teamwork." | "When two team members disagreed on the survey wording, I realised I default to consensus and miss precision." |
 
-### 9.C Component 9.0 — Academic Integration Level (0.5 pts)
+### 8.C Component 8.0 — Academic Integration Level (0.5 pts)
 - 0.25 for valid selection.
-- 0.25 for consistency with 9.2 depth claim.
+- 0.25 for consistency with 8.2 depth claim.
 
-Integration levels set depth expectations for 9.2:
+Integration levels set depth expectations for 8.2:
 - **Voluntary Extracurricular** — baseline depth.
 - **Course-Linked Assignment** — moderate depth; specific course concepts named.
 - **Credit-Bearing Component** — strong depth; formal frameworks applied.
 - **Capstone / Thesis** — high depth; independent application of advanced concepts.
 - **Research-Integrated** — highest depth; methodology, data analysis visible.
 
-### 9.D Component 9.1 — Personal Learning (1.75 pts)
+### 8.D Component 8.1 — Personal Learning (1.75 pts)
 Four prompts: A. New skills | B. Community insights | C. Perspective changes | D. Challenges (mandatory).
 
 Score 0–100 internal → × 1.75.
 - \`description_as_reflection\` flag if ≥60% of text is activity recap → −20 internal.
 
-### 9.E Component 9.2 — Academic Application (1.75 pts)
-Four elements: A. Field of study named | B. Specific concepts/methods applied | C. Connection to actual project work | D. Depth appropriate to 9.0.
+### 8.E Component 8.2 — Academic Application (1.75 pts)
+Four elements: A. Field of study named | B. Specific concepts/methods applied | C. Connection to actual project work | D. Depth appropriate to 8.0.
 
-- \`integration_depth_mismatch\` if 9.0 claims high depth but 9.2 shows voluntary-level depth → −15 internal.
+- \`integration_depth_mismatch\` if 8.0 claims high depth but 8.2 shows voluntary-level depth → −15 internal.
 
-### 9.F Component 9.3 — Competency Self-Assessment (1.0 pts)
-**Scoring philosophy: pattern, not rating value.** A "5" is not better than a "3" — what matters is whether ratings are complete, authentic, and consistent with 9.1/9.2.
+### 8.F Component 8.3 — Competency Self-Assessment (1.0 pts)
+**Scoring philosophy: pattern, not rating value.** A "5" is not better than a "3" — what matters is whether ratings are complete, authentic, and consistent with 8.1/8.2.
 
 | Sub-component | Points | Rule |
 |---------------|--------|------|
@@ -1295,33 +1295,33 @@ Authenticity penalties:
 - All identical → \`uniform_pattern\` (−0.15)
 - Mean ≥4.5 with no advanced evidence → \`unsubstantiated_inflation\` (−0.15)
 
-### 9.G Section 9 Aggregate
+### 8.G Section 8 Aggregate
 
 \`\`\`
-Score_Section_9 = Score_9.0 + Score_9.1 + Score_9.2 + Score_9.3
+Score_Section_8 = Score_8.0 + Score_8.1 + Score_8.2 + Score_8.3
 Clamp to [0.0, 5.0].
 \`\`\`
 
-### 9.H Section-Level Flags
+### 8.H Section-Level Flags
 \`description_as_reflection\`, \`integration_depth_mismatch\`, \`self_inflation\`, \`disengagement_pattern\`, \`uniform_pattern\`, \`unsubstantiated_inflation\`, \`competency_evidence_gap\`.
 
-### 9.I Student-Facing Example
+### 8.I Student-Facing Example
 > *"Your reflection shows awareness of what you experienced during the project. To improve, connect your learning more directly to one specific challenge, one academic concept, and one change in how you view community service."*
 
 ---
 
-## SECTION 10 — SUSTAINABILITY & CONTINUATION
+## SECTION 9 — SUSTAINABILITY & CONTINUATION
 
 **Weight:** 5 points | **Recognition Floor:** 2.7 | **Principle:** Highly sustainable = full points; partial = half; little = lower — but honest "NO" with mature root-cause reflection earns a fairness lift.
 
-### 10.A Form-Field Mapping
-- **10.1** Continuation Status (Yes / Partial / No)
-- **10.2** Continuation Details (100–200 words mandatory)
-- **10.3** Continuation Mechanisms (7 positive + "No Mechanism", multi-select)
-- **10.4a** Scaling Potential (Not Scalable / Within Institution / To Other Communities / Policy or Government)
-- **10.4b** Policy / Institutional Influence (No / Internal Institutional / Community / Policy/Government)
+### 9.A Form-Field Mapping
+- **9.1** Continuation Status (Yes / Partial / No)
+- **9.2** Continuation Details (100–200 words mandatory)
+- **9.3** Continuation Mechanisms (7 positive + "No Mechanism", multi-select)
+- **9.4a** Scaling Potential (Not Scalable / Within Institution / To Other Communities / Policy or Government)
+- **9.4b** Policy / Institutional Influence (No / Internal Institutional / Community / Policy/Government)
 
-### 10.B Component Scoring (each at 0 / 0.5 / 1.0)
+### 9.B Component Scoring (each at 0 / 0.5 / 1.0)
 
 | Component | Mapping |
 |-----------|---------|
@@ -1331,7 +1331,7 @@ Clamp to [0.0, 5.0].
 | **D. Scaling Potential** | 1.0 for Communities/Policy; 0.5 for Within Institution; 0.0 for Not Scalable |
 | **E. Policy / Institutional Influence** | 1.0 for Policy/Government OR Community; 0.5 for Internal Institutional; 0.0 for No |
 
-### 10.C Anchor-Equivalent Mapping
+### 9.C Anchor-Equivalent Mapping
 The five-criterion structure aligns to anchors via the sum:
 - 5.0 ≈ Anchor 5 (Distinguished)
 - 4.0–4.5 ≈ Anchor 4 (Strong)
@@ -1339,23 +1339,23 @@ The five-criterion structure aligns to anchors via the sum:
 - 2.5 ≈ Anchor 2 / floor
 - ≤2.0 ≈ Anchor 1 / floor
 
-### 10.D Honesty Caveat
+### 9.D Honesty Caveat
 The score on Component A reflects the actual achievement, not the student's character. A student who selects NO is not penalized for it. **Quality of reflection scored in Component B can fully compensate** — an honest NO with strong root-cause analysis can still reach 3.5–4.0/5.
 
-### 10.E Hard Gates
-- \`policy_overclaim\` (Yes — Policy/Government with no policy document) → Section 10 capped at 2/5.
-- \`mechanism_without_evidence\` (3+ mechanisms ticked, all unsupported) → Section 10 capped at 2/5.
+### 9.E Hard Gates
+- \`policy_overclaim\` (Yes — Policy/Government with no policy document) → Section 9 capped at 2/5.
+- \`mechanism_without_evidence\` (3+ mechanisms ticked, all unsupported) → Section 9 capped at 2/5.
 
-### 10.F Section-Level Flags
-\`status_explanation_mismatch\`, \`vague_partial\`, \`mechanism_without_evidence\`, \`policy_overclaim\`, \`contradicted_by_section_7\`.
+### 9.F Section-Level Flags
+\`status_explanation_mismatch\`, \`vague_partial\`, \`mechanism_without_evidence\`, \`policy_overclaim\`, \`contradicted_by_section_6\`.
 
-### 10.G Cross-Section Ties
-- "Partner-led Continuation" → Section 7 partner with ongoing role.
-- "Resource Handover" → Section 6 resource transfer evidence.
-- "Funding Secured" → Section 8 post-project funding document (separate from initial funding).
-- "Institutional Integration" → Section 9.0 integration level coherence.
+### 9.G Cross-Section Ties
+- "Partner-led Continuation" → Section 6 partner with ongoing role.
+- "Resource Handover" → Section 5 resource transfer evidence.
+- "Funding Secured" → Section 7 post-project funding document (separate from initial funding).
+- "Institutional Integration" → Section 8.0 integration level coherence.
 
-### 10.H Student-Facing Example
+### 9.H Student-Facing Example
 > *"The report shows a willingness to continue the work. To raise this section, name who will continue it, when the next step will happen, and what partner or resource will support it."*
 
 
@@ -1367,33 +1367,33 @@ The CIEL evaluation system treats the report as a single connected document, not
 
 | From → To | Check |
 |-----------|-------|
-| **S1 (Attendance) → S4 (Activities)** | Logged session dates and locations align with Activity Block dates and locations. |
-| **S2 (Discipline 2.3) → S9 (Application 9.2)** | The discipline named in S2.3a must match the discipline framing in S9.2. Mismatch → \`discipline_mismatch\`. |
-| **S3 (Locked SDG) → S4 (Activities)** | Activities should plausibly contribute to the locked SDG target. |
-| **S3 (Slot Mapping) → S4 (Activities)** | Additional SDG slot must connect to a real activity. Forced alignment → FAKE → −0.5. |
-| **S4 (Verification language) → S5 (Confidence)** | If S4 says "verified by team" with no instrument, S5 cannot claim "Directly Measured" without triggering \`confidence_overclaim\`. |
-| **S4 (Distinct total) → S5 (Reach claims)** | S5 outcomes' implied reach must not exceed S4's project-level distinct beneficiary count. |
-| **S4 (Activity titles) → S5 (Narrative 5.1)** | Activities named in S5.1 narrative must exist in S4. Otherwise → \`coherence_failure\`. |
-| **S4 (Activities) → S8 (Evidence)** | Each activity claim should have matching evidence files. |
-| **S5 (Outcomes) → S8 (Evidence)** | Baseline/endline claims need attendance sheets, assessment records, or partner confirmation. |
-| **S6 (Resources) → S8 (Evidence)** | Each resource claim should have receipts, partner letters, or photos in S8. |
-| **S6 (Sponsor source) → S7 (Partnerships)** | Corporate/CSR resource source should appear as a Partner in S7 if it played a partner role. |
-| **S7 (Partners) → S8 (Evidence)** | Each partner claim needs MOU, letter, email, or right-sized informal evidence. |
-| **S7 (Partner roles) → S10 (Continuation)** | "Partner-led Continuation" requires an active S7 partner with ongoing engagement language. |
-| **S9.0 (Integration) → S9.2 (Application)** | Capstone/Research-Integrated claim must be matched by Capstone-level depth in 9.2 narrative. |
-| **S10 (Funding Secured) → S8 (Evidence)** | Post-project funding mechanism requires distinct funding evidence (separate from initial project funding in S6). |
+| **S1 (Attendance) → S4A (Activities)** | Logged session dates and locations align with Activity Block dates and locations. |
+| **S2 (Discipline 2.3) → S8 (Application 8.2)** | The discipline named in S2.3a must match the discipline framing in S8.2. Mismatch → \`discipline_mismatch\`. |
+| **S3 (Locked SDG) → S4A (Activities)** | Activities should plausibly contribute to the locked SDG target. |
+| **S3 (Slot Mapping) → S4A (Activities)** | Additional SDG slot must connect to a real activity. Forced alignment → FAKE → −0.5. |
+| **S4A (Verification language) → S4B (Confidence)** | If S4A says "verified by team" with no instrument, S4B cannot claim "Directly Measured" without triggering \`confidence_overclaim\`. |
+| **S4A (Distinct total) → S4B (Reach claims)** | S4B outcomes' implied reach must not exceed S4A's project-level distinct beneficiary count. |
+| **S4A (Activity titles) → S4B (Narrative 4B.1)** | Activities named in S4B.1 narrative must exist in S4A. Otherwise → \`coherence_failure\`. |
+| **S4A (Activities) → S7 (Evidence)** | Each activity claim should have matching evidence files. |
+| **S4B (Outcomes) → S7 (Evidence)** | Baseline/endline claims need attendance sheets, assessment records, or partner confirmation. |
+| **S5 (Resources) → S7 (Evidence)** | Each resource claim should have receipts, partner letters, or photos in S7. |
+| **S5 (Sponsor source) → S6 (Partnerships)** | Corporate/CSR resource source should appear as a Partner in S6 if it played a partner role. |
+| **S6 (Partners) → S7 (Evidence)** | Each partner claim needs MOU, letter, email, or right-sized informal evidence. |
+| **S6 (Partner roles) → S9 (Continuation)** | "Partner-led Continuation" requires an active S6 partner with ongoing engagement language. |
+| **S8.0 (Integration) → S8.2 (Application)** | Capstone/Research-Integrated claim must be matched by Capstone-level depth in 8.2 narrative. |
+| **S9 (Funding Secured) → S7 (Evidence)** | Post-project funding mechanism requires distinct funding evidence (separate from initial project funding in S5). |
 
-### 8.2 The Section 8 Cross-Section Claim Matrix
-Section 8 builds an explicit **claim-to-evidence matrix** drawing from S1, S4, S5, S6, S7. Coverage rate determines Section 8 Criterion E and Master Bonus 3:
+### 8.2 The Section 7 Cross-Section Claim Matrix
+Section 7 builds an explicit **claim-to-evidence matrix** drawing from S1, S4A, S4B, S5, S6. Coverage rate determines Section 7 Criterion E and Master Bonus 3:
 
 \`\`\`
-total_claims      = count of all verifiable claims across S1, S4, S5, S6, S7
+total_claims      = count of all verifiable claims across S1, S4A, S4B, S5, S6
 verified_claims   = claims with status VERIFIED (≥75 confidence)
 coverage_rate     = verified_claims / total_claims
 
-coverage_rate ≥ 0.75    → Section 8 strong (Anchor 4–5)
-coverage_rate 0.40–0.74 → Section 8 moderate (Anchor 3)
-coverage_rate <0.40     → Section 8 weak (Anchor 1–2)
+coverage_rate ≥ 0.75    → Section 7 strong (Anchor 4–5)
+coverage_rate 0.40–0.74 → Section 7 moderate (Anchor 3)
+coverage_rate <0.40     → Section 7 weak (Anchor 1–2)
 
 coverage_rate ≥ 0.85   → Bonus 3 (Evidence Strength) eligible
 \`\`\`
@@ -1404,8 +1404,8 @@ Some sections apply internal coherence multipliers:
 
 | Section | Multiplier Source | Range |
 |---------|-------------------|-------|
-| Section 4 | Project-level summary (4.6/4.7) | 0.80 – 1.00 |
-| Section 5 | Section 4 coherence check | 0.80 – 1.00 |
+| Section 4A | Project-level summary (4.6/4.7) | 0.80 – 1.00 |
+| Section 4B | Section 4A coherence check | 0.80 – 1.00 |
 
 These multipliers are applied at the section level and feed the final section score. They are not separate red flags; they reduce the section's score automatically.
 
@@ -1432,13 +1432,13 @@ For every evaluated report, produce the following structured output.
 | 1 | Identity & Participation | 10 | ... | ... | ... (max −3.0) | ... |
 | 2 | Project Context & Discipline | 10 | ... | ... | ... (max −2.5) | ... |
 | 3 | SDG Strategy & Intent | 10 | ... | ... | ... (max −3.0) | ... |
-| 4 | Activities & Output Scale | 15 | ... | ... | ... (max −3.0) | ... |
-| 5 | Outcomes & Measurable Change | 10 | ... | ... | ... (max −3.0) | ... |
-| 6 | Resource Mobilization | 15 (+3) | ... | ... | ... (max −2.0) | ... |
-| 7 | Partnerships & Collaboration | 10 | ... | ... | ... (max −3.0) | ... |
-| 8 | Evidence & Verification | 10 | ... | ... | ... (max −3.0) | ... |
-| 9 | Personal & Academic Reflection | 5 | ... | ... | ... (max −2.0) | ... |
-| 10 | Sustainability & Continuation | 5 | ... | ... | ... (max −2.0) | ... |
+| 4A | Activities & Output Scale | 15 | ... | ... | ... (max −3.0) | ... |
+| 4B | Outcomes & Measurable Change | 10 | ... | ... | ... (max −3.0) | ... |
+| 5 | Resource Mobilization | 15 (+3) | ... | ... | ... (max −2.0) | ... |
+| 6 | Partnerships & Collaboration | 10 | ... | ... | ... (max −3.0) | ... |
+| 7 | Evidence & Verification | 10 | ... | ... | ... (max −3.0) | ... |
+| 8 | Personal & Academic Reflection | 5 | ... | ... | ... (max −2.0) | ... |
+| 9 | Sustainability & Continuation | 5 | ... | ... | ... (max −2.0) | ... |
 | — | **Master Bonus** | +5 | ... | — | — | List bonuses awarded |
 | — | **Track A — Red-Flag Penalty** | — | ... | — | — | List Track A flags |
 | — | **Track B — Inconsistency Subtotal** | — | ... | — | — | Sum across sections |
@@ -1515,7 +1515,7 @@ A warm, personal, narrative summary written **directly to the student** — the 
 
 ## PART 10 — APPENDICES
 
-### Appendix A — Section 4 Output Type × Activity Category Compatibility
+### Appendix A — Section 4A Output Type × Activity Category Compatibility
 
 | Activity Category | Compatible Output Types |
 |-------------------|-------------------------|
@@ -1536,7 +1536,7 @@ A warm, personal, narrative summary written **directly to the student** — the 
 
 Mismatched pairings → \`type_category_mismatch\` flag + −20 internal on that output.
 
-### Appendix B — Section 5 Outcome Category × Metric Group Compatibility
+### Appendix B — Section 4B Outcome Category × Metric Group Compatibility
 
 | Outcome Category | Compatible Metric Groups |
 |------------------|--------------------------|
@@ -1574,10 +1574,10 @@ Total red-flag penalty caps at **−5** unless **critical non-compliance** (iden
 
 | # | Bonus | Max | Trigger |
 |---|-------|-----|---------|
-| 1 | Resource Mobilization | +1.5 | Meaningful resources documented in S6 + verified in S8 |
-| 2 | Partnership | +1.0 | Verified partner in S7 + partner letter in S8 |
-| 3 | Evidence Strength | +1.0 | Strong file evidence backing major claims (S8 coverage ≥85%) |
-| 4 | Outcome Measurement | +1.0 | Baseline/endline + partner-confirmed outcomes in S5 |
+| 1 | Resource Mobilization | +1.5 | Meaningful resources documented in S5 + verified in S7 |
+| 2 | Partnership | +1.0 | Verified partner in S6 + partner letter in S7 |
+| 3 | Evidence Strength | +1.0 | Strong file evidence backing major claims (S7 coverage ≥85%) |
+| 4 | Outcome Measurement | +1.0 | Baseline/endline + partner-confirmed outcomes in S4B |
 | 5 | Leadership | +0.5 | Documented team leadership / coordination role |
 | | **TOTAL CAP** | **+5.0** | — |
 
@@ -1610,6 +1610,7 @@ Total red-flag penalty caps at **−5** unless **critical non-compliance** (iden
 | Version | Date | Change |
 |---------|------|--------|
 | 1.0 | 2026-06 | Initial master rubric — consolidates Sections 1–10 |
+| 1.2.1 | 2026-08 | Renumbered to match the platform's 9-step report wizard: former Section 5 (Outcomes) is now Section 4B, paired with Section 4A (Activities) on one combined wizard step; former Sections 6–10 shift down to 5–9. Section weights, recognition floors, and scoring formulas are unchanged — still 10 independently-scored components. |
 
 *End of Master Rubric — CIEL PK Community Engagement Report*
 `;

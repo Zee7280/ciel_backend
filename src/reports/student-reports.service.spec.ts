@@ -593,12 +593,13 @@ describe('StudentReportsService', () => {
         expect(result.data.status).toBe('paid');
     });
 
-    it('marks partner-required reports verified when partner approves after admin', async () => {
+    it('marks partner-required reports verified when partner approves after admin and faculty', async () => {
         const report = {
             id: 'report-1',
             status: 'paid',
             partner_status: 'pending',
             admin_status: 'approved',
+            faculty_status: 'approved',
             partnerApprovedAt: null,
             adminApprovedAt: new Date('2026-05-01T00:00:00.000Z'),
             opportunity: { organizationId: 'org-1', requiresPartnerApproval: true },
@@ -610,6 +611,45 @@ describe('StudentReportsService', () => {
         expect(report.status).toBe('verified');
         expect(report.partner_status).toBe('approved');
         expect(result.data.status).toBe('verified');
+    });
+
+    it('blocks partner approve until Faculty has approved the report', async () => {
+        const report = {
+            id: 'report-1',
+            status: 'paid',
+            partner_status: 'pending',
+            admin_status: 'approved',
+            faculty_status: 'pending',
+            partnerApprovedAt: null,
+            adminApprovedAt: new Date('2026-05-01T00:00:00.000Z'),
+            opportunity: { organizationId: 'org-1', requiresPartnerApproval: true },
+        };
+        mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+        await expect(
+            service.verifyReport('report-1', 'approve', 'partner', undefined, 'org-1'),
+        ).rejects.toThrow('not yet approved by Faculty');
+        expect(report.partner_status).toBe('pending');
+        expect(mockStudentReportsRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('blocks partner reject until Faculty has approved the report', async () => {
+        const report = {
+            id: 'report-1',
+            status: 'paid',
+            partner_status: 'pending',
+            admin_status: 'approved',
+            faculty_status: null as string | null,
+            partnerApprovedAt: null,
+            adminApprovedAt: new Date('2026-05-01T00:00:00.000Z'),
+            opportunity: { organizationId: 'org-1', requiresPartnerApproval: true },
+        };
+        mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+        await expect(
+            service.verifyReport('report-1', 'reject', 'partner', 'Not enough evidence', 'org-1'),
+        ).rejects.toThrow('not yet approved by Faculty');
+        expect(report.partner_status).toBe('pending');
     });
 
     it('sets revision status when admin rejects so students can edit', async () => {

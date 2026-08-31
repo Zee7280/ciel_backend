@@ -510,6 +510,43 @@ export class StudentReportsService {
     };
   }
 
+  private collectStringsDeep(value: unknown, acc: string[]) {
+    if (value == null) return;
+    if (typeof value === 'string') {
+      acc.push(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((v) => this.collectStringsDeep(v, acc));
+      return;
+    }
+    if (typeof value === 'object') {
+      for (const v of Object.values(value as Record<string, unknown>)) {
+        this.collectStringsDeep(v, acc);
+      }
+    }
+  }
+
+  private collectHttpsUrls(value: unknown): string[] {
+    const strings: string[] = [];
+    this.collectStringsDeep(value, strings);
+    return strings.filter((s) => /^https?:\/\//i.test(s));
+  }
+
+  /** Same URL-sniffing heuristic as the student impact-history endpoint — kept local to this
+   * service to avoid a cross-module dependency on StudentsService. */
+  private pickPdfUrlFromReport(report: StudentReport): string | null {
+    const buckets = [report.section8, report.section2, report.section5, report.section7, report.section10];
+    const urls = buckets.flatMap((b) => this.collectHttpsUrls(b));
+    return urls.find((u) => /\.pdf($|\?)/i.test(u)) ?? null;
+  }
+
+  private pickCertificateUrlFromReport(report: StudentReport): string | null {
+    const buckets = [report.section8, report.section2, report.section3, report.section5, report.section11];
+    const urls = buckets.flatMap((b) => this.collectHttpsUrls(b));
+    return urls.find((u) => /certificat/i.test(u) || /\/certificates?\//i.test(u)) ?? null;
+  }
+
   private mapReportListing(
     report: StudentReport,
     opportunityByProjectId?: Map<string, Opportunity>,
@@ -568,6 +605,11 @@ export class StudentReportsService {
           null,
       ),
       ...this.computeCommunityAwardTotal(report),
+      ...this.reportVerificationPayload(report),
+      actions: {
+        certificate_url: this.pickCertificateUrlFromReport(report),
+        pdf_url: this.pickPdfUrlFromReport(report),
+      },
       created_at: report.createdAt,
     };
   }
@@ -2675,6 +2717,20 @@ export class StudentReportsService {
       ) {
         throw new ForbiddenException(
           'You can only verify reports linked to your organization',
+        );
+      }
+      // Faculty is the sole final report approver — a partner/NGO/university
+      // reviewer may only act once Faculty has signed off, matching the
+      // Community Service loop design ("Faculty is the only final report
+      // approver; other connected stakeholders have visibility according to
+      // permissions"). Until then they can view status and send a reminder,
+      // never approve or reject the report themselves.
+      if (
+        (action === 'approve' || action === 'reject') &&
+        report.faculty_status !== 'approved'
+      ) {
+        throw new ForbiddenException(
+          'This report is not yet approved by Faculty. Partners can view its status and send a reminder, but only Faculty can approve or reject a Community Service report.',
         );
       }
     }

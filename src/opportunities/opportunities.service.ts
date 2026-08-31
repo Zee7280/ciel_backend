@@ -1529,13 +1529,17 @@ export class OpportunitiesService {
             opportunity.creatorId === userId &&
             (opportunity.facultyId === userId || opportunity.facultyId == null);
 
+        /** Student creator editing their own listing — has no organization membership, so the
+         * org-match check below doesn't apply to them (mirrors the faculty-owner bypass). */
+        const isStudentOwner = opportunity.isStudentCreated && opportunity.creatorId === userId;
+
         let orgId = organizationId;
         if (!orgId) {
             const org = await this.organizationsService.getMyOrganization(userId);
             orgId = org?.id;
         }
 
-        if (!isFacultyOwner) {
+        if (!isFacultyOwner && !isStudentOwner) {
             if (!orgId) {
                 throw new ForbiddenException('User must belong to an organization to update opportunities');
             }
@@ -1578,6 +1582,18 @@ export class OpportunitiesService {
                 opportunity.execution_verification_status = 'pending_execution';
                 opportunity.adminApprovalStatus = LINE_STATUS.PENDING;
             }
+        }
+
+        // Student creator edit/resubmit: after rejection, saving edits sends it back into the review pipeline.
+        if (isStudentOwner && rejectedResubmitSnapshot.wasRejected) {
+            const requiresPartnerApproval = this.studentOpportunityRequiresPartner(
+                opportunity as unknown as CreateOpportunityDto,
+            );
+            this.opportunityWorkflow.initStudentCreated(opportunity, requiresPartnerApproval);
+            opportunity.admin_approved = false;
+            opportunity.rejectionReason = null;
+            opportunity.requiresPartnerApproval = requiresPartnerApproval;
+            opportunity.partnerVerified = !requiresPartnerApproval;
         }
 
         // Partner / NGO org member: after admin (or partner) rejection, saving edits resubmits into review queues.
@@ -1745,6 +1761,70 @@ export class OpportunitiesService {
         );
 
         return { items, opportunities: items, rows: items };
+    }
+
+    /** Student dashboard: opportunities this student created — powers "My Drafts" and the
+     * Community Service Workspace approval-stage tracker. Optional `status` narrows to one status
+     * (e.g. `draft`); omitted returns everything the student has created, newest first. */
+    async findMineForStudent(userId: string, options?: { status?: string }) {
+        const where: Record<string, unknown> = { creatorId: userId, isStudentCreated: true };
+        if (options?.status) {
+            where.status = options.status;
+        }
+        const rows = await this.opportunitiesRepository.find({
+            where: where as any,
+            order: { updatedAt: 'DESC' },
+        });
+
+        const items = rows.map((opp) => ({
+            id: opp.id,
+            title: opp.title,
+            status: this.getApiOpportunityStatus(opp),
+            ...this.getWorkflowResponseFields(opp),
+            requires_partner_approval: opp.requiresPartnerApproval,
+            admin_approved: opp.admin_approved === true,
+            rejection_reason: opp.rejectionReason ?? null,
+            created_at: opp.createdAt,
+            updated_at: opp.updatedAt,
+        }));
+
+        return { success: true, data: items };
+    }
+
+    /**
+     * Lightweight save for a student's in-progress opportunity draft — deliberately skips the
+     * strict validation `createStudentOpportunity` enforces (faculty email, safety declarations,
+     * etc.) since a draft is by definition incomplete. Never sends verification emails. Creates a
+     * new `status: 'draft'` row on first save (no `id`), then updates that same row on every
+     * subsequent save so the student always resumes into one record, not duplicates.
+     */
+    async saveStudentOpportunityDraft(userId: string, id: string | null, dto: Record<string, unknown>) {
+        const user = await this.usersRepository.findOne({ where: { id: userId } });
+        if (!user) throw new ForbiddenException('User not found');
+
+        const { draft: _draftFlag, id: _dtoId, ...fields } = dto as Record<string, unknown> & { draft?: unknown; id?: unknown };
+
+        if (id) {
+            const opportunity = await this.opportunitiesRepository.findOne({ where: { id } });
+            if (!opportunity) throw new NotFoundException('Draft not found');
+            if (opportunity.creatorId !== userId) {
+                throw new ForbiddenException('You do not have access to this draft');
+            }
+            Object.assign(opportunity, fields, { status: 'draft' });
+            const saved = await this.opportunitiesRepository.save(opportunity);
+            return { success: true, data: saved };
+        }
+
+        const payload: DeepPartial<Opportunity> = {
+            ...fields,
+            creatorId: user.id,
+            status: 'draft',
+            isStudentCreated: true,
+            visibility: 'restricted',
+        };
+        const opportunity = this.opportunitiesRepository.create(payload);
+        const saved = await this.opportunitiesRepository.save(opportunity);
+        return { success: true, data: saved };
     }
 
     async findAll(userId: string, filters: any) {

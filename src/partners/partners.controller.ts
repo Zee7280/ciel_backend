@@ -1,4 +1,4 @@
-import { Controller, Get, Body, Patch, UseGuards, Request, Post, UseInterceptors, UploadedFile, BadRequestException, Put, Delete, Param, Query } from '@nestjs/common';
+import { Controller, Get, Body, Patch, UseGuards, Request, Post, UseInterceptors, UploadedFile, BadRequestException, ForbiddenException, Put, Delete, Param, Query } from '@nestjs/common';
 import { UsersService } from '../users/users.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { UpdateOrganizationDto } from '../organizations/dto/organization.dto';
@@ -16,6 +16,7 @@ import { GetApplicantsDto } from './dto/get-applicants.dto';
 import { UpdateApplicantDto } from './dto/update-applicant.dto';
 import { StudentReportsService } from '../reports/student-reports.service';
 import { CommunityAwardService } from '../reports/community-award.service';
+import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
 import { NotifyCommunityAwardDto } from '../reports/dto/notify-community-award.dto';
 import { S3Service } from '../common/s3.service';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
@@ -33,6 +34,7 @@ export class PartnersController {
         private readonly s3Service: S3Service,
         private readonly opportunityApplicationsService: OpportunityApplicationsService,
         private readonly communityAward: CommunityAwardService,
+        private readonly facultyUniversityScope: FacultyUniversityScopeService,
     ) { }
 
     @Get('me')
@@ -153,6 +155,31 @@ export class PartnersController {
             scopeLabel: dto.scopeLabel || org?.name,
         });
         return { success: true, data };
+    }
+
+    @Get('community-service/faculty-representatives')
+    async communityFacultyRepresentatives(@Request() req) {
+        if (!req.user.organizationId) {
+            throw new BadRequestException('User is not linked to an organization');
+        }
+        const org = await this.organizationsService.getMyOrganization(req.user.id);
+        const isUni = String(org?.orgType || '').toLowerCase().includes('university');
+        if (!isUni) {
+            throw new ForbiddenException('Faculty representatives are only available for university organizations.');
+        }
+        const rows = await this.facultyUniversityScope.listForUniversityOrganization(req.user.organizationId);
+        return {
+            success: true,
+            data: rows.map((r) => ({
+                id: r.id,
+                faculty_user_id: r.facultyUser?.id,
+                faculty_email: r.facultyUser?.email,
+                faculty_name: r.facultyUser?.name,
+                faculty_department: r.facultyUser?.faculty_department || r.facultyUser?.department,
+                university_organization_name: r.universityOrganization?.name || org?.name,
+                created_at: r.createdAt,
+            })),
+        };
     }
 
     /** University-organization participation & verification analytics (403 for non-university orgs). */
@@ -378,12 +405,19 @@ export class PartnerAliasController {
         private readonly studentReportsService: StudentReportsService,
         private readonly opportunitiesService: OpportunitiesService,
         private readonly opportunityApplicationsService: OpportunityApplicationsService,
+        private readonly organizationsService: OrganizationsService,
+        private readonly facultyUniversityScope: FacultyUniversityScopeService,
     ) { }
 
     @Get('reports')
-    getReports(@Request() req, @Query() query: any) {
+    async getReports(@Request() req, @Query() query: any) {
         if (!req.user.organizationId) {
             throw new BadRequestException('User is not linked to an organization');
+        }
+        const org = await this.organizationsService.getMyOrganization(req.user.id);
+        if (org && this.facultyUniversityScope.isUniversityOrganization(org)) {
+            const ids = await this.facultyUniversityScope.resolveOpportunityIdsForUniversityOrganization(org.id);
+            return this.studentReportsService.findAllByOpportunityIds(ids, query);
         }
         return this.studentReportsService.findAll({
             ...query,

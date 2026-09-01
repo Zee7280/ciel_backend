@@ -15,6 +15,7 @@ function makeService(opportunitiesRepo: Partial<Record<string, jest.Mock>>) {
         noop, // notificationsService
         noop, // opportunityWorkflow
         noop, // opportunityApplicationsService
+        noop, // facultyUniversityScope
     );
 }
 

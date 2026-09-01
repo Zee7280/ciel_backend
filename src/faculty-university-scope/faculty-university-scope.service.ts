@@ -220,6 +220,14 @@ export class FacultyUniversityScopeService {
         });
     }
 
+    async listForUniversityOrganization(universityOrganizationId: string): Promise<FacultyUniversityScopeAssignment[]> {
+        return this.assignmentRepo.find({
+            where: { universityOrganization: { id: universityOrganizationId } },
+            relations: ['facultyUser', 'universityOrganization'],
+            order: { createdAt: 'DESC' },
+        });
+    }
+
     async canFacultyReviewApplicationAsUniversityDelegate(
         facultyUserId: string,
         studentUser: User | null | undefined,

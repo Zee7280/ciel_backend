@@ -2294,6 +2294,64 @@ export class StudentReportsService {
     };
   }
 
+  /** University dashboard: reports on institution-linked opportunities, not only org-owned listings. */
+  async findAllByOpportunityIds(opportunityIds: string[], query: any) {
+    const { status, page = 1, limit = 10 } = query;
+    const limitNum =
+      typeof limit === 'number'
+        ? limit
+        : Math.max(1, parseInt(String(limit), 10) || 10);
+    const pageNum =
+      typeof page === 'number'
+        ? page
+        : Math.max(1, parseInt(String(page), 10) || 1);
+    const skip = (pageNum - 1) * limitNum;
+
+    if (!opportunityIds.length) {
+      return {
+        success: true,
+        data: [],
+        pagination: { total: 0, page: pageNum, limit: limitNum, total_pages: 1 },
+      };
+    }
+
+    let reports = await this.studentReportsRepository.find({
+      where: { opportunity: { id: In(opportunityIds) } },
+      relations: ['student', 'opportunity', 'opportunity.organization'],
+      order: { submission_date: 'DESC', createdAt: 'DESC' },
+    });
+
+    if (status) {
+      const wanted = String(status).trim().toLowerCase();
+      reports = reports.filter((row) => {
+        const rowStatus = String(row.status ?? '').trim().toLowerCase();
+        const faculty = String(row.faculty_status ?? '').trim().toLowerCase();
+        if (wanted === 'approved') {
+          return (
+            ['approved', 'verified', 'partner_verified', 'paid'].includes(rowStatus) ||
+            faculty === 'approved'
+          );
+        }
+        return rowStatus === wanted;
+      });
+    }
+
+    const total = reports.length;
+    const paginated = reports.slice(skip, skip + limitNum);
+    const opportunityByProjectId = await this.loadOpportunitiesForReports(paginated);
+    const mapped = await this.mapReportListingsWithTeam(paginated, opportunityByProjectId);
+    return {
+      success: true,
+      data: mapped,
+      pagination: {
+        total,
+        page: pageNum,
+        limit: limitNum,
+        total_pages: Math.max(1, Math.ceil(total / limitNum)),
+      },
+    };
+  }
+
   async findOne(id: string) {
     const report = await this.studentReportsRepository.findOne({
       where: { id },

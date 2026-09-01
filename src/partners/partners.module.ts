@@ -7,6 +7,7 @@ import { OpportunitiesModule } from '../opportunities/opportunities.module';
 import { StudentsModule } from '../students/students.module';
 import { OrganizationMembershipModule } from '../organization-membership/organization-membership.module';
 import { CommunityAwardModule } from '../reports/community-award.module';
+import { FacultyUniversityScopeModule } from '../faculty-university-scope/faculty-university-scope.module';
 
 @Module({
     imports: [
@@ -17,6 +18,7 @@ import { CommunityAwardModule } from '../reports/community-award.module';
         StudentsModule,
         OrganizationMembershipModule,
         CommunityAwardModule,
+        FacultyUniversityScopeModule,
     ],
     controllers: [PartnersController, PartnerAliasController],
 })

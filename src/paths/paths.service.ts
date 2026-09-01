@@ -640,10 +640,28 @@ export class PathsService {
     return this.attachStudents(annotated);
   }
 
-  /** The university showcase deck — submitted reports from students linked to this university org,
-   * either formally (organizationId) or by the university name they entered in step 1. Same
-   * scoping approach as the university analytics endpoint, so the two stay consistent. */
-  async listCourseProjectsForUniversity(organizationId: string) {
+  /** Draft cards from students this teacher supervises — same scoping as
+   * listCourseProjectsForTeacher, but for records that haven't been submitted yet, so faculty can
+   * nudge stalled students. */
+  async listInProgressCourseProjectsForTeacher(teacherEmail: string) {
+    const email = teacherEmail.trim().toLowerCase();
+    if (!email) return [];
+    const entries = await this.courseProjectRepo.find({
+      where: { status: 'draft' },
+      order: { updatedAt: 'DESC' },
+    });
+    const matched = entries.filter(
+      (e) => (e.studentInfo?.teacherEmail || '').trim().toLowerCase() === email,
+    );
+    const annotated = await this.courseProjectAnnotate(matched);
+    return this.attachStudents(annotated);
+  }
+
+  /** The university showcase deck — reports from students linked to this university org, either
+   * formally (organizationId) or by the university name they entered in step 1. Same scoping
+   * approach as the university analytics endpoint, so the two stay consistent. Defaults to
+   * submitted-only (the existing showcase); pass 'draft' for the in-progress companion view. */
+  async listCourseProjectsForUniversity(organizationId: string, status: 'draft' | 'submitted' = 'submitted') {
     const org = await this.organizationsRepo.findOne({
       where: { id: organizationId },
     });
@@ -652,7 +670,7 @@ export class PathsService {
     const entries = await this.courseProjectRepo
       .createQueryBuilder('e')
       .leftJoin('users', 'u', 'u.id::text = e."userId"')
-      .where('e.status = :status', { status: 'submitted' })
+      .where('e.status = :status', { status })
       .andWhere(
         new Brackets((b) => {
           b.where('u."organizationId"::text = :orgId', { orgId: organizationId }).orWhere(

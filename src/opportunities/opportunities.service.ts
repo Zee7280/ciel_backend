@@ -30,6 +30,7 @@ import { Report } from '../reports/entities/report.entity';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import { Payment } from '../payments/entities/payment.entity';
 import { Timesheet } from '../timesheets/entities/timesheet.entity';
+import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
 
 @Injectable()
 export class OpportunitiesService {
@@ -48,6 +49,7 @@ export class OpportunitiesService {
         private notificationsService: NotificationsService,
         private readonly opportunityWorkflow: OpportunityWorkflowService,
         private readonly opportunityApplicationsService: OpportunityApplicationsService,
+        private readonly facultyUniversityScope: FacultyUniversityScopeService,
     ) { }
 
     private isValidEmail(email?: string) {
@@ -1864,7 +1866,14 @@ export class OpportunitiesService {
             return [];
         }
 
-        if (filterOrgId && filterPartnerEmail) {
+        const useUniversityScope =
+            filters.partner_id === 'me' && org && this.facultyUniversityScope.isUniversityOrganization(org);
+
+        if (useUniversityScope) {
+            const uniIds = await this.facultyUniversityScope.resolveOpportunityIdsForUniversityOrganization(org.id);
+            if (!uniIds.length) return [];
+            query.andWhere('opportunity.id IN (:...uniIds)', { uniIds });
+        } else if (filterOrgId && filterPartnerEmail) {
             // Org-owned opportunities OR student-submitted opportunities that mention this partner's email
             query.andWhere(
                 `(opportunity."organizationId" = :orgId`

@@ -83,6 +83,15 @@ export class PathsController {
         return { success: true, data };
     }
 
+    /** Draft cards from students who named this teacher as their supervisor but haven't submitted yet. */
+    @Get('course-projects/in-progress')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.FACULTY)
+    async listInProgressSupervisedCourseProjects(@Request() req) {
+        const data = await this.pathsService.listInProgressCourseProjectsForTeacher(req.user.email);
+        return { success: true, data };
+    }
+
     /** Faculty approve/reject a submitted student's Course Project entry — the gate for Merit Model ranking/showcase eligibility. */
     @Patch('course-projects/:id/faculty-review')
     @UseGuards(RolesGuard)
@@ -92,12 +101,13 @@ export class PathsController {
         return { success: true, data };
     }
 
-    /** Cards from students linked to this university partner org — the university showcase deck. */
+    /** Cards from students linked to this university partner org — the university showcase deck.
+     * Defaults to submitted-only; pass ?status=draft for the in-progress companion view. */
     @Get('course-projects/university')
     @UseGuards(RolesGuard)
     @Roles(UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN)
-    async listUniversityCourseProjects(@Request() req) {
-        const data = await this.pathsService.listCourseProjectsForUniversity(req.user.organizationId);
+    async listUniversityCourseProjects(@Request() req, @Query('status') status?: 'draft' | 'submitted') {
+        const data = await this.pathsService.listCourseProjectsForUniversity(req.user.organizationId, status);
         return { success: true, data };
     }
 

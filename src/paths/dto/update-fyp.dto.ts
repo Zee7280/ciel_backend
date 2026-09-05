@@ -73,6 +73,16 @@ export class FypProjectInfoDto {
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) projectType?: string;
   @IsOptional() @IsArray() @ArrayMaxSize(LIST_MAX) @IsString({ each: true }) @MaxLength(FREE_TEXT_MAX, { each: true }) projectTypes?: string[];
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) leadRoute?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) academicAreaKey?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) academicArea?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) discipline?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) officialProgram?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) academicLevel?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) teamType?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) teamRole?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) v9Route?: string;
+  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) v9RouteOther?: string;
+  @IsOptional() v9Form?: Record<string, unknown>;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) studentName?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) studentEmail?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) rollNumber?: string;
@@ -177,6 +187,8 @@ export class FypRouteDetailsDto {
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) recommendationStatus?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) discussion?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) conclusion?: string;
+  @IsOptional() v9Pathway?: Record<string, unknown>;
+  @IsOptional() v9Roadmap?: { stage?: string; goal?: string }[];
 }
 export class FypSdgEntryDto {
   @IsNumber() goalNumber: number;

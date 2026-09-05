@@ -110,14 +110,23 @@ export class PathsService {
     const toInvite = emails.filter((e) => !existingEmails.has(e));
     for (const email of toInvite) {
       try {
+        const existingUser = await this.usersRepo.findOne({
+          where: { email },
+          select: ['id', 'role'],
+        });
+        const autoConnect =
+          !!existingUser?.id && existingUser.role === UserRole.STUDENT;
         const invite = this.teamMemberInviteRepo.create({
           kind,
           entryId,
           email,
           token: randomUUID(),
-          status: 'pending',
+          status: autoConnect ? 'accepted' : 'pending',
           invitedByUserId,
           expiresAt: new Date(Date.now() + PathsService.INVITE_TTL_MS),
+          ...(autoConnect
+            ? { acceptedByUserId: existingUser.id, acceptedAt: new Date() }
+            : {}),
         });
         await this.teamMemberInviteRepo.save(invite);
         await this.mailService.sendPathTeamInvite(email, {
@@ -535,27 +544,21 @@ export class PathsService {
       )
     )`;
 
-  /** A teammate only sees the report once it's submitted (not a mid-draft in progress) — same
-   * "visible once official" moment as Community Service's team members (there it's approval;
-   * here, since there's no separate approval step, submission is the equivalent trigger). */
-  private static readonly TEAM_VISIBLE_STATUS = `e.status = 'submitted'`;
-
   /** One student can have many coursework reports (one per assignment) — this is their own deck, plus any
-   * teammate's *submitted* report they were named on by email and have accepted. */
+   * teammate's report they were named on by email and have accepted (drafts included so the team
+   * can finish the same in-progress record together). */
   async listCourseProjects(userId: string, userEmail?: string) {
     const email = (userEmail || '').trim().toLowerCase();
     const qb = this.courseProjectRepo
       .createQueryBuilder('e')
       .where('e."userId" = :userId', { userId });
     if (email) {
-      qb.orWhere(
-        `(${PathsService.TEAM_VISIBLE_STATUS} AND ${PathsService.TEAM_MEMBER_EMAIL_MATCH})`,
-        { teamEmail: email },
-      );
+      qb.orWhere(`(${PathsService.TEAM_MEMBER_EMAIL_MATCH})`, { teamEmail: email });
     }
     const entries = await qb.orderBy('e."updatedAt"', 'DESC').getMany();
     const annotated = await this.courseProjectAnnotate(entries);
-    return annotated.map((e) => ({ ...e, isOwner: e.userId === userId }));
+    const withRanks = await this.attachLiveCourseworkRanks(annotated);
+    return withRanks.map((e) => ({ ...e, isOwner: e.userId === userId }));
   }
 
   async createCourseProject(userId: string) {
@@ -565,8 +568,8 @@ export class PathsService {
     return { ...saved, isOwner: true };
   }
 
-  /** Owner gets full access at any stage; a named team member who has accepted their invite can
-   * only read it once submitted. */
+  /** Owner gets full access at any stage; a named team member who has accepted (or was auto-connected
+   * as a registered student) can read and edit the same record, including drafts. */
   async getCourseProjectByIdForUser(userId: string, userEmail: string, id: string) {
     const email = (userEmail || '').trim().toLowerCase();
     const qb = this.courseProjectRepo
@@ -576,43 +579,60 @@ export class PathsService {
         new Brackets((b) => {
           b.where('e."userId" = :userId', { userId });
           if (email) {
-            b.orWhere(
-              `(${PathsService.TEAM_VISIBLE_STATUS} AND ${PathsService.TEAM_MEMBER_EMAIL_MATCH})`,
-              { teamEmail: email },
-            );
+            b.orWhere(`(${PathsService.TEAM_MEMBER_EMAIL_MATCH})`, { teamEmail: email });
           }
         }),
       );
     const entry = await qb.getOne();
     if (!entry) throw new NotFoundException('Course project entry not found');
     const [annotated] = await this.courseProjectAnnotate([entry]);
-    return { ...annotated, isOwner: entry.userId === userId };
+    const [withRank] = await this.attachLiveCourseworkRanks([annotated]);
+    return { ...withRank, isOwner: entry.userId === userId };
+  }
+
+  private async canEditCourseProject(
+    entry: CourseProjectEntry,
+    userId: string,
+    userEmail?: string,
+  ): Promise<boolean> {
+    if (entry.userId === userId) return true;
+    const email = (userEmail || '').trim().toLowerCase();
+    if (!email) return false;
+    if (!this.extractMemberEmails(entry.studentInfo?.groupMembers).includes(email)) {
+      return false;
+    }
+    const invite = await this.teamMemberInviteRepo.findOne({
+      where: { kind: 'course_project', entryId: entry.id, email, status: 'accepted' },
+    });
+    return !!invite;
   }
 
   async updateCourseProjectByIdForUser(
     userId: string,
     id: string,
     dto: UpdateCourseProjectDto,
+    userEmail?: string,
   ) {
     // Same locked read-modify-write as upsertCourseProject — see comment there.
     let notify: 'first_submission' | 'resubmission' | null = null;
     const saved = await this.courseProjectRepo.manager.transaction(async (manager) => {
       const repo = manager.getRepository(CourseProjectEntry);
       const entry = await repo.findOne({
-        where: { id, userId },
+        where: { id },
         lock: { mode: 'pessimistic_write' },
       });
-      if (!entry)
+      if (!entry) throw new NotFoundException('Course project entry not found');
+      if (!(await this.canEditCourseProject(entry, userId, userEmail))) {
         throw new NotFoundException('Course project entry not found');
-      // where: {id, userId} above means this only ever succeeds for the owner.
+      }
       const patched = this.applyCourseProjectPatch(entry, dto);
       notify = patched.notify;
       return repo.save(patched.entry);
     });
-    await this.syncCourseProjectInvites(saved, userId);
+    await this.syncCourseProjectInvites(saved, saved.userId);
     await this.notifyCourseworkTransition(saved, notify);
     const [annotated] = await this.courseProjectAnnotate([saved]);
-    return { ...annotated, isOwner: true };
+    return { ...annotated, isOwner: saved.userId === userId };
   }
 
   async deleteCourseProjectByIdForUser(userId: string, id: string) {
@@ -637,7 +657,7 @@ export class PathsService {
       (e) => (e.studentInfo?.teacherEmail || '').trim().toLowerCase() === email,
     );
     const annotated = await this.courseProjectAnnotate(matched);
-    return this.attachStudents(annotated);
+    return this.attachStudents(await this.attachLiveCourseworkRanks(annotated));
   }
 
   /** Draft cards from students this teacher supervises — same scoping as
@@ -682,7 +702,7 @@ export class PathsService {
       .orderBy('e."updatedAt"', 'DESC')
       .getMany();
     const annotated = await this.courseProjectAnnotate(entries);
-    return this.attachStudents(annotated);
+    return this.attachStudents(await this.attachLiveCourseworkRanks(annotated));
   }
 
   async listCourseProjectsForAdmin(status?: 'draft' | 'submitted') {
@@ -692,7 +712,9 @@ export class PathsService {
     });
     if (!entries.length) return [];
 
-    const annotated = await this.courseProjectAnnotate(entries);
+    const annotated = await this.attachLiveCourseworkRanks(
+      await this.courseProjectAnnotate(entries),
+    );
     const users = await this.usersRepo.find({
       where: { id: In(entries.map((e) => e.userId)) },
       select: ['id', 'name', 'email', 'institution', 'department'],
@@ -711,12 +733,71 @@ export class PathsService {
   async getCourseProjectForAdmin(id: string) {
     const entry = await this.courseProjectRepo.findOne({ where: { id } });
     if (!entry) throw new NotFoundException('Course project entry not found');
-    const [annotated] = await this.courseProjectAnnotate([entry]);
+    const [annotated] = await this.attachLiveCourseworkRanks(
+      await this.courseProjectAnnotate([entry]),
+    );
     const student = await this.usersRepo.findOne({
       where: { id: entry.userId },
       select: ['id', 'name', 'email', 'institution', 'department'],
     });
     return { ...annotated, student: student ?? null };
+  }
+
+  /** Live rank preview for approved cards that do not yet have a published meritRibbon.
+   * Published faculty/university ribbons stay untouched. Rank is computed in-memory from the
+   * same rubric as the Merit Model and never persisted. */
+  private async attachLiveCourseworkRanks<T extends CourseProjectEntry>(
+    entries: T[],
+  ): Promise<T[]> {
+    const needRank = entries.filter(
+      (e) =>
+        e.status === 'submitted' &&
+        e.facultyApprovalStatus === 'approved' &&
+        !e.meritRibbon,
+    );
+    if (!needRank.length) return entries;
+
+    const pool = await this.courseProjectRepo.find({
+      where: { status: 'submitted', facultyApprovalStatus: 'approved' },
+    });
+    const groups = new Map<string, CourseProjectEntry[]>();
+    for (const e of pool) {
+      const key =
+        (e.studentInfo?.universityName || '').trim().toLowerCase() || '__ciel__';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(e);
+    }
+
+    const liveById = new Map<
+      string,
+      NonNullable<CourseProjectEntry['meritRibbon']>
+    >();
+    for (const [key, group] of groups) {
+      const ranked = group.map((e) => computeMeritCard(e)).sort(byMerit);
+      const of = ranked.length;
+      const scope =
+        key === '__ciel__'
+          ? 'CIEL PK live'
+          : `${group[0]?.studentInfo?.universityName || 'University'} live`;
+      ranked.forEach((card, i) => {
+        const rank = i + 1;
+        liveById.set(card.id, {
+          rank,
+          of,
+          scope,
+          total: card.scorecard.total,
+          badgeLevel: PathsService.computeRankBadgeLevel(rank, of),
+          previousRank: null,
+          at: new Date().toISOString(),
+        });
+      });
+    }
+
+    return entries.map((e) => {
+      if (e.meritRibbon) return e;
+      const live = liveById.get(e.id);
+      return live ? { ...e, meritRibbon: live } : e;
+    });
   }
 
   /** The Merit Model — 100pt, 7-criterion rubric ranking of eligible (submitted + faculty-approved)

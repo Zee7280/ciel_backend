@@ -68,6 +68,8 @@ export interface FypTeamMember {
   email?: string;
   role?: string;
   rollNumber?: string;
+  whatsappCode?: string;
+  whatsappNumber?: string;
   /** Server-computed from team_member_invites — 'accepted' only once the named co-author has
    * clicked their emailed invite link while signed in with this exact email. Ignored on write. */
   inviteStatus?: 'pending' | 'accepted';
@@ -98,6 +100,16 @@ export interface FypProjectInfo {
   supervisorEmail?: string;
   coSupervisorName?: string;
   coSupervisorEmail?: string;
+  academicAreaKey?: string;
+  academicArea?: string;
+  discipline?: string;
+  officialProgram?: string;
+  academicLevel?: string;
+  teamType?: string;
+  teamRole?: string;
+  v9Route?: string;
+  v9RouteOther?: string;
+  v9Form?: Record<string, unknown>;
 }
 export interface FypBackgroundInfo {
   problem?: string;
@@ -196,6 +208,8 @@ export interface FypRouteDetails {
   // scholar route — discussion & conclusion (the HEC thesis chain's closing step)
   discussion?: string;
   conclusion?: string;
+  v9Pathway?: Record<string, unknown>;
+  v9Roadmap?: { stage?: string; goal?: string }[];
 }
 export interface FypSdgEntry {
   goalNumber: number;

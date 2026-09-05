@@ -26,7 +26,10 @@ export class FacultyUniversityScopeService {
         private readonly opportunityRepo: Repository<Opportunity>,
     ) {}
 
-    isUniversityOrganization(org: Organization): boolean {
+    /** Only reads orgType, so it accepts any org-shaped object — including the sensitive-field-filtered
+     * shape OrganizationsService.getMyOrganization() returns (verifiedBy/verificationNotes/isBlocked
+     * stripped for privacy), which callers like Opportunities/Partners pass in without the full entity. */
+    isUniversityOrganization(org: Pick<Organization, 'orgType'>): boolean {
         return String(org.orgType || '')
             .trim()
             .toLowerCase()

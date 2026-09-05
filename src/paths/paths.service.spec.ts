@@ -87,6 +87,29 @@ describe('PathsService — team member invites', () => {
         );
     });
 
+    it('auto-connects a registered student teammate so they can see the in-progress report without waiting on the email link', async () => {
+        const usersRepo = {
+            findOne: jest.fn().mockResolvedValue({ id: 'bob-1', role: 'student' }),
+        };
+        const { service, inviteRepo, mailService } = makeService();
+        (service as any).usersRepo = usersRepo;
+
+        await (service as any).syncTeamInvites(
+            'course_project',
+            'entry-1',
+            'user-1',
+            'Ada',
+            'Course Project',
+            'My Report',
+            [{ name: 'Bob', email: 'bob@test.com' }],
+        );
+
+        expect(inviteRepo.rows).toHaveLength(1);
+        expect(inviteRepo.rows[0].status).toBe('accepted');
+        expect(inviteRepo.rows[0].acceptedByUserId).toBe('bob-1');
+        expect(mailService.sendPathTeamInvite).toHaveBeenCalledTimes(1);
+    });
+
     it('does not re-invite (or re-send mail for) an email already invited for the same entry', async () => {
         const { service, inviteRepo, mailService } = makeService();
         const args: [string, string, string, string, string, string, unknown[]] = [
@@ -530,6 +553,72 @@ describe('PathsService — coursework submit/resubmit emails', () => {
 
         await service.updateCourseProjectByIdForUser('student-1', 'entry-1', { addedNote: 'fixed again' } as any);
         expect(mailService.sendCourseworkResubmittedForReview).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('PathsService — coursework team-member edit', () => {
+    const makeTeamEditService = () => {
+        const inviteRepo = makeInviteRepo();
+        inviteRepo.rows.push({
+            kind: 'course_project',
+            entryId: 'entry-1',
+            email: 'bob@test.com',
+            status: 'accepted',
+        });
+        const rows: Record<string, unknown>[] = [
+            {
+                id: 'entry-1',
+                userId: 'owner-1',
+                status: 'draft',
+                studentInfo: { groupMembers: [{ name: 'Bob', email: 'bob@test.com' }] },
+            },
+        ];
+        const manager = {
+            getRepository: () => ({
+                findOne: jest.fn(async () => rows[0] ?? null),
+                save: jest.fn(async (row: Record<string, unknown>) => {
+                    rows[0] = row;
+                    return row;
+                }),
+            }),
+        };
+        const service = new PathsService(
+            { manager: { transaction: jest.fn(async (fn: (m: unknown) => unknown) => fn(manager)) } } as any,
+            {} as any,
+            {} as any,
+            inviteRepo as any,
+            { findOne: jest.fn() } as any,
+            {} as any,
+            {
+                sendCourseworkSubmittedForReview: jest.fn(),
+                sendCourseworkSubmissionConfirmation: jest.fn(),
+                sendCourseworkResubmittedForReview: jest.fn(),
+            } as any,
+            { createNotification: jest.fn() } as any,
+            {} as any,
+        );
+        jest.spyOn(service as any, 'syncCourseProjectInvites').mockResolvedValue(undefined);
+        jest.spyOn(service as any, 'courseProjectAnnotate').mockImplementation(async (entries: unknown) => entries as any);
+        return { service };
+    };
+
+    it('lets an accepted teammate patch the same draft', async () => {
+        const { service } = makeTeamEditService();
+        const saved = await service.updateCourseProjectByIdForUser(
+            'bob-1',
+            'entry-1',
+            { addedNote: 'from teammate' } as any,
+            'bob@test.com',
+        );
+        expect((saved as any).addedNote).toBe('from teammate');
+        expect((saved as any).isOwner).toBe(false);
+    });
+
+    it('rejects a stranger who is not on the team', async () => {
+        const { service } = makeTeamEditService();
+        await expect(
+            service.updateCourseProjectByIdForUser('eve-1', 'entry-1', { addedNote: 'nope' } as any, 'eve@test.com'),
+        ).rejects.toBeInstanceOf(NotFoundException);
     });
 });
 

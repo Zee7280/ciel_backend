@@ -25,8 +25,22 @@ function monthsBetween(a?: string | null, b?: string | null): number {
 
 /** The route the caller's leadRoute (or first project type) resolves to — falls back to 'scholar'. */
 export function deriveFypRoute(entry: FypEntry): string {
-    const projectInfo = entry.projectInfo;
-    if (projectInfo?.leadRoute) return projectInfo.leadRoute;
+    const projectInfo = entry.projectInfo as {
+        v9Route?: string;
+        leadRoute?: string;
+        projectTypes?: string[];
+        projectType?: string;
+    } | null | undefined;
+    const v9 = projectInfo?.v9Route;
+    if (v9 === 'research' || v9 === 'legal' || v9 === 'theory' || v9 === 'clinical') return 'scholar';
+    if (v9 === 'prototype' || v9 === 'design' || v9 === 'creative') return 'maker';
+    if (v9 === 'software') return 'builder';
+    if (v9 === 'media') return 'storyteller';
+    if (v9 === 'business' || v9 === 'field') return 'consultant';
+    if (projectInfo?.leadRoute) {
+        const lead = projectInfo.leadRoute;
+        if (['scholar', 'maker', 'builder', 'storyteller', 'consultant'].includes(lead)) return lead;
+    }
     const typeLabel = projectInfo?.projectTypes?.[0] || projectInfo?.projectType;
     if (!typeLabel) return 'scholar';
     return TYPE_TO_ROUTE[stripEmojiPrefix(typeLabel)] || 'scholar';

@@ -57,7 +57,7 @@ export class PathsController {
     }
 
     /** A student's full coursework deck — every report they've submitted or drafted, plus any
-     * teammate's submitted report they were named on in step 1. */
+     * teammate's report they were named on in step 1 (including drafts they can co-edit). */
     @Get('course-projects')
     @UseGuards(RolesGuard)
     @Roles(UserRole.STUDENT)
@@ -142,7 +142,12 @@ export class PathsController {
     @UseGuards(RolesGuard)
     @Roles(UserRole.STUDENT)
     async updateCourseProjectById(@Request() req, @Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateCourseProjectDto) {
-        const data = await this.pathsService.updateCourseProjectByIdForUser(req.user.id, id, dto);
+        const data = await this.pathsService.updateCourseProjectByIdForUser(
+            req.user.id,
+            id,
+            dto,
+            req.user.email,
+        );
         return { success: true, data };
     }
 

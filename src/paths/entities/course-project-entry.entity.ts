@@ -5,6 +5,10 @@ export interface CourseProjectGroupMember {
     name: string;
     email?: string;
     rollNumber?: string;
+    /** Optional — lets the owner's "WhatsApp" nudge button link straight to this teammate's chat
+     * instead of a generic share sheet. Same shape as FypTeamMember's fields. */
+    whatsappCode?: string;
+    whatsappNumber?: string;
     /** Server-computed from team_member_invites — 'accepted' only once the named teammate has
      * clicked their emailed invite link while signed in with this exact email. Ignored on write. */
     inviteStatus?: 'pending' | 'accepted';

@@ -2828,6 +2828,17 @@ export class StudentReportsService {
         report.status =
           report.admin_status === 'approved' ? 'verified' : 'partner_verified';
       } else if (role === 'admin') {
+        // Same "Faculty is the sole final report approver" rule enforced above for partners
+        // (see comment on the isPartnerReviewer branch) — Admin approving directly, without
+        // Faculty sign-off, silently produced reports that pass the admin/status live-card
+        // checks but fail the community-award eligibility gate (which does require
+        // faculty_status === 'approved'), showing up on the Approved deck with a fabricated
+        // 0/100 score. Blocking it here keeps every approval path behind the same gate.
+        if (report.faculty_status !== 'approved') {
+          throw new ForbiddenException(
+            'This report is not yet approved by Faculty. Admin can view its status and send a reminder, but only Faculty can approve or reject a Community Service report first.',
+          );
+        }
         report.admin_status = 'approved';
         report.adminApprovedAt = decisionStamp;
         const requiresPartner =

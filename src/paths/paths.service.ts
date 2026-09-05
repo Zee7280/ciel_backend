@@ -1284,7 +1284,7 @@ export class PathsService {
   /** The university showcase deck — submitted FYP records from students formally affiliated with
    * this university org (via their account's organizationId). Unlike Course Project, FYP has no
    * free-text university-name field on the entry itself to fall back on. */
-  async listFypForUniversity(organizationId: string) {
+  async listFypForUniversity(organizationId: string, status: 'draft' | 'submitted' = 'submitted') {
     const org = await this.organizationsRepo.findOne({
       where: { id: organizationId },
     });
@@ -1292,7 +1292,7 @@ export class PathsService {
     const entries = await this.fypRepo
       .createQueryBuilder('e')
       .leftJoin('users', 'u', 'u.id::text = e."userId"')
-      .where('e.status = :status', { status: 'submitted' })
+      .where('e.status = :status', { status })
       .andWhere('u."organizationId"::text = :orgId', { orgId: organizationId })
       .orderBy('e."updatedAt"', 'DESC')
       .getMany();

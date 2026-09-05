@@ -198,8 +198,8 @@ export class PathsController {
     @Get('fyp-thesis/university')
     @UseGuards(RolesGuard)
     @Roles(UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN)
-    async listUniversityFyp(@Request() req) {
-        const data = await this.pathsService.listFypForUniversity(req.user.organizationId);
+    async listUniversityFyp(@Request() req, @Query('status') status?: 'draft' | 'submitted') {
+        const data = await this.pathsService.listFypForUniversity(req.user.organizationId, status);
         return { success: true, data };
     }
 

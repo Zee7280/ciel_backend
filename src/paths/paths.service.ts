@@ -1244,9 +1244,11 @@ export class PathsService {
     )`;
 
   /** FYP is one record per student — a co-author with no record of their own sees the lead's
-   * *submitted* record on their own dashboard instead (read-only), same "visible once official"
-   * trigger as Course Project's team-sharing, gated on a real accepted invite. A student's own
-   * record always takes priority. */
+   * record on their own dashboard instead (read-only), same drafts-included visibility as
+   * Course Project's team-sharing (listCourseProjects), gated on a real accepted invite. A
+   * teammate added while the lead is still drafting should be able to track progress, not wait
+   * until submission to even discover the record exists. A student's own record always takes
+   * priority. */
   async getFyp(userId: string, userEmail?: string) {
     const own = await this.fypRepo.findOne({ where: { userId } });
     if (own) {
@@ -1257,8 +1259,7 @@ export class PathsService {
     if (!email) return null;
     const shared = await this.fypRepo
       .createQueryBuilder('e')
-      .where(`e.status = 'submitted'`)
-      .andWhere(PathsService.FYP_TEAM_MEMBER_EMAIL_MATCH, { teamEmail: email })
+      .where(PathsService.FYP_TEAM_MEMBER_EMAIL_MATCH, { teamEmail: email })
       .getOne();
     if (!shared) return null;
     const [annotated] = await this.fypAnnotate([shared]);

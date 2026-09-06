@@ -79,15 +79,26 @@ export class PathsService {
   /** Pulls valid-looking, deduped emails out of a groupMembers/teamMembers/team array — entries
    * may be a plain legacy string (no email) or an object with an optional email field. */
   private extractMemberEmails(members: unknown[] | undefined | null): string[] {
+    return this.extractMemberEmailAndName(members).map((m) => m.email);
+  }
+
+  /** Same extraction as extractMemberEmails, but keeps each member's own declared name alongside
+   * their email — lets the invite email greet them by name ("Dear Fatima,") instead of generically. */
+  private extractMemberEmailAndName(members: unknown[] | undefined | null): { email: string; name: string | null }[] {
     if (!members?.length) return [];
-    const emails = new Set<string>();
+    const byEmail = new Map<string, string | null>();
     for (const m of members) {
       if (m && typeof m === 'object' && 'email' in (m as Record<string, unknown>)) {
         const raw = (m as { email?: unknown }).email;
-        if (typeof raw === 'string' && raw.trim()) emails.add(raw.trim().toLowerCase());
+        if (typeof raw === 'string' && raw.trim()) {
+          const email = raw.trim().toLowerCase();
+          const rawName = (m as { name?: unknown }).name;
+          const name = typeof rawName === 'string' && rawName.trim() ? rawName.trim() : null;
+          if (!byEmail.has(email) || name) byEmail.set(email, name ?? byEmail.get(email) ?? null);
+        }
       }
     }
-    return [...emails];
+    return [...byEmail.entries()].map(([email, name]) => ({ email, name }));
   }
 
   /** Fires a real, verifiable invite email to any newly-named team member with an email that
@@ -103,12 +114,12 @@ export class PathsService {
     title: string,
     members: unknown[] | undefined | null,
   ): Promise<void> {
-    const emails = this.extractMemberEmails(members);
-    if (!emails.length) return;
+    const members2 = this.extractMemberEmailAndName(members);
+    if (!members2.length) return;
     const existing = await this.teamMemberInviteRepo.find({ where: { kind, entryId } });
     const existingEmails = new Set(existing.map((i) => i.email));
-    const toInvite = emails.filter((e) => !existingEmails.has(e));
-    for (const email of toInvite) {
+    const toInvite = members2.filter((m) => !existingEmails.has(m.email));
+    for (const { email, name } of toInvite) {
       try {
         const existingUser = await this.usersRepo.findOne({
           where: { email },
@@ -130,6 +141,7 @@ export class PathsService {
         });
         await this.teamMemberInviteRepo.save(invite);
         await this.mailService.sendPathTeamInvite(email, {
+          memberName: name ?? undefined,
           inviterName,
           kindLabel,
           title,
@@ -392,7 +404,7 @@ export class PathsService {
     try {
       if (transition === 'first_submission') {
         if (teacherEmail) {
-          await this.mailService.sendCourseworkSubmittedForReview(teacherEmail, studentName, title);
+          await this.mailService.sendCourseworkSubmittedForReview(teacherEmail, studentName, title, entry.studentInfo?.teacherName?.trim() || undefined);
         }
         const student = await this.usersRepo.findOne({ where: { id: entry.userId }, select: ['email'] });
         if (student?.email) {
@@ -417,16 +429,11 @@ export class PathsService {
     const title = entry.projectTitle || entry.course || 'Untitled coursework';
     const teacherEmail = (entry.studentInfo?.teacherEmail || '').trim();
     const teacherName = entry.studentInfo?.teacherName?.trim() || 'there';
-    const universityName = entry.studentInfo?.universityName?.trim() || undefined;
     try {
       if (teacherEmail) {
-        await this.mailService.sendPathProjectConnectedToFaculty(teacherEmail, teacherName, studentName, 'Coursework', title, '/dashboard/faculty/coursework-projects');
+        await this.mailService.sendPathProjectConnectedToFaculty(teacherEmail, teacherName, studentName, 'Coursework', title, '/dashboard/faculty/coursework-projects', 'Opportunity');
       }
-      const student = await this.usersRepo.findOne({ where: { id: entry.userId }, select: ['email'] });
-      if (student?.email) {
-        await this.mailService.sendPathProjectConnectedToStudent(student.email, studentName.split(' ')[0], 'Coursework', title, teacherEmail ? teacherName : undefined, universityName);
-      }
-      await this.mailService.sendPathProjectConnectedToCielPk(studentName, teacherEmail ? teacherName : undefined, universityName, 'Coursework', title);
+      await this.mailService.sendPathProjectConnectedToCielPk(studentName, teacherEmail ? teacherName : undefined, entry.studentInfo?.universityName?.trim() || undefined, 'Coursework', title, 'Opportunity');
     } catch (err) {
       this.logger.warn(`Coursework connection email failed for ${entry.id}: ${(err as Error).message}`);
     }
@@ -1411,16 +1418,11 @@ export class PathsService {
     const title = entry.projectTitle || pi.title || 'Untitled FYP';
     const supervisorEmail = (pi.supervisorEmail || '').trim();
     const supervisorName = pi.supervisorName?.trim() || 'there';
-    const universityName = pi.university?.trim() || undefined;
     try {
       if (supervisorEmail) {
         await this.mailService.sendPathProjectConnectedToFaculty(supervisorEmail, supervisorName, studentName, 'Final Year Project', title, '/dashboard/faculty/fyp-thesis');
       }
-      const student = await this.usersRepo.findOne({ where: { id: entry.userId }, select: ['email'] });
-      if (student?.email) {
-        await this.mailService.sendPathProjectConnectedToStudent(student.email, studentName.split(' ')[0], 'Final Year Project', title, supervisorEmail ? supervisorName : undefined, universityName);
-      }
-      await this.mailService.sendPathProjectConnectedToCielPk(studentName, supervisorEmail ? supervisorName : undefined, universityName, 'Final Year Project', title);
+      await this.mailService.sendPathProjectConnectedToCielPk(studentName, supervisorEmail ? supervisorName : undefined, pi.university?.trim() || undefined, 'Final Year Project', title);
     } catch (err) {
       this.logger.warn(`FYP connection email failed for ${entry.id}: ${(err as Error).message}`);
     }

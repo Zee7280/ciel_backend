@@ -36,7 +36,7 @@ function fixture(overrides: Partial<CourseProjectEntry>): CourseProjectEntry {
 }
 
 describe('merit-model.util', () => {
-    it('scores a rich, measured, well-evidenced entry as EXEMPLARY/STRONG with a rich & credible profile', () => {
+    it('scores a rich, measured, well-evidenced entry Good or better with a rich & credible profile', () => {
         const entry = fixture({
             assignmentFileUrl: 'https://files.example.com/report.pdf',
             evidenceUrls: ['https://files.example.com/evidence.pdf'],
@@ -76,32 +76,32 @@ describe('merit-model.util', () => {
         const card = computeMeritCard(entry);
 
         expect(card.scorecard.total).toBeGreaterThanOrEqual(70);
-        expect(['EXEMPLARY', 'STRONG']).toContain(card.grade.label);
+        expect(['OUTSTANDING', 'EXCELLENT', 'VERY GOOD', 'GOOD']).toContain(card.grade.label);
         expect(card.qualityProfile.badge.label).toBe('RICH & CREDIBLE');
-        expect(card.scorecard.honesty.flag).toContain('✅');
+        expect(card.scorecard.integrityFlag).toContain('✅');
     });
 
-    it('never fabricates a deduction for honesty when there is nothing to classify (no metrics)', () => {
+    it('never lets a missing metric-status crash reflection/method scoring (no metrics)', () => {
         const entry = fixture({
             resultsInfo: { measured: 'Not yet' },
             reflectionInfo: { integrationLevel: 'Partially integrated' },
         });
         const card = computeMeritCard(entry);
-        // numOk should default to 1 (nothing to misclassify) — honesty floor is lim*4 + 1*4 + 3, never zeroed by numOk.
-        expect(card.scorecard.honesty.pts).toBeGreaterThanOrEqual(7);
+        // numOk should default to 1 (nothing to misclassify) — method's numOk*5 term is never zeroed by a missing metric.
+        expect(card.scorecard.method.pts).toBeGreaterThanOrEqual(5);
     });
 
-    it('honestly declared "not applicable" SDG scores the sustainability anchor low without crashing', () => {
+    it('honestly declared "not applicable" SDG scores the sustainability criterion low without crashing', () => {
         const entry = fixture({
             sdgMapping: { notApplicable: true, origin: '📋 Built into the assignment' },
         });
         const card = computeMeritCard(entry);
         expect(card.sdg.goalNumber).toBeUndefined();
-        expect(card.scorecard.sdg.pts).toBeLessThan(10);
+        expect(card.scorecard.sustainability.pts).toBeLessThan(6);
         expect(card.scorecard.total).toBeGreaterThanOrEqual(0);
     });
 
-    it('flags the consistency check when integration claims "central & demonstrated" but evidence is low', () => {
+    it('flags the consistency check (a safeguard, not a scored deduction) when integration claims "central & demonstrated" but evidence is low', () => {
         const entry = fixture({
             resultsInfo: { measured: '⏳ Not yet — will be measured later' },
             sdgMapping: {
@@ -111,8 +111,8 @@ describe('merit-model.util', () => {
             reflectionInfo: { integrationLevel: '🌱 Central to the work and demonstrated' },
         });
         const card = computeMeritCard(entry);
-        expect(card.scorecard.honesty.flag).toContain('⚠️');
-        expect(card.scorecard.honesty.flag).toContain('4 points deducted');
+        expect(card.scorecard.integrityFlag).toContain('⚠️');
+        expect(card.scorecard.integrityFlag).toContain('not scored');
     });
 
     it('a thin but honestly-evidenced entry is scored LEAN BUT CREDIBLE, not penalized to zero', () => {
@@ -132,7 +132,7 @@ describe('merit-model.util', () => {
         });
         const card = computeMeritCard(entry);
         expect(card.scorecard.total).toBeGreaterThan(0);
-        expect(card.scorecard.honesty.pts).toBeGreaterThan(0);
+        expect(card.scorecard.analysis.pts).toBeGreaterThan(0);
     });
 
     // Regression tests for the coursework-final-form (5).html vocabulary audit — these pin down
@@ -150,9 +150,10 @@ describe('merit-model.util', () => {
         expect(inputs.orig).toBe('Introduced by the student / team');
         expect(inputs.integ).toBe('Central to the work and demonstrated');
         const S = scorecard(inputs);
-        // (p?6:0)+target*4+how*5+INTEG+ORIGB-2 = 6+4+5+8+4-2 = 25 — the true top score, not the
-        // 6+4+5+2+1-2=16 that the old, wrong lookup keys silently produced for every real submission.
-        expect(S.sdg.pts).toBe(25);
+        // (p?6:0)+target*4+how*5+INTEG+ORIGB-2 = 6+4+5+8+4-2 = 25, ×0.6 rubric scale = 15 — the true
+        // top score, not the (6+4+5+2+1-2)×0.6=9.6 that the old, wrong lookup keys silently produced
+        // for every real submission.
+        expect(S.sustainability.pts).toBe(15);
     });
 
     it('the metric-status "Proposed — not yet tested" maps to Conceptual recommendation, not the unmapped fallback', () => {

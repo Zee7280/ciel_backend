@@ -152,29 +152,31 @@ export function extractMeritInputs(entry: CourseProjectEntry): MeritInputs {
     };
 }
 
-/** The 7-criterion rubric formulas — ported 1:1 from the prototype's scorecard(c). */
+/** The 7-criterion Universal Quality Rubric formulas — deterministic stand-ins for the design's
+ * AI-graded 0-5 performance levels (no LLM call here, same as the rest of this model): each
+ * criterion is built from the closest-matching signals extractMeritInputs() already derives.
+ * Evidence attachment (att/evf) deliberately does NOT feed any criterion — the design states
+ * evidence is a verification safeguard, not a bonus-point category. */
 export function scorecard(c: MeritInputs): MeritScorecard {
-    const sdg: MeritCriterionScore = {
-        pts: clamp(0, 25, (c.sdg.p ? 6 : 0) + c.sdg.target * 4 + c.sdg.how * 5 + (INTEG[c.integ] || 2) + (ORIGB[c.orig] || 1) - 2),
-        max: 25,
-        note: `SDG ${c.sdg.p}${c.sdg.target ? ' + target' : ''}${c.sdg.how ? ' + explained link' : ''} · ${c.integ.toLowerCase()} · ${c.orig.toLowerCase()}`,
+    const task: MeritCriterionScore = {
+        pts: clamp(0, 10, c.aim * 4 + c.issue * 3 + Math.min(c.objs, 2) * 1.5),
+        max: 10,
+        note: c.aim === 2 ? 'Clear task, real issue named, scope defined' : c.aim === 1 ? 'Task/purpose present but loosely framed' : 'Task or purpose unclear',
     };
 
-    const results: MeritCriterionScore = {
-        pts: Math.min(20, (EVPTS[c.evs] || 3) + c.output * 3 + c.insight * 2.5),
+    const knowledge: MeritCriterionScore = {
+        pts: clamp(0, 15, c.insight * 6 + (c.discipline ? 4 : 0) + c.output * 5),
+        max: 15,
+        note: c.discipline
+            ? `Grounded in ${c.discipline.toLowerCase()}${c.insight === 2 ? ' with a real contribution' : ''}`
+            : c.insight === 2
+                ? 'Contributes real insight; discipline not named'
+                : 'Limited disciplinary grounding or contribution',
+    };
+
+    const method: MeritCriterionScore = {
+        pts: clamp(0, 20, c.fit * 8 + c.scale * 5 + c.numOk * 5),
         max: 20,
-        note: `${c.evs}${c.num ? ' — ' + c.num : ''}`,
-    };
-
-    const purpose: MeritCriterionScore = {
-        pts: Math.min(14, c.aim * 4 + Math.min(c.objs, 3) * 1.3 + c.issue * 2.3),
-        max: 14,
-        note: c.aim === 2 ? 'Clear aim, concrete objectives, real issue named' : c.aim === 1 ? 'Aim present but loosely framed' : 'Aim missing or vague',
-    };
-
-    const rigor: MeritCriterionScore = {
-        pts: Math.min(13, c.fit * 4.5 + c.scale * 3 + 1),
-        max: 13,
         note:
             c.fit === 2
                 ? `Method & activities fit the ${c.format.toLowerCase()} format${c.scale ? '; scale stated' : ''}`
@@ -183,41 +185,48 @@ export function scorecard(c: MeritInputs): MeritScorecard {
                     : 'Process poorly evidenced',
     };
 
-    let hon = c.lim * 4 + c.numOk * 4 + 3;
+    const output: MeritCriterionScore = {
+        pts: clamp(0, 15, c.output * 9 + c.insight * 3),
+        max: 15,
+        note: c.output ? 'Output produced and described' : 'No output described yet',
+    };
+
+    const analysis: MeritCriterionScore = {
+        pts: clamp(0, 20, (EVPTS[c.evs] || 3) + c.insight * 5 + c.output * 3 + c.numOk * 2),
+        max: 20,
+        note: `${c.evs}${c.num ? ' — ' + c.num : ''}`,
+    };
+
+    const sustainability: MeritCriterionScore = {
+        // Same shape as the prototype's 25-point SDG formula, rescaled to this rubric's 15-point weight.
+        pts: clamp(0, 15, ((c.sdg.p ? 6 : 0) + c.sdg.target * 4 + c.sdg.how * 5 + (INTEG[c.integ] || 2) + (ORIGB[c.orig] || 1) - 2) * 0.6),
+        max: 15,
+        note: `SDG ${c.sdg.p}${c.sdg.target ? ' + target' : ''}${c.sdg.how ? ' + explained link' : ''} · ${c.integ.toLowerCase()} · ${c.orig.toLowerCase()}`,
+    };
+
+    const reflection: MeritCriterionScore = {
+        pts: clamp(0, 5, c.learn * 1.3 + c.lim * 1.0 + c.advice * 0.5 + c.next * 0.5 + Math.min(c.skills, 3) * 0.2),
+        max: 5,
+        note:
+            c.learn === 2 && c.lim === 2
+                ? 'Substantive learning with limitations honestly named'
+                : c.learn === 1 || c.lim === 1
+                    ? 'Some reflection or limitation present'
+                    : 'Reflection thin',
+    };
+
+    // Evidence & integrity are verification safeguards under this rubric, not a scored criterion —
+    // the claims-vs-evidence consistency check is still surfaced for the reviewer, but it never
+    // moves the 100-point total.
     const claimsHigh = c.integ === 'Central to the work and demonstrated';
     const evLow = ['Not measured yet', 'Conceptual recommendation', 'Proposed target'].includes(c.evs);
-    let flag: string;
-    if (claimsHigh && evLow) {
-        hon -= 4;
-        flag = `⚠️ Consistency check: claims "central & demonstrated" but evidence is ${c.evs.toLowerCase()} — 4 points deducted.`;
-    } else {
-        flag = '✅ Consistency check passed: claims match the declared evidence.';
-    }
-    const honesty: MeritCriterionScore = {
-        pts: Math.max(0, Math.min(15, hon)),
-        max: 15,
-        note: c.lim === 2 ? 'Limitation named with its effect' : c.lim === 1 ? 'Limitation named briefly' : 'No limitation acknowledged',
-        flag,
-    };
+    const integrityFlag =
+        claimsHigh && evLow
+            ? `⚠️ Consistency check: claims "central & demonstrated" but evidence is ${c.evs.toLowerCase()} — noted for reviewer, not scored.`
+            : '✅ Consistency check passed: claims match the declared evidence.';
 
-    const refl: MeritCriterionScore = {
-        pts: Math.min(8, c.learn * 2.5 + c.advice * 1.5 + c.next * 1 + Math.min(c.skills, 4) * 0.4),
-        max: 8,
-        note: c.learn === 2 ? 'Substantive learning + advice to the next class' : c.learn === 1 ? 'Some reflection present' : 'Reflection thin',
-    };
-
-    const ver: MeritCriterionScore = {
-        pts: Math.min(5, (c.att ? 3 : 0) + (c.evf ? 2 : 0)),
-        max: 5,
-        note: c.att
-            ? '📎 Assignment attached — reviewers can open the actual work' + (c.evf ? ' · evidence files on metrics' : '')
-            : c.evf
-                ? 'Evidence files attached, assignment not'
-                : 'Card-only record — no files attached (optional, but attached work ranks with higher confidence)',
-    };
-
-    const total = Math.round(sdg.pts + results.pts + purpose.pts + rigor.pts + honesty.pts + refl.pts + ver.pts);
-    return { sdg, results, purpose, rigor, honesty, refl, ver, total };
+    const total = Math.round(task.pts + knowledge.pts + method.pts + output.pts + analysis.pts + sustainability.pts + reflection.pts);
+    return { task, knowledge, method, output, analysis, sustainability, reflection, integrityFlag, total };
 }
 
 /** Grade band lookup — ported 1:1 from the prototype's grade(t). */
@@ -275,23 +284,23 @@ export function compCred(c: MeritInputs): MeritQualityProfile {
     return { completenessPercent: Math.round(comp * 100), credibilityPercent: Math.round(cred * 100), badge };
 }
 
-type MeritCriterionKey = Exclude<keyof MeritScorecard, 'total'>;
-const CRITERION_KEYS: MeritCriterionKey[] = ['sdg', 'results', 'purpose', 'rigor', 'honesty', 'refl', 'ver'];
+type MeritCriterionKey = Exclude<keyof MeritScorecard, 'total' | 'integrityFlag'>;
+const CRITERION_KEYS: MeritCriterionKey[] = ['task', 'knowledge', 'method', 'output', 'analysis', 'sustainability', 'reflection'];
 
-/** "Why this rank" generator — ported 1:1 from the prototype's reason(S,c): picks the top-2
- * scoring criteria (by percent-of-max) and stitches together their canned explanation bits. */
+/** "Why this rank" generator — picks the top-2 scoring criteria (by percent-of-max) and stitches
+ * together their canned explanation bits. */
 export function reason(S: MeritScorecard, c: MeritInputs): string {
     const parts = CRITERION_KEYS.map((key) => ({ key, ratio: S[key].pts / S[key].max }))
         .sort((a, b) => b.ratio - a.ratio)
         .slice(0, 2);
     const bits: Record<MeritCriterionKey, string> = {
-        sdg: c.orig.toLowerCase().includes('student') ? 'a self-started, authentic sustainability core' : 'an authentic, explained sustainability core',
-        results: c.evs.includes('measured result') ? 'real measured results — fruitful, not decorative' : 'substantive, honestly-classified results',
-        purpose: 'a concise, real idea anyone can grasp',
-        rigor: 'rigor true to its own format',
-        honesty: 'honest limits & correctly classified numbers',
-        refl: 'reflection that transfers to the next cohort',
-        ver: 'the actual assignment attached — every claim openable and checkable',
+        task: 'a clear task and purpose anyone can grasp',
+        knowledge: 'real disciplinary grounding and contribution',
+        method: 'a method and process that fit the work',
+        output: 'a concrete, well-executed output',
+        analysis: c.evs.includes('measured result') ? 'analysis backed by real measured results — fruitful, not decorative' : 'substantive, honestly-classified findings',
+        sustainability: c.orig.toLowerCase().includes('student') ? 'a self-started, authentic sustainability core' : 'an authentic, explained sustainability core',
+        reflection: 'reflection and limitations that transfer to the next cohort',
     };
     return `${bits[parts[0].key]}, with ${bits[parts[1].key]}${c.att ? '. The attached work lets reviewers verify, not trust' : ''}`;
 }

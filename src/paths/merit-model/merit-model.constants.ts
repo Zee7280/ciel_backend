@@ -1,6 +1,10 @@
 /** Course Project Merit Model — rubric constants.
- * Ported 1:1 from the "Coursework Merit Model" prototype (EVPTS/INTEG/ORIGB/SDGCOL/CRIT and the
- * grade bands) so the point values and lookup tables stay byte-identical to the reference design.
+ * CRIT and GRADE_BANDS implement the "CIEL PK Universal Coursework Quality Rubric" (design
+ * reference: CIEL_PK_Coursework_Form_v6_Universal_Rubric_Evidence.html) — same 7-criterion,
+ * 100-point structure and band calibration shown to students before they submit. The lookup
+ * tables (EVPTS/INTEG/ORIGB/SDGCOL/METRIC_STATUS_TO_EVS) are unchanged from the earlier
+ * "Coursework Merit Model" prototype and are reused — deterministically — inside the new
+ * criteria's formulas in merit-model.util.ts.
  */
 
 /** Evidence status -> points (used by the "Substance of results" criterion). */
@@ -59,23 +63,34 @@ export const SDGCOL: Record<number, string> = {
     17: '#19486A',
 };
 
-/** The 7 rubric criteria in order, with their weight and accent color. */
+/** The 7 Universal Quality Rubric criteria in order, with their weight and accent color.
+ * Evidence & integrity are verification safeguards under this rubric — not bonus-point
+ * categories — so unlike the old prototype there is no separate "Verifiability" line; a
+ * claims-vs-evidence consistency check is still surfaced (see scorecard()'s integrityFlag)
+ * but never subtracted from or added to the 100-point total. */
 export const CRIT: Array<{ key: string; label: string; max: number; color: string }> = [
-    { key: 'sdg', label: '1 · Sustainability & SDG authenticity', max: 25, color: '#3F7E44' },
-    { key: 'results', label: '2 · Substance of results', max: 20, color: '#c98a04' },
-    { key: 'purpose', label: '3 · Clarity & quality of idea', max: 14, color: '#2563eb' },
-    { key: 'rigor', label: '4 · Rigor (pathway-adjusted)', max: 13, color: '#0f766e' },
-    { key: 'honesty', label: '5 · Honesty & consistency', max: 15, color: '#dc2626' },
-    { key: 'refl', label: '6 · Reflection & transfer', max: 8, color: '#7c3aed' },
-    { key: 'ver', label: '7 · Verifiability', max: 5, color: '#0e7490' },
+    { key: 'task', label: '1 · Task / purpose & alignment', max: 10, color: '#7c3aed' },
+    { key: 'knowledge', label: '2 · Knowledge, context & contribution', max: 15, color: '#c98a04' },
+    { key: 'method', label: '3 · Method / process & disciplinary rigor', max: 20, color: '#0f766e' },
+    { key: 'output', label: '4 · Quality of output / execution', max: 15, color: '#ea580c' },
+    { key: 'analysis', label: '5 · Analysis, findings & application', max: 20, color: '#2563eb' },
+    { key: 'sustainability', label: '6 · Sustainability & SDG integration', max: 15, color: '#3F7E44' },
+    { key: 'reflection', label: '7 · Reflection, limitations & learning', max: 5, color: '#db2777' },
 ];
 
-/** Grade bands, in descending threshold order — first match wins. */
+/** Band calibration, in descending threshold order — first match wins. Mirrors the design's
+ * "0–39 Insufficient · 40–54 Basic · 55–64 Developing · 65–74 Good · 75–84 Very Good ·
+ * 85–94 Excellent · 95–100 Outstanding" — 90+ is not routine: it requires the strongest
+ * criteria to themselves land at Excellent/Outstanding, which the formulas below don't hand
+ * out for free. */
 export const GRADE_BANDS: Array<{ min: number; label: string; color: string }> = [
-    { min: 85, label: 'EXEMPLARY', color: '#16a34a' },
-    { min: 70, label: 'STRONG', color: '#0f766e' },
+    { min: 95, label: 'OUTSTANDING', color: '#16a34a' },
+    { min: 85, label: 'EXCELLENT', color: '#22c55e' },
+    { min: 75, label: 'VERY GOOD', color: '#0f766e' },
+    { min: 65, label: 'GOOD', color: '#2563eb' },
     { min: 55, label: 'DEVELOPING', color: '#c98a04' },
-    { min: 0, label: 'EMERGING', color: '#7a8095' },
+    { min: 40, label: 'BASIC', color: '#ea580c' },
+    { min: 0, label: 'INSUFFICIENT', color: '#dc2626' },
 ];
 
 /** New (not in the prototype, which never derived these from real text): word-count thresholds for

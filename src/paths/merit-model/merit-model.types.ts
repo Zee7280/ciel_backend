@@ -53,17 +53,20 @@ export interface MeritCriterionScore {
     pts: number;
     max: number;
     note: string;
-    flag?: string;
 }
 
+/** The 7 Universal Quality Rubric criteria — see merit-model.constants.ts's CRIT for the
+ * canonical weights/labels. `integrityFlag` is a claims-vs-evidence consistency check: a
+ * verification safeguard surfaced for the reviewer, never added to or subtracted from `total`. */
 export interface MeritScorecard {
-    sdg: MeritCriterionScore;
-    results: MeritCriterionScore;
-    purpose: MeritCriterionScore;
-    rigor: MeritCriterionScore;
-    honesty: MeritCriterionScore;
-    refl: MeritCriterionScore;
-    ver: MeritCriterionScore;
+    task: MeritCriterionScore;
+    knowledge: MeritCriterionScore;
+    method: MeritCriterionScore;
+    output: MeritCriterionScore;
+    analysis: MeritCriterionScore;
+    sustainability: MeritCriterionScore;
+    reflection: MeritCriterionScore;
+    integrityFlag: string;
     total: number;
 }
 

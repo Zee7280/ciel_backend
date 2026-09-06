@@ -7,7 +7,7 @@
  * criteria's formulas in merit-model.util.ts.
  */
 
-/** Evidence status -> points (used by the "Substance of results" criterion). */
+/** Evidence status -> points (used by the "Analysis, findings & application" criterion). */
 export const EVPTS: Record<string, number> = {
     'Actual measured result': 12,
     'Qualitative evidence': 10,
@@ -18,7 +18,7 @@ export const EVPTS: Record<string, number> = {
     'Not applicable': 4,
 };
 
-/** SDG integration level -> points (used by the "Sustainability & SDG authenticity" criterion).
+/** SDG integration level -> points (used by the "Sustainability & SDG integration" criterion).
  * Keys are the coursework-final-form's own `c_integ` chip labels (emoji-stripped — the entry's raw
  * value is normalized via stripEmojiPrefix before this lookup), NOT the merit-model prototype's own
  * demo vocabulary, which drifted from the real form and never matched real submissions. */
@@ -30,7 +30,7 @@ export const INTEG: Record<string, number> = {
     'Identified retrospectively': 3,
 };
 
-/** SDG origin -> points (used by the "Sustainability & SDG authenticity" criterion). Keys are the
+/** SDG origin -> points (used by the "Sustainability & SDG integration" criterion). Keys are the
  * final-form's own `c_orig` chip labels (emoji-stripped), for the same reason as INTEG above. */
 export const ORIGB: Record<string, number> = {
     'Introduced by the student / team': 4,

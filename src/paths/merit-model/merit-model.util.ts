@@ -225,7 +225,16 @@ export function scorecard(c: MeritInputs): MeritScorecard {
             ? `⚠️ Consistency check: claims "central & demonstrated" but evidence is ${c.evs.toLowerCase()} — noted for reviewer, not scored.`
             : '✅ Consistency check passed: claims match the declared evidence.';
 
-    const total = Math.round(task.pts + knowledge.pts + method.pts + output.pts + analysis.pts + sustainability.pts + reflection.pts);
+    // Merit gates — an anti-gaming ceiling: a top-band total requires the core execution/analysis
+    // criteria (and, at the very top, sustainability + reflection) to themselves clear a high bar,
+    // so a record can't reach Outstanding/Excellent purely by padding the smaller-weight criteria.
+    const ratio = (s: MeritCriterionScore) => (s.max ? s.pts / s.max : 0);
+    const coreAt = (min: number) => ratio(method) >= min && ratio(output) >= min && ratio(analysis) >= min;
+    let total = Math.round(task.pts + knowledge.pts + method.pts + output.pts + analysis.pts + sustainability.pts + reflection.pts);
+    if (total > 94 && !(coreAt(0.9) && ratio(sustainability) >= 0.8 && ratio(reflection) >= 0.7)) total = 94;
+    else if (total > 84 && !coreAt(0.7)) total = 84;
+    else if (total > 74 && !coreAt(0.5)) total = 74;
+
     return { task, knowledge, method, output, analysis, sustainability, reflection, integrityFlag, total };
 }
 

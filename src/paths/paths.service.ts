@@ -303,9 +303,16 @@ export class PathsService {
   private applyCourseProjectPatch(
     entry: CourseProjectEntry,
     dto: UpdateCourseProjectDto,
-  ): { entry: CourseProjectEntry; notify: 'first_submission' | 'resubmission' | null } {
+  ): {
+    entry: CourseProjectEntry;
+    notify: 'first_submission' | 'resubmission' | null;
+    /** True the moment a faculty email is first attached to this record — the "one master record,
+     * auto-connected to student + faculty + university + CIEL PK" moment, independent of submission. */
+    justConnected: boolean;
+  } {
     const keep = PathsService.withoutUndefined;
     const previousStatus = entry.status;
+    const hadTeacherEmail = !!(entry.studentInfo?.teacherEmail || '').trim();
     if (dto.course !== undefined) entry.course = dto.course;
     if (dto.projectTitle !== undefined) entry.projectTitle = dto.projectTitle;
     if (dto.projectDescription !== undefined)
@@ -369,7 +376,8 @@ export class PathsService {
     } else if (previousStatus !== 'submitted' && entry.status === 'submitted') {
       notify = 'first_submission';
     }
-    return { entry, notify };
+    const justConnected = !hadTeacherEmail && !!(entry.studentInfo?.teacherEmail || '').trim();
+    return { entry, notify, justConnected };
   }
 
   /** Best-effort — a submission/resubmission email failure must never fail the student's save. */
@@ -398,6 +406,29 @@ export class PathsService {
       this.logger.warn(
         `Coursework transition email failed for ${entry.id} (${transition}): ${(err as Error).message}`,
       );
+    }
+  }
+
+  /** Fires once — the moment a faculty email is first attached to a draft coursework record, i.e.
+   * "one master record, auto-connected to student + faculty + university + CIEL PK". Best-effort:
+   * an email failure here must never fail the student's autosave. */
+  private async notifyCourseworkConnected(entry: CourseProjectEntry): Promise<void> {
+    const studentName = entry.studentInfo?.studentName?.trim() || 'Student';
+    const title = entry.projectTitle || entry.course || 'Untitled coursework';
+    const teacherEmail = (entry.studentInfo?.teacherEmail || '').trim();
+    const teacherName = entry.studentInfo?.teacherName?.trim() || 'there';
+    const universityName = entry.studentInfo?.universityName?.trim() || undefined;
+    try {
+      if (teacherEmail) {
+        await this.mailService.sendPathProjectConnectedToFaculty(teacherEmail, teacherName, studentName, 'Coursework', title, '/dashboard/faculty/coursework-projects');
+      }
+      const student = await this.usersRepo.findOne({ where: { id: entry.userId }, select: ['email'] });
+      if (student?.email) {
+        await this.mailService.sendPathProjectConnectedToStudent(student.email, studentName.split(' ')[0], 'Coursework', title, teacherEmail ? teacherName : undefined, universityName);
+      }
+      await this.mailService.sendPathProjectConnectedToCielPk(studentName, teacherEmail ? teacherName : undefined, universityName, 'Coursework', title);
+    } catch (err) {
+      this.logger.warn(`Coursework connection email failed for ${entry.id}: ${(err as Error).message}`);
     }
   }
 
@@ -507,6 +538,7 @@ export class PathsService {
     // click, or two open tabs) can both read the same pre-image and the second save silently
     // discards the first's changes. The lock serializes them so the second read sees the first's write.
     let notify: 'first_submission' | 'resubmission' | null = null;
+    let justConnected = false;
     const saved = await this.courseProjectRepo.manager.transaction(async (manager) => {
       const repo = manager.getRepository(CourseProjectEntry);
       let entry = await repo.findOne({
@@ -517,10 +549,12 @@ export class PathsService {
       if (!entry) entry = repo.create({ userId });
       const patched = this.applyCourseProjectPatch(entry, dto);
       notify = patched.notify;
+      justConnected = patched.justConnected;
       return repo.save(patched.entry);
     });
     await this.syncCourseProjectInvites(saved, userId);
     await this.notifyCourseworkTransition(saved, notify);
+    if (justConnected) await this.notifyCourseworkConnected(saved);
     const [annotated] = await this.courseProjectAnnotate([saved]);
     return annotated;
   }
@@ -615,6 +649,7 @@ export class PathsService {
   ) {
     // Same locked read-modify-write as upsertCourseProject — see comment there.
     let notify: 'first_submission' | 'resubmission' | null = null;
+    let justConnected = false;
     const saved = await this.courseProjectRepo.manager.transaction(async (manager) => {
       const repo = manager.getRepository(CourseProjectEntry);
       const entry = await repo.findOne({
@@ -627,10 +662,12 @@ export class PathsService {
       }
       const patched = this.applyCourseProjectPatch(entry, dto);
       notify = patched.notify;
+      justConnected = patched.justConnected;
       return repo.save(patched.entry);
     });
     await this.syncCourseProjectInvites(saved, saved.userId);
     await this.notifyCourseworkTransition(saved, notify);
+    if (justConnected) await this.notifyCourseworkConnected(saved);
     const [annotated] = await this.courseProjectAnnotate([saved]);
     return { ...annotated, isOwner: saved.userId === userId };
   }
@@ -1303,6 +1340,7 @@ export class PathsService {
 
   async upsertFyp(userId: string, dto: UpdateFypDto) {
     // Locked read-modify-write — see comment on upsertCourseProject for why this matters.
+    let justConnected = false;
     const saved = await this.fypRepo.manager.transaction(async (manager) => {
       const repo = manager.getRepository(FypEntry);
       let entry = await repo.findOne({
@@ -1311,6 +1349,7 @@ export class PathsService {
       });
       if (!entry)
         entry = repo.create({ userId, milestones: DEFAULT_FYP_MILESTONES });
+      const hadSupervisorEmail = !!(entry.projectInfo?.supervisorEmail || '').trim();
       if (dto.projectTitle !== undefined)
         entry.projectTitle = dto.projectTitle;
       if (dto.overview !== undefined) entry.overview = dto.overview;
@@ -1354,11 +1393,37 @@ export class PathsService {
         entry.supervisorApprovalAt = null;
         entry.meritRibbon = null;
       }
+      justConnected = !hadSupervisorEmail && !!(entry.projectInfo?.supervisorEmail || '').trim();
       return repo.save(entry);
     });
     await this.syncFypInvites(saved, userId);
+    if (justConnected) await this.notifyFypConnected(saved);
     const [annotated] = await this.fypAnnotate([saved]);
     return { ...annotated, isOwner: true };
+  }
+
+  /** Fires once — the moment a supervisor email is first attached to a draft FYP record, i.e. "one
+   * master record, auto-connected to student + supervisor + university + CIEL PK". Best-effort: an
+   * email failure here must never fail the student's autosave. */
+  private async notifyFypConnected(entry: FypEntry): Promise<void> {
+    const pi = entry.projectInfo || {};
+    const studentName = pi.studentName?.trim() || 'Student';
+    const title = entry.projectTitle || pi.title || 'Untitled FYP';
+    const supervisorEmail = (pi.supervisorEmail || '').trim();
+    const supervisorName = pi.supervisorName?.trim() || 'there';
+    const universityName = pi.university?.trim() || undefined;
+    try {
+      if (supervisorEmail) {
+        await this.mailService.sendPathProjectConnectedToFaculty(supervisorEmail, supervisorName, studentName, 'Final Year Project', title, '/dashboard/faculty/fyp-thesis');
+      }
+      const student = await this.usersRepo.findOne({ where: { id: entry.userId }, select: ['email'] });
+      if (student?.email) {
+        await this.mailService.sendPathProjectConnectedToStudent(student.email, studentName.split(' ')[0], 'Final Year Project', title, supervisorEmail ? supervisorName : undefined, universityName);
+      }
+      await this.mailService.sendPathProjectConnectedToCielPk(studentName, supervisorEmail ? supervisorName : undefined, universityName, 'Final Year Project', title);
+    } catch (err) {
+      this.logger.warn(`FYP connection email failed for ${entry.id}: ${(err as Error).message}`);
+    }
   }
 
   /** Supervisor approve/reject a submitted FYP entry — only "approved" entries are eligible for

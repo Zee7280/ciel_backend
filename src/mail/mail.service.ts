@@ -1718,6 +1718,108 @@ export class MailService {
     }
   }
 
+  /** Shared across Coursework/FYP (and any future path) — fires once, the moment a faculty/
+   * supervisor email is first attached to a draft record, naming the student to the faculty member. */
+  async sendPathProjectConnectedToFaculty(
+    to: string,
+    facultyName: string,
+    studentName: string,
+    pathLabel: string,
+    projectTitle: string,
+    dashboardPath: string,
+  ): Promise<void> {
+    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const dashboardLink = this.buildFrontendLink(dashboardPath, {});
+    const facultyEsc = this.escHtmlPlain(facultyName?.trim() ? facultyName.trim() : 'there');
+    const studentEsc = this.escHtmlPlain(studentName?.trim() ? studentName.trim() : 'A student');
+    const titleEsc = this.escHtmlPlain(projectTitle);
+    const pathEsc = this.escHtmlPlain(pathLabel);
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">You've been named as faculty on a new ${pathEsc} record</h2>
+        <p>Dear ${facultyEsc},</p>
+        <p><strong>${studentEsc}</strong> has started a ${pathEsc} record on CIEL PK and named you as the supervising faculty:</p>
+        <p style="font-size:16px;"><strong>${titleEsc}</strong></p>
+        <p style="margin-top:16px;color:#555;">You'll be able to review it once it's submitted — no action is needed from you right now.</p>
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${dashboardLink}" style="background-color: #4CAF50; color: white; padding: 14px 30px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">Open Faculty Dashboard</a>
+        </div>
+        <p style="margin-top:24px;">Regards,<br><strong>CIEL PK Team</strong><br><span style="font-size:13px;color:#64748b;">Community Impact Education Lab</span></p>
+      </div>
+    `;
+    try {
+      await this.transporter.sendMail({ from, to, subject: `CIEL PK — you've been named faculty on a new ${pathLabel} record: ${projectTitle}`, html });
+      this.logger.log(`${pathLabel} connection email sent to faculty ${to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send ${pathLabel} connection email to faculty ${to}`, error.stack);
+    }
+  }
+
+  /** Shared across Coursework/FYP — confirms to the student that their record is now connected to
+   * their named faculty/supervisor, their university and CIEL PK. */
+  async sendPathProjectConnectedToStudent(
+    to: string,
+    studentFirstName: string,
+    pathLabel: string,
+    projectTitle: string,
+    facultyName: string | undefined,
+    universityName: string | undefined,
+  ): Promise<void> {
+    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const titleEsc = this.escHtmlPlain(projectTitle);
+    const pathEsc = this.escHtmlPlain(pathLabel);
+    const connections = [
+      facultyName ? `your faculty <strong>${this.escHtmlPlain(facultyName)}</strong>` : null,
+      universityName ? `<strong>${this.escHtmlPlain(universityName)}</strong>` : null,
+      '<strong>CIEL PK</strong>',
+    ].filter(Boolean).join(', ');
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">Your ${pathEsc} record is connected</h2>
+        <p>${this.escHtmlPlain(studentFirstName)}, your ${pathEsc} record is now one master record, auto-connected to ${connections}:</p>
+        <p style="font-size:16px;"><strong>${titleEsc}</strong></p>
+        <p style="margin-top:16px;color:#555;">Keep building it — nothing is sent for review until you submit.</p>
+        <p style="margin-top:24px;">Regards,<br><strong>CIEL PK Team</strong><br><span style="font-size:13px;color:#64748b;">Community Impact Education Lab</span></p>
+      </div>
+    `;
+    try {
+      await this.transporter.sendMail({ from, to, subject: `CIEL PK — your ${pathLabel} record is now connected: ${projectTitle}`, html });
+      this.logger.log(`${pathLabel} connection email sent to student ${to}`);
+    } catch (error) {
+      this.logger.error(`Failed to send ${pathLabel} connection confirmation to student ${to}`, error.stack);
+    }
+  }
+
+  /** Shared across Coursework/FYP — a lightweight heads-up to the CIEL PK team whenever a new
+   * record connects a student to a faculty member and (usually) a university. */
+  async sendPathProjectConnectedToCielPk(
+    studentName: string,
+    facultyName: string | undefined,
+    universityName: string | undefined,
+    pathLabel: string,
+    projectTitle: string,
+  ): Promise<void> {
+    const to = this.configService.get<string>('CIEL_PK_NOTIFY_EMAIL') || 'admin@cielpk.com';
+    const from = this.configService.get<string>('MAIL_ADMIN_FROM') || 'CIEL Admin <admin@cielpk.com>';
+    const studentEsc = this.escHtmlPlain(studentName?.trim() ? studentName.trim() : 'A student');
+    const titleEsc = this.escHtmlPlain(projectTitle);
+    const pathEsc = this.escHtmlPlain(pathLabel);
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">New ${pathEsc} record connected</h2>
+        <p><strong>${studentEsc}</strong> started a new ${pathEsc} record${facultyName ? `, naming <strong>${this.escHtmlPlain(facultyName)}</strong> as faculty` : ''}${universityName ? ` at <strong>${this.escHtmlPlain(universityName)}</strong>` : ''}:</p>
+        <p style="font-size:16px;"><strong>${titleEsc}</strong></p>
+        <p style="margin-top:16px;color:#555;">No action needed — this is an informational heads-up only.</p>
+      </div>
+    `;
+    try {
+      await this.transporter.sendMail({ from, to, subject: `CIEL PK — new ${pathLabel} record connected: ${projectTitle}`, html });
+      this.logger.log(`${pathLabel} connection heads-up sent to CIEL PK (${to})`);
+    } catch (error) {
+      this.logger.error(`Failed to send ${pathLabel} connection heads-up to CIEL PK`, error.stack);
+    }
+  }
+
   async sendCourseworkApproved(to: string, studentFirstName: string, projectTitle: string): Promise<void> {
     const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
     const wallLink = this.buildFrontendLink('/dashboard/student/paths/course-project', { view: 'wall' });

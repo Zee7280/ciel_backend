@@ -16,6 +16,14 @@ export const STUDENT_REPORT_ALLOWED_EXTENSIONS = new Set([
     '.pdf',
     '.doc',
     '.docx',
+    // Coursework/FYP assignment uploads explicitly invite "the essay, deck, design file" —
+    // presentations and spreadsheets were missing from this list, so a student submitting a
+    // PowerPoint deck or Excel file got a silent-looking rejection from the presign endpoint.
+    '.ppt',
+    '.pptx',
+    '.xls',
+    '.xlsx',
+    '.csv',
 ]);
 
 /** Common video containers — also accept any `video/*` MIME from the client. */
@@ -60,6 +68,11 @@ const ALLOWED_MIMETYPES = new Set([
     'application/pdf',
     'application/msword',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-powerpoint',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'text/csv',
 ]);
 
 export const STUDENT_REPORT_MAX_FILE_BYTES = 500 * 1024 * 1024;

@@ -566,6 +566,10 @@ export class StudentReportsService {
       project_id: report.project_id ?? null,
       student_name: report.student?.name || 'Unknown',
       student_email: report.student?.email || 'Unknown',
+      // Lets the student's "remind faculty" button address the actual reviewer instead of an
+      // empty mailto: — null when the faculty relation isn't loaded on this row's fetch path.
+      faculty_name: report.faculty?.name || null,
+      faculty_email: report.faculty?.email || null,
       project_title: opportunity?.title || report.project_id,
       organization_id:
         opportunity?.organizationId ?? opportunity?.organization?.id ?? null,
@@ -1544,6 +1548,7 @@ export class StudentReportsService {
       'student',
       'opportunity',
       'opportunity.organization',
+      'faculty',
     ];
 
     const reportsOwned = await this.studentReportsRepository.find({

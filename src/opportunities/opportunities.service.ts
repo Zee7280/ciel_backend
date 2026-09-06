@@ -1778,17 +1778,34 @@ export class OpportunitiesService {
             order: { updatedAt: 'DESC' },
         });
 
-        const items = rows.map((opp) => ({
-            id: opp.id,
-            title: opp.title,
-            status: this.getApiOpportunityStatus(opp),
-            ...this.getWorkflowResponseFields(opp),
-            requires_partner_approval: opp.requiresPartnerApproval,
-            admin_approved: opp.admin_approved === true,
-            rejection_reason: opp.rejectionReason ?? null,
-            created_at: opp.createdAt,
-            updated_at: opp.updatedAt,
-        }));
+        const items = rows.map((opp) => {
+            const sup = (opp.supervision as Record<string, unknown> | null | undefined) ?? undefined;
+            const po = (opp.partner_organization as Record<string, unknown> | null | undefined) ?? undefined;
+            const facultyName =
+                (sup && typeof sup.supervisor_name === 'string' && sup.supervisor_name.trim()) || null;
+            const partnerName =
+                (po && typeof po.contact_person === 'string' && po.contact_person.trim()) ||
+                (po && typeof po.contact_person_name === 'string' && po.contact_person_name.trim()) ||
+                (sup && typeof sup.partner_contact_person === 'string' && sup.partner_contact_person.trim()) ||
+                null;
+            return {
+                id: opp.id,
+                title: opp.title,
+                status: this.getApiOpportunityStatus(opp),
+                ...this.getWorkflowResponseFields(opp),
+                requires_partner_approval: opp.requiresPartnerApproval,
+                admin_approved: opp.admin_approved === true,
+                rejection_reason: opp.rejectionReason ?? null,
+                created_at: opp.createdAt,
+                updated_at: opp.updatedAt,
+                // Lets the student's reminder buttons address the actual pending approver by name/email
+                // instead of an empty mailto: — same contact resolution used everywhere else on this entity.
+                faculty_contact_name: facultyName,
+                faculty_contact_email: this.getFacultyEmailFromOpportunity(opp),
+                partner_contact_name: partnerName,
+                partner_contact_email: this.resolvePartnerEmailFromOpportunity(opp),
+            };
+        });
 
         return { success: true, data: items };
     }

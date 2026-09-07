@@ -1,5 +1,6 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Index, BeforeInsert, BeforeUpdate } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Index, BeforeInsert, BeforeUpdate, AfterLoad, AfterInsert, AfterUpdate } from 'typeorm';
 import { randomUUID } from 'crypto';
+import { parseStoredUrlList, urlListColumnTransformer } from '../../common/url-list-column';
 
 export interface CourseProjectGroupMember {
     name: string;
@@ -210,7 +211,8 @@ export class CourseProjectEntry {
     @Column({ type: 'simple-array', nullable: true })
     sdgs: number[];
 
-    @Column({ type: 'simple-array', nullable: true })
+    /** JSON text (legacy TypeORM simple-array CSV still reads). Do not use simple-array — S3 URL lists must not split on commas. */
+    @Column({ type: 'text', nullable: true, transformer: urlListColumnTransformer })
     evidenceUrls: string[];
 
     /** What the uploaded files include (report, slides, poster, photos, video, etc.) — student-declared, shown alongside the upload boxes at review. */
@@ -308,5 +310,14 @@ export class CourseProjectEntry {
         if (!this.verificationPublicSlug?.trim()) {
             this.verificationPublicSlug = randomUUID();
         }
+    }
+
+    /** TypeORM may write the transformer `to()` JSON string back onto the entity after save.
+     * Re-hydrate so every API response exposes a real string[]. */
+    @AfterLoad()
+    @AfterInsert()
+    @AfterUpdate()
+    hydrateEvidenceUrls(): void {
+        this.evidenceUrls = parseStoredUrlList(this.evidenceUrls);
     }
 }

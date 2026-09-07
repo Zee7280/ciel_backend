@@ -182,15 +182,18 @@ export class UpdateCourseProjectDto {
 
     @IsOptional()
     @IsArray()
+    @IsString({ each: true })
     evidenceUrls?: string[];
 
     @IsOptional()
     @IsArray()
+    @IsString({ each: true })
     evidenceTypes?: string[];
 
     @IsOptional()
+    @ValidateIf((_, v) => v !== null)
     @IsString()
-    assignmentFileUrl?: string;
+    assignmentFileUrl?: string | null;
 
     // Step-grouped fields
     @IsOptional()

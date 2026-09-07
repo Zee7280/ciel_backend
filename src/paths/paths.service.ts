@@ -8,6 +8,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, In, Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
+import { parseStoredUrlList } from '../common/url-list-column';
 import {
   CourseProjectEntry,
   CourseProjectStudentInfo,
@@ -330,7 +331,8 @@ export class PathsService {
     if (dto.projectDescription !== undefined)
       entry.projectDescription = dto.projectDescription;
     if (dto.sdgs !== undefined) entry.sdgs = dto.sdgs;
-    if (dto.evidenceUrls !== undefined) entry.evidenceUrls = dto.evidenceUrls;
+    if (dto.evidenceUrls !== undefined)
+      entry.evidenceUrls = parseStoredUrlList(dto.evidenceUrls);
     if (dto.evidenceTypes !== undefined)
       entry.evidenceTypes = dto.evidenceTypes;
     if (dto.assignmentFileUrl !== undefined)
@@ -447,6 +449,7 @@ export class PathsService {
       (e, members) =>
         ({
           ...e,
+          evidenceUrls: parseStoredUrlList(e.evidenceUrls),
           studentInfo: { ...e.studentInfo, groupMembers: members } as CourseProjectStudentInfo,
         }) as CourseProjectEntry,
     );

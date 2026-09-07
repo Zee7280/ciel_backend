@@ -14,10 +14,35 @@ import { ConfigService } from '@nestjs/config';
 import { ReportPartnerApprovalSettingsService } from './report-partner-approval-settings.service';
 import { evaluateReportRequiresPartnerApproval } from './report-partner-approval.util';
 
-/** Minimal section6/8/10 payload that passes server submit validation. */
+/** Minimal section1/2/4/5/6/7/8/9/10 payload that passes server submit validation. */
 const MIN_VALID_SUBMIT_SECTIONS = {
+    section1: { privacy_consent: true },
+    section2: {
+        problem_statement: 'Community lacks access to clean drinking water.',
+        discipline: 'Environmental Engineering',
+        baseline_evidence: ['Survey'],
+    },
+    section4: {
+        activity_blocks: [
+            {
+                title: 'Water filter installation',
+                primary_category: 'Infrastructure',
+                delivery_mode: 'In person',
+                outputs: ['5 filters installed'],
+            },
+        ],
+        project_summary: { distinct_total_beneficiaries: 50, counting_method: 'Headcount' },
+    },
+    section5: {
+        observed_change: 'Households report improved water quality.',
+        measurable_outcomes: [
+            { outcome_area: 'Health', metric: 'Households served', baseline: 0, endline: 50 },
+        ],
+    },
     section6: { use_resources: 'no' as const },
+    section7: { has_partners: 'no' as const },
     section8: { has_evidence: 'no' as const },
+    section9: { academic_integration: 'Directly related to coursework' },
     section10: {
         continuation_status: 'no' as const,
         continuation_details: 'word '.repeat(100).trim(),
@@ -153,7 +178,6 @@ describe('StudentReportsService', () => {
             'student-1',
             {
                 opportunityId: 'opp-1',
-                section2: { problem_statement: 'test', baseline_evidence: 'Survey', discipline: 'CS' },
                 ...MIN_VALID_SUBMIT_SECTIONS,
             },
             [],
@@ -220,6 +244,7 @@ describe('StudentReportsService', () => {
             'student-1',
             {
                 opportunityId: 'opp-1',
+                ...MIN_VALID_SUBMIT_SECTIONS,
                 section2: {
                     problem_statement: 'Mental health awareness among students',
                     baseline_evidence: ['Survey Data', '__o_0', '__o_1', '__o_2'],
@@ -230,7 +255,6 @@ describe('StudentReportsService', () => {
                     primary_sdg: { target_id: '', goal_number: '', indicator_id: '' },
                     contribution_intent_statement: 'Contribution logic for SDG 3',
                 },
-                ...MIN_VALID_SUBMIT_SECTIONS,
             },
             [],
             true,
@@ -375,7 +399,6 @@ describe('StudentReportsService', () => {
                 'team-lead-student',
                 {
                     opportunityId: SAMPLE_OPP_UUID,
-                    section2: { problem_statement: 'test', baseline_evidence: 'Survey', discipline: 'CS' },
                     ...MIN_VALID_SUBMIT_SECTIONS,
                 },
                 [],
@@ -445,7 +468,6 @@ describe('StudentReportsService', () => {
                 'legacy-member',
                 {
                     opportunityId: SAMPLE_OPP_UUID,
-                    section2: { problem_statement: 'test', baseline_evidence: 'Survey', discipline: 'CS' },
                     ...MIN_VALID_SUBMIT_SECTIONS,
                 },
                 [],
@@ -479,7 +501,6 @@ describe('StudentReportsService', () => {
                 'solo-student',
                 {
                     opportunityId: SAMPLE_OPP_UUID,
-                    section2: { problem_statement: 'test', baseline_evidence: 'Survey', discipline: 'CS' },
                     ...MIN_VALID_SUBMIT_SECTIONS,
                 },
                 [],
@@ -502,7 +523,6 @@ describe('StudentReportsService', () => {
                 'no-participation-user',
                 {
                     opportunityId: SAMPLE_OPP_UUID,
-                    section2: { problem_statement: 'test', baseline_evidence: 'Survey', discipline: 'CS' },
                     ...MIN_VALID_SUBMIT_SECTIONS,
                 },
                 [],

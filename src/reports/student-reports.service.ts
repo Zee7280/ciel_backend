@@ -23,7 +23,10 @@ import {
   findCanonicalTeamLeadStudentId,
 } from '../engagement/team-lead-canonical.util';
 import { Payment, PaymentStatus } from '../payments/entities/payment.entity';
-import { formatCertificateVerificationCode } from './certificate-verification-code.util';
+import {
+  formatCertificateVerificationCode,
+  buildImpactVerifyUrl as buildImpactVerifyUrlShared,
+} from './certificate-verification-code.util';
 import { ReportPartnerApprovalSettingsService } from './report-partner-approval-settings.service';
 import { isReportPartnerStepSatisfied } from './report-partner-approval.util';
 import { collectReportEvidenceFiles } from './collect-report-evidence.util';
@@ -184,26 +187,16 @@ export class StudentReportsService {
    * otherwise path-only `/impact/verify/{slug}` — resolve on the client with `new URL(impact_verify_url, NEXT_PUBLIC_APP_URL)`.
    */
   private buildImpactVerifyUrl(slug: string | null | undefined): string | null {
-    const s = slug?.trim();
-    if (!s) return null;
-    let pathSeg = (
-      this.configService.get<string>('IMPACT_VERIFY_PATH') || '/impact/verify'
-    ).trim();
-    if (!pathSeg.startsWith('/')) pathSeg = `/${pathSeg}`;
-    pathSeg = pathSeg.replace(/\/+$/, '');
-    const base = (
-      this.configService.get<string>('FRONTEND_URL') ||
-      this.configService.get<string>('APP_URL') ||
-      ''
-    )
-      .trim()
-      .replace(/\/+$/, '');
-    const pathAndSlug = `${pathSeg}/${encodeURIComponent(s)}`;
-    return base ? `${base}${pathAndSlug}` : pathAndSlug;
+    return buildImpactVerifyUrlShared(slug, {
+      frontendUrl:
+        this.configService.get<string>('FRONTEND_URL') ||
+        this.configService.get<string>('APP_URL'),
+      impactVerifyPath: this.configService.get<string>('IMPACT_VERIFY_PATH'),
+    });
   }
 
   /** QR URL + DB slug + display code for certificates (single source of truth). */
-  private reportVerificationPayload(report: StudentReport) {
+  reportVerificationPayload(report: StudentReport) {
     const slug = report.verificationPublicSlug?.trim() || null;
     return {
       verification_public_slug: slug,
@@ -2004,8 +1997,14 @@ export class StudentReportsService {
     if (shouldSubmit) {
       await this.assertTeamLeadMaySubmitReport(studentId, opportunityIdFromDto);
       const validationIssues = validateReportSectionsForSubmit({
+        section1: report.section1,
+        section2: report.section2,
+        section4: report.section4,
+        section5: report.section5,
         section6: report.section6,
+        section7: report.section7,
         section8: report.section8,
+        section9: report.section9,
         section10: report.section10,
         evidence_urls: Array.isArray(
           (report.section8 as { evidence_files?: string[] })?.evidence_files,

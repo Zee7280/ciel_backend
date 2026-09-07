@@ -44,6 +44,7 @@ import { isTeamApplyFromParticipationAndMembers } from '../opportunities/apply-t
 import { isReportPartnerStepSatisfied } from '../reports/report-partner-approval.util';
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 import { StudentReport } from '../reports/entities/student-report.entity';
+import { readCii, isCommunityAwardMedalReport } from '../reports/community-award.util';
 import { StudentReportsService } from '../reports/student-reports.service';
 import { ReportPartnerApprovalSettingsService } from '../reports/report-partner-approval-settings.service';
 
@@ -3044,6 +3045,67 @@ export class StudentsService {
     };
   }
 
+  /**
+   * "My Rankings" — where each of the student's own verified Community Service reports stands
+   * on CII against three live-computed cohorts: the same supervising faculty's students, the same
+   * university, and the whole CIEL PK network. Mirrors getImpactHistory()'s percentile precedent
+   * (live, not a stored "official run" snapshot) and reuses the same verified/CII definitions the
+   * Community Award model already uses, so a report counts as "verified" identically everywhere.
+   */
+  async getCommunityServiceRankings(studentId: string) {
+    const MIN_COHORT = 3; // a rank inside a smaller pool ("#1 of 1") is misleading, so it's suppressed
+
+    const allReports = await this.studentReportsRepository.find({
+      relations: ['student', 'opportunity'],
+    });
+
+    const uniKey = (r: StudentReport): string | null => {
+      const raw =
+        r.student?.university ||
+        r.student?.institution ||
+        (r.section1 as { team_lead?: { university?: string } } | null)?.team_lead?.university ||
+        '';
+      const trimmed = String(raw).trim().toLowerCase();
+      return trimmed || null;
+    };
+
+    type Scored = { id: string; studentId: string; facultyId: string | null; uni: string | null; cii: number };
+    const eligible: Scored[] = [];
+    for (const r of allReports) {
+      const types = r.opportunity?.types;
+      if (!Array.isArray(types) || !types.some((t) => String(t).trim().toLowerCase() === 'community service')) continue;
+      if (!isCommunityAwardMedalReport({ status: r.status, faculty_status: r.faculty_status, admin_status: r.admin_status })) continue;
+      const cii = readCii(r.section11 as Record<string, unknown> | null);
+      if (cii == null) continue;
+      eligible.push({ id: r.id, studentId: r.studentId, facultyId: r.facultyId ?? null, uni: uniKey(r), cii });
+    }
+
+    const rankWithin = (pool: Scored[], cii: number): { rank: number; of: number } | null => {
+      if (pool.length < MIN_COHORT) return null;
+      return { rank: 1 + pool.filter((p) => p.cii > cii).length, of: pool.length };
+    };
+
+    const mine = allReports.filter((r) => r.studentId === studentId && eligible.some((e) => e.id === r.id));
+
+    return {
+      success: true,
+      data: mine.map((r) => {
+        const scored = eligible.find((e) => e.id === r.id)!;
+        const facultyPool = scored.facultyId ? eligible.filter((e) => e.facultyId === scored.facultyId) : [];
+        const universityPool = scored.uni ? eligible.filter((e) => e.uni === scored.uni) : [];
+        return {
+          id: r.id,
+          opportunityId: r.opportunityId ?? null,
+          title: r.opportunity?.title ?? 'Community Service project',
+          cii: scored.cii,
+          facultyRank: rankWithin(facultyPool, scored.cii),
+          universityRank: rankWithin(universityPool, scored.cii),
+          networkRank: rankWithin(eligible, scored.cii),
+        };
+      }),
+    };
+  }
+
   async getImpactCertificateDownload(
     requestingUserId: string,
     role: string | undefined,
@@ -3056,7 +3118,12 @@ export class StudentsService {
       reportId,
       query,
     );
-    const url = this.pickCertificateUrlFromReport(report);
+    // Reuse the same "single source of truth" the QR code and public verification page already
+    // use, instead of guessing at a certificate file URL that nothing in this codebase ever
+    // generates (pickCertificateUrlFromReport only found one if a matching string happened to
+    // already exist somewhere inside the report's own JSONB sections — practically never true).
+    const url = this.studentReportsService.reportVerificationPayload(report)
+      .impact_verify_url;
     if (!url) {
       throw new NotFoundException('Certificate not available');
     }

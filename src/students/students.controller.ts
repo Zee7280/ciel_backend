@@ -185,6 +185,11 @@ export class StudentsController {
         return this.studentsService.getImpactHistory(req.user.id, req.user.role, body);
     }
 
+    @Get('community-service/rankings')
+    getCommunityServiceRankings(@Request() req) {
+        return this.studentsService.getCommunityServiceRankings(req.user.id);
+    }
+
     @Get('impact/certificates/:id/download')
     getImpactCertificateDownload(
         @Request() req,

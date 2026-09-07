@@ -117,7 +117,12 @@ export class FacultyReportsService {
                     ),
                 ),
             )
-            .andWhere('report.admin_status = :adminApproved', { adminApproved: 'approved' })
+            // Faculty is the sole *first* report approver (see verifyReport()'s admin-approve
+            // gate, which itself requires faculty_status === 'approved') — so faculty must see a
+            // report as soon as the student submits it, not only after Admin has already approved.
+            // Requiring admin_status = 'approved' here made every report unreachable by anyone:
+            // Admin can't approve until Faculty has, and Faculty couldn't see it until Admin had.
+            .andWhere("report.status != 'draft'")
             .orderBy('report.submission_date', 'DESC')
             .getMany();
 
@@ -165,12 +170,12 @@ export class FacultyReportsService {
                     ),
                 ),
             )
-            .andWhere('report.admin_status = :adminApproved', { adminApproved: 'approved' })
+            .andWhere("report.status != 'draft'")
             .getOne();
 
         if (!report) {
             throw new NotFoundException(
-                'Report not found, not assigned to you, or not yet approved by CIEL Admin',
+                'Report not found, not assigned to you, or not yet submitted',
             );
         }
 
@@ -203,12 +208,12 @@ export class FacultyReportsService {
                     ),
                 ),
             )
-            .andWhere('report.admin_status = :adminApproved', { adminApproved: 'approved' })
+            .andWhere("report.status != 'draft'")
             .getOne();
 
         if (!report) {
             throw new NotFoundException(
-                'Report not found, not assigned to you, or not yet approved by CIEL Admin',
+                'Report not found, not assigned to you, or not yet submitted',
             );
         }
 

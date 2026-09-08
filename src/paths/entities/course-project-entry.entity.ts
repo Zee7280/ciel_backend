@@ -220,7 +220,7 @@ export class CourseProjectEntry {
     evidenceTypes: string[];
 
     /** The primary uploaded assignment file (essay/deck/design file/code link) — distinct from evidenceUrls' supporting files. Drives half the Verifiability score. */
-    @Column({ nullable: true })
+    @Column({ type: 'text', nullable: true })
     assignmentFileUrl: string | null;
 
     /** Faculty review gate — only "approved" entries count toward Merit Model rankings/AI picks/showcase, mirroring FYP's eligibility gate. */

@@ -490,6 +490,119 @@ describe('PathsService — coursework faculty review', () => {
             'student@test.com', 'Ali', 'Solar audit', 'Not enough SDG linkage',
         );
     });
+
+    it('approve persists the faculty moderation overrides so they survive a reload', async () => {
+        const { service, courseProjectRepo } = makeReviewService();
+        const moderation = {
+            levels: { evidence: 4, originality: 3 },
+            notes: { originality: 'Lowered — largely templated' },
+            facultyScore: 78,
+            band: 'Merit',
+            lockHash: 'abc123',
+        };
+        const saved = await service.facultyReviewCourseProject('teacher@test.com', 'entry-1', 'approve', undefined, moderation);
+        expect((saved as any).facultyModeration).toEqual(expect.objectContaining(moderation));
+        expect((saved as any).facultyModeration.at).toEqual(expect.any(String));
+        expect(courseProjectRepo.save).toHaveBeenCalledWith(
+            expect.objectContaining({ facultyModeration: expect.objectContaining({ facultyScore: 78 }) }),
+        );
+    });
+
+    it('revision/reject clear any previously stored faculty moderation, same as the ribbon', async () => {
+        const { service } = makeReviewService();
+        const saved = await service.facultyReviewCourseProject('teacher@test.com', 'entry-1', 'reject', 'Not enough SDG linkage');
+        expect((saved as any).facultyModeration).toBeNull();
+    });
+
+    it('rejects with no reason are refused — a student is entitled to know why', async () => {
+        const { service, courseProjectRepo } = makeReviewService();
+        await expect(
+            service.facultyReviewCourseProject('teacher@test.com', 'entry-1', 'reject'),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        await expect(
+            service.facultyReviewCourseProject('teacher@test.com', 'entry-1', 'reject', '   '),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(courseProjectRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('revision requests with no reason are refused', async () => {
+        const { service } = makeReviewService();
+        await expect(
+            service.facultyReviewCourseProject('teacher@test.com', 'entry-1', 'revision'),
+        ).rejects.toBeInstanceOf(BadRequestException);
+    });
+});
+
+describe('PathsService — coursework AI score is never returned to a student', () => {
+    function makeQb(result: Record<string, unknown>[]) {
+        const qb: any = {
+            where: jest.fn(() => qb),
+            andWhere: jest.fn(() => qb),
+            orWhere: jest.fn(() => qb),
+            orderBy: jest.fn(() => qb),
+            getMany: jest.fn(async () => result),
+            getOne: jest.fn(async () => result[0] ?? null),
+        };
+        return qb;
+    }
+
+    const makeStudentReadService = (entry: Record<string, unknown>) => {
+        const courseProjectRepo = {
+            createQueryBuilder: jest.fn(() => makeQb([entry])),
+            find: jest.fn().mockResolvedValue([entry]),
+        };
+        const service = new PathsService(
+            courseProjectRepo as any,
+            {} as any,
+            {} as any,
+            makeInviteRepo() as any,
+            { findOne: jest.fn() } as any,
+            {} as any,
+            {} as any,
+            { createNotification: jest.fn() } as any,
+            {} as any,
+        );
+        jest.spyOn(service as any, 'courseProjectAnnotate').mockImplementation(async (entries: unknown) => entries as any);
+        return { service, courseProjectRepo };
+    };
+
+    const approvedEntry = {
+        id: 'entry-1',
+        userId: 'student-1',
+        status: 'submitted',
+        facultyApprovalStatus: 'approved',
+        studentInfo: { universityName: 'CIEL University' },
+        meritRibbon: null,
+    };
+
+    it('listCourseProjects strips the numeric total, keeping only rank/of/scope/badge', async () => {
+        const { service } = makeStudentReadService({ ...approvedEntry });
+        const [result] = await service.listCourseProjects('student-1', 'student@test.com');
+        expect((result as any).meritRibbon).toBeTruthy();
+        expect((result as any).meritRibbon.total).toBeUndefined();
+        expect((result as any).meritRibbon.rank).toBe(1);
+    });
+
+    it('getCourseProjectByIdForUser strips the numeric total for the owning student', async () => {
+        const { service } = makeStudentReadService({ ...approvedEntry });
+        const result = await service.getCourseProjectByIdForUser('student-1', 'student@test.com', 'entry-1');
+        expect((result as any).meritRibbon).toBeTruthy();
+        expect((result as any).meritRibbon.total).toBeUndefined();
+    });
+
+    it('never returns the faculty moderation breakdown to the owning student', async () => {
+        const withModeration = {
+            ...approvedEntry,
+            facultyModeration: { levels: { evidence: 4 }, facultyScore: 78, at: '2026-01-01' },
+        };
+        const { service } = makeStudentReadService(withModeration);
+        const [listed] = await service.listCourseProjects('student-1', 'student@test.com');
+        expect((listed as any).facultyModeration).toBeNull();
+
+        const { service: service2 } = makeStudentReadService({ ...withModeration });
+        const byId = await service2.getCourseProjectByIdForUser('student-1', 'student@test.com', 'entry-1');
+        expect((byId as any).facultyModeration).toBeNull();
+    });
 });
 
 describe('PathsService — coursework submit/resubmit emails', () => {

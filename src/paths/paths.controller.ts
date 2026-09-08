@@ -97,7 +97,7 @@ export class PathsController {
     @UseGuards(RolesGuard)
     @Roles(UserRole.FACULTY)
     async facultyReviewCourseProject(@Request() req, @Param('id', ParseUUIDPipe) id: string, @Body() dto: FacultyReviewCourseProjectDto) {
-        const data = await this.pathsService.facultyReviewCourseProject(req.user.email, id, dto.action, dto.note);
+        const data = await this.pathsService.facultyReviewCourseProject(req.user.email, id, dto.action, dto.note, dto.moderation);
         return { success: true, data };
     }
 

@@ -1850,7 +1850,6 @@ export class MailService {
         <p>${this.escHtmlPlain(studentFirstName)}, your coursework project was not approved:</p>
         <p style="font-size:16px;"><strong>${titleEsc}</strong></p>
         ${feedbackBlock}
-        <p style="margin-top:20px;color:#555;">Open the report, fix, and resubmit — nothing is penalised.</p>
         <p style="margin-top:24px;">Regards,<br><strong>CIEL PK Team</strong><br><span style="font-size:13px;color:#64748b;">Community Impact Education Lab</span></p>
       </div>
     `;

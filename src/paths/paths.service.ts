@@ -473,6 +473,13 @@ export class PathsService {
     id: string,
     action: 'approve' | 'reject' | 'revision',
     note?: string,
+    moderation?: {
+      levels: Record<string, number>;
+      notes?: Record<string, string>;
+      facultyScore: number;
+      band?: string;
+      lockHash?: string;
+    },
   ) {
     const email = (facultyEmail || '').trim().toLowerCase();
     if (!email) throw new NotFoundException('Course project entry not found');
@@ -484,9 +491,16 @@ export class PathsService {
     ) {
       throw new NotFoundException('Course project entry not found');
     }
+    if (action !== 'approve' && !(note || '').trim()) {
+      throw new BadRequestException(
+        'A reason is required when requesting a revision or rejecting a coursework report.',
+      );
+    }
     entry.facultyApprovalStatus =
       action === 'approve' ? 'approved' : action === 'revision' ? 'revision_requested' : 'rejected';
     entry.facultyApprovalNote = note ?? null;
+    entry.facultyModeration =
+      action === 'approve' && moderation ? { ...moderation, at: new Date().toISOString() } : null;
     entry.facultyApprovalAt = new Date();
     if (action !== 'approve') entry.meritRibbon = null;
     const saved = await this.courseProjectRepo.save(entry);
@@ -504,18 +518,14 @@ export class PathsService {
         await this.notificationsService.createNotification(saved.userId, {
           type: 'update',
           title: 'Revision requested on your coursework',
-          message: extra
-            ? `${first}, “${title}” needs a revision before it can be approved. ${extra} Open the report, fix, and resubmit — nothing is penalised.`
-            : `${first}, “${title}” needs a revision before it can be approved. Open the report, fix, and resubmit — nothing is penalised.`,
+          message: `${first}, “${title}” needs a revision before it can be approved. ${extra} Open the report, fix, and resubmit — nothing is penalised.`,
         });
       } else {
         const extra = (note || '').trim();
         await this.notificationsService.createNotification(saved.userId, {
           type: 'update',
           title: 'Your coursework was rejected',
-          message: extra
-            ? `${first}, “${title}” was rejected. ${extra} Open the report, fix, and resubmit — nothing is penalised.`
-            : `${first}, “${title}” was rejected. Open the report, fix, and resubmit — nothing is penalised.`,
+          message: `${first}, “${title}” was rejected. ${extra}`,
         });
       }
       const student = await this.usersRepo.findOne({ where: { id: saved.userId }, select: ['email'] });
@@ -602,7 +612,19 @@ export class PathsService {
     const entries = await qb.orderBy('e."updatedAt"', 'DESC').getMany();
     const annotated = await this.courseProjectAnnotate(entries);
     const withRanks = await this.attachLiveCourseworkRanks(annotated);
-    return withRanks.map((e) => ({ ...e, isOwner: e.userId === userId }));
+    return withRanks.map((e) => ({
+      ...PathsService.redactMeritScoreForStudent(e),
+      isOwner: e.userId === userId,
+    }));
+  }
+
+  /** The numeric AI Merit Model score — and the faculty's own per-criterion moderation of it — must
+   * never reach a student; only the coarse rank/of/scope/badgeLevel tier is student-facing. Faculty/
+   * university/admin views call attachLiveCourseworkRanks directly and keep the real values. */
+  private static redactMeritScoreForStudent<T extends CourseProjectEntry>(entry: T): T {
+    if (!entry.meritRibbon) return { ...entry, facultyModeration: null };
+    const { total, ...rest } = entry.meritRibbon;
+    return { ...entry, meritRibbon: rest, facultyModeration: null };
   }
 
   async createCourseProject(userId: string) {
@@ -631,7 +653,10 @@ export class PathsService {
     if (!entry) throw new NotFoundException('Course project entry not found');
     const [annotated] = await this.courseProjectAnnotate([entry]);
     const [withRank] = await this.attachLiveCourseworkRanks([annotated]);
-    return { ...withRank, isOwner: entry.userId === userId };
+    return {
+      ...PathsService.redactMeritScoreForStudent(withRank),
+      isOwner: entry.userId === userId,
+    };
   }
 
   private async canEditCourseProject(

@@ -221,7 +221,7 @@ export class CourseProjectEntry {
 
     /** The primary uploaded assignment file (essay/deck/design file/code link) — distinct from evidenceUrls' supporting files. Drives half the Verifiability score. */
     @Column({ nullable: true })
-    assignmentFileUrl: string;
+    assignmentFileUrl: string | null;
 
     /** Faculty review gate — only "approved" entries count toward Merit Model rankings/AI picks/showcase, mirroring FYP's eligibility gate. */
     @Column({ default: 'pending' })
@@ -232,6 +232,20 @@ export class CourseProjectEntry {
 
     @Column({ type: 'timestamp', nullable: true })
     facultyApprovalAt: Date | null;
+
+    /** The faculty's own per-criterion moderation of the AI proposal, captured and frozen at approval —
+     * without this, the "Faculty Moderation" tab's overrides/reasons/audit hash were computed in the UI
+     * and silently discarded on reload since only action+note ever reached the backend. Cleared whenever
+     * the record leaves 'approved' (revision/reject), same as meritRibbon, so a stale lock never lingers. */
+    @Column({ type: 'jsonb', nullable: true })
+    facultyModeration?: {
+        levels: Record<string, number>;
+        notes?: Record<string, string>;
+        facultyScore: number;
+        band?: string;
+        lockHash?: string;
+        at: string;
+    } | null;
 
     /** Pinned by the last analyzer notify in this card's eligible pool — shown on the student's Impact Wall.
      * badgeLevel is a rank-percentile tier (see PathsService.computeRankBadgeLevel); previousRank is

@@ -1,10 +1,22 @@
 import { Type } from 'class-transformer';
-import { IsArray, IsBoolean, IsEmail, IsIn, IsInt, IsOptional, IsString, Max, Min, ValidateIf, ValidateNested } from 'class-validator';
+import { IsArray, IsBoolean, IsEmail, IsIn, IsInt, IsObject, IsOptional, IsString, Max, Min, ValidateIf, ValidateNested } from 'class-validator';
+
+/** The faculty's per-criterion overrides of the AI-proposed 0-5 levels, captured at the moment of
+ * approval — this is what actually gets locked and shown back on reload, distinct from the AI's
+ * own proposal in courseworkFacultyAnalyser's rubric. */
+export class FacultyModerationDto {
+    @IsObject() levels: Record<string, number>;
+    @IsOptional() @IsObject() notes?: Record<string, string>;
+    @IsInt() @Min(0) @Max(100) facultyScore: number;
+    @IsOptional() @IsString() band?: string;
+    @IsOptional() @IsString() lockHash?: string;
+}
 
 export class FacultyReviewCourseProjectDto {
     @IsIn(['approve', 'reject', 'revision'])
     action: 'approve' | 'reject' | 'revision';
     @IsOptional() @IsString() note?: string;
+    @IsOptional() @ValidateNested() @Type(() => FacultyModerationDto) moderation?: FacultyModerationDto;
 }
 
 export class CourseProjectStudentInfoDto {

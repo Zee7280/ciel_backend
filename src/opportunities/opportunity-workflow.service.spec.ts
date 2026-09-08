@@ -63,6 +63,25 @@ describe('OpportunityWorkflowService', () => {
         expect(opp.partnerApprovalStatus).toBe(LINE_STATUS.REVISION_REQUESTED);
     });
 
+    it('initStudentPrivateCandidate skips faculty and routes to CIEL admin', () => {
+        const opp = {} as Opportunity;
+        service.initStudentPrivateCandidate(opp, false);
+        expect(opp.isStudentCreated).toBe(true);
+        expect(opp.facultyApprovalStatus).toBe(LINE_STATUS.NOT_APPLICABLE);
+        expect(opp.workflowStage).toBe(WORKFLOW_STAGE.PENDING_ADMIN);
+        expect(opp.status).toBe('pending_approval');
+        expect(opp.partnerApprovalStatus).toBe(LINE_STATUS.NOT_APPLICABLE);
+    });
+
+    it('initStudentPrivateCandidate with partner waits for host then admin', () => {
+        const opp = {} as Opportunity;
+        service.initStudentPrivateCandidate(opp, true);
+        expect(opp.workflowStage).toBe(WORKFLOW_STAGE.PENDING_PARTNER);
+        expect(opp.status).toBe('pending_partner');
+        expect(opp.partnerVerified).toBe(false);
+        expect(opp.facultyApprovalStatus).toBe(LINE_STATUS.NOT_APPLICABLE);
+    });
+
     it('afterAdminRejected remains terminal rejected', () => {
         const opp = { isStudentCreated: true } as Opportunity;
         service.afterAdminRejected(opp, 'Not eligible');

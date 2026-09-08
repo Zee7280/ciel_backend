@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { StudentReportsService } from './student-reports.service';
@@ -193,6 +194,82 @@ describe('StudentReportsService', () => {
             }),
         );
         expect(mockMailService.sendAdminStudentReportSubmitted).toHaveBeenCalledTimes(1);
+    });
+
+    it('blocks submission when a team member has not individually met required hours, even though the pooled team total clears the bar', async () => {
+        mockOpportunityRepository.findOne.mockResolvedValue({
+            id: 'opp-1',
+            title: 'Test Opportunity',
+            isStudentCreated: false,
+            timeline: { expected_hours: 16 },
+        });
+        mockParticipantRepository.find.mockResolvedValue([
+            { id: 'p-lead', projectId: 'opp-1', studentId: 'student-1', status: 'accepted', fullName: 'Lead Student' },
+            { id: 'p-member', projectId: 'opp-1', studentId: 'student-2', status: 'accepted', fullName: 'Quiet Teammate' },
+        ]);
+        mockAttendanceLogsRepository.find.mockResolvedValue([
+            { participantId: 'p-lead', projectId: 'opp-1', sessionHours: 32, approvalStatus: 'approved', entryStatus: 'verified' },
+        ]);
+
+        await expect(
+            service.createReport(
+                'student-1',
+                { opportunityId: 'opp-1', ...MIN_VALID_SUBMIT_SECTIONS },
+                [],
+                true,
+            ),
+        ).rejects.toThrow(/individually meet the required hours/);
+        expect(mockStudentReportsRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('allows submission once every team member has individually logged verified hours', async () => {
+        mockOpportunityRepository.findOne.mockResolvedValue({
+            id: 'opp-1',
+            title: 'Test Opportunity',
+            isStudentCreated: false,
+            timeline: { expected_hours: 16 },
+        });
+        mockParticipantRepository.find.mockResolvedValue([
+            { id: 'p-lead', projectId: 'opp-1', studentId: 'student-1', status: 'accepted', fullName: 'Lead Student' },
+            { id: 'p-member', projectId: 'opp-1', studentId: 'student-2', status: 'accepted', fullName: 'Teammate' },
+        ]);
+        mockAttendanceLogsRepository.find.mockResolvedValue([
+            { participantId: 'p-lead', projectId: 'opp-1', sessionHours: 16, approvalStatus: 'approved', entryStatus: 'verified' },
+            { participantId: 'p-member', projectId: 'opp-1', sessionHours: 20, approvalStatus: null, entryStatus: 'verified' },
+        ]);
+
+        const result = await service.createReport(
+            'student-1',
+            { opportunityId: 'opp-1', ...MIN_VALID_SUBMIT_SECTIONS },
+            [],
+            true,
+        );
+
+        expect(result.message).toBe('Report submitted successfully.');
+    });
+
+    it('ignores an unreviewed attendance log (pending, no approval yet) when checking individual hours', async () => {
+        mockOpportunityRepository.findOne.mockResolvedValue({
+            id: 'opp-1',
+            title: 'Test Opportunity',
+            isStudentCreated: false,
+            timeline: { expected_hours: 16 },
+        });
+        mockParticipantRepository.find.mockResolvedValue([
+            { id: 'p-lead', projectId: 'opp-1', studentId: 'student-1', status: 'accepted', fullName: 'Lead Student' },
+        ]);
+        mockAttendanceLogsRepository.find.mockResolvedValue([
+            { participantId: 'p-lead', projectId: 'opp-1', sessionHours: 20, approvalStatus: null, entryStatus: 'pending' },
+        ]);
+
+        await expect(
+            service.createReport(
+                'student-1',
+                { opportunityId: 'opp-1', ...MIN_VALID_SUBMIT_SECTIONS },
+                [],
+                true,
+            ),
+        ).rejects.toThrow(BadRequestException);
     });
 
     it('stores null primary_sdg_goal when section3 goal_number is an empty string', async () => {
@@ -694,6 +771,53 @@ describe('StudentReportsService', () => {
         expect(report.admin_status).toBe('rejected');
         expect(report.admin_feedback).toBe('Please fix attendance hours.');
         expect(report.adminApprovedAt).toBeNull();
+    });
+
+    it('refuses to edit a verified report that was not legitimately rejected/revision', async () => {
+        mockStudentReportsRepository.findOne.mockResolvedValue({
+            id: 'report-1',
+            studentId: 'student-1',
+            opportunityId: 'opp-1',
+            status: 'verified',
+            admin_status: 'approved',
+            partner_status: 'approved',
+            faculty_status: 'approved',
+        });
+
+        await expect(
+            service.createReport(
+                'student-1',
+                { opportunityId: 'opp-1', section2: { problem_statement: 'sneaky post-verification edit' } },
+                [],
+                false,
+            ),
+        ).rejects.toThrow('already been verified');
+        expect(mockStudentReportsRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('a late faculty rejection reopens an already-verified report for editing, and clears faculty_status on resubmit', async () => {
+        const report: Record<string, unknown> = {
+            id: 'report-1',
+            studentId: 'student-1',
+            opportunityId: 'opp-1',
+            status: 'verified',
+            admin_status: 'approved',
+            partner_status: 'approved',
+            faculty_status: 'rejected',
+        };
+        mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+        const result = await service.createReport(
+            'student-1',
+            { opportunityId: 'opp-1', ...MIN_VALID_SUBMIT_SECTIONS },
+            [],
+            true,
+        );
+
+        expect(result.message).toBe('Report submitted successfully.');
+        expect(mockStudentReportsRepository.save).toHaveBeenCalledWith(
+            expect.objectContaining({ faculty_status: 'pending' }),
+        );
     });
 
     it('returns admin feedback and editable flag from checkReportStatus', async () => {

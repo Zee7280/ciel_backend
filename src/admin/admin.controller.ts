@@ -317,14 +317,20 @@ export class AdminController {
     return { success: true, data };
   }
 
+  /** Always the real community-service report listing (StudentReport) — never forks on a query
+   * param, so this URL can't silently return a completely different entity/shape depending on
+   * what the caller passes. The legacy generic-Report listing lives at its own route below. */
   @Get('reports')
   getReports(@Query() query: any) {
-    // Fallback for existing system reports logic
-    if (query.type === 'system') {
-      return this.adminService.getReports();
-    }
-    // As per new spec, this endpoint now serves student reports
     return this.studentReportsService.findAll(query);
+  }
+
+  /** The legacy, generic content-moderation `Report` entity — unrelated to community-service
+   * StudentReports. Kept at its own explicit URL (previously a `?type=system` query param on
+   * `/admin/reports` itself, which made the same URL return two unrelated shapes). */
+  @Get('reports/legacy-system')
+  getLegacySystemReports() {
+    return this.adminService.getReports();
   }
 
   @Post('reports/merge')

@@ -371,6 +371,35 @@ export class PlatformStatsService {
     return Number.isFinite(total) ? Math.round(total) : 0;
   }
 
+  /** Real, server-computed verified hours per project — same verified definition as
+   * sumEngagementHours, batched across every project at once so the community-dividend ledger
+   * doesn't run one query per report. Never trusts a report's own client-submitted
+   * section1.metrics.total_verified_hours, which a report's own author controls. */
+  private async sumVerifiedHoursByProject(
+    projectIds: string[],
+  ): Promise<Map<string, number>> {
+    const byProject = new Map<string, number>();
+    const uniqueIds = Array.from(new Set(projectIds.filter(Boolean)));
+    if (uniqueIds.length === 0) return byProject;
+
+    const rows = await this.attendanceLogsRepository
+      .createQueryBuilder('log')
+      .select('log.projectId', 'projectId')
+      .addSelect('COALESCE(SUM(log.sessionHours), 0)', 'total')
+      .where('log.projectId IN (:...uniqueIds)', { uniqueIds })
+      .andWhere(
+        `(log.approvalStatus = 'approved' OR log.entryStatus = 'verified')`,
+      )
+      .groupBy('log.projectId')
+      .getRawMany<{ projectId: string; total: string | number | null }>();
+
+    for (const row of rows) {
+      const total = Number(row.total ?? 0);
+      byProject.set(row.projectId, Number.isFinite(total) ? total : 0);
+    }
+    return byProject;
+  }
+
   private async getAverageCiiScore(): Promise<number> {
     const reports = await this.studentReportsRepository.find({
       select: ['section11'],
@@ -420,6 +449,9 @@ export class PlatformStatsService {
       where: VERIFIED_RECORD_STATUSES.map((status) => ({ status })),
       relations: ['student', 'opportunity', 'opportunity.organization'],
     });
+    const verifiedHoursByProject = await this.sumVerifiedHoursByProject(
+      reports.map((r) => r.opportunityId || r.project_id),
+    );
 
     const studentIds = new Set<string>();
     const sdgSet = new Set<number>();
@@ -452,7 +484,8 @@ export class PlatformStatsService {
     for (const report of reports) {
       if (report.studentId) studentIds.add(report.studentId);
 
-      const hours = Number(report.section1?.metrics?.total_verified_hours) || 0;
+      const hours =
+        verifiedHoursByProject.get(report.opportunityId || report.project_id) || 0;
       verifiedHours += hours;
 
       const beneficiaries =

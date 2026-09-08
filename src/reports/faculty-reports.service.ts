@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, Repository, SelectQueryBuilder, WhereExpressionBuilder } from 'typeorm';
 import { StudentReport } from './entities/student-report.entity';
@@ -214,6 +214,12 @@ export class FacultyReportsService {
         if (!report) {
             throw new NotFoundException(
                 'Report not found, not assigned to you, or not yet submitted',
+            );
+        }
+
+        if (status === 'rejected' && !remarks?.trim()) {
+            throw new BadRequestException(
+                'A reason is required when rejecting a report.',
             );
         }
 

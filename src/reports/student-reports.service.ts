@@ -205,6 +205,79 @@ export class StudentReportsService {
     };
   }
 
+  /** Same "verified" definition used throughout section1-analytics.service.ts and
+   * platform-stats.service.ts's sumEngagementHours — approvalStatus alone is null for any row that
+   * predates the approval-request workflow, so it must never be treated as verified on its own;
+   * entryStatus is the field that actually defaults to 'pending' and only flips to 'verified' once
+   * reviewed. Deliberately stricter than the frontend's own client-side approximation. */
+  private isAttendanceLogVerifiedForHours(
+    log: Pick<AttendanceLog, 'approvalStatus' | 'entryStatus'>,
+  ): boolean {
+    return log.approvalStatus === 'approved' || log.entryStatus === 'verified';
+  }
+
+  /**
+   * The authoritative, server-computed answer to "how many verified hours has each team member
+   * actually logged on this project" — read from the real `participations`/`attendance_logs`
+   * tables, never from the client-submitted `section1.metrics` blob a report carries. Used to gate
+   * submission (every active roster member must individually clear the bar, not just the team's
+   * pooled total) and to compute the real Community Dividend payout figure.
+   */
+  private async computeServerVerifiedHours(projectId: string): Promise<{
+    hoursByParticipationId: Map<string, number>;
+    activeRoster: Participation[];
+    totalVerifiedHours: number;
+  }> {
+    const [roster, logs] = await Promise.all([
+      this.participantRepository.find({ where: { projectId } }),
+      this.attendanceLogsRepository.find({ where: { projectId } }),
+    ]);
+    const activeRoster = roster.filter((p) => p.status !== 'rejected');
+    const hoursByParticipationId = new Map<string, number>();
+    let totalVerifiedHours = 0;
+    for (const log of logs) {
+      if (!this.isAttendanceLogVerifiedForHours(log)) continue;
+      const hours = Number(log.sessionHours) || 0;
+      hoursByParticipationId.set(
+        log.participantId,
+        (hoursByParticipationId.get(log.participantId) || 0) + hours,
+      );
+      totalVerifiedHours += hours;
+    }
+    return { hoursByParticipationId, activeRoster, totalVerifiedHours };
+  }
+
+  /**
+   * Throws if any active team member hasn't individually logged and had verified their own
+   * required hours — closes the "one teammate logs everything, whole team qualifies" gap. Hours
+   * can never be pooled from one member to cover another (per product rule).
+   */
+  private async assertEveryTeamMemberMetRequiredHours(
+    projectId: string,
+    requiredHoursPerStudent: number,
+  ): Promise<void> {
+    if (!(requiredHoursPerStudent > 0)) return;
+    const { hoursByParticipationId, activeRoster } =
+      await this.computeServerVerifiedHours(projectId);
+    if (activeRoster.length === 0) return;
+    const shortfalls = activeRoster.filter(
+      (p) => (hoursByParticipationId.get(p.id) || 0) < requiredHoursPerStudent,
+    );
+    if (shortfalls.length > 0) {
+      throw new BadRequestException({
+        message:
+          shortfalls.length === activeRoster.length
+            ? 'Required engagement hours must be met to submit this report.'
+            : 'Every team member must individually meet the required hours — hours cannot be pooled from one member to cover another.',
+        validation_issues: shortfalls.map((p) => ({
+          section: 1,
+          field: 'metrics.individual_hours',
+          message: `${p.fullName || 'A team member'} has not yet met the required verified hours.`,
+        })),
+      });
+    }
+  }
+
   /** Aligns legacy DB values with student UI / frontend lifecycle names. */
   private toPublicReportStatus(raw: string | null | undefined): string {
     if (raw === 'payment_pending') return 'pending_payment';
@@ -225,22 +298,30 @@ export class StudentReportsService {
   }
 
   private isReportRejectedForRevision(
-    report: Pick<StudentReport, 'status' | 'admin_status' | 'partner_status'>,
+    report: Pick<
+      StudentReport,
+      'status' | 'admin_status' | 'partner_status' | 'faculty_status'
+    >,
   ): boolean {
     const st = String(report.status || '').toLowerCase();
     const adm = String(report.admin_status || '').toLowerCase();
     const partner = String(report.partner_status || '').toLowerCase();
+    const fac = String(report.faculty_status || '').toLowerCase();
     return (
       st === 'rejected' ||
       st === 'revision' ||
       adm === 'rejected' ||
-      partner === 'rejected'
+      partner === 'rejected' ||
+      fac === 'rejected'
     );
   }
 
   /** Student may edit when in draft/revision or when an approver returned the report for fixes. */
   private isReportEditableForStudent(
-    report: Pick<StudentReport, 'status' | 'admin_status' | 'partner_status'>,
+    report: Pick<
+      StudentReport,
+      'status' | 'admin_status' | 'partner_status' | 'faculty_status'
+    >,
   ): boolean {
     if (this.isReportRejectedForRevision(report)) return true;
     const st = String(report.status || '').toLowerCase();
@@ -249,16 +330,20 @@ export class StudentReportsService {
 
   /**
    * Legacy rows may have admin_status=rejected while status stayed submitted; expose revision to the UI.
+   * A faculty rejection — including one that arrives after admin/partner already approved — always
+   * reads back as "revision", since faculty is the first and most consequential gate in the chain.
    */
   private resolveStudentFacingReportStatus(
     rawReportStatus: string | null | undefined,
     adminStatus?: string | null,
     partnerStatus?: string | null,
+    facultyStatus?: string | null,
   ): string {
     const raw = String(rawReportStatus || '').toLowerCase();
     const adm = String(adminStatus || '').toLowerCase();
     const partner = String(partnerStatus || '').toLowerCase();
-    if (raw === 'rejected') return 'revision';
+    const fac = String(facultyStatus || '').toLowerCase();
+    if (raw === 'rejected' || fac === 'rejected') return 'revision';
     if (
       (adm === 'rejected' || partner === 'rejected') &&
       (raw === 'submitted' || raw === 'partner_verified')
@@ -1419,6 +1504,7 @@ export class StudentReportsService {
       latest,
       report.status,
       report.admin_status,
+      report.faculty_status,
     );
     if (derived.payment_verified) {
       return {
@@ -1658,6 +1744,7 @@ export class StudentReportsService {
     const paymentStatus = latestPayment?.status ?? null;
     const verified =
       report.admin_status === 'approved' &&
+      report.faculty_status !== 'rejected' &&
       (report.status === 'verified' || report.status === 'paid');
 
     if (!verified) {
@@ -1721,10 +1808,13 @@ export class StudentReportsService {
     latest: Payment | null | undefined,
     rawReportStatus: string,
     adminStatus?: string | null,
+    facultyStatus?: string | null,
   ) {
     const publicStatus = this.resolveStudentFacingReportStatus(
       rawReportStatus,
       adminStatus,
+      undefined,
+      facultyStatus,
     );
     const reportStatus = String(rawReportStatus || '').toLowerCase();
     const payment_verified =
@@ -1892,14 +1982,34 @@ export class StudentReportsService {
     const lockedReportStatuses = this.lockedReportStatusesForStudentWrite();
 
     if (report) {
+      // Captured before any of the reset-to-pending mutations below so a legitimate
+      // reject→edit→resubmit isn't mistaken for editing an already-finalized report.
+      const wasRejectedForRevision = this.isReportRejectedForRevision(report);
+
+      // Once a report is verified/paid, its content must not change without going back
+      // through every reviewer — otherwise an already-issued certificate/award could be
+      // silently inflated after the fact. The only legitimate write here is a genuine
+      // reject/revision resubmit, which the block above already special-cases.
+      if (
+        (priorReportStatus === 'verified' || priorReportStatus === 'paid') &&
+        !wasRejectedForRevision
+      ) {
+        throw new BadRequestException(
+          'This report has already been verified and can no longer be edited.',
+        );
+      }
+
       // Update existing report
       if (shouldSubmit) {
-        if (this.isReportRejectedForRevision(report)) {
+        if (wasRejectedForRevision) {
           report.admin_status = 'pending';
           if (
             String(report.partner_status || '').toLowerCase() === 'rejected'
           ) {
             report.partner_status = 'pending';
+          }
+          if (String(report.faculty_status || '').toLowerCase() === 'rejected') {
+            report.faculty_status = 'pending';
           }
           report.adminApprovedAt = null;
           report.partnerApprovedAt = null;
@@ -1908,7 +2018,7 @@ export class StudentReportsService {
         this.applyStatusAfterStudentSubmit(report);
       } else if (!lockedReportStatuses.has(report.status)) {
         report.status = 'draft';
-      } else if (this.isReportRejectedForRevision(report)) {
+      } else if (wasRejectedForRevision) {
         report.status = 'revision';
       }
       if (parsedData.section1) report.section1 = parsedData.section1;
@@ -2019,6 +2129,15 @@ export class StudentReportsService {
           validation_issues: validationIssues,
         });
       }
+      if (opportunityIdFromDto) {
+        const requiredHoursPerStudent =
+          Number((opportunityForSummary?.timeline as { expected_hours?: unknown } | undefined)?.expected_hours) ||
+          16;
+        await this.assertEveryTeamMemberMetRequiredHours(
+          String(opportunityIdFromDto),
+          requiredHoursPerStudent,
+        );
+      }
     }
 
     if (shouldSubmit) {
@@ -2121,9 +2240,19 @@ export class StudentReportsService {
     const lockedReportStatuses = this.lockedReportStatusesForStudentWrite();
 
     if (report) {
+      const priorReportStatus = report.status;
+      const wasRejectedForRevision = this.isReportRejectedForRevision(report);
+      if (
+        (priorReportStatus === 'verified' || priorReportStatus === 'paid') &&
+        !wasRejectedForRevision
+      ) {
+        throw new BadRequestException(
+          'This report has already been verified and can no longer be edited.',
+        );
+      }
       if (!lockedReportStatuses.has(report.status)) {
         report.status = 'draft';
-      } else if (this.isReportRejectedForRevision(report)) {
+      } else if (wasRejectedForRevision) {
         report.status = 'revision';
       }
       if (parsedData.project_id) report.project_id = parsedData.project_id;
@@ -2624,7 +2753,12 @@ export class StudentReportsService {
     );
     const adminStatus = report.admin_status ?? 'pending';
     const { status, payment_verified, ...paymentRest } =
-      this.paymentDerivedFields(latestPayment, report.status, adminStatus);
+      this.paymentDerivedFields(
+        latestPayment,
+        report.status,
+        adminStatus,
+        report.faculty_status,
+      );
     const approvalContext = this.getPublicReportApprovalContext(report);
     const feedback = this.buildStudentReportFeedback(report);
     const isEditable = this.isReportEditableForStudent(report);
@@ -2900,7 +3034,12 @@ export class StudentReportsService {
         );
         const adminStatus = r.admin_status ?? 'pending';
         const { status, payment_verified, ...paymentRest } =
-          this.paymentDerivedFields(latest, r.status, adminStatus);
+          this.paymentDerivedFields(
+            latest,
+            r.status,
+            adminStatus,
+            r.faculty_status,
+          );
         const feedback = this.buildStudentReportFeedback(r);
         data.push({
           status,
@@ -2954,7 +3093,12 @@ export class StudentReportsService {
     );
     const adminStatus = report.admin_status ?? 'pending';
     const { status, payment_verified, ...paymentRest } =
-      this.paymentDerivedFields(latest, report.status, adminStatus);
+      this.paymentDerivedFields(
+        latest,
+        report.status,
+        adminStatus,
+        report.faculty_status,
+      );
     const feedback = this.buildStudentReportFeedback(report);
 
     return {

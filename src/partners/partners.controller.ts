@@ -212,6 +212,9 @@ export class PartnersController {
     }
 
     // Reports Endpoints
+    /** NGO-only impact-form CRUD (legacy `Report` entity) — NOT the same feature as singular
+     * `/partner/reports` on PartnerAliasController below, which returns community-service
+     * StudentReport dossiers. See that controller's class comment for the full explanation. */
     @Get('reports')
     getReports(@Request() req, @Query() query) {
         return this.reportsService.findAllForPartner(req.user.organizationId, query);
@@ -396,7 +399,14 @@ export class PartnersController {
     }
 }
 
-// Explicit alias controller for singular /partner routes
+// Explicit alias controller for singular /partner routes.
+// NOTE: `reports` below is NOT actually an alias of PartnersController's plural `/partners/reports`
+// — despite the class-level comment, the two intentionally serve different, unrelated features:
+// this one returns community-service StudentReport dossiers (university/partner report review),
+// while plural `/partners/reports` backs the separate NGO-only impact-form CRUD (legacy `Report`
+// entity, see ReportsService). Do not "fix" one to match the other without confirming with product
+// which feature a given caller actually wants — the frontend deliberately calls both for different
+// screens (see partners/reports/page.tsx and components/partners/ReportForm.tsx).
 @Controller('partner')
 @UseGuards(JwtAuthGuard, RolesGuard, MembershipActiveGuard)
 @Roles(UserRole.UNIVERSITY, UserRole.NGO, UserRole.CORPORATE, UserRole.ORGANIZATION_ADMIN)
@@ -409,6 +419,8 @@ export class PartnerAliasController {
         private readonly facultyUniversityScope: FacultyUniversityScopeService,
     ) { }
 
+    /** Community-service StudentReport dossiers for this partner org — NOT the same feature as
+     * plural `/partners/reports` (NGO impact-form CRUD, legacy `Report` entity). See class comment. */
     @Get('reports')
     async getReports(@Request() req, @Query() query: any) {
         if (!req.user.organizationId) {

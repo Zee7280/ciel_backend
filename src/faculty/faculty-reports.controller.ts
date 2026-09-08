@@ -4,6 +4,7 @@ import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
 import { FacultyReportsService } from '../reports/faculty-reports.service';
+import { FacultyReportActionDto } from './dto/faculty-report-action.dto';
 
 @Controller('faculty/reports')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -25,7 +26,7 @@ export class FacultyReportsController {
     async handleAction(
         @Request() req,
         @Param('id') id: string,
-        @Body() body: { status: 'approved' | 'rejected'; remarks?: string }
+        @Body() body: FacultyReportActionDto
     ) {
         return await this.facultyReportsService.updateAction(
             id,

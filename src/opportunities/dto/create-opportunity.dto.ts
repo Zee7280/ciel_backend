@@ -29,6 +29,14 @@ export class TimelineDto {
     @IsInt()
     @IsOptional()
     volunteers_required?: number;
+
+    @IsString()
+    @IsOptional()
+    application_deadline?: string;
+
+    @IsString()
+    @IsOptional()
+    schedule_notes?: string;
 }
 
 export class SupervisionDto {
@@ -86,6 +94,18 @@ export class SupervisionDto {
     @IsString()
     @IsOptional()
     whatsapp_e164?: string;
+
+    @IsString()
+    @IsOptional()
+    electronic_signature?: string;
+
+    @IsString()
+    @IsOptional()
+    external_partner_org_name?: string;
+
+    @IsString()
+    @IsOptional()
+    external_partner_contact_person?: string;
 }
 
 export class CreateOpportunityDto {

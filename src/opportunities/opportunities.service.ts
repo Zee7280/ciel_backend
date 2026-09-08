@@ -13,6 +13,7 @@ import { UserRole } from '../users/enums/user-role.enum';
 import { getProfileCompletionStatus, resolveDisplayNameForProfile } from '../users/profile-completion.util';
 import { MailService, OpportunityVerificationEmailDetails } from '../mail/mail.service';
 import { randomUUID } from 'crypto';
+import { isPrivateCandidateDto } from './private-candidate.util';
 import { OpportunityWorkflowService, WORKFLOW_STAGE, LINE_STATUS } from './opportunity-workflow.service';
 import {
     normalizeOpportunityTitleForMatch,
@@ -679,6 +680,9 @@ export class OpportunitiesService {
             throw new BadRequestException('University list required for participation_scope.rule');
         }
 
+        if (rule === 'open_all_universities') {
+            return;
+        }
         if (rule === 'own_university_only' && creatorUni && uniNames.length === 0) {
             scope.university_names = [creatorUni];
         }
@@ -917,20 +921,34 @@ export class OpportunitiesService {
                 ? linkage.visibility_type.trim().toLowerCase()
                 : '';
 
+        const scopeRule =
+            opp.participation_scope && typeof opp.participation_scope === 'object'
+                ? String((opp.participation_scope as { rule?: string }).rule || '').trim()
+                : '';
+
         if (explicitType) {
-            return !['own_university_only', 'restricted_specific_universities', 'restricted'].includes(
+            const restrictive = ['own_university_only', 'restricted_specific_universities', 'restricted'].includes(
                 explicitType,
             );
+            if (!restrictive) return true;
+            // Same leniency as the legacy `visibility` fallback below: a restrictive
+            // visibility_and_academic_linkage type only hides the directory card when there's no real
+            // participation_scope backing it (nothing to gate Apply Now with). When a scope rule does
+            // exist, Apply Now eligibility is what enforces the restriction — the card itself still
+            // shows publicly. "Public card + scoped Apply Now" is the product rule everywhere else.
+            return Boolean(scopeRule);
         }
 
         // Student flow defaults top-level `visibility` to "restricted" while scope lives in
         // participation_scope; treat that default as public listing. Faculty/org "restricted"
-        // without linkage still suppresses the directory (previous behavior).
+        // without a participation rule still suppresses the directory (previous hide-the-card behavior).
         const legacy = String(opp.visibility || '').trim().toLowerCase();
         if (['own_university_only', 'restricted_specific_universities'].includes(legacy)) {
             return false;
         }
         if (legacy === 'restricted' && !opp.isStudentCreated) {
+            // Apply Now targeting is not a directory hide. Public card + scoped Apply Now is the product rule.
+            if (scopeRule) return true;
             return false;
         }
         return true;
@@ -1358,14 +1376,65 @@ export class OpportunitiesService {
         purifyStudentOpportunityContent(dto);
         dto.safety_declaration = this.resolveSafetyDeclarationPayload(dto);
         dto.safety_declaration = this.normalizeSafetyDeclaration(dto.safety_declaration);
+        const privateCandidate = isPrivateCandidateDto(dto);
         // validation rules for student flow
-        if (!dto.supervision?.contact) throw new BadRequestException('Faculty email (supervision.contact) is required');
-        if (!dto.supervision?.faculty_department) throw new BadRequestException('faculty_department is required');
-        if (!dto.executing_context?.type) throw new BadRequestException('executing_context.type is required');
+        if (!privateCandidate) {
+            if (!dto.supervision?.contact) throw new BadRequestException('Faculty email (supervision.contact) is required');
+            if (!dto.supervision?.faculty_department) throw new BadRequestException('faculty_department is required');
+        }
+        if (!dto.executing_context?.type) {
+            if (privateCandidate) {
+                dto.executing_context = {
+                    ...(typeof dto.executing_context === 'object' && dto.executing_context ? dto.executing_context : {}),
+                    type: 'independent',
+                    student_pathway: 'private',
+                    independent_community_activity: {
+                        activity_site_description: 'Private / independent candidate',
+                    },
+                };
+            } else {
+                throw new BadRequestException('executing_context.type is required');
+            }
+        }
         this.validateSafetyDeclaration(dto.safety_declaration);
         this.validateSubmissionConfirmations(dto.submission_confirmations);
         this.validateParticipationScope(dto.participation_scope);
-        this.validateSupervision(dto.supervision);
+
+        // A student-created opportunity must stay scoped to the student's own university
+        // (all departments, or specific departments) — never another university, and never
+        // "open to all universities". The client-supplied participation_scope/restricted_universities
+        // are advisory only; the real gate is the student's own profile university, enforced here
+        // regardless of what the request claims.
+        if (!privateCandidate) {
+            const ownUniversity = user.university?.trim() || user.institution?.trim() || '';
+            if (!ownUniversity) {
+                throw new BadRequestException(
+                    'Your profile is missing a university — update your profile before creating an opportunity.',
+                );
+            }
+            const allowedStudentScopeRules = ['own_university_only', 'own_university_departments'];
+            const requestedRule = String(dto.participation_scope?.rule || '').toLowerCase();
+            if (dto.participation_scope && !allowedStudentScopeRules.includes(requestedRule)) {
+                throw new BadRequestException(
+                    'Students may only scope an opportunity to their own university — either all departments or specific departments. Broader scopes require faculty, partner, or CIEL PK.',
+                );
+            }
+            if (dto.participation_scope) {
+                dto.participation_scope.creator_university_name = ownUniversity;
+                dto.participation_scope.university_names = [ownUniversity];
+            }
+            dto.restricted_universities = [ownUniversity];
+        }
+        if (!privateCandidate) {
+            this.validateSupervision(dto.supervision);
+        } else if (dto.supervision) {
+            if (dto.supervision.external_partner_email && !this.isValidEmail(dto.supervision.external_partner_email)) {
+                throw new BadRequestException('supervision.external_partner_email must be a valid email');
+            }
+            if (dto.supervision.partner_email && !this.isValidEmail(dto.supervision.partner_email)) {
+                throw new BadRequestException('supervision.partner_email must be a valid email');
+            }
+        }
         const responsibilitiesLen =
             typeof dto.activity_details?.student_responsibilities === 'string'
                 ? dto.activity_details.student_responsibilities.length
@@ -1388,12 +1457,19 @@ export class OpportunitiesService {
             }
         } else if (dto.executing_context.type === 'independent') {
             const ind = dto.executing_context.independent_community_activity || {};
-            if (!ind.activity_site_description) throw new BadRequestException('independent activity_site_description required');
+            if (!privateCandidate && !ind.activity_site_description) throw new BadRequestException('independent activity_site_description required');
         }
 
-        const restricted = dto.restricted_universities && dto.restricted_universities.length > 0
-            ? dto.restricted_universities
-            : (dto.participation_scope?.creator_university_name ? [dto.participation_scope.creator_university_name] : []);
+        const openAllParticipation =
+            String(dto.participation_scope?.rule || '').toLowerCase() === 'open_all_universities';
+        const restricted =
+            dto.restricted_universities && dto.restricted_universities.length > 0
+                ? dto.restricted_universities
+                : openAllParticipation || privateCandidate
+                  ? []
+                  : dto.participation_scope?.creator_university_name
+                    ? [dto.participation_scope.creator_university_name]
+                    : [];
 
         const requiresPartner = this.studentOpportunityRequiresPartner(dto);
         const partnerEmail = requiresPartner ? this.resolvePartnerEmail(dto) : null;
@@ -1408,19 +1484,55 @@ export class OpportunitiesService {
             user.university?.trim() ||
             user.institution?.trim() ||
             '';
-        const similarOnCreate = await this.findSimilarStudentCreatedOpportunities(
-            dto.title || '',
-            creatorUniversity,
+        // Postgres session-level advisory lock, scoped to this student — serializes a double-click or
+        // multi-tab double-submit so two near-simultaneous requests can't both pass the duplicate-title
+        // check before either INSERT lands. Released in the `finally` below no matter how this method
+        // exits (including the ConflictException thrown right after acquiring it).
+        await this.opportunitiesRepository.manager.query(
+            'SELECT pg_advisory_lock(hashtext($1))',
+            [`create_student_opportunity:${user.id}`],
         );
-        if (similarOnCreate.length > 0) {
-            throw new ConflictException({
-                message:
-                    'Disclaimer: A project with a similar title already exists at your university. Only one team lead should create the listing. Other team members must join via Apply Now on the existing opportunity instead of creating another copy.',
-                code: 'SIMILAR_STUDENT_OPPORTUNITY_EXISTS',
-                similarOpportunities: similarOnCreate,
-            });
+        try {
+            if (!privateCandidate) {
+                const similarOnCreate = await this.findSimilarStudentCreatedOpportunities(
+                    dto.title || '',
+                    creatorUniversity,
+                );
+                if (similarOnCreate.length > 0) {
+                    throw new ConflictException({
+                        message:
+                            'Disclaimer: A project with a similar title already exists at your university. Only one team lead should create the listing. Other team members must join via Apply Now on the existing opportunity instead of creating another copy.',
+                        code: 'SIMILAR_STUDENT_OPPORTUNITY_EXISTS',
+                        similarOpportunities: similarOnCreate,
+                    });
+                }
+            }
+            return await this.finishCreatingStudentOpportunity(
+                dto,
+                user,
+                privateCandidate,
+                requiresPartner,
+                partnerEmail,
+                restricted,
+                openAllParticipation,
+            );
+        } finally {
+            await this.opportunitiesRepository.manager.query(
+                'SELECT pg_advisory_unlock(hashtext($1))',
+                [`create_student_opportunity:${user.id}`],
+            );
         }
+    }
 
+    private async finishCreatingStudentOpportunity(
+        dto: CreateOpportunityDto,
+        user: User,
+        privateCandidate: boolean,
+        requiresPartner: boolean,
+        partnerEmail: string | null,
+        restricted: string[],
+        openAllParticipation: boolean,
+    ) {
         const partnerToken = requiresPartner && partnerEmail ? randomUUID() : null;
 
         let organizationId: string | null = null;
@@ -1456,15 +1568,15 @@ export class OpportunitiesService {
         const payload: DeepPartial<Opportunity> = {
             ...dto,
             organizationId,
-            facultyId: resolvedFacultyId,
+            facultyId: privateCandidate ? null : resolvedFacultyId,
             creatorId: user.id,
-            status: 'pending_faculty',
+            status: privateCandidate ? (requiresPartner ? 'pending_partner' : 'pending_approval') : 'pending_faculty',
             sdg: dto.sdg_info?.sdg_id || 'SDG',
             restricted_universities: restricted,
-            visibility: dto.visibility || 'restricted',
-            faculty_verification_status: 'pending_faculty',
-            faculty_verified: false,
-            faculty_verification_token: randomUUID(),
+            visibility: dto.visibility || (privateCandidate && openAllParticipation ? 'public' : 'restricted'),
+            faculty_verification_status: privateCandidate ? 'not_required' : 'pending_faculty',
+            faculty_verified: privateCandidate,
+            faculty_verification_token: privateCandidate ? undefined : randomUUID(),
             isStudentCreated: true,
             requiresPartnerApproval: requiresPartner,
             partnerToken: partnerToken ?? undefined,
@@ -1472,27 +1584,34 @@ export class OpportunitiesService {
         };
 
         const opportunity = this.opportunitiesRepository.create(payload);
-        this.opportunityWorkflow.initStudentCreated(opportunity as Opportunity, requiresPartner);
+        if (privateCandidate) {
+            this.opportunityWorkflow.initStudentPrivateCandidate(opportunity as Opportunity, requiresPartner);
+        } else {
+            this.opportunityWorkflow.initStudentCreated(opportunity as Opportunity, requiresPartner);
+        }
         const saved = await this.opportunitiesRepository.save(opportunity);
 
-        const facultyTo = this.normalizeEmail(dto.supervision.contact);
         const studentVerifyDetails = this.buildOpportunityVerificationEmailDetails(saved as Opportunity, {
             studentName: resolveDisplayNameForProfile(user),
             studentUniversity: user.university || user.institution || undefined,
         });
-        try {
-            await this.mailService.sendFacultyStudentOpportunityVerification(
-                facultyTo,
-                saved.title,
-                saved.faculty_verification_token,
-                studentVerifyDetails,
-                {
-                    path: '/verify/faculty',
-                    returnTo: this.getFacultyApprovalReturnTo(saved.id),
-                },
-            );
-        } catch (e) {
-            console.warn('Failed to send faculty verification email', (e as Error).message);
+
+        if (!privateCandidate) {
+            const facultyTo = this.normalizeEmail(dto.supervision?.contact);
+            try {
+                await this.mailService.sendFacultyStudentOpportunityVerification(
+                    facultyTo,
+                    saved.title,
+                    saved.faculty_verification_token,
+                    studentVerifyDetails,
+                    {
+                        path: '/verify/faculty',
+                        returnTo: this.getFacultyApprovalReturnTo(saved.id),
+                    },
+                );
+            } catch (e) {
+                console.warn('Failed to send faculty verification email', (e as Error).message);
+            }
         }
 
         if (partnerEmail && partnerToken) {
@@ -1560,6 +1679,17 @@ export class OpportunitiesService {
             /** Snapshot before patch — student pipeline must never use NGO resubmit logic. */
             isStudentCreated: opportunity.isStudentCreated,
         };
+        /** A student's own edit must also resume the pipeline out of "revision requested" — not just
+         * "rejected" — otherwise a revision-requested opportunity never re-enters any reviewer's queue
+         * once the student saves their fix. */
+        const studentNeedsResubmit =
+            rejectedResubmitSnapshot.wasRejected ||
+            opportunity.workflowStage === WORKFLOW_STAGE.REVISION ||
+            opportunity.status === WORKFLOW_STAGE.REVISION ||
+            opportunity.facultyApprovalStatus === LINE_STATUS.REVISION_REQUESTED ||
+            opportunity.partnerApprovalStatus === LINE_STATUS.REVISION_REQUESTED ||
+            opportunity.adminApprovalStatus === LINE_STATUS.REVISION_REQUESTED;
+        const studentResubmitBefore = this.snapshotStudentOpportunityResubmit(opportunity);
 
         const { id: _dtoId, ...patch } = updateOpportunityDto as UpdateOpportunityDto & { id: string };
         Object.assign(opportunity, patch);
@@ -1586,16 +1716,13 @@ export class OpportunitiesService {
             }
         }
 
-        // Student creator edit/resubmit: after rejection, saving edits sends it back into the review pipeline.
-        if (isStudentOwner && rejectedResubmitSnapshot.wasRejected) {
-            const requiresPartnerApproval = this.studentOpportunityRequiresPartner(
-                opportunity as unknown as CreateOpportunityDto,
-            );
-            this.opportunityWorkflow.initStudentCreated(opportunity, requiresPartnerApproval);
-            opportunity.admin_approved = false;
+        // Student creator edit/resubmit: after rejection OR revision, saving edits sends it back into
+        // the review pipeline — via the same stage-aware logic used for admin-driven contact edits, so
+        // a private-candidate listing (no faculty line at all) doesn't get wrongly forced into
+        // pending_faculty the way a blind initStudentCreated() call would.
+        if (isStudentOwner && studentNeedsResubmit) {
             opportunity.rejectionReason = null;
-            opportunity.requiresPartnerApproval = requiresPartnerApproval;
-            opportunity.partnerVerified = !requiresPartnerApproval;
+            await this.applyStudentCreatedOpportunityResubmit(opportunity, studentResubmitBefore);
         }
 
         // Partner / NGO org member: after admin (or partner) rejection, saving edits resubmits into review queues.

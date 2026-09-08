@@ -2400,7 +2400,8 @@ export class StudentsService {
     if (
       r.status === 'rejected' ||
       r.partner_status === 'rejected' ||
-      r.admin_status === 'rejected'
+      r.admin_status === 'rejected' ||
+      r.faculty_status === 'rejected'
     ) {
       return false;
     }

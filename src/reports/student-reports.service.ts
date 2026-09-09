@@ -2525,7 +2525,9 @@ export class StudentReportsService {
       );
     }
 
-    return await this.formatReportResponse(report);
+    return StudentReportsService.redactCiiV2ForExternalViewer(
+      await this.formatReportResponse(report),
+    );
   }
 
   async findOneByOpportunityOrId(id: string, studentId: string) {
@@ -2578,7 +2580,9 @@ export class StudentReportsService {
     }
 
     if (report) {
-      return await this.formatReportResponse(report, attendanceParticipantId);
+      return StudentReportsService.redactCiiV2ForExternalViewer(
+        await this.formatReportResponse(report, attendanceParticipantId),
+      );
     }
 
     // If no report found, check for an application to pre-populate
@@ -2729,6 +2733,52 @@ export class StudentReportsService {
     };
   }
 
+  /**
+   * The CII v2 evaluation (per-criterion anchors, faculty-facing rationale notes, integrity/bonus
+   * reasoning, red flags, needsAdminReview) must never reach the student or the partner
+   * organization before Faculty has approved and locked it — and even once locked, only the
+   * already-decided outcome (final score, level, section point totals, evidence average, lock
+   * hash/timestamp) is student/partner-facing, never the AI's internal reasoning. Faculty/admin
+   * reads call formatReportResponse directly and keep the full record.
+   */
+  private static redactCiiV2ForExternalViewer<T extends { data?: Record<string, unknown> }>(
+    response: T,
+  ): T {
+    if (!response?.data) return response;
+    const ciiV2 = response.data.ciiV2 as Record<string, unknown> | null | undefined;
+    const ciiV2Lock = response.data.ciiV2Lock as
+      | { locked?: boolean; hash?: string; lockedAt?: string }
+      | null
+      | undefined;
+
+    if (!ciiV2Lock?.locked) {
+      return { ...response, data: { ...response.data, ciiV2: null, ciiV2Lock: null } };
+    }
+
+    const sections = Array.isArray(ciiV2?.sections)
+      ? (ciiV2!.sections as Array<Record<string, unknown>>).map((s) => ({
+          id: s.id,
+          title: s.title,
+          weight: s.weight,
+          score: s.score,
+        }))
+      : [];
+
+    return {
+      ...response,
+      data: {
+        ...response.data,
+        ciiV2: {
+          final: ciiV2?.final,
+          level: ciiV2?.level,
+          evidenceAverage: ciiV2?.evidenceAverage,
+          sections,
+        },
+        ciiV2Lock: { locked: true, hash: ciiV2Lock.hash, lockedAt: ciiV2Lock.lockedAt },
+      },
+    };
+  }
+
   private async formatReportResponse(
     report: StudentReport,
     attendanceParticipantStudentId?: string,
@@ -2866,6 +2916,8 @@ export class StudentReportsService {
         section9: report.section9,
         section10: report.section10,
         section11: report.section11,
+        ciiV2: report.ciiV2,
+        ciiV2Lock: report.ciiV2Lock,
         created_at: report.createdAt,
         updated_at: report.updatedAt,
       },

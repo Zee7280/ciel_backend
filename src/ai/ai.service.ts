@@ -14,6 +14,11 @@ import {
 import { parseSection11AuditSummary } from './parse-cii-audit-summary.util';
 import { parseSection11V61Response } from './parse-section11-v61.util';
 import { parseSection11V81Response } from './parse-section11-v81.util';
+import {
+  buildCiiV2EvaluatorPrompt,
+  CII_V2_JSON_ONLY_DEPLOYMENT_NOTE,
+} from './prompts/cii-v2-rubric.constant';
+import { CiiV2AiEvaluation, parseCiiV2Response } from './parse-cii-v2.util';
 
 type OpenAiCompletionOpts = {
   temperature?: number;
@@ -28,6 +33,7 @@ export interface AiSummarizeResult {
   summary: string;
   auditMeta?: unknown;
   evaluationVersion?: string;
+  ciiV2?: CiiV2AiEvaluation;
 }
 
 function isOpenAiReasoningModel(model: string): boolean {
@@ -1387,6 +1393,15 @@ Keep the full response under 180 words.`;
       case 'section11_master_rubric':
         return buildSection11MasterRubricUserMessage(data);
 
+      // =====================================================
+      // CII v2 EVALUATION (Composite Impact Index Analyser v2)
+      // =====================================================
+      case 'cii_v2_evaluation':
+        return `Evaluate this Community Service report against the CII Rubric v2 embedded in your system instructions.
+
+REPORT DATA:
+${JSON.stringify(data)}`;
+
       default:
         return `Summarize project data professionally: ${JSON.stringify(data)}`;
     }
@@ -1401,6 +1416,7 @@ Keep the full response under 180 words.`;
 
     const isSection11Evaluation =
       section === 'section11' || section === 'section11_master_rubric';
+    const isCiiV2Evaluation = section === 'cii_v2_evaluation';
 
     const openAiOpts: OpenAiCompletionOpts | undefined = isSection11Evaluation
       ? {
@@ -1413,7 +1429,15 @@ Keep the full response under 180 words.`;
               ? `${SECTION11_MASTER_RUBRIC_EVALUATOR_PROMPT}\n\n${SECTION11_MASTER_RUBRIC_JSON_ONLY_DEPLOYMENT_NOTE}`
               : `${SECTION11_EVALUATOR_PROMPT}\n\n${SECTION11_JSON_ONLY_DEPLOYMENT_NOTE}`,
         }
-      : undefined;
+      : isCiiV2Evaluation
+        ? {
+            temperature: 0.15,
+            seed: 4220,
+            maxTokens: 16000,
+            responseFormat: { type: 'json_object' },
+            systemMessage: `${buildCiiV2EvaluatorPrompt()}\n\n${CII_V2_JSON_ONLY_DEPLOYMENT_NOTE}`,
+          }
+        : undefined;
 
     let text: string;
     try {
@@ -1458,6 +1482,14 @@ Keep the full response under 180 words.`;
         summary,
         ...(auditMeta ? { auditMeta } : {}),
       };
+    }
+
+    if (isCiiV2Evaluation) {
+      const ciiV2 = parseCiiV2Response(summary);
+      if (!ciiV2) {
+        throw new HttpException({ error: 'AI returned an unreadable CII v2 evaluation. Please retry.' }, 502);
+      }
+      return { summary, ciiV2 };
     }
 
     return { summary };

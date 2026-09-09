@@ -5,6 +5,7 @@ import { Roles } from '../auth/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
 import { FacultyReportsService } from '../reports/faculty-reports.service';
 import { FacultyReportActionDto } from './dto/faculty-report-action.dto';
+import { ApproveCiiV2Dto } from './dto/approve-cii-v2.dto';
 
 @Controller('faculty/reports')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -35,5 +36,19 @@ export class FacultyReportsController {
             body.status,
             body.remarks
         );
+    }
+
+    @Post(':id/cii-v2/analyse')
+    async analyseCiiV2(@Request() req, @Param('id') id: string) {
+        return await this.facultyReportsService.runCiiV2Analysis(id, req.user.id, req.user.email);
+    }
+
+    @Post(':id/cii-v2/approve')
+    async approveCiiV2(
+        @Request() req,
+        @Param('id') id: string,
+        @Body() body: ApproveCiiV2Dto,
+    ) {
+        return await this.facultyReportsService.approveCiiV2(id, req.user.id, req.user.email, body.note);
     }
 }

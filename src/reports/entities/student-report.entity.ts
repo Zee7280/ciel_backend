@@ -326,6 +326,20 @@ export class StudentReport {
         verified_narrative?: string;
     };
 
+    /** Composite Impact Index v2 snapshot (server-recomputed from the AI's per-criterion anchors). */
+    @Column({ type: 'jsonb', nullable: true })
+    ciiV2?: Record<string, unknown> | null;
+
+    /** Faculty approve+lock decision for the CII v2 score — immutable once locked. */
+    @Column({ type: 'jsonb', nullable: true })
+    ciiV2Lock?: {
+        locked: boolean;
+        hash: string;
+        lockedAt: string;
+        lockedByFacultyId: string;
+        facultyNote?: string;
+    } | null;
+
     @CreateDateColumn()
     createdAt: Date;
 

@@ -18,6 +18,7 @@ import { FacultyUniversityScopeModule } from '../faculty-university-scope/facult
 import { StudentsModule } from '../students/students.module';
 import { CommunityAwardModule } from '../reports/community-award.module';
 import { FacultyCommunityServiceController } from './faculty-community-service.controller';
+import { AiModule } from '../ai/ai.module';
 
 @Module({
     imports: [
@@ -34,6 +35,7 @@ import { FacultyCommunityServiceController } from './faculty-community-service.c
         FacultyUniversityScopeModule,
         StudentsModule,
         CommunityAwardModule,
+        AiModule,
     ],
     controllers: [
         FacultyReportsController,

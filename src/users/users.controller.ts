@@ -3,6 +3,7 @@ import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { S3Service } from '../common/s3.service';
+import { UserRole } from './enums/user-role.enum';
 
 @Controller('user')
 export class UsersController {
@@ -32,10 +33,13 @@ export class UsersController {
         { name: 'avatar', maxCount: 1 },
     ]))
     async updateProfile(@Request() req, @Body() body: any, @UploadedFiles() files: any) {
-        // For 'multipart/form-data', body fields might need parsing if complex, but simple strings are fine.
-        // User passed 'userId' in body, but we should prefer req.user.id for security, OR allow admin override.
-        // The prompt says "userId: 123" in body.
-        const targetUserId = body.userId || req.user.id;
+        // `userId` in the body is only honoured as an admin override. Any other caller edits
+        // their own profile only — otherwise any authenticated user could rewrite (and self-verify)
+        // anybody else's account.
+        const isAdminCaller = req.user?.role === UserRole.SUPER_ADMIN;
+        const requestedUserId = body?.userId ? String(body.userId) : null;
+        // Non-admins always edit themselves — a stale/spoofed body id is ignored, not honoured.
+        const targetUserId = isAdminCaller && requestedUserId ? requestedUserId : req.user.id;
 
         // Map 'contact' to 'phone', 'image' to 'avatar'
         const dto: any = { ...body };
@@ -52,7 +56,7 @@ export class UsersController {
         // UsersService.updateProfile in d:\saevolgo\ciel-api\src\users\users.service.ts likely needs to support this.
         // We will delegate logic to service.
 
-        return this.usersService.updateGenericProfile(targetUserId, dto);
+        return this.usersService.updateGenericProfile(targetUserId, dto, { isAdminCaller });
     }
 }
 

@@ -33,6 +33,14 @@ import { Payment } from '../payments/entities/payment.entity';
 import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
 
+/** Authenticated caller shape (`req.user`) used to gate opportunity detail reads. */
+export interface OpportunityDetailViewer {
+    id?: string;
+    email?: string;
+    role?: string;
+    organizationId?: string | null;
+}
+
 @Injectable()
 export class OpportunitiesService {
     constructor(
@@ -1309,7 +1317,7 @@ export class OpportunitiesService {
     async findSimilarStudentCreatedOpportunities(
         title: string,
         universityName: string,
-        options?: { excludeOpportunityId?: string; limit?: number },
+        options?: { excludeOpportunityId?: string; limit?: number; requestingUserId?: string },
     ) {
         const trimmedTitle = String(title || '').trim();
         const uniNorm = String(universityName || '').trim().toLowerCase();
@@ -1342,8 +1350,17 @@ export class OpportunitiesService {
             match_strength: 'exact' | 'similar';
         }> = [];
 
+        const requestingUserId = options?.requestingUserId ? String(options.requestingUserId) : '';
+
         for (const opp of candidates) {
             if (excludeId && opp.id === excludeId) continue;
+            // Another student's unsubmitted draft is not public information — only the owner sees theirs.
+            if (
+                String(opp.status || '').toLowerCase() === 'draft' &&
+                (!requestingUserId || String(opp.creatorId || '') !== requestingUserId)
+            ) {
+                continue;
+            }
             if (!opportunityMatchesUniversity(opp, uniNorm)) continue;
             if (!opportunityTitlesAreSimilar(trimmedTitle, opp.title || '')) continue;
 
@@ -1497,6 +1514,7 @@ export class OpportunitiesService {
                 const similarOnCreate = await this.findSimilarStudentCreatedOpportunities(
                     dto.title || '',
                     creatorUniversity,
+                    { requestingUserId: user.id },
                 );
                 if (similarOnCreate.length > 0) {
                     throw new ConflictException({
@@ -1956,6 +1974,14 @@ export class OpportunitiesService {
             if (opportunity.creatorId !== userId) {
                 throw new ForbiddenException('You do not have access to this draft');
             }
+            // Draft-saving only applies while the record is still a draft — otherwise a
+            // `{draft:true}` call would silently demote a submitted/approved/live opportunity
+            // back to draft and pull it off Browse.
+            if (String(opportunity.status || '').toLowerCase() !== 'draft') {
+                throw new BadRequestException(
+                    'This opportunity has already been submitted and can no longer be saved as a draft',
+                );
+            }
             Object.assign(opportunity, fields, { status: 'draft' });
             const saved = await this.opportunitiesRepository.save(opportunity);
             return { success: true, data: saved };
@@ -1992,16 +2018,38 @@ export class OpportunitiesService {
             const candidate = (meUser?.email || '').trim().toLowerCase();
             filterPartnerEmail = candidate || null;
         } else if (filters.partner_id && filters.partner_id !== 'me') {
+            let resolvedOrgId: string | null = null;
             // Check if it's already an org ID
             try {
                 const checkOrg = await this.organizationsService.findOne(filters.partner_id);
-                filterOrgId = checkOrg.id;
+                resolvedOrgId = checkOrg.id;
             } catch (e) {
                 // Not an org ID, maybe it's a User ID?
                 const checkUserOrg = await this.organizationsService.getMyOrganization(filters.partner_id);
                 if (checkUserOrg) {
-                    filterOrgId = checkUserOrg.id;
+                    resolvedOrgId = checkUserOrg.id;
                 }
+            }
+
+            if (resolvedOrgId) {
+                // An explicit partner_id may only ever resolve to the caller's own organisation —
+                // otherwise it enumerates another organisation's opportunities.
+                const requester = await this.usersRepository.findOne({
+                    where: { id: userId },
+                    select: ['id', 'role'],
+                });
+                const isAdminCaller = requester?.role === UserRole.SUPER_ADMIN;
+                const ownsResolvedOrg = !!org && org.id === resolvedOrgId;
+                if (!isAdminCaller && !ownsResolvedOrg) {
+                    throw new ForbiddenException(
+                        'You are not allowed to list another organisation\'s opportunities',
+                    );
+                }
+                filterOrgId = resolvedOrgId;
+            } else {
+                // partner_id was explicitly provided but didn't resolve to any real org/user —
+                // never silently fall through to an unfiltered, unscoped listing.
+                throw new NotFoundException('Organisation not found for the given partner_id');
             }
         }
 
@@ -2149,9 +2197,81 @@ export class OpportunitiesService {
         return this.opportunitiesRepository.findOne({ where: { id }, relations: ['organization'] });
     }
 
-    async findOneWithCreator(id: string) {
+    /**
+     * True when the viewer is the owner/admin or a designated reviewer (assigned faculty, supervision
+     * or partner contact email, owning partner org) — i.e. may see the record in ANY workflow status
+     * together with the creator's contact details. Mirrors the identity rules already used by
+     * `assertFacultySupervisorForStudentOpportunity` / `assertPartnerCanReviewOpportunity`, minus the
+     * status assertions (this is read access, not an approval action).
+     */
+    private async isPrivilegedOpportunityViewer(
+        opp: Opportunity,
+        viewer: OpportunityDetailViewer,
+    ): Promise<boolean> {
+        if (!viewer) return false;
+        if (viewer.role === UserRole.SUPER_ADMIN) return true;
+        if (viewer.id && opp.creatorId && String(opp.creatorId) === String(viewer.id)) return true;
+        if (viewer.id && opp.facultyId && String(opp.facultyId) === String(viewer.id)) return true;
+        if (viewer.organizationId && opp.organizationId && viewer.organizationId === opp.organizationId) {
+            return true;
+        }
+
+        const email = this.normalizeEmail(viewer.email);
+        if (!email) return false;
+
+        const sup = opp.supervision as Record<string, unknown> | undefined;
+        const po = opp.partner_organization as Record<string, unknown> | undefined;
+        const candidates = [
+            typeof sup?.contact === 'string' ? sup.contact : undefined,
+            typeof sup?.official_email === 'string' ? sup.official_email : undefined,
+            typeof po?.official_email === 'string' ? po.official_email : undefined,
+            this.resolvePartnerEmailFromOpportunity(opp) ?? undefined,
+        ];
+        if (candidates.some((c) => !!c && this.normalizeEmail(c) === email)) return true;
+
+        // Faculty reviewing join applications are linked through the application, not the opportunity.
+        const appRepo = this.opportunitiesRepository.manager.getRepository(OpportunityApplication);
+        const linkedApplications = await appRepo
+            .createQueryBuilder('app')
+            .where('app.opportunityId = :oid', { oid: opp.id })
+            .andWhere(
+                '(LOWER(TRIM(COALESCE(app.primaryFacultyEmail, \'\'))) = :email OR LOWER(TRIM(COALESCE(app.secondaryFacultyEmail, \'\'))) = :email)',
+                { email },
+            )
+            .getCount();
+        return linkedApplications > 0;
+    }
+
+    /**
+     * `POST /opportunities/detail`. Full record + creator contact for the owner/admin/designated
+     * reviewer; drafts and other non-public records are hidden from everyone else, and a plain
+     * authenticated browser of a live opportunity gets the record without the creator's email/phone.
+     */
+    async findOneWithCreator(id: string, viewer: OpportunityDetailViewer) {
         const opportunity = await this.findOne(id);
         if (!opportunity) return null;
+
+        const privileged = await this.isPrivilegedOpportunityViewer(opportunity, viewer);
+
+        if (!privileged) {
+            const isPublic =
+                opportunity.admin_approved === true &&
+                (this.publicLiveStatuses.includes(opportunity.status) ||
+                    opportunity.workflowStage === WORKFLOW_STAGE.LIVE) &&
+                this.isPubliclyVisibleOpportunity(opportunity);
+
+            // Students keep access to projects they actually joined even once those leave the public
+            // directory (completed/closed) — My Projects reads this same endpoint.
+            const isParticipant = viewer?.id
+                ? (await this.participationRepository.count({
+                      where: { projectId: opportunity.id, studentId: viewer.id },
+                  })) > 0
+                : false;
+
+            if (!isPublic && !isParticipant) {
+                throw new NotFoundException('Opportunity not found');
+            }
+        }
 
         const creator = opportunity.creatorId
             ? await this.usersRepository.findOne({
@@ -2166,8 +2286,9 @@ export class OpportunitiesService {
                 ? {
                       id: creator.id,
                       name: creator.name,
-                      email: creator.email,
-                      phone: creator.phone ?? null,
+                      // Creator PII is owner/reviewer/admin only.
+                      email: privileged ? creator.email : null,
+                      phone: privileged ? creator.phone ?? null : null,
                   }
                 : null,
         };

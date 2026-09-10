@@ -1,5 +1,8 @@
 import { Controller, Get, Query, Request, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
+import { UserRole } from '../users/enums/user-role.enum';
 import { FacultyDashboardViewMode, FacultyService } from './faculty.service';
 
 import { FacultyAnalyticsQueryDto } from './dto/faculty-analytics-query.dto';
@@ -14,7 +17,8 @@ function parseFacultyDashboardView(raw?: string): FacultyDashboardViewMode {
 }
 
 @Controller('faculty')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.FACULTY)
 export class FacultyDashboardController {
     constructor(private readonly facultyService: FacultyService) {}
 

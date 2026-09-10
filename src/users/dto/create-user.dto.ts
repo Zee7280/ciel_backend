@@ -1,4 +1,4 @@
-import { IsString, IsEmail, IsOptional, IsEnum } from 'class-validator';
+import { IsString, IsEmail, IsOptional, IsEnum, MinLength } from 'class-validator';
 import { UserRole } from '../enums/user-role.enum';
 
 export class CreateUserDto {
@@ -9,6 +9,7 @@ export class CreateUserDto {
     email: string;
 
     @IsString()
+    @MinLength(8, { message: 'Password must be at least 8 characters long.' })
     password: string;
 
     @IsOptional()

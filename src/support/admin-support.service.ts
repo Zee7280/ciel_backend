@@ -5,6 +5,8 @@ import { SupportFaq } from './entities/support-faq.entity';
 import { SupportTicket } from './entities/support-ticket.entity';
 import { User } from '../users/entities/user.entity';
 import { UpdateSupportTicketDto } from './dto/update-support-ticket.dto';
+import { CreateSupportFaqDto } from './dto/create-support-faq.dto';
+import { UpdateSupportFaqDto } from './dto/update-support-faq.dto';
 
 @Injectable()
 export class AdminSupportService {
@@ -21,15 +23,53 @@ export class AdminSupportService {
         const rows = await this.faqRepo.find({
             order: { sortOrder: 'ASC', id: 'ASC' },
         });
-        const items = rows.map((r) => ({
+        const items = rows.map((r) => this.toFaqRow(r));
+        return { success: true, data: { items } };
+    }
+
+    async createFaq(dto: CreateSupportFaqDto) {
+        const faq = this.faqRepo.create({
+            question: dto.question.trim(),
+            answer: dto.answer.trim(),
+            category: dto.category?.trim() || null,
+            isPublished: dto.isPublished ?? true,
+            sortOrder: dto.sortOrder ?? 0,
+        });
+        const saved = await this.faqRepo.save(faq);
+        return { success: true, data: this.toFaqRow(saved) };
+    }
+
+    async updateFaq(id: number, dto: UpdateSupportFaqDto) {
+        const faq = await this.faqRepo.findOne({ where: { id } });
+        if (!faq) {
+            throw new NotFoundException('FAQ not found');
+        }
+        if (dto.question !== undefined) faq.question = dto.question.trim();
+        if (dto.answer !== undefined) faq.answer = dto.answer.trim();
+        if (dto.category !== undefined) faq.category = dto.category.trim() || null;
+        if (dto.isPublished !== undefined) faq.isPublished = dto.isPublished;
+        if (dto.sortOrder !== undefined) faq.sortOrder = dto.sortOrder;
+        const saved = await this.faqRepo.save(faq);
+        return { success: true, data: this.toFaqRow(saved) };
+    }
+
+    async deleteFaq(id: number): Promise<void> {
+        const faq = await this.faqRepo.findOne({ where: { id } });
+        if (!faq) {
+            throw new NotFoundException('FAQ not found');
+        }
+        await this.faqRepo.delete({ id });
+    }
+
+    private toFaqRow(r: SupportFaq) {
+        return {
             id: r.id,
             question: r.question,
             answer: r.answer,
             category: r.category ?? undefined,
             isPublished: r.isPublished,
             sortOrder: r.sortOrder,
-        }));
-        return { success: true, data: { items } };
+        };
     }
 
     async listTickets(status?: string) {

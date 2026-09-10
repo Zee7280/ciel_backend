@@ -226,6 +226,16 @@ export class ChatService {
     }
 
     async markAsRead(conversationId: string, userId: string) {
+        // Same membership gate as getMessages/sendMessage — only a participant may mutate
+        // read state on a conversation.
+        const isParticipant = await this.participantRepository.findOne({
+            where: { conversationId, userId }
+        });
+
+        if (!isParticipant) {
+            throw new ForbiddenException('You are not a participant in this conversation');
+        }
+
         await this.messageRepository.update(
             { conversationId, senderId: Not(userId), isRead: false },
             { isRead: true }

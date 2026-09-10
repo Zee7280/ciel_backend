@@ -1743,7 +1743,11 @@ export class StudentsService {
       await this.opportunitiesService.findSimilarStudentCreatedOpportunities(
         title,
         university,
-        { excludeOpportunityId: options?.excludeOpportunityId, limit: 8 },
+        {
+          excludeOpportunityId: options?.excludeOpportunityId,
+          limit: 8,
+          requestingUserId: userId,
+        },
       );
 
     return {

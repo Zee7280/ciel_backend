@@ -119,17 +119,25 @@ export class VerificationsController {
         return this.performOpportunityVerification(t, req.user);
     }
 
+    /** Partner queue actions — the caller must own the organization the item was submitted to
+     * (same scope as `GET partners/verifications`); admins may act on any item. */
     @UseGuards(JwtAuthGuard)
     @Post('verifications/:id/approve')
-    async approve(@Param('id') id: string, @Body() body: { feedback?: string }) {
-        await this.verificationsService.approve(id, body.feedback);
+    async approve(@Request() req, @Param('id') id: string, @Body() body: { feedback?: string }) {
+        await this.verificationsService.approve(id, body.feedback, {
+            id: req.user?.id,
+            role: req.user?.role,
+        });
         return { success: true, data: {} };
     }
 
     @UseGuards(JwtAuthGuard)
     @Post('verifications/:id/reject')
-    async reject(@Param('id') id: string, @Body() body: { reason: string }) {
-        await this.verificationsService.reject(id, body.reason);
+    async reject(@Request() req, @Param('id') id: string, @Body() body: { reason: string }) {
+        await this.verificationsService.reject(id, body.reason, {
+            id: req.user?.id,
+            role: req.user?.role,
+        });
         return { success: true, data: {} };
     }
 }

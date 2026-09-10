@@ -41,7 +41,13 @@ export class StudentsController {
     // Let's keep it here mapped to 'dashboard' (so /students/dashboard works) AND create the new one.
     @Get('dashboard')
     getDashboard(@Request() req, @Query('studentId') studentId?: string) {
-        return this.studentsService.getDashboard(studentId || req.user.id);
+        // Same rule as `opportunities` below: a `studentId` query param is only honoured for the
+        // caller themselves or an admin — never as a way to read another student's dashboard.
+        const studentContextId =
+            studentId && (req.user?.role === UserRole.SUPER_ADMIN || studentId === req.user.id)
+                ? studentId
+                : req.user.id;
+        return this.studentsService.getDashboard(studentContextId);
     }
 
     /** BFF-friendly alias: always the authenticated student (ignores `studentId` query). */
@@ -64,7 +70,18 @@ export class StudentsController {
 
     @Get('opportunities')
     getOpportunities(@Request() req, @Query() query) {
-        return this.studentsService.getOpportunities(query, req.user.id);
+        // Same rule as the POST sibling below: a `student_id` in the query is only honoured for the
+        // caller themselves or an admin — never as a way to read another student's scoped list.
+        const requestedStudentId = query?.student_id || query?.studentId;
+        const studentContextId =
+            requestedStudentId && (req.user?.role === UserRole.SUPER_ADMIN || requestedStudentId === req.user.id)
+                ? requestedStudentId
+                : req.user.id;
+
+        return this.studentsService.getOpportunities(
+            { ...query, student_id: studentContextId },
+            studentContextId,
+        );
     }
 
     @Post('opportunities')
@@ -75,7 +92,7 @@ export class StudentsController {
     ) {
         const requestedStudentId = body?.student_id || body?.studentId;
         const studentContextId =
-            requestedStudentId && (req.user?.role === 'admin' || requestedStudentId === req.user.id)
+            requestedStudentId && (req.user?.role === UserRole.SUPER_ADMIN || requestedStudentId === req.user.id)
                 ? requestedStudentId
                 : req.user.id;
 
@@ -88,7 +105,7 @@ export class StudentsController {
     @Post('projects')
     getStudentProjects(@Request() req, @Body() body?: { studentId?: string }) {
         const targetId =
-            body?.studentId && req.user?.role === 'admin' ? body.studentId : req.user.id;
+            body?.studentId && req.user?.role === UserRole.SUPER_ADMIN ? body.studentId : req.user.id;
         return this.studentsService.getStudentProjects(targetId);
     }
 

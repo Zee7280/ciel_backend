@@ -110,7 +110,10 @@ export class UsersService {
         };
     }
 
-    async updateGenericProfile(userId: string, dto: any) {
+    async updateGenericProfile(userId: string, dto: any, options: { isAdminCaller?: boolean } = {}) {
+        // Verification/gating flags are admin-controlled — a self-service profile update must never
+        // be able to mark itself verified or drop its own CNIC/verification requirements.
+        const isAdminCaller = options.isAdminCaller === true;
         const user = await this.usersRepository.findOne({ where: { id: userId } });
         if (!user) {
             throw new NotFoundException('User not found');
@@ -126,10 +129,12 @@ export class UsersService {
         if (dto.bio) user.bio = dto.bio;
         if (dto.department) user.department = dto.department;
         if (dto.faculty_department) user.faculty_department = dto.faculty_department;
-        if (dto.requires_cnic !== undefined) user.requires_cnic = dto.requires_cnic;
-        if (dto.requires_profile_verification !== undefined) user.requires_profile_verification = dto.requires_profile_verification;
-        if (dto.profile_verified !== undefined) user.profile_verified = dto.profile_verified;
-        if (dto.identity_verified !== undefined) user.identity_verified = dto.identity_verified;
+        if (isAdminCaller) {
+            if (dto.requires_cnic !== undefined) user.requires_cnic = dto.requires_cnic;
+            if (dto.requires_profile_verification !== undefined) user.requires_profile_verification = dto.requires_profile_verification;
+            if (dto.profile_verified !== undefined) user.profile_verified = dto.profile_verified;
+            if (dto.identity_verified !== undefined) user.identity_verified = dto.identity_verified;
+        }
 
         // Save
         const updatedUser = await this.usersRepository.save(user);

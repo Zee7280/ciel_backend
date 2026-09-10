@@ -11,6 +11,7 @@ import {
     UseInterceptors,
     UploadedFiles,
     BadRequestException,
+    ForbiddenException,
     HttpException,
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
@@ -107,8 +108,19 @@ export class StudentReportsController {
     }
 
     @Get()
-    async getAllReports(@Query() query: any) {
-        return await this.studentReportsService.findAll(query);
+    async getAllReports(@Request() req, @Query() query: any) {
+        // Same ownership rule as `/check` below: default to the caller, and never let a plain
+        // student read another student's reports (omitting `studentId` used to return everyone's).
+        const isAdminCaller = req.user?.role === UserRole.SUPER_ADMIN;
+        const requestedStudentId = (query?.studentId || '').trim();
+        if (isAdminCaller) {
+            // Admins keep the unscoped listing / arbitrary studentId.
+            return await this.studentReportsService.findAll(query);
+        }
+        if (requestedStudentId && requestedStudentId !== req.user.id) {
+            throw new ForbiddenException('Unauthorized to query reports for another student');
+        }
+        return await this.studentReportsService.findAll({ ...query, studentId: req.user.id });
     }
 
     @Get('check')

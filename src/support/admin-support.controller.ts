@@ -6,7 +6,9 @@ import {
     HttpCode,
     HttpStatus,
     Param,
+    ParseIntPipe,
     Patch,
+    Post,
     Query,
     UseGuards,
     UseInterceptors,
@@ -17,6 +19,8 @@ import { Roles } from '../auth/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
 import { AdminSupportService } from './admin-support.service';
 import { UpdateSupportTicketDto } from './dto/update-support-ticket.dto';
+import { CreateSupportFaqDto } from './dto/create-support-faq.dto';
+import { UpdateSupportFaqDto } from './dto/update-support-faq.dto';
 import { AdminMutationAuditInterceptor } from '../audit-logs/admin-mutation-audit.interceptor';
 
 @Controller('admin/support')
@@ -29,6 +33,25 @@ export class AdminSupportController {
     @Get('faqs')
     listFaqs() {
         return this.adminSupportService.listFaqs();
+    }
+
+    @Post('faqs')
+    createFaq(@Body() dto: CreateSupportFaqDto) {
+        return this.adminSupportService.createFaq(dto);
+    }
+
+    @Patch('faqs/:id')
+    updateFaq(
+        @Param('id', ParseIntPipe) id: number,
+        @Body() dto: UpdateSupportFaqDto,
+    ) {
+        return this.adminSupportService.updateFaq(id, dto);
+    }
+
+    @Delete('faqs/:id')
+    @HttpCode(HttpStatus.NO_CONTENT)
+    deleteFaq(@Param('id', ParseIntPipe) id: number) {
+        return this.adminSupportService.deleteFaq(id);
     }
 
     @Get('tickets')

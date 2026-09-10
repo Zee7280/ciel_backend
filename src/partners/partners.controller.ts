@@ -91,9 +91,11 @@ export class PartnersController {
 
         const logoUrl = await this.s3Service.uploadFile(file, 'logos');
 
-        // Use userId from body if provided (and allowed), otherwise req.user.id
-        // For now allowing it as per requirement. ideally should check admin role.
-        const targetUserId = body.userId || body.id || req.user.id;
+        // A body-supplied userId/id is only honoured for admins — never as a way to overwrite
+        // another organization's logo.
+        const requestedUserId = body.userId || body.id;
+        const targetUserId =
+            requestedUserId && req.user?.role === UserRole.SUPER_ADMIN ? requestedUserId : req.user.id;
 
         await this.organizationsService.updateMyOrganization(targetUserId, { logoUrl });
         return { success: true, data: { logo_url: logoUrl } };
@@ -109,8 +111,8 @@ export class PartnersController {
     async getDashboardStats(@Request() req, @Query('id') userId?: string) {
         let orgId = req.user.organizationId;
 
-        if (userId) {
-            // If ID is provided (e.g. for admin/testing), fetch that user's org
+        if (userId && req.user?.role === UserRole.SUPER_ADMIN) {
+            // Admin-only: fetch another user's org stats (e.g. for support/testing).
             const userOrg = await this.organizationsService.getMyOrganization(userId);
             if (userOrg) {
                 orgId = userOrg.id;
@@ -331,6 +333,11 @@ export class PartnersController {
         );
     }
 
+    // Faculty are legitimate callers here: the Faculty Approvals dashboard routes
+    // `partner_ack` rows to these endpoints when the faculty user's email matches the
+    // opportunity's designated partner-reviewer email (see FacultyService). The service
+    // still gates the action via assertPartnerCanReviewOpportunity's email/org match.
+    @Roles(UserRole.UNIVERSITY, UserRole.NGO, UserRole.CORPORATE, UserRole.ORGANIZATION_ADMIN, UserRole.FACULTY)
     @Post('approvals/:id/approve')
     async approveOpportunity(@Request() req, @Param('id') id: string) {
         const saved = await this.opportunitiesService.partnerDashboardApprove(id, {
@@ -348,6 +355,7 @@ export class PartnersController {
         };
     }
 
+    @Roles(UserRole.UNIVERSITY, UserRole.NGO, UserRole.CORPORATE, UserRole.ORGANIZATION_ADMIN, UserRole.FACULTY)
     @Post('approvals/:id/reject')
     async rejectOpportunity(
         @Request() req,
@@ -373,6 +381,7 @@ export class PartnersController {
         };
     }
 
+    @Roles(UserRole.UNIVERSITY, UserRole.NGO, UserRole.CORPORATE, UserRole.ORGANIZATION_ADMIN, UserRole.FACULTY)
     @Post('approvals/:id/revise')
     async reviseOpportunity(
         @Request() req,
@@ -519,6 +528,11 @@ export class PartnerAliasController {
         );
     }
 
+    // Faculty are legitimate callers here: the Faculty Approvals dashboard routes
+    // `partner_ack` rows to these endpoints when the faculty user's email matches the
+    // opportunity's designated partner-reviewer email (see FacultyService). The service
+    // still gates the action via assertPartnerCanReviewOpportunity's email/org match.
+    @Roles(UserRole.UNIVERSITY, UserRole.NGO, UserRole.CORPORATE, UserRole.ORGANIZATION_ADMIN, UserRole.FACULTY)
     @Post('approvals/:id/approve')
     async approveOpportunity(@Request() req, @Param('id') id: string) {
         const saved = await this.opportunitiesService.partnerDashboardApprove(id, {
@@ -536,6 +550,7 @@ export class PartnerAliasController {
         };
     }
 
+    @Roles(UserRole.UNIVERSITY, UserRole.NGO, UserRole.CORPORATE, UserRole.ORGANIZATION_ADMIN, UserRole.FACULTY)
     @Post('approvals/:id/reject')
     async rejectOpportunity(
         @Request() req,
@@ -561,6 +576,7 @@ export class PartnerAliasController {
         };
     }
 
+    @Roles(UserRole.UNIVERSITY, UserRole.NGO, UserRole.CORPORATE, UserRole.ORGANIZATION_ADMIN, UserRole.FACULTY)
     @Post('approvals/:id/revise')
     async reviseOpportunity(
         @Request() req,

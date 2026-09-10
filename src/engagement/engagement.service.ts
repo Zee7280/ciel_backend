@@ -2144,6 +2144,132 @@ export class EngagementService {
     return partCount > 0;
   }
 
+  /**
+   * Read gate for engagement data scoped to a project: any enrolled participant on that project
+   * (student seat by id or email — covers team leads compiling the team report), the faculty with
+   * oversight (same rule as the pending-attendance queue), the hosting partner organization
+   * (same rule as `patchAttendanceApproval`), or a CIEL admin.
+   */
+  private async userCanViewProjectEngagement(
+    actorUserId: string,
+    actorRole: string | undefined,
+    projectId: string | null | undefined,
+  ): Promise<boolean> {
+    if (actorRole === UserRole.SUPER_ADMIN) return true;
+    if (!actorUserId || !projectId) return false;
+
+    const actor = await this.userRepository.findOne({
+      where: { id: actorUserId },
+      relations: ['organization'],
+    });
+    const actorEmail = this.normalizeParticipantEmail(actor?.email);
+
+    const ownSeats = await this.participantRepository
+      .createQueryBuilder('p')
+      .where('p.projectId = :pid', { pid: projectId })
+      .andWhere(
+        new Brackets((qb) => {
+          qb.where('p.studentId = :uid', { uid: actorUserId });
+          if (actorEmail) {
+            qb.orWhere("LOWER(TRIM(COALESCE(p.email, ''))) = :em", {
+              em: actorEmail,
+            });
+          }
+        }),
+      )
+      .getCount();
+    if (ownSeats > 0) return true;
+
+    const opportunity = await this.opportunityRepository.findOne({
+      where: { id: projectId },
+    });
+    if (!opportunity) return false;
+
+    if (
+      opportunity.creatorId === actorUserId ||
+      opportunity.facultyId === actorUserId
+    ) {
+      return true;
+    }
+
+    if (this.partnerActorHostsOpportunity(actorUserId, actor ?? null, opportunity)) {
+      return true;
+    }
+
+    if (actorRole === UserRole.FACULTY) {
+      return await this.facultyMemberCanAccessOpportunityForPendingAttendance(
+        actorUserId,
+        actorEmail,
+        opportunity,
+      );
+    }
+
+    return false;
+  }
+
+  /** Throws unless the caller may read engagement data for this project. */
+  async assertCanViewProjectEngagement(
+    actorUserId: string,
+    actorRole: string | undefined,
+    projectId: string,
+  ): Promise<void> {
+    const allowed = await this.userCanViewProjectEngagement(
+      actorUserId,
+      actorRole,
+      projectId,
+    );
+    if (!allowed) {
+      throw new ForbiddenException(
+        'You do not have access to this project’s engagement records',
+      );
+    }
+  }
+
+  /**
+   * Throws unless the caller may read engagement data for this participation seat:
+   * the owning student, a faculty member listed on the seat, or anyone allowed at project level.
+   */
+  async assertCanViewParticipationEngagement(
+    actorUserId: string,
+    actorRole: string | undefined,
+    participantId: string,
+  ): Promise<void> {
+    if (actorRole === UserRole.SUPER_ADMIN) return;
+
+    const participation =
+      await this.findParticipationByIdentifier(participantId);
+    if (!participation) {
+      throw new NotFoundException('Participation not found');
+    }
+    if (participation.studentId && participation.studentId === actorUserId) {
+      return;
+    }
+
+    const actor = await this.userRepository.findOne({
+      where: { id: actorUserId },
+    });
+    const actorEmail = this.normalizeParticipantEmail(actor?.email);
+    if (actorEmail) {
+      if (this.normalizeParticipantEmail(participation.email) === actorEmail) {
+        return;
+      }
+      if (getParticipantFacultyEmails(participation).includes(actorEmail)) {
+        return;
+      }
+    }
+
+    const allowed = await this.userCanViewProjectEngagement(
+      actorUserId,
+      actorRole,
+      participation.projectId,
+    );
+    if (!allowed) {
+      throw new ForbiddenException(
+        'You do not have access to this participation record',
+      );
+    }
+  }
+
   /** NGO / corporate / org-admin user may act only for opportunities hosted by them or their organization. */
   private partnerActorHostsOpportunity(
     actorUserId: string,

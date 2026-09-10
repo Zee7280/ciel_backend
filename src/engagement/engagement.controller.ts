@@ -181,7 +181,12 @@ export class EngagementController {
   }
 
   @Get(':id/attendance')
-  async getAttendance(@Param('id') id: string) {
+  async getAttendance(@Request() req, @Param('id') id: string) {
+    await this.engagementService.assertCanViewParticipationEngagement(
+      req.user.id,
+      req.user.role,
+      id,
+    );
     const result = await this.engagementService.getAttendanceLogs(id);
     return {
       success: true,
@@ -208,7 +213,12 @@ export class EngagementController {
   }
 
   @Get(':id/metrics')
-  async getMetrics(@Param('id') id: string) {
+  async getMetrics(@Request() req, @Param('id') id: string) {
+    await this.engagementService.assertCanViewParticipationEngagement(
+      req.user.id,
+      req.user.role,
+      id,
+    );
     const result = await this.engagementService.getEngagementMetrics(id);
     return {
       success: true,
@@ -217,7 +227,12 @@ export class EngagementController {
   }
 
   @Get(':id/summary')
-  async getSummary(@Param('id') id: string) {
+  async getSummary(@Request() req, @Param('id') id: string) {
+    await this.engagementService.assertCanViewParticipationEngagement(
+      req.user.id,
+      req.user.role,
+      id,
+    );
     const result = await this.engagementService.generateSummary(id);
     return {
       success: true,
@@ -258,7 +273,15 @@ export class EngagementController {
   }
 
   @Get('project/:projectId/team')
-  async getProjectTeam(@Param('projectId', ParseUUIDPipe) projectId: string) {
+  async getProjectTeam(
+    @Request() req,
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+  ) {
+    await this.engagementService.assertCanViewProjectEngagement(
+      req.user.id,
+      req.user.role,
+      projectId,
+    );
     const result = await this.engagementService.getProjectTeam(projectId);
     return {
       success: true,
@@ -267,7 +290,15 @@ export class EngagementController {
   }
 
   @Get('project/:projectId/attendance-logs')
-  async getProjectAttendance(@Param('projectId', ParseUUIDPipe) projectId: string) {
+  async getProjectAttendance(
+    @Request() req,
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+  ) {
+    await this.engagementService.assertCanViewProjectEngagement(
+      req.user.id,
+      req.user.role,
+      projectId,
+    );
     const result =
       await this.engagementService.getProjectAttendanceLogs(projectId);
     return {

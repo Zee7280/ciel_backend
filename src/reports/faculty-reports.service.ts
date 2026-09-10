@@ -259,6 +259,15 @@ export class FacultyReportsService {
       );
     }
 
+    // Once the CII v2 record is locked the review decision is final — mirrors the
+    // lock checks in runCiiV2Analysis/approveCiiV2 so faculty_status can't be flipped
+    // afterwards into a state contradicting the locked score.
+    if (report.ciiV2Lock?.locked) {
+      throw new BadRequestException(
+        "This report's CII v2 analysis is locked; further review actions are not permitted.",
+      );
+    }
+
     // A targeted column update — not repository.save(report) — so this can never clobber
     // ciiV2/ciiV2Lock with the stale values this method's own read happened to see, if a
     // concurrent CII v2 analysis/approval writes those columns in between.

@@ -2,6 +2,7 @@ import { Controller, Get, Patch, Post, Body, UseGuards, Request, Query } from '@
 import { OrganizationsService } from './organizations.service';
 import { UpdateOrganizationDto, AcknowledgePolicyDto } from './dto/organization.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { UserRole } from '../users/enums/user-role.enum';
 
 @Controller('organisation')
 @UseGuards(JwtAuthGuard)
@@ -20,8 +21,11 @@ export class OrganizationsController {
 
     @Post('profile/detail')
     getDetail(@Request() req, @Body() body: any) {
-        // Use passed userId or fallback to logged-in user
-        const targetUserId = body?.userId || req.user.id;
+        // `userId` in the body is only honoured as an admin override; everyone else reads their own org.
+        const isAdminCaller = req.user?.role === UserRole.SUPER_ADMIN;
+        const requestedUserId = body?.userId ? String(body.userId) : null;
+        // Non-admins always read their own organisation — a stale/spoofed body id is ignored.
+        const targetUserId = isAdminCaller && requestedUserId ? requestedUserId : req.user.id;
         return this.organizationsService.getMyOrganization(targetUserId);
     }
 

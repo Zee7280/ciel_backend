@@ -1,9 +1,16 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { Report } from '../reports/entities/report.entity';
 import { OrganizationsService } from '../organizations/organizations.service';
+import { UserRole } from '../users/enums/user-role.enum';
+
+/** Authenticated caller acting on a verification item. */
+export interface VerificationActor {
+    id: string;
+    role?: string;
+}
 
 @Injectable()
 export class VerificationsService {
@@ -60,9 +67,32 @@ export class VerificationsService {
         return combined.sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime());
     }
 
-    async approve(id: string, feedback?: string) {
+    /**
+     * The acting partner must own the organization the record was submitted to — the same scope
+     * `findAllPending` uses to build the queue. Admins may act on anything.
+     *
+     * `Timesheet.organizationId` is never populated at creation time (see `students.service.ts`
+     * `logHours`), so for Timesheets we fall back to the linked opportunity's organizationId —
+     * callers must eager-load the `opportunity` relation for this to resolve correctly.
+     */
+    private async assertActorOwnsVerificationItem(
+        actor: VerificationActor | undefined,
+        entity: { organizationId?: string | null; opportunity?: { organizationId?: string | null } | null },
+    ) {
+        if (actor?.role === UserRole.SUPER_ADMIN) return;
+        if (!actor?.id) {
+            throw new ForbiddenException('You are not allowed to act on this verification item');
+        }
+        const effectiveOrgId = entity.organizationId || entity.opportunity?.organizationId || null;
+        const org = await this.organizationsService.getMyOrganization(actor.id);
+        if (!org || !effectiveOrgId || org.id !== effectiveOrgId) {
+            throw new ForbiddenException('You are not allowed to act on this verification item');
+        }
+    }
+
+    async approve(id: string, feedback?: string, actor?: VerificationActor) {
         let type = 'Timesheet';
-        let entity: any = await this.timesheetsRepository.findOne({ where: { id } });
+        let entity: any = await this.timesheetsRepository.findOne({ where: { id }, relations: ['opportunity'] });
 
         if (!entity) {
             entity = await this.reportsRepository.findOne({ where: { id } });
@@ -72,6 +102,8 @@ export class VerificationsService {
         if (!entity) {
             throw new NotFoundException('Verification item not found');
         }
+
+        await this.assertActorOwnsVerificationItem(actor, entity);
 
         entity.status = 'verified';
         if (type === 'Timesheet') {
@@ -81,9 +113,9 @@ export class VerificationsService {
         }
     }
 
-    async reject(id: string, reason: string) {
+    async reject(id: string, reason: string, actor?: VerificationActor) {
         let type = 'Timesheet';
-        let entity: any = await this.timesheetsRepository.findOne({ where: { id } });
+        let entity: any = await this.timesheetsRepository.findOne({ where: { id }, relations: ['opportunity'] });
 
         if (!entity) {
             entity = await this.reportsRepository.findOne({ where: { id } });
@@ -93,6 +125,8 @@ export class VerificationsService {
         if (!entity) {
             throw new NotFoundException('Verification item not found');
         }
+
+        await this.assertActorOwnsVerificationItem(actor, entity);
 
         entity.status = 'rejected';
         entity.rejectionReason = reason;

@@ -161,7 +161,7 @@ export class VentureReviewPipelineDto {
     @IsOptional() @IsBoolean() declarationWork?: boolean;
     @IsOptional() @IsBoolean() declarationConsent?: boolean;
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) studentDeclaredAt?: string;
-    @IsOptional() @IsIn(['not_started', 'pending', 'approved', 'revisions_requested']) supervisorStatus?: 'not_started' | 'pending' | 'approved' | 'revisions_requested';
+    @IsOptional() @IsIn(['not_started', 'pending', 'approved', 'revisions_requested', 'rejected']) supervisorStatus?: 'not_started' | 'pending' | 'approved' | 'revisions_requested' | 'rejected';
     @IsOptional() @IsIn(['not_started', 'pending', 'approved']) universityStatus?: 'not_started' | 'pending' | 'approved';
     @IsOptional() @IsIn(['not_started', 'pending', 'approved']) sdgReviewStatus?: 'not_started' | 'pending' | 'approved';
 }

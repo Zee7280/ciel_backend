@@ -32,7 +32,14 @@ import { isReportPartnerStepSatisfied } from './report-partner-approval.util';
 import { collectReportEvidenceFiles } from './collect-report-evidence.util';
 import { buildCielPkAiEvaluationPayload } from './build-ciel-pk-ai-evaluation-payload.util';
 import { validateReportSectionsForSubmit } from './report-submit-validation.util';
-import { scoreCommunityAward, readCii, countMedia, communityServiceLevel } from './community-award.util';
+import {
+  scoreCommunityAward,
+  readCii,
+  countMedia,
+  communityServiceLevel,
+  isCommunityAwardLiveReport,
+  type CommunityServiceLevel,
+} from './community-award.util';
 
 @Injectable()
 export class StudentReportsService {
@@ -652,6 +659,22 @@ export class StudentReportsService {
       organization_id:
         opportunity?.organizationId ?? opportunity?.organization?.id ?? null,
       organization_name: opportunity?.organization?.name || 'N/A',
+      // The impact-wall / portfolio flashcards read `university` and `story`; without them every
+      // verified card fell back to the partner org name and a canned "Approved Community Service
+      // report…" sentence instead of the student's own project summary. Resolved exactly the way
+      // CommunityAwardService.toCard() already does, minus the AI-written summary_text_generated.
+      university:
+        report.section1?.team_lead?.university ||
+        report.student?.university ||
+        report.student?.institution ||
+        null,
+      story:
+        String(
+          (report.section2 as StudentReport['section2'] | null)?.summary_text ||
+            (report.section2 as StudentReport['section2'] | null)
+              ?.problem_statement ||
+            '',
+        ).trim() || null,
       status: this.toPublicReportStatus(report.status),
       partner_status: report.partner_status,
       admin_status: report.admin_status,
@@ -694,6 +717,34 @@ export class StudentReportsService {
       },
       created_at: report.createdAt,
     };
+  }
+
+  /**
+   * The student's own report listing (`GET /student/reports`) must never expose the AI-generated
+   * CII — nor the award `total`/`level` derived from it — before Faculty has signed the report
+   * off. Same rule `redactCiiV2ForExternalViewer` enforces on the detail read path, and the same
+   * bug class already fixed for Coursework's merit score. Faculty/admin/partner/university
+   * listings call `mapReportListing`/`mapReportListingsWithTeam` without this wrapper and keep
+   * the full record, which is what their review screens need.
+   */
+  private redactUnapprovedAiScoreForStudent<
+    T extends {
+      status?: string | null;
+      faculty_status?: string | null;
+      cii_score?: number | null;
+      total?: number;
+      level?: CommunityServiceLevel | null;
+    },
+  >(row: T): T {
+    if (
+      isCommunityAwardLiveReport({
+        status: row.status,
+        faculty_status: row.faculty_status,
+      })
+    ) {
+      return row;
+    }
+    return { ...row, cii_score: null, total: 0, level: null } as T;
   }
 
   /** Same 0-100 total + standing Level badge every faculty/partner/admin community-award view
@@ -2361,7 +2412,9 @@ export class StudentReportsService {
       return {
         success: true,
         data: paginated.map((r) =>
-          this.mapReportListing(r, opportunityByProjectId),
+          this.redactUnapprovedAiScoreForStudent(
+            this.mapReportListing(r, opportunityByProjectId),
+          ),
         ),
         pagination: {
           total,

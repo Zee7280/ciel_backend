@@ -400,6 +400,29 @@ describe('StudentReportsService', () => {
         });
     }
 
+    describe('redactUnapprovedAiScoreForStudent', () => {
+        const redact = (row: Record<string, unknown>) =>
+            (service as any).redactUnapprovedAiScoreForStudent(row);
+
+        it('strips the AI CII score, total and level before faculty sign-off', () => {
+            expect(
+                redact({ status: 'submitted', faculty_status: 'pending', cii_score: 88, total: 91, level: 'Transformative' }),
+            ).toMatchObject({ cii_score: null, total: 0, level: null });
+        });
+
+        it('strips them on a rejected report too', () => {
+            expect(
+                redact({ status: 'rejected', faculty_status: 'approved', cii_score: 88, total: 91, level: 'Transformative' }),
+            ).toMatchObject({ cii_score: null, total: 0, level: null });
+        });
+
+        it('keeps the decided score once faculty has approved', () => {
+            expect(
+                redact({ status: 'submitted', faculty_status: 'approved', cii_score: 88, total: 91, level: 'Transformative' }),
+            ).toMatchObject({ cii_score: 88, total: 91, level: 'Transformative' });
+        });
+    });
+
     describe('team report submit authorization', () => {
         it('blocks final submit for team members when a team lead exists on the project', async () => {
             mockTeamMemberAndLeadOnProject();

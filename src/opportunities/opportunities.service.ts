@@ -2555,6 +2555,32 @@ export class OpportunitiesService {
         return saved;
     }
 
+    /** Blocks a non-admin delete once anyone other than the requester has enrolled, applied or reported. */
+    private async assertNoOtherStudentsDependOnOpportunity(opportunityId: string, requestingUserId: string) {
+        const manager = this.opportunitiesRepository.manager;
+
+        const participations = await this.participationRepository.find({
+            where: { projectId: opportunityId },
+        });
+        const applications = await manager.getRepository(OpportunityApplication).find({
+            where: { opportunityId },
+        });
+        const reports = await manager.getRepository(StudentReport).find({
+            where: [{ opportunityId }, { project_id: opportunityId }],
+        });
+
+        const foreign =
+            participations.filter((p) => p.studentId !== requestingUserId).length +
+            applications.filter((a) => a.studentUserId !== requestingUserId).length +
+            reports.filter((r) => r.studentId !== requestingUserId).length;
+
+        if (foreign > 0) {
+            throw new BadRequestException(
+                'Other students have already enrolled, applied or reported on this opportunity, so it can no longer be deleted. Ask CIEL PK admin to close or remove it instead.',
+            );
+        }
+    }
+
     async remove(id: string, requestingUserId?: string) {
         const opportunity = await this.opportunitiesRepository.findOne({ where: { id } });
         if (!opportunity) {
@@ -2567,6 +2593,13 @@ export class OpportunitiesService {
             const isAdmin = requester?.role === UserRole.SUPER_ADMIN;
             if (!isCreator && !isAdmin) {
                 throw new ForbiddenException('You do not have permission to delete this opportunity');
+            }
+            // `deleteOpportunityChildren` cascades participations, attendance logs, applications and
+            // student reports for EVERY student on the listing — not just the creator's own rows. A
+            // student creator deleting their own listing must therefore never be able to wipe other
+            // people's verified hours or submitted reports; only CIEL admin may force that.
+            if (!isAdmin) {
+                await this.assertNoOtherStudentsDependOnOpportunity(id, requestingUserId);
             }
         }
 

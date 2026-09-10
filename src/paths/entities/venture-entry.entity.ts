@@ -11,6 +11,8 @@ export interface VentureTeamMember {
     name: string;
     role: string;
     email?: string;
+    whatsappCode?: string;
+    whatsappNumber?: string;
     /** Server-computed from team_member_invites — 'accepted' only once the named teammate has
      * clicked their emailed invite link while signed in with this exact email. Ignored on write. */
     inviteStatus?: 'pending' | 'accepted';
@@ -45,6 +47,16 @@ export interface VentureAcademicSetup {
     founderName?: string;
     founderRole?: string;
     founderCredentials?: string;
+    facultyRole?: string;
+    courseRef?: string;
+    origin?: string;
+    founderEmail?: string;
+    founderWhatsappCode?: string;
+    founderWhatsappNumber?: string;
+    teamFit?: string;
+    founderInsight?: string;
+    legalStatus?: string;
+    ventureType?: string;
 }
 
 export interface VentureDocument {
@@ -63,6 +75,14 @@ export interface VentureIdeaInfo {
     sector?: string;
     city?: string;
     pitch?: string;
+    customer?: string;
+    buyerModels?: string[];
+    payerDiff?: string;
+    evidenceMethods?: string[];
+    competitorType?: string;
+    whyUs?: string;
+    resistance?: string;
+    whyNow?: string;
 }
 
 export interface VentureSolutionInfo {
@@ -75,6 +95,21 @@ export interface VentureSolutionInfo {
     marketWho?: string;
     marketSize?: string;
     marketSource?: string;
+    demoUrl?: string;
+    revenueModels?: string[];
+    channels?: string[];
+    numberSourceType?: string;
+    numberSourceNote?: string;
+    price?: number;
+    unitCost?: number;
+    startupNeed?: number;
+    monthlyRevenue?: number;
+    cac?: number;
+    ltv?: number;
+    raised?: number;
+    grossMargin?: number;
+    burn?: number;
+    runway?: number;
 }
 
 export interface VentureSdgEntry {
@@ -92,6 +127,8 @@ export interface VentureSdgMapping {
     entries?: VentureSdgEntry[];
     mode?: 'map' | 'review' | 'none';
     howImpact?: string;
+    helpImpact?: string;
+    responsibility?: string[];
     indicators?: VentureIndicator[];
 }
 
@@ -112,6 +149,18 @@ export interface VentureEvidenceInfo {
     useOfFunds?: string;
     expectedResult?: string;
     openTo?: string[];
+    mentorsConsulted?: number;
+    competitionsJoined?: number;
+    risk?: string;
+    mitigation?: string;
+    assumption?: string;
+    regulatoryBarrier?: string;
+    reflection?: string;
+    valuation?: number;
+    equityPercent?: number;
+    founderOwnership?: number;
+    fundRunway?: number;
+    exitStrategy?: string;
 }
 
 export interface VentureReviewPipeline {

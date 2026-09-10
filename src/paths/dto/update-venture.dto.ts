@@ -53,6 +53,9 @@ export class VentureTeamMemberDto {
     @IsString()
     @MaxLength(FREE_TEXT_MAX)
     email?: string;
+
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) whatsappCode?: string;
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) whatsappNumber?: string;
 }
 
 // ── 8-step guided wizard nested DTOs (additive) ──
@@ -83,6 +86,16 @@ export class VentureAcademicSetupDto {
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) founderName?: string;
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) founderRole?: string;
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) founderCredentials?: string;
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) facultyRole?: string;
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) courseRef?: string;
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) origin?: string;
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) founderEmail?: string;
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) founderWhatsappCode?: string;
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) founderWhatsappNumber?: string;
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) teamFit?: string;
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) founderInsight?: string;
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) legalStatus?: string;
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) ventureType?: string;
 }
 
 export class VentureIdeaInfoDto {
@@ -93,7 +106,15 @@ export class VentureIdeaInfoDto {
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) beneficiaryWho?: string;
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) sector?: string;
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) city?: string;
-    @IsOptional() @IsString() @MaxLength(120) pitch?: string;
+    @IsOptional() @IsString() @MaxLength(200) pitch?: string;
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) customer?: string;
+    @IsOptional() @IsArray() @ArrayMaxSize(LIST_MAX) @IsString({ each: true }) @MaxLength(FREE_TEXT_MAX, { each: true }) buyerModels?: string[];
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) payerDiff?: string;
+    @IsOptional() @IsArray() @ArrayMaxSize(LIST_MAX) @IsString({ each: true }) @MaxLength(FREE_TEXT_MAX, { each: true }) evidenceMethods?: string[];
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) competitorType?: string;
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) whyUs?: string;
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) resistance?: string;
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) whyNow?: string;
 }
 
 export class VentureSolutionInfoDto {
@@ -106,6 +127,21 @@ export class VentureSolutionInfoDto {
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) marketWho?: string;
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) marketSize?: string;
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) marketSource?: string;
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) demoUrl?: string;
+    @IsOptional() @IsArray() @ArrayMaxSize(LIST_MAX) @IsString({ each: true }) @MaxLength(FREE_TEXT_MAX, { each: true }) revenueModels?: string[];
+    @IsOptional() @IsArray() @ArrayMaxSize(LIST_MAX) @IsString({ each: true }) @MaxLength(FREE_TEXT_MAX, { each: true }) channels?: string[];
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) numberSourceType?: string;
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) numberSourceNote?: string;
+    @IsOptional() @IsNumber() @Min(0) price?: number;
+    @IsOptional() @IsNumber() @Min(0) unitCost?: number;
+    @IsOptional() @IsNumber() @Min(0) startupNeed?: number;
+    @IsOptional() @IsNumber() @Min(0) monthlyRevenue?: number;
+    @IsOptional() @IsNumber() @Min(0) cac?: number;
+    @IsOptional() @IsNumber() @Min(0) ltv?: number;
+    @IsOptional() @IsNumber() @Min(0) raised?: number;
+    @IsOptional() @IsNumber() @Min(0) grossMargin?: number;
+    @IsOptional() @IsNumber() @Min(0) burn?: number;
+    @IsOptional() @IsNumber() @Min(0) runway?: number;
 }
 
 export class VentureSdgEntryDto {
@@ -129,6 +165,8 @@ export class VentureSdgMappingDto {
 
     @IsOptional() @IsIn(['map', 'review', 'none']) mode?: 'map' | 'review' | 'none';
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) howImpact?: string;
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) helpImpact?: string;
+    @IsOptional() @IsArray() @ArrayMaxSize(LIST_MAX) @IsString({ each: true }) @MaxLength(FREE_TEXT_MAX, { each: true }) responsibility?: string[];
 
     @IsOptional()
     @IsArray()
@@ -155,6 +193,18 @@ export class VentureEvidenceInfoDto {
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) useOfFunds?: string;
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) expectedResult?: string;
     @IsOptional() @IsArray() @ArrayMaxSize(LIST_MAX) @IsString({ each: true }) openTo?: string[];
+    @IsOptional() @IsNumber() @Min(0) mentorsConsulted?: number;
+    @IsOptional() @IsNumber() @Min(0) competitionsJoined?: number;
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) risk?: string;
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) mitigation?: string;
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) assumption?: string;
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) regulatoryBarrier?: string;
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) reflection?: string;
+    @IsOptional() @IsNumber() @Min(0) valuation?: number;
+    @IsOptional() @IsNumber() @Min(0) equityPercent?: number;
+    @IsOptional() @IsNumber() @Min(0) founderOwnership?: number;
+    @IsOptional() @IsNumber() @Min(0) fundRunway?: number;
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) exitStrategy?: string;
 }
 
 export class VentureReviewPipelineDto {

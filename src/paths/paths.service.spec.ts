@@ -735,6 +735,155 @@ describe('PathsService — coursework team-member edit', () => {
     });
 });
 
+describe('PathsService — FYP multi-record (list / create / id-scoped)', () => {
+    const makeFypMultiRecordService = () => {
+        const inviteRepo = makeInviteRepo();
+        inviteRepo.rows.push({
+            kind: 'fyp',
+            entryId: 'fyp-1',
+            email: 'bob@test.com',
+            status: 'accepted',
+        });
+        const rows: Record<string, unknown>[] = [
+            {
+                id: 'fyp-1',
+                userId: 'owner-1',
+                status: 'draft',
+                projectInfo: { teamMembers: [{ name: 'Bob', email: 'bob@test.com' }] },
+            },
+            {
+                id: 'fyp-2',
+                userId: 'owner-1',
+                status: 'draft',
+                projectInfo: {},
+            },
+        ];
+        const fypRepo = {
+            create: jest.fn((data: Record<string, unknown>) => ({ ...data })),
+            save: jest.fn(async (row: Record<string, unknown>) => {
+                if (!row.id) {
+                    (row as any).id = `fyp-${rows.length + 1}`;
+                    rows.push(row);
+                    return row;
+                }
+                const idx = rows.findIndex((r) => r.id === row.id);
+                if (idx === -1) rows.push(row);
+                else rows[idx] = row;
+                return row;
+            }),
+            delete: jest.fn(async (where: { id: string; userId: string }) => {
+                const idx = rows.findIndex((r) => r.id === where.id && r.userId === where.userId);
+                if (idx !== -1) rows.splice(idx, 1);
+            }),
+            manager: {
+                transaction: jest.fn(async (fn: (m: unknown) => unknown) =>
+                    fn({
+                        getRepository: () => ({
+                            findOne: jest.fn(async (opts: { where?: Record<string, unknown> } = {}) =>
+                                rows.find((r) => matchesWhere(r, opts.where ?? {})) ?? null,
+                            ),
+                            save: jest.fn(async (row: Record<string, unknown>) => {
+                                const idx = rows.findIndex((r) => r.id === row.id);
+                                if (idx === -1) rows.push(row);
+                                else rows[idx] = row;
+                                return row;
+                            }),
+                        }),
+                    }),
+                ),
+            },
+            createQueryBuilder: () => {
+                const state: { userId?: string; id?: string } = {};
+                const qb = {
+                    where: jest.fn((_cond: string, params?: Record<string, unknown>) => {
+                        if (params && 'userId' in params) state.userId = params.userId as string;
+                        if (params && 'id' in params) state.id = params.id as string;
+                        return qb;
+                    }),
+                    andWhere: jest.fn((builder: unknown) => {
+                        type BracketArg = { where: (c: string, p?: Record<string, unknown>) => void; orWhere: () => void };
+                        if (typeof builder === 'function') {
+                            const b: BracketArg = {
+                                where: (_c, p) => { if (p && 'userId' in p) state.userId = p.userId as string; },
+                                orWhere: () => {},
+                            };
+                            (builder as (arg: BracketArg) => void)(b);
+                        }
+                        return qb;
+                    }),
+                    orWhere: jest.fn(() => qb),
+                    orderBy: jest.fn(() => qb),
+                    getMany: jest.fn(async () => rows.filter((r) => (state.userId ? r.userId === state.userId : true))),
+                    getOne: jest.fn(async () =>
+                        rows.find((r) => r.id === state.id && (state.userId ? r.userId === state.userId : true)) ?? null,
+                    ),
+                };
+                return qb;
+            },
+        };
+        const service = new PathsService(
+            {} as any,
+            fypRepo as any,
+            {} as any,
+            inviteRepo as any,
+            { findOne: jest.fn() } as any,
+            {} as any,
+            {} as any,
+            { createNotification: jest.fn() } as any,
+            {} as any,
+        );
+        jest.spyOn(service as any, 'syncFypInvites').mockResolvedValue(undefined);
+        jest.spyOn(service as any, 'fypAnnotate').mockImplementation(async (entries: unknown) => entries as any);
+        return { service, rows };
+    };
+
+    it('createFyp always makes a new row, never reusing an existing one', async () => {
+        const { service, rows } = makeFypMultiRecordService();
+        const before = rows.length;
+        const created = await service.createFyp('owner-1');
+        expect(rows.length).toBe(before + 1);
+        expect((created as any).isOwner).toBe(true);
+    });
+
+    it('listFyps returns every entry the user owns', async () => {
+        const { service } = makeFypMultiRecordService();
+        const list = await service.listFyps('owner-1', 'owner@test.com');
+        expect(list.map((e: any) => e.id).sort()).toEqual(['fyp-1', 'fyp-2']);
+        expect(list.every((e: any) => e.isOwner)).toBe(true);
+    });
+
+    it('lets an accepted teammate patch the shared draft by id', async () => {
+        const { service } = makeFypMultiRecordService();
+        const saved = await service.updateFypByIdForUser(
+            'bob-1',
+            'fyp-1',
+            { addedNote: 'from teammate' } as any,
+            'bob@test.com',
+        );
+        expect((saved as any).addedNote).toBe('from teammate');
+        expect((saved as any).isOwner).toBe(false);
+    });
+
+    it('rejects a stranger who is not on the FYP team', async () => {
+        const { service } = makeFypMultiRecordService();
+        await expect(
+            service.updateFypByIdForUser('eve-1', 'fyp-1', { addedNote: 'nope' } as any, 'eve@test.com'),
+        ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('deleteFypByIdForUser removes only the owner\'s own draft', async () => {
+        const { service, rows } = makeFypMultiRecordService();
+        await service.deleteFypByIdForUser('owner-1', 'fyp-2');
+        expect(rows.find((r) => r.id === 'fyp-2')).toBeUndefined();
+    });
+
+    it('deleteFypByIdForUser refuses to delete a submitted record', async () => {
+        const { service, rows } = makeFypMultiRecordService();
+        rows.find((r) => r.id === 'fyp-2')!.status = 'submitted';
+        await expect(service.deleteFypByIdForUser('owner-1', 'fyp-2')).rejects.toBeInstanceOf(NotFoundException);
+    });
+});
+
 function makeGraderRunRepo() {
     const rows: Array<Record<string, unknown>> = [];
     const findOne = jest.fn(async (opts: { where?: Record<string, unknown> } = {}) =>

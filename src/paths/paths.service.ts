@@ -1433,6 +1433,65 @@ export class PathsService {
     return this.attachStudents(annotated);
   }
 
+  /** Same shape/rules as applyCourseProjectPatch — see the comment there for why an approved or
+   * returned (rejected/revision-requested) record resets to "pending" the moment it's edited again. */
+  private applyFypPatch(
+    entry: FypEntry,
+    dto: UpdateFypDto,
+  ): {
+    entry: FypEntry;
+    /** True the moment a supervisor email is first attached to this record. */
+    justConnected: boolean;
+  } {
+    const hadSupervisorEmail = !!(entry.projectInfo?.supervisorEmail || '').trim();
+    if (dto.projectTitle !== undefined)
+      entry.projectTitle = dto.projectTitle;
+    if (dto.overview !== undefined) entry.overview = dto.overview;
+    if (dto.milestones !== undefined) entry.milestones = dto.milestones;
+    if (dto.communityLinkage !== undefined)
+      entry.communityLinkage = dto.communityLinkage;
+    // 9-step guided wizard — frontend sends each group fully merged, so a straight assign is safe.
+    if (dto.projectInfo !== undefined)
+      entry.projectInfo = dto.projectInfo as FypProjectInfo;
+    if (dto.background !== undefined) entry.background = dto.background;
+    if (dto.objectivesInfo !== undefined)
+      entry.objectivesInfo = dto.objectivesInfo;
+    if (dto.literature !== undefined) entry.literature = dto.literature;
+    if (dto.methodology !== undefined) entry.methodology = dto.methodology;
+    if (dto.findings !== undefined) entry.findings = dto.findings;
+    if (dto.routeDetails !== undefined) entry.routeDetails = dto.routeDetails;
+    if (dto.sdgMapping !== undefined) entry.sdgMapping = dto.sdgMapping;
+    if (dto.reflectionInfo !== undefined)
+      entry.reflectionInfo = dto.reflectionInfo;
+    if (dto.repository !== undefined) entry.repository = dto.repository;
+    if (dto.sectionSummaries !== undefined)
+      entry.sectionSummaries = dto.sectionSummaries;
+    if (dto.addedNote !== undefined) entry.addedNote = dto.addedNote;
+    if (dto.stepCompleted !== undefined)
+      entry.stepCompleted = dto.stepCompleted;
+    if (dto.status !== undefined) entry.status = dto.status;
+    // Editing a previously-approved record after the fact invalidates that approval — same
+    // rule as Course Project's applyCourseProjectPatch, see the comment there. Same for a
+    // rejected record: fix & resubmit should land as a fresh review, not stay stuck on
+    // "rejected". Keep the supervisor's note so the student still sees it.
+    if (entry.status === 'submitted' && entry.supervisorApprovalStatus === 'approved') {
+      entry.supervisorApprovalStatus = 'pending';
+      entry.supervisorApprovalNote = null;
+      entry.supervisorApprovalAt = null;
+      entry.meritRibbon = null;
+    } else if (
+      entry.status === 'submitted' &&
+      (entry.supervisorApprovalStatus === 'rejected' || entry.supervisorApprovalStatus === 'revision_requested')
+    ) {
+      entry.supervisorApprovalStatus = 'pending';
+      entry.supervisorApprovalAt = null;
+      entry.meritRibbon = null;
+    }
+    const justConnected = !hadSupervisorEmail && !!(entry.projectInfo?.supervisorEmail || '').trim();
+    return { entry, justConnected };
+  }
+
+  /** @deprecated single-entry upsert, kept for backward compatibility — use create/update-by-id for multi-entry decks. */
   async upsertFyp(userId: string, dto: UpdateFypDto, userEmail?: string) {
     await this.assertCanWriteOwnFyp(userId, userEmail);
     // Locked read-modify-write — see comment on upsertCourseProject for why this matters.
@@ -1441,61 +1500,151 @@ export class PathsService {
       const repo = manager.getRepository(FypEntry);
       let entry = await repo.findOne({
         where: { userId },
+        order: { updatedAt: 'DESC' },
         lock: { mode: 'pessimistic_write' },
       });
       if (!entry)
         entry = repo.create({ userId, milestones: DEFAULT_FYP_MILESTONES });
-      const hadSupervisorEmail = !!(entry.projectInfo?.supervisorEmail || '').trim();
-      if (dto.projectTitle !== undefined)
-        entry.projectTitle = dto.projectTitle;
-      if (dto.overview !== undefined) entry.overview = dto.overview;
-      if (dto.milestones !== undefined) entry.milestones = dto.milestones;
-      if (dto.communityLinkage !== undefined)
-        entry.communityLinkage = dto.communityLinkage;
-      // 9-step guided wizard — frontend sends each group fully merged, so a straight assign is safe.
-      if (dto.projectInfo !== undefined)
-        entry.projectInfo = dto.projectInfo as FypProjectInfo;
-      if (dto.background !== undefined) entry.background = dto.background;
-      if (dto.objectivesInfo !== undefined)
-        entry.objectivesInfo = dto.objectivesInfo;
-      if (dto.literature !== undefined) entry.literature = dto.literature;
-      if (dto.methodology !== undefined) entry.methodology = dto.methodology;
-      if (dto.findings !== undefined) entry.findings = dto.findings;
-      if (dto.routeDetails !== undefined) entry.routeDetails = dto.routeDetails;
-      if (dto.sdgMapping !== undefined) entry.sdgMapping = dto.sdgMapping;
-      if (dto.reflectionInfo !== undefined)
-        entry.reflectionInfo = dto.reflectionInfo;
-      if (dto.repository !== undefined) entry.repository = dto.repository;
-      if (dto.sectionSummaries !== undefined)
-        entry.sectionSummaries = dto.sectionSummaries;
-      if (dto.addedNote !== undefined) entry.addedNote = dto.addedNote;
-      if (dto.stepCompleted !== undefined)
-        entry.stepCompleted = dto.stepCompleted;
-      if (dto.status !== undefined) entry.status = dto.status;
-      // Editing a previously-approved record after the fact invalidates that approval — same
-      // rule as Course Project's applyCourseProjectPatch, see the comment there. Same for a
-      // rejected record: fix & resubmit should land as a fresh review, not stay stuck on
-      // "rejected". Keep the supervisor's note so the student still sees it.
-      if (entry.status === 'submitted' && entry.supervisorApprovalStatus === 'approved') {
-        entry.supervisorApprovalStatus = 'pending';
-        entry.supervisorApprovalNote = null;
-        entry.supervisorApprovalAt = null;
-        entry.meritRibbon = null;
-      } else if (
-        entry.status === 'submitted' &&
-        (entry.supervisorApprovalStatus === 'rejected' || entry.supervisorApprovalStatus === 'revision_requested')
-      ) {
-        entry.supervisorApprovalStatus = 'pending';
-        entry.supervisorApprovalAt = null;
-        entry.meritRibbon = null;
-      }
-      justConnected = !hadSupervisorEmail && !!(entry.projectInfo?.supervisorEmail || '').trim();
-      return repo.save(entry);
+      const patched = this.applyFypPatch(entry, dto);
+      justConnected = patched.justConnected;
+      return repo.save(patched.entry);
     });
     await this.syncFypInvites(saved, userId);
     if (justConnected) await this.notifyFypConnected(saved);
     const [annotated] = await this.fypAnnotate([saved]);
     return { ...annotated, isOwner: true };
+  }
+
+  /** One student can have several independent FYP records — this is their own deck, plus any
+   * teammate's record they were named on by email and have accepted (drafts included so the team
+   * can finish the same in-progress record together). Same shape as listCourseProjects. */
+  async listFyps(userId: string, userEmail?: string) {
+    const email = (userEmail || '').trim().toLowerCase();
+    const qb = this.fypRepo
+      .createQueryBuilder('e')
+      .where('e."userId" = :userId', { userId });
+    if (email) {
+      qb.orWhere(`(${PathsService.FYP_TEAM_MEMBER_EMAIL_MATCH})`, { teamEmail: email });
+    }
+    const entries = await qb.orderBy('e."updatedAt"', 'DESC').getMany();
+    const annotated = await this.fypAnnotate(entries);
+    return annotated.map((e) => ({ ...e, isOwner: e.userId === userId }));
+  }
+
+  async createFyp(userId: string) {
+    const saved = await this.fypRepo.save(
+      this.fypRepo.create({ userId, milestones: DEFAULT_FYP_MILESTONES }),
+    );
+    return { ...saved, isOwner: true };
+  }
+
+  /** Owner gets full access at any stage; a named team member who has accepted (or was auto-connected
+   * as a registered student) can read and edit the same record, including drafts. Same rule as
+   * canEditCourseProject. */
+  private async canEditFyp(
+    entry: FypEntry,
+    userId: string,
+    userEmail?: string,
+  ): Promise<boolean> {
+    if (entry.userId === userId) return true;
+    const email = (userEmail || '').trim().toLowerCase();
+    if (!email) return false;
+    if (!this.extractMemberEmails(entry.projectInfo?.teamMembers).includes(email)) {
+      return false;
+    }
+    const invite = await this.teamMemberInviteRepo.findOne({
+      where: { kind: 'fyp', entryId: entry.id, email, status: 'accepted' },
+    });
+    return !!invite;
+  }
+
+  async getFypByIdForUser(userId: string, userEmail: string, id: string) {
+    const email = (userEmail || '').trim().toLowerCase();
+    const qb = this.fypRepo
+      .createQueryBuilder('e')
+      .where('e.id = :id', { id })
+      .andWhere(
+        new Brackets((b) => {
+          b.where('e."userId" = :userId', { userId });
+          if (email) {
+            b.orWhere(`(${PathsService.FYP_TEAM_MEMBER_EMAIL_MATCH})`, { teamEmail: email });
+          }
+        }),
+      );
+    const entry = await qb.getOne();
+    if (!entry) throw new NotFoundException('FYP entry not found');
+    const [annotated] = await this.fypAnnotate([entry]);
+    return { ...annotated, isOwner: entry.userId === userId };
+  }
+
+  async updateFypByIdForUser(
+    userId: string,
+    id: string,
+    dto: UpdateFypDto,
+    userEmail?: string,
+  ) {
+    // Same locked read-modify-write as upsertFyp — see comment there.
+    let justConnected = false;
+    const saved = await this.fypRepo.manager.transaction(async (manager) => {
+      const repo = manager.getRepository(FypEntry);
+      const entry = await repo.findOne({
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!entry) throw new NotFoundException('FYP entry not found');
+      if (!(await this.canEditFyp(entry, userId, userEmail))) {
+        throw new NotFoundException('FYP entry not found');
+      }
+      const patched = this.applyFypPatch(entry, dto);
+      justConnected = patched.justConnected;
+      return repo.save(patched.entry);
+    });
+    await this.syncFypInvites(saved, saved.userId);
+    if (justConnected) await this.notifyFypConnected(saved);
+    const [annotated] = await this.fypAnnotate([saved]);
+    return { ...annotated, isOwner: saved.userId === userId };
+  }
+
+  async deleteFypByIdForUser(userId: string, id: string) {
+    // Delete is owner-only regardless — the final .delete({id, userId}) call below enforces
+    // that on its own, so no team-member email is needed for this existence/status check.
+    const entry = await this.getFypByIdForUser(userId, '', id);
+    if (entry.status === 'submitted') {
+      throw new NotFoundException('Submitted FYP records cannot be deleted');
+    }
+    await this.fypRepo.delete({ id, userId });
+  }
+
+  async addFypDeliverableByIdForUser(
+    userId: string,
+    id: string,
+    dto: AddFypDeliverableDto,
+    userEmail?: string,
+  ) {
+    // Locked so two near-simultaneous uploads can't compute the same `nextVersion` and
+    // have the second save silently overwrite the first's deliverable entry.
+    return this.fypRepo.manager.transaction(async (manager) => {
+      const repo = manager.getRepository(FypEntry);
+      const entry = await repo.findOne({
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!entry) throw new NotFoundException('FYP entry not found');
+      if (!(await this.canEditFyp(entry, userId, userEmail))) {
+        throw new NotFoundException('FYP entry not found');
+      }
+      const nextVersion = (entry.deliverables?.length ?? 0) + 1;
+      entry.deliverables = [
+        ...(entry.deliverables ?? []),
+        {
+          version: nextVersion,
+          label: dto.label,
+          fileUrl: dto.fileUrl,
+          uploadedAt: new Date().toISOString(),
+        },
+      ];
+      return repo.save(entry);
+    });
   }
 
   /** Fires once — the moment a supervisor email is first attached to a draft FYP record, i.e. "one

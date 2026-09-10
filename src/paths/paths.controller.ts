@@ -185,6 +185,57 @@ export class PathsController {
         return { success: true, data };
     }
 
+    /** One student can have several independent FYP records — the multi-record deck, mirroring
+     * Course Project's list/create/id-scoped routes. The legacy singleton routes above stay for
+     * backward compatibility. */
+    @Get('fyp-theses')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.STUDENT)
+    async listFyps(@Request() req) {
+        const data = await this.pathsService.listFyps(req.user.id, req.user.email);
+        return { success: true, data };
+    }
+
+    @Post('fyp-theses')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.STUDENT)
+    async createFyp(@Request() req) {
+        const data = await this.pathsService.createFyp(req.user.id);
+        return { success: true, data };
+    }
+
+    @Get('fyp-theses/:id')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.STUDENT)
+    async getFypById(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
+        const data = await this.pathsService.getFypByIdForUser(req.user.id, req.user.email, id);
+        return { success: true, data };
+    }
+
+    @Patch('fyp-theses/:id')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.STUDENT)
+    async updateFypById(@Request() req, @Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateFypDto) {
+        const data = await this.pathsService.updateFypByIdForUser(req.user.id, id, dto, req.user.email);
+        return { success: true, data };
+    }
+
+    @Delete('fyp-theses/:id')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.STUDENT)
+    async deleteFypById(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
+        await this.pathsService.deleteFypByIdForUser(req.user.id, id);
+        return { success: true };
+    }
+
+    @Post('fyp-theses/:id/deliverables')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.STUDENT)
+    async addFypDeliverableById(@Request() req, @Param('id', ParseUUIDPipe) id: string, @Body() dto: AddFypDeliverableDto) {
+        const data = await this.pathsService.addFypDeliverableByIdForUser(req.user.id, id, dto, req.user.email);
+        return { success: true, data };
+    }
+
     /** Records from students who named this teacher as their supervisor — the faculty deck. */
     @Get('fyp-thesis/supervised')
     @UseGuards(RolesGuard)

@@ -1315,27 +1315,61 @@ export class PathsService {
       )
     )`;
 
-  /** FYP is one record per student — a co-author with no record of their own sees the lead's
+  /** Empty autosave shells (default milestones, no title, never advanced) are not a real FYP —
+   * they happen when a co-author opens the wizard before/after an invite and the client PATCHes.
+   * Those must not hide the lead's shared record. A submitted record, or any draft that has a
+   * title / step / deliverable, is the student's own FYP and still wins. */
+  private isFypPlaceholder(entry: FypEntry): boolean {
+    if (entry.status === 'submitted') return false;
+    if ((entry.stepCompleted ?? 0) > 0) return false;
+    const title = (entry.projectTitle || entry.projectInfo?.title || '').trim();
+    if (title) return false;
+    if ((entry.deliverables?.length ?? 0) > 0) return false;
+    return true;
+  }
+
+  private async findSharedFypForEmail(userEmail?: string): Promise<FypEntry | null> {
+    const email = (userEmail || '').trim().toLowerCase();
+    if (!email) return null;
+    return this.fypRepo
+      .createQueryBuilder('e')
+      .where(PathsService.FYP_TEAM_MEMBER_EMAIL_MATCH, { teamEmail: email })
+      .orderBy('e."updatedAt"', 'DESC')
+      .getOne();
+  }
+
+  /** Co-authors must not create a second FYP row that then shadows the lead's shared record.
+   * Skipped when userEmail is omitted so existing owner-only callers/tests stay unchanged. */
+  private async assertCanWriteOwnFyp(userId: string, userEmail?: string): Promise<void> {
+    if (!userEmail) return;
+    const own = await this.fypRepo.findOne({ where: { userId } });
+    if (own && !this.isFypPlaceholder(own)) return;
+    const shared = await this.findSharedFypForEmail(userEmail);
+    if (shared && shared.userId !== userId) {
+      throw new ForbiddenException(
+        "You are a co-author on another student's FYP — only the lead author can edit or submit it.",
+      );
+    }
+  }
+
+  /** FYP is one record per student — a co-author with no real record of their own sees the lead's
    * record on their own dashboard instead (read-only), same drafts-included visibility as
    * Course Project's team-sharing (listCourseProjects), gated on a real accepted invite. A
    * teammate added while the lead is still drafting should be able to track progress, not wait
-   * until submission to even discover the record exists. A student's own record always takes
-   * priority. */
+   * until submission to even discover the record exists. A student's own *real* record always
+   * takes priority; an empty placeholder row does not. */
   async getFyp(userId: string, userEmail?: string) {
     const own = await this.fypRepo.findOne({ where: { userId } });
-    if (own) {
-      const [annotated] = await this.fypAnnotate([own]);
-      return { ...annotated, isOwner: true };
+    const shared = await this.findSharedFypForEmail(userEmail);
+    const useShared =
+      !!shared && shared.userId !== userId && (!own || this.isFypPlaceholder(own));
+    if (useShared && shared) {
+      const [annotated] = await this.fypAnnotate([shared]);
+      return { ...annotated, isOwner: false };
     }
-    const email = (userEmail || '').trim().toLowerCase();
-    if (!email) return null;
-    const shared = await this.fypRepo
-      .createQueryBuilder('e')
-      .where(PathsService.FYP_TEAM_MEMBER_EMAIL_MATCH, { teamEmail: email })
-      .getOne();
-    if (!shared) return null;
-    const [annotated] = await this.fypAnnotate([shared]);
-    return { ...annotated, isOwner: false };
+    if (!own) return null;
+    const [annotated] = await this.fypAnnotate([own]);
+    return { ...annotated, isOwner: true };
   }
 
   /** The faculty supervision deck — submitted FYP records naming this supervisor by email, same
@@ -1354,26 +1388,53 @@ export class PathsService {
     return this.attachStudents(annotated);
   }
 
-  /** The university showcase deck — submitted FYP records from students formally affiliated with
-   * this university org (via their account's organizationId). Unlike Course Project, FYP has no
-   * free-text university-name field on the entry itself to fall back on. */
+  /** Draft cards from students this supervisor supervises — same email scoping as
+   * listFypForTeacher, so faculty can nudge stalled FYP drafts the way they already can for
+   * Coursework (listInProgressCourseProjectsForTeacher). */
+  async listInProgressFypForTeacher(supervisorEmail: string) {
+    const email = supervisorEmail.trim().toLowerCase();
+    if (!email) return [];
+    const entries = await this.fypRepo.find({
+      where: { status: 'draft' },
+      order: { updatedAt: 'DESC' },
+    });
+    const matched = entries.filter(
+      (e) => (e.projectInfo?.supervisorEmail || '').trim().toLowerCase() === email,
+    );
+    const annotated = await this.fypAnnotate(matched);
+    return this.attachStudents(annotated);
+  }
+
+  /** The university showcase deck — FYP records from students linked to this university org,
+   * either formally (organizationId) or by the university name they entered in section 1
+   * (projectInfo.university), same fallback as listCourseProjectsForUniversity. Defaults to
+   * submitted-only; pass 'draft' for the in-progress companion view. */
   async listFypForUniversity(organizationId: string, status: 'draft' | 'submitted' = 'submitted') {
     const org = await this.organizationsRepo.findOne({
       where: { id: organizationId },
     });
     if (!org) return [];
+    const orgNameNorm = org.name.trim().toLowerCase();
     const entries = await this.fypRepo
       .createQueryBuilder('e')
       .leftJoin('users', 'u', 'u.id::text = e."userId"')
       .where('e.status = :status', { status })
-      .andWhere('u."organizationId"::text = :orgId', { orgId: organizationId })
+      .andWhere(
+        new Brackets((b) => {
+          b.where('u."organizationId"::text = :orgId', { orgId: organizationId }).orWhere(
+            `LOWER(TRIM(COALESCE(e."projectInfo"->>'university', ''))) = :orgNameNorm`,
+            { orgNameNorm },
+          );
+        }),
+      )
       .orderBy('e."updatedAt"', 'DESC')
       .getMany();
     const annotated = await this.fypAnnotate(entries);
     return this.attachStudents(annotated);
   }
 
-  async upsertFyp(userId: string, dto: UpdateFypDto) {
+  async upsertFyp(userId: string, dto: UpdateFypDto, userEmail?: string) {
+    await this.assertCanWriteOwnFyp(userId, userEmail);
     // Locked read-modify-write — see comment on upsertCourseProject for why this matters.
     let justConnected = false;
     const saved = await this.fypRepo.manager.transaction(async (manager) => {
@@ -1686,7 +1747,8 @@ export class PathsService {
     return { notified: sent, scope, graderRuns };
   }
 
-  async addFypDeliverable(userId: string, dto: AddFypDeliverableDto) {
+  async addFypDeliverable(userId: string, dto: AddFypDeliverableDto, userEmail?: string) {
+    await this.assertCanWriteOwnFyp(userId, userEmail);
     // Locked so two near-simultaneous uploads can't compute the same `nextVersion` and
     // have the second save silently overwrite the first's deliverable entry.
     return this.fypRepo.manager.transaction(async (manager) => {

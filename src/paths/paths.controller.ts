@@ -173,7 +173,7 @@ export class PathsController {
     @UseGuards(RolesGuard)
     @Roles(UserRole.STUDENT)
     async updateFyp(@Request() req, @Body() dto: UpdateFypDto) {
-        const data = await this.pathsService.upsertFyp(req.user.id, dto);
+        const data = await this.pathsService.upsertFyp(req.user.id, dto, req.user.email);
         return { success: true, data };
     }
 
@@ -181,7 +181,7 @@ export class PathsController {
     @UseGuards(RolesGuard)
     @Roles(UserRole.STUDENT)
     async addFypDeliverable(@Request() req, @Body() dto: AddFypDeliverableDto) {
-        const data = await this.pathsService.addFypDeliverable(req.user.id, dto);
+        const data = await this.pathsService.addFypDeliverable(req.user.id, dto, req.user.email);
         return { success: true, data };
     }
 
@@ -191,6 +191,15 @@ export class PathsController {
     @Roles(UserRole.FACULTY)
     async listSupervisedFyp(@Request() req) {
         const data = await this.pathsService.listFypForTeacher(req.user.email);
+        return { success: true, data };
+    }
+
+    /** Draft records from students who named this teacher as their supervisor but haven't submitted yet. */
+    @Get('fyp-thesis/in-progress')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.FACULTY)
+    async listInProgressSupervisedFyp(@Request() req) {
+        const data = await this.pathsService.listInProgressFypForTeacher(req.user.email);
         return { success: true, data };
     }
 

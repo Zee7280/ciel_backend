@@ -1041,6 +1041,126 @@ describe('PathsService — FYP supervisor review', () => {
     });
 });
 
+describe('PathsService — FYP teammate share + faculty in-progress', () => {
+    const lead = {
+        id: 'fyp-lead',
+        userId: 'lead-1',
+        status: 'draft',
+        stepCompleted: 2,
+        projectTitle: 'Shared thesis',
+        projectInfo: { title: 'Shared thesis', supervisorEmail: 'sup@test.com' },
+        deliverables: [{ version: 1, label: 'draft.pdf', fileUrl: 'https://x/d.pdf', uploadedAt: '2026-01-01' }],
+    };
+    const placeholderOwn = {
+        id: 'fyp-shadow',
+        userId: 'teammate-1',
+        status: 'draft',
+        stepCompleted: 0,
+        projectTitle: null,
+        projectInfo: {},
+        deliverables: [],
+    };
+
+    function makeQb(shared: Record<string, unknown> | null) {
+        const qb: any = {
+            where: jest.fn(() => qb),
+            orderBy: jest.fn(() => qb),
+            getOne: jest.fn(async () => shared),
+        };
+        return qb;
+    }
+
+    const makeShareService = (opts: {
+        own?: Record<string, unknown> | null;
+        shared?: Record<string, unknown> | null;
+        drafts?: Record<string, unknown>[];
+    }) => {
+        const fypRepo = {
+            findOne: jest.fn(async () => opts.own ?? null),
+            find: jest.fn(async () => opts.drafts ?? []),
+            createQueryBuilder: jest.fn(() => makeQb(opts.shared ?? null)),
+            manager: {
+                transaction: jest.fn(async (fn: (m: unknown) => unknown) =>
+                    fn({
+                        getRepository: () => ({
+                            findOne: jest.fn(async () => opts.own ?? null),
+                            create: jest.fn((data: Record<string, unknown>) => ({ ...data, id: 'new-fyp' })),
+                            save: jest.fn(async (row: Record<string, unknown>) => row),
+                        }),
+                    }),
+                ),
+            },
+        };
+        const usersRepo = {
+            find: jest.fn(async () => [{ id: 'lead-1', name: 'Lead', email: 'lead@test.com' }]),
+            findOne: jest.fn(),
+        };
+        const service = new PathsService(
+            {} as any,
+            fypRepo as any,
+            {} as any,
+            makeInviteRepo() as any,
+            usersRepo as any,
+            {} as any,
+            {} as any,
+            { createNotification: jest.fn() } as any,
+            {} as any,
+        );
+        jest.spyOn(service as any, 'fypAnnotate').mockImplementation(async (entries: unknown) => entries as any);
+        jest.spyOn(service as any, 'syncFypInvites').mockResolvedValue(undefined);
+        return { service, fypRepo };
+    };
+
+    it('getFyp returns the lead draft (isOwner:false) when the teammate has no row of their own', async () => {
+        const { service } = makeShareService({ own: null, shared: lead });
+        const result = await service.getFyp('teammate-1', 'teammate@test.com');
+        expect(result).toEqual(expect.objectContaining({ id: 'fyp-lead', isOwner: false }));
+    });
+
+    it('getFyp prefers the shared lead record over an empty placeholder row of the teammate', async () => {
+        const { service } = makeShareService({ own: placeholderOwn, shared: lead });
+        const result = await service.getFyp('teammate-1', 'teammate@test.com');
+        expect(result).toEqual(expect.objectContaining({ id: 'fyp-lead', isOwner: false }));
+    });
+
+    it('getFyp keeps a real own draft even if the student is also named on someone else\'s FYP', async () => {
+        const ownReal = { ...placeholderOwn, projectTitle: 'My own thesis', stepCompleted: 1 };
+        const { service } = makeShareService({ own: ownReal, shared: lead });
+        const result = await service.getFyp('teammate-1', 'teammate@test.com');
+        expect(result).toEqual(expect.objectContaining({ id: 'fyp-shadow', isOwner: true }));
+    });
+
+    it('upsertFyp refuses to create a shadow row for an accepted co-author', async () => {
+        const { service, fypRepo } = makeShareService({ own: null, shared: lead });
+        await expect(
+            service.upsertFyp('teammate-1', { addedNote: 'nope' } as any, 'teammate@test.com'),
+        ).rejects.toBeInstanceOf(ForbiddenException);
+        expect(fypRepo.manager.transaction).not.toHaveBeenCalled();
+    });
+
+    it('upsertFyp still lets the lead (or a student with no shared FYP) save without an email argument', async () => {
+        const { service } = makeShareService({
+            own: { ...lead, userId: 'student-1' },
+            shared: null,
+        });
+        const saved = await service.upsertFyp('student-1', { addedNote: 'ok' } as any);
+        expect((saved as any).addedNote).toBe('ok');
+        expect((saved as any).isOwner).toBe(true);
+    });
+
+    it('listInProgressFypForTeacher returns only draft records naming that supervisor', async () => {
+        const { service } = makeShareService({
+            drafts: [
+                lead,
+                { ...lead, id: 'other', projectInfo: { supervisorEmail: 'someone@else.com' } },
+            ],
+        });
+        const result = await service.listInProgressFypForTeacher('SUP@test.com');
+        expect(result).toHaveLength(1);
+        expect((result[0] as { id: string }).id).toBe('fyp-lead');
+    });
+});
+
 describe('PathsService — FYP merit notify', () => {
     const makeNotifyService = () => {
         const notificationsService = { createNotification: jest.fn().mockResolvedValue(undefined) };

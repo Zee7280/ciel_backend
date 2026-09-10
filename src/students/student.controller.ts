@@ -110,7 +110,7 @@ export class StudentController {
   @Post('opportunity')
   createIndependentProject(
     @Request() req,
-    @Body() createOpportunityDto: CreateOpportunityDto & { draft?: boolean },
+    @Body() createOpportunityDto: CreateOpportunityDto,
   ) {
     if (createOpportunityDto?.draft === true) {
       return this.studentsService.saveStudentOpportunityDraft(
@@ -119,9 +119,10 @@ export class StudentController {
         createOpportunityDto as unknown as Record<string, unknown>,
       );
     }
+    const { draft: _draftFlag, ...createDto } = createOpportunityDto;
     return this.studentsService.createStudentOpportunity(
       req.user.id,
-      createOpportunityDto,
+      createDto,
     );
   }
 
@@ -131,7 +132,7 @@ export class StudentController {
     @Request() req,
     @Param('id') id: string,
     @Body()
-    updateOpportunityDto: Partial<CreateOpportunityDto> & { draft?: boolean },
+    updateOpportunityDto: Partial<CreateOpportunityDto>,
   ) {
     if (updateOpportunityDto?.draft === true) {
       return this.studentsService.saveStudentOpportunityDraft(
@@ -140,10 +141,11 @@ export class StudentController {
         updateOpportunityDto as unknown as Record<string, unknown>,
       );
     }
+    const { draft: _draftFlag, ...updateDto } = updateOpportunityDto;
     return this.studentsService.updateStudentOpportunity(
       req.user.id,
       id,
-      updateOpportunityDto,
+      updateDto,
     );
   }
 

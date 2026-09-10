@@ -30,6 +30,10 @@ export class CreateUserDto {
 
     @IsOptional()
     @IsString()
+    city?: string;
+
+    @IsOptional()
+    @IsString()
     enrollmentYear?: string;
 
     /** Optional student ID / faculty-employee ID, stored on the existing `registrationNumber` column. */

@@ -109,6 +109,11 @@ export class SupervisionDto {
 }
 
 export class CreateOpportunityDto {
+    /** Student mid-wizard save. Not persisted — StudentController branches on this, then strips it. */
+    @IsBoolean()
+    @IsOptional()
+    draft?: boolean;
+
     @IsString()
     title: string;
 

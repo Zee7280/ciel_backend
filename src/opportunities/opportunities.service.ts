@@ -1218,8 +1218,9 @@ export class OpportunitiesService {
             resolvedPartnerToken = randomUUID();
         }
 
+        const { draft: _orgDraftFlag, ...createFields } = createOpportunityDto;
         const payload: DeepPartial<Opportunity> = {
-            ...createOpportunityDto,
+            ...createFields,
             organizationId: org?.id || null,
             facultyId: user.role === UserRole.FACULTY ? user.id : null,
             creatorId: user.id,
@@ -1583,8 +1584,9 @@ export class OpportunitiesService {
             }
         }
 
+        const { draft: _studentDraftFlag, ...createFields } = dto;
         const payload: DeepPartial<Opportunity> = {
-            ...dto,
+            ...createFields,
             organizationId,
             facultyId: privateCandidate ? null : resolvedFacultyId,
             creatorId: user.id,

@@ -102,4 +102,23 @@ describe('StudentController — student-created opportunity create/update', () =
     );
     expect(studentsService.saveStudentOpportunityDraft).not.toHaveBeenCalled();
   });
+
+  it('strips draft from a full create so it cannot leak onto the opportunity row', async () => {
+    const { controller, studentsService } = makeController();
+
+    await controller.createIndependentProject(
+      { user: { id: 'student-1' } } as any,
+      {
+        draft: false,
+        title: 'Complete submission',
+      } as any,
+    );
+
+    const passed = studentsService.createStudentOpportunity.mock.calls[0][1] as {
+      draft?: boolean;
+      title?: string;
+    };
+    expect(passed.title).toBe('Complete submission');
+    expect(passed.draft).toBeUndefined();
+  });
 });

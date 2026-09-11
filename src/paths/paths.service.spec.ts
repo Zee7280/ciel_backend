@@ -760,6 +760,9 @@ describe('PathsService — FYP multi-record (list / create / id-scoped)', () => 
         ];
         const fypRepo = {
             create: jest.fn((data: Record<string, unknown>) => ({ ...data })),
+            findOne: jest.fn(async (opts: { where?: Record<string, unknown> } = {}) =>
+                rows.find((r) => matchesWhere(r, opts.where ?? {})) ?? null,
+            ),
             save: jest.fn(async (row: Record<string, unknown>) => {
                 if (!row.id) {
                     (row as any).id = `fyp-${rows.length + 1}`;
@@ -843,6 +846,16 @@ describe('PathsService — FYP multi-record (list / create / id-scoped)', () => 
         const created = await service.createFyp('owner-1');
         expect(rows.length).toBe(before + 1);
         expect((created as any).isOwner).toBe(true);
+    });
+
+    it('createFyp returns the existing row when userId is still unique-indexed', async () => {
+        const { service, rows } = makeFypMultiRecordService();
+        const before = rows.length;
+        (service as any).fypRepo.save.mockRejectedValueOnce({ code: '23505' });
+        const opened = await service.createFyp('owner-1');
+        expect(rows.length).toBe(before);
+        expect((opened as any).id).toBe('fyp-1');
+        expect((opened as any).isOwner).toBe(true);
     });
 
     it('listFyps returns every entry the user owns', async () => {
@@ -1441,6 +1454,125 @@ describe('PathsService — venture supervisor review', () => {
         );
     });
 });
+
+describe('PathsService — venture faculty in-progress + self-certify', () => {
+    it('listInProgressVenturesForTeacher returns only draft records naming that supervisor', async () => {
+        const drafts = [
+            { id: 'v-1', status: 'draft', academicSetup: { supervisorEmail: 'sup@test.com' }, ventureName: 'Mine' },
+            { id: 'v-2', status: 'draft', academicSetup: { supervisorEmail: 'other@test.com' }, ventureName: 'Other' },
+        ];
+        const ventureRepo = {
+            find: jest.fn().mockResolvedValue(drafts),
+        };
+        const usersRepo = { findOne: jest.fn().mockResolvedValue({ name: 'Dr. Supervisor', email: 'sup@test.com' }) };
+        const service = new PathsService(
+            {} as any, {} as any, ventureRepo as any, makeInviteRepo() as any, usersRepo as any, {} as any, {} as any,
+            { createNotification: jest.fn() } as any, {} as any,
+        );
+        jest.spyOn(service as any, 'ventureAnnotate').mockImplementation(async (entries: unknown) => entries as any);
+        jest.spyOn(service as any, 'attachStudents').mockImplementation(async (entries: unknown) => entries as any);
+        jest.spyOn(service as any, 'withCompleteness').mockImplementation((entry: unknown) => entry);
+        const result = await service.listInProgressVenturesForTeacher('SUP@test.com');
+        expect(result.map((e: any) => e.id)).toEqual(['v-1']);
+    });
+
+    it('selfCertifyOwnVenture submits and approves the owner record', async () => {
+        const entry: Record<string, unknown> = {
+            id: 'v-own',
+            userId: 'faculty-1',
+            status: 'draft',
+            reviewPipeline: { supervisorStatus: 'not_started' },
+        };
+        const ventureRepo = {
+            findOne: jest.fn().mockResolvedValue(entry),
+            save: jest.fn(async (row: Record<string, unknown>) => row),
+        };
+        const service = new PathsService(
+            {} as any, {} as any, ventureRepo as any, makeInviteRepo() as any, {} as any, {} as any, {} as any,
+            { createNotification: jest.fn() } as any, {} as any,
+        );
+        jest.spyOn(service as any, 'ventureAnnotate').mockImplementation(async (entries: unknown) => entries as any);
+        jest.spyOn(service as any, 'withCompleteness').mockImplementation((entry: unknown) => entry);
+        const saved: any = await service.selfCertifyOwnVenture('faculty-1');
+        expect(saved.status).toBe('submitted');
+        expect(saved.reviewPipeline.supervisorStatus).toBe('approved');
+    });
+});
+
+describe('PathsService — university + CIEL venture network', () => {
+    it('listVenturesForUniversity returns empty when the org is missing', async () => {
+        const organizationsRepo = { findOne: jest.fn().mockResolvedValue(null) };
+        const service = new PathsService(
+            {} as any, {} as any, {} as any, makeInviteRepo() as any, {} as any, organizationsRepo as any, {} as any,
+            { createNotification: jest.fn() } as any, {} as any,
+        );
+        await expect(service.listVenturesForUniversity('org-missing')).resolves.toEqual([]);
+        await expect(service.listVenturesForUniversity('')).resolves.toEqual([]);
+    });
+
+    it('listVenturesForUniversity scopes by organizationId or academicSetup.university', async () => {
+        const qb = {
+            leftJoin: jest.fn().mockReturnThis(),
+            where: jest.fn().mockReturnThis(),
+            andWhere: jest.fn().mockReturnThis(),
+            orderBy: jest.fn().mockReturnThis(),
+            getMany: jest.fn().mockResolvedValue([{ id: 'v-1', status: 'submitted' }]),
+        };
+        const ventureRepo = { createQueryBuilder: jest.fn().mockReturnValue(qb) };
+        const organizationsRepo = { findOne: jest.fn().mockResolvedValue({ id: 'org-1', name: 'Beaconhouse National University' }) };
+        const service = new PathsService(
+            {} as any, {} as any, ventureRepo as any, makeInviteRepo() as any, {} as any, organizationsRepo as any, {} as any,
+            { createNotification: jest.fn() } as any, {} as any,
+        );
+        jest.spyOn(service as any, 'ventureAnnotate').mockImplementation(async (entries: unknown) => entries as any);
+        jest.spyOn(service as any, 'attachStudents').mockImplementation(async (entries: unknown) => entries as any);
+        jest.spyOn(service as any, 'withCompleteness').mockImplementation((entry: unknown) => entry);
+        const result = await service.listVenturesForUniversity('org-1', 'submitted');
+        expect(ventureRepo.createQueryBuilder).toHaveBeenCalledWith('e');
+        expect(qb.where).toHaveBeenCalledWith('e.status = :status', { status: 'submitted' });
+        expect(result.map((e: any) => e.id)).toEqual(['v-1']);
+    });
+
+    it('getVentureMeritModel uses the university org pool for university callers', async () => {
+        const organizationsRepo = { findOne: jest.fn().mockResolvedValue({ id: 'org-1', name: 'BNU' }) };
+        const service = new PathsService(
+            {} as any, {} as any, {} as any, makeInviteRepo() as any, {} as any, organizationsRepo as any, {} as any,
+            { createNotification: jest.fn() } as any, { findOne: jest.fn().mockResolvedValue(null) } as any,
+        );
+        jest.spyOn(service, 'listVenturesForUniversity').mockResolvedValue([
+            { id: 'v-ok', status: 'submitted', reviewPipeline: { supervisorStatus: 'approved' }, student: { name: 'Fatima' } },
+        ] as any);
+        const result: any = await service.getVentureMeritModel(
+            { role: 'university', email: 'oric@bnu.edu', organizationId: 'org-1' },
+            {},
+        );
+        expect(service.listVenturesForUniversity).toHaveBeenCalledWith('org-1');
+        expect(result.scope.label).toBe('BNU');
+        expect(result.count).toBe(1);
+    });
+
+    it('setVentureSpotlight only flips publishSettings.featured', async () => {
+        const entry: Record<string, unknown> = {
+            id: 'v-1',
+            userId: 'student-1',
+            publishSettings: { audience: 'investors', acceptIntros: true },
+        };
+        const ventureRepo = {
+            findOne: jest.fn().mockResolvedValue(entry),
+            save: jest.fn(async (row: Record<string, unknown>) => row),
+        };
+        const service = new PathsService(
+            {} as any, {} as any, ventureRepo as any, makeInviteRepo() as any, {} as any, {} as any, {} as any,
+            { createNotification: jest.fn() } as any, {} as any,
+        );
+        jest.spyOn(service as any, 'ventureAnnotate').mockImplementation(async (entries: unknown) => entries as any);
+        jest.spyOn(service as any, 'attachStudents').mockImplementation(async (entries: unknown) => entries as any);
+        const saved: any = await service.setVentureSpotlight('v-1', true);
+        expect(saved.publishSettings.featured).toBe(true);
+        expect(saved.publishSettings.audience).toBe('investors');
+    });
+});
+
 
 describe('PathsService — venture merit notify', () => {
     const makeNotifyService = () => {

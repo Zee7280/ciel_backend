@@ -1,9 +1,10 @@
-import { Controller, Get, Param, ParseUUIDPipe, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
 import { PathsService } from './paths.service';
+import { SetVentureSpotlightDto } from './dto/update-venture.dto';
 
 @Controller('admin/paths')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -41,6 +42,13 @@ export class AdminPathsController {
     @Get('startup-business')
     async listVentures(@Query('visibility') visibility?: 'visible' | 'private') {
         const data = await this.pathsService.listVenturesForAdmin(visibility);
+        return { success: true, data };
+    }
+
+    /** CIEL PK Investor Hub spotlight — additive, does not change faculty review. */
+    @Patch('startup-business/:id/spotlight')
+    async setVentureSpotlight(@Param('id', ParseUUIDPipe) id: string, @Body() dto: SetVentureSpotlightDto) {
+        const data = await this.pathsService.setVentureSpotlight(id, dto.featured);
         return { success: true, data };
     }
 

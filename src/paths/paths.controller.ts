@@ -326,6 +326,33 @@ export class PathsController {
         return { success: true, data };
     }
 
+    /** Draft ventures that name this teacher — Startup Pipeline "in process". */
+    @Get('startup-business/in-progress')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.FACULTY)
+    async listInProgressSupervisedVentures(@Request() req) {
+        const data = await this.pathsService.listInProgressVenturesForTeacher(req.user.email, req.user.id);
+        return { success: true, data };
+    }
+
+    /** Records from students/faculty linked to this university partner org — the university pipeline. */
+    @Get('startup-business/university')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN)
+    async listUniversityVentures(@Request() req, @Query('status') status?: 'draft' | 'submitted') {
+        const data = await this.pathsService.listVenturesForUniversity(req.user.organizationId, status);
+        return { success: true, data };
+    }
+
+    /** Faculty founder self-certify — publishes their own record to the impact wall. */
+    @Post('startup-business/self-certify')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.FACULTY)
+    async selfCertifyOwnVenture(@Request() req) {
+        const data = await this.pathsService.selfCertifyOwnVenture(req.user.id);
+        return { success: true, data };
+    }
+
     /** Supervisor approve / request-changes — the gate students already wait on in reviewPipeline. */
     @Patch('startup-business/:id/supervisor-review')
     @UseGuards(RolesGuard)
@@ -336,19 +363,19 @@ export class PathsController {
     }
 
     /** The Venture Merit Model — 100pt rubric ranking of eligible (submitted + supervisor-approved)
-     * ventures. Phase A+B scope: faculty + CIEL only. */
+     * ventures, scoped by the caller's real role (faculty supervision / university / CIEL). */
     @Get('startup-business/merit-model')
     @UseGuards(RolesGuard)
-    @Roles(UserRole.FACULTY, UserRole.SUPER_ADMIN)
+    @Roles(UserRole.FACULTY, UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN, UserRole.SUPER_ADMIN)
     async getVentureMeritModel(@Request() req, @Query() query: VentureMeritModelQueryDto) {
         const data = await this.pathsService.getVentureMeritModel(req.user, query);
         return { success: true, data };
     }
 
-    /** After a faculty/admin venture merit-model run — notify the owners of the top-ranked cards. */
+    /** After a faculty/university/admin venture merit-model run — notify the owners of the top-ranked cards. */
     @Post('startup-business/merit-model/notify')
     @UseGuards(RolesGuard)
-    @Roles(UserRole.FACULTY, UserRole.SUPER_ADMIN)
+    @Roles(UserRole.FACULTY, UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN, UserRole.SUPER_ADMIN)
     async notifyVentureMeritRanks(@Request() req, @Body() dto: NotifyMeritRanksDto) {
         const data = await this.pathsService.notifyVentureMeritRanks(req.user, dto);
         return { success: true, data };
@@ -356,7 +383,7 @@ export class PathsController {
 
     @Get('startup-business')
     @UseGuards(RolesGuard)
-    @Roles(UserRole.STUDENT)
+    @Roles(UserRole.STUDENT, UserRole.FACULTY)
     async getVenture(@Request() req) {
         const data = await this.pathsService.getVenture(req.user.id, req.user.email);
         return { success: true, data };
@@ -364,7 +391,7 @@ export class PathsController {
 
     @Patch('startup-business')
     @UseGuards(RolesGuard)
-    @Roles(UserRole.STUDENT)
+    @Roles(UserRole.STUDENT, UserRole.FACULTY)
     async updateVenture(@Request() req, @Body() dto: UpdateVentureDto) {
         const data = await this.pathsService.upsertVenture(req.user.id, dto);
         return { success: true, data };
@@ -383,7 +410,7 @@ export class PathsController {
 
     @Post('startup-business/documents')
     @UseGuards(RolesGuard)
-    @Roles(UserRole.STUDENT)
+    @Roles(UserRole.STUDENT, UserRole.FACULTY)
     async addVentureDocument(@Request() req, @Body() dto: AddVentureDocumentDto) {
         const data = await this.pathsService.addVentureDocument(req.user.id, dto);
         return { success: true, data };

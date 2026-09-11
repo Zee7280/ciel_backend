@@ -224,6 +224,7 @@ export class VenturePublishSettingsDto {
     @IsOptional() @IsBoolean() showTraction?: boolean;
     @IsOptional() @IsBoolean() showAsk?: boolean;
     @IsOptional() @IsBoolean() acceptIntros?: boolean;
+    @IsOptional() @IsBoolean() featured?: boolean;
 }
 
 export class VentureTeamConsentEntryDto {
@@ -318,4 +319,9 @@ export class AddVentureDocumentDto extends VentureDocumentDto {}
 export class SetVentureVisibilityDto {
     @IsBoolean()
     isVisible: boolean;
+}
+
+export class SetVentureSpotlightDto {
+    @IsBoolean()
+    featured: boolean;
 }

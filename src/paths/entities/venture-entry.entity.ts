@@ -181,6 +181,8 @@ export interface VenturePublishSettings {
     showTraction?: boolean;
     showAsk?: boolean;
     acceptIntros?: boolean;
+    /** CIEL PK Investor Hub spotlight — set by super-admin, preserved across student saves. */
+    featured?: boolean;
 }
 
 export interface VentureTeamConsentEntry {

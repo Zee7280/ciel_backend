@@ -1182,7 +1182,7 @@ export class PathsService {
     if (!entries.length) return [];
     const users = await this.usersRepo.find({
       where: { id: In(entries.map((e) => e.userId)) },
-      select: ['id', 'name', 'email', 'institution', 'department'],
+      select: ['id', 'name', 'email', 'institution', 'department', 'role'],
     });
     const userById = new Map(users.map((u) => [u.id, u]));
     return entries.map((entry) => ({
@@ -1270,6 +1270,17 @@ export class PathsService {
     const [withStudent] = await this.attachStudents([
       this.enrichVentureForAdmin(annotated),
     ]);
+    return withStudent;
+  }
+
+  /** Super-admin Investor Hub spotlight — does not change faculty review or student form fields. */
+  async setVentureSpotlight(id: string, featured: boolean) {
+    const entry = await this.ventureRepo.findOne({ where: { id } });
+    if (!entry) throw new NotFoundException('Venture entry not found');
+    entry.publishSettings = { ...(entry.publishSettings || {}), featured: !!featured };
+    const saved = await this.ventureRepo.save(entry);
+    const [annotated] = await this.ventureAnnotate([saved]);
+    const [withStudent] = await this.attachStudents([this.enrichVentureForAdmin(annotated)]);
     return withStudent;
   }
 
@@ -1532,10 +1543,25 @@ export class PathsService {
   }
 
   async createFyp(userId: string) {
-    const saved = await this.fypRepo.save(
-      this.fypRepo.create({ userId, milestones: DEFAULT_FYP_MILESTONES }),
-    );
-    return { ...saved, isOwner: true };
+    try {
+      const saved = await this.fypRepo.save(
+        this.fypRepo.create({ userId, milestones: DEFAULT_FYP_MILESTONES }),
+      );
+      return { ...saved, isOwner: true };
+    } catch (err) {
+      // Older DBs still unique-index userId (one-row era). Opening Create must not 500 —
+      // return the existing row so the student form actually opens.
+      const code =
+        (err as { code?: string })?.code ||
+        (err as { driverError?: { code?: string } })?.driverError?.code;
+      if (code !== '23505') throw err;
+      const existing = await this.fypRepo.findOne({
+        where: { userId },
+        order: { updatedAt: 'DESC' },
+      });
+      if (!existing) throw err;
+      return { ...existing, isOwner: true };
+    }
   }
 
   /** Owner gets full access at any stage; a named team member who has accepted (or was auto-connected
@@ -2006,8 +2032,13 @@ export class PathsService {
           entry.evidenceInfo = dto.evidenceInfo;
         if (dto.reviewPipeline !== undefined)
           entry.reviewPipeline = dto.reviewPipeline;
-        if (dto.publishSettings !== undefined)
-          entry.publishSettings = dto.publishSettings;
+        if (dto.publishSettings !== undefined) {
+          const featured = entry.publishSettings?.featured;
+          entry.publishSettings = {
+            ...dto.publishSettings,
+            featured: dto.publishSettings.featured ?? featured,
+          };
+        }
         if (dto.teamConsent !== undefined) entry.teamConsent = dto.teamConsent;
         if (dto.sectionSummaries !== undefined)
           entry.sectionSummaries = dto.sectionSummaries;
@@ -2054,6 +2085,73 @@ export class PathsService {
     const annotated = await this.ventureAnnotate(matched);
     const enriched = annotated.map((entry) => this.withCompleteness(entry)!);
     return this.attachStudents(enriched);
+  }
+
+  /** Draft ventures that name this teacher — same faculty matching as the submitted deck, so
+   * faculty can nudge stalled student drafts from the Startup Pipeline. */
+  async listInProgressVenturesForTeacher(facultyEmail: string, facultyUserId?: string) {
+    const email = (facultyEmail || '').trim().toLowerCase();
+    if (!email) return [];
+    const faculty = facultyUserId
+      ? await this.usersRepo.findOne({ where: { id: facultyUserId } })
+      : await this.usersRepo.findOne({ where: { email } });
+    const facultyName = faculty?.name ?? null;
+    const entries = await this.ventureRepo.find({
+      where: { status: 'draft' },
+      order: { updatedAt: 'DESC' },
+    });
+    const matched = entries.filter((e) =>
+      ventureMatchesFaculty(e.academicSetup, { email, name: facultyName }),
+    );
+    const annotated = await this.ventureAnnotate(matched);
+    const enriched = annotated.map((entry) => this.withCompleteness(entry)!);
+    return this.attachStudents(enriched);
+  }
+
+  /** University showcase deck — ventures from students (and faculty founders) linked to this
+   * university org, either formally (organizationId) or by the university name they entered in
+   * section 1 (academicSetup.university). Same fallback as listFypForUniversity. Defaults to
+   * submitted-only; pass 'draft' for the in-progress companion view. */
+  async listVenturesForUniversity(organizationId: string, status: 'draft' | 'submitted' = 'submitted') {
+    if (!organizationId) return [];
+    const org = await this.organizationsRepo.findOne({
+      where: { id: organizationId },
+    });
+    if (!org) return [];
+    const orgNameNorm = org.name.trim().toLowerCase();
+    const entries = await this.ventureRepo
+      .createQueryBuilder('e')
+      .leftJoin('users', 'u', 'u.id::text = e."userId"')
+      .where('e.status = :status', { status })
+      .andWhere(
+        new Brackets((b) => {
+          b.where('u."organizationId"::text = :orgId', { orgId: organizationId }).orWhere(
+            `LOWER(TRIM(COALESCE(e."academicSetup"->>'university', ''))) = :orgNameNorm`,
+            { orgNameNorm },
+          );
+        }),
+      )
+      .orderBy('e."updatedAt"', 'DESC')
+      .getMany();
+    const annotated = await this.ventureAnnotate(entries);
+    const enriched = annotated.map((entry) => this.withCompleteness(entry)!);
+    return this.attachStudents(enriched);
+  }
+
+  /** Faculty founder track — owner certifies their own record (no student review loop). */
+  async selfCertifyOwnVenture(userId: string) {
+    const entry = await this.ventureRepo.findOne({ where: { userId } });
+    if (!entry) throw new NotFoundException('Venture entry not found');
+    entry.status = 'submitted';
+    entry.reviewPipeline = {
+      ...entry.reviewPipeline,
+      supervisorStatus: 'approved',
+      supervisorNote: 'Faculty venture — self-certified.',
+    };
+    entry.isVisible = deriveVentureIsVisible(entry);
+    const saved = await this.ventureRepo.save(entry);
+    const [annotated] = await this.ventureAnnotate([saved]);
+    return this.withCompleteness(annotated);
   }
 
   /** Supervisor approve / request-revision / reject for a submitted venture — same gate students
@@ -2126,9 +2224,7 @@ export class PathsService {
   }
 
   /** The Venture Merit Model — 100pt rubric ranking of eligible (submitted + supervisor-approved)
-   * ventures. Phase A+B scope: faculty + CIEL only — no listVenturesForUniversity exists yet, so
-   * university/org-admin roles fall through to the same empty "No scope" shape Coursework/FYP use
-   * elsewhere. Follow-on: add university scoping once that listing method exists. */
+   * ventures. Scoped like Coursework/FYP: faculty supervision, university org, or CIEL-wide. */
   async getVentureMeritModel(
     user: { role: string; email: string; organizationId?: string },
     _filters: VentureMeritModelQueryDto,
@@ -2141,6 +2237,12 @@ export class PathsService {
     if (role === UserRole.FACULTY) {
       pool = await this.listVenturesForTeacher(user.email);
       scopeLabel = 'Faculty supervision';
+    } else if (role === UserRole.UNIVERSITY || role === UserRole.ORGANIZATION_ADMIN) {
+      if (user.organizationId) {
+        pool = await this.listVenturesForUniversity(user.organizationId);
+        const org = await this.organizationsRepo.findOne({ where: { id: user.organizationId } });
+        scopeLabel = org?.name ?? 'University';
+      }
     } else if (role === UserRole.SUPER_ADMIN) {
       pool = await this.listVenturesForAdmin();
       scopeLabel = 'CIEL — all universities';

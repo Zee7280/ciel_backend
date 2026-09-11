@@ -1,7 +1,7 @@
 import { IsOptional, IsString } from 'class-validator';
 
-/** Minimal filter set for Phase A+B — faculty-only pool, no cross-scope filters needed yet
- * (no listVenturesForUniversity exists). Room to grow once university/CIEL scoping is added. */
+/** Optional cohort filters for the Venture Merit Model. Pool itself is scoped by caller role
+ * (faculty supervision / university org / CIEL). */
 export class VentureMeritModelQueryDto {
     @IsOptional()
     @IsString()

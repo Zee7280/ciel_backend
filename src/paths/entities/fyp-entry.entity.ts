@@ -247,14 +247,14 @@ export interface FypSectionSummaries {
   reflection?: string;
 }
 
-/** One record per student — FYP / Thesis path: legacy overview/milestone timeline, plus the 9-step guided wizard record. */
+/** FYP / Thesis path: legacy overview/milestone timeline, plus the 9-step guided wizard record.
+ * Students can hold several independent FYP records (same as Course Project). */
 @Entity('fyp_entries')
 export class FypEntry {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  /** One FYP/Thesis record per student (unlike Course Project's multi-entry deck) — enforced at the DB level so a race between two saves can never create a duplicate row that silently shadows the other. */
-  @Index({ unique: true })
+  @Index()
   @Column()
   userId: string;
 

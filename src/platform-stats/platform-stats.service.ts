@@ -20,11 +20,13 @@ import {
   creditPairOnce,
   hoursFromReportSection1,
   membersFromReportSection1,
+  isPlaceholderPartnerOrg,
+  partnerNamesFromSection7,
+  normalizePartnerKey,
   pkrFromResources,
+  sdgsFromVerifiedReport,
   servingMemberKey,
   sumPeopleServing,
-  mergeProjectLevelImpact,
-  sumProjectLevelImpact,
 } from './platform-stats.ledger.util';
 
 export type CityImpactStat = {
@@ -109,40 +111,6 @@ const CONTRIBUTOR_PARTICIPATION_STATUSES = [
   'accepted',
 ];
 
-function parseSdgGoal(raw: string | undefined | null): number | null {
-  if (raw == null || typeof raw !== 'string') return null;
-  const t = raw.trim();
-  if (!t || t === 'SDG') return null;
-  const m = t.match(/(?:SDG\s*)?(\d{1,2})/i);
-  if (!m) return null;
-  const n = parseInt(m[1], 10);
-  if (n >= 1 && n <= 17) return n;
-  return null;
-}
-
-function collectSdgGoalsFromOpportunity(opp: Opportunity): number[] {
-  const goals: number[] = [];
-  const primaryRaw =
-    (opp.sdg_info as { sdg_id?: string } | undefined)?.sdg_id != null
-      ? String((opp.sdg_info as { sdg_id?: string }).sdg_id)
-      : opp.sdg;
-  const p = parseSdgGoal(primaryRaw);
-  if (p != null) goals.push(p);
-
-  const secondary = opp.secondary_sdgs;
-  if (Array.isArray(secondary)) {
-    for (const row of secondary) {
-      const id =
-        row && typeof row === 'object' && row !== null
-          ? (row as { sdg_id?: string }).sdg_id
-          : null;
-      const g = parseSdgGoal(id != null ? String(id) : null);
-      if (g != null) goals.push(g);
-    }
-  }
-  return goals;
-}
-
 @Injectable()
 export class PlatformStatsService {
   constructor(
@@ -175,7 +143,6 @@ export class PlatformStatsService {
       avgCiiScore,
       verifiedRecords,
       communityLedger,
-      partnerOrganisations,
       verifiedProjectsAllPaths,
     ] = await Promise.all([
       this.countDistinctContributors(),
@@ -197,17 +164,10 @@ export class PlatformStatsService {
       this.getAverageCiiScore(),
       this.countVerifiedRecords(),
       this.computeCommunityLedger(),
-      this.computePartnerStats(),
       this.countVerifiedProjectsAllPaths(),
     ]);
 
-    const sdgSet = new Set<number>();
     const activeProjects = opportunities.length;
-    for (const opp of opportunities) {
-      for (const g of collectSdgGoalsFromOpportunity(opp)) {
-        sdgSet.add(g);
-      }
-    }
 
     const impactHoursRaw = process.env.PLATFORM_STATS_IMPACT_HOURS;
     let configuredImpactHours: number | null = null;
@@ -225,7 +185,7 @@ export class PlatformStatsService {
         ? process.env.PLATFORM_STATS_IMPACT_HOURS_LABEL?.trim() || defaultLabel
         : null;
 
-    const sdgsImpacted = Math.min(17, sdgSet.size);
+    const sdgsImpacted = Math.min(17, communityLedger.sdgsTouched);
 
     return {
       contributors,
@@ -246,11 +206,11 @@ export class PlatformStatsService {
       out_of_pocket_pkr: communityLedger.outOfPocketPkr,
       community_dividend_pkr: communityLedger.communityDividendPkr,
       dividend_hourly_rate_pkr: DIVIDEND_HOURLY_RATE_PKR,
-      partner_organisations: partnerOrganisations.count,
+      partner_organisations: communityLedger.partnerOrganisations,
       verified_projects_all_paths: verifiedProjectsAllPaths,
       cities_live: communityLedger.cities.length,
       sdgs_touched_by_reports: communityLedger.sdgsTouched,
-      partners_come_back_pct: partnerOrganisations.comeBackPct,
+      partners_come_back_pct: communityLedger.partnersComeBackPct,
       cities: communityLedger.cities,
       recent_activity: communityLedger.recentActivity,
       sdgs: communityLedger.sdgs,
@@ -303,7 +263,7 @@ export class PlatformStatsService {
     return this.organizationsRepository
       .createQueryBuilder('o')
       .where('LOWER(o.orgType) = :t', { t: 'university' })
-      .andWhere('o.verificationStatus = :v', { v: 'APPROVED' })
+      .andWhere('UPPER(o.verificationStatus) = :v', { v: 'APPROVED' })
       .andWhere('o.isBlocked = false')
       .getCount();
   }
@@ -420,6 +380,8 @@ export class PlatformStatsService {
     outOfPocketPkr: number;
     communityDividendPkr: number;
     sdgsTouched: number;
+    partnerOrganisations: number;
+    partnersComeBackPct: number;
     cities: CityImpactStat[];
     recentActivity: RecentActivityItem[];
     sdgs: SdgImpactStat[];
@@ -463,11 +425,9 @@ export class PlatformStatsService {
 
     const creditedProjects = new Set<string>();
     const projectCity = new Map<string, string>();
-    const projectImpact = new Map<
-      string,
-      { beneficiaries: number; deployed: number; outOfPocket: number }
-    >();
     const projectMemberHint = new Map<string, number>();
+    const partnerKeys = new Set<string>();
+    const oppsByPartnerOrg = new Map<string, Set<string>>();
     const creditedSdgProjects = new Set<string>();
     const sdgSet = new Set<number>();
     const creditedHourKeys = new Set<string>();
@@ -524,6 +484,8 @@ export class PlatformStatsService {
       );
       if (firstForPair) {
         peopleReachedLoose += beneficiaries;
+        resourcesDeployedLoose += pkr.deployed;
+        outOfPocketLoose += pkr.outOfPocket;
         if (projectId) {
           creditedProjects.add(projectId);
           let roster = rosterByProject.get(projectId);
@@ -562,42 +524,21 @@ export class PlatformStatsService {
             projectId,
             Math.max(projectMemberHint.get(projectId) ?? 0, reportMembers),
           );
-          projectImpact.set(
-            projectId,
-            mergeProjectLevelImpact(projectImpact.get(projectId), {
-              beneficiaries,
-              deployed: pkr.deployed,
-              outOfPocket: pkr.outOfPocket,
-            }),
-          );
         } else {
           peopleServingWithoutProject += reportMembers;
-          resourcesDeployedLoose += pkr.deployed;
-          outOfPocketLoose += pkr.outOfPocket;
         }
       }
 
-      const reportSdgs = new Set<number>();
-      if (
-        Number.isFinite(report.primary_sdg_goal) &&
-        (report.primary_sdg_goal as number) >= 1 &&
-        (report.primary_sdg_goal as number) <= 17
-      ) {
-        reportSdgs.add(report.primary_sdg_goal as number);
-      }
-      const secondary = report.section3?.secondary_sdgs;
-      if (Array.isArray(secondary)) {
-        for (const s of secondary) {
-          if (
-            s?.status === 'validated' &&
-            Number.isFinite(s.goal_number) &&
-            s.goal_number >= 1 &&
-            s.goal_number <= 17
-          ) {
-            reportSdgs.add(s.goal_number);
-          }
-        }
-      }
+      const reportSdgs = sdgsFromVerifiedReport({
+        primary_sdg_goal: report.primary_sdg_goal,
+        section3: report.section3,
+        opportunity: report.opportunity
+          ? {
+              sdg: report.opportunity.sdg,
+              sdg_info: report.opportunity.sdg_info,
+            }
+          : null,
+      });
       for (const g of reportSdgs) sdgSet.add(g);
 
       // Opportunities with no named partner get an auto-created placeholder Organization row
@@ -607,9 +548,21 @@ export class PlatformStatsService {
       // as one on the public ledger/feed/city partner list.
       const org = report.opportunity?.organization;
       const partnerName =
-        org && org.verificationStatus !== 'unclaimed_student_initiated'
-          ? org.name
-          : null;
+        org && !isPlaceholderPartnerOrg(org) ? org.name : null;
+      if (partnerName) {
+        partnerKeys.add(normalizePartnerKey(partnerName));
+        if (org?.id && projectId) {
+          let set = oppsByPartnerOrg.get(org.id);
+          if (!set) {
+            set = new Set();
+            oppsByPartnerOrg.set(org.id, set);
+          }
+          set.add(projectId);
+        }
+      }
+      for (const name of partnerNamesFromSection7(report.section7)) {
+        partnerKeys.add(normalizePartnerKey(name));
+      }
 
       const cityKey = normalizeCityKey(report.student?.city);
       if (cityKey) {
@@ -630,11 +583,9 @@ export class PlatformStatsService {
         if (firstForPair) {
           acc.verifiedHours += pairHours;
           acc.peopleServed += beneficiaries;
-          if (!projectId) {
-            acc.peopleServing += reportMembers;
-            acc.resourcesDeployedPkr += pkr.deployed;
-            acc.outOfPocketPkr += pkr.outOfPocket;
-          }
+          acc.resourcesDeployedPkr += pkr.deployed;
+          acc.outOfPocketPkr += pkr.outOfPocket;
+          if (!projectId) acc.peopleServing += reportMembers;
         }
         acc.verifiedReports += 1;
         for (const g of reportSdgs) acc.sdgs.add(g);
@@ -694,16 +645,11 @@ export class PlatformStatsService {
         projectMemberHint.get(pid) ?? 0,
         1,
       );
-      const impact = projectImpact.get(pid);
       const cityKey = projectCity.get(pid);
       if (!cityKey) continue;
       const acc = cityAcc.get(cityKey);
       if (!acc) continue;
       acc.peopleServing += n;
-      if (impact) {
-        acc.resourcesDeployedPkr += impact.deployed;
-        acc.outOfPocketPkr += impact.outOfPocket;
-      }
     }
 
     const peopleServing =
@@ -716,10 +662,9 @@ export class PlatformStatsService {
           ),
         ),
       );
-    const projectSums = sumProjectLevelImpact(projectImpact.values());
     const peopleReached = peopleReachedLoose;
-    const resourcesDeployedPkr = projectSums.deployed + resourcesDeployedLoose;
-    const outOfPocketPkr = projectSums.outOfPocket + outOfPocketLoose;
+    const resourcesDeployedPkr = resourcesDeployedLoose;
+    const outOfPocketPkr = outOfPocketLoose;
 
     // sessionHours is a decimal column, so raw sums carry fractional cents' worth of hours. Round
     // hours and out-of-pocket PKR ONCE and derive the dividend from those same rounded figures —
@@ -754,6 +699,12 @@ export class PlatformStatsService {
 
     const roundedVerifiedHours = Math.round(verifiedHours);
     const roundedOutOfPocketPkr = Math.round(outOfPocketPkr);
+    const returningPartners = [...oppsByPartnerOrg.values()].filter(
+      (s) => s.size >= 2,
+    ).length;
+    const partnersComeBackPct = oppsByPartnerOrg.size
+      ? Math.round((returningPartners / oppsByPartnerOrg.size) * 100)
+      : 0;
 
     return {
       peopleServing,
@@ -766,6 +717,8 @@ export class PlatformStatsService {
         roundedOutOfPocketPkr,
       ),
       sdgsTouched: sdgSet.size,
+      partnerOrganisations: partnerKeys.size,
+      partnersComeBackPct,
       cities,
       recentActivity: activityCandidates
         .sort(
@@ -790,55 +743,6 @@ export class PlatformStatsService {
         }))
         .sort((a, b) => a.number - b.number),
     };
-  }
-
-  /** Partner orgs = approved, non-blocked NGO/corporate orgs (there's no distinct "partner" orgType —
-   * partners are NGO/corporate accounts, mirrored from countApprovedUniversities' pattern). "Come
-   * back" = an approved partner org with verified/paid reports spanning 2+ distinct opportunities
-   * it posted — a real repeat-engagement signal, not just one project verified twice. */
-  private async computePartnerStats(): Promise<{
-    count: number;
-    comeBackPct: number;
-  }> {
-    const partners = await this.organizationsRepository
-      .createQueryBuilder('o')
-      .where('LOWER(o.orgType) IN (:...types)', { types: ['ngo', 'corporate'] })
-      .andWhere('o.verificationStatus = :v', { v: 'APPROVED' })
-      .andWhere('o.isBlocked = false')
-      .select(['o.id'])
-      .getMany();
-
-    if (!partners.length) return { count: 0, comeBackPct: 0 };
-
-    const rows = await this.studentReportsRepository
-      .createQueryBuilder('r')
-      .innerJoin('r.opportunity', 'opp')
-      .where('r.status IN (:...statuses)', {
-        statuses: VERIFIED_RECORD_STATUSES,
-      })
-      .andWhere('opp.organizationId IS NOT NULL')
-      .select([
-        'opp.organizationId AS "orgId"',
-        'r.opportunityId AS "opportunityId"',
-      ])
-      .getRawMany<{ orgId: string; opportunityId: string }>();
-
-    const opportunitiesByOrg = new Map<string, Set<string>>();
-    for (const row of rows) {
-      if (!row.orgId || !row.opportunityId) continue;
-      let set = opportunitiesByOrg.get(row.orgId);
-      if (!set) {
-        set = new Set();
-        opportunitiesByOrg.set(row.orgId, set);
-      }
-      set.add(row.opportunityId);
-    }
-
-    const returning = partners.filter(
-      (p) => (opportunitiesByOrg.get(p.id)?.size ?? 0) >= 2,
-    ).length;
-    const comeBackPct = Math.round((returning / partners.length) * 100);
-    return { count: partners.length, comeBackPct };
   }
 
   /** Unique community-service opportunities with at least one verified/paid report. */

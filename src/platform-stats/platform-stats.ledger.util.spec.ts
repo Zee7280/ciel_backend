@@ -6,6 +6,11 @@ import {
     hoursFromReportSection1,
     membersFromReportSection1,
     pkrFromResources,
+    isPlaceholderPartnerOrg,
+    partnerNamesFromSection7,
+    normalizePartnerKey,
+    parseSdgGoalNumber,
+    sdgsFromVerifiedReport,
     servingMemberKey,
     sumPeopleServing,
     mergeProjectLevelImpact,
@@ -116,10 +121,128 @@ describe('platform-stats ledger math', () => {
         ).toBe(12);
         expect(
             pkrFromResources([
-                { unit: 'PKR', amount: 3000, source: 'Partner' },
-                { unit: 'PKR', amount: 500, source: 'Out-of-pocket' },
-                { unit: 'hours', amount: 10, source: 'Student' },
+                { type: 'Financial (Cash Funding)', unit: 'PKR', amount: 3000, source: 'Partner' },
+                { type: 'Financial (Cash Funding)', unit: 'PKR', amount: 500, source: 'Out-of-pocket' },
+                { type: 'In-kind Materials (Food / Books / Supplies / Kits)', unit: 'Kits', amount: 20, source: 'Partner' },
+                { type: 'In-kind Materials (Food / Books / Supplies / Kits)', unit: 'PKR', amount: 8000, source: 'Partner' },
+                { type: 'Human Resources (Trainers / Experts / Volunteers)', unit: 'Hours', amount: 10, source: 'Student' },
             ]),
         ).toEqual({ deployed: 3000, outOfPocket: 500 });
+    });
+
+    it('counts real report partners and skips student-opportunity placeholders', () => {
+        expect(
+            isPlaceholderPartnerOrg({
+                name: 'Student opportunity — Test — abc',
+                orgType: 'OTHER',
+                verificationStatus: 'unclaimed_student_initiated',
+            }),
+        ).toBe(true);
+        expect(
+            isPlaceholderPartnerOrg({
+                name: "SOS Children's Villages Pakistan",
+                orgType: 'NGO',
+                verificationStatus: 'APPROVED',
+            }),
+        ).toBe(false);
+        expect(
+            partnerNamesFromSection7({
+                partners: [
+                    { name: '  WaterAid  ' },
+                    { name: '' },
+                    { name: 'Student opportunity — skip' },
+                ],
+            }),
+        ).toEqual(['WaterAid']);
+        expect(normalizePartnerKey('SOS  Children')).toBe('sos children');
+    });
+});
+
+describe('platform-stats SDG parsing from verified reports', () => {
+    it('parses numeric, padded, and "SDG N" goal numbers and ignores junk', () => {
+        expect(parseSdgGoalNumber(4)).toBe(4);
+        expect(parseSdgGoalNumber('04')).toBe(4);
+        expect(parseSdgGoalNumber('SDG 6')).toBe(6);
+        expect(parseSdgGoalNumber({ goal_number: '13' })).toBe(13);
+        expect(parseSdgGoalNumber({ sdg_id: 'SDG 3' })).toBe(3);
+        expect(parseSdgGoalNumber('SDG')).toBeNull();
+        expect(parseSdgGoalNumber(0)).toBeNull();
+        expect(parseSdgGoalNumber(18)).toBeNull();
+        expect(parseSdgGoalNumber({ id: 'a1b2c3d4-e5f6' })).toBeNull();
+    });
+
+    it('counts the primary goal even when stored as a string on section 3', () => {
+        expect(
+            sdgsFromVerifiedReport({
+                primary_sdg_goal: null,
+                section3: { primary_sdg: { goal_number: 'SDG 6' } },
+            }),
+        ).toEqual([6]);
+        expect(
+            sdgsFromVerifiedReport({
+                primary_sdg_goal: 4,
+                section3: { primary_sdg: { goal_number: 4 } },
+            }),
+        ).toEqual([4]);
+    });
+
+    it('does not let empty secondary ticks inflate the public SDG list', () => {
+        expect(
+            sdgsFromVerifiedReport({
+                primary_sdg_goal: 4,
+                section3: {
+                    primary_sdg: { goal_number: 4 },
+                    secondary_sdgs: [
+                        { goal_number: 1, status: 'provisional', justification_text: '' },
+                        { goal_number: 2, status: 'rejected', justification_text: 'x'.repeat(40) },
+                        {
+                            goal_number: '03',
+                            status: 'provisional',
+                            justification_text: 'Hygiene kits and menstrual-health sessions for schoolgirls.',
+                        },
+                    ],
+                },
+            }),
+        ).toEqual([3, 4]);
+    });
+
+    it('counts a validated secondary even without a long justification', () => {
+        expect(
+            sdgsFromVerifiedReport({
+                primary_sdg_goal: 4,
+                section3: {
+                    secondary_sdgs: [{ goal_number: 5, status: 'validated' }],
+                },
+            }),
+        ).toEqual([4, 5]);
+    });
+
+    it('caps secondaries at two and falls back to the opportunity primary only when the report stored none', () => {
+        expect(
+            sdgsFromVerifiedReport({
+                primary_sdg_goal: 4,
+                section3: {
+                    secondary_sdgs: [
+                        { goal_number: 1, status: 'validated' },
+                        { goal_number: 2, status: 'validated' },
+                        { goal_number: 3, status: 'validated' },
+                    ],
+                },
+            }),
+        ).toEqual([1, 2, 4]);
+        expect(
+            sdgsFromVerifiedReport({
+                primary_sdg_goal: null,
+                section3: {},
+                opportunity: { sdg: 'SDG 6', sdg_info: { sdg_id: '06' } },
+            }),
+        ).toEqual([6]);
+        expect(
+            sdgsFromVerifiedReport({
+                primary_sdg_goal: 4,
+                section3: { primary_sdg: { goal_number: 4 } },
+                opportunity: { sdg: '1', sdg_info: { sdg_id: '2' } },
+            }),
+        ).toEqual([4]);
     });
 });

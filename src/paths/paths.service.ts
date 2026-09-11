@@ -4,6 +4,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, In, Repository } from 'typeorm';
@@ -50,8 +51,15 @@ import { RankedFypMeritCard } from './merit-model/fyp-merit-model.types';
 import { byVentureMerit, computeVentureMeritCard } from './merit-model/venture-merit-model.util';
 import { RankedVentureMeritCard } from './merit-model/venture-merit-model.types';
 
+function postgresErrorCode(err: unknown): string | undefined {
+  if (!err || typeof err !== 'object') return undefined;
+  const anyErr = err as { code?: string; driverError?: { code?: string } };
+  const code = anyErr.code || anyErr.driverError?.code;
+  return typeof code === 'string' ? code : undefined;
+}
+
 @Injectable()
-export class PathsService {
+export class PathsService implements OnModuleInit {
   private readonly logger = new Logger(PathsService.name);
 
   constructor(
@@ -72,6 +80,43 @@ export class PathsService {
     @InjectRepository(PathGraderRun)
     private readonly graderRunRepo: Repository<PathGraderRun>,
   ) {}
+
+  /** One-row-era unique index on fyp_entries.userId blocks Create. Entity is @Index() only;
+   * TypeORM synchronize does not always drop the leftover unique constraint. */
+  async onModuleInit() {
+    try {
+      await this.fypRepo.query(`
+        DO $$
+        DECLARE r record;
+        BEGIN
+          FOR r IN
+            SELECT c.conname
+            FROM pg_constraint c
+            JOIN pg_class t ON c.conrelid = t.oid
+            WHERE t.relname = 'fyp_entries'
+              AND c.contype = 'u'
+              AND pg_get_constraintdef(c.oid) ILIKE '%userId%'
+          LOOP
+            EXECUTE format('ALTER TABLE fyp_entries DROP CONSTRAINT IF EXISTS %I', r.conname);
+          END LOOP;
+          FOR r IN
+            SELECT i.relname AS idxname
+            FROM pg_index x
+            JOIN pg_class i ON i.oid = x.indexrelid
+            JOIN pg_class t ON t.oid = x.indrelid
+            WHERE t.relname = 'fyp_entries'
+              AND x.indisunique
+              AND NOT x.indisprimary
+              AND pg_get_indexdef(x.indexrelid) ILIKE '%userId%'
+          LOOP
+            EXECUTE format('DROP INDEX IF EXISTS %I', r.idxname);
+          END LOOP;
+        END $$;
+      `);
+    } catch (err) {
+      this.logger.warn(`Could not drop leftover fyp_entries.userId unique index: ${(err as Error).message}`);
+    }
+  }
 
   // ---------- Team-member invites (shared across Course Project / FYP / Venture) ----------
 
@@ -1353,7 +1398,7 @@ export class PathsService {
    * Skipped when userEmail is omitted so existing owner-only callers/tests stay unchanged. */
   private async assertCanWriteOwnFyp(userId: string, userEmail?: string): Promise<void> {
     if (!userEmail) return;
-    const own = await this.fypRepo.findOne({ where: { userId } });
+    const own = await this.fypRepo.findOne({ where: { userId }, order: { updatedAt: 'DESC' } });
     if (own && !this.isFypPlaceholder(own)) return;
     const shared = await this.findSharedFypForEmail(userEmail);
     if (shared && shared.userId !== userId) {
@@ -1370,7 +1415,7 @@ export class PathsService {
    * until submission to even discover the record exists. A student's own *real* record always
    * takes priority; an empty placeholder row does not. */
   async getFyp(userId: string, userEmail?: string) {
-    const own = await this.fypRepo.findOne({ where: { userId } });
+    const own = await this.fypRepo.findOne({ where: { userId }, order: { updatedAt: 'DESC' } });
     const shared = await this.findSharedFypForEmail(userEmail);
     const useShared =
       !!shared && shared.userId !== userId && (!own || this.isFypPlaceholder(own));
@@ -1551,15 +1596,16 @@ export class PathsService {
     } catch (err) {
       // Older DBs still unique-index userId (one-row era). Opening Create must not 500 —
       // return the existing row so the student form actually opens.
-      const code =
-        (err as { code?: string })?.code ||
-        (err as { driverError?: { code?: string } })?.driverError?.code;
-      if (code !== '23505') throw err;
+      const code = postgresErrorCode(err);
+      const duplicate =
+        code === '23505' || /duplicate key/i.test(err instanceof Error ? err.message : String(err));
+      if (!duplicate) throw err;
       const existing = await this.fypRepo.findOne({
         where: { userId },
         order: { updatedAt: 'DESC' },
       });
       if (!existing) throw err;
+      this.logger.warn(`createFyp reused existing row ${existing.id} for ${userId} (unique userId still present)`);
       return { ...existing, isOwner: true };
     }
   }

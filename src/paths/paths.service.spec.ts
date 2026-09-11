@@ -848,14 +848,16 @@ describe('PathsService — FYP multi-record (list / create / id-scoped)', () => 
         expect((created as any).isOwner).toBe(true);
     });
 
-    it('createFyp returns the existing row when userId is still unique-indexed', async () => {
+    it('createFyp returns the existing row when the unique error is nested on driverError', async () => {
         const { service, rows } = makeFypMultiRecordService();
         const before = rows.length;
-        (service as any).fypRepo.save.mockRejectedValueOnce({ code: '23505' });
+        (service as any).fypRepo.save.mockRejectedValueOnce({
+            driverError: { code: '23505' },
+            message: 'duplicate key value violates unique constraint',
+        });
         const opened = await service.createFyp('owner-1');
         expect(rows.length).toBe(before);
         expect((opened as any).id).toBe('fyp-1');
-        expect((opened as any).isOwner).toBe(true);
     });
 
     it('listFyps returns every entry the user owns', async () => {

@@ -1229,8 +1229,6 @@ export class FacultyService {
                 };
             }),
         );
-        const pendingGradingTotal = courses.reduce((sum, course) => sum + (course.pending_grading || 0), 0);
-
         const activities: ActivityRow[] = [];
 
         const reportEvents = await this.studentReportsRepository
@@ -1319,7 +1317,7 @@ export class FacultyService {
                 impact_distribution,
                 recent_activity,
                 pendingSummary: {
-                    total: pendingApprovals + pendingGradingTotal,
+                    total: pendingApprovals,
                     items: [
                         {
                             key: 'faculty_pending_approvals',
@@ -1328,14 +1326,6 @@ export class FacultyService {
                             href: '/dashboard/faculty/approvals',
                             tone: 'warning',
                             description: 'Student-created opportunities or reports waiting for faculty review.',
-                        },
-                        {
-                            key: 'faculty_pending_grading',
-                            title: 'Pending grading',
-                            count: pendingGradingTotal,
-                            href: '/dashboard/faculty/grading',
-                            tone: 'neutral',
-                            description: 'Submitted student work still waiting for grading.',
                         },
                     ],
                 },

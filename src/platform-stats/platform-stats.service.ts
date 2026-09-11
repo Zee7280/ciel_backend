@@ -13,6 +13,19 @@ import { FypEntry } from '../paths/entities/fyp-entry.entity';
 import { VentureEntry } from '../paths/entities/venture-entry.entity';
 import { computeVentureGates } from '../paths/venture-gates.util';
 import { normalizeCityKey, PAKISTAN_CITY_GEO } from './pakistan-geo';
+import {
+  DIVIDEND_HOURLY_RATE_PKR,
+  beneficiariesFromSection4,
+  communityDividendPkr,
+  creditPairOnce,
+  hoursFromReportSection1,
+  membersFromReportSection1,
+  pkrFromResources,
+  servingMemberKey,
+  sumPeopleServing,
+  mergeProjectLevelImpact,
+  sumProjectLevelImpact,
+} from './platform-stats.ledger.util';
 
 export type CityImpactStat = {
   id: string;
@@ -68,7 +81,7 @@ export type PlatformStatsPayload = {
   avg_cii_score: number;
   verified_records: number;
   people_reached: number;
-  /** Community-service-report-driven ledger — see computeCommunityLedger() for the exact formula. */
+  /** Sum of unique team members on each project that has a verified/paid report (not just the students who submitted). */
   people_serving: number;
   report_verified_hours: number;
   resources_deployed_pkr: number;
@@ -86,23 +99,6 @@ export type PlatformStatsPayload = {
 };
 
 const VERIFIED_RECORD_STATUSES = ['verified', 'paid'];
-
-/** PKR value assigned to one verified volunteer hour in the community-dividend formula:
- * Σ Verified Student Person-Hours × Volunteer Hour Value + Verified Student Out-of-Pocket Spending. */
-const DIVIDEND_HOURLY_RATE_PKR = 500;
-
-function isPkrResourceUnit(unit: unknown): boolean {
-  return (
-    typeof unit === 'string' && /pkr|rs\.?|rupee|cash|financial/i.test(unit)
-  );
-}
-
-function isSelfFundedSource(source: unknown): boolean {
-  return (
-    typeof source === 'string' &&
-    /self|own|personal|out.?of.?pocket|student/i.test(source)
-  );
-}
 
 const PUBLIC_LIVE_STATUSES = ['active', 'live', 'open', 'recruiting'];
 
@@ -178,7 +174,6 @@ export class PlatformStatsService {
       engagementHours,
       avgCiiScore,
       verifiedRecords,
-      peopleReached,
       communityLedger,
       partnerOrganisations,
       verifiedProjectsAllPaths,
@@ -201,7 +196,6 @@ export class PlatformStatsService {
       this.sumEngagementHours(),
       this.getAverageCiiScore(),
       this.countVerifiedRecords(),
-      this.sumPeopleReached(),
       this.computeCommunityLedger(),
       this.computePartnerStats(),
       this.countVerifiedProjectsAllPaths(),
@@ -245,7 +239,7 @@ export class PlatformStatsService {
       active_projects: activeProjects,
       avg_cii_score: avgCiiScore,
       verified_records: verifiedRecords,
-      people_reached: peopleReached,
+      people_reached: communityLedger.peopleReached,
       people_serving: communityLedger.peopleServing,
       report_verified_hours: communityLedger.verifiedHours,
       resources_deployed_pkr: communityLedger.resourcesDeployedPkr,
@@ -263,47 +257,11 @@ export class PlatformStatsService {
     };
   }
 
-  private toBeneficiaryCount(value: unknown): number {
-    const n = Number(value);
-    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
-  }
-
   /** A "record" is a student report that has cleared verification. */
   private async countVerifiedRecords(): Promise<number> {
     return this.studentReportsRepository.count({
       where: VERIFIED_RECORD_STATUSES.map((status) => ({ status })),
     });
-  }
-
-  /**
-   * Public "not estimates" claim means this must only count beneficiaries from verified student
-   * reports — unlike the admin analytics rollup, it deliberately excludes opportunities' own
-   * self-reported `beneficiaries_count` (set by whoever created the listing, never audited).
-   */
-  private async sumPeopleReached(): Promise<number> {
-    const reports = await this.studentReportsRepository.find({
-      where: VERIFIED_RECORD_STATUSES.map((status) => ({ status })),
-      select: ['section4'],
-    });
-
-    return reports.reduce((sum, report) => {
-      const section4 = report.section4 as
-        | {
-            project_summary?: { distinct_total_beneficiaries?: unknown };
-            distinct_total_beneficiaries?: unknown;
-            total_beneficiaries?: unknown;
-            my_beneficiaries?: unknown;
-          }
-        | undefined;
-      const beneficiaries =
-        this.toBeneficiaryCount(
-          section4?.project_summary?.distinct_total_beneficiaries,
-        ) ||
-        this.toBeneficiaryCount(section4?.distinct_total_beneficiaries) ||
-        this.toBeneficiaryCount(section4?.total_beneficiaries) ||
-        this.toBeneficiaryCount(section4?.my_beneficiaries);
-      return sum + beneficiaries;
-    }, 0);
   }
 
   /** Verified students ∪ students with at least one approved participation (deduped; no PII in response). */
@@ -421,6 +379,7 @@ export class PlatformStatsService {
 
   private async getAverageCiiScore(): Promise<number> {
     const reports = await this.studentReportsRepository.find({
+      where: VERIFIED_RECORD_STATUSES.map((status) => ({ status })),
       select: ['section11'],
     });
 
@@ -455,6 +414,7 @@ export class PlatformStatsService {
    */
   private async computeCommunityLedger(): Promise<{
     peopleServing: number;
+    peopleReached: number;
     verifiedHours: number;
     resourcesDeployedPkr: number;
     outOfPocketPkr: number;
@@ -475,14 +435,51 @@ export class PlatformStatsService {
       })),
     );
 
-    const studentIds = new Set<string>();
+    const projectIds = [
+      ...new Set(
+        reports
+          .map((r) => r.opportunityId || r.project_id)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+    const participations = projectIds.length
+      ? await this.participationsRepository.find({
+          where: { projectId: In(projectIds) },
+          select: ['id', 'projectId', 'studentId', 'email', 'status'],
+        })
+      : [];
+    const rosterByProject = new Map<string, Set<string>>();
+    for (const p of participations) {
+      if (p.status === 'rejected') continue;
+      const key = servingMemberKey(p);
+      if (!key) continue;
+      let roster = rosterByProject.get(p.projectId);
+      if (!roster) {
+        roster = new Set();
+        rosterByProject.set(p.projectId, roster);
+      }
+      roster.add(key);
+    }
+
+    const creditedProjects = new Set<string>();
+    const projectCity = new Map<string, string>();
+    const projectImpact = new Map<
+      string,
+      { beneficiaries: number; deployed: number; outOfPocket: number }
+    >();
+    const projectMemberHint = new Map<string, number>();
+    const creditedSdgProjects = new Set<string>();
     const sdgSet = new Set<number>();
+    const creditedHourKeys = new Set<string>();
+    const creditedSdgHourKeys = new Set<string>();
     let verifiedHours = 0;
-    let resourcesDeployedPkr = 0;
-    let outOfPocketPkr = 0;
+    let peopleReachedLoose = 0;
+    let resourcesDeployedLoose = 0;
+    let outOfPocketLoose = 0;
+    let peopleServingWithoutProject = 0;
 
     type CityAccumulator = {
-      studentIds: Set<string>;
+      peopleServing: number;
       peopleServed: number;
       verifiedHours: number;
       resourcesDeployedPkr: number;
@@ -504,47 +501,81 @@ export class PlatformStatsService {
     const sdgAcc = new Map<number, SdgAccumulator>();
 
     for (const report of reports) {
-      if (report.studentId) studentIds.add(report.studentId);
-
-      const hours = report.studentId
-        ? verifiedHoursByProjectStudent.get(
-            `${report.opportunityId || report.project_id}:${report.studentId}`,
-          ) || 0
+      const projectId = report.opportunityId || report.project_id || '';
+      const pairKey =
+        report.studentId && projectId
+          ? `${projectId}:${report.studentId}`
+          : report.id
+            ? `report:${report.id}`
+            : '';
+      const attendanceHours = pairKey
+        ? verifiedHoursByProjectStudent.get(pairKey) || 0
         : 0;
-      verifiedHours += hours;
+      const reportHours = hoursFromReportSection1(report.section1);
+      const pairHours = reportHours > 0 ? reportHours : attendanceHours;
+      const firstForPair = creditPairOnce(pairKey, creditedHourKeys);
+      if (firstForPair) verifiedHours += pairHours;
 
-      const beneficiaries =
-        this.toBeneficiaryCount(
-          (
-            report.section4 as
-              | { project_summary?: { distinct_total_beneficiaries?: unknown } }
-              | undefined
-          )?.project_summary?.distinct_total_beneficiaries,
-        ) ||
-        this.toBeneficiaryCount(
-          (
-            report.section4 as
-              | { distinct_total_beneficiaries?: unknown }
-              | undefined
-          )?.distinct_total_beneficiaries,
-        ) ||
-        this.toBeneficiaryCount(report.section4?.total_beneficiaries) ||
-        this.toBeneficiaryCount(report.section4?.my_beneficiaries);
-
-      let reportResourcesPkr = 0;
-      let reportOutOfPocketPkr = 0;
-      const resources = report.section6?.resources;
-      if (Array.isArray(resources)) {
-        for (const r of resources) {
-          if (!isPkrResourceUnit(r?.unit)) continue;
-          const amt = Number(r?.amount);
-          if (!Number.isFinite(amt) || amt <= 0) continue;
-          if (isSelfFundedSource(r?.source)) reportOutOfPocketPkr += amt;
-          else reportResourcesPkr += amt;
+      const beneficiaries = beneficiariesFromSection4(report.section4);
+      const pkr = pkrFromResources(report.section6?.resources);
+      const reportMembers = membersFromReportSection1(
+        report.section1,
+        report.studentId,
+      );
+      if (firstForPair) {
+        peopleReachedLoose += beneficiaries;
+        if (projectId) {
+          creditedProjects.add(projectId);
+          let roster = rosterByProject.get(projectId);
+          if (!roster) {
+            roster = new Set();
+            rosterByProject.set(projectId, roster);
+          }
+          const reporterKey = servingMemberKey({
+            studentId: report.studentId,
+            id: report.id,
+          });
+          if (reporterKey) roster.add(reporterKey);
+          const s1 = report.section1 as
+            | {
+                team_lead?: { email?: string; name?: string; cnic?: string };
+                team_members?: Array<{
+                  email?: string;
+                  name?: string;
+                  cnic?: string;
+                }>;
+              }
+            | undefined;
+          const leadKey = servingMemberKey({
+            email: s1?.team_lead?.email,
+            id: s1?.team_lead?.cnic || s1?.team_lead?.name,
+          });
+          if (leadKey) roster.add(leadKey);
+          for (const m of s1?.team_members ?? []) {
+            const k = servingMemberKey({
+              email: m?.email,
+              id: m?.cnic || m?.name,
+            });
+            if (k) roster.add(k);
+          }
+          projectMemberHint.set(
+            projectId,
+            Math.max(projectMemberHint.get(projectId) ?? 0, reportMembers),
+          );
+          projectImpact.set(
+            projectId,
+            mergeProjectLevelImpact(projectImpact.get(projectId), {
+              beneficiaries,
+              deployed: pkr.deployed,
+              outOfPocket: pkr.outOfPocket,
+            }),
+          );
+        } else {
+          peopleServingWithoutProject += reportMembers;
+          resourcesDeployedLoose += pkr.deployed;
+          outOfPocketLoose += pkr.outOfPocket;
         }
       }
-      resourcesDeployedPkr += reportResourcesPkr;
-      outOfPocketPkr += reportOutOfPocketPkr;
 
       const reportSdgs = new Set<number>();
       if (
@@ -585,7 +616,7 @@ export class PlatformStatsService {
         let acc = cityAcc.get(cityKey);
         if (!acc) {
           acc = {
-            studentIds: new Set(),
+            peopleServing: 0,
             peopleServed: 0,
             verifiedHours: 0,
             resourcesDeployedPkr: 0,
@@ -596,14 +627,21 @@ export class PlatformStatsService {
           };
           cityAcc.set(cityKey, acc);
         }
-        if (report.studentId) acc.studentIds.add(report.studentId);
-        acc.peopleServed += beneficiaries;
-        acc.verifiedHours += hours;
-        acc.resourcesDeployedPkr += reportResourcesPkr;
-        acc.outOfPocketPkr += reportOutOfPocketPkr;
+        if (firstForPair) {
+          acc.verifiedHours += pairHours;
+          acc.peopleServed += beneficiaries;
+          if (!projectId) {
+            acc.peopleServing += reportMembers;
+            acc.resourcesDeployedPkr += pkr.deployed;
+            acc.outOfPocketPkr += pkr.outOfPocket;
+          }
+        }
         acc.verifiedReports += 1;
         for (const g of reportSdgs) acc.sdgs.add(g);
         if (partnerName) acc.partners.add(partnerName);
+        if (firstForPair && projectId && !projectCity.has(projectId)) {
+          projectCity.set(projectId, cityKey);
+        }
       }
 
       const geo = cityKey ? PAKISTAN_CITY_GEO[cityKey] : null;
@@ -614,7 +652,7 @@ export class PlatformStatsService {
       ).toISOString();
       activityCandidates.push({
         city: geo?.name ?? null,
-        hours: Math.round(hours),
+        hours: Math.round(pairHours),
         beneficiaries,
         partnerName,
         verifiedAt: verifiedAtIso,
@@ -632,18 +670,56 @@ export class PlatformStatsService {
           };
           sdgAcc.set(g, sAcc);
         }
-        sAcc.projects += 1;
-        sAcc.attributedHours += hours;
-        sAcc.peopleServed += beneficiaries;
+        const sdgProjectKey = `${g}:${projectId || pairKey}`;
+        if (creditPairOnce(sdgProjectKey, creditedSdgProjects)) {
+          sAcc.projects += 1;
+          sAcc.items.push({
+            title: report.opportunity?.title || 'Community Service record',
+            city: geo?.name ?? null,
+            path: 'Community Service',
+            verifiedAt: verifiedAtIso,
+          });
+        }
+        if (firstForPair) sAcc.peopleServed += beneficiaries;
+        if (creditPairOnce(`${g}:${pairKey}`, creditedSdgHourKeys)) {
+          sAcc.attributedHours += pairHours;
+        }
         if (cityKey) sAcc.cities.add(cityKey);
-        sAcc.items.push({
-          title: report.opportunity?.title || 'Community Service record',
-          city: geo?.name ?? null,
-          path: 'Community Service',
-          verifiedAt: verifiedAtIso,
-        });
       }
     }
+
+    for (const pid of creditedProjects) {
+      const n = Math.max(
+        rosterByProject.get(pid)?.size ?? 0,
+        projectMemberHint.get(pid) ?? 0,
+        1,
+      );
+      const impact = projectImpact.get(pid);
+      const cityKey = projectCity.get(pid);
+      if (!cityKey) continue;
+      const acc = cityAcc.get(cityKey);
+      if (!acc) continue;
+      acc.peopleServing += n;
+      if (impact) {
+        acc.resourcesDeployedPkr += impact.deployed;
+        acc.outOfPocketPkr += impact.outOfPocket;
+      }
+    }
+
+    const peopleServing =
+      peopleServingWithoutProject +
+      sumPeopleServing(
+        [...creditedProjects].map((pid) =>
+          Math.max(
+            rosterByProject.get(pid)?.size ?? 0,
+            projectMemberHint.get(pid) ?? 0,
+          ),
+        ),
+      );
+    const projectSums = sumProjectLevelImpact(projectImpact.values());
+    const peopleReached = peopleReachedLoose;
+    const resourcesDeployedPkr = projectSums.deployed + resourcesDeployedLoose;
+    const outOfPocketPkr = projectSums.outOfPocket + outOfPocketLoose;
 
     // sessionHours is a decimal column, so raw sums carry fractional cents' worth of hours. Round
     // hours and out-of-pocket PKR ONCE and derive the dividend from those same rounded figures —
@@ -660,13 +736,15 @@ export class PlatformStatsService {
           province: geo.province,
           lat: geo.lat,
           lon: geo.lon,
-          peopleServing: acc.studentIds.size,
+          peopleServing: acc.peopleServing,
           peopleServed: acc.peopleServed,
           verifiedHours: roundedHours,
           resourcesDeployedPkr: Math.round(acc.resourcesDeployedPkr),
           outOfPocketPkr: roundedOutOfPocketPkr,
-          communityDividendPkr:
-            roundedHours * DIVIDEND_HOURLY_RATE_PKR + roundedOutOfPocketPkr,
+          communityDividendPkr: communityDividendPkr(
+            roundedHours,
+            roundedOutOfPocketPkr,
+          ),
           verifiedReports: acc.verifiedReports,
           sdgs: [...acc.sdgs].sort((a, b) => a - b),
           partners: [...acc.partners].sort(),
@@ -678,12 +756,15 @@ export class PlatformStatsService {
     const roundedOutOfPocketPkr = Math.round(outOfPocketPkr);
 
     return {
-      peopleServing: studentIds.size,
+      peopleServing,
+      peopleReached,
       verifiedHours: roundedVerifiedHours,
       resourcesDeployedPkr: Math.round(resourcesDeployedPkr),
       outOfPocketPkr: roundedOutOfPocketPkr,
-      communityDividendPkr:
-        roundedVerifiedHours * DIVIDEND_HOURLY_RATE_PKR + roundedOutOfPocketPkr,
+      communityDividendPkr: communityDividendPkr(
+        roundedVerifiedHours,
+        roundedOutOfPocketPkr,
+      ),
       sdgsTouched: sdgSet.size,
       cities,
       recentActivity: activityCandidates
@@ -760,22 +841,36 @@ export class PlatformStatsService {
     return { count: partners.length, comeBackPct };
   }
 
+  /** Unique community-service opportunities with at least one verified/paid report. */
+  private async countVerifiedCommunityServiceProjects(): Promise<number> {
+    const rows = await this.studentReportsRepository.find({
+      where: VERIFIED_RECORD_STATUSES.map((status) => ({ status })),
+      select: ['id', 'opportunityId', 'project_id'],
+    });
+    const ids = new Set<string>();
+    for (const r of rows) {
+      ids.add(r.opportunityId || r.project_id || r.id);
+    }
+    return ids.size;
+  }
+
   /** "Verified projects" spans all four paths — unlike computeCommunityLedger, this only needs a
    * count per entity's own established "verified" definition (see each path's own service). */
   private async countVerifiedProjectsAllPaths(): Promise<number> {
-    const [reports, courseProjects, fyps, ventures] = await Promise.all([
-      this.countVerifiedRecords(),
-      this.courseProjectRepository.count({
-        where: { status: 'submitted', facultyApprovalStatus: 'approved' },
-      }),
-      this.fypRepository.count({
-        where: { status: 'submitted', supervisorApprovalStatus: 'approved' },
-      }),
-      this.ventureRepository.find(),
-    ]);
+    const [communityServiceProjects, courseProjects, fyps, ventures] =
+      await Promise.all([
+        this.countVerifiedCommunityServiceProjects(),
+        this.courseProjectRepository.count({
+          where: { status: 'submitted', facultyApprovalStatus: 'approved' },
+        }),
+        this.fypRepository.count({
+          where: { status: 'submitted', supervisorApprovalStatus: 'approved' },
+        }),
+        this.ventureRepository.find(),
+      ]);
     const verifiedVentures = ventures.filter(
       (v) => computeVentureGates(v).showcaseOk,
     ).length;
-    return reports + courseProjects + fyps + verifiedVentures;
+    return communityServiceProjects + courseProjects + fyps + verifiedVentures;
   }
 }

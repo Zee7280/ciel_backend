@@ -371,33 +371,52 @@ export class PlatformStatsService {
     return Number.isFinite(total) ? Math.round(total) : 0;
   }
 
-  /** Real, server-computed verified hours per project — same verified definition as
-   * sumEngagementHours, batched across every project at once so the community-dividend ledger
+  /** Real, server-computed verified hours per (project, student) pair — same verified definition
+   * as sumEngagementHours, batched across every report at once so the community-dividend ledger
    * doesn't run one query per report. Never trusts a report's own client-submitted
-   * section1.metrics.total_verified_hours, which a report's own author controls. */
-  private async sumVerifiedHoursByProject(
-    projectIds: string[],
+   * section1.metrics.total_verified_hours, which a report's own author controls.
+   *
+   * Grouped by student as well as project: an opportunity's attendance logs cover every
+   * participant on it, so grouping by project alone would attribute the *whole* project's hours
+   * to each verified report against it — inflating the total whenever more than one student
+   * reports on the same opportunity (a very normal case). Matches the per-student scoping already
+   * used in section1-analytics.service.ts's sumVerifiedHours(). */
+  private async sumVerifiedHoursByProjectAndStudent(
+    pairs: { projectId: string; studentId: string }[],
   ): Promise<Map<string, number>> {
-    const byProject = new Map<string, number>();
-    const uniqueIds = Array.from(new Set(projectIds.filter(Boolean)));
-    if (uniqueIds.length === 0) return byProject;
+    const byKey = new Map<string, number>();
+    const uniquePairs = Array.from(
+      new Map(
+        pairs
+          .filter((p) => p.projectId && p.studentId)
+          .map((p) => [`${p.projectId}:${p.studentId}`, p] as const),
+      ).values(),
+    );
+    if (uniquePairs.length === 0) return byKey;
+
+    const projectIds = Array.from(new Set(uniquePairs.map((p) => p.projectId)));
+    const studentIds = Array.from(new Set(uniquePairs.map((p) => p.studentId)));
 
     const rows = await this.attendanceLogsRepository
       .createQueryBuilder('log')
+      .innerJoin('log.participant', 'part')
       .select('log.projectId', 'projectId')
+      .addSelect('part.studentId', 'studentId')
       .addSelect('COALESCE(SUM(log.sessionHours), 0)', 'total')
-      .where('log.projectId IN (:...uniqueIds)', { uniqueIds })
+      .where('log.projectId IN (:...projectIds)', { projectIds })
+      .andWhere('part.studentId IN (:...studentIds)', { studentIds })
       .andWhere(
         `(log.approvalStatus = 'approved' OR log.entryStatus = 'verified')`,
       )
       .groupBy('log.projectId')
-      .getRawMany<{ projectId: string; total: string | number | null }>();
+      .addGroupBy('part.studentId')
+      .getRawMany<{ projectId: string; studentId: string; total: string | number | null }>();
 
     for (const row of rows) {
       const total = Number(row.total ?? 0);
-      byProject.set(row.projectId, Number.isFinite(total) ? total : 0);
+      byKey.set(`${row.projectId}:${row.studentId}`, Number.isFinite(total) ? total : 0);
     }
-    return byProject;
+    return byKey;
   }
 
   private async getAverageCiiScore(): Promise<number> {
@@ -449,8 +468,11 @@ export class PlatformStatsService {
       where: VERIFIED_RECORD_STATUSES.map((status) => ({ status })),
       relations: ['student', 'opportunity', 'opportunity.organization'],
     });
-    const verifiedHoursByProject = await this.sumVerifiedHoursByProject(
-      reports.map((r) => r.opportunityId || r.project_id),
+    const verifiedHoursByProjectStudent = await this.sumVerifiedHoursByProjectAndStudent(
+      reports.map((r) => ({
+        projectId: r.opportunityId || r.project_id,
+        studentId: r.studentId,
+      })),
     );
 
     const studentIds = new Set<string>();
@@ -484,8 +506,11 @@ export class PlatformStatsService {
     for (const report of reports) {
       if (report.studentId) studentIds.add(report.studentId);
 
-      const hours =
-        verifiedHoursByProject.get(report.opportunityId || report.project_id) || 0;
+      const hours = report.studentId
+        ? verifiedHoursByProjectStudent.get(
+            `${report.opportunityId || report.project_id}:${report.studentId}`,
+          ) || 0
+        : 0;
       verifiedHours += hours;
 
       const beneficiaries =
@@ -544,6 +569,17 @@ export class PlatformStatsService {
       }
       for (const g of reportSdgs) sdgSet.add(g);
 
+      // Opportunities with no named partner get an auto-created placeholder Organization row
+      // (createPlaceholderOrganizationForStudentOpportunity, opportunities.service.ts) purely so
+      // the record has an org to join against — its name ("Student opportunity — <title> —
+      // <id8>") is an internal bookkeeping string, never a real partner, and must never be shown
+      // as one on the public ledger/feed/city partner list.
+      const org = report.opportunity?.organization;
+      const partnerName =
+        org && org.verificationStatus !== 'unclaimed_student_initiated'
+          ? org.name
+          : null;
+
       const cityKey = normalizeCityKey(report.student?.city);
       if (cityKey) {
         let acc = cityAcc.get(cityKey);
@@ -567,7 +603,6 @@ export class PlatformStatsService {
         acc.outOfPocketPkr += reportOutOfPocketPkr;
         acc.verifiedReports += 1;
         for (const g of reportSdgs) acc.sdgs.add(g);
-        const partnerName = report.opportunity?.organization?.name;
         if (partnerName) acc.partners.add(partnerName);
       }
 
@@ -581,7 +616,7 @@ export class PlatformStatsService {
         city: geo?.name ?? null,
         hours: Math.round(hours),
         beneficiaries,
-        partnerName: report.opportunity?.organization?.name ?? null,
+        partnerName,
         verifiedAt: verifiedAtIso,
       });
 
@@ -610,9 +645,15 @@ export class PlatformStatsService {
       }
     }
 
+    // sessionHours is a decimal column, so raw sums carry fractional cents' worth of hours. Round
+    // hours and out-of-pocket PKR ONCE and derive the dividend from those same rounded figures —
+    // otherwise the displayed "<hours> hrs × PKR <rate> + PKR <out-of-pocket>" caption never
+    // quite multiplies out to the headline dividend number shown next to it.
     const cities: CityImpactStat[] = [...cityAcc.entries()]
       .map(([key, acc]) => {
         const geo = PAKISTAN_CITY_GEO[key];
+        const roundedHours = Math.round(acc.verifiedHours);
+        const roundedOutOfPocketPkr = Math.round(acc.outOfPocketPkr);
         return {
           id: key,
           name: geo.name,
@@ -621,12 +662,11 @@ export class PlatformStatsService {
           lon: geo.lon,
           peopleServing: acc.studentIds.size,
           peopleServed: acc.peopleServed,
-          verifiedHours: Math.round(acc.verifiedHours),
+          verifiedHours: roundedHours,
           resourcesDeployedPkr: Math.round(acc.resourcesDeployedPkr),
-          outOfPocketPkr: Math.round(acc.outOfPocketPkr),
-          communityDividendPkr: Math.round(
-            acc.verifiedHours * DIVIDEND_HOURLY_RATE_PKR + acc.outOfPocketPkr,
-          ),
+          outOfPocketPkr: roundedOutOfPocketPkr,
+          communityDividendPkr:
+            roundedHours * DIVIDEND_HOURLY_RATE_PKR + roundedOutOfPocketPkr,
           verifiedReports: acc.verifiedReports,
           sdgs: [...acc.sdgs].sort((a, b) => a - b),
           partners: [...acc.partners].sort(),
@@ -634,14 +674,16 @@ export class PlatformStatsService {
       })
       .sort((a, b) => b.peopleServing - a.peopleServing);
 
+    const roundedVerifiedHours = Math.round(verifiedHours);
+    const roundedOutOfPocketPkr = Math.round(outOfPocketPkr);
+
     return {
       peopleServing: studentIds.size,
-      verifiedHours: Math.round(verifiedHours),
+      verifiedHours: roundedVerifiedHours,
       resourcesDeployedPkr: Math.round(resourcesDeployedPkr),
-      outOfPocketPkr: Math.round(outOfPocketPkr),
-      communityDividendPkr: Math.round(
-        verifiedHours * DIVIDEND_HOURLY_RATE_PKR + outOfPocketPkr,
-      ),
+      outOfPocketPkr: roundedOutOfPocketPkr,
+      communityDividendPkr:
+        roundedVerifiedHours * DIVIDEND_HOURLY_RATE_PKR + roundedOutOfPocketPkr,
       sdgsTouched: sdgSet.size,
       cities,
       recentActivity: activityCandidates

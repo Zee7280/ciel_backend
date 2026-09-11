@@ -33,10 +33,12 @@ export function computeVentureGates(v: Partial<VentureEntry>): VentureGateStatus
         v.sdgMapping?.mode === 'none' ||
         v.reviewPipeline?.sdgReviewStatus === 'approved' ||
         v.reviewPipeline?.sdgReviewStatus === 'pending';
+    // Only faculty approve ventures — university sign-off was dropped from the design,
+    // but reviewPipeline.universityStatus is left at "pending" forever from submission
+    // (see StartupBusinessWorkspace.tsx), so it must not gate showcaseOk any more.
     const showcaseOk = !!(
         academicOk &&
         v.reviewPipeline?.supervisorStatus === 'approved' &&
-        v.reviewPipeline?.universityStatus === 'approved' &&
         sdgOk &&
         teamConsentOk
     );

@@ -28,6 +28,12 @@ const AppDataSource = new DataSource({
     database: process.env.DB_NAME || 'ciel',
     entities: [User, Organization],
     synchronize: false,
+    // Same trigger as app.module.ts's TypeORM config — the production (Vercel) Postgres requires
+    // SSL, and this script is meant to be pointed at that same database from a local machine.
+    ssl:
+        process.env.NODE_ENV === 'production' || process.env.DB_SSL === 'true'
+            ? { rejectUnauthorized: false }
+            : undefined,
 });
 
 async function run() {

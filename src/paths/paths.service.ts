@@ -798,13 +798,17 @@ export class PathsService implements OnModuleInit {
    * formally (organizationId) or by the university name they entered in step 1. Same scoping
    * approach as the university analytics endpoint, so the two stay consistent. Defaults to
    * submitted-only (the existing showcase); pass 'draft' for the in-progress companion view. */
-  async listCourseProjectsForUniversity(organizationId: string, status: 'draft' | 'submitted' = 'submitted') {
+  async listCourseProjectsForUniversity(
+    organizationId: string,
+    status: 'draft' | 'submitted' = 'submitted',
+    approvalStatus?: 'pending' | 'approved' | 'rejected' | 'revision_requested',
+  ) {
     const org = await this.organizationsRepo.findOne({
       where: { id: organizationId },
     });
     if (!org) return [];
     const orgNameNorm = org.name.trim().toLowerCase();
-    const entries = await this.courseProjectRepo
+    const qb = this.courseProjectRepo
       .createQueryBuilder('e')
       .leftJoin('users', 'u', 'u.id::text = e."userId"')
       .where('e.status = :status', { status })
@@ -815,16 +819,28 @@ export class PathsService implements OnModuleInit {
             { orgNameNorm },
           );
         }),
-      )
-      .orderBy('e."updatedAt"', 'DESC')
-      .getMany();
+      );
+    // Enforced here, not left to the caller: the "Coursework Impact Wall" must only ever be
+    // able to fetch approved records, never rely on client-side filtering to hide the rest.
+    if (approvalStatus) {
+      qb.andWhere('e."facultyApprovalStatus" = :approvalStatus', { approvalStatus });
+    }
+    const entries = await qb.orderBy('e."updatedAt"', 'DESC').getMany();
     const annotated = await this.courseProjectAnnotate(entries);
     return this.attachStudents(await this.attachLiveCourseworkRanks(annotated));
   }
 
-  async listCourseProjectsForAdmin(status?: 'draft' | 'submitted') {
+  async listCourseProjectsForAdmin(
+    status?: 'draft' | 'submitted',
+    approvalStatus?: 'pending' | 'approved' | 'rejected' | 'revision_requested',
+  ) {
+    // Enforced here, not left to the caller: the "Approved Coursework" wall must only ever be
+    // able to fetch approved records, never rely on client-side filtering to hide the rest.
     const entries = await this.courseProjectRepo.find({
-      where: status ? { status } : {},
+      where: {
+        ...(status ? { status } : {}),
+        ...(approvalStatus ? { facultyApprovalStatus: approvalStatus } : {}),
+      },
       order: { updatedAt: 'DESC' },
     });
     if (!entries.length) return [];
@@ -1263,8 +1279,17 @@ export class PathsService implements OnModuleInit {
     };
   }
 
-  async listFypForAdmin(progress?: 'complete' | 'in_progress') {
-    const entries = await this.fypRepo.find({ order: { updatedAt: 'DESC' } });
+  async listFypForAdmin(
+    progress?: 'complete' | 'in_progress',
+    approvalStatus?: 'pending' | 'approved' | 'rejected' | 'revision_requested',
+  ) {
+    // Enforced here, not left to the caller: the "Approved FYP" wall must only ever be able to
+    // fetch approved records, never rely on client-side filtering to hide the rest — same fix
+    // already applied to Course Project's listCourseProjectsForAdmin.
+    const entries = await this.fypRepo.find({
+      where: approvalStatus ? { supervisorApprovalStatus: approvalStatus } : {},
+      order: { updatedAt: 'DESC' },
+    });
     const annotated = await this.fypAnnotate(entries);
     const enriched = annotated.map((entry) => this.enrichFypForAdmin(entry));
     const filtered = progress
@@ -1292,17 +1317,21 @@ export class PathsService implements OnModuleInit {
     };
   }
 
-  async listVenturesForAdmin(visibility?: 'visible' | 'private') {
-    const where =
-      visibility === 'visible'
-        ? { isVisible: true }
-        : visibility === 'private'
-          ? { isVisible: false }
-          : {};
-    const entries = await this.ventureRepo.find({
-      where,
-      order: { updatedAt: 'DESC' },
-    });
+  async listVenturesForAdmin(
+    visibility?: 'visible' | 'private',
+    approvalStatus?: 'not_started' | 'pending' | 'approved' | 'revisions_requested' | 'rejected',
+  ) {
+    // Enforced here, not left to the caller: the "Approved Ventures" wall must only ever be able
+    // to fetch approved records, never rely on client-side filtering to hide the rest — same fix
+    // already applied to Course Project's listCourseProjectsForAdmin. reviewPipeline is jsonb, so
+    // this needs a query builder rather than a plain `find` where clause.
+    const qb = this.ventureRepo.createQueryBuilder('e').orderBy('e."updatedAt"', 'DESC');
+    if (visibility === 'visible') qb.andWhere('e."isVisible" = true');
+    else if (visibility === 'private') qb.andWhere('e."isVisible" = false');
+    if (approvalStatus) {
+      qb.andWhere(`e."reviewPipeline"->>'supervisorStatus' = :approvalStatus`, { approvalStatus });
+    }
+    const entries = await qb.getMany();
     const annotated = await this.ventureAnnotate(entries);
     const enriched = annotated.map((entry) => this.enrichVentureForAdmin(entry));
     return this.attachStudents(enriched);
@@ -1465,13 +1494,17 @@ export class PathsService implements OnModuleInit {
    * either formally (organizationId) or by the university name they entered in section 1
    * (projectInfo.university), same fallback as listCourseProjectsForUniversity. Defaults to
    * submitted-only; pass 'draft' for the in-progress companion view. */
-  async listFypForUniversity(organizationId: string, status: 'draft' | 'submitted' = 'submitted') {
+  async listFypForUniversity(
+    organizationId: string,
+    status: 'draft' | 'submitted' = 'submitted',
+    approvalStatus?: 'pending' | 'approved' | 'rejected' | 'revision_requested',
+  ) {
     const org = await this.organizationsRepo.findOne({
       where: { id: organizationId },
     });
     if (!org) return [];
     const orgNameNorm = org.name.trim().toLowerCase();
-    const entries = await this.fypRepo
+    const qb = this.fypRepo
       .createQueryBuilder('e')
       .leftJoin('users', 'u', 'u.id::text = e."userId"')
       .where('e.status = :status', { status })
@@ -1482,9 +1515,13 @@ export class PathsService implements OnModuleInit {
             { orgNameNorm },
           );
         }),
-      )
-      .orderBy('e."updatedAt"', 'DESC')
-      .getMany();
+      );
+    // Enforced here, not left to the caller: the "FYP Impact Wall" must only ever be able to
+    // fetch approved records, never rely on client-side filtering to hide the rest.
+    if (approvalStatus) {
+      qb.andWhere('e."supervisorApprovalStatus" = :approvalStatus', { approvalStatus });
+    }
+    const entries = await qb.orderBy('e."updatedAt"', 'DESC').getMany();
     const annotated = await this.fypAnnotate(entries);
     return this.attachStudents(annotated);
   }
@@ -2158,14 +2195,18 @@ export class PathsService implements OnModuleInit {
    * university org, either formally (organizationId) or by the university name they entered in
    * section 1 (academicSetup.university). Same fallback as listFypForUniversity. Defaults to
    * submitted-only; pass 'draft' for the in-progress companion view. */
-  async listVenturesForUniversity(organizationId: string, status: 'draft' | 'submitted' = 'submitted') {
+  async listVenturesForUniversity(
+    organizationId: string,
+    status: 'draft' | 'submitted' = 'submitted',
+    approvalStatus?: 'not_started' | 'pending' | 'approved' | 'revisions_requested' | 'rejected',
+  ) {
     if (!organizationId) return [];
     const org = await this.organizationsRepo.findOne({
       where: { id: organizationId },
     });
     if (!org) return [];
     const orgNameNorm = org.name.trim().toLowerCase();
-    const entries = await this.ventureRepo
+    const qb = this.ventureRepo
       .createQueryBuilder('e')
       .leftJoin('users', 'u', 'u.id::text = e."userId"')
       .where('e.status = :status', { status })
@@ -2176,9 +2217,13 @@ export class PathsService implements OnModuleInit {
             { orgNameNorm },
           );
         }),
-      )
-      .orderBy('e."updatedAt"', 'DESC')
-      .getMany();
+      );
+    // Enforced here, not left to the caller: the university venture wall must only ever be able
+    // to fetch approved records, never rely on client-side filtering to hide the rest.
+    if (approvalStatus) {
+      qb.andWhere(`e."reviewPipeline"->>'supervisorStatus' = :approvalStatus`, { approvalStatus });
+    }
+    const entries = await qb.orderBy('e."updatedAt"', 'DESC').getMany();
     const annotated = await this.ventureAnnotate(entries);
     const enriched = annotated.map((entry) => this.withCompleteness(entry)!);
     return this.attachStudents(enriched);

@@ -102,12 +102,18 @@ export class PathsController {
     }
 
     /** Cards from students linked to this university partner org — the university showcase deck.
-     * Defaults to submitted-only; pass ?status=draft for the in-progress companion view. */
+     * Defaults to submitted-only; pass ?status=draft for the in-progress companion view. Pass
+     * ?approvalStatus=approved to get the "Coursework Impact Wall" enforced at the query level —
+     * never rely on the caller to filter facultyApprovalStatus client-side. */
     @Get('course-projects/university')
     @UseGuards(RolesGuard)
     @Roles(UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN)
-    async listUniversityCourseProjects(@Request() req, @Query('status') status?: 'draft' | 'submitted') {
-        const data = await this.pathsService.listCourseProjectsForUniversity(req.user.organizationId, status);
+    async listUniversityCourseProjects(
+        @Request() req,
+        @Query('status') status?: 'draft' | 'submitted',
+        @Query('approvalStatus') approvalStatus?: 'pending' | 'approved' | 'rejected' | 'revision_requested',
+    ) {
+        const data = await this.pathsService.listCourseProjectsForUniversity(req.user.organizationId, status, approvalStatus);
         return { success: true, data };
     }
 
@@ -254,12 +260,18 @@ export class PathsController {
         return { success: true, data };
     }
 
-    /** Records from students formally linked to this university partner org — the university showcase deck. */
+    /** Records from students formally linked to this university partner org — the university showcase deck.
+     * Pass ?approvalStatus=approved to get the "FYP Impact Wall" enforced at the query level —
+     * never rely on the caller to filter supervisorApprovalStatus client-side. */
     @Get('fyp-thesis/university')
     @UseGuards(RolesGuard)
     @Roles(UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN)
-    async listUniversityFyp(@Request() req, @Query('status') status?: 'draft' | 'submitted') {
-        const data = await this.pathsService.listFypForUniversity(req.user.organizationId, status);
+    async listUniversityFyp(
+        @Request() req,
+        @Query('status') status?: 'draft' | 'submitted',
+        @Query('approvalStatus') approvalStatus?: 'pending' | 'approved' | 'rejected' | 'revision_requested',
+    ) {
+        const data = await this.pathsService.listFypForUniversity(req.user.organizationId, status, approvalStatus);
         return { success: true, data };
     }
 
@@ -335,12 +347,18 @@ export class PathsController {
         return { success: true, data };
     }
 
-    /** Records from students/faculty linked to this university partner org — the university pipeline. */
+    /** Records from students/faculty linked to this university partner org — the university pipeline.
+     * Pass ?approvalStatus=approved to get the approved-only wall enforced at the query level —
+     * never rely on the caller to filter reviewPipeline.supervisorStatus client-side. */
     @Get('startup-business/university')
     @UseGuards(RolesGuard)
     @Roles(UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN)
-    async listUniversityVentures(@Request() req, @Query('status') status?: 'draft' | 'submitted') {
-        const data = await this.pathsService.listVenturesForUniversity(req.user.organizationId, status);
+    async listUniversityVentures(
+        @Request() req,
+        @Query('status') status?: 'draft' | 'submitted',
+        @Query('approvalStatus') approvalStatus?: 'not_started' | 'pending' | 'approved' | 'revisions_requested' | 'rejected',
+    ) {
+        const data = await this.pathsService.listVenturesForUniversity(req.user.organizationId, status, approvalStatus);
         return { success: true, data };
     }
 

@@ -12,10 +12,15 @@ import { SetVentureSpotlightDto } from './dto/update-venture.dto';
 export class AdminPathsController {
     constructor(private readonly pathsService: PathsService) { }
 
-    /** All student course-project path entries (draft + submitted) for admin review. */
+    /** All student course-project path entries (draft + submitted) for admin review.
+     * Pass ?approvalStatus=approved to get the "Approved Coursework" wall enforced at the query
+     * level — never rely on the caller to filter facultyApprovalStatus client-side. */
     @Get('course-projects')
-    async listCourseProjects(@Query('status') status?: 'draft' | 'submitted') {
-        const data = await this.pathsService.listCourseProjectsForAdmin(status);
+    async listCourseProjects(
+        @Query('status') status?: 'draft' | 'submitted',
+        @Query('approvalStatus') approvalStatus?: 'pending' | 'approved' | 'rejected' | 'revision_requested',
+    ) {
+        const data = await this.pathsService.listCourseProjectsForAdmin(status, approvalStatus);
         return { success: true, data };
     }
 
@@ -25,10 +30,15 @@ export class AdminPathsController {
         return { success: true, data };
     }
 
-    /** All student FYP / thesis path entries for admin review. */
+    /** All student FYP / thesis path entries for admin review.
+     * Pass ?approvalStatus=approved to get the "Approved FYP" wall enforced at the query level —
+     * never rely on the caller to filter supervisorApprovalStatus client-side. */
     @Get('fyp-thesis')
-    async listFyp(@Query('progress') progress?: 'complete' | 'in_progress') {
-        const data = await this.pathsService.listFypForAdmin(progress);
+    async listFyp(
+        @Query('progress') progress?: 'complete' | 'in_progress',
+        @Query('approvalStatus') approvalStatus?: 'pending' | 'approved' | 'rejected' | 'revision_requested',
+    ) {
+        const data = await this.pathsService.listFypForAdmin(progress, approvalStatus);
         return { success: true, data };
     }
 
@@ -38,10 +48,15 @@ export class AdminPathsController {
         return { success: true, data };
     }
 
-    /** All student startup / venture path entries for admin review. */
+    /** All student startup / venture path entries for admin review.
+     * Pass ?approvalStatus=approved to get the approved-only wall enforced at the query level —
+     * never rely on the caller to filter reviewPipeline.supervisorStatus client-side. */
     @Get('startup-business')
-    async listVentures(@Query('visibility') visibility?: 'visible' | 'private') {
-        const data = await this.pathsService.listVenturesForAdmin(visibility);
+    async listVentures(
+        @Query('visibility') visibility?: 'visible' | 'private',
+        @Query('approvalStatus') approvalStatus?: 'not_started' | 'pending' | 'approved' | 'revisions_requested' | 'rejected',
+    ) {
+        const data = await this.pathsService.listVenturesForAdmin(visibility, approvalStatus);
         return { success: true, data };
     }
 

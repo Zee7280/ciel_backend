@@ -295,6 +295,27 @@ export class AuthService {
             throw new UnauthorizedException('Account is not active');
         }
 
+        // NGO/partner signup promises "requires CIEL PK Admin verification" — University/Corporate
+        // already get an equivalent gate via the membership-payment status above, but an NGO whose
+        // membership fee isn't required (the default setting) had no gate at all: it went straight
+        // to status 'active' with the organization's own verificationStatus never checked anywhere.
+        if (
+            user.role === UserRole.NGO &&
+            user.organization &&
+            user.status !== 'pending_membership_payment'
+        ) {
+            if (user.organization.verificationStatus === 'REJECTED') {
+                throw new UnauthorizedException(
+                    'Your organization application was not approved. Contact CIEL PK support.',
+                );
+            }
+            if (user.organization.verificationStatus !== 'APPROVED') {
+                throw new UnauthorizedException(
+                    'Your organization is pending CIEL PK admin verification.',
+                );
+            }
+        }
+
         const isPasswordValid = await bcrypt.compare(password, user.password);
         if (!isPasswordValid) {
             throw new UnauthorizedException('Invalid credentials');

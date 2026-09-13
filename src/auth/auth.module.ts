@@ -13,10 +13,12 @@ import { OtpService } from './otp.service';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { EngagementModule } from '../engagement/engagement.module';
 import { OrganizationMembershipModule } from '../organization-membership/organization-membership.module';
+import { User } from '../users/entities/user.entity';
+import { Organization } from '../organizations/entities/organization.entity';
 
 @Module({
     imports: [
-        TypeOrmModule.forFeature([EmailOtp, Opportunity]),
+        TypeOrmModule.forFeature([EmailOtp, Opportunity, User, Organization]),
         UsersModule,
         OrganizationsModule,
         EngagementModule,

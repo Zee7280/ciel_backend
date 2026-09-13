@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, ConflictException, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, OnApplicationBootstrap, UnauthorizedException, ConflictException, BadRequestException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UsersService } from '../users/users.service';
@@ -30,7 +30,7 @@ import {
 } from './org-signup.util';
 
 @Injectable()
-export class AuthService {
+export class AuthService implements OnApplicationBootstrap {
     constructor(
         private usersService: UsersService,
         private jwtService: JwtService,
@@ -41,7 +41,51 @@ export class AuthService {
         private organizationMembershipService: OrganizationMembershipService,
         @InjectRepository(Opportunity)
         private opportunitiesRepository: Repository<Opportunity>,
+        @InjectRepository(User)
+        private usersRepository: Repository<User>,
+        @InjectRepository(Organization)
+        private organizationsRepository: Repository<Organization>,
     ) { }
+
+    /**
+     * One-time-per-boot backfill: an NGO account that went live before the login verification
+     * gate existed has status 'active' but its organization's verificationStatus was never
+     * touched (still the default 'PENDING'). Without this, that gate — added in login() below —
+     * would lock out every already-active NGO/partner the next time this deploys. Cheap no-op
+     * once every such organization is APPROVED, so it's safe to run on every cold start rather
+     * than needing a manual one-off script.
+     */
+    async onApplicationBootstrap(): Promise<void> {
+        try {
+            const activeNgoUsers = await this.usersRepository.find({
+                where: { role: UserRole.NGO, status: 'active' },
+                relations: ['organization'],
+            });
+            const orgIdsToApprove = new Set<string>();
+            for (const user of activeNgoUsers) {
+                if (user.organization && user.organization.verificationStatus !== 'APPROVED') {
+                    orgIdsToApprove.add(user.organization.id);
+                }
+            }
+            for (const orgId of orgIdsToApprove) {
+                const org = await this.organizationsRepository.findOne({ where: { id: orgId } });
+                if (!org) continue;
+                org.verificationStatus = 'APPROVED';
+                org.verificationNotes = [
+                    org.verificationNotes,
+                    'Grandfathered: was already an active account before the login verification gate was added.',
+                ]
+                    .filter(Boolean)
+                    .join('\n');
+                await this.organizationsRepository.save(org);
+            }
+            if (orgIdsToApprove.size > 0) {
+                console.log(`NGO grandfather backfill: approved ${orgIdsToApprove.size} organization(s).`);
+            }
+        } catch (e) {
+            console.warn('NGO grandfather backfill failed (non-fatal):', (e as Error).message);
+        }
+    }
 
     /**
      * After a new faculty or partner user registers, link any existing opportunities

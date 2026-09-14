@@ -20,6 +20,11 @@ import {
 // against jsonb bloat / malformed clients.
 const FREE_TEXT_MAX = 2000;
 const LIST_MAX = 20;
+// sectionSummaries.* are composed paragraphs stitched together from several fields at once —
+// routinely well past 2000 chars for a detailed venture, unlike the single-purpose inputs
+// FREE_TEXT_MAX is sized for. Matches the same fix applied to FYP's equivalent DTO, after a
+// rejected save here was found to surface no usable error to the student.
+const SECTION_SUMMARY_MAX = 8000;
 
 export class VentureTractionRowDto {
     @IsString()
@@ -233,13 +238,13 @@ export class VentureTeamConsentEntryDto {
 }
 
 export class VentureSectionSummariesDto {
-    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) opportunity?: string;
-    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) advantage?: string;
-    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) business?: string;
-    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) traction?: string;
-    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) impact?: string;
-    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) ask?: string;
-    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) founder?: string;
+    @IsOptional() @IsString() @MaxLength(SECTION_SUMMARY_MAX) opportunity?: string;
+    @IsOptional() @IsString() @MaxLength(SECTION_SUMMARY_MAX) advantage?: string;
+    @IsOptional() @IsString() @MaxLength(SECTION_SUMMARY_MAX) business?: string;
+    @IsOptional() @IsString() @MaxLength(SECTION_SUMMARY_MAX) traction?: string;
+    @IsOptional() @IsString() @MaxLength(SECTION_SUMMARY_MAX) impact?: string;
+    @IsOptional() @IsString() @MaxLength(SECTION_SUMMARY_MAX) ask?: string;
+    @IsOptional() @IsString() @MaxLength(SECTION_SUMMARY_MAX) founder?: string;
 }
 
 export class VentureDocumentDto {

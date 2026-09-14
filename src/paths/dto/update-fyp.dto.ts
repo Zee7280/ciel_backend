@@ -21,6 +21,13 @@ import {
 // (one line to a paragraph), so 2000 chars covers even a very thorough response.
 const FREE_TEXT_MAX = 2000;
 const LIST_MAX = 20;
+// sectionSummaries.* are composed paragraphs stitched together from several fields at once
+// (title, focus, audience, roadmap, evidence, findings, ...) — routinely well past 2000 chars for
+// a detailed project, unlike the single-purpose inputs FREE_TEXT_MAX is sized for. A rejected save
+// here previously surfaced no usable error to the student (see FypV9Workspace.tsx), so this was a
+// silent, unrecoverable dead end for any sufficiently detailed FYP. Coursework's equivalent DTO
+// applies no cap at all; this keeps a ceiling but one generous enough not to be hit in practice.
+const SECTION_SUMMARY_MAX = 8000;
 
 export class FypMilestoneDto {
   @IsString()
@@ -220,14 +227,14 @@ export class FypRepositoryInfoDto {
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) visibility?: string;
 }
 export class FypSectionSummariesDto {
-  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) project?: string;
-  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) background?: string;
-  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) objectives?: string;
-  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) literature?: string;
-  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) methodology?: string;
-  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) findings?: string;
-  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) sdg?: string;
-  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) reflection?: string;
+  @IsOptional() @IsString() @MaxLength(SECTION_SUMMARY_MAX) project?: string;
+  @IsOptional() @IsString() @MaxLength(SECTION_SUMMARY_MAX) background?: string;
+  @IsOptional() @IsString() @MaxLength(SECTION_SUMMARY_MAX) objectives?: string;
+  @IsOptional() @IsString() @MaxLength(SECTION_SUMMARY_MAX) literature?: string;
+  @IsOptional() @IsString() @MaxLength(SECTION_SUMMARY_MAX) methodology?: string;
+  @IsOptional() @IsString() @MaxLength(SECTION_SUMMARY_MAX) findings?: string;
+  @IsOptional() @IsString() @MaxLength(SECTION_SUMMARY_MAX) sdg?: string;
+  @IsOptional() @IsString() @MaxLength(SECTION_SUMMARY_MAX) reflection?: string;
 }
 
 export class UpdateFypDto {

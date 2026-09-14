@@ -775,6 +775,64 @@ describe('StudentReportsService', () => {
         expect(report.partner_status).toBe('pending');
     });
 
+    it('treats a University caller as a partner reviewer — org-scoped, and blocked until Faculty approves', async () => {
+        const report = {
+            id: 'report-1',
+            status: 'submitted',
+            partner_status: 'pending',
+            admin_status: 'pending',
+            faculty_status: 'pending',
+            partnerApprovedAt: null,
+            adminApprovedAt: null,
+            opportunity: { organizationId: 'org-1', requiresPartnerApproval: true },
+        };
+        mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+        // Cross-org: a University caller from a different org must be refused outright.
+        await expect(
+            service.verifyReport('report-1', 'reject', 'university', 'not ours', 'org-OTHER'),
+        ).rejects.toThrow('your organization');
+        expect(mockStudentReportsRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('blocks a University caller from rejecting before Faculty has approved', async () => {
+        const report = {
+            id: 'report-1',
+            status: 'submitted',
+            partner_status: 'pending',
+            admin_status: 'pending',
+            faculty_status: 'pending',
+            partnerApprovedAt: null,
+            adminApprovedAt: null,
+            opportunity: { organizationId: 'org-1', requiresPartnerApproval: true },
+        };
+        mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+        await expect(
+            service.verifyReport('report-1', 'reject', 'university', 'no', 'org-1'),
+        ).rejects.toThrow('not yet approved by Faculty');
+        expect(report.status).toBe('submitted');
+        expect(mockStudentReportsRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('refuses a University caller trying to unlock (admin-only)', async () => {
+        const report = {
+            id: 'report-1',
+            status: 'verified',
+            partner_status: 'approved',
+            admin_status: 'approved',
+            faculty_status: 'approved',
+            opportunity: { organizationId: 'org-1', requiresPartnerApproval: true },
+        };
+        mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+        await expect(
+            service.verifyReport('report-1', 'unlock', 'university', undefined, 'org-1'),
+        ).rejects.toThrow('Only admins can unlock');
+        expect(report.status).toBe('verified');
+        expect(mockStudentReportsRepository.save).not.toHaveBeenCalled();
+    });
+
     it('sets revision status when admin rejects so students can edit', async () => {
         const report = {
             id: 'report-1',

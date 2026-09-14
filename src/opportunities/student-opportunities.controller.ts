@@ -8,6 +8,9 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
+import { UserRole } from '../users/enums/user-role.enum';
 import { VerificationVerifyAuthGuard } from '../auth/verification-verify-auth.guard';
 import { OpportunitiesService } from './opportunities.service';
 import { CreateOpportunityDto } from './dto/create-opportunity.dto';
@@ -17,7 +20,8 @@ export class StudentOpportunitiesController {
   constructor(private readonly opportunitiesService: OpportunitiesService) {}
 
   @Post()
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.STUDENT, UserRole.SUPER_ADMIN)
   create(@Request() req, @Body() dto: CreateOpportunityDto) {
     return this.opportunitiesService.createStudentOpportunity(req.user.id, dto);
   }
@@ -44,7 +48,8 @@ export class StudentOpportunitiesController {
 export class StudentOpportunitySingularController {
   constructor(private readonly opportunitiesService: OpportunitiesService) {}
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.STUDENT, UserRole.SUPER_ADMIN)
   @Get('mine')
   mine(@Request() req, @Query('status') status?: string) {
     return this.opportunitiesService.findMineForStudent(req.user.id, {

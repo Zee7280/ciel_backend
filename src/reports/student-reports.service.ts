@@ -799,9 +799,18 @@ export class StudentReportsService {
   }
 
   private isPartnerReviewerRole(role: string | null | undefined): boolean {
-    return ['partner', 'ngo', 'corporate', 'organization_admin'].includes(
-      role ?? '',
-    );
+    // 'university' was missing here even though PartnersController's class-level @Roles has
+    // always accepted UserRole.UNIVERSITY on this exact route — the omission meant a University
+    // caller fell through every isPartnerReviewer branch below untouched, silently skipping both
+    // the organization-ownership check and the "Faculty is the sole final report approver" gate,
+    // and (for 'unlock') skipping the admin-only guard entirely.
+    return [
+      'partner',
+      'ngo',
+      'corporate',
+      'organization_admin',
+      'university',
+    ].includes(role ?? '');
   }
 
   private looksLikeUuid(value: string): boolean {
@@ -1912,6 +1921,28 @@ export class StudentReportsService {
     return this.s3Service.uploadFile(file, folder);
   }
 
+  /**
+   * section11 legitimately carries the student's own self-triggered AI audit text
+   * (summary_text/audit_meta) from the report wizard's final step, so the whole object can't be
+   * rejected outright — but ai_generated_impact_score/institutional_alignment_score/
+   * verified_narrative are meant to be admin-computed only (see updateReportAiScore). Without this
+   * strip, createReport/saveDraft persisted the client's section11 object verbatim, so a student
+   * could self-inflate their own score via a raw API call. Same bug class as the read-side leak
+   * this pass also fixed in the student's own report detail response.
+   */
+  private stripStudentWritableSection11(
+    section11: unknown,
+  ): Record<string, unknown> | undefined {
+    if (!section11 || typeof section11 !== 'object') return undefined;
+    const {
+      ai_generated_impact_score,
+      institutional_alignment_score,
+      verified_narrative,
+      ...rest
+    } = section11 as Record<string, unknown>;
+    return rest;
+  }
+
   private resolveSubmitIntent(parsedData: any, forceSubmit: boolean): boolean {
     if (forceSubmit) return true;
     const submitSignal =
@@ -2082,7 +2113,10 @@ export class StudentReportsService {
       if (parsedData.section8) report.section8 = parsedData.section8;
       if (parsedData.section9) report.section9 = parsedData.section9;
       if (parsedData.section10) report.section10 = parsedData.section10;
-      if (parsedData.section11) report.section11 = parsedData.section11;
+      if (parsedData.section11)
+        report.section11 = this.stripStudentWritableSection11(
+          parsedData.section11,
+        ) as StudentReport['section11'];
 
       // If it was already validated, maybe keep it, otherwise reset to pending if re-submitting new data
       if (report.sdg_validation_status !== 'validated') {
@@ -2105,7 +2139,7 @@ export class StudentReportsService {
         section8: parsedData.section8,
         section9: parsedData.section9,
         section10: parsedData.section10,
-        section11: parsedData.section11,
+        section11: this.stripStudentWritableSection11(parsedData.section11),
         sdg_summary_stage: 'preliminary',
         sdg_validation_status: 'pending',
       });
@@ -2317,7 +2351,10 @@ export class StudentReportsService {
       if (parsedData.section8) report.section8 = parsedData.section8;
       if (parsedData.section9) report.section9 = parsedData.section9;
       if (parsedData.section10) report.section10 = parsedData.section10;
-      if (parsedData.section11) report.section11 = parsedData.section11;
+      if (parsedData.section11)
+        report.section11 = this.stripStudentWritableSection11(
+          parsedData.section11,
+        ) as StudentReport['section11'];
     } else {
       if (parsedData.opportunityId) {
         const opp = await this.opportunitiesRepository.findOne({
@@ -2340,7 +2377,7 @@ export class StudentReportsService {
         section8: parsedData.section8,
         section9: parsedData.section9,
         section10: parsedData.section10,
-        section11: parsedData.section11,
+        section11: this.stripStudentWritableSection11(parsedData.section11),
       });
     }
 
@@ -2633,8 +2670,10 @@ export class StudentReportsService {
     }
 
     if (report) {
-      return StudentReportsService.redactCiiV2ForExternalViewer(
-        await this.formatReportResponse(report, attendanceParticipantId),
+      return StudentReportsService.redactSection11ScoreForStudent(
+        StudentReportsService.redactCiiV2ForExternalViewer(
+          await this.formatReportResponse(report, attendanceParticipantId),
+        ),
       );
     }
 
@@ -2783,6 +2822,37 @@ export class StudentReportsService {
         email: leadUser?.email || '',
         student_id: canonicalLeadId || report.studentId,
       },
+    };
+  }
+
+  /**
+   * Legacy (pre-ciiV2) AI audit score, same rule as redactCiiV2ForExternalViewer: the student's own
+   * report detail read (findOneByOpportunityOrId) must not see ai_generated_impact_score /
+   * institutional_alignment_score before Faculty has signed off — mirrors the gate
+   * redactUnapprovedAiScoreForStudent already applies on the list endpoint's derived cii_score,
+   * which this detail-read path was missing (section11 was passed through raw).
+   */
+  private static redactSection11ScoreForStudent<
+    T extends { data?: { status?: string | null; faculty_status?: string | null; section11?: Record<string, unknown> | null } },
+  >(response: T): T {
+    if (!response?.data?.section11) return response;
+    if (
+      isCommunityAwardLiveReport({
+        status: response.data.status,
+        faculty_status: response.data.faculty_status,
+      })
+    ) {
+      return response;
+    }
+    const {
+      ai_generated_impact_score,
+      institutional_alignment_score,
+      verified_narrative,
+      ...restSection11
+    } = response.data.section11;
+    return {
+      ...response,
+      data: { ...response.data, section11: restSection11 },
     };
   }
 

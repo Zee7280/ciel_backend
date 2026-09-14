@@ -382,11 +382,22 @@ export class PathsService implements OnModuleInit {
       entry.evidenceTypes = dto.evidenceTypes;
     if (dto.assignmentFileUrl !== undefined)
       entry.assignmentFileUrl = dto.assignmentFileUrl;
-    if (dto.studentInfo !== undefined)
-      entry.studentInfo = {
+    if (dto.studentInfo !== undefined) {
+      const mergedStudentInfo = {
         ...entry.studentInfo,
         ...keep(dto.studentInfo),
       } as CourseProjectStudentInfo;
+      // teacherEmail is the sole scope check facultyReviewCourseProject relies on (self-declared,
+      // never verified against a roster) — once the record has entered the review queue, silently
+      // redirecting it to a different faculty account would let that faculty score a submission
+      // they were never actually assigned. Editing every other studentInfo field remains free;
+      // only a *changed* teacherEmail is refused post-submission — the normal wizard resends the
+      // same unchanged value on every save, so this never affects a legitimate flow.
+      if (previousStatus === 'submitted') {
+        mergedStudentInfo.teacherEmail = entry.studentInfo?.teacherEmail;
+      }
+      entry.studentInfo = mergedStudentInfo;
+    }
     if (dto.assignmentInfo !== undefined)
       entry.assignmentInfo = { ...entry.assignmentInfo, ...keep(dto.assignmentInfo) };
     if (dto.aimsInfo !== undefined)
@@ -423,6 +434,7 @@ export class PathsService implements OnModuleInit {
       entry.facultyApprovalNote = null;
       entry.facultyApprovalAt = null;
       entry.meritRibbon = null;
+      entry.facultyModeration = null;
       notify = 'resubmission';
     } else if (
       entry.status === 'submitted' &&
@@ -431,6 +443,7 @@ export class PathsService implements OnModuleInit {
       entry.facultyApprovalStatus = 'pending';
       entry.facultyApprovalAt = null;
       entry.meritRibbon = null;
+      entry.facultyModeration = null;
       notify = 'resubmission';
     } else if (previousStatus !== 'submitted' && entry.status === 'submitted') {
       notify = 'first_submission';
@@ -591,10 +604,11 @@ export class PathsService implements OnModuleInit {
 
   /** @deprecated single-entry accessor, kept for backward compatibility — returns the most recently touched entry. */
   async getCourseProject(userId: string) {
-    return this.courseProjectRepo.findOne({
+    const entry = await this.courseProjectRepo.findOne({
       where: { userId },
       order: { updatedAt: 'DESC' },
     });
+    return entry ? PathsService.redactMeritScoreForStudent(entry) : entry;
   }
 
   /** @deprecated single-entry upsert, kept for backward compatibility — use create/update-by-id for multi-entry decks. */
@@ -633,7 +647,7 @@ export class PathsService implements OnModuleInit {
       );
     }
     const [annotated] = await this.courseProjectAnnotate([saved]);
-    return annotated;
+    return PathsService.redactMeritScoreForStudent(annotated);
   }
 
   /** Postgres JSONB match: does this entry's studentInfo.groupMembers list include userEmailNorm,
@@ -770,7 +784,10 @@ export class PathsService implements OnModuleInit {
       );
     }
     const [annotated] = await this.courseProjectAnnotate([saved]);
-    return { ...annotated, isOwner: saved.userId === userId };
+    return {
+      ...PathsService.redactMeritScoreForStudent(annotated),
+      isOwner: saved.userId === userId,
+    };
   }
 
   async deleteCourseProjectByIdForUser(userId: string, id: string) {
@@ -1351,6 +1368,14 @@ export class PathsService implements OnModuleInit {
     else if (visibility === 'private') qb.andWhere('e."isVisible" = false');
     if (approvalStatus) {
       qb.andWhere(`e."reviewPipeline"->>'supervisorStatus' = :approvalStatus`, { approvalStatus });
+      // A decision status (approved/rejected/revisions_requested) is only ever meaningful once a
+      // venture has actually been submitted — unlike listVenturesForUniversity/ForTeacher, this
+      // admin query has no separate `status` param the caller could pass, so a still-'draft' row
+      // (e.g. one that never actually reached faculty review) must be excluded here directly rather
+      // than trusted to already be absent.
+      if (approvalStatus !== 'not_started') {
+        qb.andWhere(`e.status = 'submitted'`);
+      }
     }
     const entries = await qb.getMany();
     const annotated = await this.ventureAnnotate(entries);
@@ -1558,6 +1583,9 @@ export class PathsService implements OnModuleInit {
     justConnected: boolean;
   } {
     const hadSupervisorEmail = !!(entry.projectInfo?.supervisorEmail || '').trim();
+    const priorStatusForSupervisorLock = entry.status;
+    const priorSupervisorEmail = entry.projectInfo?.supervisorEmail;
+    const priorCoSupervisorEmail = entry.projectInfo?.coSupervisorEmail;
     if (dto.projectTitle !== undefined)
       entry.projectTitle = dto.projectTitle;
     if (dto.overview !== undefined) entry.overview = dto.overview;
@@ -1565,8 +1593,20 @@ export class PathsService implements OnModuleInit {
     if (dto.communityLinkage !== undefined)
       entry.communityLinkage = dto.communityLinkage;
     // 9-step guided wizard — frontend sends each group fully merged, so a straight assign is safe.
-    if (dto.projectInfo !== undefined)
+    if (dto.projectInfo !== undefined) {
       entry.projectInfo = dto.projectInfo as FypProjectInfo;
+      // supervisorEmail/coSupervisorEmail are the sole scope check supervisorReviewFyp relies on
+      // (self-declared, never verified against a roster) — once the record has entered the review
+      // queue, silently redirecting it to a different faculty account would let that faculty score
+      // a submission they were never actually assigned. Same fix as Course Project's teacherEmail.
+      if (priorStatusForSupervisorLock === 'submitted') {
+        entry.projectInfo = {
+          ...entry.projectInfo,
+          supervisorEmail: priorSupervisorEmail,
+          coSupervisorEmail: priorCoSupervisorEmail,
+        };
+      }
+    }
     if (dto.background !== undefined) entry.background = dto.background;
     if (dto.objectivesInfo !== undefined)
       entry.objectivesInfo = dto.objectivesInfo;
@@ -2131,6 +2171,9 @@ export class PathsService implements OnModuleInit {
           lock: { mode: 'pessimistic_write' },
         });
         if (!entry) entry = repo.create({ userId });
+        const priorStatusForSupervisorLock = entry.status;
+        const priorSupervisorEmail = entry.academicSetup?.supervisorEmail;
+        const priorSupervisorName = entry.academicSetup?.supervisorName;
         if (dto.ventureName !== undefined) entry.ventureName = dto.ventureName;
         if (dto.description !== undefined) entry.description = dto.description;
         if (dto.stage !== undefined) entry.stage = dto.stage;
@@ -2140,16 +2183,49 @@ export class PathsService implements OnModuleInit {
         if (dto.materialUrls !== undefined)
           entry.materialUrls = dto.materialUrls;
         // 8-step guided wizard — frontend sends each group fully merged, so a straight assign is safe.
-        if (dto.academicSetup !== undefined)
+        if (dto.academicSetup !== undefined) {
           entry.academicSetup = dto.academicSetup;
+          // supervisorEmail/supervisorName are what ventureMatchesFaculty relies on (self-declared,
+          // never verified against a roster) — once submitted, silently redirecting to a different
+          // faculty account would let that faculty score a venture they were never assigned. Same
+          // fix as Course Project's teacherEmail / FYP's supervisorEmail.
+          if (priorStatusForSupervisorLock === 'submitted') {
+            entry.academicSetup = {
+              ...entry.academicSetup,
+              supervisorEmail: priorSupervisorEmail,
+              supervisorName: priorSupervisorName,
+            };
+          }
+        }
         if (dto.ideaInfo !== undefined) entry.ideaInfo = dto.ideaInfo;
         if (dto.solutionInfo !== undefined)
           entry.solutionInfo = dto.solutionInfo;
         if (dto.sdgMapping !== undefined) entry.sdgMapping = dto.sdgMapping;
         if (dto.evidenceInfo !== undefined)
           entry.evidenceInfo = dto.evidenceInfo;
-        if (dto.reviewPipeline !== undefined)
-          entry.reviewPipeline = dto.reviewPipeline;
+        if (dto.reviewPipeline !== undefined) {
+          // reviewPipeline.supervisorStatus is a decision field — only supervisorReviewVenture/
+          // selfCertifyOwnVenture (faculty-only) may move it to a terminal state. The student's own
+          // wizard only ever legitimately sends 'pending'/'not_started' here, so a client-supplied
+          // terminal value is never trusted — keep whatever was already persisted instead. Without
+          // this, a forged terminal status could persist on a still-'draft' row (the reset-to-pending
+          // guard below only fires once status flips to 'submitted'), and such a row wasn't excluded
+          // from listVenturesForAdmin's approved-only query (see the accompanying fix there).
+          const TERMINAL_SUPERVISOR_STATUSES = new Set([
+            'approved',
+            'rejected',
+            'revisions_requested',
+          ]);
+          const requestedSupervisorStatus = dto.reviewPipeline.supervisorStatus;
+          entry.reviewPipeline = {
+            ...dto.reviewPipeline,
+            supervisorStatus: TERMINAL_SUPERVISOR_STATUSES.has(
+              requestedSupervisorStatus as string,
+            )
+              ? (entry.reviewPipeline?.supervisorStatus ?? 'not_started')
+              : requestedSupervisorStatus,
+          };
+        }
         if (dto.publishSettings !== undefined) {
           const featured = entry.publishSettings?.featured;
           entry.publishSettings = {

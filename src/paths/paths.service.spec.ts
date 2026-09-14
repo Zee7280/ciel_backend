@@ -603,6 +603,163 @@ describe('PathsService — coursework AI score is never returned to a student', 
         const byId = await service2.getCourseProjectByIdForUser('student-1', 'student@test.com', 'entry-1');
         expect((byId as any).facultyModeration).toBeNull();
     });
+
+    it('resubmitting an approved entry clears the stale faculty moderation, not just the ribbon', async () => {
+        const rows: Record<string, unknown>[] = [
+            {
+                id: 'entry-1',
+                userId: 'student-1',
+                status: 'submitted',
+                facultyApprovalStatus: 'approved',
+                facultyModeration: { levels: { evidence: 4 }, facultyScore: 78, at: '2026-01-01' },
+                meritRibbon: { rank: 1, of: 10, scope: 'university', total: 91 },
+                studentInfo: {},
+            },
+        ];
+        const manager = {
+            getRepository: () => ({
+                findOne: jest.fn(async () => rows[0] ?? null),
+                save: jest.fn(async (row: Record<string, unknown>) => {
+                    rows[0] = row;
+                    return row;
+                }),
+            }),
+        };
+        const service = new PathsService(
+            { manager: { transaction: jest.fn(async (fn: (m: unknown) => unknown) => fn(manager)) } } as any,
+            {} as any,
+            {} as any,
+            makeInviteRepo() as any,
+            { findOne: jest.fn() } as any,
+            {} as any,
+            {
+                sendCourseworkSubmittedForReview: jest.fn(),
+                sendCourseworkSubmissionConfirmation: jest.fn(),
+                sendCourseworkResubmittedForReview: jest.fn(),
+            } as any,
+            { createNotification: jest.fn() } as any,
+            {} as any,
+        );
+        jest.spyOn(service as any, 'syncCourseProjectInvites').mockResolvedValue(undefined);
+        jest.spyOn(service as any, 'courseProjectAnnotate').mockImplementation(async (entries: unknown) => entries as any);
+
+        // The student edits any field on their already-approved report — this alone must
+        // invalidate the stale approval, including the faculty's own scoring breakdown, not
+        // just the coarse rank/of ribbon.
+        const saved = await service.updateCourseProjectByIdForUser('student-1', 'entry-1', { addedNote: 'tweak' } as any);
+
+        expect((rows[0] as any).facultyModeration).toBeNull();
+        expect((saved as any).facultyApprovalStatus).toBe('pending');
+        expect((saved as any).facultyModeration).toBeNull();
+    });
+
+    it('the live PATCH endpoint never returns the faculty moderation breakdown, even mid-edit', async () => {
+        const rows: Record<string, unknown>[] = [
+            {
+                id: 'entry-1',
+                userId: 'student-1',
+                status: 'draft',
+                facultyApprovalStatus: 'pending',
+                facultyModeration: { levels: { evidence: 4 }, facultyScore: 78, at: '2026-01-01' },
+                meritRibbon: { rank: 2, of: 10, scope: 'university', total: 60 },
+                studentInfo: {},
+            },
+        ];
+        const manager = {
+            getRepository: () => ({
+                findOne: jest.fn(async () => rows[0] ?? null),
+                save: jest.fn(async (row: Record<string, unknown>) => {
+                    rows[0] = row;
+                    return row;
+                }),
+            }),
+        };
+        const service = new PathsService(
+            { manager: { transaction: jest.fn(async (fn: (m: unknown) => unknown) => fn(manager)) } } as any,
+            {} as any,
+            {} as any,
+            makeInviteRepo() as any,
+            { findOne: jest.fn() } as any,
+            {} as any,
+            { sendCourseworkSubmittedForReview: jest.fn(), sendCourseworkSubmissionConfirmation: jest.fn() } as any,
+            { createNotification: jest.fn() } as any,
+            {} as any,
+        );
+        jest.spyOn(service as any, 'syncCourseProjectInvites').mockResolvedValue(undefined);
+        jest.spyOn(service as any, 'courseProjectAnnotate').mockImplementation(async (entries: unknown) => entries as any);
+
+        // facultyModeration wasn't reset here (entry never reached 'submitted'/'approved' this
+        // save) — the response must still never carry it, mirroring listCourseProjects/getById.
+        const saved = await service.updateCourseProjectByIdForUser('student-1', 'entry-1', { addedNote: 'draft edit' } as any);
+
+        expect((saved as any).facultyModeration).toBeNull();
+        expect((saved as any).meritRibbon.total).toBeUndefined();
+    });
+
+    it('refuses to redirect an already-submitted entry to a different teacherEmail', async () => {
+        const rows: Record<string, unknown>[] = [
+            {
+                id: 'entry-1',
+                userId: 'student-1',
+                status: 'submitted',
+                facultyApprovalStatus: 'pending',
+                studentInfo: { teacherEmail: 'teacherA@test.com', studentName: 'Ali' },
+            },
+        ];
+        const manager = {
+            getRepository: () => ({
+                findOne: jest.fn(async () => rows[0] ?? null),
+                save: jest.fn(async (row: Record<string, unknown>) => {
+                    rows[0] = row;
+                    return row;
+                }),
+            }),
+        };
+        const service = new PathsService(
+            { manager: { transaction: jest.fn(async (fn: (m: unknown) => unknown) => fn(manager)) } } as any,
+            {} as any, {} as any, makeInviteRepo() as any, { findOne: jest.fn() } as any, {} as any,
+            { sendCourseworkSubmittedForReview: jest.fn(), sendCourseworkSubmissionConfirmation: jest.fn() } as any,
+            { createNotification: jest.fn() } as any, {} as any,
+        );
+        jest.spyOn(service as any, 'syncCourseProjectInvites').mockResolvedValue(undefined);
+        jest.spyOn(service as any, 'courseProjectAnnotate').mockImplementation(async (entries: unknown) => entries as any);
+
+        // A raw API call attempting to hijack review to a different faculty account.
+        const saved = await service.updateCourseProjectByIdForUser('student-1', 'entry-1', {
+            studentInfo: { teacherEmail: 'teacherB@test.com', studentName: 'Ali' },
+        } as any);
+
+        expect((saved as any).studentInfo.teacherEmail).toBe('teacherA@test.com');
+    });
+
+    it('still allows changing teacherEmail while the entry is still a draft', async () => {
+        const rows: Record<string, unknown>[] = [
+            { id: 'entry-1', userId: 'student-1', status: 'draft', studentInfo: { teacherEmail: 'teacherA@test.com' } },
+        ];
+        const manager = {
+            getRepository: () => ({
+                findOne: jest.fn(async () => rows[0] ?? null),
+                save: jest.fn(async (row: Record<string, unknown>) => {
+                    rows[0] = row;
+                    return row;
+                }),
+            }),
+        };
+        const service = new PathsService(
+            { manager: { transaction: jest.fn(async (fn: (m: unknown) => unknown) => fn(manager)) } } as any,
+            {} as any, {} as any, makeInviteRepo() as any, { findOne: jest.fn() } as any, {} as any,
+            { sendCourseworkSubmittedForReview: jest.fn(), sendCourseworkSubmissionConfirmation: jest.fn() } as any,
+            { createNotification: jest.fn() } as any, {} as any,
+        );
+        jest.spyOn(service as any, 'syncCourseProjectInvites').mockResolvedValue(undefined);
+        jest.spyOn(service as any, 'courseProjectAnnotate').mockImplementation(async (entries: unknown) => entries as any);
+
+        const saved = await service.updateCourseProjectByIdForUser('student-1', 'entry-1', {
+            studentInfo: { teacherEmail: 'teacherB@test.com' },
+        } as any);
+
+        expect((saved as any).studentInfo.teacherEmail).toBe('teacherB@test.com');
+    });
 });
 
 describe('PathsService — coursework submit/resubmit emails', () => {
@@ -1147,6 +1304,41 @@ describe('PathsService — FYP resubmission after rejection', () => {
         expect((saved as any).meritRibbon).toBeNull();
         expect((saved as any).supervisorApprovalNote).toBe('tighten the methodology section');
     });
+
+    it('refuses to redirect an already-submitted entry to a different supervisorEmail', async () => {
+        const rows: Record<string, unknown>[] = [
+            {
+                id: 'fyp-3',
+                userId: 'student-1',
+                status: 'submitted',
+                projectInfo: { supervisorEmail: 'supA@test.com', title: 'Solar audit' },
+            },
+        ];
+        const manager = {
+            getRepository: () => ({
+                findOne: jest.fn(async () => rows[0] ?? null),
+                create: jest.fn((data: Record<string, unknown>) => ({ ...data })),
+                save: jest.fn(async (row: Record<string, unknown>) => {
+                    rows[0] = row;
+                    return row;
+                }),
+            }),
+        };
+        const fypRepo = { manager: { transaction: jest.fn(async (fn: (m: unknown) => unknown) => fn(manager)) } };
+        const service = new PathsService(
+            {} as any, fypRepo as any, {} as any, makeInviteRepo() as any, {} as any, {} as any, {} as any,
+            { createNotification: jest.fn() } as any, {} as any,
+        );
+        jest.spyOn(service as any, 'syncFypInvites').mockResolvedValue(undefined);
+        jest.spyOn(service as any, 'fypAnnotate').mockImplementation(async (entries: unknown) => entries as any);
+
+        // A raw API call attempting to hijack review to a different supervisor account.
+        const saved = await service.upsertFyp('student-1', {
+            projectInfo: { supervisorEmail: 'supB@test.com', title: 'Solar audit' },
+        } as any);
+
+        expect((saved as any).projectInfo.supervisorEmail).toBe('supA@test.com');
+    });
 });
 
 describe('PathsService — FYP supervisor review', () => {
@@ -1684,5 +1876,134 @@ describe('PathsService — grader run limit is independent per path', () => {
             { picks: [{ entryId: 'fyp-1', rank: 1, of: 5, total: 90 }] } as any,
         );
         expect((fypResult as any).graderRuns).toEqual({ unlimited: false, used: 1, limit: 3 });
+    });
+});
+
+describe('PathsService — venture reviewPipeline forgery guard', () => {
+    const makeUpsertVentureService = (initialEntry: Record<string, unknown> | null) => {
+        const rows: Record<string, unknown>[] = initialEntry ? [initialEntry] : [];
+        const manager = {
+            getRepository: () => ({
+                findOne: jest.fn(async () => rows[0] ?? null),
+                create: jest.fn((data: Record<string, unknown>) => ({ ...data })),
+                save: jest.fn(async (row: Record<string, unknown>) => {
+                    rows[0] = row;
+                    return row;
+                }),
+            }),
+        };
+        const service = new PathsService(
+            {} as any, {} as any,
+            { manager: { transaction: jest.fn(async (fn: (m: unknown) => unknown) => fn(manager)) } } as any,
+            makeInviteRepo() as any, {} as any, {} as any, {} as any,
+            { createNotification: jest.fn() } as any, {} as any,
+        );
+        jest.spyOn(service as any, 'syncVentureInvites').mockResolvedValue(undefined);
+        jest.spyOn(service as any, 'ventureAnnotate').mockImplementation(async (entries: unknown) => entries as any);
+        jest.spyOn(service as any, 'withCompleteness').mockImplementation((entry: unknown) => entry);
+        return { service, rows };
+    };
+
+    it('never persists a client-forged terminal supervisorStatus, even while the venture stays a draft', async () => {
+        const { service, rows } = makeUpsertVentureService({
+            id: 'v-1',
+            userId: 'student-1',
+            status: 'draft',
+            reviewPipeline: { supervisorStatus: 'not_started' },
+        });
+
+        await service.upsertVenture('student-1', {
+            status: 'draft',
+            reviewPipeline: { supervisorStatus: 'approved' },
+        } as any);
+
+        expect((rows[0] as any).reviewPipeline.supervisorStatus).toBe('not_started');
+    });
+
+    it('still lets the student legitimately move reviewPipeline back to pending on submit', async () => {
+        const { service, rows } = makeUpsertVentureService({
+            id: 'v-1',
+            userId: 'student-1',
+            status: 'draft',
+            reviewPipeline: { supervisorStatus: 'not_started' },
+        });
+
+        await service.upsertVenture('student-1', {
+            status: 'submitted',
+            reviewPipeline: { supervisorStatus: 'pending' },
+        } as any);
+
+        expect((rows[0] as any).reviewPipeline.supervisorStatus).toBe('pending');
+        expect((rows[0] as any).status).toBe('submitted');
+    });
+
+    it('still resets a genuinely-approved venture back to pending on resubmit-after-edit', async () => {
+        const { service, rows } = makeUpsertVentureService({
+            id: 'v-1',
+            userId: 'student-1',
+            status: 'submitted',
+            reviewPipeline: { supervisorStatus: 'approved' },
+            meritRibbon: { rank: 1, of: 5 },
+        });
+
+        await service.upsertVenture('student-1', { ventureName: 'Renamed' } as any);
+
+        expect((rows[0] as any).reviewPipeline.supervisorStatus).toBe('pending');
+        expect((rows[0] as any).meritRibbon).toBeNull();
+    });
+
+    it('refuses to redirect an already-submitted venture to a different supervisorEmail', async () => {
+        const { service, rows } = makeUpsertVentureService({
+            id: 'v-1',
+            userId: 'student-1',
+            status: 'submitted',
+            academicSetup: { supervisorEmail: 'supA@test.com', supervisorName: 'Dr A' },
+        });
+
+        // A raw API call attempting to hijack review to a different supervisor account.
+        await service.upsertVenture('student-1', {
+            academicSetup: { supervisorEmail: 'supB@test.com', supervisorName: 'Dr B' },
+        } as any);
+
+        expect((rows[0] as any).academicSetup.supervisorEmail).toBe('supA@test.com');
+        expect((rows[0] as any).academicSetup.supervisorName).toBe('Dr A');
+    });
+});
+
+describe('PathsService — listVenturesForAdmin excludes drafts from decision-status queries', () => {
+    const makeAdminListService = (qbOverrides: Partial<Record<string, unknown>> = {}) => {
+        const qb: any = {
+            orderBy: jest.fn().mockReturnThis(),
+            andWhere: jest.fn().mockReturnThis(),
+            getMany: jest.fn().mockResolvedValue([]),
+            ...qbOverrides,
+        };
+        const ventureRepo = { createQueryBuilder: jest.fn().mockReturnValue(qb) };
+        const service = new PathsService(
+            {} as any, {} as any, ventureRepo as any, makeInviteRepo() as any, {} as any, {} as any, {} as any,
+            { createNotification: jest.fn() } as any, {} as any,
+        );
+        jest.spyOn(service as any, 'ventureAnnotate').mockImplementation(async (entries: unknown) => entries as any);
+        jest.spyOn(service as any, 'attachStudents').mockImplementation(async (entries: unknown) => entries as any);
+        return { service, qb };
+    };
+
+    it('requires status=submitted alongside an approved/rejected/revisions_requested filter', async () => {
+        const { service, qb } = makeAdminListService();
+        await service.listVenturesForAdmin(undefined, 'approved');
+        const statusFilterCalls = qb.andWhere.mock.calls.filter((call: unknown[]) =>
+            String(call[0]).includes('e.status'),
+        );
+        expect(statusFilterCalls).toHaveLength(1);
+        expect(statusFilterCalls[0][0]).toContain("'submitted'");
+    });
+
+    it('does not add the submitted-only filter for not_started (still-draft rows are the point)', async () => {
+        const { service, qb } = makeAdminListService();
+        await service.listVenturesForAdmin(undefined, 'not_started');
+        const statusFilterCalls = qb.andWhere.mock.calls.filter((call: unknown[]) =>
+            String(call[0]).includes('e.status'),
+        );
+        expect(statusFilterCalls).toHaveLength(0);
     });
 });

@@ -1,7 +1,7 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Index } from 'typeorm';
 
 export type PathGraderRunScope = 'faculty' | 'university';
-export type PathGraderRunKind = 'coursework' | 'fyp' | 'startup';
+export type PathGraderRunKind = 'coursework' | 'fyp' | 'startup' | 'community_service';
 
 /** Tracks how many times a faculty member or a university org has "run" a path's AI Grader (i.e.
  * called that path's merit-model notify/pin action) in a given calendar year — capped at 3 per

@@ -31,6 +31,8 @@ export class StudentReportsController {
     constructor(private readonly studentReportsService: StudentReportsService) { }
 
     @Post()
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.STUDENT, UserRole.SUPER_ADMIN)
     @UseInterceptors(FilesInterceptor('files', 50, {
         limits: studentReportUploadMulterLimits(),
         fileFilter: studentReportMulterFileFilter,
@@ -68,6 +70,8 @@ export class StudentReportsController {
     }
 
     @Post(':projectId/submit')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.STUDENT, UserRole.SUPER_ADMIN)
     @UseInterceptors(FilesInterceptor('files', 50, {
         limits: studentReportUploadMulterLimits(),
         fileFilter: studentReportMulterFileFilter,
@@ -91,6 +95,8 @@ export class StudentReportsController {
     }
 
     @Post('draft')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.STUDENT, UserRole.SUPER_ADMIN)
     @UseInterceptors(FilesInterceptor('files', 50, {
         limits: studentReportUploadMulterLimits(),
         fileFilter: studentReportMulterFileFilter,

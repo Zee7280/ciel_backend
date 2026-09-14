@@ -1,4 +1,4 @@
-import { BadRequestException, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { OpportunitiesService } from './opportunities.service';
 import { Opportunity } from './entities/opportunity.entity';
 
@@ -398,5 +398,59 @@ describe('OpportunitiesService — student edit/resubmit after faculty revision'
 
         expect((saved as any).workflowStage).toBe('pending_partner');
         expect((saved as any).facultyApprovalStatus).toBe('not_applicable');
+    });
+});
+
+describe('OpportunitiesService — universities do not create Community Service opportunities directly', () => {
+    const makeCreateService = (user: Record<string, unknown>, org: Record<string, unknown> | null) => {
+        const service = makeService({});
+        (service as any).usersRepository = { findOne: jest.fn().mockResolvedValue(user) };
+        (service as any).organizationsService = { getMyOrganization: jest.fn().mockResolvedValue(org) };
+        jest.spyOn(service as any, 'ensureProfileComplete').mockReturnValue(undefined);
+        jest.spyOn(service as any, 'validateSupervision').mockReturnValue(undefined);
+        jest.spyOn(service as any, 'validateSafetyDeclaration').mockReturnValue(undefined);
+        jest.spyOn(service as any, 'validateSubmissionConfirmations').mockReturnValue(undefined);
+        jest.spyOn(service as any, 'validateParticipationScope').mockReturnValue(undefined);
+        jest.spyOn(service as any, 'validateExternalPartner').mockReturnValue(undefined);
+        return service;
+    };
+
+    it('refuses a UserRole.UNIVERSITY caller outright', async () => {
+        const service = makeCreateService(
+            { id: 'uni-admin-1', role: 'university' },
+            { id: 'org-1', orgType: 'UNIVERSITY' },
+        );
+        await expect(service.create('uni-admin-1', {} as any)).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('refuses an ORGANIZATION_ADMIN whose org is a university', async () => {
+        const service = makeCreateService(
+            { id: 'org-admin-1', role: 'organization_admin' },
+            { id: 'org-1', orgType: 'UNIVERSITY' },
+        );
+        await expect(service.create('org-admin-1', {} as any)).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    // These two don't fully mock everything create() touches after the university check (opportunity
+    // repo/mail/notifications), so they assert on the one thing this test suite cares about: they
+    // must NOT be blocked by the new "universities don't create" guard specifically.
+    it('does not block an ORGANIZATION_ADMIN whose org is NGO/corporate on the university guard', async () => {
+        const service = makeCreateService(
+            { id: 'org-admin-2', role: 'organization_admin' },
+            { id: 'org-2', orgType: 'NGO' },
+        );
+        await expect(service.create('org-admin-2', {} as any)).rejects.not.toThrow(
+            "Universities do not create Community Service opportunities directly",
+        );
+    });
+
+    it("does not block FACULTY on the university guard, even when affiliated with a university org", async () => {
+        const service = makeCreateService(
+            { id: 'faculty-1', role: 'faculty' },
+            { id: 'org-1', orgType: 'UNIVERSITY' },
+        );
+        await expect(service.create('faculty-1', {} as any)).rejects.not.toThrow(
+            "Universities do not create Community Service opportunities directly",
+        );
     });
 });

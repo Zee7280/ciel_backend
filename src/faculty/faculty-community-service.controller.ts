@@ -26,7 +26,7 @@ export class FacultyCommunityServiceController {
     async awardNotify(@Request() req, @Body() dto: NotifyCommunityAwardDto) {
         const reports = await this.facultyReportsService.listAssignedReports(req.user.id, req.user.email);
         const pool = this.communityAward.cardsFrom(reports, true);
-        const data = await this.communityAward.notifyFromPool(pool, { ...dto, kind: 'fac' });
+        const data = await this.communityAward.notifyFromPool(pool, { ...dto, kind: 'fac' }, req.user.email);
         return { success: true, data };
     }
 }

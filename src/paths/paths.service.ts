@@ -617,9 +617,21 @@ export class PathsService implements OnModuleInit {
       justConnected = patched.justConnected;
       return repo.save(patched.entry);
     });
-    await this.syncCourseProjectInvites(saved, userId);
-    await this.notifyCourseworkTransition(saved, notify);
-    if (justConnected) await this.notifyCourseworkConnected(saved);
+    // Fire-and-forget: these send email (invite / transition / connected notices) and must never
+    // block the save response on a slow or unreachable mail server — a save should never hang for
+    // minutes just because notifying someone by email is slow. See the same pattern below on the
+    // FYP/Venture equivalents.
+    void this.syncCourseProjectInvites(saved, userId).catch((err) =>
+      this.logger.error(`syncCourseProjectInvites failed for ${saved.id}: ${(err as Error)?.message}`),
+    );
+    void this.notifyCourseworkTransition(saved, notify).catch((err) =>
+      this.logger.error(`notifyCourseworkTransition failed for ${saved.id}: ${(err as Error)?.message}`),
+    );
+    if (justConnected) {
+      void this.notifyCourseworkConnected(saved).catch((err) =>
+        this.logger.error(`notifyCourseworkConnected failed for ${saved.id}: ${(err as Error)?.message}`),
+      );
+    }
     const [annotated] = await this.courseProjectAnnotate([saved]);
     return annotated;
   }
@@ -745,9 +757,18 @@ export class PathsService implements OnModuleInit {
       justConnected = patched.justConnected;
       return repo.save(patched.entry);
     });
-    await this.syncCourseProjectInvites(saved, saved.userId);
-    await this.notifyCourseworkTransition(saved, notify);
-    if (justConnected) await this.notifyCourseworkConnected(saved);
+    // Fire-and-forget — see the comment on upsertCourseProject for why.
+    void this.syncCourseProjectInvites(saved, saved.userId).catch((err) =>
+      this.logger.error(`syncCourseProjectInvites failed for ${saved.id}: ${(err as Error)?.message}`),
+    );
+    void this.notifyCourseworkTransition(saved, notify).catch((err) =>
+      this.logger.error(`notifyCourseworkTransition failed for ${saved.id}: ${(err as Error)?.message}`),
+    );
+    if (justConnected) {
+      void this.notifyCourseworkConnected(saved).catch((err) =>
+        this.logger.error(`notifyCourseworkConnected failed for ${saved.id}: ${(err as Error)?.message}`),
+      );
+    }
     const [annotated] = await this.courseProjectAnnotate([saved]);
     return { ...annotated, isOwner: saved.userId === userId };
   }
@@ -1602,8 +1623,15 @@ export class PathsService implements OnModuleInit {
       justConnected = patched.justConnected;
       return repo.save(patched.entry);
     });
-    await this.syncFypInvites(saved, userId);
-    if (justConnected) await this.notifyFypConnected(saved);
+    // Fire-and-forget — see the comment on upsertCourseProject for why.
+    void this.syncFypInvites(saved, userId).catch((err) =>
+      this.logger.error(`syncFypInvites failed for ${saved.id}: ${(err as Error)?.message}`),
+    );
+    if (justConnected) {
+      void this.notifyFypConnected(saved).catch((err) =>
+        this.logger.error(`notifyFypConnected failed for ${saved.id}: ${(err as Error)?.message}`),
+      );
+    }
     const [annotated] = await this.fypAnnotate([saved]);
     return { ...annotated, isOwner: true };
   }
@@ -1708,8 +1736,15 @@ export class PathsService implements OnModuleInit {
       justConnected = patched.justConnected;
       return repo.save(patched.entry);
     });
-    await this.syncFypInvites(saved, saved.userId);
-    if (justConnected) await this.notifyFypConnected(saved);
+    // Fire-and-forget — see the comment on upsertCourseProject for why.
+    void this.syncFypInvites(saved, saved.userId).catch((err) =>
+      this.logger.error(`syncFypInvites failed for ${saved.id}: ${(err as Error)?.message}`),
+    );
+    if (justConnected) {
+      void this.notifyFypConnected(saved).catch((err) =>
+        this.logger.error(`notifyFypConnected failed for ${saved.id}: ${(err as Error)?.message}`),
+      );
+    }
     const [annotated] = await this.fypAnnotate([saved]);
     return { ...annotated, isOwner: saved.userId === userId };
   }
@@ -2145,7 +2180,10 @@ export class PathsService implements OnModuleInit {
         return repo.save(entry);
       },
     );
-    await this.syncVentureInvites(saved, userId);
+    // Fire-and-forget — see the comment on upsertCourseProject for why.
+    void this.syncVentureInvites(saved, userId).catch((err) =>
+      this.logger.error(`syncVentureInvites failed for ${saved.id}: ${(err as Error)?.message}`),
+    );
     const [annotated] = await this.ventureAnnotate([saved]);
     return this.withCompleteness(annotated);
   }

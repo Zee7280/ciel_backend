@@ -92,6 +92,12 @@ export type PlatformStatsPayload = {
   dividend_hourly_rate_pkr: number;
   partner_organisations: number;
   verified_projects_all_paths: number;
+  verified_by_path: {
+    community_service: number;
+    course_project: number;
+    fyp_thesis: number;
+    startup_business: number;
+  };
   cities_live: number;
   sdgs_touched_by_reports: number;
   partners_come_back_pct: number;
@@ -143,7 +149,7 @@ export class PlatformStatsService {
       avgCiiScore,
       verifiedRecords,
       communityLedger,
-      verifiedProjectsAllPaths,
+      verifiedByPath,
     ] = await Promise.all([
       this.countDistinctContributors(),
       this.countStudentsEnrolled(),
@@ -164,7 +170,7 @@ export class PlatformStatsService {
       this.getAverageCiiScore(),
       this.countVerifiedRecords(),
       this.computeCommunityLedger(),
-      this.countVerifiedProjectsAllPaths(),
+      this.countVerifiedByPath(),
     ]);
 
     const activeProjects = opportunities.length;
@@ -207,7 +213,12 @@ export class PlatformStatsService {
       community_dividend_pkr: communityLedger.communityDividendPkr,
       dividend_hourly_rate_pkr: DIVIDEND_HOURLY_RATE_PKR,
       partner_organisations: communityLedger.partnerOrganisations,
-      verified_projects_all_paths: verifiedProjectsAllPaths,
+      verified_projects_all_paths:
+        verifiedByPath.community_service +
+        verifiedByPath.course_project +
+        verifiedByPath.fyp_thesis +
+        verifiedByPath.startup_business,
+      verified_by_path: verifiedByPath,
       cities_live: communityLedger.cities.length,
       sdgs_touched_by_reports: communityLedger.sdgsTouched,
       partners_come_back_pct: communityLedger.partnersComeBackPct,
@@ -760,8 +771,8 @@ export class PlatformStatsService {
 
   /** "Verified projects" spans all four paths — unlike computeCommunityLedger, this only needs a
    * count per entity's own established "verified" definition (see each path's own service). */
-  private async countVerifiedProjectsAllPaths(): Promise<number> {
-    const [communityServiceProjects, courseProjects, fyps, ventures] =
+  private async countVerifiedByPath(): Promise<PlatformStatsPayload['verified_by_path']> {
+    const [communityService, courseProject, fypThesis, ventures] =
       await Promise.all([
         this.countVerifiedCommunityServiceProjects(),
         this.courseProjectRepository.count({
@@ -772,9 +783,12 @@ export class PlatformStatsService {
         }),
         this.ventureRepository.find(),
       ]);
-    const verifiedVentures = ventures.filter(
-      (v) => computeVentureGates(v).showcaseOk,
-    ).length;
-    return communityServiceProjects + courseProjects + fyps + verifiedVentures;
+    return {
+      community_service: communityService,
+      course_project: courseProject,
+      fyp_thesis: fypThesis,
+      startup_business: ventures.filter((v) => computeVentureGates(v).showcaseOk)
+        .length,
+    };
   }
 }

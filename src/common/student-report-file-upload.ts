@@ -2,9 +2,13 @@ import { BadRequestException } from '@nestjs/common';
 import * as path from 'path';
 
 /**
- * Student report / evidence uploads — keep in sync with FE `REPORT_ATTACHMENT_ACCEPT`
- * (`ciel_frontend/src/utils/reportAttachmentAccept.ts`) and HTML file inputs that use it.
- * Phone uploads often use HEIC/WebP; MIME fallback covers missing filename extensions.
+ * Student report / evidence uploads.
+ *
+ * Coursework supporting files (and path evidence) are stored on public S3 as opaque blobs —
+ * so we allow any document/media/archive/design type students actually attach. We only block
+ * types that can execute or XSS if opened from the public URL (HTML/JS/SVG/executables).
+ *
+ * Keep `REPORT_ATTACHMENT_ACCEPT` as a picker hint, not a hard filter.
  */
 export const STUDENT_REPORT_ALLOWED_EXTENSIONS = new Set([
     '.jpg',
@@ -57,22 +61,41 @@ export const STUDENT_REPORT_VIDEO_EXTENSIONS = new Set([
     '.divx',
 ]);
 
-const ALLOWED_MIMETYPES = new Set([
-    'image/jpeg',
-    'image/jpg',
-    'image/pjpeg',
-    'image/png',
-    'image/webp',
-    'image/heic',
-    'image/heif',
-    'application/pdf',
-    'application/msword',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    'application/vnd.ms-powerpoint',
-    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-    'application/vnd.ms-excel',
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    'text/csv',
+/** Public-bucket XSS / executable payloads — everything else is stored, not executed. */
+const BLOCKED_EXTENSIONS = new Set([
+    '.html',
+    '.htm',
+    '.xhtml',
+    '.js',
+    '.mjs',
+    '.cjs',
+    '.php',
+    '.phtml',
+    '.exe',
+    '.bat',
+    '.cmd',
+    '.com',
+    '.scr',
+    '.dll',
+    '.sh',
+    '.ps1',
+    '.svg',
+    '.svgz',
+    '.wasm',
+    '.jar',
+    '.hta',
+    '.vbs',
+    '.wsf',
+]);
+
+const BLOCKED_MIMETYPES = new Set([
+    'text/html',
+    'application/xhtml+xml',
+    'image/svg+xml',
+    'text/javascript',
+    'application/javascript',
+    'application/x-javascript',
+    'application/wasm',
 ]);
 
 export const STUDENT_REPORT_MAX_FILE_BYTES = 500 * 1024 * 1024;
@@ -99,24 +122,14 @@ export function studentReportUploadMulterLimits(): { fileSize: number; fieldSize
     };
 }
 
-function isAllowedStudentReportFile(filename: string | undefined, contentType: string | undefined): boolean {
+function isBlockedStudentReportFile(filename: string | undefined, contentType: string | undefined): boolean {
     const ext = path.extname(filename || '').toLowerCase();
     const mime = normalizeMime(contentType);
+    return BLOCKED_EXTENSIONS.has(ext) || BLOCKED_MIMETYPES.has(mime);
+}
 
-    if (STUDENT_REPORT_ALLOWED_EXTENSIONS.has(ext)) {
-        return true;
-    }
-
-    if (STUDENT_REPORT_VIDEO_EXTENSIONS.has(ext)) {
-        return true;
-    }
-
-    if (mime.startsWith('video/')) {
-        return true;
-    }
-
-    /* Mobile clients sometimes omit an extension — accept trusted image/doc MIME types. */
-    return !ext && ALLOWED_MIMETYPES.has(mime);
+function isAllowedStudentReportFile(filename: string | undefined, contentType: string | undefined): boolean {
+    return !isBlockedStudentReportFile(filename, contentType);
 }
 
 export function assertStudentReportUploadMeta(meta: {
@@ -145,7 +158,7 @@ export function assertStudentReportUploadMeta(meta: {
     if (!isAllowedStudentReportFile(filename, contentType)) {
         const label = path.extname(filename).toLowerCase() || contentType || '(unknown type)';
         throw new BadRequestException(
-            `File type not allowed (${label}). Use photos, PDF/Word, or common video formats (MP4, MOV, WebM, etc.).`,
+            `File type not allowed (${label}). Upload documents, photos, video, sheets, zip archives, or design files — not executable or web-script files.`,
         );
     }
 
@@ -172,7 +185,7 @@ export function studentReportMulterFileFilter(
     const label = ext || mime || '(unknown type)';
     callback(
         new BadRequestException(
-            `File type not allowed (${label}). Use photos, PDF/Word, or common video formats (MP4, MOV, WebM, etc.).`,
+            `File type not allowed (${label}). Upload documents, photos, video, sheets, zip archives, or design files — not executable or web-script files.`,
         ),
         false,
     );

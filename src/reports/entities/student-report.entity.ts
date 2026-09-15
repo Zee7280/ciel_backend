@@ -1,13 +1,13 @@
 import {
-    Entity,
-    Column,
-    PrimaryGeneratedColumn,
-    CreateDateColumn,
-    UpdateDateColumn,
-    ManyToOne,
-    JoinColumn,
-    BeforeInsert,
-    BeforeUpdate,
+  Entity,
+  Column,
+  PrimaryGeneratedColumn,
+  CreateDateColumn,
+  UpdateDateColumn,
+  ManyToOne,
+  JoinColumn,
+  BeforeInsert,
+  BeforeUpdate,
 } from 'typeorm';
 import { randomUUID } from 'crypto';
 import { User } from '../../users/entities/user.entity';
@@ -15,342 +15,398 @@ import { Opportunity } from '../../opportunities/entities/opportunity.entity';
 
 @Entity('student_reports')
 export class StudentReport {
-    @PrimaryGeneratedColumn('uuid')
-    id: string;
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
 
-    @ManyToOne(() => User, { onDelete: 'CASCADE' })
-    @JoinColumn({ name: 'studentId' })
-    student: User;
+  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'studentId' })
+  student: User;
 
-    @Column()
-    studentId: string;
+  @Column()
+  studentId: string;
 
-    @ManyToOne(() => Opportunity, { nullable: true, onDelete: 'CASCADE' })
-    @JoinColumn({ name: 'opportunityId' })
-    opportunity: Opportunity;
+  @ManyToOne(() => Opportunity, { nullable: true, onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'opportunityId' })
+  opportunity: Opportunity;
 
-    @Column({ nullable: true })
-    opportunityId: string;
+  @Column({ nullable: true })
+  opportunityId: string;
 
-    @Column({ nullable: true })
-    project_id: string;
+  @Column({ nullable: true })
+  project_id: string;
 
-    /** Opaque token for public QR verification (never use raw report/opportunity id in QR when set). */
-    @Column({ name: 'verification_public_slug', type: 'varchar', length: 36, nullable: true, unique: true })
-    verificationPublicSlug: string | null;
+  /** Opaque token for public QR verification (never use raw report/opportunity id in QR when set). */
+  @Column({
+    name: 'verification_public_slug',
+    type: 'varchar',
+    length: 36,
+    nullable: true,
+    unique: true,
+  })
+  verificationPublicSlug: string | null;
 
-    @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
-    @JoinColumn({ name: 'facultyId' })
-    faculty: User;
+  @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'facultyId' })
+  faculty: User;
 
-    @Column({ type: 'uuid', nullable: true })
-    facultyId: string | null;
+  @Column({ type: 'uuid', nullable: true })
+  facultyId: string | null;
 
-    @Column({ default: 'pending' })
-    faculty_status: string; // 'pending', 'approved', 'rejected'
+  @Column({ default: 'pending' })
+  faculty_status: string; // 'pending', 'approved', 'rejected'
 
-    @Column({ type: 'text', nullable: true })
-    faculty_remarks: string;
+  @Column({ type: 'text', nullable: true })
+  faculty_remarks: string;
 
-    @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
-    submission_date: Date;
+  @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
+  submission_date: Date;
 
-    /** Last time the student submitted the report for partner/admin review (aligned with submission_date on submit). */
-    @Column({ name: 'report_submitted_at', type: 'timestamptz', nullable: true })
-    reportSubmittedAt: Date | null;
+  /** Last time the student submitted the report for partner/admin review (aligned with submission_date on submit). */
+  @Column({ name: 'report_submitted_at', type: 'timestamptz', nullable: true })
+  reportSubmittedAt: Date | null;
 
-    @Column({ name: 'partner_approved_at', type: 'timestamptz', nullable: true })
-    partnerApprovedAt: Date | null;
+  @Column({ name: 'partner_approved_at', type: 'timestamptz', nullable: true })
+  partnerApprovedAt: Date | null;
 
-    @Column({ name: 'admin_approved_at', type: 'timestamptz', nullable: true })
-    adminApprovedAt: Date | null;
+  @Column({ name: 'admin_approved_at', type: 'timestamptz', nullable: true })
+  adminApprovedAt: Date | null;
 
-    @Column({ default: 'draft' })
-    status: string; // 'draft', 'submitted', 'partner_verified', 'payment_pending' (legacy), 'payment_under_review', 'verified', 'rejected', 'paid'
+  @Column({ default: 'draft' })
+  status: string; // 'draft', 'submitted', 'partner_verified', 'payment_pending' (legacy), 'payment_under_review', 'verified', 'rejected', 'paid'
 
-    @Column({ default: 'pending' })
-    partner_status: string; // 'pending', 'approved', 'rejected'
+  @Column({ default: 'pending' })
+  partner_status: string; // 'pending', 'approved', 'rejected'
 
-    @Column({ default: 'pending' })
-    admin_status: string; // 'pending', 'approved', 'rejected'
+  @Column({ default: 'pending' })
+  admin_status: string; // 'pending', 'approved', 'rejected'
 
-    @Column({ type: 'text', nullable: true })
-    admin_feedback: string;
+  @Column({ type: 'text', nullable: true })
+  admin_feedback: string;
 
-    /** Badges pinned when a stakeholder runs the community-service award model (faculty / partner / university / CIEL). */
-    @Column({ type: 'jsonb', nullable: true })
-    awardBadges?: Array<{
-        kind: 'fac' | 'par' | 'uni' | 'ciel';
-        label: string;
-        rank: number;
-        of: number;
-        score: number;
-        scope: string;
-        at: string;
-    }> | null;
+  /** Badges pinned when a stakeholder runs the community-service award model (faculty / partner / university / CIEL). */
+  @Column({ type: 'jsonb', nullable: true })
+  awardBadges?: Array<{
+    kind: 'fac' | 'par' | 'uni' | 'ciel';
+    label: string;
+    rank: number;
+    of: number;
+    score: number;
+    scope: string;
+    at: string;
+  }> | null;
 
-    // Auto-Generated Summary Fields (Section 2 Context)
-    @Column({ type: 'text', nullable: true })
-    summary_text_generated: string;
+  // Auto-Generated Summary Fields (Section 2 Context)
+  @Column({ type: 'text', nullable: true })
+  summary_text_generated: string;
 
-    @Column({ nullable: true })
-    problem_category: string;
+  @Column({ nullable: true })
+  problem_category: string;
 
-    @Column({ nullable: true })
-    primary_beneficiary: string;
+  @Column({ nullable: true })
+  primary_beneficiary: string;
 
-    @Column({ nullable: true })
-    baseline_evidence_source: string;
+  @Column({ nullable: true })
+  baseline_evidence_source: string;
 
-    @Column({ nullable: true })
-    discipline_alignment: string;
+  @Column({ nullable: true })
+  discipline_alignment: string;
 
-    // Section 3: SDG Mapping Metadata
-    @Column({ type: 'int', nullable: true })
-    primary_sdg_goal: number | null;
+  // Section 3: SDG Mapping Metadata
+  @Column({ type: 'int', nullable: true })
+  primary_sdg_goal: number | null;
 
-    @Column({ type: 'varchar', nullable: true })
-    primary_sdg_target: string | null;
+  @Column({ type: 'varchar', nullable: true })
+  primary_sdg_target: string | null;
 
-    @Column({ type: 'varchar', nullable: true })
-    primary_sdg_indicator: string | null;
+  @Column({ type: 'varchar', nullable: true })
+  primary_sdg_indicator: string | null;
 
-    @Column({ type: 'text', nullable: true })
+  @Column({ type: 'text', nullable: true })
+  contribution_intent_statement: string;
+
+  @Column({ default: 'pending' })
+  sdg_validation_status: string; // 'pending', 'validated', 'weak'
+
+  @Column({ default: 'preliminary' })
+  sdg_summary_stage: string; // 'preliminary', 'validated'
+
+  // Section 1: Participation (Standardized 11-section structure)
+  @Column({ type: 'jsonb', nullable: true })
+  section1: {
+    participation_type: 'individual' | 'team';
+    faculty_supervisor_email?: string;
+    team_lead: {
+      name: string;
+      fullName?: string;
+      cnic: string;
+      mobile: string;
+      email: string;
+      university: string;
+      degree: string;
+      year: string;
+      role?: string;
+      hours?: string;
+      verified?: boolean;
+    };
+    team_members?: Array<{
+      name: string;
+      fullName?: string;
+      cnic: string;
+      mobile: string;
+      university: string;
+      program: string;
+      role: string;
+      hours: string;
+      verified?: boolean;
+    }>;
+    attendance_logs: Array<{
+      id: string;
+      date: string;
+      start_time: string;
+      end_time: string;
+      location: string;
+      activity_type: string;
+      description: string;
+      hours: number;
+      entryStatus?: string;
+    }>;
+    metrics: {
+      total_verified_hours: number;
+      total_active_days: number;
+      engagement_span: number;
+      attendance_frequency: number;
+      weekly_continuity: number;
+      eis_score: number;
+      engagement_category: string;
+      hec_compliance: string;
+    };
+    privacy_consent: boolean;
+    verified_summary?: string;
+    media_urls?: string[];
+  };
+
+  // Section 2: Project Context
+  @Column({ type: 'jsonb', nullable: true })
+  section2: {
+    problem_statement: string;
+    discipline: string;
+    discipline_contribution: string;
+    baseline_evidence: string;
+    baseline_evidence_other?: string;
+    problem_category?: string;
+    primary_beneficiary?: string;
+    summary_text?: string;
+    media_urls?: string[];
+  };
+
+  // Section 3: SDG Contribution Mapping
+  @Column({ type: 'jsonb', nullable: true })
+  section3: {
+    primary_sdg: {
+      goal_number: number | null;
+      goal_title: string;
+      target_code: string;
+      indicator_code: string;
+    };
     contribution_intent_statement: string;
+    secondary_sdgs: Array<{
+      goal_number: number;
+      justification_text: string;
+      status: 'provisional' | 'validated' | 'rejected';
+    }>;
+    summary_text?: string;
+    media_urls?: string[];
+  };
 
-    @Column({ default: 'pending' })
-    sdg_validation_status: string; // 'pending', 'validated', 'weak'
+  // Section 4: Activities (Expanded)
+  @Column({ type: 'jsonb', nullable: true })
+  section4: {
+    activity_type: string;
+    delivery_mode: string;
+    total_sessions: string;
+    duration_val: string;
+    duration_unit: string;
+    total_beneficiaries: string;
+    my_role: string;
+    my_hours: string;
+    my_sessions: string;
+    my_beneficiaries: string;
+    my_output: string;
+    beneficiary_categories: string[];
+    media_urls?: string[];
+  };
 
-    @Column({ default: 'preliminary' })
-    sdg_summary_stage: string; // 'preliminary', 'validated'
+  // Section 5: Outcomes (Detailed Metrics)
+  @Column({ type: 'jsonb', nullable: true })
+  section5: {
+    observed_change: string;
+    outcome_area: string;
+    metric: string;
+    baseline: string;
+    endline: string;
+    unit: string;
+    confidence_level: string;
+    challenges: string;
+    media_urls?: string[];
+  };
 
-    // Section 1: Participation (Standardized 11-section structure)
-    @Column({ type: 'jsonb', nullable: true })
-    section1: {
-        participation_type: 'individual' | 'team';
-        faculty_supervisor_email?: string;
-        team_lead: {
-            name: string;
-            fullName?: string;
-            cnic: string;
-            mobile: string;
-            email: string;
-            university: string;
-            degree: string;
-            year: string;
-            role?: string;
-            hours?: string;
-            verified?: boolean;
-        };
-        team_members?: Array<{
-            name: string;
-            fullName?: string;
-            cnic: string;
-            mobile: string;
-            university: string;
-            program: string;
-            role: string;
-            hours: string;
-            verified?: boolean;
-        }>;
-        attendance_logs: Array<{
-            id: string;
-            date: string;
-            start_time: string;
-            end_time: string;
-            location: string;
-            activity_type: string;
-            description: string;
-            hours: number;
-            entryStatus?: string;
-        }>;
-        metrics: {
-            total_verified_hours: number;
-            total_active_days: number;
-            engagement_span: number;
-            attendance_frequency: number;
-            weekly_continuity: number;
-            eis_score: number;
-            engagement_category: string;
-            hec_compliance: string;
-        };
-        privacy_consent: boolean;
-        verified_summary?: string;
-        media_urls?: string[];
+  // Section 6: Resources (Structured)
+  @Column({ type: 'jsonb', nullable: true })
+  section6: {
+    use_resources: 'yes' | 'no';
+    resources: Array<{
+      type: string;
+      amount: string;
+      unit: string;
+      source: string;
+      purpose: string;
+      verification: string;
+    }>;
+    media_urls?: string[];
+  };
+
+  // Section 7: Partnerships (Structured)
+  @Column({ type: 'jsonb', nullable: true })
+  section7: {
+    has_partners: 'yes' | 'no';
+    partners: Array<{
+      name: string;
+      type: string;
+      role: string;
+      contribution: string[];
+      verification: string;
+    }>;
+    formalization_status: string[];
+    media_urls?: string[];
+  };
+
+  // Section 8: Evidence (Expanded)
+  @Column({ type: 'jsonb', nullable: true })
+  section8: {
+    evidence_types: string[];
+    description: string;
+    media_visible: 'public' | 'limited' | 'internal';
+    ethical_compliance: {
+      authentic: boolean;
+      informed_consent: boolean;
+      no_harm: boolean;
+      privacy_respected: boolean;
     };
+    partner_verification: boolean;
+    media_urls?: string[];
+  };
 
-    // Section 2: Project Context
-    @Column({ type: 'jsonb', nullable: true })
-    section2: {
-        problem_statement: string;
-        discipline: string;
-        discipline_contribution: string;
-        baseline_evidence: string;
-        baseline_evidence_other?: string;
-        problem_category?: string;
-        primary_beneficiary?: string;
-        summary_text?: string;
-        media_urls?: string[];
+  // Section 9: Reflection (Academic Integration)
+  @Column({ type: 'jsonb', nullable: true })
+  section9: {
+    academic_integration: string;
+    personal_learning: string;
+    academic_application: string;
+    sustainability_reflection: string;
+    competency_scores: {
+      cognitive: number;
+      practical: number;
+      social: number;
+      transformative: number;
     };
+    strongest_competency: string;
+    media_urls?: string[];
+  };
 
-    // Section 3: SDG Contribution Mapping
-    @Column({ type: 'jsonb', nullable: true })
-    section3: {
-        primary_sdg: {
-            goal_number: number | null;
-            goal_title: string;
-            target_code: string;
-            indicator_code: string;
-        };
-        contribution_intent_statement: string;
-        secondary_sdgs: Array<{
-            goal_number: number;
-            justification_text: string;
-            status: 'provisional' | 'validated' | 'rejected';
-        }>;
-        summary_text?: string;
-        media_urls?: string[];
+  // Section 10: Sustainability (Planning)
+  @Column({ type: 'jsonb', nullable: true })
+  section10: {
+    continuation_status: 'yes' | 'partially' | 'no';
+    continuation_details: string;
+    mechanisms: string[];
+    scaling_potential: string;
+    policy_influence: string;
+    media_urls?: string[];
+  };
+
+  // Section 11: Final Intelligence Summary
+  @Column({ type: 'jsonb', nullable: true })
+  section11: {
+    ai_generated_impact_score?: number;
+    institutional_alignment_score?: number;
+    verified_narrative?: string;
+  };
+
+  /** Composite Impact Index v2 snapshot (server-recomputed from the AI's per-criterion anchors). */
+  @Column({ type: 'jsonb', nullable: true })
+  ciiV2?: Record<string, unknown> | null;
+
+  /** Faculty approve+lock decision for the CII v2 score — immutable once locked. */
+  @Column({ type: 'jsonb', nullable: true })
+  ciiV2Lock?: {
+    locked: boolean;
+    hash: string;
+    lockedAt: string;
+    lockedByFacultyId: string;
+    facultyNote?: string;
+    // Phase 2: Audit trail fields
+    aiRecommendedScore?: number;
+    facultyApprovedScore?: number;
+    scoreWasAdjusted?: boolean;
+    scoreAdjustmentReason?: string;
+    criteriaOverrides?: Record<
+      string,
+      { aiAnchor: number; facultyAnchor: number; reason: string }
+    >;
+  } | null;
+
+  /**
+   * Phase 4: Independent AI analyses run from My Impact Wall.
+   *
+   * These do NOT overwrite the faculty-approved record. Each analysis is
+   * stored separately with timestamp and who ran it, creating an audit trail.
+   * Authorized stakeholders (Faculty, University, CIEL PK) can run additional
+   * analyses without disturbing the official approved score.
+   */
+  @Column({ type: 'jsonb', nullable: true })
+  independentAiAnalyses?: Array<{
+    id: string;
+    runAt: string;
+    runByUserId: string;
+    runByRole: 'faculty' | 'university' | 'ciel_admin';
+    runByName?: string;
+    score: number;
+    level?: { level: number; name: string; quality: string };
+    sections?: Array<{
+      id: number;
+      title: string;
+      score: number;
+      weight: number;
+      good?: string;
+      limit?: string;
+    }>;
+    bonus?: {
+      effort: number;
+      resources: number;
+      partners: number;
+      total: number;
     };
-
-    // Section 4: Activities (Expanded)
-    @Column({ type: 'jsonb', nullable: true })
-    section4: {
-        activity_type: string;
-        delivery_mode: string;
-        total_sessions: string;
-        duration_val: string;
-        duration_unit: string;
-        total_beneficiaries: string;
-        my_role: string;
-        my_hours: string;
-        my_sessions: string;
-        my_beneficiaries: string;
-        my_output: string;
-        beneficiary_categories: string[];
-        media_urls?: string[];
+    integrityPenalty?: number;
+    feedback?: {
+      opening_praise?: string;
+      why_score_is_high_or_low?: string;
+      encouragement?: string;
+      five_specific_actions?: string[];
     };
+    note?: string;
+  }> | null;
 
-    // Section 5: Outcomes (Detailed Metrics)
-    @Column({ type: 'jsonb', nullable: true })
-    section5: {
-        observed_change: string;
-        outcome_area: string;
-        metric: string;
-        baseline: string;
-        endline: string;
-        unit: string;
-        confidence_level: string;
-        challenges: string;
-        media_urls?: string[];
-    };
+  @CreateDateColumn()
+  createdAt: Date;
 
-    // Section 6: Resources (Structured)
-    @Column({ type: 'jsonb', nullable: true })
-    section6: {
-        use_resources: 'yes' | 'no';
-        resources: Array<{
-            type: string;
-            amount: string;
-            unit: string;
-            source: string;
-            purpose: string;
-            verification: string;
-        }>;
-        media_urls?: string[];
-    };
+  @UpdateDateColumn()
+  updatedAt: Date;
 
-    // Section 7: Partnerships (Structured)
-    @Column({ type: 'jsonb', nullable: true })
-    section7: {
-        has_partners: 'yes' | 'no';
-        partners: Array<{
-            name: string;
-            type: string;
-            role: string;
-            contribution: string[];
-            verification: string;
-        }>;
-        formalization_status: string[];
-        media_urls?: string[];
-    };
-
-    // Section 8: Evidence (Expanded)
-    @Column({ type: 'jsonb', nullable: true })
-    section8: {
-        evidence_types: string[];
-        description: string;
-        media_visible: 'public' | 'limited' | 'internal';
-        ethical_compliance: {
-            authentic: boolean;
-            informed_consent: boolean;
-            no_harm: boolean;
-            privacy_respected: boolean;
-        };
-        partner_verification: boolean;
-        media_urls?: string[];
-    };
-
-    // Section 9: Reflection (Academic Integration)
-    @Column({ type: 'jsonb', nullable: true })
-    section9: {
-        academic_integration: string;
-        personal_learning: string;
-        academic_application: string;
-        sustainability_reflection: string;
-        competency_scores: {
-            cognitive: number;
-            practical: number;
-            social: number;
-            transformative: number;
-        };
-        strongest_competency: string;
-        media_urls?: string[];
-    };
-
-    // Section 10: Sustainability (Planning)
-    @Column({ type: 'jsonb', nullable: true })
-    section10: {
-        continuation_status: 'yes' | 'partially' | 'no';
-        continuation_details: string;
-        mechanisms: string[];
-        scaling_potential: string;
-        policy_influence: string;
-        media_urls?: string[];
-    };
-
-    // Section 11: Final Intelligence Summary
-    @Column({ type: 'jsonb', nullable: true })
-    section11: {
-        ai_generated_impact_score?: number;
-        institutional_alignment_score?: number;
-        verified_narrative?: string;
-    };
-
-    /** Composite Impact Index v2 snapshot (server-recomputed from the AI's per-criterion anchors). */
-    @Column({ type: 'jsonb', nullable: true })
-    ciiV2?: Record<string, unknown> | null;
-
-    /** Faculty approve+lock decision for the CII v2 score — immutable once locked. */
-    @Column({ type: 'jsonb', nullable: true })
-    ciiV2Lock?: {
-        locked: boolean;
-        hash: string;
-        lockedAt: string;
-        lockedByFacultyId: string;
-        facultyNote?: string;
-    } | null;
-
-    @CreateDateColumn()
-    createdAt: Date;
-
-    @UpdateDateColumn()
-    updatedAt: Date;
-
-    @BeforeInsert()
-    @BeforeUpdate()
-    assignVerificationPublicSlugIfNeeded(): void {
-        if (!this.verificationPublicSlug?.trim()) {
-            this.verificationPublicSlug = randomUUID();
-        }
+  @BeforeInsert()
+  @BeforeUpdate()
+  assignVerificationPublicSlugIfNeeded(): void {
+    if (!this.verificationPublicSlug?.trim()) {
+      this.verificationPublicSlug = randomUUID();
     }
+  }
 }

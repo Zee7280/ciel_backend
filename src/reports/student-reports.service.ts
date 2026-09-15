@@ -621,15 +621,30 @@ export class StudentReportsService {
   /** Same URL-sniffing heuristic as the student impact-history endpoint — kept local to this
    * service to avoid a cross-module dependency on StudentsService. */
   private pickPdfUrlFromReport(report: StudentReport): string | null {
-    const buckets = [report.section8, report.section2, report.section5, report.section7, report.section10];
+    const buckets = [
+      report.section8,
+      report.section2,
+      report.section5,
+      report.section7,
+      report.section10,
+    ];
     const urls = buckets.flatMap((b) => this.collectHttpsUrls(b));
     return urls.find((u) => /\.pdf($|\?)/i.test(u)) ?? null;
   }
 
   private pickCertificateUrlFromReport(report: StudentReport): string | null {
-    const buckets = [report.section8, report.section2, report.section3, report.section5, report.section11];
+    const buckets = [
+      report.section8,
+      report.section2,
+      report.section3,
+      report.section5,
+      report.section11,
+    ];
     const urls = buckets.flatMap((b) => this.collectHttpsUrls(b));
-    return urls.find((u) => /certificat/i.test(u) || /\/certificates?\//i.test(u)) ?? null;
+    return (
+      urls.find((u) => /certificat/i.test(u) || /\/certificates?\//i.test(u)) ??
+      null
+    );
   }
 
   private mapReportListing(
@@ -751,7 +766,10 @@ export class StudentReportsService {
    * already computes via CommunityAwardService.toCard() — reuses the identical pure scoring
    * functions (not the service itself, to avoid a cross-module DI dependency) so the student's own
    * wall shows the exact same total/level, never a second, drifting computation. */
-  private computeCommunityAwardTotal(report: StudentReport): { total: number; level: ReturnType<typeof communityServiceLevel> } {
+  private computeCommunityAwardTotal(report: StudentReport): {
+    total: number;
+    level: ReturnType<typeof communityServiceLevel>;
+  } {
     const s1 = report.section1 as StudentReport['section1'] | null;
     const s2 = report.section2 as StudentReport['section2'] | null;
     const s3 = report.section3 as StudentReport['section3'] | null;
@@ -761,8 +779,23 @@ export class StudentReportsService {
     const s8 = report.section8 as StudentReport['section8'] | null;
     const s10 = report.section10 as StudentReport['section10'] | null;
     const hours = Number(s1?.metrics?.total_verified_hours ?? 0) || 0;
-    const sessions = Number(s4?.total_sessions ?? s4?.my_sessions ?? s1?.metrics?.total_active_days ?? 0) || 0;
-    const evidenceCount = countMedia([s1, s2, s3, s4 as { media_urls?: unknown }, s5, s7, s8, s10]);
+    const sessions =
+      Number(
+        s4?.total_sessions ??
+          s4?.my_sessions ??
+          s1?.metrics?.total_active_days ??
+          0,
+      ) || 0;
+    const evidenceCount = countMedia([
+      s1,
+      s2,
+      s3,
+      s4 as { media_urls?: unknown },
+      s5,
+      s7,
+      s8,
+      s10,
+    ]);
     const baseline = String(s5?.baseline ?? '').trim();
     const endline = String(s5?.endline ?? '').trim();
     const change = String(s5?.observed_change ?? '').trim();
@@ -774,7 +807,8 @@ export class StudentReportsService {
       hasBaseline: !!baseline,
       hasEndline: !!endline,
       hasMeasuredChange: !!change,
-      continuation: (s10?.continuation_status as 'yes' | 'partially' | 'no' | '') || '',
+      continuation:
+        (s10?.continuation_status as 'yes' | 'partially' | 'no' | '') || '',
       partnerCount: Array.isArray(s7?.partners) ? s7.partners.length : 0,
     });
     return { total: scored.total, level: communityServiceLevel(scored.total) };
@@ -958,7 +992,10 @@ export class StudentReportsService {
     return findCanonicalTeamLeadStudentId(
       this.participantRepository,
       projectKey,
-      { teamId: participation.teamId, applicationId: participation.applicationId },
+      {
+        teamId: participation.teamId,
+        applicationId: participation.applicationId,
+      },
     );
   }
 
@@ -1112,10 +1149,11 @@ export class StudentReportsService {
 
       const scopeKey = this.participationScopeKey(projectKey, participation);
       if (!canonicalLeadByScope.has(scopeKey)) {
-        const canonicalId = await this.resolveCanonicalTeamLeadStudentIdForScope(
-          projectKey,
-          participation,
-        );
+        const canonicalId =
+          await this.resolveCanonicalTeamLeadStudentIdForScope(
+            projectKey,
+            participation,
+          );
         canonicalLeadByScope.set(scopeKey, canonicalId);
       }
 
@@ -1420,7 +1458,8 @@ export class StudentReportsService {
       }
 
       if (!canonicalLeadByScope.has(scopeKey)) {
-        const canonicalId = await this.resolveCanonicalLeadForScopeKey(scopeKey);
+        const canonicalId =
+          await this.resolveCanonicalLeadForScopeKey(scopeKey);
         canonicalLeadByScope.set(scopeKey, canonicalId);
       }
 
@@ -1521,12 +1560,12 @@ export class StudentReportsService {
     const studentIds = new Set<string>();
     const projectIds = new Set<string>();
     for (const report of reports) {
-      const projectId = (report.opportunityId || report.project_id || '').trim();
-      if (
-        report.studentId &&
-        projectId &&
-        this.looksLikeUuid(projectId)
-      ) {
+      const projectId = (
+        report.opportunityId ||
+        report.project_id ||
+        ''
+      ).trim();
+      if (report.studentId && projectId && this.looksLikeUuid(projectId)) {
         studentIds.add(report.studentId);
         projectIds.add(projectId);
       }
@@ -2090,7 +2129,9 @@ export class StudentReportsService {
           ) {
             report.partner_status = 'pending';
           }
-          if (String(report.faculty_status || '').toLowerCase() === 'rejected') {
+          if (
+            String(report.faculty_status || '').toLowerCase() === 'rejected'
+          ) {
             report.faculty_status = 'pending';
           }
           report.adminApprovedAt = null;
@@ -2216,8 +2257,13 @@ export class StudentReportsService {
       }
       if (opportunityIdFromDto) {
         const requiredHoursPerStudent =
-          Number((opportunityForSummary?.timeline as { expected_hours?: unknown } | undefined)?.expected_hours) ||
-          16;
+          Number(
+            (
+              opportunityForSummary?.timeline as
+                | { expected_hours?: unknown }
+                | undefined
+            )?.expected_hours,
+          ) || 16;
         await this.assertEveryTeamMemberMetRequiredHours(
           String(opportunityIdFromDto),
           requiredHoursPerStudent,
@@ -2534,7 +2580,12 @@ export class StudentReportsService {
       return {
         success: true,
         data: [],
-        pagination: { total: 0, page: pageNum, limit: limitNum, total_pages: 1 },
+        pagination: {
+          total: 0,
+          page: pageNum,
+          limit: limitNum,
+          total_pages: 1,
+        },
       };
     }
 
@@ -2547,12 +2598,17 @@ export class StudentReportsService {
     if (status) {
       const wanted = String(status).trim().toLowerCase();
       reports = reports.filter((row) => {
-        const rowStatus = String(row.status ?? '').trim().toLowerCase();
-        const faculty = String(row.faculty_status ?? '').trim().toLowerCase();
+        const rowStatus = String(row.status ?? '')
+          .trim()
+          .toLowerCase();
+        const faculty = String(row.faculty_status ?? '')
+          .trim()
+          .toLowerCase();
         if (wanted === 'approved') {
           return (
-            ['approved', 'verified', 'partner_verified', 'paid'].includes(rowStatus) ||
-            faculty === 'approved'
+            ['approved', 'verified', 'partner_verified', 'paid'].includes(
+              rowStatus,
+            ) || faculty === 'approved'
           );
         }
         return rowStatus === wanted;
@@ -2561,8 +2617,12 @@ export class StudentReportsService {
 
     const total = reports.length;
     const paginated = reports.slice(skip, skip + limitNum);
-    const opportunityByProjectId = await this.loadOpportunitiesForReports(paginated);
-    const mapped = await this.mapReportListingsWithTeam(paginated, opportunityByProjectId);
+    const opportunityByProjectId =
+      await this.loadOpportunitiesForReports(paginated);
+    const mapped = await this.mapReportListingsWithTeam(
+      paginated,
+      opportunityByProjectId,
+    );
     return {
       success: true,
       data: mapped,
@@ -2833,7 +2893,13 @@ export class StudentReportsService {
    * which this detail-read path was missing (section11 was passed through raw).
    */
   private static redactSection11ScoreForStudent<
-    T extends { data?: { status?: string | null; faculty_status?: string | null; section11?: Record<string, unknown> | null } },
+    T extends {
+      data?: {
+        status?: string | null;
+        faculty_status?: string | null;
+        section11?: Record<string, unknown> | null;
+      };
+    },
   >(response: T): T {
     if (!response?.data?.section11) return response;
     if (
@@ -2864,28 +2930,84 @@ export class StudentReportsService {
    * hash/timestamp) is student/partner-facing, never the AI's internal reasoning. Faculty/admin
    * reads call formatReportResponse directly and keep the full record.
    */
-  private static redactCiiV2ForExternalViewer<T extends { data?: Record<string, unknown> }>(
-    response: T,
-  ): T {
+  /**
+   * Phase 3: Redact CII v2 for external viewers (students).
+   *
+   * Students can see the approved record with:
+   * - Final score (AI or Faculty-adjusted)
+   * - Level and badge
+   * - Section scores
+   * - Bonus and penalty
+   * - Student feedback
+   * - Audit trail (AI Score → Faculty Score if adjusted)
+   *
+   * Students cannot edit the approved assessment.
+   */
+  private static redactCiiV2ForExternalViewer<
+    T extends { data?: Record<string, unknown> },
+  >(response: T): T {
     if (!response?.data) return response;
-    const ciiV2 = response.data.ciiV2 as Record<string, unknown> | null | undefined;
+    const ciiV2 = response.data.ciiV2 as
+      | Record<string, unknown>
+      | null
+      | undefined;
     const ciiV2Lock = response.data.ciiV2Lock as
-      | { locked?: boolean; hash?: string; lockedAt?: string }
+      | {
+          locked?: boolean;
+          hash?: string;
+          lockedAt?: string;
+          aiRecommendedScore?: number;
+          facultyApprovedScore?: number;
+          scoreWasAdjusted?: boolean;
+          scoreAdjustmentReason?: string;
+          facultyNote?: string;
+        }
       | null
       | undefined;
 
     if (!ciiV2Lock?.locked) {
-      return { ...response, data: { ...response.data, ciiV2: null, ciiV2Lock: null } };
+      return {
+        ...response,
+        data: { ...response.data, ciiV2: null, ciiV2Lock: null },
+      };
     }
 
+    // Phase 3: Include section scores with good/limit feedback
     const sections = Array.isArray(ciiV2?.sections)
-      ? (ciiV2!.sections as Array<Record<string, unknown>>).map((s) => ({
+      ? (ciiV2.sections as Array<Record<string, unknown>>).map((s) => ({
           id: s.id,
           title: s.title,
           weight: s.weight,
           score: s.score,
+          good: s.good,
+          limit: s.limit,
         }))
       : [];
+
+    // Phase 3: Extract bonus data
+    const bonus = ciiV2?.bonus as
+      | {
+          effort?: number;
+          resources?: number;
+          partners?: number;
+          total?: number;
+        }
+      | undefined;
+
+    // Phase 3: Extract student feedback
+    const studentFeedback = ciiV2?.studentFeedback as
+      | {
+          opening_praise?: string;
+          why_score_is_high_or_low?: string;
+          encouragement?: string;
+          five_specific_actions?: string[];
+        }
+      | undefined;
+
+    // Phase 3: Extract red flags
+    const redFlags = Array.isArray(ciiV2?.redFlags)
+      ? ciiV2.redFlags
+      : undefined;
 
     return {
       ...response,
@@ -2896,8 +3018,36 @@ export class StudentReportsService {
           level: ciiV2?.level,
           evidenceAverage: ciiV2?.evidenceAverage,
           sections,
+          // Phase 3: Include additional fields for student display
+          aiRecommendedScore:
+            ciiV2?.aiRecommendedScore ?? ciiV2Lock.aiRecommendedScore,
+          facultyApprovedScore:
+            ciiV2?.facultyApprovedScore ?? ciiV2Lock.facultyApprovedScore,
+          bonus: bonus
+            ? {
+                effort: bonus.effort ?? 0,
+                resources: bonus.resources ?? 0,
+                partners: bonus.partners ?? 0,
+                total: bonus.total ?? 0,
+              }
+            : { effort: 0, resources: 0, partners: 0, total: 0 },
+          integrityPenalty: ciiV2?.integrityPenalty ?? 0,
+          studentFeedback,
+          redFlags,
         },
-        ciiV2Lock: { locked: true, hash: ciiV2Lock.hash, lockedAt: ciiV2Lock.lockedAt },
+        ciiV2Lock: {
+          locked: true,
+          hash: ciiV2Lock.hash,
+          lockedAt: ciiV2Lock.lockedAt,
+          // Phase 3: Include audit trail fields
+          aiRecommendedScore: ciiV2Lock.aiRecommendedScore,
+          facultyApprovedScore: ciiV2Lock.facultyApprovedScore,
+          scoreWasAdjusted: ciiV2Lock.scoreWasAdjusted,
+          scoreAdjustmentReason: ciiV2Lock.scoreAdjustmentReason,
+          facultyNote: ciiV2Lock.facultyNote,
+        },
+        // Phase 4: Include independent AI analyses (do not overwrite faculty-approved)
+        independentAiAnalyses: response.data.independentAiAnalyses,
       },
     };
   }
@@ -3041,6 +3191,8 @@ export class StudentReportsService {
         section11: report.section11,
         ciiV2: report.ciiV2,
         ciiV2Lock: report.ciiV2Lock,
+        // Phase 4: Include independent AI analyses
+        independentAiAnalyses: report.independentAiAnalyses,
         created_at: report.createdAt,
         updated_at: report.updatedAt,
       },

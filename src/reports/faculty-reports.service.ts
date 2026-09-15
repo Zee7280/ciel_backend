@@ -358,14 +358,28 @@ export class FacultyReportsService {
   }
 
   /**
-   * Approves and hash-locks the CII v2 score. Recomputes the final score from the stored
-   * per-criterion anchors (never trusts a client-sent score) before hashing the decision.
+   * Phase 2: Approves and hash-locks the CII v2 score with audit trail.
+   *
+   * Recomputes the final score from the stored per-criterion anchors (never trusts a
+   * client-sent score) before hashing the decision.
+   *
+   * If faculty adjusts the score, the system stores both:
+   * - AI Recommended Score (original)
+   * - Faculty Approved Score (adjusted)
+   * - Score Adjustment Reason (audit trail)
+   * - Per-criterion overrides (if any)
    */
   async approveCiiV2(
     id: string,
     facultyId: string,
     facultyEmail: string,
     note?: string,
+    facultyAdjustedScore?: number,
+    scoreAdjustmentReason?: string,
+    criteriaOverrides?: Record<
+      string,
+      { aiAnchor: number; facultyAnchor: number; reason: string }
+    >,
   ) {
     const report = await this.findAssignedReportForAction(
       id,
@@ -385,6 +399,7 @@ export class FacultyReportsService {
           integrityPenalty: number;
           evidence?: unknown[];
           computedAt?: string;
+          final?: number;
         }
       | null
       | undefined;
@@ -400,7 +415,8 @@ export class FacultyReportsService {
       );
     }
 
-    const result = computeCiiV2Result({
+    // Compute the AI-recommended score from stored anchors
+    const aiResult = computeCiiV2Result({
       sections: stored.sections.map((s) => ({
         id: s.id,
         good: s.good,
@@ -416,16 +432,49 @@ export class FacultyReportsService {
       evidence: (stored.evidence as any) || [],
     });
 
+    const aiRecommendedScore = aiResult.final;
+
+    // Determine the faculty-approved score
+    // If faculty provided an adjusted score, use it; otherwise use AI score
+    const hasFacultyAdjustment =
+      facultyAdjustedScore !== undefined &&
+      Math.round(facultyAdjustedScore) !== Math.round(aiRecommendedScore);
+
+    // Require reason when faculty adjusts the score
+    if (hasFacultyAdjustment && !scoreAdjustmentReason?.trim()) {
+      throw new BadRequestException(
+        'A reason is required when adjusting the AI-recommended score.',
+      );
+    }
+
+    const facultyApprovedScore = hasFacultyAdjustment
+      ? Math.round(Math.min(100, Math.max(0, facultyAdjustedScore)))
+      : aiRecommendedScore;
+
+    // Use the same AI-computed level structure, but note the score adjustment
+    // Level is still determined by the AI anchors (not the override score)
+    // to maintain consistency with the rubric
+    const finalResult = aiResult;
+
     const approvedAt = new Date().toISOString();
+
+    // Build the audit-ready decision record
     const decisionRecord = {
       reportId: report.id,
-      final: result.final,
-      level: result.level.level,
-      badge: result.level.name,
+      aiRecommendedScore,
+      facultyApprovedScore,
+      scoreWasAdjusted: hasFacultyAdjustment,
+      scoreAdjustmentReason: hasFacultyAdjustment
+        ? scoreAdjustmentReason
+        : null,
+      criteriaOverrides: criteriaOverrides || null,
+      level: finalResult.level.level,
+      badge: finalResult.level.name,
       facultyId,
       approvedAt,
       note: note || '',
     };
+
     const hash = crypto
       .createHash('sha256')
       .update(JSON.stringify(decisionRecord))
@@ -433,15 +482,28 @@ export class FacultyReportsService {
 
     const nextCiiV2 = {
       ...(report.ciiV2 as Record<string, unknown>),
-      ...result,
+      ...finalResult,
+      // Store both scores for audit trail
+      aiRecommendedScore,
+      facultyApprovedScore,
+      final: facultyApprovedScore, // The final score is what faculty approved
       computedAt: stored.computedAt || approvedAt,
     };
+
     const nextCiiV2Lock = {
       locked: true,
       hash,
       lockedAt: approvedAt,
       lockedByFacultyId: facultyId,
       facultyNote: note,
+      // Phase 2: Audit trail fields
+      aiRecommendedScore,
+      facultyApprovedScore,
+      scoreWasAdjusted: hasFacultyAdjustment,
+      scoreAdjustmentReason: hasFacultyAdjustment
+        ? scoreAdjustmentReason
+        : null,
+      criteriaOverrides: criteriaOverrides || null,
     };
 
     // Atomic compare-and-swap: the WHERE guard re-checks "not already locked" at write time
@@ -452,7 +514,7 @@ export class FacultyReportsService {
       .update(StudentReport)
       .set({
         ciiV2: nextCiiV2,
-        ciiV2Lock: nextCiiV2Lock,
+        ciiV2Lock: nextCiiV2Lock as StudentReport['ciiV2Lock'],
         faculty_status: 'approved',
       })
       .where('id = :id', { id: report.id })
@@ -470,6 +532,117 @@ export class FacultyReportsService {
     return {
       success: true,
       data: { ciiV2: nextCiiV2, ciiV2Lock: nextCiiV2Lock },
+    };
+  }
+
+  /**
+   * Phase 4: Run Independent AI Analysis from My Impact Wall.
+   *
+   * This is for authorized stakeholders (Faculty, University, CIEL PK) to run
+   * additional AI analysis on an already-approved record WITHOUT overwriting
+   * the faculty-approved score.
+   *
+   * - Uses the same approved formula/rubric
+   * - Results stored in `independentAiAnalyses` array
+   * - Creates an audit trail with who ran it and when
+   * - The faculty-approved record remains unchanged
+   */
+  async runIndependentAiAnalysis(
+    reportId: string,
+    userId: string,
+    userRole: 'faculty' | 'university' | 'ciel_admin',
+    userName?: string,
+    note?: string,
+  ) {
+    const report = await this.studentReportsRepository.findOne({
+      where: { id: reportId },
+    });
+
+    if (!report) {
+      throw new NotFoundException('Report not found.');
+    }
+
+    // Only allow independent analysis on locked (approved) records
+    if (!report.ciiV2Lock?.locked) {
+      throw new BadRequestException(
+        'Independent AI analysis can only be run on faculty-approved records.',
+      );
+    }
+
+    // Build the AI evaluation payload (same as faculty stage)
+    const aiPayload = buildCielPkAiEvaluationPayload(report);
+
+    // Run the AI analysis using the same method as runCiiV2Analysis
+    const { ciiV2 } = await this.aiService.summarize(
+      'cii_v2_evaluation',
+      aiPayload,
+    );
+
+    if (!ciiV2) {
+      throw new BadRequestException(
+        'AI analysis failed. Please try again later.',
+      );
+    }
+
+    // Compute the CII v2 result using the same formula/rubric
+    const ciiResult = computeCiiV2Result({
+      sections: ciiV2.sections,
+      bonus: ciiV2.bonus,
+      integrityPenalty: ciiV2.integrityPenalty,
+      evidence: ciiV2.evidence || [],
+    });
+
+    // Build the independent analysis record
+    const analysisId = crypto.randomUUID();
+    const runAt = new Date().toISOString();
+
+    const independentAnalysis = {
+      id: analysisId,
+      runAt,
+      runByUserId: userId,
+      runByRole: userRole,
+      runByName: userName,
+      score: ciiResult.final,
+      level: ciiResult.level,
+      sections: ciiResult.sections.map((s) => ({
+        id: s.id,
+        title: s.title,
+        score: s.score,
+        weight: s.weight,
+        good: s.good,
+        limit: s.limit,
+      })),
+      bonus: ciiResult.bonus,
+      integrityPenalty: ciiResult.integrityPenalty,
+      feedback: ciiV2.studentFeedback || undefined,
+      note: note || undefined,
+    };
+
+    // Append to the existing array (don't overwrite)
+    const existingAnalyses = report.independentAiAnalyses || [];
+    const updatedAnalyses = [...existingAnalyses, independentAnalysis];
+
+    // Update the report with the new analysis
+    await this.studentReportsRepository.update(report.id, {
+      independentAiAnalyses:
+        updatedAnalyses as StudentReport['independentAiAnalyses'],
+    });
+
+    return {
+      success: true,
+      data: {
+        analysis: independentAnalysis,
+        // Also return the original faculty-approved score for comparison
+        facultyApprovedScore:
+          report.ciiV2Lock?.facultyApprovedScore ??
+          (report.ciiV2 as Record<string, unknown> | null)?.final ??
+          null,
+        aiRecommendedScore:
+          report.ciiV2Lock?.aiRecommendedScore ??
+          (report.ciiV2 as Record<string, unknown> | null)
+            ?.aiRecommendedScore ??
+          null,
+      },
     };
   }
 }

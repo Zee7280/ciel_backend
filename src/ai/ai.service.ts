@@ -19,6 +19,11 @@ import {
   CII_V2_JSON_ONLY_DEPLOYMENT_NOTE,
 } from './prompts/cii-v2-rubric.constant';
 import { CiiV2AiEvaluation, parseCiiV2Response } from './parse-cii-v2.util';
+import {
+  buildFypAiEvaluatorPrompt,
+  FYP_AI_JSON_ONLY_DEPLOYMENT_NOTE,
+} from './prompts/fyp-ai-rubric.constant';
+import { FypAiEvaluation, parseFypAiResponse } from './parse-fyp-ai.util';
 
 type OpenAiCompletionOpts = {
   temperature?: number;
@@ -34,6 +39,7 @@ export interface AiSummarizeResult {
   auditMeta?: unknown;
   evaluationVersion?: string;
   ciiV2?: CiiV2AiEvaluation;
+  fypAi?: FypAiEvaluation;
 }
 
 function isOpenAiReasoningModel(model: string): boolean {
@@ -1402,6 +1408,15 @@ Keep the full response under 180 words.`;
 REPORT DATA:
 ${JSON.stringify(data)}`;
 
+      // =====================================================
+      // FYP AI EVALUATION (FYP-MM 1.0 Faculty Review Loop)
+      // =====================================================
+      case 'fyp_ai_evaluation':
+        return `Evaluate this Final Year Project / Thesis submission against the FYP-MM 1.0 rubric embedded in your system instructions.
+
+SUBMISSION DATA:
+${JSON.stringify(data)}`;
+
       default:
         return `Summarize project data professionally: ${JSON.stringify(data)}`;
     }
@@ -1417,6 +1432,7 @@ ${JSON.stringify(data)}`;
     const isSection11Evaluation =
       section === 'section11' || section === 'section11_master_rubric';
     const isCiiV2Evaluation = section === 'cii_v2_evaluation';
+    const isFypAiEvaluationSection = section === 'fyp_ai_evaluation';
 
     const openAiOpts: OpenAiCompletionOpts | undefined = isSection11Evaluation
       ? {
@@ -1437,7 +1453,15 @@ ${JSON.stringify(data)}`;
             responseFormat: { type: 'json_object' },
             systemMessage: `${buildCiiV2EvaluatorPrompt()}\n\n${CII_V2_JSON_ONLY_DEPLOYMENT_NOTE}`,
           }
-        : undefined;
+        : isFypAiEvaluationSection
+          ? {
+              temperature: 0.15,
+              seed: 4230,
+              maxTokens: 16000,
+              responseFormat: { type: 'json_object' },
+              systemMessage: `${buildFypAiEvaluatorPrompt()}\n\n${FYP_AI_JSON_ONLY_DEPLOYMENT_NOTE}`,
+            }
+          : undefined;
 
     let text: string;
     try {
@@ -1490,6 +1514,14 @@ ${JSON.stringify(data)}`;
         throw new HttpException({ error: 'AI returned an unreadable CII v2 evaluation. Please retry.' }, 502);
       }
       return { summary, ciiV2 };
+    }
+
+    if (isFypAiEvaluationSection) {
+      const fypAi = parseFypAiResponse(summary);
+      if (!fypAi) {
+        throw new HttpException({ error: 'AI returned an unreadable FYP evaluation. Please retry.' }, 502);
+      }
+      return { summary, fypAi };
     }
 
     return { summary };

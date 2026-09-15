@@ -55,6 +55,7 @@ describe('PathsService — team member invites', () => {
             mailService as any,
             notificationsService as any,
             {} as any,
+            {} as any,
         );
         return { service, inviteRepo, mailService, courseProjectRepo, notificationsService };
     };
@@ -311,6 +312,7 @@ describe('PathsService — coursework merit notify', () => {
             mailService as any,
             notificationsService as any,
             graderRunRepo as any,
+            {} as any,
         );
         return { service, notificationsService, courseProjectRepo, usersRepo, mailService, graderRunRepo };
     };
@@ -460,6 +462,7 @@ describe('PathsService — coursework faculty review', () => {
             mailService as any,
             notificationsService as any,
             {} as any,
+            {} as any,
         );
         return { service, notificationsService, courseProjectRepo, mailService };
     };
@@ -561,6 +564,7 @@ describe('PathsService — coursework AI score is never returned to a student', 
             {} as any,
             { createNotification: jest.fn() } as any,
             {} as any,
+            {} as any,
         );
         jest.spyOn(service as any, 'courseProjectAnnotate').mockImplementation(async (entries: unknown) => entries as any);
         return { service, courseProjectRepo };
@@ -639,6 +643,7 @@ describe('PathsService — coursework AI score is never returned to a student', 
             } as any,
             { createNotification: jest.fn() } as any,
             {} as any,
+            {} as any,
         );
         jest.spyOn(service as any, 'syncCourseProjectInvites').mockResolvedValue(undefined);
         jest.spyOn(service as any, 'courseProjectAnnotate').mockImplementation(async (entries: unknown) => entries as any);
@@ -684,6 +689,7 @@ describe('PathsService — coursework AI score is never returned to a student', 
             { sendCourseworkSubmittedForReview: jest.fn(), sendCourseworkSubmissionConfirmation: jest.fn() } as any,
             { createNotification: jest.fn() } as any,
             {} as any,
+            {} as any,
         );
         jest.spyOn(service as any, 'syncCourseProjectInvites').mockResolvedValue(undefined);
         jest.spyOn(service as any, 'courseProjectAnnotate').mockImplementation(async (entries: unknown) => entries as any);
@@ -720,6 +726,7 @@ describe('PathsService — coursework AI score is never returned to a student', 
             {} as any, {} as any, makeInviteRepo() as any, { findOne: jest.fn() } as any, {} as any,
             { sendCourseworkSubmittedForReview: jest.fn(), sendCourseworkSubmissionConfirmation: jest.fn() } as any,
             { createNotification: jest.fn() } as any, {} as any,
+            {} as any,
         );
         jest.spyOn(service as any, 'syncCourseProjectInvites').mockResolvedValue(undefined);
         jest.spyOn(service as any, 'courseProjectAnnotate').mockImplementation(async (entries: unknown) => entries as any);
@@ -750,6 +757,7 @@ describe('PathsService — coursework AI score is never returned to a student', 
             {} as any, {} as any, makeInviteRepo() as any, { findOne: jest.fn() } as any, {} as any,
             { sendCourseworkSubmittedForReview: jest.fn(), sendCourseworkSubmissionConfirmation: jest.fn() } as any,
             { createNotification: jest.fn() } as any, {} as any,
+            {} as any,
         );
         jest.spyOn(service as any, 'syncCourseProjectInvites').mockResolvedValue(undefined);
         jest.spyOn(service as any, 'courseProjectAnnotate').mockImplementation(async (entries: unknown) => entries as any);
@@ -794,6 +802,7 @@ describe('PathsService — coursework submit/resubmit emails', () => {
             {} as any,
             mailService as any,
             notificationsService as any,
+            {} as any,
             {} as any,
         );
         jest.spyOn(service as any, 'syncCourseProjectInvites').mockResolvedValue(undefined);
@@ -865,6 +874,7 @@ describe('PathsService — coursework team-member edit', () => {
                 sendCourseworkResubmittedForReview: jest.fn(),
             } as any,
             { createNotification: jest.fn() } as any,
+            {} as any,
             {} as any,
         );
         jest.spyOn(service as any, 'syncCourseProjectInvites').mockResolvedValue(undefined);
@@ -991,6 +1001,7 @@ describe('PathsService — FYP multi-record (list / create / id-scoped)', () => 
             {} as any,
             { createNotification: jest.fn() } as any,
             {} as any,
+            {} as any,
         );
         jest.spyOn(service as any, 'syncFypInvites').mockResolvedValue(undefined);
         jest.spyOn(service as any, 'fypAnnotate').mockImplementation(async (entries: unknown) => entries as any);
@@ -1108,6 +1119,7 @@ describe('PathsService — coursework grader run limit', () => {
             mailService as any,
             notificationsService as any,
             graderRunRepo as any,
+            {} as any,
         );
         jest.spyOn(service, 'getCourseProjectMeritModel').mockResolvedValue({
             scope: { label: 'Your cohort' },
@@ -1173,6 +1185,7 @@ describe('PathsService — public coursework verification', () => {
             {} as any,
             {} as any,
             makeInviteRepo() as any,
+            {} as any,
             {} as any,
             {} as any,
             {} as any,
@@ -1256,6 +1269,7 @@ describe('PathsService — FYP resubmission after rejection', () => {
             {} as any,
             { createNotification: jest.fn() } as any,
             {} as any,
+            {} as any,
         );
         jest.spyOn(service as any, 'syncFypInvites').mockResolvedValue(undefined);
         jest.spyOn(service as any, 'fypAnnotate').mockImplementation(async (entries: unknown) => entries as any);
@@ -1293,6 +1307,7 @@ describe('PathsService — FYP resubmission after rejection', () => {
         const service = new PathsService(
             {} as any, fypRepo as any, {} as any, makeInviteRepo() as any, {} as any, {} as any, {} as any,
             { createNotification: jest.fn() } as any, {} as any,
+            {} as any,
         );
         jest.spyOn(service as any, 'syncFypInvites').mockResolvedValue(undefined);
         jest.spyOn(service as any, 'fypAnnotate').mockImplementation(async (entries: unknown) => entries as any);
@@ -1328,6 +1343,7 @@ describe('PathsService — FYP resubmission after rejection', () => {
         const service = new PathsService(
             {} as any, fypRepo as any, {} as any, makeInviteRepo() as any, {} as any, {} as any, {} as any,
             { createNotification: jest.fn() } as any, {} as any,
+            {} as any,
         );
         jest.spyOn(service as any, 'syncFypInvites').mockResolvedValue(undefined);
         jest.spyOn(service as any, 'fypAnnotate').mockImplementation(async (entries: unknown) => entries as any);
@@ -1361,6 +1377,7 @@ describe('PathsService — FYP supervisor review', () => {
         const service = new PathsService(
             {} as any, fypRepo as any, {} as any, makeInviteRepo() as any, usersRepo as any, {} as any, {} as any,
             notificationsService as any, {} as any,
+            {} as any,
         );
         return { service, notificationsService, fypRepo };
     };
@@ -1461,6 +1478,7 @@ describe('PathsService — FYP teammate share + faculty in-progress', () => {
             {} as any,
             { createNotification: jest.fn() } as any,
             {} as any,
+            {} as any,
         );
         jest.spyOn(service as any, 'fypAnnotate').mockImplementation(async (entries: unknown) => entries as any);
         jest.spyOn(service as any, 'syncFypInvites').mockResolvedValue(undefined);
@@ -1529,6 +1547,7 @@ describe('PathsService — FYP merit notify', () => {
         const service = new PathsService(
             {} as any, fypRepo as any, {} as any, makeInviteRepo() as any, usersRepo as any, {} as any, {} as any,
             notificationsService as any, graderRunRepo as any,
+            {} as any,
         );
         return { service, notificationsService, fypRepo, graderRunRepo };
     };
@@ -1610,6 +1629,7 @@ describe('PathsService — venture supervisor review', () => {
         const service = new PathsService(
             {} as any, {} as any, ventureRepo as any, makeInviteRepo() as any, usersRepo as any, {} as any, {} as any,
             notificationsService as any, {} as any,
+            {} as any,
         );
         jest.spyOn(service as any, 'ventureAnnotate').mockImplementation(async (entries: unknown) => entries as any);
         jest.spyOn(service as any, 'attachStudents').mockImplementation(async (entries: unknown) => entries as any);
@@ -1662,6 +1682,7 @@ describe('PathsService — venture faculty in-progress + self-certify', () => {
         const service = new PathsService(
             {} as any, {} as any, ventureRepo as any, makeInviteRepo() as any, usersRepo as any, {} as any, {} as any,
             { createNotification: jest.fn() } as any, {} as any,
+            {} as any,
         );
         jest.spyOn(service as any, 'ventureAnnotate').mockImplementation(async (entries: unknown) => entries as any);
         jest.spyOn(service as any, 'attachStudents').mockImplementation(async (entries: unknown) => entries as any);
@@ -1684,6 +1705,7 @@ describe('PathsService — venture faculty in-progress + self-certify', () => {
         const service = new PathsService(
             {} as any, {} as any, ventureRepo as any, makeInviteRepo() as any, {} as any, {} as any, {} as any,
             { createNotification: jest.fn() } as any, {} as any,
+            {} as any,
         );
         jest.spyOn(service as any, 'ventureAnnotate').mockImplementation(async (entries: unknown) => entries as any);
         jest.spyOn(service as any, 'withCompleteness').mockImplementation((entry: unknown) => entry);
@@ -1699,6 +1721,7 @@ describe('PathsService — university + CIEL venture network', () => {
         const service = new PathsService(
             {} as any, {} as any, {} as any, makeInviteRepo() as any, {} as any, organizationsRepo as any, {} as any,
             { createNotification: jest.fn() } as any, {} as any,
+            {} as any,
         );
         await expect(service.listVenturesForUniversity('org-missing')).resolves.toEqual([]);
         await expect(service.listVenturesForUniversity('')).resolves.toEqual([]);
@@ -1717,6 +1740,7 @@ describe('PathsService — university + CIEL venture network', () => {
         const service = new PathsService(
             {} as any, {} as any, ventureRepo as any, makeInviteRepo() as any, {} as any, organizationsRepo as any, {} as any,
             { createNotification: jest.fn() } as any, {} as any,
+            {} as any,
         );
         jest.spyOn(service as any, 'ventureAnnotate').mockImplementation(async (entries: unknown) => entries as any);
         jest.spyOn(service as any, 'attachStudents').mockImplementation(async (entries: unknown) => entries as any);
@@ -1732,6 +1756,7 @@ describe('PathsService — university + CIEL venture network', () => {
         const service = new PathsService(
             {} as any, {} as any, {} as any, makeInviteRepo() as any, {} as any, organizationsRepo as any, {} as any,
             { createNotification: jest.fn() } as any, { findOne: jest.fn().mockResolvedValue(null) } as any,
+            {} as any,
         );
         jest.spyOn(service, 'listVenturesForUniversity').mockResolvedValue([
             { id: 'v-ok', status: 'submitted', reviewPipeline: { supervisorStatus: 'approved' }, student: { name: 'Fatima' } },
@@ -1758,6 +1783,7 @@ describe('PathsService — university + CIEL venture network', () => {
         const service = new PathsService(
             {} as any, {} as any, ventureRepo as any, makeInviteRepo() as any, {} as any, {} as any, {} as any,
             { createNotification: jest.fn() } as any, {} as any,
+            {} as any,
         );
         jest.spyOn(service as any, 'ventureAnnotate').mockImplementation(async (entries: unknown) => entries as any);
         jest.spyOn(service as any, 'attachStudents').mockImplementation(async (entries: unknown) => entries as any);
@@ -1780,6 +1806,7 @@ describe('PathsService — venture merit notify', () => {
         const service = new PathsService(
             {} as any, {} as any, ventureRepo as any, makeInviteRepo() as any, usersRepo as any, {} as any, {} as any,
             notificationsService as any, graderRunRepo as any,
+            {} as any,
         );
         return { service, notificationsService, ventureRepo, graderRunRepo };
     };
@@ -1856,6 +1883,7 @@ describe('PathsService — grader run limit is independent per path', () => {
         const service = new PathsService(
             courseProjectRepo as any, fypRepo as any, {} as any, makeInviteRepo() as any, usersRepo as any, {} as any,
             mailService as any, notificationsService as any, graderRunRepo as any,
+            {} as any,
         );
         const user = { role: 'faculty', email: 'teacher@test.com' };
         jest.spyOn(service, 'getCourseProjectMeritModel').mockResolvedValue({
@@ -1897,6 +1925,7 @@ describe('PathsService — venture reviewPipeline forgery guard', () => {
             { manager: { transaction: jest.fn(async (fn: (m: unknown) => unknown) => fn(manager)) } } as any,
             makeInviteRepo() as any, {} as any, {} as any, {} as any,
             { createNotification: jest.fn() } as any, {} as any,
+            {} as any,
         );
         jest.spyOn(service as any, 'syncVentureInvites').mockResolvedValue(undefined);
         jest.spyOn(service as any, 'ventureAnnotate').mockImplementation(async (entries: unknown) => entries as any);
@@ -1982,6 +2011,7 @@ describe('PathsService — listVenturesForAdmin excludes drafts from decision-st
         const service = new PathsService(
             {} as any, {} as any, ventureRepo as any, makeInviteRepo() as any, {} as any, {} as any, {} as any,
             { createNotification: jest.fn() } as any, {} as any,
+            {} as any,
         );
         jest.spyOn(service as any, 'ventureAnnotate').mockImplementation(async (entries: unknown) => entries as any);
         jest.spyOn(service as any, 'attachStudents').mockImplementation(async (entries: unknown) => entries as any);

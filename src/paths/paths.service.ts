@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, In, Repository } from 'typeorm';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { parseStoredUrlList } from '../common/url-list-column';
 import {
   CourseProjectEntry,
@@ -28,7 +28,15 @@ import { PathGraderRun, PathGraderRunScope, PathGraderRunKind } from './entities
 import { formatCertificateVerificationCode } from '../reports/certificate-verification-code.util';
 import { UpdateCourseProjectDto } from './dto/update-course-project.dto';
 import { AddFypDeliverableDto, UpdateFypDto } from './dto/update-fyp.dto';
+import { EditFypAiAnalysisDto } from './dto/fyp-ai-analysis.dto';
 import { FypMeritModelQueryDto } from './dto/fyp-merit-model-query.dto';
+import { AiService } from '../ai/ai.service';
+import {
+  computeFypAiResult,
+  FYP_AI_RUBRIC,
+  FypAiDimensionInput,
+} from './fyp-ai-analysis.constants';
+import { buildFypAiEvaluationPayload } from './build-fyp-ai-evaluation-payload.util';
 import { VentureMeritModelQueryDto } from './dto/venture-merit-model-query.dto';
 import { AddVentureDocumentDto, UpdateVentureDto } from './dto/update-venture.dto';
 import { ventureMatchesFaculty } from './venture-faculty-scope.util';
@@ -79,6 +87,7 @@ export class PathsService implements OnModuleInit {
     private readonly notificationsService: NotificationsService,
     @InjectRepository(PathGraderRun)
     private readonly graderRunRepo: Repository<PathGraderRun>,
+    private readonly aiService: AiService,
   ) {}
 
   /** One-row-era unique index on fyp_entries.userId blocks Create. Entity is @Index() only;
@@ -1496,11 +1505,11 @@ export class PathsService implements OnModuleInit {
       !!shared && shared.userId !== userId && (!own || this.isFypPlaceholder(own));
     if (useShared && shared) {
       const [annotated] = await this.fypAnnotate([shared]);
-      return { ...annotated, isOwner: false };
+      return PathsService.redactFypAiAnalysisForStudent({ ...annotated, isOwner: false });
     }
     if (!own) return null;
     const [annotated] = await this.fypAnnotate([own]);
-    return { ...annotated, isOwner: true };
+    return PathsService.redactFypAiAnalysisForStudent({ ...annotated, isOwner: true });
   }
 
   /** The faculty supervision deck — submitted FYP records naming this supervisor by email, same
@@ -1633,6 +1642,12 @@ export class PathsService implements OnModuleInit {
       entry.supervisorApprovalNote = null;
       entry.supervisorApprovalAt = null;
       entry.meritRibbon = null;
+      // A locked AI analysis certifies the content as it stood at approval time — once the
+      // student edits an approved record, that certification is stale and must not keep showing
+      // as "locked" (which would both mislead the next supervisor review and leak the old score
+      // to the student via redactFypAiAnalysisForStudent's locked-only exposure rule).
+      entry.aiAnalysis = null;
+      entry.aiAnalysisLock = null;
     } else if (
       entry.status === 'submitted' &&
       (entry.supervisorApprovalStatus === 'rejected' || entry.supervisorApprovalStatus === 'revision_requested')
@@ -1673,7 +1688,7 @@ export class PathsService implements OnModuleInit {
       );
     }
     const [annotated] = await this.fypAnnotate([saved]);
-    return { ...annotated, isOwner: true };
+    return PathsService.redactFypAiAnalysisForStudent({ ...annotated, isOwner: true });
   }
 
   /** One student can have several independent FYP records — this is their own deck, plus any
@@ -1689,7 +1704,9 @@ export class PathsService implements OnModuleInit {
     }
     const entries = await qb.orderBy('e."updatedAt"', 'DESC').getMany();
     const annotated = await this.fypAnnotate(entries);
-    return annotated.map((e) => ({ ...e, isOwner: e.userId === userId }));
+    return annotated.map((e) =>
+      PathsService.redactFypAiAnalysisForStudent({ ...e, isOwner: e.userId === userId }),
+    );
   }
 
   async createFyp(userId: string) {
@@ -1751,7 +1768,10 @@ export class PathsService implements OnModuleInit {
     const entry = await qb.getOne();
     if (!entry) throw new NotFoundException('FYP entry not found');
     const [annotated] = await this.fypAnnotate([entry]);
-    return { ...annotated, isOwner: entry.userId === userId };
+    return PathsService.redactFypAiAnalysisForStudent({
+      ...annotated,
+      isOwner: entry.userId === userId,
+    });
   }
 
   async updateFypByIdForUser(
@@ -1786,7 +1806,10 @@ export class PathsService implements OnModuleInit {
       );
     }
     const [annotated] = await this.fypAnnotate([saved]);
-    return { ...annotated, isOwner: saved.userId === userId };
+    return PathsService.redactFypAiAnalysisForStudent({
+      ...annotated,
+      isOwner: saved.userId === userId,
+    });
   }
 
   async deleteFypByIdForUser(userId: string, id: string) {
@@ -1850,6 +1873,47 @@ export class PathsService implements OnModuleInit {
     }
   }
 
+  /**
+   * The FYP AI pre-analysis (per-dimension scores, rationale, red flags, needsAdminReview) must
+   * never reach the student/team-member view before a supervisor has approved and locked it — and
+   * even once locked, only the already-decided outcome (per-dimension score, total, classification)
+   * is student-facing, never the AI's internal rationale or the faculty's private note. Faculty
+   * reads (getFypForSupervisorReview) return the entry unredacted. Mirrors
+   * StudentReportsService.redactCiiV2ForExternalViewer.
+   */
+  private static redactFypAiAnalysisForStudent<
+    T extends {
+      aiAnalysis?: Record<string, unknown> | null;
+      aiAnalysisLock?: { locked?: boolean; hash?: string; lockedAt?: string } | null;
+    },
+  >(entry: T): T {
+    if (!entry.aiAnalysis && !entry.aiAnalysisLock) return entry;
+    if (!entry.aiAnalysisLock?.locked) {
+      return { ...entry, aiAnalysis: null, aiAnalysisLock: null };
+    }
+    const dimensions = Array.isArray(entry.aiAnalysis?.dimensions)
+      ? (entry.aiAnalysis!.dimensions as Array<Record<string, unknown>>).map((d) => ({
+          key: d.key,
+          label: d.label,
+          max: d.max,
+          score: d.score,
+        }))
+      : [];
+    return {
+      ...entry,
+      aiAnalysis: {
+        final: entry.aiAnalysis?.final,
+        classification: entry.aiAnalysis?.classification,
+        dimensions,
+      },
+      aiAnalysisLock: {
+        locked: true,
+        hash: entry.aiAnalysisLock.hash,
+        lockedAt: entry.aiAnalysisLock.lockedAt,
+      },
+    };
+  }
+
   /** Supervisor approve/reject a submitted FYP entry — only "approved" entries are eligible for
    * Merit Model ranking/showcase. Matched the same way as listFypForTeacher: the supervisor email
    * the student entered in step 1. */
@@ -1868,6 +1932,13 @@ export class PathsService implements OnModuleInit {
       (entry.projectInfo?.supervisorEmail || '').trim().toLowerCase() !== email
     ) {
       throw new NotFoundException('FYP entry not found');
+    }
+    // Once the AI analysis is locked (approved via approveFypAiAnalysis) the review decision is
+    // final — mirrors the ciiV2Lock guard in FacultyReportsService.updateAction.
+    if (entry.aiAnalysisLock?.locked) {
+      throw new BadRequestException(
+        "This FYP's AI analysis is locked; further review actions are not permitted.",
+      );
     }
     entry.supervisorApprovalStatus =
       action === 'approve' ? 'approved' : action === 'revision' ? 'revision_requested' : 'rejected';
@@ -1907,6 +1978,242 @@ export class PathsService implements OnModuleInit {
       this.logger.warn(`FYP review notification failed for ${saved.id}: ${(err as Error).message}`);
     }
     return saved;
+  }
+
+  /** Shared lookup for supervisor-scoped FYP AI-analysis mutations — same scoping as
+   * supervisorReviewFyp (self-declared supervisorEmail, matched verbatim, never a roster check). */
+  private async findSupervisedFypForAction(id: string, supervisorEmail: string): Promise<FypEntry> {
+    const email = (supervisorEmail || '').trim().toLowerCase();
+    if (!email) throw new NotFoundException('FYP entry not found');
+    const entry = await this.fypRepo.findOne({ where: { id } });
+    if (
+      !entry ||
+      entry.status !== 'submitted' ||
+      (entry.projectInfo?.supervisorEmail || '').trim().toLowerCase() !== email
+    ) {
+      throw new NotFoundException('FYP entry not found');
+    }
+    return entry;
+  }
+
+  /** Faculty detail read for the AI Review Loop workspace — unredacted (full aiAnalysis/
+   * aiAnalysisLock), unlike the student-facing getFypByIdForUser/listFyps. */
+  async getFypForSupervisorReview(supervisorEmail: string, id: string) {
+    const entry = await this.findSupervisedFypForAction(id, supervisorEmail);
+    const [annotated] = await this.fypAnnotate([entry]);
+    return annotated;
+  }
+
+  /** Runs the FYP-MM 1.0 AI evaluation and persists a server-recomputed score snapshot.
+   * Re-runnable while unlocked — mirrors FacultyReportsService.runCiiV2Analysis. */
+  async runFypAiAnalysis(supervisorEmail: string, id: string) {
+    const entry = await this.findSupervisedFypForAction(id, supervisorEmail);
+
+    if (entry.aiAnalysisLock?.locked) {
+      throw new BadRequestException(
+        "This FYP's AI analysis is already locked and cannot be re-run.",
+      );
+    }
+
+    // Reuse a canonical payload builder that strips contact details before this reaches the AI
+    // vendor — instead of forwarding raw jsonb section data.
+    const payload = buildFypAiEvaluationPayload(entry);
+
+    const { fypAi } = await this.aiService.summarize('fyp_ai_evaluation', payload);
+    if (!fypAi) {
+      throw new BadRequestException(
+        'The AI did not return a readable FYP evaluation. Please retry.',
+      );
+    }
+
+    const result = computeFypAiResult({ dimensions: fypAi.dimensions });
+
+    const nextAiAnalysis = {
+      ...result,
+      sections: fypAi.sections,
+      why: fypAi.why,
+      whyNotHigher: fypAi.whyNotHigher,
+      sustainability: fypAi.sustainability,
+      opportunityPotential: fypAi.opportunityPotential,
+      redFlags: fypAi.redFlags,
+      needsAdminReview: fypAi.needsAdminReview,
+      studentFeedback: fypAi.studentFeedback,
+      frameworkVersion: fypAi.frameworkVersion,
+      facultyModified: false,
+      computedAt: new Date().toISOString(),
+    };
+
+    // Targeted, guarded update: only touches the aiAnalysis column (never aiAnalysisLock or any
+    // other field), and re-checks "not locked" at write time in case the AI call above raced with
+    // a concurrent approve — mirrors runCiiV2Analysis's guarded update.
+    const updateResult = await this.fypRepo
+      .createQueryBuilder()
+      .update(FypEntry)
+      .set({ aiAnalysis: nextAiAnalysis })
+      .where('id = :id', { id: entry.id })
+      .andWhere(
+        `("aiAnalysisLock" IS NULL OR ("aiAnalysisLock"->>'locked') IS DISTINCT FROM 'true')`,
+      )
+      .execute();
+
+    if (!updateResult.affected) {
+      throw new BadRequestException(
+        "This FYP's AI analysis is already locked and cannot be re-run.",
+      );
+    }
+
+    return { success: true, data: nextAiAnalysis };
+  }
+
+  /** Faculty edit of the AI-scored dimensions before approving — mirrors the locked design
+   * mockup's saveFacultyEdits(): faculty may override a score and/or rationale, but the
+   * total/classification/gates are always recomputed server-side from the merged dimension set,
+   * never trusting a client-sent total. */
+  async editFypAiAnalysis(supervisorEmail: string, id: string, dto: EditFypAiAnalysisDto) {
+    const entry = await this.findSupervisedFypForAction(id, supervisorEmail);
+
+    if (entry.aiAnalysisLock?.locked) {
+      throw new BadRequestException(
+        "This FYP's AI analysis is already locked and cannot be edited.",
+      );
+    }
+    if (!entry.aiAnalysis) {
+      throw new BadRequestException('Run the AI analysis before editing it.');
+    }
+
+    const validKeys = new Set(FYP_AI_RUBRIC.map((d) => d.key));
+    const edits = dto.dimensions.filter((d) => validKeys.has(d.key));
+    if (edits.length === 0) {
+      throw new BadRequestException('No recognised rubric dimensions were provided.');
+    }
+
+    const priorDimensions = Array.isArray((entry.aiAnalysis as Record<string, unknown>).dimensions)
+      ? ((entry.aiAnalysis as Record<string, unknown>).dimensions as FypAiDimensionInput[])
+      : [];
+    const editsByKey = new Map(edits.map((d) => [d.key, d]));
+    const mergedDimensions: FypAiDimensionInput[] = FYP_AI_RUBRIC.map((d) => {
+      const edit = editsByKey.get(d.key);
+      const prior = priorDimensions.find((p) => p.key === d.key);
+      return edit
+        ? { key: d.key, score: edit.score, rationale: edit.rationale ?? prior?.rationale }
+        : { key: d.key, score: prior?.score ?? 0, rationale: prior?.rationale };
+    });
+
+    const result = computeFypAiResult({ dimensions: mergedDimensions });
+
+    const nextAiAnalysis = {
+      ...(entry.aiAnalysis as Record<string, unknown>),
+      ...result,
+      facultyModified: true,
+      facultyEditedAt: new Date().toISOString(),
+    };
+
+    const updateResult = await this.fypRepo
+      .createQueryBuilder()
+      .update(FypEntry)
+      .set({ aiAnalysis: nextAiAnalysis })
+      .where('id = :id', { id: entry.id })
+      .andWhere(
+        `("aiAnalysisLock" IS NULL OR ("aiAnalysisLock"->>'locked') IS DISTINCT FROM 'true')`,
+      )
+      .execute();
+
+    if (!updateResult.affected) {
+      throw new BadRequestException(
+        "This FYP's AI analysis is already locked and cannot be edited.",
+      );
+    }
+
+    return { success: true, data: nextAiAnalysis };
+  }
+
+  /**
+   * Approves and hash-locks the FYP AI analysis, and — in the same atomic update — records the
+   * supervisor's approval decision (mirrors approveCiiV2's approve+lock+faculty_status write).
+   * Recomputes the final score from the stored per-dimension scores (never trusts a client-sent
+   * score) before hashing the decision.
+   */
+  async approveFypAiAnalysis(supervisorEmail: string, id: string, note?: string) {
+    const entry = await this.findSupervisedFypForAction(id, supervisorEmail);
+
+    const stored = entry.aiAnalysis as
+      | { dimensions?: FypAiDimensionInput[]; computedAt?: string }
+      | null
+      | undefined;
+    if (!stored?.dimensions?.length) {
+      throw new BadRequestException('Run the AI analysis before approving.');
+    }
+    if (entry.aiAnalysisLock?.locked) {
+      throw new BadRequestException("This FYP's AI analysis is already locked.");
+    }
+
+    const result = computeFypAiResult({ dimensions: stored.dimensions });
+
+    const approvedAt = new Date().toISOString();
+    const normalizedEmail = (supervisorEmail || '').trim().toLowerCase();
+    const decisionRecord = {
+      entryId: entry.id,
+      final: result.final,
+      classification: result.classification,
+      supervisorEmail: normalizedEmail,
+      approvedAt,
+      note: note || '',
+    };
+    const hash = createHash('sha256').update(JSON.stringify(decisionRecord)).digest('hex');
+
+    const nextAiAnalysis = {
+      ...(entry.aiAnalysis as Record<string, unknown>),
+      ...result,
+      computedAt: stored.computedAt || approvedAt,
+    };
+    const nextAiAnalysisLock = {
+      locked: true,
+      hash,
+      lockedAt: approvedAt,
+      lockedBySupervisorEmail: normalizedEmail,
+      facultyNote: note,
+    };
+
+    // Atomic compare-and-swap: the WHERE guard re-checks "not already locked" at write time, so
+    // two concurrent approve requests can't both win the lock — mirrors approveCiiV2.
+    const updateResult = await this.fypRepo
+      .createQueryBuilder()
+      .update(FypEntry)
+      .set({
+        aiAnalysis: nextAiAnalysis,
+        aiAnalysisLock: nextAiAnalysisLock,
+        supervisorApprovalStatus: 'approved',
+        supervisorApprovalNote: note ?? null,
+        supervisorApprovalAt: new Date(approvedAt),
+      })
+      .where('id = :id', { id: entry.id })
+      .andWhere(
+        `("aiAnalysisLock" IS NULL OR ("aiAnalysisLock"->>'locked') IS DISTINCT FROM 'true')`,
+      )
+      .execute();
+
+    if (!updateResult.affected) {
+      throw new BadRequestException("This FYP's AI analysis is already locked.");
+    }
+
+    try {
+      const first = entry.projectInfo?.studentName?.split(' ')[0] || 'there';
+      const title = entry.projectTitle || 'Untitled FYP';
+      await this.notificationsService.createNotification(entry.userId, {
+        type: 'approval',
+        title: 'Your FYP was approved',
+        message: `${first}, “${title}” is live. It now hangs on My Impact Wall — wait for end-of-semester ranking and badge allocation.`,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `FYP AI-analysis approval notification failed for ${entry.id}: ${(err as Error).message}`,
+      );
+    }
+
+    return {
+      success: true,
+      data: { aiAnalysis: nextAiAnalysis, aiAnalysisLock: nextAiAnalysisLock },
+    };
   }
 
   /** The FYP Merit Model — 100pt, 7-criterion route-adjusted rubric ranking of eligible (submitted +

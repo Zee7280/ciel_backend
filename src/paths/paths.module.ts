@@ -14,6 +14,7 @@ import { Organization } from '../organizations/entities/organization.entity';
 import { StorageModule } from '../common/storage.module';
 import { MailModule } from '../mail/mail.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { AiModule } from '../ai/ai.module';
 
 @Module({
     imports: [
@@ -29,6 +30,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
         StorageModule,
         MailModule,
         NotificationsModule,
+        AiModule,
     ],
     controllers: [PathsController, AdminPathsController, PublicCourseworkVerificationController],
     providers: [PathsService],

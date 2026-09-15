@@ -9,6 +9,7 @@ import { PathsService } from './paths.service';
 import { FacultyReviewCourseProjectDto, UpdateCourseProjectDto } from './dto/update-course-project.dto';
 import { MeritModelQueryDto, NotifyMeritRanksDto } from './dto/merit-model-query.dto';
 import { AddFypDeliverableDto, SupervisorReviewFypDto, UpdateFypDto } from './dto/update-fyp.dto';
+import { ApproveFypAiAnalysisDto, EditFypAiAnalysisDto } from './dto/fyp-ai-analysis.dto';
 import { FypMeritModelQueryDto } from './dto/fyp-merit-model-query.dto';
 import { AddVentureDocumentDto, SetVentureVisibilityDto, SupervisorReviewVentureDto, UpdateVentureDto } from './dto/update-venture.dto';
 import { VentureMeritModelQueryDto } from './dto/venture-merit-model-query.dto';
@@ -282,6 +283,39 @@ export class PathsController {
     async supervisorReviewFyp(@Request() req, @Param('id', ParseUUIDPipe) id: string, @Body() dto: SupervisorReviewFypDto) {
         const data = await this.pathsService.supervisorReviewFyp(req.user.email, id, dto.action, dto.note);
         return { success: true, data };
+    }
+
+    /** Faculty Review Loop — full unredacted record (incl. any AI analysis) for the review workspace. */
+    @Get('fyp-thesis/:id/review')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.FACULTY)
+    async getFypForSupervisorReview(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
+        const data = await this.pathsService.getFypForSupervisorReview(req.user.email, id);
+        return { success: true, data };
+    }
+
+    /** Runs (or re-runs, while unlocked) the FYP-MM 1.0 AI pre-analysis before the supervisor decides. */
+    @Post('fyp-thesis/:id/ai-analysis/analyse')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.FACULTY)
+    async analyseFypAi(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
+        return await this.pathsService.runFypAiAnalysis(req.user.email, id);
+    }
+
+    /** Faculty override of one or more AI-scored dimensions before approving. */
+    @Patch('fyp-thesis/:id/ai-analysis')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.FACULTY)
+    async editFypAiAnalysis(@Request() req, @Param('id', ParseUUIDPipe) id: string, @Body() dto: EditFypAiAnalysisDto) {
+        return await this.pathsService.editFypAiAnalysis(req.user.email, id, dto);
+    }
+
+    /** Approves and hash-locks the AI analysis — also records the supervisor's FYP approval decision. */
+    @Post('fyp-thesis/:id/ai-analysis/approve')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.FACULTY)
+    async approveFypAiAnalysis(@Request() req, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ApproveFypAiAnalysisDto) {
+        return await this.pathsService.approveFypAiAnalysis(req.user.email, id, dto.note);
     }
 
     /** The FYP Merit Model — 100pt route-adjusted rubric ranking of eligible (submitted + supervisor-

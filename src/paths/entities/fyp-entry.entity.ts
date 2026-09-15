@@ -332,6 +332,25 @@ export class FypEntry {
   @Column({ type: 'jsonb', nullable: true })
   sectionSummaries: FypSectionSummaries | null;
 
+  /** AI pre-analysis (FYP-MM 1.0 rubric) a supervisor can run before deciding — additive to the
+   * deterministic Merit Model above, mirrors StudentReport.ciiV2. Redacted from the student/team
+   * view until locked — see redactFypAiAnalysisForStudent in paths.service.ts. */
+  @Column({ type: 'jsonb', nullable: true })
+  aiAnalysis?: Record<string, unknown> | null;
+
+  /** Set only once a supervisor approves the AI analysis — hash-locks the decision the same way
+   * StudentReport.ciiV2Lock does, and blocks supervisorReviewFyp from running afterwards.
+   * lockedBySupervisorEmail (not a facultyId) because FYP review scoping is self-declared-email
+   * based throughout this module — see supervisorReviewFyp/findSupervisedFypForAction. */
+  @Column({ type: 'jsonb', nullable: true })
+  aiAnalysisLock?: {
+    locked: boolean;
+    hash: string;
+    lockedAt: string;
+    lockedBySupervisorEmail: string;
+    facultyNote?: string;
+  } | null;
+
   @Column({ type: 'text', nullable: true })
   addedNote: string | null;
 

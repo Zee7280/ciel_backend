@@ -57,6 +57,17 @@ export interface VentureAcademicSetup {
     founderInsight?: string;
     legalStatus?: string;
     ventureType?: string;
+    formVersion?: number;
+    startDate?: string;
+    hoursWeek?: string;
+    degreeLevel?: string;
+    website?: string;
+    commitment?: string;
+    priorExp?: string;
+    skills?: string[];
+    skillGap?: string;
+    equitySplit?: string;
+    advisors?: string;
 }
 
 export interface VentureDocument {
@@ -83,6 +94,21 @@ export interface VentureIdeaInfo {
     whyUs?: string;
     resistance?: string;
     whyNow?: string;
+    customerSegment?: string;
+    frequency?: string;
+    severity?: string;
+    trigger?: string;
+    jtbd?: string;
+    currentSpend?: number;
+    customerQuote?: string;
+    wtpEvidence?: string;
+    geography?: string;
+    tam?: number;
+    som?: number;
+    marketTrend?: string;
+    competitionLevel?: string;
+    positioning?: string;
+    competitors?: { name?: string; price?: string; strength?: string; weakness?: string }[];
 }
 
 export interface VentureSolutionInfo {
@@ -110,6 +136,61 @@ export interface VentureSolutionInfo {
     grossMargin?: number;
     burn?: number;
     runway?: number;
+    productStatus?: string;
+    features?: string;
+    ipStatus?: string;
+    moatType?: string;
+    techDependency?: string;
+    roadmap?: string;
+    deliveryModel?: string;
+    capacity?: string;
+    bottleneck?: string;
+    qualityControl?: string;
+    scalePlan?: string;
+    pricingStrategy?: string;
+    pricingTested?: string;
+    purchaseFreq?: number;
+    retentionYears?: number;
+    primaryChannel?: string;
+    salesMotion?: string;
+    salesCycle?: string;
+    referral?: string;
+    keyMessage?: string;
+    mktBudget?: number;
+    newCustMonth?: number;
+    funnelReach?: number;
+    funnelLeads?: number;
+    funnelCust?: number;
+    brandAssets?: string;
+    partners?: string;
+    fixedCosts?: number;
+    budgetPeriod?: string;
+    budgetStatus?: string;
+    budgetLines?: { category?: string; amount?: number; note?: string }[];
+    fundSources?: { source?: string; amount?: number; note?: string }[];
+    cashOnHand?: number;
+    monthlyCosts?: number;
+    projCustM1?: number;
+    projGrowth?: number;
+    paymentTerms?: string;
+    revenueTarget12?: number;
+    profitMonth?: string;
+    mrr?: number;
+    gmv?: number;
+    takeRate?: number;
+    mau?: number;
+    churn?: number;
+    payingUsers?: number;
+    finAssumptions?: string;
+    accounting?: string;
+    raisePlan?: string;
+    askInstrument?: string;
+    uofProduct?: number;
+    uofOps?: number;
+    uofMarketing?: number;
+    uofTeam?: number;
+    uofLegal?: number;
+    uofContingency?: number;
 }
 
 export interface VentureSdgEntry {
@@ -161,6 +242,15 @@ export interface VentureEvidenceInfo {
     founderOwnership?: number;
     fundRunway?: number;
     exitStrategy?: string;
+    riskRows?: { type?: string; description?: string; likelihood?: string; impact?: string; mitigation?: string }[];
+    otherCommit?: string;
+    keyPerson?: string;
+    hiringNeed?: string;
+    paceScore?: string;
+    burnoutSigns?: string[];
+    burnoutPlan?: string;
+    plan90?: string;
+    vision35?: string;
 }
 
 export interface VentureReviewPipeline {

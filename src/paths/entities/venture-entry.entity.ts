@@ -13,6 +13,8 @@ export interface VentureTeamMember {
     email?: string;
     whatsappCode?: string;
     whatsappNumber?: string;
+    /** Optional team-row commitment from the v13 student form (Full-time / Part-time / Advisor only / Undecided). */
+    commitment?: string;
     /** Server-computed from team_member_invites — 'accepted' only once the named teammate has
      * clicked their emailed invite link while signed in with this exact email. Ignored on write. */
     inviteStatus?: 'pending' | 'accepted';

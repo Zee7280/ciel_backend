@@ -77,6 +77,7 @@ export class VentureTeamMemberDto {
 
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) whatsappCode?: string;
     @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) whatsappNumber?: string;
+    @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) commitment?: string;
 }
 
 // ── 8-step guided wizard nested DTOs (additive) ──

@@ -1402,6 +1402,55 @@ export class PathsService implements OnModuleInit {
     return withStudent;
   }
 
+  /** Faculty-approved + founder-opted-in ventures for the CIEL Investor Hub. */
+  async listVenturesForInvestorHub(opts: { maskFounders: boolean }) {
+    const qb = this.ventureRepo
+      .createQueryBuilder('e')
+      .where(`e.status = 'submitted'`)
+      .andWhere(`e."reviewPipeline"->>'supervisorStatus' = :approvalStatus`, { approvalStatus: 'approved' })
+      .andWhere(
+        `(e."publishSettings"->>'acceptIntros' = 'true' OR e."publishSettings"->>'audience' = 'investors')`,
+      )
+      .orderBy('e."updatedAt"', 'DESC');
+    const entries = await qb.getMany();
+    const annotated = await this.ventureAnnotate(entries);
+    const enriched = annotated.map((entry) => this.withCompleteness(entry)!);
+    const withStudents = await this.attachStudents(enriched);
+    return withStudents.map((entry) => this.sanitizeVentureForInvestor(entry as never, opts.maskFounders));
+  }
+
+  private sanitizeVentureForInvestor(
+    entry: VentureEntry & { student: User | null; completenessPercent?: number; missingItems?: string[] },
+    maskFounders: boolean,
+  ) {
+    const student = entry.student
+      ? {
+          id: maskFounders ? undefined : entry.student.id,
+          name: maskFounders ? 'Founding team' : entry.student.name,
+          institution: entry.student.institution,
+          department: entry.student.department,
+          role: entry.student.role,
+        }
+      : null;
+    const team = Array.isArray(entry.team)
+      ? entry.team.map((m) => ({
+          name: maskFounders ? undefined : m.name,
+          inviteStatus: m.inviteStatus,
+        }))
+      : [];
+    const academicSetup = entry.academicSetup
+      ? { ...entry.academicSetup, supervisorEmail: undefined }
+      : null;
+    return {
+      ...entry,
+      student,
+      team,
+      academicSetup,
+      documents: undefined,
+      materialUrls: undefined,
+    };
+  }
+
   /** Super-admin Investor Hub spotlight — does not change faculty review or student form fields. */
   async setVentureSpotlight(id: string, featured: boolean) {
     const entry = await this.ventureRepo.findOne({ where: { id } });

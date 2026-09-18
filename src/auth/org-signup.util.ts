@@ -3,7 +3,7 @@
 const ORG_SIGNUP_ROLES = new Set(['university', 'ngo', 'corporate']);
 
 /** Public /signup roles only — admin and organization_admin are created internally. */
-export const PUBLIC_SIGNUP_ROLES = ['student', 'faculty', 'university', 'ngo', 'corporate'] as const;
+export const PUBLIC_SIGNUP_ROLES = ['student', 'faculty', 'university', 'ngo', 'corporate', 'investor'] as const;
 export type PublicSignupRole = (typeof PUBLIC_SIGNUP_ROLES)[number];
 
 export function isPublicSignupRole(role: string | undefined | null): boolean {

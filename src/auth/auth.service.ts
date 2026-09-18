@@ -228,12 +228,37 @@ export class AuthService implements OnApplicationBootstrap {
                 affiliationProofUrl,
                 affiliationProofKind,
                 affiliationProofLabel,
+                investorProfile,
                 ...userCreateData
             } = userData as typeof userData & {
                 affiliationProofUrl?: string;
                 affiliationProofKind?: string;
                 affiliationProofLabel?: string;
+                investorProfile?: Record<string, unknown>;
             };
+
+            let investorExtras: { status?: string; settings?: Record<string, unknown> } = {};
+            if (userCreateData.role === UserRole.INVESTOR) {
+                const profile =
+                    investorProfile && typeof investorProfile === 'object' && !Array.isArray(investorProfile)
+                        ? investorProfile
+                        : {};
+                const country = typeof profile.country === 'string' ? profile.country.trim() : '';
+                if (!userCreateData.city && country) userCreateData.city = country;
+                if (!userCreateData.contactPerson) userCreateData.contactPerson = userCreateData.name;
+                userCreateData.orgType = undefined;
+                investorExtras = {
+                    status: 'pending',
+                    settings: {
+                        investor: {
+                            ...profile,
+                            kycStatus: 'pending',
+                            appliedAt: new Date().toISOString(),
+                            hub: { savedIds: [], interest: [], intros: [], activity: [], deskMsgs: [] },
+                        },
+                    },
+                };
+            }
 
             const hashedPassword = await bcrypt.hash(password, 10);
 
@@ -243,7 +268,7 @@ export class AuthService implements OnApplicationBootstrap {
             }
 
             let organization: Organization | null = null;
-            if (userCreateData.orgName && userCreateData.orgType) {
+            if (userCreateData.orgName && userCreateData.orgType && userCreateData.role !== UserRole.INVESTOR) {
                 organization = await this.organizationsService.create({
                     name: userCreateData.orgName,
                     orgType: userCreateData.orgType,
@@ -278,6 +303,7 @@ export class AuthService implements OnApplicationBootstrap {
 
             const user = await this.usersService.create({
                 ...userCreateData,
+                ...investorExtras,
                 email,
                 password: hashedPassword,
                 organization,
@@ -305,7 +331,9 @@ export class AuthService implements OnApplicationBootstrap {
                 success: true,
                 message: needsMembershipFee
                     ? 'Account created. Pay the membership fee and submit proof, or wait for admin activation.'
-                    : 'User created successfully',
+                    : user.role === UserRole.INVESTOR
+                      ? 'Application received. CIEL PK verifies investor accounts within 3 working days.'
+                      : 'User created successfully',
                 data: {
                     user: await this.usersService.formatUserResponse(user),
                 },
@@ -331,10 +359,12 @@ export class AuthService implements OnApplicationBootstrap {
             throw new UnauthorizedException('Invalid credentials');
         }
 
+        const investorPending = user.role === UserRole.INVESTOR && user.status === 'pending';
         if (
             user.status !== 'active' &&
             user.status !== 'approved' &&
-            user.status !== 'pending_membership_payment'
+            user.status !== 'pending_membership_payment' &&
+            !investorPending
         ) {
             throw new UnauthorizedException('Account is not active');
         }

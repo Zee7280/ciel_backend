@@ -396,6 +396,16 @@ export class PathsController {
         return { success: true, data };
     }
 
+    /** Faculty-verified + founder-opted-in ventures for Investor / VC accounts. */
+    @Get('startup-business/investor-hub')
+    @UseGuards(RolesGuard)
+    @Roles(UserRole.INVESTOR)
+    async listInvestorHubVentures(@Request() req) {
+        const maskFounders = req.user?.status === 'pending';
+        const data = await this.pathsService.listVenturesForInvestorHub({ maskFounders });
+        return { success: true, data, kycStatus: maskFounders ? 'pending' : 'verified' };
+    }
+
     /** Faculty founder self-certify — publishes their own record to the impact wall. */
     @Post('startup-business/self-certify')
     @UseGuards(RolesGuard)

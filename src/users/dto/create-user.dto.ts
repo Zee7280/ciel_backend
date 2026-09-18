@@ -1,5 +1,30 @@
-import { IsString, IsEmail, IsOptional, IsEnum, MinLength, ValidateIf } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsString, IsEmail, IsOptional, IsEnum, MinLength, ValidateIf, IsArray, ValidateNested } from 'class-validator';
 import { UserRole } from '../enums/user-role.enum';
+
+/** Mandate / KYC extras for Investor / VC signup — stored on `users.settings.investor`. */
+export class InvestorSignupProfileDto {
+    @IsOptional() @IsString() linkedin?: string;
+    @IsOptional() @IsString() website?: string;
+    @IsOptional() @IsString() investorType?: string;
+    @IsOptional() @IsString() country?: string;
+    @IsOptional() @IsString() hearAbout?: string;
+    @IsOptional() @IsString() referralCode?: string;
+    @IsOptional() @IsArray() @IsString({ each: true }) preferredRounds?: string[];
+    @IsOptional() @IsArray() @IsString({ each: true }) preferredStages?: string[];
+    @IsOptional() @IsArray() @IsString({ each: true }) sectors?: string[];
+    @IsOptional() @IsString() typicalTicket?: string;
+    @IsOptional() @IsString() geographicFocus?: string;
+    @IsOptional() @IsString() dealsPerYear?: string;
+    @IsOptional() @IsString() decisionTimeline?: string;
+    @IsOptional() @IsString() leadFollow?: string;
+    @IsOptional() @IsString() sdgInterests?: string;
+    @IsOptional() @IsString() valueAdd?: string;
+    @IsOptional() @IsString() plan?: string;
+    @IsOptional() @IsString() professionalReference?: string;
+    @IsOptional() @IsString() proofOrgLabel?: string;
+    @IsOptional() @IsString() proofRoleLabel?: string;
+}
 
 const isStudentOrFaculty = (o: CreateUserDto) => o.role === UserRole.STUDENT || o.role === UserRole.FACULTY;
 /** Every public-signup role collects phone + city; only an admin-created SUPER_ADMIN account
@@ -95,6 +120,11 @@ export class CreateUserDto {
     @IsOptional()
     @IsString()
     affiliationProofLabel?: string;
+
+    @IsOptional()
+    @ValidateNested()
+    @Type(() => InvestorSignupProfileDto)
+    investorProfile?: InvestorSignupProfileDto;
 
     @IsEnum(UserRole)
     role: UserRole;

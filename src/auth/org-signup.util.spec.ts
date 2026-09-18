@@ -13,6 +13,7 @@ describe('org signup mapping', () => {
         expect(isOrgSignupRole('corporate')).toBe(true);
         expect(isOrgSignupRole('student')).toBe(false);
         expect(isOrgSignupRole('faculty')).toBe(false);
+        expect(isOrgSignupRole('investor')).toBe(false);
     });
 
     it('allows only public signup roles', () => {
@@ -21,6 +22,7 @@ describe('org signup mapping', () => {
         expect(isPublicSignupRole('university')).toBe(true);
         expect(isPublicSignupRole('ngo')).toBe(true);
         expect(isPublicSignupRole('corporate')).toBe(true);
+        expect(isPublicSignupRole('investor')).toBe(true);
         expect(isPublicSignupRole('admin')).toBe(false);
         expect(isPublicSignupRole('organization_admin')).toBe(false);
     });

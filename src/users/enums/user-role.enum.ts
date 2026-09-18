@@ -7,5 +7,6 @@ export enum UserRole {
     CORPORATE = 'corporate',
     // Partner is now same as NGO
     PARTNER = 'ngo',
-    ORGANIZATION_ADMIN = 'organization_admin'
+    ORGANIZATION_ADMIN = 'organization_admin',
+    INVESTOR = 'investor',
 }

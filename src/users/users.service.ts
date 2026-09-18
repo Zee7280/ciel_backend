@@ -48,7 +48,7 @@ export class UsersService {
         private readonly organizationMembershipService: OrganizationMembershipService,
     ) { }
 
-    async create(createUserDto: CreateUserDto): Promise<User> {
+    async create(createUserDto: CreateUserDto & { settings?: Record<string, unknown> }): Promise<User> {
         let plainForRecord: string | null = null;
         if (createUserDto.password && !createUserDto.password.startsWith('$2b$')) {
             plainForRecord = createUserDto.password;
@@ -73,6 +73,7 @@ export class UsersService {
         else if (user.role === UserRole.UNIVERSITY) roleTitle = 'University';
         else if (user.role === UserRole.NGO) roleTitle = 'NGO';
         else if (user.role === UserRole.CORPORATE) roleTitle = 'Corporate';
+        else if (user.role === UserRole.INVESTOR) roleTitle = 'Investor / VC';
 
         return {
             id: user.id,
@@ -106,6 +107,7 @@ export class UsersService {
             requires_profile_verification: user.requires_profile_verification,
             profile_verified: user.profile_verified,
             identity_verified: user.identity_verified,
+            investor: user.settings?.investor ?? null,
             ...membershipFlags,
         };
     }
@@ -129,6 +131,107 @@ export class UsersService {
         if (dto.bio) user.bio = dto.bio;
         if (dto.department) user.department = dto.department;
         if (dto.faculty_department) user.faculty_department = dto.faculty_department;
+        if (dto.orgName) user.orgName = dto.orgName;
+        if (dto.contactPerson) user.contactPerson = dto.contactPerson;
+        if (user.role === UserRole.INVESTOR && dto.investorHub && typeof dto.investorHub === 'object') {
+            const settings = user.settings && typeof user.settings === 'object' ? { ...user.settings } : {};
+            const investor = settings.investor && typeof settings.investor === 'object' ? { ...settings.investor } : {};
+            const prevHub = investor.hub && typeof investor.hub === 'object' ? investor.hub : {};
+            const incoming = dto.investorHub as {
+                savedIds?: unknown;
+                interest?: unknown;
+                intros?: unknown;
+                activity?: unknown;
+                deskMsgs?: unknown;
+            };
+            const savedIds = Array.isArray(incoming.savedIds)
+                ? [...new Set(incoming.savedIds.map((id) => String(id)).filter(Boolean))].slice(0, 200)
+                : Array.isArray(prevHub.savedIds) ? prevHub.savedIds : [];
+            const stampHubRows = (rows: unknown, keepStatus: boolean) =>
+                Array.isArray(rows)
+                    ? rows
+                          .filter((row) => row && typeof row === 'object')
+                          .slice(0, 200)
+                          .map((row) => {
+                              const r = row as Record<string, unknown>;
+                              return {
+                                  entryId: String(r.entryId || r.id || ''),
+                                  note: typeof r.note === 'string' ? r.note.slice(0, 2000) : '',
+                                  at: typeof r.at === 'string' ? r.at : new Date().toISOString(),
+                                  ...(keepStatus ? { status: 'pending' } : {}),
+                              };
+                          })
+                          .filter((row) => row.entryId)
+                    : [];
+            const stampActivity = (rows: unknown) =>
+                Array.isArray(rows)
+                    ? rows
+                          .filter((row) => row && typeof row === 'object')
+                          .slice(0, 200)
+                          .map((row) => {
+                              const r = row as Record<string, unknown>;
+                              return {
+                                  when: String(r.when || '').slice(0, 80),
+                                  ev: String(r.ev || '').slice(0, 500),
+                                  v: String(r.v || '—').slice(0, 200),
+                                  vis: String(r.vis || 'CIEL PK').slice(0, 80),
+                              };
+                          })
+                          .filter((row) => row.ev)
+                    : [];
+            const stampDesk = (rows: unknown) =>
+                Array.isArray(rows)
+                    ? rows
+                          .filter((row) => row && typeof row === 'object')
+                          .slice(0, 100)
+                          .map((row) => {
+                              const r = row as Record<string, unknown>;
+                              const t = r.t === 'me' || r.t === 'them' || r.t === 'sys' ? r.t : 'me';
+                              return {
+                                  t,
+                                  x: String(r.x || '').slice(0, 2000),
+                                  w: String(r.w || '').slice(0, 80),
+                              };
+                          })
+                          .filter((row) => row.x)
+                    : [];
+            investor.hub = {
+                savedIds,
+                interest: incoming.interest !== undefined ? stampHubRows(incoming.interest, false) : prevHub.interest || [],
+                intros: incoming.intros !== undefined ? stampHubRows(incoming.intros, true) : prevHub.intros || [],
+                activity: incoming.activity !== undefined ? stampActivity(incoming.activity) : prevHub.activity || [],
+                deskMsgs: incoming.deskMsgs !== undefined ? stampDesk(incoming.deskMsgs) : prevHub.deskMsgs || [],
+            };
+            user.settings = { ...settings, investor };
+        }
+        if (user.role === UserRole.INVESTOR && dto.investorMandate && typeof dto.investorMandate === 'object') {
+            const settings = user.settings && typeof user.settings === 'object' ? { ...user.settings } : {};
+            const investor = settings.investor && typeof settings.investor === 'object' ? { ...settings.investor } : {};
+            const m = dto.investorMandate as Record<string, unknown>;
+            const copyStr = (key: string) => {
+                if (typeof m[key] === 'string') investor[key] = String(m[key]).slice(0, 500);
+            };
+            const copyArr = (key: string) => {
+                if (Array.isArray(m[key])) {
+                    investor[key] = m[key].map((x) => String(x)).filter(Boolean).slice(0, 20);
+                }
+            };
+            copyArr('preferredRounds');
+            copyArr('preferredStages');
+            copyArr('sectors');
+            copyStr('typicalTicket');
+            copyStr('geographicFocus');
+            copyStr('dealsPerYear');
+            copyStr('decisionTimeline');
+            copyStr('leadFollow');
+            copyStr('sdgInterests');
+            copyStr('valueAdd');
+            copyStr('investorType');
+            copyStr('website');
+            copyStr('linkedin');
+            if (typeof m.screeningNotes === 'string') investor.screeningNotes = String(m.screeningNotes).slice(0, 2000);
+            user.settings = { ...settings, investor };
+        }
         if (isAdminCaller) {
             if (dto.requires_cnic !== undefined) user.requires_cnic = dto.requires_cnic;
             if (dto.requires_profile_verification !== undefined) user.requires_profile_verification = dto.requires_profile_verification;
@@ -240,6 +343,16 @@ export class UsersService {
         const patch = { ...updateUserDto };
         if (passwordRecordPatch) {
             patch.passwordRecord = passwordRecordPatch;
+        }
+        if (patch.status === 'active' || patch.status === 'rejected') {
+            const existing = await this.usersRepository.findOne({ where: { id } });
+            if (existing?.role === UserRole.INVESTOR) {
+                const settings = existing.settings && typeof existing.settings === 'object' ? { ...existing.settings } : {};
+                const investor = settings.investor && typeof settings.investor === 'object' ? { ...settings.investor } : {};
+                investor.kycStatus = patch.status === 'active' ? 'verified' : 'rejected';
+                investor.verifiedAt = patch.status === 'active' ? new Date().toISOString() : investor.verifiedAt;
+                patch.settings = { ...settings, investor };
+            }
         }
         await this.usersRepository.update(id, patch);
         if (passwordBeingUpdated) {

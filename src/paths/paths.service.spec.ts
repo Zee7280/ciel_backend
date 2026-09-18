@@ -1981,6 +1981,25 @@ describe('PathsService — venture reviewPipeline forgery guard', () => {
         expect((rows[0] as any).meritRibbon).toBeNull();
     });
 
+    it('does not un-approve a venture when the student only toggles investor-track consent', async () => {
+        const { service, rows } = makeUpsertVentureService({
+            id: 'v-1',
+            userId: 'student-1',
+            status: 'submitted',
+            reviewPipeline: { supervisorStatus: 'approved' },
+            meritRibbon: { rank: 1, of: 5 },
+            publishSettings: { audience: 'investors', acceptIntros: true },
+        });
+
+        await service.upsertVenture('student-1', {
+            publishSettings: { audience: 'university', acceptIntros: false },
+        } as any);
+
+        expect((rows[0] as any).reviewPipeline.supervisorStatus).toBe('approved');
+        expect((rows[0] as any).meritRibbon).toEqual({ rank: 1, of: 5 });
+        expect((rows[0] as any).publishSettings.acceptIntros).toBe(false);
+    });
+
     it('refuses to redirect an already-submitted venture to a different supervisorEmail', async () => {
         const { service, rows } = makeUpsertVentureService({
             id: 'v-1',

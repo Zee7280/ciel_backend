@@ -2546,11 +2546,32 @@ export class PathsService implements OnModuleInit {
         if (dto.stepCompleted !== undefined)
           entry.stepCompleted = dto.stepCompleted;
         if (dto.status !== undefined) entry.status = dto.status;
+        // Toggling investor-track consent is not an academic edit — it must not bounce an
+        // approved record back to pending (students can withdraw/opt-in at any time).
+        const consentOnly =
+          dto.publishSettings !== undefined &&
+          dto.ventureName === undefined &&
+          dto.description === undefined &&
+          dto.stage === undefined &&
+          dto.tractionRows === undefined &&
+          dto.team === undefined &&
+          dto.materialUrls === undefined &&
+          dto.academicSetup === undefined &&
+          dto.ideaInfo === undefined &&
+          dto.solutionInfo === undefined &&
+          dto.sdgMapping === undefined &&
+          dto.evidenceInfo === undefined &&
+          dto.reviewPipeline === undefined &&
+          dto.teamConsent === undefined &&
+          dto.sectionSummaries === undefined &&
+          dto.stepCompleted === undefined &&
+          dto.status === undefined;
         // Editing a previously-reviewed record after the fact invalidates that review — same rule
         // as Course Project/FYP: fix & resubmit should land as a fresh review. Keep the supervisor's
         // note so the student still sees it.
         const priorStatus = entry.reviewPipeline?.supervisorStatus;
         if (
+          !consentOnly &&
           entry.status === 'submitted' &&
           (priorStatus === 'approved' || priorStatus === 'rejected' || priorStatus === 'revisions_requested')
         ) {

@@ -150,8 +150,7 @@ export class AllFieldsConsoleService {
     },
   ) {
     const stakeholder = consoleRoleToStakeholder(role);
-    const sectionTitle =
-      REPORT_SECTION_TITLES[section] ?? `Section ${section}`;
+    const sectionTitle = REPORT_SECTION_TITLES[section] ?? `Section ${section}`;
 
     const projectId = (filters?.project_id || '').trim() || undefined;
     const university = (filters?.university || '').trim() || undefined;
@@ -176,7 +175,10 @@ export class AllFieldsConsoleService {
       scope: string;
       project_id?: string;
       fields: AnalyticsFieldValues;
-      meta: Record<string, { category?: AnalyticsFieldCategory; presentation?: string }>;
+      meta: Record<
+        string,
+        { category?: AnalyticsFieldCategory; presentation?: string }
+      >;
       fields_by_category?: unknown;
       category_counts?: unknown;
     };
@@ -189,12 +191,22 @@ export class AllFieldsConsoleService {
       );
       const raw = full.data.fields;
       const sanitized = sanitizeRestrictedValuesForStakeholder(
-        stakeholder as 'student' | 'partner' | 'university' | 'un_government' | 'ciel',
+        stakeholder as
+          | 'student'
+          | 'partner'
+          | 'university'
+          | 'un_government'
+          | 'ciel',
         raw,
       );
       // Faculty: start from university lens (cohort), then drop ciel-only leftovers already filtered.
       const filtered = filterSection1AnalyticsForStakeholder(
-        stakeholder as 'student' | 'partner' | 'university' | 'un_government' | 'ciel',
+        stakeholder as
+          | 'student'
+          | 'partner'
+          | 'university'
+          | 'un_government'
+          | 'ciel',
         sanitized,
       );
       const roleFiltered = this.applyFacultyExtraFilter(
@@ -213,13 +225,12 @@ export class AllFieldsConsoleService {
         category_counts: roleFiltered.category_counts,
       };
     } else {
-      const full =
-        await this.sectionReportAnalyticsService.getSectionAnalytics(
-          section,
-          requester,
-          analyticsQuery,
-          'ciel',
-        );
+      const full = await this.sectionReportAnalyticsService.getSectionAnalytics(
+        section,
+        requester,
+        analyticsQuery,
+        'ciel',
+      );
       const sanitized = sanitizeForStakeholder(stakeholder, full.data.fields);
       const filtered = filterFieldsForStakeholder(
         section,
@@ -247,7 +258,7 @@ export class AllFieldsConsoleService {
       ([key, m]) => ({
         key,
         presentation: m.presentation ?? key,
-        category: (m.category ?? 'basic') as AnalyticsFieldCategory,
+        category: m.category ?? 'basic',
       }),
     );
 
@@ -293,7 +304,10 @@ export class AllFieldsConsoleService {
     role: AllFieldsConsoleRole,
     section: number,
     fields: AnalyticsFieldValues,
-    meta: Record<string, { category?: AnalyticsFieldCategory; presentation?: string }>,
+    meta: Record<
+      string,
+      { category?: AnalyticsFieldCategory; presentation?: string }
+    >,
   ) {
     if (role !== 'faculty') {
       return {
@@ -331,7 +345,10 @@ export class AllFieldsConsoleService {
 
   private groupMeta(
     fields: AnalyticsFieldValues,
-    meta: Record<string, { category?: AnalyticsFieldCategory; presentation?: string }>,
+    meta: Record<
+      string,
+      { category?: AnalyticsFieldCategory; presentation?: string }
+    >,
   ) {
     const fields_by_category: Record<
       AnalyticsFieldCategory,
@@ -344,7 +361,8 @@ export class AllFieldsConsoleService {
     };
     for (const [key, value] of Object.entries(fields)) {
       const category: AnalyticsFieldCategory =
-        meta[key]?.category === 'premium' || meta[key]?.category === 'restricted'
+        meta[key]?.category === 'premium' ||
+        meta[key]?.category === 'restricted'
           ? meta[key].category
           : 'basic';
       fields_by_category[category][key] = value;

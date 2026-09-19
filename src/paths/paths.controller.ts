@@ -1,480 +1,718 @@
-import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Query, Request, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Query,
+  Request,
+  UseGuards,
+} from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
 import { S3Service } from '../common/s3.service';
-import { assertStudentReportUploadMeta, studentReportPresignExpiresInSeconds } from '../common/student-report-file-upload';
+import {
+  assertStudentReportUploadMeta,
+  studentReportPresignExpiresInSeconds,
+} from '../common/student-report-file-upload';
 import { PathsService } from './paths.service';
-import { FacultyReviewCourseProjectDto, UpdateCourseProjectDto } from './dto/update-course-project.dto';
-import { MeritModelQueryDto, NotifyMeritRanksDto } from './dto/merit-model-query.dto';
-import { AddFypDeliverableDto, SupervisorReviewFypDto, UpdateFypDto } from './dto/update-fyp.dto';
-import { ApproveFypAiAnalysisDto, EditFypAiAnalysisDto } from './dto/fyp-ai-analysis.dto';
+import {
+  FacultyReviewCourseProjectDto,
+  UpdateCourseProjectDto,
+} from './dto/update-course-project.dto';
+import {
+  MeritModelQueryDto,
+  NotifyMeritRanksDto,
+} from './dto/merit-model-query.dto';
+import {
+  AddFypDeliverableDto,
+  SupervisorReviewFypDto,
+  UpdateFypDto,
+} from './dto/update-fyp.dto';
+import {
+  ApproveFypAiAnalysisDto,
+  EditFypAiAnalysisDto,
+} from './dto/fyp-ai-analysis.dto';
 import { FypMeritModelQueryDto } from './dto/fyp-merit-model-query.dto';
-import { AddVentureDocumentDto, SetVentureVisibilityDto, SupervisorReviewVentureDto, UpdateVentureDto } from './dto/update-venture.dto';
+import {
+  AddVentureDocumentDto,
+  SetVentureVisibilityDto,
+  SupervisorReviewVentureDto,
+  UpdateVentureDto,
+} from './dto/update-venture.dto';
 import { VentureMeritModelQueryDto } from './dto/venture-merit-model-query.dto';
 import { ResendTeamInviteDto } from './dto/team-invite.dto';
 
 @Controller('paths')
 @UseGuards(JwtAuthGuard)
 export class PathsController {
-    constructor(
-        private readonly pathsService: PathsService,
-        private readonly s3Service: S3Service,
-    ) { }
+  constructor(
+    private readonly pathsService: PathsService,
+    private readonly s3Service: S3Service,
+  ) {}
 
-    /** JSON-only presign shared by all path workspaces' evidence/material uploads. */
-    @Post('evidence/presign')
-    async presignEvidence(
-        @Request() req,
-        @Body() body: { filename?: string; contentType?: string; size?: number | string },
-    ) {
-        const meta = assertStudentReportUploadMeta(body);
-        const signed = await this.s3Service.presignPutObject({
-            folder: `paths-evidence/${req.user.id}`,
-            originalName: meta.filename,
-            contentType: meta.contentType,
-            expiresInSeconds: studentReportPresignExpiresInSeconds(meta.size),
-        });
-        return { success: true, data: { ...signed, url: signed.publicUrl } };
+  /** JSON-only presign shared by all path workspaces' evidence/material uploads. */
+  @Post('evidence/presign')
+  async presignEvidence(
+    @Request() req,
+    @Body()
+    body: { filename?: string; contentType?: string; size?: number | string },
+  ) {
+    const meta = assertStudentReportUploadMeta(body);
+    const signed = await this.s3Service.presignPutObject({
+      folder: `paths-evidence/${req.user.id}`,
+      originalName: meta.filename,
+      contentType: meta.contentType,
+      expiresInSeconds: studentReportPresignExpiresInSeconds(meta.size),
+    });
+    return { success: true, data: { ...signed, url: signed.publicUrl } };
+  }
+
+  // ---------- Course Project ----------
+
+  @Get('course-project')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.STUDENT)
+  async getCourseProject(@Request() req) {
+    const data = await this.pathsService.getCourseProject(req.user.id);
+    return { success: true, data };
+  }
+
+  @Patch('course-project')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.STUDENT)
+  async updateCourseProject(
+    @Request() req,
+    @Body() dto: UpdateCourseProjectDto,
+  ) {
+    const data = await this.pathsService.upsertCourseProject(req.user.id, dto);
+    return { success: true, data };
+  }
+
+  /** A student's full coursework deck — every report they've submitted or drafted, plus any
+   * teammate's report they were named on in step 1 (including drafts they can co-edit). */
+  @Get('course-projects')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.STUDENT)
+  async listCourseProjects(@Request() req) {
+    const data = await this.pathsService.listCourseProjects(
+      req.user.id,
+      req.user.email,
+    );
+    return { success: true, data };
+  }
+
+  @Post('course-projects')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.STUDENT)
+  async createCourseProject(@Request() req) {
+    const data = await this.pathsService.createCourseProject(req.user.id);
+    return { success: true, data };
+  }
+
+  /** Cards from students who named this teacher as their supervisor — the faculty deck. */
+  @Get('course-projects/supervised')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.FACULTY)
+  async listSupervisedCourseProjects(@Request() req) {
+    const data = await this.pathsService.listCourseProjectsForTeacher(
+      req.user.email,
+    );
+    return { success: true, data };
+  }
+
+  /** Draft cards from students who named this teacher as their supervisor but haven't submitted yet. */
+  @Get('course-projects/in-progress')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.FACULTY)
+  async listInProgressSupervisedCourseProjects(@Request() req) {
+    const data = await this.pathsService.listInProgressCourseProjectsForTeacher(
+      req.user.email,
+    );
+    return { success: true, data };
+  }
+
+  /** Faculty approve/reject a submitted student's Course Project entry — the gate for Merit Model ranking/showcase eligibility. */
+  @Patch('course-projects/:id/faculty-review')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.FACULTY)
+  async facultyReviewCourseProject(
+    @Request() req,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: FacultyReviewCourseProjectDto,
+  ) {
+    const data = await this.pathsService.facultyReviewCourseProject(
+      req.user.email,
+      id,
+      dto.action,
+      dto.note,
+      dto.moderation,
+    );
+    return { success: true, data };
+  }
+
+  /** Cards from students linked to this university partner org — the university showcase deck.
+   * Defaults to submitted-only; pass ?status=draft for the in-progress companion view. Pass
+   * ?approvalStatus=approved to get the "Coursework Impact Wall" enforced at the query level —
+   * never rely on the caller to filter facultyApprovalStatus client-side. */
+  @Get('course-projects/university')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN)
+  async listUniversityCourseProjects(
+    @Request() req,
+    @Query('status') status?: 'draft' | 'submitted',
+    @Query('approvalStatus')
+    approvalStatus?: 'pending' | 'approved' | 'rejected' | 'revision_requested',
+  ) {
+    const data = await this.pathsService.listCourseProjectsForUniversity(
+      req.user.organizationId,
+      status,
+      approvalStatus,
+    );
+    return { success: true, data };
+  }
+
+  /** The Merit Model — 100pt rubric ranking of eligible (submitted + faculty-approved) Course
+   * Project entries, scoped by the caller's real role (faculty supervision / university / CIEL). */
+  @Get('course-projects/merit-model')
+  @UseGuards(RolesGuard)
+  @Roles(
+    UserRole.FACULTY,
+    UserRole.UNIVERSITY,
+    UserRole.ORGANIZATION_ADMIN,
+    UserRole.SUPER_ADMIN,
+  )
+  async getCourseProjectMeritModel(
+    @Request() req,
+    @Query() query: MeritModelQueryDto,
+  ) {
+    const data = await this.pathsService.getCourseProjectMeritModel(
+      req.user,
+      query,
+    );
+    return { success: true, data };
+  }
+
+  /** After a faculty/university/admin analyzer run — notify the owners of the top-ranked cards. Scoped to the caller's own eligible pool. */
+  @Post('course-projects/merit-model/notify')
+  @UseGuards(RolesGuard)
+  @Roles(
+    UserRole.FACULTY,
+    UserRole.UNIVERSITY,
+    UserRole.ORGANIZATION_ADMIN,
+    UserRole.SUPER_ADMIN,
+  )
+  async notifyCourseProjectMeritRanks(
+    @Request() req,
+    @Body() dto: NotifyMeritRanksDto,
+  ) {
+    const data = await this.pathsService.notifyCourseProjectMeritRanks(
+      req.user,
+      dto,
+    );
+    return { success: true, data };
+  }
+
+  @Get('course-projects/:id')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.STUDENT)
+  async getCourseProjectById(
+    @Request() req,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const data = await this.pathsService.getCourseProjectByIdForUser(
+      req.user.id,
+      req.user.email,
+      id,
+    );
+    return { success: true, data };
+  }
+
+  @Patch('course-projects/:id')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.STUDENT)
+  async updateCourseProjectById(
+    @Request() req,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateCourseProjectDto,
+  ) {
+    const data = await this.pathsService.updateCourseProjectByIdForUser(
+      req.user.id,
+      id,
+      dto,
+      req.user.email,
+    );
+    return { success: true, data };
+  }
+
+  @Delete('course-projects/:id')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.STUDENT)
+  async deleteCourseProjectById(
+    @Request() req,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    await this.pathsService.deleteCourseProjectByIdForUser(req.user.id, id);
+    return { success: true };
+  }
+
+  // ---------- FYP / Thesis ----------
+
+  @Get('fyp-thesis')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.STUDENT)
+  async getFyp(@Request() req) {
+    const data = await this.pathsService.getFyp(req.user.id, req.user.email);
+    return { success: true, data };
+  }
+
+  @Patch('fyp-thesis')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.STUDENT)
+  async updateFyp(@Request() req, @Body() dto: UpdateFypDto) {
+    const data = await this.pathsService.upsertFyp(
+      req.user.id,
+      dto,
+      req.user.email,
+    );
+    return { success: true, data };
+  }
+
+  @Post('fyp-thesis/deliverables')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.STUDENT)
+  async addFypDeliverable(@Request() req, @Body() dto: AddFypDeliverableDto) {
+    const data = await this.pathsService.addFypDeliverable(
+      req.user.id,
+      dto,
+      req.user.email,
+    );
+    return { success: true, data };
+  }
+
+  /** One student can have several independent FYP records — the multi-record deck, mirroring
+   * Course Project's list/create/id-scoped routes. The legacy singleton routes above stay for
+   * backward compatibility. */
+  @Get('fyp-theses')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.STUDENT)
+  async listFyps(@Request() req) {
+    const data = await this.pathsService.listFyps(req.user.id, req.user.email);
+    return { success: true, data };
+  }
+
+  @Post('fyp-theses')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.STUDENT)
+  async createFyp(@Request() req) {
+    const data = await this.pathsService.createFyp(req.user.id);
+    return { success: true, data };
+  }
+
+  @Get('fyp-theses/:id')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.STUDENT)
+  async getFypById(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
+    const data = await this.pathsService.getFypByIdForUser(
+      req.user.id,
+      req.user.email,
+      id,
+    );
+    return { success: true, data };
+  }
+
+  @Patch('fyp-theses/:id')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.STUDENT)
+  async updateFypById(
+    @Request() req,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateFypDto,
+  ) {
+    const data = await this.pathsService.updateFypByIdForUser(
+      req.user.id,
+      id,
+      dto,
+      req.user.email,
+    );
+    return { success: true, data };
+  }
+
+  @Delete('fyp-theses/:id')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.STUDENT)
+  async deleteFypById(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
+    await this.pathsService.deleteFypByIdForUser(req.user.id, id);
+    return { success: true };
+  }
+
+  @Post('fyp-theses/:id/deliverables')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.STUDENT)
+  async addFypDeliverableById(
+    @Request() req,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AddFypDeliverableDto,
+  ) {
+    const data = await this.pathsService.addFypDeliverableByIdForUser(
+      req.user.id,
+      id,
+      dto,
+      req.user.email,
+    );
+    return { success: true, data };
+  }
+
+  /** Records from students who named this teacher as their supervisor — the faculty deck. */
+  @Get('fyp-thesis/supervised')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.FACULTY)
+  async listSupervisedFyp(@Request() req) {
+    const data = await this.pathsService.listFypForTeacher(req.user.email);
+    return { success: true, data };
+  }
+
+  /** Draft records from students who named this teacher as their supervisor but haven't submitted yet. */
+  @Get('fyp-thesis/in-progress')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.FACULTY)
+  async listInProgressSupervisedFyp(@Request() req) {
+    const data = await this.pathsService.listInProgressFypForTeacher(
+      req.user.email,
+    );
+    return { success: true, data };
+  }
+
+  /** Records from students formally linked to this university partner org — the university showcase deck.
+   * Pass ?approvalStatus=approved to get the "FYP Impact Wall" enforced at the query level —
+   * never rely on the caller to filter supervisorApprovalStatus client-side. */
+  @Get('fyp-thesis/university')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN)
+  async listUniversityFyp(
+    @Request() req,
+    @Query('status') status?: 'draft' | 'submitted',
+    @Query('approvalStatus')
+    approvalStatus?: 'pending' | 'approved' | 'rejected' | 'revision_requested',
+  ) {
+    const data = await this.pathsService.listFypForUniversity(
+      req.user.organizationId,
+      status,
+      approvalStatus,
+    );
+    return { success: true, data };
+  }
+
+  /** Supervisor approve/reject a submitted student's FYP entry — the gate for Merit Model ranking/showcase eligibility. */
+  @Patch('fyp-thesis/:id/supervisor-review')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.FACULTY)
+  async supervisorReviewFyp(
+    @Request() req,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SupervisorReviewFypDto,
+  ) {
+    const data = await this.pathsService.supervisorReviewFyp(
+      req.user.email,
+      id,
+      dto.action,
+      dto.note,
+    );
+    return { success: true, data };
+  }
+
+  /** Faculty Review Loop — full unredacted record (incl. any AI analysis) for the review workspace. */
+  @Get('fyp-thesis/:id/review')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.FACULTY)
+  async getFypForSupervisorReview(
+    @Request() req,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const data = await this.pathsService.getFypForSupervisorReview(
+      req.user.email,
+      id,
+    );
+    return { success: true, data };
+  }
+
+  /** Runs (or re-runs, while unlocked) the FYP-MM 1.0 AI pre-analysis before the supervisor decides. */
+  @Post('fyp-thesis/:id/ai-analysis/analyse')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.FACULTY)
+  async analyseFypAi(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
+    return await this.pathsService.runFypAiAnalysis(req.user.email, id);
+  }
+
+  /** Faculty override of one or more AI-scored dimensions before approving. */
+  @Patch('fyp-thesis/:id/ai-analysis')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.FACULTY)
+  async editFypAiAnalysis(
+    @Request() req,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: EditFypAiAnalysisDto,
+  ) {
+    return await this.pathsService.editFypAiAnalysis(req.user.email, id, dto);
+  }
+
+  /** Approves and hash-locks the AI analysis — also records the supervisor's FYP approval decision. */
+  @Post('fyp-thesis/:id/ai-analysis/approve')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.FACULTY)
+  async approveFypAiAnalysis(
+    @Request() req,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ApproveFypAiAnalysisDto,
+  ) {
+    return await this.pathsService.approveFypAiAnalysis(
+      req.user.email,
+      id,
+      dto.note,
+    );
+  }
+
+  /** The FYP Merit Model — 100pt route-adjusted rubric ranking of eligible (submitted + supervisor-
+   * approved) FYP entries, scoped by the caller's real role (faculty supervision / university / CIEL). */
+  @Get('fyp-thesis/merit-model')
+  @UseGuards(RolesGuard)
+  @Roles(
+    UserRole.FACULTY,
+    UserRole.UNIVERSITY,
+    UserRole.ORGANIZATION_ADMIN,
+    UserRole.SUPER_ADMIN,
+  )
+  async getFypMeritModel(
+    @Request() req,
+    @Query() query: FypMeritModelQueryDto,
+  ) {
+    const data = await this.pathsService.getFypMeritModel(req.user, query);
+    return { success: true, data };
+  }
+
+  /** After a faculty/university/admin FYP merit-model run — notify the owners of the top-ranked cards. */
+  @Post('fyp-thesis/merit-model/notify')
+  @UseGuards(RolesGuard)
+  @Roles(
+    UserRole.FACULTY,
+    UserRole.UNIVERSITY,
+    UserRole.ORGANIZATION_ADMIN,
+    UserRole.SUPER_ADMIN,
+  )
+  async notifyFypMeritRanks(@Request() req, @Body() dto: NotifyMeritRanksDto) {
+    const data = await this.pathsService.notifyFypMeritRanks(req.user, dto);
+    return { success: true, data };
+  }
+
+  // ---------- Team-member invites (Course Project / FYP / Startup-Business) ----------
+
+  /** Preview shown on the /verify/team-invite landing page before the teammate accepts. */
+  @Get('team-invites/:token')
+  async getTeamInvitePreview(@Param('token') token: string) {
+    const data = await this.pathsService.getTeamInvitePreview(token);
+    return { success: true, data };
+  }
+
+  /** The invited teammate accepts — must be signed in with the exact email the invite was sent to. */
+  @Post('team-invites/:token/accept')
+  async acceptTeamInvite(@Request() req, @Param('token') token: string) {
+    const data = await this.pathsService.acceptTeamInvite(
+      token,
+      req.user.id,
+      req.user.email,
+    );
+    return { success: true, data };
+  }
+
+  /** The report owner resends a still-pending invite — looked up by (kind, entryId, email), not
+   * token, since the owner's own view never exposes a teammate's invite token. */
+  @Post('team-invites/resend')
+  async resendTeamInvite(@Request() req, @Body() dto: ResendTeamInviteDto) {
+    const data = await this.pathsService.resendTeamInvite(
+      req.user.id,
+      dto.kind,
+      dto.entryId,
+      dto.email,
+    );
+    return { success: true, data };
+  }
+
+  // ---------- Startup / Business ----------
+
+  /** Ventures from students who named this teacher as supervisor — the faculty cohort deck. */
+  @Get('startup-business/supervised')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.FACULTY)
+  async listSupervisedVentures(@Request() req) {
+    const data = await this.pathsService.listVenturesForTeacher(
+      req.user.email,
+      req.user.id,
+    );
+    return { success: true, data };
+  }
+
+  /** Draft ventures that name this teacher — Startup Pipeline "in process". */
+  @Get('startup-business/in-progress')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.FACULTY)
+  async listInProgressSupervisedVentures(@Request() req) {
+    const data = await this.pathsService.listInProgressVenturesForTeacher(
+      req.user.email,
+      req.user.id,
+    );
+    return { success: true, data };
+  }
+
+  /** Records from students/faculty linked to this university partner org — the university pipeline.
+   * Pass ?approvalStatus=approved to get the approved-only wall enforced at the query level —
+   * never rely on the caller to filter reviewPipeline.supervisorStatus client-side. */
+  @Get('startup-business/university')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN)
+  async listUniversityVentures(
+    @Request() req,
+    @Query('status') status?: 'draft' | 'submitted',
+    @Query('approvalStatus')
+    approvalStatus?:
+      | 'not_started'
+      | 'pending'
+      | 'approved'
+      | 'revisions_requested'
+      | 'rejected',
+  ) {
+    const data = await this.pathsService.listVenturesForUniversity(
+      req.user.organizationId,
+      status,
+      approvalStatus,
+    );
+    return { success: true, data };
+  }
+
+  /** Faculty-verified + founder-opted-in ventures for Investor / VC accounts. */
+  @Get('startup-business/investor-hub')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.INVESTOR)
+  async listInvestorHubVentures(@Request() req) {
+    const maskFounders = req.user?.status === 'pending';
+    const data = await this.pathsService.listVenturesForInvestorHub({
+      maskFounders,
+    });
+    return {
+      success: true,
+      data,
+      kycStatus: maskFounders ? 'pending' : 'verified',
+    };
+  }
+
+  /** Faculty founder self-certify — publishes their own record to the impact wall. */
+  @Post('startup-business/self-certify')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.FACULTY)
+  async selfCertifyOwnVenture(@Request() req) {
+    const data = await this.pathsService.selfCertifyOwnVenture(req.user.id);
+    return { success: true, data };
+  }
+
+  /** Supervisor approve / request-changes — the gate students already wait on in reviewPipeline. */
+  @Patch('startup-business/:id/supervisor-review')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.FACULTY)
+  async supervisorReviewVenture(
+    @Request() req,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SupervisorReviewVentureDto,
+  ) {
+    const data = await this.pathsService.supervisorReviewVenture(
+      req.user.email,
+      id,
+      dto.action,
+      dto.note,
+      req.user.id,
+    );
+    return { success: true, data };
+  }
+
+  /** The Venture Merit Model — 100pt rubric ranking of eligible (submitted + supervisor-approved)
+   * ventures, scoped by the caller's real role (faculty supervision / university / CIEL). */
+  @Get('startup-business/merit-model')
+  @UseGuards(RolesGuard)
+  @Roles(
+    UserRole.FACULTY,
+    UserRole.UNIVERSITY,
+    UserRole.ORGANIZATION_ADMIN,
+    UserRole.SUPER_ADMIN,
+  )
+  async getVentureMeritModel(
+    @Request() req,
+    @Query() query: VentureMeritModelQueryDto,
+  ) {
+    const data = await this.pathsService.getVentureMeritModel(req.user, query);
+    return { success: true, data };
+  }
+
+  /** After a faculty/university/admin venture merit-model run — notify the owners of the top-ranked cards. */
+  @Post('startup-business/merit-model/notify')
+  @UseGuards(RolesGuard)
+  @Roles(
+    UserRole.FACULTY,
+    UserRole.UNIVERSITY,
+    UserRole.ORGANIZATION_ADMIN,
+    UserRole.SUPER_ADMIN,
+  )
+  async notifyVentureMeritRanks(
+    @Request() req,
+    @Body() dto: NotifyMeritRanksDto,
+  ) {
+    const data = await this.pathsService.notifyVentureMeritRanks(req.user, dto);
+    return { success: true, data };
+  }
+
+  @Get('startup-business')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.STUDENT, UserRole.FACULTY)
+  async getVenture(@Request() req) {
+    const data = await this.pathsService.getVenture(
+      req.user.id,
+      req.user.email,
+    );
+    return { success: true, data };
+  }
+
+  @Patch('startup-business')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.STUDENT, UserRole.FACULTY)
+  async updateVenture(@Request() req, @Body() dto: UpdateVentureDto) {
+    const data = await this.pathsService.upsertVenture(req.user.id, dto);
+    return { success: true, data };
+  }
+
+  @Patch('startup-business/visibility')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.STUDENT)
+  async setVentureVisibility(
+    @Request() req,
+    @Body() dto: SetVentureVisibilityDto,
+  ) {
+    const result = await this.pathsService.setVentureVisibility(
+      req.user.id,
+      dto.isVisible,
+    );
+    if (result.error) {
+      return { success: false, ...result };
     }
+    return { success: true, data: result.data };
+  }
 
-    // ---------- Course Project ----------
-
-    @Get('course-project')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.STUDENT)
-    async getCourseProject(@Request() req) {
-        const data = await this.pathsService.getCourseProject(req.user.id);
-        return { success: true, data };
-    }
-
-    @Patch('course-project')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.STUDENT)
-    async updateCourseProject(@Request() req, @Body() dto: UpdateCourseProjectDto) {
-        const data = await this.pathsService.upsertCourseProject(req.user.id, dto);
-        return { success: true, data };
-    }
-
-    /** A student's full coursework deck — every report they've submitted or drafted, plus any
-     * teammate's report they were named on in step 1 (including drafts they can co-edit). */
-    @Get('course-projects')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.STUDENT)
-    async listCourseProjects(@Request() req) {
-        const data = await this.pathsService.listCourseProjects(req.user.id, req.user.email);
-        return { success: true, data };
-    }
-
-    @Post('course-projects')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.STUDENT)
-    async createCourseProject(@Request() req) {
-        const data = await this.pathsService.createCourseProject(req.user.id);
-        return { success: true, data };
-    }
-
-    /** Cards from students who named this teacher as their supervisor — the faculty deck. */
-    @Get('course-projects/supervised')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.FACULTY)
-    async listSupervisedCourseProjects(@Request() req) {
-        const data = await this.pathsService.listCourseProjectsForTeacher(req.user.email);
-        return { success: true, data };
-    }
-
-    /** Draft cards from students who named this teacher as their supervisor but haven't submitted yet. */
-    @Get('course-projects/in-progress')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.FACULTY)
-    async listInProgressSupervisedCourseProjects(@Request() req) {
-        const data = await this.pathsService.listInProgressCourseProjectsForTeacher(req.user.email);
-        return { success: true, data };
-    }
-
-    /** Faculty approve/reject a submitted student's Course Project entry — the gate for Merit Model ranking/showcase eligibility. */
-    @Patch('course-projects/:id/faculty-review')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.FACULTY)
-    async facultyReviewCourseProject(@Request() req, @Param('id', ParseUUIDPipe) id: string, @Body() dto: FacultyReviewCourseProjectDto) {
-        const data = await this.pathsService.facultyReviewCourseProject(req.user.email, id, dto.action, dto.note, dto.moderation);
-        return { success: true, data };
-    }
-
-    /** Cards from students linked to this university partner org — the university showcase deck.
-     * Defaults to submitted-only; pass ?status=draft for the in-progress companion view. Pass
-     * ?approvalStatus=approved to get the "Coursework Impact Wall" enforced at the query level —
-     * never rely on the caller to filter facultyApprovalStatus client-side. */
-    @Get('course-projects/university')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN)
-    async listUniversityCourseProjects(
-        @Request() req,
-        @Query('status') status?: 'draft' | 'submitted',
-        @Query('approvalStatus') approvalStatus?: 'pending' | 'approved' | 'rejected' | 'revision_requested',
-    ) {
-        const data = await this.pathsService.listCourseProjectsForUniversity(req.user.organizationId, status, approvalStatus);
-        return { success: true, data };
-    }
-
-    /** The Merit Model — 100pt rubric ranking of eligible (submitted + faculty-approved) Course
-     * Project entries, scoped by the caller's real role (faculty supervision / university / CIEL). */
-    @Get('course-projects/merit-model')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.FACULTY, UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN, UserRole.SUPER_ADMIN)
-    async getCourseProjectMeritModel(@Request() req, @Query() query: MeritModelQueryDto) {
-        const data = await this.pathsService.getCourseProjectMeritModel(req.user, query);
-        return { success: true, data };
-    }
-
-    /** After a faculty/university/admin analyzer run — notify the owners of the top-ranked cards. Scoped to the caller's own eligible pool. */
-    @Post('course-projects/merit-model/notify')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.FACULTY, UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN, UserRole.SUPER_ADMIN)
-    async notifyCourseProjectMeritRanks(@Request() req, @Body() dto: NotifyMeritRanksDto) {
-        const data = await this.pathsService.notifyCourseProjectMeritRanks(req.user, dto);
-        return { success: true, data };
-    }
-
-    @Get('course-projects/:id')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.STUDENT)
-    async getCourseProjectById(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
-        const data = await this.pathsService.getCourseProjectByIdForUser(req.user.id, req.user.email, id);
-        return { success: true, data };
-    }
-
-    @Patch('course-projects/:id')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.STUDENT)
-    async updateCourseProjectById(@Request() req, @Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateCourseProjectDto) {
-        const data = await this.pathsService.updateCourseProjectByIdForUser(
-            req.user.id,
-            id,
-            dto,
-            req.user.email,
-        );
-        return { success: true, data };
-    }
-
-    @Delete('course-projects/:id')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.STUDENT)
-    async deleteCourseProjectById(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
-        await this.pathsService.deleteCourseProjectByIdForUser(req.user.id, id);
-        return { success: true };
-    }
-
-    // ---------- FYP / Thesis ----------
-
-    @Get('fyp-thesis')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.STUDENT)
-    async getFyp(@Request() req) {
-        const data = await this.pathsService.getFyp(req.user.id, req.user.email);
-        return { success: true, data };
-    }
-
-    @Patch('fyp-thesis')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.STUDENT)
-    async updateFyp(@Request() req, @Body() dto: UpdateFypDto) {
-        const data = await this.pathsService.upsertFyp(req.user.id, dto, req.user.email);
-        return { success: true, data };
-    }
-
-    @Post('fyp-thesis/deliverables')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.STUDENT)
-    async addFypDeliverable(@Request() req, @Body() dto: AddFypDeliverableDto) {
-        const data = await this.pathsService.addFypDeliverable(req.user.id, dto, req.user.email);
-        return { success: true, data };
-    }
-
-    /** One student can have several independent FYP records — the multi-record deck, mirroring
-     * Course Project's list/create/id-scoped routes. The legacy singleton routes above stay for
-     * backward compatibility. */
-    @Get('fyp-theses')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.STUDENT)
-    async listFyps(@Request() req) {
-        const data = await this.pathsService.listFyps(req.user.id, req.user.email);
-        return { success: true, data };
-    }
-
-    @Post('fyp-theses')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.STUDENT)
-    async createFyp(@Request() req) {
-        const data = await this.pathsService.createFyp(req.user.id);
-        return { success: true, data };
-    }
-
-    @Get('fyp-theses/:id')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.STUDENT)
-    async getFypById(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
-        const data = await this.pathsService.getFypByIdForUser(req.user.id, req.user.email, id);
-        return { success: true, data };
-    }
-
-    @Patch('fyp-theses/:id')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.STUDENT)
-    async updateFypById(@Request() req, @Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateFypDto) {
-        const data = await this.pathsService.updateFypByIdForUser(req.user.id, id, dto, req.user.email);
-        return { success: true, data };
-    }
-
-    @Delete('fyp-theses/:id')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.STUDENT)
-    async deleteFypById(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
-        await this.pathsService.deleteFypByIdForUser(req.user.id, id);
-        return { success: true };
-    }
-
-    @Post('fyp-theses/:id/deliverables')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.STUDENT)
-    async addFypDeliverableById(@Request() req, @Param('id', ParseUUIDPipe) id: string, @Body() dto: AddFypDeliverableDto) {
-        const data = await this.pathsService.addFypDeliverableByIdForUser(req.user.id, id, dto, req.user.email);
-        return { success: true, data };
-    }
-
-    /** Records from students who named this teacher as their supervisor — the faculty deck. */
-    @Get('fyp-thesis/supervised')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.FACULTY)
-    async listSupervisedFyp(@Request() req) {
-        const data = await this.pathsService.listFypForTeacher(req.user.email);
-        return { success: true, data };
-    }
-
-    /** Draft records from students who named this teacher as their supervisor but haven't submitted yet. */
-    @Get('fyp-thesis/in-progress')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.FACULTY)
-    async listInProgressSupervisedFyp(@Request() req) {
-        const data = await this.pathsService.listInProgressFypForTeacher(req.user.email);
-        return { success: true, data };
-    }
-
-    /** Records from students formally linked to this university partner org — the university showcase deck.
-     * Pass ?approvalStatus=approved to get the "FYP Impact Wall" enforced at the query level —
-     * never rely on the caller to filter supervisorApprovalStatus client-side. */
-    @Get('fyp-thesis/university')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN)
-    async listUniversityFyp(
-        @Request() req,
-        @Query('status') status?: 'draft' | 'submitted',
-        @Query('approvalStatus') approvalStatus?: 'pending' | 'approved' | 'rejected' | 'revision_requested',
-    ) {
-        const data = await this.pathsService.listFypForUniversity(req.user.organizationId, status, approvalStatus);
-        return { success: true, data };
-    }
-
-    /** Supervisor approve/reject a submitted student's FYP entry — the gate for Merit Model ranking/showcase eligibility. */
-    @Patch('fyp-thesis/:id/supervisor-review')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.FACULTY)
-    async supervisorReviewFyp(@Request() req, @Param('id', ParseUUIDPipe) id: string, @Body() dto: SupervisorReviewFypDto) {
-        const data = await this.pathsService.supervisorReviewFyp(req.user.email, id, dto.action, dto.note);
-        return { success: true, data };
-    }
-
-    /** Faculty Review Loop — full unredacted record (incl. any AI analysis) for the review workspace. */
-    @Get('fyp-thesis/:id/review')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.FACULTY)
-    async getFypForSupervisorReview(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
-        const data = await this.pathsService.getFypForSupervisorReview(req.user.email, id);
-        return { success: true, data };
-    }
-
-    /** Runs (or re-runs, while unlocked) the FYP-MM 1.0 AI pre-analysis before the supervisor decides. */
-    @Post('fyp-thesis/:id/ai-analysis/analyse')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.FACULTY)
-    async analyseFypAi(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
-        return await this.pathsService.runFypAiAnalysis(req.user.email, id);
-    }
-
-    /** Faculty override of one or more AI-scored dimensions before approving. */
-    @Patch('fyp-thesis/:id/ai-analysis')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.FACULTY)
-    async editFypAiAnalysis(@Request() req, @Param('id', ParseUUIDPipe) id: string, @Body() dto: EditFypAiAnalysisDto) {
-        return await this.pathsService.editFypAiAnalysis(req.user.email, id, dto);
-    }
-
-    /** Approves and hash-locks the AI analysis — also records the supervisor's FYP approval decision. */
-    @Post('fyp-thesis/:id/ai-analysis/approve')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.FACULTY)
-    async approveFypAiAnalysis(@Request() req, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ApproveFypAiAnalysisDto) {
-        return await this.pathsService.approveFypAiAnalysis(req.user.email, id, dto.note);
-    }
-
-    /** The FYP Merit Model — 100pt route-adjusted rubric ranking of eligible (submitted + supervisor-
-     * approved) FYP entries, scoped by the caller's real role (faculty supervision / university / CIEL). */
-    @Get('fyp-thesis/merit-model')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.FACULTY, UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN, UserRole.SUPER_ADMIN)
-    async getFypMeritModel(@Request() req, @Query() query: FypMeritModelQueryDto) {
-        const data = await this.pathsService.getFypMeritModel(req.user, query);
-        return { success: true, data };
-    }
-
-    /** After a faculty/university/admin FYP merit-model run — notify the owners of the top-ranked cards. */
-    @Post('fyp-thesis/merit-model/notify')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.FACULTY, UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN, UserRole.SUPER_ADMIN)
-    async notifyFypMeritRanks(@Request() req, @Body() dto: NotifyMeritRanksDto) {
-        const data = await this.pathsService.notifyFypMeritRanks(req.user, dto);
-        return { success: true, data };
-    }
-
-    // ---------- Team-member invites (Course Project / FYP / Startup-Business) ----------
-
-    /** Preview shown on the /verify/team-invite landing page before the teammate accepts. */
-    @Get('team-invites/:token')
-    async getTeamInvitePreview(@Param('token') token: string) {
-        const data = await this.pathsService.getTeamInvitePreview(token);
-        return { success: true, data };
-    }
-
-    /** The invited teammate accepts — must be signed in with the exact email the invite was sent to. */
-    @Post('team-invites/:token/accept')
-    async acceptTeamInvite(@Request() req, @Param('token') token: string) {
-        const data = await this.pathsService.acceptTeamInvite(token, req.user.id, req.user.email);
-        return { success: true, data };
-    }
-
-    /** The report owner resends a still-pending invite — looked up by (kind, entryId, email), not
-     * token, since the owner's own view never exposes a teammate's invite token. */
-    @Post('team-invites/resend')
-    async resendTeamInvite(@Request() req, @Body() dto: ResendTeamInviteDto) {
-        const data = await this.pathsService.resendTeamInvite(req.user.id, dto.kind, dto.entryId, dto.email);
-        return { success: true, data };
-    }
-
-    // ---------- Startup / Business ----------
-
-    /** Ventures from students who named this teacher as supervisor — the faculty cohort deck. */
-    @Get('startup-business/supervised')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.FACULTY)
-    async listSupervisedVentures(@Request() req) {
-        const data = await this.pathsService.listVenturesForTeacher(req.user.email, req.user.id);
-        return { success: true, data };
-    }
-
-    /** Draft ventures that name this teacher — Startup Pipeline "in process". */
-    @Get('startup-business/in-progress')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.FACULTY)
-    async listInProgressSupervisedVentures(@Request() req) {
-        const data = await this.pathsService.listInProgressVenturesForTeacher(req.user.email, req.user.id);
-        return { success: true, data };
-    }
-
-    /** Records from students/faculty linked to this university partner org — the university pipeline.
-     * Pass ?approvalStatus=approved to get the approved-only wall enforced at the query level —
-     * never rely on the caller to filter reviewPipeline.supervisorStatus client-side. */
-    @Get('startup-business/university')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN)
-    async listUniversityVentures(
-        @Request() req,
-        @Query('status') status?: 'draft' | 'submitted',
-        @Query('approvalStatus') approvalStatus?: 'not_started' | 'pending' | 'approved' | 'revisions_requested' | 'rejected',
-    ) {
-        const data = await this.pathsService.listVenturesForUniversity(req.user.organizationId, status, approvalStatus);
-        return { success: true, data };
-    }
-
-    /** Faculty-verified + founder-opted-in ventures for Investor / VC accounts. */
-    @Get('startup-business/investor-hub')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.INVESTOR)
-    async listInvestorHubVentures(@Request() req) {
-        const maskFounders = req.user?.status === 'pending';
-        const data = await this.pathsService.listVenturesForInvestorHub({ maskFounders });
-        return { success: true, data, kycStatus: maskFounders ? 'pending' : 'verified' };
-    }
-
-    /** Faculty founder self-certify — publishes their own record to the impact wall. */
-    @Post('startup-business/self-certify')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.FACULTY)
-    async selfCertifyOwnVenture(@Request() req) {
-        const data = await this.pathsService.selfCertifyOwnVenture(req.user.id);
-        return { success: true, data };
-    }
-
-    /** Supervisor approve / request-changes — the gate students already wait on in reviewPipeline. */
-    @Patch('startup-business/:id/supervisor-review')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.FACULTY)
-    async supervisorReviewVenture(@Request() req, @Param('id', ParseUUIDPipe) id: string, @Body() dto: SupervisorReviewVentureDto) {
-        const data = await this.pathsService.supervisorReviewVenture(req.user.email, id, dto.action, dto.note, req.user.id);
-        return { success: true, data };
-    }
-
-    /** The Venture Merit Model — 100pt rubric ranking of eligible (submitted + supervisor-approved)
-     * ventures, scoped by the caller's real role (faculty supervision / university / CIEL). */
-    @Get('startup-business/merit-model')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.FACULTY, UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN, UserRole.SUPER_ADMIN)
-    async getVentureMeritModel(@Request() req, @Query() query: VentureMeritModelQueryDto) {
-        const data = await this.pathsService.getVentureMeritModel(req.user, query);
-        return { success: true, data };
-    }
-
-    /** After a faculty/university/admin venture merit-model run — notify the owners of the top-ranked cards. */
-    @Post('startup-business/merit-model/notify')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.FACULTY, UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN, UserRole.SUPER_ADMIN)
-    async notifyVentureMeritRanks(@Request() req, @Body() dto: NotifyMeritRanksDto) {
-        const data = await this.pathsService.notifyVentureMeritRanks(req.user, dto);
-        return { success: true, data };
-    }
-
-    @Get('startup-business')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.STUDENT, UserRole.FACULTY)
-    async getVenture(@Request() req) {
-        const data = await this.pathsService.getVenture(req.user.id, req.user.email);
-        return { success: true, data };
-    }
-
-    @Patch('startup-business')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.STUDENT, UserRole.FACULTY)
-    async updateVenture(@Request() req, @Body() dto: UpdateVentureDto) {
-        const data = await this.pathsService.upsertVenture(req.user.id, dto);
-        return { success: true, data };
-    }
-
-    @Patch('startup-business/visibility')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.STUDENT)
-    async setVentureVisibility(@Request() req, @Body() dto: SetVentureVisibilityDto) {
-        const result = await this.pathsService.setVentureVisibility(req.user.id, dto.isVisible);
-        if (result.error) {
-            return { success: false, ...result };
-        }
-        return { success: true, data: result.data };
-    }
-
-    @Post('startup-business/documents')
-    @UseGuards(RolesGuard)
-    @Roles(UserRole.STUDENT, UserRole.FACULTY)
-    async addVentureDocument(@Request() req, @Body() dto: AddVentureDocumentDto) {
-        const data = await this.pathsService.addVentureDocument(req.user.id, dto);
-        return { success: true, data };
-    }
+  @Post('startup-business/documents')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.STUDENT, UserRole.FACULTY)
+  async addVentureDocument(@Request() req, @Body() dto: AddVentureDocumentDto) {
+    const data = await this.pathsService.addVentureDocument(req.user.id, dto);
+    return { success: true, data };
+  }
 }

@@ -339,11 +339,18 @@ export class PlatformStatsService {
       )
       .groupBy('log.projectId')
       .addGroupBy('part.studentId')
-      .getRawMany<{ projectId: string; studentId: string; total: string | number | null }>();
+      .getRawMany<{
+        projectId: string;
+        studentId: string;
+        total: string | number | null;
+      }>();
 
     for (const row of rows) {
       const total = Number(row.total ?? 0);
-      byKey.set(`${row.projectId}:${row.studentId}`, Number.isFinite(total) ? total : 0);
+      byKey.set(
+        `${row.projectId}:${row.studentId}`,
+        Number.isFinite(total) ? total : 0,
+      );
     }
     return byKey;
   }
@@ -401,12 +408,13 @@ export class PlatformStatsService {
       where: VERIFIED_RECORD_STATUSES.map((status) => ({ status })),
       relations: ['student', 'opportunity', 'opportunity.organization'],
     });
-    const verifiedHoursByProjectStudent = await this.sumVerifiedHoursByProjectAndStudent(
-      reports.map((r) => ({
-        projectId: r.opportunityId || r.project_id,
-        studentId: r.studentId,
-      })),
-    );
+    const verifiedHoursByProjectStudent =
+      await this.sumVerifiedHoursByProjectAndStudent(
+        reports.map((r) => ({
+          projectId: r.opportunityId || r.project_id,
+          studentId: r.studentId,
+        })),
+      );
 
     const projectIds = [
       ...new Set(
@@ -771,7 +779,9 @@ export class PlatformStatsService {
 
   /** "Verified projects" spans all four paths — unlike computeCommunityLedger, this only needs a
    * count per entity's own established "verified" definition (see each path's own service). */
-  private async countVerifiedByPath(): Promise<PlatformStatsPayload['verified_by_path']> {
+  private async countVerifiedByPath(): Promise<
+    PlatformStatsPayload['verified_by_path']
+  > {
     const [communityService, courseProject, fypThesis, ventures] =
       await Promise.all([
         this.countVerifiedCommunityServiceProjects(),
@@ -787,8 +797,9 @@ export class PlatformStatsService {
       community_service: communityService,
       course_project: courseProject,
       fyp_thesis: fypThesis,
-      startup_business: ventures.filter((v) => computeVentureGates(v).showcaseOk)
-        .length,
+      startup_business: ventures.filter(
+        (v) => computeVentureGates(v).showcaseOk,
+      ).length,
     };
   }
 }

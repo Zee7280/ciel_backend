@@ -1,329 +1,348 @@
-import { IsString, IsArray, IsOptional, IsObject, IsEnum, IsBoolean, ValidateNested, IsInt } from 'class-validator';
+import {
+  IsString,
+  IsArray,
+  IsOptional,
+  IsObject,
+  IsEnum,
+  IsBoolean,
+  ValidateNested,
+  IsInt,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class TimelineDto {
-    @IsString()
-    @IsOptional()
-    type?: string; // fixed | flexible | ongoing
+  @IsString()
+  @IsOptional()
+  type?: string; // fixed | flexible | ongoing
 
-    @IsString()
-    @IsOptional()
-    start_date?: string;
+  @IsString()
+  @IsOptional()
+  start_date?: string;
 
-    @IsString()
-    @IsOptional()
-    end_date?: string;
+  @IsString()
+  @IsOptional()
+  end_date?: string;
 
-    @IsString()
-    @IsOptional()
-    from_time?: string; // daily window start (e.g. 09:00)
+  @IsString()
+  @IsOptional()
+  from_time?: string; // daily window start (e.g. 09:00)
 
-    @IsString()
-    @IsOptional()
-    to_time?: string;   // daily window end (e.g. 13:00)
+  @IsString()
+  @IsOptional()
+  to_time?: string; // daily window end (e.g. 13:00)
 
-    @IsInt()
-    @IsOptional()
-    expected_hours?: number;
+  @IsInt()
+  @IsOptional()
+  expected_hours?: number;
 
-    @IsInt()
-    @IsOptional()
-    volunteers_required?: number;
+  @IsInt()
+  @IsOptional()
+  volunteers_required?: number;
 
-    @IsString()
-    @IsOptional()
-    application_deadline?: string;
+  @IsString()
+  @IsOptional()
+  application_deadline?: string;
 
-    @IsString()
-    @IsOptional()
-    schedule_notes?: string;
+  @IsString()
+  @IsOptional()
+  schedule_notes?: string;
 }
 
 export class SupervisionDto {
-    @IsString()
-    @IsOptional()
-    supervisor_name?: string;
+  @IsString()
+  @IsOptional()
+  supervisor_name?: string;
 
-    @IsString()
-    @IsOptional()
-    role?: string;
+  @IsString()
+  @IsOptional()
+  role?: string;
 
-    @IsString()
-    @IsOptional()
-    contact?: string;
+  @IsString()
+  @IsOptional()
+  contact?: string;
 
-    @IsBoolean()
-    @IsOptional()
-    safe_environment?: boolean;
+  @IsBoolean()
+  @IsOptional()
+  safe_environment?: boolean;
 
-    @IsBoolean()
-    @IsOptional()
-    supervised?: boolean;
+  @IsBoolean()
+  @IsOptional()
+  supervised?: boolean;
 
-    @IsString()
-    @IsOptional()
-    partner_org_name?: string;
+  @IsString()
+  @IsOptional()
+  partner_org_name?: string;
 
-    @IsString()
-    @IsOptional()
-    partner_contact_person?: string;
+  @IsString()
+  @IsOptional()
+  partner_contact_person?: string;
 
-    @IsString()
-    @IsOptional()
-    partner_email?: string;
+  @IsString()
+  @IsOptional()
+  partner_email?: string;
 
-    /** Partner site contact (student flow); distinct from faculty supervision.contact */
-    @IsString()
-    @IsOptional()
-    external_partner_email?: string;
+  /** Partner site contact (student flow); distinct from faculty supervision.contact */
+  @IsString()
+  @IsOptional()
+  external_partner_email?: string;
 
-    @IsBoolean()
-    @IsOptional()
-    information_accurate?: boolean;
+  @IsBoolean()
+  @IsOptional()
+  information_accurate?: boolean;
 
-    @IsString()
-    @IsOptional()
-    faculty_department?: string;
+  @IsString()
+  @IsOptional()
+  faculty_department?: string;
 
-    @IsString()
-    @IsOptional()
-    faculty_university_name?: string;
+  @IsString()
+  @IsOptional()
+  faculty_university_name?: string;
 
-    /** Optional WhatsApp contact (E.164, e.g. +923001234567) for the contact listed above — the
-     * faculty supervisor, or the executing-organization contact person on a partner-created opportunity. */
-    @IsString()
-    @IsOptional()
-    whatsapp_e164?: string;
+  /** Optional WhatsApp contact (E.164, e.g. +923001234567) for the contact listed above — the
+   * faculty supervisor, or the executing-organization contact person on a partner-created opportunity. */
+  @IsString()
+  @IsOptional()
+  whatsapp_e164?: string;
 
-    @IsString()
-    @IsOptional()
-    electronic_signature?: string;
+  @IsString()
+  @IsOptional()
+  electronic_signature?: string;
 
-    @IsString()
-    @IsOptional()
-    external_partner_org_name?: string;
+  @IsString()
+  @IsOptional()
+  external_partner_org_name?: string;
 
-    @IsString()
-    @IsOptional()
-    external_partner_contact_person?: string;
+  @IsString()
+  @IsOptional()
+  external_partner_contact_person?: string;
 }
 
 export class CreateOpportunityDto {
-    /** Student mid-wizard save. Not persisted — StudentController branches on this, then strips it. */
-    @IsBoolean()
-    @IsOptional()
-    draft?: boolean;
+  /** Student mid-wizard save. Not persisted — StudentController branches on this, then strips it. */
+  @IsBoolean()
+  @IsOptional()
+  draft?: boolean;
 
-    @IsString()
-    title: string;
+  @IsString()
+  title: string;
 
-    @IsArray()
-    @IsString({ each: true })
-    types: string[];
+  @IsArray()
+  @IsString({ each: true })
+  types: string[];
 
-    @IsString()
-    mode: string;
+  @IsString()
+  mode: string;
 
-    @IsString()
-    @IsOptional()
-    student_contact?: string;
+  @IsString()
+  @IsOptional()
+  student_contact?: string;
 
-    @IsObject()
-    @IsOptional()
-    location?: any;
+  @IsObject()
+  @IsOptional()
+  location?: any;
 
-    @ValidateNested()
-    @Type(() => TimelineDto)
-    @IsOptional()
-    timeline?: TimelineDto;
+  @ValidateNested()
+  @Type(() => TimelineDto)
+  @IsOptional()
+  timeline?: TimelineDto;
 
-    @IsObject()
-    @IsOptional()
-    sdg_info?: any;
+  @IsObject()
+  @IsOptional()
+  sdg_info?: any;
 
-    @IsArray()
-    @IsOptional()
-    secondary_sdgs?: { sdg_id: string, target_id: string, indicator_id: string, justification: string }[];
+  @IsArray()
+  @IsOptional()
+  secondary_sdgs?: {
+    sdg_id: string;
+    target_id: string;
+    indicator_id: string;
+    justification: string;
+  }[];
 
-    @IsObject()
-    @IsOptional()
-    objectives?: any;
+  @IsObject()
+  @IsOptional()
+  objectives?: any;
 
-    @IsObject()
-    @IsOptional()
-    activity_details?: any;
+  @IsObject()
+  @IsOptional()
+  activity_details?: any;
 
-    @ValidateNested()
-    @Type(() => SupervisionDto)
-    @IsOptional()
-    supervision?: SupervisionDto;
+  @ValidateNested()
+  @Type(() => SupervisionDto)
+  @IsOptional()
+  supervision?: SupervisionDto;
 
-    @IsArray()
-    @IsString({ each: true })
-    verification_method: string[];
+  @IsArray()
+  @IsString({ each: true })
+  verification_method: string[];
 
-    @IsString()
-    @IsOptional()
-    visibility?: string;
+  @IsString()
+  @IsOptional()
+  visibility?: string;
 
-    @IsArray()
-    @IsOptional()
-    restricted_universities?: string[];
+  @IsArray()
+  @IsOptional()
+  restricted_universities?: string[];
 
-    @IsObject()
-    @IsOptional()
-    executing_context?: any;
+  @IsObject()
+  @IsOptional()
+  executing_context?: any;
 
-    @IsObject()
-    @IsOptional()
-    safety_declaration?: any;
+  @IsObject()
+  @IsOptional()
+  safety_declaration?: any;
 
-    @IsObject()
-    @IsOptional()
-    submission_confirmations?: any;
+  @IsObject()
+  @IsOptional()
+  submission_confirmations?: any;
 
-    @IsObject()
-    @IsOptional()
-    participation_scope?: any;
+  @IsObject()
+  @IsOptional()
+  participation_scope?: any;
 
-    @IsObject()
-    @IsOptional()
-    executing_organization?: any;
+  @IsObject()
+  @IsOptional()
+  executing_organization?: any;
 
-    @IsObject()
-    @IsOptional()
-    partner_organization?: any;
+  @IsObject()
+  @IsOptional()
+  partner_organization?: any;
 
-    @IsObject()
-    @IsOptional()
-    safety_supervision_declaration?: any;
+  @IsObject()
+  @IsOptional()
+  safety_supervision_declaration?: any;
 
-    @IsObject()
-    @IsOptional()
-    visibility_and_academic_linkage?: any;
+  @IsObject()
+  @IsOptional()
+  visibility_and_academic_linkage?: any;
 
-    @IsBoolean()
-    @IsOptional()
-    admin_approval_required?: boolean;
+  @IsBoolean()
+  @IsOptional()
+  admin_approval_required?: boolean;
 
-    @IsObject()
-    @IsOptional()
-    external_partner_collaboration?: any;
+  @IsObject()
+  @IsOptional()
+  external_partner_collaboration?: any;
 
-    @IsObject()
-    @IsOptional()
-    academic_linkage?: any;
+  @IsObject()
+  @IsOptional()
+  academic_linkage?: any;
 }
 
 export class UpdateOpportunityDto {
-    @IsString()
-    id: string;
+  @IsString()
+  id: string;
 
-    @IsString()
-    @IsOptional()
-    title?: string;
+  @IsString()
+  @IsOptional()
+  title?: string;
 
-    @IsArray()
-    @IsString({ each: true })
-    @IsOptional()
-    types?: string[];
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  types?: string[];
 
-    @IsString()
-    @IsOptional()
-    mode?: string;
+  @IsString()
+  @IsOptional()
+  mode?: string;
 
-    @IsObject()
-    @IsOptional()
-    location?: any;
+  @IsObject()
+  @IsOptional()
+  location?: any;
 
-    @ValidateNested()
-    @Type(() => TimelineDto)
-    @IsOptional()
-    timeline?: TimelineDto;
+  @ValidateNested()
+  @Type(() => TimelineDto)
+  @IsOptional()
+  timeline?: TimelineDto;
 
-    @IsObject()
-    @IsOptional()
-    sdg_info?: any;
+  @IsObject()
+  @IsOptional()
+  sdg_info?: any;
 
-    @IsArray()
-    @IsOptional()
-    secondary_sdgs?: { sdg_id: string, target_id: string, indicator_id: string, justification: string }[];
+  @IsArray()
+  @IsOptional()
+  secondary_sdgs?: {
+    sdg_id: string;
+    target_id: string;
+    indicator_id: string;
+    justification: string;
+  }[];
 
-    @IsObject()
-    @IsOptional()
-    objectives?: any;
+  @IsObject()
+  @IsOptional()
+  objectives?: any;
 
-    @IsObject()
-    @IsOptional()
-    activity_details?: any;
+  @IsObject()
+  @IsOptional()
+  activity_details?: any;
 
-    @ValidateNested()
-    @Type(() => SupervisionDto)
-    @IsOptional()
-    supervision?: SupervisionDto;
+  @ValidateNested()
+  @Type(() => SupervisionDto)
+  @IsOptional()
+  supervision?: SupervisionDto;
 
-    @IsArray()
-    @IsString({ each: true })
-    @IsOptional()
-    verification_method?: string[];
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  verification_method?: string[];
 
-    @IsString()
-    @IsOptional()
-    visibility?: string;
+  @IsString()
+  @IsOptional()
+  visibility?: string;
 
-    @IsString()
-    @IsOptional()
-    status?: string; // active, closed, draft
+  @IsString()
+  @IsOptional()
+  status?: string; // active, closed, draft
 
-    @IsString()
-    @IsOptional()
-    sdg?: string;
+  @IsString()
+  @IsOptional()
+  sdg?: string;
 
-    @IsObject()
-    @IsOptional()
-    safety_declaration?: any;
+  @IsObject()
+  @IsOptional()
+  safety_declaration?: any;
 
-    @IsObject()
-    @IsOptional()
-    submission_confirmations?: any;
+  @IsObject()
+  @IsOptional()
+  submission_confirmations?: any;
 
-    @IsObject()
-    @IsOptional()
-    participation_scope?: any;
+  @IsObject()
+  @IsOptional()
+  participation_scope?: any;
 
-    @IsArray()
-    @IsOptional()
-    restricted_universities?: string[];
+  @IsArray()
+  @IsOptional()
+  restricted_universities?: string[];
 
-    @IsObject()
-    @IsOptional()
-    external_partner_collaboration?: any;
+  @IsObject()
+  @IsOptional()
+  external_partner_collaboration?: any;
 
-    @IsObject()
-    @IsOptional()
-    academic_linkage?: any;
+  @IsObject()
+  @IsOptional()
+  academic_linkage?: any;
 
-    @IsObject()
-    @IsOptional()
-    executing_context?: any;
+  @IsObject()
+  @IsOptional()
+  executing_context?: any;
 
-    @IsObject()
-    @IsOptional()
-    executing_organization?: any;
+  @IsObject()
+  @IsOptional()
+  executing_organization?: any;
 
-    @IsObject()
-    @IsOptional()
-    partner_organization?: any;
+  @IsObject()
+  @IsOptional()
+  partner_organization?: any;
 
-    @IsObject()
-    @IsOptional()
-    safety_supervision_declaration?: any;
+  @IsObject()
+  @IsOptional()
+  safety_supervision_declaration?: any;
 
-    @IsObject()
-    @IsOptional()
-    visibility_and_academic_linkage?: any;
+  @IsObject()
+  @IsOptional()
+  visibility_and_academic_linkage?: any;
 
-    @IsBoolean()
-    @IsOptional()
-    admin_approval_required?: boolean;
+  @IsBoolean()
+  @IsOptional()
+  admin_approval_required?: boolean;
 }

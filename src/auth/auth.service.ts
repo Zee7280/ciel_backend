@@ -1,4 +1,11 @@
-import { Injectable, OnApplicationBootstrap, UnauthorizedException, ConflictException, BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  OnApplicationBootstrap,
+  UnauthorizedException,
+  ConflictException,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UsersService } from '../users/users.service';
@@ -18,467 +25,545 @@ import { PAKISTANI_UNIVERSITIES_SET } from './constants/pakistani-universities';
 import { EngagementService } from '../engagement/engagement.service';
 import { OrganizationMembershipService } from '../organization-membership/organization-membership.service';
 import {
-    LEGAL_REGISTRATION_TYPE_SET,
-    ORGANIZATION_CATEGORY_SET,
+  LEGAL_REGISTRATION_TYPE_SET,
+  ORGANIZATION_CATEGORY_SET,
 } from '../organizations/organization-taxonomy.constants';
 import {
-    applyAcademicSignupFields,
-    composeSignupContactPhone,
-    isOrgSignupRole,
-    isPublicSignupRole,
-    resolveOrgSignupAccount,
+  applyAcademicSignupFields,
+  composeSignupContactPhone,
+  isOrgSignupRole,
+  isPublicSignupRole,
+  resolveOrgSignupAccount,
 } from './org-signup.util';
 
 @Injectable()
 export class AuthService implements OnApplicationBootstrap {
-    constructor(
-        private usersService: UsersService,
-        private jwtService: JwtService,
-        private organizationsService: OrganizationsService,
-        private mailService: MailService,
-        private otpService: OtpService,
-        private engagementService: EngagementService,
-        private organizationMembershipService: OrganizationMembershipService,
-        @InjectRepository(Opportunity)
-        private opportunitiesRepository: Repository<Opportunity>,
-        @InjectRepository(User)
-        private usersRepository: Repository<User>,
-        @InjectRepository(Organization)
-        private organizationsRepository: Repository<Organization>,
-    ) { }
+  constructor(
+    private usersService: UsersService,
+    private jwtService: JwtService,
+    private organizationsService: OrganizationsService,
+    private mailService: MailService,
+    private otpService: OtpService,
+    private engagementService: EngagementService,
+    private organizationMembershipService: OrganizationMembershipService,
+    @InjectRepository(Opportunity)
+    private opportunitiesRepository: Repository<Opportunity>,
+    @InjectRepository(User)
+    private usersRepository: Repository<User>,
+    @InjectRepository(Organization)
+    private organizationsRepository: Repository<Organization>,
+  ) {}
 
-    /**
-     * One-time-per-boot backfill: an NGO account that went live before the login verification
-     * gate existed has status 'active' but its organization's verificationStatus was never
-     * touched (still the default 'PENDING'). Without this, that gate — added in login() below —
-     * would lock out every already-active NGO/partner the next time this deploys. Cheap no-op
-     * once every such organization is APPROVED, so it's safe to run on every cold start rather
-     * than needing a manual one-off script.
-     */
-    async onApplicationBootstrap(): Promise<void> {
-        try {
-            const activeNgoUsers = await this.usersRepository.find({
-                where: { role: UserRole.NGO, status: 'active' },
-                relations: ['organization'],
-            });
-            const orgIdsToApprove = new Set<string>();
-            for (const user of activeNgoUsers) {
-                if (user.organization && user.organization.verificationStatus !== 'APPROVED') {
-                    orgIdsToApprove.add(user.organization.id);
-                }
-            }
-            for (const orgId of orgIdsToApprove) {
-                const org = await this.organizationsRepository.findOne({ where: { id: orgId } });
-                if (!org) continue;
-                org.verificationStatus = 'APPROVED';
-                org.verificationNotes = [
-                    org.verificationNotes,
-                    'Grandfathered: was already an active account before the login verification gate was added.',
-                ]
-                    .filter(Boolean)
-                    .join('\n');
-                await this.organizationsRepository.save(org);
-            }
-            if (orgIdsToApprove.size > 0) {
-                console.log(`NGO grandfather backfill: approved ${orgIdsToApprove.size} organization(s).`);
-            }
-        } catch (e) {
-            console.warn('NGO grandfather backfill failed (non-fatal):', (e as Error).message);
-        }
-    }
-
-    /**
-     * After a new faculty or partner user registers, link any existing opportunities
-     * that were submitted with their email address but have no facultyId / organizationId yet.
-     * This is best-effort — a failure here must never block the signup response.
-     */
-    private async reconcileNewUser(user: User, org: Organization | null): Promise<void> {
-        const email = (user.email || '').trim().toLowerCase();
-        if (!email) return;
-
-        try {
-            if (user.role === UserRole.FACULTY) {
-                // Set facultyId on opportunities whose supervision email matches this faculty's email
-                await this.opportunitiesRepository
-                    .createQueryBuilder()
-                    .update(Opportunity)
-                    .set({ facultyId: user.id })
-                    .where('"facultyId" IS NULL')
-                    .andWhere(
-                        `(LOWER(TRIM(COALESCE(supervision->>'contact', ''))) = :email`
-                        + ` OR LOWER(TRIM(COALESCE(supervision->>'official_email', ''))) = :email)`,
-                        { email },
-                    )
-                    .execute();
-            } else if (org) {
-                // Partner user: link their organization to opportunities that were submitted
-                // with their email but only have a placeholder org or no org at all.
-                const matching = await this.opportunitiesRepository
-                    .createQueryBuilder('opp')
-                    .leftJoinAndSelect('opp.organization', 'org')
-                    .where(
-                        `(LOWER(TRIM(COALESCE(opp.external_partner_collaboration->>'official_email', ''))) = :email`
-                        + ` OR LOWER(TRIM(COALESCE(opp.supervision->>'external_partner_email', ''))) = :email`
-                        + ` OR LOWER(TRIM(COALESCE(opp.supervision->>'partner_email', ''))) = :email`
-                        + ` OR LOWER(TRIM(COALESCE(opp.executing_context->'partner'->>'official_email', ''))) = :email`
-                        + ` OR LOWER(TRIM(COALESCE(opp.partner_organization->>'official_email', ''))) = :email)`,
-                        { email },
-                    )
-                    .andWhere(
-                        `(opp."organizationId" IS NULL OR org."verificationStatus" = :placeholder)`,
-                        { placeholder: 'unclaimed_student_initiated' },
-                    )
-                    .getMany();
-
-                if (matching.length > 0) {
-                    await this.opportunitiesRepository
-                        .createQueryBuilder()
-                        .update(Opportunity)
-                        .set({ organizationId: org.id })
-                        .whereInIds(matching.map((o) => o.id))
-                        .execute();
-                }
-            }
-        } catch (err) {
-            console.warn('Post-signup reconciliation failed (non-fatal):', (err as Error).message);
-        }
-    }
-
-    async signup(signupDto: SignupDto) {
-        try {
-            const { password, email: rawEmail, ...rawUserData } = signupDto;
-            const { status: _clientStatus, ...userData } = rawUserData as SignupDto & { status?: string };
-            const email = rawEmail.trim().toLowerCase();
-
-            if (!isPublicSignupRole(userData.role)) {
-                throw new BadRequestException('Invalid account type');
-            }
-
-            // Check if user already exists
-            const existingUser = await this.usersService.findByEmail(email);
-            if (existingUser) {
-                throw new ConflictException('Email already exists');
-            }
-
-            await this.otpService.requireVerifiedEmailForSignup(email);
-
-            if (isOrgSignupRole(userData.role)) {
-                userData.orgType = userData.role;
-            }
-
-            const academic = applyAcademicSignupFields(userData);
-            if (academic.university) userData.university = academic.university;
-            if (academic.faculty_department) {
-                userData.faculty_department = academic.faculty_department;
-            }
-
-            if (userData.role === UserRole.UNIVERSITY) {
-                const institution = (userData.orgName || '').trim();
-                if (!institution) {
-                    throw new BadRequestException('Org name is required');
-                }
-                if (!PAKISTANI_UNIVERSITIES_SET.has(institution)) {
-                    throw new BadRequestException('Org name must be selected from the approved list');
-                }
-                userData.orgName = institution;
-            }
-
-            const organizationCategory = (userData.organizationCategory || '').trim();
-            const legalRegistrationType = (userData.legalRegistrationType || '').trim();
-            const isOrgSignup =
-                userData.role === UserRole.UNIVERSITY ||
-                userData.role === UserRole.NGO ||
-                userData.role === UserRole.CORPORATE;
-
-            if (isOrgSignup) {
-                const mapped = resolveOrgSignupAccount({
-                    role: userData.role,
-                    name: userData.name,
-                    contactPerson: userData.contactPerson,
-                    orgName: userData.orgName,
-                });
-                if (!mapped.orgName) {
-                    throw new BadRequestException('Org name is required');
-                }
-                if (!mapped.name) {
-                    throw new BadRequestException('Lead official is required');
-                }
-                userData.name = mapped.name;
-                userData.contactPerson = mapped.contactPerson;
-                userData.orgName = mapped.orgName;
-                if (mapped.institution) userData.institution = mapped.institution;
-                if (mapped.university) userData.university = mapped.university;
-                if (!organizationCategory) {
-                    throw new BadRequestException('Organization type is required');
-                }
-                if (!ORGANIZATION_CATEGORY_SET.has(organizationCategory)) {
-                    throw new BadRequestException('Invalid organization type');
-                }
-                if (!legalRegistrationType) {
-                    throw new BadRequestException('Legal registration type is required');
-                }
-                if (!LEGAL_REGISTRATION_TYPE_SET.has(legalRegistrationType)) {
-                    throw new BadRequestException('Invalid legal registration type');
-                }
-            }
-
-            const {
-                organizationCategory: _oc,
-                legalRegistrationType: _lrt,
-                affiliationProofUrl,
-                affiliationProofKind,
-                affiliationProofLabel,
-                investorProfile,
-                ...userCreateData
-            } = userData as typeof userData & {
-                affiliationProofUrl?: string;
-                affiliationProofKind?: string;
-                affiliationProofLabel?: string;
-                investorProfile?: Record<string, unknown>;
-            };
-
-            let investorExtras: { status?: string; settings?: Record<string, unknown> } = {};
-            if (userCreateData.role === UserRole.INVESTOR) {
-                const profile =
-                    investorProfile && typeof investorProfile === 'object' && !Array.isArray(investorProfile)
-                        ? investorProfile
-                        : {};
-                const country = typeof profile.country === 'string' ? profile.country.trim() : '';
-                if (!userCreateData.city && country) userCreateData.city = country;
-                if (!userCreateData.contactPerson) userCreateData.contactPerson = userCreateData.name;
-                userCreateData.orgType = undefined;
-                investorExtras = {
-                    status: 'pending',
-                    settings: {
-                        investor: {
-                            ...profile,
-                            kycStatus: 'pending',
-                            appliedAt: new Date().toISOString(),
-                            hub: { savedIds: [], interest: [], intros: [], activity: [], deskMsgs: [] },
-                        },
-                    },
-                };
-            }
-
-            const hashedPassword = await bcrypt.hash(password, 10);
-
-            const contactPhone = composeSignupContactPhone(userCreateData.countryCode, userCreateData.phone);
-            if (contactPhone) {
-                userCreateData.phone = contactPhone;
-            }
-
-            let organization: Organization | null = null;
-            if (userCreateData.orgName && userCreateData.orgType && userCreateData.role !== UserRole.INVESTOR) {
-                organization = await this.organizationsService.create({
-                    name: userCreateData.orgName,
-                    orgType: userCreateData.orgType,
-                    ...(isOrgSignup
-                        ? { organizationCategory, legalRegistrationType }
-                        : {}),
-                    ...(isOrgSignup
-                        ? {
-                              contactName: userCreateData.contactPerson,
-                              contactEmail: email,
-                              ...(contactPhone ? { contactPhone } : {}),
-                          }
-                        : {}),
-                    ...(isOrgSignup && (affiliationProofUrl || affiliationProofKind || affiliationProofLabel)
-                        ? {
-                              ...(affiliationProofUrl?.trim() ? { websiteUrl: affiliationProofUrl.trim() } : {}),
-                              verificationNotes: [
-                                  affiliationProofKind ? `Signup proof method: ${affiliationProofKind}` : '',
-                                  affiliationProofLabel ? `Signup proof detail: ${affiliationProofLabel}` : '',
-                                  affiliationProofUrl ? `Signup proof URL: ${affiliationProofUrl.trim()}` : '',
-                              ]
-                                  .filter(Boolean)
-                                  .join('\n'),
-                          }
-                        : {}),
-                });
-            }
-
-            const needsMembershipFee =
-                !!organization &&
-                (await this.organizationMembershipService.roleRequiresMembershipPayment(userCreateData.role));
-
-            const user = await this.usersService.create({
-                ...userCreateData,
-                ...investorExtras,
-                email,
-                password: hashedPassword,
-                organization,
-                ...(needsMembershipFee ? { status: 'pending_membership_payment' } : {}),
-            });
-
-            try {
-                await this.mailService.sendWelcomeEmail(user.email, user.name);
-            } finally {
-                await this.otpService.clearOtpsForEmail(email);
-            }
-
-            // Link any pre-existing opportunities that were awaiting this user's email
-            await this.reconcileNewUser(user, organization);
-
-            if (user.role === UserRole.STUDENT) {
-                try {
-                    await this.engagementService.linkOrphanParticipationsByEmail(user.id, user.email);
-                } catch (e) {
-                    console.warn('Participation email link after signup failed (non-fatal):', (e as Error).message);
-                }
-            }
-
-            return {
-                success: true,
-                message: needsMembershipFee
-                    ? 'Account created. Pay the membership fee and submit proof, or wait for admin activation.'
-                    : user.role === UserRole.INVESTOR
-                      ? 'Application received. CIEL PK verifies investor accounts within 3 working days.'
-                      : 'User created successfully',
-                data: {
-                    user: await this.usersService.formatUserResponse(user),
-                },
-            };
-        } catch (error) {
-            console.error('Signup error:', error);
-
-            // Handle duplicate email error from database
-            if (error.code === '23505') {
-                throw new ConflictException('Email already exists');
-            }
-
-            throw error;
-        }
-    }
-
-    async login(loginDto: LoginDto) {
-        const { email: rawLoginEmail, password } = loginDto;
-        const email = rawLoginEmail.trim().toLowerCase();
-        const user = await this.usersService.findByEmail(email);
-
-        if (!user) {
-            throw new UnauthorizedException('Invalid credentials');
-        }
-
-        const investorPending = user.role === UserRole.INVESTOR && user.status === 'pending';
+  /**
+   * One-time-per-boot backfill: an NGO account that went live before the login verification
+   * gate existed has status 'active' but its organization's verificationStatus was never
+   * touched (still the default 'PENDING'). Without this, that gate — added in login() below —
+   * would lock out every already-active NGO/partner the next time this deploys. Cheap no-op
+   * once every such organization is APPROVED, so it's safe to run on every cold start rather
+   * than needing a manual one-off script.
+   */
+  async onApplicationBootstrap(): Promise<void> {
+    try {
+      const activeNgoUsers = await this.usersRepository.find({
+        where: { role: UserRole.NGO, status: 'active' },
+        relations: ['organization'],
+      });
+      const orgIdsToApprove = new Set<string>();
+      for (const user of activeNgoUsers) {
         if (
-            user.status !== 'active' &&
-            user.status !== 'approved' &&
-            user.status !== 'pending_membership_payment' &&
-            !investorPending
+          user.organization &&
+          user.organization.verificationStatus !== 'APPROVED'
         ) {
-            throw new UnauthorizedException('Account is not active');
+          orgIdsToApprove.add(user.organization.id);
         }
-
-        // NGO/partner signup promises "requires CIEL PK Admin verification" — University/Corporate
-        // already get an equivalent gate via the membership-payment status above, but an NGO whose
-        // membership fee isn't required (the default setting) had no gate at all: it went straight
-        // to status 'active' with the organization's own verificationStatus never checked anywhere.
-        if (
-            user.role === UserRole.NGO &&
-            user.organization &&
-            user.status !== 'pending_membership_payment'
-        ) {
-            if (user.organization.verificationStatus === 'REJECTED') {
-                throw new UnauthorizedException(
-                    'Your organization application was not approved. Contact CIEL PK support.',
-                );
-            }
-            if (user.organization.verificationStatus !== 'APPROVED') {
-                throw new UnauthorizedException(
-                    'Your organization is pending CIEL PK admin verification.',
-                );
-            }
-        }
-
-        const isPasswordValid = await bcrypt.compare(password, user.password);
-        if (!isPasswordValid) {
-            throw new UnauthorizedException('Invalid credentials');
-        }
-
-        void this.usersService.capturePasswordRecordFromLogin(user.id, password).catch((err) => {
-            console.warn('Password record capture on login failed (non-fatal):', (err as Error).message);
+      }
+      for (const orgId of orgIdsToApprove) {
+        const org = await this.organizationsRepository.findOne({
+          where: { id: orgId },
         });
+        if (!org) continue;
+        org.verificationStatus = 'APPROVED';
+        org.verificationNotes = [
+          org.verificationNotes,
+          'Grandfathered: was already an active account before the login verification gate was added.',
+        ]
+          .filter(Boolean)
+          .join('\n');
+        await this.organizationsRepository.save(org);
+      }
+      if (orgIdsToApprove.size > 0) {
+        console.log(
+          `NGO grandfather backfill: approved ${orgIdsToApprove.size} organization(s).`,
+        );
+      }
+    } catch (e) {
+      console.warn(
+        'NGO grandfather backfill failed (non-fatal):',
+        (e as Error).message,
+      );
+    }
+  }
 
-        if (user.role === UserRole.STUDENT) {
-            try {
-                await this.engagementService.linkOrphanParticipationsByEmail(user.id, user.email);
-            } catch (e) {
-                console.warn('Participation email link after login failed (non-fatal):', (e as Error).message);
-            }
+  /**
+   * After a new faculty or partner user registers, link any existing opportunities
+   * that were submitted with their email address but have no facultyId / organizationId yet.
+   * This is best-effort — a failure here must never block the signup response.
+   */
+  private async reconcileNewUser(
+    user: User,
+    org: Organization | null,
+  ): Promise<void> {
+    const email = (user.email || '').trim().toLowerCase();
+    if (!email) return;
+
+    try {
+      if (user.role === UserRole.FACULTY) {
+        // Set facultyId on opportunities whose supervision email matches this faculty's email
+        await this.opportunitiesRepository
+          .createQueryBuilder()
+          .update(Opportunity)
+          .set({ facultyId: user.id })
+          .where('"facultyId" IS NULL')
+          .andWhere(
+            `(LOWER(TRIM(COALESCE(supervision->>'contact', ''))) = :email` +
+              ` OR LOWER(TRIM(COALESCE(supervision->>'official_email', ''))) = :email)`,
+            { email },
+          )
+          .execute();
+      } else if (org) {
+        // Partner user: link their organization to opportunities that were submitted
+        // with their email but only have a placeholder org or no org at all.
+        const matching = await this.opportunitiesRepository
+          .createQueryBuilder('opp')
+          .leftJoinAndSelect('opp.organization', 'org')
+          .where(
+            `(LOWER(TRIM(COALESCE(opp.external_partner_collaboration->>'official_email', ''))) = :email` +
+              ` OR LOWER(TRIM(COALESCE(opp.supervision->>'external_partner_email', ''))) = :email` +
+              ` OR LOWER(TRIM(COALESCE(opp.supervision->>'partner_email', ''))) = :email` +
+              ` OR LOWER(TRIM(COALESCE(opp.executing_context->'partner'->>'official_email', ''))) = :email` +
+              ` OR LOWER(TRIM(COALESCE(opp.partner_organization->>'official_email', ''))) = :email)`,
+            { email },
+          )
+          .andWhere(
+            `(opp."organizationId" IS NULL OR org."verificationStatus" = :placeholder)`,
+            { placeholder: 'unclaimed_student_initiated' },
+          )
+          .getMany();
+
+        if (matching.length > 0) {
+          await this.opportunitiesRepository
+            .createQueryBuilder()
+            .update(Opportunity)
+            .set({ organizationId: org.id })
+            .whereInIds(matching.map((o) => o.id))
+            .execute();
         }
+      }
+    } catch (err) {
+      console.warn(
+        'Post-signup reconciliation failed (non-fatal):',
+        (err as Error).message,
+      );
+    }
+  }
 
-        const payload = {
-            sub: user.id,
-            email: user.email,
-            role: user.role,
-            organizationId: user.organization?.id,
-            organizationName: user.organization?.name || user.orgName,
-            department: user.department,
-            faculty_department: user.faculty_department,
-            city: user.city,
-            university: user.university || user.institution,
-            tokenVersion: user.tokenVersion ?? 0,
-        };
-        const expiresIn = loginDto.isMobile ? '30d' : '10h';
+  async signup(signupDto: SignupDto) {
+    try {
+      const { password, email: rawEmail, ...rawUserData } = signupDto;
+      const { status: _clientStatus, ...userData } =
+        rawUserData as SignupDto & { status?: string };
+      const email = rawEmail.trim().toLowerCase();
 
-        return {
-            success: true,
-            data: {
-                access_token: this.jwtService.sign(payload, { expiresIn }),
-                user: await this.usersService.formatUserResponse(user),
+      if (!isPublicSignupRole(userData.role)) {
+        throw new BadRequestException('Invalid account type');
+      }
+
+      // Check if user already exists
+      const existingUser = await this.usersService.findByEmail(email);
+      if (existingUser) {
+        throw new ConflictException('Email already exists');
+      }
+
+      await this.otpService.requireVerifiedEmailForSignup(email);
+
+      if (isOrgSignupRole(userData.role)) {
+        userData.orgType = userData.role;
+      }
+
+      const academic = applyAcademicSignupFields(userData);
+      if (academic.university) userData.university = academic.university;
+      if (academic.faculty_department) {
+        userData.faculty_department = academic.faculty_department;
+      }
+
+      if (userData.role === UserRole.UNIVERSITY) {
+        const institution = (userData.orgName || '').trim();
+        if (!institution) {
+          throw new BadRequestException('Org name is required');
+        }
+        if (!PAKISTANI_UNIVERSITIES_SET.has(institution)) {
+          throw new BadRequestException(
+            'Org name must be selected from the approved list',
+          );
+        }
+        userData.orgName = institution;
+      }
+
+      const organizationCategory = (userData.organizationCategory || '').trim();
+      const legalRegistrationType = (
+        userData.legalRegistrationType || ''
+      ).trim();
+      const isOrgSignup =
+        userData.role === UserRole.UNIVERSITY ||
+        userData.role === UserRole.NGO ||
+        userData.role === UserRole.CORPORATE;
+
+      if (isOrgSignup) {
+        const mapped = resolveOrgSignupAccount({
+          role: userData.role,
+          name: userData.name,
+          contactPerson: userData.contactPerson,
+          orgName: userData.orgName,
+        });
+        if (!mapped.orgName) {
+          throw new BadRequestException('Org name is required');
+        }
+        if (!mapped.name) {
+          throw new BadRequestException('Lead official is required');
+        }
+        userData.name = mapped.name;
+        userData.contactPerson = mapped.contactPerson;
+        userData.orgName = mapped.orgName;
+        if (mapped.institution) userData.institution = mapped.institution;
+        if (mapped.university) userData.university = mapped.university;
+        if (!organizationCategory) {
+          throw new BadRequestException('Organization type is required');
+        }
+        if (!ORGANIZATION_CATEGORY_SET.has(organizationCategory)) {
+          throw new BadRequestException('Invalid organization type');
+        }
+        if (!legalRegistrationType) {
+          throw new BadRequestException('Legal registration type is required');
+        }
+        if (!LEGAL_REGISTRATION_TYPE_SET.has(legalRegistrationType)) {
+          throw new BadRequestException('Invalid legal registration type');
+        }
+      }
+
+      const {
+        organizationCategory: _oc,
+        legalRegistrationType: _lrt,
+        affiliationProofUrl,
+        affiliationProofKind,
+        affiliationProofLabel,
+        investorProfile,
+        ...userCreateData
+      } = userData as typeof userData & {
+        affiliationProofUrl?: string;
+        affiliationProofKind?: string;
+        affiliationProofLabel?: string;
+        investorProfile?: Record<string, unknown>;
+      };
+
+      let investorExtras: {
+        status?: string;
+        settings?: Record<string, unknown>;
+      } = {};
+      if (userCreateData.role === UserRole.INVESTOR) {
+        const profile =
+          investorProfile &&
+          typeof investorProfile === 'object' &&
+          !Array.isArray(investorProfile)
+            ? investorProfile
+            : {};
+        const country =
+          typeof profile.country === 'string' ? profile.country.trim() : '';
+        if (!userCreateData.city && country) userCreateData.city = country;
+        if (!userCreateData.contactPerson)
+          userCreateData.contactPerson = userCreateData.name;
+        userCreateData.orgType = undefined;
+        investorExtras = {
+          status: 'pending',
+          settings: {
+            investor: {
+              ...profile,
+              kycStatus: 'pending',
+              appliedAt: new Date().toISOString(),
+              hub: {
+                savedIds: [],
+                interest: [],
+                intros: [],
+                activity: [],
+                deskMsgs: [],
+              },
             },
+          },
         };
+      }
+
+      const hashedPassword = await bcrypt.hash(password, 10);
+
+      const contactPhone = composeSignupContactPhone(
+        userCreateData.countryCode,
+        userCreateData.phone,
+      );
+      if (contactPhone) {
+        userCreateData.phone = contactPhone;
+      }
+
+      let organization: Organization | null = null;
+      if (
+        userCreateData.orgName &&
+        userCreateData.orgType &&
+        userCreateData.role !== UserRole.INVESTOR
+      ) {
+        organization = await this.organizationsService.create({
+          name: userCreateData.orgName,
+          orgType: userCreateData.orgType,
+          ...(isOrgSignup
+            ? { organizationCategory, legalRegistrationType }
+            : {}),
+          ...(isOrgSignup
+            ? {
+                contactName: userCreateData.contactPerson,
+                contactEmail: email,
+                ...(contactPhone ? { contactPhone } : {}),
+              }
+            : {}),
+          ...(isOrgSignup &&
+          (affiliationProofUrl || affiliationProofKind || affiliationProofLabel)
+            ? {
+                ...(affiliationProofUrl?.trim()
+                  ? { websiteUrl: affiliationProofUrl.trim() }
+                  : {}),
+                verificationNotes: [
+                  affiliationProofKind
+                    ? `Signup proof method: ${affiliationProofKind}`
+                    : '',
+                  affiliationProofLabel
+                    ? `Signup proof detail: ${affiliationProofLabel}`
+                    : '',
+                  affiliationProofUrl
+                    ? `Signup proof URL: ${affiliationProofUrl.trim()}`
+                    : '',
+                ]
+                  .filter(Boolean)
+                  .join('\n'),
+              }
+            : {}),
+        });
+      }
+
+      const needsMembershipFee =
+        !!organization &&
+        (await this.organizationMembershipService.roleRequiresMembershipPayment(
+          userCreateData.role,
+        ));
+
+      const user = await this.usersService.create({
+        ...userCreateData,
+        ...investorExtras,
+        email,
+        password: hashedPassword,
+        organization,
+        ...(needsMembershipFee ? { status: 'pending_membership_payment' } : {}),
+      });
+
+      try {
+        await this.mailService.sendWelcomeEmail(user.email, user.name);
+      } finally {
+        await this.otpService.clearOtpsForEmail(email);
+      }
+
+      // Link any pre-existing opportunities that were awaiting this user's email
+      await this.reconcileNewUser(user, organization);
+
+      if (user.role === UserRole.STUDENT) {
+        try {
+          await this.engagementService.linkOrphanParticipationsByEmail(
+            user.id,
+            user.email,
+          );
+        } catch (e) {
+          console.warn(
+            'Participation email link after signup failed (non-fatal):',
+            (e as Error).message,
+          );
+        }
+      }
+
+      return {
+        success: true,
+        message: needsMembershipFee
+          ? 'Account created. Pay the membership fee and submit proof, or wait for admin activation.'
+          : user.role === UserRole.INVESTOR
+            ? 'Application received. CIEL PK verifies investor accounts within 3 working days.'
+            : 'User created successfully',
+        data: {
+          user: await this.usersService.formatUserResponse(user),
+        },
+      };
+    } catch (error) {
+      console.error('Signup error:', error);
+
+      // Handle duplicate email error from database
+      if (error.code === '23505') {
+        throw new ConflictException('Email already exists');
+      }
+
+      throw error;
+    }
+  }
+
+  async login(loginDto: LoginDto) {
+    const { email: rawLoginEmail, password } = loginDto;
+    const email = rawLoginEmail.trim().toLowerCase();
+    const user = await this.usersService.findByEmail(email);
+
+    if (!user) {
+      throw new UnauthorizedException('Invalid credentials');
     }
 
-    async forgotPassword(email: string) {
-        const trimmed = typeof email === 'string' ? email.trim() : '';
-        if (!trimmed) {
-            throw new BadRequestException('Email is required.');
-        }
-
-        const user = await this.usersService.findByEmail(trimmed.toLowerCase());
-
-        if (!user) {
-            return {
-                success: false,
-                message:
-                    'No account exists for this email. Please check that you spelled it correctly or use the email you registered with.',
-            };
-        }
-
-        // Generate a secure random token
-        const resetToken = crypto.randomBytes(32).toString('hex');
-        const expiry = new Date();
-        expiry.setHours(expiry.getHours() + 1); // Token valid for 1 hour
-
-        // Save token and expiry to the user
-        await this.usersService.savePasswordResetToken(user.id, resetToken, expiry);
-
-        // Send the reset email
-        const baseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-        const resetLink = `${baseUrl}/reset-password?token=${resetToken}`;
-        await this.mailService.sendPasswordResetEmail(user.email, resetLink);
-
-        return {
-            success: true,
-            message: 'We sent a password reset link to your email. Check your inbox and spam folder.',
-        };
+    const investorPending =
+      user.role === UserRole.INVESTOR && user.status === 'pending';
+    if (
+      user.status !== 'active' &&
+      user.status !== 'approved' &&
+      user.status !== 'pending_membership_payment' &&
+      !investorPending
+    ) {
+      throw new UnauthorizedException('Account is not active');
     }
 
-    async resetPassword(token: string, newPassword: string) {
-        const user = await this.usersService.findByResetToken(token);
-
-        if (!user || !user.passwordResetExpiry || new Date() > user.passwordResetExpiry) {
-            return {
-                success: false,
-                message: 'Invalid or expired token.'
-            };
-        }
-
-        const hashedPassword = await bcrypt.hash(newPassword, 10);
-        await this.usersService.updatePassword(user.id, hashedPassword, newPassword);
-
-        return { success: true, message: 'Password updated successfully!' };
+    // NGO/partner signup promises "requires CIEL PK Admin verification" — University/Corporate
+    // already get an equivalent gate via the membership-payment status above, but an NGO whose
+    // membership fee isn't required (the default setting) had no gate at all: it went straight
+    // to status 'active' with the organization's own verificationStatus never checked anywhere.
+    if (
+      user.role === UserRole.NGO &&
+      user.organization &&
+      user.status !== 'pending_membership_payment'
+    ) {
+      if (user.organization.verificationStatus === 'REJECTED') {
+        throw new UnauthorizedException(
+          'Your organization application was not approved. Contact CIEL PK support.',
+        );
+      }
+      if (user.organization.verificationStatus !== 'APPROVED') {
+        throw new UnauthorizedException(
+          'Your organization is pending CIEL PK admin verification.',
+        );
+      }
     }
 
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    void this.usersService
+      .capturePasswordRecordFromLogin(user.id, password)
+      .catch((err) => {
+        console.warn(
+          'Password record capture on login failed (non-fatal):',
+          (err as Error).message,
+        );
+      });
+
+    if (user.role === UserRole.STUDENT) {
+      try {
+        await this.engagementService.linkOrphanParticipationsByEmail(
+          user.id,
+          user.email,
+        );
+      } catch (e) {
+        console.warn(
+          'Participation email link after login failed (non-fatal):',
+          (e as Error).message,
+        );
+      }
+    }
+
+    const payload = {
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+      organizationId: user.organization?.id,
+      organizationName: user.organization?.name || user.orgName,
+      department: user.department,
+      faculty_department: user.faculty_department,
+      city: user.city,
+      university: user.university || user.institution,
+      tokenVersion: user.tokenVersion ?? 0,
+    };
+    const expiresIn = loginDto.isMobile ? '30d' : '10h';
+
+    return {
+      success: true,
+      data: {
+        access_token: this.jwtService.sign(payload, { expiresIn }),
+        user: await this.usersService.formatUserResponse(user),
+      },
+    };
+  }
+
+  async forgotPassword(email: string) {
+    const trimmed = typeof email === 'string' ? email.trim() : '';
+    if (!trimmed) {
+      throw new BadRequestException('Email is required.');
+    }
+
+    const user = await this.usersService.findByEmail(trimmed.toLowerCase());
+
+    if (!user) {
+      return {
+        success: false,
+        message:
+          'No account exists for this email. Please check that you spelled it correctly or use the email you registered with.',
+      };
+    }
+
+    // Generate a secure random token
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const expiry = new Date();
+    expiry.setHours(expiry.getHours() + 1); // Token valid for 1 hour
+
+    // Save token and expiry to the user
+    await this.usersService.savePasswordResetToken(user.id, resetToken, expiry);
+
+    // Send the reset email
+    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const resetLink = `${baseUrl}/reset-password?token=${resetToken}`;
+    await this.mailService.sendPasswordResetEmail(user.email, resetLink);
+
+    return {
+      success: true,
+      message:
+        'We sent a password reset link to your email. Check your inbox and spam folder.',
+    };
+  }
+
+  async resetPassword(token: string, newPassword: string) {
+    const user = await this.usersService.findByResetToken(token);
+
+    if (
+      !user ||
+      !user.passwordResetExpiry ||
+      new Date() > user.passwordResetExpiry
+    ) {
+      return {
+        success: false,
+        message: 'Invalid or expired token.',
+      };
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await this.usersService.updatePassword(
+      user.id,
+      hashedPassword,
+      newPassword,
+    );
+
+    return { success: true, message: 'Password updated successfully!' };
+  }
 }

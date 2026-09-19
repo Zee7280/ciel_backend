@@ -26,9 +26,9 @@ export class AdminMutationAuditInterceptor implements NestInterceptor {
   }
 
   private async recordIfMutation(context: ExecutionContext): Promise<void> {
-    const req = context.switchToHttp().getRequest<
-      Request & { user?: RequestUser }
-    >();
+    const req = context
+      .switchToHttp()
+      .getRequest<Request & { user?: RequestUser }>();
     const method = (req.method || '').toUpperCase();
     if (['GET', 'HEAD', 'OPTIONS'].includes(method)) {
       return;
@@ -43,7 +43,9 @@ export class AdminMutationAuditInterceptor implements NestInterceptor {
         : (req.originalUrl ?? req.url ?? '').split('?')[0] || '';
 
     const action =
-      template.length > 0 ? `${method} ${template}` : `${method} (unknown-route)`;
+      template.length > 0
+        ? `${method} ${template}`
+        : `${method} (unknown-route)`;
 
     const user = req.user;
     const userLabel = user?.email ?? user?.id ?? null;
@@ -62,7 +64,7 @@ export class AdminMutationAuditInterceptor implements NestInterceptor {
       paramKeys.find((k) => /id$/i.test(k)) ??
       paramKeys.find((k) => /slug$/i.test(k)) ??
       paramKeys[0];
-    const target = preferredKey ? detailParams[preferredKey] ?? null : null;
+    const target = preferredKey ? (detailParams[preferredKey] ?? null) : null;
 
     let target_type: string | null = null;
     if (preferredKey) {
@@ -79,7 +81,7 @@ export class AdminMutationAuditInterceptor implements NestInterceptor {
       action,
       user: userLabel,
       user_email: userEmail,
-      ip: (req.ip as string | undefined) ?? null,
+      ip: req.ip ?? null,
       target,
       target_type,
       details: {
@@ -112,7 +114,8 @@ export class AdminMutationAuditInterceptor implements NestInterceptor {
     if (body === null || body === undefined) {
       return body;
     }
-    const sensitiveKey = /^password|^token|^secret|^authorization|^credential|^otp|^refresh/i;
+    const sensitiveKey =
+      /^password|^token|^secret|^authorization|^credential|^otp|^refresh/i;
     if (depth > 6) {
       return '[truncated-depth]';
     }

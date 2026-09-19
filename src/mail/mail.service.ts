@@ -42,20 +42,28 @@ export class MailService {
     const host = this.configService.get<string>('MAIL_HOST');
     const port = this.configService.get<number>('MAIL_PORT');
 
-    this.logger.log(`MailService init. USER found: ${!!user}, PASS found: ${!!pass}, HOST: ${host}, PORT: ${port}`);
+    this.logger.log(
+      `MailService init. USER found: ${!!user}, PASS found: ${!!pass}, HOST: ${host}, PORT: ${port}`,
+    );
 
     if (!user || !pass) {
-      this.logger.error('CRITICAL: MAIL_USER or MAIL_PASS is missing from ConfigService!');
+      this.logger.error(
+        'CRITICAL: MAIL_USER or MAIL_PASS is missing from ConfigService!',
+      );
       // Check process.env directly as fallback
       const directUser = process.env.MAIL_USER;
       const directPass = process.env.MAIL_PASS;
-      this.logger.log(`Direct process.env check - USER: ${!!directUser}, PASS: ${!!directPass}`);
+      this.logger.log(
+        `Direct process.env check - USER: ${!!directUser}, PASS: ${!!directPass}`,
+      );
     }
 
     this.transporter = nodemailer.createTransport({
       host: host || 'smtpout.secureserver.net',
       port: Number(port) || 465,
-      secure: this.configService.get<string>('MAIL_SECURE') === 'true' || Number(port) === 465,
+      secure:
+        this.configService.get<string>('MAIL_SECURE') === 'true' ||
+        Number(port) === 465,
       auth: {
         user: user || process.env.MAIL_USER,
         pass: pass || process.env.MAIL_PASS,
@@ -72,7 +80,10 @@ export class MailService {
     });
   }
 
-  private wrapOfficialTemplate(opts: { heading: string; bodyHtml: string }): string {
+  private wrapOfficialTemplate(opts: {
+    heading: string;
+    bodyHtml: string;
+  }): string {
     const headingEsc = this.escHtmlPlain(opts.heading);
     const logoUrl = this.buildFrontendLink('/iel-pk-logo.png', {});
     return `
@@ -148,7 +159,15 @@ export class MailService {
     image?: Express.Multer.File;
   }): Promise<void>;
   async sendAdminComposedEmail(
-    arg1: string | { to: string[]; subject: string; messageHtml: string; messageText?: string; image?: Express.Multer.File },
+    arg1:
+      | string
+      | {
+          to: string[];
+          subject: string;
+          messageHtml: string;
+          messageText?: string;
+          image?: Express.Multer.File;
+        },
     arg2?: string,
     arg3?: string,
   ): Promise<void> {
@@ -172,7 +191,11 @@ export class MailService {
       bodyHtml: `<div style="margin:0;color:#0f172a;font-size:14px;line-height:1.7;">${sanitizedBody}</div>`,
     });
 
-    const text = (opts.messageText || this.htmlToText(sanitizedBody) || '').trim();
+    const text = (
+      opts.messageText ||
+      this.htmlToText(sanitizedBody) ||
+      ''
+    ).trim();
     const toList = (opts.to || []).map((x) => String(x).trim()).filter(Boolean);
 
     const attachments: any[] = [];
@@ -259,7 +282,9 @@ export class MailService {
   // (implementation lives in overload above)
 
   async sendWelcomeEmail(to: string, name: string) {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
     const nameEsc = this.escHtmlPlain(name?.trim() ? name.trim() : 'there');
 
     const html = `
@@ -306,7 +331,9 @@ export class MailService {
   }
 
   async sendPasswordResetEmail(to: string, resetLink: string) {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
 
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
@@ -332,12 +359,21 @@ export class MailService {
       });
       this.logger.log(`Password reset email sent to ${to}`);
     } catch (error) {
-      this.logger.error(`Failed to send password reset email to ${to}`, error.stack);
+      this.logger.error(
+        `Failed to send password reset email to ${to}`,
+        error.stack,
+      );
     }
   }
 
-  async sendExecutingOrganizationVerificationEmail(to: string, projectTitle: string, signInPortalLink: string) {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+  async sendExecutingOrganizationVerificationEmail(
+    to: string,
+    projectTitle: string,
+    signInPortalLink: string,
+  ) {
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
     const titleEsc = this.escHtmlPlain(projectTitle);
 
     const html = `
@@ -362,14 +398,21 @@ export class MailService {
         subject: `Execution verification required: ${projectTitle}`,
         html,
       });
-      this.logger.log(`Executing organization verification email sent to ${to}`);
+      this.logger.log(
+        `Executing organization verification email sent to ${to}`,
+      );
     } catch (error) {
-      this.logger.error(`Failed to send executing organization verification email to ${to}`, error.stack);
+      this.logger.error(
+        `Failed to send executing organization verification email to ${to}`,
+        error.stack,
+      );
     }
   }
 
   async sendPartnerOpportunityNotice(to: string, projectTitle: string) {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
     const titleEsc = this.escHtmlPlain(projectTitle);
     const dashboardLink = this.buildFrontendLink('/login', {});
 
@@ -394,12 +437,17 @@ export class MailService {
       });
       this.logger.log(`Partner opportunity notice email sent to ${to}`);
     } catch (error) {
-      this.logger.error(`Failed to send partner opportunity notice email to ${to}`, error.stack);
+      this.logger.error(
+        `Failed to send partner opportunity notice email to ${to}`,
+        error.stack,
+      );
     }
   }
 
   async sendTeamMemberOtp(to: string, otp: string) {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
 
     const html = `
       <div style="font-family: Arial, sans-serif; text-align: center; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
@@ -425,7 +473,9 @@ export class MailService {
   }
 
   async sendTeamMemberInvite(to: string) {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
     const loginLink = this.buildFrontendLink('/login', {});
 
     const html = `
@@ -450,7 +500,10 @@ export class MailService {
       });
       this.logger.log(`Team invite email sent to ${to}`);
     } catch (error) {
-      this.logger.error(`Failed to send team invite email to ${to}`, error.stack);
+      this.logger.error(
+        `Failed to send team invite email to ${to}`,
+        error.stack,
+      );
     }
   }
 
@@ -469,12 +522,24 @@ export class MailService {
    * unrelated Opportunities team-formation flow. */
   async sendPathTeamInvite(
     to: string,
-    params: { memberName?: string; inviterName: string; kindLabel: string; title: string; token: string },
+    params: {
+      memberName?: string;
+      inviterName: string;
+      kindLabel: string;
+      title: string;
+      token: string;
+    },
   ) {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
-    const inviteLink = this.buildFrontendLink('/verify/team-invite', { token: params.token });
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const inviteLink = this.buildFrontendLink('/verify/team-invite', {
+      token: params.token,
+    });
     const memberGreeting = this.escapeHtml(params.memberName || 'there');
-    const inviterName = this.escapeHtml(params.inviterName || 'A fellow student');
+    const inviterName = this.escapeHtml(
+      params.inviterName || 'A fellow student',
+    );
     const kindLabel = this.escapeHtml(params.kindLabel);
 
     const html = `
@@ -499,7 +564,10 @@ export class MailService {
       });
       this.logger.log(`Path team invite email sent to ${to}`);
     } catch (error) {
-      this.logger.error(`Failed to send path team invite email to ${to}`, error.stack);
+      this.logger.error(
+        `Failed to send path team invite email to ${to}`,
+        error.stack,
+      );
     }
   }
 
@@ -510,12 +578,16 @@ export class MailService {
     teamDisplayName?: string | null;
     projectId: string;
   }) {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
     const portalLink = this.buildFrontendLink(
       `/dashboard/student/projects/${encodeURIComponent(params.projectId)}/participation`,
       {},
     );
-    const leadEsc = this.escHtmlPlain(params.leadName?.trim() || 'Your team lead');
+    const leadEsc = this.escHtmlPlain(
+      params.leadName?.trim() || 'Your team lead',
+    );
     const titleEsc = this.escHtmlPlain(params.projectTitle);
     const teamLine = params.teamDisplayName?.trim()
       ? `<p>Team: <strong>${this.escHtmlPlain(params.teamDisplayName.trim())}</strong></p>`
@@ -544,7 +616,10 @@ export class MailService {
       });
       this.logger.log(`Team member added email sent to ${params.to}`);
     } catch (error) {
-      this.logger.error(`Failed to send team member added email to ${params.to}`, error.stack);
+      this.logger.error(
+        `Failed to send team member added email to ${params.to}`,
+        error.stack,
+      );
     }
   }
 
@@ -554,9 +629,16 @@ export class MailService {
     projectTitle: string,
     participationId: string,
   ) {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
-    const approvalsLink = this.buildFrontendLink('/dashboard/faculty/approvals', {});
-    const studentEsc = this.escHtmlPlain(studentName?.trim() ? studentName.trim() : 'Student');
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const approvalsLink = this.buildFrontendLink(
+      '/dashboard/faculty/approvals',
+      {},
+    );
+    const studentEsc = this.escHtmlPlain(
+      studentName?.trim() ? studentName.trim() : 'Student',
+    );
     const titleEsc = this.escHtmlPlain(projectTitle);
 
     const html = `
@@ -602,18 +684,28 @@ export class MailService {
       });
       this.logger.log(`Faculty approval request email sent to ${to}`);
     } catch (error) {
-      this.logger.error(`Failed to send faculty approval request email to ${to}`, error.stack);
+      this.logger.error(
+        `Failed to send faculty approval request email to ${to}`,
+        error.stack,
+      );
     }
   }
 
   async sendFacultyCollaboratorNotice(
     to: string,
     studentName: string,
-    projectTitle: string
+    projectTitle: string,
   ) {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
-    const dashboardLink = this.buildFrontendLink('/dashboard/faculty/my-opportunities', {});
-    const studentEsc = this.escHtmlPlain(studentName?.trim() ? studentName.trim() : 'Student');
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const dashboardLink = this.buildFrontendLink(
+      '/dashboard/faculty/my-opportunities',
+      {},
+    );
+    const studentEsc = this.escHtmlPlain(
+      studentName?.trim() ? studentName.trim() : 'Student',
+    );
     const titleEsc = this.escHtmlPlain(projectTitle);
     const html = `
         <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: 0 auto; padding: 30px; border: 1px solid #f0f0f0; border-radius: 12px; background-color: #ffffff; color: #333;">
@@ -656,17 +748,24 @@ export class MailService {
       });
       this.logger.log(`Faculty collaborator notice email sent to ${to}`);
     } catch (error) {
-      this.logger.error(`Failed to send faculty collaborator notice email to ${to}`, error.stack);
+      this.logger.error(
+        `Failed to send faculty collaborator notice email to ${to}`,
+        error.stack,
+      );
     }
   }
 
   async sendApplicationSubmitted(
     to: string,
     studentName: string,
-    projectTitle: string
+    projectTitle: string,
   ) {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
-    const studentEsc = this.escHtmlPlain(studentName?.trim() ? studentName.trim() : 'there');
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const studentEsc = this.escHtmlPlain(
+      studentName?.trim() ? studentName.trim() : 'there',
+    );
     const titleEsc = this.escHtmlPlain(projectTitle);
     const html = `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
@@ -686,9 +785,14 @@ export class MailService {
         subject: `CIEL PK — application received (pending faculty): ${projectTitle}`,
         html,
       });
-      this.logger.log(`Application submission confirmation email sent to ${to}`);
+      this.logger.log(
+        `Application submission confirmation email sent to ${to}`,
+      );
     } catch (error) {
-      this.logger.error(`Failed to send application submission confirmation email to ${to}`, error.stack);
+      this.logger.error(
+        `Failed to send application submission confirmation email to ${to}`,
+        error.stack,
+      );
     }
   }
 
@@ -697,10 +801,17 @@ export class MailService {
     studentName: string,
     projectTitle: string,
   ) {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
-    const studentEsc = this.escHtmlPlain(studentName?.trim() ? studentName.trim() : 'there');
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const studentEsc = this.escHtmlPlain(
+      studentName?.trim() ? studentName.trim() : 'there',
+    );
     const titleEsc = this.escHtmlPlain(projectTitle);
-    const dashboardLink = this.buildFrontendLink('/dashboard/student/engagement', {});
+    const dashboardLink = this.buildFrontendLink(
+      '/dashboard/student/engagement',
+      {},
+    );
     const html = `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
             <h2 style="color: #333;">Log your volunteer hours</h2>
@@ -722,17 +833,28 @@ export class MailService {
       });
       this.logger.log(`Hours logging reminder email sent to ${to}`);
     } catch (error) {
-      this.logger.error(`Failed to send hours logging reminder email to ${to}`, error.stack);
+      this.logger.error(
+        `Failed to send hours logging reminder email to ${to}`,
+        error.stack,
+      );
     }
   }
 
-  async sendFacultyInvite(to: string, studentName: string, projectName: string) {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+  async sendFacultyInvite(
+    to: string,
+    studentName: string,
+    projectName: string,
+  ) {
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
     const signupLink = this.buildFrontendLink('/signup', {
       role: 'faculty',
       email: to,
     });
-    const studentEsc = this.escHtmlPlain(studentName?.trim() ? studentName.trim() : 'A student');
+    const studentEsc = this.escHtmlPlain(
+      studentName?.trim() ? studentName.trim() : 'A student',
+    );
     const projectEsc = this.escHtmlPlain(projectName);
 
     const html = `
@@ -759,7 +881,10 @@ export class MailService {
       });
       this.logger.log(`Faculty invite email sent to ${to}`);
     } catch (error) {
-      this.logger.error(`Failed to send faculty invite email to ${to}`, error.stack);
+      this.logger.error(
+        `Failed to send faculty invite email to ${to}`,
+        error.stack,
+      );
     }
   }
 
@@ -778,7 +903,9 @@ export class MailService {
       .replace(/"/g, '&quot;');
   }
 
-  private opportunityVerificationDetailsHtml(details?: OpportunityVerificationEmailDetails): string {
+  private opportunityVerificationDetailsHtml(
+    details?: OpportunityVerificationEmailDetails,
+  ): string {
     if (!details) return '';
     const rows: [string, string | undefined][] = [
       ['Reference ID', details.opportunityId],
@@ -814,8 +941,13 @@ export class MailService {
     return `<p style="font-size:13px;color:#475569;margin:16px 0 0 0;line-height:1.5;"><strong>Signing in:</strong> If the site asks you to log in before approving, use the <strong>same email address</strong> this message was sent to, then use the button below (or open the link again after signing in).</p>`;
   }
 
-  private buildFrontendLink(pathname: string, params: Record<string, string | undefined>): string {
-    const frontend = (this.configService.get<string>('FRONTEND_URL') || 'https://cielpk.com').replace(/\/+$/, '');
+  private buildFrontendLink(
+    pathname: string,
+    params: Record<string, string | undefined>,
+  ): string {
+    const frontend = (
+      this.configService.get<string>('FRONTEND_URL') || 'https://cielpk.com'
+    ).replace(/\/+$/, '');
     const path = pathname.startsWith('/') ? pathname : `/${pathname}`;
     const search = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {
@@ -830,15 +962,22 @@ export class MailService {
     options?: { mode?: 'frontend' | 'api'; path?: string; returnTo?: string },
   ): string {
     const enc = encodeURIComponent(token);
-    const linkTarget = (options?.mode || this.configService.get<string>('VERIFICATION_EMAIL_LINK') || 'frontend').toLowerCase();
+    const linkTarget = (
+      options?.mode ||
+      this.configService.get<string>('VERIFICATION_EMAIL_LINK') ||
+      'frontend'
+    ).toLowerCase();
     if (linkTarget === 'api') {
-      const raw = this.configService.get<string>('API_URL') || 'https://api.cielpk.com';
+      const raw =
+        this.configService.get<string>('API_URL') || 'https://api.cielpk.com';
       const base = raw.replace(/\/+$/, '');
       const withApiV1 = base.endsWith('/api/v1') ? base : `${base}/api/v1`;
       return `${withApiV1}/verifications/verify?token=${enc}`;
     }
     return this.buildFrontendLink(
-      options?.path || this.configService.get<string>('FRONTEND_VERIFY_PATH') || '/verify-project',
+      options?.path ||
+        this.configService.get<string>('FRONTEND_VERIFY_PATH') ||
+        '/verify-project',
       {
         token,
         returnTo: options?.returnTo,
@@ -846,8 +985,14 @@ export class MailService {
     );
   }
 
-  async sendLiaisonVerification(to: string, projectTitle: string, token: string) {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+  async sendLiaisonVerification(
+    to: string,
+    projectTitle: string,
+    token: string,
+  ) {
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
     const verifyLink = this.buildProjectVerificationLink(token);
 
     const titleEsc = this.escHtmlPlain(projectTitle);
@@ -874,7 +1019,10 @@ export class MailService {
       });
       this.logger.log(`Liaison verification email sent to ${to}`);
     } catch (error) {
-      this.logger.error(`Failed to send liaison verification email to ${to}`, error.stack);
+      this.logger.error(
+        `Failed to send liaison verification email to ${to}`,
+        error.stack,
+      );
     }
   }
 
@@ -883,9 +1031,16 @@ export class MailService {
     projectTitle: string,
     token: string,
     details?: OpportunityVerificationEmailDetails,
-    options?: { returnTo?: string; path?: string; introText?: string; ctaLabel?: string },
+    options?: {
+      returnTo?: string;
+      path?: string;
+      introText?: string;
+      ctaLabel?: string;
+    },
   ) {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
     const verifyLink = this.buildProjectVerificationLink(token, {
       mode: 'frontend',
       path: options?.path || '/verify-project',
@@ -903,27 +1058,35 @@ export class MailService {
     const dearPartner = this.escHtmlPlain(partnerGreetingRaw);
 
     const submittedByRaw =
-      details?.studentName?.trim() ||
-      details?.facultyAuthorName?.trim() ||
-      '';
-    const submittedByEsc = submittedByRaw ? this.escHtmlPlain(submittedByRaw) : '—';
+      details?.studentName?.trim() || details?.facultyAuthorName?.trim() || '';
+    const submittedByEsc = submittedByRaw
+      ? this.escHtmlPlain(submittedByRaw)
+      : '—';
 
     const institutionRaw =
       details?.institutionName?.trim() ||
       details?.studentUniversity?.trim() ||
       '';
-    const institutionEsc = institutionRaw ? this.escHtmlPlain(institutionRaw) : '—';
+    const institutionEsc = institutionRaw
+      ? this.escHtmlPlain(institutionRaw)
+      : '—';
 
     const facultySupervisorRaw =
       details?.facultyReviewerName?.trim() ||
       details?.facultySupervisionLine?.trim() ||
       details?.facultyAuthorName?.trim() ||
       '';
-    const facultySupervisorEsc = facultySupervisorRaw ? this.escHtmlPlain(facultySupervisorRaw) : '—';
+    const facultySupervisorEsc = facultySupervisorRaw
+      ? this.escHtmlPlain(facultySupervisorRaw)
+      : '—';
 
-    const typeEsc = details?.typesLine?.trim() ? this.escHtmlPlain(details.typesLine.trim()) : '—';
+    const typeEsc = details?.typesLine?.trim()
+      ? this.escHtmlPlain(details.typesLine.trim())
+      : '—';
     const modeLabel = this.formatModeForFacultyEmail(details?.mode);
-    const durationEsc = details?.timelineSummary?.trim() ? this.escHtmlPlain(details.timelineSummary.trim()) : '—';
+    const durationEsc = details?.timelineSummary?.trim()
+      ? this.escHtmlPlain(details.timelineSummary.trim())
+      : '—';
     const volunteersEsc = details?.volunteersRequired?.trim()
       ? this.escHtmlPlain(details.volunteersRequired.trim())
       : '—';
@@ -933,7 +1096,9 @@ export class MailService {
     const facultyOrNeutralLead = `<p style="margin: 0 0 16px 0;">A community engagement opportunity on CIEL PK lists your organization as the project partner.</p>
         <p style="margin: 0 0 20px 0;">You are requested to review the opportunity details and verify your involvement in this project.</p>`;
     const defaultLead =
-      details?.studentName?.trim() || details?.institutionName?.trim() || details?.studentUniversity?.trim()
+      details?.studentName?.trim() ||
+      details?.institutionName?.trim() ||
+      details?.studentUniversity?.trim()
         ? studentSubmittedLead
         : facultyOrNeutralLead;
     const leadParagraph = postFacultyContext
@@ -983,7 +1148,10 @@ export class MailService {
       });
       this.logger.log(`Partner verification email sent to ${to}`);
     } catch (error) {
-      this.logger.error(`Failed to send partner verification email to ${to}`, error.stack);
+      this.logger.error(
+        `Failed to send partner verification email to ${to}`,
+        error.stack,
+      );
     }
   }
 
@@ -994,7 +1162,9 @@ export class MailService {
     projectTitle: string,
     facultyFeedback?: string | null,
   ) {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
     const esc = (s: string) =>
       String(s)
         .replace(/&/g, '&amp;')
@@ -1028,7 +1198,10 @@ export class MailService {
       });
       this.logger.log(`Student faculty-rejection notice sent to ${to}`);
     } catch (error) {
-      this.logger.error(`Failed to send student faculty-rejection email to ${to}`, error.stack);
+      this.logger.error(
+        `Failed to send student faculty-rejection email to ${to}`,
+        error.stack,
+      );
     }
   }
 
@@ -1049,7 +1222,9 @@ export class MailService {
     details?: OpportunityVerificationEmailDetails,
     options?: { returnTo?: string; path?: string },
   ) {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
     const verifyLink = this.buildProjectVerificationLink(token, {
       mode: 'frontend',
       path: options?.path || '/verify/faculty',
@@ -1060,8 +1235,12 @@ export class MailService {
       details?.facultyReviewerName?.trim() ||
       details?.facultySupervisionLine?.split('·')[0]?.trim() ||
       '';
-    const dearLine = facultyGreetingName ? this.escHtmlPlain(facultyGreetingName) : 'Faculty Member';
-    const studentName = details?.studentName?.trim() ? this.escHtmlPlain(details.studentName.trim()) : '—';
+    const dearLine = facultyGreetingName
+      ? this.escHtmlPlain(facultyGreetingName)
+      : 'Faculty Member';
+    const studentName = details?.studentName?.trim()
+      ? this.escHtmlPlain(details.studentName.trim())
+      : '—';
     const institution =
       details?.institutionName?.trim() ||
       details?.studentUniversity?.trim() ||
@@ -1069,9 +1248,13 @@ export class MailService {
     const institutionEsc = institution ? this.escHtmlPlain(institution) : '—';
     const department = details?.departmentName?.trim() || '';
     const departmentEsc = department ? this.escHtmlPlain(department) : '—';
-    const typeEsc = details?.typesLine?.trim() ? this.escHtmlPlain(details.typesLine.trim()) : '—';
+    const typeEsc = details?.typesLine?.trim()
+      ? this.escHtmlPlain(details.typesLine.trim())
+      : '—';
     const modeLabel = this.formatModeForFacultyEmail(details?.mode);
-    const durationEsc = details?.timelineSummary?.trim() ? this.escHtmlPlain(details.timelineSummary.trim()) : '—';
+    const durationEsc = details?.timelineSummary?.trim()
+      ? this.escHtmlPlain(details.timelineSummary.trim())
+      : '—';
     const volunteersEsc = details?.volunteersRequired?.trim()
       ? this.escHtmlPlain(details.volunteersRequired.trim())
       : '—';
@@ -1117,9 +1300,14 @@ export class MailService {
         subject: `CIEL PK — faculty approval requested: ${projectTitle}`,
         html,
       });
-      this.logger.log(`Faculty student-opportunity verification email sent to ${to}`);
+      this.logger.log(
+        `Faculty student-opportunity verification email sent to ${to}`,
+      );
     } catch (error) {
-      this.logger.error(`Failed to send faculty verification email to ${to}`, error.stack);
+      this.logger.error(
+        `Failed to send faculty verification email to ${to}`,
+        error.stack,
+      );
     }
   }
 
@@ -1131,7 +1319,9 @@ export class MailService {
     message: string,
     reason?: string | null,
   ) {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
     const titleEsc = this.escHtmlPlain(projectTitle);
     const messageEsc = this.escHtmlPlain(message);
     const headingEsc = this.escHtmlPlain(title);
@@ -1175,7 +1365,10 @@ export class MailService {
       });
       this.logger.log(`Student opportunity status email sent to ${to}`);
     } catch (error) {
-      this.logger.error(`Failed to send student opportunity status email to ${to}`, error.stack);
+      this.logger.error(
+        `Failed to send student opportunity status email to ${to}`,
+        error.stack,
+      );
     }
   }
 
@@ -1186,14 +1379,22 @@ export class MailService {
     projectTitle: string,
     opportunityId?: string,
   ) {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
-    const nameEsc = studentName?.trim() ? this.escHtmlPlain(studentName.trim()) : 'Student';
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const nameEsc = studentName?.trim()
+      ? this.escHtmlPlain(studentName.trim())
+      : 'Student';
     const titleEsc = this.escHtmlPlain(projectTitle);
     const dashboardPath =
-      this.configService.get<string>('FRONTEND_STUDENT_DASHBOARD_PATH') || '/dashboard';
-    const startLink = this.buildFrontendLink(dashboardPath.startsWith('/') ? dashboardPath : `/${dashboardPath}`, {
-      opportunity: opportunityId,
-    });
+      this.configService.get<string>('FRONTEND_STUDENT_DASHBOARD_PATH') ||
+      '/dashboard';
+    const startLink = this.buildFrontendLink(
+      dashboardPath.startsWith('/') ? dashboardPath : `/${dashboardPath}`,
+      {
+        opportunity: opportunityId,
+      },
+    );
 
     const html = `
       <div style="font-family: Arial, Helvetica, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 10px; color: #1f2937; line-height: 1.55;">
@@ -1218,7 +1419,10 @@ export class MailService {
       });
       this.logger.log(`Student opportunity fully approved email sent to ${to}`);
     } catch (error) {
-      this.logger.error(`Failed to send student opportunity fully approved email to ${to}`, error.stack);
+      this.logger.error(
+        `Failed to send student opportunity fully approved email to ${to}`,
+        error.stack,
+      );
     }
   }
 
@@ -1230,11 +1434,15 @@ export class MailService {
     const recipients = this.getAdminReviewRecipientList();
 
     if (!recipients.length) {
-      this.logger.warn(`Skipped admin review email for ${opportunityId}; no ADMIN_REVIEW_EMAILS configured.`);
+      this.logger.warn(
+        `Skipped admin review email for ${opportunityId}; no ADMIN_REVIEW_EMAILS configured.`,
+      );
       return;
     }
 
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
     const adminLink = this.buildFrontendLink('/dashboard/admin/opportunities', {
       opportunity: opportunityId,
       tab: 'pending',
@@ -1258,14 +1466,21 @@ export class MailService {
         subject: `CIEL PK — admin review needed: ${projectTitle}`,
         html,
       });
-      this.logger.log(`Admin review email sent for opportunity ${opportunityId}`);
+      this.logger.log(
+        `Admin review email sent for opportunity ${opportunityId}`,
+      );
     } catch (error) {
-      this.logger.error(`Failed to send admin review email for ${opportunityId}`, error.stack);
+      this.logger.error(
+        `Failed to send admin review email for ${opportunityId}`,
+        error.stack,
+      );
     }
   }
 
   async sendOtpEmail(to: string, otp: string): Promise<void> {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
     const esc = (s: string) =>
       String(s)
         .replace(/&/g, '&amp;')
@@ -1356,14 +1571,18 @@ export class MailService {
     projectTitle: string,
     opportunityId: string,
   ) {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
-    const dashboardPath = reviewerType === 'faculty' ? '/dashboard/faculty' : '/dashboard/partner';
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const dashboardPath =
+      reviewerType === 'faculty' ? '/dashboard/faculty' : '/dashboard/partner';
     const link = this.buildFrontendLink(dashboardPath, {
       opportunity: opportunityId,
       tab: 'attendance',
     });
     const titleEsc = this.escHtmlPlain(projectTitle);
-    const reviewerLabel = reviewerType === 'faculty' ? 'faculty reviewer' : 'partner reviewer';
+    const reviewerLabel =
+      reviewerType === 'faculty' ? 'faculty reviewer' : 'partner reviewer';
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
         <h2 style="color: #333;">Attendance log needs your review</h2>
@@ -1386,7 +1605,10 @@ export class MailService {
         `${reviewerType} attendance pending email sent to ${to} for opportunity ${opportunityId}`,
       );
     } catch (error) {
-      this.logger.error(`Failed ${reviewerType} attendance pending email`, error.stack);
+      this.logger.error(
+        `Failed ${reviewerType} attendance pending email`,
+        error.stack,
+      );
     }
   }
 
@@ -1413,14 +1635,18 @@ export class MailService {
     projectTitle: string,
     opportunityId: string,
   ) {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
-    const dashboardPath = reviewerType === 'faculty' ? '/dashboard/faculty' : '/dashboard/partner';
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const dashboardPath =
+      reviewerType === 'faculty' ? '/dashboard/faculty' : '/dashboard/partner';
     const link = this.buildFrontendLink(dashboardPath, {
       opportunity: opportunityId,
       tab: 'attendance',
     });
     const titleEsc = this.escHtmlPlain(projectTitle);
-    const reviewerLabel = reviewerType === 'faculty' ? 'faculty reviewer' : 'partner reviewer';
+    const reviewerLabel =
+      reviewerType === 'faculty' ? 'faculty reviewer' : 'partner reviewer';
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
         <h2 style="color: #333;">A participant requested attendance verification</h2>
@@ -1437,7 +1663,9 @@ export class MailService {
       subject: `CIEL PK — attendance verification requested: ${projectTitle}`,
       html,
     });
-    this.logger.log(`Attendance verification request email sent to ${to} for opportunity ${opportunityId}`);
+    this.logger.log(
+      `Attendance verification request email sent to ${to} for opportunity ${opportunityId}`,
+    );
   }
 
   async sendAttendanceDecisionNoticeToStudent(
@@ -1447,7 +1675,9 @@ export class MailService {
     opportunityId: string,
     reason?: string | null,
   ) {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
     const link = this.buildFrontendLink('/dashboard/student/report', {
       project: opportunityId,
     });
@@ -1486,10 +1716,14 @@ export class MailService {
   ) {
     const recipients = this.getAdminReviewRecipientList();
     if (!recipients.length) {
-      this.logger.warn(`Skipped admin attendance email for log ${logId}; no admin recipients configured.`);
+      this.logger.warn(
+        `Skipped admin attendance email for log ${logId}; no admin recipients configured.`,
+      );
       return;
     }
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
     const adminLink = this.buildFrontendLink('/dashboard/admin', {
       opportunity: opportunityId,
       attendanceLog: logId,
@@ -1514,7 +1748,10 @@ export class MailService {
       });
       this.logger.log(`Admin attendance pending email for log ${logId}`);
     } catch (error) {
-      this.logger.error(`Failed admin attendance pending email for log ${logId}`, error.stack);
+      this.logger.error(
+        `Failed admin attendance pending email for log ${logId}`,
+        error.stack,
+      );
     }
   }
 
@@ -1541,16 +1778,22 @@ export class MailService {
   ) {
     const recipients = this.getAdminReviewRecipientList();
     if (!recipients.length) {
-      this.logger.warn(`Skipped admin student-report email for ${reportId}; no admin recipients configured.`);
+      this.logger.warn(
+        `Skipped admin student-report email for ${reportId}; no admin recipients configured.`,
+      );
       return;
     }
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
     const adminLink = this.buildFrontendLink('/dashboard/admin', {
       opportunity: opportunityId || undefined,
       studentReport: reportId,
     });
     const titleEsc = this.escHtmlPlain(projectTitle);
-    const studentEsc = this.escHtmlPlain(studentName?.trim() ? studentName.trim() : 'Student');
+    const studentEsc = this.escHtmlPlain(
+      studentName?.trim() ? studentName.trim() : 'Student',
+    );
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
         <h2 style="color: #333;">Student impact report submitted</h2>
@@ -1568,25 +1811,40 @@ export class MailService {
         subject: `CIEL PK — student report submitted: ${projectTitle}`,
         html,
       });
-      this.logger.log(`Admin student-report submitted email for report ${reportId}`);
+      this.logger.log(
+        `Admin student-report submitted email for report ${reportId}`,
+      );
     } catch (error) {
-      this.logger.error(`Failed admin student-report submitted email for ${reportId}`, error.stack);
+      this.logger.error(
+        `Failed admin student-report submitted email for ${reportId}`,
+        error.stack,
+      );
     }
   }
 
   /** Student-created opportunity is live; student received "Start report" email (admin FYI). */
-  async sendAdminStudentMayStartReport(projectTitle: string, opportunityId: string, studentName: string) {
+  async sendAdminStudentMayStartReport(
+    projectTitle: string,
+    opportunityId: string,
+    studentName: string,
+  ) {
     const recipients = this.getAdminReviewRecipientList();
     if (!recipients.length) {
-      this.logger.warn(`Skipped admin start-report notice for ${opportunityId}; no admin recipients configured.`);
+      this.logger.warn(
+        `Skipped admin start-report notice for ${opportunityId}; no admin recipients configured.`,
+      );
       return;
     }
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
     const adminLink = this.buildFrontendLink('/dashboard/admin/opportunities', {
       opportunity: opportunityId,
     });
     const titleEsc = this.escHtmlPlain(projectTitle);
-    const studentEsc = this.escHtmlPlain(studentName?.trim() ? studentName.trim() : 'Student');
+    const studentEsc = this.escHtmlPlain(
+      studentName?.trim() ? studentName.trim() : 'Student',
+    );
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
         <h2 style="color: #333;">Student cleared to begin reporting</h2>
@@ -1604,15 +1862,27 @@ export class MailService {
         subject: `CIEL PK — student may start report: ${projectTitle}`,
         html,
       });
-      this.logger.log(`Admin start-report notice sent for opportunity ${opportunityId}`);
+      this.logger.log(
+        `Admin start-report notice sent for opportunity ${opportunityId}`,
+      );
     } catch (error) {
-      this.logger.error(`Failed admin start-report notice for ${opportunityId}`, error.stack);
+      this.logger.error(
+        `Failed admin start-report notice for ${opportunityId}`,
+        error.stack,
+      );
     }
   }
 
   /** Public contact form: delivers inquiry to support@cielpk.com */
-  async sendContactInquiry(name: string, email: string, subject: string, message: string): Promise<void> {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+  async sendContactInquiry(
+    name: string,
+    email: string,
+    subject: string,
+    message: string,
+  ): Promise<void> {
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
     const to = 'support@cielpk.com';
     const esc = (s: string) =>
       String(s)
@@ -1644,16 +1914,33 @@ export class MailService {
       });
       this.logger.log(`Contact inquiry sent to ${to} from ${email}`);
     } catch (error) {
-      this.logger.error(`Failed to send contact inquiry from ${email}`, error.stack);
+      this.logger.error(
+        `Failed to send contact inquiry from ${email}`,
+        error.stack,
+      );
       throw error;
     }
   }
 
-  async sendCourseworkSubmittedForReview(to: string, studentName: string, projectTitle: string, facultyName?: string): Promise<void> {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
-    const reviewLink = this.buildFrontendLink('/dashboard/faculty/coursework-projects', {});
-    const facultyEsc = this.escHtmlPlain(facultyName?.trim() ? facultyName.trim() : 'there');
-    const studentEsc = this.escHtmlPlain(studentName?.trim() ? studentName.trim() : 'A student');
+  async sendCourseworkSubmittedForReview(
+    to: string,
+    studentName: string,
+    projectTitle: string,
+    facultyName?: string,
+  ): Promise<void> {
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const reviewLink = this.buildFrontendLink(
+      '/dashboard/faculty/coursework-projects',
+      {},
+    );
+    const facultyEsc = this.escHtmlPlain(
+      facultyName?.trim() ? facultyName.trim() : 'there',
+    );
+    const studentEsc = this.escHtmlPlain(
+      studentName?.trim() ? studentName.trim() : 'A student',
+    );
     const titleEsc = this.escHtmlPlain(projectTitle);
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
@@ -1664,15 +1951,29 @@ export class MailService {
       </div>
     `;
     try {
-      await this.transporter.sendMail({ from, to, subject: `${studentName?.trim() || 'A student'} submitted a coursework report for your review: ${projectTitle}`, html });
+      await this.transporter.sendMail({
+        from,
+        to,
+        subject: `${studentName?.trim() || 'A student'} submitted a coursework report for your review: ${projectTitle}`,
+        html,
+      });
       this.logger.log(`Coursework submission review email sent to ${to}`);
     } catch (error) {
-      this.logger.error(`Failed to send coursework submission review email to ${to}`, error.stack);
+      this.logger.error(
+        `Failed to send coursework submission review email to ${to}`,
+        error.stack,
+      );
     }
   }
 
-  async sendCourseworkSubmissionConfirmation(to: string, studentFirstName: string, projectTitle: string): Promise<void> {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+  async sendCourseworkSubmissionConfirmation(
+    to: string,
+    studentFirstName: string,
+    projectTitle: string,
+  ): Promise<void> {
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
     const titleEsc = this.escHtmlPlain(projectTitle);
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
@@ -1684,17 +1985,36 @@ export class MailService {
       </div>
     `;
     try {
-      await this.transporter.sendMail({ from, to, subject: `CIEL PK — your coursework was submitted: ${projectTitle}`, html });
+      await this.transporter.sendMail({
+        from,
+        to,
+        subject: `CIEL PK — your coursework was submitted: ${projectTitle}`,
+        html,
+      });
       this.logger.log(`Coursework submission confirmation sent to ${to}`);
     } catch (error) {
-      this.logger.error(`Failed to send coursework submission confirmation to ${to}`, error.stack);
+      this.logger.error(
+        `Failed to send coursework submission confirmation to ${to}`,
+        error.stack,
+      );
     }
   }
 
-  async sendCourseworkResubmittedForReview(to: string, studentName: string, projectTitle: string): Promise<void> {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
-    const reviewLink = this.buildFrontendLink('/dashboard/faculty/coursework-projects', {});
-    const studentEsc = this.escHtmlPlain(studentName?.trim() ? studentName.trim() : 'A student');
+  async sendCourseworkResubmittedForReview(
+    to: string,
+    studentName: string,
+    projectTitle: string,
+  ): Promise<void> {
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const reviewLink = this.buildFrontendLink(
+      '/dashboard/faculty/coursework-projects',
+      {},
+    );
+    const studentEsc = this.escHtmlPlain(
+      studentName?.trim() ? studentName.trim() : 'A student',
+    );
     const titleEsc = this.escHtmlPlain(projectTitle);
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
@@ -1708,10 +2028,18 @@ export class MailService {
       </div>
     `;
     try {
-      await this.transporter.sendMail({ from, to, subject: `CIEL PK — coursework resubmitted for review: ${projectTitle}`, html });
+      await this.transporter.sendMail({
+        from,
+        to,
+        subject: `CIEL PK — coursework resubmitted for review: ${projectTitle}`,
+        html,
+      });
       this.logger.log(`Coursework resubmission review email sent to ${to}`);
     } catch (error) {
-      this.logger.error(`Failed to send coursework resubmission review email to ${to}`, error.stack);
+      this.logger.error(
+        `Failed to send coursework resubmission review email to ${to}`,
+        error.stack,
+      );
     }
   }
 
@@ -1726,10 +2054,16 @@ export class MailService {
     dashboardPath: string,
     recordNoun: string = 'record',
   ): Promise<void> {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
     const dashboardLink = this.buildFrontendLink(dashboardPath, {});
-    const facultyEsc = this.escHtmlPlain(facultyName?.trim() ? facultyName.trim() : 'there');
-    const studentEsc = this.escHtmlPlain(studentName?.trim() ? studentName.trim() : 'A student');
+    const facultyEsc = this.escHtmlPlain(
+      facultyName?.trim() ? facultyName.trim() : 'there',
+    );
+    const studentEsc = this.escHtmlPlain(
+      studentName?.trim() ? studentName.trim() : 'A student',
+    );
     const pathEsc = this.escHtmlPlain(pathLabel);
     const nounEsc = this.escHtmlPlain(recordNoun);
     const html = `
@@ -1741,10 +2075,20 @@ export class MailService {
       </div>
     `;
     try {
-      await this.transporter.sendMail({ from, to, subject: `${studentName?.trim() || 'A student'} selected you as their faculty supervisor on CIEL PK`, html });
-      this.logger.log(`${pathLabel} connection email sent to faculty ${to} for "${projectTitle}"`);
+      await this.transporter.sendMail({
+        from,
+        to,
+        subject: `${studentName?.trim() || 'A student'} selected you as their faculty supervisor on CIEL PK`,
+        html,
+      });
+      this.logger.log(
+        `${pathLabel} connection email sent to faculty ${to} for "${projectTitle}"`,
+      );
     } catch (error) {
-      this.logger.error(`Failed to send ${pathLabel} connection email to faculty ${to}`, error.stack);
+      this.logger.error(
+        `Failed to send ${pathLabel} connection email to faculty ${to}`,
+        error.stack,
+      );
     }
   }
 
@@ -1758,8 +2102,12 @@ export class MailService {
     projectTitle: string,
     recordNoun: string = 'record',
   ): Promise<void> {
-    const to = this.configService.get<string>('CIEL_PK_NOTIFY_EMAIL') || 'admin@cielpk.com';
-    const from = this.configService.get<string>('MAIL_ADMIN_FROM') || 'CIEL Admin <admin@cielpk.com>';
+    const to =
+      this.configService.get<string>('CIEL_PK_NOTIFY_EMAIL') ||
+      'admin@cielpk.com';
+    const from =
+      this.configService.get<string>('MAIL_ADMIN_FROM') ||
+      'CIEL Admin <admin@cielpk.com>';
     const pathEsc = this.escHtmlPlain(pathLabel);
     const nounEsc = this.escHtmlPlain(recordNoun);
     const html = `
@@ -1771,16 +2119,35 @@ export class MailService {
       </div>
     `;
     try {
-      await this.transporter.sendMail({ from, to, subject: `New ${pathLabel} ${recordNoun.toLowerCase()} created on CIEL PK`, html });
-      this.logger.log(`${pathLabel} connection heads-up sent to CIEL PK (${to}) — ${studentName} / ${facultyName ?? 'no faculty'} / ${universityName ?? 'no university'} / "${projectTitle}"`);
+      await this.transporter.sendMail({
+        from,
+        to,
+        subject: `New ${pathLabel} ${recordNoun.toLowerCase()} created on CIEL PK`,
+        html,
+      });
+      this.logger.log(
+        `${pathLabel} connection heads-up sent to CIEL PK (${to}) — ${studentName} / ${facultyName ?? 'no faculty'} / ${universityName ?? 'no university'} / "${projectTitle}"`,
+      );
     } catch (error) {
-      this.logger.error(`Failed to send ${pathLabel} connection heads-up to CIEL PK`, error.stack);
+      this.logger.error(
+        `Failed to send ${pathLabel} connection heads-up to CIEL PK`,
+        error.stack,
+      );
     }
   }
 
-  async sendCourseworkApproved(to: string, studentFirstName: string, projectTitle: string): Promise<void> {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
-    const wallLink = this.buildFrontendLink('/dashboard/student/paths/course-project', { view: 'wall' });
+  async sendCourseworkApproved(
+    to: string,
+    studentFirstName: string,
+    projectTitle: string,
+  ): Promise<void> {
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const wallLink = this.buildFrontendLink(
+      '/dashboard/student/paths/course-project',
+      { view: 'wall' },
+    );
     const titleEsc = this.escHtmlPlain(projectTitle);
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
@@ -1795,10 +2162,18 @@ export class MailService {
       </div>
     `;
     try {
-      await this.transporter.sendMail({ from, to, subject: `CIEL PK — coursework approved: ${projectTitle}`, html });
+      await this.transporter.sendMail({
+        from,
+        to,
+        subject: `CIEL PK — coursework approved: ${projectTitle}`,
+        html,
+      });
       this.logger.log(`Coursework approval email sent to ${to}`);
     } catch (error) {
-      this.logger.error(`Failed to send coursework approval email to ${to}`, error.stack);
+      this.logger.error(
+        `Failed to send coursework approval email to ${to}`,
+        error.stack,
+      );
     }
   }
 
@@ -1808,7 +2183,9 @@ export class MailService {
     projectTitle: string,
     note?: string | null,
   ): Promise<void> {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
     const titleEsc = this.escHtmlPlain(projectTitle);
     const feedbackBlock =
       note && note.trim()
@@ -1825,10 +2202,18 @@ export class MailService {
       </div>
     `;
     try {
-      await this.transporter.sendMail({ from, to, subject: `CIEL PK — revision requested on your coursework: ${projectTitle}`, html });
+      await this.transporter.sendMail({
+        from,
+        to,
+        subject: `CIEL PK — revision requested on your coursework: ${projectTitle}`,
+        html,
+      });
       this.logger.log(`Coursework revision-requested email sent to ${to}`);
     } catch (error) {
-      this.logger.error(`Failed to send coursework revision-requested email to ${to}`, error.stack);
+      this.logger.error(
+        `Failed to send coursework revision-requested email to ${to}`,
+        error.stack,
+      );
     }
   }
 
@@ -1838,7 +2223,9 @@ export class MailService {
     projectTitle: string,
     note?: string | null,
   ): Promise<void> {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
     const titleEsc = this.escHtmlPlain(projectTitle);
     const feedbackBlock =
       note && note.trim()
@@ -1854,10 +2241,18 @@ export class MailService {
       </div>
     `;
     try {
-      await this.transporter.sendMail({ from, to, subject: `CIEL PK — coursework not approved: ${projectTitle}`, html });
+      await this.transporter.sendMail({
+        from,
+        to,
+        subject: `CIEL PK — coursework not approved: ${projectTitle}`,
+        html,
+      });
       this.logger.log(`Coursework rejection email sent to ${to}`);
     } catch (error) {
-      this.logger.error(`Failed to send coursework rejection email to ${to}`, error.stack);
+      this.logger.error(
+        `Failed to send coursework rejection email to ${to}`,
+        error.stack,
+      );
     }
   }
 
@@ -1871,8 +2266,13 @@ export class MailService {
     badgeLevel: string,
     previousRank?: number | null,
   ): Promise<void> {
-    const from = this.configService.get<string>('MAIL_FROM') || 'CIEL <no-reply@cielpk.com>';
-    const wallLink = this.buildFrontendLink('/dashboard/student/paths/course-project', { view: 'wall' });
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const wallLink = this.buildFrontendLink(
+      '/dashboard/student/paths/course-project',
+      { view: 'wall' },
+    );
     const titleEsc = this.escHtmlPlain(projectTitle);
     const movementLine =
       previousRank == null
@@ -1899,10 +2299,18 @@ export class MailService {
       </div>
     `;
     try {
-      await this.transporter.sendMail({ from, to, subject: `CIEL PK — your coursework ranked #${rank}: ${projectTitle}`, html });
+      await this.transporter.sendMail({
+        from,
+        to,
+        subject: `CIEL PK — your coursework ranked #${rank}: ${projectTitle}`,
+        html,
+      });
       this.logger.log(`Coursework rank notification email sent to ${to}`);
     } catch (error) {
-      this.logger.error(`Failed to send coursework rank notification email to ${to}`, error.stack);
+      this.logger.error(
+        `Failed to send coursework rank notification email to ${to}`,
+        error.stack,
+      );
     }
   }
 }

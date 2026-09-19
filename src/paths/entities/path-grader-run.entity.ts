@@ -1,7 +1,18 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Index } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
+  UpdateDateColumn,
+  Index,
+} from 'typeorm';
 
 export type PathGraderRunScope = 'faculty' | 'university';
-export type PathGraderRunKind = 'coursework' | 'fyp' | 'startup' | 'community_service';
+export type PathGraderRunKind =
+  | 'coursework'
+  | 'fyp'
+  | 'startup'
+  | 'community_service';
 
 /** Tracks how many times a faculty member or a university org has "run" a path's AI Grader (i.e.
  * called that path's merit-model notify/pin action) in a given calendar year — capped at 3 per
@@ -11,31 +22,31 @@ export type PathGraderRunKind = 'coursework' | 'fyp' | 'startup' | 'community_se
 @Entity('path_grader_runs')
 @Index(['pathKind', 'scope', 'scopeKey', 'academicYear'], { unique: true })
 export class PathGraderRun {
-    @PrimaryGeneratedColumn('uuid')
-    id: string;
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
 
-    @Column()
-    pathKind: PathGraderRunKind;
+  @Column()
+  pathKind: PathGraderRunKind;
 
-    @Column()
-    scope: PathGraderRunScope;
+  @Column()
+  scope: PathGraderRunScope;
 
-    /** Faculty scope: the faculty user's lowercased email. University scope: the organization id. */
-    @Column()
-    scopeKey: string;
+  /** Faculty scope: the faculty user's lowercased email. University scope: the organization id. */
+  @Column()
+  scopeKey: string;
 
-    @Column({ type: 'int' })
-    academicYear: number;
+  @Column({ type: 'int' })
+  academicYear: number;
 
-    @Column({ type: 'int', default: 0 })
-    runCount: number;
+  @Column({ type: 'int', default: 0 })
+  runCount: number;
 
-    @Column({ type: 'timestamp', nullable: true })
-    lastRunAt: Date | null;
+  @Column({ type: 'timestamp', nullable: true })
+  lastRunAt: Date | null;
 
-    @CreateDateColumn()
-    createdAt: Date;
+  @CreateDateColumn()
+  createdAt: Date;
 
-    @UpdateDateColumn()
-    updatedAt: Date;
+  @UpdateDateColumn()
+  updatedAt: Date;
 }

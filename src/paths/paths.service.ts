@@ -24,7 +24,11 @@ import {
   TeamMemberInvite,
   TeamMemberInviteKind,
 } from './entities/team-member-invite.entity';
-import { PathGraderRun, PathGraderRunScope, PathGraderRunKind } from './entities/path-grader-run.entity';
+import {
+  PathGraderRun,
+  PathGraderRunScope,
+  PathGraderRunKind,
+} from './entities/path-grader-run.entity';
 import { formatCertificateVerificationCode } from '../reports/certificate-verification-code.util';
 import { UpdateCourseProjectDto } from './dto/update-course-project.dto';
 import { AddFypDeliverableDto, UpdateFypDto } from './dto/update-fyp.dto';
@@ -38,25 +42,46 @@ import {
 } from './fyp-ai-analysis.constants';
 import { buildFypAiEvaluationPayload } from './build-fyp-ai-evaluation-payload.util';
 import { VentureMeritModelQueryDto } from './dto/venture-merit-model-query.dto';
-import { AddVentureDocumentDto, UpdateVentureDto } from './dto/update-venture.dto';
+import {
+  AddVentureDocumentDto,
+  UpdateVentureDto,
+} from './dto/update-venture.dto';
 import { ventureMatchesFaculty } from './venture-faculty-scope.util';
 import {
   ventureCompletenessPercent,
   ventureMissingItems,
   VENTURE_VISIBILITY_THRESHOLD,
 } from './venture-completeness.constants';
-import { computeVentureGates, deriveVentureIsVisible } from './venture-gates.util';
+import {
+  computeVentureGates,
+  deriveVentureIsVisible,
+} from './venture-gates.util';
 import { User } from '../users/entities/user.entity';
 import { Organization } from '../organizations/entities/organization.entity';
 import { UserRole } from '../users/enums/user-role.enum';
 import { MailService } from '../mail/mail.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { MeritModelQueryDto, NotifyMeritRanksDto } from './dto/merit-model-query.dto';
-import { byMerit, computeMeritCard, deriveMeritYear } from './merit-model/merit-model.util';
+import {
+  MeritModelQueryDto,
+  NotifyMeritRanksDto,
+} from './dto/merit-model-query.dto';
+import {
+  byMerit,
+  computeMeritCard,
+  deriveMeritYear,
+} from './merit-model/merit-model.util';
 import { RankedMeritCard } from './merit-model/merit-model.types';
-import { byFypMerit, computeFypMeritCard, deriveFypCompletionMonth, deriveFypRoute } from './merit-model/fyp-merit-model.util';
+import {
+  byFypMerit,
+  computeFypMeritCard,
+  deriveFypCompletionMonth,
+  deriveFypRoute,
+} from './merit-model/fyp-merit-model.util';
 import { RankedFypMeritCard } from './merit-model/fyp-merit-model.types';
-import { byVentureMerit, computeVentureMeritCard } from './merit-model/venture-merit-model.util';
+import {
+  byVentureMerit,
+  computeVentureMeritCard,
+} from './merit-model/venture-merit-model.util';
 import { RankedVentureMeritCard } from './merit-model/venture-merit-model.types';
 
 function postgresErrorCode(err: unknown): string | undefined {
@@ -123,7 +148,9 @@ export class PathsService implements OnModuleInit {
         END $$;
       `);
     } catch (err) {
-      this.logger.warn(`Could not drop leftover fyp_entries.userId unique index: ${(err as Error).message}`);
+      this.logger.warn(
+        `Could not drop leftover fyp_entries.userId unique index: ${(err as Error).message}`,
+      );
     }
   }
 
@@ -139,17 +166,27 @@ export class PathsService implements OnModuleInit {
 
   /** Same extraction as extractMemberEmails, but keeps each member's own declared name alongside
    * their email — lets the invite email greet them by name ("Dear Fatima,") instead of generically. */
-  private extractMemberEmailAndName(members: unknown[] | undefined | null): { email: string; name: string | null }[] {
+  private extractMemberEmailAndName(
+    members: unknown[] | undefined | null,
+  ): { email: string; name: string | null }[] {
     if (!members?.length) return [];
     const byEmail = new Map<string, string | null>();
     for (const m of members) {
-      if (m && typeof m === 'object' && 'email' in (m as Record<string, unknown>)) {
+      if (
+        m &&
+        typeof m === 'object' &&
+        'email' in (m as Record<string, unknown>)
+      ) {
         const raw = (m as { email?: unknown }).email;
         if (typeof raw === 'string' && raw.trim()) {
           const email = raw.trim().toLowerCase();
           const rawName = (m as { name?: unknown }).name;
-          const name = typeof rawName === 'string' && rawName.trim() ? rawName.trim() : null;
-          if (!byEmail.has(email) || name) byEmail.set(email, name ?? byEmail.get(email) ?? null);
+          const name =
+            typeof rawName === 'string' && rawName.trim()
+              ? rawName.trim()
+              : null;
+          if (!byEmail.has(email) || name)
+            byEmail.set(email, name ?? byEmail.get(email) ?? null);
         }
       }
     }
@@ -171,7 +208,9 @@ export class PathsService implements OnModuleInit {
   ): Promise<void> {
     const members2 = this.extractMemberEmailAndName(members);
     if (!members2.length) return;
-    const existing = await this.teamMemberInviteRepo.find({ where: { kind, entryId } });
+    const existing = await this.teamMemberInviteRepo.find({
+      where: { kind, entryId },
+    });
     const existingEmails = new Set(existing.map((i) => i.email));
     const toInvite = members2.filter((m) => !existingEmails.has(m.email));
     for (const { email, name } of toInvite) {
@@ -229,16 +268,25 @@ export class PathsService implements OnModuleInit {
       where: { kind, entryId: In(ids) },
     });
     if (!invites.length) return entries;
-    const statusByKey = new Map(invites.map((i) => [`${i.entryId}::${i.email}`, i.status]));
+    const statusByKey = new Map(
+      invites.map((i) => [`${i.entryId}::${i.email}`, i.status]),
+    );
     return entries.map((entry) => {
       const members = getMembers(entry);
       if (!members?.length) return entry;
       const annotated = members.map((m) => {
-        if (!m || typeof m !== 'object' || !('email' in (m as Record<string, unknown>))) return m;
+        if (
+          !m ||
+          typeof m !== 'object' ||
+          !('email' in (m as Record<string, unknown>))
+        )
+          return m;
         const raw = (m as { email?: unknown }).email;
         if (typeof raw !== 'string' || !raw.trim()) return m;
-        const status = statusByKey.get(`${entry.id}::${raw.trim().toLowerCase()}`);
-        return status ? { ...(m as object), inviteStatus: status } : m;
+        const status = statusByKey.get(
+          `${entry.id}::${raw.trim().toLowerCase()}`,
+        );
+        return status ? { ...m, inviteStatus: status } : m;
       });
       return setMembers(entry, annotated);
     });
@@ -255,22 +303,29 @@ export class PathsService implements OnModuleInit {
     });
     const inviterName = inviter?.name || 'A fellow student';
     if (invite.kind === 'course_project') {
-      const entry = await this.courseProjectRepo.findOne({ where: { id: invite.entryId } });
+      const entry = await this.courseProjectRepo.findOne({
+        where: { id: invite.entryId },
+      });
       return {
-        title: entry?.projectTitle || entry?.course || 'a Course Project report',
+        title:
+          entry?.projectTitle || entry?.course || 'a Course Project report',
         inviterName,
         kindLabel: 'Course Project',
       };
     }
     if (invite.kind === 'fyp') {
-      const entry = await this.fypRepo.findOne({ where: { id: invite.entryId } });
+      const entry = await this.fypRepo.findOne({
+        where: { id: invite.entryId },
+      });
       return {
         title: entry?.projectTitle || 'an FYP / Thesis record',
         inviterName,
         kindLabel: 'FYP / Thesis',
       };
     }
-    const entry = await this.ventureRepo.findOne({ where: { id: invite.entryId } });
+    const entry = await this.ventureRepo.findOne({
+      where: { id: invite.entryId },
+    });
     return {
       title: entry?.ventureName || 'a Startup / Business venture',
       inviterName,
@@ -280,7 +335,9 @@ export class PathsService implements OnModuleInit {
 
   /** Public preview shown on the /verify/team-invite landing page before the teammate accepts. */
   async getTeamInvitePreview(token: string) {
-    const invite = await this.teamMemberInviteRepo.findOne({ where: { token } });
+    const invite = await this.teamMemberInviteRepo.findOne({
+      where: { token },
+    });
     if (!invite) throw new NotFoundException('Invite not found');
     const { title, inviterName, kindLabel } = await this.describeInvite(invite);
     return {
@@ -299,7 +356,9 @@ export class PathsService implements OnModuleInit {
    * accepting account's own (already-verified-at-signup) email to exactly match the invite's
    * target email, so this doubles as ownership proof without a second OTP step. */
   async acceptTeamInvite(token: string, userId: string, userEmail: string) {
-    const invite = await this.teamMemberInviteRepo.findOne({ where: { token } });
+    const invite = await this.teamMemberInviteRepo.findOne({
+      where: { token },
+    });
     if (!invite) throw new NotFoundException('Invite not found');
     const email = (userEmail || '').trim().toLowerCase();
     if (!email || email !== invite.email) {
@@ -336,9 +395,12 @@ export class PathsService implements OnModuleInit {
     });
     if (!invite) throw new NotFoundException('Invite not found');
     if (invite.invitedByUserId !== requesterUserId) {
-      throw new ForbiddenException('Only the report owner can resend this invite');
+      throw new ForbiddenException(
+        'Only the report owner can resend this invite',
+      );
     }
-    if (invite.status === 'accepted') return { success: true, alreadyAccepted: true };
+    if (invite.status === 'accepted')
+      return { success: true, alreadyAccepted: true };
     invite.expiresAt = new Date(Date.now() + PathsService.INVITE_TTL_MS);
     await this.teamMemberInviteRepo.save(invite);
     const { title, inviterName, kindLabel } = await this.describeInvite(invite);
@@ -358,7 +420,9 @@ export class PathsService implements OnModuleInit {
    * previously-saved sibling fields on any partial patch (e.g. patching just `groupMembers`
    * would erase `teacherEmail`, `studentName`, etc.). Stripping the `undefined` keys first
    * restores real partial-merge (PATCH) semantics. */
-  private static withoutUndefined<T extends object>(obj: T | undefined): Partial<T> {
+  private static withoutUndefined<T extends object>(
+    obj: T | undefined,
+  ): Partial<T> {
     if (!obj) return {};
     const out: Partial<T> = {};
     for (const key of Object.keys(obj) as (keyof T)[]) {
@@ -408,7 +472,10 @@ export class PathsService implements OnModuleInit {
       entry.studentInfo = mergedStudentInfo;
     }
     if (dto.assignmentInfo !== undefined)
-      entry.assignmentInfo = { ...entry.assignmentInfo, ...keep(dto.assignmentInfo) };
+      entry.assignmentInfo = {
+        ...entry.assignmentInfo,
+        ...keep(dto.assignmentInfo),
+      };
     if (dto.aimsInfo !== undefined)
       entry.aimsInfo = { ...entry.aimsInfo, ...keep(dto.aimsInfo) };
     if (dto.processInfo !== undefined)
@@ -418,7 +485,10 @@ export class PathsService implements OnModuleInit {
     if (dto.sdgMapping !== undefined)
       entry.sdgMapping = { ...entry.sdgMapping, ...keep(dto.sdgMapping) };
     if (dto.reflectionInfo !== undefined)
-      entry.reflectionInfo = { ...entry.reflectionInfo, ...keep(dto.reflectionInfo) };
+      entry.reflectionInfo = {
+        ...entry.reflectionInfo,
+        ...keep(dto.reflectionInfo),
+      };
     if (dto.moduleInclusion !== undefined)
       entry.moduleInclusion = {
         ...entry.moduleInclusion,
@@ -438,7 +508,10 @@ export class PathsService implements OnModuleInit {
     // Same for a returned (rejected/revision-requested) report: fix & resubmit should land as a
     // fresh review, not stay stuck on "returned". Keep the teacher's notes so the student still sees them.
     let notify: 'first_submission' | 'resubmission' | null = null;
-    if (entry.status === 'submitted' && entry.facultyApprovalStatus === 'approved') {
+    if (
+      entry.status === 'submitted' &&
+      entry.facultyApprovalStatus === 'approved'
+    ) {
       entry.facultyApprovalStatus = 'pending';
       entry.facultyApprovalNote = null;
       entry.facultyApprovalAt = null;
@@ -447,7 +520,8 @@ export class PathsService implements OnModuleInit {
       notify = 'resubmission';
     } else if (
       entry.status === 'submitted' &&
-      (entry.facultyApprovalStatus === 'rejected' || entry.facultyApprovalStatus === 'revision_requested')
+      (entry.facultyApprovalStatus === 'rejected' ||
+        entry.facultyApprovalStatus === 'revision_requested')
     ) {
       entry.facultyApprovalStatus = 'pending';
       entry.facultyApprovalAt = null;
@@ -457,7 +531,8 @@ export class PathsService implements OnModuleInit {
     } else if (previousStatus !== 'submitted' && entry.status === 'submitted') {
       notify = 'first_submission';
     }
-    const justConnected = !hadTeacherEmail && !!(entry.studentInfo?.teacherEmail || '').trim();
+    const justConnected =
+      !hadTeacherEmail && !!(entry.studentInfo?.teacherEmail || '').trim();
     return { entry, notify, justConnected };
   }
 
@@ -473,15 +548,31 @@ export class PathsService implements OnModuleInit {
     try {
       if (transition === 'first_submission') {
         if (teacherEmail) {
-          await this.mailService.sendCourseworkSubmittedForReview(teacherEmail, studentName, title, entry.studentInfo?.teacherName?.trim() || undefined);
+          await this.mailService.sendCourseworkSubmittedForReview(
+            teacherEmail,
+            studentName,
+            title,
+            entry.studentInfo?.teacherName?.trim() || undefined,
+          );
         }
-        const student = await this.usersRepo.findOne({ where: { id: entry.userId }, select: ['email'] });
+        const student = await this.usersRepo.findOne({
+          where: { id: entry.userId },
+          select: ['email'],
+        });
         if (student?.email) {
           const first = studentName.split(' ')[0];
-          await this.mailService.sendCourseworkSubmissionConfirmation(student.email, first, title);
+          await this.mailService.sendCourseworkSubmissionConfirmation(
+            student.email,
+            first,
+            title,
+          );
         }
       } else if (teacherEmail) {
-        await this.mailService.sendCourseworkResubmittedForReview(teacherEmail, studentName, title);
+        await this.mailService.sendCourseworkResubmittedForReview(
+          teacherEmail,
+          studentName,
+          title,
+        );
       }
     } catch (err) {
       this.logger.warn(
@@ -493,18 +584,37 @@ export class PathsService implements OnModuleInit {
   /** Fires once — the moment a faculty email is first attached to a draft coursework record, i.e.
    * "one master record, auto-connected to student + faculty + university + CIEL PK". Best-effort:
    * an email failure here must never fail the student's autosave. */
-  private async notifyCourseworkConnected(entry: CourseProjectEntry): Promise<void> {
+  private async notifyCourseworkConnected(
+    entry: CourseProjectEntry,
+  ): Promise<void> {
     const studentName = entry.studentInfo?.studentName?.trim() || 'Student';
     const title = entry.projectTitle || entry.course || 'Untitled coursework';
     const teacherEmail = (entry.studentInfo?.teacherEmail || '').trim();
     const teacherName = entry.studentInfo?.teacherName?.trim() || 'there';
     try {
       if (teacherEmail) {
-        await this.mailService.sendPathProjectConnectedToFaculty(teacherEmail, teacherName, studentName, 'Coursework', title, '/dashboard/faculty/coursework-projects', 'Opportunity');
+        await this.mailService.sendPathProjectConnectedToFaculty(
+          teacherEmail,
+          teacherName,
+          studentName,
+          'Coursework',
+          title,
+          '/dashboard/faculty/coursework-projects',
+          'Opportunity',
+        );
       }
-      await this.mailService.sendPathProjectConnectedToCielPk(studentName, teacherEmail ? teacherName : undefined, entry.studentInfo?.universityName?.trim() || undefined, 'Coursework', title, 'Opportunity');
+      await this.mailService.sendPathProjectConnectedToCielPk(
+        studentName,
+        teacherEmail ? teacherName : undefined,
+        entry.studentInfo?.universityName?.trim() || undefined,
+        'Coursework',
+        title,
+        'Opportunity',
+      );
     } catch (err) {
-      this.logger.warn(`Coursework connection email failed for ${entry.id}: ${(err as Error).message}`);
+      this.logger.warn(
+        `Coursework connection email failed for ${entry.id}: ${(err as Error).message}`,
+      );
     }
   }
 
@@ -517,12 +627,18 @@ export class PathsService implements OnModuleInit {
         ({
           ...e,
           evidenceUrls: parseStoredUrlList(e.evidenceUrls),
-          studentInfo: { ...e.studentInfo, groupMembers: members } as CourseProjectStudentInfo,
+          studentInfo: {
+            ...e.studentInfo,
+            groupMembers: members,
+          } as CourseProjectStudentInfo,
         }) as CourseProjectEntry,
     );
   }
 
-  private async syncCourseProjectInvites(entry: CourseProjectEntry, invitedByUserId: string) {
+  private async syncCourseProjectInvites(
+    entry: CourseProjectEntry,
+    invitedByUserId: string,
+  ) {
     await this.syncTeamInvites(
       'course_project',
       entry.id,
@@ -564,10 +680,16 @@ export class PathsService implements OnModuleInit {
       );
     }
     entry.facultyApprovalStatus =
-      action === 'approve' ? 'approved' : action === 'revision' ? 'revision_requested' : 'rejected';
+      action === 'approve'
+        ? 'approved'
+        : action === 'revision'
+          ? 'revision_requested'
+          : 'rejected';
     entry.facultyApprovalNote = note ?? null;
     entry.facultyModeration =
-      action === 'approve' && moderation ? { ...moderation, at: new Date().toISOString() } : null;
+      action === 'approve' && moderation
+        ? { ...moderation, at: new Date().toISOString() }
+        : null;
     entry.facultyApprovalAt = new Date();
     if (action !== 'approve') entry.meritRibbon = null;
     const saved = await this.courseProjectRepo.save(entry);
@@ -595,18 +717,37 @@ export class PathsService implements OnModuleInit {
           message: `${first}, “${title}” was rejected. ${extra}`,
         });
       }
-      const student = await this.usersRepo.findOne({ where: { id: saved.userId }, select: ['email'] });
+      const student = await this.usersRepo.findOne({
+        where: { id: saved.userId },
+        select: ['email'],
+      });
       if (student?.email) {
         if (action === 'approve') {
-          await this.mailService.sendCourseworkApproved(student.email, first, title);
+          await this.mailService.sendCourseworkApproved(
+            student.email,
+            first,
+            title,
+          );
         } else if (action === 'revision') {
-          await this.mailService.sendCourseworkRevisionRequested(student.email, first, title, note);
+          await this.mailService.sendCourseworkRevisionRequested(
+            student.email,
+            first,
+            title,
+            note,
+          );
         } else {
-          await this.mailService.sendCourseworkRejected(student.email, first, title, note);
+          await this.mailService.sendCourseworkRejected(
+            student.email,
+            first,
+            title,
+            note,
+          );
         }
       }
     } catch (err) {
-      this.logger.warn(`Coursework review notification failed for ${saved.id}: ${(err as Error).message}`);
+      this.logger.warn(
+        `Coursework review notification failed for ${saved.id}: ${(err as Error).message}`,
+      );
     }
     return saved;
   }
@@ -627,32 +768,40 @@ export class PathsService implements OnModuleInit {
     // discards the first's changes. The lock serializes them so the second read sees the first's write.
     let notify: 'first_submission' | 'resubmission' | null = null;
     let justConnected = false;
-    const saved = await this.courseProjectRepo.manager.transaction(async (manager) => {
-      const repo = manager.getRepository(CourseProjectEntry);
-      let entry = await repo.findOne({
-        where: { userId },
-        order: { updatedAt: 'DESC' },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!entry) entry = repo.create({ userId });
-      const patched = this.applyCourseProjectPatch(entry, dto);
-      notify = patched.notify;
-      justConnected = patched.justConnected;
-      return repo.save(patched.entry);
-    });
+    const saved = await this.courseProjectRepo.manager.transaction(
+      async (manager) => {
+        const repo = manager.getRepository(CourseProjectEntry);
+        let entry = await repo.findOne({
+          where: { userId },
+          order: { updatedAt: 'DESC' },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!entry) entry = repo.create({ userId });
+        const patched = this.applyCourseProjectPatch(entry, dto);
+        notify = patched.notify;
+        justConnected = patched.justConnected;
+        return repo.save(patched.entry);
+      },
+    );
     // Fire-and-forget: these send email (invite / transition / connected notices) and must never
     // block the save response on a slow or unreachable mail server — a save should never hang for
     // minutes just because notifying someone by email is slow. See the same pattern below on the
     // FYP/Venture equivalents.
     void this.syncCourseProjectInvites(saved, userId).catch((err) =>
-      this.logger.error(`syncCourseProjectInvites failed for ${saved.id}: ${(err as Error)?.message}`),
+      this.logger.error(
+        `syncCourseProjectInvites failed for ${saved.id}: ${(err as Error)?.message}`,
+      ),
     );
     void this.notifyCourseworkTransition(saved, notify).catch((err) =>
-      this.logger.error(`notifyCourseworkTransition failed for ${saved.id}: ${(err as Error)?.message}`),
+      this.logger.error(
+        `notifyCourseworkTransition failed for ${saved.id}: ${(err as Error)?.message}`,
+      ),
     );
     if (justConnected) {
       void this.notifyCourseworkConnected(saved).catch((err) =>
-        this.logger.error(`notifyCourseworkConnected failed for ${saved.id}: ${(err as Error)?.message}`),
+        this.logger.error(
+          `notifyCourseworkConnected failed for ${saved.id}: ${(err as Error)?.message}`,
+        ),
       );
     }
     const [annotated] = await this.courseProjectAnnotate([saved]);
@@ -687,7 +836,9 @@ export class PathsService implements OnModuleInit {
       .createQueryBuilder('e')
       .where('e."userId" = :userId', { userId });
     if (email) {
-      qb.orWhere(`(${PathsService.TEAM_MEMBER_EMAIL_MATCH})`, { teamEmail: email });
+      qb.orWhere(`(${PathsService.TEAM_MEMBER_EMAIL_MATCH})`, {
+        teamEmail: email,
+      });
     }
     const entries = await qb.orderBy('e."updatedAt"', 'DESC').getMany();
     const annotated = await this.courseProjectAnnotate(entries);
@@ -701,7 +852,9 @@ export class PathsService implements OnModuleInit {
   /** The numeric AI Merit Model score — and the faculty's own per-criterion moderation of it — must
    * never reach a student; only the coarse rank/of/scope/badgeLevel tier is student-facing. Faculty/
    * university/admin views call attachLiveCourseworkRanks directly and keep the real values. */
-  private static redactMeritScoreForStudent<T extends CourseProjectEntry>(entry: T): T {
+  private static redactMeritScoreForStudent<T extends CourseProjectEntry>(
+    entry: T,
+  ): T {
     if (!entry.meritRibbon) return { ...entry, facultyModeration: null };
     const { total, ...rest } = entry.meritRibbon;
     return { ...entry, meritRibbon: rest, facultyModeration: null };
@@ -716,7 +869,11 @@ export class PathsService implements OnModuleInit {
 
   /** Owner gets full access at any stage; a named team member who has accepted (or was auto-connected
    * as a registered student) can read and edit the same record, including drafts. */
-  async getCourseProjectByIdForUser(userId: string, userEmail: string, id: string) {
+  async getCourseProjectByIdForUser(
+    userId: string,
+    userEmail: string,
+    id: string,
+  ) {
     const email = (userEmail || '').trim().toLowerCase();
     const qb = this.courseProjectRepo
       .createQueryBuilder('e')
@@ -725,7 +882,9 @@ export class PathsService implements OnModuleInit {
         new Brackets((b) => {
           b.where('e."userId" = :userId', { userId });
           if (email) {
-            b.orWhere(`(${PathsService.TEAM_MEMBER_EMAIL_MATCH})`, { teamEmail: email });
+            b.orWhere(`(${PathsService.TEAM_MEMBER_EMAIL_MATCH})`, {
+              teamEmail: email,
+            });
           }
         }),
       );
@@ -747,11 +906,18 @@ export class PathsService implements OnModuleInit {
     if (entry.userId === userId) return true;
     const email = (userEmail || '').trim().toLowerCase();
     if (!email) return false;
-    if (!this.extractMemberEmails(entry.studentInfo?.groupMembers).includes(email)) {
+    if (
+      !this.extractMemberEmails(entry.studentInfo?.groupMembers).includes(email)
+    ) {
       return false;
     }
     const invite = await this.teamMemberInviteRepo.findOne({
-      where: { kind: 'course_project', entryId: entry.id, email, status: 'accepted' },
+      where: {
+        kind: 'course_project',
+        entryId: entry.id,
+        email,
+        status: 'accepted',
+      },
     });
     return !!invite;
   }
@@ -765,31 +931,40 @@ export class PathsService implements OnModuleInit {
     // Same locked read-modify-write as upsertCourseProject — see comment there.
     let notify: 'first_submission' | 'resubmission' | null = null;
     let justConnected = false;
-    const saved = await this.courseProjectRepo.manager.transaction(async (manager) => {
-      const repo = manager.getRepository(CourseProjectEntry);
-      const entry = await repo.findOne({
-        where: { id },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!entry) throw new NotFoundException('Course project entry not found');
-      if (!(await this.canEditCourseProject(entry, userId, userEmail))) {
-        throw new NotFoundException('Course project entry not found');
-      }
-      const patched = this.applyCourseProjectPatch(entry, dto);
-      notify = patched.notify;
-      justConnected = patched.justConnected;
-      return repo.save(patched.entry);
-    });
+    const saved = await this.courseProjectRepo.manager.transaction(
+      async (manager) => {
+        const repo = manager.getRepository(CourseProjectEntry);
+        const entry = await repo.findOne({
+          where: { id },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!entry)
+          throw new NotFoundException('Course project entry not found');
+        if (!(await this.canEditCourseProject(entry, userId, userEmail))) {
+          throw new NotFoundException('Course project entry not found');
+        }
+        const patched = this.applyCourseProjectPatch(entry, dto);
+        notify = patched.notify;
+        justConnected = patched.justConnected;
+        return repo.save(patched.entry);
+      },
+    );
     // Fire-and-forget — see the comment on upsertCourseProject for why.
     void this.syncCourseProjectInvites(saved, saved.userId).catch((err) =>
-      this.logger.error(`syncCourseProjectInvites failed for ${saved.id}: ${(err as Error)?.message}`),
+      this.logger.error(
+        `syncCourseProjectInvites failed for ${saved.id}: ${(err as Error)?.message}`,
+      ),
     );
     void this.notifyCourseworkTransition(saved, notify).catch((err) =>
-      this.logger.error(`notifyCourseworkTransition failed for ${saved.id}: ${(err as Error)?.message}`),
+      this.logger.error(
+        `notifyCourseworkTransition failed for ${saved.id}: ${(err as Error)?.message}`,
+      ),
     );
     if (justConnected) {
       void this.notifyCourseworkConnected(saved).catch((err) =>
-        this.logger.error(`notifyCourseworkConnected failed for ${saved.id}: ${(err as Error)?.message}`),
+        this.logger.error(
+          `notifyCourseworkConnected failed for ${saved.id}: ${(err as Error)?.message}`,
+        ),
       );
     }
     const [annotated] = await this.courseProjectAnnotate([saved]);
@@ -861,7 +1036,9 @@ export class PathsService implements OnModuleInit {
       .where('e.status = :status', { status })
       .andWhere(
         new Brackets((b) => {
-          b.where('u."organizationId"::text = :orgId', { orgId: organizationId }).orWhere(
+          b.where('u."organizationId"::text = :orgId', {
+            orgId: organizationId,
+          }).orWhere(
             `LOWER(TRIM(COALESCE(e."studentInfo"->>'universityName', ''))) = :orgNameNorm`,
             { orgNameNorm },
           );
@@ -870,7 +1047,9 @@ export class PathsService implements OnModuleInit {
     // Enforced here, not left to the caller: the "Coursework Impact Wall" must only ever be
     // able to fetch approved records, never rely on client-side filtering to hide the rest.
     if (approvalStatus) {
-      qb.andWhere('e."facultyApprovalStatus" = :approvalStatus', { approvalStatus });
+      qb.andWhere('e."facultyApprovalStatus" = :approvalStatus', {
+        approvalStatus,
+      });
     }
     const entries = await qb.orderBy('e."updatedAt"', 'DESC').getMany();
     const annotated = await this.courseProjectAnnotate(entries);
@@ -943,7 +1122,8 @@ export class PathsService implements OnModuleInit {
     const groups = new Map<string, CourseProjectEntry[]>();
     for (const e of pool) {
       const key =
-        (e.studentInfo?.universityName || '').trim().toLowerCase() || '__ciel__';
+        (e.studentInfo?.universityName || '').trim().toLowerCase() ||
+        '__ciel__';
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key)!.push(e);
     }
@@ -992,22 +1172,31 @@ export class PathsService implements OnModuleInit {
     let pool: Array<CourseProjectEntry & { student: User | null }> = [];
     let scopeLabel = 'No scope';
     const honorsWideFilters =
-      role === UserRole.UNIVERSITY || role === UserRole.ORGANIZATION_ADMIN || role === UserRole.SUPER_ADMIN;
+      role === UserRole.UNIVERSITY ||
+      role === UserRole.ORGANIZATION_ADMIN ||
+      role === UserRole.SUPER_ADMIN;
     const graderRuns = await this.peekGraderRunUsage('coursework', user);
 
     if (role === UserRole.FACULTY) {
       pool = await this.listCourseProjectsForTeacher(user.email);
       scopeLabel = 'Faculty supervision';
-    } else if (role === UserRole.UNIVERSITY || role === UserRole.ORGANIZATION_ADMIN) {
+    } else if (
+      role === UserRole.UNIVERSITY ||
+      role === UserRole.ORGANIZATION_ADMIN
+    ) {
       if (user.organizationId) {
         pool = await this.listCourseProjectsForUniversity(user.organizationId);
-        const org = await this.organizationsRepo.findOne({ where: { id: user.organizationId } });
+        const org = await this.organizationsRepo.findOne({
+          where: { id: user.organizationId },
+        });
         scopeLabel = org?.name ?? 'University';
       }
     } else if (role === UserRole.SUPER_ADMIN) {
       if (filters.university) {
         pool = await this.listCourseProjectsForUniversity(filters.university);
-        const org = await this.organizationsRepo.findOne({ where: { id: filters.university } });
+        const org = await this.organizationsRepo.findOne({
+          where: { id: filters.university },
+        });
         scopeLabel = org?.name ?? 'CIEL — all universities';
       } else {
         pool = await this.listCourseProjectsForAdmin('submitted');
@@ -1015,7 +1204,12 @@ export class PathsService implements OnModuleInit {
       }
     } else {
       return {
-        scope: { role, label: scopeLabel, mode: filters.mode ?? 'overall', filters: {} },
+        scope: {
+          role,
+          label: scopeLabel,
+          mode: filters.mode ?? 'overall',
+          filters: {},
+        },
         cohortAverage: 0,
         count: 0,
         entries: [],
@@ -1029,37 +1223,63 @@ export class PathsService implements OnModuleInit {
     if (honorsWideFilters) {
       if (filters.discipline) {
         const target = filters.discipline.trim().toLowerCase();
-        eligible = eligible.filter((e) => (e.studentInfo?.disciplineName || '').trim().toLowerCase() === target);
+        eligible = eligible.filter(
+          (e) =>
+            (e.studentInfo?.disciplineName || '').trim().toLowerCase() ===
+            target,
+        );
       }
       if (filters.faculty) {
         const target = filters.faculty.trim().toLowerCase();
-        eligible = eligible.filter((e) => (e.studentInfo?.teacherEmail || '').trim().toLowerCase() === target);
+        eligible = eligible.filter(
+          (e) =>
+            (e.studentInfo?.teacherEmail || '').trim().toLowerCase() === target,
+        );
       }
       if (filters.year) {
-        eligible = eligible.filter((e) => String(deriveMeritYear(e)) === filters.year);
+        eligible = eligible.filter(
+          (e) => String(deriveMeritYear(e)) === filters.year,
+        );
       }
       if (filters.teamType) {
         const wantsInterdisciplinary = filters.teamType === 'interdisciplinary';
         eligible = eligible.filter(
-          (e) => (e.studentInfo?.teamMode === 'Interdisciplinary team') === wantsInterdisciplinary,
+          (e) =>
+            (e.studentInfo?.teamMode === 'Interdisciplinary team') ===
+            wantsInterdisciplinary,
         );
       }
     }
     if (filters.semesterFrom || filters.semesterTo) {
-      const from = filters.semesterFrom ? parseInt(filters.semesterFrom.replace(/\D/g, ''), 10) : -Infinity;
-      const to = filters.semesterTo ? parseInt(filters.semesterTo.replace(/\D/g, ''), 10) : Infinity;
+      const from = filters.semesterFrom
+        ? parseInt(filters.semesterFrom.replace(/\D/g, ''), 10)
+        : -Infinity;
+      const to = filters.semesterTo
+        ? parseInt(filters.semesterTo.replace(/\D/g, ''), 10)
+        : Infinity;
       eligible = eligible.filter((e) => {
-        const sem = parseInt((e.studentInfo?.semester || '').replace(/\D/g, ''), 10);
+        const sem = parseInt(
+          (e.studentInfo?.semester || '').replace(/\D/g, ''),
+          10,
+        );
         return !Number.isNaN(sem) && sem >= from && sem <= to;
       });
     }
 
-    const mode: 'overall' | 'discipline' = filters.mode === 'discipline' ? 'discipline' : 'overall';
-    const cards = eligible.map((e) => ({ ...computeMeritCard(e), student: e.student }));
+    const mode: 'overall' | 'discipline' =
+      filters.mode === 'discipline' ? 'discipline' : 'overall';
+    const cards = eligible.map((e) => ({
+      ...computeMeritCard(e),
+      student: e.student,
+    }));
     const cohortAverage = cards.length
-      ? Math.round(cards.reduce((sum, c) => sum + c.scorecard.total, 0) / cards.length)
+      ? Math.round(
+          cards.reduce((sum, c) => sum + c.scorecard.total, 0) / cards.length,
+        )
       : 0;
-    const appliedFilters = Object.fromEntries(Object.entries(filters).filter(([, v]) => v !== undefined));
+    const appliedFilters = Object.fromEntries(
+      Object.entries(filters).filter(([, v]) => v !== undefined),
+    );
 
     if (mode === 'discipline') {
       const groups = new Map<string, typeof cards>();
@@ -1072,7 +1292,11 @@ export class PathsService implements OnModuleInit {
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([discipline, groupCards]) => {
           const sorted = [...groupCards].sort(byMerit);
-          const ranked: RankedMeritCard[] = sorted.map((card, i) => ({ ...card, rank: i + 1, isTopPick: i === 0 }));
+          const ranked: RankedMeritCard[] = sorted.map((card, i) => ({
+            ...card,
+            rank: i + 1,
+            isTopPick: i === 0,
+          }));
           return { discipline, count: ranked.length, entries: ranked };
         });
       return {
@@ -1087,7 +1311,11 @@ export class PathsService implements OnModuleInit {
     const sorted = [...cards].sort(byMerit);
     // Overall mode highlights the top 10 as AI picks (matches the prototype's `ranked && i<10`);
     // discipline mode above highlights only the #1 pick per group (matches its `j===0`).
-    const ranked: RankedMeritCard[] = sorted.map((card, i) => ({ ...card, rank: i + 1, isTopPick: i < 10 }));
+    const ranked: RankedMeritCard[] = sorted.map((card, i) => ({
+      ...card,
+      rank: i + 1,
+      isTopPick: i < 10,
+    }));
     return {
       scope: { role, label: scopeLabel, mode, filters: appliedFilters },
       cohortAverage,
@@ -1106,7 +1334,11 @@ export class PathsService implements OnModuleInit {
     if (user.role === UserRole.FACULTY) {
       return { scope: 'faculty', key: (user.email || '').trim().toLowerCase() };
     }
-    if ((user.role === UserRole.UNIVERSITY || user.role === UserRole.ORGANIZATION_ADMIN) && user.organizationId) {
+    if (
+      (user.role === UserRole.UNIVERSITY ||
+        user.role === UserRole.ORGANIZATION_ADMIN) &&
+      user.organizationId
+    ) {
       return { scope: 'university', key: user.organizationId };
     }
     return null;
@@ -1121,7 +1353,12 @@ export class PathsService implements OnModuleInit {
     if (!resolved) return { unlimited: true, used: 0, limit: 0 };
     const academicYear = new Date().getFullYear();
     const row = await this.graderRunRepo.findOne({
-      where: { pathKind, scope: resolved.scope, scopeKey: resolved.key, academicYear },
+      where: {
+        pathKind,
+        scope: resolved.scope,
+        scopeKey: resolved.key,
+        academicYear,
+      },
     });
     return { unlimited: false, used: row?.runCount ?? 0, limit: 3 };
   }
@@ -1139,30 +1376,43 @@ export class PathsService implements OnModuleInit {
     const limit = 3;
     // Locked read-modify-write — without this, two near-simultaneous "Run" clicks from the same
     // pathKind+scope+year can both read the same pre-image and both save runCount+1, undercounting by one.
-    const runCount = await this.graderRunRepo.manager.transaction(async (manager) => {
-      const repo = manager.getRepository(PathGraderRun);
-      let row = await repo.findOne({
-        where: { pathKind, scope: resolved.scope, scopeKey: resolved.key, academicYear },
-        lock: { mode: 'pessimistic_write' },
-      });
-      const used = row?.runCount ?? 0;
-      if (used >= limit) {
-        throw new ForbiddenException({
-          success: false,
-          code: 'GRADER_RUNS_EXHAUSTED',
-          message: `No AI Grader runs left this year (used ${used} of ${limit}). Runs reset next academic year.`,
-          used,
-          limit,
+    const runCount = await this.graderRunRepo.manager.transaction(
+      async (manager) => {
+        const repo = manager.getRepository(PathGraderRun);
+        let row = await repo.findOne({
+          where: {
+            pathKind,
+            scope: resolved.scope,
+            scopeKey: resolved.key,
+            academicYear,
+          },
+          lock: { mode: 'pessimistic_write' },
         });
-      }
-      if (!row) {
-        row = repo.create({ pathKind, scope: resolved.scope, scopeKey: resolved.key, academicYear, runCount: 0 });
-      }
-      row.runCount = used + 1;
-      row.lastRunAt = new Date();
-      const saved = await repo.save(row);
-      return saved.runCount;
-    });
+        const used = row?.runCount ?? 0;
+        if (used >= limit) {
+          throw new ForbiddenException({
+            success: false,
+            code: 'GRADER_RUNS_EXHAUSTED',
+            message: `No AI Grader runs left this year (used ${used} of ${limit}). Runs reset next academic year.`,
+            used,
+            limit,
+          });
+        }
+        if (!row) {
+          row = repo.create({
+            pathKind,
+            scope: resolved.scope,
+            scopeKey: resolved.key,
+            academicYear,
+            runCount: 0,
+          });
+        }
+        row.runCount = used + 1;
+        row.lastRunAt = new Date();
+        const saved = await repo.save(row);
+        return saved.runCount;
+      },
+    );
     return { unlimited: false, used: runCount, limit };
   }
 
@@ -1174,14 +1424,28 @@ export class PathsService implements OnModuleInit {
     const model = await this.getCourseProjectMeritModel(user, {});
     const ranked: RankedMeritCard[] = Array.isArray(model.entries)
       ? model.entries
-      : Array.isArray((model as { groups?: { entries: RankedMeritCard[] }[] }).groups)
-        ? (model as { groups: { entries: RankedMeritCard[] }[] }).groups.flatMap((g) => g.entries)
+      : Array.isArray(
+            (model as { groups?: { entries: RankedMeritCard[] }[] }).groups,
+          )
+        ? (
+            model as { groups: { entries: RankedMeritCard[] }[] }
+          ).groups.flatMap((g) => g.entries)
         : [];
     const allowed = new Set(ranked.map((c) => c.id));
-    const scope = (dto.scopeLabel || model.scope?.label || 'this ranking').trim();
-    const picks = (dto.picks?.length
-      ? dto.picks
-      : (dto.entryIds || []).map((entryId, i) => ({ entryId, rank: i + 1, of: ranked.length, total: undefined as number | undefined }))
+    const scope = (
+      dto.scopeLabel ||
+      model.scope?.label ||
+      'this ranking'
+    ).trim();
+    const picks = (
+      dto.picks?.length
+        ? dto.picks
+        : (dto.entryIds || []).map((entryId, i) => ({
+            entryId,
+            rank: i + 1,
+            of: ranked.length,
+            total: undefined as number | undefined,
+          }))
     )
       .filter((p) => p.entryId && allowed.has(p.entryId))
       .slice(0, 3);
@@ -1193,13 +1457,23 @@ export class PathsService implements OnModuleInit {
     for (const pick of picks) {
       if (seen.has(pick.entryId)) continue;
       seen.add(pick.entryId);
-      const entry = await this.courseProjectRepo.findOne({ where: { id: pick.entryId } });
+      const entry = await this.courseProjectRepo.findOne({
+        where: { id: pick.entryId },
+      });
       if (!entry || entry.facultyApprovalStatus !== 'approved') continue;
       const of = pick.of || ranked.length;
       const rank = pick.rank;
       const previousRank = entry.meritRibbon?.rank ?? null;
       const badgeLevel = PathsService.computeRankBadgeLevel(rank, of);
-      const ribbon = { rank, of, scope, total: pick.total, badgeLevel, previousRank, at: new Date().toISOString() };
+      const ribbon = {
+        rank,
+        of,
+        scope,
+        total: pick.total,
+        badgeLevel,
+        previousRank,
+        at: new Date().toISOString(),
+      };
       const already =
         entry.meritRibbon?.rank === rank &&
         entry.meritRibbon?.of === of &&
@@ -1218,7 +1492,10 @@ export class PathsService implements OnModuleInit {
           title: `Your coursework ranked #${rank}`,
           message: `${first}, your coursework “${title}” ranked #${rank} of ${of} in ${scope} (${badgeLevel}). Open Coursework → My Impact Wall to see the ribbon.`,
         });
-        const student = await this.usersRepo.findOne({ where: { id: entry.userId }, select: ['email'] });
+        const student = await this.usersRepo.findOne({
+          where: { id: entry.userId },
+          select: ['email'],
+        });
         if (student?.email) {
           await this.mailService.sendCourseworkRankNotification(
             student.email,
@@ -1233,7 +1510,9 @@ export class PathsService implements OnModuleInit {
         }
         sent += 1;
       } catch (err) {
-        this.logger.warn(`Merit rank notification failed for ${entry.id}: ${(err as Error).message}`);
+        this.logger.warn(
+          `Merit rank notification failed for ${entry.id}: ${(err as Error).message}`,
+        );
       }
     }
     return { notified: sent, scope, graderRuns };
@@ -1264,14 +1543,23 @@ export class PathsService implements OnModuleInit {
   async getPublicCourseworkVerification(verificationKey: string) {
     const key = (verificationKey || '').trim();
     if (!key) throw new NotFoundException('Verification link not found');
-    let entry = await this.courseProjectRepo.findOne({ where: { verificationPublicSlug: key } });
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(key);
+    let entry = await this.courseProjectRepo.findOne({
+      where: { verificationPublicSlug: key },
+    });
+    const isUuid =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        key,
+      );
     if (!entry && isUuid) {
       entry = await this.courseProjectRepo.findOne({ where: { id: key } });
     }
     if (!entry) throw new NotFoundException('Verification link not found');
     if (entry.facultyApprovalStatus !== 'approved') {
-      return { success: true, verified: false, status: entry.facultyApprovalStatus };
+      return {
+        success: true,
+        verified: false,
+        status: entry.facultyApprovalStatus,
+      };
     }
     return {
       success: true,
@@ -1281,7 +1569,9 @@ export class PathsService implements OnModuleInit {
       rank: entry.meritRibbon?.rank ?? null,
       of: entry.meritRibbon?.of ?? null,
       scope: entry.meritRibbon?.scope ?? null,
-      verification_code: formatCertificateVerificationCode(entry.verificationPublicSlug),
+      verification_code: formatCertificateVerificationCode(
+        entry.verificationPublicSlug,
+      ),
       verified_at: entry.facultyApprovalAt,
     };
   }
@@ -1317,9 +1607,9 @@ export class PathsService implements OnModuleInit {
       wizardStepsComplete: usesWizard ? entry.stepCompleted : null,
       wizardStepsTotal: usesWizard ? wizardTotalSteps : null,
       progressStatus: usesWizard
-        ? (entry.status === 'submitted'
-            ? ('complete' as const)
-            : ('in_progress' as const))
+        ? entry.status === 'submitted'
+          ? ('complete' as const)
+          : ('in_progress' as const)
         : complete >= total && total > 0
           ? ('complete' as const)
           : ('in_progress' as const),
@@ -1366,17 +1656,26 @@ export class PathsService implements OnModuleInit {
 
   async listVenturesForAdmin(
     visibility?: 'visible' | 'private',
-    approvalStatus?: 'not_started' | 'pending' | 'approved' | 'revisions_requested' | 'rejected',
+    approvalStatus?:
+      | 'not_started'
+      | 'pending'
+      | 'approved'
+      | 'revisions_requested'
+      | 'rejected',
   ) {
     // Enforced here, not left to the caller: the "Approved Ventures" wall must only ever be able
     // to fetch approved records, never rely on client-side filtering to hide the rest — same fix
     // already applied to Course Project's listCourseProjectsForAdmin. reviewPipeline is jsonb, so
     // this needs a query builder rather than a plain `find` where clause.
-    const qb = this.ventureRepo.createQueryBuilder('e').orderBy('e."updatedAt"', 'DESC');
+    const qb = this.ventureRepo
+      .createQueryBuilder('e')
+      .orderBy('e."updatedAt"', 'DESC');
     if (visibility === 'visible') qb.andWhere('e."isVisible" = true');
     else if (visibility === 'private') qb.andWhere('e."isVisible" = false');
     if (approvalStatus) {
-      qb.andWhere(`e."reviewPipeline"->>'supervisorStatus' = :approvalStatus`, { approvalStatus });
+      qb.andWhere(`e."reviewPipeline"->>'supervisorStatus' = :approvalStatus`, {
+        approvalStatus,
+      });
       // A decision status (approved/rejected/revisions_requested) is only ever meaningful once a
       // venture has actually been submitted — unlike listVenturesForUniversity/ForTeacher, this
       // admin query has no separate `status` param the caller could pass, so a still-'draft' row
@@ -1388,7 +1687,9 @@ export class PathsService implements OnModuleInit {
     }
     const entries = await qb.getMany();
     const annotated = await this.ventureAnnotate(entries);
-    const enriched = annotated.map((entry) => this.enrichVentureForAdmin(entry));
+    const enriched = annotated.map((entry) =>
+      this.enrichVentureForAdmin(entry),
+    );
     return this.attachStudents(enriched);
   }
 
@@ -1407,7 +1708,9 @@ export class PathsService implements OnModuleInit {
     const qb = this.ventureRepo
       .createQueryBuilder('e')
       .where(`e.status = 'submitted'`)
-      .andWhere(`e."reviewPipeline"->>'supervisorStatus' = :approvalStatus`, { approvalStatus: 'approved' })
+      .andWhere(`e."reviewPipeline"->>'supervisorStatus' = :approvalStatus`, {
+        approvalStatus: 'approved',
+      })
       .andWhere(
         `(e."publishSettings"->>'acceptIntros' = 'true' OR e."publishSettings"->>'audience' = 'investors')`,
       )
@@ -1416,11 +1719,17 @@ export class PathsService implements OnModuleInit {
     const annotated = await this.ventureAnnotate(entries);
     const enriched = annotated.map((entry) => this.withCompleteness(entry)!);
     const withStudents = await this.attachStudents(enriched);
-    return withStudents.map((entry) => this.sanitizeVentureForInvestor(entry as never, opts.maskFounders));
+    return withStudents.map((entry) =>
+      this.sanitizeVentureForInvestor(entry as never, opts.maskFounders),
+    );
   }
 
   private sanitizeVentureForInvestor(
-    entry: VentureEntry & { student: User | null; completenessPercent?: number; missingItems?: string[] },
+    entry: VentureEntry & {
+      student: User | null;
+      completenessPercent?: number;
+      missingItems?: string[];
+    },
     maskFounders: boolean,
   ) {
     const student = entry.student
@@ -1455,10 +1764,15 @@ export class PathsService implements OnModuleInit {
   async setVentureSpotlight(id: string, featured: boolean) {
     const entry = await this.ventureRepo.findOne({ where: { id } });
     if (!entry) throw new NotFoundException('Venture entry not found');
-    entry.publishSettings = { ...(entry.publishSettings || {}), featured: !!featured };
+    entry.publishSettings = {
+      ...(entry.publishSettings || {}),
+      featured: !!featured,
+    };
     const saved = await this.ventureRepo.save(entry);
     const [annotated] = await this.ventureAnnotate([saved]);
-    const [withStudent] = await this.attachStudents([this.enrichVentureForAdmin(annotated)]);
+    const [withStudent] = await this.attachStudents([
+      this.enrichVentureForAdmin(annotated),
+    ]);
     return withStudent;
   }
 
@@ -1471,7 +1785,10 @@ export class PathsService implements OnModuleInit {
       (e) => e.projectInfo?.teamMembers,
       (e, members) => ({
         ...e,
-        projectInfo: { ...e.projectInfo, teamMembers: members } as FypProjectInfo,
+        projectInfo: {
+          ...e.projectInfo,
+          teamMembers: members,
+        } as FypProjectInfo,
       }),
     );
   }
@@ -1483,7 +1800,9 @@ export class PathsService implements OnModuleInit {
       invitedByUserId,
       entry.projectInfo?.studentName || 'A fellow student',
       'FYP / Thesis',
-      entry.projectTitle || entry.projectInfo?.title || 'an FYP / Thesis record',
+      entry.projectTitle ||
+        entry.projectInfo?.title ||
+        'an FYP / Thesis record',
       entry.projectInfo?.teamMembers,
     );
   }
@@ -1517,7 +1836,9 @@ export class PathsService implements OnModuleInit {
     return true;
   }
 
-  private async findSharedFypForEmail(userEmail?: string): Promise<FypEntry | null> {
+  private async findSharedFypForEmail(
+    userEmail?: string,
+  ): Promise<FypEntry | null> {
     const email = (userEmail || '').trim().toLowerCase();
     if (!email) return null;
     return this.fypRepo
@@ -1529,9 +1850,15 @@ export class PathsService implements OnModuleInit {
 
   /** Co-authors must not create a second FYP row that then shadows the lead's shared record.
    * Skipped when userEmail is omitted so existing owner-only callers/tests stay unchanged. */
-  private async assertCanWriteOwnFyp(userId: string, userEmail?: string): Promise<void> {
+  private async assertCanWriteOwnFyp(
+    userId: string,
+    userEmail?: string,
+  ): Promise<void> {
     if (!userEmail) return;
-    const own = await this.fypRepo.findOne({ where: { userId }, order: { updatedAt: 'DESC' } });
+    const own = await this.fypRepo.findOne({
+      where: { userId },
+      order: { updatedAt: 'DESC' },
+    });
     if (own && !this.isFypPlaceholder(own)) return;
     const shared = await this.findSharedFypForEmail(userEmail);
     if (shared && shared.userId !== userId) {
@@ -1548,17 +1875,28 @@ export class PathsService implements OnModuleInit {
    * until submission to even discover the record exists. A student's own *real* record always
    * takes priority; an empty placeholder row does not. */
   async getFyp(userId: string, userEmail?: string) {
-    const own = await this.fypRepo.findOne({ where: { userId }, order: { updatedAt: 'DESC' } });
+    const own = await this.fypRepo.findOne({
+      where: { userId },
+      order: { updatedAt: 'DESC' },
+    });
     const shared = await this.findSharedFypForEmail(userEmail);
     const useShared =
-      !!shared && shared.userId !== userId && (!own || this.isFypPlaceholder(own));
+      !!shared &&
+      shared.userId !== userId &&
+      (!own || this.isFypPlaceholder(own));
     if (useShared && shared) {
       const [annotated] = await this.fypAnnotate([shared]);
-      return PathsService.redactFypAiAnalysisForStudent({ ...annotated, isOwner: false });
+      return PathsService.redactFypAiAnalysisForStudent({
+        ...annotated,
+        isOwner: false,
+      });
     }
     if (!own) return null;
     const [annotated] = await this.fypAnnotate([own]);
-    return PathsService.redactFypAiAnalysisForStudent({ ...annotated, isOwner: true });
+    return PathsService.redactFypAiAnalysisForStudent({
+      ...annotated,
+      isOwner: true,
+    });
   }
 
   /** The faculty supervision deck — submitted FYP records naming this supervisor by email, same
@@ -1571,7 +1909,8 @@ export class PathsService implements OnModuleInit {
       order: { updatedAt: 'DESC' },
     });
     const matched = entries.filter(
-      (e) => (e.projectInfo?.supervisorEmail || '').trim().toLowerCase() === email,
+      (e) =>
+        (e.projectInfo?.supervisorEmail || '').trim().toLowerCase() === email,
     );
     const annotated = await this.fypAnnotate(matched);
     return this.attachStudents(annotated);
@@ -1588,7 +1927,8 @@ export class PathsService implements OnModuleInit {
       order: { updatedAt: 'DESC' },
     });
     const matched = entries.filter(
-      (e) => (e.projectInfo?.supervisorEmail || '').trim().toLowerCase() === email,
+      (e) =>
+        (e.projectInfo?.supervisorEmail || '').trim().toLowerCase() === email,
     );
     const annotated = await this.fypAnnotate(matched);
     return this.attachStudents(annotated);
@@ -1614,7 +1954,9 @@ export class PathsService implements OnModuleInit {
       .where('e.status = :status', { status })
       .andWhere(
         new Brackets((b) => {
-          b.where('u."organizationId"::text = :orgId', { orgId: organizationId }).orWhere(
+          b.where('u."organizationId"::text = :orgId', {
+            orgId: organizationId,
+          }).orWhere(
             `LOWER(TRIM(COALESCE(e."projectInfo"->>'university', ''))) = :orgNameNorm`,
             { orgNameNorm },
           );
@@ -1623,7 +1965,9 @@ export class PathsService implements OnModuleInit {
     // Enforced here, not left to the caller: the "FYP Impact Wall" must only ever be able to
     // fetch approved records, never rely on client-side filtering to hide the rest.
     if (approvalStatus) {
-      qb.andWhere('e."supervisorApprovalStatus" = :approvalStatus', { approvalStatus });
+      qb.andWhere('e."supervisorApprovalStatus" = :approvalStatus', {
+        approvalStatus,
+      });
     }
     const entries = await qb.orderBy('e."updatedAt"', 'DESC').getMany();
     const annotated = await this.fypAnnotate(entries);
@@ -1640,12 +1984,13 @@ export class PathsService implements OnModuleInit {
     /** True the moment a supervisor email is first attached to this record. */
     justConnected: boolean;
   } {
-    const hadSupervisorEmail = !!(entry.projectInfo?.supervisorEmail || '').trim();
+    const hadSupervisorEmail = !!(
+      entry.projectInfo?.supervisorEmail || ''
+    ).trim();
     const priorStatusForSupervisorLock = entry.status;
     const priorSupervisorEmail = entry.projectInfo?.supervisorEmail;
     const priorCoSupervisorEmail = entry.projectInfo?.coSupervisorEmail;
-    if (dto.projectTitle !== undefined)
-      entry.projectTitle = dto.projectTitle;
+    if (dto.projectTitle !== undefined) entry.projectTitle = dto.projectTitle;
     if (dto.overview !== undefined) entry.overview = dto.overview;
     if (dto.milestones !== undefined) entry.milestones = dto.milestones;
     if (dto.communityLinkage !== undefined)
@@ -1686,7 +2031,10 @@ export class PathsService implements OnModuleInit {
     // rule as Course Project's applyCourseProjectPatch, see the comment there. Same for a
     // rejected record: fix & resubmit should land as a fresh review, not stay stuck on
     // "rejected". Keep the supervisor's note so the student still sees it.
-    if (entry.status === 'submitted' && entry.supervisorApprovalStatus === 'approved') {
+    if (
+      entry.status === 'submitted' &&
+      entry.supervisorApprovalStatus === 'approved'
+    ) {
       entry.supervisorApprovalStatus = 'pending';
       entry.supervisorApprovalNote = null;
       entry.supervisorApprovalAt = null;
@@ -1699,13 +2047,16 @@ export class PathsService implements OnModuleInit {
       entry.aiAnalysisLock = null;
     } else if (
       entry.status === 'submitted' &&
-      (entry.supervisorApprovalStatus === 'rejected' || entry.supervisorApprovalStatus === 'revision_requested')
+      (entry.supervisorApprovalStatus === 'rejected' ||
+        entry.supervisorApprovalStatus === 'revision_requested')
     ) {
       entry.supervisorApprovalStatus = 'pending';
       entry.supervisorApprovalAt = null;
       entry.meritRibbon = null;
     }
-    const justConnected = !hadSupervisorEmail && !!(entry.projectInfo?.supervisorEmail || '').trim();
+    const justConnected =
+      !hadSupervisorEmail &&
+      !!(entry.projectInfo?.supervisorEmail || '').trim();
     return { entry, justConnected };
   }
 
@@ -1729,15 +2080,22 @@ export class PathsService implements OnModuleInit {
     });
     // Fire-and-forget — see the comment on upsertCourseProject for why.
     void this.syncFypInvites(saved, userId).catch((err) =>
-      this.logger.error(`syncFypInvites failed for ${saved.id}: ${(err as Error)?.message}`),
+      this.logger.error(
+        `syncFypInvites failed for ${saved.id}: ${(err as Error)?.message}`,
+      ),
     );
     if (justConnected) {
       void this.notifyFypConnected(saved).catch((err) =>
-        this.logger.error(`notifyFypConnected failed for ${saved.id}: ${(err as Error)?.message}`),
+        this.logger.error(
+          `notifyFypConnected failed for ${saved.id}: ${(err as Error)?.message}`,
+        ),
       );
     }
     const [annotated] = await this.fypAnnotate([saved]);
-    return PathsService.redactFypAiAnalysisForStudent({ ...annotated, isOwner: true });
+    return PathsService.redactFypAiAnalysisForStudent({
+      ...annotated,
+      isOwner: true,
+    });
   }
 
   /** One student can have several independent FYP records — this is their own deck, plus any
@@ -1749,12 +2107,17 @@ export class PathsService implements OnModuleInit {
       .createQueryBuilder('e')
       .where('e."userId" = :userId', { userId });
     if (email) {
-      qb.orWhere(`(${PathsService.FYP_TEAM_MEMBER_EMAIL_MATCH})`, { teamEmail: email });
+      qb.orWhere(`(${PathsService.FYP_TEAM_MEMBER_EMAIL_MATCH})`, {
+        teamEmail: email,
+      });
     }
     const entries = await qb.orderBy('e."updatedAt"', 'DESC').getMany();
     const annotated = await this.fypAnnotate(entries);
     return annotated.map((e) =>
-      PathsService.redactFypAiAnalysisForStudent({ ...e, isOwner: e.userId === userId }),
+      PathsService.redactFypAiAnalysisForStudent({
+        ...e,
+        isOwner: e.userId === userId,
+      }),
     );
   }
 
@@ -1769,14 +2132,17 @@ export class PathsService implements OnModuleInit {
       // return the existing row so the student form actually opens.
       const code = postgresErrorCode(err);
       const duplicate =
-        code === '23505' || /duplicate key/i.test(err instanceof Error ? err.message : String(err));
+        code === '23505' ||
+        /duplicate key/i.test(err instanceof Error ? err.message : String(err));
       if (!duplicate) throw err;
       const existing = await this.fypRepo.findOne({
         where: { userId },
         order: { updatedAt: 'DESC' },
       });
       if (!existing) throw err;
-      this.logger.warn(`createFyp reused existing row ${existing.id} for ${userId} (unique userId still present)`);
+      this.logger.warn(
+        `createFyp reused existing row ${existing.id} for ${userId} (unique userId still present)`,
+      );
       return { ...existing, isOwner: true };
     }
   }
@@ -1792,7 +2158,9 @@ export class PathsService implements OnModuleInit {
     if (entry.userId === userId) return true;
     const email = (userEmail || '').trim().toLowerCase();
     if (!email) return false;
-    if (!this.extractMemberEmails(entry.projectInfo?.teamMembers).includes(email)) {
+    if (
+      !this.extractMemberEmails(entry.projectInfo?.teamMembers).includes(email)
+    ) {
       return false;
     }
     const invite = await this.teamMemberInviteRepo.findOne({
@@ -1810,7 +2178,9 @@ export class PathsService implements OnModuleInit {
         new Brackets((b) => {
           b.where('e."userId" = :userId', { userId });
           if (email) {
-            b.orWhere(`(${PathsService.FYP_TEAM_MEMBER_EMAIL_MATCH})`, { teamEmail: email });
+            b.orWhere(`(${PathsService.FYP_TEAM_MEMBER_EMAIL_MATCH})`, {
+              teamEmail: email,
+            });
           }
         }),
       );
@@ -1847,11 +2217,15 @@ export class PathsService implements OnModuleInit {
     });
     // Fire-and-forget — see the comment on upsertCourseProject for why.
     void this.syncFypInvites(saved, saved.userId).catch((err) =>
-      this.logger.error(`syncFypInvites failed for ${saved.id}: ${(err as Error)?.message}`),
+      this.logger.error(
+        `syncFypInvites failed for ${saved.id}: ${(err as Error)?.message}`,
+      ),
     );
     if (justConnected) {
       void this.notifyFypConnected(saved).catch((err) =>
-        this.logger.error(`notifyFypConnected failed for ${saved.id}: ${(err as Error)?.message}`),
+        this.logger.error(
+          `notifyFypConnected failed for ${saved.id}: ${(err as Error)?.message}`,
+        ),
       );
     }
     const [annotated] = await this.fypAnnotate([saved]);
@@ -1914,11 +2288,26 @@ export class PathsService implements OnModuleInit {
     const supervisorName = pi.supervisorName?.trim() || 'there';
     try {
       if (supervisorEmail) {
-        await this.mailService.sendPathProjectConnectedToFaculty(supervisorEmail, supervisorName, studentName, 'Final Year Project', title, '/dashboard/faculty/fyp-thesis');
+        await this.mailService.sendPathProjectConnectedToFaculty(
+          supervisorEmail,
+          supervisorName,
+          studentName,
+          'Final Year Project',
+          title,
+          '/dashboard/faculty/fyp-thesis',
+        );
       }
-      await this.mailService.sendPathProjectConnectedToCielPk(studentName, supervisorEmail ? supervisorName : undefined, pi.university?.trim() || undefined, 'Final Year Project', title);
+      await this.mailService.sendPathProjectConnectedToCielPk(
+        studentName,
+        supervisorEmail ? supervisorName : undefined,
+        pi.university?.trim() || undefined,
+        'Final Year Project',
+        title,
+      );
     } catch (err) {
-      this.logger.warn(`FYP connection email failed for ${entry.id}: ${(err as Error).message}`);
+      this.logger.warn(
+        `FYP connection email failed for ${entry.id}: ${(err as Error).message}`,
+      );
     }
   }
 
@@ -1933,7 +2322,11 @@ export class PathsService implements OnModuleInit {
   private static redactFypAiAnalysisForStudent<
     T extends {
       aiAnalysis?: Record<string, unknown> | null;
-      aiAnalysisLock?: { locked?: boolean; hash?: string; lockedAt?: string } | null;
+      aiAnalysisLock?: {
+        locked?: boolean;
+        hash?: string;
+        lockedAt?: string;
+      } | null;
     },
   >(entry: T): T {
     if (!entry.aiAnalysis && !entry.aiAnalysisLock) return entry;
@@ -1941,12 +2334,14 @@ export class PathsService implements OnModuleInit {
       return { ...entry, aiAnalysis: null, aiAnalysisLock: null };
     }
     const dimensions = Array.isArray(entry.aiAnalysis?.dimensions)
-      ? (entry.aiAnalysis!.dimensions as Array<Record<string, unknown>>).map((d) => ({
-          key: d.key,
-          label: d.label,
-          max: d.max,
-          score: d.score,
-        }))
+      ? (entry.aiAnalysis.dimensions as Array<Record<string, unknown>>).map(
+          (d) => ({
+            key: d.key,
+            label: d.label,
+            max: d.max,
+            score: d.score,
+          }),
+        )
       : [];
     return {
       ...entry,
@@ -1990,7 +2385,11 @@ export class PathsService implements OnModuleInit {
       );
     }
     entry.supervisorApprovalStatus =
-      action === 'approve' ? 'approved' : action === 'revision' ? 'revision_requested' : 'rejected';
+      action === 'approve'
+        ? 'approved'
+        : action === 'revision'
+          ? 'revision_requested'
+          : 'rejected';
     entry.supervisorApprovalNote = note ?? null;
     entry.supervisorApprovalAt = new Date();
     if (action !== 'approve') entry.meritRibbon = null;
@@ -2024,14 +2423,19 @@ export class PathsService implements OnModuleInit {
         });
       }
     } catch (err) {
-      this.logger.warn(`FYP review notification failed for ${saved.id}: ${(err as Error).message}`);
+      this.logger.warn(
+        `FYP review notification failed for ${saved.id}: ${(err as Error).message}`,
+      );
     }
     return saved;
   }
 
   /** Shared lookup for supervisor-scoped FYP AI-analysis mutations — same scoping as
    * supervisorReviewFyp (self-declared supervisorEmail, matched verbatim, never a roster check). */
-  private async findSupervisedFypForAction(id: string, supervisorEmail: string): Promise<FypEntry> {
+  private async findSupervisedFypForAction(
+    id: string,
+    supervisorEmail: string,
+  ): Promise<FypEntry> {
     const email = (supervisorEmail || '').trim().toLowerCase();
     if (!email) throw new NotFoundException('FYP entry not found');
     const entry = await this.fypRepo.findOne({ where: { id } });
@@ -2068,7 +2472,10 @@ export class PathsService implements OnModuleInit {
     // vendor — instead of forwarding raw jsonb section data.
     const payload = buildFypAiEvaluationPayload(entry);
 
-    const { fypAi } = await this.aiService.summarize('fyp_ai_evaluation', payload);
+    const { fypAi } = await this.aiService.summarize(
+      'fyp_ai_evaluation',
+      payload,
+    );
     if (!fypAi) {
       throw new BadRequestException(
         'The AI did not return a readable FYP evaluation. Please retry.',
@@ -2118,7 +2525,11 @@ export class PathsService implements OnModuleInit {
    * mockup's saveFacultyEdits(): faculty may override a score and/or rationale, but the
    * total/classification/gates are always recomputed server-side from the merged dimension set,
    * never trusting a client-sent total. */
-  async editFypAiAnalysis(supervisorEmail: string, id: string, dto: EditFypAiAnalysisDto) {
+  async editFypAiAnalysis(
+    supervisorEmail: string,
+    id: string,
+    dto: EditFypAiAnalysisDto,
+  ) {
     const entry = await this.findSupervisedFypForAction(id, supervisorEmail);
 
     if (entry.aiAnalysisLock?.locked) {
@@ -2133,25 +2544,31 @@ export class PathsService implements OnModuleInit {
     const validKeys = new Set(FYP_AI_RUBRIC.map((d) => d.key));
     const edits = dto.dimensions.filter((d) => validKeys.has(d.key));
     if (edits.length === 0) {
-      throw new BadRequestException('No recognised rubric dimensions were provided.');
+      throw new BadRequestException(
+        'No recognised rubric dimensions were provided.',
+      );
     }
 
-    const priorDimensions = Array.isArray((entry.aiAnalysis as Record<string, unknown>).dimensions)
-      ? ((entry.aiAnalysis as Record<string, unknown>).dimensions as FypAiDimensionInput[])
+    const priorDimensions = Array.isArray(entry.aiAnalysis.dimensions)
+      ? (entry.aiAnalysis.dimensions as FypAiDimensionInput[])
       : [];
     const editsByKey = new Map(edits.map((d) => [d.key, d]));
     const mergedDimensions: FypAiDimensionInput[] = FYP_AI_RUBRIC.map((d) => {
       const edit = editsByKey.get(d.key);
       const prior = priorDimensions.find((p) => p.key === d.key);
       return edit
-        ? { key: d.key, score: edit.score, rationale: edit.rationale ?? prior?.rationale }
+        ? {
+            key: d.key,
+            score: edit.score,
+            rationale: edit.rationale ?? prior?.rationale,
+          }
         : { key: d.key, score: prior?.score ?? 0, rationale: prior?.rationale };
     });
 
     const result = computeFypAiResult({ dimensions: mergedDimensions });
 
     const nextAiAnalysis = {
-      ...(entry.aiAnalysis as Record<string, unknown>),
+      ...entry.aiAnalysis,
       ...result,
       facultyModified: true,
       facultyEditedAt: new Date().toISOString(),
@@ -2182,7 +2599,11 @@ export class PathsService implements OnModuleInit {
    * Recomputes the final score from the stored per-dimension scores (never trusts a client-sent
    * score) before hashing the decision.
    */
-  async approveFypAiAnalysis(supervisorEmail: string, id: string, note?: string) {
+  async approveFypAiAnalysis(
+    supervisorEmail: string,
+    id: string,
+    note?: string,
+  ) {
     const entry = await this.findSupervisedFypForAction(id, supervisorEmail);
 
     const stored = entry.aiAnalysis as
@@ -2193,7 +2614,9 @@ export class PathsService implements OnModuleInit {
       throw new BadRequestException('Run the AI analysis before approving.');
     }
     if (entry.aiAnalysisLock?.locked) {
-      throw new BadRequestException("This FYP's AI analysis is already locked.");
+      throw new BadRequestException(
+        "This FYP's AI analysis is already locked.",
+      );
     }
 
     const result = computeFypAiResult({ dimensions: stored.dimensions });
@@ -2208,7 +2631,9 @@ export class PathsService implements OnModuleInit {
       approvedAt,
       note: note || '',
     };
-    const hash = createHash('sha256').update(JSON.stringify(decisionRecord)).digest('hex');
+    const hash = createHash('sha256')
+      .update(JSON.stringify(decisionRecord))
+      .digest('hex');
 
     const nextAiAnalysis = {
       ...(entry.aiAnalysis as Record<string, unknown>),
@@ -2242,7 +2667,9 @@ export class PathsService implements OnModuleInit {
       .execute();
 
     if (!updateResult.affected) {
-      throw new BadRequestException("This FYP's AI analysis is already locked.");
+      throw new BadRequestException(
+        "This FYP's AI analysis is already locked.",
+      );
     }
 
     try {
@@ -2281,16 +2708,23 @@ export class PathsService implements OnModuleInit {
     if (role === UserRole.FACULTY) {
       pool = await this.listFypForTeacher(user.email);
       scopeLabel = 'Faculty supervision';
-    } else if (role === UserRole.UNIVERSITY || role === UserRole.ORGANIZATION_ADMIN) {
+    } else if (
+      role === UserRole.UNIVERSITY ||
+      role === UserRole.ORGANIZATION_ADMIN
+    ) {
       if (user.organizationId) {
         pool = await this.listFypForUniversity(user.organizationId);
-        const org = await this.organizationsRepo.findOne({ where: { id: user.organizationId } });
+        const org = await this.organizationsRepo.findOne({
+          where: { id: user.organizationId },
+        });
         scopeLabel = org?.name ?? 'University';
       }
     } else if (role === UserRole.SUPER_ADMIN) {
       if (filters.university) {
         pool = await this.listFypForUniversity(filters.university);
-        const org = await this.organizationsRepo.findOne({ where: { id: filters.university } });
+        const org = await this.organizationsRepo.findOne({
+          where: { id: filters.university },
+        });
         scopeLabel = org?.name ?? 'CIEL — all universities';
       } else {
         const entries = await this.fypRepo.find({
@@ -2313,42 +2747,65 @@ export class PathsService implements OnModuleInit {
     }
 
     // Eligibility gate — only supervisor-approved, submitted entries count toward the Merit Model.
-    let eligible = pool.filter((e) => e.supervisorApprovalStatus === 'approved');
+    let eligible = pool.filter(
+      (e) => e.supervisorApprovalStatus === 'approved',
+    );
 
     if (filters.route) {
       eligible = eligible.filter((e) => deriveFypRoute(e) === filters.route);
     }
     if (filters.school) {
       const target = filters.school.trim().toLowerCase();
-      eligible = eligible.filter((e) => (e.projectInfo?.school || '').trim().toLowerCase() === target);
+      eligible = eligible.filter(
+        (e) => (e.projectInfo?.school || '').trim().toLowerCase() === target,
+      );
     }
     if (filters.semester) {
       const target = filters.semester.trim().toLowerCase();
-      eligible = eligible.filter((e) => (e.projectInfo?.span || '').trim().toLowerCase() === target);
+      eligible = eligible.filter(
+        (e) => (e.projectInfo?.span || '').trim().toLowerCase() === target,
+      );
     }
     if (honorsSupervisorFilter && filters.supervisor) {
       const target = filters.supervisor.trim().toLowerCase();
-      eligible = eligible.filter((e) => (e.projectInfo?.supervisorEmail || '').trim().toLowerCase() === target);
+      eligible = eligible.filter(
+        (e) =>
+          (e.projectInfo?.supervisorEmail || '').trim().toLowerCase() ===
+          target,
+      );
     }
     if (filters.year) {
-      eligible = eligible.filter((e) => deriveFypCompletionMonth(e).slice(0, 4) === filters.year);
+      eligible = eligible.filter(
+        (e) => deriveFypCompletionMonth(e).slice(0, 4) === filters.year,
+      );
     }
     if (filters.from) {
-      eligible = eligible.filter((e) => deriveFypCompletionMonth(e) >= filters.from!);
+      eligible = eligible.filter(
+        (e) => deriveFypCompletionMonth(e) >= filters.from!,
+      );
     }
     if (filters.to) {
-      eligible = eligible.filter((e) => deriveFypCompletionMonth(e) <= filters.to!);
+      eligible = eligible.filter(
+        (e) => deriveFypCompletionMonth(e) <= filters.to!,
+      );
     }
     // `university` (organizationId) is only meaningful for CIEL scope — it's already applied above
     // when resolving the SUPER_ADMIN pool; for other roles it's silently ignored, matching the
     // prototype's control panel where the university dropdown is hidden entirely outside CIEL scope.
 
-    const cards = eligible.map((e) => ({ ...computeFypMeritCard(e), student: e.student }));
+    const cards = eligible.map((e) => ({
+      ...computeFypMeritCard(e),
+      student: e.student,
+    }));
     const cohortAverage = cards.length
-      ? Math.round(cards.reduce((sum, c) => sum + c.scorecard.total, 0) / cards.length)
+      ? Math.round(
+          cards.reduce((sum, c) => sum + c.scorecard.total, 0) / cards.length,
+        )
       : 0;
 
-    const appliedFilters = Object.fromEntries(Object.entries(filters).filter(([, v]) => v !== undefined));
+    const appliedFilters = Object.fromEntries(
+      Object.entries(filters).filter(([, v]) => v !== undefined),
+    );
     const sorted = [...cards].sort(byFypMerit);
     const ranked: RankedFypMeritCard[] = sorted.map((card, i) => ({
       ...card,
@@ -2386,12 +2843,24 @@ export class PathsService implements OnModuleInit {
     dto: NotifyMeritRanksDto,
   ) {
     const model = await this.getFypMeritModel(user, {});
-    const ranked: RankedFypMeritCard[] = Array.isArray(model.entries) ? model.entries : [];
+    const ranked: RankedFypMeritCard[] = Array.isArray(model.entries)
+      ? model.entries
+      : [];
     const allowed = new Set(ranked.map((c) => c.id));
-    const scope = (dto.scopeLabel || model.scope?.label || 'this ranking').trim();
-    const picks = (dto.picks?.length
-      ? dto.picks
-      : (dto.entryIds || []).map((entryId, i) => ({ entryId, rank: i + 1, of: ranked.length, total: undefined as number | undefined }))
+    const scope = (
+      dto.scopeLabel ||
+      model.scope?.label ||
+      'this ranking'
+    ).trim();
+    const picks = (
+      dto.picks?.length
+        ? dto.picks
+        : (dto.entryIds || []).map((entryId, i) => ({
+            entryId,
+            rank: i + 1,
+            of: ranked.length,
+            total: undefined as number | undefined,
+          }))
     )
       .filter((p) => p.entryId && allowed.has(p.entryId))
       .slice(0, 3);
@@ -2409,7 +2878,15 @@ export class PathsService implements OnModuleInit {
       const rank = pick.rank;
       const previousRank = entry.meritRibbon?.rank ?? null;
       const badgeLevel = PathsService.computeRankBadgeLevel(rank, of);
-      const ribbon = { rank, of, scope, total: pick.total, badgeLevel, previousRank, at: new Date().toISOString() };
+      const ribbon = {
+        rank,
+        of,
+        scope,
+        total: pick.total,
+        badgeLevel,
+        previousRank,
+        at: new Date().toISOString(),
+      };
       const already =
         entry.meritRibbon?.rank === rank &&
         entry.meritRibbon?.of === of &&
@@ -2430,13 +2907,19 @@ export class PathsService implements OnModuleInit {
         });
         sent += 1;
       } catch (err) {
-        this.logger.warn(`FYP merit rank notification failed for ${entry.id}: ${(err as Error).message}`);
+        this.logger.warn(
+          `FYP merit rank notification failed for ${entry.id}: ${(err as Error).message}`,
+        );
       }
     }
     return { notified: sent, scope, graderRuns };
   }
 
-  async addFypDeliverable(userId: string, dto: AddFypDeliverableDto, userEmail?: string) {
+  async addFypDeliverable(
+    userId: string,
+    dto: AddFypDeliverableDto,
+    userEmail?: string,
+  ) {
     await this.assertCanWriteOwnFyp(userId, userEmail);
     // Locked so two near-simultaneous uploads can't compute the same `nextVersion` and
     // have the second save silently overwrite the first's deliverable entry.
@@ -2473,7 +2956,10 @@ export class PathsService implements OnModuleInit {
     );
   }
 
-  private async syncVentureInvites(entry: VentureEntry, invitedByUserId: string) {
+  private async syncVentureInvites(
+    entry: VentureEntry,
+    invitedByUserId: string,
+  ) {
     await this.syncTeamInvites(
       'venture',
       entry.id,
@@ -2504,13 +2990,19 @@ export class PathsService implements OnModuleInit {
    * accepted invite, same pattern as getFyp. A student's own record always takes priority. */
   async getVenture(userId: string, userEmail?: string) {
     const own = await this.ventureRepo.findOne({ where: { userId } });
-    if (own) return { ...this.withCompleteness((await this.ventureAnnotate([own]))[0]), isOwner: true };
+    if (own)
+      return {
+        ...this.withCompleteness((await this.ventureAnnotate([own]))[0]),
+        isOwner: true,
+      };
     const email = (userEmail || '').trim().toLowerCase();
     if (!email) return null;
     const shared = await this.ventureRepo
       .createQueryBuilder('e')
       .where(`e.status = 'submitted'`)
-      .andWhere(PathsService.VENTURE_TEAM_MEMBER_EMAIL_MATCH, { teamEmail: email })
+      .andWhere(PathsService.VENTURE_TEAM_MEMBER_EMAIL_MATCH, {
+        teamEmail: email,
+      })
       .getOne();
     if (!shared) return null;
     const [annotated] = await this.ventureAnnotate([shared]);
@@ -2622,9 +3114,14 @@ export class PathsService implements OnModuleInit {
         if (
           !consentOnly &&
           entry.status === 'submitted' &&
-          (priorStatus === 'approved' || priorStatus === 'rejected' || priorStatus === 'revisions_requested')
+          (priorStatus === 'approved' ||
+            priorStatus === 'rejected' ||
+            priorStatus === 'revisions_requested')
         ) {
-          entry.reviewPipeline = { ...entry.reviewPipeline, supervisorStatus: 'pending' };
+          entry.reviewPipeline = {
+            ...entry.reviewPipeline,
+            supervisorStatus: 'pending',
+          };
           entry.meritRibbon = null;
         }
         // isVisible is earned, not self-toggled, once the guided wizard is in use — recomputed
@@ -2635,7 +3132,9 @@ export class PathsService implements OnModuleInit {
     );
     // Fire-and-forget — see the comment on upsertCourseProject for why.
     void this.syncVentureInvites(saved, userId).catch((err) =>
-      this.logger.error(`syncVentureInvites failed for ${saved.id}: ${(err as Error)?.message}`),
+      this.logger.error(
+        `syncVentureInvites failed for ${saved.id}: ${(err as Error)?.message}`,
+      ),
     );
     const [annotated] = await this.ventureAnnotate([saved]);
     return this.withCompleteness(annotated);
@@ -2663,7 +3162,10 @@ export class PathsService implements OnModuleInit {
 
   /** Draft ventures that name this teacher — same faculty matching as the submitted deck, so
    * faculty can nudge stalled student drafts from the Startup Pipeline. */
-  async listInProgressVenturesForTeacher(facultyEmail: string, facultyUserId?: string) {
+  async listInProgressVenturesForTeacher(
+    facultyEmail: string,
+    facultyUserId?: string,
+  ) {
     const email = (facultyEmail || '').trim().toLowerCase();
     if (!email) return [];
     const faculty = facultyUserId
@@ -2689,7 +3191,12 @@ export class PathsService implements OnModuleInit {
   async listVenturesForUniversity(
     organizationId: string,
     status: 'draft' | 'submitted' = 'submitted',
-    approvalStatus?: 'not_started' | 'pending' | 'approved' | 'revisions_requested' | 'rejected',
+    approvalStatus?:
+      | 'not_started'
+      | 'pending'
+      | 'approved'
+      | 'revisions_requested'
+      | 'rejected',
   ) {
     if (!organizationId) return [];
     const org = await this.organizationsRepo.findOne({
@@ -2703,7 +3210,9 @@ export class PathsService implements OnModuleInit {
       .where('e.status = :status', { status })
       .andWhere(
         new Brackets((b) => {
-          b.where('u."organizationId"::text = :orgId', { orgId: organizationId }).orWhere(
+          b.where('u."organizationId"::text = :orgId', {
+            orgId: organizationId,
+          }).orWhere(
             `LOWER(TRIM(COALESCE(e."academicSetup"->>'university', ''))) = :orgNameNorm`,
             { orgNameNorm },
           );
@@ -2712,7 +3221,9 @@ export class PathsService implements OnModuleInit {
     // Enforced here, not left to the caller: the university venture wall must only ever be able
     // to fetch approved records, never rely on client-side filtering to hide the rest.
     if (approvalStatus) {
-      qb.andWhere(`e."reviewPipeline"->>'supervisorStatus' = :approvalStatus`, { approvalStatus });
+      qb.andWhere(`e."reviewPipeline"->>'supervisorStatus' = :approvalStatus`, {
+        approvalStatus,
+      });
     }
     const entries = await qb.orderBy('e."updatedAt"', 'DESC').getMany();
     const annotated = await this.ventureAnnotate(entries);
@@ -2755,20 +3266,34 @@ export class PathsService implements OnModuleInit {
     if (
       !entry ||
       entry.status !== 'submitted' ||
-      !ventureMatchesFaculty(entry.academicSetup, { email, name: faculty?.name ?? null })
+      !ventureMatchesFaculty(entry.academicSetup, {
+        email,
+        name: faculty?.name ?? null,
+      })
     ) {
       throw new NotFoundException('Venture entry not found');
     }
-    const supervisorStatus = action === 'approve' ? 'approved' : action === 'revision' ? 'revisions_requested' : 'rejected';
+    const supervisorStatus =
+      action === 'approve'
+        ? 'approved'
+        : action === 'revision'
+          ? 'revisions_requested'
+          : 'rejected';
     entry.reviewPipeline = {
       ...entry.reviewPipeline,
       supervisorStatus,
-      supervisorNote: action === 'approve' ? null : note?.trim() || entry.reviewPipeline?.supervisorNote || null,
+      supervisorNote:
+        action === 'approve'
+          ? null
+          : note?.trim() || entry.reviewPipeline?.supervisorNote || null,
     };
     entry.isVisible = deriveVentureIsVisible(entry);
     if (action !== 'approve') entry.meritRibbon = null;
     const saved = await this.ventureRepo.save(entry);
-    const student = await this.usersRepo.findOne({ where: { id: saved.userId }, select: ['name'] });
+    const student = await this.usersRepo.findOne({
+      where: { id: saved.userId },
+      select: ['name'],
+    });
     const first = student?.name?.split(' ')[0] || 'there';
     const title = saved.ventureName || 'your venture';
     try {
@@ -2798,10 +3323,14 @@ export class PathsService implements OnModuleInit {
         });
       }
     } catch (err) {
-      this.logger.warn(`Venture review notification failed for ${saved.id}: ${(err as Error).message}`);
+      this.logger.warn(
+        `Venture review notification failed for ${saved.id}: ${(err as Error).message}`,
+      );
     }
     const [annotated] = await this.ventureAnnotate([saved]);
-    const [withStudent] = await this.attachStudents([this.withCompleteness(annotated)!]);
+    const [withStudent] = await this.attachStudents([
+      this.withCompleteness(annotated)!,
+    ]);
     return withStudent;
   }
 
@@ -2819,10 +3348,15 @@ export class PathsService implements OnModuleInit {
     if (role === UserRole.FACULTY) {
       pool = await this.listVenturesForTeacher(user.email);
       scopeLabel = 'Faculty supervision';
-    } else if (role === UserRole.UNIVERSITY || role === UserRole.ORGANIZATION_ADMIN) {
+    } else if (
+      role === UserRole.UNIVERSITY ||
+      role === UserRole.ORGANIZATION_ADMIN
+    ) {
       if (user.organizationId) {
         pool = await this.listVenturesForUniversity(user.organizationId);
-        const org = await this.organizationsRepo.findOne({ where: { id: user.organizationId } });
+        const org = await this.organizationsRepo.findOne({
+          where: { id: user.organizationId },
+        });
         scopeLabel = org?.name ?? 'University';
       }
     } else if (role === UserRole.SUPER_ADMIN) {
@@ -2839,14 +3373,25 @@ export class PathsService implements OnModuleInit {
     }
 
     // Eligibility gate — only supervisor-approved, submitted entries count toward the Merit Model.
-    const eligible = pool.filter((e) => e.reviewPipeline?.supervisorStatus === 'approved');
+    const eligible = pool.filter(
+      (e) => e.reviewPipeline?.supervisorStatus === 'approved',
+    );
 
-    const cards = eligible.map((e) => ({ ...computeVentureMeritCard(e), student: e.student }));
+    const cards = eligible.map((e) => ({
+      ...computeVentureMeritCard(e),
+      student: e.student,
+    }));
     const cohortAverage = cards.length
-      ? Math.round(cards.reduce((sum, c) => sum + c.scorecard.total, 0) / cards.length)
+      ? Math.round(
+          cards.reduce((sum, c) => sum + c.scorecard.total, 0) / cards.length,
+        )
       : 0;
     const sorted = [...cards].sort(byVentureMerit);
-    const ranked: RankedVentureMeritCard[] = sorted.map((card, i) => ({ ...card, rank: i + 1, isTopPick: i < 10 }));
+    const ranked: RankedVentureMeritCard[] = sorted.map((card, i) => ({
+      ...card,
+      rank: i + 1,
+      isTopPick: i < 10,
+    }));
 
     return {
       scope: { role, label: scopeLabel, filters: {} },
@@ -2863,12 +3408,24 @@ export class PathsService implements OnModuleInit {
     dto: NotifyMeritRanksDto,
   ) {
     const model = await this.getVentureMeritModel(user, {});
-    const ranked: RankedVentureMeritCard[] = Array.isArray(model.entries) ? model.entries : [];
+    const ranked: RankedVentureMeritCard[] = Array.isArray(model.entries)
+      ? model.entries
+      : [];
     const allowed = new Set(ranked.map((c) => c.id));
-    const scope = (dto.scopeLabel || model.scope?.label || 'this ranking').trim();
-    const picks = (dto.picks?.length
-      ? dto.picks
-      : (dto.entryIds || []).map((entryId, i) => ({ entryId, rank: i + 1, of: ranked.length, total: undefined as number | undefined }))
+    const scope = (
+      dto.scopeLabel ||
+      model.scope?.label ||
+      'this ranking'
+    ).trim();
+    const picks = (
+      dto.picks?.length
+        ? dto.picks
+        : (dto.entryIds || []).map((entryId, i) => ({
+            entryId,
+            rank: i + 1,
+            of: ranked.length,
+            total: undefined as number | undefined,
+          }))
     )
       .filter((p) => p.entryId && allowed.has(p.entryId))
       .slice(0, 3);
@@ -2880,13 +3437,24 @@ export class PathsService implements OnModuleInit {
     for (const pick of picks) {
       if (seen.has(pick.entryId)) continue;
       seen.add(pick.entryId);
-      const entry = await this.ventureRepo.findOne({ where: { id: pick.entryId } });
-      if (!entry || entry.reviewPipeline?.supervisorStatus !== 'approved') continue;
+      const entry = await this.ventureRepo.findOne({
+        where: { id: pick.entryId },
+      });
+      if (!entry || entry.reviewPipeline?.supervisorStatus !== 'approved')
+        continue;
       const of = pick.of || ranked.length;
       const rank = pick.rank;
       const previousRank = entry.meritRibbon?.rank ?? null;
       const badgeLevel = PathsService.computeRankBadgeLevel(rank, of);
-      const ribbon = { rank, of, scope, total: pick.total, badgeLevel, previousRank, at: new Date().toISOString() };
+      const ribbon = {
+        rank,
+        of,
+        scope,
+        total: pick.total,
+        badgeLevel,
+        previousRank,
+        at: new Date().toISOString(),
+      };
       const already =
         entry.meritRibbon?.rank === rank &&
         entry.meritRibbon?.of === of &&
@@ -2897,7 +3465,10 @@ export class PathsService implements OnModuleInit {
         sent += 1;
         continue;
       }
-      const student = await this.usersRepo.findOne({ where: { id: entry.userId }, select: ['name'] });
+      const student = await this.usersRepo.findOne({
+        where: { id: entry.userId },
+        select: ['name'],
+      });
       const first = student?.name?.split(' ')[0] || 'there';
       const title = entry.ventureName || 'Untitled venture';
       try {
@@ -2908,7 +3479,9 @@ export class PathsService implements OnModuleInit {
         });
         sent += 1;
       } catch (err) {
-        this.logger.warn(`Venture merit rank notification failed for ${entry.id}: ${(err as Error).message}`);
+        this.logger.warn(
+          `Venture merit rank notification failed for ${entry.id}: ${(err as Error).message}`,
+        );
       }
     }
     return { notified: sent, scope, graderRuns };

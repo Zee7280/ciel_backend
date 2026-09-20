@@ -2045,6 +2045,140 @@ describe('PathsService — FYP resubmission after rejection', () => {
 
     expect((saved as any).projectInfo.supervisorEmail).toBe('supA@test.com');
   });
+
+  it('clears the stale aiAnalysis/aiAnalysisLock when a revision_requested entry is edited again', async () => {
+    const rows: Record<string, unknown>[] = [
+      {
+        id: 'fyp-4',
+        userId: 'student-1',
+        status: 'submitted',
+        supervisorApprovalStatus: 'revision_requested',
+        projectInfo: { supervisorEmail: 'supA@test.com', title: 'Solar audit' },
+        aiAnalysis: { dimensions: [], final: 42 },
+        aiAnalysisLock: null,
+      },
+    ];
+    const manager = {
+      getRepository: () => ({
+        findOne: jest.fn(async () => rows[0] ?? null),
+        create: jest.fn((data: Record<string, unknown>) => ({ ...data })),
+        save: jest.fn(async (row: Record<string, unknown>) => {
+          rows[0] = row;
+          return row;
+        }),
+      }),
+    };
+    const fypRepo = {
+      manager: {
+        transaction: jest.fn(async (fn: (m: unknown) => unknown) =>
+          fn(manager),
+        ),
+      },
+    };
+    const service = new PathsService(
+      {} as any,
+      fypRepo as any,
+      {} as any,
+      makeInviteRepo() as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      { createNotification: jest.fn() } as any,
+      {} as any,
+      {} as any,
+    );
+    jest.spyOn(service as any, 'syncFypInvites').mockResolvedValue(undefined);
+    jest
+      .spyOn(service as any, 'fypAnnotate')
+      .mockImplementation(async (entries: unknown) => entries as any);
+
+    const saved = await service.upsertFyp('student-1', {
+      addedNote: 'fixed the methodology',
+    } as any);
+
+    expect((saved as any).aiAnalysis).toBeNull();
+    expect((saved as any).aiAnalysisLock).toBeNull();
+  });
+});
+
+describe('PathsService — FYP submit readiness gate', () => {
+  const makeDraftFypService = () => {
+    const rows: Record<string, unknown>[] = [
+      { id: 'fyp-draft-1', userId: 'student-1', status: 'draft' },
+    ];
+    const manager = {
+      getRepository: () => ({
+        findOne: jest.fn(async () => rows[0] ?? null),
+        create: jest.fn((data: Record<string, unknown>) => ({ ...data })),
+        save: jest.fn(async (row: Record<string, unknown>) => {
+          rows[0] = row;
+          return row;
+        }),
+      }),
+    };
+    const fypRepo = {
+      manager: {
+        transaction: jest.fn(async (fn: (m: unknown) => unknown) =>
+          fn(manager),
+        ),
+      },
+    };
+    const service = new PathsService(
+      {} as any,
+      fypRepo as any,
+      {} as any,
+      makeInviteRepo() as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      { createNotification: jest.fn() } as any,
+      {} as any,
+      {} as any,
+    );
+    jest.spyOn(service as any, 'syncFypInvites').mockResolvedValue(undefined);
+    jest
+      .spyOn(service as any, 'fypAnnotate')
+      .mockImplementation(async (entries: unknown) => entries as any);
+    return { service };
+  };
+
+  it('refuses to submit a draft with no supervisorEmail, so the record can never be orphaned', async () => {
+    const { service } = makeDraftFypService();
+    await expect(
+      service.upsertFyp('student-1', {
+        projectTitle: 'Solar audit',
+        status: 'submitted',
+      } as any),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('refuses to submit a draft with no project title', async () => {
+    const { service } = makeDraftFypService();
+    await expect(
+      service.upsertFyp('student-1', {
+        projectInfo: { supervisorEmail: 'sup@test.com' },
+        status: 'submitted',
+      } as any),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('allows submitting once title and supervisorEmail are both present', async () => {
+    const { service } = makeDraftFypService();
+    const saved = await service.upsertFyp('student-1', {
+      projectTitle: 'Solar audit',
+      projectInfo: { supervisorEmail: 'sup@test.com' },
+      status: 'submitted',
+    } as any);
+    expect((saved as any).status).toBe('submitted');
+  });
+
+  it('does not gate a plain draft autosave that never sets status: submitted', async () => {
+    const { service } = makeDraftFypService();
+    const saved = await service.upsertFyp('student-1', {
+      addedNote: 'still working on it',
+    } as any);
+    expect((saved as any).addedNote).toBe('still working on it');
+  });
 });
 
 describe('PathsService — FYP supervisor review', () => {
@@ -2064,9 +2198,17 @@ describe('PathsService — FYP supervisor review', () => {
       },
       meritRibbon: { rank: 1, of: 8, scope: 'x', at: '2026-01-01' },
     };
+    const qb = {
+      update: jest.fn().mockReturnThis(),
+      set: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      execute: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
     const fypRepo = {
       findOne: jest.fn().mockResolvedValue(entry),
       save: jest.fn(async (row: Record<string, unknown>) => row),
+      createQueryBuilder: jest.fn(() => qb),
     };
     const usersRepo = {
       findOne: jest.fn().mockResolvedValue({ name: 'Ali Khan' }),
@@ -2129,6 +2271,16 @@ describe('PathsService — FYP supervisor review', () => {
       'student-1',
       expect.objectContaining({ title: 'Your FYP was rejected' }),
     );
+  });
+
+  it('refuses the decision when a concurrent approveFypAiAnalysis wins the lock first (0 rows affected)', async () => {
+    const { service, fypRepo } = makeReviewService();
+    (fypRepo.createQueryBuilder() as any).execute.mockResolvedValueOnce({
+      affected: 0,
+    });
+    await expect(
+      service.supervisorReviewFyp('supervisor@test.com', 'fyp-1', 'reject'),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 });
 

@@ -48,6 +48,106 @@ describe('StudentsService impact history', () => {
     );
   };
 
+  it('never includes a student-created Team Project in the public browse listing', async () => {
+    const opportunities = [
+      {
+        id: 'opp-team-1',
+        isStudentCreated: true,
+        status: 'active',
+        admin_approved: true,
+        workflowStage: 'live',
+        types: [],
+        organization: null,
+        timeline: {},
+        objectives: {},
+      },
+      {
+        id: 'opp-normal-1',
+        isStudentCreated: false,
+        status: 'active',
+        admin_approved: true,
+        workflowStage: 'live',
+        types: [],
+        organization: null,
+        timeline: {},
+        objectives: {},
+      },
+    ];
+    const service = makeService({
+      opportunitiesRepository: {
+        find: jest.fn().mockResolvedValue(opportunities),
+      },
+      participantRepository: {
+        find: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+      },
+      opportunityApplicationsService: {
+        mapCurrentApplicationsForOpportunities: jest.fn().mockResolvedValue(new Map()),
+        resolveStudentJoinOverlay: jest.fn().mockResolvedValue({
+          applicationStatus: null,
+          hasApplied: false,
+          app: null,
+        }),
+        countSeatsInFlight: jest.fn().mockResolvedValue(0),
+      },
+      opportunitiesService: {
+        getFacultyOrgFallback: jest.fn().mockResolvedValue(null),
+      },
+    });
+
+    const result = await service.getOpportunities({}, 'user-1');
+
+    expect(result.data.map((o: any) => o.id)).toEqual(['opp-normal-1']);
+  });
+
+  it('attributes a faculty-created opportunity (no Organization row) to the faculty institution instead of "Unknown"', async () => {
+    const opportunities = [
+      {
+        id: 'opp-faculty-1',
+        isStudentCreated: false,
+        facultyId: 'faculty-1',
+        organizationId: null,
+        status: 'active',
+        admin_approved: true,
+        workflowStage: 'live',
+        types: [],
+        organization: null,
+        timeline: {},
+        objectives: {},
+      },
+    ];
+    const service = makeService({
+      opportunitiesRepository: {
+        find: jest.fn().mockResolvedValue(opportunities),
+      },
+      participantRepository: {
+        find: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+      },
+      opportunityApplicationsService: {
+        mapCurrentApplicationsForOpportunities: jest.fn().mockResolvedValue(new Map()),
+        resolveStudentJoinOverlay: jest.fn().mockResolvedValue({
+          applicationStatus: null,
+          hasApplied: false,
+          app: null,
+        }),
+        countSeatsInFlight: jest.fn().mockResolvedValue(0),
+      },
+      opportunitiesService: {
+        getFacultyOrgFallback: jest.fn().mockResolvedValue({
+          id: null,
+          name: 'Acme University',
+          logo_url: null,
+        }),
+      },
+    });
+
+    const result = await service.getOpportunities({}, 'user-1');
+
+    expect(result.data[0].organization).toBe('Acme University');
+    expect(result.data[0].organization_name).toBe('Acme University');
+  });
+
   it('uses approved report hours when no verified timesheet exists', async () => {
     const now = new Date();
     const queryBuilder = {

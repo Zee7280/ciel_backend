@@ -1312,6 +1312,11 @@ export class StudentsService {
 
     // Participation scope is enforced in applyToOpportunity, not on the browse list.
     const filtered = opportunities.filter((opportunity) => {
+      // Student-created opportunities are Team Projects — private to their creator + named team
+      // members, never discoverable in the general student browse/search list. Without this, any
+      // fully-approved Team Project (workflowStage 'live'/admin_approved) would show up to every
+      // student, not just the team, since the query above has no isStudentCreated filter.
+      if (opportunity.isStudentCreated) return false;
       const matchesSdg =
         !normalizedSdg ||
         this.normalize(opportunity.sdg) === normalizedSdg ||
@@ -1348,7 +1353,18 @@ export class StudentsService {
           const applicationStatus = overlay.applicationStatus;
           const hasApplied = overlay.hasApplied;
           const app = overlay.app;
-          const organizationName = o.organization?.name || 'Unknown';
+          // Faculty-created opportunities have no Organization row (only University/NGO/Corporate
+          // get one at signup), so `o.organization` is always null for them here — this endpoint
+          // previously showed "Unknown" as the owner for every faculty-created listing, even
+          // though the same fallback (faculty's institution/university/name) already exists and
+          // is used by OpportunitiesService's own browse/detail endpoints.
+          const organizationName =
+            o.organization?.name ||
+            (!o.organizationId
+              ? (await this.opportunitiesService.getFacultyOrgFallback(o.facultyId))
+                  ?.name
+              : null) ||
+            'Unknown';
 
           return {
             ...o,
@@ -1870,6 +1886,15 @@ export class StudentsService {
     }
 
     Object.assign(opportunity, patch);
+    // Only re-check location.pin when this edit actually touches mode/location — a pre-fix legacy
+    // record with no pin must still be editable for unrelated fields, not permanently stuck
+    // because it predates this rule. New records are already gated at creation time.
+    if (dto.mode !== undefined || dto.location !== undefined) {
+      this.opportunitiesService.validateLocation(
+        opportunity.mode,
+        opportunity.location,
+      );
+    }
 
     if (dto.sdg_info) {
       opportunity.sdg = dto.sdg_info.sdg_id || opportunity.sdg;

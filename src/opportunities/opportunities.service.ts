@@ -958,6 +958,20 @@ export class OpportunitiesService {
       throw new BadRequestException('faculty_university_name is required');
   }
 
+  /** A non-remote opportunity needs a real map pin, not just a picked city — otherwise it can
+   * "float" with no accurate location while still passing every other check. The frontend's own
+   * form validation should already require this; this is the same rule enforced server-side so a
+   * raw API call (or a form bug) can't bypass it. */
+  validateLocation(mode?: string, location?: any) {
+    if (mode === 'Remote') return;
+    const pin = typeof location?.pin === 'string' ? location.pin.trim() : '';
+    if (!pin) {
+      throw new BadRequestException(
+        'location.pin is required for a non-Remote opportunity — pin the exact location on the map.',
+      );
+    }
+  }
+
   private validateExternalPartner(collab?: any) {
     if (!collab) return;
     const { organization_name, contact_person, official_email } = collab;
@@ -1001,7 +1015,7 @@ export class OpportunitiesService {
     });
   }
 
-  private async getFacultyOrgFallback(facultyId?: string | null) {
+  async getFacultyOrgFallback(facultyId?: string | null) {
     if (!facultyId) return null;
     const faculty = await this.usersRepository.findOne({
       where: { id: facultyId },
@@ -1224,6 +1238,12 @@ export class OpportunitiesService {
 
   /** Public directory: honor org/creator visibility flags only. Participation rules apply at apply/enroll time. */
   private isPubliclyVisibleOpportunity(opp: Opportunity): boolean {
+    // Student-created opportunities are Team Projects — private to their creator + named team
+    // members, never discoverable in the public/anonymous directory (not even by direct id guess
+    // via getPublicOpportunityById). The restrictive-visibility branch further below used to
+    // explicitly bypass ITSELF for isStudentCreated records, which made them unconditionally
+    // public regardless of any visibility setting — the opposite of what a Team Project needs.
+    if (opp.isStudentCreated) return false;
     const linkage = opp.visibility_and_academic_linkage;
     const explicitType =
       linkage && typeof linkage.visibility_type === 'string'
@@ -1265,7 +1285,7 @@ export class OpportunitiesService {
     ) {
       return false;
     }
-    if (legacy === 'restricted' && !opp.isStudentCreated) {
+    if (legacy === 'restricted') {
       // Apply Now targeting is not a directory hide. Public card + scoped Apply Now is the product rule.
       if (scopeRule) return true;
       return false;
@@ -1536,6 +1556,13 @@ export class OpportunitiesService {
         "Universities do not create Community Service opportunities directly — faculty representatives create them on the institution's behalf.",
       );
     }
+
+    // Role/authorization checks (above) must win over data-completeness checks (below) — an
+    // unauthorized caller should see "you can't do this," not "your form is incomplete."
+    this.validateLocation(
+      createOpportunityDto.mode,
+      createOpportunityDto.location,
+    );
 
     const hasExecContactEmail = !!this.normalizeEmail(
       typeof createOpportunityDto.executing_organization?.official_email ===
@@ -1836,6 +1863,7 @@ export class OpportunitiesService {
     }
     this.validateSafetyDeclaration(dto.safety_declaration);
     this.validateSubmissionConfirmations(dto.submission_confirmations);
+    this.validateLocation(dto.mode, dto.location);
     this.validateParticipationScope(dto.participation_scope);
 
     // A student-created opportunity must stay scoped to the student's own university
@@ -2194,6 +2222,13 @@ export class OpportunitiesService {
     const { id: _dtoId, ...patch } =
       updateOpportunityDto as UpdateOpportunityDto & { id: string };
     Object.assign(opportunity, patch);
+    // Only re-check location.pin when this edit is actually touching mode/location — a pre-fix
+    // legacy record with no pin must still be editable for unrelated fields (title, dates, ...),
+    // not permanently stuck because it predates this rule. New records are already gated at
+    // create() time; this just stops an edit from actively making a pin worse (e.g. clearing it).
+    if (patch.mode !== undefined || patch.location !== undefined) {
+      this.validateLocation(opportunity.mode, opportunity.location);
+    }
 
     if (updateOpportunityDto.sdg_info) {
       opportunity.sdg = updateOpportunityDto.sdg_info.sdg_id || opportunity.sdg;
@@ -3453,7 +3488,77 @@ export class OpportunitiesService {
     return {
       title: opportunity.title,
       alreadyVerified: !!opportunity.partnerVerified,
+      // "Request revision" is only a valid action for student-created opportunities — see
+      // afterPartnerRevision/decideOpportunityViaPartnerToken. Exposed so the public flashcard can
+      // hide that button rather than let the reviewer hit a 400 after picking it.
+      isStudentCreated: !!opportunity.isStudentCreated,
       detail: buildOpportunityDetailView(opportunity),
+    };
+  }
+
+  /**
+   * Public, token-scoped reject/revision — the anonymous partnerToken counterpart to
+   * partnerDashboardReject/partnerDashboardRevise, for the same no-login "flashcard" flow that
+   * verifyOpportunityToken's approve path already serves at /verify/partner. Possession of the
+   * emailed partnerToken is the partner's credential here (same design as the existing approve
+   * path) — there is no authenticated partner identity to run an email/org ownership check
+   * against, so this only re-checks that the token still resolves and the opportunity isn't
+   * already decided.
+   */
+  async decideOpportunityViaPartnerToken(
+    token: string,
+    action: 'reject' | 'revision',
+    reason?: string,
+  ) {
+    const opportunity = await this.opportunitiesRepository.findOne({
+      where: { partnerToken: token },
+    });
+    if (!opportunity) {
+      throw new NotFoundException('Invalid or expired verification link.');
+    }
+    if (opportunity.partnerVerified) {
+      throw new BadRequestException(
+        'This opportunity was already verified via this link.',
+      );
+    }
+    if (action === 'revision' && !opportunity.isStudentCreated) {
+      throw new BadRequestException(
+        'Revision is only supported for student-created opportunities.',
+      );
+    }
+
+    if (action === 'reject') {
+      this.opportunityWorkflow.afterPartnerRejected(opportunity, reason);
+    } else {
+      this.opportunityWorkflow.afterPartnerRevision(opportunity, reason);
+    }
+    const saved = await this.opportunitiesRepository.save(opportunity);
+
+    if (saved.isStudentCreated) {
+      await this.notifyStudentOpportunityUpdate(saved, {
+        title: action === 'reject' ? 'Opportunity closed' : 'Revision requested',
+        message:
+          action === 'reject'
+            ? 'Your opportunity was permanently rejected during partner review and can no longer be edited.'
+            : 'Your partner organization asked you to update your opportunity. Save your changes to resubmit for review.',
+        emailSubject:
+          action === 'reject'
+            ? 'Your opportunity was permanently rejected'
+            : 'Partner requested revisions on your opportunity',
+        reason,
+      });
+    }
+
+    return {
+      success: true,
+      message:
+        action === 'reject'
+          ? 'This opportunity has been rejected.'
+          : 'A revision request has been sent to the student.',
+      data: {
+        title: saved.title,
+        status: this.getApiOpportunityStatus(saved),
+      },
     };
   }
 
@@ -3775,7 +3880,11 @@ export class OpportunitiesService {
     }
   }
 
-  private assertPartnerCanReviewOpportunity(
+  /** Ownership only — no business-state assertions. Safe to call before an idempotency
+   * short-circuit (e.g. partnerDashboardApprove's "already approved" return), unlike the fuller
+   * assertPartnerCanReviewOpportunity below, whose "still awaiting review" check would reject a
+   * legitimate double-click on an opportunity this same partner already approved. */
+  private assertPartnerOwnsOpportunity(
     opp: Opportunity,
     partnerEmail: string,
     organizationId?: string | null,
@@ -3794,6 +3903,14 @@ export class OpportunitiesService {
         'You are not the assigned partner reviewer for this opportunity',
       );
     }
+  }
+
+  private assertPartnerCanReviewOpportunity(
+    opp: Opportunity,
+    partnerEmail: string,
+    organizationId?: string | null,
+  ) {
+    this.assertPartnerOwnsOpportunity(opp, partnerEmail, organizationId);
 
     if (opp.isStudentCreated) {
       if (!opp.faculty_verified) {
@@ -4033,6 +4150,13 @@ export class OpportunitiesService {
   ) {
     const opp = await this.findOne(opportunityId);
     if (!opp) throw new NotFoundException('Opportunity not found');
+
+    // Ownership must be checked before the idempotency short-circuit below — otherwise any
+    // authenticated partner/faculty user could probe another partner's already-approved
+    // opportunities by calling approve again and reading back the (unchanged) result. Ownership
+    // only, not the full assertion (which also demands "still awaiting review" and would wrongly
+    // reject the correct partner's own legitimate double-click on an already-approved opportunity).
+    this.assertPartnerOwnsOpportunity(opp, partner.email, partner.organizationId);
 
     if (
       opp.partnerApprovalStatus === 'approved' &&

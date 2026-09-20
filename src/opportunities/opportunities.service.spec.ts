@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { OpportunitiesService } from './opportunities.service';
+import { OpportunityWorkflowService } from './opportunity-workflow.service';
 import { Opportunity } from './entities/opportunity.entity';
 
 function makeService(opportunitiesRepo: Record<string, unknown>) {
@@ -148,11 +149,28 @@ describe('OpportunitiesService — public directory visibility (isPubliclyVisibl
             }),
         ).toBe(true);
     });
+
+    it('never lists a student-created Team Project in the public directory, regardless of visibility/scope', () => {
+        expect(
+            isVisible({
+                isStudentCreated: true,
+                visibility: 'restricted',
+                participation_scope: { rule: 'own_university_only' },
+            }),
+        ).toBe(false);
+        expect(
+            isVisible({
+                isStudentCreated: true,
+                visibility_and_academic_linkage: { visibility_type: 'open_all_universities' },
+            }),
+        ).toBe(false);
+    });
 });
 
 describe('OpportunitiesService — student create-opportunity is locked to their own university', () => {
     const baseDto = () => ({
         title: 'Beach clean-up',
+        mode: 'Remote', // keep location.pin out of the way — these tests are about university scoping
         supervision: { contact: 'teacher@uni.edu', faculty_department: 'CS' },
         executing_context: {
             type: 'independent',
@@ -254,6 +272,7 @@ describe('OpportunitiesService — createStudentOpportunity advisory lock', () =
 
         const result = await service.createStudentOpportunity('student-1', {
             title: 'CS', // < 6 chars — findSimilarStudentCreatedOpportunities short-circuits, no queryBuilder needed
+            mode: 'Remote', // location.pin isn't relevant to this test — keep it out of the way
             supervision: { contact: 'teacher@uni.edu', faculty_department: 'CS' },
             executing_context: {
                 type: 'independent',
@@ -303,6 +322,7 @@ describe('OpportunitiesService — createStudentOpportunity advisory lock', () =
         await expect(
             service.createStudentOpportunity('student-1', {
                 title: 'Beach clean-up drive', // >= 6 chars — reaches the real duplicate check
+                mode: 'Remote', // location.pin isn't relevant to this test — keep it out of the way
                 supervision: { contact: 'teacher@uni.edu', faculty_department: 'CS' },
                 executing_context: {
                     type: 'independent',
@@ -452,5 +472,136 @@ describe('OpportunitiesService — universities do not create Community Service 
         await expect(service.create('faculty-1', {} as any)).rejects.not.toThrow(
             "Universities do not create Community Service opportunities directly",
         );
+    });
+});
+
+describe('OpportunitiesService — partnerDashboardApprove ownership guard', () => {
+    const makeApprovedOpp = () => ({
+        id: 'opp-partner-1',
+        isStudentCreated: false,
+        organizationId: 'org-A',
+        partnerApprovalStatus: 'approved',
+        workflowStage: 'pending_admin',
+        partner_organization: { official_email: 'realpartner@org.com' },
+    });
+
+    it('refuses a partner who is not the assigned reviewer, even for an already-approved opportunity', async () => {
+        const opp = makeApprovedOpp();
+        const findOne = jest.fn().mockResolvedValue(opp);
+        const save = jest.fn(async (row: any) => row);
+        const service = makeService({ findOne, save });
+
+        await expect(
+            service.partnerDashboardApprove('opp-partner-1', {
+                email: 'someoneelse@org.com',
+                organizationId: 'org-B',
+            }),
+        ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('lets the correct partner double-click approve on an already-approved opportunity without erroring', async () => {
+        const opp = makeApprovedOpp();
+        const findOne = jest.fn().mockResolvedValue(opp);
+        const save = jest.fn(async (row: any) => row);
+        const service = makeService({ findOne, save });
+
+        const result = await service.partnerDashboardApprove('opp-partner-1', {
+            email: 'realpartner@org.com',
+            organizationId: 'org-A',
+        });
+
+        expect(result).toBe(opp);
+        expect(save).not.toHaveBeenCalled();
+    });
+});
+
+describe('OpportunitiesService — decideOpportunityViaPartnerToken (public flashcard reject/revision)', () => {
+    it('rejects a student-created opportunity by token and notifies the student', async () => {
+        const opp = {
+            id: 'opp-tok-1',
+            partnerToken: 'tok-1',
+            partnerVerified: false,
+            isStudentCreated: true,
+            title: 'Beach clean-up',
+        };
+        const findOne = jest.fn().mockResolvedValue(opp);
+        const save = jest.fn(async (row: any) => row);
+        const service = makeService({ findOne, save });
+        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+        const notifySpy = jest
+            .spyOn(service as any, 'notifyStudentOpportunityUpdate')
+            .mockResolvedValue(undefined);
+
+        const result = await service.decideOpportunityViaPartnerToken('tok-1', 'reject', 'Not a fit');
+
+        expect(save).toHaveBeenCalled();
+        expect((opp as any).status).toBe('rejected');
+        expect((opp as any).rejectionReason).toBe('Not a fit');
+        expect(notifySpy).toHaveBeenCalled();
+        expect(result.success).toBe(true);
+    });
+
+    it('refuses a revision request for a non-student-created (faculty/NGO) opportunity', async () => {
+        const opp = {
+            id: 'opp-tok-2',
+            partnerToken: 'tok-2',
+            partnerVerified: false,
+            isStudentCreated: false,
+        };
+        const findOne = jest.fn().mockResolvedValue(opp);
+        const save = jest.fn(async (row: any) => row);
+        const service = makeService({ findOne, save });
+
+        await expect(
+            service.decideOpportunityViaPartnerToken('tok-2', 'revision'),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(save).not.toHaveBeenCalled();
+    });
+
+    it('refuses to decide an opportunity that was already verified through this link', async () => {
+        const opp = {
+            id: 'opp-tok-3',
+            partnerToken: 'tok-3',
+            partnerVerified: true,
+            isStudentCreated: true,
+        };
+        const findOne = jest.fn().mockResolvedValue(opp);
+        const service = makeService({ findOne, save: jest.fn() });
+
+        await expect(
+            service.decideOpportunityViaPartnerToken('tok-3', 'reject'),
+        ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('throws NotFoundException for an unknown token', async () => {
+        const findOne = jest.fn().mockResolvedValue(null);
+        const service = makeService({ findOne });
+
+        await expect(
+            service.decideOpportunityViaPartnerToken('missing-token', 'reject'),
+        ).rejects.toBeInstanceOf(NotFoundException);
+    });
+});
+
+describe('OpportunitiesService — validateLocation (accurate-pin gate)', () => {
+    const service = makeService({});
+
+    it('requires a non-empty location.pin for a non-Remote opportunity', () => {
+        expect(() => service.validateLocation('On site', { city: 'Lahore', venue: 'Park', pin: '' })).toThrow(
+            BadRequestException,
+        );
+        expect(() => service.validateLocation('On site', undefined)).toThrow(BadRequestException);
+        expect(() => service.validateLocation('Hybrid', { city: 'Lahore' })).toThrow(BadRequestException);
+    });
+
+    it('allows a Remote opportunity with no pin at all', () => {
+        expect(() => service.validateLocation('Remote', undefined)).not.toThrow();
+        expect(() => service.validateLocation('Remote', { city: '' })).not.toThrow();
+    });
+
+    it('allows a non-Remote opportunity once a real pin is set', () => {
+        expect(() =>
+            service.validateLocation('On site', { city: 'Lahore', venue: 'Park', pin: '31.5204,74.3587' }),
+        ).not.toThrow();
     });
 });

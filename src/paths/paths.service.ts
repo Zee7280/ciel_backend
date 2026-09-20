@@ -33,6 +33,7 @@ import {
 import { formatCertificateVerificationCode } from '../reports/certificate-verification-code.util';
 import { UpdateCourseProjectDto } from './dto/update-course-project.dto';
 import { computeCourseworkReadiness } from './course-project-readiness.util';
+import { computeFypReadiness } from './fyp-readiness.util';
 import { AddFypDeliverableDto, UpdateFypDto } from './dto/update-fyp.dto';
 import { EditFypAiAnalysisDto } from './dto/fyp-ai-analysis.dto';
 import { FypMeritModelQueryDto } from './dto/fyp-merit-model-query.dto';
@@ -2138,6 +2139,26 @@ export class PathsService implements OnModuleInit {
       entry.supervisorApprovalStatus = 'pending';
       entry.supervisorApprovalAt = null;
       entry.meritRibbon = null;
+      // Same staleness argument as the approved-reset branch above: an AI analysis run before this
+      // revision/rejection decision reflects pre-edit content and must not keep showing as current
+      // once the student has changed the record.
+      entry.aiAnalysis = null;
+      entry.aiAnalysisLock = null;
+    }
+    // "Ready to Submit" gate — block the draft→submitted transition (not every autosave, and not
+    // a resubmission edit — supervisorEmail is already locked in by then) if required fields are
+    // missing, so a record can never reach 'submitted' with no supervisor to review it. See
+    // fyp-readiness.util.ts for why an empty supervisorEmail here would otherwise be permanent.
+    if (
+      priorStatusForSupervisorLock !== 'submitted' &&
+      entry.status === 'submitted'
+    ) {
+      const readiness = computeFypReadiness(entry);
+      if (!readiness.ready) {
+        throw new BadRequestException(
+          `This FYP record isn't ready to submit yet. Missing: ${readiness.missing.join('; ')}.`,
+        );
+      }
     }
     const justConnected =
       !hadSupervisorEmail &&
@@ -2469,16 +2490,43 @@ export class PathsService implements OnModuleInit {
         "This FYP's AI analysis is locked; further review actions are not permitted.",
       );
     }
-    entry.supervisorApprovalStatus =
+    const nextApprovalStatus =
       action === 'approve'
         ? 'approved'
         : action === 'revision'
           ? 'revision_requested'
           : 'rejected';
-    entry.supervisorApprovalNote = note ?? null;
-    entry.supervisorApprovalAt = new Date();
-    if (action !== 'approve') entry.meritRibbon = null;
-    const saved = await this.fypRepo.save(entry);
+    const nextApprovalNote = note ?? null;
+    const nextApprovalAt = new Date();
+    // Atomic compare-and-swap: the WHERE guard re-checks "not locked" at write time — mirrors
+    // approveFypAiAnalysis. Without this, a blind full-entity save() here could race a concurrent
+    // approveFypAiAnalysis call and silently revert its just-committed lock (see audit finding).
+    const updateResult = await this.fypRepo
+      .createQueryBuilder()
+      .update(FypEntry)
+      .set({
+        supervisorApprovalStatus: nextApprovalStatus,
+        supervisorApprovalNote: nextApprovalNote,
+        supervisorApprovalAt: nextApprovalAt,
+        ...(action !== 'approve' ? { meritRibbon: null } : {}),
+      })
+      .where('id = :id', { id: entry.id })
+      .andWhere(
+        `("aiAnalysisLock" IS NULL OR ("aiAnalysisLock"->>'locked') IS DISTINCT FROM 'true')`,
+      )
+      .execute();
+    if (!updateResult.affected) {
+      throw new BadRequestException(
+        "This FYP's AI analysis is locked; further review actions are not permitted.",
+      );
+    }
+    const saved: FypEntry = {
+      ...entry,
+      supervisorApprovalStatus: nextApprovalStatus,
+      supervisorApprovalNote: nextApprovalNote,
+      supervisorApprovalAt: nextApprovalAt,
+      ...(action !== 'approve' ? { meritRibbon: null } : {}),
+    };
     const first = saved.projectInfo?.studentName?.split(' ')[0] || 'there';
     const title = saved.projectTitle || 'Untitled FYP';
     try {
@@ -3012,6 +3060,7 @@ export class PathsService implements OnModuleInit {
       const repo = manager.getRepository(FypEntry);
       let entry = await repo.findOne({
         where: { userId },
+        order: { updatedAt: 'DESC' },
         lock: { mode: 'pessimistic_write' },
       });
       if (!entry)

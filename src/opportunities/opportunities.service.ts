@@ -2553,6 +2553,13 @@ export class OpportunitiesService {
       status: 'draft',
       isStudentCreated: true,
       visibility: 'restricted',
+      // `sdg` is a required (NOT NULL, no default) column kept for backward compatibility, but the
+      // wizard only ever sends the SDG selection nested under `sdg_info.sdg_id` — never a top-level
+      // `sdg` field — and a draft is saved long before the student reaches that step. Without this
+      // fallback the very first "Save Draft" click fails outright with a NOT NULL violation, since
+      // `fields` never carries a `sdg` key at all. Mirrors the same fallback `createStudentOpportunity`
+      // already applies for a full submit.
+      sdg: (fields as { sdg_info?: { sdg_id?: string } }).sdg_info?.sdg_id || 'SDG',
     };
     const opportunity = this.opportunitiesRepository.create(payload);
     const saved = await this.opportunitiesRepository.save(opportunity);

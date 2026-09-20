@@ -20,6 +20,11 @@ export class NotificationsController {
         return { success: true, data };
     }
 
+    @Put('read-all')
+    markAllAsRead(@Request() req) {
+        return this.notificationsService.markAllAsRead(req.user.id);
+    }
+
     @Put(':id/read')
     markAsRead(@Request() req, @Param('id', ParseIntPipe) id: number) {
         return this.notificationsService.markAsRead(id, req.user.id);

@@ -552,3 +552,42 @@ describe('OpportunitiesService — validateLocation (accurate-pin gate)', () => 
     });
 });
 
+describe('OpportunitiesService — saveStudentOpportunityDraft (first-save regression)', () => {
+    it('always fills the required sdg column on a brand-new draft, even before the student has picked an SDG', async () => {
+        const create = jest.fn((payload) => payload);
+        const save = jest.fn((payload) => Promise.resolve({ id: 'new-draft-id', ...payload }));
+        const service = makeService({ create, save });
+        (service as any).usersRepository = {
+            findOne: jest.fn().mockResolvedValue({ id: 'student-1' }),
+        };
+
+        // Mirrors exactly what the wizard sends on an early "Save Draft" click: only a title, no
+        // sdg_info yet — the wizard nests any SDG pick under sdg_info.sdg_id, never a bare `sdg`
+        // field, but the Opportunity entity's `sdg` column is NOT NULL with no default.
+        await service.saveStudentOpportunityDraft('student-1', null, {
+            draft: true,
+            title: 'Untitled draft',
+        });
+
+        expect(create).toHaveBeenCalledWith(expect.objectContaining({ sdg: expect.any(String) }));
+        expect(create.mock.calls[0][0].sdg).toBeTruthy();
+    });
+
+    it('uses the picked SDG once sdg_info is present', async () => {
+        const create = jest.fn((payload) => payload);
+        const save = jest.fn((payload) => Promise.resolve({ id: 'new-draft-id', ...payload }));
+        const service = makeService({ create, save });
+        (service as any).usersRepository = {
+            findOne: jest.fn().mockResolvedValue({ id: 'student-1' }),
+        };
+
+        await service.saveStudentOpportunityDraft('student-1', null, {
+            draft: true,
+            title: 'Digital Skills for Young Learners',
+            sdg_info: { sdg_id: '4', target_id: '4.1', indicator_id: '', why_relevant: '' },
+        });
+
+        expect(create.mock.calls[0][0].sdg).toBe('4');
+    });
+});
+

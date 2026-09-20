@@ -59,6 +59,14 @@ export class NotificationsService {
         });
     }
 
+    async markAllAsRead(userId: string) {
+        await this.notificationsRepository.update(
+            { userId, isRead: false },
+            { isRead: true },
+        );
+        return { success: true };
+    }
+
     async markAsRead(id: number, userId: string) {
         const notification = await this.notificationsRepository.findOne({ where: { id } });
 

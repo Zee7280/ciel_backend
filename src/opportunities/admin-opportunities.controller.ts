@@ -6,6 +6,7 @@ import {
   Body,
   Param,
   Query,
+  Request,
   UseGuards,
   UseInterceptors,
   Patch,
@@ -99,16 +100,16 @@ export class AdminOpportunitiesController {
   @Post(':id/approve')
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
-  async approve(@Param('id') id: string) {
-    await this.opportunitiesService.approve(id);
+  async approve(@Request() req, @Param('id') id: string) {
+    await this.opportunitiesService.approve(id, { id: req.user.id, name: req.user.name });
     return { success: true, data: {} };
   }
 
   @Patch(':id/approve')
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
-  async approvePatch(@Param('id') id: string) {
-    await this.opportunitiesService.approve(id);
+  async approvePatch(@Request() req, @Param('id') id: string) {
+    await this.opportunitiesService.approve(id, { id: req.user.id, name: req.user.name });
     return { success: true, data: {} };
   }
 
@@ -123,16 +124,16 @@ export class AdminOpportunitiesController {
   @Post(':id/reject')
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
-  async reject(@Param('id') id: string, @Body() body: { reason: string }) {
-    await this.opportunitiesService.reject(id, body.reason);
+  async reject(@Request() req, @Param('id') id: string, @Body() body: { reason: string }) {
+    await this.opportunitiesService.reject(id, body.reason, { id: req.user.id, name: req.user.name });
     return { success: true, data: {} };
   }
 
   @Post(':id/revise')
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
-  async revise(@Param('id') id: string, @Body() body: { reason: string }) {
-    const saved = await this.opportunitiesService.revise(id, body.reason);
+  async revise(@Request() req, @Param('id') id: string, @Body() body: { reason: string }) {
+    const saved = await this.opportunitiesService.revise(id, body.reason, { id: req.user.id, name: req.user.name });
     return {
       success: true,
       data: {

@@ -547,6 +547,8 @@ export class PartnersController {
     const saved = await this.opportunitiesService.partnerDashboardApprove(id, {
       email: req.user.email || '',
       organizationId: req.user.organizationId || null,
+      id: req.user.id,
+      name: req.user.name,
     });
     return {
       success: true,
@@ -577,6 +579,8 @@ export class PartnersController {
       {
         email: req.user.email || '',
         organizationId: req.user.organizationId || null,
+        id: req.user.id,
+        name: req.user.name,
       },
       body?.reason,
     );
@@ -609,6 +613,8 @@ export class PartnersController {
       {
         email: req.user.email || '',
         organizationId: req.user.organizationId || null,
+        id: req.user.id,
+        name: req.user.name,
       },
       body?.reason,
     );
@@ -784,6 +790,8 @@ export class PartnerAliasController {
     const saved = await this.opportunitiesService.partnerDashboardApprove(id, {
       email: req.user.email || '',
       organizationId: req.user.organizationId || null,
+      id: req.user.id,
+      name: req.user.name,
     });
     return {
       success: true,
@@ -814,6 +822,8 @@ export class PartnerAliasController {
       {
         email: req.user.email || '',
         organizationId: req.user.organizationId || null,
+        id: req.user.id,
+        name: req.user.name,
       },
       body?.reason,
     );
@@ -846,6 +856,8 @@ export class PartnerAliasController {
       {
         email: req.user.email || '',
         organizationId: req.user.organizationId || null,
+        id: req.user.id,
+        name: req.user.name,
       },
       body?.reason,
     );

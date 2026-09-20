@@ -32,6 +32,7 @@ export class FacultyController {
             id,
             req.user.id,
             req.user.email || '',
+            req.user.name,
         );
         return {
             success: true,
@@ -65,6 +66,7 @@ export class FacultyController {
             req.user.id,
             req.user.email || '',
             body?.reason ?? body?.comment,
+            req.user.name,
         );
         return {
             success: true,
@@ -98,6 +100,7 @@ export class FacultyController {
             req.user.id,
             req.user.email || '',
             body?.reason ?? body?.comment,
+            req.user.name,
         );
         return {
             success: true,

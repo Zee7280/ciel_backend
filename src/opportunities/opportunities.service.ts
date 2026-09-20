@@ -43,6 +43,7 @@ import {
   OpportunityWorkflowService,
   WORKFLOW_STAGE,
   LINE_STATUS,
+  ApprovalActor,
 } from './opportunity-workflow.service';
 import {
   normalizeOpportunityTitleForMatch,
@@ -633,14 +634,41 @@ export class OpportunitiesService {
     await tryBindFacultyByEmail(rawPo);
   }
 
-  private getFacultyEmailFromOpportunity(opp: Opportunity): string | null {
-    const sup = opp.supervision as Record<string, unknown> | undefined;
+  /** Faculty contact email, read generically off whichever field the creator's form used:
+   * `supervision.contact`/`official_email` (student/faculty flows) or
+   * `visibility_and_academic_linkage.faculty_institutional_representative.official_email`
+   * (the NGO/Partner Organization form's optional "Academic / faculty link" section). Works on
+   * either a `CreateOpportunityDto` (at create time) or a saved `Opportunity` entity — same JSON
+   * shape either way. */
+  private resolveFacultyEmail(dto: {
+    supervision?: unknown;
+    visibility_and_academic_linkage?: unknown;
+  }): string | null {
+    const sup = dto.supervision as Record<string, unknown> | undefined;
+    const val =
+      dto.visibility_and_academic_linkage &&
+      typeof dto.visibility_and_academic_linkage === 'object'
+        ? (dto.visibility_and_academic_linkage as Record<string, unknown>)
+        : undefined;
+    const fir =
+      val?.faculty_institutional_representative &&
+      typeof val.faculty_institutional_representative === 'object'
+        ? (val.faculty_institutional_representative as Record<
+            string,
+            unknown
+          >)
+        : undefined;
     const raw =
       (sup && typeof sup.contact === 'string' && sup.contact) ||
       (sup && typeof sup.official_email === 'string' && sup.official_email) ||
+      (fir && typeof fir.official_email === 'string' && fir.official_email) ||
       '';
     const em = this.normalizeEmail(raw);
     return em && this.isValidEmail(em) ? em : null;
+  }
+
+  private getFacultyEmailFromOpportunity(opp: Opportunity): string | null {
+    return this.resolveFacultyEmail(opp);
   }
 
   /** Snapshot before student PATCH — used to detect faculty/partner assignment changes on resubmit. */
@@ -1190,6 +1218,15 @@ export class OpportunitiesService {
       if (!opp.workflowStage && opp.status === 'pending_approval') return true;
       return false;
     }
+    // An NGO/Partner Organization creator's optionally-linked faculty gate — same rule as the
+    // partner check just below: admin can't finalize while that line is still open.
+    if (
+      opp.facultyApprovalStatus &&
+      opp.facultyApprovalStatus !== LINE_STATUS.APPROVED &&
+      opp.facultyApprovalStatus !== LINE_STATUS.NOT_APPLICABLE
+    ) {
+      return false;
+    }
     if (opp.requiresPartnerApproval && !opp.partnerVerified) return false;
     if (opp.status === 'pending_partner') return false;
     if (opp.workflowStage === WORKFLOW_STAGE.PENDING_PARTNER) return false;
@@ -1558,6 +1595,14 @@ export class OpportunitiesService {
     const isFaculty = user.role === UserRole.FACULTY;
     /** Partner gate for faculty-authored posts (same heuristics as student flow, but only when a valid partner email exists). */
     let facultyPartnerToken: string | null = null;
+    /** NGO/Partner Organization creator optionally links a faculty as an academic contact
+     * ("Academic / faculty link" section) — when they do, that faculty's approval becomes a real
+     * required gate, same as it would be for a student- or faculty-created opportunity. */
+    const orgCreatorFacultyEmail =
+      !isFaculty && !needsExecutingOrgVerification
+        ? this.resolveFacultyEmail(createOpportunityDto)
+        : null;
+    const orgCreatorFacultyToken = orgCreatorFacultyEmail ? randomUUID() : null;
     // Admin queue (findAllPending) lists only pending_approval. Faculty-created opps used to default to
     // pending_execution when admin_approval_required was false, so they never appeared for CIEL Admin.
     let initialStatus: string;
@@ -1574,10 +1619,15 @@ export class OpportunitiesService {
       initialStatus = requiresPartnerGate
         ? 'pending_partner'
         : 'pending_approval';
-    } else if (createOpportunityDto.admin_approval_required) {
-      initialStatus = 'pending_approval';
+    } else if (orgCreatorFacultyToken) {
+      initialStatus = 'pending_faculty';
     } else {
-      initialStatus = 'pending_execution';
+      // CIEL PK review is always required for org-created opportunities (NGO/Partner/Corporate) —
+      // there is no creator role here that gets to skip it, so this must never be a client-trusted
+      // flag. A client-supplied `admin_approval_required: false` used to route these straight to
+      // `pending_execution` with no further stage, silently orphaning the row (never publishable,
+      // never visible for CIEL PK to act on).
+      initialStatus = 'pending_approval';
     }
 
     /** Distinct partner_organization contact must acknowledge (even when executing-org portal step runs first). */
@@ -1618,6 +1668,16 @@ export class OpportunitiesService {
               : {}),
           }
         : {}),
+      ...(!isFaculty && !needsExecutingOrgVerification
+        ? orgCreatorFacultyToken
+          ? {
+              faculty_verification_token: orgCreatorFacultyToken,
+              faculty_verification_status: 'pending_faculty',
+              faculty_verified: false,
+              facultyApprovalStatus: LINE_STATUS.PENDING,
+            }
+          : { facultyApprovalStatus: LINE_STATUS.NOT_APPLICABLE }
+        : {}),
     };
 
     const opportunity = this.opportunitiesRepository.create(payload);
@@ -1631,6 +1691,10 @@ export class OpportunitiesService {
     }
 
     const saved = await this.opportunitiesRepository.save(opportunity);
+
+    if (orgCreatorFacultyToken) {
+      await this.notifyFacultyForStudentOpportunityVerification(saved);
+    }
 
     // Notify executing-org contact: sign in and confirm from opportunity detail (no public token link).
     if (
@@ -2184,6 +2248,29 @@ export class OpportunitiesService {
         opportunity.partnerApprovalStatus === LINE_STATUS.REJECTED,
       /** Snapshot before patch — student pipeline must never use NGO resubmit logic. */
       isStudentCreated: opportunity.isStudentCreated,
+      wasLive: opportunity.workflowStage === WORKFLOW_STAGE.LIVE,
+      wasRevisionRequested:
+        opportunity.workflowStage === WORKFLOW_STAGE.REVISION ||
+        opportunity.status === WORKFLOW_STAGE.REVISION ||
+        opportunity.adminApprovalStatus === LINE_STATUS.REVISION_REQUESTED ||
+        opportunity.partnerApprovalStatus === LINE_STATUS.REVISION_REQUESTED,
+      /** Whether ANY line was ever approved — not just "is it live right now". Once CIEL PK
+       * requests a revision, `workflowStage` moves off `live` even though the partner line may
+       * still legitimately read `approved`; a blind full reset must not discard that. */
+      everHadApprovedLine:
+        opportunity.workflowStage === WORKFLOW_STAGE.LIVE ||
+        opportunity.status === 'active' ||
+        opportunity.partnerApprovalStatus === LINE_STATUS.APPROVED ||
+        opportunity.adminApprovalStatus === LINE_STATUS.APPROVED,
+      /** For the scoped faculty resubmit below — only the partner line, specifically. */
+      partnerLineFlagged:
+        opportunity.partnerApprovalStatus === LINE_STATUS.REJECTED ||
+        opportunity.partnerApprovalStatus === LINE_STATUS.REVISION_REQUESTED,
+      partnerEmailBefore: this.resolvePartnerEmailFromOpportunity(opportunity),
+      requiresPartnerBefore:
+        this.studentOpportunityRequiresPartner(
+          opportunity as unknown as CreateOpportunityDto,
+        ) && !!this.resolvePartnerEmailFromOpportunity(opportunity),
     };
     /** A student's own edit must also resume the pipeline out of "revision requested" — not just
      * "rejected" — otherwise a revision-requested opportunity never re-enters any reviewer's queue
@@ -2213,20 +2300,86 @@ export class OpportunitiesService {
       opportunity.sdg = updateOpportunityDto.sdg_info.sdg_id || opportunity.sdg;
     }
 
-    // Faculty edit/resubmit: force opportunity back into review lanes for fresh approval.
-    if (isFacultyOwner && !opportunity.isStudentCreated) {
+    // Faculty edit/resubmit: force opportunity back into review lanes for fresh approval —
+    // but only when it actually needs one. A published (live) opportunity that was never
+    // rejected/revision-requested must stay live through a routine edit (fixing a typo, updating
+    // a date); otherwise every faculty edit would silently unpublish an approved opportunity and
+    // send it back through the whole approval chain again.
+    const facultyEditNeedsFreshApproval =
+      !rejectedResubmitSnapshot.wasLive ||
+      rejectedResubmitSnapshot.wasRejected ||
+      rejectedResubmitSnapshot.wasRevisionRequested;
+    if (
+      isFacultyOwner &&
+      !opportunity.isStudentCreated &&
+      facultyEditNeedsFreshApproval
+    ) {
       const requiresPartnerApproval =
         this.studentOpportunityRequiresPartner(
           opportunity as unknown as CreateOpportunityDto,
         ) && !!this.resolvePartnerEmailFromOpportunity(opportunity);
 
-      this.opportunityWorkflow.initFacultyCreated(
-        opportunity,
-        requiresPartnerApproval,
-      );
       opportunity.admin_approved = false;
       opportunity.rejectionReason = null;
-      opportunity.partnerVerified = !requiresPartnerApproval;
+      if (
+        rejectedResubmitSnapshot.wasRejected ||
+        rejectedResubmitSnapshot.wasRevisionRequested
+      ) {
+        opportunity.version = (opportunity.version || 1) + 1;
+      }
+
+      if (!rejectedResubmitSnapshot.everHadApprovedLine) {
+        // Nothing has ever been approved yet (still in the initial review pipeline) — a full
+        // recompute is safe because there is no prior approval that could be wrongly discarded.
+        this.opportunityWorkflow.initFacultyCreated(
+          opportunity,
+          requiresPartnerApproval,
+        );
+        opportunity.partnerVerified = !requiresPartnerApproval;
+      } else {
+        // Was previously live/approved and is now resubmitting after a rejection or revision
+        // request — only rewind the specific line that actually needs re-review. An already
+        // -approved partner line must not be forced back to pending just because CIEL PK (or the
+        // faculty's own edit) touched the opportunity after a sibling line was flagged.
+        const partnerEmailNow = this.resolvePartnerEmailFromOpportunity(opportunity);
+        const partnerEmailChanged =
+          this.normalizeEmail(
+            rejectedResubmitSnapshot.partnerEmailBefore || '',
+          ) !== this.normalizeEmail(partnerEmailNow || '');
+        const partnerRequirementChanged =
+          rejectedResubmitSnapshot.requiresPartnerBefore !==
+          requiresPartnerApproval;
+        const partnerNeedsReReview =
+          requiresPartnerApproval &&
+          (rejectedResubmitSnapshot.partnerLineFlagged ||
+            partnerRequirementChanged ||
+            partnerEmailChanged ||
+            !opportunity.partnerVerified ||
+            opportunity.partnerApprovalStatus !== LINE_STATUS.APPROVED);
+
+        if (partnerNeedsReReview) {
+          opportunity.requiresPartnerApproval = true;
+          opportunity.partnerApprovalStatus = LINE_STATUS.PENDING;
+          opportunity.partnerVerified = false;
+          if (partnerEmailChanged || !opportunity.partnerToken) {
+            opportunity.partnerToken = randomUUID();
+          }
+          opportunity.adminApprovalStatus = LINE_STATUS.PENDING;
+          opportunity.workflowStage = WORKFLOW_STAGE.PENDING_PARTNER;
+          opportunity.status = 'pending_partner';
+        } else {
+          opportunity.requiresPartnerApproval = requiresPartnerApproval;
+          if (!requiresPartnerApproval) {
+            opportunity.partnerApprovalStatus = LINE_STATUS.NOT_APPLICABLE;
+            opportunity.partnerVerified = true;
+          }
+          // Partner line is fine (already approved, or not required) — only CIEL PK's admin
+          // line needs a fresh look.
+          opportunity.adminApprovalStatus = LINE_STATUS.PENDING;
+          opportunity.workflowStage = WORKFLOW_STAGE.PENDING_ADMIN;
+          opportunity.status = 'pending_approval';
+        }
+      }
 
       if (
         opportunity.execution_verification_token &&
@@ -2244,6 +2397,7 @@ export class OpportunitiesService {
     // pending_faculty the way a blind initStudentCreated() call would.
     if (isStudentOwner && studentNeedsResubmit) {
       opportunity.rejectionReason = null;
+      opportunity.version = (opportunity.version || 1) + 1;
       await this.applyStudentCreatedOpportunityResubmit(
         opportunity,
         studentResubmitBefore,
@@ -2260,6 +2414,7 @@ export class OpportunitiesService {
     if (rejectedResubmitSnapshot.wasRejected && isPartnerOrgMemberUpdate) {
       opportunity.rejectionReason = null;
       opportunity.admin_approved = false;
+      opportunity.version = (opportunity.version || 1) + 1;
 
       const needsPartnerReverify =
         opportunity.requiresPartnerApproval &&
@@ -2433,6 +2588,18 @@ export class OpportunitiesService {
               'string' &&
               opp.external_partner_collaboration.organization_name) ||
             null,
+          // Lets the "Pending Partner" status line name the actual person, same contact
+          // resolution used on the student "mine" list.
+          partner_contact_name:
+            (typeof opp.partner_organization?.contact_person === 'string' &&
+              opp.partner_organization.contact_person.trim()) ||
+            (typeof opp.partner_organization?.contact_person_name ===
+              'string' &&
+              opp.partner_organization.contact_person_name.trim()) ||
+            (typeof opp.supervision?.partner_contact_person === 'string' &&
+              opp.supervision.partner_contact_person.trim()) ||
+            null,
+          partner_contact_email: this.resolvePartnerEmailFromOpportunity(opp),
           admin_approved: opp.admin_approved === true,
           rejection_reason: opp.rejectionReason ?? null,
         };
@@ -2693,6 +2860,7 @@ export class OpportunitiesService {
         return {
           ...opp,
           status: this.getApiOpportunityStatus(opp),
+          requires_partner_approval: opp.requiresPartnerApproval,
           location: opp.location,
           start_date: opp.timeline?.start_date,
           end_date: opp.timeline?.end_date,
@@ -3158,7 +3326,7 @@ export class OpportunitiesService {
     );
   }
 
-  async approve(id: string) {
+  async approve(id: string, actor?: ApprovalActor) {
     const opp = await this.findOne(id);
     if (!opp) throw new NotFoundException('Opportunity not found');
     // Idempotent: repeated approve (double-click, retried request) must not re-run side effects / emails.
@@ -3178,7 +3346,7 @@ export class OpportunitiesService {
         'CIEL final approval is only available after faculty and partner steps (when applicable) are completed.',
       );
     }
-    this.opportunityWorkflow.afterAdminApproved(opp);
+    this.opportunityWorkflow.afterAdminApproved(opp, actor);
     const saved = await this.opportunitiesRepository.save(opp);
     await this.handleAdminApprovedSideEffects(saved);
     return saved;
@@ -3206,10 +3374,10 @@ export class OpportunitiesService {
     return this.opportunitiesRepository.save(opp);
   }
 
-  async reject(id: string, reason: string) {
+  async reject(id: string, reason: string, actor?: ApprovalActor) {
     const opp = await this.findOne(id);
     if (!opp) throw new NotFoundException('Opportunity not found');
-    this.opportunityWorkflow.afterAdminRejected(opp, reason);
+    this.opportunityWorkflow.afterAdminRejected(opp, reason, actor);
     const saved = await this.opportunitiesRepository.save(opp);
     if (saved.isStudentCreated) {
       await this.notifyStudentOpportunityUpdate(saved, {
@@ -3223,15 +3391,10 @@ export class OpportunitiesService {
     return saved;
   }
 
-  async revise(id: string, reason: string) {
+  async revise(id: string, reason: string, actor?: ApprovalActor) {
     const opp = await this.findOne(id);
     if (!opp) throw new NotFoundException('Opportunity not found');
-    if (!opp.isStudentCreated && opp.admin_approved !== true) {
-      throw new BadRequestException(
-        'Revision is only supported for student-created opportunities, or to correct a completed admin approval.',
-      );
-    }
-    this.opportunityWorkflow.afterAdminRevision(opp, reason);
+    this.opportunityWorkflow.afterAdminRevision(opp, reason, actor);
     const saved = await this.opportunitiesRepository.save(opp);
     await this.notifyStudentOpportunityUpdate(saved, {
       title: 'Revision requested',
@@ -3507,33 +3670,41 @@ export class OpportunitiesService {
         'This opportunity was already verified via this link.',
       );
     }
-    if (action === 'revision' && !opportunity.isStudentCreated) {
+    // `partnerVerified` only guards the approve path — a rejection also leaves it `false`, so a
+    // stale/replayed link could otherwise resurrect an already permanently-closed opportunity.
+    if (
+      opportunity.workflowStage === WORKFLOW_STAGE.REJECTED ||
+      opportunity.status === 'rejected'
+    ) {
       throw new BadRequestException(
-        'Revision is only supported for student-created opportunities.',
+        'This opportunity has already been closed and can no longer be actioned via this link.',
       );
     }
-
+    // No authenticated identity here — possession of the emailed token is the credential — so the
+    // audit trail names the resolved partner contact email rather than a user id.
+    const linkActor: ApprovalActor = {
+      id: null,
+      name: this.resolvePartnerEmailFromOpportunity(opportunity) || 'Partner (via link)',
+    };
     if (action === 'reject') {
-      this.opportunityWorkflow.afterPartnerRejected(opportunity, reason);
+      this.opportunityWorkflow.afterPartnerRejected(opportunity, reason, linkActor);
     } else {
-      this.opportunityWorkflow.afterPartnerRevision(opportunity, reason);
+      this.opportunityWorkflow.afterPartnerRevision(opportunity, reason, linkActor);
     }
     const saved = await this.opportunitiesRepository.save(opportunity);
 
-    if (saved.isStudentCreated) {
-      await this.notifyStudentOpportunityUpdate(saved, {
-        title: action === 'reject' ? 'Opportunity closed' : 'Revision requested',
-        message:
-          action === 'reject'
-            ? 'Your opportunity was permanently rejected during partner review and can no longer be edited.'
-            : 'Your partner organization asked you to update your opportunity. Save your changes to resubmit for review.',
-        emailSubject:
-          action === 'reject'
-            ? 'Your opportunity was permanently rejected'
-            : 'Partner requested revisions on your opportunity',
-        reason,
-      });
-    }
+    await this.notifyStudentOpportunityUpdate(saved, {
+      title: action === 'reject' ? 'Opportunity closed' : 'Revision requested',
+      message:
+        action === 'reject'
+          ? 'Your opportunity was permanently rejected during partner review and can no longer be edited.'
+          : 'Your partner organization asked you to update your opportunity. Save your changes to resubmit for review.',
+      emailSubject:
+        action === 'reject'
+          ? 'Your opportunity was permanently rejected'
+          : 'Partner requested revisions on your opportunity',
+      reason,
+    });
 
     return {
       success: true,
@@ -3592,7 +3763,10 @@ export class OpportunitiesService {
           'Partner verification is only available after the faculty supervisor has approved this opportunity.',
         );
       }
-      this.opportunityWorkflow.afterPartnerVerified(opportunity);
+      this.opportunityWorkflow.afterPartnerVerified(opportunity, {
+        id: null,
+        name: this.resolvePartnerEmailFromOpportunity(opportunity) || 'Partner (via link)',
+      });
       await this.assignFacultyIdFromSupervisionIfMissing(opportunity);
       await this.opportunitiesRepository.save(opportunity);
       await this.handlePartnerApprovedSideEffects(opportunity);
@@ -3629,7 +3803,10 @@ export class OpportunitiesService {
           opportunity,
           opportunity.requiresPartnerApproval,
         );
-        this.opportunityWorkflow.afterFacultyVerified(opportunity);
+        this.opportunityWorkflow.afterFacultyVerified(opportunity, {
+          id: null,
+          name: this.resolveFacultyEmail(opportunity) || 'Faculty (via link)',
+        });
         await this.assignFacultyIdFromSupervisionIfMissing(opportunity);
         await this.opportunitiesRepository.save(opportunity);
         await this.handleFacultyApprovedSideEffects(opportunity);
@@ -3651,7 +3828,10 @@ export class OpportunitiesService {
       !opportunity.partnerVerified &&
       !opportunity.isStudentCreated
     ) {
-      this.opportunityWorkflow.afterFacultyCreatedPartnerVerified(opportunity);
+      this.opportunityWorkflow.afterFacultyCreatedPartnerVerified(opportunity, {
+        id: null,
+        name: this.resolvePartnerEmailFromOpportunity(opportunity) || 'Partner (via link)',
+      });
       verifiedRole = 'Partner';
       await this.assignFacultyIdFromSupervisionIfMissing(opportunity);
       await this.opportunitiesRepository.save(opportunity);
@@ -3806,7 +3986,10 @@ export class OpportunitiesService {
         'Invalid or expired faculty verification token',
       );
     this.assertVerificationIdentityIfRequired(opp, token, user);
-    if (opp.isStudentCreated && opp.faculty_verified) {
+    const alreadyDone = opp.isStudentCreated
+      ? opp.faculty_verified
+      : opp.facultyApprovalStatus === LINE_STATUS.APPROVED;
+    if (alreadyDone) {
       return {
         success: true,
         message: 'Faculty verification was already completed.',
@@ -3817,7 +4000,10 @@ export class OpportunitiesService {
         },
       };
     }
-    this.opportunityWorkflow.afterFacultyVerified(opp);
+    this.opportunityWorkflow.afterFacultyVerified(opp, {
+      id: user?.id ?? null,
+      name: user?.email || this.resolveFacultyEmail(opp) || 'Faculty (via link)',
+    });
     await this.assignFacultyIdFromSupervisionIfMissing(opp);
     await this.opportunitiesRepository.save(opp);
     await this.handleFacultyApprovedSideEffects(opp);
@@ -3842,22 +4028,15 @@ export class OpportunitiesService {
     facultyUserId: string,
     facultyEmail: string,
   ) {
-    const o = opp.supervision;
-    const supContact = this.normalizeEmail(
-      typeof o?.contact === 'string' ? o.contact : undefined,
-    );
-    const supOfficial = this.normalizeEmail(
-      typeof o?.official_email === 'string' ? o.official_email : undefined,
-    );
     const po = opp.partner_organization as Record<string, unknown> | undefined;
     const partnerOfficial = this.normalizeEmail(
       typeof po?.official_email === 'string' ? po.official_email : undefined,
     );
+    const linkedFacultyEmail = this.resolveFacultyEmail(opp);
     const fe = this.normalizeEmail(facultyEmail);
     const idOk = !!opp.facultyId && opp.facultyId === facultyUserId;
     const emailOk =
-      (!!supContact && !!fe && supContact === fe) ||
-      (!!supOfficial && !!fe && supOfficial === fe) ||
+      (!!linkedFacultyEmail && !!fe && linkedFacultyEmail === fe) ||
       (!!partnerOfficial && !!fe && partnerOfficial === fe);
     if (!idOk && !emailOk) {
       throw new ForbiddenException(
@@ -3973,6 +4152,7 @@ export class OpportunitiesService {
     opportunityId: string,
     facultyUserId: string,
     facultyEmail: string,
+    facultyName?: string,
   ) {
     const opp = await this.findOne(opportunityId);
     if (!opp) throw new NotFoundException('Opportunity not found');
@@ -3997,7 +4177,10 @@ export class OpportunitiesService {
     }
 
     if (oppAwaitingFaculty) {
-      this.opportunityWorkflow.afterFacultyVerified(opp);
+      this.opportunityWorkflow.afterFacultyVerified(opp, {
+        id: facultyUserId,
+        name: facultyName,
+      });
       await this.assignFacultyIdFromSupervisionIfMissing(opp);
       const saved = await this.opportunitiesRepository.save(opp);
       await this.handleFacultyApprovedSideEffects(saved);
@@ -4019,6 +4202,7 @@ export class OpportunitiesService {
     facultyUserId: string,
     facultyEmail: string,
     reason?: string,
+    facultyName?: string,
   ) {
     const opp = await this.findOne(opportunityId);
     if (!opp) throw new NotFoundException('Opportunity not found');
@@ -4043,7 +4227,10 @@ export class OpportunitiesService {
     }
 
     if (oppAwaitingFaculty) {
-      this.opportunityWorkflow.afterFacultyRejected(opp, reason);
+      this.opportunityWorkflow.afterFacultyRejected(opp, reason, {
+        id: facultyUserId,
+        name: facultyName,
+      });
       await this.assignFacultyIdFromSupervisionIfMissing(opp);
     } else {
       await this.opportunityApplicationsService.facultyReject(
@@ -4098,6 +4285,7 @@ export class OpportunitiesService {
     facultyUserId: string,
     facultyEmail: string,
     reason?: string,
+    facultyName?: string,
   ) {
     const opp = await this.findOne(opportunityId);
     if (!opp) throw new NotFoundException('Opportunity not found');
@@ -4114,7 +4302,10 @@ export class OpportunitiesService {
       );
     }
 
-    this.opportunityWorkflow.afterFacultyRevision(opp, reason);
+    this.opportunityWorkflow.afterFacultyRevision(opp, reason, {
+      id: facultyUserId,
+      name: facultyName,
+    });
     await this.assignFacultyIdFromSupervisionIfMissing(opp);
     const saved = await this.opportunitiesRepository.save(opp);
 
@@ -4132,7 +4323,12 @@ export class OpportunitiesService {
 
   async partnerDashboardApprove(
     opportunityId: string,
-    partner: { email: string; organizationId?: string | null },
+    partner: {
+      email: string;
+      organizationId?: string | null;
+      id?: string | null;
+      name?: string | null;
+    },
   ) {
     const opp = await this.findOne(opportunityId);
     if (!opp) throw new NotFoundException('Opportunity not found');
@@ -4156,10 +4352,11 @@ export class OpportunitiesService {
       partner.email,
       partner.organizationId,
     );
+    const actor: ApprovalActor = { id: partner.id, name: partner.name };
     if (opp.isStudentCreated) {
-      this.opportunityWorkflow.afterPartnerVerified(opp);
+      this.opportunityWorkflow.afterPartnerVerified(opp, actor);
     } else {
-      this.opportunityWorkflow.afterFacultyCreatedPartnerVerified(opp);
+      this.opportunityWorkflow.afterFacultyCreatedPartnerVerified(opp, actor);
     }
     const saved = await this.opportunitiesRepository.save(opp);
     await this.handlePartnerApprovedSideEffects(saved);
@@ -4168,7 +4365,12 @@ export class OpportunitiesService {
 
   async partnerDashboardReject(
     opportunityId: string,
-    partner: { email: string; organizationId?: string | null },
+    partner: {
+      email: string;
+      organizationId?: string | null;
+      id?: string | null;
+      name?: string | null;
+    },
     reason?: string,
   ) {
     const opp = await this.findOne(opportunityId);
@@ -4179,7 +4381,10 @@ export class OpportunitiesService {
       partner.email,
       partner.organizationId,
     );
-    this.opportunityWorkflow.afterPartnerRejected(opp, reason);
+    this.opportunityWorkflow.afterPartnerRejected(opp, reason, {
+      id: partner.id,
+      name: partner.name,
+    });
     const saved = await this.opportunitiesRepository.save(opp);
 
     if (saved.isStudentCreated) {
@@ -4197,7 +4402,12 @@ export class OpportunitiesService {
 
   async partnerDashboardRevise(
     opportunityId: string,
-    partner: { email: string; organizationId?: string | null },
+    partner: {
+      email: string;
+      organizationId?: string | null;
+      id?: string | null;
+      name?: string | null;
+    },
     reason?: string,
   ) {
     const opp = await this.findOne(opportunityId);
@@ -4208,13 +4418,11 @@ export class OpportunitiesService {
       partner.email,
       partner.organizationId,
     );
-    if (!opp.isStudentCreated) {
-      throw new BadRequestException(
-        'Revision is only supported for student-created opportunities',
-      );
-    }
 
-    this.opportunityWorkflow.afterPartnerRevision(opp, reason);
+    this.opportunityWorkflow.afterPartnerRevision(opp, reason, {
+      id: partner.id,
+      name: partner.name,
+    });
     const saved = await this.opportunitiesRepository.save(opp);
 
     await this.notifyStudentOpportunityUpdate(saved, {

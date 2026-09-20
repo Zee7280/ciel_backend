@@ -131,6 +131,12 @@ export class Opportunity {
     @Column({ default: true })
     partnerVerified: boolean;
 
+    @Column({ type: 'timestamptz', nullable: true })
+    partnerTokenExpiresAt: Date | null;
+
+    @Column({ type: 'timestamptz', nullable: true })
+    facultyTokenExpiresAt: Date | null;
+
     @Column({ nullable: true })
     creatorId: string;
 
@@ -159,6 +165,25 @@ export class Opportunity {
 
     @Column({ type: 'text', nullable: true })
     rejectionReason: string | null;
+
+    /** Bumped on every meaningful edit/resubmission; stamped onto each `approvalHistory` entry so
+     * an approval can be tied back to the exact version of the opportunity it was made against. */
+    @Column({ type: 'int', default: 1 })
+    version: number;
+
+    /** Append-only audit trail: who approved/rejected/requested revision on which line, and when —
+     * the "actor + timestamp + version" record the approval-loop spec requires. Never mutate past
+     * entries; only ever push new ones. */
+    @Column({ type: 'jsonb', default: () => "'[]'" })
+    approvalHistory: {
+        line: 'faculty' | 'partner' | 'ngo' | 'admin';
+        action: 'approved' | 'rejected' | 'revision_requested';
+        actorId?: string | null;
+        actorName?: string | null;
+        at: string;
+        version: number;
+        reason?: string | null;
+    }[];
 
     /** Admin override for attendance approver routing (`auto` | `partner` | `faculty`). */
     @Column({ type: 'varchar', length: 16, default: 'auto' })

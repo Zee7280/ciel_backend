@@ -284,6 +284,26 @@ export class FacultyService {
           : '';
       if (pe === fe) return true;
     }
+    // NGO/Partner Organization creator's optional "Academic / faculty link" section.
+    const val = opportunity.visibility_and_academic_linkage as
+      | Record<string, unknown>
+      | null
+      | undefined;
+    const fir =
+      val?.faculty_institutional_representative &&
+      typeof val.faculty_institutional_representative === 'object'
+        ? (val.faculty_institutional_representative as Record<
+            string,
+            unknown
+          >)
+        : null;
+    if (fir) {
+      const fe2 =
+        typeof fir.official_email === 'string'
+          ? this.normalizeFacultyEmail(fir.official_email)
+          : '';
+      if (fe2 === fe) return true;
+    }
     return false;
   }
 
@@ -547,6 +567,10 @@ export class FacultyService {
                   )
                   .orWhere(
                     `LOWER(TRIM(COALESCE(opportunity.partner_organization->>'official_email', ''))) = :fe`,
+                    { fe },
+                  )
+                  .orWhere(
+                    `LOWER(TRIM(COALESCE(opportunity.visibility_and_academic_linkage->'faculty_institutional_representative'->>'official_email', ''))) = :fe`,
                     { fe },
                   );
               }
@@ -1270,6 +1294,8 @@ export class FacultyService {
           faculty_approval_status: opp.facultyApprovalStatus ?? null,
           partner_approval_status: opp.partnerApprovalStatus ?? null,
           admin_approval_status: opp.adminApprovalStatus ?? null,
+          version: opp.version ?? 1,
+          approvalHistory: opp.approvalHistory ?? [],
           facultyVerified: opp.faculty_verified,
           liaisonVerified: opp.liaisonVerified,
           approvalVisibility,

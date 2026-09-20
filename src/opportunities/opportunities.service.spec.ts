@@ -3,6 +3,14 @@ import { OpportunitiesService } from './opportunities.service';
 import { OpportunityWorkflowService } from './opportunity-workflow.service';
 import { Opportunity } from './entities/opportunity.entity';
 
+// create() gates on a fully-complete profile before it even looks at approval routing — stub it
+// out so these tests can focus on the approval-status decision without building a fully valid
+// user profile.
+jest.mock('../users/profile-completion.util', () => ({
+    ...jest.requireActual('../users/profile-completion.util'),
+    getProfileCompletionStatus: () => ({ profile_complete: true, profile_missing_fields: [] }),
+}));
+
 function makeService(opportunitiesRepo: Record<string, unknown>) {
     const noop = {} as any;
     return new OpportunitiesService(
@@ -459,6 +467,34 @@ describe('OpportunitiesService — partnerDashboardApprove ownership guard', () 
         expect(result).toBe(opp);
         expect(save).not.toHaveBeenCalled();
     });
+
+    it('allows the assigned partner to request revision on a non-student-created (faculty/NGO) opportunity', async () => {
+        const opp = {
+            ...makeApprovedOpp(),
+            partnerApprovalStatus: 'pending',
+            partnerVerified: false,
+            requiresPartnerApproval: true,
+            workflowStage: 'pending_partner',
+            status: 'pending_partner',
+        };
+        const findOne = jest.fn().mockResolvedValue(opp);
+        const save = jest.fn(async (row: any) => row);
+        const service = makeService({ findOne, save });
+        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+        const notifySpy = jest
+            .spyOn(service as any, 'notifyStudentOpportunityUpdate')
+            .mockResolvedValue(undefined);
+
+        const saved = await service.partnerDashboardRevise(
+            'opp-partner-1',
+            { email: 'realpartner@org.com', organizationId: 'org-A' },
+            'Please confirm the exact venue address',
+        );
+
+        expect((saved as any).partnerApprovalStatus).toBe('revision_requested');
+        expect((saved as any).status).toBe('revision');
+        expect(notifySpy).toHaveBeenCalled();
+    });
 });
 
 describe('OpportunitiesService — decideOpportunityViaPartnerToken (public flashcard reject/revision)', () => {
@@ -487,21 +523,29 @@ describe('OpportunitiesService — decideOpportunityViaPartnerToken (public flas
         expect(result.success).toBe(true);
     });
 
-    it('refuses a revision request for a non-student-created (faculty/NGO) opportunity', async () => {
+    it('allows a revision request for a non-student-created (faculty/NGO) opportunity too — creator still gets notified', async () => {
         const opp = {
             id: 'opp-tok-2',
             partnerToken: 'tok-2',
             partnerVerified: false,
             isStudentCreated: false,
+            creatorId: undefined,
         };
         const findOne = jest.fn().mockResolvedValue(opp);
         const save = jest.fn(async (row: any) => row);
         const service = makeService({ findOne, save });
+        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+        const notifySpy = jest
+            .spyOn(service as any, 'notifyStudentOpportunityUpdate')
+            .mockResolvedValue(undefined);
 
-        await expect(
-            service.decideOpportunityViaPartnerToken('tok-2', 'revision'),
-        ).rejects.toBeInstanceOf(BadRequestException);
-        expect(save).not.toHaveBeenCalled();
+        const result = await service.decideOpportunityViaPartnerToken('tok-2', 'revision', 'Please add exact venue');
+
+        expect(save).toHaveBeenCalled();
+        expect((opp as any).partnerApprovalStatus).toBe('revision_requested');
+        expect((opp as any).status).toBe('revision');
+        expect(notifySpy).toHaveBeenCalled();
+        expect(result.success).toBe(true);
     });
 
     it('refuses to decide an opportunity that was already verified through this link', async () => {
@@ -526,6 +570,26 @@ describe('OpportunitiesService — decideOpportunityViaPartnerToken (public flas
         await expect(
             service.decideOpportunityViaPartnerToken('missing-token', 'reject'),
         ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('refuses to replay a stale link to revive an already-rejected opportunity (partnerVerified stays false on reject, so that guard alone would not catch this)', async () => {
+        const opp = {
+            id: 'opp-tok-4',
+            partnerToken: 'tok-4',
+            partnerVerified: false,
+            workflowStage: 'rejected',
+            status: 'rejected',
+            isStudentCreated: false,
+        };
+        const findOne = jest.fn().mockResolvedValue(opp);
+        const save = jest.fn(async (row: any) => row);
+        const service = makeService({ findOne, save });
+        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+
+        await expect(
+            service.decideOpportunityViaPartnerToken('tok-4', 'revision', 'trying to resurrect it'),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(save).not.toHaveBeenCalled();
     });
 });
 
@@ -588,6 +652,362 @@ describe('OpportunitiesService — saveStudentOpportunityDraft (first-save regre
         });
 
         expect(create.mock.calls[0][0].sdg).toBe('4');
+    });
+});
+
+describe('OpportunitiesService — create() CIEL PK review requirement is server-computed, not client-trusted', () => {
+    function minimalOrgCreatorDto(overrides: Record<string, unknown> = {}) {
+        return {
+            title: 'Beach cleanup drive',
+            mode: 'Remote', // sidesteps the location.pin requirement — not the concern of this test
+            safety_declaration: {
+                environment_safe_and_appropriate: true,
+                students_guided_and_supervised: true,
+                lawful_ethical_and_non_hazardous: true,
+                precautions_and_basic_safety: true,
+            },
+            submission_confirmations: {
+                academically_valid_and_accurately_described: true,
+                activity_properly_supervised: true,
+                environment_safe_and_appropriate: true,
+                information_correct_and_verifiable: true,
+            },
+            sdg_info: { sdg_id: '14' },
+            ...overrides,
+        } as any;
+    }
+
+    function makeOrgCreatorService() {
+        const create = jest.fn((payload) => payload);
+        const save = jest.fn((payload) => Promise.resolve({ id: 'new-opp-id', ...payload }));
+        const service = makeService({ create, save, findOne: jest.fn() });
+        (service as any).usersRepository = {
+            findOne: jest.fn().mockResolvedValue({ id: 'ngo-user-1', role: 'ngo', email: 'contact@ngo.org' }),
+        };
+        (service as any).organizationsService = {
+            getMyOrganization: jest.fn().mockResolvedValue({ id: 'org-1' }),
+        };
+        (service as any).mailService = { sendAdminOpportunityReviewNeeded: jest.fn() };
+        return { service, save };
+    }
+
+    it('routes to pending_approval even when the client omits admin_approval_required', async () => {
+        const { service, save } = makeOrgCreatorService();
+
+        const saved = await service.create('ngo-user-1', minimalOrgCreatorDto());
+
+        expect(saved.status).toBe('pending_approval');
+        expect(save).toHaveBeenCalled();
+    });
+
+    it('routes to pending_approval even when the client explicitly sends admin_approval_required: false', async () => {
+        const { service } = makeOrgCreatorService();
+
+        const saved = await service.create(
+            'ngo-user-1',
+            minimalOrgCreatorDto({ admin_approval_required: false }),
+        );
+
+        // Before the fix this fell through to `pending_execution` — a status with no further
+        // stage, so the row could never be approved (`approve()` explicitly refuses it) and
+        // never reached CIEL PK either. It must never depend on a client-supplied flag.
+        expect(saved.status).toBe('pending_approval');
+    });
+
+    it('gates on a linked faculty (NGO/Partner Org "Academic / faculty link" section) before CIEL PK ever sees it', async () => {
+        const { service, save } = makeOrgCreatorService();
+        (service as any).mailService.sendFacultyStudentOpportunityVerification = jest.fn();
+
+        const saved = await service.create(
+            'ngo-user-1',
+            minimalOrgCreatorDto({
+                visibility_and_academic_linkage: {
+                    faculty_institutional_representative: {
+                        name: 'Dr. Hina Malik',
+                        official_email: 'hina.malik@bnu.edu.pk',
+                    },
+                },
+            }),
+        );
+
+        expect(saved.status).toBe('pending_faculty');
+        expect(saved.facultyApprovalStatus).toBe('pending');
+        expect(saved.faculty_verification_token).toBeTruthy();
+        expect(save).toHaveBeenCalled();
+        expect((service as any).mailService.sendFacultyStudentOpportunityVerification).toHaveBeenCalled();
+    });
+
+    it('marks the faculty line not_applicable (never blocks CIEL PK) when no faculty is linked', async () => {
+        const { service } = makeOrgCreatorService();
+
+        const saved = await service.create('ngo-user-1', minimalOrgCreatorDto());
+
+        expect(saved.facultyApprovalStatus).toBe('not_applicable');
+        expect(saved.status).toBe('pending_approval');
+    });
+});
+
+describe('OpportunitiesService — afterFacultyVerified now also completes an NGO/Partner-linked faculty gate', () => {
+    it('approving via the faculty token link moves a non-student, non-faculty-created opportunity on to pending_approval (no partner required)', () => {
+        const workflow = new OpportunityWorkflowService();
+        const opp = {
+            isStudentCreated: false,
+            status: 'pending_faculty',
+            workflowStage: null,
+            facultyApprovalStatus: 'pending',
+            requiresPartnerApproval: false,
+            partnerApprovalStatus: 'not_applicable',
+        } as unknown as Opportunity;
+
+        workflow.afterFacultyVerified(opp);
+
+        expect(opp.facultyApprovalStatus).toBe('approved');
+        expect(opp.faculty_verified).toBe(true);
+        expect(opp.status).toBe('pending_approval');
+        expect(opp.workflowStage).toBe('pending_admin');
+    });
+
+    it('routes to pending_partner instead when a partner/co-host is also required', () => {
+        const workflow = new OpportunityWorkflowService();
+        const opp = {
+            isStudentCreated: false,
+            status: 'pending_faculty',
+            workflowStage: null,
+            facultyApprovalStatus: 'pending',
+            requiresPartnerApproval: true,
+            partnerApprovalStatus: 'pending',
+        } as unknown as Opportunity;
+
+        workflow.afterFacultyVerified(opp);
+
+        expect(opp.facultyApprovalStatus).toBe('approved');
+        expect(opp.status).toBe('pending_partner');
+        expect(opp.workflowStage).toBe('pending_partner');
+    });
+});
+
+describe('OpportunitiesService — update() faculty-owned opportunity resubmit scoping', () => {
+    function makeFacultyOpp(overrides: Record<string, unknown> = {}) {
+        return {
+            id: 'fac-opp-1',
+            creatorId: 'faculty-1',
+            facultyId: 'faculty-1',
+            isStudentCreated: false,
+            organizationId: null,
+            status: 'active',
+            workflowStage: 'live',
+            admin_approved: true,
+            adminApprovalStatus: 'approved',
+            requiresPartnerApproval: true,
+            partnerApprovalStatus: 'approved',
+            partnerVerified: true,
+            partnerToken: 'existing-partner-token',
+            partner_organization: { official_email: 'partner@org.com' },
+            execution_verification_token: null,
+            execution_verified: true,
+            ...overrides,
+        } as unknown as Opportunity;
+    }
+
+    function makeFacultyService(opp: Opportunity) {
+        const findOne = jest.fn().mockResolvedValue(opp);
+        const save = jest.fn(async (row: Opportunity) => row);
+        const service = makeService({ findOne, save });
+        (service as any).usersRepository = {
+            findOne: jest.fn().mockResolvedValue({ id: 'faculty-1', role: 'faculty' }),
+        };
+        (service as any).organizationsService = {
+            getMyOrganization: jest.fn().mockResolvedValue(null),
+        };
+        return service;
+    }
+
+    it('leaves a live, fully-approved opportunity untouched on a routine edit (no reset, stays published)', async () => {
+        const opp = makeFacultyOpp();
+        const service = makeFacultyService(opp);
+
+        const saved = await service.update('faculty-1', {
+            id: 'fac-opp-1',
+            title: 'Fixed a typo in the title',
+        } as any);
+
+        expect((saved as any).status).toBe('active');
+        expect((saved as any).workflowStage).toBe('live');
+        expect((saved as any).admin_approved).toBe(true);
+        expect((saved as any).partnerApprovalStatus).toBe('approved');
+        expect((saved as any).adminApprovalStatus).toBe('approved');
+    });
+
+    it('after CIEL PK requests revision mid-chain, resubmitting only rewinds the admin line — the already-approved partner line is untouched', async () => {
+        const opp = makeFacultyOpp({
+            status: 'revision',
+            workflowStage: 'revision',
+            admin_approved: false,
+            adminApprovalStatus: 'revision_requested',
+            // Partner already approved before CIEL PK's own (revision-requesting) review.
+            partnerApprovalStatus: 'approved',
+            partnerVerified: true,
+        });
+        const service = makeFacultyService(opp);
+
+        const saved = await service.update('faculty-1', {
+            id: 'fac-opp-1',
+            title: 'Addressed CIEL PK feedback',
+        } as any);
+
+        expect((saved as any).partnerApprovalStatus).toBe('approved');
+        expect((saved as any).partnerVerified).toBe(true);
+        expect((saved as any).adminApprovalStatus).toBe('pending');
+        expect((saved as any).status).toBe('pending_approval');
+        expect((saved as any).workflowStage).toBe('pending_admin');
+    });
+
+    it('(scoped-reset branch) if the partner line is flagged after the opportunity had already gone live, resubmitting rewinds both the partner and admin lines back to pending', async () => {
+        // Deliberately atypical combination (partner rejected while workflowStage is still 'live')
+        // to isolate and exercise `partnerLineFlagged` inside the scoped-reset branch specifically —
+        // see the next test for the realistic "rejected before admin ever decided" full-reset case.
+        const opp = makeFacultyOpp({
+            status: 'active', // stale mirror from before the rejection was recorded
+            workflowStage: 'live',
+            admin_approved: true,
+            adminApprovalStatus: 'approved',
+            partnerApprovalStatus: 'rejected',
+            partnerVerified: false,
+        });
+        const service = makeFacultyService(opp);
+
+        const saved = await service.update('faculty-1', {
+            id: 'fac-opp-1',
+            title: 'Addressed partner feedback',
+        } as any);
+
+        expect((saved as any).partnerApprovalStatus).toBe('pending');
+        expect((saved as any).partnerVerified).toBe(false);
+        expect((saved as any).adminApprovalStatus).toBe('pending');
+        expect((saved as any).status).toBe('pending_partner');
+        expect((saved as any).workflowStage).toBe('pending_partner');
+    });
+
+    it('(full-reset branch) partner rejected before admin ever reviewed — resubmitting recomputes the pipeline and lands back in pending_partner', async () => {
+        const opp = makeFacultyOpp({
+            status: 'rejected',
+            workflowStage: 'rejected',
+            admin_approved: false,
+            adminApprovalStatus: 'pending', // admin never got a chance to decide
+            partnerApprovalStatus: 'rejected',
+            partnerVerified: false,
+        });
+        const service = makeFacultyService(opp);
+        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+
+        const saved = await service.update('faculty-1', {
+            id: 'fac-opp-1',
+            title: 'Addressed partner feedback',
+        } as any);
+
+        expect((saved as any).partnerApprovalStatus).toBe('pending');
+        expect((saved as any).partnerVerified).toBe(false);
+        expect((saved as any).adminApprovalStatus).toBe('pending');
+        expect((saved as any).status).toBe('pending_partner');
+        expect((saved as any).workflowStage).toBe('pending_partner');
+    });
+});
+
+describe('OpportunitiesService — revise() now supports non-student-created opportunities before first admin approval', () => {
+    it('no longer throws for a faculty-created opportunity awaiting its first CIEL PK decision', async () => {
+        const opp = {
+            id: 'fac-opp-2',
+            isStudentCreated: false,
+            admin_approved: false, // never approved yet — this used to be rejected outright
+            status: 'pending_approval',
+            workflowStage: 'pending_admin',
+            adminApprovalStatus: 'pending',
+        } as unknown as Opportunity;
+        const findOne = jest.fn().mockResolvedValue(opp);
+        const save = jest.fn(async (row: Opportunity) => row);
+        const service = makeService({ findOne, save });
+        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+
+        const saved = await service.revise(
+            'fac-opp-2',
+            'Please add a specific location.',
+            { id: 'admin-1', name: 'Ayesha (CIEL PK)' },
+        );
+
+        expect((saved as any).status).toBe('revision');
+        expect((saved as any).adminApprovalStatus).toBe('revision_requested');
+        expect((saved as any).rejectionReason).toBe('Please add a specific location.');
+    });
+});
+
+describe('OpportunitiesService — approval actions record actor + timestamp + version (audit trail)', () => {
+    it('approve() appends an actor-stamped, versioned entry to approvalHistory', async () => {
+        const opp = {
+            id: 'opp-audit-1',
+            isStudentCreated: true,
+            workflowStage: 'pending_admin',
+            status: 'pending_approval',
+            version: 3,
+            approvalHistory: [],
+        } as unknown as Opportunity;
+        const findOne = jest.fn().mockResolvedValue(opp);
+        const save = jest.fn(async (row: Opportunity) => row);
+        const service = makeService({ findOne, save });
+        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+        (service as any).mailService = { sendAdminOpportunityReviewNeeded: jest.fn() };
+
+        const before = Date.now();
+        const saved = await service.approve('opp-audit-1', { id: 'admin-1', name: 'Ayesha (CIEL PK)' });
+        const after = Date.now();
+
+        const history = (saved as any).approvalHistory;
+        expect(history).toHaveLength(1);
+        expect(history[0]).toMatchObject({
+            line: 'admin',
+            action: 'approved',
+            actorId: 'admin-1',
+            actorName: 'Ayesha (CIEL PK)',
+            version: 3,
+        });
+        const stampedAt = new Date(history[0].at).getTime();
+        expect(stampedAt).toBeGreaterThanOrEqual(before);
+        expect(stampedAt).toBeLessThanOrEqual(after);
+    });
+
+    it('reject() and revise() also stamp their own line, action and actor — never mutating earlier entries', async () => {
+        const opp = {
+            id: 'opp-audit-2',
+            isStudentCreated: false,
+            admin_approved: false,
+            status: 'pending_approval',
+            workflowStage: 'pending_admin',
+            adminApprovalStatus: 'pending',
+            version: 1,
+            approvalHistory: [
+                { line: 'faculty', action: 'approved', actorId: 'fac-1', actorName: 'Dr. Hina Malik', at: '2026-01-01T00:00:00.000Z', version: 1 },
+            ],
+        } as unknown as Opportunity;
+        const findOne = jest.fn().mockResolvedValue(opp);
+        const save = jest.fn(async (row: Opportunity) => row);
+        const service = makeService({ findOne, save });
+        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+
+        const saved = await service.revise('opp-audit-2', 'Please clarify the timeline', {
+            id: 'admin-1',
+            name: 'Ayesha (CIEL PK)',
+        });
+
+        const history = (saved as any).approvalHistory;
+        expect(history).toHaveLength(2);
+        // The pre-existing faculty entry must survive untouched.
+        expect(history[0]).toMatchObject({ line: 'faculty', action: 'approved', actorId: 'fac-1' });
+        expect(history[1]).toMatchObject({
+            line: 'admin',
+            action: 'revision_requested',
+            actorId: 'admin-1',
+            actorName: 'Ayesha (CIEL PK)',
+            reason: 'Please clarify the timeline',
+        });
     });
 });
 

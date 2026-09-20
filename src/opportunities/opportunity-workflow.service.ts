@@ -22,11 +22,34 @@ export const LINE_STATUS = {
   NOT_REQUIRED: 'not_required',
 } as const;
 
+export type ApprovalActor = { id?: string | null; name?: string | null } | null;
+
 /**
  * Centralizes student-created opportunity lifecycle without breaking legacy `status` consumers.
  */
 @Injectable()
 export class OpportunityWorkflowService {
+  /** Append-only audit entry: actor + timestamp + the opportunity's version at the time of the
+   * action. Never mutates a past entry — only ever pushes a new one. */
+  private stamp(
+    opp: Opportunity,
+    line: 'faculty' | 'partner' | 'admin',
+    action: 'approved' | 'rejected' | 'revision_requested',
+    actor?: ApprovalActor,
+    reason?: string | null,
+  ): void {
+    if (!Array.isArray(opp.approvalHistory)) opp.approvalHistory = [];
+    opp.approvalHistory.push({
+      line,
+      action,
+      actorId: actor?.id ?? null,
+      actorName: actor?.name ?? null,
+      at: new Date().toISOString(),
+      version: opp.version || 1,
+      reason: reason ?? null,
+    });
+  }
+
   private responseStatus(opp: Opportunity): string {
     if (opp.workflowStage === WORKFLOW_STAGE.LIVE && opp.admin_approved)
       return 'live';
@@ -110,16 +133,34 @@ export class OpportunityWorkflowService {
   /**
    * After faculty verifies via token link.
    */
-  afterFacultyVerified(opp: Opportunity): void {
+  afterFacultyVerified(opp: Opportunity, actor?: ApprovalActor): void {
+    this.stamp(opp, 'faculty', 'approved', actor);
     if (!opp.isStudentCreated) {
-      // Legacy: liaison / older student path used pending_verification
+      // Legacy liaison flow, and now also an NGO/Partner Organization creator's optionally-linked
+      // faculty gate — either way, complete the faculty line and route to the next required stage.
       opp.faculty_verified = true;
       opp.faculty_verification_status = 'faculty_verified';
+      opp.facultyApprovalStatus = LINE_STATUS.APPROVED;
       if (
         opp.status === 'pending_faculty' ||
         opp.status === 'pending_verification'
       ) {
-        opp.status = 'pending_approval';
+        if (
+          opp.requiresPartnerApproval &&
+          opp.partnerApprovalStatus !== LINE_STATUS.APPROVED
+        ) {
+          opp.workflowStage = WORKFLOW_STAGE.PENDING_PARTNER;
+          opp.status = 'pending_partner';
+          if (
+            !opp.partnerApprovalStatus ||
+            opp.partnerApprovalStatus === LINE_STATUS.NOT_APPLICABLE
+          ) {
+            opp.partnerApprovalStatus = LINE_STATUS.PENDING;
+          }
+        } else {
+          opp.workflowStage = WORKFLOW_STAGE.PENDING_ADMIN;
+          opp.status = 'pending_approval';
+        }
       }
       return;
     }
@@ -146,8 +187,9 @@ export class OpportunityWorkflowService {
   /**
    * Partner clicked verify link (student-created flow, `partnerToken`).
    */
-  afterPartnerVerified(opp: Opportunity): void {
+  afterPartnerVerified(opp: Opportunity, actor?: ApprovalActor): void {
     if (!opp.isStudentCreated) return;
+    this.stamp(opp, 'partner', 'approved', actor);
 
     opp.partnerVerified = true;
     opp.partnerApprovalStatus = LINE_STATUS.APPROVED;
@@ -155,7 +197,12 @@ export class OpportunityWorkflowService {
     opp.status = 'pending_approval';
   }
 
-  afterPartnerRejected(opp: Opportunity, reason?: string | null): void {
+  afterPartnerRejected(
+    opp: Opportunity,
+    reason?: string | null,
+    actor?: ApprovalActor,
+  ): void {
+    this.stamp(opp, 'partner', 'rejected', actor, reason);
     opp.partnerVerified = false;
     opp.partnerApprovalStatus = LINE_STATUS.REJECTED;
     opp.workflowStage = WORKFLOW_STAGE.REJECTED;
@@ -166,8 +213,12 @@ export class OpportunityWorkflowService {
   }
 
   /** Faculty-authored opportunity: partner used magic link → CIEL admin queue. */
-  afterFacultyCreatedPartnerVerified(opp: Opportunity): void {
+  afterFacultyCreatedPartnerVerified(
+    opp: Opportunity,
+    actor?: ApprovalActor,
+  ): void {
     if (opp.isStudentCreated) return;
+    this.stamp(opp, 'partner', 'approved', actor);
     opp.partnerVerified = true;
     opp.partnerApprovalStatus = LINE_STATUS.APPROVED;
     // Executing-org confirmation can run in parallel; do not skip `pending_execution` until that gate clears.
@@ -181,7 +232,12 @@ export class OpportunityWorkflowService {
   }
 
   /** Faculty rejects a student-created proposal (dashboard or future API). */
-  afterFacultyRejected(opp: Opportunity, reason?: string | null): void {
+  afterFacultyRejected(
+    opp: Opportunity,
+    reason?: string | null,
+    actor?: ApprovalActor,
+  ): void {
+    this.stamp(opp, 'faculty', 'rejected', actor, reason);
     if (opp.isStudentCreated) {
       opp.faculty_verified = false;
       opp.faculty_verification_status = 'rejected';
@@ -202,7 +258,8 @@ export class OpportunityWorkflowService {
     }
   }
 
-  afterAdminApproved(opp: Opportunity): void {
+  afterAdminApproved(opp: Opportunity, actor?: ApprovalActor): void {
+    this.stamp(opp, 'admin', 'approved', actor);
     opp.admin_approved = true;
     opp.adminApprovalStatus = LINE_STATUS.APPROVED;
     opp.workflowStage = WORKFLOW_STAGE.LIVE;
@@ -219,7 +276,12 @@ export class OpportunityWorkflowService {
     opp.status = 'active';
   }
 
-  afterAdminRejected(opp: Opportunity, reason?: string | null): void {
+  afterAdminRejected(
+    opp: Opportunity,
+    reason?: string | null,
+    actor?: ApprovalActor,
+  ): void {
+    this.stamp(opp, 'admin', 'rejected', actor, reason);
     opp.adminApprovalStatus = LINE_STATUS.REJECTED;
     opp.workflowStage = WORKFLOW_STAGE.REJECTED;
     opp.status = 'rejected';
@@ -229,7 +291,12 @@ export class OpportunityWorkflowService {
   }
 
   /** Faculty asks the student to update supervision/details and resubmit. */
-  afterFacultyRevision(opp: Opportunity, reason?: string | null): void {
+  afterFacultyRevision(
+    opp: Opportunity,
+    reason?: string | null,
+    actor?: ApprovalActor,
+  ): void {
+    this.stamp(opp, 'faculty', 'revision_requested', actor, reason);
     if (opp.isStudentCreated) {
       opp.faculty_verified = false;
       opp.faculty_verification_status = WORKFLOW_STAGE.PENDING_FACULTY;
@@ -250,10 +317,13 @@ export class OpportunityWorkflowService {
     }
   }
 
-  /** Partner asks the student to update partner/execution details and resubmit. */
-  afterPartnerRevision(opp: Opportunity, reason?: string | null): void {
-    if (!opp.isStudentCreated) return;
-
+  /** Partner asks the creator to update partner/execution details and resubmit. */
+  afterPartnerRevision(
+    opp: Opportunity,
+    reason?: string | null,
+    actor?: ApprovalActor,
+  ): void {
+    this.stamp(opp, 'partner', 'revision_requested', actor, reason);
     opp.partnerVerified = false;
     opp.partnerApprovalStatus = LINE_STATUS.REVISION_REQUESTED;
     opp.workflowStage = WORKFLOW_STAGE.REVISION;
@@ -264,7 +334,12 @@ export class OpportunityWorkflowService {
   }
 
   /** CIEL admin asks the student to update before final approval (faculty/partner lines may stay approved). */
-  afterAdminRevision(opp: Opportunity, reason?: string | null): void {
+  afterAdminRevision(
+    opp: Opportunity,
+    reason?: string | null,
+    actor?: ApprovalActor,
+  ): void {
+    this.stamp(opp, 'admin', 'revision_requested', actor, reason);
     opp.admin_approved = false;
     opp.adminApprovalStatus = LINE_STATUS.REVISION_REQUESTED;
     opp.workflowStage = WORKFLOW_STAGE.REVISION;

@@ -157,7 +157,7 @@ export class FacultyReportsService {
       data: reports.map((r) => ({
         id: r.id,
         student_name: r.student?.name || 'Unknown',
-        student_email: r.student?.email || 'Unknown',
+        student_email: r.student?.email || null,
         project_title: r.opportunity?.title || r.project_id,
         organization_name: r.opportunity?.organization?.name || 'N/A',
         status: r.status,

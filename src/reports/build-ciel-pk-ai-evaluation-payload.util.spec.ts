@@ -75,8 +75,9 @@ describe('buildCielPkAiEvaluationPayload', () => {
       section3: {
         primary_sdg: {
           goal_number: 4,
-          target_id: '4.4',
-          indicator_id: '4.4.1',
+          target_id: '4.a',
+          indicator_id: '4.a.1',
+          sub_indicator: 'Sessions / activities completed',
         },
         contribution_intent_statement: 'The project contributed to SDG 4.',
         validation_status: 'validated',
@@ -221,5 +222,13 @@ describe('buildCielPkAiEvaluationPayload', () => {
       }
     ).attendance_summary;
     expect(attendanceSummary?.max_daily_attendance_hours_per_student).toBe(9);
+    const section3 = payload.section3_sdg_strategy_intent as {
+      primary_sdg?: { target_code?: string; indicator_code?: string; sub_indicator?: string };
+    };
+    expect(section3.primary_sdg).toMatchObject({
+      target_code: '4.a',
+      indicator_code: '4.a.1',
+      sub_indicator: 'Sessions / activities completed',
+    });
   });
 });

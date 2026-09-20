@@ -283,17 +283,19 @@ function mapSection3(section3: UnknownRecord): UnknownRecord {
         primary_sdg: {
             sdg_number: pickNumber(primary.goal_number),
             sdg_name: pickString(primary.goal_title),
-            target_code: pickString(primary.target_id),
+            target_code: pickString(primary.target_id) || pickString(primary.target_code),
             target_description: pickString(primary.target_description),
-            indicator_code: pickString(primary.indicator_id),
+            indicator_code: pickString(primary.indicator_id) || pickString(primary.indicator_code),
             indicator_description: pickString(primary.indicator_description),
+            sub_indicator: pickString(primary.sub_indicator),
         },
         secondary_sdgs: asArray(section3.secondary_sdgs).map((entry) => {
             const row = asRecord(entry);
             return {
                 sdg_number: pickNumber(row.goal_number),
-                target_code: pickString(row.target_id),
-                indicator_code: pickString(row.indicator_id),
+                target_code: pickString(row.target_id) || pickString(row.target_code),
+                indicator_code: pickString(row.indicator_id) || pickString(row.indicator_code),
+                sub_indicator: pickString(row.sub_indicator),
                 justification: pickString(row.justification_text),
                 status: pickString(row.status),
             };

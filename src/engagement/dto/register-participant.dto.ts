@@ -7,6 +7,7 @@ import {
   Length,
   IsOptional,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
 
 export class RegisterParticipantDto {
   @IsUUID()
@@ -30,6 +31,7 @@ export class RegisterParticipantDto {
   fullName: string;
 
   @IsString()
+  @Transform(({ value }) => String(value ?? '').replace(/\D/g, '').slice(0, 13))
   @Length(13, 13)
   cnic: string;
 

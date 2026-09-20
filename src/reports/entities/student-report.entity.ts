@@ -207,10 +207,19 @@ export class StudentReport {
       goal_title: string;
       target_code: string;
       indicator_code: string;
+      /** Frontend report form field; kept alongside target_code. */
+      target_id?: string;
+      /** Frontend report form field; kept alongside indicator_code. */
+      indicator_id?: string;
+      /** Optional local metric after the UN indicator. */
+      sub_indicator?: string;
     };
     contribution_intent_statement: string;
     secondary_sdgs: Array<{
       goal_number: number;
+      target_id?: string;
+      indicator_id?: string;
+      sub_indicator?: string;
       justification_text: string;
       status: 'provisional' | 'validated' | 'rejected';
     }>;

@@ -438,6 +438,57 @@ describe('StudentReportsService', () => {
     );
   });
 
+  it('persists section3 target_id, indicator_id, and sub_indicator on primary_sdg', async () => {
+    mockStudentReportsRepository.findOne.mockResolvedValue({
+      id: 'report-1',
+      studentId: 'student-1',
+      opportunityId: 'opp-1',
+      status: 'draft',
+      section3: null,
+    });
+
+    await service.createReport(
+      'student-1',
+      {
+        opportunityId: 'opp-1',
+        section2: {
+          problem_statement: 'test',
+          baseline_evidence: 'Survey',
+          discipline: 'CS',
+        },
+        section3: {
+          primary_sdg: {
+            goal_number: 4,
+            target_id: '4.a',
+            indicator_id: '4.a.1',
+            sub_indicator: 'Sessions / activities completed',
+          },
+          contribution_intent_statement: 'Contribution logic statement',
+        },
+      },
+      [],
+      false,
+    );
+
+    expect(mockStudentReportsRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        primary_sdg_goal: 4,
+        primary_sdg_target: '4.a',
+        primary_sdg_indicator: '4.a.1',
+        section3: expect.objectContaining({
+          primary_sdg: expect.objectContaining({
+            goal_number: 4,
+            target_id: '4.a',
+            indicator_id: '4.a.1',
+            target_code: '4.a',
+            indicator_code: '4.a.1',
+            sub_indicator: 'Sessions / activities completed',
+          }),
+        }),
+      }),
+    );
+  });
+
   it('submits successfully with array baseline_evidence and blank SDG fields (production-like payload)', async () => {
     mockStudentReportsRepository.findOne.mockResolvedValue({
       id: '84c78cd8-1614-47a0-8db4-1e201266010b',

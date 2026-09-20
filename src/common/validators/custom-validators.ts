@@ -15,12 +15,12 @@ export function IsCNIC(validationOptions?: ValidationOptions) {
         validate(value: any, args: ValidationArguments) {
           if (typeof value !== 'string') return false;
 
-          // CNIC format: 12345-1234567-1 (5 digits, 7 digits, 1 digit)
-          const cnicRegex = /^\d{5}-\d{7}-\d{1}$/;
-          return cnicRegex.test(value);
+          // UI sends xxxxx-xxxxxxx-x; engagement/apply often store 13 digits.
+          const digits = value.replace(/\D/g, '');
+          return digits.length === 13;
         },
         defaultMessage(args: ValidationArguments) {
-          return 'CNIC must be in format: 12345-1234567-1 (13 digits with dashes)';
+          return 'CNIC must be 13 digits, with or without dashes (12345-1234567-1)';
         },
       },
     });

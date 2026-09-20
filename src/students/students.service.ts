@@ -3186,6 +3186,7 @@ export class StudentsService {
           facultyRank: rankWithin(facultyPool, scored.cii),
           universityRank: rankWithin(universityPool, scored.cii),
           networkRank: rankWithin(eligible, scored.cii),
+          awardBadges: r.awardBadges ?? [],
         };
       }),
     };

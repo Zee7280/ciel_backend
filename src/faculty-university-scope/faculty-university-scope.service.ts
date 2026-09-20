@@ -239,6 +239,83 @@ export class FacultyUniversityScopeService {
     return this.assignmentRepo.save(created);
   }
 
+  async assignByUniversityOperator(params: {
+    facultyEmail: string;
+    universityOrganizationId: string;
+    operatorUserId: string;
+  }): Promise<FacultyUniversityScopeAssignment> {
+    const email = String(params.facultyEmail || '')
+      .trim()
+      .toLowerCase();
+    if (!email) {
+      throw new BadRequestException('Faculty email is required');
+    }
+    const faculty = await this.usersRepo
+      .createQueryBuilder('user')
+      .where('LOWER(user.email) = :email', { email })
+      .getOne();
+    if (!faculty || faculty.role !== UserRole.FACULTY) {
+      throw new BadRequestException(
+        'No faculty account exists for that email',
+      );
+    }
+
+    const org = await this.orgRepo.findOne({
+      where: { id: params.universityOrganizationId },
+    });
+    if (!org) {
+      throw new NotFoundException('University organization not found');
+    }
+    if (!this.isUniversityOrganization(org)) {
+      throw new BadRequestException(
+        'Organization must be a university-type organization',
+      );
+    }
+
+    if (!operator) {
+      throw new ForbiddenException(
+        'Only this university can authorise faculty for its own institution',
+      );
+    }
+
+    const existing = await this.assignmentRepo.findOne({
+      where: { facultyUser: { id: faculty.id } },
+      relations: ['facultyUser', 'universityOrganization', 'assignedByAdmin'],
+    });
+    if (existing) {
+      existing.universityOrganization = org;
+      existing.assignedByAdmin = operator;
+      return this.assignmentRepo.save(existing);
+    }
+    const created = this.assignmentRepo.create({
+      facultyUser: faculty,
+      universityOrganization: org,
+      assignedByAdmin: operator,
+    });
+    return this.assignmentRepo.save(created);
+  }
+
+  async removeForUniversityOrganization(
+    facultyUserId: string,
+    universityOrganizationId: string,
+  ): Promise<void> {
+    const existing = await this.assignmentRepo.findOne({
+      where: { facultyUser: { id: facultyUserId } },
+      relations: ['universityOrganization'],
+    });
+    if (!existing) {
+      throw new NotFoundException(
+        'No university scope assignment for this faculty',
+      );
+    }
+    if (existing.universityOrganization?.id !== universityOrganizationId) {
+      throw new ForbiddenException(
+        'That faculty is not allocated to this university',
+      );
+    }
+    await this.assignmentRepo.remove(existing);
+  }
+
   async remove(facultyUserId: string): Promise<void> {
     const existing = await this.assignmentRepo.findOne({
       where: { facultyUser: { id: facultyUserId } },

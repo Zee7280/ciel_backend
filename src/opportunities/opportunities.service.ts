@@ -1530,6 +1530,10 @@ export class OpportunitiesService {
     this.validateExternalPartner(
       createOpportunityDto.external_partner_collaboration,
     );
+    this.validateLocation(
+      createOpportunityDto.mode,
+      createOpportunityDto.location,
+    );
 
     const org = await this.organizationsService.getMyOrganization(userId);
 
@@ -1538,31 +1542,6 @@ export class OpportunitiesService {
         'User must belong to an organization to create opportunities',
       );
     }
-
-    // Universities don't author Community Service opportunities directly — the product's own
-    // University hub states this as a locked rule ("Faculty representatives create them on the
-    // institution's behalf"), but nothing enforced it server-side: this route had no @Roles
-    // guard at all, and a University-role account always has an organization, so the check
-    // above never caught it. Scoped to the role, not the org type, so a FACULTY account
-    // affiliated with a university org (the intended creator) is unaffected.
-    const isUniversityOrgAdmin =
-      user.role === UserRole.UNIVERSITY ||
-      (user.role === UserRole.ORGANIZATION_ADMIN &&
-        String(org?.orgType || '')
-          .toLowerCase()
-          .includes('university'));
-    if (isUniversityOrgAdmin) {
-      throw new ForbiddenException(
-        "Universities do not create Community Service opportunities directly — faculty representatives create them on the institution's behalf.",
-      );
-    }
-
-    // Role/authorization checks (above) must win over data-completeness checks (below) — an
-    // unauthorized caller should see "you can't do this," not "your form is incomplete."
-    this.validateLocation(
-      createOpportunityDto.mode,
-      createOpportunityDto.location,
-    );
 
     const hasExecContactEmail = !!this.normalizeEmail(
       typeof createOpportunityDto.executing_organization?.official_email ===

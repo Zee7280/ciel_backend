@@ -127,6 +127,16 @@ export class StudentReportsService {
           ? {
               ...primarySdg,
               goal_number: goalNumber,
+              target_id:
+                primarySdg.target_id ||
+                primarySdg.target_code ||
+                targetCode ||
+                '',
+              indicator_id:
+                primarySdg.indicator_id ||
+                primarySdg.indicator_code ||
+                indicatorCode ||
+                '',
               target_code:
                 targetCode ??
                 primarySdg.target_code ??
@@ -618,6 +628,8 @@ export class StudentReportsService {
     return strings.filter((s) => /^https?:\/\//i.test(s));
   }
 
+  /** Same URL-sniffing heuristic as the student impact-history endpoint — kept local to this
+   * service to avoid a cross-module dependency on StudentsService. */
   /** Real "Certificate"/"Full report" links for My Impact Wall — the report detail page
    * (Section11Summary.tsx) already builds and gates both views (only reveals them once
    * showVerifiedImpactScores is true), it just needed a `?view=` param to auto-open the right one
@@ -3530,10 +3542,12 @@ export class StudentReportsService {
     const target =
       report.primary_sdg_target ||
       report.section3?.primary_sdg?.target_code ||
+      report.section3?.primary_sdg?.target_id ||
       '4.4';
     const indicator =
       report.primary_sdg_indicator ||
       report.section3?.primary_sdg?.indicator_code ||
+      report.section3?.primary_sdg?.indicator_id ||
       '4.4.1';
 
     return `This project is aligned with SDG ${goal} (${goalTitle}), Target ${target}. The planned intervention focuses on contributing toward indicator ${indicator}. Full validation of indicator-level contribution logic will be determined after measurable outputs and outcomes are submitted in Sections 4 and 5.`;

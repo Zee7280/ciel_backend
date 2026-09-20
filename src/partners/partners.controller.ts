@@ -296,8 +296,67 @@ export class PartnersController {
         university_organization_name:
           r.universityOrganization?.name || org?.name,
         created_at: r.createdAt,
+        status: 'authorized',
       })),
     };
+  }
+
+  @Post('community-service/faculty-representatives')
+  async allocateFacultyRepresentative(
+    @Request() req,
+    @Body() body: { faculty_email?: string },
+  ) {
+    if (!req.user.organizationId) {
+      throw new BadRequestException('User is not linked to an organization');
+    }
+    const org = await this.organizationsService.getMyOrganization(req.user.id);
+    const isUni = String(org?.orgType || '')
+      .toLowerCase()
+      .includes('university');
+    if (!isUni) {
+      throw new ForbiddenException(
+        'Faculty representatives are only available for university organizations.',
+      );
+    }
+    const saved = await this.facultyUniversityScope.assignByUniversityOperator({
+      facultyEmail: String(body?.faculty_email || ''),
+      universityOrganizationId: req.user.organizationId,
+      operatorUserId: req.user.id,
+    });
+    return {
+      success: true,
+      data: {
+        id: saved.id,
+        faculty_user_id: saved.facultyUser?.id,
+        faculty_email: saved.facultyUser?.email,
+        faculty_name: saved.facultyUser?.name,
+        status: 'authorized',
+      },
+    };
+  }
+
+  @Delete('community-service/faculty-representatives/:facultyUserId')
+  async revokeFacultyRepresentative(
+    @Request() req,
+    @Param('facultyUserId') facultyUserId: string,
+  ) {
+    if (!req.user.organizationId) {
+      throw new BadRequestException('User is not linked to an organization');
+    }
+    const org = await this.organizationsService.getMyOrganization(req.user.id);
+    const isUni = String(org?.orgType || '')
+      .toLowerCase()
+      .includes('university');
+    if (!isUni) {
+      throw new ForbiddenException(
+        'Faculty representatives are only available for university organizations.',
+      );
+    }
+    await this.facultyUniversityScope.removeForUniversityOrganization(
+      facultyUserId,
+      req.user.organizationId,
+    );
+    return { success: true };
   }
 
   /** University-organization participation & verification analytics (403 for non-university orgs). */

@@ -85,9 +85,13 @@ describe('platform-stats ledger math', () => {
         expect(creditPairOnce('', seen)).toBe(false);
     });
 
-    it('community dividend is hours × 192 + out-of-pocket, using the same rounded hours the caption shows', () => {
-        expect(communityDividendPkr(994, 0)).toBe(994 * DIVIDEND_HOURLY_RATE_PKR);
-        expect(communityDividendPkr(192.4, 10.6)).toBe(192 * DIVIDEND_HOURLY_RATE_PKR + 11);
+    it('community dividend is hours × 192.31 + out-of-pocket, rounding only the final total', () => {
+        expect(communityDividendPkr(994, 0)).toBe(Math.round(994 * DIVIDEND_HOURLY_RATE_PKR));
+        // Fractional hours must scale the rate directly, not get rounded away before multiplying —
+        // 192.4h is not the same payout as 192h.
+        expect(communityDividendPkr(192.4, 10.6)).toBe(
+            Math.round(192.4 * DIVIDEND_HOURLY_RATE_PKR + 10.6),
+        );
         expect(communityDividendPkr(0, 2500)).toBe(2500);
     });
 
@@ -109,7 +113,9 @@ describe('platform-stats ledger math', () => {
         }
         expect(hours).toBe(200);
         expect(people).toBe(45);
-        expect(communityDividendPkr(hours, oop)).toBe(200 * DIVIDEND_HOURLY_RATE_PKR + 200);
+        expect(communityDividendPkr(hours, oop)).toBe(
+            Math.round(200 * DIVIDEND_HOURLY_RATE_PKR + 200),
+        );
     });
 
     it('reads distinct beneficiaries and splits self-funded PKR from partner-deployed PKR', () => {

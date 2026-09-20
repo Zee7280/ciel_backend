@@ -618,33 +618,28 @@ export class StudentReportsService {
     return strings.filter((s) => /^https?:\/\//i.test(s));
   }
 
-  /** Same URL-sniffing heuristic as the student impact-history endpoint — kept local to this
-   * service to avoid a cross-module dependency on StudentsService. */
-  private pickPdfUrlFromReport(report: StudentReport): string | null {
-    const buckets = [
-      report.section8,
-      report.section2,
-      report.section5,
-      report.section7,
-      report.section10,
-    ];
-    const urls = buckets.flatMap((b) => this.collectHttpsUrls(b));
-    return urls.find((u) => /\.pdf($|\?)/i.test(u)) ?? null;
-  }
-
-  private pickCertificateUrlFromReport(report: StudentReport): string | null {
-    const buckets = [
-      report.section8,
-      report.section2,
-      report.section3,
-      report.section5,
-      report.section11,
-    ];
-    const urls = buckets.flatMap((b) => this.collectHttpsUrls(b));
-    return (
-      urls.find((u) => /certificat/i.test(u) || /\/certificates?\//i.test(u)) ??
-      null
-    );
+  /** Real "Certificate"/"Full report" links for My Impact Wall — the report detail page
+   * (Section11Summary.tsx) already builds and gates both views (only reveals them once
+   * showVerifiedImpactScores is true), it just needed a `?view=` param to auto-open the right one
+   * instead of requiring an extra click. Previously these scanned the student's own uploaded
+   * evidence files for a URL that happened to contain "certificat" or end in ".pdf" — which only
+   * ever worked by coincidence (see pickCertificateUrlFromReport/pickPdfUrlFromReport, now removed)
+   * and had nothing to do with an actual generated certificate or report. */
+  private buildStudentReportViewUrl(
+    report: StudentReport,
+    view: 'certificate' | 'print',
+  ): string | null {
+    const projectId = report.opportunityId || report.project_id;
+    if (!projectId) return null;
+    const base = (
+      this.configService.get<string>('FRONTEND_URL') ||
+      this.configService.get<string>('APP_URL') ||
+      ''
+    )
+      .trim()
+      .replace(/\/+$/, '');
+    const path = `/dashboard/student/report?projectId=${encodeURIComponent(projectId)}&view=${view}`;
+    return base ? `${base}${path}` : path;
   }
 
   private mapReportListing(
@@ -724,11 +719,18 @@ export class StudentReportsService {
         (report.section11 as Record<string, unknown> | null | undefined) ??
           null,
       ),
+      // Raw CII v2 (Phase 1-4) — redacted for the student's own listing via
+      // redactCiiV2ListingForStudent below, same rule as the detail read path
+      // (redactCiiV2ForExternalViewer). Faculty/admin/partner/university listings call this
+      // method directly and keep the full record, same as cii_score above.
+      ciiV2: report.ciiV2 ?? null,
+      ciiV2Lock: report.ciiV2Lock ?? null,
+      independentAiAnalyses: report.independentAiAnalyses ?? null,
       ...this.computeCommunityAwardTotal(report),
       ...this.reportVerificationPayload(report),
       actions: {
-        certificate_url: this.pickCertificateUrlFromReport(report),
-        pdf_url: this.pickPdfUrlFromReport(report),
+        certificate_url: this.buildStudentReportViewUrl(report, 'certificate'),
+        pdf_url: this.buildStudentReportViewUrl(report, 'print'),
       },
       created_at: report.createdAt,
     };
@@ -749,6 +751,11 @@ export class StudentReportsService {
       cii_score?: number | null;
       total?: number;
       level?: CommunityServiceLevel | null;
+      actions?: {
+        certificate_url?: string | null;
+        pdf_url?: string | null;
+        evidence_url?: string | null;
+      };
     },
   >(row: T): T {
     if (
@@ -759,7 +766,30 @@ export class StudentReportsService {
     ) {
       return row;
     }
-    return { ...row, cii_score: null, total: 0, level: null } as T;
+    // The certificate/full-report links land on a page that itself only reveals those views once
+    // the record is live — but don't invite a click that goes nowhere useful while it's pending.
+    return {
+      ...row,
+      cii_score: null,
+      total: 0,
+      level: null,
+      actions: row.actions
+        ? { ...row.actions, certificate_url: null, pdf_url: null }
+        : row.actions,
+    } as T;
+  }
+
+  /** Same redaction rule as redactCiiV2ForExternalViewer (detail path), reused here for the
+   * student's own report listing (`GET /student/reports`) — mapReportListing now carries raw
+   * `ciiV2`/`ciiV2Lock`, so the listing endpoint must strip it exactly like the detail endpoint
+   * already does, not just the legacy `cii_score` (see redactUnapprovedAiScoreForStudent above). */
+  private static redactCiiV2ListingForStudent<
+    T extends { ciiV2?: unknown; ciiV2Lock?: unknown },
+  >(row: T): T {
+    const wrapped = StudentReportsService.redactCiiV2ForExternalViewer({
+      data: row as Record<string, unknown>,
+    });
+    return wrapped.data as T;
   }
 
   /** Same 0-100 total + standing Level badge every faculty/partner/admin community-award view
@@ -2496,7 +2526,9 @@ export class StudentReportsService {
         success: true,
         data: paginated.map((r) =>
           this.redactUnapprovedAiScoreForStudent(
-            this.mapReportListing(r, opportunityByProjectId),
+            StudentReportsService.redactCiiV2ListingForStudent(
+              this.mapReportListing(r, opportunityByProjectId),
+            ),
           ),
         ),
         pagination: {
@@ -3232,6 +3264,11 @@ export class StudentReportsService {
       throw new NotFoundException('Report not found');
     }
 
+    // Snapshot for the atomic compare-and-swap write below — see the guarded update at the end
+    // of this method for why a blind full-entity save() here would race a concurrent reviewer.
+    const originalAdminStatus = report.admin_status;
+    const originalPartnerStatus = report.partner_status;
+
     const isPartnerReviewer = this.isPartnerReviewerRole(role);
     if (isPartnerReviewer) {
       if (
@@ -3304,6 +3341,12 @@ export class StudentReportsService {
             'This report is not yet approved by Faculty. Admin can view its status and send a reminder, but only Faculty can approve or reject a Community Service report first.',
           );
         }
+        // NOTE: admin_status intentionally records CIEL PK's own decision independently of
+        // partner_status — the two are separate, order-independent sign-offs, and only the
+        // derived `status` field waits for both (see isReportPartnerStepSatisfied below). This is
+        // a deliberate, already-tested design (see student-reports.service.spec.ts "marks
+        // partner-required reports verified when partner approves after admin and faculty") —
+        // do not gate admin_status on partner_status here without re-checking that test's intent.
         report.admin_status = 'approved';
         report.adminApprovedAt = decisionStamp;
         const requiresPartner =
@@ -3323,7 +3366,33 @@ export class StudentReportsService {
       }
     }
 
-    await this.studentReportsRepository.save(report);
+    // Atomic compare-and-swap: the WHERE guard re-checks that admin_status/partner_status haven't
+    // changed since we read them above, so two concurrent reviewers (double-click, two tabs, or a
+    // partner-reject racing an admin-approve) can't silently clobber each other via a blind
+    // full-entity save() — same bug class already fixed elsewhere this session (FYP's
+    // supervisorReviewFyp, approveCiiV2/runCiiV2Analysis).
+    const verifyUpdateResult = await this.studentReportsRepository
+      .createQueryBuilder()
+      .update(StudentReport)
+      .set({
+        status: report.status,
+        admin_status: report.admin_status,
+        partner_status: report.partner_status,
+        partnerApprovedAt: report.partnerApprovedAt,
+        adminApprovedAt: report.adminApprovedAt,
+        admin_feedback: report.admin_feedback,
+      })
+      .where('id = :id', { id: report.id })
+      .andWhere('admin_status = :originalAdminStatus', { originalAdminStatus })
+      .andWhere('partner_status = :originalPartnerStatus', {
+        originalPartnerStatus,
+      })
+      .execute();
+    if (!verifyUpdateResult.affected) {
+      throw new BadRequestException(
+        'This report was just updated by another reviewer — please refresh and try again.',
+      );
+    }
 
     const actionMessage =
       action === 'approve'

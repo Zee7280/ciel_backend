@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { EngagementService } from './engagement.service';
 import { getRepositoryToken } from '@nestjs/typeorm';
@@ -36,6 +37,7 @@ describe('EngagementService', () => {
     create: jest.fn(),
     save: jest.fn(),
     find: jest.fn(),
+    findOne: jest.fn(),
     delete: jest.fn(),
     createQueryBuilder: jest.fn(),
   };
@@ -534,6 +536,22 @@ describe('EngagementService', () => {
 
       expect(result).toBeDefined();
       expect(mockAttendanceLogRepository.save).toHaveBeenCalled();
+    });
+
+    it('refuses to add a new entry once the participant\'s hours are locked (post-verification)', async () => {
+      const t = fx('attendance-locked-add');
+      mockParticipationRepository.findOne.mockResolvedValue({
+        id: t.id.participation,
+        studentId: t.id.u1,
+        projectId: t.id.project,
+        status: 'approved',
+        attendanceLocked: true,
+      });
+      const dto = { ...standardAttendanceDto } as any;
+
+      await expect(
+        service.addAttendanceLog(t.id.u1, t.id.participation, dto),
+      ).rejects.toBeInstanceOf(BadRequestException);
     });
 
     it('should backfill faculty emails from the approved application before routing attendance', async () => {
@@ -1184,6 +1202,70 @@ describe('EngagementService', () => {
       await expect(service.addAttendanceLog('u1', 'p1', dto)).rejects.toThrow(
         'Attendance logging is only allowed for approved/verified records',
       );
+    });
+  });
+
+  describe('deleteAttendanceLog', () => {
+    it('deletes an unverified entry the owner requests', async () => {
+      const t = fx('delete-attendance-ok');
+      mockParticipationRepository.findOne.mockResolvedValue({
+        id: t.id.participation,
+        studentId: t.id.u1,
+        attendanceLocked: false,
+      });
+      mockAttendanceLogRepository.findOne.mockResolvedValue({
+        id: 'log-1',
+        participantId: t.id.participation,
+        approvalStatus: 'pending',
+        entryStatus: 'pending',
+      });
+
+      const result = await service.deleteAttendanceLog(
+        t.id.u1,
+        t.id.participation,
+        'log-1',
+      );
+
+      expect(result).toEqual({ deleted: true });
+      expect(mockAttendanceLogRepository.delete).toHaveBeenCalledWith('log-1');
+    });
+
+    it('refuses to delete once the participant\'s hours are locked', async () => {
+      const t = fx('delete-attendance-locked');
+      mockParticipationRepository.findOne.mockResolvedValue({
+        id: t.id.participation,
+        studentId: t.id.u1,
+        attendanceLocked: true,
+      });
+      mockAttendanceLogRepository.findOne.mockResolvedValue({
+        id: 'log-1',
+        participantId: t.id.participation,
+        approvalStatus: 'pending',
+        entryStatus: 'pending',
+      });
+
+      await expect(
+        service.deleteAttendanceLog(t.id.u1, t.id.participation, 'log-1'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('refuses to delete an individually-verified entry even if the participant is not yet fully locked', async () => {
+      const t = fx('delete-attendance-entry-verified');
+      mockParticipationRepository.findOne.mockResolvedValue({
+        id: t.id.participation,
+        studentId: t.id.u1,
+        attendanceLocked: false,
+      });
+      mockAttendanceLogRepository.findOne.mockResolvedValue({
+        id: 'log-1',
+        participantId: t.id.participation,
+        approvalStatus: 'approved',
+        entryStatus: 'verified',
+      });
+
+      await expect(
+        service.deleteAttendanceLog(t.id.u1, t.id.participation, 'log-1'),
+      ).rejects.toBeInstanceOf(BadRequestException);
     });
   });
 

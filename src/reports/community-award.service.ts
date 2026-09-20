@@ -1,9 +1,8 @@
-import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, Repository, SelectQueryBuilder } from 'typeorm';
 import { StudentReport } from './entities/student-report.entity';
 import { Organization } from '../organizations/entities/organization.entity';
-import { PathGraderRun } from '../paths/entities/path-grader-run.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotifyCommunityAwardDto } from './dto/notify-community-award.dto';
 import {
@@ -54,64 +53,8 @@ export class CommunityAwardService {
     private readonly reports: Repository<StudentReport>,
     @InjectRepository(Organization)
     private readonly orgs: Repository<Organization>,
-    @InjectRepository(PathGraderRun)
-    private readonly graderRunRepo: Repository<PathGraderRun>,
     private readonly notifications: NotificationsService,
   ) {}
-
-  /** Checks and atomically consumes one Community Service award-run for this faculty member's
-   * email+year — throws GRADER_RUNS_EXHAUSTED (403) once the advertised cap of 4/year is reached.
-   * Same locked read-modify-write pattern as PathsService's checkAndConsumeGraderRun for
-   * Coursework/FYP/Venture, sharing the same path_grader_runs table under its own
-   * 'community_service' pathKind partition — the faculty hub UI has always advertised this "4
-   * RUNS / YEAR" limit, but nothing enforced it server-side until now, so it was unlimited in
-   * practice for any caller who didn't rely on the (client-side-only) UI copy. */
-  private async checkAndConsumeCommunityServiceGraderRun(
-    facultyEmail: string,
-  ): Promise<{ unlimited: boolean; used: number; limit: number }> {
-    const scopeKey = (facultyEmail || '').trim().toLowerCase();
-    if (!scopeKey) return { unlimited: true, used: 0, limit: 0 };
-    const academicYear = new Date().getFullYear();
-    const limit = 4;
-    const runCount = await this.graderRunRepo.manager.transaction(
-      async (manager) => {
-        const repo = manager.getRepository(PathGraderRun);
-        let row = await repo.findOne({
-          where: {
-            pathKind: 'community_service',
-            scope: 'faculty',
-            scopeKey,
-            academicYear,
-          },
-          lock: { mode: 'pessimistic_write' },
-        });
-        const used = row?.runCount ?? 0;
-        if (used >= limit) {
-          throw new ForbiddenException({
-            success: false,
-            code: 'GRADER_RUNS_EXHAUSTED',
-            message: `No AI Grader runs left this year (used ${used} of ${limit}). Runs reset next academic year.`,
-            used,
-            limit,
-          });
-        }
-        if (!row) {
-          row = repo.create({
-            pathKind: 'community_service',
-            scope: 'faculty',
-            scopeKey,
-            academicYear,
-            runCount: 0,
-          });
-        }
-        row.runCount = used + 1;
-        row.lastRunAt = new Date();
-        const saved = await repo.save(row);
-        return saved.runCount;
-      },
-    );
-    return { unlimited: false, used: runCount, limit };
-  }
 
   toCard(report: StudentReport): CommunityAwardCard {
     const s1 = report.section1 as StudentReport['section1'] | null;
@@ -326,20 +269,8 @@ export class CommunityAwardService {
       .map((r) => this.toCard(r));
   }
 
-  async notifyFromPool(
-    pool: CommunityAwardCard[],
-    dto: NotifyCommunityAwardDto,
-    facultyEmail?: string,
-  ) {
+  async notifyFromPool(pool: CommunityAwardCard[], dto: NotifyCommunityAwardDto) {
     const kind = dto.kind as CommunityAwardKind;
-    let graderRuns:
-      | { unlimited: boolean; used: number; limit: number }
-      | undefined;
-    if (kind === 'fac') {
-      graderRuns = await this.checkAndConsumeCommunityServiceGraderRun(
-        facultyEmail || '',
-      );
-    }
     const allowed = new Set(pool.map((c) => c.id));
     const scope = (dto.scopeLabel || 'this ranking').trim();
     const topN = awardTopN(kind);
@@ -413,7 +344,6 @@ export class CommunityAwardService {
       notified: sent,
       scope,
       kind,
-      ...(graderRuns ? { graderRuns } : {}),
     };
   }
 }

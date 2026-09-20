@@ -15,6 +15,7 @@ import { FacultyReportsService } from '../reports/faculty-reports.service';
 import { FacultyReportActionDto } from './dto/faculty-report-action.dto';
 import { ApproveCiiV2Dto } from './dto/approve-cii-v2.dto';
 import { RunIndependentAnalysisDto } from './dto/run-independent-analysis.dto';
+import { RunIndependentAnalysisBatchDto } from './dto/run-independent-analysis-batch.dto';
 
 @Controller('faculty/reports')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -108,6 +109,25 @@ export class FacultyReportsController {
       'faculty',
       req.user.name || req.user.email,
       body.note,
+      { facultyEmail: req.user.email },
+    );
+  }
+
+  /** Batch counterpart — run independent analysis across several of this faculty's assigned
+   * reports at once, so the resulting score/trend update lands on each affected student's My
+   * Impact Wall in a single action instead of one report at a time. */
+  @Post('cii-v2/independent-analysis/batch')
+  async runIndependentAnalysisBatch(
+    @Request() req,
+    @Body() body: RunIndependentAnalysisBatchDto,
+  ) {
+    return await this.facultyReportsService.runIndependentAiAnalysisBatch(
+      body.reportIds,
+      req.user.id,
+      'faculty',
+      req.user.name || req.user.email,
+      body.note,
+      { facultyEmail: req.user.email },
     );
   }
 }

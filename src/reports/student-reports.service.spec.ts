@@ -68,11 +68,29 @@ describe('StudentReportsService', () => {
     findOne: jest.fn().mockResolvedValue(null),
     find: jest.fn().mockResolvedValue([]),
   };
+  // Backing store for the guarded update() in verifyReport's atomic compare-and-swap — mirrors
+  // the mutation onto the same object `findOne` returned, so assertions on `report.<field>` after
+  // calling verifyReport still see the applied values, same as the old blind save() did.
+  const verifyReportQb = {
+    update: jest.fn().mockReturnThis(),
+    set: jest.fn(function (this: any, patch: Record<string, unknown>) {
+      this.__patch = patch;
+      return this;
+    }),
+    where: jest.fn().mockReturnThis(),
+    andWhere: jest.fn().mockReturnThis(),
+    execute: jest.fn(function (this: any) {
+      return Promise.resolve({ affected: this.__nextAffected ?? 1 });
+    }),
+    __patch: undefined as Record<string, unknown> | undefined,
+    __nextAffected: undefined as number | undefined,
+  };
   const mockStudentReportsRepository = {
     findOne: jest.fn(),
     find: jest.fn().mockResolvedValue([]),
     create: jest.fn(),
     save: jest.fn(),
+    createQueryBuilder: jest.fn(() => verifyReportQb),
   };
   const mockAttendanceLogsRepository = {
     find: jest.fn().mockResolvedValue([]),
@@ -562,6 +580,53 @@ describe('StudentReportsService', () => {
     });
   });
 
+  describe('redactCiiV2ListingForStudent (My Impact Wall list)', () => {
+    const redactListing = (row: Record<string, unknown>) =>
+      (StudentReportsService as any).redactCiiV2ListingForStudent(row);
+
+    it('strips ciiV2/ciiV2Lock when the score is not yet faculty-locked', () => {
+      const result = redactListing({
+        id: 'r-1',
+        ciiV2: { final: 91.5, sections: [] },
+        ciiV2Lock: null,
+      });
+      expect(result.ciiV2).toBeNull();
+      expect(result.ciiV2Lock).toBeNull();
+    });
+
+    it('surfaces the locked score/level/feedback once faculty has approved it', () => {
+      const result = redactListing({
+        id: 'r-2',
+        ciiV2: {
+          final: 91.5,
+          level: { level: 6, name: 'Distinguished Impact Contributor' },
+          evidenceAverage: 88,
+          sections: [{ id: 1, title: 'Problem', weight: 10, score: 9, good: 'x', limit: 'y' }],
+        },
+        ciiV2Lock: {
+          locked: true,
+          hash: 'abc',
+          lockedAt: '2026-01-01T00:00:00.000Z',
+          aiRecommendedScore: 90,
+          facultyApprovedScore: 91.5,
+        },
+      });
+      expect(result.ciiV2.final).toBe(91.5);
+      expect(result.ciiV2.level).toEqual({ level: 6, name: 'Distinguished Impact Contributor' });
+      expect(result.ciiV2Lock.locked).toBe(true);
+    });
+
+    it('leaves every other listing field untouched', () => {
+      const result = redactListing({
+        id: 'r-3',
+        project_title: 'Clean water drive',
+        ciiV2: null,
+        ciiV2Lock: null,
+      });
+      expect(result.project_title).toBe('Clean water drive');
+    });
+  });
+
   describe('team report submit authorization', () => {
     it('blocks final submit for team members when a team lead exists on the project', async () => {
       mockTeamMemberAndLeadOnProject();
@@ -846,7 +911,30 @@ describe('StudentReportsService', () => {
     expect(report.status).toBe('verified');
     expect(report.admin_status).toBe('approved');
     expect(result.data.status).toBe('verified');
-    expect(mockStudentReportsRepository.save).toHaveBeenCalledWith(report);
+    expect(verifyReportQb.execute).toHaveBeenCalled();
+  });
+
+  it('refuses the decision when a concurrent reviewer already changed admin_status/partner_status (atomic compare-and-swap)', async () => {
+    const report = {
+      id: 'report-1',
+      status: 'paid',
+      partner_status: 'pending',
+      admin_status: 'pending',
+      faculty_status: 'approved',
+      partnerApprovedAt: null,
+      adminApprovedAt: null,
+      opportunity: { requiresPartnerApproval: false },
+    };
+    mockStudentReportsRepository.findOne.mockResolvedValue(report);
+    verifyReportQb.__nextAffected = 0; // simulates another reviewer's write winning the race
+
+    try {
+      await expect(
+        service.verifyReport('report-1', 'approve', 'admin'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    } finally {
+      verifyReportQb.__nextAffected = undefined;
+    }
   });
 
   it('marks partner-required reports verified on admin approve when platform partner gate is disabled', async () => {

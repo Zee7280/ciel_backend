@@ -1,5 +1,9 @@
-/** PKR value of one verified volunteer hour in the public community-dividend formula. */
-export const DIVIDEND_HOURLY_RATE_PKR = 192;
+/** PKR value of one verified volunteer hour in the public community-dividend formula — Punjab
+ * minimum-wage prototype (40,000 / 26 / 8). Keep this exact; other spots in the app (e.g.
+ * CommunityAwardAnalytics.tsx's per-card estimate) must import and reuse this constant rather than
+ * hardcoding their own rate — a prior drift (192 here vs a hardcoded 500/hr elsewhere) showed
+ * different dividend figures for the same hours depending on which dashboard you were on. */
+export const DIVIDEND_HOURLY_RATE_PKR = 192.31;
 
 /** Credit a (project, student) pair once so duplicate verified reports cannot inflate the ledger. */
 export function creditPairOnce(pairKey: string, seen: Set<string>): boolean {
@@ -143,7 +147,9 @@ export function communityDividendPkr(
   outOfPocketPkr: number,
   rate = DIVIDEND_HOURLY_RATE_PKR,
 ): number {
-  return Math.round(hours) * rate + Math.round(outOfPocketPkr);
+  // Round only the final total, not `hours` first — rounding fractional hours before multiplying
+  // by the rate compounds imprecision (e.g. 2.5h silently became "2h × rate" instead of 2.5h × rate).
+  return Math.round(hours * rate + outOfPocketPkr);
 }
 
 export function beneficiariesFromSection4(section4: unknown): number {

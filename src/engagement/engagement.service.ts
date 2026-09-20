@@ -1233,6 +1233,15 @@ export class EngagementService {
     if (!participation)
       throw new NotFoundException('Participation record not found');
 
+    // Verified hours are meant to be locked — attendanceLocked was previously set on verification
+    // request but never actually enforced anywhere, so a student (or a team lead logging on a
+    // member's behalf) could still add new entries after sign-off via a direct API call.
+    if (participation.attendanceLocked) {
+      throw new BadRequestException(
+        'Hours are locked for this participant after verification and can no longer be edited directly — use the audited correction workflow.',
+      );
+    }
+
     if (participation.studentId !== studentId) {
       const user = await this.userRepository.findOne({
         where: { id: studentId },
@@ -2580,6 +2589,19 @@ export class EngagementService {
       where: { id: logId, participantId: participation.id },
     });
     if (!log) throw new NotFoundException('Attendance log not found');
+
+    // Verified hours must stay locked — this previously only checked ownership, so a student
+    // could delete an already-verified entry (undermining the same hours figure the Community
+    // Dividend payout is computed from) via a direct API call after sign-off.
+    if (
+      participation.attendanceLocked ||
+      log.approvalStatus === 'approved' ||
+      log.entryStatus === 'verified'
+    ) {
+      throw new BadRequestException(
+        'This entry has already been verified and can no longer be deleted directly — use the audited correction workflow.',
+      );
+    }
 
     await this.attendanceLogRepository.delete(logId);
     return { deleted: true };

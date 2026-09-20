@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { FacultyReportsService } from './faculty-reports.service';
 
 function makeService(
@@ -20,6 +20,7 @@ function makeService(
     createQueryBuilder: jest.fn(() => qb),
     save: jest.fn(async (row: Record<string, unknown>) => row),
     update: jest.fn(async () => ({ affected: 1 })),
+    findOne: jest.fn(async () => report),
   };
   const facultyService = {
     getScopedOpportunityIds: jest.fn().mockResolvedValue([]),
@@ -28,13 +29,24 @@ function makeService(
     summarize: jest.fn(),
     ...aiServiceOverrides,
   };
+  const facultyUniversityScopeService = {
+    normalizeOrgName: (name: string) => (name || '').trim().toLowerCase(),
+    studentProfileMatchesOrganization: jest.fn().mockReturnValue(true),
+  };
   const service = new FacultyReportsService(
     studentReportsRepository as any,
     {} as any,
     facultyService as any,
     aiService as any,
+    facultyUniversityScopeService as any,
   );
-  return { service, studentReportsRepository, aiService, qb };
+  return {
+    service,
+    studentReportsRepository,
+    aiService,
+    qb,
+    facultyUniversityScopeService,
+  };
 }
 
 describe('FacultyReportsService — updateAction', () => {
@@ -345,5 +357,191 @@ describe('FacultyReportsService — approveCiiV2', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+});
+
+describe('FacultyReportsService — runIndependentAiAnalysis (multi-stakeholder Phase 4)', () => {
+  const lockedReport = () => ({
+    id: 'report-1',
+    student: { id: 'student-1', role: 'student', university: 'Acme University' },
+    ciiV2Lock: { locked: true, hash: 'x', lockedAt: 'now', lockedByFacultyId: 'faculty-1' },
+    independentAiAnalyses: null,
+  });
+
+  it('refuses to run on a report that is not yet faculty-approved', async () => {
+    const { service } = makeService(
+      { id: 'report-1', student: {}, ciiV2Lock: null },
+      { summarize: jest.fn().mockResolvedValue({ summary: '', ciiV2: CII_V2_AI_RESPONSE }) },
+    );
+
+    await expect(
+      service.runIndependentAiAnalysis('report-1', 'faculty-1', 'faculty', 'Teacher', undefined, {
+        facultyEmail: 'teacher@uni.edu',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('faculty: refuses when the report is outside their assigned scope', async () => {
+    const { service, qb } = makeService(
+      lockedReport(),
+      { summarize: jest.fn().mockResolvedValue({ summary: '', ciiV2: CII_V2_AI_RESPONSE }) },
+    );
+    qb.getOne = jest.fn(async () => null); // outside this faculty's assignment scope
+
+    await expect(
+      service.runIndependentAiAnalysis('report-1', 'faculty-1', 'faculty', 'Teacher', undefined, {
+        facultyEmail: 'teacher@uni.edu',
+      }),
+    ).rejects.toThrow(/not found|not assigned/i);
+  });
+
+  it('faculty: runs and appends to independentAiAnalyses without touching ciiV2Lock', async () => {
+    const { service, studentReportsRepository } = makeService(
+      lockedReport(),
+      { summarize: jest.fn().mockResolvedValue({ summary: '', ciiV2: CII_V2_AI_RESPONSE }) },
+    );
+
+    const result = await service.runIndependentAiAnalysis(
+      'report-1',
+      'faculty-1',
+      'faculty',
+      'Teacher',
+      'Looks good',
+      { facultyEmail: 'teacher@uni.edu' },
+    );
+
+    expect(result.success).toBe(true);
+    expect((result.data as any).analysis.runByRole).toBe('faculty');
+    expect((result.data as any).analysis.score).toBe(100);
+    expect(studentReportsRepository.update).toHaveBeenCalledWith(
+      'report-1',
+      expect.objectContaining({
+        independentAiAnalyses: [expect.objectContaining({ runByRole: 'faculty' })],
+      }),
+    );
+  });
+
+  it('university: refuses when the report is not from a student at their university', async () => {
+    const { service, facultyUniversityScopeService } = makeService(
+      lockedReport(),
+      { summarize: jest.fn().mockResolvedValue({ summary: '', ciiV2: CII_V2_AI_RESPONSE }) },
+    );
+    facultyUniversityScopeService.studentProfileMatchesOrganization.mockReturnValue(false);
+
+    await expect(
+      service.runIndependentAiAnalysis('report-1', 'uni-user-1', 'university', 'Uni Reviewer', undefined, {
+        universityOrganizationName: 'Some Other University',
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('university: runs when the report is from a student at their own university', async () => {
+    const { service, facultyUniversityScopeService } = makeService(
+      lockedReport(),
+      { summarize: jest.fn().mockResolvedValue({ summary: '', ciiV2: CII_V2_AI_RESPONSE }) },
+    );
+    facultyUniversityScopeService.studentProfileMatchesOrganization.mockReturnValue(true);
+
+    const result = await service.runIndependentAiAnalysis(
+      'report-1',
+      'uni-user-1',
+      'university',
+      'Uni Reviewer',
+      undefined,
+      { universityOrganizationName: 'Acme University' },
+    );
+
+    expect(result.success).toBe(true);
+    expect((result.data as any).analysis.runByRole).toBe('university');
+  });
+
+  it('ciel_admin: runs unrestricted, no scope required', async () => {
+    const { service } = makeService(
+      lockedReport(),
+      { summarize: jest.fn().mockResolvedValue({ summary: '', ciiV2: CII_V2_AI_RESPONSE }) },
+    );
+
+    const result = await service.runIndependentAiAnalysis(
+      'report-1',
+      'admin-1',
+      'ciel_admin',
+      'CIEL PK',
+    );
+
+    expect(result.success).toBe(true);
+    expect((result.data as any).analysis.runByRole).toBe('ciel_admin');
+  });
+});
+
+describe('FacultyReportsService — runIndependentAiAnalysisBatch', () => {
+  const lockedReport = () => ({
+    id: 'report-1',
+    student: { id: 'student-1', role: 'student', university: 'Acme University' },
+    ciiV2Lock: { locked: true, hash: 'x', lockedAt: 'now', lockedByFacultyId: 'faculty-1' },
+    independentAiAnalyses: null,
+  });
+
+  it('refuses an empty reportIds list', async () => {
+    const { service } = makeService(lockedReport());
+    await expect(
+      service.runIndependentAiAnalysisBatch([], 'admin-1', 'ciel_admin'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('refuses a batch larger than the safety cap', async () => {
+    const { service } = makeService(lockedReport());
+    const tooMany = Array.from({ length: 101 }, (_, i) => `report-${i}`);
+    await expect(
+      service.runIndependentAiAnalysisBatch(tooMany, 'admin-1', 'ciel_admin'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('runs every id and reports success without ever throwing for the caller', async () => {
+    const { service } = makeService(
+      lockedReport(),
+      { summarize: jest.fn().mockResolvedValue({ summary: '', ciiV2: CII_V2_AI_RESPONSE }) },
+    );
+
+    const result = await service.runIndependentAiAnalysisBatch(
+      ['report-1', 'report-1', 'report-1'], // de-duplicated to one
+      'admin-1',
+      'ciel_admin',
+      'CIEL PK',
+    );
+
+    expect(result.success).toBe(true);
+    expect((result.data as any).total).toBe(1);
+    expect((result.data as any).succeeded).toBe(1);
+    expect((result.data as any).failed).toBe(0);
+    expect((result.data as any).results[0]).toEqual(
+      expect.objectContaining({ reportId: 'report-1', success: true, score: 100 }),
+    );
+  });
+
+  it('reports a per-id failure instead of aborting the whole batch', async () => {
+    const { service, studentReportsRepository } = makeService(
+      lockedReport(),
+      { summarize: jest.fn().mockResolvedValue({ summary: '', ciiV2: CII_V2_AI_RESPONSE }) },
+    );
+    // Second id resolves to nothing (e.g. someone else's report, outside ciel_admin's... in this
+    // case simulate "not found" by having findOne return null only for the second lookup).
+    let call = 0;
+    studentReportsRepository.findOne = jest.fn(async () => {
+      call += 1;
+      return call === 2 ? null : lockedReport();
+    });
+
+    const result = await service.runIndependentAiAnalysisBatch(
+      ['report-1', 'report-2'],
+      'admin-1',
+      'ciel_admin',
+    );
+
+    expect((result.data as any).total).toBe(2);
+    expect((result.data as any).succeeded).toBe(1);
+    expect((result.data as any).failed).toBe(1);
+    expect((result.data as any).results.find((r: any) => r.reportId === 'report-2')).toEqual(
+      expect.objectContaining({ success: false }),
+    );
   });
 });

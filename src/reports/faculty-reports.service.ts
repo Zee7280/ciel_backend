@@ -17,6 +17,7 @@ import { FacultyService } from '../faculty/faculty.service';
 import { AiService } from '../ai/ai.service';
 import { computeCiiV2Result } from './cii-v2.constants';
 import { buildCielPkAiEvaluationPayload } from './build-ciel-pk-ai-evaluation-payload.util';
+import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
 
 @Injectable()
 export class FacultyReportsService {
@@ -26,6 +27,7 @@ export class FacultyReportsService {
     private readonly studentReportsService: StudentReportsService,
     private readonly facultyService: FacultyService,
     private readonly aiService: AiService,
+    private readonly facultyUniversityScopeService: FacultyUniversityScopeService,
   ) {}
 
   private normalizeFacultyEmail(facultyEmail: string): string {
@@ -535,6 +537,54 @@ export class FacultyReportsService {
     };
   }
 
+  /** Scoping for runIndependentAiAnalysis, split out by caller role — previously this method
+   * took no scope at all (any faculty could run it against any report id, university/ciel_admin
+   * had no route yet). Faculty reuses the same assignment-based scope as runCiiV2Analysis;
+   * university is restricted to reports whose student's profile matches the caller's university
+   * org (same rule FacultyUniversityScopeService uses elsewhere); ciel_admin/CIEL PK has no scope
+   * restriction, matching SUPER_ADMIN's usual platform-wide access. */
+  private async findReportForIndependentAnalysis(
+    reportId: string,
+    userId: string,
+    userRole: 'faculty' | 'university' | 'ciel_admin',
+    scope?: { facultyEmail?: string; universityOrganizationName?: string },
+  ): Promise<StudentReport> {
+    if (userRole === 'faculty') {
+      return this.findAssignedReportForAction(
+        reportId,
+        userId,
+        scope?.facultyEmail || '',
+      );
+    }
+
+    const report = await this.studentReportsRepository.findOne({
+      where: { id: reportId },
+      relations: ['student'],
+    });
+    if (!report) {
+      throw new NotFoundException('Report not found.');
+    }
+
+    if (userRole === 'university') {
+      const orgNameNorm = this.facultyUniversityScopeService.normalizeOrgName(
+        scope?.universityOrganizationName || '',
+      );
+      const matches =
+        !!orgNameNorm &&
+        this.facultyUniversityScopeService.studentProfileMatchesOrganization(
+          report.student,
+          orgNameNorm,
+        );
+      if (!matches) {
+        throw new NotFoundException(
+          'Report not found, or not from a student at your university.',
+        );
+      }
+    }
+
+    return report;
+  }
+
   /**
    * Phase 4: Run Independent AI Analysis from My Impact Wall.
    *
@@ -546,6 +596,7 @@ export class FacultyReportsService {
    * - Results stored in `independentAiAnalyses` array
    * - Creates an audit trail with who ran it and when
    * - The faculty-approved record remains unchanged
+   * - Scoped per caller role — see findReportForIndependentAnalysis.
    */
   async runIndependentAiAnalysis(
     reportId: string,
@@ -553,14 +604,14 @@ export class FacultyReportsService {
     userRole: 'faculty' | 'university' | 'ciel_admin',
     userName?: string,
     note?: string,
+    scope?: { facultyEmail?: string; universityOrganizationName?: string },
   ) {
-    const report = await this.studentReportsRepository.findOne({
-      where: { id: reportId },
-    });
-
-    if (!report) {
-      throw new NotFoundException('Report not found.');
-    }
+    const report = await this.findReportForIndependentAnalysis(
+      reportId,
+      userId,
+      userRole,
+      scope,
+    );
 
     // Only allow independent analysis on locked (approved) records
     if (!report.ciiV2Lock?.locked) {
@@ -642,6 +693,76 @@ export class FacultyReportsService {
           (report.ciiV2 as Record<string, unknown> | null)
             ?.aiRecommendedScore ??
           null,
+      },
+    };
+  }
+
+  /** Batch counterpart to runIndependentAiAnalysis — the actual "run for the whole batch" action
+   * a faculty/university/CIEL PK caller triggers from their Community Service pool. Each report
+   * runs the identical per-report method (same scoping, same lock requirement, same audit-trail
+   * append), so a fresh, dated entry lands in that student's own `independentAiAnalyses` history —
+   * this per-report history IS the "trend" surfaced on My Impact Wall; there is no separate trend
+   * store to keep in sync. Runs sequentially and never throws for an individual failure (a locked
+   * report elsewhere in the batch, one outside the caller's scope, a transient AI error) so one bad
+   * id can't abort everyone else's update — each outcome is reported back instead. */
+  private static readonly MAX_BATCH_SIZE = 100;
+
+  async runIndependentAiAnalysisBatch(
+    reportIds: string[],
+    userId: string,
+    userRole: 'faculty' | 'university' | 'ciel_admin',
+    userName?: string,
+    note?: string,
+    scope?: { facultyEmail?: string; universityOrganizationName?: string },
+  ) {
+    const ids = Array.from(new Set((reportIds || []).filter(Boolean)));
+    if (ids.length === 0) {
+      throw new BadRequestException('reportIds must include at least one report id.');
+    }
+    if (ids.length > FacultyReportsService.MAX_BATCH_SIZE) {
+      throw new BadRequestException(
+        `A single batch run is limited to ${FacultyReportsService.MAX_BATCH_SIZE} reports at a time — split this into more than one run.`,
+      );
+    }
+
+    const results: Array<{
+      reportId: string;
+      success: boolean;
+      score?: number;
+      error?: string;
+    }> = [];
+
+    for (const reportId of ids) {
+      try {
+        const result = await this.runIndependentAiAnalysis(
+          reportId,
+          userId,
+          userRole,
+          userName,
+          note,
+          scope,
+        );
+        results.push({
+          reportId,
+          success: true,
+          score: result.data.analysis.score,
+        });
+      } catch (err) {
+        results.push({
+          reportId,
+          success: false,
+          error: err instanceof Error ? err.message : 'Unknown error',
+        });
+      }
+    }
+
+    return {
+      success: true,
+      data: {
+        total: ids.length,
+        succeeded: results.filter((r) => r.success).length,
+        failed: results.filter((r) => !r.success).length,
+        results,
       },
     };
   }

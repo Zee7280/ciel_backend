@@ -24,6 +24,7 @@ import { FeedbackModule } from '../feedback/feedback.module';
 import { JobsModule } from '../jobs/jobs.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { CommunityAwardModule } from '../reports/community-award.module';
+import { FacultyModule } from '../faculty/faculty.module';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { CommunityAwardModule } from '../reports/community-award.module';
     JobsModule,
     NotificationsModule,
     CommunityAwardModule,
+    FacultyModule,
     TypeOrmModule.forFeature([
       User,
       Opportunity,

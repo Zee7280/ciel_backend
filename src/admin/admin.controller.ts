@@ -36,6 +36,9 @@ import { OpportunityApplicationsService } from '../opportunities/opportunity-app
 import { IssueLogsService } from '../issue-logs/issue-logs.service';
 import type { IssueLogListQuery } from '../issue-logs/issue-logs.service';
 import { PlatformJobsService } from '../jobs/platform-jobs.service';
+import { FacultyReportsService } from '../reports/faculty-reports.service';
+import { RunIndependentAnalysisDto } from '../faculty/dto/run-independent-analysis.dto';
+import { RunIndependentAnalysisBatchDto } from '../faculty/dto/run-independent-analysis-batch.dto';
 
 @Controller('admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -52,6 +55,7 @@ export class AdminController {
     private readonly issueLogsService: IssueLogsService,
     private readonly adminProjectEvidenceService: AdminProjectEvidenceService,
     private readonly platformJobsService: PlatformJobsService,
+    private readonly facultyReportsService: FacultyReportsService,
   ) {}
 
   @Post('jobs/attendance-sla')
@@ -315,6 +319,45 @@ export class AdminController {
       scopeLabel: dto.scopeLabel || 'CIEL PK',
     });
     return { success: true, data };
+  }
+
+  /** Phase 4 (My Impact Wall): CIEL PK runs an additional AI analysis on an already
+   * faculty-approved report — same engine as faculty's independent-analysis action, unrestricted
+   * (platform-wide), and never overwrites the faculty-approved score. */
+  @Post('community-service/reports/:id/independent-analysis')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  async communityServiceIndependentAnalysis(
+    @Request() req,
+    @Param('id') id: string,
+    @Body() body: RunIndependentAnalysisDto,
+  ) {
+    return await this.facultyReportsService.runIndependentAiAnalysis(
+      id,
+      req.user.id,
+      'ciel_admin',
+      req.user.name || req.user.email,
+      body.note,
+    );
+  }
+
+  /** Batch counterpart — run independent analysis across several reports at once (platform-wide,
+   * unrestricted), so the resulting score/trend update lands on each affected student's My Impact
+   * Wall in a single action instead of one report at a time. */
+  @Post('community-service/reports/independent-analysis/batch')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  async communityServiceIndependentAnalysisBatch(
+    @Request() req,
+    @Body() body: RunIndependentAnalysisBatchDto,
+  ) {
+    return await this.facultyReportsService.runIndependentAiAnalysisBatch(
+      body.reportIds,
+      req.user.id,
+      'ciel_admin',
+      req.user.name || req.user.email,
+      body.note,
+    );
   }
 
   /** Always the real community-service report listing (StudentReport) — never forks on a query

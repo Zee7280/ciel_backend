@@ -187,6 +187,103 @@ describe('PathsService — team member invites', () => {
     );
   });
 
+  it("revokes a still-pending invite when the member's email is edited/removed on the next sync", async () => {
+    const { service, inviteRepo, mailService } = makeService();
+
+    await (service as any).syncTeamInvites(
+      'course_project',
+      'entry-1',
+      'user-1',
+      'Ada',
+      'Course Project',
+      'My Report',
+      [{ name: 'Bob', email: 'bob@test.com' }],
+    );
+    expect(inviteRepo.rows).toHaveLength(1);
+    const originalToken = inviteRepo.rows[0].token;
+
+    // The student fixes a typo — bob@test.com becomes bob.k@test.com.
+    await (service as any).syncTeamInvites(
+      'course_project',
+      'entry-1',
+      'user-1',
+      'Ada',
+      'Course Project',
+      'My Report',
+      [{ name: 'Bob', email: 'bob.k@test.com' }],
+    );
+
+    expect(inviteRepo.rows).toHaveLength(2);
+    const stale = inviteRepo.rows.find((r) => r.email === 'bob@test.com');
+    const fresh = inviteRepo.rows.find((r) => r.email === 'bob.k@test.com');
+    expect(stale.status).toBe('revoked');
+    expect(stale.revokedAt).toBeInstanceOf(Date);
+    expect(stale.token).toBe(originalToken);
+    expect(fresh.status).toBe('pending');
+    expect(fresh.token).not.toBe(originalToken);
+    expect(mailService.sendPathTeamInvite).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not revoke an already-accepted invite when the member is later removed from the list', async () => {
+    const inviteRepo = makeInviteRepo();
+    inviteRepo.rows.push({
+      id: 'invite-1',
+      kind: 'course_project',
+      entryId: 'entry-1',
+      email: 'bob@test.com',
+      token: 'tok-1',
+      status: 'accepted',
+      invitedByUserId: 'user-1',
+      expiresAt: new Date(Date.now() + 1000 * 60 * 60),
+    });
+    const { service } = makeService({ inviteRepo });
+
+    // Bob is removed from the group entirely — no members left.
+    await (service as any).syncTeamInvites(
+      'course_project',
+      'entry-1',
+      'user-1',
+      'Ada',
+      'Course Project',
+      'My Report',
+      [],
+    );
+
+    expect(inviteRepo.rows).toHaveLength(1);
+    expect(inviteRepo.rows[0].status).toBe('accepted');
+  });
+
+  it('issues a genuinely new invite (new token) when a revoked email is re-added', async () => {
+    const inviteRepo = makeInviteRepo();
+    inviteRepo.rows.push({
+      id: 'invite-1',
+      kind: 'course_project',
+      entryId: 'entry-1',
+      email: 'bob@test.com',
+      token: 'tok-old',
+      status: 'revoked',
+      invitedByUserId: 'user-1',
+      expiresAt: new Date(Date.now() + 1000 * 60 * 60),
+      revokedAt: new Date(),
+    });
+    const { service, mailService } = makeService({ inviteRepo });
+
+    await (service as any).syncTeamInvites(
+      'course_project',
+      'entry-1',
+      'user-1',
+      'Ada',
+      'Course Project',
+      'My Report',
+      [{ name: 'Bob', email: 'bob@test.com' }],
+    );
+
+    expect(inviteRepo.rows).toHaveLength(2);
+    const active = inviteRepo.rows.find((r) => r.status === 'pending');
+    expect(active.token).not.toBe('tok-old');
+    expect(mailService.sendPathTeamInvite).toHaveBeenCalledTimes(1);
+  });
+
   it('acceptTeamInvite rejects when the signed-in email does not match the invite email', async () => {
     const inviteRepo = makeInviteRepo();
     inviteRepo.rows.push({
@@ -223,6 +320,27 @@ describe('PathsService — team member invites', () => {
     await expect(
       service.acceptTeamInvite('tok-1', 'user-2', 'bob@test.com'),
     ).rejects.toThrow(BadRequestException);
+  });
+
+  it('acceptTeamInvite rejects a revoked invite even before it would otherwise expire', async () => {
+    const inviteRepo = makeInviteRepo();
+    inviteRepo.rows.push({
+      id: 'invite-1',
+      kind: 'course_project',
+      entryId: 'entry-1',
+      email: 'bob@test.com',
+      token: 'tok-1',
+      status: 'revoked',
+      invitedByUserId: 'user-1',
+      expiresAt: new Date(Date.now() + 1000 * 60 * 60),
+      revokedAt: new Date(),
+    });
+    const { service } = makeService({ inviteRepo });
+
+    await expect(
+      service.acceptTeamInvite('tok-1', 'user-2', 'bob@test.com'),
+    ).rejects.toThrow(BadRequestException);
+    expect(inviteRepo.rows[0].status).toBe('revoked');
   });
 
   it('acceptTeamInvite throws NotFoundException for an unknown token', async () => {
@@ -336,6 +454,68 @@ describe('PathsService — team member invites', () => {
 
     expect(result).toEqual({ success: true, alreadyAccepted: true });
     expect(mailService.sendPathTeamInvite).not.toHaveBeenCalled();
+  });
+
+  it('resendTeamInvite refuses to resend a revoked invite', async () => {
+    const inviteRepo = makeInviteRepo();
+    inviteRepo.rows.push({
+      id: 'invite-1',
+      kind: 'course_project',
+      entryId: 'entry-1',
+      email: 'bob@test.com',
+      token: 'tok-1',
+      status: 'revoked',
+      invitedByUserId: 'user-1',
+      expiresAt: new Date(Date.now() + 1000),
+      revokedAt: new Date(),
+    });
+    const { service, mailService } = makeService({ inviteRepo });
+
+    await expect(
+      service.resendTeamInvite('user-1', 'course_project', 'entry-1', 'bob@test.com'),
+    ).rejects.toThrow(BadRequestException);
+    expect(mailService.sendPathTeamInvite).not.toHaveBeenCalled();
+  });
+
+  it('resendTeamInvite resends the active row when a revoked row exists for the same email', async () => {
+    const inviteRepo = makeInviteRepo();
+    inviteRepo.rows.push(
+      {
+        id: 'invite-old',
+        kind: 'course_project',
+        entryId: 'entry-1',
+        email: 'bob@test.com',
+        token: 'tok-old',
+        status: 'revoked',
+        invitedByUserId: 'user-1',
+        expiresAt: new Date(Date.now() + 1000),
+        revokedAt: new Date(),
+      },
+      {
+        id: 'invite-new',
+        kind: 'course_project',
+        entryId: 'entry-1',
+        email: 'bob@test.com',
+        token: 'tok-new',
+        status: 'pending',
+        invitedByUserId: 'user-1',
+        expiresAt: new Date(Date.now() + 1000),
+      },
+    );
+    const { service, mailService } = makeService({ inviteRepo });
+
+    const result = await service.resendTeamInvite(
+      'user-1',
+      'course_project',
+      'entry-1',
+      'bob@test.com',
+    );
+
+    expect(result).toEqual({ success: true });
+    expect(mailService.sendPathTeamInvite).toHaveBeenCalledWith(
+      'bob@test.com',
+      expect.objectContaining({ token: 'tok-new' }),
+    );
   });
 
   it('getTeamInvitePreview flags an expired pending invite but not an accepted one', async () => {
@@ -834,7 +1014,17 @@ describe('PathsService — coursework AI score is never returned to a student', 
           at: '2026-01-01',
         },
         meritRibbon: { rank: 1, of: 10, scope: 'university', total: 91 },
-        studentInfo: {},
+        studentInfo: {
+          studentName: 'Ali Khan',
+          universityName: 'Test University',
+          teacherEmail: 'teacher@test.com',
+        },
+        assignmentInfo: { format: 'Report' },
+        aimsInfo: { aimStatement: 'Audit rooftop solar viability.' },
+        processInfo: { activities: ['Site survey'] },
+        resultsInfo: { resultsSummary: 'Rooftop can host 5kW.' },
+        sdgMapping: { notApplicable: true },
+        reflectionInfo: { lessonLearned: 'Data collection takes longer than planned.' },
       },
     ];
     const manager = {
@@ -1141,8 +1331,15 @@ describe('PathsService — coursework submit/resubmit emails', () => {
       facultyApprovalStatus: 'pending',
       studentInfo: {
         studentName: 'Ali Khan',
+        universityName: 'Test University',
         teacherEmail: 'teacher@test.com',
       },
+      assignmentInfo: { format: 'Report' },
+      aimsInfo: { aimStatement: 'Audit rooftop solar viability.' },
+      processInfo: { activities: ['Site survey'] },
+      resultsInfo: { resultsSummary: 'Rooftop can host 5kW.' },
+      sdgMapping: { notApplicable: true },
+      reflectionInfo: { lessonLearned: 'Data collection takes longer than planned.' },
     });
     await service.updateCourseProjectByIdForUser('student-1', 'entry-1', {
       status: 'submitted',
@@ -1168,8 +1365,15 @@ describe('PathsService — coursework submit/resubmit emails', () => {
       facultyApprovalNote: 'fix this',
       studentInfo: {
         studentName: 'Ali Khan',
+        universityName: 'Test University',
         teacherEmail: 'teacher@test.com',
       },
+      assignmentInfo: { format: 'Report' },
+      aimsInfo: { aimStatement: 'Audit rooftop solar viability.' },
+      processInfo: { activities: ['Site survey'] },
+      resultsInfo: { resultsSummary: 'Rooftop can host 5kW.' },
+      sdgMapping: { notApplicable: true },
+      reflectionInfo: { lessonLearned: 'Data collection takes longer than planned.' },
     });
     await service.updateCourseProjectByIdForUser('student-1', 'entry-1', {
       addedNote: 'fixed',

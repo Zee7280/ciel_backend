@@ -177,6 +177,19 @@ export interface CourseProjectModuleInclusion {
     lim?: boolean;
 }
 
+/** A snapshot of the prior faculty decision, captured immediately before a resubmission silently
+ * discards it (see applyCourseProjectPatch) — so "no silent overwrite" holds for the one field
+ * group that previously vanished on every resubmit. */
+export interface CourseProjectVersionSnapshot {
+    versionedAt: string;
+    reason: 'resubmission_after_approval' | 'resubmission_after_return';
+    priorFacultyApprovalStatus: string;
+    priorFacultyApprovalNote: string | null;
+    priorFacultyApprovalAt: string | null;
+    priorFacultyModeration?: CourseProjectEntry['facultyModeration'];
+    priorMeritRibbon?: CourseProjectEntry['meritRibbon'];
+}
+
 /** Per-section review text (student-accepted or edited) shown on the final review/flash-card step. */
 export interface CourseProjectSectionSummaries {
     course?: string;
@@ -296,6 +309,10 @@ export class CourseProjectEntry {
 
     @Column({ type: 'jsonb', nullable: true })
     sectionSummaries: CourseProjectSectionSummaries | null;
+
+    /** Append-only — see CourseProjectVersionSnapshot. Never rewritten or trimmed. */
+    @Column({ type: 'jsonb', default: () => "'[]'" })
+    versions: CourseProjectVersionSnapshot[];
 
     @Column({ type: 'text', nullable: true })
     addedNote: string;

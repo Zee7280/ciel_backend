@@ -23,6 +23,7 @@ import { VentureEntry } from './entities/venture-entry.entity';
 import {
   TeamMemberInvite,
   TeamMemberInviteKind,
+  TeamMemberInviteStatus,
 } from './entities/team-member-invite.entity';
 import {
   PathGraderRun,
@@ -31,6 +32,7 @@ import {
 } from './entities/path-grader-run.entity';
 import { formatCertificateVerificationCode } from '../reports/certificate-verification-code.util';
 import { UpdateCourseProjectDto } from './dto/update-course-project.dto';
+import { computeCourseworkReadiness } from './course-project-readiness.util';
 import { AddFypDeliverableDto, UpdateFypDto } from './dto/update-fyp.dto';
 import { EditFypAiAnalysisDto } from './dto/fyp-ai-analysis.dto';
 import { FypMeritModelQueryDto } from './dto/fyp-merit-model-query.dto';
@@ -207,12 +209,33 @@ export class PathsService implements OnModuleInit {
     members: unknown[] | undefined | null,
   ): Promise<void> {
     const members2 = this.extractMemberEmailAndName(members);
-    if (!members2.length) return;
+    const currentEmails = new Set(members2.map((m) => m.email));
     const existing = await this.teamMemberInviteRepo.find({
       where: { kind, entryId },
     });
-    const existingEmails = new Set(existing.map((i) => i.email));
-    const toInvite = members2.filter((m) => !existingEmails.has(m.email));
+
+    // A wrong/removed email must not leave a live, acceptable token behind — revoke any
+    // still-pending invite whose email is no longer among the current members. An already-accepted
+    // invite is left alone: removing a confirmed teammate from the list already revokes their
+    // read/write access via canEditCourseProject's live groupMembers check, and the row stays as
+    // history, never deleted.
+    const toRevoke = existing.filter(
+      (i) => i.status === 'pending' && !currentEmails.has(i.email),
+    );
+    for (const invite of toRevoke) {
+      invite.status = 'revoked';
+      invite.revokedAt = new Date();
+      await this.teamMemberInviteRepo.save(invite);
+    }
+
+    if (!members2.length) return;
+    // Only a still-active (pending/accepted) row counts as "already invited" — a revoked row for
+    // this exact email (e.g. removed then re-added) must get a genuinely new invite + token rather
+    // than being silently skipped as a duplicate.
+    const activeEmails = new Set(
+      existing.filter((i) => i.status !== 'revoked').map((i) => i.email),
+    );
+    const toInvite = members2.filter((m) => !activeEmails.has(m.email));
     for (const { email, name } of toInvite) {
       try {
         const existingUser = await this.usersRepo.findOne({
@@ -268,9 +291,14 @@ export class PathsService implements OnModuleInit {
       where: { kind, entryId: In(ids) },
     });
     if (!invites.length) return entries;
-    const statusByKey = new Map(
-      invites.map((i) => [`${i.entryId}::${i.email}`, i.status]),
-    );
+    // A revoked row can coexist with a fresh active row for the same (entryId, email) after an
+    // edit-then-re-add cycle — always prefer the active one for display.
+    const statusByKey = new Map<string, TeamMemberInviteStatus>();
+    for (const i of invites) {
+      const key = `${i.entryId}::${i.email}`;
+      const current = statusByKey.get(key);
+      if (!current || current === 'revoked') statusByKey.set(key, i.status);
+    }
     return entries.map((entry) => {
       const members = getMembers(entry);
       if (!members?.length) return entry;
@@ -346,6 +374,7 @@ export class PathsService implements OnModuleInit {
       email: invite.email,
       status: invite.status,
       expired: invite.status === 'pending' && invite.expiresAt < new Date(),
+      revoked: invite.status === 'revoked',
       inviterName,
       title,
       kindLabel,
@@ -364,6 +393,11 @@ export class PathsService implements OnModuleInit {
     if (!email || email !== invite.email) {
       throw new ForbiddenException(
         'This invite was sent to a different email address — sign in with that email to accept it.',
+      );
+    }
+    if (invite.status === 'revoked') {
+      throw new BadRequestException(
+        'This invite is no longer valid — the report owner changed or removed this email. Ask them to re-add you.',
       );
     }
     if (invite.status === 'pending' && invite.expiresAt < new Date()) {
@@ -390,9 +424,13 @@ export class PathsService implements OnModuleInit {
     email: string,
   ) {
     const normEmail = (email || '').trim().toLowerCase();
-    const invite = await this.teamMemberInviteRepo.findOne({
+    // A revoked row can coexist with a fresh active row for this exact email after an
+    // edit-then-re-add cycle (syncTeamInvites never deletes) — always resend the active one.
+    const candidates = await this.teamMemberInviteRepo.find({
       where: { kind, entryId, email: normEmail },
+      order: { createdAt: 'DESC' },
     });
+    const invite = candidates.find((i) => i.status !== 'revoked') ?? candidates[0];
     if (!invite) throw new NotFoundException('Invite not found');
     if (invite.invitedByUserId !== requesterUserId) {
       throw new ForbiddenException(
@@ -401,6 +439,11 @@ export class PathsService implements OnModuleInit {
     }
     if (invite.status === 'accepted')
       return { success: true, alreadyAccepted: true };
+    if (invite.status === 'revoked') {
+      throw new BadRequestException(
+        'This invite was revoked — remove and re-add this teammate to send a fresh invite.',
+      );
+    }
     invite.expiresAt = new Date(Date.now() + PathsService.INVITE_TTL_MS);
     await this.teamMemberInviteRepo.save(invite);
     const { title, inviterName, kindLabel } = await this.describeInvite(invite);
@@ -512,6 +555,23 @@ export class PathsService implements OnModuleInit {
       entry.status === 'submitted' &&
       entry.facultyApprovalStatus === 'approved'
     ) {
+      // "No silent overwrite" — the faculty's prior decision (and any AI/moderation state locked
+      // in at approval) is about to be discarded by the lines below; snapshot it first so it stays
+      // recoverable instead of vanishing the moment the student edits an approved record.
+      entry.versions = [
+        ...(entry.versions || []),
+        {
+          versionedAt: new Date().toISOString(),
+          reason: 'resubmission_after_approval',
+          priorFacultyApprovalStatus: entry.facultyApprovalStatus,
+          priorFacultyApprovalNote: entry.facultyApprovalNote,
+          priorFacultyApprovalAt: entry.facultyApprovalAt
+            ? entry.facultyApprovalAt.toISOString()
+            : null,
+          priorFacultyModeration: entry.facultyModeration,
+          priorMeritRibbon: entry.meritRibbon,
+        },
+      ];
       entry.facultyApprovalStatus = 'pending';
       entry.facultyApprovalNote = null;
       entry.facultyApprovalAt = null;
@@ -523,6 +583,20 @@ export class PathsService implements OnModuleInit {
       (entry.facultyApprovalStatus === 'rejected' ||
         entry.facultyApprovalStatus === 'revision_requested')
     ) {
+      entry.versions = [
+        ...(entry.versions || []),
+        {
+          versionedAt: new Date().toISOString(),
+          reason: 'resubmission_after_return',
+          priorFacultyApprovalStatus: entry.facultyApprovalStatus,
+          priorFacultyApprovalNote: entry.facultyApprovalNote,
+          priorFacultyApprovalAt: entry.facultyApprovalAt
+            ? entry.facultyApprovalAt.toISOString()
+            : null,
+          priorFacultyModeration: entry.facultyModeration,
+          priorMeritRibbon: entry.meritRibbon,
+        },
+      ];
       entry.facultyApprovalStatus = 'pending';
       entry.facultyApprovalAt = null;
       entry.meritRibbon = null;
@@ -530,6 +604,17 @@ export class PathsService implements OnModuleInit {
       notify = 'resubmission';
     } else if (previousStatus !== 'submitted' && entry.status === 'submitted') {
       notify = 'first_submission';
+    }
+    // "Ready to Submit" gate — block the actual submit/resubmit transition (not every autosave)
+    // if mandatory fields or the faculty connection are missing, so an incomplete record never
+    // reaches a faculty review queue.
+    if (notify !== null) {
+      const readiness = computeCourseworkReadiness(entry);
+      if (!readiness.ready) {
+        throw new BadRequestException(
+          `This coursework record isn't ready to submit yet. Missing: ${readiness.missing.join('; ')}.`,
+        );
+      }
     }
     const justConnected =
       !hadTeacherEmail && !!(entry.studentInfo?.teacherEmail || '').trim();

@@ -30,6 +30,10 @@ import {
 import { ReportPartnerApprovalSettingsService } from './report-partner-approval-settings.service';
 import { isReportPartnerStepSatisfied } from './report-partner-approval.util';
 import { collectReportEvidenceFiles } from './collect-report-evidence.util';
+import {
+  redactCiiV2Fields,
+  type CiiV2LockInput,
+} from './cii-v2-redaction.util';
 import { buildCielPkAiEvaluationPayload } from './build-ciel-pk-ai-evaluation-payload.util';
 import { validateReportSectionsForSubmit } from './report-submit-validation.util';
 import {
@@ -3035,118 +3039,17 @@ export class StudentReportsService {
     T extends { data?: Record<string, unknown> },
   >(response: T): T {
     if (!response?.data) return response;
-    const ciiV2 = response.data.ciiV2 as
-      | Record<string, unknown>
-      | null
-      | undefined;
-    const ciiV2Lock = response.data.ciiV2Lock as
-      | {
-          locked?: boolean;
-          hash?: string;
-          lockedAt?: string;
-          aiRecommendedScore?: number;
-          facultyApprovedScore?: number;
-          scoreWasAdjusted?: boolean;
-          scoreAdjustmentReason?: string;
-          facultyNote?: string;
-        }
-      | null
-      | undefined;
-
-    if (!ciiV2Lock?.locked) {
-      return {
-        ...response,
-        data: { ...response.data, ciiV2: null, ciiV2Lock: null },
-      };
-    }
-
-    // Phase 3: Include section scores with good/limit feedback
-    const sections = Array.isArray(ciiV2?.sections)
-      ? (ciiV2.sections as Array<Record<string, unknown>>).map((s) => ({
-          id: s.id,
-          title: s.title,
-          weight: s.weight,
-          score: s.score,
-          good: s.good,
-          limit: s.limit,
-        }))
-      : [];
-
-    // Phase 3: Extract bonus data
-    const bonus = ciiV2?.bonus as
-      | {
-          effort?: number;
-          resources?: number;
-          partners?: number;
-          total?: number;
-        }
-      | undefined;
-
-    // Phase 3: Extract student feedback
-    const studentFeedback = ciiV2?.studentFeedback as
-      | {
-          opening_praise?: string;
-          why_score_is_high_or_low?: string;
-          encouragement?: string;
-          five_specific_actions?: string[];
-        }
-      | undefined;
-
-    // Phase 3: Extract red flags
-    const redFlags = Array.isArray(ciiV2?.redFlags)
-      ? ciiV2.redFlags
-      : undefined;
-
-    // Evidence gallery (flashcard): expose only what type of evidence was checked and
-    // whether it held up — never the numeric match score or the AI's internal "why", which
-    // would leak per-item AI judgement the same way a per-criterion score would.
-    const evidence = Array.isArray(ciiV2?.evidence)
-      ? (ciiV2.evidence as Array<Record<string, unknown>>).map((e) => ({
-          id: e.id,
-          type: e.type,
-          claim: e.claim,
-          verdict: e.verdict,
-        }))
-      : undefined;
+    const { ciiV2, ciiV2Lock } = redactCiiV2Fields(
+      response.data.ciiV2 as Record<string, unknown> | null | undefined,
+      response.data.ciiV2Lock as CiiV2LockInput,
+    );
 
     return {
       ...response,
       data: {
         ...response.data,
-        ciiV2: {
-          final: ciiV2?.final,
-          level: ciiV2?.level,
-          evidenceAverage: ciiV2?.evidenceAverage,
-          sections,
-          evidence,
-          // Phase 3: Include additional fields for student display
-          aiRecommendedScore:
-            ciiV2?.aiRecommendedScore ?? ciiV2Lock.aiRecommendedScore,
-          facultyApprovedScore:
-            ciiV2?.facultyApprovedScore ?? ciiV2Lock.facultyApprovedScore,
-          bonus: bonus
-            ? {
-                effort: bonus.effort ?? 0,
-                resources: bonus.resources ?? 0,
-                partners: bonus.partners ?? 0,
-                total: bonus.total ?? 0,
-              }
-            : { effort: 0, resources: 0, partners: 0, total: 0 },
-          integrityPenalty: ciiV2?.integrityPenalty ?? 0,
-          studentFeedback,
-          redFlags,
-        },
-        ciiV2Lock: {
-          locked: true,
-          hash: ciiV2Lock.hash,
-          lockedAt: ciiV2Lock.lockedAt,
-          // Phase 3: Include audit trail fields
-          aiRecommendedScore: ciiV2Lock.aiRecommendedScore,
-          facultyApprovedScore: ciiV2Lock.facultyApprovedScore,
-          scoreWasAdjusted: ciiV2Lock.scoreWasAdjusted,
-          scoreAdjustmentReason: ciiV2Lock.scoreAdjustmentReason,
-          facultyNote: ciiV2Lock.facultyNote,
-        },
+        ciiV2,
+        ciiV2Lock,
         // Phase 4: Include independent AI analyses (do not overwrite faculty-approved)
         independentAiAnalyses: response.data.independentAiAnalyses,
       },

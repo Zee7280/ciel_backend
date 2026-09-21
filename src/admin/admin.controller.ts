@@ -11,6 +11,7 @@ import {
   Request,
   UseInterceptors,
   Res,
+  NotFoundException,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { AdminMutationAuditInterceptor } from '../audit-logs/admin-mutation-audit.interceptor';
@@ -358,6 +359,21 @@ export class AdminController {
       req.user.name || req.user.email,
       body.note,
     );
+  }
+
+  /** Read-only CII v2 breakdown (section scores + verified highlights, never per-criterion
+   * detail) for a single faculty-approved report — platform-wide, unrestricted. */
+  @Get('community-service/reports/:id/cii-v2')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  async communityServiceCiiV2Breakdown(@Param('id') id: string) {
+    const data = await this.communityAward.getCiiV2BreakdownForAdmin(id);
+    if (!data) {
+      throw new NotFoundException(
+        'No faculty-approved CII v2 record found for this report.',
+      );
+    }
+    return { success: true, data };
   }
 
   /** Always the real community-service report listing (StudentReport) — never forks on a query

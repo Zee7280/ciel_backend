@@ -16,6 +16,11 @@ import {
   type CommunityAwardKind,
   type CommunityServiceLevel,
 } from './community-award.util';
+import {
+  redactCiiV2Fields,
+  type RedactedCiiV2,
+  type RedactedCiiV2Lock,
+} from './cii-v2-redaction.util';
 
 export type CommunityAwardCard = {
   id: string;
@@ -269,7 +274,85 @@ export class CommunityAwardService {
       .map((r) => this.toCard(r));
   }
 
-  async notifyFromPool(pool: CommunityAwardCard[], dto: NotifyCommunityAwardDto) {
+  /** Same org-scoping WHERE clause as listForPartnerOrg/listForUniversity, narrowed to one
+   * report id — backs the read-only CII v2 breakdown endpoint so a partner/NGO/university can
+   * never fetch a report outside their own scope just by guessing its id. */
+  private async findScopedReport(
+    reportId: string,
+    organizationId: string,
+    isUni: boolean,
+  ): Promise<StudentReport | null> {
+    if (!reportId || !organizationId) return null;
+    const qb = this.reports
+      .createQueryBuilder('report')
+      .leftJoinAndSelect('report.student', 'student')
+      .leftJoinAndSelect('report.opportunity', 'opportunity')
+      .leftJoinAndSelect('opportunity.organization', 'organization')
+      .where('report.id = :rid', { rid: reportId });
+    if (isUni) {
+      qb.leftJoin('student.organization', 'studentOrg');
+      const org = await this.orgs.findOne({ where: { id: organizationId } });
+      const name = (org?.name || '').trim().toLowerCase();
+      qb.andWhere(
+        new Brackets((q) => {
+          q.where('studentOrg.id = :oid', { oid: organizationId }).orWhere(
+            'opportunity.organizationId = :oid',
+            { oid: organizationId },
+          );
+          if (name) {
+            q.orWhere(
+              "LOWER(TRIM(COALESCE(student.university, student.institution, ''))) = :n",
+              { n: name },
+            ).orWhere(
+              `LOWER(TRIM(COALESCE(report.section1->'team_lead'->>'university', ''))) = :n`,
+              { n: name },
+            );
+          }
+        }),
+      );
+    } else {
+      qb.andWhere('opportunity.organizationId = :oid', { oid: organizationId });
+    }
+    return qb.getOne();
+  }
+
+  /** Read-only CII v2 breakdown (sections/bonus/evidence — never per-criterion detail) for a
+   * report this org can see, or null when the report doesn't exist, isn't in scope, or Faculty
+   * hasn't approved/locked it yet. Same redaction whitelist the student flashcard already uses. */
+  async getCiiV2BreakdownForOrg(
+    reportId: string,
+    organizationId: string,
+    isUni: boolean,
+  ): Promise<{ ciiV2: RedactedCiiV2; ciiV2Lock: RedactedCiiV2Lock } | null> {
+    const report = await this.findScopedReport(reportId, organizationId, isUni);
+    if (!report || !this.facultyApproved(report)) return null;
+    const { ciiV2, ciiV2Lock } = redactCiiV2Fields(
+      report.ciiV2 as Record<string, unknown> | null,
+      report.ciiV2Lock,
+    );
+    if (!ciiV2 || !ciiV2Lock) return null;
+    return { ciiV2, ciiV2Lock };
+  }
+
+  /** Same as getCiiV2BreakdownForOrg but unrestricted (Super Admin — platform-wide). */
+  async getCiiV2BreakdownForAdmin(
+    reportId: string,
+  ): Promise<{ ciiV2: RedactedCiiV2; ciiV2Lock: RedactedCiiV2Lock } | null> {
+    if (!reportId) return null;
+    const report = await this.reports.findOne({ where: { id: reportId } });
+    if (!report || !this.facultyApproved(report)) return null;
+    const { ciiV2, ciiV2Lock } = redactCiiV2Fields(
+      report.ciiV2 as Record<string, unknown> | null,
+      report.ciiV2Lock,
+    );
+    if (!ciiV2 || !ciiV2Lock) return null;
+    return { ciiV2, ciiV2Lock };
+  }
+
+  async notifyFromPool(
+    pool: CommunityAwardCard[],
+    dto: NotifyCommunityAwardDto,
+  ) {
     const kind = dto.kind as CommunityAwardKind;
     const allowed = new Set(pool.map((c) => c.id));
     const scope = (dto.scopeLabel || 'this ranking').trim();

@@ -10,6 +10,7 @@ import {
   UploadedFile,
   BadRequestException,
   ForbiddenException,
+  NotFoundException,
   Put,
   Delete,
   Param,
@@ -264,6 +265,33 @@ export class PartnersController {
       body.note,
       { universityOrganizationName: org?.name || '' },
     );
+  }
+
+  /** Read-only CII v2 breakdown (section scores + verified highlights, never per-criterion
+   * detail) for a single faculty-approved report this org can already see via award-cards. */
+  @Get('community-service/reports/:id/cii-v2')
+  async communityServiceCiiV2Breakdown(
+    @Request() req,
+    @Param('id') id: string,
+  ) {
+    if (!req.user.organizationId) {
+      throw new BadRequestException('User is not linked to an organization');
+    }
+    const org = await this.organizationsService.getMyOrganization(req.user.id);
+    const isUni = String(org?.orgType || '')
+      .toLowerCase()
+      .includes('university');
+    const data = await this.communityAward.getCiiV2BreakdownForOrg(
+      id,
+      req.user.organizationId,
+      isUni,
+    );
+    if (!data) {
+      throw new NotFoundException(
+        'No faculty-approved CII v2 record found for this report in your scope.',
+      );
+    }
+    return { success: true, data };
   }
 
   @Get('community-service/faculty-representatives')

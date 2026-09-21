@@ -312,13 +312,20 @@ export class AdminController {
   @Post('community-service/award-notify')
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
-  async communityAwardNotify(@Body() dto: NotifyCommunityAwardDto) {
+  async communityAwardNotify(
+    @Request() req,
+    @Body() dto: NotifyCommunityAwardDto,
+  ) {
     const pool = await this.communityAward.listForAdmin();
-    const data = await this.communityAward.notifyFromPool(pool, {
-      ...dto,
-      kind: 'ciel',
-      scopeLabel: dto.scopeLabel || 'CIEL PK',
-    });
+    const data = await this.communityAward.notifyFromPool(
+      pool,
+      {
+        ...dto,
+        kind: 'ciel',
+        scopeLabel: dto.scopeLabel || 'CIEL PK',
+      },
+      req.user.name,
+    );
     return { success: true, data };
   }
 

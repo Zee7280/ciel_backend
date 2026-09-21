@@ -1287,6 +1287,7 @@ export class StudentReportsService {
       year:
         this.pickTrimmedString(row.yearOfStudy) ||
         this.pickTrimmedString(row.year),
+      semester: this.pickTrimmedString(row.semester),
       role: isLead ? 'Team Lead' : 'Team member',
       verified: row.emailVerified === true || row.verified === true,
       hours: useStoredLeadFields ? storedLead?.hours : row.hours,
@@ -2212,6 +2213,14 @@ export class StudentReportsService {
       // Update existing report
       if (shouldSubmit) {
         if (wasRejectedForRevision) {
+          // Clearing the old rejection notes alongside the status reset matters: without it,
+          // a leftover admin_feedback/faculty_remarks string from the prior rejection keeps
+          // reading as "still rejected" to any consumer that classifies by remark text (e.g.
+          // the faculty console's decisionFromFacultyRecord) even though the status columns
+          // below have already correctly reset to 'pending'.
+          if (String(report.admin_status || '').toLowerCase() === 'rejected') {
+            report.admin_feedback = '';
+          }
           report.admin_status = 'pending';
           if (
             String(report.partner_status || '').toLowerCase() === 'rejected'
@@ -2222,6 +2231,7 @@ export class StudentReportsService {
             String(report.faculty_status || '').toLowerCase() === 'rejected'
           ) {
             report.faculty_status = 'pending';
+            report.faculty_remarks = '';
           }
           report.adminApprovedAt = null;
           report.partnerApprovedAt = null;

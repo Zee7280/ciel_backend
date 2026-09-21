@@ -272,7 +272,11 @@ export class FacultyUniversityScopeService {
       );
     }
 
-    if (!operator) {
+    const operator = await this.usersRepo.findOne({
+      where: { id: params.operatorUserId },
+      relations: ['organization'],
+    });
+    if (!operator || operator.organization?.id !== org.id) {
       throw new ForbiddenException(
         'Only this university can authorise faculty for its own institution',
       );

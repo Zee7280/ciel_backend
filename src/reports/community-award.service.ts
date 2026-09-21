@@ -352,6 +352,7 @@ export class CommunityAwardService {
   async notifyFromPool(
     pool: CommunityAwardCard[],
     dto: NotifyCommunityAwardDto,
+    actorName?: string,
   ) {
     const kind = dto.kind as CommunityAwardKind;
     const allowed = new Set(pool.map((c) => c.id));
@@ -390,6 +391,7 @@ export class CommunityAwardService {
           pick.total ?? pool.find((c) => c.id === pick.reportId)?.total ?? 0,
         scope,
         at: new Date().toISOString(),
+        by: actorName || undefined,
       };
       const prev = (report.awardBadges || []).filter((b) => b.kind !== kind);
       const same = (report.awardBadges || []).find(
@@ -400,6 +402,7 @@ export class CommunityAwardService {
           b.scope === badge.scope,
       );
       report.awardBadges = [...prev, badge];
+      report.awardBadgeHistory = [...(report.awardBadgeHistory || []), badge];
       await this.reports.save(report);
       if (same) {
         sent += 1;

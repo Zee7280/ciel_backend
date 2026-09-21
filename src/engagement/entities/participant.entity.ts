@@ -118,6 +118,10 @@ export class Participation {
   })
   yearOfStudy: string;
 
+  /** Community-service report's "Semester (1-10)" field — separate from `yearOfStudy`, additive only. */
+  @Column({ nullable: true })
+  semester: string;
+
   @Column({ nullable: true })
   department: string;
 

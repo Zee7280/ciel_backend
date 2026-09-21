@@ -204,11 +204,15 @@ export class PartnersController {
       ? await this.communityAward.listForUniversity(req.user.organizationId)
       : await this.communityAward.listForPartnerOrg(req.user.organizationId);
     const kind = isUni ? 'uni' : 'par';
-    const data = await this.communityAward.notifyFromPool(pool, {
-      ...dto,
-      kind,
-      scopeLabel: dto.scopeLabel || org?.name,
-    });
+    const data = await this.communityAward.notifyFromPool(
+      pool,
+      {
+        ...dto,
+        kind,
+        scopeLabel: dto.scopeLabel || org?.name,
+      },
+      req.user.name,
+    );
     return { success: true, data };
   }
 

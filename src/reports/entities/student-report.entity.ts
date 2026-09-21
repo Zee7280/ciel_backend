@@ -83,7 +83,8 @@ export class StudentReport {
   @Column({ type: 'text', nullable: true })
   admin_feedback: string;
 
-  /** Badges pinned when a stakeholder runs the community-service award model (faculty / partner / university / CIEL). */
+  /** Badges pinned when a stakeholder runs the community-service award model (faculty / partner / university / CIEL).
+   * One entry per kind — a new run replaces the previous entry of the same kind here. */
   @Column({ type: 'jsonb', nullable: true })
   awardBadges?: Array<{
     kind: 'fac' | 'par' | 'uni' | 'ciel';
@@ -93,6 +94,22 @@ export class StudentReport {
     score: number;
     scope: string;
     at: string;
+    by?: string;
+  }> | null;
+
+  /** Append-only log of every award-badge run ever recorded for this report, never overwritten —
+   * lets the student-facing National Ranking screen show trend (rank moving up/down over time)
+   * and best-rank-held history per cohort, which the upsert-only awardBadges column can't. */
+  @Column({ type: 'jsonb', nullable: true })
+  awardBadgeHistory?: Array<{
+    kind: 'fac' | 'par' | 'uni' | 'ciel';
+    label: string;
+    rank: number;
+    of: number;
+    score: number;
+    scope: string;
+    at: string;
+    by?: string;
   }> | null;
 
   // Auto-Generated Summary Fields (Section 2 Context)
@@ -144,10 +161,14 @@ export class StudentReport {
       university: string;
       degree: string;
       year: string;
+      /** "Semester (1-10)" — additive alongside `year`/Year of Study, not derived from it. */
+      semester?: string;
       role?: string;
       hours?: string;
       verified?: boolean;
     };
+    /** Not persisted here — stripped before save; team members' identity/academic data (incl. `semester`)
+     * lives on the `Participation` record and is read live by teamId/projectId. */
     team_members?: Array<{
       name: string;
       fullName?: string;
@@ -155,6 +176,7 @@ export class StudentReport {
       mobile: string;
       university: string;
       program: string;
+      semester?: string;
       role: string;
       hours: string;
       verified?: boolean;

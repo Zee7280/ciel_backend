@@ -63,6 +63,11 @@ export class RegisterParticipantDto {
   @IsString()
   department: string;
 
+  /** Community-service report's "Semester (1-10)" field — separate from `yearOfStudy`. */
+  @IsString()
+  @IsOptional()
+  semester?: string;
+
   @IsEnum([
     'Voluntary',
     'Course-Linked',

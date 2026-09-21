@@ -724,6 +724,21 @@ export class StudentReportsService {
             null,
         },
       },
+      // Student's own self-rated reflection competencies (not AI-scored — safe to always
+      // return, unlike ciiV2 below, which needs faculty-lock redaction).
+      section9: {
+        competency_scores: report.section9?.competency_scores ?? null,
+      },
+      // Same rule the approval-workflow gate uses (isReportPartnerStepSatisfied): a report with
+      // no partner requirement carries partner_status 'not_applicable'/'not_required', not
+      // 'approved' — a flashcard checklist that only accepted 'approved' would wrongly show
+      // "partner not verified" on a fully live, no-partner-needed record.
+      partner_verified: isReportPartnerStepSatisfied(report.partner_status),
+      required_hours:
+        Number(
+          (opportunity?.timeline as { expected_hours?: unknown } | undefined)
+            ?.expected_hours,
+        ) || null,
       sdgs,
       faculty_status: report.faculty_status,
       awardBadges: report.awardBadges ?? [],
@@ -1848,23 +1863,25 @@ export class StudentReportsService {
       throw new NotFoundException();
     }
 
+    const verificationRelations = ['opportunity', 'opportunity.organization'];
+
     let report =
       (await this.studentReportsRepository.findOne({
         where: { verificationPublicSlug: key },
-        relations: ['opportunity'],
+        relations: verificationRelations,
       })) ?? null;
 
     if (!report && this.looksLikeUuid(key)) {
       report = await this.studentReportsRepository.findOne({
         where: { id: key },
-        relations: ['opportunity'],
+        relations: verificationRelations,
       });
     }
 
     if (!report) {
       const rows = await this.studentReportsRepository.find({
         where: { project_id: key },
-        relations: ['opportunity'],
+        relations: verificationRelations,
         order: { adminApprovedAt: 'DESC', updatedAt: 'DESC' },
         take: 1,
       });
@@ -1920,12 +1937,38 @@ export class StudentReportsService {
       };
     }
 
+    // Faculty-locked CII v2 (community-service reports only) is safe to publish here — it's the
+    // same final score + level band the certificate/badge already display, no per-criterion detail.
+    const ciiV2Lock = report.ciiV2Lock;
+    const ciiV2 = report.ciiV2 as { final?: number } | null | undefined;
+    const publicLevel = ciiV2Lock?.locked
+      ? ((report.ciiV2 as { level?: { level?: number; name?: string } })
+          ?.level ?? null)
+      : null;
+
     return {
       success: true,
       verified: true,
       project_title,
       verified_at: report.adminApprovedAt
         ? new Date(report.adminApprovedAt).toISOString()
+        : null,
+      record_id: report.verificationPublicSlug || report.id,
+      university: report.section1?.team_lead?.university || null,
+      partner_name:
+        report.opportunity?.organization?.name ||
+        (
+          report.opportunity?.partner_organization as
+            | { organization_name?: string }
+            | undefined
+        )?.organization_name ||
+        null,
+      cii_score:
+        ciiV2Lock?.locked && typeof ciiV2?.final === 'number'
+          ? Math.round(ciiV2.final)
+          : null,
+      level: publicLevel
+        ? { level: publicLevel.level, name: publicLevel.name }
         : null,
     };
   }
@@ -3054,6 +3097,18 @@ export class StudentReportsService {
       ? ciiV2.redFlags
       : undefined;
 
+    // Evidence gallery (flashcard): expose only what type of evidence was checked and
+    // whether it held up — never the numeric match score or the AI's internal "why", which
+    // would leak per-item AI judgement the same way a per-criterion score would.
+    const evidence = Array.isArray(ciiV2?.evidence)
+      ? (ciiV2.evidence as Array<Record<string, unknown>>).map((e) => ({
+          id: e.id,
+          type: e.type,
+          claim: e.claim,
+          verdict: e.verdict,
+        }))
+      : undefined;
+
     return {
       ...response,
       data: {
@@ -3063,6 +3118,7 @@ export class StudentReportsService {
           level: ciiV2?.level,
           evidenceAverage: ciiV2?.evidenceAverage,
           sections,
+          evidence,
           // Phase 3: Include additional fields for student display
           aiRecommendedScore:
             ciiV2?.aiRecommendedScore ?? ciiV2Lock.aiRecommendedScore,

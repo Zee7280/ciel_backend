@@ -25,6 +25,17 @@ const UNLOCKED_RESPONSE = {
           ],
         },
       ],
+      evidence: [
+        {
+          id: 'ev-1',
+          file: 'attendance.pdf',
+          claim: 'Attendance is verified',
+          type: 'Attendance register',
+          match: 92,
+          verdict: 'MATCH',
+          why: 'private faculty-facing rationale',
+        },
+      ],
       bonusWhy: { effort: 'private faculty-facing rationale' },
       integrityWhy: 'private faculty-facing rationale',
       redFlags: ['possible inflation in beneficiary count'],
@@ -59,6 +70,10 @@ describe('StudentReportsService.redactCiiV2ForExternalViewer', () => {
 
     const result = redact(locked);
 
+    // Phase 3/4 deliberately surface the section-level "good"/"limit" verdict, the overall
+    // red flags, bonus/penalty totals and student feedback to the record's own student — what
+    // stays stripped is per-criterion detail (anchors/notes) and the evidence row's numeric
+    // match score / internal "why", which would leak the same granular AI judgement.
     expect(result.data.ciiV2).toEqual({
       final: 91.5,
       level: { level: 6, name: 'Distinguished Impact Contributor' },
@@ -69,15 +84,32 @@ describe('StudentReportsService.redactCiiV2ForExternalViewer', () => {
           title: 'Evidence, Verification & Integrity',
           weight: 15,
           score: 13,
+          good: 'Strong evidence base',
+          limit: 'Follow-up window is short',
         },
       ],
+      evidence: [
+        {
+          id: 'ev-1',
+          type: 'Attendance register',
+          claim: 'Attendance is verified',
+          verdict: 'MATCH',
+        },
+      ],
+      aiRecommendedScore: undefined,
+      facultyApprovedScore: undefined,
+      bonus: { effort: 0, resources: 0, partners: 0, total: 0 },
+      integrityPenalty: 0,
+      studentFeedback: 'Great work overall.',
+      redFlags: ['possible inflation in beneficiary count'],
     });
-    expect(result.data.ciiV2).not.toHaveProperty('redFlags');
     expect(result.data.ciiV2).not.toHaveProperty('needsAdminReview');
     expect(result.data.ciiV2).not.toHaveProperty('integrityWhy');
     expect(result.data.ciiV2).not.toHaveProperty('bonusWhy');
     expect(result.data.ciiV2.sections[0]).not.toHaveProperty('criteria');
-    expect(result.data.ciiV2.sections[0]).not.toHaveProperty('good');
+    expect(result.data.ciiV2.evidence[0]).not.toHaveProperty('match');
+    expect(result.data.ciiV2.evidence[0]).not.toHaveProperty('why');
+    expect(result.data.ciiV2.evidence[0]).not.toHaveProperty('file');
     expect(result.data.ciiV2Lock).toEqual({
       locked: true,
       hash: 'abc123',

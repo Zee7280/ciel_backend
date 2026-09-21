@@ -2284,6 +2284,7 @@ export class StudentReportsService {
         section8: report.section8,
         section9: report.section9,
         section10: report.section10,
+        section11: report.section11,
         evidence_urls: Array.isArray(
           (report.section8 as { evidence_files?: string[] })?.evidence_files,
         )

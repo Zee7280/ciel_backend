@@ -27,6 +27,10 @@ const VALID_CORE_SECTIONS = {
   },
   section7: { has_partners: 'no' },
   section9: { academic_integration: 'Directly related to coursework' },
+  section11: {
+    final_declaration: [true, true, true, true, true],
+    signature_name: 'Jane Student',
+  },
 };
 
 describe('validateReportSectionsForSubmit', () => {
@@ -148,5 +152,38 @@ describe('validateReportSectionsForSubmit', () => {
     });
     expect(issues.some((i) => i.section === 7 && i.field === 'partners.0.name')).toBe(true);
     expect(issues.some((i) => i.section === 7 && i.field === 'partners.0.type')).toBe(true);
+  });
+
+  it('rejects submission when the final declaration is missing or incomplete', () => {
+    const issues = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section6: { use_resources: 'no' },
+      section8: { has_evidence: 'no' },
+      section10: { continuation_status: 'no', continuation_details: 'Wraps up with the semester.' },
+      section11: { final_declaration: [true, true, false, true, true], signature_name: 'Jane Student' },
+    });
+    expect(issues.some((i) => i.section === 11 && i.field === 'final_declaration')).toBe(true);
+  });
+
+  it('rejects submission when the electronic signature is missing', () => {
+    const issues = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section6: { use_resources: 'no' },
+      section8: { has_evidence: 'no' },
+      section10: { continuation_status: 'no', continuation_details: 'Wraps up with the semester.' },
+      section11: { final_declaration: [true, true, true, true, true], signature_name: '  ' },
+    });
+    expect(issues.some((i) => i.section === 11 && i.field === 'signature_name')).toBe(true);
+  });
+
+  it('requires all three Section 1 declaration checkboxes, not just consent', () => {
+    const issues = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section1: { review_checked: [true, false, true] },
+      section6: { use_resources: 'no' },
+      section8: { has_evidence: 'no' },
+      section10: { continuation_status: 'no', continuation_details: 'Wraps up with the semester.' },
+    });
+    expect(issues.some((i) => i.section === 1)).toBe(true);
   });
 });

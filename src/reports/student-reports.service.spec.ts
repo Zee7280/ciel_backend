@@ -56,6 +56,10 @@ const MIN_VALID_SUBMIT_SECTIONS = {
     continuation_status: 'no' as const,
     continuation_details: 'word '.repeat(100).trim(),
   },
+  section11: {
+    final_declaration: [true, true, true, true, true],
+    signature_name: 'Jane Student',
+  },
 };
 
 describe('StudentReportsService', () => {

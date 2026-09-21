@@ -339,6 +339,12 @@ export class StudentReport {
     ai_generated_impact_score?: number;
     institutional_alignment_score?: number;
     verified_narrative?: string;
+    /** Final report declaration — 5 checkboxes gating submission, replacing a per-section sign-off. */
+    final_declaration?: boolean[];
+    /** Typed full-name electronic signature accompanying the final declaration. */
+    signature_name?: string;
+    /** Auto-recorded timestamp the moment the declaration + signature were completed. */
+    signed_at?: string;
   };
 
   /** Composite Impact Index v2 snapshot (server-recomputed from the AI's per-criterion anchors). */

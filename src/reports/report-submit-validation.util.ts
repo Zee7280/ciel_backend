@@ -16,11 +16,12 @@ function stringField(value: unknown): string {
 }
 
 /**
- * Presence-only safety net for sections 1, 2, 4, 5, 7 and 9 — mirrors which fields the frontend
- * wizard (report/utils/validation.ts) treats as *required to have a value*, without duplicating
- * its word-count/phrasing rules (those stay owned by the frontend). This exists so a submission
- * made by calling the API directly (bypassing the wizard's canSubmitReport gate) can't produce a
- * report that is essentially empty in these sections.
+ * Presence-only safety net for sections 1, 2, 4, 5, 7, 9 and 11 — mirrors which fields the
+ * frontend wizard (report/utils/validation.ts, context/ReportContext.tsx) treats as *required to
+ * have a value*, without duplicating its word-count/phrasing rules (those stay owned by the
+ * frontend). This exists so a submission made by calling the API directly (bypassing the
+ * wizard's canSubmitReport gate) can't produce a report that is essentially empty in these
+ * sections, or that skips the final declaration and electronic sign-off.
  */
 function validateCoreSectionsPresence(report: {
   section1?: Record<string, unknown> | null;
@@ -29,19 +30,27 @@ function validateCoreSectionsPresence(report: {
   section5?: Record<string, unknown> | null;
   section7?: Record<string, unknown> | null;
   section9?: Record<string, unknown> | null;
+  section11?: Record<string, unknown> | null;
 }): ReportSubmitValidationIssue[] {
   const issues: ReportSubmitValidationIssue[] = [];
 
   const section1 = report.section1 || {};
-  const hasPrivacyConsent = Boolean(
-    section1.privacy_consent ||
-      (Array.isArray(section1.review_checked) && section1.review_checked[2]),
-  );
+  const reviewChecked = Array.isArray(section1.review_checked) ? section1.review_checked : [];
+  // The 3-item declaration (mirrors report/utils/validation.ts validateSection1) replaced the old
+  // mid-flow attendance-verification request — all three boxes must be ticked, not just consent.
+  const declarationComplete = reviewChecked.length >= 3 && reviewChecked.slice(0, 3).every(Boolean);
+  const hasPrivacyConsent = Boolean(section1.privacy_consent || declarationComplete);
   if (!hasPrivacyConsent) {
     issues.push({
       section: 1,
       field: 'privacy_consent',
       message: 'Privacy consent is required',
+    });
+  } else if (reviewChecked.length > 0 && !declarationComplete) {
+    issues.push({
+      section: 1,
+      field: 'review_checked',
+      message: 'All three declaration checkboxes must be confirmed',
     });
   }
   if ((section1.metrics as Record<string, unknown> | undefined)?.hec_compliance === 'below') {
@@ -142,6 +151,27 @@ function validateCoreSectionsPresence(report: {
     issues.push({ section: 9, field: 'academic_integration', message: 'Please select an academic integration level' });
   }
 
+  const section11 = report.section11 || {};
+  const finalDeclaration = Array.isArray(section11.final_declaration)
+    ? section11.final_declaration
+    : [];
+  const finalDeclarationComplete =
+    finalDeclaration.length >= 5 && finalDeclaration.slice(0, 5).every(Boolean);
+  if (!finalDeclarationComplete) {
+    issues.push({
+      section: 11,
+      field: 'final_declaration',
+      message: 'All five final declaration checkboxes must be confirmed',
+    });
+  }
+  if (!stringField(section11.signature_name).trim()) {
+    issues.push({
+      section: 11,
+      field: 'signature_name',
+      message: 'An electronic signature (your full name) is required',
+    });
+  }
+
   return issues;
 }
 
@@ -155,6 +185,7 @@ export function validateReportSectionsForSubmit(report: {
   section8?: Record<string, unknown> | null;
   section9?: Record<string, unknown> | null;
   section10?: Record<string, unknown> | null;
+  section11?: Record<string, unknown> | null;
   evidence_urls?: string[] | null;
 }): ReportSubmitValidationIssue[] {
   const issues: ReportSubmitValidationIssue[] = validateCoreSectionsPresence(report);

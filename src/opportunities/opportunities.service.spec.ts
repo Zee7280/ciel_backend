@@ -526,6 +526,46 @@ describe('OpportunitiesService — partnerDashboardApprove ownership guard', () 
         ).rejects.toBeInstanceOf(ForbiddenException);
     });
 
+    it('lets the organisation named on a student opportunity approve when the contact email is someone else', async () => {
+        const opp = {
+            id: 'opp-named-org',
+            isStudentCreated: true,
+            organizationId: 'student-placeholder',
+            faculty_verified: true,
+            partnerVerified: false,
+            requiresPartnerApproval: true,
+            partnerApprovalStatus: 'pending',
+            workflowStage: 'pending_partner',
+            status: 'pending_partner',
+            supervision: { partner_org_name: 'Fellah Khalid' },
+            partner_organization: {
+                organization_name: 'FELLAH',
+                official_email: 'fellah.khalid@example.com',
+            },
+        };
+        const findOne = jest.fn().mockResolvedValue(opp);
+        const save = jest.fn(async (row: any) => row);
+        const service = makeService({ findOne, save });
+        (service as any).organizationsService = {
+            findOne: jest.fn().mockResolvedValue({ id: 'org-fellah', name: 'FELLAH' }),
+        };
+        (service as any).facultyUniversityScope = {
+            normalizeOrgName: (name: string) => (name || '').trim().toLowerCase(),
+        };
+        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+        jest.spyOn(service as any, 'handlePartnerApprovedSideEffects').mockResolvedValue(undefined);
+
+        const result = await service.partnerDashboardApprove('opp-named-org', {
+            email: 'fatima@fellah.org',
+            organizationId: 'org-fellah',
+            id: 'user-fatima',
+            name: 'Fatima Khalid',
+        });
+
+        expect(result).toBe(opp);
+        expect(save).toHaveBeenCalled();
+    });
+
     it('lets the correct partner double-click approve on an already-approved opportunity without erroring', async () => {
         const opp = makeApprovedOpp();
         const findOne = jest.fn().mockResolvedValue(opp);

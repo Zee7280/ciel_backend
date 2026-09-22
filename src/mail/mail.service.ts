@@ -1153,6 +1153,7 @@ export class MailService {
         `Failed to send partner verification email to ${to}`,
         error.stack,
       );
+      throw error;
     }
   }
 
@@ -1309,6 +1310,7 @@ export class MailService {
         `Failed to send faculty verification email to ${to}`,
         error.stack,
       );
+      throw error;
     }
   }
 

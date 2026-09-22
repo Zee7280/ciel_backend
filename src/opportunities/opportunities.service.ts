@@ -805,11 +805,16 @@ export class OpportunitiesService {
           'No faculty email is saved on this opportunity.',
         );
       }
-      await this.notifyFacultyForStudentOpportunityVerification(opp);
+      const sent = await this.notifyFacultyForStudentOpportunityVerification(opp);
+      if (!sent) {
+        throw new BadRequestException(
+          `The email could not be sent to ${facultyTo}. The mail server rejected it.`,
+        );
+      }
       return {
         success: true,
         sent_to: 'faculty',
-        message: 'Verification email sent to the faculty supervisor.',
+        message: `Verification email sent to ${facultyTo}.`,
       };
     }
 
@@ -830,11 +835,16 @@ export class OpportunitiesService {
           'No partner email is saved on this opportunity.',
         );
       }
-      await this.sendPartnerApprovalEmail(opp);
+      const sent = await this.sendPartnerApprovalEmail(opp);
+      if (!sent) {
+        throw new BadRequestException(
+          `The email could not be sent to ${partnerEmail}. The mail server rejected it.`,
+        );
+      }
       return {
         success: true,
         sent_to: 'partner',
-        message: 'Verification email sent to the partner.',
+        message: `Verification email sent to ${partnerEmail}.`,
       };
     }
 
@@ -846,9 +856,9 @@ export class OpportunitiesService {
   /** Faculty verification email after student resubmit reaches `pending_faculty`. */
   async notifyFacultyForStudentOpportunityVerification(
     opportunity: Opportunity,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const facultyTo = this.getFacultyEmailFromOpportunity(opportunity);
-    if (!facultyTo || !opportunity.faculty_verification_token) return;
+    if (!facultyTo || !opportunity.faculty_verification_token) return false;
 
     const creator = await this.getOpportunityCreatorContact(opportunity);
     const studentVerifyDetails = this.buildOpportunityVerificationEmailDetails(
@@ -873,11 +883,13 @@ export class OpportunitiesService {
           returnTo: this.getFacultyApprovalReturnTo(opportunity.id),
         },
       );
+      return true;
     } catch (e) {
       console.warn(
         'Failed to send faculty verification email on resubmit',
         (e as Error).message,
       );
+      return false;
     }
   }
 
@@ -1465,10 +1477,10 @@ export class OpportunitiesService {
     }
   }
 
-  private async sendPartnerApprovalEmail(opportunity: Opportunity) {
-    if (!opportunity.partnerToken) return;
+  private async sendPartnerApprovalEmail(opportunity: Opportunity): Promise<boolean> {
+    if (!opportunity.partnerToken) return false;
     const partnerEmail = this.resolvePartnerEmailFromOpportunity(opportunity);
-    if (!partnerEmail) return;
+    if (!partnerEmail) return false;
 
     const creator = await this.getOpportunityCreatorContact(opportunity);
     const details = this.buildOpportunityVerificationEmailDetails(opportunity, {
@@ -1492,11 +1504,13 @@ export class OpportunitiesService {
           ctaLabel: 'Review partner approval',
         },
       );
+      return true;
     } catch (error) {
       console.warn(
         'Failed to send partner approval email',
         (error as Error).message,
       );
+      return false;
     }
   }
 
@@ -2982,6 +2996,15 @@ export class OpportunitiesService {
       org &&
       this.facultyUniversityScope.isUniversityOrganization(org);
 
+    const orgNameNorm = org?.name
+      ? this.facultyUniversityScope.normalizeOrgName(org.name)
+      : '';
+    const matchNamedOrg = orgNameNorm.length >= 3;
+    const namedOrgSql = this.partnerOrgNameMatchSql();
+    const namedOrgParams = matchNamedOrg
+      ? this.partnerOrgNameMatchParams(orgNameNorm)
+      : {};
+
     if (useUniversityScope) {
       const uniIds =
         await this.facultyUniversityScope.resolveOpportunityIdsForUniversityOrganization(
@@ -2990,28 +3013,45 @@ export class OpportunitiesService {
       if (!uniIds.length) return [];
       query.andWhere('opportunity.id IN (:...uniIds)', { uniIds });
     } else if (filterOrgId && filterPartnerEmail) {
-      // Org-owned opportunities OR student-submitted opportunities that mention this partner's email
+      // Org-owned rows, student rows that name this login email, or student rows that name this organisation.
       query.andWhere(
         `(opportunity."organizationId" = :orgId` +
           ` OR LOWER(TRIM(COALESCE(opportunity.external_partner_collaboration->>'official_email', ''))) = :pe` +
           ` OR LOWER(TRIM(COALESCE(opportunity.supervision->>'external_partner_email', ''))) = :pe` +
           ` OR LOWER(TRIM(COALESCE(opportunity.supervision->>'partner_email', ''))) = :pe` +
           ` OR LOWER(TRIM(COALESCE(opportunity.executing_context->'partner'->>'official_email', ''))) = :pe` +
-          ` OR LOWER(TRIM(COALESCE(opportunity.partner_organization->>'official_email', ''))) = :pe)`,
-        { orgId: filterOrgId, pe: filterPartnerEmail },
+          ` OR LOWER(TRIM(COALESCE(opportunity.partner_organization->>'official_email', ''))) = :pe` +
+          (matchNamedOrg ? ` OR ${namedOrgSql}` : '') +
+          `)`,
+        {
+          orgId: filterOrgId,
+          pe: filterPartnerEmail,
+          ...namedOrgParams,
+        },
       );
     } else if (filterOrgId) {
-      query.andWhere('opportunity.organizationId = :orgId', {
-        orgId: filterOrgId,
-      });
+      query.andWhere(
+        `(opportunity."organizationId" = :orgId` +
+          (matchNamedOrg ? ` OR ${namedOrgSql}` : '') +
+          `)`,
+        {
+          orgId: filterOrgId,
+          ...namedOrgParams,
+        },
+      );
     } else if (filterPartnerEmail) {
       query.andWhere(
         `(LOWER(TRIM(COALESCE(opportunity.external_partner_collaboration->>'official_email', ''))) = :pe` +
           ` OR LOWER(TRIM(COALESCE(opportunity.supervision->>'external_partner_email', ''))) = :pe` +
           ` OR LOWER(TRIM(COALESCE(opportunity.supervision->>'partner_email', ''))) = :pe` +
           ` OR LOWER(TRIM(COALESCE(opportunity.executing_context->'partner'->>'official_email', ''))) = :pe` +
-          ` OR LOWER(TRIM(COALESCE(opportunity.partner_organization->>'official_email', ''))) = :pe)`,
-        { pe: filterPartnerEmail },
+          ` OR LOWER(TRIM(COALESCE(opportunity.partner_organization->>'official_email', ''))) = :pe` +
+          (matchNamedOrg ? ` OR ${namedOrgSql}` : '') +
+          `)`,
+        {
+          pe: filterPartnerEmail,
+          ...namedOrgParams,
+        },
       );
     }
 
@@ -3223,6 +3263,16 @@ export class OpportunitiesService {
     ];
     if (candidates.some((c) => !!c && this.normalizeEmail(c) === email))
       return true;
+
+    if (
+      await this.namedPartnerOrgMatches(
+        opp,
+        viewer.organizationId,
+        viewer.id,
+      )
+    ) {
+      return true;
+    }
 
     // Faculty reviewing join applications are linked through the application, not the opportunity.
     const appRepo = this.opportunitiesRepository.manager.getRepository(
@@ -4376,10 +4426,104 @@ export class OpportunitiesService {
    * short-circuit (e.g. partnerDashboardApprove's "already approved" return), unlike the fuller
    * assertPartnerCanReviewOpportunity below, whose "still awaiting review" check would reject a
    * legitimate double-click on an opportunity this same partner already approved. */
-  private assertPartnerOwnsOpportunity(
+  /** Exact name, or the registered name as a whole word inside the name the student typed. */
+  private orgNamesReferToSamePartner(candidate: string, target: string): boolean {
+    const left = this.facultyUniversityScope.normalizeOrgName(candidate);
+    const right = this.facultyUniversityScope.normalizeOrgName(target);
+    if (!left || !right || right.length < 3) return false;
+    if (left === right) return true;
+    if (right.length < 4) return false;
+    return (
+      left.startsWith(`${right} `) ||
+      left.endsWith(` ${right}`) ||
+      left.includes(` ${right} `)
+    );
+  }
+
+  private partnerOrgNameMatchSql(): string {
+    const exprs = [
+      `opportunity.external_partner_collaboration->>'organization_name'`,
+      `opportunity.partner_organization->>'organization_name'`,
+      `opportunity.partner_organization->>'name'`,
+      `opportunity.supervision->>'partner_org_name'`,
+      `opportunity.supervision->>'external_partner_org_name'`,
+      `opportunity.executing_context->'partner'->>'organization_name'`,
+    ];
+    return `(${exprs
+      .map(
+        (expr) => `(
+          LOWER(TRIM(COALESCE(${expr}, ''))) = :orgName
+          OR LOWER(TRIM(COALESCE(${expr}, ''))) LIKE :orgNamePrefix
+          OR LOWER(TRIM(COALESCE(${expr}, ''))) LIKE :orgNameSuffix
+          OR LOWER(TRIM(COALESCE(${expr}, ''))) LIKE :orgNameMiddle
+        )`,
+      )
+      .join(' OR ')})`;
+  }
+
+  private partnerOrgNameMatchParams(orgNameNorm: string): Record<string, string> {
+    const token = orgNameNorm.length >= 4;
+    return {
+      orgName: orgNameNorm,
+      // Length under 4 stays exact-only: the LIKE patterns cannot match.
+      orgNamePrefix: token ? `${orgNameNorm} %` : '\u0000',
+      orgNameSuffix: token ? `% ${orgNameNorm}` : '\u0000',
+      orgNameMiddle: token ? `% ${orgNameNorm} %` : '\u0000',
+    };
+  }
+
+  /** True when the opportunity names this organisation, even if the contact email is a different person. */
+  private async namedPartnerOrgMatches(
+    opp: Opportunity,
+    organizationId?: string | null,
+    userId?: string | null,
+  ): Promise<boolean> {
+    let orgName = '';
+    try {
+      if (organizationId) {
+        const org = await this.organizationsService.findOne(organizationId);
+        orgName = org?.name || '';
+      } else if (userId) {
+        const org = await this.organizationsService.getMyOrganization(userId);
+        orgName = org?.name || '';
+      } else {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+    const collab = opp.external_partner_collaboration as
+      | { organization_name?: string }
+      | undefined;
+    const po = opp.partner_organization as
+      | { organization_name?: string; name?: string }
+      | undefined;
+    const sup = opp.supervision as
+      | { partner_org_name?: string; external_partner_org_name?: string }
+      | undefined;
+    const ctx = opp.executing_context as
+      | { partner?: { organization_name?: string } }
+      | undefined;
+    const candidates = [
+      collab?.organization_name,
+      po?.organization_name,
+      po?.name,
+      sup?.partner_org_name,
+      sup?.external_partner_org_name,
+      ctx?.partner?.organization_name,
+    ];
+    return candidates.some(
+      (raw) =>
+        typeof raw === 'string' &&
+        this.orgNamesReferToSamePartner(raw, orgName),
+    );
+  }
+
+  private async assertPartnerOwnsOpportunity(
     opp: Opportunity,
     partnerEmail: string,
     organizationId?: string | null,
+    userId?: string | null,
   ) {
     const expectedEmail = this.resolvePartnerEmailFromOpportunity(opp);
     const emailMatches =
@@ -4389,20 +4533,31 @@ export class OpportunitiesService {
       !!organizationId &&
       !!opp.organizationId &&
       organizationId === opp.organizationId;
+    const namedOrgMatches = await this.namedPartnerOrgMatches(
+      opp,
+      organizationId,
+      userId,
+    );
 
-    if (!emailMatches && !organizationMatches) {
+    if (!emailMatches && !organizationMatches && !namedOrgMatches) {
       throw new ForbiddenException(
         'You are not the assigned partner reviewer for this opportunity',
       );
     }
   }
 
-  private assertPartnerCanReviewOpportunity(
+  private async assertPartnerCanReviewOpportunity(
     opp: Opportunity,
     partnerEmail: string,
     organizationId?: string | null,
+    userId?: string | null,
   ) {
-    this.assertPartnerOwnsOpportunity(opp, partnerEmail, organizationId);
+    await this.assertPartnerOwnsOpportunity(
+      opp,
+      partnerEmail,
+      organizationId,
+      userId,
+    );
 
     if (opp.isStudentCreated) {
       if (!opp.faculty_verified) {
@@ -4665,7 +4820,12 @@ export class OpportunitiesService {
     // opportunities by calling approve again and reading back the (unchanged) result. Ownership
     // only, not the full assertion (which also demands "still awaiting review" and would wrongly
     // reject the correct partner's own legitimate double-click on an already-approved opportunity).
-    this.assertPartnerOwnsOpportunity(opp, partner.email, partner.organizationId);
+    await this.assertPartnerOwnsOpportunity(
+      opp,
+      partner.email,
+      partner.organizationId,
+      partner.id,
+    );
 
     if (
       opp.partnerApprovalStatus === 'approved' &&
@@ -4674,10 +4834,11 @@ export class OpportunitiesService {
       return opp;
     }
 
-    this.assertPartnerCanReviewOpportunity(
+    await this.assertPartnerCanReviewOpportunity(
       opp,
       partner.email,
       partner.organizationId,
+      partner.id,
     );
     const actor: ApprovalActor = { id: partner.id, name: partner.name };
     if (opp.isStudentCreated) {
@@ -4703,10 +4864,11 @@ export class OpportunitiesService {
     const opp = await this.findOne(opportunityId);
     if (!opp) throw new NotFoundException('Opportunity not found');
 
-    this.assertPartnerCanReviewOpportunity(
+    await this.assertPartnerCanReviewOpportunity(
       opp,
       partner.email,
       partner.organizationId,
+      partner.id,
     );
     this.opportunityWorkflow.afterPartnerRejected(opp, reason, {
       id: partner.id,
@@ -4740,10 +4902,11 @@ export class OpportunitiesService {
     const opp = await this.findOne(opportunityId);
     if (!opp) throw new NotFoundException('Opportunity not found');
 
-    this.assertPartnerCanReviewOpportunity(
+    await this.assertPartnerCanReviewOpportunity(
       opp,
       partner.email,
       partner.organizationId,
+      partner.id,
     );
 
     this.opportunityWorkflow.afterPartnerRevision(opp, reason, {

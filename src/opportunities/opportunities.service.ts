@@ -1183,6 +1183,9 @@ export class OpportunitiesService {
   }
 
   private getApiOpportunityStatus(opp: Opportunity): string | null {
+    // Keep unfinished creator drafts out of the closed/rejected bucket. normalizeOpportunityStatus
+    // maps the raw word "draft" to "closed", which hid them from every Drafts tab.
+    if (String(opp.status || '').toLowerCase() === 'draft') return 'draft';
     if (opp.workflowStage === WORKFLOW_STAGE.LIVE && opp.admin_approved)
       return 'live';
     if (
@@ -1275,6 +1278,7 @@ export class OpportunitiesService {
 
   /** Public directory: honor org/creator visibility flags only. Participation rules apply at apply/enroll time. */
   private isPubliclyVisibleOpportunity(opp: Opportunity): boolean {
+    if (String(opp.status || '').toLowerCase() === 'draft') return false;
     // Student-created opportunities are Team Projects — private to their creator + named team
     // members, never discoverable in the public/anonymous directory (not even by direct id guess
     // via getPublicOpportunityById). The restrictive-visibility branch further below used to
@@ -1555,6 +1559,9 @@ export class OpportunitiesService {
   }
 
   async create(userId: string, createOpportunityDto: CreateOpportunityDto) {
+    if (createOpportunityDto?.draft === true) {
+      return this.saveCreatorOpportunityDraft(userId, null, createOpportunityDto);
+    }
     const user = await this.usersRepository.findOne({
       where: { id: userId },
       relations: ['organization'],
@@ -1839,17 +1846,11 @@ export class OpportunitiesService {
       match_strength: 'exact' | 'similar';
     }> = [];
 
-    const requestingUserId = options?.requestingUserId
-      ? String(options.requestingUserId)
-      : '';
-
     for (const opp of candidates) {
       if (excludeId && opp.id === excludeId) continue;
-      // Another student's unsubmitted draft is not public information — only the owner sees theirs.
-      if (
-        String(opp.status || '').toLowerCase() === 'draft' &&
-        (!requestingUserId || String(opp.creatorId || '') !== requestingUserId)
-      ) {
+      // A draft is not a live listing. Including the owner's own draft would block Next-save
+      // from later submitting that same opportunity as a duplicate of itself.
+      if (String(opp.status || '').toLowerCase() === 'draft') {
         continue;
       }
       if (!opportunityMatchesUniversity(opp, uniNorm)) continue;
@@ -2208,6 +2209,13 @@ export class OpportunitiesService {
     updateOpportunityDto: UpdateOpportunityDto,
     organizationId?: string,
   ) {
+    if (updateOpportunityDto?.draft === true) {
+      return this.saveCreatorOpportunityDraft(
+        userId,
+        updateOpportunityDto.id,
+        updateOpportunityDto,
+      );
+    }
     const opportunity = await this.opportunitiesRepository.findOne({
       where: { id: updateOpportunityDto.id },
     });
@@ -2744,6 +2752,42 @@ export class OpportunitiesService {
     id: string | null,
     dto: Record<string, unknown>,
   ) {
+    return this.persistOpportunityDraft(userId, id, dto, { isStudentCreated: true });
+  }
+
+  /**
+   * Faculty, partner, NGO, and university wizards. Same incomplete-save rules as the student
+   * draft: no approval emails, status stays `draft`, and a later full create is what starts review.
+   */
+  async saveCreatorOpportunityDraft(
+    userId: string,
+    id: string | null,
+    dto: Record<string, unknown> | CreateOpportunityDto | UpdateOpportunityDto,
+  ) {
+    const user = await this.usersRepository.findOne({ where: { id: userId } });
+    if (!user) throw new ForbiddenException('User not found');
+    if (user.role === UserRole.STUDENT) {
+      return this.saveStudentOpportunityDraft(userId, id, dto as Record<string, unknown>);
+    }
+    const org = await this.organizationsService.getMyOrganization(userId);
+    const isFaculty = user.role === UserRole.FACULTY;
+    return this.persistOpportunityDraft(userId, id, dto as Record<string, unknown>, {
+      isStudentCreated: false,
+      facultyId: isFaculty ? user.id : null,
+      organizationId: org?.id ?? null,
+    });
+  }
+
+  private async persistOpportunityDraft(
+    userId: string,
+    id: string | null,
+    dto: Record<string, unknown>,
+    ownership: {
+      isStudentCreated: boolean;
+      facultyId?: string | null;
+      organizationId?: string | null;
+    },
+  ) {
     const user = await this.usersRepository.findOne({ where: { id: userId } });
     if (!user) throw new ForbiddenException('User not found');
 
@@ -2752,6 +2796,10 @@ export class OpportunitiesService {
       id: _dtoId,
       ...fields
     } = dto as Record<string, unknown> & { draft?: unknown; id?: unknown };
+    const title =
+      typeof fields.title === 'string' && fields.title.trim()
+        ? fields.title.trim()
+        : 'Untitled opportunity';
 
     if (id) {
       const opportunity = await this.opportunitiesRepository.findOne({
@@ -2769,20 +2817,25 @@ export class OpportunitiesService {
           'This opportunity has already been submitted and can no longer be saved as a draft',
         );
       }
-      Object.assign(opportunity, fields, { status: 'draft' });
+      Object.assign(opportunity, fields, { title, status: 'draft' });
       const saved = await this.opportunitiesRepository.save(opportunity);
       return { success: true, data: saved };
     }
 
     const payload: DeepPartial<Opportunity> = {
       ...fields,
+      title,
       creatorId: user.id,
       status: 'draft',
-      isStudentCreated: true,
+      isStudentCreated: ownership.isStudentCreated,
       visibility: 'restricted',
+      ...(ownership.facultyId !== undefined ? { facultyId: ownership.facultyId } : {}),
+      ...(ownership.organizationId !== undefined
+        ? { organizationId: ownership.organizationId }
+        : {}),
       // `sdg` is a required (NOT NULL, no default) column kept for backward compatibility, but the
       // wizard only ever sends the SDG selection nested under `sdg_info.sdg_id` — never a top-level
-      // `sdg` field — and a draft is saved long before the student reaches that step. Without this
+      // `sdg` field — and a draft is saved long before the creator reaches that step. Without this
       // fallback the very first "Save Draft" click fails outright with a NOT NULL violation, since
       // `fields` never carries a `sdg` key at all. Mirrors the same fallback `createStudentOpportunity`
       // already applies for a full submit.

@@ -233,6 +233,11 @@ export class UpdateOpportunityDto {
   @IsString()
   id: string;
 
+  /** Mid-wizard save. Not a column — OpportunitiesService branches on this, then strips it. */
+  @IsBoolean()
+  @IsOptional()
+  draft?: boolean;
+
   @IsString()
   @IsOptional()
   title?: string;

@@ -61,13 +61,13 @@ export class NotifyCommunityAwardDto {
     @IsOptional() @IsString() scopeLabel?: string;
     @IsOptional()
     @IsArray()
-    @ArrayMaxSize(3)
+    @ArrayMaxSize(500)
     @ValidateNested({ each: true })
     @Type(() => CommunityAwardPickDto)
     picks?: CommunityAwardPickDto[];
     @IsOptional()
     @IsArray()
-    @ArrayMaxSize(3)
+    @ArrayMaxSize(500)
     @IsString({ each: true })
     reportIds?: string[];
 

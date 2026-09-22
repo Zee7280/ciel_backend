@@ -47,6 +47,7 @@ export type CommunityAwardCard = {
   total: number;
   level: CommunityServiceLevel;
   awardBadges: NonNullable<StudentReport['awardBadges']>;
+  awardBadgeHistory: NonNullable<StudentReport['awardBadgeHistory']>;
 };
 
 @Injectable()
@@ -154,6 +155,7 @@ export class CommunityAwardService {
       total: scored.total,
       level: communityServiceLevel(scored.total),
       awardBadges: report.awardBadges ?? [],
+      awardBadgeHistory: report.awardBadgeHistory ?? [],
     };
   }
 
@@ -358,6 +360,8 @@ export class CommunityAwardService {
     const allowed = new Set(pool.map((c) => c.id));
     const scope = (dto.scopeLabel || 'this ranking').trim();
     const topN = awardTopN(kind);
+    // CIEL PK national ranking publishes the whole reviewed cohort. Faculty, partner
+    // and university awards stay capped at their top-N medal.
     const picks = (
       dto.picks?.length
         ? dto.picks
@@ -369,7 +373,7 @@ export class CommunityAwardService {
           }))
     )
       .filter((p) => p.reportId && allowed.has(p.reportId))
-      .slice(0, topN);
+      .slice(0, kind === 'ciel' ? undefined : topN);
     const label = awardBadgeLabel(kind, scope);
     const seen = new Set<string>();
     let sent = 0;

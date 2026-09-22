@@ -683,7 +683,15 @@ export class StudentsService {
     }
 
     await this.otpRepository.save(otpRecord);
-    await this.mailService.sendTeamMemberOtp(email, otp);
+    try {
+      await this.mailService.sendTeamMemberOtp(email, otp);
+    } catch {
+      // mail.service.ts now rethrows on send failure instead of swallowing it — surface a clear
+      // error here rather than telling the caller "sent" when the email never went out.
+      throw new BadRequestException(
+        'Failed to send verification code. Please try again in a moment.',
+      );
+    }
 
     return { success: true, message: 'OTP sent successfully' };
   }

@@ -469,6 +469,7 @@ export class MailService {
       this.logger.log(`OTP email sent to ${to}`);
     } catch (error) {
       this.logger.error(`Failed to send OTP email to ${to}`, error.stack);
+      throw error;
     }
   }
 

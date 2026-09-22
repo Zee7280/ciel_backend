@@ -1501,7 +1501,18 @@ export class OpportunitiesService {
   }
 
   private async handleAdminApprovedSideEffects(opportunity: Opportunity) {
-    if (!opportunity.isStudentCreated) return;
+    if (!opportunity.isStudentCreated) {
+      // Faculty creator: no dedicated "fully approved" email template for this audience (the one
+      // below is student-report-specific), so send the generic status-update email directly instead
+      // of suppressing it — faculty used to get nothing at all when their opportunity went live.
+      await this.notifyStudentOpportunityUpdate(opportunity, {
+        title: 'Opportunity live',
+        message:
+          'Your opportunity has passed admin review and is now live on CIEL. Students can now discover and apply to it.',
+        emailSubject: 'Your opportunity is now live',
+      });
+      return;
+    }
 
     // Single in-app notification (two used to fire here and could surface as duplicate alerts / digests).
     await this.notifyStudentOpportunityUpdate(opportunity, {
@@ -2388,6 +2399,55 @@ export class OpportunitiesService {
         opportunity.status = 'pending_execution';
         opportunity.execution_verification_status = 'pending_execution';
         opportunity.adminApprovalStatus = LINE_STATUS.PENDING;
+      }
+
+      // Re-review needs a fresh notification too — this branch used to silently rewind the
+      // opportunity's approval lane with no email to whoever needs to act on it next.
+      const editExecBlocking =
+        !!opportunity.execution_verification_token &&
+        !opportunity.execution_verified;
+      if (
+        opportunity.workflowStage === WORKFLOW_STAGE.PENDING_PARTNER &&
+        opportunity.partnerToken &&
+        !editExecBlocking
+      ) {
+        const partnerEmail = this.resolvePartnerEmailFromOpportunity(opportunity);
+        if (partnerEmail) {
+          try {
+            const verifyDetails = this.buildOpportunityVerificationEmailDetails(
+              opportunity,
+              {
+                facultyAuthorName: resolveDisplayNameForProfile(user),
+                facultyAuthorEmail: user.email || undefined,
+              },
+            );
+            await this.mailService.sendPartnerVerification(
+              partnerEmail,
+              opportunity.title,
+              opportunity.partnerToken,
+              verifyDetails,
+              {
+                path: '/verify/partner',
+                returnTo: this.getPartnerApprovalReturnTo(opportunity.id),
+                introText:
+                  `The faculty supervisor updated <strong>${this.escHtml(opportunity.title)}</strong> and it needs your review again. ` +
+                  'Please review the partner execution scope to continue this opportunity in CIEL.',
+                ctaLabel: 'Review partner approval',
+              },
+            );
+          } catch (e) {
+            console.warn(
+              'Failed to send partner verification email for faculty resubmission',
+              (e as Error).message,
+            );
+          }
+        }
+      } else if (
+        opportunity.status === 'pending_approval' &&
+        !opportunity.admin_approved &&
+        !editExecBlocking
+      ) {
+        await this.sendAdminReviewEmail(opportunity, 'faculty resubmission');
       }
     }
 
@@ -3379,15 +3439,15 @@ export class OpportunitiesService {
     if (!opp) throw new NotFoundException('Opportunity not found');
     this.opportunityWorkflow.afterAdminRejected(opp, reason, actor);
     const saved = await this.opportunitiesRepository.save(opp);
-    if (saved.isStudentCreated) {
-      await this.notifyStudentOpportunityUpdate(saved, {
-        title: 'Opportunity closed',
-        message:
-          'Your opportunity was permanently rejected during admin review and can no longer be edited.',
-        emailSubject: 'Your opportunity was permanently rejected',
-        reason,
-      });
-    }
+    // Faculty creators used to get no notification at all here, unlike revise() below — reject is
+    // just as final for them as for a student creator, so they need to hear about it too.
+    await this.notifyStudentOpportunityUpdate(saved, {
+      title: 'Opportunity closed',
+      message:
+        'Your opportunity was permanently rejected during admin review and can no longer be edited.',
+      emailSubject: 'Your opportunity was permanently rejected',
+      reason,
+    });
     return saved;
   }
 

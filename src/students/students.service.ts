@@ -1780,6 +1780,13 @@ export class StudentsService {
     };
   }
 
+  remindOpportunityReviewer(userId: string, opportunityId: string) {
+    return this.opportunitiesService.remindOpportunityReviewer(
+      userId,
+      opportunityId,
+    );
+  }
+
   async createStudentOpportunity(userId: string, dto: CreateOpportunityDto) {
     // Single CIEL workflow (faculty token + stages); avoids duplicate liaison-only rows that never sync with the dashboard.
     const result = await this.opportunitiesService.createStudentOpportunity(

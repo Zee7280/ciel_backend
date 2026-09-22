@@ -777,6 +777,72 @@ export class OpportunitiesService {
     return { notifyFaculty: false, notifyPartner: false };
   }
 
+  /**
+   * Creator-triggered resend of the email the current reviewer should already have received.
+   * Does not move the approval stage. Faculty and partner only — CIEL PK has no magic-link inbox here.
+   */
+  async remindOpportunityReviewer(userId: string, opportunityId: string) {
+    const user = await this.usersRepository.findOne({ where: { id: userId } });
+    if (!user) throw new ForbiddenException('User not found');
+    const opp = await this.opportunitiesRepository.findOne({
+      where: { id: opportunityId },
+    });
+    if (!opp) throw new NotFoundException('Opportunity not found');
+    const isOwner = opp.creatorId === userId;
+    const isAdmin = user.role === UserRole.SUPER_ADMIN;
+    if (!isOwner && !isAdmin) {
+      throw new ForbiddenException('You do not have access to this opportunity');
+    }
+
+    if (this.isAwaitingFacultyDashboardReview(opp)) {
+      if (!opp.faculty_verification_token) {
+        opp.faculty_verification_token = randomUUID();
+        await this.opportunitiesRepository.save(opp);
+      }
+      const facultyTo = this.getFacultyEmailFromOpportunity(opp);
+      if (!facultyTo) {
+        throw new BadRequestException(
+          'No faculty email is saved on this opportunity.',
+        );
+      }
+      await this.notifyFacultyForStudentOpportunityVerification(opp);
+      return {
+        success: true,
+        sent_to: 'faculty',
+        message: 'Verification email sent to the faculty supervisor.',
+      };
+    }
+
+    const awaitingPartner =
+      !!opp.requiresPartnerApproval &&
+      !opp.partnerVerified &&
+      opp.partnerApprovalStatus !== LINE_STATUS.APPROVED &&
+      (opp.workflowStage === WORKFLOW_STAGE.PENDING_PARTNER ||
+        opp.status === 'pending_partner');
+    if (awaitingPartner) {
+      if (!opp.partnerToken) {
+        opp.partnerToken = randomUUID();
+        await this.opportunitiesRepository.save(opp);
+      }
+      const partnerEmail = this.resolvePartnerEmailFromOpportunity(opp);
+      if (!partnerEmail) {
+        throw new BadRequestException(
+          'No partner email is saved on this opportunity.',
+        );
+      }
+      await this.sendPartnerApprovalEmail(opp);
+      return {
+        success: true,
+        sent_to: 'partner',
+        message: 'Verification email sent to the partner.',
+      };
+    }
+
+    throw new BadRequestException(
+      'This opportunity is not waiting on a faculty or partner email.',
+    );
+  }
+
   /** Faculty verification email after student resubmit reaches `pending_faculty`. */
   async notifyFacultyForStudentOpportunityVerification(
     opportunity: Opportunity,

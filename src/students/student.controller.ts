@@ -126,6 +126,12 @@ export class StudentController {
     );
   }
 
+  /** Resend the official faculty or partner verification email. Does not change the approval stage. */
+  @Post('opportunity/:id/remind-reviewer')
+  remindOpportunityReviewer(@Request() req, @Param('id') id: string) {
+    return this.studentsService.remindOpportunityReviewer(req.user.id, id);
+  }
+
   @Post('opportunity/:id')
   @Patch('opportunity/:id')
   updateIndependentProject(

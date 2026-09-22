@@ -162,6 +162,7 @@ export class FacultyReportsService {
         organization_name: r.opportunity?.organization?.name || 'N/A',
         status: r.status,
         faculty_status: r.faculty_status,
+        project_id: r.project_id || r.opportunityId || null,
         hours: Number(r.section1?.metrics?.total_verified_hours ?? 0) || 0,
         submission_date: r.submission_date,
         report_submitted_at: r.reportSubmittedAt,

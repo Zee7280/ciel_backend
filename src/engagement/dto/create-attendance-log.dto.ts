@@ -32,6 +32,12 @@ export class CreateAttendanceLogDto {
   @IsString()
   organizationName: string;
 
+  /** Optional map pin as `lat,lng`. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  locationPin?: string;
+
   @IsString()
   activityType: string;
 

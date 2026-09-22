@@ -1786,6 +1786,7 @@ export class EngagementService {
 
     const log = this.attendanceLogRepository.create({
       ...dto,
+      locationPin: dto.locationPin?.trim() || null,
       participantId: participation.id,
       projectId: participation.projectId,
       sessionHours,

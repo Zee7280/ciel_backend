@@ -3178,6 +3178,7 @@ export class StudentReportsService {
                   start_time: log.startTime,
                   end_time: log.endTime,
                   location: log.organizationName, // Mapping as location
+                  location_pin: (log as { locationPin?: string | null }).locationPin ?? null,
                   activity_type: log.activityType,
                   description: log.description,
                   hours: Number(log.sessionHours),
@@ -3837,6 +3838,7 @@ export class StudentReportsService {
               start_time: log.startTime,
               end_time: log.endTime,
               location: log.organizationName,
+              location_pin: (log as { locationPin?: string | null }).locationPin ?? null,
               activity_type: log.activityType,
               description: log.description,
               hours: Number(log.sessionHours),

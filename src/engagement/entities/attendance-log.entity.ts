@@ -49,6 +49,10 @@ export class AttendanceLog {
   @Column()
   organizationName: string;
 
+  /** Optional GPS pin from the session map (`lat,lng`). */
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  locationPin: string | null;
+
   @Column()
   activityType: string;
 

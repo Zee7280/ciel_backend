@@ -3010,8 +3010,17 @@ export class OpportunitiesService {
         await this.facultyUniversityScope.resolveOpportunityIdsForUniversityOrganization(
           org.id,
         );
-      if (!uniIds.length) return [];
-      query.andWhere('opportunity.id IN (:...uniIds)', { uniIds });
+      if (!uniIds.length && !matchNamedOrg) return [];
+      if (uniIds.length && matchNamedOrg) {
+        query.andWhere(
+          `(opportunity.id IN (:...uniIds) OR ${namedOrgSql})`,
+          { uniIds, ...namedOrgParams },
+        );
+      } else if (uniIds.length) {
+        query.andWhere('opportunity.id IN (:...uniIds)', { uniIds });
+      } else {
+        query.andWhere(namedOrgSql, namedOrgParams);
+      }
     } else if (filterOrgId && filterPartnerEmail) {
       // Org-owned rows, student rows that name this login email, or student rows that name this organisation.
       query.andWhere(
@@ -4426,10 +4435,19 @@ export class OpportunitiesService {
    * short-circuit (e.g. partnerDashboardApprove's "already approved" return), unlike the fuller
    * assertPartnerCanReviewOpportunity below, whose "still awaiting review" check would reject a
    * legitimate double-click on an opportunity this same partner already approved. */
+  /** Letters and digits only, so "FELLAH" matches "Fellah Khalid" and "FELLAH,". */
+  private foldPartnerOrgName(name: string): string {
+    return this.facultyUniversityScope
+      .normalizeOrgName(name)
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
   /** Exact name, or the registered name as a whole word inside the name the student typed. */
   private orgNamesReferToSamePartner(candidate: string, target: string): boolean {
-    const left = this.facultyUniversityScope.normalizeOrgName(candidate);
-    const right = this.facultyUniversityScope.normalizeOrgName(target);
+    const left = this.foldPartnerOrgName(candidate);
+    const right = this.foldPartnerOrgName(target);
     if (!left || !right || right.length < 3) return false;
     if (left === right) return true;
     if (right.length < 4) return false;
@@ -4443,32 +4461,41 @@ export class OpportunitiesService {
   private partnerOrgNameMatchSql(): string {
     const exprs = [
       `opportunity.external_partner_collaboration->>'organization_name'`,
+      `opportunity.external_partner_collaboration->>'contact_person'`,
       `opportunity.partner_organization->>'organization_name'`,
       `opportunity.partner_organization->>'name'`,
+      `opportunity.partner_organization->>'contact_person'`,
+      `opportunity.partner_organization->>'contact_person_name'`,
       `opportunity.supervision->>'partner_org_name'`,
       `opportunity.supervision->>'external_partner_org_name'`,
+      `opportunity.supervision->>'partner_contact_person'`,
+      `opportunity.supervision->>'external_partner_contact_person'`,
       `opportunity.executing_context->'partner'->>'organization_name'`,
+      `opportunity.executing_context->'partner'->>'contact_person'`,
     ];
+    const folded = (expr: string) =>
+      `regexp_replace(LOWER(TRIM(COALESCE(${expr}, ''))), '[^a-z0-9]+', ' ', 'g')`;
     return `(${exprs
       .map(
         (expr) => `(
-          LOWER(TRIM(COALESCE(${expr}, ''))) = :orgName
-          OR LOWER(TRIM(COALESCE(${expr}, ''))) LIKE :orgNamePrefix
-          OR LOWER(TRIM(COALESCE(${expr}, ''))) LIKE :orgNameSuffix
-          OR LOWER(TRIM(COALESCE(${expr}, ''))) LIKE :orgNameMiddle
+          ${folded(expr)} = :orgName
+          OR ${folded(expr)} LIKE :orgNamePrefix
+          OR ${folded(expr)} LIKE :orgNameSuffix
+          OR ${folded(expr)} LIKE :orgNameMiddle
         )`,
       )
       .join(' OR ')})`;
   }
 
   private partnerOrgNameMatchParams(orgNameNorm: string): Record<string, string> {
-    const token = orgNameNorm.length >= 4;
+    const folded = this.foldPartnerOrgName(orgNameNorm);
+    const token = folded.length >= 4;
     return {
-      orgName: orgNameNorm,
+      orgName: folded,
       // Length under 4 stays exact-only: the LIKE patterns cannot match.
-      orgNamePrefix: token ? `${orgNameNorm} %` : '\u0000',
-      orgNameSuffix: token ? `% ${orgNameNorm}` : '\u0000',
-      orgNameMiddle: token ? `% ${orgNameNorm} %` : '\u0000',
+      orgNamePrefix: token ? `${folded} %` : '\u0000',
+      orgNameSuffix: token ? `% ${folded}` : '\u0000',
+      orgNameMiddle: token ? `% ${folded} %` : '\u0000',
     };
   }
 
@@ -4478,44 +4505,66 @@ export class OpportunitiesService {
     organizationId?: string | null,
     userId?: string | null,
   ): Promise<boolean> {
-    let orgName = '';
-    try {
-      if (organizationId) {
-        const org = await this.organizationsService.findOne(organizationId);
-        orgName = org?.name || '';
-      } else if (userId) {
-        const org = await this.organizationsService.getMyOrganization(userId);
-        orgName = org?.name || '';
-      } else {
-        return false;
+    const orgNames: string[] = [];
+    if (userId) {
+      try {
+        const mine = await this.organizationsService.getMyOrganization(userId);
+        if (mine?.name) orgNames.push(mine.name);
+      } catch {
+        /* login is not linked to an organisation */
       }
-    } catch {
-      return false;
     }
+    if (organizationId) {
+      try {
+        const org = await this.organizationsService.findOne(organizationId);
+        if (org?.name) orgNames.push(org.name);
+      } catch {
+        /* token org id is missing or stale */
+      }
+    }
+    if (!orgNames.length) return false;
     const collab = opp.external_partner_collaboration as
-      | { organization_name?: string }
+      | { organization_name?: string; contact_person?: string }
       | undefined;
     const po = opp.partner_organization as
-      | { organization_name?: string; name?: string }
+      | {
+          organization_name?: string;
+          name?: string;
+          contact_person?: string;
+          contact_person_name?: string;
+        }
       | undefined;
     const sup = opp.supervision as
-      | { partner_org_name?: string; external_partner_org_name?: string }
+      | {
+          partner_org_name?: string;
+          external_partner_org_name?: string;
+          partner_contact_person?: string;
+          external_partner_contact_person?: string;
+        }
       | undefined;
     const ctx = opp.executing_context as
-      | { partner?: { organization_name?: string } }
+      | { partner?: { organization_name?: string; contact_person?: string } }
       | undefined;
     const candidates = [
       collab?.organization_name,
+      collab?.contact_person,
       po?.organization_name,
       po?.name,
+      po?.contact_person,
+      po?.contact_person_name,
       sup?.partner_org_name,
       sup?.external_partner_org_name,
+      sup?.partner_contact_person,
+      sup?.external_partner_contact_person,
       ctx?.partner?.organization_name,
+      ctx?.partner?.contact_person,
     ];
-    return candidates.some(
-      (raw) =>
-        typeof raw === 'string' &&
-        this.orgNamesReferToSamePartner(raw, orgName),
+    return orgNames.some((orgName) =>
+      candidates.some(
+        (raw) =>
+          typeof raw === 'string' &&
+          this.orgNamesReferToSamePartner(raw, orgName),
+      ),
     );
   }
 

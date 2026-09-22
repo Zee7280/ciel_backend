@@ -25,6 +25,16 @@ import {
 } from './prompts/fyp-ai-rubric.constant';
 import { FypAiEvaluation, parseFypAiResponse } from './parse-fyp-ai.util';
 
+/** Shared rules for the executive flashcard section summaries (V12). Scoring prompts do not use this. */
+const FLASHCARD_SUMMARY_RULES = `You write one section of the CIEL PK executive impact flashcard. This compresses recorded report fields for rapid academic review. It is not a score, and it does not replace the detailed report.
+
+Rules:
+- Use only the inputs below. Never invent hours, people, reach, money, partners, outcomes, or evidence.
+- If a value is missing, write "not recorded" on that line. Do not hide a blank field.
+- Do not claim SDG achievement, long-term causal impact, or that faculty has already verified the report.
+- Plain text only. No markdown, bullets, or asterisks.
+- Each labeled value is one short sentence, about 12–28 words.`;
+
 type OpenAiCompletionOpts = {
   temperature?: number;
   /** When set, requests reproducible sampling (same inputs → same text for supported models). */
@@ -595,31 +605,25 @@ FINAL REVIEW PRINCIPLES
       // SECTION 2 AUTO SUMMARY
       // =====================================================
       case 'section2':
-        return `You are a professional institutional impact analyst. Generate a structured baseline summary based on the following student project information.
+        return `${FLASHCARD_SUMMARY_RULES}
 
-                Inputs:
-                - Project Title: ${data.projectTitle}
-                - Partner Organization: ${data.partnerOrg}
-                - Location: ${data.location}
-                - Project Duration: ${data.duration}
-                - Problem / System Need: ${data.problem_statement}
-                - Academic Discipline: ${data.discipline}
-                - Discipline Contribution: ${data.discipline_contribution}
-                - Baseline Evidence Sources: ${data.baseline_evidence} ${data.baseline_evidence_other ? `(${data.baseline_evidence_other})` : ''}
+Lens: Community Need & Starting Point. Describe only what was true before the project. Do not describe activities or results.
 
-                Generate a summary with exactly these 5 numbered sections:
-                1. Identified Problem: Clearly describe the issue or system gap that existed before the intervention.
-                2. Affected Beneficiary Group: Identify who was affected and where.
-                3. Baseline Evidence: Explain what data or sources informed the understanding of the problem.
-                4. Academic Perspective: Explain how the student's academic discipline helped analyze the situation.
-                5. Intervention Justification: Explain why a structured intervention was necessary.
+Inputs (the student report section, as saved):
+- Problem / system need: ${data.problem_statement}
+- Who was affected: ${data.affected_group}
+- What was missing: ${JSON.stringify(data.system_gaps || [])}
+- Academic discipline: ${data.discipline}${data.discipline_other ? ` (${data.discipline_other})` : ''}
+- Discipline contribution: ${data.discipline_contribution}
+- Baseline evidence sources: ${JSON.stringify(data.baseline_evidence || [])} ${data.baseline_evidence_other ? `(${data.baseline_evidence_other})` : ''}
+- Full section: ${JSON.stringify(data)}
 
-                Constraints:
-                - Limit the entire summary to 120–150 words.
-                - Use professional institutional language.
-                - Do not describe activities, results, or outcomes.
-                - Focus strictly on the baseline context.
-                - Do NOT use markdown formatting (no bolding, no asterisks). Output plain text only.`;
+Output exactly these lines:
+Need: the specific gap that existed before the project
+Who: who was affected, with a number only if one was recorded
+Known from: the baseline sources actually selected
+Facts: short chips such as affected count, source count, and discipline — omit any chip you cannot support
+Missing: required baseline fields that are blank, or "none"`;
 
       // =====================================================
       // SECTION 2 EVALUATION
@@ -686,13 +690,24 @@ Provide a brief explanation of the score.`;
       // SECTION 3 AUTO SUMMARY
       // =====================================================
       case 'section3':
-        return `You are a student writing a formal community service report. Summarize the SDG contribution intent.
-                Focus on your INTENT and PLAN to address the goal.
-                Strictly write in the first person ('I' or 'We'). Write exactly 2 concise sentences.
-                Do NOT use any markdown formatting, asterisks, or bullet points. Output plain text only.
+        return `${FLASHCARD_SUMMARY_RULES}
 
-                Primary SDG: ${data.primary_sdg?.goal_title}
-                Intent Statement: ${data.contribution_intent_statement}`;
+Lens: SDG Contribution. Link the recorded work to the named targets. Do not treat an SDG icon as proof of impact.
+
+Inputs (the student report section, as saved):
+Primary SDG number: ${data.primary_sdg?.goal_number}
+Primary SDG title: ${data.primary_sdg?.goal_title}
+Target: ${data.primary_sdg?.target_id}
+Indicator: ${data.primary_sdg?.indicator_id}
+Contribution logic: ${data.contribution_intent_statement || data.student_contribution_intent_statement}
+Secondary SDGs: ${JSON.stringify(data.secondary_sdgs || [])}
+Full section: ${JSON.stringify(data)}
+
+Output exactly these lines:
+SDG: which recorded goals this work supports, and the concrete link
+Logic: how the physical or service change maps to the named target, not to the icon alone
+Facts: count of registered SDGs, targets, and indicators only when present in the input
+Missing: optional or required SDG fields that are blank, or "none"`;
 
       // =====================================================
       // SECTION 3 EVALUATION
@@ -753,28 +768,22 @@ Provide a brief explanation of the score.`;
       // SECTION 4 AUTO SUMMARY
       // =====================================================
       case 'section4':
-        return `You are a professional institutional analyst. Generate a structured report summary for Section 4 (Activities & Outputs) based on the project data.
+        return `${FLASHCARD_SUMMARY_RULES}
 
-                Strictly follow these three steps:
-                1. Implementation Profile: Describe what activities were conducted, the delivery mode, total sessions, and overall duration. Identify the dominant activity cluster if multiple types exist.
-                2. Output Profile: Summarize the outputs delivered, their diversity, and scale. Analyze "Other" output types and classify them into closest meaningful categories if possible, or mention them generically.
-                3. Beneficiary Profile: Describe progress in reaching beneficiary groups, total number reached, and whether vulnerable/priority groups were included.
+Lens: Activities & Outputs. Count what was delivered. Do not interpret outcomes or claim that people were improved or empowered.
 
-                Constraints:
-                - Do NOT interpret outcomes, improvements, or impact (e.g., avoid "improved health" or "empowered community").
-                - Focus strictly on what was conducted and delivered.
-                - Write exactly 3-4 professional, concise sentences.
-                - Use a neutral, institutional tone.
-                - Do NOT use markdown (bolding, lists, etc). Output plain text only.
+Inputs (the student report section, as saved):
+- Activity blocks: ${JSON.stringify(data.activity_blocks || data.activities || [])}
+- Project summary: ${JSON.stringify(data.project_summary || {})}
+- Distinct beneficiaries: ${data.project_summary?.distinct_total_beneficiaries}
+- Full section: ${JSON.stringify(data)}
 
-                Data:
-                - Activities: ${JSON.stringify(data.activities)}
-                - Total Sessions: ${data.total_sessions}
-                - Project Duration: ${data.engagementProfile?.engagement_span || 'Not specified'} days
-                - Outputs: ${JSON.stringify(data.outputs)}
-                - Total Beneficiaries: ${data.project_summary?.distinct_total_beneficiaries}
-                - Beneficiary Categories: ${JSON.stringify(data.beneficiary_categories)}
-                - Team Contributions: ${JSON.stringify(data.team_contributions)}`;
+Output exactly these lines:
+Activities: the recorded activities, in a few words
+Outputs: countable things delivered, with numbers only when recorded
+Reach: unique people served, marked estimated only if the input says so
+Facts: activity count, output count, and unique reach — omit a chip you cannot support
+Missing: required activity or output fields that are blank, or "none"`;
 
       // =====================================================
       // SECTION 4 EVALUATION
@@ -838,33 +847,21 @@ Provide a brief explanation of the score.`;
       // SECTION 5 AUTO SUMMARY
       // =====================================================
       case 'section5_summary':
-        return `
-Generate a concise outcome summary for Section 5 — Outcomes & Results.
+        return `${FLASHCARD_SUMMARY_RULES}
 
-Inputs:
-Primary SDG: ${data.primary_sdg}
-SDG Target: ${data.sdg_target}
-Total Beneficiaries Reached: ${data.project_summary?.distinct_total_beneficiaries}
-Output Types Recorded: ${JSON.stringify(data.outputs)}
-Observed Change Narrative: ${data.observed_change}
-Measurable Outcomes: ${JSON.stringify(data.measurable_outcomes)}
-Challenges & Limitations Narrative: ${data.challenges}
+Lens: Outcomes & Measured Change. Report before → after only when both numbers are recorded. A short follow-up is a limit, not a hidden success.
 
-Instructions:
-1. Summarize the main change observed among beneficiaries.
-2. Briefly reference the measurable outcome (baseline vs endline).
-3. Indicate the type of outcome achieved (skills, behaviour, access etc).
-4. Acknowledge any key limitation if mentioned.
+Inputs (the student report section, as saved):
+Observed change: ${data.observed_change}
+Measurable outcomes: ${JSON.stringify(data.measurable_outcomes || [])}
+Challenges: ${data.challenges}
+Full section: ${JSON.stringify(data)}
 
-Rules:
-Maximum 50 words.
-Use neutral professional language.
-Do not exaggerate impact.
-Do not claim SDG achievement.
-
-Output:
-Write one concise paragraph (35–50 words).
-`;
+Output exactly these lines:
+Change: the recorded baseline → endline, and whether it was directly measured
+Limit: the stated limitation, including a short follow-up window when that is what the input says
+Facts: outcome count and how many were directly measured
+Missing: a measurable outcome or its evidence reference when absent, or "none"`;
 
       // =====================================================
       // SECTION 5 EVALUATION
@@ -946,31 +943,21 @@ Provide a brief explanation of the score.`;
       // SECTION 6 AUTO SUMMARY
       // =====================================================
       case 'section6_summary':
-        return `
-Generate the auto-generated summary for Section 6 — Resources & Implementation Support.
+        return `${FLASHCARD_SUMMARY_RULES}
 
-Inputs:
-Primary SDG: ${data.primary_sdg}
-SDG Target: ${data.sdg_target}
-Total Beneficiaries Reached: ${data.project_summary?.distinct_total_beneficiaries}
-Total Verified Student Hours: ${data.total_verified_hours}
-Resource Confirmation Model: ${data.resource_model}
-Resource Entries: ${JSON.stringify(data.resources)}
-Evidence Upload Presence: ${data.evidence}
+Lens: Resources & Stewardship. Trace what was used and where it came from. Zero budget is a valid recorded fact.
 
-Instructions:
-1. Identify whether the project relied only on volunteer effort or included additional resources.
-2. Briefly summarize the main resource categories used.
-3. Mention key supporting sources.
-4. Indicate verification level.
+Inputs (the student report section, as saved):
+Uses extra resources: ${data.use_resources}
+Resource entries: ${JSON.stringify(data.resources || [])}
+Full section: ${JSON.stringify(data)}
 
-Rules:
-Maximum 50 words.
-Neutral institutional language.
-
-Output:
-Write one concise paragraph (35–50 words).
-`;
+Output exactly these lines:
+Resources: cash, in-kind, or volunteer time actually recorded
+Sources: who provided them
+Use: what those resources paid for or enabled
+Facts: amount traced and entry count, only from the input
+Missing: source or use when a resource is listed without them, or "none"`;
 
       // =====================================================
       // SECTION 6 EVALUATION
@@ -1029,26 +1016,21 @@ Provide a brief explanation of the score.`;
       // SECTION 7 SUMMARY
       // =====================================================
       case 'section7_summary':
-        return `
-Generate the auto-generated summary for Section 7 — Partnerships & Collaboration.
+        return `${FLASHCARD_SUMMARY_RULES}
 
-Inputs:
-Partnership Confirmation: ${data.confirmation}
-Partner Entries: ${JSON.stringify(data.partners)}
-Partnership Documentation: ${data.documentation}
+Lens: Partnership & Collaboration. A named role beats a paragraph of praise. Do not list an organization that is not in the input.
 
-Instructions:
-1. Identify whether the project involved partners or implemented independently.
-2. State number and types of partners.
-3. Briefly describe main roles or contributions.
-4. Mention verification level and formal documentation.
+Inputs (the student report section, as saved):
+Has partners: ${data.has_partners}
+Partner entries: ${JSON.stringify(data.partners || [])}
+Full section: ${JSON.stringify(data)}
 
-Rules:
-Maximum 50 words. Neutral factual institutional language.
-
-Output:
-Write one concise paragraph (35–50 words).
-`;
+Output exactly these lines:
+Partner: the recorded host or collaborating organization
+Role: what they actually did, such as site, access, or verification
+Contribution: the support recorded, not a compliment
+Facts: partner count and role count
+Missing: a partner role or optional profile link when blank, or "none"`;
 
       // =====================================================
       // SECTION 7 EVALUATION
@@ -1107,27 +1089,25 @@ Provide a brief explanation of the score.`;
       // SECTION 8 SUMMARY
       // =====================================================
       case 'section8_summary':
-        return `
-Generate the auto-generated summary for Section 8 — Evidence, Verification & Ethical Compliance.
+        return `${FLASHCARD_SUMMARY_RULES}
 
-Inputs:
-Evidence Files Uploaded: ${data.evidence_count}
-Evidence Types: ${JSON.stringify(data.evidence_types)}
-Evidence Description: ${data.description}
-Ethical Compliance: ${data.ethics}
-Partner Verification: ${data.partner_verification}
+Lens: Evidence, Ethics & Verification. Visibility does not change verification weight. Private evidence counts the same as public evidence.
 
-Instructions:
-1. State quantity and types of evidence.
-2. Mention ethical confirmations and partner verification.
-3. Describe documentation level.
+Inputs (the student report section, as saved):
+Has evidence: ${data.has_evidence}
+Evidence types: ${JSON.stringify(data.evidence_types || [])}
+Description: ${data.description}
+Ethical compliance: ${JSON.stringify(data.ethical_compliance || data.ethics || {})}
+Visibility: ${data.media_visible}
+Partner verification: ${data.partner_verification}
+Full section: ${JSON.stringify(data)}
 
-Rules:
-Maximum 50 words. Neutral institutional tone.
-
-Output:
-Write one concise paragraph (35–50 words).
-`;
+Output exactly these lines:
+Evidence: how many items, and which kinds were recorded
+Ethics: whether consent and dignity were confirmed
+Visibility: the recorded visibility setting, without treating public as stronger
+Facts: evidence count and consent status
+Missing: ethics confirmation or a claim with no evidence link, or "none"`;
 
       // =====================================================
       // SECTION 8 EVALUATION
@@ -1203,25 +1183,24 @@ Provide a brief explanation of the score.`;
       // SECTION 9 SUMMARY
       // =====================================================
       case 'section9_summary':
-        return `
-Generate the auto-generated summary for Section 9 — Reflection, Learning & Academic Integration.
+        return `${FLASHCARD_SUMMARY_RULES}
 
-Inputs:
-Academic Integration Level: ${data.integration_level}
-Personal Reflection: ${data.reflection}
-Academic Application: ${data.academic_application}
-Competency Ratings: ${JSON.stringify(data.competencies)}
+Lens: Reflection & Academic Growth. Prefer one real decision or shift in thinking over generic leadership language. Do not treat a row of perfect self-ratings as proof.
 
-Instructions:
-1. Summarize key learning outcomes and academic knowledge application.
-2. Indicate competency development and sustainability thinking.
+Inputs (the student report section, as saved):
+Academic integration: ${data.academic_integration}
+Personal learning: ${data.personal_learning}
+Academic application: ${data.academic_application}
+Skills grown: ${JSON.stringify(data.skills_grown || [])}
+Competency scores: ${JSON.stringify(data.competency_scores || data.competencies || {})}
+Full section: ${JSON.stringify(data)}
 
-Rules:
-Maximum 50 words. Neutral institutional tone.
-
-Output:
-Write one concise paragraph (35–50 words).
-`;
+Output exactly these lines:
+Learning: the recorded change in approach or understanding
+Academic use: how the student's field was applied
+Skills: only skills named in the input
+Facts: skill count and competency coverage when the ratings are present
+Missing: reflection or academic application when blank, or "none"`;
 
       // =====================================================
       // SECTION 9 EVALUATION
@@ -1284,26 +1263,24 @@ Provide a brief explanation of the score.`;
       // SECTION 10 SUMMARY
       // =====================================================
       case 'section10_summary':
-        return `
-Generate the auto-generated summary for Section 10 — Sustainability & Continuation.
+        return `${FLASHCARD_SUMMARY_RULES}
 
-Inputs:
-Continuation Status: ${data.status}
-Continuation Explanation: ${data.explanation}
-Sustainability Mechanisms: ${JSON.stringify(data.mechanisms)}
-Scaling Potential: ${data.scaling}
-Policy Influence: ${data.policy}
+Lens: Sustainability & Handover. A candid partial continuation with a named owner is stronger than an unsupported claim that the project continues forever.
 
-Instructions:
-1. State continuation status and mechanisms.
-2. Indicate scaling potential and policy influence.
+Inputs (the student report section, as saved):
+Continuation status: ${data.continuation_status || data.status}
+Continuation details: ${data.continuation_details || data.explanation}
+Mechanisms: ${JSON.stringify(data.mechanisms || [])}
+Scaling potential: ${data.scaling_potential || data.scaling}
+Policy influence: ${data.policy_influence || data.policy}
+Full section: ${JSON.stringify(data)}
 
-Rules:
-Maximum 50 words. Neutral institutional tone.
-
-Output:
-Write one concise paragraph (35–50 words).
-`;
+Output exactly these lines:
+Outlook: whether continuation is yes, partial, or no, in the words of the input
+Mechanisms: the named handover, partner, or follow-up mechanisms
+Scale: replication or scaling only if the input states it
+Facts: mechanism count
+Missing: outlook, mechanism, or signature when absent, or "none"`;
 
       // =====================================================
       // SECTION 10 EVALUATION

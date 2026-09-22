@@ -365,7 +365,7 @@ describe('StudentReportsService', () => {
     expect(result.message).toBe('Report submitted successfully.');
   });
 
-  it('ignores an unreviewed attendance log (pending, no approval yet) when checking individual hours', async () => {
+  it('allows submission when required hours are logged but faculty has not approved attendance yet', async () => {
     mockOpportunityRepository.findOne.mockResolvedValue({
       id: 'opp-1',
       title: 'Test Opportunity',
@@ -391,6 +391,42 @@ describe('StudentReportsService', () => {
       },
     ]);
 
+    const result = await service.createReport(
+      'student-1',
+      { opportunityId: 'opp-1', ...MIN_VALID_SUBMIT_SECTIONS },
+      [],
+      true,
+    );
+
+    expect(result.message).toBe('Report submitted successfully.');
+  });
+
+  it('does not count a rejected attendance log toward the submit hour bar', async () => {
+    mockOpportunityRepository.findOne.mockResolvedValue({
+      id: 'opp-1',
+      title: 'Test Opportunity',
+      isStudentCreated: false,
+      timeline: { expected_hours: 16 },
+    });
+    mockParticipantRepository.find.mockResolvedValue([
+      {
+        id: 'p-lead',
+        projectId: 'opp-1',
+        studentId: 'student-1',
+        status: 'accepted',
+        fullName: 'Lead Student',
+      },
+    ]);
+    mockAttendanceLogsRepository.find.mockResolvedValue([
+      {
+        participantId: 'p-lead',
+        projectId: 'opp-1',
+        sessionHours: 20,
+        approvalStatus: 'rejected',
+        entryStatus: 'pending',
+      },
+    ]);
+
     await expect(
       service.createReport(
         'student-1',
@@ -398,7 +434,7 @@ describe('StudentReportsService', () => {
         [],
         true,
       ),
-    ).rejects.toThrow(BadRequestException);
+    ).rejects.toThrow(/Required engagement hours must be met/);
   });
 
   it('stores null primary_sdg_goal when section3 goal_number is an empty string', async () => {

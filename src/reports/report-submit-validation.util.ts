@@ -53,14 +53,6 @@ function validateCoreSectionsPresence(report: {
       message: 'All three declaration checkboxes must be confirmed',
     });
   }
-  if ((section1.metrics as Record<string, unknown> | undefined)?.hec_compliance === 'below') {
-    issues.push({
-      section: 1,
-      field: 'metrics.hec_compliance',
-      message: 'Required engagement hours must be met to submit this report',
-    });
-  }
-
   const section2 = report.section2 || {};
   if (!stringField(section2.problem_statement).trim()) {
     issues.push({ section: 2, field: 'problem_statement', message: 'Problem statement is required' });

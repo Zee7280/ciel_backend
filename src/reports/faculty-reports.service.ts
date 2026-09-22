@@ -6,6 +6,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   Brackets,
+  In,
   Repository,
   SelectQueryBuilder,
   WhereExpressionBuilder,
@@ -18,6 +19,7 @@ import { AiService } from '../ai/ai.service';
 import { computeCiiV2Result } from './cii-v2.constants';
 import { buildCielPkAiEvaluationPayload } from './build-ciel-pk-ai-evaluation-payload.util';
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
+import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 
 @Injectable()
 export class FacultyReportsService {
@@ -28,6 +30,8 @@ export class FacultyReportsService {
     private readonly facultyService: FacultyService,
     private readonly aiService: AiService,
     private readonly facultyUniversityScopeService: FacultyUniversityScopeService,
+    @InjectRepository(AttendanceLog)
+    private readonly attendanceLogsRepository: Repository<AttendanceLog>,
   ) {}
 
   private normalizeFacultyEmail(facultyEmail: string): string {
@@ -149,8 +153,37 @@ export class FacultyReportsService {
     return reports;
   }
 
+  /** Same submit bar: rejected sessions do not count; pending sessions do. */
+  private loggedHoursForProject(
+    logs: Pick<AttendanceLog, 'approvalStatus' | 'sessionHours'>[],
+  ): number {
+    return logs.reduce((sum, log) => {
+      if (String(log.approvalStatus || '').toLowerCase() === 'rejected') return sum;
+      return sum + (Number(log.sessionHours) || 0);
+    }, 0);
+  }
+
   async findAll(facultyId: string, facultyEmail: string) {
     const reports = await this.listAssignedReports(facultyId, facultyEmail);
+    const projectIds = [
+      ...new Set(
+        reports
+          .map((r) => (r.opportunityId || r.project_id || '').trim())
+          .filter(Boolean),
+      ),
+    ];
+    const logs = projectIds.length
+      ? await this.attendanceLogsRepository.find({
+          where: { projectId: In(projectIds) },
+        })
+      : [];
+    const hoursByProject = new Map<string, number>();
+    for (const projectId of projectIds) {
+      hoursByProject.set(
+        projectId,
+        this.loggedHoursForProject(logs.filter((log) => log.projectId === projectId)),
+      );
+    }
 
     return {
       success: true,
@@ -162,8 +195,10 @@ export class FacultyReportsService {
         organization_name: r.opportunity?.organization?.name || 'N/A',
         status: r.status,
         faculty_status: r.faculty_status,
-        project_id: r.project_id || r.opportunityId || null,
-        hours: Number(r.section1?.metrics?.total_verified_hours ?? 0) || 0,
+        project_id: r.opportunityId || r.project_id || null,
+        hours:
+          hoursByProject.get((r.opportunityId || r.project_id || '').trim()) ??
+          (Number(r.section1?.metrics?.total_verified_hours ?? 0) || 0),
         submission_date: r.submission_date,
         report_submitted_at: r.reportSubmittedAt,
         partner_approved_at: r.partnerApprovedAt,

@@ -315,8 +315,9 @@ function mapSection4(section4: UnknownRecord): UnknownRecord {
             const out = asRecord(output);
             return {
                 output_type: pickString(out.type) || pickString(out.title),
+                output_type_other: pickString(out.type_other),
                 quantity: pickNumber(out.quantity),
-                unit: pickString(out.unit),
+                unit: pickString(out.unit_other) || pickString(out.unit),
                 verification_method: pickString(out.verification_note),
                 evidence_file_ids: [],
             };
@@ -324,19 +325,29 @@ function mapSection4(section4: UnknownRecord): UnknownRecord {
         return {
             activity_id: pickString(row.id) || `ACT-${String(index + 1).padStart(3, '0')}`,
             activity_title: pickString(row.title),
-            activity_date: pickString(row.activity_date) || null,
+            status: pickString(row.status),
+            activity_date: pickString(row.activity_period) || pickString(row.activity_date) || null,
             activity_type: pickString(row.primary_category) || pickString(row.sub_category),
+            sub_category: pickString(row.sub_category),
+            sub_category_other: pickString(row.other_sub_category_text),
+            partner_host: pickString(row.partner_host),
             description: pickString(row.description),
             outputs,
             beneficiaries: {
                 count: pickNumber(row.beneficiaries_reached),
+                unique_count: pickNumber(row.unique_beneficiaries),
                 beneficiary_type: asArray(row.beneficiary_categories).join(', ') || null,
+                beneficiary_other: pickString(row.other_beneficiary_text),
                 age_group: pickString(row.beneficiary_description) || null,
+                overlap_status: pickString(row.overlap_status),
+                overlap_note: pickString(row.overlap_note),
+                counting_method: pickString(row.reach_counting_method_other) || pickString(row.reach_counting_method),
             },
             team_members_involved: [],
             sessions_count: pickNumber(row.sessions_count),
             delivery_mode: pickString(row.delivery_mode),
             geographic_reach: pickString(row.geographic_reach),
+            site_note: pickString(row.site_note),
         };
     });
     const summary = asRecord(section4.project_summary);

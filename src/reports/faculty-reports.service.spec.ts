@@ -39,6 +39,7 @@ function makeService(
     facultyService as any,
     aiService as any,
     facultyUniversityScopeService as any,
+    { find: jest.fn().mockResolvedValue([]) } as any,
   );
   return {
     service,

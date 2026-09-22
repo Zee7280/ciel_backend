@@ -226,23 +226,21 @@ export class StudentReportsService {
     };
   }
 
-  /** Same "verified" definition used throughout section1-analytics.service.ts and
-   * platform-stats.service.ts's sumEngagementHours — approvalStatus alone is null for any row that
-   * predates the approval-request workflow, so it must never be treated as verified on its own;
-   * entryStatus is the field that actually defaults to 'pending' and only flips to 'verified' once
-   * reviewed. Deliberately stricter than the frontend's own client-side approximation. */
-  private isAttendanceLogVerifiedForHours(
-    log: Pick<AttendanceLog, 'approvalStatus' | 'entryStatus'>,
+  /**
+   * Hours that count toward the pre-submit bar. Faculty no longer has to approve each
+   * attendance row before the student can submit; they approve the report from the flash
+   * card afterwards. Rejected sessions still do not count.
+   */
+  private isAttendanceLogCountedForSubmitHours(
+    log: Pick<AttendanceLog, 'approvalStatus'>,
   ): boolean {
-    return log.approvalStatus === 'approved' || log.entryStatus === 'verified';
+    return String(log.approvalStatus || '').toLowerCase() !== 'rejected';
   }
 
   /**
-   * The authoritative, server-computed answer to "how many verified hours has each team member
-   * actually logged on this project" — read from the real `participations`/`attendance_logs`
-   * tables, never from the client-submitted `section1.metrics` blob a report carries. Used to gate
-   * submission (every active roster member must individually clear the bar, not just the team's
-   * pooled total) and to compute the real Community Dividend payout figure.
+   * Server-computed logged hours per team member, from `participations` / `attendance_logs`,
+   * never from the client `section1.metrics` blob. Every active member must clear the hour
+   * bar on their own logs. Faculty session approval is not required for this check.
    */
   private async computeServerVerifiedHours(projectId: string): Promise<{
     hoursByParticipationId: Map<string, number>;
@@ -257,7 +255,7 @@ export class StudentReportsService {
     const hoursByParticipationId = new Map<string, number>();
     let totalVerifiedHours = 0;
     for (const log of logs) {
-      if (!this.isAttendanceLogVerifiedForHours(log)) continue;
+      if (!this.isAttendanceLogCountedForSubmitHours(log)) continue;
       const hours = Number(log.sessionHours) || 0;
       hoursByParticipationId.set(
         log.participantId,
@@ -269,9 +267,9 @@ export class StudentReportsService {
   }
 
   /**
-   * Throws if any active team member hasn't individually logged and had verified their own
-   * required hours — closes the "one teammate logs everything, whole team qualifies" gap. Hours
-   * can never be pooled from one member to cover another (per product rule).
+   * Throws if any active team member hasn't individually logged their own required hours.
+   * Hours cannot be pooled from one member to cover another. Faculty attendance approval
+   * happens with the flash card after the report is submitted, not before.
    */
   private async assertEveryTeamMemberMetRequiredHours(
     projectId: string,
@@ -293,7 +291,7 @@ export class StudentReportsService {
         validation_issues: shortfalls.map((p) => ({
           section: 1,
           field: 'metrics.individual_hours',
-          message: `${p.fullName || 'A team member'} has not yet met the required verified hours.`,
+          message: `${p.fullName || 'A team member'} has not yet met the required hours.`,
         })),
       });
     }

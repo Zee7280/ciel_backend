@@ -88,9 +88,17 @@ describe('buildCielPkAiEvaluationPayload', () => {
           {
             id: 'act-1',
             title: 'Entrepreneurship Session',
+            status: 'Completed',
+            sub_category: 'Workshop',
+            activity_period: '12–18 Oct 2026',
+            partner_host: 'Abroo High School',
             sessions_count: '12',
             description: 'Introduced students to entrepreneurship concepts.',
             beneficiaries_reached: '60',
+            unique_beneficiaries: '40',
+            overlap_note: 'same class attended twice',
+            reach_counting_method: 'Verified registration / list',
+            site_note: 'Classroom 4',
           },
         ],
         project_summary: {
@@ -229,6 +237,28 @@ describe('buildCielPkAiEvaluationPayload', () => {
       target_code: '4.a',
       indicator_code: '4.a.1',
       sub_indicator: 'Sessions / activities completed',
+    });
+    const section4 = payload.section4_activities_outputs_scale as {
+      activity_blocks?: Array<{
+        status?: string;
+        activity_date?: string;
+        sub_category?: string;
+        partner_host?: string;
+        site_note?: string;
+        beneficiaries?: { unique_count?: number; overlap_note?: string; counting_method?: string };
+      }>;
+    };
+    expect(section4.activity_blocks?.[0]).toMatchObject({
+      status: 'Completed',
+      activity_date: '12–18 Oct 2026',
+      sub_category: 'Workshop',
+      partner_host: 'Abroo High School',
+      site_note: 'Classroom 4',
+      beneficiaries: {
+        unique_count: 40,
+        overlap_note: 'same class attended twice',
+        counting_method: 'Verified registration / list',
+      },
     });
   });
 });

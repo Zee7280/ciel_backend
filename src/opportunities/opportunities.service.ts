@@ -1353,15 +1353,27 @@ export class OpportunitiesService {
     return { flow_status: 'CIEL final approval', admin_can_approve };
   }
 
+  /**
+   * Student-created rows stay off the public directory until CIEL final approval.
+   * After that they are listed like any other live opportunity (browse + homepage).
+   * Apply Now still uses participation_scope; the stored default visibility is "restricted".
+   */
+  private isApprovedLiveStudentOpportunity(opp: Opportunity): boolean {
+    if (opp.admin_approved !== true) return false;
+    const status = String(opp.status || '').toLowerCase();
+    if (status === 'draft' || status === 'rejected' || status === 'closed') {
+      return false;
+    }
+    if (opp.workflowStage === WORKFLOW_STAGE.LIVE) return true;
+    return this.publicLiveStatuses.includes(status);
+  }
+
   /** Public directory: honor org/creator visibility flags only. Participation rules apply at apply/enroll time. */
   private isPubliclyVisibleOpportunity(opp: Opportunity): boolean {
     if (String(opp.status || '').toLowerCase() === 'draft') return false;
-    // Student-created opportunities are Team Projects — private to their creator + named team
-    // members, never discoverable in the public/anonymous directory (not even by direct id guess
-    // via getPublicOpportunityById). The restrictive-visibility branch further below used to
-    // explicitly bypass ITSELF for isStudentCreated records, which made them unconditionally
-    // public regardless of any visibility setting — the opposite of what a Team Project needs.
-    if (opp.isStudentCreated) return false;
+    if (opp.isStudentCreated) {
+      return this.isApprovedLiveStudentOpportunity(opp);
+    }
     const linkage = opp.visibility_and_academic_linkage;
     const explicitType =
       linkage && typeof linkage.visibility_type === 'string'
@@ -1423,7 +1435,7 @@ export class OpportunitiesService {
     if (!opportunity.creatorId) return null;
     return this.usersRepository.findOne({
       where: { id: opportunity.creatorId },
-      select: ['id', 'email', 'name', 'university', 'institution'],
+      select: ['id', 'email', 'name', 'university', 'institution', 'role'],
     });
   }
 
@@ -1584,24 +1596,12 @@ export class OpportunitiesService {
   }
 
   private async handleAdminApprovedSideEffects(opportunity: Opportunity) {
-    if (!opportunity.isStudentCreated) {
-      // Faculty creator: no dedicated "fully approved" email template for this audience (the one
-      // below is student-report-specific), so send the generic status-update email directly instead
-      // of suppressing it — faculty used to get nothing at all when their opportunity went live.
-      await this.notifyStudentOpportunityUpdate(opportunity, {
-        title: 'Opportunity live',
-        message:
-          'Your opportunity has passed admin review and is now live on CIEL. Students can now discover and apply to it.',
-        emailSubject: 'Your opportunity is now live',
-      });
-      return;
-    }
-
-    // Single in-app notification (two used to fire here and could surface as duplicate alerts / digests).
+    // In-app notice only. The creator email below is the one live message.
     await this.notifyStudentOpportunityUpdate(opportunity, {
       title: 'Opportunity live',
-      message:
-        'Your opportunity has passed admin review and is now live on CIEL. You can begin your report from your dashboard.',
+      message: opportunity.isStudentCreated
+        ? 'Your opportunity has passed admin review and is now live on CIEL. You can begin your report from your dashboard.'
+        : 'Your opportunity has passed admin review and is now live on CIEL. Students can now discover and apply to it.',
       emailSubject: 'Your opportunity is now live',
       skipStatusEmail: true,
     });
@@ -1609,19 +1609,24 @@ export class OpportunitiesService {
     const creator = await this.getOpportunityCreatorContact(opportunity);
     if (creator?.email) {
       try {
-        await this.mailService.sendStudentOpportunityFullyApprovedEmail(
-          creator.email,
-          creator.name || 'Student',
-          opportunity.title,
-          opportunity.id,
-        );
+        await this.mailService.sendOpportunityLiveStartReportEmail({
+          to: creator.email,
+          creatorName: creator.name || 'there',
+          projectTitle: opportunity.title,
+          partnerName: this.liveEmailPartnerName(opportunity),
+          requiredHours: this.liveEmailRequiredHours(opportunity),
+          projectPeriod: this.liveEmailProjectPeriod(opportunity),
+          reportPath: this.liveEmailReportPath(creator.role, opportunity.id),
+        });
       } catch (error) {
         console.warn(
-          'Failed to send student fully approved opportunity email',
+          'Failed to send opportunity live start-report email',
           (error as Error).message,
         );
       }
     }
+
+    if (!opportunity.isStudentCreated) return;
 
     try {
       await this.mailService.sendAdminStudentMayStartReport(
@@ -1635,6 +1640,72 @@ export class OpportunitiesService {
         (error as Error).message,
       );
     }
+  }
+
+  private liveEmailPartnerName(opportunity: Opportunity): string {
+    const supervision = opportunity.supervision as
+      | { partner_org_name?: string; external_partner_org_name?: string }
+      | undefined;
+    const partnerOrg = opportunity.partner_organization as
+      | { organization_name?: string; name?: string }
+      | undefined;
+    const collab = opportunity.external_partner_collaboration as
+      | { organization_name?: string }
+      | undefined;
+    const executing = opportunity.executing_context as
+      | { partner?: { organization_name?: string } }
+      | undefined;
+    const name = [
+      supervision?.partner_org_name,
+      supervision?.external_partner_org_name,
+      collab?.organization_name,
+      partnerOrg?.organization_name,
+      partnerOrg?.name,
+      executing?.partner?.organization_name,
+    ].find((value) => typeof value === 'string' && value.trim());
+    return name?.trim() || '—';
+  }
+
+  private liveEmailRequiredHours(opportunity: Opportunity): string {
+    const timeline = opportunity.timeline as
+      | { expected_hours?: number | string; required_hours?: number | string }
+      | undefined;
+    const raw = timeline?.expected_hours ?? timeline?.required_hours;
+    if (raw == null || String(raw).trim() === '') return '—';
+    return `${String(raw).trim()} hours per student`;
+  }
+
+  private liveEmailProjectPeriod(opportunity: Opportunity): string {
+    const timeline = opportunity.timeline as
+      | { start_date?: string; end_date?: string }
+      | undefined;
+    const start = this.formatLiveEmailDate(timeline?.start_date);
+    const end = this.formatLiveEmailDate(timeline?.end_date);
+    if (start && end) return `${start} – ${end}`;
+    return start || end || '—';
+  }
+
+  private formatLiveEmailDate(value?: string): string {
+    const raw = (value || '').trim();
+    if (!raw) return '';
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) return raw;
+    return parsed.toLocaleDateString('en-GB', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    });
+  }
+
+  private liveEmailReportPath(role: string | undefined, opportunityId: string): string {
+    const id = encodeURIComponent(opportunityId);
+    if (!role || role === UserRole.STUDENT) {
+      return `/dashboard/student/report?projectId=${id}`;
+    }
+    if (role === UserRole.FACULTY) {
+      return '/dashboard/faculty/community-service';
+    }
+    return '/dashboard/partner/community-service';
   }
 
   async create(userId: string, createOpportunityDto: CreateOpportunityDto) {

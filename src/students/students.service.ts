@@ -1319,12 +1319,9 @@ export class StudentsService {
     const normalizedSdg = this.normalize(sdg);
 
     // Participation scope is enforced in applyToOpportunity, not on the browse list.
+    // The query above is already CIEL-approved + live. Student-created rows stay in that
+    // list once approved so browse matches the public homepage.
     const filtered = opportunities.filter((opportunity) => {
-      // Student-created opportunities are Team Projects — private to their creator + named team
-      // members, never discoverable in the general student browse/search list. Without this, any
-      // fully-approved Team Project (workflowStage 'live'/admin_approved) would show up to every
-      // student, not just the team, since the query above has no isStudentCreated filter.
-      if (opportunity.isStudentCreated) return false;
       const matchesSdg =
         !normalizedSdg ||
         this.normalize(opportunity.sdg) === normalizedSdg ||

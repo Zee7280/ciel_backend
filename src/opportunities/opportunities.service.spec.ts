@@ -231,7 +231,7 @@ describe('OpportunitiesService — public directory visibility (isPubliclyVisibl
         ).toBe(true);
     });
 
-    it('never lists a student-created Team Project in the public directory, regardless of visibility/scope', () => {
+    it('hides a student-created opportunity until CIEL approval, then lists it even when visibility is restricted', () => {
         expect(
             isVisible({
                 isStudentCreated: true,
@@ -242,9 +242,21 @@ describe('OpportunitiesService — public directory visibility (isPubliclyVisibl
         expect(
             isVisible({
                 isStudentCreated: true,
+                admin_approved: true,
+                workflowStage: 'pending_admin',
+                status: 'pending_admin',
                 visibility_and_academic_linkage: { visibility_type: 'open_all_universities' },
             }),
         ).toBe(false);
+        expect(
+            isVisible({
+                isStudentCreated: true,
+                admin_approved: true,
+                workflowStage: 'live',
+                status: 'active',
+                visibility: 'restricted',
+            }),
+        ).toBe(true);
     });
 });
 

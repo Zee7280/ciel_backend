@@ -48,7 +48,7 @@ describe('StudentsService impact history', () => {
     );
   };
 
-  it('never includes a student-created Team Project in the public browse listing', async () => {
+  it('includes an approved student-created opportunity in the student browse listing', async () => {
     const opportunities = [
       {
         id: 'opp-team-1',
@@ -97,7 +97,7 @@ describe('StudentsService impact history', () => {
 
     const result = await service.getOpportunities({}, 'user-1');
 
-    expect(result.data.map((o: any) => o.id)).toEqual(['opp-normal-1']);
+    expect(result.data.map((o: any) => o.id)).toEqual(['opp-team-1', 'opp-normal-1']);
   });
 
   it('attributes a faculty-created opportunity (no Organization row) to the faculty institution instead of "Unknown"', async () => {

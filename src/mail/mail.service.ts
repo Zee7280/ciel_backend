@@ -1375,57 +1375,62 @@ export class MailService {
     }
   }
 
-  /** Sent when CIEL admin approves a student-created opportunity (fully live); directs creator to Apply Now, team members, and report. */
-  async sendStudentOpportunityFullyApprovedEmail(
-    to: string,
-    studentName: string,
-    projectTitle: string,
-    opportunityId?: string,
-  ) {
+  /** Sent when CIEL admin approves an opportunity. Goes to the creator so they can open their report. */
+  async sendOpportunityLiveStartReportEmail(input: {
+    to: string;
+    creatorName: string;
+    projectTitle: string;
+    partnerName: string;
+    requiredHours: string;
+    projectPeriod: string;
+    reportPath: string;
+  }) {
     const from =
       this.configService.get<string>('MAIL_FROM') ||
       'CIEL <no-reply@cielpk.com>';
-    const nameEsc = studentName?.trim()
-      ? this.escHtmlPlain(studentName.trim())
-      : 'Student';
-    const titleEsc = this.escHtmlPlain(projectTitle);
-    const dashboardPath =
-      this.configService.get<string>('FRONTEND_STUDENT_DASHBOARD_PATH') ||
-      '/dashboard';
-    const startLink = this.buildFrontendLink(
-      dashboardPath.startsWith('/') ? dashboardPath : `/${dashboardPath}`,
-      {
-        opportunity: opportunityId,
-      },
-    );
+    const nameEsc = input.creatorName?.trim()
+      ? this.escHtmlPlain(input.creatorName.trim())
+      : 'there';
+    const titleEsc = this.escHtmlPlain(input.projectTitle || 'your opportunity');
+    const partnerEsc = this.escHtmlPlain(input.partnerName || '—');
+    const hoursEsc = this.escHtmlPlain(input.requiredHours || '—');
+    const periodEsc = this.escHtmlPlain(input.projectPeriod || '—');
+    const startLink = this.buildFrontendLink(input.reportPath, {});
 
     const html = `
       <div style="font-family: Arial, Helvetica, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 10px; color: #1f2937; line-height: 1.55;">
-        <p style="margin: 0 0 16px 0;">Dear ${nameEsc},</p>
-        <h2 style="margin: 0 0 16px 0; font-size: 20px; color: #111827;">Your opportunity is now live!</h2>
-        <p style="margin: 0 0 20px 0;">Click <strong>Apply Now</strong> to join the project, add your group members, and start updating your report. Please ensure all team members are registered on the platform before adding them.</p>
-        <p style="margin: 0 0 8px 0;"><strong>Opportunity Title:</strong> ${titleEsc}</p>
-        <p style="margin: 20px 0 16px 0;">Use the button below to open your dashboard and apply:</p>
+        <p style="margin: 0 0 16px 0;">Hi <strong>${nameEsc}</strong>,</p>
+        <p style="margin: 0 0 16px 0;">Great news! Your community service opportunity “<strong>${titleEsc}</strong>” has been fully approved and is now <strong>LIVE</strong> on CIEL PK.</p>
+        <p style="margin: 0 0 16px 0;">Your project journey can now begin. As the opportunity creator, you have a report workspace ready for you.</p>
+        <p style="margin: 0 0 8px 0;"><strong>What happens next?</strong></p>
+        <p style="margin: 0 0 20px 0;">Start documenting your activities, verified hours, evidence, outcomes, and impact as your project progresses.</p>
         <div style="text-align: center; margin: 28px 0;">
-          <a href="${startLink}" style="background-color: #16a34a; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">Apply Now</a>
+          <a href="${startLink}" style="background-color: #0e4d4e; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">START REPORT →</a>
         </div>
-        <p style="margin: 20px 0 0 0;">Best regards,<br><strong>CIEL PK Team</strong></p>
+        <p style="margin: 0 0 6px 0;"><strong>Opportunity:</strong> ${titleEsc}</p>
+        <p style="margin: 0 0 6px 0;"><strong>Partner:</strong> ${partnerEsc}</p>
+        <p style="margin: 0 0 6px 0;"><strong>Required Hours:</strong> ${hoursEsc}</p>
+        <p style="margin: 0 0 16px 0;"><strong>Project Period:</strong> ${periodEsc}</p>
+        <p style="margin: 0 0 16px 0;">You don’t need to wait until the project is complete. <strong>Update your report as you go</strong> and keep your progress and evidence organized along the way.</p>
+        <p style="margin: 0 0 16px 0;"><strong>Create impact. Document it. Get it verified.</strong></p>
+        <p style="margin: 20px 0 0 0;">— <strong>CIEL PK</strong><br>Community Impact Education Lab Pakistan</p>
       </div>
     `;
 
     try {
       await this.transporter.sendMail({
         from,
-        to,
-        subject: `Your opportunity is now live!`,
+        to: input.to,
+        subject: '🎉 Your Opportunity Is Live — Start Your Impact Report',
         html,
       });
-      this.logger.log(`Student opportunity fully approved email sent to ${to}`);
+      this.logger.log(`Opportunity live start-report email sent to ${input.to}`);
     } catch (error) {
       this.logger.error(
-        `Failed to send student opportunity fully approved email to ${to}`,
+        `Failed to send opportunity live start-report email to ${input.to}`,
         error.stack,
       );
+      throw error;
     }
   }
 

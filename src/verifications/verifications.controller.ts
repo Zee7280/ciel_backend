@@ -185,6 +185,78 @@ export class VerificationsController {
         }
     }
 
+    /** Fully public faculty preview. The emailed faculty token is the credential. */
+    @Get('verifications/faculty-preview')
+    @Header('Cache-Control', 'no-store, no-cache, must-revalidate, private')
+    @Header('Pragma', 'no-cache')
+    async getFacultyVerificationPreview(@Query('token') token: string) {
+        const t = typeof token === 'string' ? token.trim() : '';
+        if (!t) {
+            throw new HttpException(
+                { success: false, message: 'Token is required' },
+                HttpStatus.BAD_REQUEST,
+            );
+        }
+        try {
+            const data = await this.opportunitiesService.getPublicFacultyVerificationPreview(t);
+            return { success: true, data };
+        } catch (error) {
+            if (error instanceof NotFoundException) {
+                throw new HttpException({ success: false, message: error.message }, HttpStatus.NOT_FOUND);
+            }
+            throw error;
+        }
+    }
+
+    /** Public faculty reject / request-revision. Approve stays on POST verifications/verify. */
+    @Post('verifications/faculty-decision')
+    @Header('Cache-Control', 'no-store, no-cache, must-revalidate, private')
+    @Header('Pragma', 'no-cache')
+    async decideOpportunityViaFacultyToken(
+        @Body() body: { token?: string; action?: 'reject' | 'revision'; reason?: string },
+    ) {
+        const t = typeof body?.token === 'string' ? body.token.trim() : '';
+        if (!t) {
+            throw new HttpException(
+                { success: false, message: 'Token is required' },
+                HttpStatus.BAD_REQUEST,
+            );
+        }
+        if (body?.action !== 'reject' && body?.action !== 'revision') {
+            throw new HttpException(
+                { success: false, message: 'action must be "reject" or "revision"' },
+                HttpStatus.BAD_REQUEST,
+            );
+        }
+        try {
+            return await this.opportunitiesService.decideOpportunityViaFacultyToken(
+                t,
+                body.action,
+                typeof body?.reason === 'string' ? body.reason : undefined,
+            );
+        } catch (error) {
+            if (
+                error instanceof BadRequestException ||
+                error instanceof ForbiddenException ||
+                error instanceof NotFoundException
+            ) {
+                const response = error.getResponse();
+                const message =
+                    typeof response === 'string'
+                        ? response
+                        : (response as any)?.message || error.message;
+                throw new HttpException(
+                    {
+                        success: false,
+                        message: Array.isArray(message) ? message.join(', ') : message,
+                    },
+                    error.getStatus(),
+                );
+            }
+            throw error;
+        }
+    }
+
     /** Partner queue actions — the caller must own the organization the item was submitted to
      * (same scope as `GET partners/verifications`); admins may act on any item. Role-gated
      * defense-in-depth on top of that org-ownership check — previously only JwtAuthGuard, so a

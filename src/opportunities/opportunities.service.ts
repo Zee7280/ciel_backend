@@ -483,10 +483,9 @@ export class OpportunitiesService {
   }
 
   /**
-   * When VERIFICATION_REQUIRE_AUTH is enabled, the logged-in user must match the email / faculty
-   * binding for the magic link (faculty vs legacy liaison). Partner-token links are exempt —
-   * the partner contact is an external stakeholder with no CIEL account, so the emailed token
-   * itself is their credential and this must stay anonymous regardless of that setting.
+   * When VERIFICATION_REQUIRE_AUTH is enabled, a legacy liaison link still needs a matching login.
+   * Faculty and partner magic links stay anonymous: the emailed token is the credential, same as
+   * the public partner flashcard. Dashboard approve/reject/revise is a separate logged-in path.
    */
   private assertVerificationIdentityIfRequired(
     opportunity: Opportunity,
@@ -494,7 +493,7 @@ export class OpportunitiesService {
     user?: { id: string; email: string; role: string },
   ): void {
     const kind = this.projectVerificationTokenKind(opportunity, token);
-    if (kind === 'partner') return;
+    if (kind === 'partner' || kind === 'faculty') return;
     if (!this.verificationAuthRequired()) return;
     if (!user?.id) {
       throw new UnauthorizedException('Login required to verify this link.');
@@ -3832,6 +3831,150 @@ export class OpportunitiesService {
     };
   }
 
+  /**
+   * Public faculty review card. The emailed faculty token is the credential — no login.
+   * Returns only the opportunity content the flashcard renders, never tokens or participant lists.
+   */
+  async getPublicFacultyVerificationPreview(token: string) {
+    const opportunity = await this.opportunitiesRepository.findOne({
+      where: { faculty_verification_token: token },
+    });
+    if (!opportunity) {
+      throw new NotFoundException('Invalid or expired verification link.');
+    }
+    const alreadyVerified = opportunity.isStudentCreated
+      ? !!opportunity.faculty_verified
+      : opportunity.facultyApprovalStatus === LINE_STATUS.APPROVED;
+    const closed =
+      opportunity.workflowStage === WORKFLOW_STAGE.REJECTED ||
+      opportunity.status === 'rejected';
+    return {
+      title: opportunity.title,
+      alreadyVerified,
+      closed,
+      canDecide: !alreadyVerified && !closed && this.isAwaitingFacultyDashboardReview(opportunity),
+      isStudentCreated: !!opportunity.isStudentCreated,
+      record: {
+        title: opportunity.title,
+        types: opportunity.types,
+        mode: opportunity.mode,
+        location: opportunity.location,
+        timeline: opportunity.timeline,
+        objectives: opportunity.objectives,
+        activity_details: opportunity.activity_details,
+        supervision: opportunity.supervision,
+        sdg_info: opportunity.sdg_info,
+        secondary_sdgs: opportunity.secondary_sdgs,
+        verification_method: opportunity.verification_method,
+        visibility: opportunity.visibility,
+      },
+    };
+  }
+
+  /**
+   * Anonymous faculty reject/revision. Same workflow methods as the logged-in faculty dashboard,
+   * scoped to the emailed faculty token. Approve stays on verifyOpportunityToken.
+   */
+  async decideOpportunityViaFacultyToken(
+    token: string,
+    action: 'reject' | 'revision',
+    reason?: string,
+  ) {
+    const opportunity = await this.opportunitiesRepository.findOne({
+      where: { faculty_verification_token: token },
+    });
+    if (!opportunity) {
+      throw new NotFoundException('Invalid or expired verification link.');
+    }
+    const alreadyVerified = opportunity.isStudentCreated
+      ? !!opportunity.faculty_verified
+      : opportunity.facultyApprovalStatus === LINE_STATUS.APPROVED;
+    if (alreadyVerified) {
+      throw new BadRequestException(
+        'This opportunity was already verified via this link.',
+      );
+    }
+    if (
+      opportunity.workflowStage === WORKFLOW_STAGE.REJECTED ||
+      opportunity.status === 'rejected'
+    ) {
+      throw new BadRequestException(
+        'This opportunity has already been closed and can no longer be actioned via this link.',
+      );
+    }
+    if (!this.isAwaitingFacultyDashboardReview(opportunity)) {
+      throw new BadRequestException(
+        'This opportunity is not awaiting faculty approval',
+      );
+    }
+    const linkActor: ApprovalActor = {
+      id: null,
+      name: this.resolveFacultyEmail(opportunity) || 'Faculty (via link)',
+    };
+    if (action === 'reject') {
+      this.opportunityWorkflow.afterFacultyRejected(opportunity, reason, linkActor);
+    } else {
+      this.opportunityWorkflow.afterFacultyRevision(opportunity, reason, linkActor);
+    }
+    await this.assignFacultyIdFromSupervisionIfMissing(opportunity);
+    const saved = await this.opportunitiesRepository.save(opportunity);
+
+    if (saved.isStudentCreated && saved.creatorId) {
+      if (action === 'reject') {
+        try {
+          await this.notificationsService.createApprovalNotification(
+            saved.creatorId,
+            'Opportunity closed',
+            'Your opportunity was permanently rejected during faculty review and can no longer be edited.',
+          );
+        } catch (e) {
+          console.warn(
+            'Failed to create faculty rejection notification',
+            (e as Error).message,
+          );
+        }
+        const student = await this.usersRepository.findOne({
+          where: { id: saved.creatorId },
+          select: ['email', 'name'],
+        });
+        if (student?.email) {
+          try {
+            await this.mailService.sendStudentOpportunityRejectedByFaculty(
+              student.email,
+              saved.title,
+              reason,
+            );
+          } catch (e) {
+            console.warn(
+              'Failed to send student faculty-rejection email',
+              (e as Error).message,
+            );
+          }
+        }
+      } else {
+        await this.notifyStudentOpportunityUpdate(saved, {
+          title: 'Revision requested',
+          message:
+            'Your faculty supervisor asked you to update your opportunity. Save your changes to resubmit for review.',
+          emailSubject: 'Faculty requested revisions on your opportunity',
+          reason,
+        });
+      }
+    }
+
+    return {
+      success: true,
+      message:
+        action === 'reject'
+          ? 'This opportunity has been rejected.'
+          : 'A revision request has been sent back to the creator.',
+      data: {
+        title: saved.title,
+        status: this.getApiOpportunityStatus(saved),
+      },
+    };
+  }
+
   async verifyOpportunityToken(
     token: string,
     user?: { id: string; email: string; role: string },
@@ -4102,6 +4245,11 @@ export class OpportunitiesService {
     const alreadyDone = opp.isStudentCreated
       ? opp.faculty_verified
       : opp.facultyApprovalStatus === LINE_STATUS.APPROVED;
+    if (!alreadyDone && !this.isAwaitingFacultyDashboardReview(opp)) {
+      throw new BadRequestException(
+        'This opportunity is not awaiting faculty approval',
+      );
+    }
     if (alreadyDone) {
       return {
         success: true,

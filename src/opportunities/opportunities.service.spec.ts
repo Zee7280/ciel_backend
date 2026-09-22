@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { OpportunitiesService } from './opportunities.service';
 import { OpportunityWorkflowService } from './opportunity-workflow.service';
 import { Opportunity } from './entities/opportunity.entity';
@@ -84,16 +84,37 @@ describe('OpportunitiesService — public partner verification', () => {
             expect(result.success).toBe(true);
         });
 
-        it('still requires a matching login for a faculty-token link when VERIFICATION_REQUIRE_AUTH is on', async () => {
+        it('allows anonymous faculty-token verification even when VERIFICATION_REQUIRE_AUTH is on', async () => {
             process.env.VERIFICATION_REQUIRE_AUTH = 'true';
             const opp = {
                 id: 'opp-1',
                 faculty_verification_token: 'faculty-tok',
+                isStudentCreated: true,
+                faculty_verified: true,
                 title: 'Community clean-up',
             } as unknown as Opportunity;
             const service = makeService({ findOne: jest.fn().mockResolvedValue(opp) });
 
-            await expect(service.verifyOpportunityToken('faculty-tok', undefined)).rejects.toThrow(UnauthorizedException);
+            const result = await service.verifyOpportunityToken('faculty-tok', undefined);
+            expect(result.success).toBe(true);
+        });
+
+        it('refuses a faculty token that is not awaiting review, without asking for login', async () => {
+            process.env.VERIFICATION_REQUIRE_AUTH = 'true';
+            const opp = {
+                id: 'opp-1',
+                faculty_verification_token: 'faculty-tok',
+                isStudentCreated: true,
+                faculty_verified: false,
+                admin_approved: true,
+                creatorId: 'student-1',
+                workflowStage: 'live',
+                status: 'active',
+                title: 'Community clean-up',
+            } as unknown as Opportunity;
+            const service = makeService({ findOne: jest.fn().mockResolvedValue(opp) });
+
+            await expect(service.verifyOpportunityToken('faculty-tok', undefined)).rejects.toThrow(BadRequestException);
         });
 
         it('allows anonymous faculty-token verification when VERIFICATION_REQUIRE_AUTH is off (dev default)', async () => {
@@ -110,6 +131,58 @@ describe('OpportunitiesService — public partner verification', () => {
             const result = await service.verifyOpportunityToken('faculty-tok', undefined);
             expect(result.success).toBe(true);
         });
+    });
+});
+
+describe('OpportunitiesService — public faculty verification', () => {
+    it('previews by faculty token and omits the token from the flashcard record', async () => {
+        const opp = {
+            id: 'opp-1',
+            title: 'Food rescue',
+            faculty_verification_token: 'faculty-secret',
+            partnerToken: 'partner-secret',
+            isStudentCreated: true,
+            faculty_verified: false,
+            admin_approved: false,
+            creatorId: 'student-1',
+            status: 'pending_faculty',
+            workflowStage: 'pending_faculty',
+            types: ['Community Service'],
+            mode: 'On-site',
+        } as unknown as Opportunity;
+        const service = makeService({ findOne: jest.fn().mockResolvedValue(opp) });
+        const preview = await service.getPublicFacultyVerificationPreview('faculty-secret');
+        expect(preview.title).toBe('Food rescue');
+        expect(preview.canDecide).toBe(true);
+        expect(preview.record).not.toHaveProperty('faculty_verification_token');
+        expect(preview.record).not.toHaveProperty('partnerToken');
+        expect(JSON.stringify(preview)).not.toContain('faculty-secret');
+    });
+
+    it('rejects via the faculty token without a login', async () => {
+        const opp = {
+            id: 'opp-f',
+            faculty_verification_token: 'ftok',
+            isStudentCreated: false,
+            faculty_verified: false,
+            facultyApprovalStatus: 'pending',
+            admin_approved: false,
+            creatorId: 'ngo-1',
+            status: 'pending_faculty',
+            workflowStage: 'pending_faculty',
+            title: 'Campus drive',
+        };
+        const findOne = jest.fn().mockResolvedValue(opp);
+        const save = jest.fn(async (row: any) => row);
+        const service = makeService({ findOne, save });
+        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+
+        const result = await service.decideOpportunityViaFacultyToken('ftok', 'reject', 'Not a fit');
+
+        expect(save).toHaveBeenCalled();
+        expect((opp as any).status).toBe('rejected');
+        expect((opp as any).rejectionReason).toBe('Not a fit');
+        expect(result.success).toBe(true);
     });
 });
 

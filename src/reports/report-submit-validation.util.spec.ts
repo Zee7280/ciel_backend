@@ -8,25 +8,45 @@ const VALID_CORE_SECTIONS = {
     discipline: 'Environmental Engineering',
     baseline_evidence: ['Survey'],
   },
+  section3: {
+    contribution_intent_statement: 'Students will support safer water handling in the host community.',
+  },
   section4: {
     activity_blocks: [
       {
         title: 'Water filter installation',
         primary_category: 'Infrastructure',
-        delivery_mode: 'In person',
-        outputs: ['5 filters installed'],
+        sub_category: 'Water / Sanitation Infrastructure',
+        status: 'Completed',
+        description: 'Installed filters and showed households how to use them.',
+        outputs: [{ title: 'Filters installed', quantity: '5' }],
       },
     ],
     project_summary: { distinct_total_beneficiaries: 50, counting_method: 'Headcount' },
   },
   section5: {
     observed_change: 'Households report improved water quality.',
+    challenges: 'Parts were hard to find in the first week.',
     measurable_outcomes: [
-      { outcome_area: 'Health', metric: 'Households served', baseline: 0, endline: 50 },
+      {
+        outcome_area: 'Health',
+        outcome_sub_category: 'Water quality',
+        metric_category: 'Health outcome',
+        metric: 'Households served',
+        baseline: 0,
+        endline: 50,
+        unit: 'households',
+        confidence_level: ['Directly Measured'],
+        measurement_explanation: 'Counted from the partner register.',
+      },
     ],
   },
   section7: { has_partners: 'no' },
-  section9: { academic_integration: 'Directly related to coursework' },
+  section9: {
+    academic_integration: 'Directly related to coursework',
+    personal_learning: 'I learned how to document community work.',
+    academic_application: 'The project used fieldwork methods from my course.',
+  },
   section11: {
     final_declaration: [true, true, true, true, true],
     signature_name: 'Jane Student',
@@ -124,6 +144,76 @@ describe('validateReportSectionsForSubmit', () => {
     expect(issues).toEqual([]);
   });
 
+  it('accepts an activity with reach and no delivery mode or project summary', () => {
+    const section4 = {
+      activity_blocks: [
+        {
+          title: 'Hygiene session',
+          primary_category: '🩺 Health & Clinical Outreach',
+          sub_category: 'Health Education',
+          status: 'Ongoing',
+          description: 'Ran a hygiene session with the host clinic.',
+          beneficiaries_reached: '180',
+          unique_beneficiaries: '120',
+        },
+      ],
+    };
+    const issues = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section4,
+      section6: { use_resources: 'no' },
+      section8: { has_evidence: 'no' },
+      section10: { continuation_status: 'no', continuation_details: 'Done.' },
+    });
+    expect(issues.filter((i) => i.section === 4)).toEqual([]);
+  });
+
+  it('rejects an activity that has neither a countable output nor reach', () => {
+    const section4 = {
+      activity_blocks: [
+        {
+          title: 'Hygiene session',
+          primary_category: '🩺 Health & Clinical Outreach',
+          sub_category: 'Health Education',
+          status: 'Ongoing',
+          description: 'Ran a hygiene session with the host clinic.',
+          outputs: [],
+        },
+      ],
+    };
+    const issues = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section4,
+      section6: { use_resources: 'no' },
+      section8: { has_evidence: 'no' },
+      section10: { continuation_status: 'no', continuation_details: 'Done.' },
+    });
+    expect(issues.some((i) => i.section === 4 && i.field === 'activity_blocks.0.outputs')).toBe(true);
+  });
+
+  it('keeps a named subcategory that contains the word Other', () => {
+    const section4 = {
+      activity_blocks: [
+        {
+          title: 'Kit distribution',
+          primary_category: 'Resource Distribution',
+          sub_category: 'Other Essential Resource Support',
+          status: 'Completed',
+          description: 'Distributed hygiene kits at the school gate.',
+          outputs: [{ title: 'Hygiene kits', quantity: '40' }],
+        },
+      ],
+    };
+    const issues = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section4,
+      section6: { use_resources: 'no' },
+      section8: { has_evidence: 'no' },
+      section10: { continuation_status: 'no', continuation_details: 'Done.' },
+    });
+    expect(issues.filter((i) => i.section === 4)).toEqual([]);
+  });
+
   it('rejects a near-empty report with presence issues across sections 1, 2, 4, 5, 7 and 9', () => {
     const issues = validateReportSectionsForSubmit({
       section6: { use_resources: 'no' },
@@ -136,6 +226,7 @@ describe('validateReportSectionsForSubmit', () => {
     const sections = new Set(issues.map((i) => i.section));
     expect(sections.has(1)).toBe(true);
     expect(sections.has(2)).toBe(true);
+    expect(sections.has(3)).toBe(true);
     expect(sections.has(4)).toBe(true);
     expect(sections.has(5)).toBe(true);
     expect(sections.has(7)).toBe(true);

@@ -23,13 +23,18 @@ const MIN_VALID_SUBMIT_SECTIONS = {
     discipline: 'Environmental Engineering',
     baseline_evidence: ['Survey'],
   },
+  section3: {
+    contribution_intent_statement: 'Students will support safer water handling in the host community.',
+  },
   section4: {
     activity_blocks: [
       {
         title: 'Water filter installation',
         primary_category: 'Infrastructure',
-        delivery_mode: 'In person',
-        outputs: ['5 filters installed'],
+        sub_category: 'Water / Sanitation Infrastructure',
+        status: 'Completed',
+        description: 'Installed filters and showed households how to use them.',
+        outputs: [{ title: 'Filters installed', quantity: '5' }],
       },
     ],
     project_summary: {
@@ -39,19 +44,29 @@ const MIN_VALID_SUBMIT_SECTIONS = {
   },
   section5: {
     observed_change: 'Households report improved water quality.',
+    challenges: 'Parts were hard to find in the first week.',
     measurable_outcomes: [
       {
         outcome_area: 'Health',
+        outcome_sub_category: 'Water quality',
+        metric_category: 'Health outcome',
         metric: 'Households served',
         baseline: 0,
         endline: 50,
+        unit: 'households',
+        confidence_level: ['Directly Measured'],
+        measurement_explanation: 'Counted from the partner register.',
       },
     ],
   },
   section6: { use_resources: 'no' as const },
   section7: { has_partners: 'no' as const },
   section8: { has_evidence: 'no' as const },
-  section9: { academic_integration: 'Directly related to coursework' },
+  section9: {
+    academic_integration: 'Directly related to coursework',
+    personal_learning: 'I learned how to document community work.',
+    academic_application: 'The project used fieldwork methods from my course.',
+  },
   section10: {
     continuation_status: 'no' as const,
     continuation_details: 'word '.repeat(100).trim(),

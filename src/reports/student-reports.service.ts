@@ -45,6 +45,29 @@ import {
   type CommunityServiceLevel,
 } from './community-award.util';
 
+/** Project-level total, or the sum of each activity's unique reach when that field is no longer on the form. */
+function distinctBeneficiariesFromSection4(section4: any): number | string | null {
+  const summary =
+    section4?.project_summary?.distinct_total_beneficiaries ??
+    section4?.distinct_total_beneficiaries ??
+    section4?.total_beneficiaries;
+  if (summary !== undefined && summary !== null && String(summary).trim() !== '') {
+    return summary;
+  }
+  const blocks = Array.isArray(section4?.activity_blocks) ? section4.activity_blocks : [];
+  let sum = 0;
+  let any = false;
+  for (const block of blocks) {
+    const raw = block?.unique_beneficiaries || block?.beneficiaries_reached;
+    const count = Number(String(raw ?? '').replace(/,/g, ''));
+    if (Number.isFinite(count) && count > 0) {
+      sum += count;
+      any = true;
+    }
+  }
+  return any ? sum : null;
+}
+
 @Injectable()
 export class StudentReportsService {
   constructor(
@@ -719,11 +742,7 @@ export class StudentReportsService {
       },
       section4: {
         project_summary: {
-          distinct_total_beneficiaries:
-            section4?.project_summary?.distinct_total_beneficiaries ??
-            section4?.distinct_total_beneficiaries ??
-            section4?.total_beneficiaries ??
-            null,
+          distinct_total_beneficiaries: distinctBeneficiariesFromSection4(section4),
         },
       },
       // Student's own self-rated reflection competencies (not AI-scored — safe to always
@@ -2332,6 +2351,7 @@ export class StudentReportsService {
       const validationIssues = validateReportSectionsForSubmit({
         section1: report.section1,
         section2: report.section2,
+        section3: report.section3,
         section4: report.section4,
         section5: report.section5,
         section6: report.section6,

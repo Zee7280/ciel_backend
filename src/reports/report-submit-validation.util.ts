@@ -15,6 +15,26 @@ function stringField(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
+function isOtherChoice(value: unknown): boolean {
+  const text = stringField(value).trim();
+  if (!text) return false;
+  if (/^other$/i.test(text)) return true;
+  return /other\s*\/\s*custom/i.test(text);
+}
+
+/** Mirrors frontend validateSection4: a titled quantity, a legacy output string, or beneficiary reach. */
+function activityHasOutputOrReach(block: Record<string, unknown>): boolean {
+  const outputs = Array.isArray(block.outputs) ? block.outputs : [];
+  const hasOutput = outputs.some((entry) => {
+    if (typeof entry === 'string') return entry.trim().length > 0;
+    const out = (entry || {}) as Record<string, unknown>;
+    return stringField(out.title).trim().length > 0 && String(out.quantity ?? '').trim().length > 0;
+  });
+  const gross = String(block.beneficiaries_reached ?? '').trim();
+  const unique = String(block.unique_beneficiaries ?? block.beneficiaries_reached ?? '').trim();
+  return hasOutput || (gross.length > 0 && unique.length > 0);
+}
+
 /**
  * Presence-only safety net for sections 1, 2, 4, 5, 7, 9 and 11 — mirrors which fields the
  * frontend wizard (report/utils/validation.ts, context/ReportContext.tsx) treats as *required to
@@ -23,9 +43,15 @@ function stringField(value: unknown): string {
  * wizard's canSubmitReport gate) can't produce a report that is essentially empty in these
  * sections, or that skips the final declaration and electronic sign-off.
  */
+function hasChosenValue(value: unknown): boolean {
+  if (Array.isArray(value)) return value.length > 0;
+  return stringField(value).trim().length > 0 || (typeof value === 'number' && Number.isFinite(value));
+}
+
 function validateCoreSectionsPresence(report: {
   section1?: Record<string, unknown> | null;
   section2?: Record<string, unknown> | null;
+  section3?: Record<string, unknown> | null;
   section4?: Record<string, unknown> | null;
   section5?: Record<string, unknown> | null;
   section7?: Record<string, unknown> | null;
@@ -59,6 +85,13 @@ function validateCoreSectionsPresence(report: {
   }
   if (!section2.discipline) {
     issues.push({ section: 2, field: 'discipline', message: 'Academic discipline is required' });
+  } else if (section2.discipline === 'Other…' && !stringField(section2.discipline_other).trim()) {
+    issues.push({ section: 2, field: 'discipline_other', message: 'Please name your discipline' });
+  }
+
+  const section3 = report.section3 || {};
+  if (!stringField(section3.contribution_intent_statement).trim()) {
+    issues.push({ section: 3, field: 'contribution_intent_statement', message: 'Contribution logic is required' });
   }
   if (!Array.isArray(section2.baseline_evidence) || !section2.baseline_evidence.length) {
     issues.push({ section: 2, field: 'baseline_evidence', message: 'At least one baseline evidence type is required' });
@@ -75,22 +108,27 @@ function validateCoreSectionsPresence(report: {
         issues.push({ section: 4, field: `activity_blocks.${index}.title`, message: `Activity ${index + 1}: title is required` });
       }
       if (!block.primary_category) {
-        issues.push({ section: 4, field: `activity_blocks.${index}.primary_category`, message: `Activity ${index + 1}: primary category is required` });
+        issues.push({ section: 4, field: `activity_blocks.${index}.primary_category`, message: `Activity ${index + 1}: activity family is required` });
       }
-      if (!block.delivery_mode) {
-        issues.push({ section: 4, field: `activity_blocks.${index}.delivery_mode`, message: `Activity ${index + 1}: delivery mode is required` });
+      if (isOtherChoice(block.primary_category) && !stringField(block.other_category_text).trim()) {
+        issues.push({ section: 4, field: `activity_blocks.${index}.other_category_text`, message: `Activity ${index + 1}: custom activity family is required` });
       }
-      if (!Array.isArray(block.outputs) || !block.outputs.length) {
-        issues.push({ section: 4, field: `activity_blocks.${index}.outputs`, message: `Activity ${index + 1}: at least one output is required` });
+      if (block.primary_category && !isOtherChoice(block.primary_category) && !block.sub_category) {
+        issues.push({ section: 4, field: `activity_blocks.${index}.sub_category`, message: `Activity ${index + 1}: sub-category is required` });
+      }
+      if (isOtherChoice(block.sub_category) && !stringField(block.other_sub_category_text).trim()) {
+        issues.push({ section: 4, field: `activity_blocks.${index}.other_sub_category_text`, message: `Activity ${index + 1}: custom sub-category is required` });
+      }
+      if (!block.status) {
+        issues.push({ section: 4, field: `activity_blocks.${index}.status`, message: `Activity ${index + 1}: status is required` });
+      }
+      if (!stringField(block.description).trim()) {
+        issues.push({ section: 4, field: `activity_blocks.${index}.description`, message: `Activity ${index + 1}: what was done is required` });
+      }
+      if (!activityHasOutputOrReach(block)) {
+        issues.push({ section: 4, field: `activity_blocks.${index}.outputs`, message: `Activity ${index + 1}: add a countable output or a beneficiary reach` });
       }
     });
-  }
-  const projectSummary = (section4.project_summary as Record<string, unknown> | undefined) || {};
-  if (!projectSummary.distinct_total_beneficiaries) {
-    issues.push({ section: 4, field: 'project_summary.distinct_total_beneficiaries', message: 'Distinct total beneficiaries is required' });
-  }
-  if (!projectSummary.counting_method) {
-    issues.push({ section: 4, field: 'project_summary.counting_method', message: 'Beneficiary counting method is required' });
   }
 
   const section5 = report.section5 || {};
@@ -106,6 +144,12 @@ function validateCoreSectionsPresence(report: {
       if (!outcome.outcome_area) {
         issues.push({ section: 5, field: `measurable_outcomes.${index}.outcome_area`, message: 'Outcome category is required' });
       }
+      if (outcome.outcome_area && outcome.outcome_area !== 'Other' && !outcome.outcome_sub_category) {
+        issues.push({ section: 5, field: `measurable_outcomes.${index}.outcome_sub_category`, message: 'Outcome sub-category is required' });
+      }
+      if (!outcome.metric_category) {
+        issues.push({ section: 5, field: `measurable_outcomes.${index}.metric_category`, message: 'Metric category is required' });
+      }
       if (!outcome.metric) {
         issues.push({ section: 5, field: `measurable_outcomes.${index}.metric`, message: 'Primary metric unit is required' });
       }
@@ -115,7 +159,19 @@ function validateCoreSectionsPresence(report: {
       if (outcome.endline === '' || outcome.endline === undefined || outcome.endline === null) {
         issues.push({ section: 5, field: `measurable_outcomes.${index}.endline`, message: 'Endline value is required' });
       }
+      if (!outcome.unit) {
+        issues.push({ section: 5, field: `measurable_outcomes.${index}.unit`, message: 'Unit of measurement is required' });
+      }
+      if (!hasChosenValue(outcome.confidence_level)) {
+        issues.push({ section: 5, field: `measurable_outcomes.${index}.confidence_level`, message: 'At least one confidence level is required' });
+      }
+      if (!stringField(outcome.measurement_explanation).trim()) {
+        issues.push({ section: 5, field: `measurable_outcomes.${index}.measurement_explanation`, message: 'Measurement explanation is required' });
+      }
     });
+  }
+  if (!stringField(section5.challenges).trim()) {
+    issues.push({ section: 5, field: 'challenges', message: 'Challenges description is required' });
   }
 
   const section7 = report.section7 || {};
@@ -134,6 +190,15 @@ function validateCoreSectionsPresence(report: {
         if (!partner.type) {
           issues.push({ section: 7, field: `partners.${index}.type`, message: `Partner ${index + 1}: partner type is required` });
         }
+        if (partner.type === 'Others (please specify)' && !stringField(partner.type_other).trim()) {
+          issues.push({ section: 7, field: `partners.${index}.type_other`, message: `Partner ${index + 1}: specify the partner type` });
+        }
+        if (!hasChosenValue(partner.role)) {
+          issues.push({ section: 7, field: `partners.${index}.role`, message: `Partner ${index + 1}: at least one role is required` });
+        }
+        if (!hasChosenValue(partner.contribution)) {
+          issues.push({ section: 7, field: `partners.${index}.contribution`, message: `Partner ${index + 1}: at least one contribution is required` });
+        }
       });
     }
   }
@@ -141,6 +206,12 @@ function validateCoreSectionsPresence(report: {
   const section9 = report.section9 || {};
   if (!section9.academic_integration) {
     issues.push({ section: 9, field: 'academic_integration', message: 'Please select an academic integration level' });
+  }
+  if (!stringField(section9.personal_learning).trim()) {
+    issues.push({ section: 9, field: 'personal_learning', message: 'Personal growth statement is required' });
+  }
+  if (!stringField(section9.academic_application).trim()) {
+    issues.push({ section: 9, field: 'academic_application', message: 'Academic application explanation is required' });
   }
 
   const section11 = report.section11 || {};
@@ -170,6 +241,7 @@ function validateCoreSectionsPresence(report: {
 export function validateReportSectionsForSubmit(report: {
   section1?: Record<string, unknown> | null;
   section2?: Record<string, unknown> | null;
+  section3?: Record<string, unknown> | null;
   section4?: Record<string, unknown> | null;
   section5?: Record<string, unknown> | null;
   section6?: Record<string, unknown> | null;
@@ -206,6 +278,16 @@ export function validateReportSectionsForSubmit(report: {
             field: `resources.${index}.purpose`,
             message: 'Say what this resource made possible',
           });
+        }
+        if (res.type === 'Other (Specify)' && !stringField(res.type_other).trim()) {
+          issues.push({ section: 6, field: `resources.${index}.type_other`, message: 'Please specify the resource type' });
+        }
+        if (res.unit === 'Other (Specify)' && !stringField(res.unit_other).trim()) {
+          issues.push({ section: 6, field: `resources.${index}.unit_other`, message: 'Please specify the unit' });
+        }
+        const sources = Array.isArray(res.sources) ? res.sources : [];
+        if (sources.includes('Other (Specify)') && !stringField(res.source_other).trim()) {
+          issues.push({ section: 6, field: `resources.${index}.source_other`, message: 'Please specify the source' });
         }
       });
     }

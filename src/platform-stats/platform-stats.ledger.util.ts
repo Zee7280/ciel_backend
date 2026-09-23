@@ -159,14 +159,22 @@ export function beneficiariesFromSection4(section4: unknown): number {
         distinct_total_beneficiaries?: unknown;
         total_beneficiaries?: unknown;
         my_beneficiaries?: unknown;
+        activity_blocks?: Array<{
+          unique_beneficiaries?: unknown;
+          beneficiaries_reached?: unknown;
+        }>;
       }
     | undefined;
-  return (
+  const stored =
     toBeneficiaryCount(s?.project_summary?.distinct_total_beneficiaries) ||
     toBeneficiaryCount(s?.distinct_total_beneficiaries) ||
     toBeneficiaryCount(s?.total_beneficiaries) ||
-    toBeneficiaryCount(s?.my_beneficiaries)
-  );
+    toBeneficiaryCount(s?.my_beneficiaries);
+  if (stored) return stored;
+  const blocks = Array.isArray(s?.activity_blocks) ? s.activity_blocks : [];
+  return blocks.reduce((sum, block) => {
+    return sum + toBeneficiaryCount(block?.unique_beneficiaries || block?.beneficiaries_reached);
+  }, 0);
 }
 
 export function pkrFromResources(

@@ -775,7 +775,7 @@ Lens: Activities & Outputs. Count what was delivered. Do not interpret outcomes 
 Inputs (the student report section, as saved):
 - Activity blocks: ${JSON.stringify(data.activity_blocks || data.activities || [])}
 - Project summary: ${JSON.stringify(data.project_summary || {})}
-- Distinct beneficiaries: ${data.project_summary?.distinct_total_beneficiaries}
+- Distinct beneficiaries: ${data.project_summary?.distinct_total_beneficiaries || (Array.isArray(data.activity_blocks) ? data.activity_blocks.reduce((sum, block) => sum + (Number(String(block?.unique_beneficiaries || block?.beneficiaries_reached || '').replace(/,/g, '')) || 0), 0) : 0)}
 - Full section: ${JSON.stringify(data)}
 
 Output exactly these lines:

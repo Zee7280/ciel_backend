@@ -126,6 +126,14 @@ describe('platform-stats ledger math', () => {
             }),
         ).toBe(12);
         expect(
+            beneficiariesFromSection4({
+                activity_blocks: [
+                    { unique_beneficiaries: '40' },
+                    { beneficiaries_reached: '15' },
+                ],
+            }),
+        ).toBe(55);
+        expect(
             pkrFromResources([
                 { type: 'Financial (Cash Funding)', unit: 'PKR', amount: 3000, source: 'Partner' },
                 { type: 'Financial (Cash Funding)', unit: 'PKR', amount: 500, source: 'Out-of-pocket' },

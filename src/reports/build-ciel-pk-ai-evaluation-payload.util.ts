@@ -327,7 +327,12 @@ function mapSection4(section4: UnknownRecord): UnknownRecord {
             activity_title: pickString(row.title),
             status: pickString(row.status),
             activity_date: pickString(row.activity_period) || pickString(row.activity_date) || null,
-            activity_type: pickString(row.primary_category) || pickString(row.sub_category),
+            activity_type:
+                (/other/i.test(pickString(row.primary_category))
+                    ? pickString(row.other_category_text)
+                    : '') ||
+                pickString(row.primary_category) ||
+                pickString(row.sub_category),
             sub_category: pickString(row.sub_category),
             sub_category_other: pickString(row.other_sub_category_text),
             partner_host: pickString(row.partner_host),
@@ -352,11 +357,16 @@ function mapSection4(section4: UnknownRecord): UnknownRecord {
     });
     const summary = asRecord(section4.project_summary);
     const totalSessions = blocks.reduce((sum, block) => sum + (pickNumber(asRecord(block).sessions_count) ?? 0), 0);
+    const fromActivities = blocks.reduce((sum, block) => {
+        const people = asRecord(asRecord(block).beneficiaries);
+        return sum + (pickNumber(people.unique_count) ?? pickNumber(people.count) ?? 0);
+    }, 0);
+    const distinctBeneficiaries = pickNumber(summary.distinct_total_beneficiaries) ?? (fromActivities > 0 ? fromActivities : null);
     return {
         project_summary: {
             total_sessions: totalSessions,
-            total_beneficiaries_reached: pickNumber(summary.distinct_total_beneficiaries),
-            direct_beneficiaries: pickNumber(summary.distinct_total_beneficiaries),
+            total_beneficiaries_reached: distinctBeneficiaries,
+            direct_beneficiaries: distinctBeneficiaries,
             indirect_beneficiaries: 0,
             geographic_reach: pickString(summary.overall_geographic_reach),
             implementation_model: asArray(summary.overall_implementation_model).join(', ') || pickString(summary.overall_delivery_mode),

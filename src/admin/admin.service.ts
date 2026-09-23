@@ -1058,18 +1058,25 @@ export class AdminService {
           distinct_total_beneficiaries?: unknown;
           total_beneficiaries?: unknown;
           my_beneficiaries?: unknown;
+          activity_blocks?: Array<{
+            unique_beneficiaries?: unknown;
+            beneficiaries_reached?: unknown;
+          }>;
         }
       | undefined;
 
-    return (
+    const stored =
       this.toAnalyticsNumber(
         section4?.project_summary?.distinct_total_beneficiaries,
       ) ??
       this.toAnalyticsNumber(section4?.distinct_total_beneficiaries) ??
       this.toAnalyticsNumber(section4?.total_beneficiaries) ??
-      this.toAnalyticsNumber(section4?.my_beneficiaries) ??
-      0
-    );
+      this.toAnalyticsNumber(section4?.my_beneficiaries);
+    if (stored) return stored;
+    const blocks = Array.isArray(section4?.activity_blocks) ? section4.activity_blocks : [];
+    return blocks.reduce((sum, block) => {
+      return sum + (this.toAnalyticsNumber(block?.unique_beneficiaries || block?.beneficiaries_reached) ?? 0);
+    }, 0);
   }
 
   private getOpportunityBeneficiaries(opportunity: Opportunity): number {

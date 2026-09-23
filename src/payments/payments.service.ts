@@ -517,27 +517,55 @@ export class PaymentsService {
             throw new NotFoundException('Payment record not found');
         }
 
+        if (payment.status !== PaymentStatus.PENDING) {
+            throw new ConflictException('Only a pending payment can be approved or rejected');
+        }
+
         payment.status = status;
         if (feedback) payment.feedback = feedback;
         await this.paymentRepository.save(payment);
 
-        // Update corresponding report status
-        const report = await this.findStudentReportForPayment(payment.studentId, payment.projectId);
-
-        if (report) {
-            if (status === PaymentStatus.APPROVED) {
-                // Fee cleared — partner/admin review may proceed (final verify is separate).
-                report.status = 'paid';
-            } else if (status === PaymentStatus.REJECTED) {
-                report.status = 'payment_pending';
-            }
-            await this.studentReportRepository.save(report);
-        }
+        await this.syncReportStatusForPaymentScope(payment);
 
         return {
             success: true,
             message: `Payment ${status} successfully`,
         };
+    }
+
+    /**
+     * Report status follows the slips for this student + project.
+     * Approve clears the fee (`paid`). Reject with nothing else pending sends the student back to pay.
+     * Revert puts a cleared fee back under review. A later faculty/admin verify (`verified`) is only
+     * pulled back when the approval that cleared the fee is reverted.
+     */
+    private async syncReportStatusForPaymentScope(payment: Payment): Promise<void> {
+        const report = await this.findStudentReportForPayment(payment.studentId, payment.projectId);
+        if (!report) return;
+
+        const rows = await this.paymentRepository.find({
+            where: { studentId: payment.studentId, projectId: payment.projectId },
+        });
+        const anyApproved = rows.some((row) => row.status === PaymentStatus.APPROVED);
+        const anyPending = rows.some((row) => row.status === PaymentStatus.PENDING);
+        const current = String(report.status || '').toLowerCase();
+        let next: string | null = null;
+
+        if (anyApproved) {
+            if (current === 'payment_pending' || current === 'payment_under_review') {
+                next = 'paid';
+            }
+        } else if (anyPending) {
+            if (current === 'paid' || current === 'verified' || current === 'payment_pending') {
+                next = 'payment_under_review';
+            }
+        } else if (current === 'payment_under_review' || current === 'paid') {
+            next = 'payment_pending';
+        }
+
+        if (!next || next === current) return;
+        report.status = next;
+        await this.studentReportRepository.save(report);
     }
 
     async revertManualPaymentApproval(
@@ -561,12 +589,7 @@ export class PaymentsService {
         payment.feedback = null;
         await this.paymentRepository.save(payment);
 
-        const report = await this.findStudentReportForPayment(payment.studentId, payment.projectId);
-
-        if (report && report.status === 'verified') {
-            report.status = 'payment_under_review';
-            await this.studentReportRepository.save(report);
-        }
+        await this.syncReportStatusForPaymentScope(payment);
 
         const updated = await this.paymentRepository.findOne({
             where: { id: paymentId },

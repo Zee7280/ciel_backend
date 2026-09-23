@@ -22,6 +22,11 @@ function isOtherChoice(value: unknown): boolean {
   return /other\s*\/\s*custom/i.test(text);
 }
 
+function isOtherMechanism(value: unknown): boolean {
+  const text = stringField(value).replace(/^✏️\s*/, '').trim();
+  return /^other$/i.test(text);
+}
+
 /** Mirrors frontend validateSection4: a titled quantity, a legacy output string, or beneficiary reach. */
 function activityHasOutputOrReach(block: Record<string, unknown>): boolean {
   const outputs = Array.isArray(block.outputs) ? block.outputs : [];
@@ -190,7 +195,7 @@ function validateCoreSectionsPresence(report: {
         if (!partner.type) {
           issues.push({ section: 7, field: `partners.${index}.type`, message: `Partner ${index + 1}: partner type is required` });
         }
-        if (partner.type === 'Others (please specify)' && !stringField(partner.type_other).trim()) {
+        if ((partner.type === 'Others (please specify)' || partner.type === '✏️ Other') && !stringField(partner.type_other).trim()) {
           issues.push({ section: 7, field: `partners.${index}.type_other`, message: `Partner ${index + 1}: specify the partner type` });
         }
         if (!hasChosenValue(partner.role)) {
@@ -279,14 +284,14 @@ export function validateReportSectionsForSubmit(report: {
             message: 'Say what this resource made possible',
           });
         }
-        if (res.type === 'Other (Specify)' && !stringField(res.type_other).trim()) {
+        if ((res.type === 'Other (Specify)' || res.type === 'Other / Custom') && !stringField(res.type_other).trim()) {
           issues.push({ section: 6, field: `resources.${index}.type_other`, message: 'Please specify the resource type' });
         }
-        if (res.unit === 'Other (Specify)' && !stringField(res.unit_other).trim()) {
+        if ((res.unit === 'Other (Specify)' || res.unit === 'Other…') && !stringField(res.unit_other).trim()) {
           issues.push({ section: 6, field: `resources.${index}.unit_other`, message: 'Please specify the unit' });
         }
         const sources = Array.isArray(res.sources) ? res.sources : [];
-        if (sources.includes('Other (Specify)') && !stringField(res.source_other).trim()) {
+        if (sources.some((item) => item === 'Other (Specify)' || item === 'Other / Custom Source') && !stringField(res.source_other).trim()) {
           issues.push({ section: 6, field: `resources.${index}.source_other`, message: 'Please specify the source' });
         }
       });
@@ -390,11 +395,19 @@ export function validateReportSectionsForSubmit(report: {
   const mechanisms = Array.isArray(section10.mechanisms)
     ? section10.mechanisms
     : [];
+  // The live report form can submit "no" with no mechanisms, and can omit scaling
+  // and policy influence. The new form still requires those before it calls submit.
   if (continuationStatus !== 'no' && !mechanisms.length) {
     issues.push({
       section: 10,
       field: 'mechanisms',
       message: 'Identify at least one sustainability mechanism',
+    });
+  } else if (mechanisms.some((entry) => isOtherMechanism(entry)) && !stringField(section10.mechanism_other).trim()) {
+    issues.push({
+      section: 10,
+      field: 'mechanism_other',
+      message: 'Say what else keeps it going',
     });
   }
 

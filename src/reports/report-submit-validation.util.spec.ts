@@ -131,6 +131,19 @@ describe('validateReportSectionsForSubmit', () => {
     ]);
   });
 
+  it('accepts a live-form sustainability answer that says no and leaves scaling blank', () => {
+    const issues = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section6: { use_resources: 'no' },
+      section8: { has_evidence: 'no' },
+      section10: {
+        continuation_status: 'no',
+        continuation_details: 'Funding is exhausted; no further sessions planned.',
+      },
+    });
+    expect(issues.filter((i) => i.section === 10)).toEqual([]);
+  });
+
   it('accepts a fully valid report with no issues', () => {
     const issues = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,
@@ -139,6 +152,9 @@ describe('validateReportSectionsForSubmit', () => {
       section10: {
         continuation_status: 'no',
         continuation_details: 'Funding is exhausted; no further sessions planned.',
+        mechanisms: ['No continuation mechanism'],
+        scaling_potential: 'Not scalable',
+        policy_influence: 'No',
       },
     });
     expect(issues).toEqual([]);

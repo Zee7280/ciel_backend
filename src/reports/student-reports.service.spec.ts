@@ -70,6 +70,9 @@ const MIN_VALID_SUBMIT_SECTIONS = {
   section10: {
     continuation_status: 'no' as const,
     continuation_details: 'word '.repeat(100).trim(),
+    mechanisms: ['No continuation mechanism'],
+    scaling_potential: 'Not scalable',
+    policy_influence: 'No',
   },
   section11: {
     final_declaration: [true, true, true, true, true],

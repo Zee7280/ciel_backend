@@ -21,14 +21,6 @@ import { PaymentsService } from './payments.service';
 export class StudentPaymentsController {
     constructor(private readonly paymentsService: PaymentsService) { }
 
-    @Get('payment-info')
-    async getPaymentInfo() {
-        return {
-            success: true,
-            data: await this.paymentsService.getPaymentInfo(),
-        };
-    }
-
     @Get('payments/history')
     async getPaymentHistory(
         @Request() req,

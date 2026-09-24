@@ -41,20 +41,6 @@ export class StudentController {
     private readonly s3Service: S3Service,
   ) {}
 
-  @Get('dashboard')
-  getDashboard(@Request() req, @Query('studentId') studentId?: string) {
-    const targetId = studentId || req.user.id;
-    if (targetId !== req.user.id && req.user.role !== 'admin') {
-      throw new BadRequestException('Unauthorized to view this dashboard');
-    }
-    return this.studentsService.getDashboard(targetId);
-  }
-
-  @Get('me/dashboard')
-  getMyDashboard(@Request() req) {
-    return this.studentsService.getDashboard(req.user.id);
-  }
-
   @Get('projects')
   getStudentProjects(@Request() req) {
     return this.studentsService.getStudentProjects(req.user.id);
@@ -156,7 +142,6 @@ export class StudentController {
   }
 
   @Post('verify-team-member/send')
-  @Post('verify-identity/send')
   async sendOtp(@Body() body: { email: string }) {
     if (!body.email) {
       throw new BadRequestException('Email is required');
@@ -165,7 +150,6 @@ export class StudentController {
   }
 
   @Post('verify-team-member/confirm')
-  @Post('verify-identity/confirm')
   async confirmOtp(@Body() body: { email: string; otp: string }) {
     if (!body.email || !body.otp) {
       throw new BadRequestException('Email and OTP required');
@@ -189,23 +173,6 @@ export class StudentController {
       ...query,
       studentId: req.user.id,
     });
-  }
-
-  @Get('reports/check')
-  checkReportStatus(
-    @Request() req,
-    @Query() query: { studentId?: string; opportunityId?: string },
-  ) {
-    const studentId = (query.studentId || '').trim() || req.user.id;
-    if (studentId !== req.user.id && req.user.role !== UserRole.SUPER_ADMIN) {
-      throw new BadRequestException(
-        'Unauthorized to query report status for another student',
-      );
-    }
-    return this.studentReportsService.checkReportStatus(
-      studentId,
-      query.opportunityId,
-    );
   }
 
   @Get('reports/:id')

@@ -957,17 +957,6 @@ export class EngagementService {
     return null;
   }
 
-  async getLatestParticipation(
-    studentId: string,
-  ): Promise<Participation | null> {
-    const latest = await this.participantRepository.findOne({
-      where: { studentId },
-      relations: ['attendanceLogs'],
-      order: { createdAt: 'DESC' },
-    });
-    return latest ? this.decryptParticipation(latest) : null;
-  }
-
   async deleteParticipant(requesterUserId: string, participantId: string) {
     const participation = await this.participantRepository.findOne({
       where: { id: participantId },

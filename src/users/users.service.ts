@@ -72,11 +72,10 @@ export class UsersService {
   }
 
   async formatUserResponse(user: User) {
-    const notifications_count = await this.notificationsService.countUnread(
-      user.id,
-    );
-    const membershipFlags =
-      await this.organizationMembershipService.getUiFlags(user);
+    const [notifications_count, membershipFlags] = await Promise.all([
+      this.notificationsService.countUnread(user.id),
+      this.organizationMembershipService.getUiFlags(user),
+    ]);
     let roleTitle: string = user.role;
     // Simple mapping based on known roles
     if (user.role === UserRole.SUPER_ADMIN) roleTitle = 'Super Admin';

@@ -3090,22 +3090,20 @@ export class StudentReportsService {
   ) {
     const pid = report.opportunityId || report.project_id;
     const attendeeId = attendanceParticipantStudentId ?? report.studentId;
-    const reportAccess = await this.buildReportAccessForViewer(
-      attendeeId,
-      report,
-    );
-    const attendanceLogs = await this.attendanceLogsRepository.find({
-      where: {
-        participant: { studentId: attendeeId },
-        projectId: pid,
-      },
-      order: { dateOfEngagement: 'ASC', startTime: 'ASC' },
-    });
     const projectKey = report.opportunityId || report.project_id;
-    const latestPayment = await this.findLatestManualPayment(
-      report.studentId,
-      projectKey,
-    );
+    const [reportAccess, attendanceLogs, latestPayment, liveTeamFields] =
+      await Promise.all([
+        this.buildReportAccessForViewer(attendeeId, report),
+        this.attendanceLogsRepository.find({
+          where: {
+            participant: { studentId: attendeeId },
+            projectId: pid,
+          },
+          order: { dateOfEngagement: 'ASC', startTime: 'ASC' },
+        }),
+        this.findLatestManualPayment(report.studentId, projectKey),
+        this.buildLiveSection1TeamFields(report),
+      ]);
     const adminStatus = report.admin_status ?? 'pending';
     const { status, payment_verified, ...paymentRest } =
       this.paymentDerivedFields(
@@ -3117,7 +3115,6 @@ export class StudentReportsService {
     const approvalContext = this.getPublicReportApprovalContext(report);
     const feedback = this.buildStudentReportFeedback(report);
     const isEditable = this.isReportEditableForStudent(report);
-    const liveTeamFields = await this.buildLiveSection1TeamFields(report);
     const storedTeamLead = report.section1?.team_lead
       ? {
           ...report.section1.team_lead,

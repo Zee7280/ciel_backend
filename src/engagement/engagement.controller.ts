@@ -49,17 +49,6 @@ export class EngagementController {
     };
   }
 
-  @Get('me/latest')
-  async getMyLatest(@Request() req) {
-    const result = await this.engagementService.getLatestParticipation(
-      req.user.id,
-    );
-    return {
-      success: true,
-      data: result,
-    };
-  }
-
   /** Partner/NGO (creator) or CIEL admin: pending attendance queue (server-side routing; no client-supplied approver). */
   @Get('attendance/pending')
   async listPendingAttendance(

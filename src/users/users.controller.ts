@@ -59,15 +59,3 @@ export class UsersController {
         return this.usersService.updateGenericProfile(targetUserId, dto, { isAdminCaller });
     }
 }
-
-/** Backward-compatible plural route used by frontend helpers (`/api/v1/users/me`). */
-@Controller('users')
-export class UsersAliasController {
-    constructor(private readonly usersService: UsersService) { }
-
-    @UseGuards(JwtAuthGuard)
-    @Get('me')
-    getProfile(@Request() req) {
-        return this.usersService.getProfile(req.user.id);
-    }
-}

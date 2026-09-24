@@ -13,8 +13,6 @@ import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { CreateOpportunityDto } from '../opportunities/dto/create-opportunity.dto';
 import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { ApplyOpportunityDto } from './dto/apply-opportunity.dto';
-import { LogHoursDto } from './dto/log-hours.dto';
-import { UpdateStudentProfileDto } from './dto/update-profile.dto';
 
 import { Participation } from '../engagement/entities/participant.entity';
 import { Organization } from '../organizations/entities/organization.entity';
@@ -761,21 +759,6 @@ export class StudentsService {
       'payment_pending',
     ] as const;
 
-    const verifiedTimesheets = await this.timesheetsRepository.find({
-      where: { studentId: userId, status: 'verified' },
-      relations: ['opportunity'],
-    });
-
-    const hoursVolunteered = verifiedTimesheets.reduce(
-      (sum, t) => sum + this.safeDashboardNumber(t.hours),
-      0,
-    );
-    const completedOppIds = verifiedTimesheets
-      .map((t) => t.opportunityId)
-      .filter((id): id is string => !!id);
-    const projectsCompleted = new Set(completedOppIds).size;
-    const impactPoints = Math.round(hoursVolunteered * 10);
-
     const teamCountStatuses = [
       'pending',
       'pending_payment_approval',
@@ -789,12 +772,18 @@ export class StudentsService {
     ] as const;
 
     const [
+      verifiedTimesheets,
       activeCourses,
       activeProjectsCount,
       pendingApprovalsCount,
       activeApplications,
       studentUser,
+      studentReports,
     ] = await Promise.all([
+      this.timesheetsRepository.find({
+        where: { studentId: userId, status: 'verified' },
+        relations: ['opportunity'],
+      }),
       this.participantRepository.count({
         where: { studentId: userId, status: In([...activeCourseStatStatuses]) },
       }),
@@ -823,10 +812,18 @@ export class StudentsService {
         where: { id: userId },
         relations: ['organization'],
       }),
+      this.studentReportsService.getMergedReportsForParticipant(userId),
     ]);
 
-    const studentReports =
-      await this.studentReportsService.getMergedReportsForParticipant(userId);
+    const hoursVolunteered = verifiedTimesheets.reduce(
+      (sum, t) => sum + this.safeDashboardNumber(t.hours),
+      0,
+    );
+    const completedOppIds = verifiedTimesheets
+      .map((t) => t.opportunityId)
+      .filter((id): id is string => !!id);
+    const projectsCompleted = new Set(completedOppIds).size;
+    const impactPoints = Math.round(hoursVolunteered * 10);
 
     const reportsUnderReviewCount = studentReports.filter((r) =>
       (reportUnderReviewStatuses as readonly string[]).includes(r.status),
@@ -2236,25 +2233,6 @@ export class StudentsService {
     };
   }
 
-  // Timesheets
-  async getTimesheets(userId: string, query: any) {
-    const { status, opportunityId } = query;
-    const whereClause: any = { studentId: userId };
-    if (status) whereClause.status = status;
-    if (opportunityId) whereClause.opportunityId = opportunityId;
-
-    const timesheets = await this.timesheetsRepository.find({
-      where: whereClause,
-      relations: ['opportunity'],
-      order: { createdAt: 'DESC' },
-    });
-
-    return {
-      success: true,
-      data: timesheets,
-    };
-  }
-
   async getReports(userId: string, organisationId: string) {
     // Find all applications/participants for this user in opportunities from this organisation
     const activeApplications = await this.participantRepository.find({
@@ -2304,120 +2282,6 @@ export class StudentsService {
     return {
       success: true,
       data: reports,
-    };
-  }
-
-  async logHours(userId: string, dto: LogHoursDto) {
-    const timesheet = this.timesheetsRepository.create({
-      studentId: userId,
-      opportunityId: dto.opportunityId,
-      hours: dto.hours,
-      description: dto.description,
-      status: 'pending',
-    });
-
-    await this.timesheetsRepository.save(timesheet);
-
-    return {
-      success: true,
-      data: timesheet,
-      message: 'Hours logged successfully',
-    };
-  }
-
-  async updateTimesheet(userId: string, id: string, dto: Partial<LogHoursDto>) {
-    const timesheet = await this.timesheetsRepository.findOne({
-      where: { id },
-    });
-
-    if (!timesheet) {
-      throw new NotFoundException('Timesheet not found');
-    }
-
-    if (timesheet.studentId !== userId) {
-      throw new ForbiddenException('Not your timesheet');
-    }
-
-    if (timesheet.status === 'verified') {
-      throw new BadRequestException('Cannot update verified timesheets');
-    }
-
-    Object.assign(timesheet, dto);
-    await this.timesheetsRepository.save(timesheet);
-
-    return {
-      success: true,
-      data: timesheet,
-    };
-  }
-
-  async deleteTimesheet(userId: string, id: string) {
-    const timesheet = await this.timesheetsRepository.findOne({
-      where: { id },
-    });
-
-    if (!timesheet) {
-      throw new NotFoundException('Timesheet not found');
-    }
-
-    if (timesheet.studentId !== userId) {
-      throw new ForbiddenException('Not your timesheet');
-    }
-
-    if (timesheet.status === 'verified') {
-      throw new BadRequestException('Cannot delete verified timesheets');
-    }
-
-    await this.timesheetsRepository.remove(timesheet);
-
-    return {
-      success: true,
-      message: 'Timesheet deleted successfully',
-    };
-  }
-
-  // Impact
-  async getImpact(userId: string) {
-    const timesheets = await this.timesheetsRepository.find({
-      where: { studentId: userId, status: 'verified' },
-      relations: ['opportunity'],
-    });
-
-    const totalHours = timesheets.reduce((sum, t) => sum + t.hours, 0);
-
-    const sdgContributions = timesheets.reduce((acc, t) => {
-      const sdg = t.opportunity?.sdg || 'Unknown';
-      acc[sdg] = (acc[sdg] || 0) + t.hours;
-      return acc;
-    }, {});
-
-    // Monthly trend
-    const monthlyTrend: Array<{ month: string; hours: number }> =
-      timesheets.reduce(
-        (acc, t) => {
-          const month = new Date(t.createdAt).toLocaleString('default', {
-            month: 'short',
-          });
-          const existing = acc.find((m) => m.month === month);
-          if (existing) {
-            existing.hours += t.hours;
-          } else {
-            acc.push({ month, hours: t.hours });
-          }
-          return acc;
-        },
-        [] as Array<{ month: string; hours: number }>,
-      );
-
-    return {
-      success: true,
-      data: {
-        totalHours,
-        totalBeneficiaries: totalHours * 5, // Estimate
-        sdgContributions,
-        monthlyTrend,
-        certificates: [],
-      },
     };
   }
 
@@ -3205,212 +3069,5 @@ export class StudentsService {
     };
   }
 
-  async getImpactCertificateDownload(
-    requestingUserId: string,
-    role: string | undefined,
-    reportId: string,
-    query?: { student_id?: string; studentId?: string },
-  ) {
-    const report = await this.getApprovedOwnedReport(
-      requestingUserId,
-      role,
-      reportId,
-      query,
-    );
-    // Reuse the same "single source of truth" the QR code and public verification page already
-    // use, instead of guessing at a certificate file URL that nothing in this codebase ever
-    // generates (pickCertificateUrlFromReport only found one if a matching string happened to
-    // already exist somewhere inside the report's own JSONB sections — practically never true).
-    const url =
-      this.studentReportsService.reportVerificationPayload(
-        report,
-      ).impact_verify_url;
-    if (!url) {
-      throw new NotFoundException('Certificate not available');
-    }
-    return { success: true, data: { url } };
-  }
 
-  async getImpactReportPdf(
-    requestingUserId: string,
-    role: string | undefined,
-    reportId: string,
-    query?: { student_id?: string; studentId?: string },
-  ) {
-    const report = await this.getApprovedOwnedReport(
-      requestingUserId,
-      role,
-      reportId,
-      query,
-    );
-    const url = this.pickPdfUrlFromReport(report);
-    if (!url) {
-      throw new NotFoundException('PDF not available');
-    }
-    return { success: true, data: { url } };
-  }
-
-  async getImpactCiiView(
-    requestingUserId: string,
-    role: string | undefined,
-    reportId: string,
-    query?: { student_id?: string; studentId?: string },
-  ) {
-    const report = await this.getApprovedOwnedReport(
-      requestingUserId,
-      role,
-      reportId,
-      query,
-    );
-    const s11 = (report.section11 || {}) as {
-      ai_generated_impact_score?: number;
-      institutional_alignment_score?: number;
-      verified_narrative?: string;
-    };
-    return {
-      success: true,
-      data: {
-        report_id: report.id,
-        opportunity_id: report.opportunityId,
-        scores: {
-          ai_generated_impact_score: s11.ai_generated_impact_score ?? null,
-          institutional_alignment_score:
-            s11.institutional_alignment_score ?? null,
-        },
-        verified_narrative: s11.verified_narrative ?? null,
-      },
-    };
-  }
-
-  async getImpactAiReportView(
-    requestingUserId: string,
-    role: string | undefined,
-    reportId: string,
-    query?: { student_id?: string; studentId?: string },
-  ) {
-    const report = await this.getApprovedOwnedReport(
-      requestingUserId,
-      role,
-      reportId,
-      query,
-    );
-    const s11 = report.section11 || {};
-    return {
-      success: true,
-      data: {
-        report_id: report.id,
-        opportunity_id: report.opportunityId,
-        section11: s11,
-      },
-    };
-  }
-
-  async getImpactProjectResults(
-    requestingUserId: string,
-    role: string | undefined,
-    opportunityId: string,
-    query?: { student_id?: string; studentId?: string },
-  ) {
-    const studentId = this.resolveImpactStudentId(
-      requestingUserId,
-      role,
-      query,
-    );
-    const verifiedTs = await this.timesheetsRepository.findOne({
-      where: { studentId, opportunityId, status: 'verified' },
-    });
-    const canonical = await this.resolveImpactReportCandidate(
-      studentId,
-      opportunityId,
-    );
-    const approvedReport =
-      canonical && this.isApprovedImpactReport(canonical)
-        ? canonical
-        : undefined;
-    if (!verifiedTs && !approvedReport) {
-      throw new NotFoundException('Results not available');
-    }
-    const projectPayload = await this.getProjectById(opportunityId, studentId);
-    return {
-      success: true,
-      data: {
-        ...projectPayload.data,
-        completion: {
-          report_id: approvedReport?.id ?? null,
-          impact_score:
-            (
-              approvedReport?.section11 as
-                | { ai_generated_impact_score?: number }
-                | undefined
-            )?.ai_generated_impact_score ?? null,
-          verified_hours: verifiedTs?.hours ?? null,
-          has_verified_report: !!approvedReport,
-        },
-      },
-    };
-  }
-
-  // Profile
-  async getProfile(userId: string) {
-    const user = await this.usersRepository.findOne({
-      where: { id: userId },
-      relations: ['organization'],
-    });
-
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-
-    return {
-      success: true,
-      data: await this.usersService.formatUserResponse(user),
-    };
-  }
-
-  async updateProfile(userId: string, dto: UpdateStudentProfileDto) {
-    const user = await this.usersRepository.findOne({
-      where: { id: userId },
-    });
-
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-
-    Object.assign(user, dto);
-    await this.usersRepository.save(user);
-
-    return {
-      success: true,
-      data: await this.usersService.formatUserResponse(user),
-    };
-  }
-
-  // Settings
-  async getSettings(userId: string) {
-    // Mock settings for now
-    return {
-      success: true,
-      data: {
-        notifications: {
-          email: true,
-          push: false,
-          sms: false,
-        },
-        privacy: {
-          profileVisibility: 'public',
-          showEmail: false,
-        },
-        language: 'en',
-        theme: 'light',
-      },
-    };
-  }
-
-  async updateSettings(userId: string, settings: any) {
-    // Mock implementation
-    return {
-      success: true,
-      data: settings,
-    };
-  }
 }

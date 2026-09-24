@@ -2,16 +2,12 @@ import {
     Controller,
     Get,
     Post,
-    Put,
     Delete,
     Body,
     Param,
     Query,
     Request,
     UseGuards,
-    UseInterceptors,
-    UploadedFile,
-    UploadedFiles,
     BadRequestException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -19,12 +15,7 @@ import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
 import { StudentsService } from './students.service';
-import { StudentReportsService } from '../reports/student-reports.service';
 import { ApplyOpportunityDto } from './dto/apply-opportunity.dto';
-import { LogHoursDto } from './dto/log-hours.dto';
-import { UpdateStudentProfileDto } from './dto/update-profile.dto';
-import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
-import { S3Service } from '../common/s3.service';
 
 @Controller('students')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -32,34 +23,13 @@ import { S3Service } from '../common/s3.service';
 export class StudentsController {
     constructor(
         private readonly studentsService: StudentsService,
-        private readonly s3Service: S3Service
     ) { }
 
-    // Dashboard - Moving to StudentController below, but keeping here for backward compatibility if needed? 
-    // Actually, user specifically asked for /student/dashboard.
-    // I will remove it from here to avoid confusion or keep it as alias? 
-    // Let's keep it here mapped to 'dashboard' (so /students/dashboard works) AND create the new one.
-    @Get('dashboard')
-    getDashboard(@Request() req, @Query('studentId') studentId?: string) {
-        // Same rule as `opportunities` below: a `studentId` query param is only honoured for the
-        // caller themselves or an admin — never as a way to read another student's dashboard.
-        const studentContextId =
-            studentId && (req.user?.role === UserRole.SUPER_ADMIN || studentId === req.user.id)
-                ? studentId
-                : req.user.id;
-        return this.studentsService.getDashboard(studentContextId);
-    }
-
-    /** BFF-friendly alias: always the authenticated student (ignores `studentId` query). */
     @Get('me/dashboard')
     getMyDashboard(@Request() req) {
         return this.studentsService.getDashboard(req.user.id);
     }
 
-    // ... other methods ...
-
-
-    // Opportunities
     @Get('reports')
     getReports(@Request() req, @Query('organisationId') organisationId: string) {
         if (!organisationId) {
@@ -102,34 +72,9 @@ export class StudentsController {
         );
     }
 
-    @Post('projects')
-    getStudentProjects(@Request() req, @Body() body?: { studentId?: string }) {
-        const targetId =
-            body?.studentId && req.user?.role === UserRole.SUPER_ADMIN ? body.studentId : req.user.id;
-        return this.studentsService.getStudentProjects(targetId);
-    }
-
-    @Get('projects/:id')
-    getProjectById(@Request() req, @Param('id') id: string) {
-        return this.studentsService.getProjectById(id, req.user.id);
-    }
-
     @Get('opportunities/recommended')
     getRecommendedOpportunities(@Request() req) {
         return this.studentsService.getRecommendedOpportunities(req.user.id);
-    }
-
-    @Get('opportunities/similar')
-    findSimilarOpportunities(
-        @Request() req,
-        @Query('title') title?: string,
-        @Query('university') university?: string,
-        @Query('excludeId') excludeId?: string,
-    ) {
-        return this.studentsService.findSimilarStudentOpportunitiesForCreate(req.user.id, title || '', {
-            university,
-            excludeOpportunityId: excludeId,
-        });
     }
 
     @Get('opportunities/:id')
@@ -158,33 +103,6 @@ export class StudentsController {
         return this.studentsService.withdrawApplication(req.user.id, id);
     }
 
-    // Timesheets
-    @Get('timesheets')
-    getTimesheets(@Request() req, @Query() query) {
-        return this.studentsService.getTimesheets(req.user.id, query);
-    }
-
-    @Post('timesheets')
-    logHours(@Request() req, @Body() dto: LogHoursDto) {
-        return this.studentsService.logHours(req.user.id, dto);
-    }
-
-    @Put('timesheets/:id')
-    updateTimesheet(@Request() req, @Param('id') id: string, @Body() dto: Partial<LogHoursDto>) {
-        return this.studentsService.updateTimesheet(req.user.id, id, dto);
-    }
-
-    @Delete('timesheets/:id')
-    deleteTimesheet(@Request() req, @Param('id') id: string) {
-        return this.studentsService.deleteTimesheet(req.user.id, id);
-    }
-
-    // Impact
-    @Get('impact')
-    getImpact(@Request() req) {
-        return this.studentsService.getImpact(req.user.id);
-    }
-
     @Get('impact/history')
     getImpactHistoryGet(
         @Request() req,
@@ -207,119 +125,4 @@ export class StudentsController {
         return this.studentsService.getCommunityServiceRankings(req.user.id);
     }
 
-    @Get('impact/certificates/:id/download')
-    getImpactCertificateDownload(
-        @Request() req,
-        @Param('id') id: string,
-        @Query('student_id') student_id?: string,
-    ) {
-        return this.studentsService.getImpactCertificateDownload(req.user.id, req.user.role, id, {
-            student_id,
-        });
-    }
-
-    @Get('impact/reports/:id/pdf')
-    getImpactReportPdf(
-        @Request() req,
-        @Param('id') id: string,
-        @Query('student_id') student_id?: string,
-    ) {
-        return this.studentsService.getImpactReportPdf(req.user.id, req.user.role, id, { student_id });
-    }
-
-    @Get('impact/cii/:id')
-    getImpactCiiView(
-        @Request() req,
-        @Param('id') id: string,
-        @Query('student_id') student_id?: string,
-    ) {
-        return this.studentsService.getImpactCiiView(req.user.id, req.user.role, id, { student_id });
-    }
-
-    @Get('impact/ai-reports/:id')
-    getImpactAiReportView(
-        @Request() req,
-        @Param('id') id: string,
-        @Query('student_id') student_id?: string,
-    ) {
-        return this.studentsService.getImpactAiReportView(req.user.id, req.user.role, id, { student_id });
-    }
-
-    @Get('impact/projects/:id/results')
-    getImpactProjectResults(
-        @Request() req,
-        @Param('id') id: string,
-        @Query('student_id') student_id?: string,
-    ) {
-        return this.studentsService.getImpactProjectResults(req.user.id, req.user.role, id, {
-            student_id,
-        });
-    }
-
-    // Profile
-    @Get('profile')
-    getProfile(@Request() req) {
-        return this.studentsService.getProfile(req.user.id);
-    }
-
-    @Put('profile')
-    updateProfile(@Request() req, @Body() dto: UpdateStudentProfileDto) {
-        return this.studentsService.updateProfile(req.user.id, dto);
-    }
-
-    @Post('profile/avatar')
-    @UseInterceptors(FileInterceptor('avatar'))
-    async uploadAvatar(@Request() req, @UploadedFile() file: any) {
-        if (!file) {
-            throw new BadRequestException('Avatar file not provided');
-        }
-        const avatarUrl = await this.s3Service.uploadFile(file, 'avatars');
-        await this.studentsService.updateProfile(req.user.id, { avatar: avatarUrl } as any);
-        return { success: true, data: { avatar_url: avatarUrl } };
-    }
-
-    @Post('profile/change-password')
-    async changePassword(@Request() req, @Body() body: { currentPassword: string; newPassword: string }) {
-        // This should be implemented in UsersService
-        return {
-            success: true,
-            message: 'Password changed successfully',
-        };
-    }
-
-    // Settings
-    @Get('settings')
-    getSettings(@Request() req) {
-        return this.studentsService.getSettings(req.user.id);
-    }
-
-    @Put('settings')
-    updateSettings(@Request() req, @Body() settings: any) {
-        return this.studentsService.updateSettings(req.user.id, settings);
-    }
-    @Post('verify-team-member/send')
-    @Post('verify-identity/send')
-    async sendOtp(@Body() body: { email: string }) {
-        if (!body.email) {
-            throw new BadRequestException('Email is required');
-        }
-        return this.studentsService.sendTeamMemberOtp(body.email);
-    }
-
-    @Post('verify-team-member/confirm')
-    @Post('verify-identity/confirm')
-    async confirmOtp(@Body() body: { email: string; otp: string }) {
-        if (!body.email || !body.otp) {
-            throw new BadRequestException('Email and OTP required');
-        }
-        return this.studentsService.confirmTeamMemberOtp(body.email, body.otp);
-    }
-
-    @Post('verify-team-member')
-    async verifyTeamMember(@Body() body: { email: string }) {
-        if (!body.email) {
-            throw new BadRequestException('Email is required');
-        }
-        return this.studentsService.sendTeamMemberVerification(body.email);
-    }
 }

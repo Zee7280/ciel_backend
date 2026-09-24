@@ -23,20 +23,6 @@ export class PaymentsService {
         private readonly s3Service: S3Service,
     ) { }
 
-    async getPaymentInfo() {
-        const bankName = await this.getSetting('BANK_NAME', 'Standard Chartered');
-        const accountHolder = await this.getSetting('ACCOUNT_HOLDER', 'CIEL Education');
-        const accountNumber = await this.getSetting('ACCOUNT_NUMBER', '000-0000000-00');
-        const amount = await this.getSetting('PAYMENT_AMOUNT', '5000');
-
-        return {
-            bankName,
-            accountHolder,
-            accountNumber,
-            amount: parseInt(amount),
-        };
-    }
-
     private async getSetting(key: string, defaultValue: string): Promise<string> {
         const setting = await this.settingRepository.findOne({ where: { key } });
         return setting ? setting.value : defaultValue;

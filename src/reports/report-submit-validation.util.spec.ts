@@ -184,6 +184,40 @@ describe('validateReportSectionsForSubmit', () => {
     expect(issues.filter((i) => i.section === 4)).toEqual([]);
   });
 
+  it('rejects an unnamed activity and accepts the same block once it has a title', () => {
+    const unnamed = {
+      activity_blocks: [
+        {
+          title: '   ',
+          primary_category: '🩺 Health & Clinical Outreach',
+          sub_category: 'Health Education',
+          status: 'Ongoing',
+          description: 'Ran a hygiene session with the host clinic.',
+          beneficiaries_reached: '40',
+        },
+      ],
+    };
+    const blank = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section4: unnamed,
+      section6: { use_resources: 'no' },
+      section8: { has_evidence: 'no' },
+      section10: { continuation_status: 'no', continuation_details: 'Done.' },
+    });
+    expect(blank.some((i) => i.field === 'activity_blocks.0.title')).toBe(true);
+
+    const named = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section4: {
+        activity_blocks: [{ ...unnamed.activity_blocks[0], title: 'Classroom hygiene session' }],
+      },
+      section6: { use_resources: 'no' },
+      section8: { has_evidence: 'no' },
+      section10: { continuation_status: 'no', continuation_details: 'Done.' },
+    });
+    expect(named.filter((i) => i.section === 4)).toEqual([]);
+  });
+
   it('rejects an activity that has neither a countable output nor reach', () => {
     const section4 = {
       activity_blocks: [

@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, QueryFailedError, Repository } from 'typeorm';
 import { StudentReport } from './entities/student-report.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { Participation } from '../engagement/entities/participant.entity';
@@ -3236,7 +3236,16 @@ export class StudentReportsService {
     if (!report) {
       throw new NotFoundException('Report not found');
     }
-    await this.studentReportsRepository.remove(report);
+    try {
+      await this.studentReportsRepository.remove(report);
+    } catch (error) {
+      if (error instanceof QueryFailedError) {
+        throw new BadRequestException(
+          'This report could not be deleted because another record still depends on it.',
+        );
+      }
+      throw error;
+    }
     return { success: true, message: 'Report deleted successfully' };
   }
 

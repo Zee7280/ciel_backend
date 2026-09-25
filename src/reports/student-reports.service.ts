@@ -2089,6 +2089,28 @@ export class StudentReportsService {
     return rest;
   }
 
+  /** Draft saves must not keep a previous submit's CII snapshot (e.g. after admin delete + rewrite). */
+  private stripDraftCiiFromSection11(
+    section11: unknown,
+  ): Record<string, unknown> | undefined {
+    const stripped = this.stripStudentWritableSection11(section11);
+    if (!stripped) return undefined;
+    const { cii_index: _ciiIndex, ciiIndex: _ciiIndexAlt, ...rest } = stripped;
+    return rest;
+  }
+
+  /** On submit, fold root-level cii_index into section11 so reload can read the snapshot. */
+  private mergeSubmitCiiIntoSection11(
+    section11: unknown,
+    ciiIndex: unknown,
+  ): Record<string, unknown> | undefined {
+    const base = this.stripStudentWritableSection11(section11) ?? {};
+    if (ciiIndex && typeof ciiIndex === 'object') {
+      return { ...base, cii_index: ciiIndex };
+    }
+    return Object.keys(base).length ? base : undefined;
+  }
+
   private resolveSubmitIntent(parsedData: any, forceSubmit: boolean): boolean {
     if (forceSubmit) return true;
     const submitSignal =
@@ -2270,10 +2292,16 @@ export class StudentReportsService {
       if (parsedData.section8) report.section8 = parsedData.section8;
       if (parsedData.section9) report.section9 = parsedData.section9;
       if (parsedData.section10) report.section10 = parsedData.section10;
-      if (parsedData.section11)
-        report.section11 = this.stripStudentWritableSection11(
+      if (shouldSubmit) {
+        report.section11 = this.mergeSubmitCiiIntoSection11(
+          parsedData.section11,
+          parsedData.cii_index,
+        ) as StudentReport['section11'];
+      } else if (parsedData.section11) {
+        report.section11 = this.stripDraftCiiFromSection11(
           parsedData.section11,
         ) as StudentReport['section11'];
+      }
 
       // If it was already validated, maybe keep it, otherwise reset to pending if re-submitting new data
       if (report.sdg_validation_status !== 'validated') {
@@ -2296,7 +2324,12 @@ export class StudentReportsService {
         section8: parsedData.section8,
         section9: parsedData.section9,
         section10: parsedData.section10,
-        section11: this.stripStudentWritableSection11(parsedData.section11),
+        section11: (shouldSubmit
+          ? this.mergeSubmitCiiIntoSection11(
+              parsedData.section11,
+              parsedData.cii_index,
+            )
+          : this.stripDraftCiiFromSection11(parsedData.section11)) as StudentReport['section11'],
         sdg_summary_stage: 'preliminary',
         sdg_validation_status: 'pending',
       });
@@ -2516,7 +2549,7 @@ export class StudentReportsService {
       if (parsedData.section9) report.section9 = parsedData.section9;
       if (parsedData.section10) report.section10 = parsedData.section10;
       if (parsedData.section11)
-        report.section11 = this.stripStudentWritableSection11(
+        report.section11 = this.stripDraftCiiFromSection11(
           parsedData.section11,
         ) as StudentReport['section11'];
     } else {
@@ -2541,7 +2574,7 @@ export class StudentReportsService {
         section8: parsedData.section8,
         section9: parsedData.section9,
         section10: parsedData.section10,
-        section11: this.stripStudentWritableSection11(parsedData.section11),
+        section11: this.stripDraftCiiFromSection11(parsedData.section11),
       });
     }
 
@@ -2940,6 +2973,20 @@ export class StudentReportsService {
               hec_compliance: 'below',
             },
           },
+          // Explicit empty sections so clients never keep a deleted report's reflection/CII.
+          section2: {},
+          section3: {},
+          section4: {},
+          section5: {},
+          section6: {},
+          section7: {},
+          section8: {},
+          section9: {},
+          section10: {},
+          section11: {},
+          cii_index: null,
+          ciiV2: null,
+          ciiV2Lock: null,
         },
       };
     }
@@ -3372,16 +3419,45 @@ export class StudentReportsService {
             }
           }
 
+          let reportsRemoved = 0;
+          let reportIdsRemoved: string[] = [];
           if (deleteReport) {
-            await reportRepo.delete({ id: report.id });
+            // Remove this report and any leftover same-project team drafts so
+            // reflection / CII / section bodies cannot reappear after delete.
+            const idsToDelete = new Set<string>([report.id]);
+            if (projectId && studentIds.length) {
+              const siblings = await reportRepo.find({
+                where: [
+                  { opportunityId: projectId, studentId: In(studentIds) },
+                  { project_id: projectId, studentId: In(studentIds) },
+                ],
+              });
+              for (const sibling of siblings) {
+                if (sibling?.id) idsToDelete.add(sibling.id);
+              }
+            }
+            reportIdsRemoved = [...idsToDelete];
+            await reportRepo.delete({ id: In(reportIdsRemoved) });
+            reportsRemoved = reportIdsRemoved.length;
           }
 
-          return { attendanceRemoved, paymentsRemoved };
+          return {
+            attendanceRemoved,
+            paymentsRemoved,
+            reportsRemoved,
+            reportIdsRemoved,
+          };
         },
       );
 
       const parts: string[] = [];
-      if (deleteReport) parts.push('the report');
+      if (deleteReport) {
+        parts.push(
+          result.reportsRemoved > 1
+            ? `${result.reportsRemoved} report rows`
+            : 'the report',
+        );
+      }
       if (deleteAttendance) {
         parts.push(
           `${result.attendanceRemoved} attendance session${result.attendanceRemoved === 1 ? '' : 's'}`,
@@ -3398,6 +3474,7 @@ export class StudentReportsService {
         message: `Deleted ${parts.join(', ')}.`,
         deleted: {
           report: deleteReport,
+          report_ids: result.reportIdsRemoved,
           attendance: deleteAttendance ? result.attendanceRemoved : 0,
           payment: deletePayment ? result.paymentsRemoved : 0,
         },

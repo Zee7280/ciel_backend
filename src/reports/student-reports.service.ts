@@ -3229,24 +3229,142 @@ export class StudentReportsService {
     };
   }
 
-  async removeReport(id: string) {
+  /**
+   * Admin delete. Only the flags that are true are removed.
+   * A request with no flags still deletes only the report, matching the first version of this route.
+   * Opportunity and enrollment seats are never removed here.
+   */
+  async removeReport(
+    id: string,
+    options?: {
+      delete_report?: boolean;
+      delete_attendance?: boolean;
+      delete_payment?: boolean;
+    },
+  ) {
     const report = await this.studentReportsRepository.findOne({
       where: { id },
     });
     if (!report) {
       throw new NotFoundException('Report not found');
     }
+
+    const explicit = Boolean(
+      options &&
+        (options.delete_report !== undefined ||
+          options.delete_attendance !== undefined ||
+          options.delete_payment !== undefined),
+    );
+    const deleteReport = explicit ? Boolean(options?.delete_report) : true;
+    const deleteAttendance = Boolean(options?.delete_attendance);
+    const deletePayment = Boolean(options?.delete_payment);
+    if (!deleteReport && !deleteAttendance && !deletePayment) {
+      throw new BadRequestException('Choose at least one item to delete.');
+    }
+
+    const projectId = this.reportProjectKey(report);
+    const roster = projectId
+      ? await this.participantRepository.find({ where: { projectId } })
+      : [];
+    const owner = roster.find((row) => row.studentId === report.studentId);
+    const teamId = (owner?.teamId || '').trim();
+    const team = teamId
+      ? roster.filter((row) => (row.teamId || '').trim() === teamId)
+      : roster.filter((row) => row.studentId && row.studentId === report.studentId);
+    const participantIds = team.map((row) => row.id);
+    const studentIds = [
+      ...new Set(
+        team
+          .map((row) => (row.studentId || '').trim())
+          .filter(Boolean)
+          .concat(report.studentId ? [report.studentId] : []),
+      ),
+    ];
+
     try {
-      await this.studentReportsRepository.remove(report);
+      const result = await this.studentReportsRepository.manager.transaction(
+        async (em) => {
+          const attendanceRepo = em.getRepository(AttendanceLog);
+          const paymentRepo = em.getRepository(Payment);
+          const reportRepo = em.getRepository(StudentReport);
+          let attendanceRemoved = 0;
+          let paymentsRemoved = 0;
+
+          if (deleteAttendance && projectId && participantIds.length > 0) {
+            const removed = await attendanceRepo.delete({
+              projectId,
+              participantId: In(participantIds),
+            });
+            attendanceRemoved = removed.affected ?? 0;
+          }
+
+          if (deletePayment && projectId && studentIds.length > 0) {
+            const removed = await paymentRepo.delete({
+              projectId,
+              studentId: In(studentIds),
+            });
+            paymentsRemoved = removed.affected ?? 0;
+          }
+
+          if (!deleteReport && deleteAttendance) {
+            const section1 = {
+              ...(report.section1 ?? {}),
+              attendance_logs: [],
+              metrics: {
+                total_verified_hours: 0,
+                total_active_days: 0,
+                engagement_span: report.section1?.metrics?.engagement_span ?? 0,
+                attendance_frequency: 0,
+                weekly_continuity: 0,
+                eis_score: 0,
+                engagement_category:
+                  report.section1?.metrics?.engagement_category ?? '',
+                hec_compliance: report.section1?.metrics?.hec_compliance ?? '',
+              },
+            };
+            await reportRepo.update(report.id, {
+              section1: section1 as StudentReport['section1'],
+            });
+          }
+
+          if (deleteReport) {
+            await reportRepo.delete({ id: report.id });
+          }
+
+          return { attendanceRemoved, paymentsRemoved };
+        },
+      );
+
+      const parts: string[] = [];
+      if (deleteReport) parts.push('the report');
+      if (deleteAttendance) {
+        parts.push(
+          `${result.attendanceRemoved} attendance session${result.attendanceRemoved === 1 ? '' : 's'}`,
+        );
+      }
+      if (deletePayment) {
+        parts.push(
+          `${result.paymentsRemoved} payment slip${result.paymentsRemoved === 1 ? '' : 's'}`,
+        );
+      }
+
+      return {
+        success: true,
+        message: `Deleted ${parts.join(', ')}.`,
+        deleted: {
+          report: deleteReport,
+          attendance: deleteAttendance ? result.attendanceRemoved : 0,
+          payment: deletePayment ? result.paymentsRemoved : 0,
+        },
+      };
     } catch (error) {
       if (error instanceof QueryFailedError) {
         throw new BadRequestException(
-          'This report could not be deleted because another record still depends on it.',
+          'This could not be deleted because another record still depends on it.',
         );
       }
       throw error;
     }
-    return { success: true, message: 'Report deleted successfully' };
   }
 
   async verifyReport(

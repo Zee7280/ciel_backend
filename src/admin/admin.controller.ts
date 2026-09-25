@@ -31,6 +31,7 @@ import { StudentReportsService } from '../reports/student-reports.service';
 import { CommunityAwardService } from '../reports/community-award.service';
 import { NotifyCommunityAwardDto } from '../reports/dto/notify-community-award.dto';
 import { AdminMergeReportsDto } from '../reports/dto/admin-merge-reports.dto';
+import { AdminDeleteReportDto } from '../reports/dto/admin-delete-report.dto';
 import { SetAttendanceEditableDto } from './dto/set-attendance-editable.dto';
 import { AdminDedupeStudentSeatsDto } from './dto/admin-dedupe-student-seats.dto';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
@@ -445,8 +446,8 @@ export class AdminController {
   }
 
   @Delete('reports/:id')
-  removeReport(@Param('id') id: string) {
-    return this.studentReportsService.removeReport(id);
+  removeReport(@Param('id') id: string, @Body() body: AdminDeleteReportDto) {
+    return this.studentReportsService.removeReport(id, body);
   }
 
   @Post('users')

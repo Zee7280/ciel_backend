@@ -215,9 +215,17 @@ export class StudentReport {
     discipline_contribution: string;
     baseline_evidence: string;
     baseline_evidence_other?: string;
+    baseline_other_entries?: string[];
     problem_category?: string;
     primary_beneficiary?: string;
     summary_text?: string;
+    affected_group?: string;
+    affected_count?: string;
+    system_gaps?: string[];
+    /** Legacy single "Other" gap text — kept in sync with system_gaps_other_entries. */
+    system_gaps_other?: string;
+    /** Multiple custom "Other" gap texts when the student uses Add another. */
+    system_gaps_other_entries?: string[];
     media_urls?: string[];
   };
 

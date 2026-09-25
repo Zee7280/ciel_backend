@@ -3184,9 +3184,8 @@ export class StudentReportsService {
               : await this.engagementService.getProjectTeamForReportDossier(
                   report.opportunityId || report.project_id,
                 ),
-          attendance_logs:
-            attendanceLogs.length > 0
-              ? attendanceLogs.map((log) => ({
+          attendance_logs: pid
+            ? attendanceLogs.map((log) => ({
                   id: log.id,
                   participantId: log.participantId,
                   date: log.dateOfEngagement,
@@ -3207,7 +3206,7 @@ export class StudentReportsService {
                   opportunity_creator_kind:
                     (log as any).opportunityCreatorKind ?? null,
                 }))
-              : report.section1?.attendance_logs || [],
+            : report.section1?.attendance_logs || [],
         },
         section2: report.section2,
         section3: report.section3,
@@ -3266,12 +3265,25 @@ export class StudentReportsService {
     const roster = projectId
       ? await this.participantRepository.find({ where: { projectId } })
       : [];
-    const owner = roster.find((row) => row.studentId === report.studentId);
+    const owner =
+      roster.find((row) => row.studentId === report.studentId) ||
+      roster.find((row) => row.isTeamLead && row.studentId === report.studentId) ||
+      null;
     const teamId = (owner?.teamId || '').trim();
-    const team = teamId
-      ? roster.filter((row) => (row.teamId || '').trim() === teamId)
-      : roster.filter((row) => row.studentId && row.studentId === report.studentId);
-    const participantIds = team.map((row) => row.id);
+    const applicationId = (owner?.applicationId || '').trim();
+    let team = roster.filter((row) => row.studentId === report.studentId);
+    if (teamId) {
+      team = roster.filter((row) => (row.teamId || '').trim() === teamId);
+    } else if (applicationId) {
+      team = roster.filter(
+        (row) => (row.applicationId || '').trim() === applicationId,
+      );
+    } else if (team.length === 0 && report.studentId) {
+      team = roster.filter((row) => row.studentId === report.studentId);
+    }
+    const participantIds = [
+      ...new Set(team.map((row) => row.id).filter(Boolean)),
+    ];
     const studentIds = [
       ...new Set(
         team
@@ -3287,15 +3299,25 @@ export class StudentReportsService {
           const attendanceRepo = em.getRepository(AttendanceLog);
           const paymentRepo = em.getRepository(Payment);
           const reportRepo = em.getRepository(StudentReport);
+          const participationRepo = em.getRepository(Participation);
           let attendanceRemoved = 0;
           let paymentsRemoved = 0;
 
-          if (deleteAttendance && projectId && participantIds.length > 0) {
-            const removed = await attendanceRepo.delete({
-              projectId,
-              participantId: In(participantIds),
-            });
-            attendanceRemoved = removed.affected ?? 0;
+          if (deleteAttendance && projectId) {
+            let ids = participantIds;
+            if (!ids.length && studentIds.length) {
+              const parts = await participationRepo.find({
+                where: { projectId, studentId: In(studentIds) },
+              });
+              ids = parts.map((row) => row.id).filter(Boolean);
+            }
+            if (ids.length) {
+              const removed = await attendanceRepo.delete({
+                projectId,
+                participantId: In(ids),
+              });
+              attendanceRemoved = removed.affected ?? 0;
+            }
           }
 
           if (deletePayment && projectId && studentIds.length > 0) {
@@ -3307,24 +3329,47 @@ export class StudentReportsService {
           }
 
           if (!deleteReport && deleteAttendance) {
-            const section1 = {
-              ...(report.section1 ?? {}),
+            const clearSection1Attendance = (
+              section1: StudentReport['section1'] | null | undefined,
+            ) => ({
+              ...(section1 ?? {}),
               attendance_logs: [],
               metrics: {
                 total_verified_hours: 0,
                 total_active_days: 0,
-                engagement_span: report.section1?.metrics?.engagement_span ?? 0,
+                engagement_span: section1?.metrics?.engagement_span ?? 0,
                 attendance_frequency: 0,
                 weekly_continuity: 0,
                 eis_score: 0,
                 engagement_category:
-                  report.section1?.metrics?.engagement_category ?? '',
-                hec_compliance: report.section1?.metrics?.hec_compliance ?? '',
+                  section1?.metrics?.engagement_category ?? '',
+                hec_compliance: section1?.metrics?.hec_compliance ?? '',
               },
-            };
-            await reportRepo.update(report.id, {
-              section1: section1 as StudentReport['section1'],
             });
+
+            await reportRepo.update(report.id, {
+              section1: clearSection1Attendance(
+                report.section1,
+              ) as StudentReport['section1'],
+            });
+
+            // Same project + team students may have leftover draft rows with cached logs.
+            if (studentIds.length) {
+              const siblings = await reportRepo.find({
+                where: [
+                  { opportunityId: projectId, studentId: In(studentIds) },
+                  { project_id: projectId, studentId: In(studentIds) },
+                ],
+              });
+              for (const sibling of siblings) {
+                if (sibling.id === report.id) continue;
+                await reportRepo.update(sibling.id, {
+                  section1: clearSection1Attendance(
+                    sibling.section1,
+                  ) as StudentReport['section1'],
+                });
+              }
+            }
           }
 
           if (deleteReport) {

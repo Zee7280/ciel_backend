@@ -1,5 +1,5 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { FacultyReportsService } from './faculty-reports.service';
+import { FacultyReportsService, mapFacultyListCii } from './faculty-reports.service';
 
 function makeService(
   report: Record<string, unknown> | null,
@@ -544,5 +544,59 @@ describe('FacultyReportsService — runIndependentAiAnalysisBatch', () => {
     expect((result.data as any).results.find((r: any) => r.reportId === 'report-2')).toEqual(
       expect.objectContaining({ success: false }),
     );
+  });
+});
+
+describe('mapFacultyListCii', () => {
+  it('returns empty CII fields when analyser has not run', () => {
+    expect(mapFacultyListCii({ ciiV2: null, ciiV2Lock: null })).toEqual({
+      cii_analyser_run: false,
+      cii_provisional: null,
+      cii_locked: false,
+      cii_level_name: null,
+      cii_numeric_level: null,
+    });
+  });
+
+  it('maps a provisional System CII without treating it as locked', () => {
+    expect(
+      mapFacultyListCii({
+        ciiV2: {
+          final: 54.44,
+          numericLevel: 2,
+          level: { name: 'Foundation Stage Contributor', level: 2 },
+        },
+        ciiV2Lock: { locked: false },
+      }),
+    ).toEqual({
+      cii_analyser_run: true,
+      cii_provisional: 54.4,
+      cii_locked: false,
+      cii_level_name: 'Foundation Stage Contributor',
+      cii_numeric_level: 2,
+    });
+  });
+
+  it('does not treat the string "false" as a locked CII', () => {
+    expect(
+      mapFacultyListCii({
+        ciiV2: { final: '67' },
+        ciiV2Lock: { locked: 'false' },
+      }),
+    ).toMatchObject({
+      cii_analyser_run: true,
+      cii_provisional: 67,
+      cii_locked: false,
+    });
+  });
+
+  it('ignores malformed ciiV2 payloads instead of throwing', () => {
+    expect(mapFacultyListCii({ ciiV2: 'broken', ciiV2Lock: undefined })).toEqual({
+      cii_analyser_run: false,
+      cii_provisional: null,
+      cii_locked: false,
+      cii_level_name: null,
+      cii_numeric_level: null,
+    });
   });
 });

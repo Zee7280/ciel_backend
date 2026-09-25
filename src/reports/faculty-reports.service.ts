@@ -21,6 +21,48 @@ import { buildCielPkAiEvaluationPayload } from './build-ciel-pk-ai-evaluation-pa
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 
+function finiteNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim() && Number.isFinite(Number(value))) {
+    return Number(value);
+  }
+  return null;
+}
+
+/** List-card CII fields only — never mutates scores or lock state. */
+export function mapFacultyListCii(report: {
+  ciiV2?: unknown;
+  ciiV2Lock?: { locked?: unknown } | null;
+}): {
+  cii_analyser_run: boolean;
+  cii_provisional: number | null;
+  cii_locked: boolean;
+  cii_level_name: string | null;
+  cii_numeric_level: number | null;
+} {
+  const ciiV2 =
+    report.ciiV2 && typeof report.ciiV2 === 'object'
+      ? (report.ciiV2 as Record<string, unknown>)
+      : null;
+  const finalNum = finiteNumber(ciiV2?.final);
+  const ciiFinal = finalNum == null ? null : Math.round(finalNum * 10) / 10;
+  const level =
+    ciiV2?.level && typeof ciiV2.level === 'object'
+      ? (ciiV2.level as { name?: unknown; level?: unknown })
+      : null;
+  const lockedRaw = report.ciiV2Lock?.locked;
+  const levelName =
+    typeof level?.name === 'string' && level.name.trim() ? level.name : null;
+  return {
+    cii_analyser_run: ciiFinal != null,
+    cii_provisional: ciiFinal,
+    cii_locked: lockedRaw === true || lockedRaw === 'true',
+    cii_level_name: levelName,
+    cii_numeric_level:
+      finiteNumber(ciiV2?.numericLevel) ?? finiteNumber(level?.level),
+  };
+}
+
 @Injectable()
 export class FacultyReportsService {
   constructor(
@@ -204,6 +246,7 @@ export class FacultyReportsService {
         partner_approved_at: r.partnerApprovedAt,
         admin_approved_at: r.adminApprovedAt,
         metrics: r.section1?.metrics,
+        ...mapFacultyListCii(r),
       })),
     };
   }

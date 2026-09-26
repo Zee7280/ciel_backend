@@ -1,4 +1,15 @@
-import { communityServiceLevel, isCommunityAwardLiveReport, isCommunityAwardMedalReport, scoreCommunityAward } from './community-award.util';
+import {
+    communityAwardInputsFromReport,
+    communityServiceLevel,
+    isCommunityAwardLiveReport,
+    isCommunityAwardMedalReport,
+    resolveDisplayCii,
+    resolveReportFlashEvidence,
+    resolveReportFlashHours,
+    resolveReportFlashOutcomes,
+    resolveReportFlashSessions,
+    scoreCommunityAward,
+} from './community-award.util';
 
 describe('community-award.util', () => {
     it('scores CII as 40% of the 100-point index and caps each band', () => {
@@ -92,5 +103,152 @@ describe('communityServiceLevel', () => {
         expect(communityServiceLevel(50)).toBe('Strong');
         expect(communityServiceLevel(49)).toBe('Developing');
         expect(communityServiceLevel(0)).toBe('Developing');
+    });
+});
+
+describe('resolveReportFlashHours — same cascade as the V23 flashcard', () => {
+    it('uses session logs when metrics hours are empty', () => {
+        expect(
+            resolveReportFlashHours({
+                metrics: { total_verified_hours: 0 },
+                attendance_logs: [
+                    { hours: 2, approval_status: 'pending' },
+                    { hours: 2, start_time: '09:00', end_time: '11:00' },
+                ],
+            }),
+        ).toBe(4);
+    });
+
+    it('ignores rejected logs and falls back to roster hours', () => {
+        expect(
+            resolveReportFlashHours({
+                metrics: { total_verified_hours: 0 },
+                attendance_logs: [{ hours: 8, approval_status: 'rejected' }],
+                team_lead: { hours: 6 },
+                team_members: [{ hours: 4 }],
+            }),
+        ).toBe(10);
+    });
+
+    it('uses live attendance hours only when the stored blob is still 0', () => {
+        expect(resolveReportFlashHours({ metrics: { total_verified_hours: 16 } }, 40)).toBe(16);
+        expect(resolveReportFlashHours({ metrics: { total_verified_hours: 0 } }, 12)).toBe(12);
+    });
+});
+
+describe('resolveDisplayCii', () => {
+    it('hides provisional CII while a lock row exists but is unlocked', () => {
+        expect(
+            resolveDisplayCii({
+                section11: { ai_generated_impact_score: 54 },
+                ciiV2: { final: 54 },
+                ciiV2Lock: { locked: false },
+            }),
+        ).toBeNull();
+    });
+
+    it('returns the faculty-locked final score', () => {
+        expect(
+            resolveDisplayCii({
+                section11: { ai_generated_impact_score: 54 },
+                ciiV2: { final: 71.4 },
+                ciiV2Lock: { locked: true },
+            }),
+        ).toBe(71);
+        expect(
+            resolveDisplayCii({
+                section11: { ai_generated_impact_score: 54 },
+                ciiV2: { final: '90.5' },
+                ciiV2Lock: { locked: true },
+            }),
+        ).toBe(91);
+    });
+
+    it('treats JSON string "true" as a faculty lock, same as the flashcard', () => {
+        expect(
+            resolveDisplayCii({
+                section11: { ai_generated_impact_score: 54 },
+                ciiV2: { final: 71.4 },
+                ciiV2Lock: { locked: 'true' },
+            }),
+        ).toBe(71);
+        expect(
+            resolveDisplayCii({
+                section11: { ai_generated_impact_score: 54 },
+                ciiV2: { final: 71.4 },
+                ciiV2Lock: { locked: 'false' },
+            }),
+        ).toBeNull();
+    });
+
+    it('keeps legacy section11 CII when there is no lock record', () => {
+        expect(
+            resolveDisplayCii({
+                section11: { ai_generated_impact_score: 88 },
+            }),
+        ).toBe(88);
+    });
+});
+
+describe('resolveReportFlashEvidence', () => {
+    it('counts session evidence when section8 files are empty', () => {
+        expect(
+            resolveReportFlashEvidence({
+                section8: { evidence_files: [] },
+                section1: {
+                    attendance_logs: [
+                        { evidence_url: 'https://cdn.example/a.jpg' },
+                        { hours: 2 },
+                    ],
+                },
+            }),
+        ).toBe(1);
+    });
+
+    it('counts section media_urls the same way the exhibition gallery does', () => {
+        expect(
+            resolveReportFlashEvidence({
+                section8: { evidence_files: [] },
+                section5: { media_urls: ['https://cdn.example/a.jpg', 'https://cdn.example/b.jpg'] },
+            }),
+        ).toBe(2);
+    });
+});
+
+describe('resolveReportFlashSessions / outcomes — same sources as the V23 flashcard', () => {
+    it('counts non-rejected attendance logs before section4 totals', () => {
+        expect(
+            resolveReportFlashSessions(
+                {
+                    metrics: { total_active_days: 1 },
+                    attendance_logs: [
+                        { hours: 2, approval_status: 'pending' },
+                        { hours: 2 },
+                        { hours: 8, approval_status: 'rejected' },
+                    ],
+                },
+                { total_sessions: 9 },
+            ),
+        ).toBe(2);
+    });
+
+    it('reads measurable_outcomes when legacy baseline/endline fields are empty', () => {
+        const outcomes = resolveReportFlashOutcomes({
+            measurable_outcomes: [
+                { metric: 'Attendance', baseline: '20', endline: '45' },
+            ],
+        });
+        expect(outcomes.baseline).toBe('20');
+        expect(outcomes.endline).toBe('45');
+        expect(outcomes.change).toContain('20 → 45');
+        expect(
+            communityAwardInputsFromReport({
+                section5: {
+                    measurable_outcomes: [
+                        { metric: 'Attendance', baseline: '20', endline: '45' },
+                    ],
+                },
+            }).hasMeasuredChange,
+        ).toBe(true);
     });
 });

@@ -8,9 +8,10 @@ import { NotifyCommunityAwardDto } from './dto/notify-community-award.dto';
 import {
   awardBadgeLabel,
   awardTopN,
-  countMedia,
-  readCii,
   scoreCommunityAward,
+  communityAwardInputsFromReport,
+  resolveDisplayCii,
+  resolveReportFlashOutcomes,
   isCommunityAwardMedalReport,
   communityServiceLevel,
   type CommunityAwardKind,
@@ -21,6 +22,7 @@ import {
   type RedactedCiiV2,
   type RedactedCiiV2Lock,
 } from './cii-v2-redaction.util';
+import { buildImpactVerifyUrl } from './certificate-verification-code.util';
 
 export type CommunityAwardCard = {
   id: string;
@@ -48,6 +50,7 @@ export type CommunityAwardCard = {
   level: CommunityServiceLevel;
   awardBadges: NonNullable<StudentReport['awardBadges']>;
   awardBadgeHistory: NonNullable<StudentReport['awardBadgeHistory']>;
+  impact_verify_url: string | null;
 };
 
 @Injectable()
@@ -66,45 +69,18 @@ export class CommunityAwardService {
     const s1 = report.section1 as StudentReport['section1'] | null;
     const s2 = report.section2 as StudentReport['section2'] | null;
     const s3 = report.section3 as StudentReport['section3'] | null;
-    const s4 = report.section4 as Record<string, unknown> | null;
     const s5 = report.section5 as StudentReport['section5'] | null;
-    const s7 = report.section7 as StudentReport['section7'] | null;
-    const s8 = report.section8 as StudentReport['section8'] | null;
-    const s10 = report.section10 as StudentReport['section10'] | null;
     const lead = s1?.team_lead;
-    const hours = Number(s1?.metrics?.total_verified_hours ?? 0) || 0;
-    const sessions =
-      Number(
-        s4?.total_sessions ??
-          s4?.my_sessions ??
-          s1?.metrics?.total_active_days ??
-          0,
-      ) || 0;
-    const evidenceCount = countMedia([
-      s1,
-      s2,
-      s3,
-      s4 as { media_urls?: unknown },
-      s5,
-      s7,
-      s8,
-      s10,
-    ]);
-    const baseline = String(s5?.baseline ?? '').trim();
-    const endline = String(s5?.endline ?? '').trim();
-    const change = String(s5?.observed_change ?? '').trim();
-    const scored = scoreCommunityAward({
-      cii: readCii(report.section11 as Record<string, unknown> | null),
-      hours,
-      sessions,
-      evidenceCount,
-      hasBaseline: !!baseline,
-      hasEndline: !!endline,
-      hasMeasuredChange: !!change,
-      continuation:
-        (s10?.continuation_status as 'yes' | 'partially' | 'no' | '') || '',
-      partnerCount: Array.isArray(s7?.partners) ? s7.partners.length : 0,
-    });
+    const scoredInput = communityAwardInputsFromReport(report);
+    const hours = scoredInput.hours;
+    const evidenceCount = scoredInput.evidenceCount;
+    const scored = scoreCommunityAward(scoredInput);
+    const { baseline, endline, change } = resolveReportFlashOutcomes(s5);
+    const arrow = baseline && endline ? `${baseline} → ${endline}` : '';
+    const changeLine =
+      change && arrow && change.includes(arrow)
+        ? change
+        : [arrow, change].filter(Boolean).join(' · ');
     const submitted =
       report.reportSubmittedAt || report.submission_date || report.createdAt;
     const dt = submitted ? new Date(submitted) : null;
@@ -139,9 +115,7 @@ export class CommunityAwardService {
         report.summary_text_generated ||
         ''
       ).trim(),
-      change: [baseline && endline ? `${baseline} → ${endline}` : '', change]
-        .filter(Boolean)
-        .join(' · '),
+      change: changeLine,
       semester: String(lead?.year || '').trim() || '—',
       year: dt ? String(dt.getFullYear()) : '',
       month: dt
@@ -150,12 +124,13 @@ export class CommunityAwardService {
       teamSize: 1 + members,
       faculty_status: report.faculty_status,
       status: report.status,
-      cii: readCii(report.section11 as Record<string, unknown> | null),
+      cii: resolveDisplayCii(report),
       pts: scored.pts,
       total: scored.total,
       level: communityServiceLevel(scored.total),
       awardBadges: report.awardBadges ?? [],
       awardBadgeHistory: report.awardBadgeHistory ?? [],
+      impact_verify_url: buildImpactVerifyUrl(report.verificationPublicSlug),
     };
   }
 

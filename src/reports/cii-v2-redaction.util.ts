@@ -47,7 +47,7 @@ export interface RedactedCiiV2 {
 
 export type CiiV2LockInput =
   | {
-      locked?: boolean;
+      locked?: boolean | string;
       hash?: string;
       lockedAt?: string;
       aiRecommendedScore?: number;
@@ -63,7 +63,9 @@ export function redactCiiV2Fields(
   ciiV2: Record<string, unknown> | null | undefined,
   ciiV2Lock: CiiV2LockInput,
 ): { ciiV2: RedactedCiiV2 | null; ciiV2Lock: RedactedCiiV2Lock | null } {
-  if (!ciiV2Lock?.locked) {
+  const locked =
+    ciiV2Lock?.locked === true || ciiV2Lock?.locked === 'true';
+  if (!locked) {
     return { ciiV2: null, ciiV2Lock: null };
   }
 

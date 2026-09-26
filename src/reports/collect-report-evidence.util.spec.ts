@@ -7,7 +7,12 @@ describe('collectReportEvidenceFiles', () => {
             id: 'r1',
             section1: {
                 media_urls: ['https://bucket.s3.region.amazonaws.com/a.jpg'],
-                attendance_logs: [{ evidence_url: 'https://bucket.s3.region.amazonaws.com/b.jpg' }],
+                attendance_logs: [
+                    { evidence_url: 'https://bucket.s3.region.amazonaws.com/b.jpg' },
+                    {
+                        evidence_urls: ['https://bucket.s3.region.amazonaws.com/f.jpg'],
+                    },
+                ],
             },
             section6: {
                 evidence_files: [{ url: 'https://bucket.s3.region.amazonaws.com/c.pdf', name: 'c.pdf' }],
@@ -21,7 +26,7 @@ describe('collectReportEvidenceFiles', () => {
         } as unknown as StudentReport;
 
         const files = collectReportEvidenceFiles(report);
-        expect(files).toHaveLength(5);
+        expect(files).toHaveLength(6);
         expect(files.map((f) => f.url)).toEqual(
             expect.arrayContaining([
                 'https://bucket.s3.region.amazonaws.com/a.jpg',
@@ -29,6 +34,7 @@ describe('collectReportEvidenceFiles', () => {
                 'https://bucket.s3.region.amazonaws.com/c.pdf',
                 'https://bucket.s3.region.amazonaws.com/d.png',
                 'https://bucket.s3.region.amazonaws.com/e.png',
+                'https://bucket.s3.region.amazonaws.com/f.jpg',
             ]),
         );
     });

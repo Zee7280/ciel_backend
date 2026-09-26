@@ -94,6 +94,7 @@ export function collectReportEvidenceFiles(report: StudentReport): ReportEvidenc
         if (!log || typeof log !== 'object') return;
         const entry = log as Record<string, unknown>;
         addCandidate(map, entry.evidence_url, 'section1.attendance_logs', index);
+        addFromList(map, entry.evidence_urls, 'section1.attendance_logs');
         addCandidate(map, entry.evidence_file, 'section1.attendance_logs', index);
     });
 

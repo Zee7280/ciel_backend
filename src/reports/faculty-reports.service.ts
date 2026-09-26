@@ -20,6 +20,10 @@ import { computeCiiV2Result } from './cii-v2.constants';
 import { buildCielPkAiEvaluationPayload } from './build-ciel-pk-ai-evaluation-payload.util';
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
+import {
+  resolveReportFlashEvidence,
+  resolveReportFlashHours,
+} from './community-award.util';
 
 function finiteNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -60,6 +64,91 @@ export function mapFacultyListCii(report: {
     cii_level_name: levelName,
     cii_numeric_level:
       finiteNumber(ciiV2?.numericLevel) ?? finiteNumber(level?.level),
+  };
+}
+
+function pickListNumber(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Number(value.replace(/,/g, '').trim());
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
+function pickListString(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
+}
+
+export function mapFacultyListPackage(
+  report: StudentReport,
+  liveHours = 0,
+): {
+  university: string | null;
+  faculty_name: string | null;
+  story: string | null;
+  evidence_count: number;
+  participation_type: string;
+  member_hours: Array<{ name: string; hours: number; required: number }>;
+  required_hours: number;
+} {
+  const s1 = report.section1 as StudentReport['section1'] | null;
+  const s2 = report.section2 as StudentReport['section2'] | null;
+  const lead = s1?.team_lead;
+  const members = Array.isArray(s1?.team_members) ? s1.team_members : [];
+  const required =
+    Number(
+      (report.opportunity?.timeline as { expected_hours?: unknown } | undefined)
+        ?.expected_hours,
+    ) || 16;
+  const flashHours = resolveReportFlashHours(report.section1, liveHours);
+  const memberHours = [
+    lead
+      ? {
+          name: pickListString(lead.name, report.student?.name) || 'Student',
+          hours: pickListNumber(lead.hours) || (members.length ? 0 : flashHours),
+          required,
+        }
+      : {
+          name: report.student?.name || 'Student',
+          hours: flashHours,
+          required,
+        },
+    ...members.map((member) => ({
+      name: pickListString(member.name) || 'Member',
+      hours: pickListNumber(member.hours),
+      required,
+    })),
+  ];
+  const supervision =
+    report.opportunity?.supervision &&
+    typeof report.opportunity.supervision === 'object'
+      ? (report.opportunity.supervision as Record<string, unknown>)
+      : {};
+  return {
+    university:
+      pickListString(
+        lead?.university,
+        report.student?.university,
+        report.student?.institution,
+      ) || null,
+    faculty_name:
+      pickListString(
+        (s1 as { faculty_supervisor_name?: string } | null)
+          ?.faculty_supervisor_name,
+        report.faculty?.name,
+        supervision.supervisor_name,
+        supervision.supervisorName,
+      ) || null,
+    story:
+      pickListString(s2?.summary_text, s2?.problem_statement) || null,
+    evidence_count: resolveReportFlashEvidence(report),
+    participation_type: s1?.participation_type || 'individual',
+    member_hours: memberHours,
+    required_hours: required,
   };
 }
 
@@ -161,6 +250,7 @@ export class FacultyReportsService {
     return this.studentReportsRepository
       .createQueryBuilder('report')
       .leftJoinAndSelect('report.student', 'student')
+      .leftJoinAndSelect('report.faculty', 'faculty')
       .leftJoinAndSelect('report.opportunity', 'opportunity')
       .leftJoinAndSelect('opportunity.organization', 'organization');
   }
@@ -238,15 +328,21 @@ export class FacultyReportsService {
         status: r.status,
         faculty_status: r.faculty_status,
         project_id: r.opportunityId || r.project_id || null,
-        hours:
-          hoursByProject.get((r.opportunityId || r.project_id || '').trim()) ??
-          (Number(r.section1?.metrics?.total_verified_hours ?? 0) || 0),
+        hours: resolveReportFlashHours(
+          r.section1,
+          hoursByProject.get((r.opportunityId || r.project_id || '').trim()) || 0,
+        ),
         submission_date: r.submission_date,
         report_submitted_at: r.reportSubmittedAt,
         partner_approved_at: r.partnerApprovedAt,
         admin_approved_at: r.adminApprovedAt,
+        updated_at: r.updatedAt,
         metrics: r.section1?.metrics,
         ...mapFacultyListCii(r),
+        ...mapFacultyListPackage(
+          r,
+          hoursByProject.get((r.opportunityId || r.project_id || '').trim()) || 0,
+        ),
       })),
     };
   }

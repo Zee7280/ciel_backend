@@ -38,8 +38,10 @@ import { buildCielPkAiEvaluationPayload } from './build-ciel-pk-ai-evaluation-pa
 import { validateReportSectionsForSubmit } from './report-submit-validation.util';
 import {
   scoreCommunityAward,
-  readCii,
-  countMedia,
+  communityAwardInputsFromReport,
+  resolveDisplayCii,
+  resolveReportFlashHours,
+  isCiiFacultyLocked,
   communityServiceLevel,
   isCommunityAwardLiveReport,
   type CommunityServiceLevel,
@@ -690,6 +692,7 @@ export class StudentReportsService {
       report,
       opportunityByProjectId,
     );
+    const flashHours = resolveReportFlashHours(report.section1);
 
     return {
       id: report.id,
@@ -731,10 +734,11 @@ export class StudentReportsService {
       report_submitted_at: report.reportSubmittedAt,
       partner_approved_at: report.partnerApprovedAt,
       admin_approved_at: report.adminApprovedAt,
+      hours: flashHours,
       section1: {
         metrics: {
           total_verified_hours:
-            report.section1?.metrics?.total_verified_hours ?? 0,
+            flashHours || report.section1?.metrics?.total_verified_hours || 0,
         },
       },
       section3: {
@@ -763,10 +767,8 @@ export class StudentReportsService {
       sdgs,
       faculty_status: report.faculty_status,
       awardBadges: report.awardBadges ?? [],
-      cii_score: this.resolveCiiScoreFromPayload(
-        (report.section11 as Record<string, unknown> | null | undefined) ??
-          null,
-      ),
+      awardBadgeHistory: report.awardBadgeHistory ?? [],
+      cii_score: resolveDisplayCii(report),
       // Raw CII v2 (Phase 1-4) — redacted for the student's own listing via
       // redactCiiV2ListingForStudent below, same rule as the detail read path
       // (redactCiiV2ForExternalViewer). Faculty/admin/partner/university listings call this
@@ -848,47 +850,7 @@ export class StudentReportsService {
     total: number;
     level: ReturnType<typeof communityServiceLevel>;
   } {
-    const s1 = report.section1 as StudentReport['section1'] | null;
-    const s2 = report.section2 as StudentReport['section2'] | null;
-    const s3 = report.section3 as StudentReport['section3'] | null;
-    const s4 = report.section4 as Record<string, unknown> | null;
-    const s5 = report.section5 as StudentReport['section5'] | null;
-    const s7 = report.section7 as StudentReport['section7'] | null;
-    const s8 = report.section8 as StudentReport['section8'] | null;
-    const s10 = report.section10 as StudentReport['section10'] | null;
-    const hours = Number(s1?.metrics?.total_verified_hours ?? 0) || 0;
-    const sessions =
-      Number(
-        s4?.total_sessions ??
-          s4?.my_sessions ??
-          s1?.metrics?.total_active_days ??
-          0,
-      ) || 0;
-    const evidenceCount = countMedia([
-      s1,
-      s2,
-      s3,
-      s4 as { media_urls?: unknown },
-      s5,
-      s7,
-      s8,
-      s10,
-    ]);
-    const baseline = String(s5?.baseline ?? '').trim();
-    const endline = String(s5?.endline ?? '').trim();
-    const change = String(s5?.observed_change ?? '').trim();
-    const scored = scoreCommunityAward({
-      cii: readCii(report.section11 as Record<string, unknown> | null),
-      hours,
-      sessions,
-      evidenceCount,
-      hasBaseline: !!baseline,
-      hasEndline: !!endline,
-      hasMeasuredChange: !!change,
-      continuation:
-        (s10?.continuation_status as 'yes' | 'partially' | 'no' | '') || '',
-      partnerCount: Array.isArray(s7?.partners) ? s7.partners.length : 0,
-    });
+    const scored = scoreCommunityAward(communityAwardInputsFromReport(report));
     return { total: scored.total, level: communityServiceLevel(scored.total) };
   }
 
@@ -1962,11 +1924,20 @@ export class StudentReportsService {
     // Faculty-locked CII v2 (community-service reports only) is safe to publish here — it's the
     // same final score + level band the certificate/badge already display, no per-criterion detail.
     const ciiV2Lock = report.ciiV2Lock;
-    const ciiV2 = report.ciiV2 as { final?: number } | null | undefined;
-    const publicLevel = ciiV2Lock?.locked
+    const ciiV2 = report.ciiV2 as { final?: unknown } | null | undefined;
+    const locked = isCiiFacultyLocked(ciiV2Lock);
+    const publicLevel = locked
       ? ((report.ciiV2 as { level?: { level?: number; name?: string } })
           ?.level ?? null)
       : null;
+    const lockedFinal =
+      typeof ciiV2?.final === 'number' && Number.isFinite(ciiV2.final)
+        ? Math.round(ciiV2.final)
+        : typeof ciiV2?.final === 'string' &&
+            ciiV2.final.trim() &&
+            Number.isFinite(Number(ciiV2.final))
+          ? Math.round(Number(ciiV2.final))
+          : null;
 
     return {
       success: true,
@@ -1985,10 +1956,7 @@ export class StudentReportsService {
             | undefined
         )?.organization_name ||
         null,
-      cii_score:
-        ciiV2Lock?.locked && typeof ciiV2?.final === 'number'
-          ? Math.round(ciiV2.final)
-          : null,
+      cii_score: locked ? lockedFinal : null,
       level: publicLevel
         ? { level: publicLevel.level, name: publicLevel.name }
         : null,

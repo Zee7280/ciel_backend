@@ -1,5 +1,5 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { FacultyReportsService, mapFacultyListCii } from './faculty-reports.service';
+import { FacultyReportsService, mapFacultyListCii, mapFacultyListPackage } from './faculty-reports.service';
 
 function makeService(
   report: Record<string, unknown> | null,
@@ -598,5 +598,41 @@ describe('mapFacultyListCii', () => {
       cii_level_name: null,
       cii_numeric_level: null,
     });
+  });
+});
+
+describe('mapFacultyListPackage', () => {
+  it('fills university, faculty, story, evidence and hours from the same flash helpers as the locked package', () => {
+    const report = {
+      student: { name: 'Sara Ahmed', university: 'BNU' },
+      faculty: { name: 'Dr. Hina Malik' },
+      opportunity: { timeline: { expected_hours: 16 }, supervision: { supervisor_name: 'Dr. Hina Malik' } },
+      section1: {
+        participation_type: 'individual',
+        team_lead: { name: 'Sara Ahmed', university: 'BNU', hours: '22' },
+        metrics: { total_verified_hours: 0 },
+        attendance_logs: [{ hours: 22, evidence_url: 'https://example.com/a.jpg' }],
+      },
+      section2: { summary_text: 'Workshops for out-of-school youth in Johar Town.' },
+      section8: { evidence_files: [] },
+    } as any;
+    const pkg = mapFacultyListPackage(report, 22);
+    expect(pkg.university).toBe('BNU');
+    expect(pkg.faculty_name).toBe('Dr. Hina Malik');
+    expect(pkg.story).toContain('Johar Town');
+    expect(pkg.evidence_count).toBeGreaterThan(0);
+    expect(pkg.required_hours).toBe(16);
+    expect(pkg.member_hours[0]).toEqual(
+      expect.objectContaining({ name: 'Sara Ahmed', hours: 22, required: 16 }),
+    );
+  });
+
+  it('uses live attendance hours when the stored blob is empty', () => {
+    const report = {
+      student: { name: 'Sara Ahmed' },
+      section1: { participation_type: 'individual', metrics: { total_verified_hours: 0 } },
+      section2: {},
+    } as any;
+    expect(mapFacultyListPackage(report, 18).member_hours[0].hours).toBe(18);
   });
 });

@@ -109,6 +109,24 @@ describe('FacultyReportsService — updateAction', () => {
 
     expect(result.success).toBe(true);
   });
+
+  it('refuses review while the reporting fee is still pending', async () => {
+    const { service, studentReportsRepository } = makeService({
+      id: 'report-1',
+      status: 'payment_pending',
+      faculty_status: 'pending',
+    });
+
+    await expect(
+      service.updateAction(
+        'report-1',
+        'faculty-1',
+        'teacher@uni.edu',
+        'approved',
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(studentReportsRepository.save).not.toHaveBeenCalled();
+  });
 });
 
 const CII_V2_AI_RESPONSE = {

@@ -273,12 +273,13 @@ export class FacultyReportsService {
           ),
         ),
       )
-      // Faculty is the sole *first* report approver (see verifyReport()'s admin-approve
-      // gate, which itself requires faculty_status === 'approved') — so faculty must see a
-      // report as soon as the student submits it, not only after Admin has already approved.
-      // Requiring admin_status = 'approved' here made every report unreachable by anyone:
-      // Admin can't approve until Faculty has, and Faculty couldn't see it until Admin had.
+      // Faculty is the first *report* approver after the reporting fee is cleared.
+      // Fee-hold statuses (including legacy `submitted`) stay off this inbox until
+      // payments.service moves the row to `paid`.
       .andWhere("report.status != 'draft'")
+      .andWhere(
+        "report.status NOT IN ('payment_pending', 'pending_payment', 'payment_under_review', 'submitted')",
+      )
       .orderBy('report.submission_date', 'DESC')
       .getMany();
 
@@ -433,6 +434,18 @@ export class FacultyReportsService {
     if (status === 'rejected' && !remarks?.trim()) {
       throw new BadRequestException(
         'A reason is required when rejecting a report.',
+      );
+    }
+
+    const reportStatus = String(report.status || '').toLowerCase();
+    if (
+      reportStatus === 'payment_pending' ||
+      reportStatus === 'pending_payment' ||
+      reportStatus === 'payment_under_review' ||
+      reportStatus === 'submitted'
+    ) {
+      throw new BadRequestException(
+        'Reporting fee must be approved before faculty can review this report.',
       );
     }
 

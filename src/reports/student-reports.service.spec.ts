@@ -289,6 +289,62 @@ describe('StudentReportsService', () => {
     ).toHaveBeenCalledTimes(1);
   });
 
+  it('does not rewind a submitted report to draft when createReport is called without submit', async () => {
+    const existing = {
+      id: 'report-live',
+      studentId: 'student-1',
+      opportunityId: 'opp-1',
+      project_id: 'opp-1',
+      status: 'payment_pending',
+      reportSubmittedAt: new Date('2026-09-01T00:00:00.000Z'),
+      section2: { problem_statement: 'locked copy' },
+    };
+    mockStudentReportsRepository.findOne.mockResolvedValue(existing);
+
+    const result = await service.createReport(
+      'student-1',
+      {
+        opportunityId: 'opp-1',
+        section2: { problem_statement: 'should not overwrite' },
+      },
+      [],
+      false,
+    );
+
+    expect(result.message).toBe('Report saved as draft.');
+    expect(existing.status).toBe('payment_pending');
+    expect(existing.section2).toEqual({ problem_statement: 'locked copy' });
+    expect(mockStudentReportsRepository.save).not.toHaveBeenCalled();
+  });
+
+  it('does not rewind a submitted report to draft on saveDraft', async () => {
+    const existing = {
+      id: 'report-live',
+      studentId: 'student-1',
+      opportunityId: 'opp-1',
+      project_id: 'opp-1',
+      status: 'payment_pending',
+      reportSubmittedAt: new Date('2026-09-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-09-01T00:00:00.000Z'),
+      section2: { problem_statement: 'locked copy' },
+    };
+    mockStudentReportsRepository.findOne.mockResolvedValue(existing);
+
+    const result = await service.saveDraft(
+      'student-1',
+      {
+        opportunityId: 'opp-1',
+        section2: { problem_statement: 'should not overwrite' },
+      },
+      [],
+    );
+
+    expect(result.message).toBe('Draft saved successfully.');
+    expect(existing.status).toBe('payment_pending');
+    expect(existing.section2).toEqual({ problem_statement: 'locked copy' });
+    expect(mockStudentReportsRepository.save).not.toHaveBeenCalled();
+  });
+
   it('blocks submission when a team member has not individually met required hours, even though the pooled team total clears the bar', async () => {
     mockOpportunityRepository.findOne.mockResolvedValue({
       id: 'opp-1',

@@ -324,7 +324,7 @@ export class StudentReportsService {
 
   /** Aligns legacy DB values with student UI / frontend lifecycle names. */
   private toPublicReportStatus(raw: string | null | undefined): string {
-    if (raw === 'payment_pending') return 'pending_payment';
+    if (raw === 'payment_pending' || raw === 'submitted') return 'pending_payment';
     if (raw === 'continue') return 'draft';
     return raw ?? 'draft';
   }
@@ -335,10 +335,48 @@ export class StudentReportsService {
       'submitted',
       'partner_verified',
       'payment_pending',
+      'pending_payment',
       'payment_under_review',
       'verified',
       'paid',
     ]);
+  }
+
+  private shouldKeepStudentLifecycleStatus(
+    report: Pick<StudentReport, 'status' | 'reportSubmittedAt'>,
+  ): boolean {
+    if (report.reportSubmittedAt) return true;
+    return this.lockedReportStatusesForStudentWrite().has(
+      String(report.status || '').toLowerCase(),
+    );
+  }
+
+  private async findExistingStudentReport(
+    studentId: string,
+    opportunityId: string,
+  ): Promise<StudentReport | null> {
+    const key = String(opportunityId || '').trim();
+    if (!key) return null;
+    const where = [
+      { studentId, opportunityId: key },
+      { studentId, project_id: key },
+    ];
+    if (typeof this.studentReportsRepository.find === 'function') {
+      const rows = await this.studentReportsRepository.find({
+        where,
+        order: { createdAt: 'DESC' },
+      });
+      if (Array.isArray(rows) && rows.length > 0) {
+        const seen = new Set<string>();
+        const unique = rows.filter((row) => {
+          if (!row?.id || seen.has(row.id)) return false;
+          seen.add(row.id);
+          return true;
+        });
+        if (unique.length) return this.pickPreferredTeamReportRow(unique);
+      }
+    }
+    return this.studentReportsRepository.findOne({ where });
   }
 
   private isReportRejectedForRevision(
@@ -962,15 +1000,29 @@ export class StudentReportsService {
       where: { studentId: viewerStudentId, projectId: key },
     });
 
-    const fetchLatestRow = async (sid: string) =>
-      this.studentReportsRepository.findOne({
-        where: [
-          { studentId: sid, opportunityId: key },
-          { studentId: sid, project_id: key },
-        ],
-        relations: ['student', 'opportunity', 'opportunity.organization'],
-        order: { createdAt: 'DESC' },
-      });
+    const fetchLatestRow = async (sid: string) => {
+      const where = [
+        { studentId: sid, opportunityId: key },
+        { studentId: sid, project_id: key },
+      ];
+      const relations = ['student', 'opportunity', 'opportunity.organization'];
+      if (typeof this.studentReportsRepository.find === 'function') {
+        const rows = await this.studentReportsRepository.find({
+          where,
+          relations,
+        });
+        if (Array.isArray(rows) && rows.length > 0) {
+          const seen = new Set<string>();
+          const unique = rows.filter((row) => {
+            if (!row?.id || seen.has(row.id)) return false;
+            seen.add(row.id);
+            return true;
+          });
+          if (unique.length) return this.pickPreferredTeamReportRow(unique);
+        }
+      }
+      return this.studentReportsRepository.findOne({ where, relations });
+    };
 
     const isTeam = mine?.participationMode === 'team';
     if (isTeam && mine) {
@@ -1405,6 +1457,8 @@ export class StudentReportsService {
           'submitted',
           'payment_pending',
           'pending_payment',
+          'payment_under_review',
+          'partner_verified',
           'paid',
           'verified',
           'finalized',
@@ -1505,9 +1559,12 @@ export class StudentReportsService {
       }
 
       const canonicalId = canonicalLeadByScope.get(scopeKey);
+      const leadRows = canonicalId
+        ? group.filter((r) => r.studentId === canonicalId)
+        : [];
       const keeper =
-        (canonicalId
-          ? group.find((r) => r.studentId === canonicalId)
+        (leadRows.length
+          ? this.pickPreferredTeamReportRow(leadRows)
           : undefined) ??
         this.pickTeamLeadReportBySection1(group) ??
         this.pickPreferredTeamReportRow(group);
@@ -2190,14 +2247,11 @@ export class StudentReportsService {
       : studentId;
 
     // Upsert logic: Check if report already exists
-    let report = await this.studentReportsRepository.findOne({
-      where: {
-        studentId: reportOwnerId,
-        opportunityId: opportunityIdFromDto,
-      },
-    });
+    let report = await this.findExistingStudentReport(
+      reportOwnerId,
+      String(opportunityIdFromDto || ''),
+    );
     const priorReportStatus = report?.status ?? null;
-    const lockedReportStatuses = this.lockedReportStatusesForStudentWrite();
 
     if (report) {
       // Captured before any of the reset-to-pending mutations below so a legitimate
@@ -2245,10 +2299,26 @@ export class StudentReportsService {
         }
         report.status = 'submitted';
         this.applyStatusAfterStudentSubmit(report);
-      } else if (!lockedReportStatuses.has(report.status)) {
+      } else if (!this.shouldKeepStudentLifecycleStatus(report)) {
         report.status = 'draft';
       } else if (wasRejectedForRevision) {
         report.status = 'revision';
+      } else {
+        await this.syncReportProjectKeys(report);
+        return {
+          success: true,
+          message: 'Report saved as draft.',
+          data: {
+            report_id: report.id,
+            ...this.reportVerificationPayload(report),
+            project_id: report.project_id,
+            submitted_at: report.submission_date,
+            report_submitted_at: report.reportSubmittedAt,
+            partner_approved_at: report.partnerApprovedAt,
+            admin_approved_at: report.adminApprovedAt,
+            status: report.status,
+          },
+        };
       }
       if (parsedData.section1) report.section1 = parsedData.section1;
       if (parsedData.section2) report.section2 = parsedData.section2;
@@ -2480,14 +2550,10 @@ export class StudentReportsService {
       ? await this.resolveTeamReportOwnerStudentId(studentId, opportunityId)
       : studentId;
 
-    let report = await this.studentReportsRepository.findOne({
-      where: {
-        studentId: reportOwnerId,
-        opportunityId: opportunityId || parsedData.opportunityId,
-      },
-    });
-
-    const lockedReportStatuses = this.lockedReportStatusesForStudentWrite();
+    let report = await this.findExistingStudentReport(
+      reportOwnerId,
+      opportunityId || String(parsedData.opportunityId || parsedData.project_id || ''),
+    );
 
     if (report) {
       const priorReportStatus = report.status;
@@ -2500,10 +2566,21 @@ export class StudentReportsService {
           'This report has already been verified and can no longer be edited.',
         );
       }
-      if (!lockedReportStatuses.has(report.status)) {
+      if (!this.shouldKeepStudentLifecycleStatus(report)) {
         report.status = 'draft';
       } else if (wasRejectedForRevision) {
         report.status = 'revision';
+      } else {
+        return {
+          success: true,
+          message: 'Draft saved successfully.',
+          data: {
+            draft_id: report.id,
+            report_id: report.id,
+            ...this.reportVerificationPayload(report),
+            last_saved: report.updatedAt,
+          },
+        };
       }
       if (parsedData.project_id) report.project_id = parsedData.project_id;
       if (parsedData.section1) report.section1 = parsedData.section1;

@@ -1128,6 +1128,47 @@ describe('StudentReportsService', () => {
     );
   });
 
+  it('does not promote a draft report to paid because a leftover payment row is approved', async () => {
+    const opp = '582da802-e41e-488d-bd3d-d6dee59982b7';
+    mockStudentReportsRepository.findOne.mockResolvedValue({
+      id: 'report-draft-1',
+      studentId: 'student-1',
+      opportunityId: opp,
+      project_id: opp,
+      status: 'draft',
+      admin_status: 'pending',
+      faculty_status: 'pending',
+      partner_status: 'pending',
+      section1: { team_lead: { fullName: 'Jane', cnic: '' } },
+      section2: {},
+      section3: {},
+      section4: {},
+      section5: {},
+      section6: {},
+      section7: {},
+      section8: {},
+      section9: {},
+      section10: {},
+      section11: {},
+      student: { id: 'student-1', name: 'Jane', email: 'jane@test.com' },
+      opportunity: { id: opp, title: 'SOS Class Transformation' },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    mockPaymentRepository.findOne.mockResolvedValue({
+      status: 'approved',
+      studentId: 'student-1',
+      projectId: opp,
+    });
+
+    const result = await service.findOneByOpportunityOrId(opp, 'student-1');
+    const data = result.data as { status?: string; is_editable?: boolean; payment_verified?: boolean };
+
+    expect(data.status).toBe('draft');
+    expect(data.is_editable).toBe(true);
+    expect(data.payment_verified).toBe(false);
+  });
+
   it('blocks partner or admin approve until reporting fee is cleared', async () => {
     const report = {
       id: 'report-1',

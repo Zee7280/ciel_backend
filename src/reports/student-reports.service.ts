@@ -2096,6 +2096,22 @@ export class StudentReportsService {
       opportunity,
     );
     const reportStatus = String(rawReportStatus || '').toLowerCase();
+    const stillDraft =
+      !reportStatus ||
+      reportStatus === 'draft' ||
+      reportStatus === 'continue' ||
+      reportStatus === 'none' ||
+      publicStatus === 'draft' ||
+      publicStatus === 'revision';
+    // A leftover join/reporting-fee payment row must not promote an unsubmitted
+    // draft to paid/verified — that locks the student wizard and never reaches faculty.
+    if (stillDraft) {
+      return {
+        status: publicStatus === 'continue' ? 'draft' : publicStatus || 'draft',
+        payment_verified: false,
+        payment_status: latest?.status ?? null,
+      };
+    }
     const payment_verified =
       latest?.status === PaymentStatus.APPROVED ||
       ['paid', 'partner_verified', 'verified'].includes(reportStatus);

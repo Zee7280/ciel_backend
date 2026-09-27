@@ -20,7 +20,12 @@ import { Otp } from './entities/otp.entity';
 import { UsersService } from '../users/users.service';
 import { MailService } from '../mail/mail.service';
 import { EngagementService } from '../engagement/engagement.service';
-import { findCanonicalTeamLeadStudentId } from '../engagement/team-lead-canonical.util';
+import {
+  enrollmentLooksLikeTeam,
+  findCanonicalTeamLeadStudentId,
+  loadSameTeamParticipations,
+  resolveCanonicalLeadStudentIdForViewer,
+} from '../engagement/team-lead-canonical.util';
 import {
   opportunityHasActionablePartnerForAttendance,
   resolveEffectiveAttendanceApproverType,
@@ -2562,11 +2567,12 @@ export class StudentsService {
         order: { createdAt: 'DESC' },
       });
 
-    if (mine?.participationMode === 'team') {
-      const leadId = await this.getTeamLeadParticipantStudentId(key, {
-        teamId: mine.teamId,
-        applicationId: mine.applicationId,
-      });
+    if (mine && enrollmentLooksLikeTeam(mine)) {
+      const leadId = await resolveCanonicalLeadStudentIdForViewer(
+        this.participantRepository,
+        key,
+        mine,
+      );
       if (leadId && leadId !== viewerStudentId) {
         const leaderReport = await fetchLatestRow(leadId);
         if (leaderReport) return leaderReport;
@@ -2591,12 +2597,20 @@ export class StudentsService {
     const mine = await this.participantRepository.findOne({
       where: { studentId: requestingStudentId, projectId: pid },
     });
-    if (!mine || mine.participationMode !== 'team') return false;
+    if (!mine || !enrollmentLooksLikeTeam(mine)) return false;
 
-    const leadId = await this.getTeamLeadParticipantStudentId(pid, {
-      teamId: mine.teamId,
-      applicationId: mine.applicationId,
-    });
+    const roster = await loadSameTeamParticipations(
+      this.participantRepository,
+      pid,
+      mine,
+    );
+    if (roster.some((row) => row.studentId === report.studentId)) return true;
+
+    const leadId = await resolveCanonicalLeadStudentIdForViewer(
+      this.participantRepository,
+      pid,
+      mine,
+    );
     return Boolean(leadId && leadId === report.studentId);
   }
 

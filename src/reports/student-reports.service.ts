@@ -19,8 +19,11 @@ import { MailService } from '../mail/mail.service';
 
 import { EngagementService } from '../engagement/engagement.service';
 import {
+  enrollmentLooksLikeTeam,
   findCanonicalTeamLeadParticipation,
   findCanonicalTeamLeadStudentId,
+  loadSameTeamParticipations,
+  resolveCanonicalLeadStudentIdForViewer,
 } from '../engagement/team-lead-canonical.util';
 import { Payment, PaymentStatus } from '../payments/entities/payment.entity';
 import {
@@ -35,6 +38,10 @@ import {
   redactCiiV2Fields,
   type CiiV2LockInput,
 } from './cii-v2-redaction.util';
+import {
+  buildStudentReportPageUrl,
+  type StudentReportPageView,
+} from './student-report-view-url.util';
 import { buildCielPkAiEvaluationPayload } from './build-ciel-pk-ai-evaluation-payload.util';
 import { validateReportSectionsForSubmit } from './report-submit-validation.util';
 import {
@@ -732,28 +739,20 @@ export class StudentReportsService {
 
   /** Same URL-sniffing heuristic as the student impact-history endpoint — kept local to this
    * service to avoid a cross-module dependency on StudentsService. */
-  /** Real "Certificate"/"Full report" links for My Impact Wall — the report detail page
-   * (Section11Summary.tsx) already builds and gates both views (only reveals them once
-   * showVerifiedImpactScores is true), it just needed a `?view=` param to auto-open the right one
-   * instead of requiring an extra click. Previously these scanned the student's own uploaded
-   * evidence files for a URL that happened to contain "certificat" or end in ".pdf" — which only
-   * ever worked by coincidence (see pickCertificateUrlFromReport/pickPdfUrlFromReport, now removed)
-   * and had nothing to do with an actual generated certificate or report. */
+  /** Real "Certificate" / official dossier / faculty V17 package links for My Impact Wall.
+   * Section11Summary.tsx auto-opens those views from `?view=`. Do not scan uploaded evidence
+   * files for a URL that happens to contain "certificat" or end in ".pdf". */
   private buildStudentReportViewUrl(
     report: StudentReport,
-    view: 'certificate' | 'print',
+    view: StudentReportPageView,
   ): string | null {
-    const projectId = report.opportunityId || report.project_id;
-    if (!projectId) return null;
-    const base = (
+    return buildStudentReportPageUrl(
+      report.opportunityId || report.project_id,
+      view,
       this.configService.get<string>('FRONTEND_URL') ||
-      this.configService.get<string>('APP_URL') ||
-      ''
-    )
-      .trim()
-      .replace(/\/+$/, '');
-    const path = `/dashboard/student/report?projectId=${encodeURIComponent(projectId)}&view=${view}`;
-    return base ? `${base}${path}` : path;
+        this.configService.get<string>('APP_URL') ||
+        '',
+    );
   }
 
   private mapReportListing(
@@ -858,6 +857,7 @@ export class StudentReportsService {
       actions: {
         certificate_url: this.buildStudentReportViewUrl(report, 'certificate'),
         pdf_url: this.buildStudentReportViewUrl(report, 'print'),
+        v17_url: this.buildStudentReportViewUrl(report, 'v17'),
       },
       created_at: report.createdAt,
     };
@@ -881,6 +881,7 @@ export class StudentReportsService {
       actions?: {
         certificate_url?: string | null;
         pdf_url?: string | null;
+        v17_url?: string | null;
         evidence_url?: string | null;
       };
     },
@@ -893,8 +894,8 @@ export class StudentReportsService {
     ) {
       return row;
     }
-    // The certificate/full-report links land on a page that itself only reveals those views once
-    // the record is live — but don't invite a click that goes nowhere useful while it's pending.
+    // Certificate + official print dossier stay hidden until the record is live. The V17 locked
+    // package is the student's own source record (HOLD until faculty lock), so keep v17_url.
     return {
       ...row,
       cii_score: null,
@@ -1007,17 +1008,25 @@ export class StudentReportsService {
     if (!projKey || !this.looksLikeUuid(String(projKey).trim())) {
       return false;
     }
+    const projectId = String(projKey).trim();
     const mine = await this.participantRepository.findOne({
-      where: { studentId: viewerStudentId, projectId: String(projKey).trim() },
+      where: { studentId: viewerStudentId, projectId },
     });
-    if (!mine || mine.participationMode !== 'team') {
+    if (!mine || !enrollmentLooksLikeTeam(mine)) {
       return false;
     }
-    const scope = { teamId: mine.teamId, applicationId: mine.applicationId };
-    const leadId = await findCanonicalTeamLeadStudentId(
+    const roster = await loadSameTeamParticipations(
       this.participantRepository,
-      String(projKey).trim(),
-      scope,
+      projectId,
+      mine,
+    );
+    if (roster.some((row) => row.studentId === report.studentId)) {
+      return true;
+    }
+    const leadId = await resolveCanonicalLeadStudentIdForViewer(
+      this.participantRepository,
+      projectId,
+      mine,
     );
     return Boolean(leadId && leadId === report.studentId);
   }
@@ -1063,26 +1072,88 @@ export class StudentReportsService {
       return this.studentReportsRepository.findOne({ where, relations });
     };
 
-    const isTeam = mine?.participationMode === 'team';
-    if (isTeam && mine) {
-      const leadId = await findCanonicalTeamLeadStudentId(
-        this.participantRepository,
+    if (mine && enrollmentLooksLikeTeam(mine)) {
+      const shared = await this.findSharedTeamReportForViewer(
+        viewerStudentId,
         key,
-        {
-          teamId: mine.teamId,
-          applicationId: mine.applicationId,
-        },
+        mine,
+        fetchLatestRow,
       );
-      if (leadId && leadId !== viewerStudentId) {
-        const leaderReport = await fetchLatestRow(leadId);
-        if (leaderReport) {
-          return { report: leaderReport, attendanceStudentId: viewerStudentId };
-        }
+      if (shared) {
+        return { report: shared, attendanceStudentId: viewerStudentId };
       }
     }
 
     const own = await fetchLatestRow(viewerStudentId);
     return { report: own, attendanceStudentId: viewerStudentId };
+  }
+
+  /**
+   * Prefer the team-lead row (whatever they wrote in sections 2–11) over a teammate's
+   * empty/orphan draft, including 5-person teams and members whose mode is still individual.
+   */
+  private async findSharedTeamReportForViewer(
+    viewerStudentId: string,
+    projectKey: string,
+    mine: Participation,
+    fetchLatestRow: (sid: string) => Promise<StudentReport | null>,
+  ): Promise<StudentReport | null> {
+    const leadId = await resolveCanonicalLeadStudentIdForViewer(
+      this.participantRepository,
+      projectKey,
+      mine,
+    );
+    const roster = await loadSameTeamParticipations(
+      this.participantRepository,
+      projectKey,
+      mine,
+    );
+    const studentIds = [
+      ...new Set(
+        [leadId, ...roster.map((row) => row.studentId)].filter(
+          (id): id is string => Boolean(id),
+        ),
+      ),
+    ];
+
+    const relations = ['student', 'opportunity', 'opportunity.organization'];
+    if (
+      studentIds.length &&
+      typeof this.studentReportsRepository.find === 'function'
+    ) {
+      const rows = await this.studentReportsRepository.find({
+        where: [
+          { opportunityId: projectKey, studentId: In(studentIds) },
+          { project_id: projectKey, studentId: In(studentIds) },
+        ],
+        relations,
+      });
+      if (Array.isArray(rows) && rows.length > 0) {
+        const seen = new Set<string>();
+        const unique = rows.filter((row) => {
+          if (!row?.id || seen.has(row.id)) return false;
+          seen.add(row.id);
+          return true;
+        });
+        if (leadId) {
+          const leadRows = unique.filter((row) => row.studentId === leadId);
+          if (leadRows.length) {
+            return this.pickPreferredTeamReportRow(leadRows);
+          }
+        }
+        const others = unique.filter(
+          (row) => row.studentId !== viewerStudentId,
+        );
+        if (others.length) {
+          return this.pickPreferredTeamReportRow(others);
+        }
+      }
+    }
+
+    if (leadId && leadId !== viewerStudentId) {
+      return fetchLatestRow(leadId);
+    }
+    return null;
   }
 
   private reportProjectKey(report: StudentReport): string {
@@ -2265,21 +2336,18 @@ export class StudentReportsService {
       where: { studentId, projectId: oid },
     });
     if (!mine) return;
-    if (mine.participationMode !== 'team') return;
+    if (!enrollmentLooksLikeTeam(mine)) return;
 
-    const canonicalLead = await findCanonicalTeamLeadParticipation(
+    const canonicalLeadId = await resolveCanonicalLeadStudentIdForViewer(
       this.participantRepository,
       oid,
-      {
-        teamId: mine.teamId,
-        applicationId: mine.applicationId,
-      },
+      mine,
     );
-    if (!canonicalLead?.studentId) {
+    if (!canonicalLeadId) {
       if (mine.isTeamLead) return;
       return;
     }
-    if (canonicalLead.studentId !== studentId) {
+    if (canonicalLeadId !== studentId) {
       throw new ForbiddenException(
         'Only the team lead can edit and submit the impact report for this team project. You may update your attendance in Section 1; your team lead files the report.',
       );
@@ -3073,12 +3141,13 @@ export class StudentReportsService {
       });
       const roster =
         await this.engagementService.getProjectTeamForReportDossier(id);
-      const isTeam = application.participationMode === 'team';
+      const isTeam = enrollmentLooksLikeTeam(application);
       const canonicalLeadId = isTeam
-        ? await findCanonicalTeamLeadStudentId(this.participantRepository, id, {
-            teamId: application.teamId,
-            applicationId: application.applicationId,
-          })
+        ? await resolveCanonicalLeadStudentIdForViewer(
+            this.participantRepository,
+            id,
+            application,
+          )
         : null;
       const leadProfile =
         canonicalLeadId && canonicalLeadId !== studentId
@@ -3184,7 +3253,7 @@ export class StudentReportsService {
         })
       : null;
 
-    if (!mine || mine.participationMode !== 'team') {
+    if (!mine || !enrollmentLooksLikeTeam(mine)) {
       return {
         participation_mode: 'individual' as const,
         is_team_lead: true,
@@ -3195,13 +3264,10 @@ export class StudentReportsService {
       };
     }
 
-    const canonicalLeadId = await findCanonicalTeamLeadStudentId(
+    const canonicalLeadId = await resolveCanonicalLeadStudentIdForViewer(
       this.participantRepository,
       projectKey,
-      {
-        teamId: mine.teamId,
-        applicationId: mine.applicationId,
-      },
+      mine,
     );
     const isLead = canonicalLeadId
       ? viewerStudentId === canonicalLeadId

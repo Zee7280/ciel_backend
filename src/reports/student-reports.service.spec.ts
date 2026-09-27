@@ -215,7 +215,10 @@ describe('StudentReportsService', () => {
       isStudentCreated: false,
       timeline: null,
     });
+    mockStudentReportsRepository.findOne.mockReset();
     mockStudentReportsRepository.findOne.mockResolvedValue(null);
+    mockStudentReportsRepository.find.mockReset();
+    mockStudentReportsRepository.find.mockResolvedValue([]);
     mockStudentReportsRepository.create.mockImplementation(
       (payload: any) => payload,
     );
@@ -819,6 +822,27 @@ describe('StudentReportsService', () => {
         }),
       ).toMatchObject({ cii_score: 88, total: 91, level: 'Transformative' });
     });
+
+    it('hides certificate/print until live but keeps the V17 locked-package link', () => {
+      expect(
+        redact({
+          status: 'submitted',
+          faculty_status: 'pending',
+          cii_score: 88,
+          actions: {
+            certificate_url: '/cert',
+            pdf_url: '/print',
+            v17_url: '/v17',
+          },
+        }),
+      ).toMatchObject({
+        actions: {
+          certificate_url: null,
+          pdf_url: null,
+          v17_url: '/v17',
+        },
+      });
+    });
   });
 
   describe('redactCiiV2ListingForStudent (My Impact Wall list)', () => {
@@ -1120,6 +1144,196 @@ describe('StudentReportsService', () => {
 
       expect(result.message).toBe('Report submitted successfully.');
       expect(mockParticipantRepository.findOne).toHaveBeenCalled();
+    });
+
+    it('blocks submit for a teammate whose mode is still individual but who shares the teamId', async () => {
+      mockOpportunityRepository.findOne.mockResolvedValue({
+        id: SAMPLE_OPP_UUID,
+        title: 'Team Project',
+        isStudentCreated: false,
+        timeline: null,
+      });
+      mockCanonicalLeadRows('team-lead-student');
+      mockParticipantRepository.findOne.mockImplementation(
+        (opts: { where?: Record<string, unknown> }) => {
+          const w = opts?.where ?? {};
+          if (
+            w.studentId === 'student-member' &&
+            w.projectId === SAMPLE_OPP_UUID
+          ) {
+            return Promise.resolve({
+              id: 'p-member',
+              participationMode: 'individual',
+              isTeamLead: false,
+              studentId: w.studentId,
+              projectId: w.projectId,
+              status: 'accepted',
+              ...TEAM_SCOPE,
+            });
+          }
+          return Promise.resolve(null);
+        },
+      );
+
+      await expect(
+        service.createReport(
+          'student-member',
+          {
+            opportunityId: SAMPLE_OPP_UUID,
+            ...MIN_VALID_SUBMIT_SECTIONS,
+          },
+          [],
+          true,
+        ),
+      ).rejects.toThrow(TEAM_ONLY_GUARD_MESSAGE);
+    });
+  });
+
+  describe('team shared report read', () => {
+    const WRITTEN = 'Every teammate must see this problem statement.';
+
+    function fivePersonRoster() {
+      const lead = {
+        id: 'p-lead',
+        studentId: 'team-lead-student',
+        projectId: SAMPLE_OPP_UUID,
+        participationMode: 'team',
+        isTeamLead: true,
+        createdAt: new Date('2020-01-01'),
+        ...TEAM_SCOPE,
+      };
+      const members = [2, 3, 4, 5].map((n) => ({
+        id: `p-m${n}`,
+        studentId: `member-${n}`,
+        projectId: SAMPLE_OPP_UUID,
+        participationMode: n === 5 ? 'individual' : 'team',
+        isTeamLead: false,
+        createdAt: new Date(`2020-01-0${n}`),
+        ...TEAM_SCOPE,
+      }));
+      return [lead, ...members];
+    }
+
+    function leadReportRow() {
+      return {
+        id: 'lead-report-1',
+        studentId: 'team-lead-student',
+        opportunityId: SAMPLE_OPP_UUID,
+        project_id: SAMPLE_OPP_UUID,
+        status: 'draft',
+        admin_status: 'pending',
+        faculty_status: 'pending',
+        partner_status: 'pending',
+        section1: {
+          participation_type: 'team',
+          team_lead: { fullName: 'Lead', email: 'lead@test.com', cnic: '' },
+          team_members: [],
+        },
+        section2: { problem_statement: WRITTEN },
+        section3: { contribution_intent_statement: 'Shared intent text.' },
+        section4: {},
+        section5: {},
+        section6: {},
+        section7: {},
+        section8: {},
+        section9: { personal_learning: 'Shared reflection.' },
+        section10: {},
+        section11: {},
+        student: {
+          id: 'team-lead-student',
+          name: 'Lead',
+          email: 'lead@test.com',
+        },
+        opportunity: { id: SAMPLE_OPP_UUID, title: 'Five person team project' },
+        createdAt: new Date('2020-01-01'),
+        updatedAt: new Date('2020-06-01'),
+      };
+    }
+
+    it('returns the lead’s written sections to every teammate on a 5-person team', async () => {
+      const roster = fivePersonRoster();
+      const leadReport = leadReportRow();
+      const memberOrphan = {
+        ...leadReport,
+        id: 'orphan-member-2',
+        studentId: 'member-2',
+        section2: { problem_statement: '' },
+        section3: {},
+        section9: {},
+        createdAt: new Date('2020-02-01'),
+      };
+
+      mockParticipantRepository.findOne.mockImplementation(
+        (opts: { where?: Record<string, unknown> }) => {
+          const w = opts?.where ?? {};
+          const row = roster.find(
+            (p) => p.studentId === w.studentId && p.projectId === w.projectId,
+          );
+          return Promise.resolve(row ?? null);
+        },
+      );
+      mockParticipantRepository.find.mockImplementation(
+        (opts: { where?: Record<string, unknown> }) => {
+          const w = opts?.where ?? {};
+          return Promise.resolve(
+            roster.filter((row) => {
+              if (w.projectId && row.projectId !== w.projectId) return false;
+              if (w.teamId && row.teamId !== w.teamId) return false;
+              if (
+                w.applicationId &&
+                row.applicationId !== w.applicationId
+              ) {
+                return false;
+              }
+              if (
+                w.participationMode &&
+                row.participationMode !== w.participationMode
+              ) {
+                return false;
+              }
+              if (
+                w.isTeamLead !== undefined &&
+                row.isTeamLead !== w.isTeamLead
+              ) {
+                return false;
+              }
+              return true;
+            }),
+          );
+        },
+      );
+      mockStudentReportsRepository.findOne.mockResolvedValue(null);
+      mockStudentReportsRepository.find.mockResolvedValue([
+        leadReport,
+        memberOrphan,
+      ]);
+      mockUsersRepository.findOne.mockResolvedValue({
+        id: 'team-lead-student',
+        name: 'Lead',
+        email: 'lead@test.com',
+      });
+
+      for (const viewer of ['member-2', 'member-3', 'member-4', 'member-5']) {
+        const result = await service.findOneByOpportunityOrId(
+          SAMPLE_OPP_UUID,
+          viewer,
+        );
+        const data = result.data as {
+          section2?: { problem_statement?: string };
+          section9?: { personal_learning?: string };
+          report_access?: {
+            is_team_lead?: boolean;
+            can_submit_report?: boolean;
+            can_edit_report_body?: boolean;
+            team_member_count?: number;
+          };
+        };
+        expect(data.section2?.problem_statement).toBe(WRITTEN);
+        expect(data.section9?.personal_learning).toBe('Shared reflection.');
+        expect(data.report_access?.is_team_lead).toBe(false);
+        expect(data.report_access?.can_submit_report).toBe(false);
+        expect(data.report_access?.can_edit_report_body).toBe(false);
+      }
     });
   });
 

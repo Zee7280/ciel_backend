@@ -56,6 +56,97 @@ export async function findCanonicalTeamLeadStudentId(
   return row?.studentId ?? null;
 }
 
+/** Team seat: explicit team mode, or a shared `teamId` even if mode still defaults to individual. */
+export function enrollmentLooksLikeTeam(
+  participation?: Pick<
+    Participation,
+    'participationMode' | 'teamId'
+  > | null,
+): boolean {
+  if (!participation) return false;
+  if (participation.participationMode === 'team') return true;
+  return Boolean((participation.teamId || '').trim());
+}
+
+function rosterKey(row: Pick<Participation, 'id' | 'studentId'>): string {
+  const id = (row.id || '').trim();
+  if (id) return id;
+  return `student:${(row.studentId || '').trim()}`;
+}
+
+/**
+ * Everyone on the viewer's team for this project: same `teamId`, then same `applicationId`.
+ * Does not require `participationMode === 'team'` on every row (Section 1 adds can leave it individual).
+ */
+export async function loadSameTeamParticipations(
+  repo: Repository<Participation>,
+  projectId: string,
+  viewer: Pick<
+    Participation,
+    'id' | 'studentId' | 'teamId' | 'applicationId' | 'participationMode' | 'isTeamLead'
+  >,
+): Promise<Participation[]> {
+  const pid = projectId.trim();
+  if (!looksLikeParticipationProjectUuid(pid)) {
+    return [viewer as Participation];
+  }
+
+  const merged = new Map<string, Participation>();
+  merged.set(rosterKey(viewer), viewer as Participation);
+
+  const teamId = (viewer.teamId || '').trim();
+  const applicationId = (viewer.applicationId || '').trim();
+
+  if (teamId) {
+    const byTeam = await repo.find({ where: { projectId: pid, teamId } });
+    for (const row of byTeam) {
+      merged.set(rosterKey(row), row);
+    }
+  }
+
+  if (applicationId && enrollmentLooksLikeTeam(viewer)) {
+    const byApp = await repo.find({
+      where: { projectId: pid, applicationId },
+    });
+    for (const row of byApp) {
+      merged.set(rosterKey(row), row);
+    }
+  }
+
+  return [...merged.values()];
+}
+
+/** Canonical lead studentId for the viewer's team, including mismatched scope / individual-mode members. */
+export async function resolveCanonicalLeadStudentIdForViewer(
+  repo: Repository<Participation>,
+  projectId: string,
+  viewer: Participation,
+): Promise<string | null> {
+  const scoped = await findCanonicalTeamLeadStudentId(repo, projectId, {
+    teamId: viewer.teamId,
+    applicationId: viewer.applicationId,
+  });
+  if (scoped) return scoped;
+
+  const roster = await loadSameTeamParticipations(repo, projectId, viewer);
+  const flagged = roster.filter(
+    (row) => row.isTeamLead === true && Boolean(row.studentId),
+  );
+  if (flagged.length) {
+    return pickCanonicalTeamLeadFromMembers(flagged).studentId ?? null;
+  }
+
+  const applicationId = (viewer.applicationId || '').trim();
+  if (applicationId && viewer.participationMode === 'team') {
+    return findCanonicalTeamLeadStudentId(repo, projectId, {
+      teamId: null,
+      applicationId,
+    });
+  }
+
+  return null;
+}
+
 /** In-memory roster (admin team list): earliest flagged lead, else first member. */
 /**
  * Ensures at most one `isTeamLead` per team/application on a project (keeps `keepParticipationId`).

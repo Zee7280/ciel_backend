@@ -70,23 +70,32 @@ describe('OpportunityWorkflowService', () => {
     expect(opp.partnerApprovalStatus).toBe(LINE_STATUS.REVISION_REQUESTED);
   });
 
-  it('initStudentPrivateCandidate skips faculty and routes to CIEL admin', () => {
+  it('initStudentCreated starts at faculty, then partner if involved, then CIEL admin', () => {
     const opp = {} as Opportunity;
-    service.initStudentPrivateCandidate(opp, false);
+    service.initStudentCreated(opp, true);
     expect(opp.isStudentCreated).toBe(true);
-    expect(opp.facultyApprovalStatus).toBe(LINE_STATUS.NOT_APPLICABLE);
-    expect(opp.workflowStage).toBe(WORKFLOW_STAGE.PENDING_ADMIN);
-    expect(opp.status).toBe('pending_approval');
-    expect(opp.partnerApprovalStatus).toBe(LINE_STATUS.NOT_APPLICABLE);
+    expect(opp.facultyApprovalStatus).toBe(LINE_STATUS.PENDING);
+    expect(opp.partnerApprovalStatus).toBe(LINE_STATUS.PENDING);
+    expect(opp.workflowStage).toBe(WORKFLOW_STAGE.PENDING_FACULTY);
   });
 
-  it('initStudentPrivateCandidate with partner waits for host then admin', () => {
+  it('initStudentPrivateCandidate skips faculty and waits on partner when a host is involved', () => {
     const opp = {} as Opportunity;
     service.initStudentPrivateCandidate(opp, true);
     expect(opp.workflowStage).toBe(WORKFLOW_STAGE.PENDING_PARTNER);
     expect(opp.status).toBe('pending_partner');
-    expect(opp.partnerVerified).toBe(false);
     expect(opp.facultyApprovalStatus).toBe(LINE_STATUS.NOT_APPLICABLE);
+    expect(opp.faculty_verification_status).toBe('not_required');
+    expect(opp.partnerApprovalStatus).toBe(LINE_STATUS.PENDING);
+  });
+
+  it('initStudentPrivateCandidate skips faculty and partner when no host is involved', () => {
+    const opp = {} as Opportunity;
+    service.initStudentPrivateCandidate(opp, false);
+    expect(opp.workflowStage).toBe(WORKFLOW_STAGE.PENDING_ADMIN);
+    expect(opp.status).toBe('pending_approval');
+    expect(opp.facultyApprovalStatus).toBe(LINE_STATUS.NOT_APPLICABLE);
+    expect(opp.partnerApprovalStatus).toBe(LINE_STATUS.NOT_APPLICABLE);
   });
 
   it('initFacultyCreated syncs the legacy faculty_verified/faculty_verification_status fields, not just facultyApprovalStatus', () => {

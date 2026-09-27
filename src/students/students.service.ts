@@ -38,6 +38,7 @@ import { OpportunitiesService } from '../opportunities/opportunities.service';
 import { buildOpportunityDetailView } from '../opportunities/opportunity-detail-view.util';
 import { purifyStudentOpportunityContent } from '../opportunities/opportunity-content-purify.util';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
+import { isPrivateCandidateOpportunity } from '../opportunities/private-candidate.util';
 import { isTeamApplyFromParticipationAndMembers } from '../opportunities/apply-team-payload.util';
 import { isReportPartnerStepSatisfied } from '../reports/report-partner-approval.util';
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
@@ -456,16 +457,25 @@ export class StudentsService {
 
   /**
    * Public `report_status` for dashboard lists (distinct from legacy DB-only labels).
-   * `pending_payment` = student must pay / submit proof (`partner_verified`, legacy `payment_pending`).
+   * `pending_payment` is only for private-candidate fee gateway. University fee is paused.
    */
   private dashboardPublicReportStatus(
     raw: string | null | undefined,
     partnerStatus?: string | null,
+    opportunity?: Opportunity | null,
   ): string | null {
     if (!raw) return null;
     if (raw === 'continue') return 'draft';
-    if (raw === 'payment_pending' || raw === 'submitted')
-      return 'pending_payment';
+    if (isPrivateCandidateOpportunity(opportunity)) {
+      if (raw === 'payment_pending' || raw === 'submitted')
+        return 'pending_payment';
+    } else if (
+      raw === 'payment_pending' ||
+      raw === 'pending_payment' ||
+      raw === 'payment_under_review'
+    ) {
+      return 'submitted';
+    }
     if (raw === 'payment_under_review') return 'payment_under_review';
     return raw;
   }
@@ -905,7 +915,11 @@ export class StudentsService {
 
       const rep = reportByProjectId.get(String(app.projectId));
       const reportStatus = rep
-        ? this.dashboardPublicReportStatus(rep.status, rep.partner_status)
+        ? this.dashboardPublicReportStatus(
+            rep.status,
+            rep.partner_status,
+            rep.opportunity,
+          )
         : null;
 
       const teamSize =
@@ -1003,8 +1017,14 @@ export class StudentsService {
       draftReport?.opportunityId || draftReport?.project_id;
 
     const paymentDueReport = studentReports.find((r) => {
+      if (!isPrivateCandidateOpportunity(r.opportunity)) return false;
       const st = String(r.status || '').toLowerCase();
-      return st === 'payment_pending' || st === 'submitted';
+      return (
+        st === 'payment_pending' ||
+        st === 'pending_payment' ||
+        st === 'submitted' ||
+        st === 'payment_under_review'
+      );
     });
     const paymentDueProjectId = paymentDueReport
       ? this.reportProjectKey(paymentDueReport)
@@ -1063,15 +1083,15 @@ export class StudentsService {
 
     const underReviewNotifs = reportsUnderReviewList.slice(0, 5).map((r) => {
       const paymentish =
-        r.status === 'payment_under_review' ||
-        r.status === 'payment_pending' ||
-        r.status === 'partner_verified';
+        isPrivateCandidateOpportunity(r.opportunity) &&
+        (r.status === 'payment_under_review' ||
+          r.status === 'payment_pending');
       let detail = 'Submitted — review in progress.';
-      if (r.status === 'payment_under_review') {
+      if (isPrivateCandidateOpportunity(r.opportunity) && r.status === 'payment_under_review') {
         detail = 'Payment proof is under review.';
       } else if (
-        r.status === 'payment_pending' ||
-        r.status === 'partner_verified'
+        isPrivateCandidateOpportunity(r.opportunity) &&
+        r.status === 'payment_pending'
       ) {
         detail = 'Payment or fee slip is required.';
       }
@@ -1092,6 +1112,7 @@ export class StudentsService {
 
     const pendingPaymentByProject = new Map<string, StudentReport>();
     for (const r of studentReports) {
+      if (!isPrivateCandidateOpportunity(r.opportunity)) continue;
       if (!['partner_verified', 'payment_pending'].includes(r.status)) continue;
       const key = this.reportProjectKey(r);
       if (key && !pendingPaymentByProject.has(key)) {

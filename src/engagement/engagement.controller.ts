@@ -49,7 +49,7 @@ export class EngagementController {
     };
   }
 
-  /** Partner/NGO (creator) or CIEL admin: pending attendance queue (server-side routing; no client-supplied approver). */
+  /** Pending list is empty — attendance is confirmed on the faculty flash card. */
   @Get('attendance/pending')
   async listPendingAttendance(
     @Request() req,

@@ -65,12 +65,6 @@ export function resolveParticipationPhase(input: {
     return 'application_pending';
   }
 
-  if (input.attendanceVerificationPending) {
-    return input.approverType === 'partner'
-      ? 'attendance_pending_partner'
-      : 'attendance_pending_faculty';
-  }
-
   if (input.guideRole === 'team_member') {
     if (!input.emailVerified) {
       return 'team_member_pending_verification';

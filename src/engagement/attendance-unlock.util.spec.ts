@@ -48,7 +48,7 @@ describe('attendance-unlock.util', () => {
     });
   });
 
-  it('does not unlock when only a teammate has admin override', () => {
+  it('unlocks a team lead through identity gates even if leftover attendanceLocked is set', () => {
     const result = resolveAttendanceUnlockStatus(
       baseUser,
       {
@@ -60,7 +60,7 @@ describe('attendance-unlock.util', () => {
       true,
     );
 
-    expect(result.unlocked).toBe(false);
+    expect(result.unlocked).toBe(true);
     expect(result.admin_override).toBeUndefined();
   });
 
@@ -103,15 +103,15 @@ describe('attendance-unlock.util', () => {
     expect(result.missing).toContain('identity_verification');
   });
 
-  it('locks when attendance verification has been requested', () => {
+  it('unlocks when identity, academic and team setup are complete even if leftover attendanceLocked is set', () => {
     const result = resolveAttendanceUnlockStatus(
       baseUser,
       { ...baseParticipation, attendanceLocked: true } as Participation,
       true,
     );
 
-    expect(result.unlocked).toBe(false);
-    expect(result.missing).toContain('attendance_locked');
+    expect(result.unlocked).toBe(true);
+    expect(result.missing).not.toContain('attendance_locked');
   });
 
   it('requires at least two team members for team configuration', () => {

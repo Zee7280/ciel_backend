@@ -1,4 +1,5 @@
 import {
+  attendanceCountsTowardProgress,
   canUserActOnAttendanceQueue,
   extractPartnerContactEmailsForAttendance,
   opportunityHasActionablePartnerForAttendance,
@@ -65,6 +66,24 @@ describe('attendance partner routing', () => {
         partner_organization: { official_email: 'partner@ngo.org' },
       }),
     ).toBe('partner');
+  });
+});
+
+describe('attendanceCountsTowardProgress', () => {
+  it('counts pending and approved hours, not rejected or flagged', () => {
+    expect(attendanceCountsTowardProgress({ approvalStatus: 'pending' })).toBe(
+      true,
+    );
+    expect(attendanceCountsTowardProgress({ approvalStatus: 'approved' })).toBe(
+      true,
+    );
+    expect(attendanceCountsTowardProgress({ approvalStatus: null })).toBe(true);
+    expect(attendanceCountsTowardProgress({ approvalStatus: 'rejected' })).toBe(
+      false,
+    );
+    expect(attendanceCountsTowardProgress({ approvalStatus: 'flagged' })).toBe(
+      false,
+    );
   });
 });
 

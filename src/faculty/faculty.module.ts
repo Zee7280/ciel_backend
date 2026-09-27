@@ -19,6 +19,7 @@ import { StudentsModule } from '../students/students.module';
 import { CommunityAwardModule } from '../reports/community-award.module';
 import { FacultyCommunityServiceController } from './faculty-community-service.controller';
 import { AiModule } from '../ai/ai.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
     imports: [
@@ -36,6 +37,7 @@ import { AiModule } from '../ai/ai.module';
         StudentsModule,
         CommunityAwardModule,
         AiModule,
+        NotificationsModule,
     ],
     controllers: [
         FacultyReportsController,

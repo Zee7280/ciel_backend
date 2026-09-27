@@ -323,91 +323,15 @@ describe('EngagementService', () => {
       mockAttendanceLogRepository.createQueryBuilder.mockReset();
     });
 
-    it('hydrates missing participant.teamId / team_id from roster parity before returning logs', async () => {
-      const t = fx('pending-roster-hydrate');
-      mockUserRepository.findOne.mockResolvedValue({
-        id: t.id.partnerActor,
-        email: t.email.ngoOwner,
-        organization: { id: t.id.org },
-      });
-
-      mockOpportunityRepository.findOne.mockResolvedValue({
-        id: t.id.projectRoster,
-      });
-
-      const rosterLead: Partial<Participation> & {
-        id: string;
-        projectId: string;
-      } = {
-        id: `${t.id.lead}-p`,
-        projectId: t.id.projectRoster,
-        isTeamLead: true,
-        teamId: t.id.teamId,
-        applicationId: undefined,
-        participationMode: 'team',
-        status: 'approved',
-      };
-
-      const rosterMember: Partial<Participation> & {
-        id: string;
-        projectId: string;
-        email?: string;
-      } = {
-        id: `${t.id.member}-p`,
-        projectId: t.id.projectRoster,
-        isTeamLead: false,
-        teamId: null as unknown as string,
-        applicationId: undefined,
-        participationMode: 'team',
-        status: 'approved',
-        email: t.email.rosterMember,
-      };
-
-      mockParticipationRepository.find.mockResolvedValue([
-        rosterLead,
-        rosterMember,
-      ] as Participation[]);
-
-      const attendeeParticipant = {
-        ...rosterMember,
-        studentId: `${t.id.student}-db`,
-      } as Participation;
-
-      const attendanceLogStub = {
-        id: `log-${t.tag}`,
-        projectId: t.id.projectRoster,
-        approvalStatus: 'pending',
-        assignedApproverType: 'partner',
-        assignedApproverUserId: t.id.partnerActor,
-        participant: attendeeParticipant,
-        project: { organizationId: t.id.org },
-      } as unknown as AttendanceLog;
-
-      qbChain.getMany.mockResolvedValue([attendanceLogStub]);
-
+    it('returns an empty queue — attendance is confirmed on the flash card', async () => {
       const result = await service.listPendingAttendanceLogs(
-        t.id.partnerActor,
+        'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
         UserRole.NGO,
-        t.id.projectRoster,
+        '11111111-2222-4333-8444-555555555555',
       );
-
-      expect(mockAttendanceLogRepository.createQueryBuilder).toHaveBeenCalled();
-      expect(mockParticipationRepository.find).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({ projectId: t.id.projectRoster }),
-          order: { createdAt: 'ASC' },
-        }),
-      );
-      expect(result.pending).toHaveLength(1);
-
-      type PartWithLegacy = Participation & { team_id?: string | null };
-
-      expect((result.pending[0].participant as PartWithLegacy).teamId).toBe(
-        t.id.teamId,
-      );
-      expect((result.pending[0].participant as PartWithLegacy).team_id).toBe(
-        t.id.teamId,
-      );
+      expect(result.pending).toHaveLength(0);
+      expect(result.count).toBe(0);
+      expect(mockAttendanceLogRepository.createQueryBuilder).not.toHaveBeenCalled();
     });
   });
 
@@ -538,20 +462,45 @@ describe('EngagementService', () => {
       expect(mockAttendanceLogRepository.save).toHaveBeenCalled();
     });
 
-    it('refuses to add a new entry once the participant\'s hours are locked (post-verification)', async () => {
+    it('does not treat leftover attendanceLocked as a logging block — hours are confirmed on the flash card', async () => {
       const t = fx('attendance-locked-add');
-      mockParticipationRepository.findOne.mockResolvedValue({
+      const mockParticipation = {
         id: t.id.participation,
         studentId: t.id.u1,
         projectId: t.id.project,
         status: 'approved',
         attendanceLocked: true,
-      });
+        primaryFacultyEmail: t.email.faculty,
+      };
       const dto = { ...standardAttendanceDto } as any;
+
+      mockParticipationRepository.findOne.mockResolvedValue(mockParticipation);
+      mockOpportunityRepository.findOne.mockResolvedValue({
+        id: t.id.project,
+        title: t.title,
+        creatorId: t.id.faculty,
+        organization: null,
+      });
+      mockUserRepository.findOne.mockResolvedValue({
+        id: t.id.faculty,
+        role: 'faculty',
+        name: t.name.faculty,
+      });
+      mockAttendanceLogRepository.create.mockReturnValue({
+        ...dto,
+        participantId: t.id.participation,
+        projectId: t.id.project,
+        sessionHours: 3,
+      });
+      mockAttendanceLogRepository.save.mockResolvedValue({
+        id: `log-${t.tag}`,
+        ...dto,
+      });
 
       await expect(
         service.addAttendanceLog(t.id.u1, t.id.participation, dto),
-      ).rejects.toBeInstanceOf(BadRequestException);
+      ).resolves.toBeDefined();
+      expect(mockAttendanceLogRepository.save).toHaveBeenCalled();
     });
 
     it('should backfill faculty emails from the approved application before routing attendance', async () => {
@@ -755,24 +704,7 @@ describe('EngagementService', () => {
       await service.addAttendanceLog(t.id.student, t.id.participation, dto);
       await new Promise((resolve) => setImmediate(resolve));
 
-      expect(mockMailService.sendAttendancePendingReview).toHaveBeenCalledWith(
-        t.email.partner,
-        expect.any(String),
-        'partner',
-        t.name.studentDisplay,
-        t.projectTitleStudent,
-        t.id.project,
-      );
-      expect(
-        mockMailService.sendAttendancePendingReview,
-      ).not.toHaveBeenCalledWith(
-        t.email.student,
-        expect.anything(),
-        expect.anything(),
-        expect.anything(),
-        expect.anything(),
-        expect.anything(),
-      );
+      expect(mockMailService.sendAttendancePendingReview).not.toHaveBeenCalled();
       expect(mockAttendanceLogRepository.create).toHaveBeenCalledWith(
         expect.objectContaining({
           assignedApproverUserId: t.id.partnerUser,
@@ -984,24 +916,7 @@ describe('EngagementService', () => {
       expect(mockAttendanceLogRepository.create).toHaveBeenCalledWith(
         expect.objectContaining({ assignedApproverType: 'partner' }),
       );
-      expect(mockMailService.sendAttendancePendingReview).toHaveBeenCalledWith(
-        t.email.partnerOrg,
-        expect.any(String),
-        'partner',
-        t.name.studentDisplay,
-        t.projectTitlePartner,
-        t.id.project,
-      );
-      expect(
-        mockMailService.sendAttendancePendingReview,
-      ).not.toHaveBeenCalledWith(
-        t.email.supervisor,
-        expect.anything(),
-        'faculty',
-        expect.anything(),
-        expect.anything(),
-        expect.anything(),
-      );
+      expect(mockMailService.sendAttendancePendingReview).not.toHaveBeenCalled();
     });
 
     it('should fall back to faculty when partner route has organizationId but no partner contact', async () => {
@@ -1230,7 +1145,7 @@ describe('EngagementService', () => {
       expect(mockAttendanceLogRepository.delete).toHaveBeenCalledWith('log-1');
     });
 
-    it('refuses to delete once the participant\'s hours are locked', async () => {
+    it('still allows deleting a pending log when leftover attendanceLocked is set', async () => {
       const t = fx('delete-attendance-locked');
       mockParticipationRepository.findOne.mockResolvedValue({
         id: t.id.participation,
@@ -1244,9 +1159,13 @@ describe('EngagementService', () => {
         entryStatus: 'pending',
       });
 
-      await expect(
-        service.deleteAttendanceLog(t.id.u1, t.id.participation, 'log-1'),
-      ).rejects.toBeInstanceOf(BadRequestException);
+      const result = await service.deleteAttendanceLog(
+        t.id.u1,
+        t.id.participation,
+        'log-1',
+      );
+
+      expect(result).toEqual({ deleted: true });
     });
 
     it('refuses to delete an individually-verified entry even if the participant is not yet fully locked', async () => {
@@ -1408,7 +1327,8 @@ describe('EngagementService', () => {
       );
       expect(result).toEqual(
         expect.objectContaining({
-          type: 'already_requested',
+          type: 'deferred_to_faculty_flash_card',
+          emailNotified: false,
         }),
       );
     });

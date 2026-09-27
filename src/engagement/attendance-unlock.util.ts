@@ -94,11 +94,10 @@ export function resolveAttendanceUnlockStatus(
   const academicOk =
     computeAcademicCompletionPercent(participation, user) >= 80;
   const teamOk = participation?.participationMode !== 'team' || teamConfigured;
-  const unlocked =
-    identityOk &&
-    academicOk &&
-    teamOk &&
-    participation?.attendanceLocked !== true;
+  // Attendance lock used to mean "queued for faculty/partner review". Hours are
+  // now confirmed on the flash card after report submit, so leftover locks must
+  // not block logging. Identity / academic / team (or admin override) still gate.
+  const unlocked = identityOk && academicOk && teamOk;
 
   return {
     unlocked,
@@ -107,7 +106,6 @@ export function resolveAttendanceUnlockStatus(
       !identityOk ? 'identity_verification' : null,
       !academicOk ? 'academic_info' : null,
       !teamOk ? 'team_setup' : null,
-      participation?.attendanceLocked ? 'attendance_locked' : null,
     ].filter((value): value is string => Boolean(value)),
   };
 }

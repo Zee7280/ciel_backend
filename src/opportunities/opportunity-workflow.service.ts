@@ -78,8 +78,8 @@ export class OpportunityWorkflowService {
   }
 
   /**
-   * Private / independent undergraduate candidate: no faculty connection.
-   * Optional host acknowledgement, then CIEL PK verification.
+   * Private / independent undergraduate candidate: no faculty listing reviewer.
+   * Optional host acknowledgement, then CIEL PK.
    */
   initStudentPrivateCandidate(
     opp: Opportunity,
@@ -88,15 +88,17 @@ export class OpportunityWorkflowService {
     opp.isStudentCreated = true;
     opp.requiresPartnerApproval = requiresPartner;
     opp.facultyApprovalStatus = LINE_STATUS.NOT_APPLICABLE;
-    opp.partnerApprovalStatus = requiresPartner
-      ? LINE_STATUS.PENDING
-      : LINE_STATUS.NOT_APPLICABLE;
+    opp.faculty_verified = true;
+    opp.faculty_verification_status = 'not_required';
     opp.adminApprovalStatus = LINE_STATUS.PENDING;
     if (requiresPartner) {
+      opp.partnerApprovalStatus = LINE_STATUS.PENDING;
       opp.workflowStage = WORKFLOW_STAGE.PENDING_PARTNER;
       opp.status = 'pending_partner';
       opp.partnerVerified = false;
     } else {
+      opp.partnerApprovalStatus = LINE_STATUS.NOT_APPLICABLE;
+      opp.partnerVerified = true;
       opp.workflowStage = WORKFLOW_STAGE.PENDING_ADMIN;
       opp.status = 'pending_approval';
     }

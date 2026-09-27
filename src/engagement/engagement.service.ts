@@ -1222,15 +1222,6 @@ export class EngagementService {
     if (!participation)
       throw new NotFoundException('Participation record not found');
 
-    // Verified hours are meant to be locked — attendanceLocked was previously set on verification
-    // request but never actually enforced anywhere, so a student (or a team lead logging on a
-    // member's behalf) could still add new entries after sign-off via a direct API call.
-    if (participation.attendanceLocked) {
-      throw new BadRequestException(
-        'Hours are locked for this participant after verification and can no longer be edited directly — use the audited correction workflow.',
-      );
-    }
-
     if (participation.studentId !== studentId) {
       const user = await this.userRepository.findOne({
         where: { id: studentId },
@@ -1788,16 +1779,6 @@ export class EngagementService {
     });
 
     const saved = await this.attendanceLogRepository.save(log);
-    void this.notifyAttendancePendingReview(
-      saved,
-      opportunity,
-      participation,
-      routing,
-    ).catch((err) =>
-      this.logger.warn(
-        `Attendance pending notification skipped: ${err?.message}`,
-      ),
-    );
     return saved;
   }
 
@@ -1889,6 +1870,10 @@ export class EngagementService {
     ) {
       throw new BadRequestException('Invalid projectId — expected a UUID.');
     }
+
+    void actorUserId;
+    void actorRole;
+    return { pending: [] as AttendanceLog[], count: 0 };
 
     const actor = await this.userRepository.findOne({
       where: { id: actorUserId },
@@ -2304,6 +2289,11 @@ export class EngagementService {
         'No attendance log was found for this id. It may have been removed or the link is out of date.',
       );
     }
+    if (actorRole !== UserRole.SUPER_ADMIN) {
+      throw new BadRequestException(
+        'Attendance is confirmed when Faculty (or CIEL PK) locks the flash-card score. There is no separate attendance approval queue.',
+      );
+    }
     if (!log.approvalStatus || log.approvalStatus !== 'pending') {
       const state = log.approvalStatus ? String(log.approvalStatus) : 'legacy';
       throw new BadRequestException(
@@ -2458,6 +2448,16 @@ export class EngagementService {
       );
     }
 
+    // New stakeholder flow: do not lock hours or email a faculty/partner queue.
+    // Faculty (or CIEL PK) confirms attendance when locking the flash-card score.
+    void dto;
+    void opportunity;
+    return {
+      emailNotified: false,
+      reviewerType: null,
+      type: 'deferred_to_faculty_flash_card',
+    };
+
     // Idempotent: already-requested seats never fail on the newer oath/min-hours gates.
     if (participant.attendanceVerificationRequested) {
       if (!participant.attendanceLocked) {
@@ -2580,11 +2580,7 @@ export class EngagementService {
     });
     if (!log) throw new NotFoundException('Attendance log not found');
 
-    // Verified hours must stay locked — this previously only checked ownership, so a student
-    // could delete an already-verified entry (undermining the same hours figure the Community
-    // Dividend payout is computed from) via a direct API call after sign-off.
     if (
-      participation.attendanceLocked ||
       log.approvalStatus === 'approved' ||
       log.entryStatus === 'verified'
     ) {

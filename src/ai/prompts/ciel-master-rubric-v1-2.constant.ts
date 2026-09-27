@@ -553,7 +553,7 @@ If Compliance_Ratio < 1.0 → report cannot be finalized;
 
 ### 1.D Section-Specific Deductions
 - Team hours confused with individual hours → **High flag**, do not auto-reject; credit cautiously, set Admin Review.
-- Unrealistic daily hours (>12h on single date) → invalidate excess.
+- Unrealistic daily hours (>12h on a single date for one student; teammates may share a date) → invalidate excess for that student only.
 - Duplicate session logs → invalidate duplicates.
 - Identity OTP claimed verified but no audit log → Critical flag.
 

@@ -173,7 +173,12 @@ describe('StudentReportsService', () => {
     reportPartnerGateGloballyEnabled = true;
 
     mockParticipantRepository.findOne.mockReset();
-    mockParticipantRepository.findOne.mockResolvedValue(null);
+    mockParticipantRepository.findOne.mockResolvedValue({
+      studentId: 'student-1',
+      projectId: 'opp-1',
+      status: 'accepted',
+      participationMode: 'individual',
+    });
     mockParticipantRepository.find.mockReset();
     mockParticipantRepository.find.mockResolvedValue([]);
 
@@ -279,7 +284,7 @@ describe('StudentReportsService', () => {
     expect(result.message).toBe('Report submitted successfully.');
     expect(mockStudentReportsRepository.save).toHaveBeenCalledWith(
       expect.objectContaining({
-        status: 'payment_pending',
+        status: 'submitted',
         opportunityId: 'opp-1',
         project_id: 'opp-1',
       }),
@@ -343,6 +348,49 @@ describe('StudentReportsService', () => {
     expect(existing.status).toBe('payment_pending');
     expect(existing.section2).toEqual({ problem_statement: 'locked copy' });
     expect(mockStudentReportsRepository.save).not.toHaveBeenCalled();
+  });
+
+  it('blocks starting a report on an org listing until the student has an approved enrollment', async () => {
+    mockParticipantRepository.findOne.mockResolvedValue(null);
+
+    await expect(
+      service.createReport(
+        'student-1',
+        { opportunityId: 'opp-1', section2: { problem_statement: 'x' } },
+        [],
+        false,
+      ),
+    ).rejects.toThrow('Apply to this opportunity');
+  });
+
+  it('lets the student-created opportunity owner start a report without a participation row', async () => {
+    mockOpportunityRepository.findOne.mockResolvedValue({
+      id: 'opp-1',
+      title: 'Test Opportunity',
+      isStudentCreated: true,
+      creatorId: 'student-1',
+      admin_approved: true,
+      workflowStage: 'live',
+      status: 'active',
+      timeline: null,
+    });
+    mockParticipantRepository.findOne.mockResolvedValue(null);
+
+    const result = await service.createReport(
+      'student-1',
+      {
+        opportunityId: 'opp-1',
+        section2: {
+          problem_statement: 'test',
+          baseline_evidence: 'Survey',
+          discipline: 'CS',
+        },
+      },
+      [],
+      false,
+    );
+
+    expect(result.message).toBe('Report saved as draft.');
   });
 
   it('blocks submission when a team member has not individually met required hours, even though the pooled team total clears the bar', async () => {
@@ -634,7 +682,7 @@ describe('StudentReportsService', () => {
     expect(result.message).toBe('Report submitted successfully.');
     expect(mockStudentReportsRepository.save).toHaveBeenCalledWith(
       expect.objectContaining({
-        status: 'payment_pending',
+        status: 'submitted',
         primary_sdg_goal: null,
         baseline_evidence_source: 'Survey Data, __o_0, __o_1, __o_2',
       }),
@@ -696,6 +744,7 @@ describe('StudentReportsService', () => {
             isTeamLead: false,
             studentId: w.studentId,
             projectId: w.projectId,
+            status: 'accepted',
             ...TEAM_SCOPE,
           });
         }
@@ -874,6 +923,7 @@ describe('StudentReportsService', () => {
               isTeamLead: true,
               studentId: w.studentId,
               projectId: w.projectId,
+              status: 'accepted',
               ...TEAM_SCOPE,
             });
           }
@@ -914,6 +964,7 @@ describe('StudentReportsService', () => {
               isTeamLead: true,
               studentId: w.studentId,
               projectId: w.projectId,
+              status: 'accepted',
               ...TEAM_SCOPE,
             });
           }
@@ -958,6 +1009,7 @@ describe('StudentReportsService', () => {
               isTeamLead: false,
               studentId: w.studentId,
               projectId: w.projectId,
+              status: 'accepted',
             });
           }
           return Promise.resolve(null);
@@ -996,6 +1048,7 @@ describe('StudentReportsService', () => {
               isTeamLead: false,
               studentId: w.studentId,
               projectId: w.projectId,
+              status: 'accepted',
             });
           }
           return Promise.resolve(null);
@@ -1015,11 +1068,15 @@ describe('StudentReportsService', () => {
       expect(result.message).toBe('Report submitted successfully.');
     });
 
-    it('allows submit when student has no participation row (creator / legacy)', async () => {
+    it('allows submit when the student-created opportunity owner has no participation row', async () => {
       mockOpportunityRepository.findOne.mockResolvedValue({
         id: SAMPLE_OPP_UUID,
         title: 'Project',
-        isStudentCreated: false,
+        isStudentCreated: true,
+        creatorId: 'no-participation-user',
+        admin_approved: true,
+        workflowStage: 'live',
+        status: 'active',
         timeline: null,
       });
       mockParticipantRepository.findOne.mockResolvedValue(null);
@@ -1039,6 +1096,38 @@ describe('StudentReportsService', () => {
     });
   });
 
+  it('holds private-candidate submit on the reporting-fee gateway', async () => {
+    mockOpportunityRepository.findOne.mockResolvedValue({
+      id: 'opp-1',
+      title: 'Private listing',
+      isStudentCreated: true,
+      admin_approved: true,
+      workflowStage: 'live',
+      status: 'active',
+      faculty_verification_status: 'not_required',
+      executing_context: { student_pathway: 'private' },
+      timeline: null,
+    });
+
+    const result = await service.createReport(
+      'student-1',
+      {
+        opportunityId: 'opp-1',
+        ...MIN_VALID_SUBMIT_SECTIONS,
+      },
+      [],
+      true,
+    );
+
+    expect(result.message).toBe('Report submitted successfully.');
+    expect(mockStudentReportsRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'payment_pending',
+        opportunityId: 'opp-1',
+      }),
+    );
+  });
+
   it('blocks partner or admin approve until reporting fee is cleared', async () => {
     const report = {
       id: 'report-1',
@@ -1048,7 +1137,10 @@ describe('StudentReportsService', () => {
       studentId: 'student-1',
       opportunityId: 'opp-1',
       project_id: 'opp-1',
-      opportunity: { requiresPartnerApproval: false },
+      opportunity: {
+        faculty_verification_status: 'not_required',
+        executing_context: { student_pathway: 'private' },
+      },
     };
     mockStudentReportsRepository.findOne.mockResolvedValue(report);
     mockPaymentRepository.findOne.mockResolvedValue(null);
@@ -1077,6 +1169,189 @@ describe('StudentReportsService', () => {
     expect(report.admin_status).toBe('approved');
     expect(result.data.status).toBe('verified');
     expect(verifyReportQb.execute).toHaveBeenCalled();
+  });
+
+  it('blocks admin approve on a faculty-gated report until Faculty has signed off', async () => {
+    const report = {
+      id: 'report-1',
+      status: 'paid',
+      partner_status: 'pending',
+      admin_status: 'pending',
+      faculty_status: 'pending',
+      partnerApprovedAt: null,
+      adminApprovedAt: null,
+      opportunity: { requiresPartnerApproval: false },
+    };
+    mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+    await expect(service.verifyReport('report-1', 'approve', 'admin')).rejects.toThrow(
+      'not yet approved by Faculty',
+    );
+  });
+
+  it('lets CIEL PK publish a private-candidate report after CII is locked, without Faculty', async () => {
+    const report = {
+      id: 'report-pc',
+      status: 'paid',
+      partner_status: 'pending',
+      admin_status: 'pending',
+      faculty_status: 'pending',
+      partnerApprovedAt: null,
+      adminApprovedAt: null,
+      ciiV2Lock: { locked: true },
+      opportunity: {
+        requiresPartnerApproval: false,
+        faculty_verification_status: 'not_required',
+      },
+    };
+    mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+    const result = await service.verifyReport('report-pc', 'approve', 'admin');
+
+    expect(report.admin_status).toBe('approved');
+    expect(report.faculty_status).toBe('not_applicable');
+    expect(report.status).toBe('verified');
+    expect(result.data.status).toBe('verified');
+  });
+
+  it('refuses to publish a private-candidate report before CII is locked', async () => {
+    const report = {
+      id: 'report-pc',
+      status: 'paid',
+      partner_status: 'pending',
+      admin_status: 'pending',
+      faculty_status: 'pending',
+      partnerApprovedAt: null,
+      adminApprovedAt: null,
+      opportunity: { faculty_verification_status: 'not_required' },
+    };
+    mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+    await expect(service.verifyReport('report-pc', 'approve', 'admin')).rejects.toThrow(
+      'Run and confirm the CII analysis',
+    );
+  });
+
+  it('blocks admin approve on a faculty-gated report until Faculty has signed off', async () => {
+    const report = {
+      id: 'report-1',
+      status: 'paid',
+      partner_status: 'pending',
+      admin_status: 'pending',
+      faculty_status: 'pending',
+      partnerApprovedAt: null,
+      adminApprovedAt: null,
+      opportunity: { requiresPartnerApproval: false },
+    };
+    mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+    await expect(service.verifyReport('report-1', 'approve', 'admin')).rejects.toThrow(
+      'not yet approved by Faculty',
+    );
+  });
+
+  it('lets CIEL PK publish a private-candidate report after CII is locked, without Faculty', async () => {
+    const report = {
+      id: 'report-pc',
+      status: 'paid',
+      partner_status: 'pending',
+      admin_status: 'pending',
+      faculty_status: 'pending',
+      partnerApprovedAt: null,
+      adminApprovedAt: null,
+      ciiV2Lock: { locked: true },
+      opportunity: {
+        requiresPartnerApproval: false,
+        faculty_verification_status: 'not_required',
+      },
+    };
+    mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+    const result = await service.verifyReport('report-pc', 'approve', 'admin');
+
+    expect(report.admin_status).toBe('approved');
+    expect(report.faculty_status).toBe('not_applicable');
+    expect(report.status).toBe('verified');
+    expect(result.data.status).toBe('verified');
+  });
+
+  it('refuses to publish a private-candidate report before CII is locked', async () => {
+    const report = {
+      id: 'report-pc',
+      status: 'paid',
+      partner_status: 'pending',
+      admin_status: 'pending',
+      faculty_status: 'pending',
+      partnerApprovedAt: null,
+      adminApprovedAt: null,
+      opportunity: { faculty_verification_status: 'not_required' },
+    };
+    mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+    await expect(service.verifyReport('report-pc', 'approve', 'admin')).rejects.toThrow(
+      'Run and confirm the CII analysis',
+    );
+  });
+
+  it('blocks admin approve on a faculty-gated report until Faculty has signed off', async () => {
+    const report = {
+      id: 'report-1',
+      status: 'paid',
+      partner_status: 'pending',
+      admin_status: 'pending',
+      faculty_status: 'pending',
+      partnerApprovedAt: null,
+      adminApprovedAt: null,
+      opportunity: { requiresPartnerApproval: false },
+    };
+    mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+    await expect(service.verifyReport('report-1', 'approve', 'admin')).rejects.toThrow(
+      'not yet approved by Faculty',
+    );
+  });
+
+  it('lets CIEL PK publish a private-candidate report after CII is locked, without Faculty', async () => {
+    const report = {
+      id: 'report-pc',
+      status: 'paid',
+      partner_status: 'pending',
+      admin_status: 'pending',
+      faculty_status: 'pending',
+      partnerApprovedAt: null,
+      adminApprovedAt: null,
+      ciiV2Lock: { locked: true },
+      opportunity: {
+        requiresPartnerApproval: false,
+        faculty_verification_status: 'not_required',
+      },
+    };
+    mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+    const result = await service.verifyReport('report-pc', 'approve', 'admin');
+
+    expect(report.admin_status).toBe('approved');
+    expect(report.faculty_status).toBe('not_applicable');
+    expect(report.status).toBe('verified');
+    expect(result.data.status).toBe('verified');
+  });
+
+  it('refuses to publish a private-candidate report before CII is locked', async () => {
+    const report = {
+      id: 'report-pc',
+      status: 'paid',
+      partner_status: 'pending',
+      admin_status: 'pending',
+      faculty_status: 'pending',
+      partnerApprovedAt: null,
+      adminApprovedAt: null,
+      opportunity: { faculty_verification_status: 'not_required' },
+    };
+    mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+    await expect(service.verifyReport('report-pc', 'approve', 'admin')).rejects.toThrow(
+      'Run and confirm the CII analysis',
+    );
   });
 
   it('refuses the decision when a concurrent reviewer already changed admin_status/partner_status (atomic compare-and-swap)', async () => {
@@ -1342,7 +1617,7 @@ describe('StudentReportsService', () => {
     expect(mockStudentReportsRepository.save).not.toHaveBeenCalled();
   });
 
-  it('a late faculty rejection reopens an already-verified report for editing, and clears faculty_status on resubmit', async () => {
+  it('a late faculty revision request reopens an already-verified report for editing, and clears faculty_status on resubmit', async () => {
     const report: Record<string, unknown> = {
       id: 'report-1',
       studentId: 'student-1',
@@ -1350,7 +1625,7 @@ describe('StudentReportsService', () => {
       status: 'verified',
       admin_status: 'approved',
       partner_status: 'approved',
-      faculty_status: 'rejected',
+      faculty_status: 'revision_requested',
     };
     mockStudentReportsRepository.findOne.mockResolvedValue(report);
 
@@ -1393,11 +1668,15 @@ describe('StudentReportsService', () => {
       feedback?: string;
       is_editable?: boolean;
       status?: string;
+      private_candidate?: boolean;
+      review_route?: string;
     };
 
     expect(data.feedback).toBe('Revise Section 4 outputs.');
     expect(data.is_editable).toBe(true);
     expect(data.status).toBe('revision');
+    expect(data.private_candidate).toBe(false);
+    expect(data.review_route).toBe('faculty');
   });
 
   it('persists admin-regenerated section11 AI score', async () => {

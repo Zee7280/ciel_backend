@@ -19,14 +19,14 @@ describe('resolveParticipationPhase', () => {
     ).toBe('team_member_pending_verification');
   });
 
-  it('returns attendance_pending_partner when verification requested on partner project', () => {
+  it('does not stall on leftover attendance-verification pending — student continues to enrolled', () => {
     expect(
       resolveParticipationPhase({
         guideRole: 'individual_owner',
         attendanceVerificationPending: true,
         approverType: 'partner',
       }),
-    ).toBe('attendance_pending_partner');
+    ).toBe('enrolled_individual');
   });
 
   it('returns team_formed_lead for team lead in team mode', () => {

@@ -43,10 +43,12 @@ export function resolveAttendanceApproverRouting(
 export function attendanceCountsTowardProgress(log: {
   approvalStatus?: string | null;
 }): boolean {
-  if (log.approvalStatus == null || log.approvalStatus === '') {
-    return true;
-  }
-  return log.approvalStatus === 'approved';
+  const status = String(log.approvalStatus || '')
+    .trim()
+    .toLowerCase();
+  // New flow: logged hours count until Faculty (or CIEL PK) locks the flash-card
+  // score. Rejected / flagged sessions stay out of progress.
+  return status !== 'rejected' && status !== 'flagged';
 }
 
 export function canUserActOnAttendanceQueue(

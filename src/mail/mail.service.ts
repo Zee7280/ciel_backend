@@ -2321,4 +2321,66 @@ export class MailService {
       );
     }
   }
+
+  async sendStudentImpactReportFacultyDecision(
+    to: string,
+    studentFirstName: string,
+    projectTitle: string,
+    status: 'approved' | 'rejected' | 'revision_requested',
+    note?: string | null,
+  ): Promise<void> {
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const titleEsc = this.escHtmlPlain(projectTitle);
+    const nameEsc = this.escHtmlPlain(studentFirstName);
+    const feedbackBlock =
+      note && note.trim()
+        ? `<p style="margin:16px 0 0 0;"><strong>Notes from faculty:</strong></p><p style="background:#fffbeb;border-left:4px solid #f59e0b;padding:12px 14px;margin:8px 0 0 0;color:#374151;">${this.escHtmlPlain(note.trim())}</p>`
+        : '';
+    const copy =
+      status === 'approved'
+        ? {
+            heading: 'Your impact report was approved',
+            body: `${nameEsc}, faculty approved your community service report:`,
+            next: 'Scores, certificate and the public flashcard unlock after CIEL PK completes verification.',
+            subject: `CIEL PK — impact report approved: ${projectTitle}`,
+          }
+        : status === 'revision_requested'
+          ? {
+              heading: 'Revision requested on your impact report',
+              body: `${nameEsc}, faculty sent your community service report back for edits:`,
+              next: 'Open Action Required, fix the notes below, and resubmit — the same flow continues.',
+              subject: `CIEL PK — revision requested: ${projectTitle}`,
+            }
+          : {
+              heading: 'Your impact report was rejected',
+              body: `${nameEsc}, faculty rejected your community service report:`,
+              next: 'This reporting process has ended. You will not resubmit this report.',
+              subject: `CIEL PK — impact report rejected: ${projectTitle}`,
+            };
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">${copy.heading}</h2>
+        <p>${copy.body}</p>
+        <p style="font-size:16px;"><strong>${titleEsc}</strong></p>
+        ${feedbackBlock}
+        <p style="margin-top:20px;color:#555;">${copy.next}</p>
+        <p style="margin-top:24px;">Regards,<br><strong>CIEL PK Team</strong><br><span style="font-size:13px;color:#64748b;">Community Impact Education Lab</span></p>
+      </div>
+    `;
+    try {
+      await this.transporter.sendMail({
+        from,
+        to,
+        subject: copy.subject,
+        html,
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed student impact-report ${status} email to ${to}`,
+        error.stack,
+      );
+    }
+  }
 }

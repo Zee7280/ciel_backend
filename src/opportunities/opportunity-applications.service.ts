@@ -3374,21 +3374,14 @@ export class OpportunityApplicationsService {
     const row = this.appRepo.create({
       opportunityId: params.opportunityId,
       studentUserId: params.studentUserId,
-      internalStatus:
-        attendanceApproverType === 'partner' && !primary
-          ? 'pending_admin'
-          : 'pending_faculty',
+      internalStatus: 'pending_admin',
       primaryFacultyEmail: primary,
       secondaryFacultyEmail: secondary,
       attendanceApproverType,
       applyPayload: params.applyPayload,
     });
     try {
-      const saved = await this.appRepo.save(row);
-      return await this.autoCompleteFacultyStepForNewApplication(
-        saved,
-        primary,
-      );
+      return await this.appRepo.save(row);
     } catch (e: any) {
       if (e?.code === '23505') {
         throw new BadRequestException('Already applied to this opportunity');

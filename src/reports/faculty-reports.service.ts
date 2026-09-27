@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -20,10 +21,13 @@ import { computeCiiV2Result } from './cii-v2.constants';
 import { buildCielPkAiEvaluationPayload } from './build-ciel-pk-ai-evaluation-payload.util';
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
+import { MailService } from '../mail/mail.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import {
   resolveReportFlashEvidence,
   resolveReportFlashHours,
 } from './community-award.util';
+import { isPrivateCandidateOpportunity, reviewRouteForOpportunity } from '../opportunities/private-candidate.util';
 
 function finiteNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -163,6 +167,8 @@ export class FacultyReportsService {
     private readonly facultyUniversityScopeService: FacultyUniversityScopeService,
     @InjectRepository(AttendanceLog)
     private readonly attendanceLogsRepository: Repository<AttendanceLog>,
+    private readonly mailService: MailService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   private normalizeFacultyEmail(facultyEmail: string): string {
@@ -273,12 +279,16 @@ export class FacultyReportsService {
           ),
         ),
       )
-      // Faculty is the first *report* approver after the reporting fee is cleared.
-      // Fee-hold statuses (including legacy `submitted`) stay off this inbox until
-      // payments.service moves the row to `paid`.
+      // Faculty is the first *report* approver after submit for university-supervised
+      // work. Private-candidate rows are excluded below; they stay on the fee gateway
+      // until CIEL PK. Leftover university payment_pending rows are reviewable here
+      // while the university fee is paused (Dr Moeed).
       .andWhere("report.status != 'draft'")
       .andWhere(
-        "report.status NOT IN ('payment_pending', 'pending_payment', 'payment_under_review', 'submitted')",
+        `COALESCE(opportunity.faculty_verification_status, '') <> 'not_required'`,
+      )
+      .andWhere(
+        `COALESCE(opportunity.executing_context->>'student_pathway', '') <> 'private'`,
       )
       .orderBy('report.submission_date', 'DESC')
       .getMany();
@@ -328,6 +338,8 @@ export class FacultyReportsService {
         organization_name: r.opportunity?.organization?.name || 'N/A',
         status: r.status,
         faculty_status: r.faculty_status,
+        private_candidate: isPrivateCandidateOpportunity(r.opportunity),
+        review_route: reviewRouteForOpportunity(r.opportunity),
         project_id: r.opportunityId || r.project_id || null,
         hours: resolveReportFlashHours(
           r.section1,
@@ -418,11 +430,43 @@ export class FacultyReportsService {
     return report;
   }
 
+  private assertFeeClearedForCii(report: StudentReport) {
+    if (!isPrivateCandidateOpportunity(report.opportunity)) return;
+    const reportStatus = String(report.status || '').toLowerCase();
+    if (
+      reportStatus === 'draft' ||
+      reportStatus === 'payment_pending' ||
+      reportStatus === 'pending_payment' ||
+      reportStatus === 'payment_under_review'
+    ) {
+      throw new BadRequestException(
+        'Reporting fee must be approved before CII analysis can run.',
+      );
+    }
+  }
+
+  private async findPrivateCandidateReportForAdmin(id: string): Promise<StudentReport> {
+    const report = await this.studentReportsRepository.findOne({
+      where: { id },
+      relations: ['opportunity', 'student'],
+    });
+    if (!report) {
+      throw new NotFoundException('Report not found.');
+    }
+    if (!isPrivateCandidateOpportunity(report.opportunity)) {
+      throw new ForbiddenException(
+        'CIEL PK CII analysis is only for the private-candidate review route. Regular reports are reviewed by faculty.',
+      );
+    }
+    this.assertFeeClearedForCii(report);
+    return report;
+  }
+
   async updateAction(
     id: string,
     facultyId: string,
     facultyEmail: string,
-    status: 'approved' | 'rejected',
+    status: 'approved' | 'rejected' | 'revision_requested',
     remarks?: string,
   ) {
     const report = await this.findAssignedReportForAction(
@@ -431,21 +475,14 @@ export class FacultyReportsService {
       facultyEmail,
     );
 
-    if (status === 'rejected' && !remarks?.trim()) {
-      throw new BadRequestException(
-        'A reason is required when rejecting a report.',
-      );
-    }
-
-    const reportStatus = String(report.status || '').toLowerCase();
     if (
-      reportStatus === 'payment_pending' ||
-      reportStatus === 'pending_payment' ||
-      reportStatus === 'payment_under_review' ||
-      reportStatus === 'submitted'
+      (status === 'rejected' || status === 'revision_requested') &&
+      !remarks?.trim()
     ) {
       throw new BadRequestException(
-        'Reporting fee must be approved before faculty can review this report.',
+        status === 'revision_requested'
+          ? 'A reason is required when sending a report back for revision.'
+          : 'A reason is required when rejecting a report.',
       );
     }
 
@@ -458,25 +495,81 @@ export class FacultyReportsService {
       );
     }
 
-    // A targeted column update — not repository.save(report) — so this can never clobber
-    // ciiV2/ciiV2Lock with the stale values this method's own read happened to see, if a
-    // concurrent CII v2 analysis/approval writes those columns in between.
-    await this.studentReportsRepository.update(
-      { id: report.id },
-      {
-        faculty_status: status,
-        ...(remarks ? { faculty_remarks: remarks } : {}),
-      },
-    );
+    const patch: Record<string, unknown> = {
+      faculty_status: status,
+      ...(remarks ? { faculty_remarks: remarks } : {}),
+    };
+    if (status === 'revision_requested') {
+      patch.status = 'revision';
+    } else if (status === 'rejected') {
+      patch.status = 'rejected';
+    }
 
+    await this.studentReportsRepository.update({ id: report.id }, patch as never);
+
+    const projectTitle =
+      report.opportunity?.title || report.project_id || 'Community service report';
+    const studentName = report.student?.name || 'Student';
+    const studentEmail = report.student?.email;
+    const note = remarks?.trim() || '';
+    void this.notifyStudentFacultyDecision(
+      report.studentId,
+      studentEmail,
+      studentName,
+      projectTitle,
+      status,
+      note,
+    ).catch(() => undefined);
+
+    const verb =
+      status === 'revision_requested'
+        ? 'returned for revision'
+        : status === 'rejected'
+          ? 'rejected'
+          : 'approved';
     return {
       success: true,
-      message: `Report ${status} successfully.`,
+      message: `Report ${verb} successfully.`,
       data: {
         id: report.id,
         faculty_status: status,
+        status: (patch.status as string) || report.status,
       },
     };
+  }
+
+  private async notifyStudentFacultyDecision(
+    studentId: string,
+    studentEmail: string | null | undefined,
+    studentName: string,
+    projectTitle: string,
+    status: 'approved' | 'rejected' | 'revision_requested',
+    note: string,
+  ): Promise<void> {
+    const titles = {
+      approved: 'Impact report approved',
+      rejected: 'Impact report rejected',
+      revision_requested: 'Impact report needs revision',
+    };
+    const messages = {
+      approved: `${projectTitle} was approved by faculty.`,
+      rejected: `${projectTitle} was rejected by faculty. The reporting process has ended.`,
+      revision_requested: `${projectTitle} was sent back for revision. Open Action Required to edit and resubmit.`,
+    };
+    await this.notificationsService.createNotification(studentId, {
+      type: 'approval',
+      title: titles[status],
+      message: note ? `${messages[status]} ${note}` : messages[status],
+    });
+    if (studentEmail) {
+      await this.mailService.sendStudentImpactReportFacultyDecision(
+        studentEmail,
+        studentName.split(' ')[0] || studentName,
+        projectTitle,
+        status,
+        note,
+      );
+    }
   }
 
   /** Runs the CII v2 AI evaluation and persists a server-recomputed score snapshot. Re-runnable while unlocked. */
@@ -486,6 +579,15 @@ export class FacultyReportsService {
       facultyId,
       facultyEmail,
     );
+    return this.persistCiiV2Analysis(report);
+  }
+
+  async runCiiV2AnalysisForAdmin(id: string) {
+    const report = await this.findPrivateCandidateReportForAdmin(id);
+    return this.persistCiiV2Analysis(report);
+  }
+
+  private async persistCiiV2Analysis(report: StudentReport) {
 
     if (report.ciiV2Lock?.locked) {
       throw new BadRequestException(
@@ -576,6 +678,52 @@ export class FacultyReportsService {
       facultyId,
       facultyEmail,
     );
+    return this.persistCiiV2Approval(
+      report,
+      facultyId,
+      'approved',
+      note,
+      facultyAdjustedScore,
+      scoreAdjustmentReason,
+      criteriaOverrides,
+    );
+  }
+
+  async approveCiiV2ForAdmin(
+    id: string,
+    adminId: string,
+    note?: string,
+    facultyAdjustedScore?: number,
+    scoreAdjustmentReason?: string,
+    criteriaOverrides?: Record<
+      string,
+      { aiAnchor: number; facultyAnchor: number; reason: string }
+    >,
+  ) {
+    const report = await this.findPrivateCandidateReportForAdmin(id);
+    return this.persistCiiV2Approval(
+      report,
+      adminId,
+      'not_applicable',
+      note,
+      facultyAdjustedScore,
+      scoreAdjustmentReason,
+      criteriaOverrides,
+    );
+  }
+
+  private async persistCiiV2Approval(
+    report: StudentReport,
+    lockerUserId: string,
+    facultyStatus: 'approved' | 'not_applicable',
+    note?: string,
+    facultyAdjustedScore?: number,
+    scoreAdjustmentReason?: string,
+    criteriaOverrides?: Record<
+      string,
+      { aiAnchor: number; facultyAnchor: number; reason: string }
+    >,
+  ) {
 
     const stored = report.ciiV2 as
       | {
@@ -660,7 +808,7 @@ export class FacultyReportsService {
       criteriaOverrides: criteriaOverrides || null,
       level: finalResult.level.level,
       badge: finalResult.level.name,
-      facultyId,
+      facultyId: lockerUserId,
       approvedAt,
       note: note || '',
     };
@@ -684,7 +832,7 @@ export class FacultyReportsService {
       locked: true,
       hash,
       lockedAt: approvedAt,
-      lockedByFacultyId: facultyId,
+      lockedByFacultyId: lockerUserId,
       facultyNote: note,
       // Phase 2: Audit trail fields
       aiRecommendedScore,
@@ -705,7 +853,7 @@ export class FacultyReportsService {
       .set({
         ciiV2: nextCiiV2,
         ciiV2Lock: nextCiiV2Lock as StudentReport['ciiV2Lock'],
-        faculty_status: 'approved',
+        faculty_status: facultyStatus,
       })
       .where('id = :id', { id: report.id })
       .andWhere(
@@ -719,10 +867,75 @@ export class FacultyReportsService {
       );
     }
 
+    await this.approveAttendanceLogsOnFlashCardLock(report, lockerUserId);
+
     return {
       success: true,
       data: { ciiV2: nextCiiV2, ciiV2Lock: nextCiiV2Lock },
     };
+  }
+
+  /** Confirm pending attendance when Faculty / CIEL PK locks the flash-card score. */
+  private async approveAttendanceLogsOnFlashCardLock(
+    report: StudentReport,
+    actorId: string,
+  ): Promise<void> {
+    const projectId = String(
+      report.opportunityId || report.project_id || '',
+    ).trim();
+    if (!projectId) return;
+
+    const studentId = String(report.studentId || report.student?.id || '').trim();
+    let logs: AttendanceLog[] = [];
+    try {
+      logs = await this.attendanceLogsRepository.find({
+        where: { projectId },
+        relations: ['participant'],
+      });
+    } catch {
+      return;
+    }
+
+    const seed = logs.find((log) => log.participant?.studentId === studentId)
+      ?.participant;
+    const now = new Date();
+    const toApprove = logs.filter((log) => {
+      const status = String(log.approvalStatus || '')
+        .trim()
+        .toLowerCase();
+      if (status === 'approved' || status === 'rejected') return false;
+      if (studentId && log.participant?.studentId === studentId) return true;
+      if (
+        seed?.isTeamLead &&
+        seed.applicationId &&
+        log.participant?.applicationId === seed.applicationId
+      ) {
+        return true;
+      }
+      if (
+        seed?.isTeamLead &&
+        seed.teamId &&
+        log.participant?.teamId === seed.teamId
+      ) {
+        return true;
+      }
+      return !studentId && (status === 'pending' || status === '');
+    });
+    if (!toApprove.length) return;
+
+    for (const log of toApprove) {
+      log.approvalStatus = 'approved';
+      log.entryStatus = 'verified';
+      log.approvalActorUserId = actorId;
+      log.approvalActionAt = now;
+      log.approvalActionReason =
+        'Approved with faculty flash-card score lock';
+    }
+    try {
+      await this.attendanceLogsRepository.save(toApprove);
+    } catch {
+      // Flash-card lock already persisted — do not fail CII confirm if hours write lags.
+    }
   }
 
   /** Scoping for runIndependentAiAnalysis, split out by caller role — previously this method

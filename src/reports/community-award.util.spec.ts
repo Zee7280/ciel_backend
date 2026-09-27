@@ -58,6 +58,23 @@ describe('isCommunityAwardLiveReport', () => {
         expect(isCommunityAwardLiveReport({ faculty_status: 'pending', status: 'draft', hours: 20 })).toBe(false);
         expect(isCommunityAwardLiveReport({ faculty_status: 'rejected', status: 'submitted', hours: 20 })).toBe(false);
     });
+
+    it('treats CIEL PK-published private-candidate reports as live without Faculty', () => {
+        expect(
+            isCommunityAwardLiveReport({
+                faculty_status: 'not_applicable',
+                admin_status: 'approved',
+                status: 'verified',
+            }),
+        ).toBe(true);
+        expect(
+            isCommunityAwardLiveReport({
+                faculty_status: 'not_applicable',
+                admin_status: 'pending',
+                status: 'paid',
+            }),
+        ).toBe(false);
+    });
 });
 
 describe('isCommunityAwardMedalReport', () => {
@@ -87,6 +104,13 @@ describe('isCommunityAwardMedalReport', () => {
             isCommunityAwardMedalReport({
                 faculty_status: 'approved',
                 admin_status: 'pending',
+                status: 'verified',
+            }),
+        ).toBe(true);
+        expect(
+            isCommunityAwardMedalReport({
+                faculty_status: 'not_applicable',
+                admin_status: 'approved',
                 status: 'verified',
             }),
         ).toBe(true);

@@ -30,6 +30,7 @@ import {
 import { ReportPartnerApprovalSettingsService } from './report-partner-approval-settings.service';
 import { isReportPartnerStepSatisfied } from './report-partner-approval.util';
 import { collectReportEvidenceFiles } from './collect-report-evidence.util';
+import { isPrivateCandidateOpportunity, reviewRouteForOpportunity } from '../opportunities/private-candidate.util';
 import {
   redactCiiV2Fields,
   type CiiV2LockInput,
@@ -323,9 +324,24 @@ export class StudentReportsService {
   }
 
   /** Aligns legacy DB values with student UI / frontend lifecycle names. */
-  private toPublicReportStatus(raw: string | null | undefined): string {
-    if (raw === 'payment_pending' || raw === 'submitted') return 'pending_payment';
+  private toPublicReportStatus(
+    raw: string | null | undefined,
+    opportunity?: Opportunity | null,
+  ): string {
     if (raw === 'continue') return 'draft';
+    const st = String(raw || '').toLowerCase();
+    if (isPrivateCandidateOpportunity(opportunity)) {
+      if (st === 'payment_pending' || st === 'submitted') return 'pending_payment';
+      return raw ?? 'draft';
+    }
+    // University reporting fee is paused (Dr Moeed). Leftover fee-hold rows read as submitted.
+    if (
+      st === 'payment_pending' ||
+      st === 'pending_payment' ||
+      st === 'payment_under_review'
+    ) {
+      return 'submitted';
+    }
     return raw ?? 'draft';
   }
 
@@ -339,6 +355,7 @@ export class StudentReportsService {
       'payment_under_review',
       'verified',
       'paid',
+      'rejected',
     ]);
   }
 
@@ -379,6 +396,15 @@ export class StudentReportsService {
     return this.studentReportsRepository.findOne({ where });
   }
 
+  private isFacultyRevisionRequested(facultyStatus?: string | null): boolean {
+    const fac = String(facultyStatus || '').toLowerCase();
+    return (
+      fac === 'revision_requested' ||
+      fac === 'revisions_requested' ||
+      fac === 'changes_requested'
+    );
+  }
+
   private isReportRejectedForRevision(
     report: Pick<
       StudentReport,
@@ -389,13 +415,9 @@ export class StudentReportsService {
     const adm = String(report.admin_status || '').toLowerCase();
     const partner = String(report.partner_status || '').toLowerCase();
     const fac = String(report.faculty_status || '').toLowerCase();
-    return (
-      st === 'rejected' ||
-      st === 'revision' ||
-      adm === 'rejected' ||
-      partner === 'rejected' ||
-      fac === 'rejected'
-    );
+    if (this.isFacultyRevisionRequested(fac) || st === 'revision') return true;
+    if (fac === 'rejected' || st === 'rejected') return false;
+    return adm === 'rejected' || partner === 'rejected';
   }
 
   /** Student may edit when in draft/revision or when an approver returned the report for fixes. */
@@ -412,29 +434,34 @@ export class StudentReportsService {
 
   /**
    * Legacy rows may have admin_status=rejected while status stayed submitted; expose revision to the UI.
-   * A faculty rejection — including one that arrives after admin/partner already approved — always
-   * reads back as "revision", since faculty is the first and most consequential gate in the chain.
+   * Faculty "request revision" is editable. Faculty "rejected" ends the report (diagram step 7).
    */
   private resolveStudentFacingReportStatus(
     rawReportStatus: string | null | undefined,
     adminStatus?: string | null,
     partnerStatus?: string | null,
     facultyStatus?: string | null,
+    opportunity?: Opportunity | null,
   ): string {
     const raw = String(rawReportStatus || '').toLowerCase();
     const adm = String(adminStatus || '').toLowerCase();
     const partner = String(partnerStatus || '').toLowerCase();
     const fac = String(facultyStatus || '').toLowerCase();
-    if (raw === 'rejected' || fac === 'rejected') return 'revision';
+    if (this.isFacultyRevisionRequested(fac) || raw === 'revision') {
+      return 'revision';
+    }
+    if (raw === 'rejected' || fac === 'rejected') return 'rejected';
     if (
       (adm === 'rejected' || partner === 'rejected') &&
-      (raw === 'submitted' || raw === 'partner_verified')
+      (raw === 'submitted' ||
+        raw === 'partner_verified' ||
+        raw === 'paid' ||
+        raw === 'payment_pending' ||
+        raw === 'pending_payment')
     ) {
       return 'revision';
     }
-    if (raw === 'payment_pending') return 'pending_payment';
-    if (raw === 'submitted') return 'pending_payment';
-    return this.toPublicReportStatus(rawReportStatus);
+    return this.toPublicReportStatus(rawReportStatus, opportunity);
   }
 
   /** Reporting fee approved (manual payment row or terminal paid statuses). */
@@ -453,15 +480,25 @@ export class StudentReportsService {
   private async assertReportFeeClearedBeforeApproval(
     report: StudentReport,
   ): Promise<void> {
+    if (!isPrivateCandidateOpportunity(report.opportunity)) return;
     if (await this.isReportFeeClearedForApprovals(report)) return;
     throw new BadRequestException(
-      'Reporting fee must be submitted and approved before partner or admin can review this report.',
+      'Reporting fee must be submitted and approved before CIEL PK can review this private-candidate report.',
     );
   }
 
-  /** After final submit: payment is required before any partner/admin approval. */
-  private applyStatusAfterStudentSubmit(report: StudentReport): void {
-    report.status = 'payment_pending';
+  /**
+   * University-supervised reports go to Faculty after submit (fee paused pending Dr Moeed).
+   * Private-candidate reports still hold for the reporting-fee gateway, then CIEL PK.
+   */
+  private applyStatusAfterStudentSubmit(
+    report: StudentReport,
+    opportunity?: Opportunity | null,
+  ): void {
+    const opp = opportunity ?? report.opportunity ?? null;
+    report.status = isPrivateCandidateOpportunity(opp)
+      ? 'payment_pending'
+      : 'submitted';
   }
 
   private async syncReportProjectKeys(report: StudentReport): Promise<void> {
@@ -763,7 +800,7 @@ export class StudentReportsService {
               ?.problem_statement ||
             '',
         ).trim() || null,
-      status: this.toPublicReportStatus(report.status),
+      status: this.toPublicReportStatus(report.status, opportunity),
       partner_status: report.partner_status,
       admin_status: report.admin_status,
       submission_date: report.submission_date,
@@ -804,6 +841,8 @@ export class StudentReportsService {
         ) || null,
       sdgs,
       faculty_status: report.faculty_status,
+      private_candidate: isPrivateCandidateOpportunity(opportunity),
+      review_route: reviewRouteForOpportunity(opportunity),
       awardBadges: report.awardBadges ?? [],
       awardBadgeHistory: report.awardBadgeHistory ?? [],
       cii_score: resolveDisplayCii(report),
@@ -1702,6 +1741,7 @@ export class StudentReportsService {
       report.status,
       report.admin_status,
       report.faculty_status,
+      report.opportunity,
     );
     if (derived.payment_verified) {
       return {
@@ -1935,7 +1975,10 @@ export class StudentReportsService {
 
     const project_title =
       (report.opportunity?.title || 'Impact report').trim() || 'Impact report';
-    const publicStatus = this.toPublicReportStatus(report.status);
+    const publicStatus = this.toPublicReportStatus(
+      report.status,
+      report.opportunity,
+    );
     const latestPayment = await this.findLatestManualPayment(
       report.studentId,
       report.opportunityId || report.project_id,
@@ -1948,12 +1991,15 @@ export class StudentReportsService {
 
     if (!verified) {
       const approvalContext = this.getPublicReportApprovalContext(report);
-      const feeCleared = await this.isReportFeeClearedForApprovals(report);
+      const requiresFee = isPrivateCandidateOpportunity(report.opportunity);
+      const feeCleared =
+        !requiresFee || (await this.isReportFeeClearedForApprovals(report));
       const paymentPending =
-        !feeCleared ||
-        report.status === 'payment_pending' ||
-        report.status === 'payment_under_review' ||
-        paymentStatus === PaymentStatus.PENDING;
+        requiresFee &&
+        (!feeCleared ||
+          report.status === 'payment_pending' ||
+          report.status === 'payment_under_review' ||
+          paymentStatus === PaymentStatus.PENDING);
       const workflowStage =
         feeCleared &&
         approvalContext.requires_partner_approval &&
@@ -2040,12 +2086,14 @@ export class StudentReportsService {
     rawReportStatus: string,
     adminStatus?: string | null,
     facultyStatus?: string | null,
+    opportunity?: Opportunity | null,
   ) {
     const publicStatus = this.resolveStudentFacingReportStatus(
       rawReportStatus,
       adminStatus,
       undefined,
       facultyStatus,
+      opportunity,
     );
     const reportStatus = String(rawReportStatus || '').toLowerCase();
     const payment_verified =
@@ -2081,6 +2129,35 @@ export class StudentReportsService {
         'This opportunity is not live yet. Complete faculty, partner (if any), and admin approval before starting a report.',
       );
     }
+  }
+
+  private participationAllowsReportStart(status: string | null | undefined): boolean {
+    return [
+      'accepted',
+      'approved',
+      'verified',
+      'paid',
+      'finalized',
+    ].includes(String(status || '').toLowerCase());
+  }
+
+  /**
+   * Student-created listing: the creator may start the report immediately once it is live.
+   * Faculty / CLPK / NGO / partner listings require an approved enrollment first (Apply Now).
+   */
+  private async assertStudentEnrolledToStartReport(
+    studentId: string,
+    opp: Opportunity | null,
+  ): Promise<void> {
+    if (!opp?.id) return;
+    if (opp.isStudentCreated && opp.creatorId === studentId) return;
+    const mine = await this.participantRepository.findOne({
+      where: { studentId, projectId: opp.id },
+    });
+    if (this.participationAllowsReportStart(mine?.status)) return;
+    throw new ForbiddenException(
+      'Apply to this opportunity and wait for approval before starting a report.',
+    );
   }
 
   async uploadFile(
@@ -2220,6 +2297,10 @@ export class StudentReportsService {
         where: { id: opportunityIdFromDto },
       });
       this.assertStudentOpportunityReportableForWrite(opportunityForPolicy);
+      await this.assertStudentEnrolledToStartReport(
+        studentId,
+        opportunityForPolicy,
+      );
       if (opportunityForPolicy?.timeline?.type === 'flexible') {
         const startDate = new Date(opportunityForPolicy.timeline.start_date);
         const endDate = new Date(opportunityForPolicy.timeline.end_date);
@@ -2289,6 +2370,7 @@ export class StudentReportsService {
             report.partner_status = 'pending';
           }
           if (
+            this.isFacultyRevisionRequested(report.faculty_status) ||
             String(report.faculty_status || '').toLowerCase() === 'rejected'
           ) {
             report.faculty_status = 'pending';
@@ -2298,7 +2380,7 @@ export class StudentReportsService {
           report.partnerApprovedAt = null;
         }
         report.status = 'submitted';
-        this.applyStatusAfterStudentSubmit(report);
+        this.applyStatusAfterStudentSubmit(report, opportunityForPolicy);
       } else if (!this.shouldKeepStudentLifecycleStatus(report)) {
         report.status = 'draft';
       } else if (wasRejectedForRevision) {
@@ -2465,7 +2547,10 @@ export class StudentReportsService {
       report.reportSubmittedAt = submitStamp;
       report.submission_date = submitStamp;
       if (report.status === 'submitted') {
-        this.applyStatusAfterStudentSubmit(report);
+        this.applyStatusAfterStudentSubmit(
+          report,
+          opportunityForPolicy || opportunityForSummary,
+        );
       }
     }
 
@@ -2518,6 +2603,13 @@ export class StudentReportsService {
         .catch(() => undefined);
     }
 
+    const submitOpportunity =
+      opportunityForPolicy ||
+      opportunityForSummary ||
+      report.opportunity ||
+      null;
+    const privateCandidate = isPrivateCandidateOpportunity(submitOpportunity);
+
     return {
       success: true,
       message: shouldSubmit
@@ -2532,6 +2624,8 @@ export class StudentReportsService {
         partner_approved_at: report.partnerApprovedAt,
         admin_approved_at: report.adminApprovedAt,
         status: report.status,
+        private_candidate: privateCandidate,
+        review_route: reviewRouteForOpportunity(submitOpportunity),
       },
     };
   }
@@ -2543,6 +2637,11 @@ export class StudentReportsService {
     ).trim();
 
     if (opportunityId) {
+      const opp = await this.opportunitiesRepository.findOne({
+        where: { id: opportunityId },
+      });
+      this.assertStudentOpportunityReportableForWrite(opp);
+      await this.assertStudentEnrolledToStartReport(studentId, opp);
       await this.assertTeamLeadMayWriteReport(studentId, opportunityId);
     }
 
@@ -2598,12 +2697,6 @@ export class StudentReportsService {
           parsedData.section11,
         ) as StudentReport['section11'];
     } else {
-      if (parsedData.opportunityId) {
-        const opp = await this.opportunitiesRepository.findOne({
-          where: { id: parsedData.opportunityId },
-        });
-        this.assertStudentOpportunityReportableForWrite(opp);
-      }
       report = this.studentReportsRepository.create({
         studentId: reportOwnerId,
         project_id: parsedData.project_id,
@@ -3203,6 +3296,7 @@ export class StudentReportsService {
         report.status,
         adminStatus,
         report.faculty_status,
+        report.opportunity,
       );
     const approvalContext = this.getPublicReportApprovalContext(report);
     const feedback = this.buildStudentReportFeedback(report);
@@ -3253,6 +3347,8 @@ export class StudentReportsService {
         ...approvalContext,
         faculty_status: report.faculty_status,
         faculty_remarks: report.faculty_remarks,
+        private_candidate: isPrivateCandidateOpportunity(report.opportunity),
+        review_route: reviewRouteForOpportunity(report.opportunity),
         admin_status: adminStatus,
         admin_approval_status: adminStatus,
         submission_date: report.submission_date,
@@ -3561,6 +3657,8 @@ export class StudentReportsService {
     const originalAdminStatus = report.admin_status;
     const originalPartnerStatus = report.partner_status;
 
+    const privateCandidate = isPrivateCandidateOpportunity(report.opportunity);
+
     const isPartnerReviewer = this.isPartnerReviewerRole(role);
     if (isPartnerReviewer) {
       if (
@@ -3571,12 +3669,13 @@ export class StudentReportsService {
           'You can only verify reports linked to your organization',
         );
       }
-      // Faculty is the sole final report approver — a partner/NGO/university
-      // reviewer may only act once Faculty has signed off, matching the
-      // Community Service loop design ("Faculty is the only final report
-      // approver; other connected stakeholders have visibility according to
-      // permissions"). Until then they can view status and send a reminder,
-      // never approve or reject the report themselves.
+      // Regular route: Faculty is the first report reviewer. Private-candidate
+      // reports are reviewed by CIEL PK, not a partner.
+      if (privateCandidate) {
+        throw new ForbiddenException(
+          'This private-candidate report is reviewed by CIEL PK, not a partner organisation.',
+        );
+      }
       if (
         (action === 'approve' || action === 'reject') &&
         report.faculty_status !== 'approved'
@@ -3622,13 +3721,20 @@ export class StudentReportsService {
         report.status =
           report.admin_status === 'approved' ? 'verified' : 'partner_verified';
       } else if (role === 'admin') {
-        // Same "Faculty is the sole final report approver" rule enforced above for partners
-        // (see comment on the isPartnerReviewer branch) — Admin approving directly, without
-        // Faculty sign-off, silently produced reports that pass the admin/status live-card
-        // checks but fail the community-award eligibility gate (which does require
-        // faculty_status === 'approved'), showing up on the Approved deck with a fabricated
-        // 0/100 score. Blocking it here keeps every approval path behind the same gate.
-        if (report.faculty_status !== 'approved') {
+        if (privateCandidate) {
+          if (action === 'approve' && !isCiiFacultyLocked(report.ciiV2Lock)) {
+            throw new BadRequestException(
+              'Run and confirm the CII analysis before publishing this private-candidate report.',
+            );
+          }
+          if (
+            report.faculty_status !== 'approved' &&
+            report.faculty_status !== 'not_applicable' &&
+            report.faculty_status !== 'not_required'
+          ) {
+            report.faculty_status = 'not_applicable';
+          }
+        } else if (report.faculty_status !== 'approved') {
           throw new ForbiddenException(
             'This report is not yet approved by Faculty. Admin can view its status and send a reminder, but only Faculty can approve or reject a Community Service report first.',
           );
@@ -3670,6 +3776,7 @@ export class StudentReportsService {
         status: report.status,
         admin_status: report.admin_status,
         partner_status: report.partner_status,
+        faculty_status: report.faculty_status,
         partnerApprovedAt: report.partnerApprovedAt,
         adminApprovedAt: report.adminApprovedAt,
         admin_feedback: report.admin_feedback,
@@ -3701,6 +3808,7 @@ export class StudentReportsService {
         status: report.status,
         partner_status: report.partner_status,
         admin_status: report.admin_status,
+        faculty_status: report.faculty_status,
         report_submitted_at: report.reportSubmittedAt,
         partner_approved_at: report.partnerApprovedAt,
         admin_approved_at: report.adminApprovedAt,
@@ -3727,6 +3835,7 @@ export class StudentReportsService {
             r.status,
             adminStatus,
             r.faculty_status,
+            r.opportunity,
           );
         const feedback = this.buildStudentReportFeedback(r);
         data.push({
@@ -3742,6 +3851,9 @@ export class StudentReportsService {
           admin_status: adminStatus,
           admin_approval_status: adminStatus,
           partner_status: r.partner_status,
+          faculty_status: r.faculty_status,
+          private_candidate: isPrivateCandidateOpportunity(r.opportunity),
+          review_route: reviewRouteForOpportunity(r.opportunity),
           feedback,
           admin_feedback: r.admin_feedback,
           is_editable: this.isReportEditableForStudent(r),
@@ -3786,6 +3898,7 @@ export class StudentReportsService {
         report.status,
         adminStatus,
         report.faculty_status,
+        report.opportunity,
       );
     const feedback = this.buildStudentReportFeedback(report);
 
@@ -3803,6 +3916,9 @@ export class StudentReportsService {
         admin_status: adminStatus,
         admin_approval_status: adminStatus,
         partner_status: report.partner_status,
+        faculty_status: report.faculty_status,
+        private_candidate: isPrivateCandidateOpportunity(report.opportunity),
+        review_route: reviewRouteForOpportunity(report.opportunity),
         feedback,
         admin_feedback: report.admin_feedback,
         is_editable: this.isReportEditableForStudent(report),

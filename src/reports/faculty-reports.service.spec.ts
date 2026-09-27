@@ -33,13 +33,25 @@ function makeService(
     normalizeOrgName: (name: string) => (name || '').trim().toLowerCase(),
     studentProfileMatchesOrganization: jest.fn().mockReturnValue(true),
   };
+  const mailService = {
+    sendStudentImpactReportFacultyDecision: jest.fn().mockResolvedValue(undefined),
+  };
+  const notificationsService = {
+    createNotification: jest.fn().mockResolvedValue(undefined),
+  };
+  const attendanceLogsRepository = {
+    find: jest.fn().mockResolvedValue([]),
+    save: jest.fn(async (rows: unknown) => rows),
+  };
   const service = new FacultyReportsService(
     studentReportsRepository as any,
     {} as any,
     facultyService as any,
     aiService as any,
     facultyUniversityScopeService as any,
-    { find: jest.fn().mockResolvedValue([]) } as any,
+    attendanceLogsRepository as any,
+    mailService as any,
+    notificationsService as any,
   );
   return {
     service,
@@ -47,6 +59,7 @@ function makeService(
     aiService,
     qb,
     facultyUniversityScopeService,
+    attendanceLogsRepository,
   };
 }
 
@@ -110,22 +123,48 @@ describe('FacultyReportsService — updateAction', () => {
     expect(result.success).toBe(true);
   });
 
-  it('refuses review while the reporting fee is still pending', async () => {
+  it('lets faculty review a submitted university report without a reporting fee', async () => {
     const { service, studentReportsRepository } = makeService({
       id: 'report-1',
-      status: 'payment_pending',
+      status: 'submitted',
       faculty_status: 'pending',
     });
 
-    await expect(
-      service.updateAction(
-        'report-1',
-        'faculty-1',
-        'teacher@uni.edu',
-        'approved',
-      ),
-    ).rejects.toBeInstanceOf(BadRequestException);
-    expect(studentReportsRepository.save).not.toHaveBeenCalled();
+    const result = await service.updateAction(
+      'report-1',
+      'faculty-1',
+      'teacher@uni.edu',
+      'approved',
+    );
+
+    expect(result.success).toBe(true);
+    expect(studentReportsRepository.update).toHaveBeenCalled();
+  });
+
+  it('sends the report back for revision without ending the process', async () => {
+    const { service, studentReportsRepository } = makeService({
+      id: 'report-1',
+      status: 'paid',
+      faculty_status: 'pending',
+    });
+
+    const result = await service.updateAction(
+      'report-1',
+      'faculty-1',
+      'teacher@uni.edu',
+      'revision_requested',
+      'Please add baseline evidence.',
+    );
+
+    expect(result.success).toBe(true);
+    expect(studentReportsRepository.update).toHaveBeenCalledWith(
+      { id: 'report-1' },
+      expect.objectContaining({
+        faculty_status: 'revision_requested',
+        status: 'revision',
+        faculty_remarks: 'Please add baseline evidence.',
+      }),
+    );
   });
 });
 
@@ -336,6 +375,42 @@ describe('FacultyReportsService — approveCiiV2', () => {
     await expect(
       service.approveCiiV2('report-1', 'faculty-1', 'teacher@uni.edu'),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('approves the student pending attendance logs when the flash-card score is locked', async () => {
+    const pendingLog = {
+      id: 'log-1',
+      approvalStatus: 'pending',
+      participant: { studentId: 'stu-1', isTeamLead: false },
+    };
+    const { service, attendanceLogsRepository } = makeService({
+      id: 'report-1',
+      studentId: 'stu-1',
+      opportunityId: 'opp-1',
+      ciiV2: {
+        sections: CII_V2_AI_RESPONSE.sections,
+        bonus: CII_V2_AI_RESPONSE.bonus,
+        integrityPenalty: 0,
+        evidence: [],
+        computedAt: '2024-01-01T00:00:00.000Z',
+      },
+    });
+    attendanceLogsRepository.find.mockResolvedValue([pendingLog]);
+
+    await service.approveCiiV2('report-1', 'faculty-1', 'teacher@uni.edu');
+
+    expect(attendanceLogsRepository.find).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { projectId: 'opp-1' } }),
+    );
+    expect(attendanceLogsRepository.save).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'log-1',
+          approvalStatus: 'approved',
+          entryStatus: 'verified',
+        }),
+      ]),
+    );
   });
 
   it('locks with a hash that changes when the faculty note changes, for otherwise identical input and timestamp', async () => {

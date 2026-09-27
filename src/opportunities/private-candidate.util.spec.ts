@@ -1,4 +1,4 @@
-import { isPrivateCandidateDto } from './private-candidate.util';
+import { isPrivateCandidateDto, isPrivateCandidateOpportunity, reviewRouteForOpportunity } from './private-candidate.util';
 
 describe('isPrivateCandidateDto', () => {
     it('detects student_pathway private', () => {
@@ -24,5 +24,47 @@ describe('isPrivateCandidateDto', () => {
                 supervision: { contact: 'faculty@uni.edu' },
             }),
         ).toBe(false);
+    });
+});
+
+describe('isPrivateCandidateOpportunity', () => {
+    it('matches stored not_required faculty line', () => {
+        expect(
+            isPrivateCandidateOpportunity({ faculty_verification_status: 'not_required' }),
+        ).toBe(true);
+    });
+
+    it('is false for a normal faculty-gated listing', () => {
+        expect(
+            isPrivateCandidateOpportunity({
+                faculty_verification_status: 'pending_faculty',
+                facultyApprovalStatus: 'pending',
+            }),
+        ).toBe(false);
+    });
+
+    it('is false for a partner listing that has no faculty line', () => {
+        expect(
+            isPrivateCandidateOpportunity({
+                facultyApprovalStatus: 'not_applicable',
+                faculty_verification_status: 'faculty_verified',
+            }),
+        ).toBe(false);
+    });
+});
+
+describe('reviewRouteForOpportunity', () => {
+    it('routes private listings to CIEL PK', () => {
+        expect(
+            reviewRouteForOpportunity({ executing_context: { student_pathway: 'private' } }),
+        ).toBe('ciel_pk');
+    });
+
+    it('routes university-supervised listings to faculty', () => {
+        expect(
+            reviewRouteForOpportunity({
+                faculty_verification_status: 'pending_faculty',
+            }),
+        ).toBe('faculty');
     });
 });

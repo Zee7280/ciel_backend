@@ -47,57 +47,21 @@ describe('AttendanceSlaService', () => {
     service = module.get(AttendanceSlaService);
   });
 
-  it('escalates partner-queue logs older than 8 days', async () => {
-    const old = new Date(Date.now() - 9 * 24 * 60 * 60 * 1000);
-    const log = {
-      id: 'log-1',
-      approvalStatus: 'pending',
-      assignedApproverType: 'partner',
-      escalatedAt: null,
-      slaReminderCount: 1,
-      createdAt: old,
-      participant: { fullName: 'Sara' },
-      project: {
-        id: 'proj-1',
-        title: 'Clean Water',
-        partner_organization: { official_email: 'partner@ngo.org' },
-      },
-    } as unknown as AttendanceLog;
-
-    attendanceLogRepo.find.mockResolvedValue([log]);
-
+  it('does not escalate partner-queue logs — attendance is confirmed on the flash card', async () => {
     const result = await service.processPartnerAttendanceSla();
-    expect(result.escalated).toBe(1);
-    expect(attendanceLogRepo.save).toHaveBeenCalledWith(
-      expect.objectContaining({
-        assignedApproverType: 'admin',
-        escalatedAt: expect.any(Date),
-      }),
-    );
-    expect(notificationsService.createNotification).toHaveBeenCalled();
+    expect(result).toEqual({
+      reminders_sent: 0,
+      escalated: 0,
+      scanned: 0,
+    });
+    expect(attendanceLogRepo.find).not.toHaveBeenCalled();
+    expect(attendanceLogRepo.save).not.toHaveBeenCalled();
+    expect(notificationsService.createNotification).not.toHaveBeenCalled();
   });
 
-  it('sends day-3 reminder for pending partner logs', async () => {
-    const createdAt = new Date(Date.now() - 4 * 24 * 60 * 60 * 1000);
-    const log = {
-      id: 'log-2',
-      approvalStatus: 'pending',
-      assignedApproverType: 'partner',
-      escalatedAt: null,
-      slaReminderCount: 0,
-      createdAt,
-      participant: { fullName: 'Ali' },
-      project: {
-        id: 'proj-2',
-        title: 'Tree Planting',
-        partner_organization: { official_email: 'partner@ngo.org' },
-      },
-    } as unknown as AttendanceLog;
-
-    attendanceLogRepo.find.mockResolvedValue([log]);
-
+  it('does not send partner day-3 reminders', async () => {
     const result = await service.processPartnerAttendanceSla();
-    expect(result.reminders_sent).toBe(1);
-    expect(mailService.sendAttendancePendingPartnerReview).toHaveBeenCalled();
+    expect(result.reminders_sent).toBe(0);
+    expect(mailService.sendAttendancePendingPartnerReview).not.toHaveBeenCalled();
   });
 });

@@ -419,7 +419,7 @@ const BLOCKED_STATUS = new Set(['draft', 'rejected', 'declined']);
 export function isCommunityAwardLiveReport(input: {
   status?: string | null;
   faculty_status?: string | null;
-  hours?: number | null;
+  admin_status?: string | null;
 }): boolean {
   const overall = String(input.status || '')
     .trim()
@@ -427,7 +427,15 @@ export function isCommunityAwardLiveReport(input: {
   const faculty = String(input.faculty_status || '')
     .trim()
     .toLowerCase();
+  const admin = String(input.admin_status || '')
+    .trim()
+    .toLowerCase();
   if (BLOCKED_STATUS.has(overall) || BLOCKED_STATUS.has(faculty)) return false;
+  if (BLOCKED_STATUS.has(admin)) return false;
+  // Private-candidate route: CIEL PK publishes (no faculty line).
+  if (faculty === 'not_applicable' || faculty === 'not_required') {
+    return LIVE_STATUS.has(admin) || LIVE_STATUS.has(overall);
+  }
   return LIVE_STATUS.has(faculty) || LIVE_STATUS.has(overall);
 }
 
@@ -452,8 +460,9 @@ export function isCommunityAwardMedalReport(input: {
     BLOCKED_STATUS.has(admin)
   )
     return false;
-  return (
-    LIVE_STATUS.has(faculty) &&
-    (LIVE_STATUS.has(admin) || LIVE_STATUS.has(overall))
-  );
+  const facultySignedOff =
+    LIVE_STATUS.has(faculty) ||
+    faculty === 'not_applicable' ||
+    faculty === 'not_required';
+  return facultySignedOff && (LIVE_STATUS.has(admin) || LIVE_STATUS.has(overall));
 }

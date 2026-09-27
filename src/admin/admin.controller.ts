@@ -41,6 +41,7 @@ import { PlatformJobsService } from '../jobs/platform-jobs.service';
 import { FacultyReportsService } from '../reports/faculty-reports.service';
 import { RunIndependentAnalysisDto } from '../faculty/dto/run-independent-analysis.dto';
 import { RunIndependentAnalysisBatchDto } from '../faculty/dto/run-independent-analysis-batch.dto';
+import { ApproveCiiV2Dto } from '../faculty/dto/approve-cii-v2.dto';
 
 @Controller('admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -328,6 +329,31 @@ export class AdminController {
       req.user.name,
     );
     return { success: true, data };
+  }
+
+  @Post('community-service/reports/:id/cii-v2/analyse')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  async communityServiceCiiV2Analyse(@Param('id') id: string) {
+    return await this.facultyReportsService.runCiiV2AnalysisForAdmin(id);
+  }
+
+  @Post('community-service/reports/:id/cii-v2/approve')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  async communityServiceCiiV2Approve(
+    @Request() req,
+    @Param('id') id: string,
+    @Body() body: ApproveCiiV2Dto,
+  ) {
+    return await this.facultyReportsService.approveCiiV2ForAdmin(
+      id,
+      req.user.id,
+      body.note,
+      body.facultyAdjustedScore,
+      body.scoreAdjustmentReason,
+      body.criteriaOverrides,
+    );
   }
 
   /** Phase 4 (My Impact Wall): CIEL PK runs an additional AI analysis on an already

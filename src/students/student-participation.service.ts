@@ -13,7 +13,6 @@ import {
   resolveEffectiveAttendanceApproverType,
 } from '../engagement/attendance-approver.util';
 import { buildTeamDisplayName } from '../engagement/team-display-name.util';
-import { resolveParticipationForAttendanceUnlock } from '../engagement/attendance-unlock.util';
 import {
   participationPhaseLabel,
   resolveParticipationPhase,
@@ -108,9 +107,6 @@ export class StudentParticipationService {
       participationMode: context.participation?.participationMode,
       isTeamLead: context.participation?.isTeamLead,
       emailVerified: context.participation?.emailVerified,
-      attendanceVerificationPending:
-        context.participation?.attendanceVerificationRequested === true &&
-        !context.participation?.adminAttendanceEditable,
       approverType,
       approvedHours: context.approvedHours,
       requiredHours: context.requiredHours,
@@ -376,24 +372,12 @@ export class StudentParticipationService {
       Number(opportunity.requiredHours) ||
       16;
 
-    const teamPeers =
-      mine.participationMode === 'team'
-        ? await this.participationRepo.find({ where: { projectId } })
-        : [mine];
-    const effectiveParticipation =
-      resolveParticipationForAttendanceUnlock(mine, teamPeers) ?? mine;
-    const adminUnlocked = effectiveParticipation.adminAttendanceEditable === true;
-
-    const verificationPending =
-      mine.attendanceVerificationRequested === true && !adminUnlocked;
-
     let participation_state:
       | 'verify'
       | 'log_attendance'
       | 'pending_approval'
       | 'complete' = 'log_attendance';
     if (!mine.emailVerified) participation_state = 'verify';
-    else if (verificationPending) participation_state = 'pending_approval';
     else if (approvedHours >= requiredHours) participation_state = 'complete';
 
     const reportStatusForPhase = isMember ? teamReportStatus : ownReportStatus;
@@ -404,7 +388,6 @@ export class StudentParticipationService {
         participationMode: mine.participationMode,
         isTeamLead: isLead,
         emailVerified: mine.emailVerified,
-        attendanceVerificationPending: verificationPending,
         approverType: guide.attendance_approver_type,
         approvedHours,
         requiredHours,
@@ -431,8 +414,7 @@ export class StudentParticipationService {
           logged: loggedHours,
           approved: approvedHours,
         },
-        attendance_locked:
-          (mine.attendanceLocked === true && !adminUnlocked) || verificationPending,
+        attendance_locked: false,
         team_report_status: teamReportStatus,
         recommended_action: guide.recommended_action,
         messages: guide.messages,

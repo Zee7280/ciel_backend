@@ -15,3 +15,29 @@ export function isPrivateCandidateDto(dto: {
     }
     return false;
 }
+
+/** Stored opportunity: private / independent candidate — no faculty report reviewer. */
+export function isPrivateCandidateOpportunity(
+    opp:
+        | {
+              faculty_verification_status?: string | null;
+              facultyApprovalStatus?: string | null;
+              executing_context?: unknown;
+              supervision?: unknown;
+          }
+        | null
+        | undefined,
+): boolean {
+    if (!opp) return false;
+    if (isPrivateCandidateDto(opp)) return true;
+    const facultyLine = String(opp.faculty_verification_status || '').toLowerCase();
+    return facultyLine === 'not_required';
+}
+
+export type ReportReviewRoute = 'ciel_pk' | 'faculty';
+
+export function reviewRouteForOpportunity(
+    opp: Parameters<typeof isPrivateCandidateOpportunity>[0],
+): ReportReviewRoute {
+    return isPrivateCandidateOpportunity(opp) ? 'ciel_pk' : 'faculty';
+}

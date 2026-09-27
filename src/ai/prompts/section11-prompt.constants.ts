@@ -1245,7 +1245,7 @@ Possible red flags:
 
 •	missing student-level evidence,
 
-•	unrealistic daily hours,
+•	unrealistic daily hours for one student (team members on the same date is allowed),
 
 •	duplicate logs,
 

@@ -27,6 +27,49 @@ function isOtherMechanism(value: unknown): boolean {
   return /^other$/i.test(text);
 }
 
+function isOtherSkill(value: unknown): boolean {
+  const text = stringField(value).replace(/^✏️\s*/, '').trim();
+  return /^other$/i.test(text);
+}
+
+function listHasItems(value: unknown): boolean {
+  return Array.isArray(value) && value.length > 0;
+}
+
+/** Same 12 keys the live Reflection tab (validateSection9) requires. */
+const COMPETENCY_SCORE_KEYS = [
+  'cognitive_systemic',
+  'cognitive_critical',
+  'cognitive_evaluate',
+  'practical_design',
+  'practical_evidence',
+  'practical_engagement',
+  'social_empathy',
+  'social_diversity',
+  'social_collaboration',
+  'transformative_longterm',
+  'transformative_benefits',
+  'transformative_sustainability',
+] as const;
+
+function competencyScoresComplete(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const scores = value as Record<string, unknown>;
+  return COMPETENCY_SCORE_KEYS.every((key) => Number(scores[key]) >= 1);
+}
+
+function ethicsAccepted(section8: Record<string, unknown>): boolean {
+  const ethics =
+    section8.ethical_compliance && typeof section8.ethical_compliance === 'object'
+      ? (section8.ethical_compliance as Record<string, unknown>)
+      : {};
+  const authentic = ethics.authentic === true || section8.consent_authentic === true;
+  const informed = ethics.informed_consent === true || section8.consent_informed === true;
+  const noHarm = ethics.no_harm === true || section8.consent_no_harm === true;
+  const privacy = ethics.privacy_respected === true;
+  return Boolean(authentic && informed && noHarm && privacy);
+}
+
 /** Mirrors frontend validateSection4: a titled quantity, a legacy output string, or beneficiary reach. */
 function activityHasOutputOrReach(block: Record<string, unknown>): boolean {
   const outputs = Array.isArray(block.outputs) ? block.outputs : [];
@@ -41,12 +84,11 @@ function activityHasOutputOrReach(block: Record<string, unknown>): boolean {
 }
 
 /**
- * Presence-only safety net for sections 1, 2, 4, 5, 7, 9 and 11 — mirrors which fields the
- * frontend wizard (report/utils/validation.ts, context/ReportContext.tsx) treats as *required to
- * have a value*, without duplicating its word-count/phrasing rules (those stay owned by the
- * frontend). This exists so a submission made by calling the API directly (bypassing the
- * wizard's canSubmitReport gate) can't produce a report that is essentially empty in these
- * sections, or that skips the final declaration and electronic sign-off.
+ * Presence-only safety net that mirrors the live wizard
+ * (ciel_frontend report/utils/validation.ts). Word-count / phrasing rules stay
+ * owned by the frontend so a complete wizard submit is never rejected here for
+ * being "too short". This exists so a direct API submit cannot skip the fields
+ * that are actually on form tabs 1–9.
  */
 function hasChosenValue(value: unknown): boolean {
   if (Array.isArray(value)) return value.length > 0;
@@ -209,14 +251,42 @@ function validateCoreSectionsPresence(report: {
   }
 
   const section9 = report.section9 || {};
-  if (!section9.academic_integration) {
-    issues.push({ section: 9, field: 'academic_integration', message: 'Please select an academic integration level' });
+  if (!stringField(section9.academic_integration).trim()) {
+    issues.push({
+      section: 9,
+      field: 'academic_integration',
+      message: 'Tap an Academic integration option (Voluntary, course, credit, capstone, or research)',
+    });
+  }
+  if (!listHasItems(section9.skills_grown)) {
+    issues.push({ section: 9, field: 'skills_grown', message: 'Tap at least one skill you grew' });
+  } else if (
+    (section9.skills_grown as unknown[]).some((skill) => isOtherSkill(skill)) &&
+    !stringField(section9.skills_grown_other).trim()
+  ) {
+    issues.push({ section: 9, field: 'skills_grown_other', message: 'Name the other skill you grew' });
+  }
+  if (!stringField(section9.reflection_biggest_learning).trim()) {
+    issues.push({ section: 9, field: 'reflection_biggest_learning', message: 'Say the biggest thing you learned' });
+  }
+  if (!stringField(section9.reflection_moment).trim()) {
+    issues.push({ section: 9, field: 'reflection_moment', message: 'Name a moment that changed how you see things' });
+  }
+  if (!stringField(section9.reflection_discipline_help).trim()) {
+    issues.push({
+      section: 9,
+      field: 'reflection_discipline_help',
+      message: 'Name an academic skill you actually applied',
+    });
   }
   if (!stringField(section9.personal_learning).trim()) {
     issues.push({ section: 9, field: 'personal_learning', message: 'Personal growth statement is required' });
   }
   if (!stringField(section9.academic_application).trim()) {
     issues.push({ section: 9, field: 'academic_application', message: 'Academic application explanation is required' });
+  }
+  if (!competencyScoresComplete(section9.competency_scores)) {
+    issues.push({ section: 9, field: 'competency_scores', message: 'Rate all 12 competencies' });
   }
 
   const section11 = report.section11 || {};
@@ -298,17 +368,27 @@ export function validateReportSectionsForSubmit(report: {
     }
   }
 
-  const hasEvidence =
-    stringField(section8.has_evidence).trim().toLowerCase() === 'yes';
-  if (hasEvidence) {
+  const hasEvidence = stringField(section8.has_evidence).trim().toLowerCase();
+  if (hasEvidence !== 'yes' && hasEvidence !== 'no') {
+    issues.push({
+      section: 8,
+      field: 'has_evidence',
+      message: 'Tell us whether you have more evidence to add',
+    });
+  }
+
+  if (hasEvidence === 'yes') {
     const evidenceFiles = Array.isArray(section8.evidence_files)
       ? section8.evidence_files
       : [];
-    if (!evidenceFiles.length) {
+    const evidenceUrls = Array.isArray(report.evidence_urls)
+      ? report.evidence_urls
+      : [];
+    if (!evidenceFiles.length && !evidenceUrls.length) {
       issues.push({
         section: 8,
         field: 'evidence_files',
-        message: 'At least one evidence file is mandatory',
+        message: 'Add at least one evidence file',
       });
     }
     const evidenceTypes = Array.isArray(section8.evidence_types)
@@ -318,53 +398,44 @@ export function validateReportSectionsForSubmit(report: {
       issues.push({
         section: 8,
         field: 'evidence_types',
-        message: 'At least one evidence type is mandatory',
+        message: 'Choose at least one evidence type',
+      });
+    }
+    if (
+      evidenceTypes.some((type) =>
+        /other supporting document/i.test(stringField(type)),
+      ) &&
+      !stringField(section8.evidence_type_other).trim()
+    ) {
+      issues.push({
+        section: 8,
+        field: 'evidence_type_other',
+        message: 'Say what kind of document this is',
       });
     }
     if (!stringField(section8.description).trim()) {
       issues.push({
         section: 8,
         field: 'description',
-        message: 'Say what your evidence shows',
+        message: 'What does your evidence show? is required',
       });
     }
-    const mediaVisible = section8.media_visible ?? section8.media_usage;
-    if (!mediaVisible) {
-      issues.push({
-        section: 8,
-        field: 'media_visible',
-        message: 'Media visibility preference is required',
-      });
-    }
-    const ethics =
-      section8.ethical_compliance &&
-      typeof section8.ethical_compliance === 'object'
-        ? (section8.ethical_compliance as Record<string, unknown>)
-        : {};
-    const authentic =
-      ethics.authentic === true || section8.consent_authentic === true;
-    const informed =
-      ethics.informed_consent === true || section8.consent_informed === true;
-    const noHarm = ethics.no_harm === true || section8.consent_no_harm === true;
-    const privacy = ethics.privacy_respected === true;
-    if (!authentic || !informed || !noHarm || !privacy) {
-      issues.push({
-        section: 8,
-        field: 'ethical_compliance',
-        message: 'All ethical compliance checks must be accepted',
-      });
-    }
-    if (
-      hasEvidence &&
-      (!report.evidence_urls || !report.evidence_urls.length) &&
-      !evidenceFiles.length
-    ) {
-      issues.push({
-        section: 8,
-        field: 'evidence_urls',
-        message: 'Section 8 claims evidence but no files are attached',
-      });
-    }
+  }
+
+  const mediaVisible = section8.media_visible ?? section8.media_usage;
+  if (!mediaVisible) {
+    issues.push({
+      section: 8,
+      field: 'media_visible',
+      message: 'Choose Public, Institutional, or Private',
+    });
+  }
+  if (!ethicsAccepted(section8)) {
+    issues.push({
+      section: 8,
+      field: 'ethical_compliance',
+      message: 'Confirm this evidence was gathered responsibly',
+    });
   }
 
   const continuationStatus = stringField(
@@ -377,9 +448,8 @@ export function validateReportSectionsForSubmit(report: {
     issues.push({
       section: 10,
       field: 'continuation_status',
-      message: 'Sustainability continuation status is required',
+      message: 'Choose whether the impact will continue after you (Yes / Partial / No)',
     });
-    return issues;
   }
 
   const continuationDetails = stringField(
@@ -389,25 +459,40 @@ export function validateReportSectionsForSubmit(report: {
     issues.push({
       section: 10,
       field: 'continuation_details',
-      message: 'Say what will keep going, or what will happen next',
+      message: 'What continues, what stops? is required',
     });
   }
   const mechanisms = Array.isArray(section10.mechanisms)
     ? section10.mechanisms
     : [];
-  // The live report form can submit "no" with no mechanisms, and can omit scaling
-  // and policy influence. The new form still requires those before it calls submit.
-  if (continuationStatus !== 'no' && !mechanisms.length) {
+  if (!mechanisms.length) {
     issues.push({
       section: 10,
       field: 'mechanisms',
-      message: 'Identify at least one sustainability mechanism',
+      message: 'Tap at least one option under What keeps it alive?',
     });
-  } else if (mechanisms.some((entry) => isOtherMechanism(entry)) && !stringField(section10.mechanism_other).trim()) {
+  } else if (
+    mechanisms.some((entry) => isOtherMechanism(entry)) &&
+    !stringField(section10.mechanism_other).trim()
+  ) {
     issues.push({
       section: 10,
       field: 'mechanism_other',
       message: 'Say what else keeps it going',
+    });
+  }
+  if (!stringField(section10.scaling_potential).trim()) {
+    issues.push({
+      section: 10,
+      field: 'scaling_potential',
+      message: 'Select a Scaling potential option',
+    });
+  }
+  if (!stringField(section10.policy_influence).trim()) {
+    issues.push({
+      section: 10,
+      field: 'policy_influence',
+      message: 'Select whether this project influenced a long-term system',
     });
   }
 

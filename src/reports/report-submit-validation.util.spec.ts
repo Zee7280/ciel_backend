@@ -1,6 +1,29 @@
 import { validateReportSectionsForSubmit } from './report-submit-validation.util';
 
-/** Minimal core-section payload that satisfies validateCoreSectionsPresence (sections 1,2,4,5,7,9). */
+/** Live wizard tabs 7–9 (data sections 8–10) presence payload. */
+const WIZARD_ETHICS = {
+  authentic: true,
+  informed_consent: true,
+  no_harm: true,
+  privacy_respected: true,
+};
+
+const WIZARD_COMPETENCY_SCORES = {
+  cognitive_systemic: 3,
+  cognitive_critical: 3,
+  cognitive_evaluate: 3,
+  practical_design: 3,
+  practical_evidence: 3,
+  practical_engagement: 3,
+  social_empathy: 3,
+  social_diversity: 3,
+  social_collaboration: 3,
+  transformative_longterm: 3,
+  transformative_benefits: 3,
+  transformative_sustainability: 3,
+};
+
+/** Payload that matches a complete live-form submit (presence only; no word-count). */
 const VALID_CORE_SECTIONS = {
   section1: { privacy_consent: true },
   section2: {
@@ -41,11 +64,29 @@ const VALID_CORE_SECTIONS = {
       },
     ],
   },
+  section6: { use_resources: 'no' },
   section7: { has_partners: 'no' },
+  section8: {
+    has_evidence: 'no',
+    media_visible: 'internal',
+    ethical_compliance: WIZARD_ETHICS,
+  },
   section9: {
-    academic_integration: 'Directly related to coursework',
+    academic_integration: 'Course-linked assignment',
+    skills_grown: ['💬 Communication'],
+    reflection_biggest_learning: 'listening to the community',
+    reflection_moment: 'children choosing books on day one',
+    reflection_discipline_help: 'simple data tracking for attendance',
     personal_learning: 'I learned how to document community work.',
     academic_application: 'The project used fieldwork methods from my course.',
+    competency_scores: WIZARD_COMPETENCY_SCORES,
+  },
+  section10: {
+    continuation_status: 'no',
+    continuation_details: 'Funding is exhausted; no further sessions planned.',
+    mechanisms: ['No continuation mechanism'],
+    scaling_potential: 'Not scalable',
+    policy_influence: 'No',
   },
   section11: {
     final_declaration: [true, true, true, true, true],
@@ -58,26 +99,19 @@ describe('validateReportSectionsForSubmit', () => {
     const issues = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,
       section6: { use_resources: 'yes', resources: [] },
-      section8: { has_evidence: 'no' },
-      section10: {
-        continuation_status: 'no',
-        continuation_details: 'word '.repeat(100).trim(),
-      },
     });
     expect(issues.some((i) => i.section === 6 && i.field === 'resources')).toBe(
       true,
     );
   });
 
-  it('skips section8 validation when has_evidence is not yes', () => {
+  it('does not require extra evidence files when has_evidence is no', () => {
     const issues = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,
-      section6: { use_resources: 'no' },
-      section8: { has_evidence: 'no' },
-      section10: {
-        continuation_status: 'yes',
-        continuation_details: 'word '.repeat(100).trim(),
-        mechanisms: ['community ownership'],
+      section8: {
+        has_evidence: 'no',
+        media_visible: 'internal',
+        ethical_compliance: WIZARD_ETHICS,
       },
     });
     expect(issues.some((i) => i.section === 8)).toBe(false);
@@ -86,9 +120,8 @@ describe('validateReportSectionsForSubmit', () => {
   it('rejects an empty or whitespace-only section10 continuation_details', () => {
     const issues = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,
-      section6: { use_resources: 'no' },
-      section8: { has_evidence: 'no' },
       section10: {
+        ...VALID_CORE_SECTIONS.section10,
         continuation_status: 'yes',
         continuation_details: '   ',
         mechanisms: ['community ownership'],
@@ -104,9 +137,8 @@ describe('validateReportSectionsForSubmit', () => {
   it('accepts a short (no minimum word count) section10 continuation_details', () => {
     const issues = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,
-      section6: { use_resources: 'no' },
-      section8: { has_evidence: 'no' },
       section10: {
+        ...VALID_CORE_SECTIONS.section10,
         continuation_status: 'yes',
         continuation_details: 'too short',
         mechanisms: ['community ownership'],
@@ -119,43 +151,32 @@ describe('validateReportSectionsForSubmit', () => {
     ).toBe(false);
   });
 
-  it('requires continuation_status before other section10 checks', () => {
+  it('flags missing continuation_status among other Step 9 sustainability gaps', () => {
     const issues = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,
-      section6: { use_resources: 'no' },
-      section8: { has_evidence: 'no' },
       section10: {},
     });
-    expect(issues).toEqual([
-      expect.objectContaining({ section: 10, field: 'continuation_status' }),
-    ]);
+    expect(
+      issues.some((i) => i.section === 10 && i.field === 'continuation_status'),
+    ).toBe(true);
   });
 
-  it('accepts a live-form sustainability answer that says no and leaves scaling blank', () => {
+  it('requires Step 9 scaling, policy, and mechanism chips like the live form', () => {
     const issues = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,
-      section6: { use_resources: 'no' },
-      section8: { has_evidence: 'no' },
       section10: {
         continuation_status: 'no',
         continuation_details: 'Funding is exhausted; no further sessions planned.',
       },
     });
-    expect(issues.filter((i) => i.section === 10)).toEqual([]);
+    expect(issues.some((i) => i.section === 10 && i.field === 'mechanisms')).toBe(true);
+    expect(issues.some((i) => i.section === 10 && i.field === 'scaling_potential')).toBe(true);
+    expect(issues.some((i) => i.section === 10 && i.field === 'policy_influence')).toBe(true);
   });
 
-  it('accepts a fully valid report with no issues', () => {
+  it('accepts a fully valid live-form report with no issues', () => {
     const issues = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,
-      section6: { use_resources: 'no' },
-      section8: { has_evidence: 'no' },
-      section10: {
-        continuation_status: 'no',
-        continuation_details: 'Funding is exhausted; no further sessions planned.',
-        mechanisms: ['No continuation mechanism'],
-        scaling_potential: 'Not scalable',
-        policy_influence: 'No',
-      },
     });
     expect(issues).toEqual([]);
   });
@@ -177,9 +198,6 @@ describe('validateReportSectionsForSubmit', () => {
     const issues = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,
       section4,
-      section6: { use_resources: 'no' },
-      section8: { has_evidence: 'no' },
-      section10: { continuation_status: 'no', continuation_details: 'Done.' },
     });
     expect(issues.filter((i) => i.section === 4)).toEqual([]);
   });
@@ -200,9 +218,6 @@ describe('validateReportSectionsForSubmit', () => {
     const blank = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,
       section4: unnamed,
-      section6: { use_resources: 'no' },
-      section8: { has_evidence: 'no' },
-      section10: { continuation_status: 'no', continuation_details: 'Done.' },
     });
     expect(blank.some((i) => i.field === 'activity_blocks.0.title')).toBe(true);
 
@@ -211,9 +226,6 @@ describe('validateReportSectionsForSubmit', () => {
       section4: {
         activity_blocks: [{ ...unnamed.activity_blocks[0], title: 'Classroom hygiene session' }],
       },
-      section6: { use_resources: 'no' },
-      section8: { has_evidence: 'no' },
-      section10: { continuation_status: 'no', continuation_details: 'Done.' },
     });
     expect(named.filter((i) => i.section === 4)).toEqual([]);
   });
@@ -234,9 +246,6 @@ describe('validateReportSectionsForSubmit', () => {
     const issues = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,
       section4,
-      section6: { use_resources: 'no' },
-      section8: { has_evidence: 'no' },
-      section10: { continuation_status: 'no', continuation_details: 'Done.' },
     });
     expect(issues.some((i) => i.section === 4 && i.field === 'activity_blocks.0.outputs')).toBe(true);
   });
@@ -257,9 +266,6 @@ describe('validateReportSectionsForSubmit', () => {
     const issues = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,
       section4,
-      section6: { use_resources: 'no' },
-      section8: { has_evidence: 'no' },
-      section10: { continuation_status: 'no', continuation_details: 'Done.' },
     });
     expect(issues.filter((i) => i.section === 4)).toEqual([]);
   });
@@ -287,9 +293,6 @@ describe('validateReportSectionsForSubmit', () => {
     const issues = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,
       section7: { has_partners: 'yes', partners: [{}] },
-      section6: { use_resources: 'no' },
-      section8: { has_evidence: 'no' },
-      section10: { continuation_status: 'no', continuation_details: 'Wraps up with the semester.' },
     });
     expect(issues.some((i) => i.section === 7 && i.field === 'partners.0.name')).toBe(true);
     expect(issues.some((i) => i.section === 7 && i.field === 'partners.0.type')).toBe(true);
@@ -298,9 +301,6 @@ describe('validateReportSectionsForSubmit', () => {
   it('rejects submission when the final declaration is missing or incomplete', () => {
     const issues = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,
-      section6: { use_resources: 'no' },
-      section8: { has_evidence: 'no' },
-      section10: { continuation_status: 'no', continuation_details: 'Wraps up with the semester.' },
       section11: { final_declaration: [true, true, false, true, true], signature_name: 'Jane Student' },
     });
     expect(issues.some((i) => i.section === 11 && i.field === 'final_declaration')).toBe(true);
@@ -309,9 +309,6 @@ describe('validateReportSectionsForSubmit', () => {
   it('rejects submission when the electronic signature is missing', () => {
     const issues = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,
-      section6: { use_resources: 'no' },
-      section8: { has_evidence: 'no' },
-      section10: { continuation_status: 'no', continuation_details: 'Wraps up with the semester.' },
       section11: { final_declaration: [true, true, true, true, true], signature_name: '  ' },
     });
     expect(issues.some((i) => i.section === 11 && i.field === 'signature_name')).toBe(true);
@@ -321,10 +318,66 @@ describe('validateReportSectionsForSubmit', () => {
     const issues = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,
       section1: { review_checked: [true, false, true] },
-      section6: { use_resources: 'no' },
-      section8: { has_evidence: 'no' },
-      section10: { continuation_status: 'no', continuation_details: 'Wraps up with the semester.' },
     });
     expect(issues.some((i) => i.section === 1)).toBe(true);
+  });
+
+  it('accepts a Step 8 Academic integration chip id', () => {
+    const issues = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section9: {
+        ...VALID_CORE_SECTIONS.section9,
+        academic_integration: 'Course-linked assignment',
+      },
+    });
+    expect(issues.some((i) => i.field === 'academic_integration')).toBe(false);
+  });
+
+  it('requires Academic integration when the Step 8 chip is empty', () => {
+    const issues = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section9: {
+        ...VALID_CORE_SECTIONS.section9,
+        academic_integration: '',
+      },
+    });
+    expect(
+      issues.some(
+        (i) =>
+          i.section === 9 &&
+          i.field === 'academic_integration' &&
+          /Academic integration/i.test(i.message),
+      ),
+    ).toBe(true);
+  });
+
+  it('accepts extra evidence when has_evidence is yes and files are on the payload', () => {
+    const issues = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section8: {
+        has_evidence: 'yes',
+        evidence_types: ['Attendance sheet'],
+        evidence_files: [{ url: 'https://cdn.example/sheet.jpg', name: 'sheet.jpg' }],
+        description: 'the attendance sheet confirms 40 participants across three sessions',
+        media_visible: 'internal',
+        ethical_compliance: WIZARD_ETHICS,
+      },
+    });
+    expect(issues.filter((i) => i.section === 8)).toEqual([]);
+  });
+
+  it('requires the Step 7 caption when extra evidence is yes', () => {
+    const issues = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section8: {
+        has_evidence: 'yes',
+        evidence_types: ['Attendance sheet'],
+        evidence_files: ['https://cdn.example/sheet.jpg'],
+        description: '  ',
+        media_visible: 'internal',
+        ethical_compliance: WIZARD_ETHICS,
+      },
+    });
+    expect(issues.some((i) => i.section === 8 && i.field === 'description')).toBe(true);
   });
 });

@@ -720,6 +720,18 @@ describe('mapFacultyListPackage', () => {
     );
   });
 
+  it('prefers live project hours over stored blob metrics', () => {
+    const report = {
+      student: { name: 'Sara Ahmed' },
+      section1: {
+        participation_type: 'individual',
+        metrics: { total_verified_hours: 16 },
+      },
+      section2: {},
+    } as any;
+    expect(mapFacultyListPackage(report, 44).member_hours[0].hours).toBe(44);
+  });
+
   it('uses live attendance hours when the stored blob is empty', () => {
     const report = {
       student: { name: 'Sara Ahmed' },

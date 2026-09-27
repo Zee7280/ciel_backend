@@ -177,6 +177,17 @@ export interface CourseProjectModuleInclusion {
     lim?: boolean;
 }
 
+/** One published ranking badge at a single level — see CourseProjectEntry.meritRibbon. */
+export interface CourseworkRibbonEntry {
+    rank: number;
+    of: number;
+    scope: string;
+    total?: number;
+    badgeLevel?: 'Gold' | 'Silver' | 'Bronze' | 'Participant';
+    previousRank?: number | null;
+    at: string;
+}
+
 /** A snapshot of the prior faculty decision, captured immediately before a resubmission silently
  * discards it (see applyCourseProjectPatch) — so "no silent overwrite" holds for the one field
  * group that previously vanished on every resubmit. */
@@ -260,19 +271,18 @@ export class CourseProjectEntry {
         at: string;
     } | null;
 
-    /** Pinned by the last analyzer notify in this card's eligible pool — shown on the student's Impact Wall.
-     * badgeLevel is a rank-percentile tier (see PathsService.computeRankBadgeLevel); previousRank is
-     * this card's rank the last time it was ranked, captured just before being overwritten by a new run —
-     * null/undefined means this is the first-ever ranked run. */
+    /** Up to three independent, simultaneous ranking badges — one per publishing level. Each level is
+     * only ever written by that level's own role (faculty / university-or-org-admin / super-admin, see
+     * PathsService.deriveCourseworkRibbonLevel) and publishing one level never touches the others, so a
+     * record can carry a Faculty rank, a University rank and a CIEL PK rank all at once. badgeLevel is a
+     * rank-percentile tier (see PathsService.computeRankBadgeLevel); previousRank is that level's rank the
+     * last time it was ranked, captured just before being overwritten by a new run at that same level —
+     * null/undefined means this is the first-ever ranked run at that level. */
     @Column({ type: 'jsonb', nullable: true })
     meritRibbon?: {
-        rank: number;
-        of: number;
-        scope: string;
-        total?: number;
-        badgeLevel?: 'Gold' | 'Silver' | 'Bronze' | 'Participant';
-        previousRank?: number | null;
-        at: string;
+        faculty?: CourseworkRibbonEntry;
+        university?: CourseworkRibbonEntry;
+        cielpk?: CourseworkRibbonEntry;
     } | null;
 
     // ---------- Step 1: You & the course ----------

@@ -1195,6 +1195,13 @@ export class OpportunitiesService {
       organization?.name ||
       opp.partner_organization?.organization_name ||
       opp.executing_organization?.name ||
+      (opp.supervision &&
+      typeof opp.supervision === 'object' &&
+      typeof (opp.supervision as { faculty_university_name?: unknown })
+        .faculty_university_name === 'string'
+        ? (opp.supervision as { faculty_university_name: string })
+            .faculty_university_name
+        : null) ||
       null;
 
     const base = {
@@ -1553,27 +1560,34 @@ export class OpportunitiesService {
   }
 
   private async handleFacultyApprovedSideEffects(opportunity: Opportunity) {
-    if (!opportunity.isStudentCreated) return;
-
+    // Partner/admin notice must fire for every creator kind that can reach this stage after a
+    // faculty gate clears — legacy liaison flow, an NGO/Partner Organization creator's linked
+    // faculty gate, and now a CIEL PK Super Admin's named-faculty gate (initCielAdminCreated) all
+    // route through here with `isStudentCreated: false`. Only the in-app "your opportunity" student
+    // notice below is student-specific.
     if (opportunity.workflowStage === WORKFLOW_STAGE.PENDING_PARTNER) {
       await this.sendPartnerApprovalEmail(opportunity);
-      await this.notifyStudentOpportunityUpdate(opportunity, {
-        title: 'Faculty Approved',
-        message:
-          'Your opportunity has passed faculty review and is now waiting for partner approval.',
-        emailSubject: 'Faculty approved your opportunity',
-      });
+      if (opportunity.isStudentCreated) {
+        await this.notifyStudentOpportunityUpdate(opportunity, {
+          title: 'Faculty Approved',
+          message:
+            'Your opportunity has passed faculty review and is now waiting for partner approval.',
+          emailSubject: 'Faculty approved your opportunity',
+        });
+      }
       return;
     }
 
     if (opportunity.workflowStage === WORKFLOW_STAGE.PENDING_ADMIN) {
       await this.sendAdminReviewEmail(opportunity, 'faculty approval');
-      await this.notifyStudentOpportunityUpdate(opportunity, {
-        title: 'Faculty Approved',
-        message:
-          'Your opportunity has passed faculty review and is now waiting for admin approval.',
-        emailSubject: 'Faculty approved your opportunity',
-      });
+      if (opportunity.isStudentCreated) {
+        await this.notifyStudentOpportunityUpdate(opportunity, {
+          title: 'Faculty Approved',
+          message:
+            'Your opportunity has passed faculty review and is now waiting for admin approval.',
+          emailSubject: 'Faculty approved your opportunity',
+        });
+      }
     }
   }
 
@@ -1581,7 +1595,13 @@ export class OpportunitiesService {
     const execBlocking =
       !!opportunity.execution_verification_token &&
       !opportunity.execution_verified;
-    if (!execBlocking || opportunity.isStudentCreated) {
+    const stillNeedsCielReview =
+      opportunity.workflowStage === WORKFLOW_STAGE.PENDING_ADMIN ||
+      (opportunity.status === 'pending_approval' && !opportunity.admin_approved);
+    if (
+      stillNeedsCielReview &&
+      (!execBlocking || opportunity.isStudentCreated)
+    ) {
       await this.sendAdminReviewEmail(opportunity, 'partner approval');
     }
 
@@ -1740,9 +1760,11 @@ export class OpportunitiesService {
       createOpportunityDto.location,
     );
 
+    const isFaculty = user.role === UserRole.FACULTY;
+    const isCielAdmin = user.role === UserRole.SUPER_ADMIN;
     const org = await this.organizationsService.getMyOrganization(userId);
 
-    if (!org && user.role !== UserRole.FACULTY) {
+    if (!org && !isFaculty && !isCielAdmin) {
       throw new ForbiddenException(
         'User must belong to an organization to create opportunities',
       );
@@ -1760,15 +1782,19 @@ export class OpportunitiesService {
     const executionVerificationToken = needsExecutingOrgVerification
       ? randomUUID()
       : null;
-    const isFaculty = user.role === UserRole.FACULTY;
     /** Partner gate for faculty-authored posts (same heuristics as student flow, but only when a valid partner email exists). */
     let facultyPartnerToken: string | null = null;
     /** NGO/Partner Organization creator optionally links a faculty as an academic contact
      * ("Academic / faculty link" section) — when they do, that faculty's approval becomes a real
      * required gate, same as it would be for a student- or faculty-created opportunity. */
-    const orgCreatorFacultyEmail =
-      !isFaculty && !needsExecutingOrgVerification
-        ? this.resolveFacultyEmail(createOpportunityDto)
+    const namedFacultyEmail = this.resolveFacultyEmail(createOpportunityDto);
+    const creatorEmail = this.normalizeEmail(user.email);
+    const orgCreatorFacultyEmail = isCielAdmin
+      ? namedFacultyEmail && namedFacultyEmail !== creatorEmail
+        ? namedFacultyEmail
+        : null
+      : !isFaculty && !needsExecutingOrgVerification
+        ? namedFacultyEmail
         : null;
     const orgCreatorFacultyToken = orgCreatorFacultyEmail ? randomUUID() : null;
     // Admin queue (findAllPending) lists only pending_approval. Faculty-created opps used to default to
@@ -1787,6 +1813,20 @@ export class OpportunitiesService {
       initialStatus = requiresPartnerGate
         ? 'pending_partner'
         : 'pending_approval';
+    } else if (isCielAdmin) {
+      const wantsPartner =
+        this.studentOpportunityRequiresPartner(createOpportunityDto);
+      const partnerContact = wantsPartner
+        ? this.resolvePartnerEmail(createOpportunityDto)
+        : null;
+      const requiresPartnerGate = !!(wantsPartner && partnerContact);
+      facultyPartnerToken = requiresPartnerGate ? randomUUID() : null;
+      // Placeholder — `initCielAdminCreated` overwrites with live / pending_partner / pending_faculty.
+      initialStatus = facultyPartnerToken
+        ? 'pending_partner'
+        : orgCreatorFacultyToken
+          ? 'pending_faculty'
+          : 'active';
     } else if (orgCreatorFacultyToken) {
       initialStatus = 'pending_faculty';
     } else {
@@ -1802,7 +1842,9 @@ export class OpportunitiesService {
     const needsPartnerOrgAck =
       this.shouldRequirePartnerOrganizationAck(createOpportunityDto);
     let resolvedPartnerToken: string | null =
-      isFaculty && !needsExecutingOrgVerification && facultyPartnerToken
+      (isFaculty || isCielAdmin) &&
+      !needsExecutingOrgVerification &&
+      facultyPartnerToken
         ? facultyPartnerToken
         : null;
     if (needsPartnerOrgAck && !resolvedPartnerToken) {
@@ -1836,7 +1878,7 @@ export class OpportunitiesService {
               : {}),
           }
         : {}),
-      ...(!isFaculty && !needsExecutingOrgVerification
+      ...(!isFaculty && (!needsExecutingOrgVerification || isCielAdmin)
         ? orgCreatorFacultyToken
           ? {
               faculty_verification_token: orgCreatorFacultyToken,
@@ -1856,6 +1898,16 @@ export class OpportunitiesService {
         opportunity,
         !!resolvedPartnerToken,
       );
+    }
+    if (isCielAdmin) {
+      this.opportunityWorkflow.initCielAdminCreated(opportunity, {
+        requiresPartner: !!resolvedPartnerToken,
+        requiresFaculty: !!orgCreatorFacultyToken,
+      });
+      if (needsExecutingOrgVerification) {
+        opportunity.status = 'pending_execution';
+        opportunity.workflowStage = null;
+      }
     }
 
     const saved = await this.opportunitiesRepository.save(opportunity);
@@ -2388,13 +2440,16 @@ export class OpportunitiesService {
     const isStudentOwner =
       opportunity.isStudentCreated && opportunity.creatorId === userId;
 
+    const isCielAdminOwner =
+      user.role === UserRole.SUPER_ADMIN && opportunity.creatorId === userId;
+
     let orgId = organizationId;
     if (!orgId) {
       const org = await this.organizationsService.getMyOrganization(userId);
       orgId = org?.id;
     }
 
-    if (!isFacultyOwner && !isStudentOwner) {
+    if (!isFacultyOwner && !isStudentOwner && !isCielAdminOwner) {
       if (!orgId) {
         throw new ForbiddenException(
           'User must belong to an organization to update opportunities',
@@ -3001,6 +3056,12 @@ export class OpportunitiesService {
     const query =
       this.opportunitiesRepository.createQueryBuilder('opportunity');
 
+    if (filters?.created_by === 'me' || filters?.creator_id === 'me') {
+      query.andWhere('("opportunity"."creatorId")::text = :creatorMe', {
+        creatorMe: userId,
+      });
+    }
+
     let filterOrgId: string | null = null;
     // Email-based fallback for student-created opportunities that list this partner's email
     // in JSON fields but may not yet have the partner's organizationId set.
@@ -3462,6 +3523,15 @@ export class OpportunitiesService {
               .andWhere(
                 '(opportunity.admin_approved = :aa2 OR opportunity.admin_approved IS NULL)',
                 { aa2: false },
+              )
+              .andWhere(
+                '(opportunity.adminApprovalStatus IS NULL OR opportunity.adminApprovalStatus NOT IN (:...cielSelfApproved))',
+                {
+                  cielSelfApproved: [
+                    LINE_STATUS.APPROVED,
+                    LINE_STATUS.NOT_REQUIRED,
+                  ],
+                },
               )
               .andWhere('opportunity.status IN (:...partnerOrg)', {
                 partnerOrg: ['pending_execution', 'pending_partner'],
@@ -4288,16 +4358,18 @@ export class OpportunitiesService {
       await this.assignFacultyIdFromSupervisionIfMissing(opportunity);
       await this.opportunitiesRepository.save(opportunity);
       await this.handlePartnerApprovedSideEffects(opportunity);
+      const nowLive = this.getApiOpportunityStatus(opportunity) === 'live';
       return {
         success: true,
         data: {
           title: opportunity.title,
-          isFullyVerified: false,
+          isFullyVerified: nowLive,
           status: this.getApiOpportunityStatus(opportunity),
           workflow_stage: opportunity.workflowStage,
         },
-        message:
-          'Partner verification successful. The opportunity will now be reviewed by CIEL Admin.',
+        message: nowLive
+          ? 'Partner verification successful. The opportunity is now published.'
+          : 'Partner verification successful. The opportunity will now be reviewed by CIEL Admin.',
       };
     } else {
       return {
@@ -4382,8 +4454,12 @@ export class OpportunitiesService {
 
     opp.execution_verified = true;
     opp.execution_verification_status = 'execution_verified';
-    if (opp.admin_approved) {
-      opp.status = 'active';
+    const facultyStillPending =
+      opp.facultyApprovalStatus === LINE_STATUS.PENDING ||
+      (!!opp.faculty_verification_token && !opp.faculty_verified);
+    if (facultyStillPending) {
+      opp.status = 'pending_faculty';
+      opp.workflowStage = WORKFLOW_STAGE.PENDING_FACULTY;
     } else if (opp.requiresPartnerApproval && !opp.partnerVerified) {
       opp.status = 'pending_partner';
       opp.workflowStage = WORKFLOW_STAGE.PENDING_PARTNER;
@@ -4393,6 +4469,15 @@ export class OpportunitiesService {
       ) {
         opp.partnerApprovalStatus = LINE_STATUS.PENDING;
       }
+    } else if (
+      opp.admin_approved ||
+      opp.adminApprovalStatus === LINE_STATUS.APPROVED ||
+      opp.adminApprovalStatus === LINE_STATUS.NOT_REQUIRED
+    ) {
+      this.opportunityWorkflow.afterAdminApproved(opp, {
+        id: user?.id ?? null,
+        name: actorEmail,
+      });
     } else {
       opp.status = 'pending_approval';
       if (
@@ -4409,7 +4494,10 @@ export class OpportunitiesService {
       }
     }
     await this.opportunitiesRepository.save(opp);
-    if (!opp.admin_approved) {
+    if (
+      !opp.admin_approved &&
+      opp.workflowStage === WORKFLOW_STAGE.PENDING_ADMIN
+    ) {
       await this.sendAdminReviewEmail(
         opp,
         'executing organization verification',

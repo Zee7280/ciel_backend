@@ -611,10 +611,12 @@ describe('PathsService — coursework merit notify', () => {
     expect(courseProjectRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({
         meritRibbon: expect.objectContaining({
-          rank: 1,
-          of: 8,
-          scope: 'Your cohort',
-          total: 91,
+          faculty: expect.objectContaining({
+            rank: 1,
+            of: 8,
+            scope: 'Your cohort',
+            total: 91,
+          }),
         }),
       }),
     );
@@ -639,11 +641,13 @@ describe('PathsService — coursework merit notify', () => {
       facultyApprovalStatus: 'approved',
       studentInfo: { studentName: 'Ali Khan' },
       meritRibbon: {
-        rank: 1,
-        of: 8,
-        scope: 'Your cohort',
-        total: 91,
-        at: '2026-01-01',
+        faculty: {
+          rank: 1,
+          of: 8,
+          scope: 'Your cohort',
+          total: 91,
+          at: '2026-01-01',
+        },
       },
     });
 
@@ -672,11 +676,13 @@ describe('PathsService — coursework merit notify', () => {
       facultyApprovalStatus: 'approved',
       studentInfo: { studentName: 'Ali Khan' },
       meritRibbon: {
-        rank: 3,
-        of: 8,
-        scope: 'Your cohort',
-        total: 70,
-        at: '2026-01-01',
+        faculty: {
+          rank: 3,
+          of: 8,
+          scope: 'Your cohort',
+          total: 70,
+          at: '2026-01-01',
+        },
       },
     });
 
@@ -692,10 +698,12 @@ describe('PathsService — coursework merit notify', () => {
     expect(courseProjectRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({
         meritRibbon: expect.objectContaining({
-          rank: 1,
-          of: 8,
-          badgeLevel: 'Silver',
-          previousRank: 3,
+          faculty: expect.objectContaining({
+            rank: 1,
+            of: 8,
+            badgeLevel: 'Silver',
+            previousRank: 3,
+          }),
         }),
       }),
     );
@@ -724,11 +732,13 @@ describe('PathsService — coursework merit notify', () => {
       facultyApprovalStatus: 'approved',
       studentInfo: { studentName: 'Ali Khan' },
       meritRibbon: {
-        rank: 1,
-        of: 8,
-        scope: 'Your cohort',
-        total: 91,
-        at: '2026-01-01',
+        faculty: {
+          rank: 1,
+          of: 8,
+          scope: 'Your cohort',
+          total: 91,
+          at: '2026-01-01',
+        },
       },
     });
 
@@ -961,8 +971,10 @@ describe('PathsService — coursework AI score is never returned to a student', 
       'student@test.com',
     );
     expect((result as any).meritRibbon).toBeTruthy();
-    expect((result as any).meritRibbon.total).toBeUndefined();
-    expect((result as any).meritRibbon.rank).toBe(1);
+    expect((result as any).meritRibbon.cielpk.total).toBeUndefined();
+    expect((result as any).meritRibbon.cielpk.rank).toBe(1);
+    expect((result as any).meritRibbon.university.rank).toBe(1);
+    expect((result as any).meritRibbon.faculty.rank).toBe(1);
   });
 
   it('getCourseProjectByIdForUser strips the numeric total for the owning student', async () => {
@@ -973,7 +985,7 @@ describe('PathsService — coursework AI score is never returned to a student', 
       'entry-1',
     );
     expect((result as any).meritRibbon).toBeTruthy();
-    expect((result as any).meritRibbon.total).toBeUndefined();
+    expect((result as any).meritRibbon.cielpk.total).toBeUndefined();
   });
 
   it('never returns the faculty moderation breakdown to the owning student', async () => {
@@ -1091,7 +1103,9 @@ describe('PathsService — coursework AI score is never returned to a student', 
           facultyScore: 78,
           at: '2026-01-01',
         },
-        meritRibbon: { rank: 2, of: 10, scope: 'university', total: 60 },
+        meritRibbon: {
+          university: { rank: 2, of: 10, scope: 'university', total: 60 },
+        },
         studentInfo: {},
       },
     ];
@@ -1141,7 +1155,8 @@ describe('PathsService — coursework AI score is never returned to a student', 
     );
 
     expect((saved as any).facultyModeration).toBeNull();
-    expect((saved as any).meritRibbon.total).toBeUndefined();
+    expect((saved as any).meritRibbon.university.rank).toBe(2);
+    expect((saved as any).meritRibbon.university.total).toBeUndefined();
   });
 
   it('refuses to redirect an already-submitted entry to a different teacherEmail', async () => {
@@ -1842,7 +1857,10 @@ describe('PathsService — public coursework verification', () => {
       facultyApprovalStatus: 'approved',
       facultyApprovalAt: new Date('2026-01-01'),
       verificationPublicSlug: 'abc-123',
-      meritRibbon: { rank: 1, of: 8, scope: 'Your cohort', badgeLevel: 'Gold' },
+      meritRibbon: {
+        faculty: { rank: 2, of: 8, scope: 'Faculty supervision', badgeLevel: 'Silver' },
+        cielpk: { rank: 1, of: 8, scope: 'Your cohort', badgeLevel: 'Gold' },
+      },
     });
     const result = await service.getPublicCourseworkVerification('abc-123');
     expect(result).toMatchObject({
@@ -1855,6 +1873,26 @@ describe('PathsService — public coursework verification', () => {
     });
     expect(result).not.toHaveProperty('student_name');
     expect(result).not.toHaveProperty('studentInfo');
+  });
+
+  it('falls back to the faculty badge when no university/cielpk ribbon is published yet', async () => {
+    const { service } = makeVerifyService({
+      id: 'entry-1',
+      projectTitle: 'Solar audit',
+      facultyApprovalStatus: 'approved',
+      facultyApprovalAt: new Date('2026-01-01'),
+      verificationPublicSlug: 'abc-123',
+      meritRibbon: {
+        faculty: { rank: 2, of: 8, scope: 'Faculty supervision', badgeLevel: 'Silver' },
+      },
+    });
+    const result = await service.getPublicCourseworkVerification('abc-123');
+    expect(result).toMatchObject({
+      badge_level: 'Silver',
+      rank: 2,
+      of: 8,
+      scope: 'Faculty supervision',
+    });
   });
 
   it('returns verified:false with only a status for a pending entry', async () => {

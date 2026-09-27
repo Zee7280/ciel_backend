@@ -105,6 +105,16 @@ describe('validateReportSectionsForSubmit', () => {
     );
   });
 
+  it('requires a use_resources yes or no choice', () => {
+    const issues = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section6: {},
+    });
+    expect(
+      issues.some((i) => i.section === 6 && i.field === 'use_resources'),
+    ).toBe(true);
+  });
+
   it('does not require extra evidence files when has_evidence is no', () => {
     const issues = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,

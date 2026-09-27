@@ -105,6 +105,46 @@ export class OpportunityWorkflowService {
   }
 
   /**
+   * CIEL PK Super Admin posting: the creator is already the platform admin, so there is no
+   * second CIEL approval. Partner / faculty acknowledgement is required only when those
+   * stakeholders are actually named on the opportunity.
+   */
+  initCielAdminCreated(
+    opp: Opportunity,
+    opts: { requiresPartner: boolean; requiresFaculty: boolean },
+  ): void {
+    opp.isStudentCreated = false;
+    opp.requiresPartnerApproval = opts.requiresPartner;
+    opp.adminApprovalStatus = LINE_STATUS.APPROVED;
+    opp.facultyApprovalStatus = opts.requiresFaculty
+      ? LINE_STATUS.PENDING
+      : LINE_STATUS.NOT_APPLICABLE;
+    if (opts.requiresFaculty) {
+      opp.faculty_verified = false;
+      opp.faculty_verification_status = 'pending_faculty';
+    } else {
+      opp.faculty_verified = true;
+      opp.faculty_verification_status = 'not_required';
+    }
+    opp.partnerApprovalStatus = opts.requiresPartner
+      ? LINE_STATUS.PENDING
+      : LINE_STATUS.NOT_APPLICABLE;
+    if (opts.requiresFaculty) {
+      opp.workflowStage = WORKFLOW_STAGE.PENDING_FACULTY;
+      opp.status = 'pending_faculty';
+      opp.admin_approved = false;
+      opp.partnerVerified = !opts.requiresPartner;
+    } else if (opts.requiresPartner) {
+      opp.workflowStage = WORKFLOW_STAGE.PENDING_PARTNER;
+      opp.status = 'pending_partner';
+      opp.admin_approved = false;
+      opp.partnerVerified = false;
+    } else {
+      this.afterAdminApproved(opp);
+    }
+  }
+
+  /**
    * Faculty-authored posting: no separate faculty-approval step; optional partner gate then admin.
    */
   initFacultyCreated(opp: Opportunity, requiresPartner: boolean): void {
@@ -159,6 +199,11 @@ export class OpportunityWorkflowService {
           ) {
             opp.partnerApprovalStatus = LINE_STATUS.PENDING;
           }
+        } else if (
+          opp.adminApprovalStatus === LINE_STATUS.APPROVED ||
+          opp.adminApprovalStatus === LINE_STATUS.NOT_REQUIRED
+        ) {
+          this.afterAdminApproved(opp, actor);
         } else {
           opp.workflowStage = WORKFLOW_STAGE.PENDING_ADMIN;
           opp.status = 'pending_approval';
@@ -227,6 +272,13 @@ export class OpportunityWorkflowService {
     if (opp.execution_verification_token && !opp.execution_verified) {
       opp.workflowStage = null;
       opp.status = 'pending_execution';
+      return;
+    }
+    if (
+      opp.adminApprovalStatus === LINE_STATUS.APPROVED ||
+      opp.adminApprovalStatus === LINE_STATUS.NOT_REQUIRED
+    ) {
+      this.afterAdminApproved(opp, actor);
       return;
     }
     opp.workflowStage = WORKFLOW_STAGE.PENDING_ADMIN;

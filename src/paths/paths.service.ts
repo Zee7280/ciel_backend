@@ -13,6 +13,7 @@ import { parseStoredUrlList } from '../common/url-list-column';
 import {
   CourseProjectEntry,
   CourseProjectStudentInfo,
+  CourseworkRibbonEntry,
 } from './entities/course-project-entry.entity';
 import {
   DEFAULT_FYP_MILESTONES,
@@ -936,14 +937,22 @@ export class PathsService implements OnModuleInit {
   }
 
   /** The numeric AI Merit Model score — and the faculty's own per-criterion moderation of it — must
-   * never reach a student; only the coarse rank/of/scope/badgeLevel tier is student-facing. Faculty/
-   * university/admin views call attachLiveCourseworkRanks directly and keep the real values. */
+   * never reach a student; only the coarse rank/of/scope/badgeLevel tier is student-facing, per
+   * published level. Faculty/university/admin views call attachLiveCourseworkRanks directly and
+   * keep the real values. */
   private static redactMeritScoreForStudent<T extends CourseProjectEntry>(
     entry: T,
   ): T {
     if (!entry.meritRibbon) return { ...entry, facultyModeration: null };
-    const { total, ...rest } = entry.meritRibbon;
-    return { ...entry, meritRibbon: rest, facultyModeration: null };
+    const redacted: NonNullable<CourseProjectEntry['meritRibbon']> = {};
+    (['faculty', 'university', 'cielpk'] as const).forEach((level) => {
+      const ribbon = entry.meritRibbon?.[level];
+      if (ribbon) {
+        const { total, ...rest } = ribbon;
+        redacted[level] = rest;
+      }
+    });
+    return { ...entry, meritRibbon: redacted, facultyModeration: null };
   }
 
   async createCourseProject(userId: string) {
@@ -1188,61 +1197,97 @@ export class PathsService implements OnModuleInit {
     return { ...annotated, student: student ?? null };
   }
 
-  /** Live rank preview for approved cards that do not yet have a published meritRibbon.
-   * Published faculty/university ribbons stay untouched. Rank is computed in-memory from the
-   * same rubric as the Merit Model and never persisted. */
+  /** Live rank preview for approved cards that do not yet have a published ribbon at a given
+   * level. Already-published faculty/university/cielpk ribbons stay untouched — this only fills
+   * in whichever of the three levels a card is still missing. Rank is computed in-memory from
+   * the same rubric as the Merit Model and never persisted. */
   private async attachLiveCourseworkRanks<T extends CourseProjectEntry>(
     entries: T[],
   ): Promise<T[]> {
-    const needRank = entries.filter(
+    type Level = 'faculty' | 'university' | 'cielpk';
+    const approved = (e: CourseProjectEntry) =>
+      e.status === 'submitted' && e.facultyApprovalStatus === 'approved';
+    const needAnyLevel = entries.filter(
       (e) =>
-        e.status === 'submitted' &&
-        e.facultyApprovalStatus === 'approved' &&
-        !e.meritRibbon,
+        approved(e) &&
+        (!e.meritRibbon?.faculty ||
+          !e.meritRibbon?.university ||
+          !e.meritRibbon?.cielpk),
     );
-    if (!needRank.length) return entries;
+    if (!needAnyLevel.length) return entries;
 
     const pool = await this.courseProjectRepo.find({
       where: { status: 'submitted', facultyApprovalStatus: 'approved' },
     });
-    const groups = new Map<string, CourseProjectEntry[]>();
-    for (const e of pool) {
-      const key =
-        (e.studentInfo?.universityName || '').trim().toLowerCase() ||
-        '__ciel__';
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key)!.push(e);
-    }
 
-    const liveById = new Map<
-      string,
-      NonNullable<CourseProjectEntry['meritRibbon']>
-    >();
-    for (const [key, group] of groups) {
-      const ranked = group.map((e) => computeMeritCard(e)).sort(byMerit);
-      const of = ranked.length;
-      const scope =
-        key === '__ciel__'
-          ? 'CIEL PK live'
-          : `${group[0]?.studentInfo?.universityName || 'University'} live`;
-      ranked.forEach((card, i) => {
-        const rank = i + 1;
-        liveById.set(card.id, {
-          rank,
-          of,
-          scope,
-          total: card.scorecard.total,
-          badgeLevel: PathsService.computeRankBadgeLevel(rank, of),
-          previousRank: null,
-          at: new Date().toISOString(),
+    const groupKey: Record<Level, (e: CourseProjectEntry) => string> = {
+      faculty: (e) =>
+        (e.studentInfo?.teacherEmail || '').trim().toLowerCase() ||
+        '__no_faculty__',
+      university: (e) =>
+        (e.studentInfo?.universityName || '').trim().toLowerCase() ||
+        '__no_university__',
+      cielpk: () => '__ciel__',
+    };
+    const scopeLabel: Record<
+      Level,
+      (group: CourseProjectEntry[]) => string
+    > = {
+      faculty: (group) =>
+        `${group[0]?.studentInfo?.teacherName || 'Faculty'} live`,
+      university: (group) =>
+        `${group[0]?.studentInfo?.universityName || 'University'} live`,
+      cielpk: () => 'CIEL PK live',
+    };
+
+    const liveByLevel: Record<
+      Level,
+      Map<string, CourseworkRibbonEntry>
+    > = { faculty: new Map(), university: new Map(), cielpk: new Map() };
+
+    (['faculty', 'university', 'cielpk'] as const).forEach((level) => {
+      const groups = new Map<string, CourseProjectEntry[]>();
+      for (const e of pool) {
+        const key = groupKey[level](e);
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key)!.push(e);
+      }
+      for (const [, group] of groups) {
+        const ranked = group.map((e) => computeMeritCard(e)).sort(byMerit);
+        const of = ranked.length;
+        const scope = scopeLabel[level](group);
+        ranked.forEach((card, i) => {
+          const rank = i + 1;
+          liveByLevel[level].set(card.id, {
+            rank,
+            of,
+            scope,
+            total: card.scorecard.total,
+            badgeLevel: PathsService.computeRankBadgeLevel(rank, of),
+            previousRank: null,
+            at: new Date().toISOString(),
+          });
         });
-      });
-    }
+      }
+    });
 
     return entries.map((e) => {
-      if (e.meritRibbon) return e;
-      const live = liveById.get(e.id);
-      return live ? { ...e, meritRibbon: live } : e;
+      if (!approved(e)) return e;
+      const existing = e.meritRibbon || {};
+      const merged: NonNullable<CourseProjectEntry['meritRibbon']> = {
+        ...existing,
+      };
+      let changed = false;
+      (['faculty', 'university', 'cielpk'] as const).forEach((level) => {
+        if (!merged[level]) {
+          const live = liveByLevel[level].get(e.id);
+          if (live) {
+            merged[level] = live;
+            changed = true;
+          }
+        }
+      });
+      return changed ? { ...e, meritRibbon: merged } : e;
     });
   }
 
@@ -1411,6 +1456,21 @@ export class PathsService implements OnModuleInit {
     };
   }
 
+  /** Which of the three independent ribbon levels this caller's role publishes into — never taken
+   * from client input, so a faculty account can only ever write the 'faculty' badge on a record,
+   * never 'university'/'cielpk'. Mirrors resolveGraderRunScope's role switch. */
+  private static deriveCourseworkRibbonLevel(user: {
+    role: string;
+  }): 'faculty' | 'university' | 'cielpk' {
+    if (user.role === UserRole.FACULTY) return 'faculty';
+    if (
+      user.role === UserRole.UNIVERSITY ||
+      user.role === UserRole.ORGANIZATION_ADMIN
+    )
+      return 'university';
+    return 'cielpk';
+  }
+
   /** Which grader-run scope (and key) this caller consumes against — null means unlimited (CIEL/admin). */
   private resolveGraderRunScope(user: {
     role: string;
@@ -1538,6 +1598,7 @@ export class PathsService implements OnModuleInit {
     const graderRuns = picks.length
       ? await this.checkAndConsumeGraderRun('coursework', user)
       : await this.peekGraderRunUsage('coursework', user);
+    const level = PathsService.deriveCourseworkRibbonLevel(user);
     const seen = new Set<string>();
     let sent = 0;
     for (const pick of picks) {
@@ -1549,9 +1610,10 @@ export class PathsService implements OnModuleInit {
       if (!entry || entry.facultyApprovalStatus !== 'approved') continue;
       const of = pick.of || ranked.length;
       const rank = pick.rank;
-      const previousRank = entry.meritRibbon?.rank ?? null;
+      const priorAtLevel = entry.meritRibbon?.[level];
+      const previousRank = priorAtLevel?.rank ?? null;
       const badgeLevel = PathsService.computeRankBadgeLevel(rank, of);
-      const ribbon = {
+      const ribbon: CourseworkRibbonEntry = {
         rank,
         of,
         scope,
@@ -1561,10 +1623,12 @@ export class PathsService implements OnModuleInit {
         at: new Date().toISOString(),
       };
       const already =
-        entry.meritRibbon?.rank === rank &&
-        entry.meritRibbon?.of === of &&
-        entry.meritRibbon?.scope === scope;
-      entry.meritRibbon = ribbon;
+        priorAtLevel?.rank === rank &&
+        priorAtLevel?.of === of &&
+        priorAtLevel?.scope === scope;
+      // Only this level's badge is written — the other two levels' ribbons (if any) are untouched,
+      // so a record can carry independent Faculty/University/CIEL PK badges at once.
+      entry.meritRibbon = { ...(entry.meritRibbon || {}), [level]: ribbon };
       await this.courseProjectRepo.save(entry);
       if (already) {
         sent += 1;
@@ -1647,14 +1711,22 @@ export class PathsService implements OnModuleInit {
         status: entry.facultyApprovalStatus,
       };
     }
+    // A record may carry up to three independent badges now — the public card shows the single
+    // most prestigious one published (CIEL PK > University > Faculty), same precedence a verifier
+    // would expect from a "highest recognition" badge.
+    const bestRibbon =
+      entry.meritRibbon?.cielpk ??
+      entry.meritRibbon?.university ??
+      entry.meritRibbon?.faculty ??
+      null;
     return {
       success: true,
       verified: true,
       project_title: entry.projectTitle || 'Untitled coursework',
-      badge_level: entry.meritRibbon?.badgeLevel ?? null,
-      rank: entry.meritRibbon?.rank ?? null,
-      of: entry.meritRibbon?.of ?? null,
-      scope: entry.meritRibbon?.scope ?? null,
+      badge_level: bestRibbon?.badgeLevel ?? null,
+      rank: bestRibbon?.rank ?? null,
+      of: bestRibbon?.of ?? null,
+      scope: bestRibbon?.scope ?? null,
       verification_code: formatCertificateVerificationCode(
         entry.verificationPublicSlug,
       ),

@@ -122,6 +122,60 @@ describe('OpportunityWorkflowService', () => {
     expect(opp.partnerApprovalStatus).toBe(LINE_STATUS.PENDING);
   });
 
+  it('initCielAdminCreated publishes immediately when no partner or faculty is named', () => {
+    const opp = {} as Opportunity;
+    service.initCielAdminCreated(opp, { requiresPartner: false, requiresFaculty: false });
+    expect(opp.adminApprovalStatus).toBe(LINE_STATUS.APPROVED);
+    expect(opp.facultyApprovalStatus).toBe(LINE_STATUS.NOT_APPLICABLE);
+    expect(opp.partnerApprovalStatus).toBe(LINE_STATUS.NOT_APPLICABLE);
+    expect(opp.workflowStage).toBe(WORKFLOW_STAGE.LIVE);
+    expect(opp.status).toBe('active');
+    expect(opp.admin_approved).toBe(true);
+  });
+
+  it('initCielAdminCreated waits on a named partner without a second CIEL admin gate', () => {
+    const opp = {} as Opportunity;
+    service.initCielAdminCreated(opp, { requiresPartner: true, requiresFaculty: false });
+    expect(opp.adminApprovalStatus).toBe(LINE_STATUS.APPROVED);
+    expect(opp.workflowStage).toBe(WORKFLOW_STAGE.PENDING_PARTNER);
+    expect(opp.status).toBe('pending_partner');
+    expect(opp.admin_approved).toBe(false);
+  });
+
+  it('initCielAdminCreated waits on a named faculty without a second CIEL admin gate', () => {
+    const opp = {} as Opportunity;
+    service.initCielAdminCreated(opp, { requiresPartner: false, requiresFaculty: true });
+    expect(opp.adminApprovalStatus).toBe(LINE_STATUS.APPROVED);
+    expect(opp.facultyApprovalStatus).toBe(LINE_STATUS.PENDING);
+    expect(opp.workflowStage).toBe(WORKFLOW_STAGE.PENDING_FACULTY);
+    expect(opp.status).toBe('pending_faculty');
+    expect(opp.admin_approved).toBe(false);
+  });
+
+  it('afterFacultyVerified goes live when the admin line is already self-approved (CIEL-created)', () => {
+    const opp = {
+      isStudentCreated: false,
+      status: 'pending_faculty',
+      adminApprovalStatus: LINE_STATUS.APPROVED,
+      requiresPartnerApproval: false,
+    } as Opportunity;
+    service.afterFacultyVerified(opp);
+    expect(opp.workflowStage).toBe(WORKFLOW_STAGE.LIVE);
+    expect(opp.status).toBe('active');
+    expect(opp.admin_approved).toBe(true);
+  });
+
+  it('afterFacultyCreatedPartnerVerified goes live when the admin line is already self-approved', () => {
+    const opp = {
+      isStudentCreated: false,
+      adminApprovalStatus: LINE_STATUS.APPROVED,
+      execution_verified: true,
+    } as Opportunity;
+    service.afterFacultyCreatedPartnerVerified(opp);
+    expect(opp.workflowStage).toBe(WORKFLOW_STAGE.LIVE);
+    expect(opp.status).toBe('active');
+  });
+
   it('afterAdminRejected remains terminal rejected', () => {
     const opp = { isStudentCreated: true } as Opportunity;
     service.afterAdminRejected(opp, 'Not eligible');

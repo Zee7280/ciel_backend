@@ -333,6 +333,13 @@ export function validateReportSectionsForSubmit(report: {
   const section10 = report.section10 || {};
 
   const useResources = pickUseResources(section6);
+  if (useResources !== 'yes' && useResources !== 'no') {
+    issues.push({
+      section: 6,
+      field: 'use_resources',
+      message: 'Tell us whether the project used extra resources',
+    });
+  }
   if (useResources === 'yes') {
     const resources = Array.isArray(section6.resources)
       ? section6.resources

@@ -2959,8 +2959,13 @@ export class StudentReportsService {
   async buildDetailResponse(
     report: StudentReport,
     attendanceParticipantStudentId?: string,
+    options?: { allProjectAttendance?: boolean },
   ) {
-    return this.formatReportResponse(report, attendanceParticipantStudentId);
+    return this.formatReportResponse(
+      report,
+      attendanceParticipantStudentId,
+      options,
+    );
   }
 
   async findOneForPartner(id: string, organizationId: string) {
@@ -3288,6 +3293,7 @@ export class StudentReportsService {
   private async formatReportResponse(
     report: StudentReport,
     attendanceParticipantStudentId?: string,
+    options?: { allProjectAttendance?: boolean },
   ) {
     const pid = report.opportunityId || report.project_id;
     const attendeeId = attendanceParticipantStudentId ?? report.studentId;
@@ -3296,10 +3302,12 @@ export class StudentReportsService {
       await Promise.all([
         this.buildReportAccessForViewer(attendeeId, report),
         this.attendanceLogsRepository.find({
-          where: {
-            participant: { studentId: attendeeId },
-            projectId: pid,
-          },
+          where: options?.allProjectAttendance
+            ? { projectId: pid }
+            : {
+                participant: { studentId: attendeeId },
+                projectId: pid,
+              },
           order: { dateOfEngagement: 'ASC', startTime: 'ASC' },
         }),
         this.findLatestManualPayment(report.studentId, projectKey),
@@ -3317,6 +3325,48 @@ export class StudentReportsService {
     const approvalContext = this.getPublicReportApprovalContext(report);
     const feedback = this.buildStudentReportFeedback(report);
     const isEditable = this.isReportEditableForStudent(report);
+    const mappedAttendanceLogs = pid
+      ? attendanceLogs.map((log) => ({
+          id: log.id,
+          participantId: log.participantId,
+          date: log.dateOfEngagement,
+          start_time: log.startTime,
+          end_time: log.endTime,
+          location: log.organizationName, // Mapping as location
+          location_pin:
+            (log as { locationPin?: string | null }).locationPin ?? null,
+          activity_type: log.activityType,
+          description: log.description,
+          hours: Number(log.sessionHours),
+          evidence_url: log.evidenceUrl,
+          entryStatus: log.entryStatus,
+          approval_status: (log as { approvalStatus?: string | null })
+            .approvalStatus ?? null,
+          approval_action_reason:
+            (log as { approvalActionReason?: string | null })
+              .approvalActionReason ?? null,
+          assigned_approver_type:
+            (log as { assignedApproverType?: string | null })
+              .assignedApproverType ?? null,
+          opportunity_creator_kind:
+            (log as { opportunityCreatorKind?: string | null })
+              .opportunityCreatorKind ?? null,
+        }))
+      : report.section1?.attendance_logs || [];
+    // Only consumed by the `allProjectAttendance` metrics override below — skip the pass over
+    // attendance logs entirely on the common path (a student viewing their own report).
+    const liveLoggedHours = options?.allProjectAttendance
+      ? (Array.isArray(mappedAttendanceLogs) ? mappedAttendanceLogs : []).reduce(
+          (sum, log) => {
+            const rec = log as { approval_status?: unknown; hours?: unknown };
+            if (String(rec.approval_status || '').toLowerCase() === 'rejected') {
+              return sum;
+            }
+            return sum + (Number(rec.hours) || 0);
+          },
+          0,
+        )
+      : 0;
     const storedTeamLead = report.section1?.team_lead
       ? {
           ...report.section1.team_lead,
@@ -3388,29 +3438,21 @@ export class StudentReportsService {
               : await this.engagementService.getProjectTeamForReportDossier(
                   report.opportunityId || report.project_id,
                 ),
-          attendance_logs: pid
-            ? attendanceLogs.map((log) => ({
-                  id: log.id,
-                  participantId: log.participantId,
-                  date: log.dateOfEngagement,
-                  start_time: log.startTime,
-                  end_time: log.endTime,
-                  location: log.organizationName, // Mapping as location
-                  location_pin: (log as { locationPin?: string | null }).locationPin ?? null,
-                  activity_type: log.activityType,
-                  description: log.description,
-                  hours: Number(log.sessionHours),
-                  evidence_url: log.evidenceUrl,
-                  entryStatus: log.entryStatus,
-                  approval_status: (log as any).approvalStatus ?? null,
-                  approval_action_reason:
-                    (log as any).approvalActionReason ?? null,
-                  assigned_approver_type:
-                    (log as any).assignedApproverType ?? null,
-                  opportunity_creator_kind:
-                    (log as any).opportunityCreatorKind ?? null,
-                }))
-            : report.section1?.attendance_logs || [],
+          attendance_logs: mappedAttendanceLogs,
+          // Gate on whether any live logs exist at all, not on the resulting total being > 0 —
+          // a project where every logged session was rejected has a genuine live total of 0 and
+          // must still override the (now-stale) stored metrics rather than silently falling back
+          // to them, the same falsy-zero distinction `mapFacultyListPackage` makes.
+          ...(options?.allProjectAttendance &&
+          Array.isArray(mappedAttendanceLogs) &&
+          mappedAttendanceLogs.length > 0
+            ? {
+                metrics: {
+                  ...report.section1?.metrics,
+                  total_verified_hours: liveLoggedHours,
+                },
+              }
+            : {}),
         },
         section2: report.section2,
         section3: report.section3,

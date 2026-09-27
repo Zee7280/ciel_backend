@@ -910,6 +910,118 @@ describe('OpportunitiesService — create() CIEL PK review requirement is server
     });
 });
 
+describe('OpportunitiesService — Super Admin create skips a second CIEL gate unless a stakeholder is named', () => {
+    function makeCielAdminService() {
+        const create = jest.fn((payload) => payload);
+        const save = jest.fn((payload) => Promise.resolve({ id: 'ciel-opp-id', ...payload }));
+        const service = makeService({ create, save, findOne: jest.fn() });
+        (service as any).usersRepository = {
+            findOne: jest.fn().mockResolvedValue({
+                id: 'admin-1',
+                role: 'admin',
+                email: 'admin@ciel.pk',
+            }),
+        };
+        (service as any).organizationsService = {
+            getMyOrganization: jest.fn().mockResolvedValue(null),
+        };
+        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+        (service as any).mailService = {
+            sendAdminOpportunityReviewNeeded: jest.fn(),
+            sendFacultyStudentOpportunityVerification: jest.fn(),
+            sendPartnerVerification: jest.fn(),
+            sendPartnerOpportunityNotice: jest.fn(),
+        };
+        return { service, save };
+    }
+
+    function minimalAdminDto(overrides: Record<string, unknown> = {}) {
+        return {
+            title: 'National tree plantation',
+            mode: 'Remote',
+            safety_declaration: {
+                environment_safe_and_appropriate: true,
+                students_guided_and_supervised: true,
+                lawful_ethical_and_non_hazardous: true,
+                precautions_and_basic_safety: true,
+            },
+            submission_confirmations: {
+                academically_valid_and_accurately_described: true,
+                activity_properly_supervised: true,
+                environment_safe_and_appropriate: true,
+                information_correct_and_verifiable: true,
+            },
+            sdg_info: { sdg_id: '15' },
+            ...overrides,
+        } as any;
+    }
+
+    it('publishes immediately when CIEL Admin names neither a partner nor a faculty stakeholder', async () => {
+        const { service } = makeCielAdminService();
+        const saved = await service.create('admin-1', minimalAdminDto());
+        expect(saved.status).toBe('active');
+        expect(saved.adminApprovalStatus).toBe('approved');
+        expect(saved.admin_approved).toBe(true);
+        expect((service as any).mailService.sendAdminOpportunityReviewNeeded).not.toHaveBeenCalled();
+    });
+
+    it('does not treat the Super Admin creator email as a faculty stakeholder', async () => {
+        const { service } = makeCielAdminService();
+        const saved = await service.create(
+            'admin-1',
+            minimalAdminDto({
+                supervision: { contact: 'admin@ciel.pk', supervisor_name: 'CIEL PK Admin' },
+            }),
+        );
+        expect(saved.status).toBe('active');
+        expect(saved.facultyApprovalStatus).toBe('not_applicable');
+        expect(saved.faculty_verification_token).toBeFalsy();
+    });
+
+    it('waits on a named faculty (not CIEL) without a second admin queue', async () => {
+        const { service } = makeCielAdminService();
+        const saved = await service.create(
+            'admin-1',
+            minimalAdminDto({
+                supervision: { contact: 'hina.malik@bnu.edu.pk', supervisor_name: 'Dr. Hina Malik' },
+            }),
+        );
+        expect(saved.status).toBe('pending_faculty');
+        expect(saved.facultyApprovalStatus).toBe('pending');
+        expect(saved.adminApprovalStatus).toBe('approved');
+        expect(saved.admin_approved).toBe(false);
+        expect(saved.faculty_verification_token).toBeTruthy();
+        expect((service as any).mailService.sendFacultyStudentOpportunityVerification).toHaveBeenCalled();
+        expect((service as any).mailService.sendAdminOpportunityReviewNeeded).not.toHaveBeenCalled();
+    });
+
+    it('waits on a named partner from the faculty-form collaboration payload without a second admin queue', async () => {
+        const { service } = makeCielAdminService();
+        const saved = await service.create(
+            'admin-1',
+            minimalAdminDto({
+                external_partner_collaboration: {
+                    organization_name: 'Abroo',
+                    contact_person: 'Host',
+                    official_email: 'host@abroo.org',
+                },
+                supervision: {
+                    contact: 'admin@ciel.pk',
+                    supervisor_name: 'CIEL PK Admin',
+                    external_partner_email: 'host@abroo.org',
+                },
+            }),
+        );
+        expect(saved.status).toBe('pending_partner');
+        expect(saved.partnerApprovalStatus).toBe('pending');
+        expect(saved.adminApprovalStatus).toBe('approved');
+        expect(saved.admin_approved).toBe(false);
+        expect(saved.partnerToken).toBeTruthy();
+        expect((service as any).mailService.sendPartnerVerification).toHaveBeenCalled();
+        expect((service as any).mailService.sendAdminOpportunityReviewNeeded).not.toHaveBeenCalled();
+    });
+});
+
 describe('OpportunitiesService — afterFacultyVerified now also completes an NGO/Partner-linked faculty gate', () => {
     it('approving via the faculty token link moves a non-student, non-faculty-created opportunity on to pending_approval (no partner required)', () => {
         const workflow = new OpportunityWorkflowService();

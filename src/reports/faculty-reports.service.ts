@@ -89,7 +89,10 @@ function pickListString(...values: unknown[]): string {
 
 export function mapFacultyListPackage(
   report: StudentReport,
-  liveHours = 0,
+  /** null/undefined = no live attendance-log data for this project (fall back to the stored
+   * blob); a number (including 0, e.g. every logged session was rejected) is the real live
+   * total and must win outright — it must never be conflated with "no live data yet". */
+  liveHours: number | null = null,
 ): {
   university: string | null;
   faculty_name: string | null;
@@ -108,7 +111,11 @@ export function mapFacultyListPackage(
       (report.opportunity?.timeline as { expected_hours?: unknown } | undefined)
         ?.expected_hours,
     ) || 16;
-  const flashHours = resolveReportFlashHours(report.section1, liveHours);
+  // Live non-rejected project logs are the source of truth when present (team, not lead-only
+  // blob) — including a genuine live total of 0 (e.g. every session was rejected), which must
+  // not fall back to a stale stored value. Only the absence of live data (null) falls back.
+  const flashHours =
+    liveHours != null ? liveHours : resolveReportFlashHours(report.section1);
   const memberHours = [
     lead
       ? {
@@ -320,43 +327,48 @@ export class FacultyReportsService {
           where: { projectId: In(projectIds) },
         })
       : [];
-    const hoursByProject = new Map<string, number>();
+    // null = no attendance logs exist yet for this project (fall back to the stored blob); a
+    // number (including 0, e.g. every logged session was rejected) is the real live total.
+    const hoursByProject = new Map<string, number | null>();
     for (const projectId of projectIds) {
+      const projectLogs = logs.filter((log) => log.projectId === projectId);
       hoursByProject.set(
         projectId,
-        this.loggedHoursForProject(logs.filter((log) => log.projectId === projectId)),
+        projectLogs.length ? this.loggedHoursForProject(projectLogs) : null,
       );
     }
 
     return {
       success: true,
-      data: reports.map((r) => ({
-        id: r.id,
-        student_name: r.student?.name || 'Unknown',
-        student_email: r.student?.email || null,
-        project_title: r.opportunity?.title || r.project_id,
-        organization_name: r.opportunity?.organization?.name || 'N/A',
-        status: r.status,
-        faculty_status: r.faculty_status,
-        private_candidate: isPrivateCandidateOpportunity(r.opportunity),
-        review_route: reviewRouteForOpportunity(r.opportunity),
-        project_id: r.opportunityId || r.project_id || null,
-        hours: resolveReportFlashHours(
-          r.section1,
-          hoursByProject.get((r.opportunityId || r.project_id || '').trim()) || 0,
-        ),
-        submission_date: r.submission_date,
-        report_submitted_at: r.reportSubmittedAt,
-        partner_approved_at: r.partnerApprovedAt,
-        admin_approved_at: r.adminApprovedAt,
-        updated_at: r.updatedAt,
-        metrics: r.section1?.metrics,
-        ...mapFacultyListCii(r),
-        ...mapFacultyListPackage(
-          r,
-          hoursByProject.get((r.opportunityId || r.project_id || '').trim()) || 0,
-        ),
-      })),
+      data: reports.map((r) => {
+        const liveHours =
+          hoursByProject.get((r.opportunityId || r.project_id || '').trim()) ??
+          null;
+        return {
+          id: r.id,
+          student_name: r.student?.name || 'Unknown',
+          student_email: r.student?.email || null,
+          project_title: r.opportunity?.title || r.project_id,
+          organization_name: r.opportunity?.organization?.name || 'N/A',
+          status: r.status,
+          faculty_status: r.faculty_status,
+          private_candidate: isPrivateCandidateOpportunity(r.opportunity),
+          review_route: reviewRouteForOpportunity(r.opportunity),
+          project_id: r.opportunityId || r.project_id || null,
+          hours:
+            liveHours != null
+              ? liveHours
+              : resolveReportFlashHours(r.section1),
+          submission_date: r.submission_date,
+          report_submitted_at: r.reportSubmittedAt,
+          partner_approved_at: r.partnerApprovedAt,
+          admin_approved_at: r.adminApprovedAt,
+          updated_at: r.updatedAt,
+          metrics: r.section1?.metrics,
+          ...mapFacultyListCii(r),
+          ...mapFacultyListPackage(r, liveHours),
+        };
+      }),
     };
   }
 
@@ -388,7 +400,9 @@ export class FacultyReportsService {
       );
     }
 
-    return this.studentReportsService.buildDetailResponse(report);
+    return this.studentReportsService.buildDetailResponse(report, undefined, {
+      allProjectAttendance: true,
+    });
   }
 
   /** Shared lookup for faculty-scoped mutations (decision actions, CII v2 analyse/approve). */

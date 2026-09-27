@@ -1335,6 +1335,82 @@ describe('StudentReportsService', () => {
         expect(data.report_access?.can_edit_report_body).toBe(false);
       }
     });
+
+    it('still returns the lead report when the teammate also has a leftover individual seat', async () => {
+      const roster = fivePersonRoster();
+      const leftover = {
+        id: 'p-solo-2',
+        studentId: 'member-2',
+        projectId: SAMPLE_OPP_UUID,
+        participationMode: 'individual',
+        isTeamLead: false,
+        createdAt: new Date('2019-01-01'),
+        teamId: null,
+        applicationId: null,
+      };
+      const leadReport = leadReportRow();
+      mockParticipantRepository.findOne.mockImplementation(
+        (opts: { where?: Record<string, unknown> }) => {
+          const w = opts?.where ?? {};
+          if (w.studentId === 'member-2') return Promise.resolve(leftover);
+          const row = roster.find(
+            (p) => p.studentId === w.studentId && p.projectId === w.projectId,
+          );
+          return Promise.resolve(row ?? null);
+        },
+      );
+      mockParticipantRepository.find.mockImplementation(
+        (opts: { where?: Record<string, unknown> }) => {
+          const w = opts?.where ?? {};
+          if (w.studentId === 'member-2' && w.projectId === SAMPLE_OPP_UUID) {
+            return Promise.resolve([
+              leftover,
+              roster.find((p) => p.studentId === 'member-2'),
+            ]);
+          }
+          return Promise.resolve(
+            roster.filter((row) => {
+              if (w.projectId && row.projectId !== w.projectId) return false;
+              if (w.teamId && row.teamId !== w.teamId) return false;
+              if (w.applicationId && row.applicationId !== w.applicationId) {
+                return false;
+              }
+              if (
+                w.participationMode &&
+                row.participationMode !== w.participationMode
+              ) {
+                return false;
+              }
+              if (
+                w.isTeamLead !== undefined &&
+                row.isTeamLead !== w.isTeamLead
+              ) {
+                return false;
+              }
+              return true;
+            }),
+          );
+        },
+      );
+      mockStudentReportsRepository.findOne.mockResolvedValue(null);
+      mockStudentReportsRepository.find.mockResolvedValue([leadReport]);
+      mockUsersRepository.findOne.mockResolvedValue({
+        id: 'team-lead-student',
+        name: 'Lead',
+        email: 'lead@test.com',
+      });
+
+      const result = await service.findOneByOpportunityOrId(
+        SAMPLE_OPP_UUID,
+        'member-2',
+      );
+      const data = result.data as {
+        section2?: { problem_statement?: string };
+        report_access?: { can_submit_report?: boolean };
+      };
+      expect(data.section2?.problem_statement).toBe(WRITTEN);
+      expect(data.report_access?.can_submit_report).toBe(false);
+    });
   });
 
   it('holds private-candidate submit on the reporting-fee gateway', async () => {

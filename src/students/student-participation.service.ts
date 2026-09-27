@@ -7,7 +7,7 @@ import { StudentReport } from '../reports/entities/student-report.entity';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import { User } from '../users/entities/user.entity';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
-import { findCanonicalTeamLeadParticipation } from '../engagement/team-lead-canonical.util';
+import { enrollmentLooksLikeTeam, findCanonicalTeamLeadParticipation, findPreferredProjectEnrollment } from '../engagement/team-lead-canonical.util';
 import {
   attendanceCountsTowardProgress,
   resolveEffectiveAttendanceApproverType,
@@ -125,7 +125,7 @@ export class StudentParticipationService {
     participation: Participation,
   ): Promise<string | null> {
     const isMember =
-      participation.participationMode === 'team' &&
+      enrollmentLooksLikeTeam(participation) &&
       participation.isTeamLead !== true;
     let reportStudentId = studentUserId;
     if (isMember) {
@@ -168,10 +168,12 @@ export class StudentParticipationService {
     );
     const approverLabel = this.approverLabel(approverType);
 
-    const mine = await this.participationRepo.findOne({
-      where: { studentId: studentUserId, projectId: opportunityId },
-      relations: ['student'],
-    });
+    const mine = await findPreferredProjectEnrollment(
+      this.participationRepo,
+      studentUserId,
+      opportunityId,
+      { relations: ['student'] },
+    );
     const reportStatus =
       options?.reportStatus !== undefined
         ? options.reportStatus
@@ -204,7 +206,7 @@ export class StudentParticipationService {
       );
     }
 
-    if (mine?.participationMode === 'team') {
+    if (mine && enrollmentLooksLikeTeam(mine) && mine.isTeamLead !== true) {
       const lead = await findCanonicalTeamLeadParticipation(
         this.participationRepo,
         opportunityId,
@@ -229,8 +231,8 @@ export class StudentParticipationService {
           ),
           attendance_approver_label: approverLabel,
           messages: {
-            en: 'You are on a team project. Do not apply separately — update your attendance only; your team lead files the report.',
-            ur: 'You are on a team project. Do not apply separately — update your attendance only; your team lead files the report.',
+            en: 'You are on a team project. Do not apply separately � update your attendance only; your team lead files the report.',
+            ur: 'You are on a team project. Do not apply separately � update your attendance only; your team lead files the report.',
           },
         },
         { participation: mine, opportunity, reportStatus },
@@ -320,8 +322,8 @@ export class StudentParticipationService {
         attendance_approver_type: approverType,
         attendance_approver_label: approverLabel,
         messages: {
-          en: 'Joining a teammate who already started? Do not apply — ask them to add you in Section 1. Your own work? Apply as Individual.',
-          ur: 'Joining a teammate who already started? Do not apply — ask them to add you in Section 1. Your own work? Apply as Individual.',
+          en: 'Joining a teammate who already started? Do not apply � ask them to add you in Section 1. Your own work? Apply as Individual.',
+          ur: 'Joining a teammate who already started? Do not apply � ask them to add you in Section 1. Your own work? Apply as Individual.',
         },
       },
       { participation: null, opportunity },
@@ -334,10 +336,12 @@ export class StudentParticipationService {
     });
     if (!opportunity) throw new NotFoundException('Project not found');
 
-    const mine = await this.participationRepo.findOne({
-      where: { studentId: studentUserId, projectId },
-      relations: ['student'],
-    });
+    const mine = await findPreferredProjectEnrollment(
+      this.participationRepo,
+      studentUserId,
+      projectId,
+      { relations: ['student'] },
+    );
     if (!mine)
       throw new NotFoundException('You are not enrolled on this project');
 
@@ -350,7 +354,7 @@ export class StudentParticipationService {
       reportStatus,
     });
     const isLead = mine.isTeamLead === true;
-    const isMember = mine.participationMode === 'team' && !isLead;
+    const isMember = enrollmentLooksLikeTeam(mine) && !isLead;
 
     const logs = await this.attendanceLogRepo.find({
       where: { participantId: mine.id },

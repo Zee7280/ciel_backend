@@ -22,6 +22,7 @@ import {
   enrollmentLooksLikeTeam,
   findCanonicalTeamLeadParticipation,
   findCanonicalTeamLeadStudentId,
+  findPreferredProjectEnrollment,
   loadSameTeamParticipations,
   resolveCanonicalLeadStudentIdForViewer,
 } from '../engagement/team-lead-canonical.util';
@@ -1009,9 +1010,11 @@ export class StudentReportsService {
       return false;
     }
     const projectId = String(projKey).trim();
-    const mine = await this.participantRepository.findOne({
-      where: { studentId: viewerStudentId, projectId },
-    });
+    const mine = await findPreferredProjectEnrollment(
+      this.participantRepository,
+      viewerStudentId,
+      projectId,
+    );
     if (!mine || !enrollmentLooksLikeTeam(mine)) {
       return false;
     }
@@ -1044,9 +1047,11 @@ export class StudentReportsService {
       return { report: null, attendanceStudentId: viewerStudentId };
     }
 
-    const mine = await this.participantRepository.findOne({
-      where: { studentId: viewerStudentId, projectId: key },
-    });
+    const mine = await findPreferredProjectEnrollment(
+      this.participantRepository,
+      viewerStudentId,
+      key,
+    );
 
     const fetchLatestRow = async (sid: string) => {
       const where = [
@@ -2332,9 +2337,11 @@ export class StudentReportsService {
     const oid = String(opportunityId).trim();
     if (!this.looksLikeUuid(oid)) return;
 
-    const mine = await this.participantRepository.findOne({
-      where: { studentId, projectId: oid },
-    });
+    const mine = await findPreferredProjectEnrollment(
+      this.participantRepository,
+      studentId,
+      oid,
+    );
     if (!mine) return;
     if (!enrollmentLooksLikeTeam(mine)) return;
 
@@ -3131,9 +3138,11 @@ export class StudentReportsService {
     }
 
     // If no report found, check for an application to pre-populate
-    const application = await this.participantRepository.findOne({
-      where: { projectId: id, studentId },
-    });
+    const application = await findPreferredProjectEnrollment(
+      this.participantRepository,
+      studentId,
+      id,
+    );
 
     if (application) {
       const studentProfile = await this.usersRepository.findOne({
@@ -3248,9 +3257,11 @@ export class StudentReportsService {
       : [];
 
     const mine = this.looksLikeUuid(projectKey)
-      ? await this.participantRepository.findOne({
-          where: { studentId: viewerStudentId, projectId: projectKey },
-        })
+      ? await findPreferredProjectEnrollment(
+          this.participantRepository,
+          viewerStudentId,
+          projectKey,
+        )
       : null;
 
     if (!mine || !enrollmentLooksLikeTeam(mine)) {

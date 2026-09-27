@@ -65,6 +65,34 @@ describe('StudentParticipationService', () => {
   });
 
   it('guides team member to my participation', async () => {
+    mockParticipationRepo.find.mockImplementation(
+      (opts?: { where?: Record<string, unknown> }) => {
+        const w = opts?.where ?? {};
+        if (w.studentId === 'u1' && w.projectId === 'opp-1') {
+          return Promise.resolve([
+            {
+              id: 'p1',
+              studentId: 'u1',
+              projectId: 'opp-1',
+              participationMode: 'team',
+              isTeamLead: false,
+              teamId: 'TM-1',
+              teamDisplayName: 'Water · Ali Team',
+              attendanceApproverType: 'faculty',
+              emailVerified: true,
+            },
+          ]);
+        }
+        return Promise.resolve([
+          {
+            id: 'lead-1',
+            fullName: 'Ali Khan',
+            isTeamLead: true,
+            createdAt: new Date(),
+          },
+        ]);
+      },
+    );
     mockParticipationRepo.findOne.mockResolvedValue({
       id: 'p1',
       studentId: 'u1',
@@ -76,14 +104,6 @@ describe('StudentParticipationService', () => {
       attendanceApproverType: 'faculty',
       emailVerified: true,
     });
-    mockParticipationRepo.find.mockResolvedValue([
-      {
-        id: 'lead-1',
-        fullName: 'Ali Khan',
-        isTeamLead: true,
-        createdAt: new Date(),
-      },
-    ]);
 
     const guide = await service.getParticipationGuide('u1', 'opp-1');
     expect(guide.your_role).toBe('team_member');
@@ -94,6 +114,7 @@ describe('StudentParticipationService', () => {
 
   it('allows apply when not enrolled', async () => {
     mockParticipationRepo.findOne.mockResolvedValue(null);
+    mockParticipationRepo.find.mockResolvedValue([]);
     const guide = await service.getParticipationGuide('u1', 'opp-1');
     expect(guide.can_apply).toBe(true);
     expect(guide.messages.en).toContain('Do not apply');

@@ -23,6 +23,7 @@ import { EngagementService } from '../engagement/engagement.service';
 import {
   enrollmentLooksLikeTeam,
   findCanonicalTeamLeadStudentId,
+  findPreferredProjectEnrollment,
   loadSameTeamParticipations,
   resolveCanonicalLeadStudentIdForViewer,
 } from '../engagement/team-lead-canonical.util';
@@ -1622,7 +1623,7 @@ export class StudentsService {
           participation_mode: app.participationMode,
           team_display_name: app.teamDisplayName,
           is_team_member:
-            app.participationMode === 'team' && app.isTeamLead !== true,
+            enrollmentLooksLikeTeam(app) && app.isTeamLead !== true,
           participation_phase: phase,
           participation_phase_label: participationPhaseLabel(phase),
         };
@@ -1685,9 +1686,11 @@ export class StudentsService {
     );
 
     if (studentUserId) {
-      const part = await this.participantRepository.findOne({
-        where: { studentId: studentUserId, projectId: opportunityId },
-      });
+      const part = await findPreferredProjectEnrollment(
+        this.participantRepository,
+        studentUserId,
+        opportunityId,
+      );
       const overlay =
         await this.opportunityApplicationsService.resolveStudentJoinOverlay(
           studentUserId,
@@ -1698,10 +1701,28 @@ export class StudentsService {
       applicationStage = overlay.applicationStage;
       applicationInternalStatus = overlay.applicationInternalStatus;
       hasApplied = overlay.hasApplied;
-      participationType = part?.participationMode || participationType;
+      participationType = enrollmentLooksLikeTeam(part)
+        ? 'team'
+        : part?.participationMode || participationType;
+
+      const partStatus = (part?.status || '').toLowerCase();
+      const enrolledSeat = [
+        'approved',
+        'verified',
+        'accepted',
+        'finalized',
+      ].includes(partStatus);
+      if (
+        enrolledSeat &&
+        ['pending_approval', 'pending', 'applied'].includes(
+          String(applicationStatus || '').toLowerCase(),
+        )
+      ) {
+        applicationStatus = partStatus === 'verified' ? 'verified' : 'approved';
+      }
 
       if (part) {
-        if (part.participationMode === 'team') {
+        if (enrollmentLooksLikeTeam(part)) {
           const teamRows =
             await this.participationRowsForStudentProjectTeam(part);
           teamSize = teamRows.length > 0 ? teamRows.length : 1;
@@ -1711,9 +1732,9 @@ export class StudentsService {
       }
 
       const joinCleared =
-        overlay.applicationStatus === 'approved' ||
-        overlay.applicationStatus === 'verified' ||
-        (!!part && ['approved', 'verified'].includes(part.status)) ||
+        applicationStatus === 'approved' ||
+        applicationStatus === 'verified' ||
+        enrolledSeat ||
         (isStudentOwner &&
           this.opportunityApplicationsService.isCreatorOwnLiveListing(
             opportunity,
@@ -2553,9 +2574,11 @@ export class StudentsService {
     const key = projectKey.trim();
     if (!this.looksLikeImpactUuid(key)) return null;
 
-    const mine = await this.participantRepository.findOne({
-      where: { studentId: viewerStudentId, projectId: key },
-    });
+    const mine = await findPreferredProjectEnrollment(
+      this.participantRepository,
+      viewerStudentId,
+      key,
+    );
 
     const fetchLatestRow = async (sid: string) =>
       this.studentReportsRepository.findOne({
@@ -2594,9 +2617,11 @@ export class StudentsService {
     const pid = (projKey || '').trim();
     if (!this.looksLikeImpactUuid(pid)) return false;
 
-    const mine = await this.participantRepository.findOne({
-      where: { studentId: requestingStudentId, projectId: pid },
-    });
+    const mine = await findPreferredProjectEnrollment(
+      this.participantRepository,
+      requestingStudentId,
+      pid,
+    );
     if (!mine || !enrollmentLooksLikeTeam(mine)) return false;
 
     const roster = await loadSameTeamParticipations(

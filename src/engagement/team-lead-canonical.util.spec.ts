@@ -3,6 +3,7 @@ import {
   enrollmentLooksLikeTeam,
   loadSameTeamParticipations,
   pickCanonicalTeamLeadFromMembers,
+  pickPreferredProjectEnrollment,
   resolveCanonicalLeadStudentIdForViewer,
 } from './team-lead-canonical.util';
 import { Repository } from 'typeorm';
@@ -100,6 +101,30 @@ describe('enrollmentLooksLikeTeam', () => {
         teamId: null,
       } as unknown as Participation),
     ).toBe(false);
+  });
+});
+
+describe('pickPreferredProjectEnrollment', () => {
+  it('prefers the team member seat over a leftover individual row', () => {
+    const leftover = member({
+      id: 'p-solo',
+      studentId: 'member-2',
+      participationMode: 'individual',
+      isTeamLead: false,
+      teamId: null,
+      createdAt: new Date('2019-01-01'),
+    });
+    const teamSeat = member({
+      id: 'p-team',
+      studentId: 'member-2',
+      participationMode: 'team',
+      isTeamLead: false,
+      teamId: 'team-5',
+      createdAt: new Date('2020-06-01'),
+    });
+    expect(pickPreferredProjectEnrollment([leftover, teamSeat])?.id).toBe(
+      'p-team',
+    );
   });
 });
 

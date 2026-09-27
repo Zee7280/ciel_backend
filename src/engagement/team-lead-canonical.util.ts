@@ -68,6 +68,54 @@ export function enrollmentLooksLikeTeam(
   return Boolean((participation.teamId || '').trim());
 }
 
+/**
+ * One student can have an individual leftover row plus a later team seat on the same project.
+ * Prefer the team seat so teammates resolve the shared lead report instead of an empty own draft.
+ */
+export function pickPreferredProjectEnrollment(
+  rows: Participation[],
+): Participation | null {
+  if (!rows.length) return null;
+  const teamish = rows.filter((row) => enrollmentLooksLikeTeam(row));
+  const pool = teamish.length ? teamish : rows;
+  return [...pool].sort((a, b) => {
+    if (a.isTeamLead !== b.isTeamLead) return a.isTeamLead ? -1 : 1;
+    const aTeam = a.participationMode === 'team' ? 1 : 0;
+    const bTeam = b.participationMode === 'team' ? 1 : 0;
+    if (aTeam !== bTeam) return bTeam - aTeam;
+    const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    return aTime - bTime || String(a.id || '').localeCompare(String(b.id || ''));
+  })[0];
+}
+
+export async function findPreferredProjectEnrollment(
+  repo: Repository<Participation>,
+  studentId: string,
+  projectId: string,
+  options?: { relations?: string[] },
+): Promise<Participation | null> {
+  const pid = projectId.trim();
+  const sid = studentId.trim();
+  if (!sid || !pid) return null;
+  if (typeof repo.find === 'function') {
+    const rows = await repo.find({
+      where: { studentId: sid, projectId: pid },
+      ...(options?.relations ? { relations: options.relations } : {}),
+    });
+    if (Array.isArray(rows) && rows.length > 0) {
+      return pickPreferredProjectEnrollment(rows);
+    }
+  }
+  if (typeof repo.findOne === 'function') {
+    return repo.findOne({
+      where: { studentId: sid, projectId: pid },
+      ...(options?.relations ? { relations: options.relations } : {}),
+    });
+  }
+  return null;
+}
+
 function rosterKey(row: Pick<Participation, 'id' | 'studentId'>): string {
   const id = (row.id || '').trim();
   if (id) return id;

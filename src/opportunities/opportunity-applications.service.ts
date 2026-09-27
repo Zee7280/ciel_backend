@@ -35,6 +35,10 @@ import {
   pickCanonicalTeamLeadFromMembers,
 } from '../engagement/team-lead-canonical.util';
 import { buildTeamDisplayName } from '../engagement/team-display-name.util';
+import {
+  participationStudentIdMislinked,
+  pickSeatToKeepWhenRelinking,
+} from './team-enrollment-link.util';
 
 const PENDING_PIPELINE: OpportunityApplicationInternalStatus[] = [
   'pending_faculty',
@@ -1200,21 +1204,14 @@ export class OpportunityApplicationsService {
     const allEmails = [
       ...new Set(
         rows
-          .map((r) => this.normalizeEmail(r.student?.email ?? r.email ?? ''))
+          .flatMap((r) => [
+            this.normalizeEmail(r.email ?? ''),
+            this.normalizeEmail(r.student?.email ?? ''),
+          ])
           .filter(Boolean),
       ),
     ];
-    const emailOwnerByEmail = new Map<string, string>();
-    if (allEmails.length) {
-      const owners = await this.userRepo
-        .createQueryBuilder('u')
-        .where('LOWER(TRIM(u.email)) IN (:...emails)', { emails: allEmails })
-        .getMany();
-      for (const owner of owners) {
-        const em = this.normalizeEmail(owner.email);
-        if (em) emailOwnerByEmail.set(em, owner.id);
-      }
-    }
+    const emailOwnerByEmail = await this.loadLoginUserIdByEmailMap(allEmails);
 
     const data: Array<Record<string, unknown>> = [];
     let completedReports = 0;
@@ -1266,44 +1263,47 @@ export class OpportunityApplicationsService {
 
       const seatCountByEmailInGroup = new Map<string, number>();
       for (const member of members) {
-        const em = this.normalizeEmail(
-          member.student?.email ?? member.email ?? '',
-        );
-        if (!em) continue;
-        seatCountByEmailInGroup.set(
-          em,
-          (seatCountByEmailInGroup.get(em) ?? 0) + 1,
-        );
+        for (const raw of [member.email, member.student?.email]) {
+          const em = this.normalizeEmail(raw ?? '');
+          if (!em) continue;
+          seatCountByEmailInGroup.set(
+            em,
+            (seatCountByEmailInGroup.get(em) ?? 0) + 1,
+          );
+        }
       }
 
       const memberPayload = dedupMembers.map((member) => {
+        const rosterEmail =
+          this.normalizeEmail(member.email) ||
+          this.normalizeEmail(member.student?.email ?? '');
         const rep = member.studentId
           ? this.pickLatestReportForStudent(reports, member.studentId)
           : null;
         const reportStatus = this.toTeamReportStatus(rep?.status);
         const snap = this.participationMobileAndCnicSnapshot(member);
-        const memberEmail = this.normalizeEmail(
-          member.student?.email ?? member.email ?? '',
-        );
         const byStudent = member.studentId
           ? (seatCountByStudentId.get(member.studentId) ?? 1)
           : 1;
-        const byEmail = memberEmail
-          ? (seatCountByEmailInGroup.get(memberEmail) ?? 1)
+        const byEmail = rosterEmail
+          ? (seatCountByEmailInGroup.get(rosterEmail) ?? 1)
           : 1;
-        const emailOwnerId = memberEmail
-          ? emailOwnerByEmail.get(memberEmail)
+        const emailOwnerId = rosterEmail
+          ? emailOwnerByEmail.get(rosterEmail)
           : undefined;
-        const studentIdMislinked = Boolean(
-          emailOwnerId &&
-          member.studentId?.trim() &&
-          emailOwnerId !== member.studentId.trim(),
-        );
+        const studentIdMislinked = participationStudentIdMislinked({
+          emailOwnerId,
+          studentId: member.studentId,
+        });
         return {
           id: member.id,
           supports_admin_patch: true,
-          name: member.student?.name ?? member.fullName ?? null,
-          email: member.student?.email ?? member.email ?? null,
+          name: studentIdMislinked
+            ? member.fullName ?? member.student?.name ?? null
+            : member.student?.name ?? member.fullName ?? null,
+          email: studentIdMislinked
+            ? member.email ?? member.student?.email ?? null
+            : member.student?.email ?? member.email ?? null,
           role:
             isIndividualEntry || member.id === canonicalLead.id
               ? 'lead'
@@ -2183,6 +2183,18 @@ export class OpportunityApplicationsService {
     const salvaged =
       await this.salvageAllDuplicateAccountSeatsWithoutDelete(opportunityId);
     await this.reconcileMissingTeamMemberSeatsForOpportunity(opportunityId);
+    const activeForRelink = await this.participationRepo.find({
+      where: {
+        projectId: opportunityId,
+        status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
+      },
+      relations: ['student'],
+    });
+    const linksRepaired = await this.relinkMismatchedStudentIdSeats(
+      opportunityId,
+      activeForRelink,
+      { mergeDuplicates: false },
+    );
 
     const rows = await this.participationRepo.find({
       where: {
@@ -2206,15 +2218,18 @@ export class OpportunityApplicationsService {
     return {
       success: true,
       message:
-        salvaged > 0
-          ? `Restored ${salvaged} teammate seat(s) from duplicate rows and application data. No enrollments were deleted.`
-          : duplicateAccountCount > 0
-            ? `Restored seats from applications. ${duplicateAccountCount} account(s) still have duplicate rows — use Repair enrollments or Clean dupes on a row.`
-            : 'Restored missing team seats from applications. No enrollments were deleted.',
+        linksRepaired > 0
+          ? `Fixed ${linksRepaired} wrong account link(s). No enrollments were deleted.`
+          : salvaged > 0
+            ? `Restored ${salvaged} teammate seat(s) from duplicate rows and application data. No enrollments were deleted.`
+            : duplicateAccountCount > 0
+              ? `Restored seats from applications. ${duplicateAccountCount} account(s) still have duplicate rows — use Repair enrollments or Clean dupes on a row.`
+              : 'Restored missing team seats from applications. No enrollments were deleted.',
       data: {
         duplicate_accounts_remaining: duplicateAccountCount,
         seats_removed: 0,
         teammates_salvaged: salvaged,
+        student_id_links_repaired: linksRepaired,
         ...refreshed,
       },
     };
@@ -2308,52 +2323,12 @@ export class OpportunityApplicationsService {
         projectId: opportunityId,
         status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
       },
+      relations: ['student'],
     });
-
-    for (const seat of afterEmailDedupe) {
-      const em = this.normalizeEmail(seat.email);
-      if (!em) continue;
-      const owner = await this.userRepo
-        .createQueryBuilder('u')
-        .where('LOWER(TRIM(u.email)) = :em', { em })
-        .getOne();
-      if (!owner?.id || seat.studentId === owner.id) continue;
-
-      const ownerSeat = await this.participationRepo.findOne({
-        where: { projectId: opportunityId, studentId: owner.id },
+    summary.student_id_links_repaired +=
+      await this.relinkMismatchedStudentIdSeats(opportunityId, afterEmailDedupe, {
+        mergeDuplicates: true,
       });
-      if (ownerSeat && ownerSeat.id !== seat.id) {
-        const [keepScore, dropScore] = await Promise.all([
-          this.scoreParticipationSeatForHeal(ownerSeat, owner),
-          this.scoreParticipationSeatForHeal(seat, owner),
-        ]);
-        const keep = keepScore >= dropScore ? ownerSeat : seat;
-        const drop = keep.id === ownerSeat.id ? seat : ownerSeat;
-        await this.moveAttendanceLogsToParticipant(drop.id, keep.id);
-        await this.participationRepo.remove(drop);
-        summary.duplicate_email_rows_removed += 1;
-        if (keep.id === seat.id) {
-          seat.studentId = owner.id;
-          seat.fullName = owner.name || seat.fullName;
-          seat.email = this.normalizeEmail(owner.email);
-          await this.participationRepo.save(seat);
-          summary.student_id_links_repaired += 1;
-        }
-        continue;
-      }
-
-      seat.studentId = owner.id;
-      seat.fullName = owner.name || seat.fullName;
-      seat.email = this.normalizeEmail(owner.email);
-      if (owner.phone) seat.mobile = owner.phone;
-      if (owner.university) {
-        seat.universityName = owner.university;
-        seat.universityId = owner.university;
-      }
-      if (owner.major) seat.academicProgram = owner.major;
-      await this.participationRepo.save(seat);
-      summary.student_id_links_repaired += 1;
-    }
 
     const teamIds = new Set<string>();
     const finalSeats = await this.participationRepo.find({
@@ -2419,6 +2394,125 @@ export class OpportunityApplicationsService {
         ...refreshed,
       },
     };
+  }
+
+  /**
+   * Same account login uses (`UsersService.findByEmail`): case-insensitive match.
+   * Multiple user rows with the same email must not flip the "wrong account" flag
+   * depending on getMany order.
+   */
+  private async loadLoginUserIdByEmailMap(
+    emails: string[],
+  ): Promise<Map<string, string>> {
+    const unique = [...new Set(emails.map((e) => this.normalizeEmail(e)).filter(Boolean))];
+    const map = new Map<string, string>();
+    if (!unique.length) return map;
+    const owners = await Promise.all(
+      unique.map(async (em) => [em, await this.usersService.findByEmail(em)] as const),
+    );
+    for (const [em, owner] of owners) {
+      if (owner?.id) map.set(em, owner.id);
+    }
+    return map;
+  }
+
+  private applyEmailOwnerProfile(seat: Participation, owner: User, rosterEmail: string) {
+    seat.studentId = owner.id;
+    seat.fullName = owner.name || seat.fullName;
+    seat.email = this.normalizeEmail(owner.email) || rosterEmail;
+    if (owner.phone) seat.mobile = owner.phone;
+    if (owner.university) {
+      seat.universityName = owner.university;
+      seat.universityId = owner.university;
+    }
+    if (owner.major) seat.academicProgram = owner.major;
+  }
+
+  /**
+   * Point teammate seats at the login user for their roster email.
+   * Repair may merge a leftover individual seat into the team row.
+   * Auto-fix only updates in place (no deletes).
+   */
+  private async relinkMismatchedStudentIdSeats(
+    opportunityId: string,
+    seats: Participation[],
+    opts: { mergeDuplicates: boolean },
+  ): Promise<number> {
+    let repaired = 0;
+    const seen = new Set<string>();
+
+    for (const seat of seats) {
+      if (!seat?.id || seen.has(seat.id)) continue;
+      const em =
+        this.normalizeEmail(seat.email) ||
+        this.normalizeEmail(seat.student?.email ?? '');
+      if (!em) continue;
+
+      const owner = await this.usersService.findByEmail(em);
+      if (!owner?.id) continue;
+      if ((seat.studentId || '').trim() === owner.id) continue;
+
+      const ownerSeat = await this.participationRepo.findOne({
+        where: {
+          projectId: opportunityId,
+          studentId: owner.id,
+          status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
+        },
+      });
+
+      if (ownerSeat && ownerSeat.id !== seat.id) {
+        if (!opts.mergeDuplicates) continue;
+        const keep = pickSeatToKeepWhenRelinking(ownerSeat, seat);
+        const drop = keep.id === ownerSeat.id ? seat : ownerSeat;
+        await this.moveAttendanceLogsToParticipant(drop.id, keep.id);
+        this.applyEmailOwnerProfile(keep, owner, em);
+        if (!(keep.teamId || '').trim() && (drop.teamId || '').trim()) {
+          keep.teamId = drop.teamId;
+          keep.participationMode = 'team';
+        }
+        if (!keep.isTeamLead && drop.isTeamLead) {
+          keep.isTeamLead = true;
+        }
+        await this.participationRepo.save(keep);
+        await this.participationRepo.remove(drop);
+        seen.add(keep.id);
+        seen.add(drop.id);
+        repaired += 1;
+        continue;
+      }
+
+      try {
+        this.applyEmailOwnerProfile(seat, owner, em);
+        await this.participationRepo.save(seat);
+        seen.add(seat.id);
+        repaired += 1;
+      } catch {
+        if (!opts.mergeDuplicates) continue;
+        const conflict = await this.participationRepo.findOne({
+          where: {
+            projectId: opportunityId,
+            studentId: owner.id,
+            status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
+          },
+        });
+        if (!conflict || conflict.id === seat.id) continue;
+        const keep = pickSeatToKeepWhenRelinking(conflict, seat);
+        const drop = keep.id === conflict.id ? seat : conflict;
+        await this.moveAttendanceLogsToParticipant(drop.id, keep.id);
+        this.applyEmailOwnerProfile(keep, owner, em);
+        if (!(keep.teamId || '').trim() && (drop.teamId || '').trim()) {
+          keep.teamId = drop.teamId;
+          keep.participationMode = 'team';
+        }
+        await this.participationRepo.save(keep);
+        await this.participationRepo.remove(drop);
+        seen.add(keep.id);
+        seen.add(drop.id);
+        repaired += 1;
+      }
+    }
+
+    return repaired;
   }
 
   private async scoreParticipationSeatForHeal(

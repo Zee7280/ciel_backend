@@ -2952,7 +2952,11 @@ export class StudentReportsService {
       throw new NotFoundException('Report not found');
     }
 
-    return await this.formatReportResponse(report);
+    // A shared team report's attendance would otherwise be scoped to just the
+    // report owner (report.studentId) — admin needs the whole team's logs.
+    return await this.formatReportResponse(report, undefined, {
+      allProjectAttendance: true,
+    });
   }
 
   /** Same dossier payload as admin/partner detail, for role-scoped controllers that already verified access. */
@@ -2987,8 +2991,12 @@ export class StudentReportsService {
       );
     }
 
+    // Same reasoning as findOne (admin) above — a partner reviewing a team's
+    // report must see every member's logged hours, not just the owner's.
     return StudentReportsService.redactCiiV2ForExternalViewer(
-      await this.formatReportResponse(report),
+      await this.formatReportResponse(report, undefined, {
+        allProjectAttendance: true,
+      }),
     );
   }
 
@@ -3042,9 +3050,14 @@ export class StudentReportsService {
     }
 
     if (report) {
+      // This is one shared row per team — every team member (lead or not)
+      // must see the whole team's logged hours here, not just their own,
+      // or a teammate's logged sessions silently never appear to anyone else.
       return StudentReportsService.redactSection11ScoreForStudent(
         StudentReportsService.redactCiiV2ForExternalViewer(
-          await this.formatReportResponse(report, attendanceParticipantId),
+          await this.formatReportResponse(report, attendanceParticipantId, {
+            allProjectAttendance: true,
+          }),
         ),
       );
     }
@@ -4384,6 +4397,8 @@ export class StudentReportsService {
     report.section11 = mergedSection11 as StudentReport['section11'];
     await this.studentReportsRepository.save(report);
 
-    return this.formatReportResponse(report);
+    return this.formatReportResponse(report, undefined, {
+      allProjectAttendance: true,
+    });
   }
 }

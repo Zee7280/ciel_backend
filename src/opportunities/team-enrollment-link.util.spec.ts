@@ -1,4 +1,5 @@
 import {
+  countSeatsByRosterEmail,
   participationStudentIdMislinked,
   pickSeatToKeepWhenRelinking,
 } from './team-enrollment-link.util';
@@ -29,6 +30,39 @@ describe('participationStudentIdMislinked', () => {
         studentId: null,
       }),
     ).toBe(false);
+  });
+});
+
+describe('countSeatsByRosterEmail', () => {
+  const normalize = (value: string) => value.trim().toLowerCase();
+
+  it('does not treat seat.email + student.email on the same row as two seats', () => {
+    const counts = countSeatsByRosterEmail(
+      [
+        {
+          email: 'f2023-159@bnu.edu.pk',
+          linkedEmail: 'F2023-159@bnu.edu.pk',
+        },
+        {
+          email: 'f2024-0989@bnu.edu.pk',
+          linkedEmail: 'f2024-0989@bnu.edu.pk',
+        },
+      ],
+      normalize,
+    );
+    expect(counts.get('f2023-159@bnu.edu.pk')).toBe(1);
+    expect(counts.get('f2024-0989@bnu.edu.pk')).toBe(1);
+  });
+
+  it('counts two participation rows that share an email as duplicate seats', () => {
+    const counts = countSeatsByRosterEmail(
+      [
+        { email: 'f2023-159@bnu.edu.pk', linkedEmail: 'f2023-159@bnu.edu.pk' },
+        { email: 'f2023-159@bnu.edu.pk', linkedEmail: null },
+      ],
+      normalize,
+    );
+    expect(counts.get('f2023-159@bnu.edu.pk')).toBe(2);
   });
 });
 

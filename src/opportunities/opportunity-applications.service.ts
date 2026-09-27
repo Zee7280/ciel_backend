@@ -36,6 +36,7 @@ import {
 } from '../engagement/team-lead-canonical.util';
 import { buildTeamDisplayName } from '../engagement/team-display-name.util';
 import {
+  countSeatsByRosterEmail,
   participationStudentIdMislinked,
   pickSeatToKeepWhenRelinking,
 } from './team-enrollment-link.util';
@@ -1261,17 +1262,13 @@ export class OpportunityApplicationsService {
         dedupMembers.push(member);
       }
 
-      const seatCountByEmailInGroup = new Map<string, number>();
-      for (const member of members) {
-        for (const raw of [member.email, member.student?.email]) {
-          const em = this.normalizeEmail(raw ?? '');
-          if (!em) continue;
-          seatCountByEmailInGroup.set(
-            em,
-            (seatCountByEmailInGroup.get(em) ?? 0) + 1,
-          );
-        }
-      }
+      const seatCountByEmailInGroup = countSeatsByRosterEmail(
+        members.map((member) => ({
+          email: member.email,
+          linkedEmail: member.student?.email,
+        })),
+        (value) => this.normalizeEmail(value),
+      );
 
       const memberPayload = dedupMembers.map((member) => {
         const rosterEmail =

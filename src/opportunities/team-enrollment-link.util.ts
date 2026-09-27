@@ -27,3 +27,17 @@ export function pickSeatToKeepWhenRelinking<
   if (ownerSeat.isTeamLead && !mislinkedSeat.isTeamLead) return ownerSeat;
   return mislinkedSeat;
 }
+
+/** One increment per participation row, not per email field on that row. */
+export function countSeatsByRosterEmail(
+  rows: Array<{ email?: string | null; linkedEmail?: string | null }>,
+  normalize: (value: string) => string,
+): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const row of rows) {
+    const em = normalize(row.email || '') || normalize(row.linkedEmail || '');
+    if (!em) continue;
+    map.set(em, (map.get(em) ?? 0) + 1);
+  }
+  return map;
+}

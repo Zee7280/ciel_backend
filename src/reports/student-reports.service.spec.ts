@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { StudentReportsService } from './student-reports.service';
@@ -161,6 +161,12 @@ describe('StudentReportsService', () => {
   const mockMailService = {
     sendAdminStudentReportSubmitted: jest.fn().mockResolvedValue(undefined),
     sendFacultyInvite: jest.fn().mockResolvedValue(undefined),
+    sendFacultyStudentReportAwaitingReview: jest
+      .fn()
+      .mockResolvedValue(undefined),
+    sendStudentImpactReportFacultyDecision: jest
+      .fn()
+      .mockResolvedValue(undefined),
   };
   const mockConfigService = {
     get: jest.fn().mockReturnValue(''),
@@ -2035,6 +2041,274 @@ describe('StudentReportsService', () => {
     expect(data.status).toBe('revision');
     expect(data.private_candidate).toBe(false);
     expect(data.review_route).toBe('faculty');
+  });
+
+  it('prefers faculty_remarks over leftover admin_feedback when Faculty asked for revision', async () => {
+    const OPP = '582da802-e41e-488d-bd3d-d6dee59982b7';
+    const report = {
+      id: 'report-1',
+      studentId: 'student-1',
+      opportunityId: OPP,
+      project_id: OPP,
+      status: 'revision',
+      faculty_status: 'revision_requested',
+      faculty_remarks:
+        'Section(s): Section 4\nReason: Hours look thin.\nRequired Correction: Add session dates.',
+      admin_status: 'pending',
+      partner_status: 'pending',
+      admin_feedback: 'Old partner note that must not hide Faculty comments.',
+      section11: null,
+      submission_date: new Date(),
+      reportSubmittedAt: new Date(),
+      partnerApprovedAt: null,
+      adminApprovedAt: null,
+      opportunity: { title: 'Test' },
+    };
+    mockParticipantRepository.findOne.mockResolvedValue(null);
+    mockStudentReportsRepository.findOne.mockImplementation(async () => report);
+
+    const result = await service.checkReportStatus('student-1', OPP);
+    const data = result.data as { feedback?: string; status?: string };
+
+    expect(data.status).toBe('revision');
+    expect(data.feedback).toBe(
+      'Section(s): Section 4\nReason: Hours look thin.\nRequired Correction: Add session dates.',
+    );
+  });
+
+  it('includes faculty_remarks on listing rows for Action Required / rejected cards', async () => {
+    const opp = '582da802-e41e-488d-bd3d-d6dee59982b8';
+    const leadReport = {
+      id: 'report-lead',
+      studentId: 'lead-student',
+      opportunityId: opp,
+      project_id: opp,
+      status: 'revision',
+      faculty_status: 'revision_requested',
+      faculty_remarks: 'Please add baseline evidence.',
+      partner_status: 'pending',
+      admin_status: 'pending',
+      submission_date: new Date(),
+      reportSubmittedAt: new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date('2026-09-01T10:00:00.000Z'),
+      student: { name: 'Lead', email: 'lead@test.com' },
+      opportunity: {
+        title: 'Team Project',
+        organizationId: 'org-1',
+        organization: { name: 'Org' },
+      },
+      section11: null,
+    };
+
+    mockStudentReportsRepository.find.mockResolvedValue([leadReport]);
+    mockParticipantRepository.find.mockResolvedValue([
+      {
+        studentId: 'lead-student',
+        projectId: opp,
+        participationMode: 'team',
+        teamId: 'TEAM-1',
+        isTeamLead: true,
+        createdAt: new Date(1),
+        id: 'p-lead',
+      },
+    ]);
+
+    const result = await service.findAll({ page: 1, limit: 50 });
+    const row = result.data[0] as {
+      faculty_remarks?: string | null;
+      last_edited_by?: string | null;
+    };
+
+    expect(result.success).toBe(true);
+    expect(result.data).toHaveLength(1);
+    expect(row.faculty_remarks).toBe('Please add baseline evidence.');
+    expect(row.last_edited_by).toBe('Lead');
+  });
+
+  it('remindReportReviewer emails Faculty without changing report status', async () => {
+    const report = {
+      id: 'report-1',
+      studentId: 'student-1',
+      status: 'submitted',
+      faculty_status: 'pending',
+      faculty: { email: 'teacher@uni.edu' },
+      student: { name: 'Lead', email: 'lead@test.com' },
+      opportunity: { title: 'Community garden' },
+      opportunityId: '582da802-e41e-488d-bd3d-d6dee59982b7',
+      project_id: '582da802-e41e-488d-bd3d-d6dee59982b7',
+    };
+    mockStudentReportsRepository.findOne.mockResolvedValue(report);
+    mockUsersRepository.findOne.mockResolvedValue({
+      id: 'student-1',
+      email: 'lead@test.com',
+      role: 'student',
+    });
+    mockParticipantRepository.findOne.mockResolvedValue({
+      studentId: 'student-1',
+      projectId: report.opportunityId,
+      isTeamLead: true,
+    });
+
+    const result = await service.remindReportReviewer('student-1', 'report-1');
+
+    expect(result.success).toBe(true);
+    expect(result.sent_to).toBe('faculty');
+    expect(
+      mockMailService.sendFacultyStudentReportAwaitingReview,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: 'teacher@uni.edu',
+        reportId: 'report-1',
+      }),
+    );
+    expect(mockStudentReportsRepository.save).not.toHaveBeenCalled();
+  });
+
+  it('refuses a draft remind so status cannot be nudged by the reminder route', async () => {
+    mockStudentReportsRepository.findOne.mockResolvedValue({
+      id: 'report-1',
+      studentId: 'student-1',
+      status: 'draft',
+      faculty_status: 'pending',
+      student: { name: 'Lead', email: 'lead@test.com' },
+    });
+    mockUsersRepository.findOne.mockResolvedValue({
+      id: 'student-1',
+      email: 'lead@test.com',
+      role: 'student',
+    });
+
+    await expect(
+      service.remindReportReviewer('student-1', 'report-1'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(
+      mockMailService.sendFacultyStudentReportAwaitingReview,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('refuses a reminder on a rejected report', async () => {
+    mockStudentReportsRepository.findOne.mockResolvedValue({
+      id: 'report-1',
+      studentId: 'student-1',
+      status: 'rejected',
+      faculty_status: 'rejected',
+      student: { name: 'Lead', email: 'lead@test.com' },
+    });
+    mockUsersRepository.findOne.mockResolvedValue({
+      id: 'student-1',
+      email: 'lead@test.com',
+      role: 'student',
+    });
+
+    await expect(
+      service.remindReportReviewer('student-1', 'report-1'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(
+      mockMailService.sendFacultyStudentReportAwaitingReview,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('lets the linked Partner/NGO remind Faculty (route allows NGO/ORGANIZATION_ADMIN)', async () => {
+    const report = {
+      id: 'report-1',
+      studentId: 'student-1',
+      status: 'submitted',
+      faculty_status: 'pending',
+      faculty: { email: 'teacher@uni.edu' },
+      student: { name: 'Lead', email: 'lead@test.com' },
+      opportunity: {
+        title: 'Community garden',
+        partner_organization: { official_email: 'contact@partner-ngo.org' },
+      },
+      opportunityId: '582da802-e41e-488d-bd3d-d6dee59982b7',
+      project_id: '582da802-e41e-488d-bd3d-d6dee59982b7',
+    };
+    mockStudentReportsRepository.findOne.mockResolvedValue(report);
+    mockUsersRepository.findOne.mockResolvedValue({
+      id: 'partner-user-1',
+      email: 'Contact@Partner-NGO.org',
+      role: 'ngo',
+    });
+    mockParticipantRepository.findOne.mockResolvedValue(null);
+
+    const result = await service.remindReportReviewer(
+      'partner-user-1',
+      'report-1',
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.sent_to).toBe('faculty');
+  });
+
+  it('blocks an unlinked NGO/Partner account from reminding on a report they are not attached to', async () => {
+    const report = {
+      id: 'report-1',
+      studentId: 'student-1',
+      status: 'submitted',
+      faculty_status: 'pending',
+      faculty: { email: 'teacher@uni.edu' },
+      student: { name: 'Lead', email: 'lead@test.com' },
+      opportunity: {
+        title: 'Community garden',
+        partner_organization: { official_email: 'contact@partner-ngo.org' },
+      },
+      opportunityId: '582da802-e41e-488d-bd3d-d6dee59982b7',
+      project_id: '582da802-e41e-488d-bd3d-d6dee59982b7',
+    };
+    mockStudentReportsRepository.findOne.mockResolvedValue(report);
+    mockUsersRepository.findOne.mockResolvedValue({
+      id: 'other-ngo-user',
+      email: 'someone@unrelated-ngo.org',
+      role: 'ngo',
+    });
+    mockParticipantRepository.findOne.mockResolvedValue(null);
+
+    await expect(
+      service.remindReportReviewer('other-ngo-user', 'report-1'),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('lets a University reviewer remind Faculty only when their university matches the student', async () => {
+    const report = {
+      id: 'report-1',
+      studentId: 'student-1',
+      status: 'submitted',
+      faculty_status: 'pending',
+      faculty: { email: 'teacher@uni.edu' },
+      student: {
+        name: 'Lead',
+        email: 'lead@test.com',
+        university: 'Beaconhouse National University',
+      },
+      opportunity: { title: 'Community garden' },
+      opportunityId: '582da802-e41e-488d-bd3d-d6dee59982b7',
+      project_id: '582da802-e41e-488d-bd3d-d6dee59982b7',
+    };
+    mockStudentReportsRepository.findOne.mockResolvedValue(report);
+    mockParticipantRepository.findOne.mockResolvedValue(null);
+
+    mockUsersRepository.findOne.mockResolvedValue({
+      id: 'uni-staff-1',
+      email: 'staff@bnu.edu.pk',
+      role: 'university',
+      university: 'Beaconhouse National University',
+    });
+    const allowed = await service.remindReportReviewer(
+      'uni-staff-1',
+      'report-1',
+    );
+    expect(allowed.success).toBe(true);
+
+    mockUsersRepository.findOne.mockResolvedValue({
+      id: 'uni-staff-2',
+      email: 'staff@other.edu.pk',
+      role: 'university',
+      university: 'Some Other University',
+    });
+    await expect(
+      service.remindReportReviewer('uni-staff-2', 'report-1'),
+    ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
   it('persists admin-regenerated section11 AI score', async () => {

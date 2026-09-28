@@ -28,6 +28,7 @@ import {
   resolveReportFlashHours,
 } from './community-award.util';
 import { isPrivateCandidateOpportunity, reviewRouteForOpportunity } from '../opportunities/private-candidate.util';
+import { composeFacultyReportRemarks } from './faculty-report-remarks.util';
 
 function finiteNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -482,6 +483,7 @@ export class FacultyReportsService {
     facultyEmail: string,
     status: 'approved' | 'rejected' | 'revision_requested',
     remarks?: string,
+    extras?: { revision_section?: string; required_correction?: string },
   ) {
     const report = await this.findAssignedReportForAction(
       id,
@@ -509,9 +511,14 @@ export class FacultyReportsService {
       );
     }
 
+    const composedRemarks = composeFacultyReportRemarks({
+      remarks,
+      revision_section: extras?.revision_section,
+      required_correction: extras?.required_correction,
+    });
     const patch: Record<string, unknown> = {
       faculty_status: status,
-      ...(remarks ? { faculty_remarks: remarks } : {}),
+      ...(composedRemarks ? { faculty_remarks: composedRemarks } : {}),
     };
     if (status === 'revision_requested') {
       patch.status = 'revision';
@@ -525,7 +532,7 @@ export class FacultyReportsService {
       report.opportunity?.title || report.project_id || 'Community service report';
     const studentName = report.student?.name || 'Student';
     const studentEmail = report.student?.email;
-    const note = remarks?.trim() || '';
+    const note = composedRemarks;
     void this.notifyStudentFacultyDecision(
       report.studentId,
       studentEmail,

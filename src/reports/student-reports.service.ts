@@ -15,6 +15,7 @@ import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import * as path from 'path';
 
 import { User } from '../users/entities/user.entity';
+import { UserRole } from '../users/enums/user-role.enum';
 import { MailService } from '../mail/mail.service';
 
 import { EngagementService } from '../engagement/engagement.service';
@@ -841,6 +842,14 @@ export class StudentReportsService {
         ) || null,
       sdgs,
       faculty_status: report.faculty_status,
+      faculty_remarks: report.faculty_remarks ?? null,
+      last_edited_at: report.updatedAt,
+      last_edited_by:
+        (report.section1?.team_lead &&
+          (report.section1.team_lead.fullName ||
+            report.section1.team_lead.name)) ||
+        report.student?.name ||
+        null,
       private_candidate: isPrivateCandidateOpportunity(opportunity),
       review_route: reviewRouteForOpportunity(opportunity),
       awardBadges: report.awardBadges ?? [],
@@ -934,6 +943,17 @@ export class StudentReportsService {
   }
 
   private buildStudentReportFeedback(report: StudentReport): string | null {
+    const fac = String(report.faculty_status || '').toLowerCase();
+    const st = String(report.status || '').toLowerCase();
+    const facultyDecisionOpen =
+      fac.includes('revision') ||
+      fac === 'rejected' ||
+      st === 'revision' ||
+      st === 'rejected';
+    if (facultyDecisionOpen) {
+      const faculty = report.faculty_remarks?.trim();
+      if (faculty) return faculty;
+    }
     const direct = report.admin_feedback?.trim();
     if (direct) return direct;
     const section11 = report.section11 as
@@ -2368,6 +2388,192 @@ export class StudentReportsService {
     await this.assertTeamLeadMayWriteReport(studentId, opportunityId);
   }
 
+  private normalizeEmail(value: unknown): string {
+    return String(value || '')
+      .trim()
+      .toLowerCase();
+  }
+
+  private resolveReportFacultyEmail(
+    report: StudentReport,
+    opportunity?: Opportunity | null,
+  ): string {
+    const s1 =
+      report.section1 && typeof report.section1 === 'object'
+        ? (report.section1 as { faculty_supervisor_email?: unknown })
+        : {};
+    const supervision =
+      opportunity?.supervision && typeof opportunity.supervision === 'object'
+        ? (opportunity.supervision as Record<string, unknown>)
+        : {};
+    return (
+      this.normalizeEmail(report.faculty?.email) ||
+      this.normalizeEmail(s1.faculty_supervisor_email) ||
+      this.normalizeEmail(supervision.official_email) ||
+      this.normalizeEmail(supervision.supervisor_email) ||
+      this.normalizeEmail(supervision.email)
+    );
+  }
+
+  /** Same source order as `OpportunitiesService.resolvePartnerEmail` (first valid email wins). */
+  private resolveReportPartnerEmail(opportunity?: Opportunity | null): string {
+    if (!opportunity) return '';
+    const collab = opportunity.external_partner_collaboration as
+      | { official_email?: string }
+      | undefined;
+    const fromCollab =
+      collab && typeof collab.official_email === 'string'
+        ? collab.official_email
+        : undefined;
+    const sup = opportunity.supervision as
+      | { external_partner_email?: string; partner_email?: string }
+      | undefined;
+    const fromSupExt =
+      sup && typeof sup.external_partner_email === 'string'
+        ? sup.external_partner_email
+        : undefined;
+    const fromSupPartner =
+      sup && typeof sup.partner_email === 'string' ? sup.partner_email : undefined;
+    const ctx = opportunity.executing_context as
+      | { partner?: { official_email?: string } }
+      | undefined;
+    const fromCtx =
+      ctx?.partner && typeof ctx.partner.official_email === 'string'
+        ? ctx.partner.official_email
+        : undefined;
+    const po = opportunity.partner_organization as
+      | { official_email?: string }
+      | undefined;
+    const fromPo =
+      po && typeof po.official_email === 'string' ? po.official_email : undefined;
+    for (const c of [fromCollab, fromSupExt, fromSupPartner, fromCtx, fromPo]) {
+      const e = this.normalizeEmail(c || '');
+      if (e && e.includes('@')) return e;
+    }
+    return '';
+  }
+
+  /**
+   * Resend the Faculty (or CIEL PK) report-review email. Does not change report status.
+   */
+  async remindReportReviewer(userId: string, reportId: string) {
+    const report = await this.studentReportsRepository.findOne({
+      where: { id: reportId },
+      relations: ['student', 'faculty', 'opportunity'],
+    });
+    if (!report) throw new NotFoundException('Report not found');
+
+    const user = await this.usersRepository.findOne({ where: { id: userId } });
+    if (!user) throw new ForbiddenException('You do not have access to this report');
+
+    const projectKey = report.opportunityId || report.project_id || '';
+    const enrollment = this.looksLikeUuid(projectKey)
+      ? await findPreferredProjectEnrollment(
+          this.participantRepository,
+          userId,
+          projectKey,
+        )
+      : null;
+    const callerEmail = this.normalizeEmail(user.email);
+    const facultyEmail = this.resolveReportFacultyEmail(report, report.opportunity);
+    const partnerEmail = this.resolveReportPartnerEmail(report.opportunity);
+    const isLead = report.studentId === userId;
+    const isTeammate = Boolean(enrollment);
+    const isNamedFaculty = !!facultyEmail && facultyEmail === callerEmail;
+    const isNamedPartner = !!partnerEmail && partnerEmail === callerEmail;
+    const isAdmin = user.role === UserRole.SUPER_ADMIN;
+    const isUniversity =
+      user.role === UserRole.UNIVERSITY &&
+      (() => {
+        const callerUni = this.normalizeEmail(
+          user.university || user.institution || '',
+        );
+        const studentUni = this.normalizeEmail(
+          report.student?.university || report.student?.institution || '',
+        );
+        return !!callerUni && !!studentUni && callerUni === studentUni;
+      })();
+    if (
+      !isLead &&
+      !isTeammate &&
+      !isNamedFaculty &&
+      !isNamedPartner &&
+      !isAdmin &&
+      !isUniversity
+    ) {
+      throw new ForbiddenException('You do not have access to this report');
+    }
+
+    const st = String(report.status || '').toLowerCase();
+    const fac = String(report.faculty_status || '').toLowerCase();
+    const privateCandidate = isPrivateCandidateOpportunity(report.opportunity);
+    if (st === 'draft' || st === 'continue') {
+      throw new BadRequestException(
+        'This report is still a draft. Reminders are for submitted review.',
+      );
+    }
+    if (st === 'rejected' || fac === 'rejected') {
+      throw new BadRequestException(
+        'This report was rejected. No further review reminder is needed.',
+      );
+    }
+
+    const projectTitle =
+      report.opportunity?.title || report.project_id || 'Community Service report';
+    const teamLeadName = report.student?.name || 'Team Lead';
+
+    if (fac.includes('revision') || st === 'revision') {
+      const leadEmail = this.normalizeEmail(report.student?.email);
+      if (!leadEmail) {
+        throw new BadRequestException('No team lead email is saved on this report.');
+      }
+      await this.mailService.sendStudentImpactReportFacultyDecision(
+        leadEmail,
+        teamLeadName.split(/\s+/)[0] || 'Team',
+        projectTitle,
+        'revision_requested',
+        report.faculty_remarks ||
+          'Please continue the shared report. Only the Team Lead can resubmit.',
+      );
+      return {
+        success: true,
+        sent_to: 'student',
+        message: `Reminder sent to ${leadEmail}.`,
+      };
+    }
+
+    if (privateCandidate) {
+      await this.mailService.sendAdminStudentReportSubmitted(
+        projectTitle,
+        report.opportunityId || '',
+        report.id,
+        teamLeadName,
+      );
+      return {
+        success: true,
+        sent_to: 'admin',
+        message: 'CIEL PK has been reminded that this report is awaiting review.',
+      };
+    }
+
+    if (!facultyEmail) {
+      throw new BadRequestException('No faculty email is saved on this report.');
+    }
+    if (typeof this.mailService.sendFacultyStudentReportAwaitingReview === 'function') {
+      await this.mailService.sendFacultyStudentReportAwaitingReview({
+        to: facultyEmail,
+        projectTitle,
+        reportId: report.id,
+        teamLeadName,
+      });
+    }
+    return {
+      success: true,
+      sent_to: 'faculty',
+      message: `Verification email sent to ${facultyEmail}.`,
+    };
+  }
+
   async createReport(
     studentId: string,
     dto: any,
@@ -2692,6 +2898,21 @@ export class StudentReportsService {
           student?.name || 'Student',
         )
         .catch(() => undefined);
+      const facultyTo = this.resolveReportFacultyEmail(report, oppForTitle);
+      if (
+        facultyTo &&
+        typeof this.mailService.sendFacultyStudentReportAwaitingReview ===
+          'function'
+      ) {
+        void this.mailService
+          .sendFacultyStudentReportAwaitingReview({
+            to: facultyTo,
+            projectTitle,
+            reportId: report.id,
+            teamLeadName: student?.name || 'Team Lead',
+          })
+          .catch(() => undefined);
+      }
     }
 
     const submitOpportunity =
@@ -3560,6 +3781,10 @@ export class StudentReportsService {
         independentAiAnalyses: report.independentAiAnalyses,
         created_at: report.createdAt,
         updated_at: report.updatedAt,
+        last_saved: report.updatedAt,
+        last_edited_at: report.updatedAt,
+        last_edited_by:
+          reportAccess.team_lead?.name || report.student?.name || null,
       },
     };
   }

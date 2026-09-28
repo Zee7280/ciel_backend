@@ -126,6 +126,20 @@ export class StudentController {
     return this.studentsService.remindOpportunityReviewer(req.user.id, id);
   }
 
+  /** Resend Faculty / CIEL PK report-review email. Does not change report status. */
+  @Post('reports/:id/remind-reviewer')
+  @Roles(
+    UserRole.STUDENT,
+    UserRole.SUPER_ADMIN,
+    UserRole.FACULTY,
+    UserRole.NGO,
+    UserRole.UNIVERSITY,
+    UserRole.ORGANIZATION_ADMIN,
+  )
+  remindReportReviewer(@Request() req, @Param('id') id: string) {
+    return this.studentReportsService.remindReportReviewer(req.user.id, id);
+  }
+
   @Post('opportunity/:id')
   @Patch('opportunity/:id')
   updateIndependentProject(

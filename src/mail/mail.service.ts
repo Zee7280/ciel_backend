@@ -1830,6 +1830,49 @@ export class MailService {
     }
   }
 
+  /** Regular Community Service report is waiting on Faculty review. Does not change status. */
+  async sendFacultyStudentReportAwaitingReview(input: {
+    to: string;
+    projectTitle: string;
+    reportId: string;
+    teamLeadName: string;
+  }): Promise<void> {
+    const to = String(input.to || '').trim();
+    if (!to) return;
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const facultyLink = this.buildFrontendLink(
+      `/dashboard/faculty/reports/${encodeURIComponent(input.reportId)}`,
+    );
+    const titleEsc = this.escHtmlPlain(input.projectTitle);
+    const leadEsc = this.escHtmlPlain(input.teamLeadName || 'Team Lead');
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">CIEL PK · Report Awaiting Faculty Review</h2>
+        <p>The Community Service report for <strong>${titleEsc}</strong> has been submitted and is awaiting your review.</p>
+        <p>Team Lead: <strong>${leadEsc}</strong></p>
+        <p>Please review the report using the link below.</p>
+        <div style="text-align: center; margin: 28px 0;">
+          <a href="${facultyLink}" style="background-color: #0e7d74; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Open Report Package</a>
+        </div>
+      </div>
+    `;
+    try {
+      await this.transporter.sendMail({
+        from,
+        to,
+        subject: `CIEL PK · Report Awaiting Faculty Review · ${input.projectTitle}`,
+        html,
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed faculty report-awaiting email for ${input.reportId}`,
+        (error as Error).stack,
+      );
+    }
+  }
+
   /** Student-created opportunity is live; student received "Start report" email (admin FYI). */
   async sendAdminStudentMayStartReport(
     projectTitle: string,

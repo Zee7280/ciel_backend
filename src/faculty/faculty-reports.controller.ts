@@ -52,6 +52,10 @@ export class FacultyReportsController {
       req.user.email,
       body.status,
       body.remarks,
+      {
+        revision_section: body.revision_section,
+        required_correction: body.required_correction,
+      },
     );
   }
 

@@ -7,4 +7,13 @@ export class FacultyReportActionDto {
     @IsOptional()
     @IsString()
     remarks?: string;
+
+    /** Additive. Folded into faculty_remarks. Existing remarks-only clients stay valid. */
+    @IsOptional()
+    @IsString()
+    revision_section?: string;
+
+    @IsOptional()
+    @IsString()
+    required_correction?: string;
 }

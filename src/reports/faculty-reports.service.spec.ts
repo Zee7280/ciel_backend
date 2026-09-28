@@ -166,6 +166,34 @@ describe('FacultyReportsService — updateAction', () => {
       }),
     );
   });
+
+  it('folds optional section and required-correction into remarks without changing status rules', async () => {
+    const { service, studentReportsRepository } = makeService({
+      id: 'report-1',
+      status: 'submitted',
+      faculty_status: 'pending',
+    });
+
+    const result = await service.updateAction(
+      'report-1',
+      'faculty-1',
+      'teacher@uni.edu',
+      'revision_requested',
+      'Hours look thin.',
+      { revision_section: 'Section 4', required_correction: 'Add session dates.' },
+    );
+
+    expect(result.success).toBe(true);
+    expect(studentReportsRepository.update).toHaveBeenCalledWith(
+      { id: 'report-1' },
+      expect.objectContaining({
+        faculty_status: 'revision_requested',
+        status: 'revision',
+        faculty_remarks:
+          'Section(s): Section 4\nReason: Hours look thin.\nRequired Correction: Add session dates.',
+      }),
+    );
+  });
 });
 
 const CII_V2_AI_RESPONSE = {

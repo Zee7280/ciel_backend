@@ -58,6 +58,7 @@ import { purifyStudentOpportunityContent } from './opportunity-content-purify.ut
 import {
   buildApprovalReminderCopy,
   buildOpportunityApprovalTracker,
+  communityServicePublicCode,
 } from './opportunity-approval-tracker.util';
 import { isProjectVerificationAuthRequired } from '../common/project-verification-auth.util';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -415,6 +416,7 @@ export class OpportunitiesService {
 
     return {
       opportunityId: opp.id,
+      publicCode: communityServicePublicCode(opp.id, opp.createdAt),
       mode: opp.mode || undefined,
       typesLine: opp.types?.length ? opp.types.join(', ') : undefined,
       timelineSummary: tl.length ? tl.join(' · ') : undefined,
@@ -1618,6 +1620,7 @@ export class OpportunitiesService {
         opportunity.title,
         opportunity.id,
         stageLabel,
+        communityServicePublicCode(opportunity.id, opportunity.createdAt),
       );
     } catch (error) {
       console.warn(

@@ -5,7 +5,8 @@ import sanitizeHtml from 'sanitize-html';
 
 /** Optional structured summary for faculty/partner verification emails. */
 export interface OpportunityVerificationEmailDetails {
-  opportunityId?: string;
+  /** Display-only CS-YEAR-XXXX — same master record, not a sequential counter. */
+  publicCode?: string;
   studentName?: string;
   studentUniversity?: string;
   /** Student / creator university line for faculty summary emails. */
@@ -1119,6 +1120,7 @@ export class MailService {
         <p style="margin: 0 0 8px 0; font-weight: bold; color: #111827;">Opportunity Summary</p>
         <ul style="margin: 0 0 20px 0; padding-left: 20px; color: #374151;">
           <li style="margin-bottom: 6px;"><strong>Project Title:</strong> ${titleEsc}</li>
+          ${details?.publicCode?.trim() ? `<li style="margin-bottom: 6px;"><strong>Opportunity ID:</strong> ${this.escHtmlPlain(details.publicCode.trim())}</li>` : ''}
           <li style="margin-bottom: 6px;"><strong>Submitted By:</strong> ${submittedByEsc}</li>
           <li style="margin-bottom: 6px;"><strong>Institution:</strong> ${institutionEsc}</li>
           <li style="margin-bottom: 6px;"><strong>Faculty Supervisor:</strong> ${facultySupervisorEsc}</li>
@@ -1269,6 +1271,7 @@ export class MailService {
         <p style="margin: 0 0 8px 0; font-weight: bold; color: #111827;">Opportunity Summary</p>
         <ul style="margin: 0 0 20px 0; padding-left: 20px; color: #374151;">
           <li style="margin-bottom: 6px;"><strong>Project Title:</strong> ${titleEsc}</li>
+          ${details?.publicCode?.trim() ? `<li style="margin-bottom: 6px;"><strong>Opportunity ID:</strong> ${this.escHtmlPlain(details.publicCode.trim())}</li>` : ''}
           <li style="margin-bottom: 6px;"><strong>Submitted By:</strong> ${studentName}</li>
           <li style="margin-bottom: 6px;"><strong>Institution:</strong> ${institutionEsc}</li>
           <li style="margin-bottom: 6px;"><strong>Department:</strong> ${departmentEsc}</li>
@@ -1438,6 +1441,7 @@ export class MailService {
     projectTitle: string,
     opportunityId: string,
     stageLabel: string,
+    publicCode?: string,
   ) {
     const recipients = this.getAdminReviewRecipientList();
 
@@ -1458,7 +1462,7 @@ export class MailService {
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
         <h2 style="color: #333;">Opportunity ready for platform admin review</h2>
-        <p><strong>${this.escHtmlPlain(projectTitle)}</strong> has cleared the previous verification step (<em>${this.escHtmlPlain(stageLabel)}</em>) and is now waiting in the CIEL PK admin queue.</p>
+        <p><strong>${this.escHtmlPlain(projectTitle)}</strong>${publicCode?.trim() ? ` (<strong>${this.escHtmlPlain(publicCode.trim())}</strong>)` : ''} has cleared the previous verification step (<em>${this.escHtmlPlain(stageLabel)}</em>) and is now waiting in the CIEL PK admin queue.</p>
         <p>Please sign in, open the pending list, and assign <strong>Final decision</strong> (Approve, Return for edits, or Decline) according to policy.</p>
         <div style="text-align: center; margin: 30px 0;">
           <a href="${adminLink}" style="background-color: #2563eb; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Open admin queue</a>

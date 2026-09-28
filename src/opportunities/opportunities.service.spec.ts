@@ -865,6 +865,7 @@ describe('OpportunitiesService — create() CIEL PK review requirement is server
             'Beach cleanup drive',
             'new-opp-id',
             'new submission',
+            expect.any(String),
         );
     });
 
@@ -1303,7 +1304,7 @@ describe('OpportunitiesService — faculty approve then emails partner', () => {
         expect(opp.status).toBe('pending_approval');
         expect(
             (service as any).mailService.sendAdminOpportunityReviewNeeded,
-        ).toHaveBeenCalledWith('Community garden', 'opp-1', 'partner approval');
+        ).toHaveBeenCalledWith('Community garden', 'opp-1', 'partner approval', expect.any(String));
     });
 
     it('remind-reviewer after faculty approval resends the partner link without changing stage', async () => {
@@ -1411,6 +1412,7 @@ describe('OpportunitiesService — Faculty / Partner / CIEL notify loop', () => 
             'Campus garden',
             'opp-1',
             'faculty approval',
+            expect.any(String),
         );
     });
 
@@ -1500,6 +1502,7 @@ describe('OpportunitiesService — Faculty / Partner / CIEL notify loop', () => 
             'Campus garden',
             'opp-1',
             'CIEL PK final approval',
+            expect.any(String),
         );
     });
 
@@ -1544,6 +1547,7 @@ describe('OpportunitiesService — Faculty / Partner / CIEL notify loop', () => 
             'Campus garden',
             'opp-1',
             'partner approval',
+            expect.any(String),
         );
     });
 

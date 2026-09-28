@@ -41,6 +41,7 @@ import {
   WORKFLOW_STAGE,
 } from '../opportunities/opportunity-workflow.service';
 import { OpportunitiesService } from '../opportunities/opportunities.service';
+import { buildOpportunityApprovalTracker } from '../opportunities/opportunity-approval-tracker.util';
 import { buildOpportunityDetailView } from '../opportunities/opportunity-detail-view.util';
 import { purifyStudentOpportunityContent } from '../opportunities/opportunity-content-purify.util';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
@@ -535,11 +536,20 @@ export class StudentsService {
   }
 
   private getWorkflowResponseFields(opportunity: Opportunity) {
+    const tracker = buildOpportunityApprovalTracker(opportunity);
     return {
       workflow_stage: opportunity.workflowStage ?? null,
       faculty_approval_status: opportunity.facultyApprovalStatus ?? null,
       partner_approval_status: opportunity.partnerApprovalStatus ?? null,
       admin_approval_status: opportunity.adminApprovalStatus ?? null,
+      public_code: tracker.public_code,
+      linked_draft: tracker.linked_draft,
+      currently_with: tracker.currently_with,
+      currently_with_role: tracker.currently_with_role,
+      next_step: tracker.next_step,
+      waiting_since: tracker.waiting_since,
+      approval_route: tracker.route,
+      approval_checklist: tracker.checklist,
     };
   }
 

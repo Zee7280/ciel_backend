@@ -26,6 +26,7 @@ import {
   WORKFLOW_STAGE,
   LINE_STATUS,
 } from '../opportunities/opportunity-workflow.service';
+import { buildOpportunityApprovalTracker } from '../opportunities/opportunity-approval-tracker.util';
 
 /** Participation statuses treated as “active” for faculty dashboard student counts. */
 const ACTIVE_PARTICIPATION_STATUSES = [
@@ -584,6 +585,55 @@ export class FacultyService {
         }),
       );
 
+    if (status === 'linked_drafts') {
+      query
+        .andWhere('opportunity.isStudentCreated = :iscDraft', { iscDraft: true })
+        .andWhere("LOWER(COALESCE(opportunity.status, '')) = :draftOnly", {
+          draftOnly: 'draft',
+        });
+      return query;
+    }
+
+    if (status === 'revision') {
+      query
+        .andWhere(
+          new Brackets((rev) => {
+            rev
+              .where('opportunity.workflowStage = :revWs', {
+                revWs: WORKFLOW_STAGE.REVISION,
+              })
+              .orWhere("LOWER(COALESCE(opportunity.status, '')) = :revSt", {
+                revSt: 'revision',
+              })
+              .orWhere('opportunity.facultyApprovalStatus = :revLine', {
+                revLine: LINE_STATUS.REVISION_REQUESTED,
+              })
+              .orWhere('opportunity.partnerApprovalStatus = :revPartnerLine', {
+                revPartnerLine: LINE_STATUS.REVISION_REQUESTED,
+              });
+          }),
+        )
+        .andWhere("LOWER(COALESCE(opportunity.status, '')) <> :notDraftRev", {
+          notDraftRev: 'draft',
+        })
+        .andWhere(
+          new Brackets((keep) => {
+            keep
+              .where('opportunity.workflowStage IS NULL')
+              .orWhere(
+                'opportunity.workflowStage NOT IN (:...revExcludedWorkflows)',
+                {
+                  revExcludedWorkflows: [
+                    WORKFLOW_STAGE.LIVE,
+                    WORKFLOW_STAGE.REJECTED,
+                  ],
+                },
+              );
+          }),
+        );
+      return query;
+    }
+
     if (status === 'pending' || status === undefined || status === '') {
       query.andWhere(
         new Brackets((outer) => {
@@ -735,6 +785,23 @@ export class FacultyService {
             );
         }),
       );
+      query.andWhere(
+        "LOWER(COALESCE(opportunity.status, '')) <> :notDraftPending",
+        { notDraftPending: 'draft' },
+      );
+      query.andWhere(
+        "LOWER(COALESCE(opportunity.status, '')) <> :notRevisionPending",
+        { notRevisionPending: 'revision' },
+      );
+      query.andWhere(
+        new Brackets((keep) => {
+          keep
+            .where('opportunity.workflowStage IS NULL')
+            .orWhere('opportunity.workflowStage <> :notRevWs', {
+              notRevWs: WORKFLOW_STAGE.REVISION,
+            });
+        }),
+      );
     } else if (status === 'history' || status === 'reviewed') {
       query
         .andWhere('opportunity.creatorId IS NOT NULL')
@@ -795,6 +862,18 @@ export class FacultyService {
                 histOaFacultyEmail: fe,
               }
             : {},
+        )
+        .andWhere("LOWER(COALESCE(opportunity.status, '')) <> :histNotRevSt", {
+          histNotRevSt: 'revision',
+        })
+        .andWhere(
+          new Brackets((histRev) => {
+            histRev
+              .where('opportunity.workflowStage IS NULL')
+              .orWhere('opportunity.workflowStage <> :histNotRevWs', {
+                histNotRevWs: WORKFLOW_STAGE.REVISION,
+              });
+          }),
         );
     } else {
       query.andWhere('opportunity.status = :st', { st: status });
@@ -1302,6 +1381,7 @@ export class FacultyService {
           approval_visibility: approvalVisibility,
           approval_action,
           approvalAction: approval_action,
+          ...buildOpportunityApprovalTracker(opp),
         };
       }),
     );

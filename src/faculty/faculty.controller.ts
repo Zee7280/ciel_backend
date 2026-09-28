@@ -5,6 +5,7 @@ import { Roles } from '../auth/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
 import { FacultyService } from './faculty.service';
 import { OpportunitiesService } from '../opportunities/opportunities.service';
+import { buildOpportunityApprovalTracker } from '../opportunities/opportunity-approval-tracker.util';
 
 @Controller('faculty/approvals')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -34,6 +35,7 @@ export class FacultyController {
             req.user.email || '',
             req.user.name,
         );
+        const tracker = buildOpportunityApprovalTracker(saved);
         return {
             success: true,
             message: 'Faculty approval completed',
@@ -51,6 +53,10 @@ export class FacultyController {
                                     ? 'revision'
                                     : saved.status,
                 workflow_stage: saved.workflowStage,
+                currently_with: tracker.currently_with,
+                currently_with_role: tracker.currently_with_role,
+                next_step: tracker.next_step,
+                public_code: tracker.public_code,
             },
         };
     }

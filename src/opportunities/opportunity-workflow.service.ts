@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Opportunity } from './entities/opportunity.entity';
+import { buildOpportunityApprovalTracker } from './opportunity-approval-tracker.util';
 
 /** Canonical stages aligned with CIEL frontend (`opportunityWorkflow.ts`). */
 export const WORKFLOW_STAGE = {
@@ -411,6 +412,7 @@ export class OpportunityWorkflowService {
     extra?: { teamMembers?: unknown[] },
   ): Record<string, unknown> {
     const org = (opp as any).organization;
+    const tracker = buildOpportunityApprovalTracker(opp);
     return {
       id: opp.id,
       title: opp.title,
@@ -433,6 +435,14 @@ export class OpportunityWorkflowService {
       requires_partner_approval: opp.requiresPartnerApproval,
       liaison_verified: opp.liaisonVerified,
       rejection_reason: opp.rejectionReason ?? null,
+      public_code: tracker.public_code,
+      linked_draft: tracker.linked_draft,
+      currently_with: tracker.currently_with,
+      currently_with_role: tracker.currently_with_role,
+      next_step: tracker.next_step,
+      waiting_since: tracker.waiting_since,
+      approval_route: tracker.route,
+      approval_checklist: tracker.checklist,
     };
   }
 

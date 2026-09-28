@@ -114,6 +114,14 @@ export class StudentController {
 
   /** Resend the official faculty or partner verification email. Does not change the approval stage. */
   @Post('opportunity/:id/remind-reviewer')
+  @Roles(
+    UserRole.STUDENT,
+    UserRole.SUPER_ADMIN,
+    UserRole.FACULTY,
+    UserRole.NGO,
+    UserRole.UNIVERSITY,
+    UserRole.ORGANIZATION_ADMIN,
+  )
   remindOpportunityReviewer(@Request() req, @Param('id') id: string) {
     return this.studentsService.remindOpportunityReviewer(req.user.id, id);
   }

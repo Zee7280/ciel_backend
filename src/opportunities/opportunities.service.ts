@@ -55,6 +55,10 @@ import {
   STUDENT_RESPONSIBILITIES_MAX_LENGTH,
 } from './opportunity-detail-view.util';
 import { purifyStudentOpportunityContent } from './opportunity-content-purify.util';
+import {
+  buildApprovalReminderCopy,
+  buildOpportunityApprovalTracker,
+} from './opportunity-approval-tracker.util';
 import { isProjectVerificationAuthRequired } from '../common/project-verification-auth.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { OpportunityApplication } from './entities/opportunity-application.entity';
@@ -790,9 +794,36 @@ export class OpportunitiesService {
     if (!opp) throw new NotFoundException('Opportunity not found');
     const isOwner = opp.creatorId === userId;
     const isAdmin = user.role === UserRole.SUPER_ADMIN;
-    if (!isOwner && !isAdmin) {
-      throw new ForbiddenException('You do not have access to this opportunity');
+    const facultyEmail = this.normalizeEmail(
+      this.getFacultyEmailFromOpportunity(opp),
+    );
+    const partnerEmail = this.normalizeEmail(
+      this.resolvePartnerEmailFromOpportunity(opp),
+    );
+    const callerEmail = this.normalizeEmail(user.email);
+    const isNamedFaculty = !!facultyEmail && facultyEmail === callerEmail;
+    const isNamedPartner = !!partnerEmail && partnerEmail === callerEmail;
+    const isUniversity = user.role === UserRole.UNIVERSITY;
+    if (!isOwner && !isAdmin && !isNamedFaculty && !isNamedPartner) {
+      if (!isUniversity) {
+        throw new ForbiddenException('You do not have access to this opportunity');
+      }
+      const creator = await this.getOpportunityCreatorContact(opp);
+      const userUni = String(user.university || user.institution || '')
+        .trim()
+        .toLowerCase();
+      const creatorUni = String(creator?.university || creator?.institution || '')
+        .trim()
+        .toLowerCase();
+      if (!userUni || !creatorUni || userUni !== creatorUni) {
+        throw new ForbiddenException(
+          'University reminders are limited to opportunities from your institution.',
+        );
+      }
     }
+
+    const reminderCopy = buildApprovalReminderCopy(opp, this.frontendOrigin());
+    const tracker = buildOpportunityApprovalTracker(opp);
 
     if (this.isAwaitingFacultyDashboardReview(opp)) {
       if (!opp.faculty_verification_token) {
@@ -815,6 +846,8 @@ export class OpportunitiesService {
         success: true,
         sent_to: 'faculty',
         message: `Verification email sent to ${facultyTo}.`,
+        ...tracker,
+        reminder: reminderCopy,
       };
     }
 
@@ -829,8 +862,8 @@ export class OpportunitiesService {
         opp.partnerToken = randomUUID();
         await this.opportunitiesRepository.save(opp);
       }
-      const partnerEmail = this.resolvePartnerEmailFromOpportunity(opp);
-      if (!partnerEmail) {
+      const partnerTo = this.resolvePartnerEmailFromOpportunity(opp);
+      if (!partnerTo) {
         throw new BadRequestException(
           'No partner email is saved on this opportunity.',
         );
@@ -838,18 +871,34 @@ export class OpportunitiesService {
       const sent = await this.sendPartnerApprovalEmail(opp);
       if (!sent) {
         throw new BadRequestException(
-          `The email could not be sent to ${partnerEmail}. The mail server rejected it.`,
+          `The email could not be sent to ${partnerTo}. The mail server rejected it.`,
         );
       }
       return {
         success: true,
         sent_to: 'partner',
-        message: `Verification email sent to ${partnerEmail}.`,
+        message: `Verification email sent to ${partnerTo}.`,
+        ...tracker,
+        reminder: reminderCopy,
+      };
+    }
+
+    const awaitingAdmin =
+      opp.workflowStage === WORKFLOW_STAGE.PENDING_ADMIN ||
+      opp.status === 'pending_approval';
+    if (awaitingAdmin) {
+      await this.sendAdminReviewEmail(opp, 'CIEL PK final approval');
+      return {
+        success: true,
+        sent_to: 'admin',
+        message: 'CIEL PK has been reminded that this opportunity is ready for final approval.',
+        ...tracker,
+        reminder: reminderCopy,
       };
     }
 
     throw new BadRequestException(
-      'This opportunity is not waiting on a faculty or partner email.',
+      'This opportunity is not waiting on a faculty, partner, or CIEL PK review.',
     );
   }
 
@@ -1290,16 +1339,34 @@ export class OpportunitiesService {
   }
 
   private getWorkflowResponseFields(opp: Opportunity) {
+    const tracker = buildOpportunityApprovalTracker(opp);
     return {
       workflow_stage: opp.workflowStage ?? null,
       faculty_approval_status: opp.facultyApprovalStatus ?? null,
       partner_approval_status: opp.partnerApprovalStatus ?? null,
       admin_approval_status: opp.adminApprovalStatus ?? null,
+      public_code: tracker.public_code,
+      linked_draft: tracker.linked_draft,
+      currently_with: tracker.currently_with,
+      currently_with_role: tracker.currently_with_role,
+      next_step: tracker.next_step,
+      waiting_since: tracker.waiting_since,
+      approval_route: tracker.route,
+      approval_checklist: tracker.checklist,
     };
+  }
+
+  private frontendOrigin(): string {
+    return (
+      process.env.FRONTEND_URL ||
+      process.env.APP_URL ||
+      ''
+    ).replace(/\/+$/, '');
   }
 
   /** Whether CIEL admin final-approve may run without skipping required gates. */
   private isOpportunityReadyForAdminFinalApprove(opp: Opportunity): boolean {
+    if (String(opp.status || '').toLowerCase() === 'draft') return false;
     if (opp.isStudentCreated) {
       if (opp.workflowStage === WORKFLOW_STAGE.PENDING_ADMIN) return true;
       if (!opp.workflowStage && opp.status === 'pending_approval') return true;
@@ -3543,11 +3610,12 @@ export class OpportunitiesService {
 
   private normalizeAdminApprovalQueue(
     queue?: string,
-  ): 'pending' | 'approved' | 'rejected' | 'revision' | 'all' {
+  ): 'pending' | 'approved' | 'rejected' | 'revision' | 'draft' | 'all' {
     const q = (queue || 'pending').trim().toLowerCase();
     if (q === 'approved' || q === 'live') return 'approved';
     if (q === 'rejected') return 'rejected';
     if (q === 'revision' || q === 'revise') return 'revision';
+    if (q === 'draft' || q === 'drafts') return 'draft';
     if (q === 'all') return 'all';
     return 'pending';
   }
@@ -3575,6 +3643,10 @@ export class OpportunitiesService {
       qb.where('opportunity.workflowStage = :rev', {
         rev: WORKFLOW_STAGE.REVISION,
       });
+    } else if (normalizedQueue === 'draft') {
+      qb.where("LOWER(COALESCE(opportunity.status, '')) = :draftSt", {
+        draftSt: 'draft',
+      });
     } else {
       qb.where(
         new Brackets((outer) => {
@@ -3594,6 +3666,9 @@ export class OpportunitiesService {
             })
             .orWhere('opportunity.workflowStage = :revAll', {
               revAll: WORKFLOW_STAGE.REVISION,
+            })
+            .orWhere("LOWER(COALESCE(opportunity.status, '')) = :draftAll", {
+              draftAll: 'draft',
             });
         }),
       );
@@ -4793,6 +4868,9 @@ export class OpportunitiesService {
    * (covers `pending_execution` + null workflow where execution org is still pending but partner may act).
    */
   isAwaitingPartnerDashboardReview(opp: Opportunity): boolean {
+    if (String(opp.status || '').toLowerCase() === 'draft') {
+      return false;
+    }
     if (!opp.requiresPartnerApproval || opp.partnerVerified) {
       return false;
     }
@@ -4820,6 +4898,7 @@ export class OpportunitiesService {
   }
 
   private isAwaitingFacultyDashboardReview(opp: Opportunity): boolean {
+    if (String(opp.status || '').toLowerCase() === 'draft') return false;
     if (!opp.creatorId || opp.faculty_verified || opp.admin_approved)
       return false;
     if (

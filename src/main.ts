@@ -6,6 +6,7 @@ import { AppModule } from './app.module';
 import { join } from 'path';
 import * as fs from 'fs';
 import { json, urlencoded } from 'express';
+import compression from 'compression';
 
 async function bootstrap() {
   const bodyLimit = process.env.REQUEST_BODY_LIMIT ?? '50mb';
@@ -13,6 +14,7 @@ async function bootstrap() {
     bodyParser: false,
   });
 
+  app.use(compression());
   app.use(json({ limit: bodyLimit }));
   app.use(urlencoded({ extended: true, limit: bodyLimit }));
 

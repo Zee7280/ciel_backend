@@ -1844,6 +1844,7 @@ export class MailService {
       'CIEL <no-reply@cielpk.com>';
     const facultyLink = this.buildFrontendLink(
       `/dashboard/faculty/reports/${encodeURIComponent(input.reportId)}`,
+      {},
     );
     const titleEsc = this.escHtmlPlain(input.projectTitle);
     const leadEsc = this.escHtmlPlain(input.teamLeadName || 'Team Lead');

@@ -1564,9 +1564,18 @@ export class OpportunitiesService {
   }
 
   private async sendPartnerApprovalEmail(opportunity: Opportunity): Promise<boolean> {
-    if (!opportunity.partnerToken) return false;
     const partnerEmail = this.resolvePartnerEmailFromOpportunity(opportunity);
-    if (!partnerEmail) return false;
+    if (!partnerEmail) {
+      console.warn(
+        'Partner approval email skipped: no partner email on opportunity',
+        opportunity.id,
+      );
+      return false;
+    }
+    if (!opportunity.partnerToken) {
+      opportunity.partnerToken = randomUUID();
+      await this.opportunitiesRepository.save(opportunity);
+    }
 
     const creator = await this.getOpportunityCreatorContact(opportunity);
     const details = this.buildOpportunityVerificationEmailDetails(opportunity, {
@@ -1633,6 +1642,8 @@ export class OpportunitiesService {
     // route through here with `isStudentCreated: false`. Only the in-app "your opportunity" student
     // notice below is student-specific.
     if (opportunity.workflowStage === WORKFLOW_STAGE.PENDING_PARTNER) {
+      // Faculty → Partner is sequential. Do not email the partner at create while
+      // faculty is still pending — their verify link is rejected until this stage.
       await this.sendPartnerApprovalEmail(opportunity);
       if (opportunity.isStudentCreated) {
         await this.notifyStudentOpportunityUpdate(opportunity, {
@@ -2025,8 +2036,11 @@ export class OpportunitiesService {
     }
 
     if (resolvedPartnerToken) {
+      const waitingOnFaculty =
+        saved.workflowStage === WORKFLOW_STAGE.PENDING_FACULTY ||
+        saved.status === 'pending_faculty';
       const pe = this.resolvePartnerEmail(createOpportunityDto);
-      if (pe) {
+      if (pe && !waitingOnFaculty) {
         try {
           const verifyDetails = this.buildOpportunityVerificationEmailDetails(
             saved,
@@ -2450,7 +2464,9 @@ export class OpportunitiesService {
       }
     }
 
-    if (partnerEmail && partnerToken) {
+    // Private-candidate has no faculty gate, so partner is next immediately.
+    // Regular student listings wait until faculty approves (handleFacultyApprovedSideEffects).
+    if (privateCandidate && partnerEmail && partnerToken) {
       try {
         await this.mailService.sendPartnerVerification(
           partnerEmail,
@@ -4569,7 +4585,15 @@ export class OpportunitiesService {
       }
     }
     await this.opportunitiesRepository.save(opp);
-    if (
+    if (opp.workflowStage === WORKFLOW_STAGE.PENDING_FACULTY) {
+      if (!opp.faculty_verification_token) {
+        opp.faculty_verification_token = randomUUID();
+        await this.opportunitiesRepository.save(opp);
+      }
+      await this.notifyFacultyForStudentOpportunityVerification(opp);
+    } else if (opp.workflowStage === WORKFLOW_STAGE.PENDING_PARTNER) {
+      await this.sendPartnerApprovalEmail(opp);
+    } else if (
       !opp.admin_approved &&
       opp.workflowStage === WORKFLOW_STAGE.PENDING_ADMIN
     ) {

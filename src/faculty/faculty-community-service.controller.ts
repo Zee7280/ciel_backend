@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
   Get,
   Post,
   Request,
@@ -23,6 +24,7 @@ export class FacultyCommunityServiceController {
     private readonly communityAward: CommunityAwardService,
   ) {}
 
+  /** Read-only pool for linked projects. Faculty cannot run or publish Ruberix ranking. */
   @Get('award-cards')
   async awardCards(@Request() req) {
     const reports = await this.facultyReportsService.listAssignedReports(
@@ -36,17 +38,9 @@ export class FacultyCommunityServiceController {
   }
 
   @Post('award-notify')
-  async awardNotify(@Request() req, @Body() dto: NotifyCommunityAwardDto) {
-    const reports = await this.facultyReportsService.listAssignedReports(
-      req.user.id,
-      req.user.email,
+  async awardNotify(@Request() _req, @Body() _dto: NotifyCommunityAwardDto) {
+    throw new ForbiddenException(
+      'Only University and CIEL PK Super Admin can run or publish Community Service Ruberix rankings.',
     );
-    const pool = this.communityAward.cardsFrom(reports, true);
-    const data = await this.communityAward.notifyFromPool(
-      pool,
-      { ...dto, kind: 'fac' },
-      req.user.name,
-    );
-    return { success: true, data };
   }
 }

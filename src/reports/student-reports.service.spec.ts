@@ -1535,7 +1535,7 @@ describe('StudentReportsService', () => {
     expect(verifyReportQb.execute).toHaveBeenCalled();
   });
 
-  it('blocks admin approve on a faculty-gated report until Faculty has signed off', async () => {
+  it('blocks admin approve on a faculty-gated report until CII is locked (or legacy faculty approved)', async () => {
     const report = {
       id: 'report-1',
       status: 'paid',
@@ -1549,7 +1549,90 @@ describe('StudentReportsService', () => {
     mockStudentReportsRepository.findOne.mockResolvedValue(report);
 
     await expect(service.verifyReport('report-1', 'approve', 'admin')).rejects.toThrow(
-      'not yet approved by Faculty',
+      'Run and confirm the CII analysis',
+    );
+  });
+
+  it('lets CIEL PK publish a regular report after CII is locked, without prior Faculty action', async () => {
+    const report = {
+      id: 'report-1',
+      status: 'paid',
+      partner_status: 'pending',
+      admin_status: 'pending',
+      faculty_status: 'pending',
+      partnerApprovedAt: null,
+      adminApprovedAt: null,
+      ciiV2Lock: { locked: true },
+      opportunity: { requiresPartnerApproval: false },
+    };
+    mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+    const result = await service.verifyReport('report-1', 'approve', 'admin');
+
+    expect(report.admin_status).toBe('approved');
+    expect(report.faculty_status).toBe('approved');
+    expect(report.status).toBe('verified');
+    expect(result.data.status).toBe('verified');
+  });
+
+  it('lets CIEL PK publish a private-candidate report after CII is locked, without Faculty', async () => {
+    const report = {
+      id: 'report-pc',
+      status: 'paid',
+      partner_status: 'pending',
+      admin_status: 'pending',
+      faculty_status: 'pending',
+      partnerApprovedAt: null,
+      adminApprovedAt: null,
+      ciiV2Lock: { locked: true },
+      opportunity: {
+        requiresPartnerApproval: false,
+        faculty_verification_status: 'not_required',
+      },
+    };
+    mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+    const result = await service.verifyReport('report-pc', 'approve', 'admin');
+
+    expect(report.admin_status).toBe('approved');
+    expect(report.faculty_status).toBe('not_applicable');
+    expect(report.status).toBe('verified');
+    expect(result.data.status).toBe('verified');
+  });
+
+  it('refuses to publish a private-candidate report before CII is locked', async () => {
+    const report = {
+      id: 'report-pc',
+      status: 'paid',
+      partner_status: 'pending',
+      admin_status: 'pending',
+      faculty_status: 'pending',
+      partnerApprovedAt: null,
+      adminApprovedAt: null,
+      opportunity: { faculty_verification_status: 'not_required' },
+    };
+    mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+    await expect(service.verifyReport('report-pc', 'approve', 'admin')).rejects.toThrow(
+      'Run and confirm the CII analysis',
+    );
+  });
+
+  it('blocks admin approve on a faculty-gated report until CII is locked (or legacy faculty approved)', async () => {
+    const report = {
+      id: 'report-1',
+      status: 'paid',
+      partner_status: 'pending',
+      admin_status: 'pending',
+      faculty_status: 'pending',
+      partnerApprovedAt: null,
+      adminApprovedAt: null,
+      opportunity: { requiresPartnerApproval: false },
+    };
+    mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+    await expect(service.verifyReport('report-1', 'approve', 'admin')).rejects.toThrow(
+      'Run and confirm the CII analysis',
     );
   });
 
@@ -1596,7 +1679,7 @@ describe('StudentReportsService', () => {
     );
   });
 
-  it('blocks admin approve on a faculty-gated report until Faculty has signed off', async () => {
+  it('blocks admin approve on a faculty-gated report until CII is locked (or legacy faculty approved)', async () => {
     const report = {
       id: 'report-1',
       status: 'paid',
@@ -1610,68 +1693,7 @@ describe('StudentReportsService', () => {
     mockStudentReportsRepository.findOne.mockResolvedValue(report);
 
     await expect(service.verifyReport('report-1', 'approve', 'admin')).rejects.toThrow(
-      'not yet approved by Faculty',
-    );
-  });
-
-  it('lets CIEL PK publish a private-candidate report after CII is locked, without Faculty', async () => {
-    const report = {
-      id: 'report-pc',
-      status: 'paid',
-      partner_status: 'pending',
-      admin_status: 'pending',
-      faculty_status: 'pending',
-      partnerApprovedAt: null,
-      adminApprovedAt: null,
-      ciiV2Lock: { locked: true },
-      opportunity: {
-        requiresPartnerApproval: false,
-        faculty_verification_status: 'not_required',
-      },
-    };
-    mockStudentReportsRepository.findOne.mockResolvedValue(report);
-
-    const result = await service.verifyReport('report-pc', 'approve', 'admin');
-
-    expect(report.admin_status).toBe('approved');
-    expect(report.faculty_status).toBe('not_applicable');
-    expect(report.status).toBe('verified');
-    expect(result.data.status).toBe('verified');
-  });
-
-  it('refuses to publish a private-candidate report before CII is locked', async () => {
-    const report = {
-      id: 'report-pc',
-      status: 'paid',
-      partner_status: 'pending',
-      admin_status: 'pending',
-      faculty_status: 'pending',
-      partnerApprovedAt: null,
-      adminApprovedAt: null,
-      opportunity: { faculty_verification_status: 'not_required' },
-    };
-    mockStudentReportsRepository.findOne.mockResolvedValue(report);
-
-    await expect(service.verifyReport('report-pc', 'approve', 'admin')).rejects.toThrow(
       'Run and confirm the CII analysis',
-    );
-  });
-
-  it('blocks admin approve on a faculty-gated report until Faculty has signed off', async () => {
-    const report = {
-      id: 'report-1',
-      status: 'paid',
-      partner_status: 'pending',
-      admin_status: 'pending',
-      faculty_status: 'pending',
-      partnerApprovedAt: null,
-      adminApprovedAt: null,
-      opportunity: { requiresPartnerApproval: false },
-    };
-    mockStudentReportsRepository.findOne.mockResolvedValue(report);
-
-    await expect(service.verifyReport('report-1', 'approve', 'admin')).rejects.toThrow(
-      'not yet approved by Faculty',
     );
   });
 

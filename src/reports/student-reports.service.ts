@@ -4107,10 +4107,20 @@ export class StudentReportsService {
           ) {
             report.faculty_status = 'not_applicable';
           }
-        } else if (report.faculty_status !== 'approved') {
-          throw new ForbiddenException(
-            'This report is not yet approved by Faculty. Admin can view its status and send a reminder, but only Faculty can approve or reject a Community Service report first.',
-          );
+        } else {
+          // Faculty login is read-only going forward. Allow publish when:
+          // - CII is locked by CIEL PK Admin (new path), or
+          // - faculty_status is already approved (legacy in-flight reports).
+          const ciiLocked = isCiiFacultyLocked(report.ciiV2Lock);
+          const facultyAlreadyApproved = report.faculty_status === 'approved';
+          if (!ciiLocked && !facultyAlreadyApproved) {
+            throw new BadRequestException(
+              'Run and confirm the CII analysis before publishing this report.',
+            );
+          }
+          if (ciiLocked && !facultyAlreadyApproved) {
+            report.faculty_status = 'approved';
+          }
         }
         // NOTE: admin_status intentionally records CIEL PK's own decision independently of
         // partner_status — the two are separate, order-independent sign-offs, and only the

@@ -6,6 +6,7 @@ import {
   Param,
   UseGuards,
   Request,
+  ForbiddenException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
@@ -16,6 +17,9 @@ import { FacultyReportActionDto } from './dto/faculty-report-action.dto';
 import { ApproveCiiV2Dto } from './dto/approve-cii-v2.dto';
 import { RunIndependentAnalysisDto } from './dto/run-independent-analysis.dto';
 import { RunIndependentAnalysisBatchDto } from './dto/run-independent-analysis-batch.dto';
+
+const FACULTY_REPORT_WRITE_BLOCKED =
+  'Faculty report review is read-only. Run Analyzer, Approve, Request revision and Reject are handled by CIEL PK Admin.';
 
 @Controller('faculty/reports')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -40,98 +44,44 @@ export class FacultyReportsController {
     );
   }
 
+  /** Read-only faculty policy — decisions live on CIEL PK Admin. */
   @Post(':id/action')
   async handleAction(
-    @Request() req,
-    @Param('id') id: string,
-    @Body() body: FacultyReportActionDto,
+    @Request() _req,
+    @Param('id') _id: string,
+    @Body() _body: FacultyReportActionDto,
   ) {
-    return await this.facultyReportsService.updateAction(
-      id,
-      req.user.id,
-      req.user.email,
-      body.status,
-      body.remarks,
-      {
-        revision_section: body.revision_section,
-        required_correction: body.required_correction,
-      },
-    );
+    throw new ForbiddenException(FACULTY_REPORT_WRITE_BLOCKED);
   }
 
   @Post(':id/cii-v2/analyse')
-  async analyseCiiV2(@Request() req, @Param('id') id: string) {
-    return await this.facultyReportsService.runCiiV2Analysis(
-      id,
-      req.user.id,
-      req.user.email,
-    );
+  async analyseCiiV2(@Request() _req, @Param('id') _id: string) {
+    throw new ForbiddenException(FACULTY_REPORT_WRITE_BLOCKED);
   }
 
-  /**
-   * Phase 2: Approve CII v2 with audit trail support.
-   *
-   * If faculty adjusts the AI-recommended score, they must provide a reason.
-   * Both scores are stored for audit: AI Recommended → Faculty Approved
-   */
   @Post(':id/cii-v2/approve')
   async approveCiiV2(
-    @Request() req,
-    @Param('id') id: string,
-    @Body() body: ApproveCiiV2Dto,
+    @Request() _req,
+    @Param('id') _id: string,
+    @Body() _body: ApproveCiiV2Dto,
   ) {
-    return await this.facultyReportsService.approveCiiV2(
-      id,
-      req.user.id,
-      req.user.email,
-      body.note,
-      body.facultyAdjustedScore,
-      body.scoreAdjustmentReason,
-      body.criteriaOverrides,
-    );
+    throw new ForbiddenException(FACULTY_REPORT_WRITE_BLOCKED);
   }
 
-  /**
-   * Phase 4: Run Independent AI Analysis from My Impact Wall.
-   *
-   * Authorized stakeholders can run additional AI analysis on approved records
-   * without overwriting the faculty-approved score.
-   *
-   * - Uses the same approved formula/rubric
-   * - Results stored separately for audit
-   * - Original faculty-approved record remains unchanged
-   */
   @Post(':id/cii-v2/independent-analysis')
   async runIndependentAnalysis(
-    @Request() req,
-    @Param('id') id: string,
-    @Body() body: RunIndependentAnalysisDto,
+    @Request() _req,
+    @Param('id') _id: string,
+    @Body() _body: RunIndependentAnalysisDto,
   ) {
-    return await this.facultyReportsService.runIndependentAiAnalysis(
-      id,
-      req.user.id,
-      'faculty',
-      req.user.name || req.user.email,
-      body.note,
-      { facultyEmail: req.user.email },
-    );
+    throw new ForbiddenException(FACULTY_REPORT_WRITE_BLOCKED);
   }
 
-  /** Batch counterpart — run independent analysis across several of this faculty's assigned
-   * reports at once, so the resulting score/trend update lands on each affected student's My
-   * Impact Wall in a single action instead of one report at a time. */
   @Post('cii-v2/independent-analysis/batch')
   async runIndependentAnalysisBatch(
-    @Request() req,
-    @Body() body: RunIndependentAnalysisBatchDto,
+    @Request() _req,
+    @Body() _body: RunIndependentAnalysisBatchDto,
   ) {
-    return await this.facultyReportsService.runIndependentAiAnalysisBatch(
-      body.reportIds,
-      req.user.id,
-      'faculty',
-      req.user.name || req.user.email,
-      body.note,
-      { facultyEmail: req.user.email },
-    );
+    throw new ForbiddenException(FACULTY_REPORT_WRITE_BLOCKED);
   }
 }

@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -460,18 +459,18 @@ export class FacultyReportsService {
     }
   }
 
-  private async findPrivateCandidateReportForAdmin(id: string): Promise<StudentReport> {
+  /**
+   * CIEL PK Admin CII analyse/approve — platform-wide.
+   * Faculty login is read-only; Admin owns Analyzer + CII lock for every CS report
+   * (private-candidate and regular faculty-linked routes).
+   */
+  private async findReportForAdminCii(id: string): Promise<StudentReport> {
     const report = await this.studentReportsRepository.findOne({
       where: { id },
       relations: ['opportunity', 'student'],
     });
     if (!report) {
       throw new NotFoundException('Report not found.');
-    }
-    if (!isPrivateCandidateOpportunity(report.opportunity)) {
-      throw new ForbiddenException(
-        'CIEL PK CII analysis is only for the private-candidate review route. Regular reports are reviewed by faculty.',
-      );
     }
     this.assertFeeClearedForCii(report);
     return report;
@@ -604,7 +603,7 @@ export class FacultyReportsService {
   }
 
   async runCiiV2AnalysisForAdmin(id: string) {
-    const report = await this.findPrivateCandidateReportForAdmin(id);
+    const report = await this.findReportForAdminCii(id);
     return this.persistCiiV2Analysis(report);
   }
 
@@ -721,11 +720,16 @@ export class FacultyReportsService {
       { aiAnchor: number; facultyAnchor: number; reason: string }
     >,
   ) {
-    const report = await this.findPrivateCandidateReportForAdmin(id);
+    const report = await this.findReportForAdminCii(id);
+    // Private-candidate: no faculty step. Regular reports: CIEL PK CII lock stands in for
+    // the former faculty academic sign-off so partner/admin verify gates stay consistent.
+    const facultyStatus = isPrivateCandidateOpportunity(report.opportunity)
+      ? 'not_applicable'
+      : 'approved';
     return this.persistCiiV2Approval(
       report,
       adminId,
-      'not_applicable',
+      facultyStatus,
       note,
       facultyAdjustedScore,
       scoreAdjustmentReason,

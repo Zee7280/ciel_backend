@@ -200,15 +200,19 @@ export class PartnersController {
     const isUni = String(org?.orgType || '')
       .toLowerCase()
       .includes('university');
-    const pool = isUni
-      ? await this.communityAward.listForUniversity(req.user.organizationId)
-      : await this.communityAward.listForPartnerOrg(req.user.organizationId);
-    const kind = isUni ? 'uni' : 'par';
+    if (!isUni) {
+      throw new ForbiddenException(
+        'Only University and CIEL PK Super Admin can run or publish Community Service Ruberix rankings. Partner / NGO can view published ranks only.',
+      );
+    }
+    const pool = await this.communityAward.listForUniversity(
+      req.user.organizationId,
+    );
     const data = await this.communityAward.notifyFromPool(
       pool,
       {
         ...dto,
-        kind,
+        kind: 'uni',
         scopeLabel: dto.scopeLabel || org?.name,
       },
       req.user.name,

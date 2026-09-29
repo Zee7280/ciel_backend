@@ -888,7 +888,8 @@ export class OpportunitiesService {
       return {
         success: true,
         sent_to: 'partner',
-        message: `Verification email sent to ${partnerTo}.`,
+        partner_email: partnerTo,
+        message: `Verification email sent to ${partnerTo}. Check Inbox and Spam.`,
         ...tracker,
         reminder: reminderCopy,
       };

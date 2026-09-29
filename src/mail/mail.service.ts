@@ -35,50 +35,206 @@ export interface OpportunityVerificationEmailDetails {
 @Injectable()
 export class MailService {
   private transporter: nodemailer.Transporter;
+  /** Alternate GoDaddy port (465↔587) used once if primary retries are exhausted. */
+  private fallbackTransporter: nodemailer.Transporter | null = null;
   private readonly logger = new Logger(MailService.name);
 
   constructor(private configService: ConfigService) {
-    const user = this.configService.get<string>('MAIL_USER');
-    const pass = this.configService.get<string>('MAIL_PASS');
-    const host = this.configService.get<string>('MAIL_HOST');
-    const port = this.configService.get<number>('MAIL_PORT');
+    const user =
+      this.configService.get<string>('MAIL_USER') || process.env.MAIL_USER;
+    const pass =
+      this.configService.get<string>('MAIL_PASS') || process.env.MAIL_PASS;
+    const host =
+      this.configService.get<string>('MAIL_HOST') ||
+      process.env.MAIL_HOST ||
+      'smtpout.secureserver.net';
+    const port = Number(
+      this.configService.get<string>('MAIL_PORT') ||
+        process.env.MAIL_PORT ||
+        587,
+    );
+    const secureEnv = (
+      this.configService.get<string>('MAIL_SECURE') ||
+      process.env.MAIL_SECURE ||
+      ''
+    ).toLowerCase();
+    const secure =
+      secureEnv === 'true' || secureEnv === '1' || port === 465;
 
     this.logger.log(
-      `MailService init. USER found: ${!!user}, PASS found: ${!!pass}, HOST: ${host}, PORT: ${port}`,
+      `MailService init. USER found: ${!!user}, PASS found: ${!!pass}, HOST: ${host}, PORT: ${port}, SECURE: ${secure}`,
     );
 
     if (!user || !pass) {
       this.logger.error(
-        'CRITICAL: MAIL_USER or MAIL_PASS is missing from ConfigService!',
-      );
-      // Check process.env directly as fallback
-      const directUser = process.env.MAIL_USER;
-      const directPass = process.env.MAIL_PASS;
-      this.logger.log(
-        `Direct process.env check - USER: ${!!directUser}, PASS: ${!!directPass}`,
+        'CRITICAL: MAIL_USER or MAIL_PASS is missing — outbound mail will fail until configured.',
       );
     }
 
-    this.transporter = nodemailer.createTransport({
-      host: host || 'smtpout.secureserver.net',
-      port: Number(port) || 465,
-      secure:
-        this.configService.get<string>('MAIL_SECURE') === 'true' ||
-        Number(port) === 465,
-      auth: {
-        user: user || process.env.MAIL_USER,
-        pass: pass || process.env.MAIL_PASS,
-      },
+    this.transporter = this.buildTransporter({
+      host,
+      port,
+      secure,
+      user,
+      pass,
     });
 
-    // Verify connection configuration
-    this.transporter.verify((error, success) => {
+    // GoDaddy / Secureserver: if primary is 587 STARTTLS, keep 465 SSL as fallback (and vice versa).
+    const fallbackPort = port === 465 ? 587 : 465;
+    const fallbackSecure = fallbackPort === 465;
+    if (fallbackPort !== port) {
+      this.fallbackTransporter = this.buildTransporter({
+        host,
+        port: fallbackPort,
+        secure: fallbackSecure,
+        user,
+        pass,
+      });
+      this.logger.log(
+        `MailService fallback SMTP ready on ${host}:${fallbackPort} (secure=${fallbackSecure})`,
+      );
+    }
+
+    this.transporter.verify((error) => {
       if (error) {
-        this.logger.error('Transporter verification failed:', error.message);
+        this.logger.error(
+          `Primary transporter verification failed (${host}:${port}): ${error.message}`,
+        );
       } else {
-        this.logger.log('Transporter is ready to take our messages');
+        this.logger.log(
+          `Primary transporter ready (${host}:${port}, secure=${secure})`,
+        );
       }
     });
+  }
+
+  private buildTransporter(opts: {
+    host: string;
+    port: number;
+    secure: boolean;
+    user?: string;
+    pass?: string;
+  }): nodemailer.Transporter {
+    const rejectUnauthorized =
+      (
+        this.configService.get<string>('MAIL_TLS_REJECT_UNAUTHORIZED') ||
+        process.env.MAIL_TLS_REJECT_UNAUTHORIZED ||
+        'true'
+      ).toLowerCase() !== 'false';
+
+    return nodemailer.createTransport({
+      host: opts.host,
+      port: opts.port,
+      secure: opts.secure,
+      // Port 587 needs explicit STARTTLS; without it some hosts hang or drop auth.
+      requireTLS: !opts.secure && opts.port === 587,
+      auth:
+        opts.user && opts.pass
+          ? { user: opts.user, pass: opts.pass }
+          : undefined,
+      connectionTimeout: 20_000,
+      greetingTimeout: 20_000,
+      socketTimeout: 45_000,
+      tls: {
+        minVersion: 'TLSv1.2',
+        rejectUnauthorized,
+      },
+    });
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private isTransientSmtpError(err: unknown): boolean {
+    const e = err as {
+      code?: string;
+      responseCode?: number;
+      message?: string;
+    };
+    const code = String(e?.code || '').toUpperCase();
+    const msg = String(e?.message || '').toLowerCase();
+    const responseCode = Number(e?.responseCode || 0);
+    if (
+      [
+        'ETIMEDOUT',
+        'ESOCKET',
+        'ECONNECTION',
+        'ECONNRESET',
+        'ECONNREFUSED',
+        'ENOTFOUND',
+        'EAI_AGAIN',
+        'ETLS',
+        'EENVELOPE',
+      ].includes(code)
+    ) {
+      return true;
+    }
+    // 4xx SMTP = transient; 421/451 common on rate limits / greylisting.
+    if (responseCode >= 400 && responseCode < 500) return true;
+    if (
+      msg.includes('timeout') ||
+      msg.includes('temporarily') ||
+      msg.includes('try again') ||
+      msg.includes('greylist') ||
+      msg.includes('connection')
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Central send path: retries transient SMTP failures, then tries the alternate
+   * GoDaddy port once so faculty/partner verification mail is not lost to a flaky socket.
+   */
+  private async sendMailReliable(
+    mailOptions: nodemailer.SendMailOptions,
+  ): Promise<nodemailer.SentMessageInfo> {
+    const to = Array.isArray(mailOptions.to)
+      ? mailOptions.to.join(', ')
+      : String(mailOptions.to || '');
+    if (!to.trim()) {
+      throw new Error('Mail send aborted: empty recipient');
+    }
+
+    const maxAttempts = 3;
+    let lastError: Error | null = null;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const info = await this.transporter.sendMail(mailOptions);
+        this.logger.log(
+          `Mail sent to ${to} (attempt ${attempt}/${maxAttempts}) id=${info.messageId || 'n/a'}`,
+        );
+        return info;
+      } catch (err) {
+        lastError = err as Error;
+        const transient = this.isTransientSmtpError(err);
+        this.logger.warn(
+          `Mail send failed to ${to} (attempt ${attempt}/${maxAttempts}, transient=${transient}): ${lastError.message}`,
+        );
+        if (!transient || attempt === maxAttempts) break;
+        await this.sleep(500 * attempt);
+      }
+    }
+
+    if (this.fallbackTransporter) {
+      try {
+        const info = await this.fallbackTransporter.sendMail(mailOptions);
+        this.logger.log(
+          `Mail sent via fallback SMTP to ${to} id=${info.messageId || 'n/a'}`,
+        );
+        return info;
+      } catch (err) {
+        lastError = err as Error;
+        this.logger.error(
+          `Fallback SMTP also failed to ${to}: ${lastError.message}`,
+        );
+      }
+    }
+
+    throw lastError || new Error(`Mail send failed to ${to}`);
   }
 
   private wrapOfficialTemplate(opts: {
@@ -208,7 +364,7 @@ export class MailService {
       });
     }
 
-    await this.transporter.sendMail({
+    await this.sendMailReliable({
       from,
       to: toList.join(','),
       subject: subjectTrim || 'CIEL PK message',
@@ -318,7 +474,7 @@ export class MailService {
     `;
 
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: 'Welcome to CIEL PK — your account is ready',
@@ -352,7 +508,7 @@ export class MailService {
     `;
 
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: 'Reset your CIEL PK password',
@@ -393,7 +549,7 @@ export class MailService {
     `;
 
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: `Execution verification required: ${projectTitle}`,
@@ -430,7 +586,7 @@ export class MailService {
     `;
 
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: `CIEL PK — you are referenced on: ${projectTitle}`,
@@ -461,7 +617,7 @@ export class MailService {
     `;
 
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: 'Your CIEL PK team verification code',
@@ -494,7 +650,7 @@ export class MailService {
     `;
 
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: 'A student added you to their team on CIEL PK',
@@ -558,7 +714,7 @@ export class MailService {
     `;
 
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: `${params.inviterName || 'A fellow student'} added you as a group member on CIEL PK`,
@@ -610,7 +766,7 @@ export class MailService {
     `;
 
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to: params.to,
         subject: `${params.leadName} added you to ${params.projectTitle}`,
@@ -678,7 +834,7 @@ export class MailService {
     `;
 
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: `CIEL PK — approval needed from faculty: ${projectTitle}`,
@@ -742,7 +898,7 @@ export class MailService {
     `;
 
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: `CIEL PK — collaborating supervisor (${projectTitle})`,
@@ -781,7 +937,7 @@ export class MailService {
     `;
 
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: `CIEL PK — application received (pending faculty): ${projectTitle}`,
@@ -827,7 +983,7 @@ export class MailService {
     `;
 
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: `CIEL PK — reminder: log your hours for ${projectTitle}`,
@@ -875,7 +1031,7 @@ export class MailService {
     `;
 
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: `CIEL PK — faculty supervisor invitation (${projectName})`,
@@ -1013,7 +1169,7 @@ export class MailService {
     `;
 
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: `CIEL PK — liaison verification: ${projectTitle}`,
@@ -1143,7 +1299,7 @@ export class MailService {
     `;
 
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: `CIEL PK — partner verification requested: ${projectTitle}`,
@@ -1194,7 +1350,7 @@ export class MailService {
     `;
 
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: `CIEL PK — opportunity not approved: ${projectTitle}`,
@@ -1299,7 +1455,7 @@ export class MailService {
     `;
 
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: `CIEL PK — faculty approval requested: ${projectTitle}`,
@@ -1363,7 +1519,7 @@ export class MailService {
     `;
 
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: `${subjectPrefix}: ${projectTitle}`,
@@ -1421,7 +1577,7 @@ export class MailService {
     `;
 
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to: input.to,
         subject: '🎉 Your Opportunity Is Live — Start Your Impact Report',
@@ -1472,7 +1628,7 @@ export class MailService {
     `;
 
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to: recipients.join(', '),
         subject: `CIEL PK — admin review needed: ${projectTitle}`,
@@ -1561,7 +1717,7 @@ export class MailService {
     `;
     const text = `CIEL — Verify your email\n\nYour verification code: ${otp}\n\nThis code expires in 5 minutes.\n\nIf you didn't request this, you can ignore this email.\nSupport: support@cielpk.com`;
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: 'Your CIEL Verification Code',
@@ -1607,7 +1763,7 @@ export class MailService {
       </div>
     `;
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: `CIEL PK — attendance review: ${projectTitle}`,
@@ -1669,7 +1825,7 @@ export class MailService {
         </div>
       </div>
     `;
-    await this.transporter.sendMail({
+    await this.sendMailReliable({
       from,
       to,
       subject: `CIEL PK — attendance verification requested: ${projectTitle}`,
@@ -1709,7 +1865,7 @@ export class MailService {
         </div>
       </div>
     `;
-    await this.transporter.sendMail({
+    await this.sendMailReliable({
       from,
       to,
       subject: `CIEL PK — attendance ${decision}: ${projectTitle}`,
@@ -1752,7 +1908,7 @@ export class MailService {
       </div>
     `;
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to: recipients.join(', '),
         subject: `CIEL PK — admin attendance queue: ${projectTitle}`,
@@ -1817,7 +1973,7 @@ export class MailService {
       </div>
     `;
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to: recipients.join(', '),
         subject: `CIEL PK — student report submitted: ${projectTitle}`,
@@ -1864,7 +2020,7 @@ export class MailService {
       </div>
     `;
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: `CIEL PK · Report Awaiting Faculty Review · ${input.projectTitle}`,
@@ -1912,7 +2068,7 @@ export class MailService {
       </div>
     `;
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to: recipients.join(', '),
         subject: `CIEL PK — student may start report: ${projectTitle}`,
@@ -1960,7 +2116,7 @@ export class MailService {
     `;
     const text = `Name: ${name}\nEmail: ${email}\nSubject: ${subject}\n\n${message}`;
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         replyTo: email,
@@ -2007,7 +2163,7 @@ export class MailService {
       </div>
     `;
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: `${studentName?.trim() || 'A student'} submitted a coursework report for your review: ${projectTitle}`,
@@ -2041,7 +2197,7 @@ export class MailService {
       </div>
     `;
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: `CIEL PK — your coursework was submitted: ${projectTitle}`,
@@ -2084,7 +2240,7 @@ export class MailService {
       </div>
     `;
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: `CIEL PK — coursework resubmitted for review: ${projectTitle}`,
@@ -2131,7 +2287,7 @@ export class MailService {
       </div>
     `;
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: `${studentName?.trim() || 'A student'} selected you as their faculty supervisor on CIEL PK`,
@@ -2175,7 +2331,7 @@ export class MailService {
       </div>
     `;
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: `New ${pathLabel} ${recordNoun.toLowerCase()} created on CIEL PK`,
@@ -2218,7 +2374,7 @@ export class MailService {
       </div>
     `;
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: `CIEL PK — coursework approved: ${projectTitle}`,
@@ -2258,7 +2414,7 @@ export class MailService {
       </div>
     `;
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: `CIEL PK — revision requested on your coursework: ${projectTitle}`,
@@ -2297,7 +2453,7 @@ export class MailService {
       </div>
     `;
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: `CIEL PK — coursework not approved: ${projectTitle}`,
@@ -2355,7 +2511,7 @@ export class MailService {
       </div>
     `;
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: `CIEL PK — your coursework ranked #${rank}: ${projectTitle}`,
@@ -2418,7 +2574,7 @@ export class MailService {
       </div>
     `;
     try {
-      await this.transporter.sendMail({
+      await this.sendMailReliable({
         from,
         to,
         subject: copy.subject,

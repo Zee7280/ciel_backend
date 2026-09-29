@@ -1654,7 +1654,10 @@ export class OpportunitiesService {
       .replace(/"/g, '&quot;');
   }
 
-  private async handleFacultyApprovedSideEffects(opportunity: Opportunity) {
+  private async handleFacultyApprovedSideEffects(opportunity: Opportunity): Promise<{
+    partnerEmailSent: boolean;
+    partnerEmail: string | null;
+  }> {
     // Partner/admin notice must fire for every creator kind that can reach this stage after a
     // faculty gate clears — legacy liaison flow, an NGO/Partner Organization creator's linked
     // faculty gate, and now a CIEL PK Super Admin's named-faculty gate (initCielAdminCreated) all
@@ -1663,7 +1666,29 @@ export class OpportunitiesService {
     if (opportunity.workflowStage === WORKFLOW_STAGE.PENDING_PARTNER) {
       // Faculty → Partner is sequential. Do not email the partner at create while
       // faculty is still pending — their verify link is rejected until this stage.
-      await this.sendPartnerApprovalEmail(opportunity);
+      const partnerEmail = this.resolvePartnerEmailFromOpportunity(opportunity);
+      const partnerEmailSent = await this.sendPartnerApprovalEmail(opportunity);
+      if (!partnerEmailSent) {
+        console.warn(
+          'Faculty approved but partner verification email was NOT delivered (scheduling background retry)',
+          {
+            opportunityId: opportunity.id,
+            partnerEmail,
+            hasPartnerToken: !!opportunity.partnerToken,
+          },
+        );
+        const oppId = opportunity.id;
+        setTimeout(() => {
+          this.sendPartnerApprovalEmail(opportunity).then((ok) => {
+            if (!ok) {
+              console.warn(
+                'Background partner verification email retry failed',
+                { opportunityId: oppId, partnerEmail },
+              );
+            }
+          });
+        }, 12_000);
+      }
       if (opportunity.isStudentCreated) {
         await this.notifyStudentOpportunityUpdate(opportunity, {
           title: 'Faculty Approved',
@@ -1672,7 +1697,7 @@ export class OpportunitiesService {
           emailSubject: 'Faculty approved your opportunity',
         });
       }
-      return;
+      return { partnerEmailSent, partnerEmail };
     }
 
     if (opportunity.workflowStage === WORKFLOW_STAGE.PENDING_ADMIN) {
@@ -1686,6 +1711,7 @@ export class OpportunitiesService {
         });
       }
     }
+    return { partnerEmailSent: false, partnerEmail: null };
   }
 
   private async handlePartnerApprovedSideEffects(opportunity: Opportunity) {
@@ -2513,31 +2539,58 @@ export class OpportunitiesService {
     );
 
     if (!privateCandidate) {
-      const facultyTo = this.normalizeEmail(dto.supervision?.contact);
-      try {
-        await this.mailService.sendFacultyStudentOpportunityVerification(
-          facultyTo,
-          saved.title,
-          saved.faculty_verification_token,
-          studentVerifyDetails,
+      const facultyTo =
+        this.getFacultyEmailFromOpportunity(saved) ||
+        this.normalizeEmail(dto.supervision?.contact);
+      if (!facultyTo || !saved.faculty_verification_token) {
+        console.warn(
+          'Faculty verification email skipped on student create: missing faculty email or token',
           {
-            path: '/verify/faculty',
-            returnTo: this.getFacultyApprovalReturnTo(saved.id),
+            opportunityId: saved.id,
+            hasEmail: !!facultyTo,
+            hasToken: !!saved.faculty_verification_token,
           },
         );
-      } catch (e) {
-        console.warn(
-          'Failed to send faculty verification email',
-          (e as Error).message,
-        );
+      } else {
+        const sendFaculty = () =>
+          this.mailService.sendFacultyStudentOpportunityVerification(
+            facultyTo,
+            saved.title,
+            saved.faculty_verification_token!,
+            studentVerifyDetails,
+            {
+              path: '/verify/faculty',
+              returnTo: this.getFacultyApprovalReturnTo(saved.id),
+            },
+          );
+        try {
+          await sendFaculty();
+        } catch (e) {
+          console.warn(
+            'Failed to send faculty verification email (will retry once in background)',
+            (e as Error).message,
+            { opportunityId: saved.id, to: facultyTo },
+          );
+          // MailService already retried transient SMTP; one delayed pass catches brief outages
+          // without failing the student create response.
+          setTimeout(() => {
+            sendFaculty().catch((retryErr) =>
+              console.warn(
+                'Background faculty verification email retry failed',
+                (retryErr as Error).message,
+                { opportunityId: saved.id, to: facultyTo },
+              ),
+            );
+          }, 12_000);
+        }
       }
     }
 
     // Private-candidate has no faculty gate, so partner is next immediately.
     // Regular student listings wait until faculty approves (handleFacultyApprovedSideEffects).
     if (privateCandidate && partnerEmail && partnerToken) {
-      try {
-        await this.mailService.sendPartnerVerification(
+      const sendPartner = () =>
+        this.mailService.sendPartnerVerification(
           partnerEmail,
           saved.title,
           partnerToken,
@@ -2547,11 +2600,21 @@ export class OpportunitiesService {
             returnTo: this.getPartnerApprovalReturnTo(saved.id),
           },
         );
+      try {
+        await sendPartner();
       } catch (e) {
         console.warn(
-          'Failed to send partner verification email',
+          'Failed to send partner verification email (will retry once in background)',
           (e as Error).message,
         );
+        setTimeout(() => {
+          sendPartner().catch((retryErr) =>
+            console.warn(
+              'Background partner verification email retry failed',
+              (retryErr as Error).message,
+            ),
+          );
+        }, 12_000);
       }
     }
 
@@ -5081,8 +5144,11 @@ export class OpportunitiesService {
       });
       await this.assignFacultyIdFromSupervisionIfMissing(opp);
       const saved = await this.opportunitiesRepository.save(opp);
-      await this.handleFacultyApprovedSideEffects(saved);
-      return saved;
+      const mail = await this.handleFacultyApprovedSideEffects(saved);
+      return Object.assign(saved, {
+        partner_email_sent: mail.partnerEmailSent,
+        partner_email: mail.partnerEmail,
+      });
     }
 
     await this.opportunityApplicationsService.facultyApprove(

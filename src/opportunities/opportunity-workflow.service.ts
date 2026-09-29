@@ -169,6 +169,7 @@ export class OpportunityWorkflowService {
       ? LINE_STATUS.PENDING
       : LINE_STATUS.NOT_APPLICABLE;
     opp.adminApprovalStatus = LINE_STATUS.PENDING;
+    opp.admin_approved = false;
     if (requiresPartner) {
       opp.workflowStage = WORKFLOW_STAGE.PENDING_PARTNER;
       opp.status = 'pending_partner';
@@ -177,6 +178,60 @@ export class OpportunityWorkflowService {
       opp.workflowStage = WORKFLOW_STAGE.PENDING_ADMIN;
       opp.status = 'pending_approval';
     }
+  }
+
+  /**
+   * NGO / Partner Organization / Corporate creator: CIEL PK admin review is always required.
+   * Optional faculty link and/or partner ack and/or executing-org portal confirm run first.
+   */
+  initOrgCreated(
+    opp: Opportunity,
+    opts: {
+      requiresPartner: boolean;
+      requiresFaculty: boolean;
+      needsExecutingOrg: boolean;
+    },
+  ): void {
+    opp.isStudentCreated = false;
+    opp.requiresPartnerApproval = opts.requiresPartner;
+    opp.admin_approved = false;
+    opp.adminApprovalStatus = LINE_STATUS.PENDING;
+
+    if (opts.requiresFaculty) {
+      opp.facultyApprovalStatus = LINE_STATUS.PENDING;
+      opp.faculty_verified = false;
+      if (!opp.faculty_verification_status) {
+        opp.faculty_verification_status = 'pending_faculty';
+      }
+    } else {
+      opp.facultyApprovalStatus = LINE_STATUS.NOT_APPLICABLE;
+    }
+
+    opp.partnerApprovalStatus = opts.requiresPartner
+      ? LINE_STATUS.PENDING
+      : LINE_STATUS.NOT_APPLICABLE;
+    if (opts.requiresPartner) {
+      opp.partnerVerified = false;
+    }
+
+    // Executing-org portal confirm runs first when present (parallel partner token may exist).
+    if (opts.needsExecutingOrg) {
+      opp.workflowStage = null;
+      opp.status = 'pending_execution';
+      return;
+    }
+    if (opts.requiresFaculty) {
+      opp.workflowStage = WORKFLOW_STAGE.PENDING_FACULTY;
+      opp.status = 'pending_faculty';
+      return;
+    }
+    if (opts.requiresPartner) {
+      opp.workflowStage = WORKFLOW_STAGE.PENDING_PARTNER;
+      opp.status = 'pending_partner';
+      return;
+    }
+    opp.workflowStage = WORKFLOW_STAGE.PENDING_ADMIN;
+    opp.status = 'pending_approval';
   }
 
   /**
@@ -194,6 +249,12 @@ export class OpportunityWorkflowService {
         opp.status === 'pending_faculty' ||
         opp.status === 'pending_verification'
       ) {
+        // Executing-org portal confirm can still be open; do not skip it for admin/partner.
+        if (opp.execution_verification_token && !opp.execution_verified) {
+          opp.workflowStage = null;
+          opp.status = 'pending_execution';
+          return;
+        }
         if (
           opp.requiresPartnerApproval &&
           opp.partnerApprovalStatus !== LINE_STATUS.APPROVED
@@ -331,9 +392,18 @@ export class OpportunityWorkflowService {
     }
 
     // Faculty / org postings: CIEL admin approval makes the listing live for students.
-    // Executing-org confirmation may still be pending (`execution_verified` false) but must not
-    // leave `status` stuck on `pending_execution` after final admin approve.
-    opp.partnerVerified = true;
+    // Only mark partner verified when there was no partner gate (or it already cleared) —
+    // never invent a partner ack that never happened.
+    if (!opp.requiresPartnerApproval) {
+      opp.partnerVerified = true;
+      if (
+        !opp.partnerApprovalStatus ||
+        opp.partnerApprovalStatus === LINE_STATUS.NOT_APPLICABLE ||
+        opp.partnerApprovalStatus === LINE_STATUS.PENDING
+      ) {
+        opp.partnerApprovalStatus = LINE_STATUS.NOT_APPLICABLE;
+      }
+    }
     opp.status = 'active';
   }
 

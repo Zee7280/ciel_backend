@@ -366,6 +366,7 @@ describe('OpportunitiesService — createStudentOpportunity advisory lock', () =
         const result = await service.createStudentOpportunity('student-1', {
             title: 'CS', // < 6 chars — findSimilarStudentCreatedOpportunities short-circuits, no queryBuilder needed
             mode: 'Remote', // location.pin isn't relevant to this test — keep it out of the way
+            timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
             supervision: { contact: 'teacher@uni.edu', faculty_department: 'CS' },
             executing_context: {
                 type: 'independent',
@@ -416,6 +417,7 @@ describe('OpportunitiesService — createStudentOpportunity advisory lock', () =
             service.createStudentOpportunity('student-1', {
                 title: 'Beach clean-up drive', // >= 6 chars — reaches the real duplicate check
                 mode: 'Remote', // location.pin isn't relevant to this test — keep it out of the way
+                timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
                 supervision: { contact: 'teacher@uni.edu', faculty_department: 'CS' },
                 executing_context: {
                     type: 'independent',
@@ -823,6 +825,7 @@ describe('OpportunitiesService — create() CIEL PK review requirement is server
         return {
             title: 'Beach cleanup drive',
             mode: 'Remote', // sidesteps the location.pin requirement — not the concern of this test
+            timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
             safety_declaration: {
                 environment_safe_and_appropriate: true,
                 students_guided_and_supervised: true,
@@ -850,6 +853,7 @@ describe('OpportunitiesService — create() CIEL PK review requirement is server
         (service as any).organizationsService = {
             getMyOrganization: jest.fn().mockResolvedValue({ id: 'org-1' }),
         };
+        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
         (service as any).mailService = { sendAdminOpportunityReviewNeeded: jest.fn() };
         return { service, save };
     }
@@ -913,6 +917,81 @@ describe('OpportunitiesService — create() CIEL PK review requirement is server
 
         expect(saved.facultyApprovalStatus).toBe('not_applicable');
         expect(saved.status).toBe('pending_approval');
+        expect(saved.workflowStage).toBe('pending_admin');
+        expect(saved.admin_approved).toBe(false);
+        expect(saved.adminApprovalStatus).toBe('pending');
+    });
+
+    it('ignores a crafted admin_approved:true from the client payload', async () => {
+        const { service } = makeOrgCreatorService();
+
+        const saved = await service.create(
+            'ngo-user-1',
+            minimalOrgCreatorDto({ admin_approved: true, status: 'active' }),
+        );
+
+        expect(saved.admin_approved).toBe(false);
+        expect(saved.status).toBe('pending_approval');
+        expect(saved.workflowStage).toBe('pending_admin');
+    });
+
+    it('routes partner-organization ack to pending_partner (not premature CIEL PK email)', async () => {
+        const { service } = makeOrgCreatorService();
+        (service as any).mailService.sendPartnerVerification = jest.fn();
+
+        const saved = await service.create(
+            'ngo-user-1',
+            minimalOrgCreatorDto({
+                partner_organization: {
+                    name: 'City Parks Trust',
+                    official_email: 'parks@city.org',
+                },
+            }),
+        );
+
+        // When a distinct partner org must ack, CIEL PK must wait — do not email admin yet.
+        expect(saved.requiresPartnerApproval).toBe(true);
+        expect(saved.partnerToken).toBeTruthy();
+        expect(saved.status).toBe('pending_partner');
+        expect(saved.workflowStage).toBe('pending_partner');
+        expect((service as any).mailService.sendAdminOpportunityReviewNeeded).not.toHaveBeenCalled();
+    });
+
+    it('keeps faculty link gate when executing-org portal confirm is also required', async () => {
+        const { service } = makeOrgCreatorService();
+        (service as any).mailService.sendFacultyStudentOpportunityVerification = jest.fn();
+        (service as any).mailService.sendExecutingOrganizationVerificationEmail = jest.fn();
+
+        const saved = await service.create(
+            'ngo-user-1',
+            minimalOrgCreatorDto({
+                partner_organization: {
+                    organization_name: 'City Parks Trust',
+                    official_email: 'parks@city.org',
+                },
+                executing_organization: {
+                    official_email: 'host@exec.org',
+                    name: 'Exec Host',
+                },
+                visibility_and_academic_linkage: {
+                    faculty_institutional_representative: {
+                        name: 'Dr. Hina Malik',
+                        official_email: 'hina.malik@bnu.edu.pk',
+                    },
+                },
+            }),
+        );
+
+        expect(saved.status).toBe('pending_execution');
+        expect(saved.execution_verification_token).toBeTruthy();
+        expect(saved.execution_verified).toBe(false);
+        expect(saved.faculty_verification_token).toBeTruthy();
+        expect(saved.facultyApprovalStatus).toBe('pending');
+        expect(saved.admin_approved).toBe(false);
+        expect(saved.adminApprovalStatus).toBe('pending');
+        // Faculty email waits until executing-org confirms (verifyExecutingOrganizationForUser).
+        expect((service as any).mailService.sendFacultyStudentOpportunityVerification).not.toHaveBeenCalled();
+        expect((service as any).mailService.sendAdminOpportunityReviewNeeded).not.toHaveBeenCalled();
     });
 });
 
@@ -945,6 +1024,7 @@ describe('OpportunitiesService — Super Admin create skips a second CIEL gate u
         return {
             title: 'National tree plantation',
             mode: 'Remote',
+            timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
             safety_declaration: {
                 environment_safe_and_appropriate: true,
                 students_guided_and_supervised: true,
@@ -1777,6 +1857,33 @@ describe('OpportunitiesService — revise() now supports non-student-created opp
 });
 
 describe('OpportunitiesService — approval actions record actor + timestamp + version (audit trail)', () => {
+    it('approve() refuses pending_execution even when admin_approval_required is true', async () => {
+        const opp = {
+            id: 'opp-exec-1',
+            isStudentCreated: false,
+            status: 'pending_execution',
+            workflowStage: null,
+            admin_approval_required: true,
+            admin_approved: false,
+            adminApprovalStatus: 'pending',
+            facultyApprovalStatus: 'not_applicable',
+            execution_verification_token: 'etok',
+            execution_verified: false,
+            requiresPartnerApproval: false,
+        } as unknown as Opportunity;
+        const service = makeService({
+            findOne: jest.fn().mockResolvedValue(opp),
+            save: jest.fn(async (row: Opportunity) => row),
+        });
+        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+
+        await expect(service.approve('opp-exec-1')).rejects.toBeInstanceOf(
+            BadRequestException,
+        );
+        expect(opp.admin_approved).toBe(false);
+        expect(opp.status).toBe('pending_execution');
+    });
+
     it('approve() appends an actor-stamped, versioned entry to approvalHistory', async () => {
         const opp = {
             id: 'opp-audit-1',

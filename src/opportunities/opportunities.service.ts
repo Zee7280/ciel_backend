@@ -1384,6 +1384,11 @@ export class OpportunitiesService {
   /** Whether CIEL admin final-approve may run without skipping required gates. */
   private isOpportunityReadyForAdminFinalApprove(opp: Opportunity): boolean {
     if (String(opp.status || '').toLowerCase() === 'draft') return false;
+    // Executing-org portal confirm must always finish before CIEL final approve —
+    // never trust a client-supplied `admin_approval_required` to skip this gate.
+    if (opp.execution_verification_token && !opp.execution_verified) {
+      return false;
+    }
     if (opp.isStudentCreated) {
       if (opp.workflowStage === WORKFLOW_STAGE.PENDING_ADMIN) return true;
       if (!opp.workflowStage && opp.status === 'pending_approval') return true;
@@ -1401,13 +1406,9 @@ export class OpportunitiesService {
     if (opp.requiresPartnerApproval && !opp.partnerVerified) return false;
     if (opp.status === 'pending_partner') return false;
     if (opp.workflowStage === WORKFLOW_STAGE.PENDING_PARTNER) return false;
-    // `pending_execution` blocks admin final approve only when no CIEL admin step is required.
-    if (
-      opp.status === 'pending_execution' &&
-      opp.admin_approval_required !== true
-    ) {
-      return false;
-    }
+    if (opp.status === 'pending_faculty') return false;
+    if (opp.workflowStage === WORKFLOW_STAGE.PENDING_FACULTY) return false;
+    if (opp.status === 'pending_execution') return false;
     return true;
   }
 
@@ -1883,14 +1884,16 @@ export class OpportunitiesService {
     let facultyPartnerToken: string | null = null;
     /** NGO/Partner Organization creator optionally links a faculty as an academic contact
      * ("Academic / faculty link" section) — when they do, that faculty's approval becomes a real
-     * required gate, same as it would be for a student- or faculty-created opportunity. */
+     * required gate, same as it would be for a student- or faculty-created opportunity.
+     * This gate is independent of executing-org portal confirm: both can be required; exec runs
+     * first (`pending_execution`), then faculty, then partner/admin. */
     const namedFacultyEmail = this.resolveFacultyEmail(createOpportunityDto);
     const creatorEmail = this.normalizeEmail(user.email);
     const orgCreatorFacultyEmail = isCielAdmin
       ? namedFacultyEmail && namedFacultyEmail !== creatorEmail
         ? namedFacultyEmail
         : null
-      : !isFaculty && !needsExecutingOrgVerification
+      : !isFaculty
         ? namedFacultyEmail
         : null;
     const orgCreatorFacultyToken = orgCreatorFacultyEmail ? randomUUID() : null;
@@ -1949,12 +1952,29 @@ export class OpportunitiesService {
     }
 
     const { draft: _orgDraftFlag, ...createFields } = createOpportunityDto;
+    // Strip client-controlled approval/live fields so a crafted payload cannot skip faculty/admin.
+    const {
+      admin_approved: _clientAdminApproved,
+      admin_approval_required: _clientAdminRequired,
+      workflowStage: _clientWorkflow,
+      workflow_stage: _clientWorkflowSnake,
+      faculty_verified: _clientFacultyVerified,
+      facultyApprovalStatus: _clientFacultyStatus,
+      partnerApprovalStatus: _clientPartnerStatus,
+      adminApprovalStatus: _clientAdminStatus,
+      status: _clientStatus,
+      isStudentCreated: _clientIsStudentCreated,
+      partnerVerified: _clientPartnerVerified,
+      execution_verified: _clientExecVerified,
+      ...safeCreateFields
+    } = createFields as CreateOpportunityDto & Record<string, unknown>;
     const payload: DeepPartial<Opportunity> = {
-      ...createFields,
+      ...safeCreateFields,
       organizationId: org?.id || null,
       facultyId: user.role === UserRole.FACULTY ? user.id : null,
       creatorId: user.id,
       status: initialStatus,
+      admin_approved: false,
       execution_verification_token: executionVerificationToken,
       execution_verified: !executionVerificationToken,
       execution_verification_status: executionVerificationToken
@@ -1975,7 +1995,7 @@ export class OpportunitiesService {
               : {}),
           }
         : {}),
-      ...(!isFaculty && (!needsExecutingOrgVerification || isCielAdmin)
+      ...(!isFaculty
         ? orgCreatorFacultyToken
           ? {
               faculty_verification_token: orgCreatorFacultyToken,
@@ -1988,15 +2008,17 @@ export class OpportunitiesService {
     };
 
     const opportunity = this.opportunitiesRepository.create(payload);
-    if (isFaculty && !needsExecutingOrgVerification) {
-      // Align workflow with any partner gate (magic link): `resolvedPartnerToken` can be set via
-      // `needsPartnerOrgAck` even when `facultyPartnerToken` was not (e.g. org-ack-only path).
+    if (isFaculty) {
+      // Always init faculty workflow lines (even when executing-org confirm runs first).
       this.opportunityWorkflow.initFacultyCreated(
         opportunity,
         !!resolvedPartnerToken,
       );
-    }
-    if (isCielAdmin) {
+      if (needsExecutingOrgVerification) {
+        opportunity.status = 'pending_execution';
+        opportunity.workflowStage = null;
+      }
+    } else if (isCielAdmin) {
       this.opportunityWorkflow.initCielAdminCreated(opportunity, {
         requiresPartner: !!resolvedPartnerToken,
         requiresFaculty: !!orgCreatorFacultyToken,
@@ -2004,12 +2026,29 @@ export class OpportunitiesService {
       if (needsExecutingOrgVerification) {
         opportunity.status = 'pending_execution';
         opportunity.workflowStage = null;
+        // initCielAdminCreated may have briefly marked the row live when no partner/faculty
+        // was named — keep the self-approved admin *line* so exec confirm can finish live,
+        // but clear the public live flag until that portal step clears.
+        opportunity.admin_approved = false;
       }
+    } else {
+      // Partner / NGO / Corporate org creator — always initializes CIEL PK admin as required.
+      this.opportunityWorkflow.initOrgCreated(opportunity, {
+        requiresPartner: !!resolvedPartnerToken,
+        requiresFaculty: !!orgCreatorFacultyToken,
+        needsExecutingOrg: needsExecutingOrgVerification,
+      });
     }
 
     const saved = await this.opportunitiesRepository.save(opportunity);
 
-    if (orgCreatorFacultyToken) {
+    // Faculty magic-link email only when the row is actually waiting on faculty —
+    // not while executing-org portal confirm still blocks that stage.
+    if (
+      orgCreatorFacultyToken &&
+      (saved.status === 'pending_faculty' ||
+        saved.workflowStage === WORKFLOW_STAGE.PENDING_FACULTY)
+    ) {
       await this.notifyFacultyForStudentOpportunityVerification(saved);
     }
 
@@ -2087,16 +2126,11 @@ export class OpportunitiesService {
       }
     }
 
-    const execBlocking =
-      !!saved.execution_verification_token && !saved.execution_verified;
-    const notAwaitingFacultyOrPartner =
-      saved.workflowStage !== WORKFLOW_STAGE.PENDING_FACULTY &&
-      saved.workflowStage !== WORKFLOW_STAGE.PENDING_PARTNER;
+    // Only email CIEL PK when the row is actually ready for final admin review —
+    // not while faculty / partner / executing-org gates are still open.
     if (
-      saved.status === 'pending_approval' &&
       !saved.admin_approved &&
-      !execBlocking &&
-      notAwaitingFacultyOrPartner
+      this.isOpportunityReadyForAdminFinalApprove(saved)
     ) {
       await this.sendAdminReviewEmail(saved, 'new submission');
     }

@@ -120,6 +120,99 @@ describe('OpportunityWorkflowService', () => {
     expect(opp.workflowStage).toBe(WORKFLOW_STAGE.PENDING_PARTNER);
     expect(opp.status).toBe('pending_partner');
     expect(opp.partnerApprovalStatus).toBe(LINE_STATUS.PENDING);
+    expect(opp.admin_approved).toBe(false);
+  });
+
+  it('initOrgCreated always leaves CIEL admin pending and routes to pending_approval when no other gates', () => {
+    const opp = {} as Opportunity;
+    service.initOrgCreated(opp, {
+      requiresPartner: false,
+      requiresFaculty: false,
+      needsExecutingOrg: false,
+    });
+    expect(opp.isStudentCreated).toBe(false);
+    expect(opp.admin_approved).toBe(false);
+    expect(opp.adminApprovalStatus).toBe(LINE_STATUS.PENDING);
+    expect(opp.facultyApprovalStatus).toBe(LINE_STATUS.NOT_APPLICABLE);
+    expect(opp.workflowStage).toBe(WORKFLOW_STAGE.PENDING_ADMIN);
+    expect(opp.status).toBe('pending_approval');
+  });
+
+  it('initOrgCreated waits on partner before CIEL PK when a partner ack is required', () => {
+    const opp = {} as Opportunity;
+    service.initOrgCreated(opp, {
+      requiresPartner: true,
+      requiresFaculty: false,
+      needsExecutingOrg: false,
+    });
+    expect(opp.status).toBe('pending_partner');
+    expect(opp.workflowStage).toBe(WORKFLOW_STAGE.PENDING_PARTNER);
+    expect(opp.partnerApprovalStatus).toBe(LINE_STATUS.PENDING);
+    expect(opp.adminApprovalStatus).toBe(LINE_STATUS.PENDING);
+  });
+
+  it('initOrgCreated waits on executing-org confirm first when that portal step is required', () => {
+    const opp = {} as Opportunity;
+    service.initOrgCreated(opp, {
+      requiresPartner: true,
+      requiresFaculty: false,
+      needsExecutingOrg: true,
+    });
+    expect(opp.status).toBe('pending_execution');
+    expect(opp.workflowStage).toBeNull();
+    expect(opp.adminApprovalStatus).toBe(LINE_STATUS.PENDING);
+  });
+
+  it('initOrgCreated waits on linked faculty before partner/admin', () => {
+    const opp = {} as Opportunity;
+    service.initOrgCreated(opp, {
+      requiresPartner: true,
+      requiresFaculty: true,
+      needsExecutingOrg: false,
+    });
+    expect(opp.status).toBe('pending_faculty');
+    expect(opp.workflowStage).toBe(WORKFLOW_STAGE.PENDING_FACULTY);
+    expect(opp.facultyApprovalStatus).toBe(LINE_STATUS.PENDING);
+  });
+
+  it('afterFacultyVerified keeps org rows on pending_execution while executing-org confirm is open', () => {
+    const opp = {
+      isStudentCreated: false,
+      status: 'pending_faculty',
+      execution_verification_token: 'tok',
+      execution_verified: false,
+      adminApprovalStatus: LINE_STATUS.PENDING,
+      requiresPartnerApproval: false,
+    } as Opportunity;
+    service.afterFacultyVerified(opp);
+    expect(opp.facultyApprovalStatus).toBe(LINE_STATUS.APPROVED);
+    expect(opp.status).toBe('pending_execution');
+    expect(opp.workflowStage).toBeNull();
+  });
+
+  it('afterAdminApproved does not invent partnerVerified when a partner gate was required', () => {
+    const opp = {
+      isStudentCreated: false,
+      requiresPartnerApproval: true,
+      partnerVerified: true,
+      partnerApprovalStatus: LINE_STATUS.APPROVED,
+    } as Opportunity;
+    service.afterAdminApproved(opp);
+    expect(opp.partnerVerified).toBe(true);
+    expect(opp.status).toBe('active');
+    expect(opp.workflowStage).toBe(WORKFLOW_STAGE.LIVE);
+  });
+
+  it('afterAdminApproved marks partner N/A when no partner gate existed', () => {
+    const opp = {
+      isStudentCreated: false,
+      requiresPartnerApproval: false,
+      partnerVerified: false,
+      partnerApprovalStatus: LINE_STATUS.PENDING,
+    } as Opportunity;
+    service.afterAdminApproved(opp);
+    expect(opp.partnerVerified).toBe(true);
+    expect(opp.partnerApprovalStatus).toBe(LINE_STATUS.NOT_APPLICABLE);
   });
 
   it('initCielAdminCreated publishes immediately when no partner or faculty is named', () => {

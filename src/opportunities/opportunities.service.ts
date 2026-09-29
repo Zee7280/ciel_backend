@@ -70,6 +70,15 @@ import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import { Payment } from '../payments/entities/payment.entity';
 import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
+import {
+  REPORTING_WINDOW_DAYS,
+  addDaysToDateOnly,
+  asTimeline,
+  compareDateOnly,
+  getProjectEndDate,
+  toDateOnlyString,
+  validateTimelineForPersist,
+} from './opportunity-timeline.util';
 
 /** Authenticated caller shape (`req.user`) used to gate opportunity detail reads. */
 export interface OpportunityDetailViewer {
@@ -1128,6 +1137,12 @@ export class OpportunitiesService {
     }
   }
 
+  /** Project start/end required; application deadline only when early close is enabled. */
+  validateTimeline(timeline: unknown, opts?: { requireDates?: boolean }) {
+    const err = validateTimelineForPersist(timeline, opts);
+    if (err) throw new BadRequestException(err);
+  }
+
   private validateExternalPartner(collab?: any) {
     if (!collab) return;
     const { organization_name, contact_person, official_email } = collab;
@@ -1840,6 +1855,7 @@ export class OpportunitiesService {
       createOpportunityDto.mode,
       createOpportunityDto.location,
     );
+    this.validateTimeline(createOpportunityDto.timeline, { requireDates: true });
 
     const isFaculty = user.role === UserRole.FACULTY;
     const isCielAdmin = user.role === UserRole.SUPER_ADMIN;
@@ -2205,6 +2221,7 @@ export class OpportunitiesService {
     this.validateSafetyDeclaration(dto.safety_declaration);
     this.validateSubmissionConfirmations(dto.submission_confirmations);
     this.validateLocation(dto.mode, dto.location);
+    this.validateTimeline(dto.timeline, { requireDates: true });
     this.validateParticipationScope(dto.participation_scope);
 
     // A student-created opportunity must stay scoped to the student's own university
@@ -2401,8 +2418,22 @@ export class OpportunitiesService {
     }
 
     const { draft: _studentDraftFlag, ...createFields } = dto;
+    // Strip client-controlled approval/live fields so a crafted payload cannot skip faculty/admin.
+    const {
+      admin_approved: _clientAdminApproved,
+      admin_approval_required: _clientAdminRequired,
+      workflowStage: _clientWorkflow,
+      workflow_stage: _clientWorkflowSnake,
+      faculty_verified: _clientFacultyVerified,
+      facultyApprovalStatus: _clientFacultyStatus,
+      partnerApprovalStatus: _clientPartnerStatus,
+      adminApprovalStatus: _clientAdminStatus,
+      status: _clientStatus,
+      isStudentCreated: _clientIsStudentCreated,
+      ...safeCreateFields
+    } = createFields as CreateOpportunityDto & Record<string, unknown>;
     const payload: DeepPartial<Opportunity> = {
-      ...createFields,
+      ...safeCreateFields,
       organizationId,
       facultyId: privateCandidate ? null : resolvedFacultyId,
       creatorId: user.id,
@@ -2422,6 +2453,7 @@ export class OpportunitiesService {
       faculty_verified: privateCandidate,
       faculty_verification_token: privateCandidate ? undefined : randomUUID(),
       isStudentCreated: true,
+      admin_approved: false,
       requiresPartnerApproval: requiresPartner,
       partnerToken: partnerToken ?? undefined,
       partnerVerified: !requiresPartner,
@@ -2604,6 +2636,9 @@ export class OpportunitiesService {
     // create() time; this just stops an edit from actively making a pin worse (e.g. clearing it).
     if (patch.mode !== undefined || patch.location !== undefined) {
       this.validateLocation(opportunity.mode, opportunity.location);
+    }
+    if (patch.timeline !== undefined) {
+      this.validateTimeline(opportunity.timeline, { requireDates: true });
     }
 
     if (updateOpportunityDto.sdg_info) {
@@ -3796,6 +3831,39 @@ export class OpportunitiesService {
         };
       }),
     );
+  }
+
+  /**
+   * Exceptional reopen of the 60-day reporting window (Faculty / CIEL PK Admin).
+   * Sets timeline.reporting_window_reopened_until (inclusive).
+   */
+  async reopenReportingWindow(id: string, until: string) {
+    const opp = await this.findOne(id);
+    if (!opp) throw new NotFoundException('Opportunity not found');
+    const untilDay = toDateOnlyString(until);
+    if (!untilDay) {
+      throw new BadRequestException(
+        'Provide reporting_window_reopened_until as YYYY-MM-DD.',
+      );
+    }
+    const end = getProjectEndDate(opp.timeline);
+    if (!end) {
+      throw new BadRequestException(
+        'This opportunity has no project end date — set project dates before reopening reporting.',
+      );
+    }
+    const defaultClose = addDaysToDateOnly(end, REPORTING_WINDOW_DAYS);
+    if (defaultClose && compareDateOnly(untilDay, defaultClose) < 0) {
+      throw new BadRequestException(
+        `Reopen date must be on or after the default reporting close date (${defaultClose}).`,
+      );
+    }
+    const timeline = {
+      ...asTimeline(opp.timeline),
+      reporting_window_reopened_until: untilDay,
+    };
+    opp.timeline = timeline;
+    return this.opportunitiesRepository.save(opp);
   }
 
   async approve(id: string, actor?: ApprovalActor) {

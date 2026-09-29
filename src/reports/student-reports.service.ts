@@ -9,6 +9,11 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, QueryFailedError, Repository } from 'typeorm';
 import { StudentReport } from './entities/student-report.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
+import {
+  REPORTING_WINDOW_CLOSED_MESSAGE,
+  canEditOrSubmitReport,
+  getReportingCloseDate,
+} from '../opportunities/opportunity-timeline.util';
 import { Participation } from '../engagement/entities/participant.entity';
 import { S3Service } from '../common/s3.service';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
@@ -2228,19 +2233,57 @@ export class StudentReportsService {
   }
 
   /**
-   * Student-submitted opportunities only unlock reporting after admin approval (`live` / active).
-   * Does not affect org/faculty-created opportunities or legacy rows without `isStudentCreated`.
+   * Reporting unlocks only after the full approval chain:
+   * faculty (or N/A) → partner (or N/A) → CIEL admin live.
+   * Creators do not bypass this — only enrollment does after live.
    */
   private assertStudentOpportunityReportableForWrite(opp: Opportunity | null) {
-    if (!opp?.isStudentCreated) return;
-    const ok =
+    if (!opp) return;
+    const facultyOk =
+      opp.faculty_verified === true ||
+      String(opp.facultyApprovalStatus || '').toLowerCase() === 'approved' ||
+      String(opp.facultyApprovalStatus || '').toLowerCase() === 'not_applicable' ||
+      String(opp.faculty_verification_status || '').toLowerCase() === 'not_required' ||
+      String(opp.faculty_verification_status || '').toLowerCase() === 'faculty_verified';
+    const partnerOk =
+      opp.requiresPartnerApproval !== true ||
+      opp.partnerVerified === true ||
+      String(opp.partnerApprovalStatus || '').toLowerCase() === 'approved' ||
+      String(opp.partnerApprovalStatus || '').toLowerCase() === 'not_applicable';
+    const liveOk =
       opp.admin_approved === true &&
-      (opp.workflowStage === 'live' || opp.status === 'active');
-    if (!ok) {
+      (opp.workflowStage === 'live' ||
+        String(opp.status || '').toLowerCase() === 'active' ||
+        String(opp.status || '').toLowerCase() === 'live');
+
+    // Student-created listings must clear faculty → partner → admin.
+    // Faculty/partner/org listings also must be admin-live before a student report starts.
+    if (opp.isStudentCreated) {
+      if (!facultyOk || !partnerOk || !liveOk) {
+        throw new ForbiddenException(
+          'This opportunity is not live yet. Faculty approval, partner verification (if required), and CIEL PK admin approval must complete before starting a report.',
+        );
+      }
+      return;
+    }
+
+    if (!liveOk) {
       throw new ForbiddenException(
-        'This opportunity is not live yet. Complete faculty, partner (if any), and admin approval before starting a report.',
+        'This opportunity is not live yet. Wait until CIEL PK publishes it before starting a report.',
       );
     }
+  }
+
+  /** After project end + 60 days (unless reopened), student report writes/submits lock. */
+  private assertReportingWindowOpen(opp: Opportunity | null) {
+    if (!opp?.timeline) return;
+    if (canEditOrSubmitReport(opp.timeline)) return;
+    const until = getReportingCloseDate(opp.timeline);
+    throw new ForbiddenException(
+      until
+        ? `${REPORTING_WINDOW_CLOSED_MESSAGE} (closed after ${until}).`
+        : REPORTING_WINDOW_CLOSED_MESSAGE,
+    );
   }
 
   private participationAllowsReportStart(status: string | null | undefined): boolean {
@@ -2594,6 +2637,7 @@ export class StudentReportsService {
         where: { id: opportunityIdFromDto },
       });
       this.assertStudentOpportunityReportableForWrite(opportunityForPolicy);
+      this.assertReportingWindowOpen(opportunityForPolicy);
       await this.assertStudentEnrolledToStartReport(
         studentId,
         opportunityForPolicy,
@@ -2953,6 +2997,7 @@ export class StudentReportsService {
         where: { id: opportunityId },
       });
       this.assertStudentOpportunityReportableForWrite(opp);
+      this.assertReportingWindowOpen(opp);
       await this.assertStudentEnrolledToStartReport(studentId, opp);
       await this.assertTeamLeadMayWriteReport(studentId, opportunityId);
     }

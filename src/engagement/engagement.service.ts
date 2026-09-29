@@ -25,6 +25,12 @@ import { PatchAttendanceApprovalDto } from './dto/patch-attendance-approval.dto'
 import { CreateAttendanceVerifyRequestDto } from './dto/create-attendance-verify-request.dto';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { WORKFLOW_STAGE } from '../opportunities/opportunity-workflow.service';
+import {
+  getProjectEndDate,
+  getProjectStartDate,
+  isServiceDateAllowed,
+  toDateOnlyString,
+} from '../opportunities/opportunity-timeline.util';
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 import { User } from '../users/entities/user.entity';
 import { UserRole } from '../users/enums/user-role.enum';
@@ -1492,11 +1498,36 @@ export class EngagementService {
       throw new BadRequestException('Attendance date cannot be in the future');
     }
 
-    // Handle Flexible Project 4-month window
-    if (
+    // Service dates must fall within the opportunity project start..end window.
+    const projectStart = getProjectStartDate(opportunity?.timeline);
+    const projectEnd = getProjectEndDate(opportunity?.timeline);
+    if (projectStart && projectEnd) {
+      if (!isServiceDateAllowed(dto.dateOfEngagement, opportunity?.timeline)) {
+        const day =
+          toDateOnlyString(dto.dateOfEngagement) || String(dto.dateOfEngagement);
+        const windowMsg = `Attendance / service date must fall within the project period (${projectStart} to ${projectEnd}). Date entered: ${day}.`;
+        this.recordAttendanceFailure(
+          'outside_project_period',
+          windowMsg,
+          400,
+          studentId,
+          participantId,
+          {
+            hasEvidence,
+            participationId: participation.id,
+            projectId: participation.projectId,
+            projectStart,
+            projectEnd,
+            serviceDate: day,
+          },
+        );
+        throw new BadRequestException(windowMsg);
+      }
+    } else if (
       participation.attendanceLogs &&
       participation.attendanceLogs.length > 0
     ) {
+      // Legacy opportunities without start/end: keep prior 4-month flexible window.
       const firstLogDate = new Date(
         Math.min(
           ...participation.attendanceLogs.map((l) =>

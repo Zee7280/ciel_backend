@@ -12,6 +12,7 @@ import {
   UseInterceptors,
   Res,
   NotFoundException,
+  BadRequestException,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { AdminMutationAuditInterceptor } from '../audit-logs/admin-mutation-audit.interceptor';
@@ -407,6 +408,24 @@ export class AdminController {
         'No faculty-approved CII v2 record found for this report.',
       );
     }
+    return { success: true, data };
+  }
+
+  /** Exceptional: extend reporting window past project end + 60 days. */
+  @Post('community-service/opportunities/:id/reopen-reporting-window')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  async reopenReportingWindow(
+    @Param('id') id: string,
+    @Body() body: { until?: string; reporting_window_reopened_until?: string },
+  ) {
+    const until = body.until || body.reporting_window_reopened_until;
+    if (!until) {
+      throw new BadRequestException(
+        'Body must include until (YYYY-MM-DD) for the new reporting close date.',
+      );
+    }
+    const data = await this.opportunitiesService.reopenReportingWindow(id, until);
     return { success: true, data };
   }
 

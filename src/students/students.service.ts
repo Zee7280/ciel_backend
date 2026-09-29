@@ -41,6 +41,12 @@ import {
   WORKFLOW_STAGE,
 } from '../opportunities/opportunity-workflow.service';
 import { OpportunitiesService } from '../opportunities/opportunities.service';
+import {
+  REPORTING_WINDOW_CLOSED_MESSAGE,
+  canJoinOrApply,
+  canRecordCompletedService,
+  resolveLifecyclePhase,
+} from '../opportunities/opportunity-timeline.util';
 import { buildOpportunityApprovalTracker } from '../opportunities/opportunity-approval-tracker.util';
 import { buildOpportunityDetailView } from '../opportunities/opportunity-detail-view.util';
 import { purifyStudentOpportunityContent } from '../opportunities/opportunity-content-purify.util';
@@ -1741,23 +1747,15 @@ export class StudentsService {
         }
       }
 
-      const joinCleared =
-        applicationStatus === 'approved' ||
-        applicationStatus === 'verified' ||
-        enrolledSeat ||
-        (isStudentOwner &&
-          this.opportunityApplicationsService.isCreatorOwnLiveListing(
-            opportunity,
-            studentUserId,
-          ));
-
-      if (joinCleared) {
-        if (part?.status === 'verified') {
-          statusForReport = 'verified';
-        } else {
-          statusForReport = 'approved';
-        }
-      }
+      // Listing status must stay API-aligned (`live` / `pending_verification` / …).
+      // Never overwrite with participation status (`approved`/`verified`) — FE report gates
+      // require status === "live" + admin_approved. Join clearance lives in application_status.
+      statusForReport =
+        this.getApiOpportunityStatus(opportunity) ||
+        (opportunity.status || '').toLowerCase();
+    } else {
+      statusForReport =
+        this.getApiOpportunityStatus(opportunity) || statusForReport;
     }
 
     return {
@@ -1776,6 +1774,13 @@ export class StudentsService {
         admin_approved: opportunity.admin_approved,
         workflow_stage: opportunity.workflowStage,
         workflowStage: opportunity.workflowStage,
+        is_student_created: opportunity.isStudentCreated === true,
+        isStudentCreated: opportunity.isStudentCreated === true,
+        faculty_approval_status: opportunity.facultyApprovalStatus ?? null,
+        partner_approval_status: opportunity.partnerApprovalStatus ?? null,
+        admin_approval_status: opportunity.adminApprovalStatus ?? null,
+        requires_partner_approval: opportunity.requiresPartnerApproval === true,
+        faculty_verified: opportunity.faculty_verified === true,
         application_status: applicationStatus,
         application_stage: applicationStage,
         application_internal_status: applicationInternalStatus,
@@ -1961,6 +1966,11 @@ export class StudentsService {
         opportunity.location,
       );
     }
+    if (dto.timeline !== undefined) {
+      this.opportunitiesService.validateTimeline(opportunity.timeline, {
+        requireDates: true,
+      });
+    }
 
     if (dto.sdg_info) {
       opportunity.sdg = dto.sdg_info.sdg_id || opportunity.sdg;
@@ -2040,6 +2050,24 @@ export class StudentsService {
     ) {
       throw new BadRequestException(
         'This opportunity is not open for applications yet',
+      );
+    }
+
+    const timeline = opportunity.timeline;
+    const joinOpen = canJoinOrApply(timeline);
+    const lateRecord = canRecordCompletedService(timeline);
+    if (!joinOpen && !lateRecord) {
+      const phase = resolveLifecyclePhase(timeline);
+      if (phase === 'applications_closed_service_active') {
+        throw new BadRequestException(
+          'Applications have closed for this opportunity. Service is still active for enrolled students.',
+        );
+      }
+      if (phase === 'reporting_closed') {
+        throw new BadRequestException(REPORTING_WINDOW_CLOSED_MESSAGE);
+      }
+      throw new BadRequestException(
+        'This opportunity is not open for new applications.',
       );
     }
 

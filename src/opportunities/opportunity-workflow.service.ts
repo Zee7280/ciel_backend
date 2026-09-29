@@ -71,11 +71,16 @@ export class OpportunityWorkflowService {
     opp.isStudentCreated = true;
     opp.requiresPartnerApproval = requiresPartner;
     opp.workflowStage = WORKFLOW_STAGE.PENDING_FACULTY;
+    opp.status = 'pending_faculty';
     opp.facultyApprovalStatus = LINE_STATUS.PENDING;
     opp.partnerApprovalStatus = requiresPartner
       ? LINE_STATUS.PENDING
       : LINE_STATUS.NOT_APPLICABLE;
     opp.adminApprovalStatus = LINE_STATUS.PENDING;
+    // Never inherit a client-supplied live/approved flag from the create DTO.
+    opp.admin_approved = false;
+    opp.faculty_verified = false;
+    opp.faculty_verification_status = 'pending_faculty';
   }
 
   /**
@@ -92,6 +97,7 @@ export class OpportunityWorkflowService {
     opp.faculty_verified = true;
     opp.faculty_verification_status = 'not_required';
     opp.adminApprovalStatus = LINE_STATUS.PENDING;
+    opp.admin_approved = false;
     if (requiresPartner) {
       opp.partnerApprovalStatus = LINE_STATUS.PENDING;
       opp.workflowStage = WORKFLOW_STAGE.PENDING_PARTNER;
@@ -424,6 +430,7 @@ export class OpportunityWorkflowService {
       submitted_at: opp.createdAt?.toISOString?.() ?? opp.createdAt,
       description: opp.objectives?.description || '',
       teamMembers: extra?.teamMembers ?? [],
+      admin_approved: opp.admin_approved === true,
       workflow_stage: opp.workflowStage,
       faculty_approval_status: opp.facultyApprovalStatus,
       partner_approval_status: opp.partnerApprovalStatus,

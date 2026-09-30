@@ -1761,13 +1761,27 @@ export class OpportunitiesService {
           requiredHours: this.liveEmailRequiredHours(opportunity),
           projectPeriod: this.liveEmailProjectPeriod(opportunity),
           reportPath: this.liveEmailReportPath(creator.role, opportunity.id),
+          publicCode: communityServicePublicCode(
+            opportunity.id,
+            opportunity.createdAt,
+          ),
+          isStudentCreator: opportunity.isStudentCreated === true,
         });
       } catch (error) {
         console.warn(
           'Failed to send opportunity live start-report email',
-          (error as Error).message,
+          {
+            opportunityId: opportunity.id,
+            to: creator.email,
+            error: (error as Error).message,
+          },
         );
       }
+    } else {
+      console.warn(
+        'Admin approved but creator email missing — start-report email skipped',
+        { opportunityId: opportunity.id, creatorId: opportunity.creatorId },
+      );
     }
 
     if (!opportunity.isStudentCreated) return;

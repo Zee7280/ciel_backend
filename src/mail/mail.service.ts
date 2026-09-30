@@ -1543,36 +1543,70 @@ export class MailService {
     requiredHours: string;
     projectPeriod: string;
     reportPath: string;
+    publicCode?: string;
+    isStudentCreator?: boolean;
   }) {
     const from =
       this.configService.get<string>('MAIL_FROM') ||
       'CIEL <no-reply@cielpk.com>';
-    const nameEsc = input.creatorName?.trim()
-      ? this.escHtmlPlain(input.creatorName.trim())
-      : 'there';
+    const first =
+      (input.creatorName || '')
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean)[0] || 'there';
+    const nameEsc = this.escHtmlPlain(first);
     const titleEsc = this.escHtmlPlain(input.projectTitle || 'your opportunity');
     const partnerEsc = this.escHtmlPlain(input.partnerName || '—');
     const hoursEsc = this.escHtmlPlain(input.requiredHours || '—');
     const periodEsc = this.escHtmlPlain(input.projectPeriod || '—');
+    const codeEsc = input.publicCode?.trim()
+      ? this.escHtmlPlain(input.publicCode.trim())
+      : '';
     const startLink = this.buildFrontendLink(input.reportPath, {});
+    const hubLink = this.buildFrontendLink(
+      '/dashboard/student/paths/community-service',
+      { view: 'create', filter: 'history' },
+    );
+    const student = input.isStudentCreator !== false;
 
     const html = `
-      <div style="font-family: Arial, Helvetica, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 10px; color: #1f2937; line-height: 1.55;">
-        <p style="margin: 0 0 16px 0;">Hi <strong>${nameEsc}</strong>,</p>
-        <p style="margin: 0 0 16px 0;">Great news! Your community service opportunity “<strong>${titleEsc}</strong>” has been fully approved and is now <strong>LIVE</strong> on CIEL PK.</p>
-        <p style="margin: 0 0 16px 0;">Your project journey can now begin. As the opportunity creator, you have a report workspace ready for you.</p>
-        <p style="margin: 0 0 8px 0;"><strong>What happens next?</strong></p>
-        <p style="margin: 0 0 20px 0;">Start documenting your activities, verified hours, evidence, outcomes, and impact as your project progresses.</p>
-        <div style="text-align: center; margin: 28px 0;">
-          <a href="${startLink}" style="background-color: #0e4d4e; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">START REPORT →</a>
+      <div style="font-family: Arial, Helvetica, sans-serif; max-width: 640px; margin: 0 auto; padding: 0; color: #16313d; line-height: 1.55;">
+        <div style="background: linear-gradient(125deg, #0d3b45 0%, #0f6e68 70%); color: #fff; border-radius: 14px 14px 0 0; padding: 28px 28px 22px;">
+          <p style="margin: 0 0 8px 0; font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: #e8d48a; font-weight: 700;">CIEL PK · Community Service</p>
+          <h1 style="margin: 0; font-size: 22px; line-height: 1.3; font-weight: 800;">Your opportunity is approved 🎉</h1>
+          <p style="margin: 10px 0 0 0; font-size: 14px; color: rgba(255,255,255,0.9);">You can start your impact report now.</p>
         </div>
-        <p style="margin: 0 0 6px 0;"><strong>Opportunity:</strong> ${titleEsc}</p>
-        <p style="margin: 0 0 6px 0;"><strong>Partner:</strong> ${partnerEsc}</p>
-        <p style="margin: 0 0 6px 0;"><strong>Required Hours:</strong> ${hoursEsc}</p>
-        <p style="margin: 0 0 16px 0;"><strong>Project Period:</strong> ${periodEsc}</p>
-        <p style="margin: 0 0 16px 0;">You don’t need to wait until the project is complete. <strong>Update your report as you go</strong> and keep your progress and evidence organized along the way.</p>
-        <p style="margin: 0 0 16px 0;"><strong>Create impact. Document it. Get it verified.</strong></p>
-        <p style="margin: 20px 0 0 0;">— <strong>CIEL PK</strong><br>Community Impact Education Lab Pakistan</p>
+        <div style="border: 1px solid #d7e3e6; border-top: 0; border-radius: 0 0 14px 14px; padding: 26px 28px 28px; background: #ffffff;">
+          <p style="margin: 0 0 14px 0;">Hi <strong>${nameEsc}</strong>,</p>
+          <p style="margin: 0 0 14px 0;">Great news — CIEL PK has <strong>approved</strong> your community service opportunity <strong>“${titleEsc}”</strong>${codeEsc ? ` (<strong>${codeEsc}</strong>)` : ''}. It is now <strong>LIVE</strong> on the platform.</p>
+          <p style="margin: 0 0 18px 0;">${
+            student
+              ? 'As the student who created this opportunity, you can <strong>start your report</strong> right away — log service hours, add evidence, and submit for verification.'
+              : 'Your listing is live. Students can discover and apply, and you can follow progress from your Community Service dashboard.'
+          }</p>
+
+          <div style="background: #f3faf7; border: 1px solid #d3ebe3; border-radius: 12px; padding: 14px 16px; margin: 0 0 22px 0;">
+            <p style="margin: 0 0 8px 0; font-size: 11px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: #1f7a61;">Opportunity details</p>
+            <p style="margin: 0 0 4px 0; font-size: 14px;"><strong>Title:</strong> ${titleEsc}</p>
+            ${codeEsc ? `<p style="margin: 0 0 4px 0; font-size: 14px;"><strong>ID:</strong> ${codeEsc}</p>` : ''}
+            <p style="margin: 0 0 4px 0; font-size: 14px;"><strong>Partner:</strong> ${partnerEsc}</p>
+            <p style="margin: 0 0 4px 0; font-size: 14px;"><strong>Required hours:</strong> ${hoursEsc}</p>
+            <p style="margin: 0; font-size: 14px;"><strong>Project period:</strong> ${periodEsc}</p>
+          </div>
+
+          <div style="text-align: center; margin: 8px 0 10px;">
+            <a href="${startLink}" style="background-color: #174b43; color: #ffffff; padding: 13px 28px; text-decoration: none; border-radius: 8px; font-weight: 800; display: inline-block; font-size: 14px;">Start Report →</a>
+          </div>
+          ${
+            student
+              ? `<p style="text-align: center; margin: 0 0 18px 0; font-size: 12.5px; color: #5d727a;">Or open <a href="${hubLink}" style="color: #0e7d74; font-weight: 700;">Approved / Live</a> in Create Opportunity.</p>`
+              : ''
+          }
+
+          <p style="margin: 0 0 10px 0; font-size: 14px;"><strong>Tip:</strong> You do not need to wait until the project ends. Update your report as you go — keep dates, hours, and evidence organized.</p>
+          <p style="margin: 0 0 18px 0; font-size: 14px; color: #0f6e62;"><strong>Create impact. Document it. Get it verified.</strong></p>
+          <p style="margin: 0; font-size: 13px; color: #6a7d84;">— <strong style="color: #16313d;">CIEL PK</strong><br>Community Impact Education Lab Pakistan</p>
+        </div>
       </div>
     `;
 
@@ -1580,7 +1614,7 @@ export class MailService {
       await this.sendMailReliable({
         from,
         to: input.to,
-        subject: '🎉 Your Opportunity Is Live — Start Your Impact Report',
+        subject: `Approved — Start your report: ${input.projectTitle || 'Your opportunity'}`,
         html,
       });
       this.logger.log(`Opportunity live start-report email sent to ${input.to}`);

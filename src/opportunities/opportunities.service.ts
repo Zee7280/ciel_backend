@@ -3156,8 +3156,25 @@ export class OpportunitiesService {
         // instead of an empty mailto: — same contact resolution used everywhere else on this entity.
         faculty_contact_name: facultyName,
         faculty_contact_email: this.getFacultyEmailFromOpportunity(opp),
+        faculty_contact_phone: (() => {
+          const w = sup?.whatsapp_e164;
+          const f = sup?.faculty_whatsapp;
+          if (typeof w === 'string' && w.trim()) return w.trim();
+          if (typeof f === 'string' && f.trim()) return f.trim();
+          return null;
+        })(),
         partner_contact_name: partnerName,
         partner_contact_email: this.resolvePartnerEmailFromOpportunity(opp),
+        partner_contact_phone: (() => {
+          const a = sup?.partner_whatsapp_e164;
+          const b = sup?.partner_phone;
+          const c = po?.whatsapp;
+          const d = po?.phone;
+          for (const v of [a, b, c, d]) {
+            if (typeof v === 'string' && v.trim()) return v.trim();
+          }
+          return null;
+        })(),
       };
     });
 

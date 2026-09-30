@@ -198,7 +198,9 @@ export function buildOpportunityApprovalTracker(opp: TrackerOpp): OpportunityApp
     };
   }
 
-  if (checklist.admin || stage === 'live' || status === 'active' || status === 'live') {
+  // Only mark Published when the opportunity is actually live — admin line alone is not enough
+  // (stale admin_approval_status was showing "Published" + Email CIEL PK at the same time).
+  if (stage === 'live' || status === 'live' || (status === 'active' && checklist.admin)) {
     return {
       public_code,
       linked_draft: false,

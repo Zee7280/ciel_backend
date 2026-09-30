@@ -2498,3 +2498,86 @@ describe('OpportunitiesService — create() idempotency for org / faculty / admi
         expect(locks).toBe(unlocks);
     });
 });
+
+describe('OpportunitiesService — university-scope (delegated) faculty can open and act on rows they are listed', () => {
+    function makeDelegateService(delegatedIds: string[] | null) {
+        const opp = {
+            id: 'opp-scope-1',
+            creatorId: 'student-1',
+            facultyId: 'named-faculty',
+            isStudentCreated: true,
+            status: 'pending_faculty',
+            workflowStage: 'pending_faculty',
+            faculty_verification_status: 'pending_faculty',
+            facultyApprovalStatus: 'pending',
+            admin_approved: false,
+            supervision: { contact: 'named@uni.edu' },
+        } as unknown as Opportunity;
+        const service = makeService({
+            findOne: jest.fn().mockResolvedValue(opp),
+            save: jest.fn(async (row: Opportunity) => row),
+        });
+        (service as any).facultyUniversityScope = {
+            getDelegatedOrganizationId: jest.fn().mockResolvedValue(delegatedIds ? 'uni-org-1' : null),
+            resolveOpportunityIdsForUniversityOrganization: jest.fn().mockResolvedValue(delegatedIds ?? []),
+        };
+        (service as any).opportunityApplicationsService = {
+            findActionablePendingFacultyApplicationForDashboard: jest.fn().mockResolvedValue(null),
+        };
+        (service as any).participationRepository = { count: jest.fn().mockResolvedValue(0) };
+        (service as any).opportunitiesRepository.manager = {
+            getRepository: () => ({
+                createQueryBuilder: () => ({
+                    where() { return this; },
+                    andWhere() { return this; },
+                    getCount: async () => 0,
+                }),
+            }),
+        };
+        (service as any).usersRepository = {
+            findOne: jest.fn().mockResolvedValue({ id: 'student-1', name: 'S', email: 's@uni.edu' }),
+        };
+        return { service, opp };
+    }
+
+    const delegate = { id: 'liaison-1', email: 'liaison@uni.edu', role: 'faculty', organizationId: null };
+
+    it('detail: a delegated faculty gets the record (not 404)', async () => {
+        const { service } = makeDelegateService(['opp-scope-1']);
+        const data: any = await service.findOneWithCreator('opp-scope-1', delegate as any);
+        expect(data.id).toBe('opp-scope-1');
+    });
+
+    it('detail: a faculty with no delegation for it still gets 404', async () => {
+        const { service } = makeDelegateService(['some-other-opp']);
+        await expect(service.findOneWithCreator('opp-scope-1', delegate as any)).rejects.toThrow(/not found/i);
+    });
+
+    it('detail: a faculty with no scope assignment at all still gets 404', async () => {
+        const { service } = makeDelegateService(null);
+        await expect(service.findOneWithCreator('opp-scope-1', delegate as any)).rejects.toThrow(/not found/i);
+    });
+
+    it('approve: delegated faculty passes the supervisor check (no 403)', async () => {
+        const { service } = makeDelegateService(['opp-scope-1']);
+        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+        (service as any).mailService = {
+            sendPartnerVerification: jest.fn(),
+            sendStudentOpportunityStatusUpdate: jest.fn(),
+        };
+        (service as any).notificationsService = { createApprovalNotification: jest.fn() };
+        await expect(
+            service.facultyDashboardApprove('opp-scope-1', delegate.id, delegate.email, 'Liaison'),
+        ).resolves.toBeDefined();
+    });
+
+    it.each(['facultyDashboardApprove', 'facultyDashboardReject', 'facultyDashboardRevise'])(
+        '%s: a faculty outside the delegation is still refused with 403',
+        async (method) => {
+            const { service } = makeDelegateService(['some-other-opp']);
+            await expect(
+                (service as any)[method]('opp-scope-1', delegate.id, delegate.email, 'A reason that is long enough'),
+            ).rejects.toThrow(/not the assigned faculty supervisor/i);
+        },
+    );
+});

@@ -3992,6 +3992,13 @@ export class OpportunitiesService {
       return true;
     }
 
+    if (
+      viewer.role === UserRole.FACULTY &&
+      (await this.isDelegatedFacultyForOpportunity(opp.id, viewer.id))
+    ) {
+      return true;
+    }
+
     const email = this.normalizeEmail(viewer.email);
     if (!email) return false;
 
@@ -5287,7 +5294,27 @@ export class OpportunitiesService {
    * partner_organization.official_email (institutional partner contact using a faculty account).
    * Does not assert opportunity.status — see facultyDashboardApprove/Reject for pipeline vs application.
    */
-  private assertFacultySupervisorForStudentOpportunity(
+  /** True when this faculty user is the admin-assigned liaison ("University scope") for the
+   * university organization the opportunity belongs to — the same set the faculty approvals
+   * list shows them, so the rows they can see are also rows they can open and act on. */
+  private async isDelegatedFacultyForOpportunity(
+    opportunityId: string,
+    facultyUserId?: string,
+  ): Promise<boolean> {
+    if (!facultyUserId) return false;
+    const orgId =
+      await this.facultyUniversityScope.getDelegatedOrganizationId(
+        facultyUserId,
+      );
+    if (!orgId) return false;
+    const ids =
+      await this.facultyUniversityScope.resolveOpportunityIdsForUniversityOrganization(
+        orgId,
+      );
+    return ids.includes(opportunityId);
+  }
+
+  private async assertFacultySupervisorForStudentOpportunity(
     opp: Opportunity,
     facultyUserId: string,
     facultyEmail: string,
@@ -5302,7 +5329,11 @@ export class OpportunitiesService {
     const emailOk =
       (!!linkedFacultyEmail && !!fe && linkedFacultyEmail === fe) ||
       (!!partnerOfficial && !!fe && partnerOfficial === fe);
-    if (!idOk && !emailOk) {
+    if (
+      !idOk &&
+      !emailOk &&
+      !(await this.isDelegatedFacultyForOpportunity(opp.id, facultyUserId))
+    ) {
       throw new ForbiddenException(
         'You are not the assigned faculty supervisor for this opportunity',
       );
@@ -5574,7 +5605,7 @@ export class OpportunitiesService {
   ) {
     const opp = await this.findOne(opportunityId);
     if (!opp) throw new NotFoundException('Opportunity not found');
-    this.assertFacultySupervisorForStudentOpportunity(
+    await this.assertFacultySupervisorForStudentOpportunity(
       opp,
       facultyUserId,
       facultyEmail,
@@ -5627,7 +5658,7 @@ export class OpportunitiesService {
   ) {
     const opp = await this.findOne(opportunityId);
     if (!opp) throw new NotFoundException('Opportunity not found');
-    this.assertFacultySupervisorForStudentOpportunity(
+    await this.assertFacultySupervisorForStudentOpportunity(
       opp,
       facultyUserId,
       facultyEmail,
@@ -5710,7 +5741,7 @@ export class OpportunitiesService {
   ) {
     const opp = await this.findOne(opportunityId);
     if (!opp) throw new NotFoundException('Opportunity not found');
-    this.assertFacultySupervisorForStudentOpportunity(
+    await this.assertFacultySupervisorForStudentOpportunity(
       opp,
       facultyUserId,
       facultyEmail,

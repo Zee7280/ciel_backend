@@ -12,10 +12,12 @@ import {
     Query,
     HttpStatus,
     Header,
-    Redirect,
+    Headers,
+    Res,
     NotFoundException,
     UnauthorizedException,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { VerificationsService } from './verifications.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { VerificationVerifyAuthGuard } from '../auth/verification-verify-auth.guard';
@@ -106,12 +108,18 @@ export class VerificationsController {
     }
 
     /** Legacy email links point here. GET must never change state (mail scanners / prefetchers
-     * follow links), so it only redirects to the frontend confirmation page, which POSTs. */
+     * follow links), so a browser navigation is only redirected to the frontend confirmation page,
+     * which POSTs. Non-browser callers (an older frontend proxy doing fetch(GET) and expecting
+     * JSON) get an explicit 405 instead of a redirect — following the redirect would hand them an
+     * HTML page that they could mistake for a successful verification. */
     @Get('verifications/verify')
     @Header('Cache-Control', 'no-store, no-cache, must-revalidate, private')
     @Header('Pragma', 'no-cache')
-    @Redirect()
-    verifyOpportunityLegacyGet(@Query('token') token: string) {
+    verifyOpportunityLegacyGet(
+        @Query('token') token: string,
+        @Headers('accept') accept: string | undefined,
+        @Res({ passthrough: true }) res: Response,
+    ) {
         const t = typeof token === 'string' ? token.trim() : '';
         if (!t) {
             throw new HttpException(
@@ -119,12 +127,19 @@ export class VerificationsController {
                 HttpStatus.BAD_REQUEST,
             );
         }
+        if (!/text\/html/i.test(accept || '')) {
+            throw new HttpException(
+                {
+                    success: false,
+                    message:
+                        'Verification must be confirmed from the verify page (POST). Open the link from your email in a browser.',
+                },
+                HttpStatus.METHOD_NOT_ALLOWED,
+            );
+        }
         const base = (process.env.FRONTEND_URL || process.env.APP_URL || '').replace(/\/+$/, '');
         const path = process.env.FRONTEND_VERIFY_PATH || '/verify-project';
-        return {
-            url: `${base}${path}?token=${encodeURIComponent(t)}`,
-            statusCode: HttpStatus.FOUND,
-        };
+        res.redirect(HttpStatus.FOUND, `${base}${path}?token=${encodeURIComponent(t)}`);
     }
 
     @UseGuards(VerificationVerifyAuthGuard)

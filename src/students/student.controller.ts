@@ -55,8 +55,14 @@ export class StudentController {
   }
 
   @Get('projects/:id')
-  getProjectById(@Request() req, @Param('id') id: string) {
-    return this.studentsService.getProjectById(id, req.user.id);
+  @UseInterceptors(RedactOpportunitySecretsInterceptor)
+  getProjectById(@Request() req, @Param('id', new ParseUUIDPipe()) id: string) {
+    return this.studentsService.getProjectById(id, req.user.id, {
+      id: req.user.id,
+      email: req.user.email,
+      role: req.user.role,
+      organizationId: req.user.organizationId ?? null,
+    });
   }
 
   @Get('projects/:id/my-participation')
@@ -65,7 +71,17 @@ export class StudentController {
   }
 
   @Get('opportunities/:id/participation-guide')
-  async getParticipationGuide(@Request() req, @Param('id') id: string) {
+  async getParticipationGuide(
+    @Request() req,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    // Only opportunities the caller may open at all (public-live / own / joined / applied).
+    await this.studentsService.assertOpportunityVisibleToViewer(id, {
+      id: req.user.id,
+      email: req.user.email,
+      role: req.user.role,
+      organizationId: req.user.organizationId ?? null,
+    });
     const data = await this.studentParticipationService.getParticipationGuide(
       req.user.id,
       id,

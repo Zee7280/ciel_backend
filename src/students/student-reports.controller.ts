@@ -23,12 +23,18 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { StudentReportsService } from '../reports/student-reports.service';
+import { OrganizationsService } from '../organizations/organizations.service';
+import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
 import { UserRole } from '../users/enums/user-role.enum';
 
 @Controller('students/reports')
 @UseGuards(JwtAuthGuard)
 export class StudentReportsController {
-  constructor(private readonly studentReportsService: StudentReportsService) {}
+  constructor(
+    private readonly studentReportsService: StudentReportsService,
+    private readonly organizationsService: OrganizationsService,
+    private readonly facultyUniversityScope: FacultyUniversityScopeService,
+  ) {}
 
   @Post()
   @UseGuards(RolesGuard)
@@ -157,13 +163,32 @@ export class StudentReportsController {
   async getReportById(@Request() req, @Param('id') id: string) {
     if (
       req.user?.organizationId &&
-      ['partner', 'ngo', 'corporate', 'organization_admin'].includes(
-        req.user?.role,
-      )
+      [
+        UserRole.NGO,
+        UserRole.CORPORATE,
+        UserRole.ORGANIZATION_ADMIN,
+        UserRole.UNIVERSITY,
+      ].includes(req.user?.role)
     ) {
+      // Same scope rule as `GET /partners/reports/:id`: a university organisation also reads
+      // (read-only) the reports on opportunities in its dashboard scope; the service still
+      // 403s anything outside the caller's organisation / scope.
+      let universityScopeOpportunityIds: string[] = [];
+      if (req.user.role === UserRole.UNIVERSITY) {
+        const org = await this.organizationsService.getMyOrganization(
+          req.user.id,
+        );
+        if (org && this.facultyUniversityScope.isUniversityOrganization(org)) {
+          universityScopeOpportunityIds =
+            await this.facultyUniversityScope.resolveOpportunityIdsForUniversityOrganization(
+              org.id,
+            );
+        }
+      }
       return await this.studentReportsService.findOneForPartner(
         id,
         req.user.organizationId,
+        { universityScopeOpportunityIds },
       );
     }
     // Match /student/reports/:id — accept report UUID or opportunity (project) id for the JWT student.

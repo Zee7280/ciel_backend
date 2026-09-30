@@ -425,20 +425,12 @@ export class FacultyService {
         new Brackets((qb) => {
           qb.where('"o"."facultyId"::text = :facultyId', { facultyId });
           if (fe) {
-            qb.orWhere(
-              `LOWER(TRIM(COALESCE(o.supervision->>'contact', ''))) = :fe`,
-              { fe },
-            )
-              .orWhere(
-                `LOWER(TRIM(COALESCE(o.supervision->>'official_email', ''))) = :fe`,
-                { fe },
-              )
-              .orWhere(
-                `LOWER(TRIM(COALESCE(o.partner_organization->>'official_email', ''))) = :fe`,
-                {
-                  fe,
-                },
-              );
+            for (const expr of [
+              ...this.facultyIdentityEmailSql('o'),
+              ...this.partnerIdentityEmailSql('o'),
+            ]) {
+              qb.orWhere(`${expr} = :fe`, { fe });
+            }
           }
         }),
       );
@@ -526,6 +518,34 @@ export class FacultyService {
     );
   }
 
+  /**
+   * SQL for every email field that can name a FACULTY reviewer / approver (mirrors
+   * `OpportunitiesService.collectFacultyReviewerEmails` + the partner-organisation official email the
+   * faculty action gate also accepts). `alias` is the opportunity alias in the query.
+   */
+  private facultyIdentityEmailSql(alias: string): string[] {
+    return [
+      `LOWER(TRIM(COALESCE(${alias}.supervision->>'contact', '')))`,
+      `LOWER(TRIM(COALESCE(${alias}.supervision->>'official_email', '')))`,
+      `LOWER(TRIM(COALESCE(${alias}.partner_organization->>'official_email', '')))`,
+      `LOWER(TRIM(COALESCE(${alias}.visibility_and_academic_linkage->'faculty_institutional_representative'->>'official_email', '')))`,
+    ];
+  }
+
+  /**
+   * SQL for every email field that can name a PARTNER reviewer (mirrors
+   * `OpportunitiesService.collectPartnerContactEmails` / {@link partnerReviewerEmails}).
+   */
+  private partnerIdentityEmailSql(alias: string): string[] {
+    return [
+      `LOWER(TRIM(COALESCE(${alias}.external_partner_collaboration->>'official_email', '')))`,
+      `LOWER(TRIM(COALESCE(${alias}.supervision->>'external_partner_email', '')))`,
+      `LOWER(TRIM(COALESCE(${alias}.supervision->>'partner_email', '')))`,
+      `LOWER(TRIM(COALESCE(${alias}.executing_context->'partner'->>'official_email', '')))`,
+      `LOWER(TRIM(COALESCE(${alias}.partner_organization->>'official_email', '')))`,
+    ];
+  }
+
   private buildFacultyApprovalsQuery(
     facultyId: string,
     facultyEmail: string,
@@ -545,22 +565,15 @@ export class FacultyService {
                 facultyId,
               });
               if (fe) {
-                qb.orWhere(
-                  `LOWER(TRIM(COALESCE(opportunity.supervision->>'contact', ''))) = :fe`,
-                  { fe },
-                )
-                  .orWhere(
-                    `LOWER(TRIM(COALESCE(opportunity.supervision->>'official_email', ''))) = :fe`,
-                    { fe },
-                  )
-                  .orWhere(
-                    `LOWER(TRIM(COALESCE(opportunity.partner_organization->>'official_email', ''))) = :fe`,
-                    { fe },
-                  )
-                  .orWhere(
-                    `LOWER(TRIM(COALESCE(opportunity.visibility_and_academic_linkage->'faculty_institutional_representative'->>'official_email', ''))) = :fe`,
-                    { fe },
-                  );
+                // Every faculty AND partner reviewer email field (see helpers) — the same set the
+                // detail read (`isPrivilegedOpportunityViewer`) and the approve/reject gates accept.
+                // Which ACTION a row offers is decided per stage below / in approvalActionForRow.
+                for (const expr of [
+                  ...this.facultyIdentityEmailSql('opportunity'),
+                  ...this.partnerIdentityEmailSql('opportunity'),
+                ]) {
+                  qb.orWhere(`${expr} = :fe`, { fe });
+                }
               }
             }),
           );
@@ -663,6 +676,29 @@ export class FacultyService {
                         );
                     }),
                   )
+                  .andWhere(
+                    // The faculty gate can only be acted on by the assigned / named FACULTY
+                    // identities (or the delegated university liaison) — a row matched solely
+                    // through a partner contact email is not offered here (it 403s on action).
+                    new Brackets((facId) => {
+                      facId.where('"opportunity"."facultyId"::text = :facultyId', {
+                        facultyId,
+                      });
+                      if (fe) {
+                        for (const expr of this.facultyIdentityEmailSql(
+                          'opportunity',
+                        )) {
+                          facId.orWhere(`${expr} = :fe`, { fe });
+                        }
+                      }
+                      if (hasDelegated) {
+                        facId.orWhere(
+                          'opportunity.id IN (:...delegatedOppIdsEarly)',
+                          { delegatedOppIdsEarly: delegatedOpportunityIds },
+                        );
+                      }
+                    }),
+                  )
                   .andWhere('opportunity.faculty_verified = :fvp', {
                     fvp: false,
                   })
@@ -724,27 +760,11 @@ export class FacultyService {
                   )
                   .andWhere(
                     new Brackets((emOr) => {
-                      emOr
-                        .where(
-                          `LOWER(TRIM(COALESCE(opportunity.external_partner_collaboration->>'official_email', ''))) = :fePartner`,
-                          { fePartner: fe },
-                        )
-                        .orWhere(
-                          `LOWER(TRIM(COALESCE(opportunity.supervision->>'external_partner_email', ''))) = :fePartner`,
-                          { fePartner: fe },
-                        )
-                        .orWhere(
-                          `LOWER(TRIM(COALESCE(opportunity.supervision->>'partner_email', ''))) = :fePartner`,
-                          { fePartner: fe },
-                        )
-                        .orWhere(
-                          `LOWER(TRIM(COALESCE(opportunity.executing_context->'partner'->>'official_email', ''))) = :fePartner`,
-                          { fePartner: fe },
-                        )
-                        .orWhere(
-                          `LOWER(TRIM(COALESCE(opportunity.partner_organization->>'official_email', ''))) = :fePartner`,
-                          { fePartner: fe },
-                        );
+                      for (const expr of this.partnerIdentityEmailSql(
+                        'opportunity',
+                      )) {
+                        emOr.orWhere(`${expr} = :fePartner`, { fePartner: fe });
+                      }
                     }),
                   )
                   .andWhere(

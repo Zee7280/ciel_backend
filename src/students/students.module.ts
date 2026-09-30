@@ -21,6 +21,8 @@ import { Payment } from '../payments/entities/payment.entity';
 
 import { EngagementModule } from '../engagement/engagement.module';
 import { OpportunitiesModule } from '../opportunities/opportunities.module';
+import { OrganizationsModule } from '../organizations/organizations.module';
+import { FacultyUniversityScopeModule } from '../faculty-university-scope/faculty-university-scope.module';
 import { ReportPartnerApprovalModule } from '../reports/report-partner-approval.module';
 
 @Module({
@@ -40,6 +42,8 @@ import { ReportPartnerApprovalModule } from '../reports/report-partner-approval.
     EngagementModule,
     OpportunitiesModule,
     ReportPartnerApprovalModule,
+    OrganizationsModule,
+    FacultyUniversityScopeModule,
   ],
   controllers: [
     StudentsController,

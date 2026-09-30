@@ -40,7 +40,11 @@ import {
   OpportunityWorkflowService,
   WORKFLOW_STAGE,
 } from '../opportunities/opportunity-workflow.service';
-import { OpportunitiesService } from '../opportunities/opportunities.service';
+import {
+  OpportunitiesService,
+  OpportunityDetailViewer,
+} from '../opportunities/opportunities.service';
+import { redactOpportunityContactDetails } from '../opportunities/opportunity-secrets.util';
 import {
   REPORTING_WINDOW_CLOSED_MESSAGE,
   canJoinOrApply,
@@ -1680,7 +1684,26 @@ export class StudentsService {
     };
   }
 
-  async getProjectById(opportunityId: string, studentUserId?: string) {
+  /** 404 unless the viewer may open this opportunity (same rule as `POST /opportunities/detail`). */
+  async assertOpportunityVisibleToViewer(
+    opportunityId: string,
+    viewer: OpportunityDetailViewer,
+  ): Promise<void> {
+    const opportunity = await this.opportunitiesRepository.findOne({
+      where: { id: opportunityId },
+    });
+    if (!opportunity) throw new NotFoundException('Opportunity not found');
+    await this.opportunitiesService.assertViewerMayOpenOpportunity(
+      opportunity,
+      viewer,
+    );
+  }
+
+  async getProjectById(
+    opportunityId: string,
+    studentUserId?: string,
+    viewer?: OpportunityDetailViewer,
+  ) {
     const opportunity = await this.opportunitiesRepository.findOne({
       where: { id: opportunityId },
       relations: ['organization'],
@@ -1689,6 +1712,14 @@ export class StudentsService {
     if (!opportunity) {
       throw new NotFoundException(`Project with ID ${opportunityId} not found`);
     }
+
+    // Same visibility rule as `POST /opportunities/detail`: someone else's draft / pending /
+    // rejected record (or any non-public row the caller is not tied to) is a 404, not a read.
+    const { privileged } =
+      await this.opportunitiesService.assertViewerMayOpenOpportunity(
+        opportunity,
+        viewer ?? { id: studentUserId },
+      );
 
     let statusForReport = (opportunity.status || '').toLowerCase();
     let applicationStatus: string | null = null;
@@ -1758,7 +1789,7 @@ export class StudentsService {
         this.getApiOpportunityStatus(opportunity) || statusForReport;
     }
 
-    return {
+    const payload = {
       success: true,
       data: {
         id: opportunity.id,
@@ -1803,6 +1834,8 @@ export class StudentsService {
         updatedAt: opportunity.updatedAt,
       },
     };
+    // Supervisor / partner contact details are for the owner, reviewers and admin only.
+    return privileged ? payload : redactOpportunityContactDetails(payload);
   }
 
   async findSimilarStudentOpportunitiesForCreate(

@@ -3502,7 +3502,7 @@ export class OpportunityApplicationsService {
     return this.appRepo.save(saved);
   }
 
-  /** Primary supervisor on the application or official email on the opportunity listing. */
+  /** Primary or secondary supervisor on the application, or official email on the opportunity listing. */
   private facultyEmailMatchesApplicationGate(
     facultyEmail: string,
     app: OpportunityApplication,
@@ -3512,6 +3512,11 @@ export class OpportunityApplicationsService {
       return false;
     }
     if (this.normalizeEmail(app.primaryFacultyEmail) === email) {
+      return true;
+    }
+    // The secondary faculty named on the application is a reviewer too (faculty/mine, the
+    // opportunity detail read and the join queue all treat them as one).
+    if (this.normalizeEmail(app.secondaryFacultyEmail) === email) {
       return true;
     }
     const opp = app.opportunity;
@@ -3615,6 +3620,10 @@ export class OpportunityApplicationsService {
       .andWhere(
         new Brackets((outer) => {
           outer.where('lower(a.primaryFacultyEmail) = :email', { email });
+          outer.orWhere(
+            "LOWER(TRIM(COALESCE(a.secondaryFacultyEmail, ''))) = :email",
+            { email },
+          );
           outer.orWhere(
             "LOWER(TRIM(COALESCE(o.supervision->>'contact', ''))) = :email",
             { email },

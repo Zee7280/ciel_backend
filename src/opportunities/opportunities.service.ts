@@ -4180,14 +4180,15 @@ export class OpportunitiesService {
   }
 
   /**
-   * `POST /opportunities/detail`. Full record + creator contact for the owner/admin/designated
-   * reviewer; drafts and other non-public records are hidden from everyone else, and a plain
-   * authenticated browser of a live opportunity gets the record without the creator's email/phone.
+   * THE visibility rule for reading one opportunity by id (shared by `POST /opportunities/detail`
+   * and `GET /student/projects/:id`): privileged reviewer/owner/admin, else public-live, else a
+   * project the viewer joined / applied to / sees through university scope. Anything else -> 404.
+   * Returns whether the viewer is privileged (may see contact details).
    */
-  async findOneWithCreator(id: string, viewer: OpportunityDetailViewer) {
-    const opportunity = await this.findOne(id);
-    if (!opportunity) return null;
-
+  async assertViewerMayOpenOpportunity(
+    opportunity: Opportunity,
+    viewer: OpportunityDetailViewer,
+  ): Promise<{ privileged: boolean }> {
     const privileged = await this.isPrivilegedOpportunityViewer(
       opportunity,
       viewer,
@@ -4235,6 +4236,22 @@ export class OpportunitiesService {
         throw new NotFoundException('Opportunity not found');
       }
     }
+    return { privileged };
+  }
+
+  /**
+   * `POST /opportunities/detail`. Full record + creator contact for the owner/admin/designated
+   * reviewer; drafts and other non-public records are hidden from everyone else, and a plain
+   * authenticated browser of a live opportunity gets the record without the creator's email/phone.
+   */
+  async findOneWithCreator(id: string, viewer: OpportunityDetailViewer) {
+    const opportunity = await this.findOne(id);
+    if (!opportunity) return null;
+
+    const { privileged } = await this.assertViewerMayOpenOpportunity(
+      opportunity,
+      viewer,
+    );
 
     const creator = opportunity.creatorId
       ? await this.usersRepository.findOne({

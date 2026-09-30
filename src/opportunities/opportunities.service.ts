@@ -338,6 +338,77 @@ export class OpportunitiesService {
     } as CreateOpportunityDto);
   }
 
+  /**
+   * EVERY partner contact email the creator's form can carry (not just the first non-empty one):
+   * the partner list (`GET /opportunities?partner_id=me`) matches a row on any of these, so the
+   * detail read and the approve/reject/revise gate must accept the same set — otherwise a partner
+   * listed through a later field gets a 404 / 403 on a row the UI shows.
+   */
+  private collectPartnerContactEmails(opp: Opportunity): string[] {
+    const collab = opp.external_partner_collaboration as
+      | { official_email?: unknown }
+      | null
+      | undefined;
+    const sup = opp.supervision as
+      | { external_partner_email?: unknown; partner_email?: unknown }
+      | null
+      | undefined;
+    const ctx = opp.executing_context as
+      | { partner?: { official_email?: unknown } }
+      | null
+      | undefined;
+    const po = opp.partner_organization as
+      | { official_email?: unknown }
+      | null
+      | undefined;
+    return this.uniqueValidEmails([
+      collab?.official_email,
+      sup?.external_partner_email,
+      sup?.partner_email,
+      ctx?.partner?.official_email,
+      po?.official_email,
+    ]);
+  }
+
+  /** EVERY faculty contact email on the record (supervision contact / official email and the
+   * NGO form's "academic / faculty link" representative) — the faculty approvals list matches all. */
+  private collectFacultyReviewerEmails(opp: Opportunity): string[] {
+    const sup = opp.supervision as
+      | { contact?: unknown; official_email?: unknown }
+      | null
+      | undefined;
+    const val = opp.visibility_and_academic_linkage as
+      | {
+          faculty_institutional_representative?: { official_email?: unknown };
+        }
+      | null
+      | undefined;
+    return this.uniqueValidEmails([
+      sup?.contact,
+      sup?.official_email,
+      val?.faculty_institutional_representative?.official_email,
+    ]);
+  }
+
+  /** Official executing-organization contact(s) — the only login that may confirm execution. */
+  private collectExecutingOrgEmails(opp: Opportunity): string[] {
+    const exec = opp.executing_organization as
+      | { official_email?: unknown; officialEmail?: unknown }
+      | null
+      | undefined;
+    return this.uniqueValidEmails([exec?.official_email, exec?.officialEmail]);
+  }
+
+  private uniqueValidEmails(raw: unknown[]): string[] {
+    const out = new Set<string>();
+    for (const r of raw) {
+      if (typeof r !== 'string') continue;
+      const e = this.normalizeEmail(r);
+      if (e && this.isValidEmail(e)) out.add(e);
+    }
+    return [...out];
+  }
+
   private buildOpportunityVerificationEmailDetails(
     opp: Opportunity,
     meta: {
@@ -949,15 +1020,13 @@ export class OpportunitiesService {
     if (!opp) throw new NotFoundException('Opportunity not found');
     const isOwner = opp.creatorId === userId;
     const isAdmin = user.role === UserRole.SUPER_ADMIN;
-    const facultyEmail = this.normalizeEmail(
-      this.getFacultyEmailFromOpportunity(opp),
-    );
-    const partnerEmail = this.normalizeEmail(
-      this.resolvePartnerEmailFromOpportunity(opp),
-    );
     const callerEmail = this.normalizeEmail(user.email);
-    const isNamedFaculty = !!facultyEmail && facultyEmail === callerEmail;
-    const isNamedPartner = !!partnerEmail && partnerEmail === callerEmail;
+    const isNamedFaculty =
+      !!callerEmail &&
+      this.collectFacultyReviewerEmails(opp).includes(callerEmail);
+    const isNamedPartner =
+      !!callerEmail &&
+      this.collectPartnerContactEmails(opp).includes(callerEmail);
     const isUniversity = user.role === UserRole.UNIVERSITY;
     if (!isOwner && !isAdmin && !isNamedFaculty && !isNamedPartner) {
       if (!isUniversity) {
@@ -3739,31 +3808,46 @@ export class OpportunitiesService {
       ? this.partnerOrgNameMatchParams(orgNameNorm)
       : {};
 
+    /** Partner / executing-organization contact emails — the same identities the detail read and
+     * the approve / confirm actions accept (see collectPartnerContactEmails). */
+    const contactEmailSql = [
+      `opportunity.external_partner_collaboration->>'official_email'`,
+      `opportunity.supervision->>'external_partner_email'`,
+      `opportunity.supervision->>'partner_email'`,
+      `opportunity.executing_context->'partner'->>'official_email'`,
+      `opportunity.partner_organization->>'official_email'`,
+      `opportunity.executing_organization->>'official_email'`,
+    ]
+      .map((expr) => `LOWER(TRIM(COALESCE(${expr}, ''))) = :pe`)
+      .join(' OR ');
+
     if (useUniversityScope) {
       const uniIds =
         await this.facultyUniversityScope.resolveOpportunityIdsForUniversityOrganization(
           org.id,
         );
-      if (!uniIds.length && !matchNamedOrg) return [];
-      if (uniIds.length && matchNamedOrg) {
-        query.andWhere(
-          `(opportunity.id IN (:...uniIds) OR ${namedOrgSql})`,
-          { uniIds, ...namedOrgParams },
-        );
-      } else if (uniIds.length) {
-        query.andWhere('opportunity.id IN (:...uniIds)', { uniIds });
-      } else {
-        query.andWhere(namedOrgSql, namedOrgParams);
+      // A university login can ALSO be named as the partner / executing contact by email.
+      const uniParts: string[] = [];
+      const uniParams: Record<string, unknown> = {};
+      if (uniIds.length) {
+        uniParts.push('opportunity.id IN (:...uniIds)');
+        uniParams.uniIds = uniIds;
       }
+      if (matchNamedOrg) {
+        uniParts.push(namedOrgSql);
+        Object.assign(uniParams, namedOrgParams);
+      }
+      if (filterPartnerEmail) {
+        uniParts.push(`(${contactEmailSql})`);
+        uniParams.pe = filterPartnerEmail;
+      }
+      if (!uniParts.length) return [];
+      query.andWhere(`(${uniParts.join(' OR ')})`, uniParams);
     } else if (filterOrgId && filterPartnerEmail) {
       // Org-owned rows, student rows that name this login email, or student rows that name this organisation.
       query.andWhere(
         `(opportunity."organizationId" = :orgId` +
-          ` OR LOWER(TRIM(COALESCE(opportunity.external_partner_collaboration->>'official_email', ''))) = :pe` +
-          ` OR LOWER(TRIM(COALESCE(opportunity.supervision->>'external_partner_email', ''))) = :pe` +
-          ` OR LOWER(TRIM(COALESCE(opportunity.supervision->>'partner_email', ''))) = :pe` +
-          ` OR LOWER(TRIM(COALESCE(opportunity.executing_context->'partner'->>'official_email', ''))) = :pe` +
-          ` OR LOWER(TRIM(COALESCE(opportunity.partner_organization->>'official_email', ''))) = :pe` +
+          ` OR ${contactEmailSql}` +
           (matchNamedOrg ? ` OR ${namedOrgSql}` : '') +
           `)`,
         {
@@ -3784,11 +3868,7 @@ export class OpportunitiesService {
       );
     } else if (filterPartnerEmail) {
       query.andWhere(
-        `(LOWER(TRIM(COALESCE(opportunity.external_partner_collaboration->>'official_email', ''))) = :pe` +
-          ` OR LOWER(TRIM(COALESCE(opportunity.supervision->>'external_partner_email', ''))) = :pe` +
-          ` OR LOWER(TRIM(COALESCE(opportunity.supervision->>'partner_email', ''))) = :pe` +
-          ` OR LOWER(TRIM(COALESCE(opportunity.executing_context->'partner'->>'official_email', ''))) = :pe` +
-          ` OR LOWER(TRIM(COALESCE(opportunity.partner_organization->>'official_email', ''))) = :pe` +
+        `(${contactEmailSql}` +
           (matchNamedOrg ? ` OR ${namedOrgSql}` : '') +
           `)`,
         {
@@ -3817,9 +3897,31 @@ export class OpportunitiesService {
         const orgFallback = !opp.organizationId
           ? await this.getFacultyOrgFallback(opp.facultyId)
           : null;
+        // Partner queues: tell the UI which of the listed rows THIS login may actually review /
+        // manage, using the very same identity rules the actions enforce.
+        const viewerAccess =
+          filters?.partner_id === 'me'
+            ? {
+                is_org_owner:
+                  !!org && !!opp.organizationId && opp.organizationId === org.id,
+                can_partner_review: await this.partnerReviewIdentityMatches(
+                  opp,
+                  filterPartnerEmail || '',
+                  org?.id ?? null,
+                  userId,
+                  org?.name ? [org.name] : [],
+                ),
+                is_executing_contact:
+                  !!filterPartnerEmail &&
+                  this.collectExecutingOrgEmails(opp).includes(
+                    filterPartnerEmail,
+                  ),
+              }
+            : undefined;
 
         return {
           ...opp,
+          ...(viewerAccess ? { viewer_access: viewerAccess } : {}),
           status: this.getApiOpportunityStatus(opp),
           requires_partner_approval: opp.requiresPartnerApproval,
           location: opp.location,
@@ -4002,16 +4104,14 @@ export class OpportunitiesService {
     const email = this.normalizeEmail(viewer.email);
     if (!email) return false;
 
-    const sup = opp.supervision as Record<string, unknown> | undefined;
-    const po = opp.partner_organization as Record<string, unknown> | undefined;
+    // Every reviewer identity the lists match on: supervisor / faculty-link emails, ALL partner
+    // contact emails, and the executing-organization contact (who must open the record to confirm).
     const candidates = [
-      typeof sup?.contact === 'string' ? sup.contact : undefined,
-      typeof sup?.official_email === 'string' ? sup.official_email : undefined,
-      typeof po?.official_email === 'string' ? po.official_email : undefined,
-      this.resolvePartnerEmailFromOpportunity(opp) ?? undefined,
+      ...this.collectFacultyReviewerEmails(opp),
+      ...this.collectPartnerContactEmails(opp),
+      ...this.collectExecutingOrgEmails(opp),
     ];
-    if (candidates.some((c) => !!c && this.normalizeEmail(c) === email))
-      return true;
+    if (candidates.includes(email)) return true;
 
     if (
       await this.namedPartnerOrgMatches(
@@ -4036,6 +4136,47 @@ export class OpportunitiesService {
       )
       .getCount();
     return linkedApplications > 0;
+  }
+
+  /** Mirror of the edit gate in `update()` (owner shortcuts, else same organisation). */
+  private viewerMayEditOpportunity(
+    opp: Opportunity,
+    viewer: OpportunityDetailViewer,
+  ): boolean {
+    if (!viewer?.id) return false;
+    const isOwner = !!opp.creatorId && String(opp.creatorId) === String(viewer.id);
+    if (viewer.role === UserRole.FACULTY) {
+      if (isOwner && (opp.facultyId === viewer.id || opp.facultyId == null))
+        return true;
+    }
+    if (isOwner && opp.isStudentCreated) return true;
+    if (isOwner && viewer.role === UserRole.SUPER_ADMIN) return true;
+    return (
+      !!viewer.organizationId &&
+      !!opp.organizationId &&
+      viewer.organizationId === opp.organizationId
+    );
+  }
+
+  /** True when the viewer's organisation is a university whose dashboard scope contains the record. */
+  private async isInViewerUniversityScope(
+    opportunityId: string,
+    viewer: OpportunityDetailViewer,
+  ): Promise<boolean> {
+    if (!viewer?.organizationId) return false;
+    let org: { id: string; orgType?: string | null } | null = null;
+    try {
+      org = await this.organizationsService.findOne(viewer.organizationId);
+    } catch {
+      return false;
+    }
+    if (!org || !this.facultyUniversityScope.isUniversityOrganization(org as any))
+      return false;
+    const ids =
+      await this.facultyUniversityScope.resolveOpportunityIdsForUniversityOrganization(
+        org.id,
+      );
+    return ids.includes(opportunityId);
   }
 
   /**
@@ -4067,7 +4208,30 @@ export class OpportunitiesService {
           })) > 0
         : false;
 
-      if (!isPublic && !isParticipant) {
+      // A student's own pending join request is listed on My Projects too (pipeline-only rows),
+      // so it must stay openable after the listing leaves the public directory.
+      const hasOwnApplication =
+        !isPublic && !isParticipant && viewer?.id
+          ? (await this.opportunitiesRepository.manager
+              .getRepository(OpportunityApplication)
+              .count({
+                where: {
+                  opportunityId: opportunity.id,
+                  studentUserId: viewer.id,
+                  withdrawnAt: IsNull(),
+                },
+              })) > 0
+          : false;
+
+      // University dashboards list every opportunity in the university's scope (its students'
+      // listings, participations and applications). They may open those records — contact details
+      // stay redacted like any non-reviewer, and no action is granted.
+      const inUniversityScope =
+        !isPublic && !isParticipant && !hasOwnApplication
+          ? await this.isInViewerUniversityScope(opportunity.id, viewer)
+          : false;
+
+      if (!isPublic && !isParticipant && !hasOwnApplication && !inUniversityScope) {
         throw new NotFoundException('Opportunity not found');
       }
     }
@@ -4090,6 +4254,9 @@ export class OpportunitiesService {
             phone: privileged ? (creator.phone ?? null) : null,
           }
         : null,
+      // What THIS viewer may actually do with the record, so the UI never offers a button the
+      // API would refuse (e.g. "Edit" to an executing-org contact or a university observer).
+      viewer_access: { can_edit: this.viewerMayEditOpportunity(opportunity, viewer) },
     };
     // Supervisor / partner / executing-org contact details are for the owner, designated
     // reviewers and admin only — a plain viewer of a live opportunity does not get them.
@@ -5323,11 +5490,13 @@ export class OpportunitiesService {
     const partnerOfficial = this.normalizeEmail(
       typeof po?.official_email === 'string' ? po.official_email : undefined,
     );
-    const linkedFacultyEmail = this.resolveFacultyEmail(opp);
+    // ANY faculty email on the record (not just the first non-empty one): the approvals list
+    // matches the supervision contact, the official email and the faculty-link representative.
+    const linkedFacultyEmails = this.collectFacultyReviewerEmails(opp);
     const fe = this.normalizeEmail(facultyEmail);
     const idOk = !!opp.facultyId && opp.facultyId === facultyUserId;
     const emailOk =
-      (!!linkedFacultyEmail && !!fe && linkedFacultyEmail === fe) ||
+      (!!fe && linkedFacultyEmails.includes(fe)) ||
       (!!partnerOfficial && !!fe && partnerOfficial === fe);
     if (
       !idOk &&
@@ -5413,9 +5582,10 @@ export class OpportunitiesService {
     opp: Opportunity,
     organizationId?: string | null,
     userId?: string | null,
+    preloadedOrgNames?: string[],
   ): Promise<boolean> {
-    const orgNames: string[] = [];
-    if (userId) {
+    const orgNames: string[] = preloadedOrgNames ? [...preloadedOrgNames] : [];
+    if (!preloadedOrgNames && userId) {
       try {
         const mine = await this.organizationsService.getMyOrganization(userId);
         if (mine?.name) orgNames.push(mine.name);
@@ -5423,7 +5593,7 @@ export class OpportunitiesService {
         /* login is not linked to an organisation */
       }
     }
-    if (organizationId) {
+    if (!preloadedOrgNames && organizationId) {
       try {
         const org = await this.organizationsService.findOne(organizationId);
         if (org?.name) orgNames.push(org.name);
@@ -5477,16 +5647,18 @@ export class OpportunitiesService {
     );
   }
 
-  private async assertPartnerOwnsOpportunity(
+  /** Non-throwing form of the partner-reviewer identity gate (see assertPartnerOwnsOpportunity). */
+  private async partnerReviewIdentityMatches(
     opp: Opportunity,
     partnerEmail: string,
     organizationId?: string | null,
     userId?: string | null,
-  ) {
-    const expectedEmail = this.resolvePartnerEmailFromOpportunity(opp);
+    preloadedOrgNames?: string[],
+  ): Promise<boolean> {
+    // Any partner contact email the creator entered — the partner list matches all of them.
+    const actorEmail = this.normalizeEmail(partnerEmail);
     const emailMatches =
-      !!expectedEmail &&
-      this.normalizeEmail(expectedEmail) === this.normalizeEmail(partnerEmail);
+      !!actorEmail && this.collectPartnerContactEmails(opp).includes(actorEmail);
     // On a student-created row `organizationId` is the *host partner's* organisation, so its
     // members are the reviewers. On an org/faculty/admin-created row it is the CREATOR's own
     // organisation — accepting it would let the creator (or a colleague) acknowledge the distinct
@@ -5496,13 +5668,29 @@ export class OpportunitiesService {
       !!organizationId &&
       !!opp.organizationId &&
       organizationId === opp.organizationId;
-    const namedOrgMatches = await this.namedPartnerOrgMatches(
+    if (emailMatches || organizationMatches) return true;
+    return this.namedPartnerOrgMatches(
       opp,
       organizationId,
       userId,
+      preloadedOrgNames,
     );
+  }
 
-    if (!emailMatches && !organizationMatches && !namedOrgMatches) {
+  private async assertPartnerOwnsOpportunity(
+    opp: Opportunity,
+    partnerEmail: string,
+    organizationId?: string | null,
+    userId?: string | null,
+  ) {
+    if (
+      !(await this.partnerReviewIdentityMatches(
+        opp,
+        partnerEmail,
+        organizationId,
+        userId,
+      ))
+    ) {
       throw new ForbiddenException(
         'You are not the assigned partner reviewer for this opportunity',
       );

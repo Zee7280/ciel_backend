@@ -3313,7 +3313,17 @@ export class StudentReportsService {
     );
   }
 
-  async findOneForPartner(id: string, organizationId: string) {
+  /**
+   * Partner / university report dossier. Owned-organisation access is the review path; a university
+   * dashboard ALSO lists reports on institution-linked opportunities it does not own
+   * (`findAllByOpportunityIds`), so those must be openable read-only. `viewer_can_review` tells the
+   * UI whether Approve / Reject will actually be honoured by `verifyReport`.
+   */
+  async findOneForPartner(
+    id: string,
+    organizationId: string,
+    options?: { universityScopeOpportunityIds?: string[] },
+  ) {
     const report = await this.studentReportsRepository.findOne({
       where: { id },
       relations: ['student', 'opportunity'],
@@ -3323,10 +3333,12 @@ export class StudentReportsService {
       throw new NotFoundException('Report not found');
     }
 
-    if (
-      !organizationId ||
-      report.opportunity?.organizationId !== organizationId
-    ) {
+    const ownsOpportunity =
+      !!organizationId && report.opportunity?.organizationId === organizationId;
+    const oppId = report.opportunity?.id ?? report.opportunityId;
+    const inUniversityScope =
+      !!oppId && (options?.universityScopeOpportunityIds ?? []).includes(oppId);
+    if (!ownsOpportunity && !inUniversityScope) {
       throw new ForbiddenException(
         'You can only access reports linked to your organization',
       );
@@ -3334,11 +3346,17 @@ export class StudentReportsService {
 
     // Same reasoning as findOne (admin) above — a partner reviewing a team's
     // report must see every member's logged hours, not just the owner's.
-    return StudentReportsService.redactCiiV2ForExternalViewer(
+    const response = StudentReportsService.redactCiiV2ForExternalViewer(
       await this.formatReportResponse(report, undefined, {
         allProjectAttendance: true,
       }),
     );
+    return response?.data
+      ? {
+          ...response,
+          data: { ...response.data, viewer_can_review: ownsOpportunity },
+        }
+      : response;
   }
 
   async findOneByOpportunityOrId(id: string, studentId: string) {

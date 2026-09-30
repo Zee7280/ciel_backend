@@ -2527,6 +2527,7 @@ describe('OpportunitiesService — university-scope (delegated) faculty can open
         (service as any).participationRepository = { count: jest.fn().mockResolvedValue(0) };
         (service as any).opportunitiesRepository.manager = {
             getRepository: () => ({
+                count: async () => 0,
                 createQueryBuilder: () => ({
                     where() { return this; },
                     andWhere() { return this; },
@@ -2580,4 +2581,166 @@ describe('OpportunitiesService — university-scope (delegated) faculty can open
             ).rejects.toThrow(/not the assigned faculty supervisor/i);
         },
     );
+});
+
+describe('OpportunitiesService — every list-visible reviewer identity can open and act (access consistency)', () => {
+    function makeAccessService(
+        oppOver: Record<string, unknown> = {},
+        opts: { uniOrg?: { id: string; orgType: string; name: string } | null; uniIds?: string[]; hasApplication?: boolean } = {},
+    ) {
+        const opp = {
+            id: 'opp-acc-1',
+            creatorId: 'creator-1',
+            facultyId: null,
+            organizationId: 'host-org',
+            isStudentCreated: false,
+            status: 'pending_faculty',
+            workflowStage: 'pending_faculty',
+            admin_approved: false,
+            supervision: {},
+            ...oppOver,
+        } as unknown as Opportunity;
+        const service = makeService({ findOne: jest.fn().mockResolvedValue(opp) });
+        (service as any).facultyUniversityScope = {
+            getDelegatedOrganizationId: jest.fn().mockResolvedValue(null),
+            resolveOpportunityIdsForUniversityOrganization: jest.fn().mockResolvedValue(opts.uniIds ?? []),
+            isUniversityOrganization: (o: { orgType?: string }) => String(o?.orgType || '').toLowerCase().includes('university'),
+            normalizeOrgName: (n: string) => (n || '').trim().toLowerCase(),
+        };
+        (service as any).participationRepository = { count: jest.fn().mockResolvedValue(0) };
+        (service as any).opportunitiesRepository.manager = {
+            getRepository: () => ({
+                count: async () => (opts.hasApplication ? 1 : 0),
+                createQueryBuilder: () => ({
+                    where() { return this; },
+                    andWhere() { return this; },
+                    getCount: async () => 0,
+                }),
+            }),
+        };
+        (service as any).usersRepository = {
+            findOne: jest.fn().mockResolvedValue({ id: 'creator-1', name: 'C', email: 'creator@x.org', phone: '123' }),
+        };
+        (service as any).organizationsService = {
+            findOne: jest.fn(async (id: string) => {
+                if (opts.uniOrg && id === opts.uniOrg.id) return opts.uniOrg;
+                throw new Error('not found');
+            }),
+            getMyOrganization: jest.fn().mockResolvedValue(null),
+        };
+        return { service, opp };
+    }
+
+    const viewer = (email: string, role = 'faculty', organizationId: string | null = null) => ({
+        id: `u-${email}`,
+        email,
+        role,
+        organizationId,
+    });
+
+    it('detail: the faculty named only as the NGO "faculty link" representative can open the record', async () => {
+        const { service } = makeAccessService({
+            visibility_and_academic_linkage: { faculty_institutional_representative: { official_email: 'fir@uni.edu' } },
+            supervision: { contact: 'someone.else@uni.edu' },
+        });
+        const data: any = await service.findOneWithCreator('opp-acc-1', viewer('fir@uni.edu') as any);
+        expect(data.creator.email).toBe('creator@x.org'); // reviewer sees the contact
+    });
+
+    it('detail: every partner contact email works, not only the first non-empty source', async () => {
+        const { service } = makeAccessService({
+            external_partner_collaboration: { official_email: 'first@ngo.org' },
+            supervision: { external_partner_email: 'second@ngo.org' },
+            partner_organization: { official_email: 'third@ngo.org' },
+        });
+        for (const em of ['first@ngo.org', 'second@ngo.org', 'third@ngo.org']) {
+            const data: any = await service.findOneWithCreator('opp-acc-1', viewer(em, 'ngo') as any);
+            expect(data.id).toBe('opp-acc-1');
+        }
+    });
+
+    it('detail: the executing-organization contact can open the record they are asked to confirm', async () => {
+        const { service } = makeAccessService({ executing_organization: { official_email: 'exec@org.pk' } });
+        const data: any = await service.findOneWithCreator('opp-acc-1', viewer('exec@org.pk', 'ngo') as any);
+        expect(data.id).toBe('opp-acc-1');
+    });
+
+    it('detail: an unrelated login still gets 404', async () => {
+        const { service } = makeAccessService({
+            visibility_and_academic_linkage: { faculty_institutional_representative: { official_email: 'fir@uni.edu' } },
+            executing_organization: { official_email: 'exec@org.pk' },
+        });
+        await expect(service.findOneWithCreator('opp-acc-1', viewer('stranger@x.org', 'ngo', 'other-org') as any)).rejects.toThrow(/not found/i);
+    });
+
+    it('detail: a university dashboard can open a record in its scope, with contacts redacted and no edit right', async () => {
+        const uni = { id: 'uni-org', orgType: 'UNIVERSITY', name: 'Uni' };
+        const { service } = makeAccessService({}, { uniOrg: uni, uniIds: ['opp-acc-1'] });
+        const data: any = await service.findOneWithCreator('opp-acc-1', viewer('reg@uni.edu', 'university', 'uni-org') as any);
+        expect(data.id).toBe('opp-acc-1');
+        expect(data.creator.email).toBeUndefined(); // contact keys stripped for non-reviewers
+        expect(data.viewer_access.can_edit).toBe(false);
+    });
+
+    it('detail: a university whose scope does not contain the record, or a non-university org, still gets 404', async () => {
+        const uni = { id: 'uni-org', orgType: 'UNIVERSITY', name: 'Uni' };
+        const a = makeAccessService({}, { uniOrg: uni, uniIds: ['other-opp'] });
+        await expect(a.service.findOneWithCreator('opp-acc-1', viewer('reg@uni.edu', 'university', 'uni-org') as any)).rejects.toThrow(/not found/i);
+        const ngo = { id: 'ngo-org', orgType: 'NGO', name: 'Ngo' };
+        const b = makeAccessService({}, { uniOrg: ngo, uniIds: ['opp-acc-1'] });
+        await expect(b.service.findOneWithCreator('opp-acc-1', viewer('x@ngo.org', 'ngo', 'ngo-org') as any)).rejects.toThrow(/not found/i);
+    });
+
+    it('detail: a student with their own pending join request can still open a non-public listing', async () => {
+        const { service } = makeAccessService({}, { hasApplication: true });
+        const data: any = await service.findOneWithCreator('opp-acc-1', viewer('stu@uni.edu', 'student') as any);
+        expect(data.id).toBe('opp-acc-1');
+        expect(data.creator.email).toBeUndefined();
+    });
+
+    it('viewer_access.can_edit: creator org / owner yes; named partner, exec contact, university no', async () => {
+        const { service, opp } = makeAccessService({ organizationId: 'host-org', partner_organization: { official_email: 'p@ngo.org' } });
+        const edit = (v: any) => (service as any).viewerMayEditOpportunity(opp, v);
+        expect(edit({ id: 'colleague', role: 'ngo', organizationId: 'host-org' })).toBe(true);
+        expect(edit({ id: 'p', email: 'p@ngo.org', role: 'ngo', organizationId: 'partner-org' })).toBe(false);
+        expect(edit({ id: 'creator-1', role: 'faculty', organizationId: null })).toBe(true); // faculty creator (facultyId unset)
+        (opp as any).facultyId = 'another-faculty';
+        expect(edit({ id: 'creator-1', role: 'faculty', organizationId: null })).toBe(false); // update() would 403 here too
+        expect(edit({ role: 'ngo', organizationId: 'host-org' })).toBe(false);
+    });
+
+    it('faculty action: FIR-listed faculty passes the supervisor gate even when supervision.contact names someone else', async () => {
+        const { service, opp } = makeAccessService({
+            visibility_and_academic_linkage: { faculty_institutional_representative: { official_email: 'fir@uni.edu' } },
+            supervision: { contact: 'someone.else@uni.edu' },
+        });
+        await expect(
+            (service as any).assertFacultySupervisorForStudentOpportunity(opp, 'fac-1', 'fir@uni.edu'),
+        ).resolves.toBeUndefined();
+        await expect(
+            (service as any).assertFacultySupervisorForStudentOpportunity(opp, 'fac-2', 'nobody@uni.edu'),
+        ).rejects.toThrow(/not the assigned faculty supervisor/i);
+    });
+
+    it('partner action: a partner named in a later contact field passes the ownership gate; a stranger does not', async () => {
+        const { service, opp } = makeAccessService({
+            isStudentCreated: true,
+            organizationId: null,
+            external_partner_collaboration: { official_email: 'first@ngo.org' },
+            executing_context: { partner: { official_email: 'ctx@ngo.org' } },
+        });
+        await expect(
+            (service as any).assertPartnerOwnsOpportunity(opp, 'ctx@ngo.org', null, null),
+        ).resolves.toBeUndefined();
+        await expect(
+            (service as any).assertPartnerOwnsOpportunity(opp, 'stranger@ngo.org', null, null),
+        ).rejects.toThrow(/not the assigned partner reviewer/i);
+    });
+
+    it('org-created row: a same-org colleague is NOT a partner reviewer (gate unchanged)', async () => {
+        const { service, opp } = makeAccessService({ isStudentCreated: false, organizationId: 'host-org' });
+        await expect(
+            (service as any).partnerReviewIdentityMatches(opp, 'colleague@ngo.org', 'host-org', 'col-1', ['Host Org']),
+        ).resolves.toBe(false);
+    });
 });

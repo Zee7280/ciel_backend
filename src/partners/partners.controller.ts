@@ -755,10 +755,25 @@ export class PartnerAliasController {
   }
 
   @Get('reports/:id')
-  getReportById(@Request() req, @Param('id') id: string) {
+  async getReportById(@Request() req, @Param('id') id: string) {
+    // The university dashboard lists reports on every institution-linked opportunity (see
+    // getReports above), so the same scope must be readable here — read-only, not reviewable.
+    let universityScopeOpportunityIds: string[] = [];
+    if (req.user.organizationId) {
+      const org = await this.organizationsService.getMyOrganization(
+        req.user.id,
+      );
+      if (org && this.facultyUniversityScope.isUniversityOrganization(org)) {
+        universityScopeOpportunityIds =
+          await this.facultyUniversityScope.resolveOpportunityIdsForUniversityOrganization(
+            org.id,
+          );
+      }
+    }
     return this.studentReportsService.findOneForPartner(
       id,
       req.user.organizationId,
+      { universityScopeOpportunityIds },
     );
   }
 

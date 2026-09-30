@@ -118,47 +118,35 @@ export class FacultyService {
     return (facultyEmail || '').trim().toLowerCase();
   }
 
-  /** Same source order as `OpportunitiesService.resolvePartnerEmail` (first valid email wins). */
-  private resolvedPartnerReviewerEmail(opp: Opportunity): string | null {
+  /** EVERY partner contact email on the record (same five sources as
+   * `OpportunitiesService.collectPartnerContactEmails`): the partner approve API accepts any of
+   * them, so a faculty account matching a later field must also be routed to `partner_ack`. */
+  private partnerReviewerEmails(opp: Opportunity): string[] {
     const collab = opp.external_partner_collaboration as
       | { official_email?: string }
       | undefined;
-    const fromCollab =
-      collab && typeof collab.official_email === 'string'
-        ? collab.official_email
-        : undefined;
     const sup = opp.supervision as
       | { external_partner_email?: string; partner_email?: string }
       | undefined;
-    const fromSupExt =
-      sup && typeof sup.external_partner_email === 'string'
-        ? sup.external_partner_email
-        : undefined;
-    const fromSupPartner =
-      sup && typeof sup.partner_email === 'string'
-        ? sup.partner_email
-        : undefined;
     const ctx = opp.executing_context as
       | { partner?: { official_email?: string } }
       | undefined;
-    const fromCtx =
-      ctx?.partner && typeof ctx.partner.official_email === 'string'
-        ? ctx.partner.official_email
-        : undefined;
     const po = opp.partner_organization as
       | { official_email?: string }
       | undefined;
-    const fromPo =
-      po && typeof po.official_email === 'string'
-        ? po.official_email
-        : undefined;
-    for (const c of [fromCollab, fromSupExt, fromSupPartner, fromCtx, fromPo]) {
-      const e = this.normalizeFacultyEmail(c || '');
-      if (e && e.includes('@')) {
-        return e;
-      }
+    const out = new Set<string>();
+    for (const c of [
+      collab?.official_email,
+      sup?.external_partner_email,
+      sup?.partner_email,
+      ctx?.partner?.official_email,
+      po?.official_email,
+    ]) {
+      if (typeof c !== 'string') continue;
+      const e = this.normalizeFacultyEmail(c);
+      if (e && e.includes('@')) out.add(e);
     }
-    return null;
+    return [...out];
   }
 
   /**
@@ -187,9 +175,8 @@ export class FacultyService {
       return 'faculty_review';
     }
 
-    const resolvedPartner = this.resolvedPartnerReviewerEmail(opp);
     const partnerReviewerMatch =
-      !!fe && !!resolvedPartner && fe === resolvedPartner;
+      !!fe && this.partnerReviewerEmails(opp).includes(fe);
     const partnerAckPending =
       partnerReviewerMatch &&
       (!opp.isStudentCreated || opp.faculty_verified === true) &&
@@ -1213,14 +1200,23 @@ export class FacultyService {
       facultyId,
       facultyEmail,
     );
-    if (!scopedIds.includes(opportunityId)) {
-      throw new NotFoundException('Project not found or not assigned to you');
-    }
-
     const opportunity = await this.opportunitiesRepository.findOne({
       where: { id: opportunityId },
       relations: ['organization'],
     });
+
+    // Scoped ids (dashboard / analytics scope) OR any row the approvals list shows this faculty
+    // (named supervisor incl. the NGO "faculty link" email) — a listed approval must be openable.
+    const listedOnApprovals =
+      !!opportunity &&
+      this.opportunityMatchesNamedSupervisorPath(
+        opportunity,
+        facultyId,
+        this.normalizeFacultyEmail(facultyEmail),
+      );
+    if (!scopedIds.includes(opportunityId) && !listedOnApprovals) {
+      throw new NotFoundException('Project not found or not assigned to you');
+    }
 
     if (!opportunity) {
       throw new NotFoundException('Project not found');

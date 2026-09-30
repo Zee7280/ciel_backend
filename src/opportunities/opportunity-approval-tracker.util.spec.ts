@@ -132,6 +132,24 @@ describe('buildOpportunityApprovalTracker', () => {
     }
   });
 
+  it('admin approved alone does not mark Published until live', () => {
+    const row = buildOpportunityApprovalTracker({
+      ...base,
+      isStudentCreated: true,
+      requiresPartnerApproval: true,
+      status: 'pending_approval',
+      workflowStage: 'pending_admin',
+      faculty_verified: true,
+      facultyApprovalStatus: 'approved',
+      partnerVerified: true,
+      partnerApprovalStatus: 'approved',
+      adminApprovalStatus: 'approved',
+      admin_approved: true,
+    });
+    expect(row.currently_with_role).toBe('admin');
+    expect(row.currently_with).toContain('CIEL');
+  });
+
   it('does not invent a second NGO gate when only the partner line exists', () => {
     const t = buildOpportunityApprovalTracker({
       ...base,

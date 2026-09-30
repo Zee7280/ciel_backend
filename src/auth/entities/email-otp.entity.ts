@@ -9,7 +9,7 @@ export class EmailOtp {
     @Column()
     email: string;
 
-    /** Legacy rows: verify with bcrypt. New rows: plain code for debugging/support (nullable when only hash exists). */
+    /** Legacy rows only (plain code). New rows store just `otpHash`. */
     @Column({ type: 'varchar', length: 16, nullable: true })
     otp: string | null;
 
@@ -22,6 +22,10 @@ export class EmailOtp {
 
     @Column({ default: false })
     verified: boolean;
+
+    /** Wrong-code guesses against this code; the row is dropped after too many. */
+    @Column({ type: 'int', default: 0 })
+    attempts: number;
 
     @CreateDateColumn()
     createdAt: Date;

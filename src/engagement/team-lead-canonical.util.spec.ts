@@ -98,7 +98,7 @@ describe('enrollmentLooksLikeTeam', () => {
     expect(
       enrollmentLooksLikeTeam({
         participationMode: 'individual',
-        teamId: null,
+        teamId: null as any,
       } as unknown as Participation),
     ).toBe(false);
   });
@@ -111,7 +111,7 @@ describe('pickPreferredProjectEnrollment', () => {
       studentId: 'member-2',
       participationMode: 'individual',
       isTeamLead: false,
-      teamId: null,
+      teamId: null as any,
       createdAt: new Date('2019-01-01'),
     });
     const teamSeat = member({

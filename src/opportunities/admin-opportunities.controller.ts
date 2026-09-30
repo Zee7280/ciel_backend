@@ -13,6 +13,7 @@ import {
   Delete,
   HttpCode,
   HttpStatus,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { OpportunitiesService } from './opportunities.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -100,23 +101,35 @@ export class AdminOpportunitiesController {
   @Post(':id/approve')
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
-  async approve(@Request() req, @Param('id') id: string) {
-    await this.opportunitiesService.approve(id, { id: req.user.id, name: req.user.name });
+  async approve(@Request() req, @Param('id', new ParseUUIDPipe()) id: string) {
+    await this.opportunitiesService.approve(id, {
+      id: req.user.id,
+      name: req.user.name,
+    });
     return { success: true, data: {} };
   }
 
   @Patch(':id/approve')
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
-  async approvePatch(@Request() req, @Param('id') id: string) {
-    await this.opportunitiesService.approve(id, { id: req.user.id, name: req.user.name });
+  async approvePatch(
+    @Request() req,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    await this.opportunitiesService.approve(id, {
+      id: req.user.id,
+      name: req.user.name,
+    });
     return { success: true, data: {} };
   }
 
   @Put(':id/status')
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
-  async setStatus(@Param('id') id: string, @Body() body: { status: string }) {
+  async setStatus(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() body: { status: string },
+  ) {
     const saved = await this.opportunitiesService.setStatus(id, body.status);
     return { success: true, data: { id: saved.id, status: saved.status } };
   }
@@ -124,16 +137,30 @@ export class AdminOpportunitiesController {
   @Post(':id/reject')
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
-  async reject(@Request() req, @Param('id') id: string, @Body() body: { reason: string }) {
-    await this.opportunitiesService.reject(id, body.reason, { id: req.user.id, name: req.user.name });
+  async reject(
+    @Request() req,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() body: { reason: string },
+  ) {
+    await this.opportunitiesService.reject(id, body.reason, {
+      id: req.user.id,
+      name: req.user.name,
+    });
     return { success: true, data: {} };
   }
 
   @Post(':id/revise')
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
-  async revise(@Request() req, @Param('id') id: string, @Body() body: { reason: string }) {
-    const saved = await this.opportunitiesService.revise(id, body.reason, { id: req.user.id, name: req.user.name });
+  async revise(
+    @Request() req,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() body: { reason: string },
+  ) {
+    const saved = await this.opportunitiesService.revise(id, body.reason, {
+      id: req.user.id,
+      name: req.user.name,
+    });
     return {
       success: true,
       data: {

@@ -7,6 +7,11 @@ import {
   IsBoolean,
   ValidateNested,
   IsInt,
+  IsUUID,
+  MaxLength,
+  Min,
+  Max,
+  ArrayMaxSize,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -32,10 +37,14 @@ export class TimelineDto {
   to_time?: string; // daily window end (e.g. 13:00)
 
   @IsInt()
+  @Min(0)
+  @Max(10000)
   @IsOptional()
   expected_hours?: number;
 
   @IsInt()
+  @Min(1)
+  @Max(100000)
   @IsOptional()
   volunteers_required?: number;
 
@@ -124,9 +133,11 @@ export class CreateOpportunityDto {
   draft?: boolean;
 
   @IsString()
+  @MaxLength(200)
   title: string;
 
   @IsArray()
+  @ArrayMaxSize(20)
   @IsString({ each: true })
   types: string[];
 
@@ -230,7 +241,7 @@ export class CreateOpportunityDto {
 }
 
 export class UpdateOpportunityDto {
-  @IsString()
+  @IsUUID()
   id: string;
 
   /** Mid-wizard save. Not a column — OpportunitiesService branches on this, then strips it. */
@@ -239,6 +250,7 @@ export class UpdateOpportunityDto {
   draft?: boolean;
 
   @IsString()
+  @MaxLength(200)
   @IsOptional()
   title?: string;
 

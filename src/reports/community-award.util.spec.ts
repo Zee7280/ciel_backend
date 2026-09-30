@@ -44,19 +44,19 @@ describe('community-award.util', () => {
 
 describe('isCommunityAwardLiveReport', () => {
     it('keeps faculty-approved and verified reports on the live deck', () => {
-        expect(isCommunityAwardLiveReport({ faculty_status: 'approved', status: 'submitted', hours: 0 })).toBe(true);
-        expect(isCommunityAwardLiveReport({ faculty_status: 'pending', status: 'verified', hours: 0 })).toBe(true);
+        expect(isCommunityAwardLiveReport({ faculty_status: 'approved', status: 'submitted' })).toBe(true);
+        expect(isCommunityAwardLiveReport({ faculty_status: 'pending', status: 'verified' })).toBe(true);
     });
 
     it('keeps submitted reports in the waiting inbox even when hours are already logged', () => {
-        expect(isCommunityAwardLiveReport({ faculty_status: 'pending', status: 'submitted', hours: 16 })).toBe(false);
-        expect(isCommunityAwardLiveReport({ faculty_status: 'pending', status: 'submitted', hours: 0 })).toBe(false);
-        expect(isCommunityAwardLiveReport({ faculty_status: 'pending', status: 'paid', hours: 16 })).toBe(false);
+        expect(isCommunityAwardLiveReport({ faculty_status: 'pending', status: 'submitted' })).toBe(false);
+        expect(isCommunityAwardLiveReport({ faculty_status: 'pending', status: 'submitted' })).toBe(false);
+        expect(isCommunityAwardLiveReport({ faculty_status: 'pending', status: 'paid' })).toBe(false);
     });
 
     it('excludes drafts and rejections', () => {
-        expect(isCommunityAwardLiveReport({ faculty_status: 'pending', status: 'draft', hours: 20 })).toBe(false);
-        expect(isCommunityAwardLiveReport({ faculty_status: 'rejected', status: 'submitted', hours: 20 })).toBe(false);
+        expect(isCommunityAwardLiveReport({ faculty_status: 'pending', status: 'draft' })).toBe(false);
+        expect(isCommunityAwardLiveReport({ faculty_status: 'rejected', status: 'submitted' })).toBe(false);
     });
 
     it('treats CIEL PK-published private-candidate reports as live without Faculty', () => {

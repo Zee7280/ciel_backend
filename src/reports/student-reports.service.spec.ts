@@ -107,6 +107,17 @@ const MIN_VALID_SUBMIT_SECTIONS = {
   },
 };
 
+
+// Fully approved + live listing: satisfies assertStudentOpportunityReportableForWrite
+// (faculty -> partner -> CIEL admin live) so tests reach the logic they actually exercise.
+const LIVE_OPP_GATES = {
+  faculty_verified: true,
+  facultyApprovalStatus: 'approved',
+  requiresPartnerApproval: false,
+  admin_approved: true,
+  workflowStage: 'live',
+  status: 'active',
+};
 describe('StudentReportsService', () => {
   let service: StudentReportsService;
 
@@ -219,6 +230,7 @@ describe('StudentReportsService', () => {
       id: 'opp-1',
       title: 'Test Opportunity',
       isStudentCreated: false,
+      ...LIVE_OPP_GATES,
       timeline: null,
     });
     mockStudentReportsRepository.findOne.mockReset();
@@ -404,6 +416,7 @@ describe('StudentReportsService', () => {
       id: 'opp-1',
       title: 'Test Opportunity',
       isStudentCreated: true,
+      ...LIVE_OPP_GATES,
       creatorId: 'student-1',
       admin_approved: true,
       workflowStage: 'live',
@@ -434,6 +447,7 @@ describe('StudentReportsService', () => {
       id: 'opp-1',
       title: 'Test Opportunity',
       isStudentCreated: false,
+      ...LIVE_OPP_GATES,
       timeline: { expected_hours: 16 },
     });
     mockParticipantRepository.find.mockResolvedValue([
@@ -478,6 +492,7 @@ describe('StudentReportsService', () => {
       id: 'opp-1',
       title: 'Test Opportunity',
       isStudentCreated: false,
+      ...LIVE_OPP_GATES,
       timeline: { expected_hours: 16 },
     });
     mockParticipantRepository.find.mockResolvedValue([
@@ -528,6 +543,7 @@ describe('StudentReportsService', () => {
       id: 'opp-1',
       title: 'Test Opportunity',
       isStudentCreated: false,
+      ...LIVE_OPP_GATES,
       timeline: { expected_hours: 16 },
     });
     mockParticipantRepository.find.mockResolvedValue([
@@ -564,6 +580,7 @@ describe('StudentReportsService', () => {
       id: 'opp-1',
       title: 'Test Opportunity',
       isStudentCreated: false,
+      ...LIVE_OPP_GATES,
       timeline: { expected_hours: 16 },
     });
     mockParticipantRepository.find.mockResolvedValue([
@@ -765,6 +782,7 @@ describe('StudentReportsService', () => {
       id: SAMPLE_OPP_UUID,
       title: 'Team Project',
       isStudentCreated: false,
+      ...LIVE_OPP_GATES,
       timeline: null,
     });
     mockCanonicalLeadRows('team-lead-student');
@@ -965,6 +983,7 @@ describe('StudentReportsService', () => {
         id: SAMPLE_OPP_UUID,
         title: 'Team Project',
         isStudentCreated: false,
+        ...LIVE_OPP_GATES,
         timeline: null,
       });
       mockCanonicalLeadRows('team-lead-student');
@@ -1006,6 +1025,7 @@ describe('StudentReportsService', () => {
         id: SAMPLE_OPP_UUID,
         title: 'Team Project',
         isStudentCreated: false,
+        ...LIVE_OPP_GATES,
         timeline: null,
       });
       mockCanonicalLeadRows('hamza-lead', '2019-06-01T00:00:00.000Z');
@@ -1051,6 +1071,7 @@ describe('StudentReportsService', () => {
         id: SAMPLE_OPP_UUID,
         title: 'Team Project',
         isStudentCreated: false,
+        ...LIVE_OPP_GATES,
         timeline: null,
       });
       mockParticipantRepository.find.mockResolvedValue([]);
@@ -1091,6 +1112,7 @@ describe('StudentReportsService', () => {
         id: SAMPLE_OPP_UUID,
         title: 'Solo Project',
         isStudentCreated: false,
+        ...LIVE_OPP_GATES,
         timeline: null,
       });
       mockParticipantRepository.findOne.mockImplementation(
@@ -1130,6 +1152,7 @@ describe('StudentReportsService', () => {
         id: SAMPLE_OPP_UUID,
         title: 'Project',
         isStudentCreated: true,
+        ...LIVE_OPP_GATES,
         creatorId: 'no-participation-user',
         admin_approved: true,
         workflowStage: 'live',
@@ -1157,6 +1180,7 @@ describe('StudentReportsService', () => {
         id: SAMPLE_OPP_UUID,
         title: 'Team Project',
         isStudentCreated: false,
+        ...LIVE_OPP_GATES,
         timeline: null,
       });
       mockCanonicalLeadRows('team-lead-student');
@@ -1424,6 +1448,7 @@ describe('StudentReportsService', () => {
       id: 'opp-1',
       title: 'Private listing',
       isStudentCreated: true,
+      ...LIVE_OPP_GATES,
       admin_approved: true,
       workflowStage: 'live',
       status: 'active',

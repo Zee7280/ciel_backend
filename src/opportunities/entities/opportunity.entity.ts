@@ -1,5 +1,12 @@
 import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn } from 'typeorm';
+
 import { Organization } from '../../organizations/entities/organization.entity';
+
+/** Public verification links stay valid this long after (re)issue. Override with VERIFICATION_TOKEN_TTL_DAYS. */
+export function verificationTokenTtlMs(): number {
+    const days = Number(process.env.VERIFICATION_TOKEN_TTL_DAYS);
+    return (Number.isFinite(days) && days > 0 ? days : 30) * 24 * 60 * 60 * 1000;
+}
 
 @Entity('opportunities')
 export class Opportunity {
@@ -133,6 +140,10 @@ export class Opportunity {
 
     @Column({ type: 'timestamptz', nullable: true })
     partnerTokenExpiresAt: Date | null;
+
+    /** sha256 of the creator + org + normalized create payload; only used to dedupe retried POST /opportunities. Never exposed. */
+    @Column({ type: 'varchar', length: 64, nullable: true, select: false })
+    createFingerprint?: string | null;
 
     @Column({ type: 'timestamptz', nullable: true })
     facultyTokenExpiresAt: Date | null;

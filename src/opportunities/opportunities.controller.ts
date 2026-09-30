@@ -11,14 +11,20 @@ import {
     Param,
     NotFoundException,
     BadRequestException,
+    UseInterceptors,
+  ParseUUIDPipe,
 } from '@nestjs/common';
+import { isUUID } from 'class-validator';
 import { OpportunitiesService } from './opportunities.service';
 import { CreateOpportunityDto, UpdateOpportunityDto } from './dto/create-opportunity.dto';
 import { buildOpportunityDetailView } from './opportunity-detail-view.util';
 import { GetOpportunityDetailDto } from './dto/get-opportunity-detail.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RedactOpportunitySecretsInterceptor } from './redact-opportunity-secrets.interceptor';
 
+/** Every response here may embed an Opportunity row — never return raw magic-link credentials. */
 @Controller('opportunities')
+@UseInterceptors(RedactOpportunitySecretsInterceptor)
 export class OpportunitiesController {
     constructor(private readonly opportunitiesService: OpportunitiesService) { }
 
@@ -42,6 +48,9 @@ export class OpportunitiesController {
         const id = typeof body?.id === 'string' ? body.id.trim() : '';
         if (!id) {
             throw new BadRequestException('Opportunity id is required');
+        }
+        if (!isUUID(id)) {
+            throw new BadRequestException('Opportunity id must be a UUID');
         }
         return this.opportunitiesService.verifyExecutingOrganizationForUser(req.user.id, req.user.email, id);
     }
@@ -119,14 +128,14 @@ export class OpportunitiesController {
 
     @UseGuards(JwtAuthGuard)
     @Patch(':id')
-    async patchById(@Request() req, @Param('id') id: string, @Body() body: Record<string, unknown>) {
+    async patchById(@Request() req, @Param('id', new ParseUUIDPipe()) id: string, @Body() body: Record<string, unknown>) {
         const dto = { ...body, id } as UpdateOpportunityDto;
         return this.opportunitiesService.update(req.user.id, dto, req.user.organizationId);
     }
 
     @UseGuards(JwtAuthGuard)
     @Delete(':id')
-    remove(@Request() req, @Param('id') id: string) {
+    remove(@Request() req, @Param('id', new ParseUUIDPipe()) id: string) {
         return this.opportunitiesService.remove(id, req.user.id);
     }
 }

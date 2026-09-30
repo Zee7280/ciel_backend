@@ -275,4 +275,19 @@ describe('OpportunityWorkflowService', () => {
     expect(opp.workflowStage).toBe(WORKFLOW_STAGE.REJECTED);
     expect(opp.adminApprovalStatus).toBe(LINE_STATUS.REJECTED);
   });
+
+  it('partner link on an org-created opportunity does not skip a still-pending faculty gate', () => {
+    const opp = {
+      isStudentCreated: false,
+      facultyApprovalStatus: LINE_STATUS.PENDING,
+      faculty_verified: false,
+      adminApprovalStatus: LINE_STATUS.PENDING,
+      execution_verified: true,
+      status: 'pending_partner',
+    } as Opportunity;
+    service.afterFacultyCreatedPartnerVerified(opp, { id: null, name: 'p@x.org' });
+    expect(opp.status).toBe('pending_faculty');
+    expect(opp.workflowStage).toBe(WORKFLOW_STAGE.PENDING_FACULTY);
+    expect(opp.approvalHistory).toHaveLength(1);
+  });
 });

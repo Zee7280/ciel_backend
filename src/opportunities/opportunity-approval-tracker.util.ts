@@ -36,6 +36,9 @@ type TrackerOpp = {
   adminApprovalStatus?: string | null;
   requiresPartnerApproval?: boolean | null;
   isStudentCreated?: boolean | null;
+  creatorId?: string | null;
+  facultyId?: string | null;
+  organizationId?: string | null;
   faculty_verified?: boolean | null;
   partnerVerified?: boolean | null;
   admin_approved?: boolean | null;
@@ -101,6 +104,19 @@ function partnerCleared(opp: TrackerOpp): boolean {
   );
 }
 
+/**
+ * Who authored the opportunity, derived from stored ownership (no DB column for it):
+ * students carry `isStudentCreated`; a faculty creator is stored as their own `facultyId`
+ * (a *linked* faculty on an org row is a different user); an org-less non-faculty creator can
+ * only be a CIEL PK admin (every other creator role is blocked without an organization).
+ */
+export function opportunityCreatorLabel(opp: TrackerOpp): string {
+  if (opp.isStudentCreated) return 'Student';
+  if (opp.creatorId && opp.facultyId && opp.creatorId === opp.facultyId) return 'Faculty';
+  if (!opp.organizationId) return 'CIEL PK admin';
+  return 'Partner / NGO';
+}
+
 function facultyLabel(opp: TrackerOpp): string {
   const s = opp.supervision && typeof opp.supervision === 'object' ? opp.supervision : {};
   return (
@@ -137,6 +153,7 @@ export function buildOpportunityApprovalTracker(opp: TrackerOpp): OpportunityApp
   const partnerRequired = Boolean(opp.requiresPartnerApproval);
   const draft = isLinkedDraftOpportunity(opp);
   const public_code = communityServicePublicCode(id, opp.createdAt);
+  const creator = opportunityCreatorLabel(opp);
   const route = {
     faculty: `/dashboard/faculty/approvals?opportunity=${encodeURIComponent(id)}&tab=pending`,
     partner: `/dashboard/partner/verify?opportunity=${encodeURIComponent(id)}&tab=pending`,
@@ -189,9 +206,9 @@ export function buildOpportunityApprovalTracker(opp: TrackerOpp): OpportunityApp
     return {
       public_code,
       linked_draft: false,
-      currently_with: 'Student — revision requested',
+      currently_with: `${creator} — revision requested`,
       currently_with_role: 'student',
-      next_step: 'Student updates and resubmits',
+      next_step: `${creator} updates and resubmits`,
       waiting_since: waitingSince(opp),
       route,
       checklist,

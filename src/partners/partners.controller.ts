@@ -15,6 +15,7 @@ import {
   Delete,
   Param,
   Query,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { UsersService } from '../users/users.service';
 import { OrganizationsService } from '../organizations/organizations.service';
@@ -579,7 +580,7 @@ export class PartnersController {
     UserRole.FACULTY,
   )
   @Post('approvals/:id/approve')
-  async approveOpportunity(@Request() req, @Param('id') id: string) {
+  async approveOpportunity(@Request() req, @Param('id', new ParseUUIDPipe()) id: string) {
     const saved = await this.opportunitiesService.partnerDashboardApprove(id, {
       email: req.user.email || '',
       organizationId: req.user.organizationId || null,
@@ -607,7 +608,7 @@ export class PartnersController {
   @Post('approvals/:id/reject')
   async rejectOpportunity(
     @Request() req,
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() body: { reason?: string },
   ) {
     const saved = await this.opportunitiesService.partnerDashboardReject(
@@ -641,7 +642,7 @@ export class PartnersController {
   @Post('approvals/:id/revise')
   async reviseOpportunity(
     @Request() req,
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() body: { reason?: string },
   ) {
     const saved = await this.opportunitiesService.partnerDashboardRevise(
@@ -822,7 +823,7 @@ export class PartnerAliasController {
     UserRole.FACULTY,
   )
   @Post('approvals/:id/approve')
-  async approveOpportunity(@Request() req, @Param('id') id: string) {
+  async approveOpportunity(@Request() req, @Param('id', new ParseUUIDPipe()) id: string) {
     const saved = await this.opportunitiesService.partnerDashboardApprove(id, {
       email: req.user.email || '',
       organizationId: req.user.organizationId || null,
@@ -850,7 +851,7 @@ export class PartnerAliasController {
   @Post('approvals/:id/reject')
   async rejectOpportunity(
     @Request() req,
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() body: { reason?: string },
   ) {
     const saved = await this.opportunitiesService.partnerDashboardReject(
@@ -884,7 +885,7 @@ export class PartnerAliasController {
   @Post('approvals/:id/revise')
   async reviseOpportunity(
     @Request() req,
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() body: { reason?: string },
   ) {
     const saved = await this.opportunitiesService.partnerDashboardRevise(

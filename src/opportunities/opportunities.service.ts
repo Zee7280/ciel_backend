@@ -19,6 +19,11 @@ import {
 } from 'typeorm';
 import { Opportunity } from './entities/opportunity.entity';
 import { Organization } from '../organizations/entities/organization.entity';
+import {
+  CREATE_DEDUPE_IGNORED_STATUSES,
+  CREATE_DEDUPE_WINDOW_MS,
+  createPayloadFingerprint,
+} from './opportunity-create-dedupe.util';
 import { Participation } from '../engagement/entities/participant.entity';
 import {
   CreateOpportunityDto,
@@ -60,6 +65,7 @@ import {
   buildOpportunityApprovalTracker,
   communityServicePublicCode,
 } from './opportunity-approval-tracker.util';
+import { redactOpportunityContactDetails } from './opportunity-secrets.util';
 import { isProjectVerificationAuthRequired } from '../common/project-verification-auth.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { OpportunityApplication } from './entities/opportunity-application.entity';
@@ -88,6 +94,76 @@ export interface OpportunityDetailViewer {
   organizationId?: string | null;
 }
 
+/** Columns only the workflow/approval services may write — never client-patchable. */
+/** Cap on the free-text reason accepted from anonymous magic-link reject/revision calls. */
+export const MAX_TOKEN_DECISION_REASON_LENGTH = 2000;
+
+const SERVER_CONTROLLED_OPPORTUNITY_FIELDS = [
+  'id',
+  'status',
+  'admin_approved',
+  'admin_approval_required',
+  'workflowStage',
+  'workflow_stage',
+  'facultyApprovalStatus',
+  'partnerApprovalStatus',
+  'adminApprovalStatus',
+  'faculty_approval_status',
+  'partner_approval_status',
+  'admin_approval_status',
+  'faculty_verified',
+  'faculty_verification_token',
+  'faculty_verification_status',
+  'partnerToken',
+  'partnerTokenExpiresAt',
+  'facultyTokenExpiresAt',
+  'liaisonToken',
+  'liaisonVerified',
+  'partnerVerified',
+  'requiresPartnerApproval',
+  'execution_verified',
+  'execution_verification_token',
+  'execution_verification_status',
+  'rejectionReason',
+  'rejection_reason',
+  'createFingerprint',
+  'creatorId',
+  'facultyId',
+  'organizationId',
+  'isStudentCreated',
+  'version',
+  'approvalHistory',
+  'attendanceRoutingOverride',
+  'createdAt',
+  'updatedAt',
+] as const;
+
+/** Roles that may POST /opportunities. Students use the student flow; investors have none. */
+const OPPORTUNITY_CREATOR_ROLES: UserRole[] = [
+  UserRole.SUPER_ADMIN,
+  UserRole.FACULTY,
+  UserRole.UNIVERSITY,
+  UserRole.NGO,
+  UserRole.CORPORATE,
+  UserRole.ORGANIZATION_ADMIN,
+];
+
+function stripServerControlledFields<T extends Record<string, unknown>>(
+  patch: T,
+): Partial<T> {
+  const clean: Record<string, unknown> = { ...patch };
+  for (const key of SERVER_CONTROLLED_OPPORTUNITY_FIELDS) delete clean[key];
+  // The validation pipe (`transform: true`) instantiates the DTO with every un-sent field set to
+  // `undefined`. `Object.assign(entity, patch)` would copy those over the loaded entity, so any
+  // logic reading the in-memory row after a partial edit (partner / faculty email resolution,
+  // gate recomputation) would see `supervision` / `partner_organization` / … as missing even
+  // though they are still stored. Only fields the client actually sent may overwrite the row.
+  for (const key of Object.keys(clean)) {
+    if (clean[key] === undefined) delete clean[key];
+  }
+  return clean as Partial<T>;
+}
+
 @Injectable()
 export class OpportunitiesService {
   constructor(
@@ -113,7 +189,7 @@ export class OpportunitiesService {
     return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email);
   }
 
-  private normalizeEmail(s?: string) {
+  private normalizeEmail(s?: string | null) {
     return (s || '').trim().toLowerCase();
   }
 
@@ -424,7 +500,6 @@ export class OpportunitiesService {
     }
 
     return {
-      opportunityId: opp.id,
       publicCode: communityServicePublicCode(opp.id, opp.createdAt),
       mode: opp.mode || undefined,
       typesLine: opp.types?.length ? opp.types.join(', ') : undefined,
@@ -447,6 +522,76 @@ export class OpportunitiesService {
       facultyAuthorName: meta.facultyAuthorName,
       facultyAuthorEmail: meta.facultyAuthorEmail,
     };
+  }
+
+  /**
+   * Public magic-link tokens: must be a non-empty string of URL-safe chars (randomUUID is 36).
+   * TypeORM silently DROPS `where: { col: undefined }`, which would match an arbitrary row, so
+   * every token entry point normalizes first. Malformed input gets the same generic 404 as an
+   * unknown token so existence is never leaked.
+   */
+  private normalizeVerificationToken(token: unknown): string {
+    if (
+      typeof token !== 'string' ||
+      !/^[A-Za-z0-9_-]{1,128}$/.test(token.trim())
+    ) {
+      throw new NotFoundException('Invalid or expired verification link.');
+    }
+    return token.trim();
+  }
+
+  private normalizeDecisionReason(reason: unknown): string | undefined {
+    if (reason === undefined || reason === null) return undefined;
+    if (typeof reason !== 'string') {
+      throw new BadRequestException('Reason must be text.');
+    }
+    const r = reason.trim();
+    if (r.length > MAX_TOKEN_DECISION_REASON_LENGTH) {
+      throw new BadRequestException(
+        `Reason must be at most ${MAX_TOKEN_DECISION_REASON_LENGTH} characters.`,
+      );
+    }
+    return r || undefined;
+  }
+
+  /** Like normalizeDecisionReason, but a trimmed non-empty reason is mandatory (400 otherwise). */
+  private requireDecisionReason(reason: unknown): string {
+    const r = this.normalizeDecisionReason(reason);
+    if (!r) {
+      throw new BadRequestException(
+        'A reason is required (it is shown to the creator so they know what to change).',
+      );
+    }
+    return r;
+  }
+
+  /** Expired link → identical generic 404 as an unknown token. Null expiry = no expiry. */
+  private assertVerificationLinkNotExpired(
+    expiresAt: Date | string | null | undefined,
+  ): void {
+    if (!expiresAt) return;
+    const t = new Date(expiresAt).getTime();
+    if (Number.isFinite(t) && t < Date.now()) {
+      throw new NotFoundException('Invalid or expired verification link.');
+    }
+  }
+
+  /** Rejected / revision / draft / closed rows can never be actioned through an emailed link. */
+  private isClosedForTokenAction(opp: Opportunity): boolean {
+    const status = String(opp.status || '').toLowerCase();
+    return (
+      opp.workflowStage === WORKFLOW_STAGE.REJECTED ||
+      opp.workflowStage === WORKFLOW_STAGE.REVISION ||
+      ['rejected', 'revision', 'draft', 'closed', 'cancelled', 'canceled', 'completed', 'archived'].includes(status)
+    );
+  }
+
+  private assertOpenForTokenAction(opp: Opportunity): void {
+    if (this.isClosedForTokenAction(opp)) {
+      throw new BadRequestException(
+        'This opportunity is not awaiting action and can no longer be actioned via this link.',
+      );
+    }
   }
 
   private verificationAuthRequired(): boolean {
@@ -777,9 +922,8 @@ export class OpportunitiesService {
       opp.status = WORKFLOW_STAGE.PENDING_PARTNER;
       opp.partnerApprovalStatus = LINE_STATUS.PENDING;
       opp.partnerVerified = false;
-      if (partnerEmailChanged || !opp.partnerToken) {
-        opp.partnerToken = randomUUID();
-      }
+      // Fresh link per re-review round; the previous one stops resolving.
+      opp.partnerToken = randomUUID();
       opp.adminApprovalStatus = LINE_STATUS.PENDING;
       opp.admin_approved = false;
       return { notifyFaculty: false, notifyPartner: true };
@@ -1095,8 +1239,34 @@ export class OpportunitiesService {
     }
   }
 
+  /** Contact emails on the org blocks drive verification mails — reject malformed ones up front
+   * (and never let a raw API call skip the form's own check). */
+  private validateOrganizationContacts(dto: {
+    executing_organization?: any;
+    partner_organization?: any;
+  }) {
+    for (const [key, block] of [
+      ['executing_organization', dto.executing_organization],
+      ['partner_organization', dto.partner_organization],
+    ] as const) {
+      const email = block?.official_email;
+      if (email == null || email === '') continue;
+      if (typeof email !== 'string' || email.length > 254 || !this.isValidEmail(email.trim())) {
+        throw new BadRequestException(`${key}.official_email must be a valid email`);
+      }
+    }
+  }
+
   private validateSupervision(supervision: any) {
     if (!supervision) return;
+    if (
+      supervision.whatsapp_e164 &&
+      !/^\+[1-9]\d{7,14}$/.test(String(supervision.whatsapp_e164).trim())
+    ) {
+      throw new BadRequestException(
+        'supervision.whatsapp_e164 must be in international format, e.g. +923001234567',
+      );
+    }
     if (supervision.contact && !this.isValidEmail(supervision.contact)) {
       throw new BadRequestException(
         'supervision.contact must be a valid email',
@@ -1385,6 +1555,17 @@ export class OpportunitiesService {
   /** Whether CIEL admin final-approve may run without skipping required gates. */
   private isOpportunityReadyForAdminFinalApprove(opp: Opportunity): boolean {
     if (String(opp.status || '').toLowerCase() === 'draft') return false;
+    // A rejected row or one CIEL PK sent back for revision is not in the approval queue: it must
+    // be edited and resubmitted by its creator first (student-created rows already enforced this
+    // through the stage check below; org / faculty rows used to be approvable straight from
+    // `rejected` / `revision`, skipping the creator's fix and any reviewer that rejected it).
+    if (
+      opp.workflowStage === WORKFLOW_STAGE.REJECTED ||
+      opp.workflowStage === WORKFLOW_STAGE.REVISION ||
+      ['rejected', 'revision'].includes(String(opp.status || '').toLowerCase())
+    ) {
+      return false;
+    }
     // Executing-org portal confirm must always finish before CIEL final approve —
     // never trust a client-supplied `admin_approval_required` to skip this gate.
     if (opp.execution_verification_token && !opp.execution_verified) {
@@ -1582,7 +1763,10 @@ export class OpportunitiesService {
     }
   }
 
-  private async sendPartnerApprovalEmail(opportunity: Opportunity): Promise<boolean> {
+  private async sendPartnerApprovalEmail(
+    opportunity: Opportunity,
+    introText?: string,
+  ): Promise<boolean> {
     const partnerEmail = this.resolvePartnerEmailFromOpportunity(opportunity);
     if (!partnerEmail) {
       console.warn(
@@ -1613,8 +1797,9 @@ export class OpportunitiesService {
           path: '/verify/partner',
           returnTo: this.getPartnerApprovalReturnTo(opportunity.id),
           introText:
-            `The faculty supervisor has approved <strong>${this.escHtml(opportunity.title)}</strong>. ` +
-            'Please review the partner execution scope to continue this opportunity in CIEL.',
+            introText ??
+            (`The faculty supervisor has approved <strong>${this.escHtml(opportunity.title)}</strong>. ` +
+              'Please review the partner execution scope to continue this opportunity in CIEL.'),
           ctaLabel: 'Review partner approval',
         },
       );
@@ -1863,7 +2048,15 @@ export class OpportunitiesService {
     if (!user) {
       throw new ForbiddenException('User not found');
     }
+    if (!OPPORTUNITY_CREATOR_ROLES.includes(user.role)) {
+      throw new ForbiddenException(
+        'Your account role is not allowed to create opportunities',
+      );
+    }
     this.ensureProfileComplete(user);
+    if (!createOpportunityDto.title?.trim()) {
+      throw new BadRequestException('Title is required');
+    }
     createOpportunityDto.safety_declaration =
       this.resolveSafetyDeclarationPayload(createOpportunityDto);
     createOpportunityDto.safety_declaration = this.normalizeSafetyDeclaration(
@@ -1871,6 +2064,7 @@ export class OpportunitiesService {
     );
 
     this.validateSupervision(createOpportunityDto.supervision);
+    this.validateOrganizationContacts(createOpportunityDto);
     this.validateSafetyDeclaration(createOpportunityDto.safety_declaration);
     this.validateSubmissionConfirmations(
       createOpportunityDto.submission_confirmations,
@@ -1894,6 +2088,61 @@ export class OpportunitiesService {
         'User must belong to an organization to create opportunities',
       );
     }
+
+    // Idempotency for retried / double-clicked submits: same creator + org + identical payload
+    // inside a short window returns the row already created (no second row, no second emails).
+    // A session advisory lock on a pinned connection (same pattern as the student flow) makes the
+    // check-then-insert atomic per creator.
+    const { draft: _fpDraft, ...fingerprintBody } =
+      createOpportunityDto as CreateOpportunityDto & Record<string, unknown>;
+    const fingerprint = createPayloadFingerprint({
+      creatorId: user.id,
+      organizationId: org?.id ?? null,
+      body: fingerprintBody,
+    });
+    const lockKey = `create_creator_opportunity:${user.id}`;
+    const lockRunner =
+      this.opportunitiesRepository.manager.connection.createQueryRunner();
+    try {
+      await lockRunner.connect();
+      await lockRunner.query('SELECT pg_advisory_lock(hashtext($1))', [lockKey]);
+      try {
+        const recent = await this.opportunitiesRepository
+          .createQueryBuilder('o')
+          .where('o.creatorId = :cid', { cid: user.id })
+          .andWhere('o.createFingerprint = :fp', { fp: fingerprint })
+          .andWhere('o.createdAt >= :since', {
+            since: new Date(Date.now() - CREATE_DEDUPE_WINDOW_MS),
+          })
+          .andWhere('o.status NOT IN (:...ignored)', {
+            ignored: CREATE_DEDUPE_IGNORED_STATUSES,
+          })
+          .orderBy('o.createdAt', 'DESC')
+          .getOne();
+        if (recent) return recent;
+        return await this.finishCreatingCreatorOpportunity(
+          user,
+          org,
+          createOpportunityDto,
+          fingerprint,
+        );
+      } finally {
+        await lockRunner.query('SELECT pg_advisory_unlock(hashtext($1))', [lockKey]);
+      }
+    } finally {
+      await lockRunner.release();
+    }
+  }
+
+  private async finishCreatingCreatorOpportunity(
+    user: User,
+    org: { id: string } | null,
+    createOpportunityDto: CreateOpportunityDto,
+    createFingerprint: string,
+  ) {
+    const userId = user.id;
+    const isFaculty = user.role === UserRole.FACULTY;
+    const isCielAdmin = user.role === UserRole.SUPER_ADMIN;
 
     const hasExecContactEmail = !!this.normalizeEmail(
       typeof createOpportunityDto.executing_organization?.official_email ===
@@ -2000,6 +2249,7 @@ export class OpportunitiesService {
       organizationId: org?.id || null,
       facultyId: user.role === UserRole.FACULTY ? user.id : null,
       creatorId: user.id,
+      createFingerprint,
       status: initialStatus,
       admin_approved: false,
       execution_verification_token: executionVerificationToken,
@@ -2162,6 +2412,8 @@ export class OpportunitiesService {
       await this.sendAdminReviewEmail(saved, 'new submission');
     }
 
+    // Never expose the internal dedupe hash in the response.
+    delete saved.createFingerprint;
     return saved;
   }
 
@@ -2396,41 +2648,53 @@ export class OpportunitiesService {
     // multi-tab double-submit so two near-simultaneous requests can't both pass the duplicate-title
     // check before either INSERT lands. Released in the `finally` below no matter how this method
     // exits (including the ConflictException thrown right after acquiring it).
-    await this.opportunitiesRepository.manager.query(
-      'SELECT pg_advisory_lock(hashtext($1))',
-      [`create_student_opportunity:${user.id}`],
-    );
+    //
+    // Session-level locks belong to ONE connection: lock and unlock must run on the same one.
+    // Going through `manager.query` twice draws two arbitrary connections from the pool, so under
+    // load the unlock could hit a different session (a silent no-op) and leave the lock held by a
+    // pooled connection — that student's next create would then block behind it. A dedicated
+    // query runner pins both statements to a single connection.
+    const lockKey = `create_student_opportunity:${user.id}`;
+    const lockRunner =
+      this.opportunitiesRepository.manager.connection.createQueryRunner();
     try {
-      if (!privateCandidate) {
-        const similarOnCreate =
-          await this.findSimilarStudentCreatedOpportunities(
-            dto.title || '',
-            creatorUniversity,
-            { requestingUserId: user.id },
-          );
-        if (similarOnCreate.length > 0) {
-          throw new ConflictException({
-            message:
-              'Disclaimer: A project with a similar title already exists at your university. Only one team lead should create the listing. Other team members must join via Apply Now on the existing opportunity instead of creating another copy.',
-            code: 'SIMILAR_STUDENT_OPPORTUNITY_EXISTS',
-            similarOpportunities: similarOnCreate,
-          });
+      await lockRunner.connect();
+      await lockRunner.query('SELECT pg_advisory_lock(hashtext($1))', [
+        lockKey,
+      ]);
+      try {
+        if (!privateCandidate) {
+          const similarOnCreate =
+            await this.findSimilarStudentCreatedOpportunities(
+              dto.title || '',
+              creatorUniversity,
+              { requestingUserId: user.id },
+            );
+          if (similarOnCreate.length > 0) {
+            throw new ConflictException({
+              message:
+                'Disclaimer: A project with a similar title already exists at your university. Only one team lead should create the listing. Other team members must join via Apply Now on the existing opportunity instead of creating another copy.',
+              code: 'SIMILAR_STUDENT_OPPORTUNITY_EXISTS',
+              similarOpportunities: similarOnCreate,
+            });
+          }
         }
+        return await this.finishCreatingStudentOpportunity(
+          dto,
+          user,
+          privateCandidate,
+          requiresPartner,
+          partnerEmail,
+          restricted,
+          openAllParticipation,
+        );
+      } finally {
+        await lockRunner.query('SELECT pg_advisory_unlock(hashtext($1))', [
+          lockKey,
+        ]);
       }
-      return await this.finishCreatingStudentOpportunity(
-        dto,
-        user,
-        privateCandidate,
-        requiresPartner,
-        partnerEmail,
-        restricted,
-        openAllParticipation,
-      );
     } finally {
-      await this.opportunitiesRepository.manager.query(
-        'SELECT pg_advisory_unlock(hashtext($1))',
-        [`create_student_opportunity:${user.id}`],
-      );
+      await lockRunner.release();
     }
   }
 
@@ -2659,6 +2923,34 @@ export class OpportunitiesService {
     const isCielAdminOwner =
       user.role === UserRole.SUPER_ADMIN && opportunity.creatorId === userId;
 
+    // Same lifecycle rules as the student edit route (StudentsService.updateStudentOpportunity):
+    // this generic endpoint must not be a way around them — a student could otherwise rewrite
+    // their own LIVE listing without re-review, or resurrect a permanently rejected one.
+    if (isStudentOwner) {
+      if (
+        opportunity.admin_approved ||
+        (opportunity.workflowStage === WORKFLOW_STAGE.LIVE &&
+          opportunity.status !== 'draft') ||
+        this.publicLiveStatuses.includes(
+          String(opportunity.status || '').toLowerCase(),
+        )
+      ) {
+        throw new BadRequestException('Approved opportunities cannot be updated');
+      }
+      // CIEL PK / faculty rejections are terminal ("permanently rejected" everywhere the student is
+      // told). A partner-only rejection of a private-candidate listing remains resubmittable here
+      // (see the `studentNeedsResubmit` flow below).
+      if (
+        opportunity.workflowStage === WORKFLOW_STAGE.REJECTED &&
+        (opportunity.adminApprovalStatus === LINE_STATUS.REJECTED ||
+          opportunity.facultyApprovalStatus === LINE_STATUS.REJECTED)
+      ) {
+        throw new BadRequestException(
+          'This opportunity was permanently rejected and cannot be edited. Submit a new opportunity if needed.',
+        );
+      }
+    }
+
     let orgId = organizationId;
     if (!orgId) {
       const org = await this.organizationsService.getMyOrganization(userId);
@@ -2725,8 +3017,12 @@ export class OpportunitiesService {
     const studentResubmitBefore =
       this.snapshotStudentOpportunityResubmit(opportunity);
 
-    const { id: _dtoId, ...patch } =
+    const { id: _dtoId, draft: _draftFlag, ...rawPatch } =
       updateOpportunityDto as UpdateOpportunityDto & { id: string };
+    // PATCH /opportunities/:id passes the raw body (no DTO whitelist), and POST /update's DTO
+    // still exposes `status` — strip every server-controlled column so an edit can never
+    // self-approve, republish, reassign ownership or forge verification tokens.
+    const patch = stripServerControlledFields(rawPatch) as typeof rawPatch;
     Object.assign(opportunity, patch);
     // Only re-check location.pin when this edit is actually touching mode/location — a pre-fix
     // legacy record with no pin must still be editable for unrelated fields (title, dates, ...),
@@ -2779,6 +3075,10 @@ export class OpportunitiesService {
           requiresPartnerApproval,
         );
         opportunity.partnerVerified = !requiresPartnerApproval;
+        if (requiresPartnerApproval) {
+          // New partner review round -> fresh link; the previous one stops resolving.
+          opportunity.partnerToken = randomUUID();
+        }
       } else {
         // Was previously live/approved and is now resubmitting after a rejection or revision
         // request — only rewind the specific line that actually needs re-review. An already
@@ -2804,9 +3104,8 @@ export class OpportunitiesService {
           opportunity.requiresPartnerApproval = true;
           opportunity.partnerApprovalStatus = LINE_STATUS.PENDING;
           opportunity.partnerVerified = false;
-          if (partnerEmailChanged || !opportunity.partnerToken) {
-            opportunity.partnerToken = randomUUID();
-          }
+          // Every re-review round gets a fresh link; the previous one stops resolving.
+          opportunity.partnerToken = randomUUID();
           opportunity.adminApprovalStatus = LINE_STATUS.PENDING;
           opportunity.workflowStage = WORKFLOW_STAGE.PENDING_PARTNER;
           opportunity.status = 'pending_partner';
@@ -2896,33 +3195,68 @@ export class OpportunitiesService {
       );
     }
 
-    // Partner / NGO org member: after admin (or partner) rejection, saving edits resubmits into review queues.
+    // Partner / NGO org member: after a rejection OR a revision request (CIEL PK, partner or
+    // linked faculty), saving edits resubmits into the review queue that flagged it. A revision
+    // request used to be ignored here, leaving the row parked in `revision` forever.
     const isPartnerOrgMemberUpdate =
       !isFacultyOwner &&
       !!orgId &&
       opportunity.organizationId === orgId &&
       !rejectedResubmitSnapshot.isStudentCreated;
 
-    if (rejectedResubmitSnapshot.wasRejected && isPartnerOrgMemberUpdate) {
+    let notifyFacultyAfterOrgResubmit = false;
+    let notifyPartnerAfterOrgResubmit = false;
+    if (
+      (rejectedResubmitSnapshot.wasRejected ||
+        rejectedResubmitSnapshot.wasRevisionRequested) &&
+      isPartnerOrgMemberUpdate
+    ) {
       opportunity.rejectionReason = null;
       opportunity.admin_approved = false;
       opportunity.version = (opportunity.version || 1) + 1;
 
+      const execBlocking =
+        !!opportunity.execution_verification_token &&
+        !opportunity.execution_verified;
+      // The linked faculty's own reject / revision must send the row back to that faculty — never
+      // straight to CIEL PK, which can neither approve it (faculty line still flagged) nor act on
+      // the faculty's behalf, so the row would be stuck for everyone.
+      const needsFacultyReverify =
+        (opportunity.facultyApprovalStatus === LINE_STATUS.REJECTED ||
+          opportunity.facultyApprovalStatus === LINE_STATUS.REVISION_REQUESTED) &&
+        !!this.getFacultyEmailFromOpportunity(opportunity);
       const needsPartnerReverify =
         opportunity.requiresPartnerApproval &&
-        (rejectedResubmitSnapshot.partnerLineRejected ||
-          opportunity.partnerApprovalStatus === LINE_STATUS.REJECTED);
+        (rejectedResubmitSnapshot.partnerLineFlagged ||
+          opportunity.partnerApprovalStatus === LINE_STATUS.REJECTED ||
+          opportunity.partnerApprovalStatus === LINE_STATUS.REVISION_REQUESTED);
 
-      if (needsPartnerReverify) {
+      if (needsFacultyReverify) {
+        opportunity.facultyApprovalStatus = LINE_STATUS.PENDING;
+        opportunity.faculty_verified = false;
+        opportunity.faculty_verification_status = WORKFLOW_STAGE.PENDING_FACULTY;
+        opportunity.faculty_verification_token = randomUUID();
+        opportunity.adminApprovalStatus = LINE_STATUS.PENDING;
+        if (execBlocking) {
+          opportunity.status = 'pending_execution';
+          opportunity.execution_verification_status = 'pending_execution';
+          opportunity.workflowStage = null;
+        } else {
+          opportunity.status = 'pending_faculty';
+          opportunity.workflowStage = WORKFLOW_STAGE.PENDING_FACULTY;
+          notifyFacultyAfterOrgResubmit = true;
+        }
+      } else if (needsPartnerReverify) {
         opportunity.partnerApprovalStatus = LINE_STATUS.PENDING;
         opportunity.partnerVerified = false;
+        // Fresh link for the new review round (expiry is re-stamped by the token-expiry
+        // subscriber); the token from the rejected / revised round stops resolving.
+        opportunity.partnerToken = randomUUID();
         opportunity.workflowStage = WORKFLOW_STAGE.PENDING_PARTNER;
         opportunity.status = 'pending_partner';
         opportunity.adminApprovalStatus = LINE_STATUS.PENDING;
-      } else if (
-        opportunity.execution_verification_token &&
-        !opportunity.execution_verified
-      ) {
+        notifyPartnerAfterOrgResubmit = true;
+      } else if (execBlocking) {
         opportunity.status = 'pending_execution';
         opportunity.execution_verification_status = 'pending_execution';
         opportunity.workflowStage = null;
@@ -2944,7 +3278,20 @@ export class OpportunitiesService {
       }
     }
 
-    return this.opportunitiesRepository.save(opportunity);
+    const savedOpportunity = await this.opportunitiesRepository.save(opportunity);
+    if (notifyFacultyAfterOrgResubmit) {
+      await this.notifyFacultyForStudentOpportunityVerification(savedOpportunity);
+    }
+    if (notifyPartnerAfterOrgResubmit) {
+      // sendPartnerApprovalEmail swallows mail errors (returns false) — a flaky SMTP never
+      // fails the creator's save.
+      await this.sendPartnerApprovalEmail(
+        savedOpportunity,
+        `The organization updated <strong>${this.escHtml(savedOpportunity.title)}</strong> after your earlier feedback and it needs your review again. ` +
+          'Please review the partner execution scope to continue this opportunity in CIEL.',
+      );
+    }
+    return savedOpportunity;
   }
 
   /**
@@ -3218,8 +3565,11 @@ export class OpportunitiesService {
     const {
       draft: _draftFlag,
       id: _dtoId,
-      ...fields
+      ...rawFields
     } = dto as Record<string, unknown> & { draft?: unknown; id?: unknown };
+    // `POST /student/opportunity/:id` hands the raw request body to this method (no DTO whitelist),
+    // so a draft save must never be able to write approval / ownership / token columns.
+    const fields = stripServerControlledFields(rawFields);
     const title =
       typeof fields.title === 'string' && fields.title.trim()
         ? fields.title.trim()
@@ -3279,6 +3629,39 @@ export class OpportunitiesService {
       query.andWhere('("opportunity"."creatorId")::text = :creatorMe', {
         creatorMe: userId,
       });
+    }
+
+    // An unscoped list (no `partner_id`, not `created_by=me`) is a directory browse. Only CIEL PK
+    // admin may see the whole pipeline; everyone else gets the same set the public directory
+    // exposes — otherwise any signed-in user (a student, say) could enumerate other people's
+    // drafts, pending and rejected submissions.
+    const isScopedList =
+      filters?.created_by === 'me' ||
+      filters?.creator_id === 'me' ||
+      !!filters?.partner_id;
+    let redactContacts = false;
+    if (!isScopedList) {
+      const requester = await this.usersRepository.findOne({
+        where: { id: userId },
+        select: ['id', 'role'],
+      });
+      if (requester?.role !== UserRole.SUPER_ADMIN) {
+        redactContacts = true;
+        query
+          .andWhere('opportunity.admin_approved = :liveApproved', {
+            liveApproved: true,
+          })
+          .andWhere("LOWER(COALESCE(opportunity.status, '')) <> :draftOnly", {
+            draftOnly: 'draft',
+          })
+          .andWhere(
+            '(opportunity.status IN (:...liveStatuses) OR opportunity.workflowStage = :liveStage)',
+            {
+              liveStatuses: this.publicLiveStatuses,
+              liveStage: WORKFLOW_STAGE.LIVE,
+            },
+          );
+      }
     }
 
     let filterOrgId: string | null = null;
@@ -3427,7 +3810,7 @@ export class OpportunitiesService {
 
     const opportunities = await query.getMany();
 
-    return Promise.all(
+    const rows = await Promise.all(
       opportunities.map(async (opp) => {
         const occupiedSeats = await this.getOccupiedSeats(opp.id);
         const volunteersRequired = opp.timeline?.volunteers_required || 0;
@@ -3470,6 +3853,7 @@ export class OpportunitiesService {
         };
       }),
     );
+    return redactContacts ? redactOpportunityContactDetails(rows) : rows;
   }
 
   async getPublicOpportunities(filters: any = {}) {
@@ -3523,7 +3907,8 @@ export class OpportunitiesService {
       }),
     );
 
-    return opportunitiesWithCounts;
+    // Anonymous directory: never expose supervisor / partner contact details.
+    return redactOpportunityContactDetails(opportunitiesWithCounts);
   }
 
   async getPublicOpportunityById(id: string) {
@@ -3562,11 +3947,8 @@ export class OpportunitiesService {
     const orgFallback = !opp.organizationId
       ? await this.getFacultyOrgFallback(opp.facultyId)
       : null;
-    return this.buildPublicOpportunityPayload(
-      opp,
-      occupiedSeats,
-      orgFallback,
-      true,
+    return redactOpportunityContactDetails(
+      this.buildPublicOpportunityPayload(opp, occupiedSeats, orgFallback, true),
     );
   }
 
@@ -3690,7 +4072,7 @@ export class OpportunitiesService {
         })
       : null;
 
-    return {
+    const result = {
       ...opportunity,
       creator: creator
         ? {
@@ -3702,6 +4084,9 @@ export class OpportunitiesService {
           }
         : null,
     };
+    // Supervisor / partner / executing-org contact details are for the owner, designated
+    // reviewers and admin only — a plain viewer of a live opportunity does not get them.
+    return privileged ? result : redactOpportunityContactDetails(result);
   }
 
   // Admin methods
@@ -4012,7 +4397,8 @@ export class OpportunitiesService {
     return this.opportunitiesRepository.save(opp);
   }
 
-  async reject(id: string, reason: string, actor?: ApprovalActor) {
+  async reject(id: string, rawReason: string, actor?: ApprovalActor) {
+    const reason = this.requireDecisionReason(rawReason);
     const opp = await this.findOne(id);
     if (!opp) throw new NotFoundException('Opportunity not found');
     this.opportunityWorkflow.afterAdminRejected(opp, reason, actor);
@@ -4029,7 +4415,8 @@ export class OpportunitiesService {
     return saved;
   }
 
-  async revise(id: string, reason: string, actor?: ApprovalActor) {
+  async revise(id: string, rawReason: string, actor?: ApprovalActor) {
+    const reason = this.requireDecisionReason(rawReason);
     const opp = await this.findOne(id);
     if (!opp) throw new NotFoundException('Opportunity not found');
     this.opportunityWorkflow.afterAdminRevision(opp, reason, actor);
@@ -4265,13 +4652,15 @@ export class OpportunitiesService {
    * the faculty/liaison tokens) and return only opportunity-summary data, never participant lists
    * or other students' information.
    */
-  async getPublicPartnerVerificationPreview(token: string) {
+  async getPublicPartnerVerificationPreview(rawToken: string) {
+    const token = this.normalizeVerificationToken(rawToken);
     const opportunity = await this.opportunitiesRepository.findOne({
       where: { partnerToken: token },
     });
     if (!opportunity) {
       throw new NotFoundException('Invalid or expired verification link.');
     }
+    this.assertVerificationLinkNotExpired(opportunity.partnerTokenExpiresAt);
     return {
       title: opportunity.title,
       alreadyVerified: !!opportunity.partnerVerified,
@@ -4293,16 +4682,22 @@ export class OpportunitiesService {
    * already decided.
    */
   async decideOpportunityViaPartnerToken(
-    token: string,
+    rawToken: string,
     action: 'reject' | 'revision',
-    reason?: string,
+    rawReason?: string,
   ) {
+    const token = this.normalizeVerificationToken(rawToken);
+    const reason = this.normalizeDecisionReason(rawReason);
+    if (action !== 'reject' && action !== 'revision') {
+      throw new BadRequestException('action must be "reject" or "revision"');
+    }
     const opportunity = await this.opportunitiesRepository.findOne({
       where: { partnerToken: token },
     });
     if (!opportunity) {
       throw new NotFoundException('Invalid or expired verification link.');
     }
+    this.assertVerificationLinkNotExpired(opportunity.partnerTokenExpiresAt);
     if (opportunity.partnerVerified) {
       throw new BadRequestException(
         'This opportunity was already verified via this link.',
@@ -4316,6 +4711,17 @@ export class OpportunitiesService {
     ) {
       throw new BadRequestException(
         'This opportunity has already been closed and can no longer be actioned via this link.',
+      );
+    }
+    // Not decidable when already in revision (duplicate history), draft/closed, or already live.
+    this.assertOpenForTokenAction(opportunity);
+    if (
+      opportunity.workflowStage === WORKFLOW_STAGE.LIVE ||
+      opportunity.status === 'active' ||
+      opportunity.status === 'live'
+    ) {
+      throw new BadRequestException(
+        'This opportunity is already live and can no longer be actioned via this link.',
       );
     }
     // No authenticated identity here — possession of the emailed token is the credential — so the
@@ -4361,19 +4767,19 @@ export class OpportunitiesService {
    * Public faculty review card. The emailed faculty token is the credential — no login.
    * Returns only the opportunity content the flashcard renders, never tokens or participant lists.
    */
-  async getPublicFacultyVerificationPreview(token: string) {
+  async getPublicFacultyVerificationPreview(rawToken: string) {
+    const token = this.normalizeVerificationToken(rawToken);
     const opportunity = await this.opportunitiesRepository.findOne({
       where: { faculty_verification_token: token },
     });
     if (!opportunity) {
       throw new NotFoundException('Invalid or expired verification link.');
     }
+    this.assertVerificationLinkNotExpired(opportunity.facultyTokenExpiresAt);
     const alreadyVerified = opportunity.isStudentCreated
       ? !!opportunity.faculty_verified
       : opportunity.facultyApprovalStatus === LINE_STATUS.APPROVED;
-    const closed =
-      opportunity.workflowStage === WORKFLOW_STAGE.REJECTED ||
-      opportunity.status === 'rejected';
+    const closed = this.isClosedForTokenAction(opportunity);
     return {
       title: opportunity.title,
       alreadyVerified,
@@ -4402,16 +4808,22 @@ export class OpportunitiesService {
    * scoped to the emailed faculty token. Approve stays on verifyOpportunityToken.
    */
   async decideOpportunityViaFacultyToken(
-    token: string,
+    rawToken: string,
     action: 'reject' | 'revision',
-    reason?: string,
+    rawReason?: string,
   ) {
+    const token = this.normalizeVerificationToken(rawToken);
+    const reason = this.normalizeDecisionReason(rawReason);
+    if (action !== 'reject' && action !== 'revision') {
+      throw new BadRequestException('action must be "reject" or "revision"');
+    }
     const opportunity = await this.opportunitiesRepository.findOne({
       where: { faculty_verification_token: token },
     });
     if (!opportunity) {
       throw new NotFoundException('Invalid or expired verification link.');
     }
+    this.assertVerificationLinkNotExpired(opportunity.facultyTokenExpiresAt);
     const alreadyVerified = opportunity.isStudentCreated
       ? !!opportunity.faculty_verified
       : opportunity.facultyApprovalStatus === LINE_STATUS.APPROVED;
@@ -4428,6 +4840,7 @@ export class OpportunitiesService {
         'This opportunity has already been closed and can no longer be actioned via this link.',
       );
     }
+    this.assertOpenForTokenAction(opportunity);
     if (!this.isAwaitingFacultyDashboardReview(opportunity)) {
       throw new BadRequestException(
         'This opportunity is not awaiting faculty approval',
@@ -4502,9 +4915,10 @@ export class OpportunitiesService {
   }
 
   async verifyOpportunityToken(
-    token: string,
+    rawToken: string,
     user?: { id: string; email: string; role: string },
   ) {
+    const token = this.normalizeVerificationToken(rawToken);
     const opportunity = await this.opportunitiesRepository.findOne({
       where: [
         { faculty_verification_token: token },
@@ -4518,6 +4932,9 @@ export class OpportunitiesService {
     }
 
     this.assertVerificationIdentityIfRequired(opportunity, token, user);
+    if (opportunity.partnerToken === token) {
+      this.assertVerificationLinkNotExpired(opportunity.partnerTokenExpiresAt);
+    }
 
     // Faculty magic link — isolated from partner/liaison tokens (wrong link cannot approve as partner).
     if (opportunity.faculty_verification_token === token) {
@@ -4537,6 +4954,7 @@ export class OpportunitiesService {
           },
         };
       }
+      this.assertOpenForTokenAction(opportunity);
       if (
         !opportunity.faculty_verified ||
         opportunity.status !== 'pending_partner'
@@ -4568,6 +4986,7 @@ export class OpportunitiesService {
     let verifiedRole = '';
 
     if (opportunity.liaisonToken === token && !opportunity.liaisonVerified) {
+      this.assertOpenForTokenAction(opportunity);
       opportunity.liaisonVerified = true;
       verifiedRole = 'Liaison';
 
@@ -4610,6 +5029,16 @@ export class OpportunitiesService {
       !opportunity.partnerVerified &&
       !opportunity.isStudentCreated
     ) {
+      this.assertOpenForTokenAction(opportunity);
+      if (
+        opportunity.workflowStage === WORKFLOW_STAGE.LIVE ||
+        opportunity.status === 'active' ||
+        opportunity.status === 'live'
+      ) {
+        throw new BadRequestException(
+          'This opportunity is already live and can no longer be actioned via this link.',
+        );
+      }
       this.opportunityWorkflow.afterFacultyCreatedPartnerVerified(opportunity, {
         id: null,
         name: this.resolvePartnerEmailFromOpportunity(opportunity) || 'Partner (via link)',
@@ -4638,8 +5067,13 @@ export class OpportunitiesService {
       };
     }
 
-    // Check if both are now verified
-    if (opportunity.liaisonVerified && opportunity.partnerVerified) {
+    // Check if both are now verified. Only the legacy pending_verification row may self-activate
+    // here; any other stage must go through its own workflow gate (never skip CIEL admin).
+    if (
+      opportunity.liaisonVerified &&
+      opportunity.partnerVerified &&
+      opportunity.status === 'pending_verification'
+    ) {
       opportunity.status = 'active';
     }
 
@@ -4680,6 +5114,17 @@ export class OpportunitiesService {
     if (!opp.execution_verification_token) {
       throw new BadRequestException(
         'This opportunity does not require executing-organization confirmation in the portal.',
+      );
+    }
+
+    if (
+      !opp.execution_verified &&
+      (this.isClosedForTokenAction(opp) ||
+        opp.workflowStage === WORKFLOW_STAGE.LIVE ||
+        opp.status === 'active')
+    ) {
+      throw new BadRequestException(
+        'This opportunity is not awaiting executing-organization confirmation.',
       );
     }
 
@@ -4783,9 +5228,10 @@ export class OpportunitiesService {
   }
 
   async verifyFaculty(
-    token: string,
+    rawToken: string,
     user?: { id: string; email: string; role: string },
   ) {
+    const token = this.normalizeVerificationToken(rawToken);
     const opp = await this.opportunitiesRepository.findOne({
       where: { faculty_verification_token: token },
     });
@@ -4793,11 +5239,16 @@ export class OpportunitiesService {
       throw new NotFoundException(
         'Invalid or expired faculty verification token',
       );
+    this.assertVerificationLinkNotExpired(opp.facultyTokenExpiresAt);
     this.assertVerificationIdentityIfRequired(opp, token, user);
     const alreadyDone = opp.isStudentCreated
       ? opp.faculty_verified
       : opp.facultyApprovalStatus === LINE_STATUS.APPROVED;
-    if (!alreadyDone && !this.isAwaitingFacultyDashboardReview(opp)) {
+    if (
+      !alreadyDone &&
+      (this.isClosedForTokenAction(opp) ||
+        !this.isAwaitingFacultyDashboardReview(opp))
+    ) {
       throw new BadRequestException(
         'This opportunity is not awaiting faculty approval',
       );
@@ -5005,7 +5456,12 @@ export class OpportunitiesService {
     const emailMatches =
       !!expectedEmail &&
       this.normalizeEmail(expectedEmail) === this.normalizeEmail(partnerEmail);
+    // On a student-created row `organizationId` is the *host partner's* organisation, so its
+    // members are the reviewers. On an org/faculty/admin-created row it is the CREATOR's own
+    // organisation — accepting it would let the creator (or a colleague) acknowledge the distinct
+    // partner / collaboration gate that exists precisely so someone else confirms it.
     const organizationMatches =
+      opp.isStudentCreated === true &&
       !!organizationId &&
       !!opp.organizationId &&
       organizationId === opp.organizationId;

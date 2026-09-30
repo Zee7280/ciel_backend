@@ -1066,7 +1066,7 @@ export class MailService {
   ): string {
     if (!details) return '';
     const rows: [string, string | undefined][] = [
-      ['Reference ID', details.opportunityId],
+      ['Reference ID', details.publicCode],
       ['Student', details.studentName],
       ['Student university', details.studentUniversity],
       ['Posted by (faculty)', details.facultyAuthorName],

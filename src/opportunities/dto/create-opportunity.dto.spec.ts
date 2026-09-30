@@ -30,3 +30,24 @@ describe('CreateOpportunityDto — draft flag survives whitelist', () => {
     ).rejects.toBeTruthy();
   });
 });
+
+describe('CreateOpportunityDto — field bounds', () => {
+  const pipe = new ValidationPipe({ whitelist: true, transform: true });
+  const metadata: ArgumentMetadata = { type: 'body', metatype: CreateOpportunityDto };
+  const base = { title: 'Ok', types: ['Community Service'], mode: 'Remote', verification_method: [] };
+
+  it('rejects a title over 200 chars', async () => {
+    await expect(pipe.transform({ ...base, title: 'x'.repeat(201) }, metadata)).rejects.toBeTruthy();
+  });
+  it('rejects zero volunteers and negative hours', async () => {
+    await expect(pipe.transform({ ...base, timeline: { volunteers_required: 0 } }, metadata)).rejects.toBeTruthy();
+    await expect(pipe.transform({ ...base, timeline: { expected_hours: -1 } }, metadata)).rejects.toBeTruthy();
+  });
+  it('accepts unicode/emoji titles and in-range numbers', async () => {
+    const r: any = await pipe.transform(
+      { ...base, title: 'صفائی مہم 🌳', timeline: { volunteers_required: 5, expected_hours: 10 } },
+      metadata,
+    );
+    expect(r.title).toBe('صفائی مہم 🌳');
+  });
+});

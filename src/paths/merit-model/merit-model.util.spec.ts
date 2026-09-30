@@ -2,7 +2,7 @@ import { CourseProjectEntry } from '../entities/course-project-entry.entity';
 import { computeMeritCard, extractMeritInputs, scorecard } from './merit-model.util';
 
 function fixture(overrides: Partial<CourseProjectEntry>): CourseProjectEntry {
-    const base: CourseProjectEntry = {
+    const base = {
         id: 'entry-1',
         userId: 'user-1',
         course: null as any,

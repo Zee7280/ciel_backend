@@ -18,6 +18,7 @@ import { User } from '../users/entities/user.entity';
 import { MailModule } from '../mail/mail.module';
 import { StudentReport } from '../reports/entities/student-report.entity';
 import { StudentOpportunitiesController, StudentOpportunitySingularController } from './student-opportunities.controller';
+import { OpportunityTokenExpirySubscriber } from './opportunity-token-expiry.subscriber';
 import { OpportunityWorkflowService } from './opportunity-workflow.service';
 import { VerificationVerifyAuthGuard } from '../auth/verification-verify-auth.guard';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -44,7 +45,7 @@ import { FacultyUniversityScopeModule } from '../faculty-university-scope/facult
         FacultyUniversityScopeModule,
     ],
     controllers: [OpportunitiesController, AdminOpportunitiesController, PublicOpportunitiesController, ParticipantsController, StudentOpportunitiesController, StudentOpportunitySingularController],
-    providers: [OpportunitiesService, OpportunityWorkflowService, OpportunityApplicationsService, VerificationVerifyAuthGuard],
+    providers: [OpportunitiesService, OpportunityWorkflowService, OpportunityApplicationsService, VerificationVerifyAuthGuard, OpportunityTokenExpirySubscriber],
     exports: [OpportunitiesService, OpportunityWorkflowService, OpportunityApplicationsService],
 })
 export class OpportunitiesModule { }

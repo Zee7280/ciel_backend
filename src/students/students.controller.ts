@@ -9,12 +9,15 @@ import {
     Request,
     UseGuards,
     BadRequestException,
+    UseInterceptors,
+    ParseUUIDPipe,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
 import { StudentsService } from './students.service';
+import { RedactOpportunityBrowseInterceptor } from '../opportunities/redact-opportunity-secrets.interceptor';
 import { ApplyOpportunityDto } from './dto/apply-opportunity.dto';
 
 @Controller('students')
@@ -39,6 +42,7 @@ export class StudentsController {
     }
 
     @Get('opportunities')
+    @UseInterceptors(RedactOpportunityBrowseInterceptor)
     getOpportunities(@Request() req, @Query() query) {
         // Same rule as the POST sibling below: a `student_id` in the query is only honoured for the
         // caller themselves or an admin — never as a way to read another student's scoped list.
@@ -55,6 +59,7 @@ export class StudentsController {
     }
 
     @Post('opportunities')
+    @UseInterceptors(RedactOpportunityBrowseInterceptor)
     getOpportunitiesPost(
         @Request() req,
         @Query() query,
@@ -73,12 +78,14 @@ export class StudentsController {
     }
 
     @Get('opportunities/recommended')
+    @UseInterceptors(RedactOpportunityBrowseInterceptor)
     getRecommendedOpportunities(@Request() req) {
         return this.studentsService.getRecommendedOpportunities(req.user.id);
     }
 
     @Get('opportunities/:id')
-    getOpportunityById(@Request() req, @Param('id') id: string) {
+    @UseInterceptors(RedactOpportunityBrowseInterceptor)
+    getOpportunityById(@Request() req, @Param('id', new ParseUUIDPipe()) id: string) {
         return this.studentsService.getOpportunityById(id, req.user.id);
     }
 
@@ -94,7 +101,7 @@ export class StudentsController {
     }
 
     @Post('opportunities/:id/apply')
-    applyToOpportunityById(@Request() req, @Param('id') id: string, @Body() body: any) {
+    applyToOpportunityById(@Request() req, @Param('id', new ParseUUIDPipe()) id: string, @Body() body: any) {
         return this.studentsService.applyToOpportunity(req.user.id, { ...body, opportunityId: id });
     }
 

@@ -9,6 +9,7 @@ import {
   Request,
   UseGuards,
   UseInterceptors,
+  ParseUUIDPipe,
   UploadedFiles,
   UploadedFile,
   BadRequestException,
@@ -29,6 +30,7 @@ import {
   studentReportUploadMulterLimits,
 } from '../common/student-report-file-upload';
 import { S3Service } from '../common/s3.service';
+import { RedactOpportunitySecretsInterceptor } from '../opportunities/redact-opportunity-secrets.interceptor';
 
 @Controller('student')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -94,6 +96,7 @@ export class StudentController {
   }
 
   @Post('opportunity')
+  @UseInterceptors(RedactOpportunitySecretsInterceptor)
   createIndependentProject(
     @Request() req,
     @Body() createOpportunityDto: CreateOpportunityDto,
@@ -122,7 +125,10 @@ export class StudentController {
     UserRole.UNIVERSITY,
     UserRole.ORGANIZATION_ADMIN,
   )
-  remindOpportunityReviewer(@Request() req, @Param('id') id: string) {
+  remindOpportunityReviewer(
+    @Request() req,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
     return this.studentsService.remindOpportunityReviewer(req.user.id, id);
   }
 
@@ -142,9 +148,10 @@ export class StudentController {
 
   @Post('opportunity/:id')
   @Patch('opportunity/:id')
+  @UseInterceptors(RedactOpportunitySecretsInterceptor)
   updateIndependentProject(
     @Request() req,
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body()
     updateOpportunityDto: Partial<CreateOpportunityDto>,
   ) {

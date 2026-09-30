@@ -214,8 +214,8 @@ describe('PathsService — team member invites', () => {
     );
 
     expect(inviteRepo.rows).toHaveLength(2);
-    const stale = inviteRepo.rows.find((r) => r.email === 'bob@test.com');
-    const fresh = inviteRepo.rows.find((r) => r.email === 'bob.k@test.com');
+    const stale = inviteRepo.rows.find((r) => r.email === 'bob@test.com')!;
+    const fresh = inviteRepo.rows.find((r) => r.email === 'bob.k@test.com')!;
     expect(stale.status).toBe('revoked');
     expect(stale.revokedAt).toBeInstanceOf(Date);
     expect(stale.token).toBe(originalToken);
@@ -279,7 +279,7 @@ describe('PathsService — team member invites', () => {
     );
 
     expect(inviteRepo.rows).toHaveLength(2);
-    const active = inviteRepo.rows.find((r) => r.status === 'pending');
+    const active = inviteRepo.rows.find((r) => r.status === 'pending')!;
     expect(active.token).not.toBe('tok-old');
     expect(mailService.sendPathTeamInvite).toHaveBeenCalledTimes(1);
   });

@@ -12,6 +12,7 @@ import {
     Query,
     HttpStatus,
     Header,
+    Redirect,
     NotFoundException,
     UnauthorizedException,
 } from '@nestjs/common';
@@ -104,11 +105,13 @@ export class VerificationsController {
         }
     }
 
-    @UseGuards(VerificationVerifyAuthGuard)
+    /** Legacy email links point here. GET must never change state (mail scanners / prefetchers
+     * follow links), so it only redirects to the frontend confirmation page, which POSTs. */
     @Get('verifications/verify')
     @Header('Cache-Control', 'no-store, no-cache, must-revalidate, private')
     @Header('Pragma', 'no-cache')
-    async verifyOpportunity(@Request() req, @Query('token') token: string) {
+    @Redirect()
+    verifyOpportunityLegacyGet(@Query('token') token: string) {
         const t = typeof token === 'string' ? token.trim() : '';
         if (!t) {
             throw new HttpException(
@@ -116,7 +119,12 @@ export class VerificationsController {
                 HttpStatus.BAD_REQUEST,
             );
         }
-        return this.performOpportunityVerification(t, req.user);
+        const base = (process.env.FRONTEND_URL || process.env.APP_URL || '').replace(/\/+$/, '');
+        const path = process.env.FRONTEND_VERIFY_PATH || '/verify-project';
+        return {
+            url: `${base}${path}?token=${encodeURIComponent(t)}`,
+            statusCode: HttpStatus.FOUND,
+        };
     }
 
     @UseGuards(VerificationVerifyAuthGuard)
@@ -160,7 +168,7 @@ export class VerificationsController {
             return await this.opportunitiesService.decideOpportunityViaPartnerToken(
                 t,
                 body.action,
-                typeof body?.reason === 'string' ? body.reason : undefined,
+                body?.reason,
             );
         } catch (error) {
             if (
@@ -232,7 +240,7 @@ export class VerificationsController {
             return await this.opportunitiesService.decideOpportunityViaFacultyToken(
                 t,
                 body.action,
-                typeof body?.reason === 'string' ? body.reason : undefined,
+                body?.reason,
             );
         } catch (error) {
             if (

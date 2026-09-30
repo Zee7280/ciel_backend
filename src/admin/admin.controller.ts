@@ -13,6 +13,7 @@ import {
   Res,
   NotFoundException,
   BadRequestException,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { AdminMutationAuditInterceptor } from '../audit-logs/admin-mutation-audit.interceptor';
@@ -135,32 +136,52 @@ export class AdminController {
 
   // Opportunity approval routes (duplicate here to handle routing conflicts)
   @Post('opportunities/:id/approve')
-  async approveOpportunity(@Param('id') id: string) {
-    await this.opportunitiesService.approve(id);
+  async approveOpportunity(
+    @Request() req,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    await this.opportunitiesService.approve(id, {
+      id: req.user.id,
+      name: req.user.name,
+    });
     return { success: true, data: {} };
   }
 
   @Patch('opportunities/:id/approve')
-  async approveOpportunityPatch(@Param('id') id: string) {
-    await this.opportunitiesService.approve(id);
+  async approveOpportunityPatch(
+    @Request() req,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    await this.opportunitiesService.approve(id, {
+      id: req.user.id,
+      name: req.user.name,
+    });
     return { success: true, data: {} };
   }
 
   @Post('opportunities/:id/reject')
   async rejectOpportunity(
-    @Param('id') id: string,
+    @Request() req,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() body: { reason: string },
   ) {
-    await this.opportunitiesService.reject(id, body.reason);
+    await this.opportunitiesService.reject(id, body.reason, {
+      id: req.user.id,
+      name: req.user.name,
+    });
     return { success: true, data: {} };
   }
 
   @Post('opportunities/:id/revise')
   async reviseOpportunity(
-    @Param('id') id: string,
+    @Request() req,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() body: { reason: string },
   ) {
-    const saved = await this.opportunitiesService.revise(id, body.reason);
+    const saved = await this.opportunitiesService.revise(id, body.reason, {
+      id: req.user.id,
+      name: req.user.name,
+    });
     return {
       success: true,
       data: {
@@ -172,7 +193,7 @@ export class AdminController {
   }
 
   @Delete('opportunities/:id')
-  removeOpportunity(@Param('id') id: string) {
+  removeOpportunity(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.opportunitiesService.remove(id);
   }
 
@@ -425,7 +446,10 @@ export class AdminController {
         'Body must include until (YYYY-MM-DD) for the new reporting close date.',
       );
     }
-    const data = await this.opportunitiesService.reopenReportingWindow(id, until);
+    const data = await this.opportunitiesService.reopenReportingWindow(
+      id,
+      until,
+    );
     return { success: true, data };
   }
 

@@ -11,6 +11,27 @@ jest.mock('../users/profile-completion.util', () => ({
     getProfileCompletionStatus: () => ({ profile_complete: true, profile_missing_fields: [] }),
 }));
 
+/** Fake EntityManager whose `connection.createQueryRunner()` hands out ONE pinned runner. */
+function lockManager(query: jest.Mock) {
+    const runner = { connect: jest.fn(), query, release: jest.fn() };
+    return { query: jest.fn(), connection: { createQueryRunner: () => runner }, runner };
+}
+
+/** Repo bits POST /opportunities' idempotency guard needs: pinned lock runner + recent-row query. */
+function createDedupeStubs(recent: unknown = null) {
+    const lockQuery = jest.fn().mockResolvedValue(undefined);
+    const dedupeGetOne = jest.fn().mockResolvedValue(recent);
+    const dedupeQb: any = {};
+    for (const m of ['where', 'andWhere', 'orderBy']) dedupeQb[m] = jest.fn(() => dedupeQb);
+    dedupeQb.getOne = dedupeGetOne;
+    return {
+        stubs: { manager: lockManager(lockQuery), createQueryBuilder: jest.fn(() => dedupeQb) },
+        lockQuery,
+        dedupeGetOne,
+        dedupeQb,
+    };
+}
+
 function makeService(opportunitiesRepo: Record<string, unknown>) {
     const noop = {} as any;
     return new OpportunitiesService(
@@ -337,7 +358,7 @@ describe('OpportunitiesService — createStudentOpportunity advisory lock', () =
     it('acquires and releases the per-student advisory lock around the duplicate-title check and create, even on the happy path', async () => {
         const managerQuery = jest.fn().mockResolvedValue(undefined);
         const opportunitiesRepo = {
-            manager: { query: managerQuery },
+            manager: lockManager(managerQuery),
             create: jest.fn((payload: any) => payload),
             save: jest.fn(async (row: any) => ({ ...row, id: 'opp-new' })),
         };
@@ -391,11 +412,16 @@ describe('OpportunitiesService — createStudentOpportunity advisory lock', () =
         expect(managerQuery.mock.calls[0][1]).toEqual(['create_student_opportunity:student-1']);
         expect(managerQuery.mock.calls[1][0]).toContain('pg_advisory_unlock');
         expect(managerQuery.mock.calls[1][1]).toEqual(['create_student_opportunity:student-1']);
+        // lock + unlock go through the ONE pinned query runner (same DB session), which is then
+        // released back to the pool — never through pooled `manager.query` (two arbitrary sessions).
+        expect(opportunitiesRepo.manager.query).not.toHaveBeenCalled();
+        expect(opportunitiesRepo.manager.runner.connect).toHaveBeenCalledTimes(1);
+        expect(opportunitiesRepo.manager.runner.release).toHaveBeenCalledTimes(1);
     });
 
     it('still releases the lock when the duplicate-title check throws', async () => {
         const managerQuery = jest.fn().mockResolvedValue(undefined);
-        const opportunitiesRepo = { manager: { query: managerQuery } };
+        const opportunitiesRepo = { manager: lockManager(managerQuery) };
         const service = makeService(opportunitiesRepo);
         (service as any).usersRepository = {
             findOne: jest.fn().mockResolvedValue({
@@ -846,7 +872,8 @@ describe('OpportunitiesService — create() CIEL PK review requirement is server
     function makeOrgCreatorService() {
         const create = jest.fn((payload) => payload);
         const save = jest.fn((payload) => Promise.resolve({ id: 'new-opp-id', ...payload }));
-        const service = makeService({ create, save, findOne: jest.fn() });
+        const { stubs, lockQuery, dedupeGetOne, dedupeQb } = createDedupeStubs();
+        const service = makeService({ create, save, findOne: jest.fn(), ...stubs });
         (service as any).usersRepository = {
             findOne: jest.fn().mockResolvedValue({ id: 'ngo-user-1', role: 'ngo', email: 'contact@ngo.org' }),
         };
@@ -855,13 +882,46 @@ describe('OpportunitiesService — create() CIEL PK review requirement is server
         };
         (service as any).opportunityWorkflow = new OpportunityWorkflowService();
         (service as any).mailService = { sendAdminOpportunityReviewNeeded: jest.fn() };
-        return { service, save };
+        return { service, save, lockQuery, dedupeGetOne, dedupeQb };
     }
+
+    it.each(['student', 'investor'])('rejects %s accounts on the generic create endpoint (403)', async (role) => {
+        const { service, save } = makeOrgCreatorService();
+        (service as any).usersRepository.findOne = jest
+            .fn()
+            .mockResolvedValue({ id: 'u-1', role, email: 'u@x.org' });
+        await expect(service.create('u-1', minimalOrgCreatorDto())).rejects.toThrow(/not allowed/i);
+        expect(save).not.toHaveBeenCalled();
+    });
+
+    it('rejects a whitespace-only title and persists nothing', async () => {
+        const { service, save } = makeOrgCreatorService();
+        await expect(service.create('ngo-user-1', minimalOrgCreatorDto({ title: '   ' }))).rejects.toThrow(/title/i);
+        expect(save).not.toHaveBeenCalled();
+    });
+
+    it('rejects a malformed executing/partner organization email', async () => {
+        const { service, save } = makeOrgCreatorService();
+        await expect(
+            service.create('ngo-user-1', minimalOrgCreatorDto({ executing_organization: { official_email: 'not-an-email' } })),
+        ).rejects.toThrow(/official_email/);
+        await expect(
+            service.create('ngo-user-1', minimalOrgCreatorDto({ partner_organization: { official_email: 'a@b' } })),
+        ).rejects.toThrow(/official_email/);
+        expect(save).not.toHaveBeenCalled();
+    });
+
+    it('rejects a malformed supervision WhatsApp number', async () => {
+        const { service } = makeOrgCreatorService();
+        await expect(
+            service.create('ngo-user-1', minimalOrgCreatorDto({ supervision: { whatsapp_e164: '0300-1234567' } })),
+        ).rejects.toThrow(/whatsapp/i);
+    });
 
     it('routes to pending_approval even when the client omits admin_approval_required', async () => {
         const { service, save } = makeOrgCreatorService();
 
-        const saved = await service.create('ngo-user-1', minimalOrgCreatorDto());
+        const saved: any = await service.create('ngo-user-1', minimalOrgCreatorDto());
 
         expect(saved.status).toBe('pending_approval');
         expect(save).toHaveBeenCalled();
@@ -876,7 +936,7 @@ describe('OpportunitiesService — create() CIEL PK review requirement is server
     it('routes to pending_approval even when the client explicitly sends admin_approval_required: false', async () => {
         const { service } = makeOrgCreatorService();
 
-        const saved = await service.create(
+        const saved: any = await service.create(
             'ngo-user-1',
             minimalOrgCreatorDto({ admin_approval_required: false }),
         );
@@ -891,7 +951,7 @@ describe('OpportunitiesService — create() CIEL PK review requirement is server
         const { service, save } = makeOrgCreatorService();
         (service as any).mailService.sendFacultyStudentOpportunityVerification = jest.fn();
 
-        const saved = await service.create(
+        const saved: any = await service.create(
             'ngo-user-1',
             minimalOrgCreatorDto({
                 visibility_and_academic_linkage: {
@@ -913,7 +973,7 @@ describe('OpportunitiesService — create() CIEL PK review requirement is server
     it('marks the faculty line not_applicable (never blocks CIEL PK) when no faculty is linked', async () => {
         const { service } = makeOrgCreatorService();
 
-        const saved = await service.create('ngo-user-1', minimalOrgCreatorDto());
+        const saved: any = await service.create('ngo-user-1', minimalOrgCreatorDto());
 
         expect(saved.facultyApprovalStatus).toBe('not_applicable');
         expect(saved.status).toBe('pending_approval');
@@ -925,7 +985,7 @@ describe('OpportunitiesService — create() CIEL PK review requirement is server
     it('ignores a crafted admin_approved:true from the client payload', async () => {
         const { service } = makeOrgCreatorService();
 
-        const saved = await service.create(
+        const saved: any = await service.create(
             'ngo-user-1',
             minimalOrgCreatorDto({ admin_approved: true, status: 'active' }),
         );
@@ -939,7 +999,7 @@ describe('OpportunitiesService — create() CIEL PK review requirement is server
         const { service } = makeOrgCreatorService();
         (service as any).mailService.sendPartnerVerification = jest.fn();
 
-        const saved = await service.create(
+        const saved: any = await service.create(
             'ngo-user-1',
             minimalOrgCreatorDto({
                 partner_organization: {
@@ -962,7 +1022,7 @@ describe('OpportunitiesService — create() CIEL PK review requirement is server
         (service as any).mailService.sendFacultyStudentOpportunityVerification = jest.fn();
         (service as any).mailService.sendExecutingOrganizationVerificationEmail = jest.fn();
 
-        const saved = await service.create(
+        const saved: any = await service.create(
             'ngo-user-1',
             minimalOrgCreatorDto({
                 partner_organization: {
@@ -999,7 +1059,7 @@ describe('OpportunitiesService — Super Admin create skips a second CIEL gate u
     function makeCielAdminService() {
         const create = jest.fn((payload) => payload);
         const save = jest.fn((payload) => Promise.resolve({ id: 'ciel-opp-id', ...payload }));
-        const service = makeService({ create, save, findOne: jest.fn() });
+        const service = makeService({ create, save, findOne: jest.fn(), ...createDedupeStubs().stubs });
         (service as any).usersRepository = {
             findOne: jest.fn().mockResolvedValue({
                 id: 'admin-1',
@@ -1044,7 +1104,7 @@ describe('OpportunitiesService — Super Admin create skips a second CIEL gate u
 
     it('publishes immediately when CIEL Admin names neither a partner nor a faculty stakeholder', async () => {
         const { service } = makeCielAdminService();
-        const saved = await service.create('admin-1', minimalAdminDto());
+        const saved: any = await service.create('admin-1', minimalAdminDto());
         expect(saved.status).toBe('active');
         expect(saved.adminApprovalStatus).toBe('approved');
         expect(saved.admin_approved).toBe(true);
@@ -1053,7 +1113,7 @@ describe('OpportunitiesService — Super Admin create skips a second CIEL gate u
 
     it('does not treat the Super Admin creator email as a faculty stakeholder', async () => {
         const { service } = makeCielAdminService();
-        const saved = await service.create(
+        const saved: any = await service.create(
             'admin-1',
             minimalAdminDto({
                 supervision: { contact: 'admin@ciel.pk', supervisor_name: 'CIEL PK Admin' },
@@ -1066,7 +1126,7 @@ describe('OpportunitiesService — Super Admin create skips a second CIEL gate u
 
     it('waits on a named faculty (not CIEL) without a second admin queue', async () => {
         const { service } = makeCielAdminService();
-        const saved = await service.create(
+        const saved: any = await service.create(
             'admin-1',
             minimalAdminDto({
                 supervision: { contact: 'hina.malik@bnu.edu.pk', supervisor_name: 'Dr. Hina Malik' },
@@ -1083,7 +1143,7 @@ describe('OpportunitiesService — Super Admin create skips a second CIEL gate u
 
     it('waits on a named partner from the faculty-form collaboration payload without a second admin queue', async () => {
         const { service } = makeCielAdminService();
-        const saved = await service.create(
+        const saved: any = await service.create(
             'admin-1',
             minimalAdminDto({
                 external_partner_collaboration: {
@@ -1109,7 +1169,7 @@ describe('OpportunitiesService — Super Admin create skips a second CIEL gate u
 
     it('does not email the partner until faculty has approved when both stakeholders are named', async () => {
         const { service } = makeCielAdminService();
-        const saved = await service.create(
+        const saved: any = await service.create(
             'admin-1',
             minimalAdminDto({
                 external_partner_collaboration: {
@@ -1827,6 +1887,71 @@ describe('OpportunitiesService — update() faculty-owned opportunity resubmit s
         expect((saved as any).status).toBe('pending_partner');
         expect((saved as any).workflowStage).toBe('pending_partner');
     });
+
+    it('resubmit into pending_partner issues a fresh partner token and re-emails the partner; a mail failure does not fail the save', async () => {
+        const opp = makeFacultyOpp({
+            status: 'revision',
+            workflowStage: 'revision',
+            admin_approved: false,
+            adminApprovalStatus: 'pending',
+            partnerApprovalStatus: 'revision_requested',
+            partnerVerified: false,
+        });
+        const service = makeFacultyService(opp);
+        const sendPartnerVerification = jest.fn().mockRejectedValue(new Error('smtp down'));
+        (service as any).mailService = { sendPartnerVerification };
+        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+
+        const saved = await service.update('faculty-1', { id: 'fac-opp-1', title: 'Addressed partner feedback' } as any);
+
+        expect((saved as any).status).toBe('pending_partner');
+        expect((saved as any).partnerToken).toBeTruthy();
+        expect((saved as any).partnerToken).not.toBe('existing-partner-token');
+        expect(sendPartnerVerification).toHaveBeenCalledTimes(1);
+        expect(sendPartnerVerification.mock.calls[0][0]).toBe('partner@org.com');
+        expect(sendPartnerVerification.mock.calls[0][2]).toBe((saved as any).partnerToken);
+    });
+});
+
+describe('OpportunitiesService — update() partner token rotation (scoped-reset branch)', () => {
+    it('a live row whose partner line was flagged gets a fresh token and a new partner email on resubmit', async () => {
+        const opp = {
+            id: 'fac-opp-9',
+            title: 'T',
+            creatorId: 'faculty-1',
+            facultyId: 'faculty-1',
+            isStudentCreated: false,
+            status: 'active',
+            workflowStage: 'live',
+            admin_approved: true,
+            adminApprovalStatus: 'approved',
+            facultyApprovalStatus: 'approved',
+            faculty_verified: true,
+            requiresPartnerApproval: true,
+            partnerApprovalStatus: 'rejected',
+            partnerVerified: false,
+            partnerToken: 'old-token',
+            partner_organization: { official_email: 'partner@org.com' },
+            execution_verification_token: null,
+            execution_verified: true,
+        } as unknown as Opportunity;
+        const service = makeService({
+            findOne: jest.fn().mockResolvedValue(opp),
+            save: jest.fn(async (row: Opportunity) => row),
+        });
+        (service as any).usersRepository = { findOne: jest.fn().mockResolvedValue({ id: 'faculty-1', role: 'faculty' }) };
+        (service as any).organizationsService = { getMyOrganization: jest.fn().mockResolvedValue(null) };
+        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+        const sendPartnerVerification = jest.fn().mockResolvedValue(true);
+        (service as any).mailService = { sendPartnerVerification };
+
+        const saved: any = await service.update('faculty-1', { id: 'fac-opp-9', title: 'T2' } as any);
+
+        expect(saved.status).toBe('pending_partner');
+        expect(saved.partnerToken).not.toBe('old-token');
+        expect(sendPartnerVerification).toHaveBeenCalledTimes(1);
+        expect(sendPartnerVerification.mock.calls[0][2]).toBe(saved.partnerToken);
+    });
 });
 
 describe('OpportunitiesService — revise() now supports non-student-created opportunities before first admin approval', () => {
@@ -1954,3 +2079,422 @@ describe('OpportunitiesService — approval actions record actor + timestamp + v
     });
 });
 
+
+describe('OpportunitiesService — update() strips server-controlled fields (mass-assignment guard)', () => {
+    const forged = {
+        status: 'active',
+        admin_approved: true,
+        workflowStage: 'live',
+        adminApprovalStatus: 'approved',
+        facultyApprovalStatus: 'approved',
+        partnerApprovalStatus: 'approved',
+        partnerVerified: true,
+        execution_verified: true,
+        creatorId: 'attacker',
+        organizationId: 'other-org',
+        isStudentCreated: true,
+        rejectionReason: 'x',
+        version: 99,
+        approvalHistory: [{ forged: true }],
+        partnerToken: 'known-token',
+        faculty_verification_token: 'known-token',
+    };
+
+    function makeOrgService() {
+        const opp = {
+            id: 'org-opp-1',
+            creatorId: 'ngo-1',
+            organizationId: 'org-1',
+            isStudentCreated: false,
+            status: 'pending_approval',
+            workflowStage: 'pending_admin',
+            admin_approved: false,
+            adminApprovalStatus: 'pending',
+            version: 1,
+            approvalHistory: [],
+            title: 'Old title',
+        } as unknown as Opportunity;
+        const findOne = jest.fn().mockResolvedValue(opp);
+        const save = jest.fn(async (row: Opportunity) => row);
+        const service = makeService({ findOne, save });
+        (service as any).usersRepository = {
+            findOne: jest.fn().mockResolvedValue({ id: 'ngo-1', role: 'ngo' }),
+        };
+        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+        return { service, opp, save };
+    }
+
+    it('keeps legitimate edits but ignores forged approval/ownership fields', async () => {
+        const { service, opp } = makeOrgService();
+        await service.update('ngo-1', { id: 'org-opp-1', title: 'New title', ...forged } as any, 'org-1');
+        expect(opp.title).toBe('New title');
+        expect(opp.status).toBe('pending_approval');
+        expect(opp.admin_approved).toBe(false);
+        expect(opp.workflowStage).toBe('pending_admin');
+        expect(opp.adminApprovalStatus).toBe('pending');
+        expect(opp.creatorId).toBe('ngo-1');
+        expect(opp.organizationId).toBe('org-1');
+        expect(opp.isStudentCreated).toBe(false);
+        expect(opp.version).toBe(1);
+        expect(opp.approvalHistory).toEqual([]);
+        expect((opp as any).partnerToken).toBeUndefined();
+    });
+
+    it('rejects a user from another organization with 403', async () => {
+        const { service } = makeOrgService();
+        await expect(
+            service.update('ngo-1', { id: 'org-opp-1', title: 'Hijack' } as any, 'someone-elses-org'),
+        ).rejects.toThrow(/access/i);
+    });
+});
+
+describe('OpportunitiesService — public token hardening', () => {
+    const past = new Date(Date.now() - 60_000);
+    const build = (opp: Partial<Opportunity> | null) => {
+        const findOne = jest.fn().mockResolvedValue(opp);
+        const save = jest.fn(async (o: Opportunity) => o);
+        const service = makeService({ findOne, save });
+        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+        return { service, findOne, save };
+    };
+
+    it.each([undefined, null, '', '   ', 'a'.repeat(200), 'tok en', "x' OR 1=1", ['a'] as any, { a: 1 } as any])(
+        'malformed token %p gets the generic 404 without querying the DB',
+        async (bad) => {
+            const { service, findOne } = build(null);
+            await expect(service.verifyFaculty(bad as any)).rejects.toThrow(NotFoundException);
+            await expect(service.verifyOpportunityToken(bad as any)).rejects.toThrow(NotFoundException);
+            await expect(service.getPublicPartnerVerificationPreview(bad as any)).rejects.toThrow(NotFoundException);
+            await expect(service.getPublicFacultyVerificationPreview(bad as any)).rejects.toThrow(NotFoundException);
+            await expect(service.decideOpportunityViaPartnerToken(bad as any, 'reject')).rejects.toThrow(NotFoundException);
+            await expect(service.decideOpportunityViaFacultyToken(bad as any, 'reject')).rejects.toThrow(NotFoundException);
+            expect(findOne).not.toHaveBeenCalled();
+        },
+    );
+
+    it('expired partner token is rejected on preview, decision and verify with the same 404', async () => {
+        const opp = { id: 'o', partnerToken: 'ptok', partnerVerified: false, partnerTokenExpiresAt: past, status: 'pending_partner' } as any;
+        const { service, save } = build(opp);
+        await expect(service.getPublicPartnerVerificationPreview('ptok')).rejects.toThrow(NotFoundException);
+        await expect(service.decideOpportunityViaPartnerToken('ptok', 'reject')).rejects.toThrow(NotFoundException);
+        await expect(service.verifyOpportunityToken('ptok')).rejects.toThrow(NotFoundException);
+        expect(save).not.toHaveBeenCalled();
+    });
+
+    it('expired faculty token is rejected everywhere and does not mutate', async () => {
+        const opp = { id: 'o', faculty_verification_token: 'ftok', facultyTokenExpiresAt: past, creatorId: 'c', status: 'pending_faculty', workflowStage: 'pending_faculty' } as any;
+        const { service, save } = build(opp);
+        await expect(service.getPublicFacultyVerificationPreview('ftok')).rejects.toThrow(NotFoundException);
+        await expect(service.decideOpportunityViaFacultyToken('ftok', 'reject')).rejects.toThrow(NotFoundException);
+        await expect(service.verifyFaculty('ftok')).rejects.toThrow(NotFoundException);
+        expect(save).not.toHaveBeenCalled();
+    });
+
+    it('rejects over-long or non-string decision reasons without state change', async () => {
+        const opp = { id: 'o', partnerToken: 'ptok', faculty_verification_token: 'ftok', partnerVerified: false, isStudentCreated: true, creatorId: 'c', status: 'pending_partner', workflowStage: 'pending_partner', approvalHistory: [] } as any;
+        const { service, save } = build(opp);
+        await expect(service.decideOpportunityViaPartnerToken('ptok', 'reject', 'x'.repeat(2001))).rejects.toThrow(BadRequestException);
+        await expect(service.decideOpportunityViaFacultyToken('ftok', 'reject', 123 as any)).rejects.toThrow(BadRequestException);
+        expect(save).not.toHaveBeenCalled();
+        expect(opp.approvalHistory).toHaveLength(0);
+    });
+
+    it('faculty token cannot approve after a partner rejected the opportunity (stale facultyApprovalStatus)', async () => {
+        const opp = { id: 'o', faculty_verification_token: 'ftok', isStudentCreated: true, faculty_verified: false, creatorId: 'c', facultyApprovalStatus: 'pending', workflowStage: 'rejected', status: 'rejected', approvalHistory: [] } as any;
+        const { service, save } = build(opp);
+        await expect(service.verifyFaculty('ftok')).rejects.toThrow(BadRequestException);
+        await expect(service.verifyOpportunityToken('ftok')).rejects.toThrow(BadRequestException);
+        expect(save).not.toHaveBeenCalled();
+        expect(opp.approvalHistory).toHaveLength(0);
+    });
+
+    it('faculty token cannot approve or decide while the opportunity is in revision', async () => {
+        const opp = { id: 'o', faculty_verification_token: 'ftok', isStudentCreated: true, faculty_verified: false, creatorId: 'c', faculty_verification_status: 'pending_faculty', facultyApprovalStatus: 'revision_requested', workflowStage: 'revision', status: 'revision', approvalHistory: [] } as any;
+        const { service, save } = build(opp);
+        await expect(service.verifyFaculty('ftok')).rejects.toThrow(BadRequestException);
+        await expect(service.decideOpportunityViaFacultyToken('ftok', 'revision', 'again')).rejects.toThrow(BadRequestException);
+        expect(save).not.toHaveBeenCalled();
+        expect(opp.approvalHistory).toHaveLength(0);
+    });
+
+    it('partner token cannot request revision twice or act on a live opportunity', async () => {
+        const inRevision = { id: 'o', partnerToken: 'ptok', partnerVerified: false, isStudentCreated: true, workflowStage: 'revision', status: 'revision', approvalHistory: [] } as any;
+        const a = build(inRevision);
+        await expect(a.service.decideOpportunityViaPartnerToken('ptok', 'revision', 'r')).rejects.toThrow(BadRequestException);
+        expect(a.save).not.toHaveBeenCalled();
+        expect(inRevision.approvalHistory).toHaveLength(0);
+
+        const live = { id: 'o', partnerToken: 'ptok', partnerVerified: false, isStudentCreated: true, workflowStage: 'live', status: 'active', approvalHistory: [] } as any;
+        const b = build(live);
+        await expect(b.service.decideOpportunityViaPartnerToken('ptok', 'reject')).rejects.toThrow(BadRequestException);
+
+    });
+
+    it('legacy partner token cannot approve a rejected, draft, revision or live opportunity', async () => {
+        for (const [status, workflowStage] of [['rejected', 'rejected'], ['draft', null], ['revision', 'revision'], ['active', 'live']] as const) {
+            const opp = { id: 'o', partnerToken: 'ptok', partnerVerified: false, isStudentCreated: false, status, workflowStage, approvalHistory: [] } as any;
+            const { service, save } = build(opp);
+            await expect(service.verifyOpportunityToken('ptok')).rejects.toThrow(BadRequestException);
+            expect(save).not.toHaveBeenCalled();
+            expect(opp.partnerVerified).toBe(false);
+            expect(opp.approvalHistory).toHaveLength(0);
+        }
+    });
+
+    it('student partner token cannot approve a rejected opportunity even if faculty_verified/status are stale', async () => {
+        const opp = { id: 'o', partnerToken: 'ptok', partnerVerified: false, isStudentCreated: true, faculty_verified: true, status: 'rejected', workflowStage: 'rejected', approvalHistory: [] } as any;
+        const { service, save } = build(opp);
+        await expect(service.verifyOpportunityToken('ptok')).rejects.toThrow(BadRequestException);
+        expect(save).not.toHaveBeenCalled();
+    });
+
+    it('liaison token cannot flip a rejected opportunity or activate outside pending_verification', async () => {
+        const rejected = { id: 'o', liaisonToken: 'ltok', liaisonVerified: false, status: 'rejected', workflowStage: 'rejected' } as any;
+        const a = build(rejected);
+        await expect(a.service.verifyOpportunityToken('ltok')).rejects.toThrow(BadRequestException);
+        expect(rejected.liaisonVerified).toBe(false);
+
+        const pending = { id: 'o', title: 'T', liaisonToken: 'ltok', liaisonVerified: false, partnerVerified: true, status: 'pending_approval', workflowStage: 'pending_admin', facultyId: 'f' } as any;
+        const b = build(pending);
+        (b.service as any).assignFacultyIdFromSupervisionIfMissing = jest.fn();
+        await b.service.verifyOpportunityToken('ltok');
+        expect(pending.status).toBe('pending_approval');
+    });
+
+    it('executing-org confirm is refused for a rejected or live opportunity', async () => {
+        const opp = { id: 'o', execution_verification_token: 'x', execution_verified: false, status: 'rejected', workflowStage: 'rejected' } as any;
+        const service = makeService({ findOne: jest.fn().mockResolvedValue(opp), save: jest.fn() });
+        (service as any).usersRepository = { findOne: jest.fn().mockResolvedValue({ id: 'u', email: 'a@b.org' }) };
+        (service as any).findOne = jest.fn().mockResolvedValue(opp);
+        await expect(service.verifyExecutingOrganizationForUser('u', 'a@b.org', 'o')).rejects.toThrow(BadRequestException);
+    });
+
+    it('a valid partner-token approval records actor+version and is not repeatable', async () => {
+        const opp = { id: 'o', title: 'T', partnerToken: 'ptok', partnerVerified: false, isStudentCreated: true, faculty_verified: true, status: 'pending_partner', workflowStage: 'pending_partner', version: 3, approvalHistory: [] } as any;
+        const { service, save } = build(opp);
+        (service as any).assignFacultyIdFromSupervisionIfMissing = jest.fn();
+        (service as any).handlePartnerApprovedSideEffects = jest.fn();
+        await service.verifyOpportunityToken('ptok');
+        expect(opp.status).toBe('pending_approval');
+        expect(opp.workflowStage).toBe('pending_admin');
+        expect(opp.approvalHistory).toHaveLength(1);
+        expect(opp.approvalHistory[0]).toMatchObject({ line: 'partner', action: 'approved', version: 3 });
+        expect(opp.approvalHistory[0].at).toBeTruthy();
+        await service.verifyOpportunityToken('ptok'); // replay: idempotent, no new entry / save
+        expect(opp.approvalHistory).toHaveLength(1);
+        expect(save).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('OpportunitiesService — e2e-found regressions', () => {
+    const baseOrgRow = (over: Record<string, unknown>) =>
+        ({
+            id: 'opp-r',
+            isStudentCreated: false,
+            admin_approved: false,
+            adminApprovalStatus: 'pending',
+            facultyApprovalStatus: 'not_applicable',
+            partnerApprovalStatus: 'not_applicable',
+            requiresPartnerApproval: false,
+            execution_verified: true,
+            ...over,
+        }) as unknown as Opportunity;
+
+    it.each([
+        ['rejected', { status: 'rejected', workflowStage: 'rejected' }],
+        ['revision', { status: 'revision', workflowStage: 'revision' }],
+    ])('CIEL approve refuses an org/faculty row that is %s (must be resubmitted first)', async (_l, over) => {
+        const opp = baseOrgRow(over);
+        const service = makeService({
+            findOne: jest.fn().mockResolvedValue(opp),
+            save: jest.fn(async (row: Opportunity) => row),
+        });
+        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+        await expect(service.approve('opp-r', { id: 'a1' })).rejects.toBeInstanceOf(BadRequestException);
+        expect(opp.admin_approved).toBe(false);
+    });
+
+    it('org member edit after a CIEL PK revision request re-enters the admin queue (was stuck in revision)', async () => {
+        const opp = baseOrgRow({
+            creatorId: 'ngo-1',
+            organizationId: 'org-1',
+            status: 'revision',
+            workflowStage: 'revision',
+            adminApprovalStatus: 'revision_requested',
+            rejectionReason: 'Add detail',
+        });
+        const service = makeService({
+            findOne: jest.fn().mockResolvedValue(opp),
+            save: jest.fn(async (row: Opportunity) => row),
+        });
+        (service as any).usersRepository = { findOne: jest.fn().mockResolvedValue({ id: 'ngo-1', role: 'ngo' }) };
+        (service as any).mailService = { sendAdminOpportunityReviewNeeded: jest.fn() };
+        const saved: any = await service.update('ngo-1', { id: 'opp-r', title: 'Better' } as any, 'org-1');
+        expect(saved.status).toBe('pending_approval');
+        expect(saved.workflowStage).toBe('pending_admin');
+        expect(saved.adminApprovalStatus).toBe('pending');
+        expect(saved.version).toBe(2);
+        expect(saved.rejectionReason).toBeNull();
+    });
+
+    it('a partial edit (validation-pipe leaves un-sent DTO fields undefined) never wipes stored JSON blocks', async () => {
+        const supervision = { contact: 'fac@uni.edu' };
+        const opp = baseOrgRow({
+            creatorId: 'ngo-1',
+            organizationId: 'org-1',
+            status: 'pending_approval',
+            workflowStage: 'pending_admin',
+            supervision,
+        });
+        const service = makeService({
+            findOne: jest.fn().mockResolvedValue(opp),
+            save: jest.fn(async (row: Opportunity) => row),
+        });
+        (service as any).usersRepository = { findOne: jest.fn().mockResolvedValue({ id: 'ngo-1', role: 'ngo' }) };
+        const saved: any = await service.update(
+            'ngo-1',
+            { id: 'opp-r', title: 'Only a title', supervision: undefined, partner_organization: undefined } as any,
+            'org-1',
+        );
+        expect(saved.title).toBe('Only a title');
+        expect(saved.supervision).toBe(supervision);
+    });
+
+    it('a student cannot edit their own LIVE or CIEL-rejected opportunity through the generic update endpoint', async () => {
+        for (const over of [
+            { status: 'active', workflowStage: 'live', admin_approved: true },
+            { status: 'rejected', workflowStage: 'rejected', adminApprovalStatus: 'rejected' },
+        ]) {
+            const opp = baseOrgRow({ creatorId: 's1', isStudentCreated: true, ...over });
+            const service = makeService({
+                findOne: jest.fn().mockResolvedValue(opp),
+                save: jest.fn(async (row: Opportunity) => row),
+            });
+            (service as any).usersRepository = { findOne: jest.fn().mockResolvedValue({ id: 's1', role: 'student' }) };
+            await expect(service.update('s1', { id: 'opp-r', title: 'sneaky' } as any)).rejects.toBeInstanceOf(
+                BadRequestException,
+            );
+            expect(opp.title).toBeUndefined();
+        }
+    });
+});
+
+
+describe('OpportunitiesService — admin reject / revise require a reason', () => {
+    function setup() {
+        const opp = {
+            id: 'opp-r-1',
+            isStudentCreated: false,
+            status: 'pending_approval',
+            workflowStage: 'pending_admin',
+            adminApprovalStatus: 'pending',
+            admin_approved: false,
+        } as unknown as Opportunity;
+        const findOne = jest.fn().mockResolvedValue(opp);
+        const save = jest.fn(async (row: Opportunity) => row);
+        const service = makeService({ findOne, save });
+        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+        (service as any).notifyStudentOpportunityUpdate = jest.fn();
+        return { service, opp, save, findOne };
+    }
+
+    it.each([
+        ['reject', undefined],
+        ['reject', ''],
+        ['reject', '   \n\t '],
+        ['reject', 42],
+        ['reject', 'x'.repeat(2001)],
+        ['revise', undefined],
+        ['revise', null],
+        ['revise', '   '],
+        ['revise', { a: 1 }],
+        ['revise', 'y'.repeat(2001)],
+    ])('%s with reason %p -> 400 and no state change', async (action, reason) => {
+        const { service, opp, save } = setup();
+        await expect((service as any)[action]('opp-r-1', reason, { id: 'a', name: 'A' })).rejects.toBeInstanceOf(
+            BadRequestException,
+        );
+        expect(save).not.toHaveBeenCalled();
+        expect(opp.status).toBe('pending_approval');
+        expect(opp.adminApprovalStatus).toBe('pending');
+    });
+
+    it('stores the trimmed reason and accepts exactly 2000 chars', async () => {
+        const a = setup();
+        const r = await a.service.reject('opp-r-1', '  Not a fit.  ', { id: 'a', name: 'A' });
+        expect(r.status).toBe('rejected');
+        expect(r.rejectionReason).toBe('Not a fit.');
+        const b = setup();
+        const v = await b.service.revise('opp-r-1', 'z'.repeat(2000), { id: 'a', name: 'A' });
+        expect(v.status).toBe('revision');
+        expect(v.rejectionReason).toHaveLength(2000);
+    });
+});
+
+describe('OpportunitiesService — create() idempotency for org / faculty / admin creators', () => {
+    function setup(recent: unknown = null) {
+        const create = jest.fn((payload) => payload);
+        const save = jest.fn((payload) => Promise.resolve({ id: 'new-opp-id', ...payload }));
+        const d = createDedupeStubs(recent);
+        const service = makeService({ create, save, findOne: jest.fn(), ...d.stubs });
+        (service as any).usersRepository = {
+            findOne: jest.fn().mockResolvedValue({ id: 'ngo-user-1', role: 'ngo', email: 'contact@ngo.org' }),
+        };
+        (service as any).organizationsService = { getMyOrganization: jest.fn().mockResolvedValue({ id: 'org-1' }) };
+        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+        const mailService = { sendAdminOpportunityReviewNeeded: jest.fn() };
+        (service as any).mailService = mailService;
+        return { service, save, mailService, ...d };
+    }
+    const dto = (over: Record<string, unknown> = {}) => ({
+        title: 'Beach cleanup drive',
+        mode: 'Remote',
+        timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
+        safety_declaration: {
+            environment_safe_and_appropriate: true,
+            students_guided_and_supervised: true,
+            lawful_ethical_and_non_hazardous: true,
+            precautions_and_basic_safety: true,
+        },
+        submission_confirmations: {
+            academically_valid_and_accurately_described: true,
+            activity_properly_supervised: true,
+            environment_safe_and_appropriate: true,
+            information_correct_and_verifiable: true,
+        },
+        ...over,
+    });
+
+    it('returns the recently created identical row: no save, no mail, lock taken and released', async () => {
+        const existing = { id: 'existing-opp', title: 'Beach cleanup drive' };
+        const { service, save, mailService, lockQuery, dedupeQb } = setup(existing);
+        const out = await service.create('ngo-user-1', dto() as any);
+        expect(out).toBe(existing);
+        expect(save).not.toHaveBeenCalled();
+        expect(mailService.sendAdminOpportunityReviewNeeded).not.toHaveBeenCalled();
+        expect(lockQuery.mock.calls[0][0]).toContain('pg_advisory_lock');
+        expect(lockQuery.mock.calls[0][1]).toEqual(['create_creator_opportunity:ngo-user-1']);
+        expect(lockQuery.mock.calls[1][0]).toContain('pg_advisory_unlock');
+        // rejected / deleted rows are excluded from the lookup
+        const ignored = dedupeQb.andWhere.mock.calls.find((c: any[]) => c[1]?.ignored)?.[1].ignored;
+        expect(ignored).toEqual(expect.arrayContaining(['rejected', 'deleted']));
+    });
+
+    it('creates normally when nothing matches, stamps a fingerprint, and never returns it', async () => {
+        const { service, save } = setup(null);
+        const out: any = await service.create('ngo-user-1', dto() as any);
+        expect(save).toHaveBeenCalledTimes(1);
+        expect(save.mock.calls[0][0].createFingerprint).toMatch(/^[0-9a-f]{64}$/);
+        expect(out.createFingerprint).toBeUndefined();
+        expect(out.id).toBe('new-opp-id');
+    });
+
+    it('releases the lock even when creation throws', async () => {
+        const { service, lockQuery } = setup(null);
+        await expect(service.create('ngo-user-1', dto({ mode: 'Onsite' }) as any)).rejects.toBeDefined();
+        // validation fails before the lock is needed OR the lock is released — never left held
+        const locks = lockQuery.mock.calls.filter((c) => String(c[0]).includes('pg_advisory_lock')).length;
+        const unlocks = lockQuery.mock.calls.filter((c) => String(c[0]).includes('pg_advisory_unlock')).length;
+        expect(locks).toBe(unlocks);
+    });
+});

@@ -1987,6 +1987,8 @@ export class StudentsService {
       notifyFacultyAfterResubmit = plan.notifyFaculty;
       notifyPartnerAfterResubmit = plan.notifyPartner;
       opportunity.rejectionReason = null;
+      // Each resubmission is a new version — `approvalHistory` entries are stamped with it.
+      opportunity.version = (opportunity.version || 1) + 1;
     }
 
     const saved = await this.opportunitiesRepository.save(opportunity);

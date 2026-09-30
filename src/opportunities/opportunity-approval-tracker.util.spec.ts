@@ -110,6 +110,28 @@ describe('buildOpportunityApprovalTracker', () => {
     expect(t.waiting_since).toBe('2026-09-27T16:20:00.000Z');
   });
 
+  it('revision label names the actual creator type, not always "Student"', () => {
+    const rev = {
+      ...base,
+      status: 'revision',
+      workflowStage: 'revision',
+      updatedAt: '2026-09-27T16:20:00.000Z',
+    };
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [{ isStudentCreated: true, creatorId: 'u1' }, 'Student'],
+      [{ isStudentCreated: false, creatorId: 'u1', facultyId: 'u1', organizationId: null }, 'Faculty'],
+      [{ isStudentCreated: false, creatorId: 'u1', facultyId: 'u2', organizationId: 'org' }, 'Partner / NGO'],
+      [{ isStudentCreated: false, creatorId: 'u1', facultyId: null, organizationId: 'org' }, 'Partner / NGO'],
+      [{ isStudentCreated: false, creatorId: 'u1', facultyId: null, organizationId: null }, 'CIEL PK admin'],
+    ];
+    for (const [extra, label] of cases) {
+      const t = buildOpportunityApprovalTracker({ ...rev, ...extra });
+      expect(t.currently_with).toBe(`${label} — revision requested`);
+      expect(t.next_step).toBe(`${label} updates and resubmits`);
+      expect(t.currently_with_role).toBe('student');
+    }
+  });
+
   it('does not invent a second NGO gate when only the partner line exists', () => {
     const t = buildOpportunityApprovalTracker({
       ...base,

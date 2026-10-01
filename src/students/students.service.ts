@@ -847,6 +847,40 @@ export class StudentsService {
       this.studentReportsService.getMergedReportsForParticipant(userId),
     ]);
 
+    // Team seats OTP-registered by email may lack studentId until the teammate opens the app.
+    // Claim + merge so "Teach to Transform" style team projects appear on My Reports.
+    const emailNorm = (studentUser?.email || '').trim().toLowerCase();
+    if (
+      emailNorm &&
+      typeof this.participantRepository.createQueryBuilder === 'function'
+    ) {
+      const byEmail = await this.participantRepository
+        .createQueryBuilder('p')
+        .leftJoinAndSelect('p.project', 'project')
+        .leftJoinAndSelect('project.organization', 'organization')
+        .where("LOWER(TRIM(COALESCE(p.email, ''))) = :emailNorm", { emailNorm })
+        .andWhere('p.status IN (:...statuses)', {
+          statuses: [...participationDashboardStatuses],
+        })
+        .orderBy('p.updatedAt', 'DESC')
+        .take(50)
+        .getMany();
+      const seen = new Set(activeApplications.map((p) => p.id));
+      for (const row of byEmail) {
+        if (row.studentId && row.studentId !== userId) {
+          continue;
+        }
+        if (!row.studentId) {
+          row.studentId = userId;
+          await this.participantRepository.save(row);
+        }
+        if (!seen.has(row.id)) {
+          seen.add(row.id);
+          activeApplications.push(row);
+        }
+      }
+    }
+
     const hoursVolunteered = verifiedTimesheets.reduce(
       (sum, t) => sum + this.safeDashboardNumber(t.hours),
       0,

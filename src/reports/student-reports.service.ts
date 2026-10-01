@@ -2039,6 +2039,37 @@ export class StudentReportsService {
       where: { studentId },
     });
 
+    // Team members OTP-added by a lead may have email on the seat before studentId is linked.
+    // Claim those seats so My Reports / shared-report resolve includes TCF-style team projects.
+    const viewer = await this.usersRepository.findOne({
+      where: { id: studentId },
+      select: ['id', 'email'],
+    });
+    const emailNorm = (viewer?.email || '').trim().toLowerCase();
+    if (
+      emailNorm &&
+      typeof this.participantRepository.createQueryBuilder === 'function'
+    ) {
+      const byEmail = await this.participantRepository
+        .createQueryBuilder('p')
+        .where("LOWER(TRIM(COALESCE(p.email, ''))) = :emailNorm", { emailNorm })
+        .getMany();
+      const seenPid = new Set(participantRows.map((p) => p.id));
+      for (const row of byEmail) {
+        if (row.studentId && row.studentId !== studentId) {
+          continue;
+        }
+        if (!row.studentId) {
+          row.studentId = studentId;
+          await this.participantRepository.save(row);
+        }
+        if (!seenPid.has(row.id)) {
+          seenPid.add(row.id);
+          participantRows.push(row);
+        }
+      }
+    }
+
     const uniqOpp = new Set<string>();
     const registerOpp = (key?: string | null) => {
       const s = (key || '').trim();

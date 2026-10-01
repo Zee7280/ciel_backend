@@ -4,6 +4,7 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, In, Repository } from 'typeorm';
@@ -62,6 +63,8 @@ import {
 } from '../reports/community-award.util';
 import { StudentReportsService } from '../reports/student-reports.service';
 import { ReportPartnerApprovalSettingsService } from '../reports/report-partner-approval-settings.service';
+import { StudentApplyMaintenanceService } from '../opportunities/student-apply-maintenance.service';
+import type { ApplyMaintenanceState } from '../opportunities/student-apply-maintenance.util';
 
 @Injectable()
 export class StudentsService {
@@ -88,7 +91,36 @@ export class StudentsService {
     private readonly opportunityApplicationsService: OpportunityApplicationsService,
     private readonly studentReportsService: StudentReportsService,
     private readonly reportPartnerApprovalSettings: ReportPartnerApprovalSettingsService,
+    @Optional()
+    private readonly studentApplyMaintenance?: StudentApplyMaintenanceService,
   ) {}
+
+  private async loadApplyMaintenanceState(): Promise<ApplyMaintenanceState | null> {
+    if (!this.studentApplyMaintenance) return null;
+    try {
+      return await this.studentApplyMaintenance.getState();
+    } catch {
+      return null;
+    }
+  }
+
+  private applyGateFields(
+    opportunity: Opportunity,
+    state: ApplyMaintenanceState | null,
+  ) {
+    if (!this.studentApplyMaintenance || !state) {
+      return {};
+    }
+    return this.studentApplyMaintenance.decorateOpportunity(opportunity, state);
+  }
+
+  private applyMaintenancePayload(state: ApplyMaintenanceState | null) {
+    if (!state) return undefined;
+    return {
+      enabled: state.maintenanceEnabled,
+      message: state.maintenanceMessage,
+    };
+  }
 
   private normalize(str?: string | null) {
     return (str || '').trim().toLowerCase();
@@ -1415,9 +1447,11 @@ export class StudentsService {
 
     const total = filtered.length;
     const paginated = filtered.slice(skip, skip + limitNumber);
+    const applyState = await this.loadApplyMaintenanceState();
 
     return {
       success: true,
+      apply_maintenance: this.applyMaintenancePayload(applyState),
       data: await Promise.all(
         paginated.map(async (o) => {
           const part = participationByOpp.get(o.id);
@@ -1466,6 +1500,7 @@ export class StudentsService {
             payment_proof_url: part ? part.paymentProofUrl : null,
             status: this.getApiOpportunityStatus(o),
             ...this.getWorkflowResponseFields(o),
+            ...this.applyGateFields(o, applyState),
             teamMembers: [], // We no longer fetch team members in a list view for performance, or we can fetch them if needed.
           };
         }),
@@ -1521,9 +1556,11 @@ export class StudentsService {
 
     const occupiedSeats = await this.getOccupiedSeats(id);
     const volunteersRequired = opportunity.timeline?.volunteers_required || 0;
+    const applyState = await this.loadApplyMaintenanceState();
 
     return {
       success: true,
+      apply_maintenance: this.applyMaintenancePayload(applyState),
       data: {
         ...opportunity,
         application_status: applicationStatus,
@@ -1537,6 +1574,7 @@ export class StudentsService {
         volunteersNeeded: volunteersRequired,
         status: this.getApiOpportunityStatus(opportunity),
         ...this.getWorkflowResponseFields(opportunity),
+        ...this.applyGateFields(opportunity, applyState),
         detail_view: buildOpportunityDetailView(opportunity),
       },
     };
@@ -1792,8 +1830,11 @@ export class StudentsService {
         this.getApiOpportunityStatus(opportunity) || statusForReport;
     }
 
+    const applyState = await this.loadApplyMaintenanceState();
+
     return {
       success: true,
+      apply_maintenance: this.applyMaintenancePayload(applyState),
       data: {
         id: opportunity.id,
         title: opportunity.title,
@@ -1835,6 +1876,7 @@ export class StudentsService {
         verification_method: opportunity.verification_method,
         createdAt: opportunity.createdAt,
         updatedAt: opportunity.updatedAt,
+        ...this.applyGateFields(opportunity, applyState),
       },
     };
   }
@@ -2077,6 +2119,16 @@ export class StudentsService {
 
     if (!opportunity) {
       throw new NotFoundException('Opportunity not found');
+    }
+    if (this.studentApplyMaintenance) {
+      try {
+        await this.studentApplyMaintenance.assertNewApplicationsAllowed(
+          opportunity,
+        );
+      } catch (err) {
+        if (err instanceof BadRequestException) throw err;
+        // Gate lookup failed — fall through to existing live/timeline checks.
+      }
     }
     if (
       !this.isLiveOpportunityStatus(opportunity.status) ||

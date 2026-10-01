@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from '../users/entities/user.entity';
@@ -33,6 +33,8 @@ import {
 import { OrganizationMembershipService } from '../organization-membership/organization-membership.service';
 import { PartnerMembershipSettingsService } from '../organization-membership/partner-membership-settings.service';
 import { PARTNER_MEMBERSHIP_REQUIRED_KEY } from '../organization-membership/partner-membership.util';
+import { StudentApplyMaintenanceService } from '../opportunities/student-apply-maintenance.service';
+import { isStudentApplyMaintenanceSettingKey } from '../opportunities/student-apply-maintenance.util';
 import {
   isTeamConfigurationComplete,
   resolveAttendanceUnlockStatus,
@@ -238,9 +240,16 @@ export class AdminService {
     private readonly feedbackService: FeedbackService,
     private readonly mailService: MailService,
     private readonly notificationsService: NotificationsService,
+    @Optional()
+    private readonly studentApplyMaintenance?: StudentApplyMaintenanceService,
   ) {}
 
   async getSettings() {
+    try {
+      await this.studentApplyMaintenance?.seedClosedBeforeIfMissing();
+    } catch {
+      // Settings page must still load even if the apply-cutoff stamp fails.
+    }
     const settings = await this.settingRepository.find();
     return {
       success: true,
@@ -266,6 +275,10 @@ export class AdminService {
       if (!enabled) {
         await this.organizationMembershipService.releasePendingPartnerMembershipAccounts();
       }
+    }
+    if (isStudentApplyMaintenanceSettingKey(key)) {
+      this.studentApplyMaintenance?.invalidateCache();
+      await this.studentApplyMaintenance?.refreshCache();
     }
     return {
       success: true,

@@ -1089,6 +1089,43 @@ export class StudentReportsService {
   }
 
   /**
+   * OTP team seats are often saved with email before `studentId` is linked.
+   * Claim those rows for the signed-in account so deep-link report GET and shared-read work
+   * without requiring a prior My Reports / dashboard visit.
+   */
+  private async claimUnlinkedParticipationsByEmail(
+    studentId: string,
+  ): Promise<Participation[]> {
+    const claimed: Participation[] = [];
+    const viewer = await this.usersRepository.findOne({
+      where: { id: studentId },
+      select: ['id', 'email'],
+    });
+    const emailNorm = (viewer?.email || '').trim().toLowerCase();
+    if (
+      !emailNorm ||
+      typeof this.participantRepository.createQueryBuilder !== 'function'
+    ) {
+      return claimed;
+    }
+    const byEmail = await this.participantRepository
+      .createQueryBuilder('p')
+      .where("LOWER(TRIM(COALESCE(p.email, ''))) = :emailNorm", { emailNorm })
+      .getMany();
+    for (const row of byEmail) {
+      if (row.studentId && row.studentId !== studentId) {
+        continue;
+      }
+      if (!row.studentId) {
+        row.studentId = studentId;
+        await this.participantRepository.save(row);
+      }
+      claimed.push(row);
+    }
+    return claimed;
+  }
+
+  /**
    * One canonical student_reports row per team project: readers who are teammates resolve the team lead row.
    * Attendance/logs are still keyed to `viewerStudentId`.
    */
@@ -1100,6 +1137,8 @@ export class StudentReportsService {
     if (!this.looksLikeUuid(key)) {
       return { report: null, attendanceStudentId: viewerStudentId };
     }
+
+    await this.claimUnlinkedParticipationsByEmail(viewerStudentId);
 
     const mine = await findPreferredProjectEnrollment(
       this.participantRepository,
@@ -2039,34 +2078,13 @@ export class StudentReportsService {
       where: { studentId },
     });
 
-    // Team members OTP-added by a lead may have email on the seat before studentId is linked.
-    // Claim those seats so My Reports / shared-report resolve includes TCF-style team projects.
-    const viewer = await this.usersRepository.findOne({
-      where: { id: studentId },
-      select: ['id', 'email'],
-    });
-    const emailNorm = (viewer?.email || '').trim().toLowerCase();
-    if (
-      emailNorm &&
-      typeof this.participantRepository.createQueryBuilder === 'function'
-    ) {
-      const byEmail = await this.participantRepository
-        .createQueryBuilder('p')
-        .where("LOWER(TRIM(COALESCE(p.email, ''))) = :emailNorm", { emailNorm })
-        .getMany();
-      const seenPid = new Set(participantRows.map((p) => p.id));
-      for (const row of byEmail) {
-        if (row.studentId && row.studentId !== studentId) {
-          continue;
-        }
-        if (!row.studentId) {
-          row.studentId = studentId;
-          await this.participantRepository.save(row);
-        }
-        if (!seenPid.has(row.id)) {
-          seenPid.add(row.id);
-          participantRows.push(row);
-        }
+    // Reuse the same OTP email-claim path used on report deep-link GET.
+    const claimed = await this.claimUnlinkedParticipationsByEmail(studentId);
+    const seenPid = new Set(participantRows.map((p) => p.id));
+    for (const row of claimed) {
+      if (!seenPid.has(row.id)) {
+        seenPid.add(row.id);
+        participantRows.push(row);
       }
     }
 
@@ -3434,6 +3452,9 @@ export class StudentReportsService {
   }
 
   async findOneByOpportunityOrId(id: string, studentId: string) {
+    // Claim OTP email seats before any enrollment / shared-report lookup.
+    await this.claimUnlinkedParticipationsByEmail(studentId);
+
     // Try finding by primary key (Report ID) first
     let report = await this.studentReportsRepository.findOne({
       where: { id, studentId },
@@ -3526,16 +3547,28 @@ export class StudentReportsService {
         !isTeam ||
         application.isTeamLead === true ||
         studentId === canonicalLeadId;
-      const teamMembers = Array.isArray(roster)
-        ? roster.filter(
-            (m: { isTeamLead?: boolean; is_team_lead?: boolean }) => {
-              const flagged =
-                m?.isTeamLead === true ||
-                (m as { is_team_lead?: boolean })?.is_team_lead === true;
-              return !flagged;
-            },
-          )
-        : [];
+      const teamId = (application.teamId || '').trim();
+      const applicationId = (application.applicationId || '').trim();
+      let scopedRoster = Array.isArray(roster) ? roster : [];
+      if (teamId) {
+        scopedRoster = scopedRoster.filter(
+          (m: { teamId?: string; team_id?: string }) =>
+            String(m?.teamId || m?.team_id || '').trim() === teamId,
+        );
+      } else if (applicationId) {
+        scopedRoster = scopedRoster.filter(
+          (m: { applicationId?: string }) =>
+            String(m?.applicationId || '').trim() === applicationId,
+        );
+      }
+      const teamMembers = scopedRoster.filter(
+        (m: { isTeamLead?: boolean; is_team_lead?: boolean }) => {
+          const flagged =
+            m?.isTeamLead === true ||
+            (m as { is_team_lead?: boolean })?.is_team_lead === true;
+          return !flagged;
+        },
+      );
       return {
         success: true,
         data: {
@@ -3907,11 +3940,12 @@ export class StudentReportsService {
             report.section1?.participation_type,
           team_lead: liveTeamFields.team_lead ?? storedTeamLead,
           team_members:
+            Array.isArray(liveTeamFields.team_members) &&
             liveTeamFields.team_members.length > 0
               ? liveTeamFields.team_members
-              : await this.engagementService.getProjectTeamForReportDossier(
-                  report.opportunityId || report.project_id,
-                ),
+              : Array.isArray(report.section1?.team_members)
+                ? report.section1.team_members
+                : [],
           attendance_logs: mappedAttendanceLogs,
           // Gate on whether any live logs exist at all, not on the resulting total being > 0 —
           // a project where every logged session was rejected has a genuine live total of 0 and

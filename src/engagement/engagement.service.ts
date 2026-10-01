@@ -631,6 +631,30 @@ export class EngagementService {
   }
 
   async getMyParticipants(studentId: string) {
+    // Claim OTP seats linked by email before listing — report deep-link identity sync
+    // calls `/engagement/my` and must see the same seats as My Reports.
+    const viewer = await this.userRepository.findOne({
+      where: { id: studentId },
+      select: ['id', 'email'],
+    });
+    const emailNorm = (viewer?.email || '').trim().toLowerCase();
+    if (
+      emailNorm &&
+      typeof this.participantRepository.createQueryBuilder === 'function'
+    ) {
+      const byEmail = await this.participantRepository
+        .createQueryBuilder('p')
+        .where("LOWER(TRIM(COALESCE(p.email, ''))) = :emailNorm", { emailNorm })
+        .getMany();
+      for (const row of byEmail) {
+        if (row.studentId && row.studentId !== studentId) continue;
+        if (!row.studentId) {
+          row.studentId = studentId;
+          await this.participantRepository.save(row);
+        }
+      }
+    }
+
     const result = await this.participantRepository.find({
       where: { studentId },
       relations: ['attendanceLogs'],

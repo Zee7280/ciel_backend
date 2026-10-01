@@ -818,6 +818,36 @@ describe('OpportunitiesService — saveStudentOpportunityDraft (first-save regre
 
         expect(create.mock.calls[0][0].sdg).toBe('4');
     });
+
+    it('does not write draft/id/approval columns, and stores a blank mode as null', async () => {
+        const create = jest.fn((payload) => payload);
+        const save = jest.fn((payload) => Promise.resolve({ id: 'new-draft-id', ...payload }));
+        const service = makeService({ create, save });
+        (service as any).usersRepository = {
+            findOne: jest.fn().mockResolvedValue({ id: 'student-1' }),
+        };
+
+        await service.saveStudentOpportunityDraft('student-1', null, {
+            draft: true,
+            id: 'should-not-land',
+            title: 'Untitled opportunity',
+            mode: '',
+            types: [],
+            verification_method: [],
+            admin_approved: true,
+            creatorId: 'attacker',
+            status: 'active',
+        });
+
+        const payload = create.mock.calls[0][0] as Record<string, unknown>;
+        expect(payload.draft).toBeUndefined();
+        expect(payload.id).toBeUndefined();
+        expect(payload.admin_approved).toBeUndefined();
+        expect(payload.creatorId).toBe('student-1');
+        expect(payload.status).toBe('draft');
+        expect(payload.mode).toBeNull();
+        expect(payload.types).toEqual([]);
+    });
 });
 
 describe('OpportunitiesService — create() CIEL PK review requirement is server-computed, not client-trusted', () => {

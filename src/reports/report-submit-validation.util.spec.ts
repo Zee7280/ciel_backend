@@ -25,10 +25,14 @@ const WIZARD_COMPETENCY_SCORES = {
 
 /** Payload that matches a complete live-form submit (presence only; no word-count). */
 const VALID_CORE_SECTIONS = {
-  section1: { privacy_consent: true },
+  section1: { privacy_consent: true, review_checked: [true, true, true] },
   section2: {
     problem_statement: 'Community lacks access to clean drinking water.',
     discipline: 'Environmental Engineering',
+    discipline_contribution: 'Engineering methods used to install and test filters.',
+    affected_group: 'Households without safe water',
+    affected_count: '40',
+    system_gaps: ['Access'],
     baseline_evidence: ['Survey'],
   },
   section3: {
@@ -330,6 +334,31 @@ describe('validateReportSectionsForSubmit', () => {
       section1: { review_checked: [true, false, true] },
     });
     expect(issues.some((i) => i.section === 1)).toBe(true);
+  });
+
+  it('rejects privacy_consent alone without the three declaration boxes', () => {
+    const issues = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section1: { privacy_consent: true },
+    });
+    expect(issues.some((i) => i.section === 1 && i.field === 'review_checked')).toBe(
+      true,
+    );
+  });
+
+  it('requires Section 2 affected group, count, gaps, and discipline contribution', () => {
+    const issues = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section2: {
+        problem_statement: 'Community lacks access to clean drinking water.',
+        discipline: 'Environmental Engineering',
+        baseline_evidence: ['Survey'],
+      },
+    });
+    expect(issues.some((i) => i.field === 'affected_group')).toBe(true);
+    expect(issues.some((i) => i.field === 'affected_count')).toBe(true);
+    expect(issues.some((i) => i.field === 'system_gaps')).toBe(true);
+    expect(issues.some((i) => i.field === 'discipline_contribution')).toBe(true);
   });
 
   it('accepts a Step 8 Academic integration chip id', () => {

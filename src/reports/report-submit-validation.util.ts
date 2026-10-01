@@ -108,32 +108,77 @@ function validateCoreSectionsPresence(report: {
   const issues: ReportSubmitValidationIssue[] = [];
 
   const section1 = report.section1 || {};
-  const reviewChecked = Array.isArray(section1.review_checked) ? section1.review_checked : [];
-  // The 3-item declaration (mirrors report/utils/validation.ts validateSection1) replaced the old
-  // mid-flow attendance-verification request — all three boxes must be ticked, not just consent.
-  const declarationComplete = reviewChecked.length >= 3 && reviewChecked.slice(0, 3).every(Boolean);
-  const hasPrivacyConsent = Boolean(section1.privacy_consent || declarationComplete);
-  if (!hasPrivacyConsent) {
-    issues.push({
-      section: 1,
-      field: 'privacy_consent',
-      message: 'Privacy consent is required',
-    });
-  } else if (reviewChecked.length > 0 && !declarationComplete) {
+  const reviewChecked = Array.isArray(section1.review_checked)
+    ? section1.review_checked
+    : [];
+  // Mirrors report/utils/validation.ts validateSection1: all three declaration
+  // boxes, not privacy_consent alone.
+  const declarationComplete =
+    reviewChecked.length >= 3 && reviewChecked.slice(0, 3).every(Boolean);
+  const hasPrivacyConsent = Boolean(
+    section1.privacy_consent || reviewChecked[2],
+  );
+  if (!declarationComplete) {
     issues.push({
       section: 1,
       field: 'review_checked',
       message: 'All three declaration checkboxes must be confirmed',
     });
   }
+  if (!hasPrivacyConsent) {
+    issues.push({
+      section: 1,
+      field: 'privacy_consent',
+      message: 'Privacy consent is required',
+    });
+  }
   const section2 = report.section2 || {};
   if (!stringField(section2.problem_statement).trim()) {
     issues.push({ section: 2, field: 'problem_statement', message: 'Problem statement is required' });
+  }
+  if (!stringField(section2.affected_group).trim()) {
+    issues.push({ section: 2, field: 'affected_group', message: 'Who was affected is required' });
+  }
+  const affectedCount = Number(String(section2.affected_count ?? '').replace(/,/g, ''));
+  if (
+    !stringField(section2.affected_count).trim() ||
+    !Number.isFinite(affectedCount) ||
+    affectedCount <= 0
+  ) {
+    issues.push({
+      section: 2,
+      field: 'affected_count',
+      message: 'Enter the approximate number affected',
+    });
+  }
+  if (!listHasItems(section2.system_gaps)) {
+    issues.push({
+      section: 2,
+      field: 'system_gaps',
+      message: 'Choose at least one thing that was missing',
+    });
+  } else if (
+    (section2.system_gaps as unknown[]).some((gap) => String(gap) === 'Other') &&
+    !stringField(section2.system_gaps_other).trim() &&
+    !listHasItems(section2.system_gaps_other_entries)
+  ) {
+    issues.push({
+      section: 2,
+      field: 'system_gaps_other',
+      message: 'Please specify the "Other" system gap',
+    });
   }
   if (!section2.discipline) {
     issues.push({ section: 2, field: 'discipline', message: 'Academic discipline is required' });
   } else if (section2.discipline === 'Other…' && !stringField(section2.discipline_other).trim()) {
     issues.push({ section: 2, field: 'discipline_other', message: 'Please name your discipline' });
+  }
+  if (!stringField(section2.discipline_contribution).trim()) {
+    issues.push({
+      section: 2,
+      field: 'discipline_contribution',
+      message: 'Discipline contribution explanation is required',
+    });
   }
 
   const section3 = report.section3 || {};
@@ -199,6 +244,15 @@ function validateCoreSectionsPresence(report: {
       }
       if (!outcome.metric) {
         issues.push({ section: 5, field: `measurable_outcomes.${index}.metric`, message: 'Primary metric unit is required' });
+      } else if (
+        /^other$/i.test(stringField(outcome.metric).trim()) &&
+        !stringField(outcome.metric_other).trim()
+      ) {
+        issues.push({
+          section: 5,
+          field: `measurable_outcomes.${index}.metric_other`,
+          message: 'Please specify the custom metric unit',
+        });
       }
       if (outcome.baseline === '' || outcome.baseline === undefined || outcome.baseline === null) {
         issues.push({ section: 5, field: `measurable_outcomes.${index}.baseline`, message: 'Baseline value is required' });

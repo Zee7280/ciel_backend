@@ -17,10 +17,14 @@ import { evaluateReportRequiresPartnerApproval } from './report-partner-approval
 
 /** Minimal section1/2/4/5/6/7/8/9/10 payload that passes server submit validation. */
 const MIN_VALID_SUBMIT_SECTIONS = {
-  section1: { privacy_consent: true },
+  section1: { privacy_consent: true, review_checked: [true, true, true] },
   section2: {
     problem_statement: 'Community lacks access to clean drinking water.',
     discipline: 'Environmental Engineering',
+    discipline_contribution: 'Engineering methods used to install and test filters.',
+    affected_group: 'Households without safe water',
+    affected_count: '40',
+    system_gaps: ['Access'],
     baseline_evidence: ['Survey'],
   },
   section3: {
@@ -718,6 +722,7 @@ describe('StudentReportsService', () => {
         opportunityId: 'opp-1',
         ...MIN_VALID_SUBMIT_SECTIONS,
         section2: {
+          ...MIN_VALID_SUBMIT_SECTIONS.section2,
           problem_statement: 'Mental health awareness among students',
           baseline_evidence: ['Survey Data', '__o_0', '__o_1', '__o_2'],
           baseline_evidence_other: 'Clinical psychologist consultation',

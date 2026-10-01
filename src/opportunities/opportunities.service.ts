@@ -88,6 +88,62 @@ export interface OpportunityDetailViewer {
   organizationId?: string | null;
 }
 
+/** Wizard fields a draft save may write. Tokens, approval gates, ownership, and status stay server-owned. */
+const DRAFT_PERSIST_KEYS = [
+  'title',
+  'types',
+  'mode',
+  'location',
+  'timeline',
+  'sdg_info',
+  'secondary_sdgs',
+  'objectives',
+  'activity_details',
+  'supervision',
+  'verification_method',
+  'restricted_universities',
+  'executing_context',
+  'executing_organization',
+  'partner_organization',
+  'safety_supervision_declaration',
+  'safety_declaration',
+  'submission_confirmations',
+  'participation_scope',
+  'visibility_and_academic_linkage',
+  'external_partner_collaboration',
+  'academic_linkage',
+  'student_contact',
+  'visibility',
+] as const;
+
+function pickDraftPersistFields(dto: Record<string, unknown>): Record<string, unknown> {
+  let plain: Record<string, unknown>;
+  try {
+    plain = JSON.parse(JSON.stringify(dto ?? {})) as Record<string, unknown>;
+  } catch {
+    plain = { ...(dto ?? {}) };
+  }
+  const picked: Record<string, unknown> = {};
+  for (const key of DRAFT_PERSIST_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(plain, key)) continue;
+    if (plain[key] === undefined) continue;
+    picked[key] = plain[key];
+  }
+  if (typeof picked.mode === 'string' && !picked.mode.trim()) {
+    picked.mode = null;
+  }
+  if (picked.types !== undefined && !Array.isArray(picked.types)) {
+    picked.types = [];
+  }
+  if (
+    picked.verification_method !== undefined &&
+    !Array.isArray(picked.verification_method)
+  ) {
+    picked.verification_method = [];
+  }
+  return picked;
+}
+
 @Injectable()
 export class OpportunitiesService {
   constructor(
@@ -3249,56 +3305,90 @@ export class OpportunitiesService {
     const {
       draft: _draftFlag,
       id: _dtoId,
-      ...fields
+      ...rawFields
     } = dto as Record<string, unknown> & { draft?: unknown; id?: unknown };
+    const fields = pickDraftPersistFields(rawFields);
     const title =
       typeof fields.title === 'string' && fields.title.trim()
         ? fields.title.trim()
         : 'Untitled opportunity';
+    const sdgFromInfo = (fields as { sdg_info?: { sdg_id?: string } }).sdg_info
+      ?.sdg_id;
+    const sdg =
+      typeof sdgFromInfo === 'string' && sdgFromInfo.trim()
+        ? sdgFromInfo.trim()
+        : 'SDG';
 
-    if (id) {
-      const opportunity = await this.opportunitiesRepository.findOne({
-        where: { id },
-      });
-      if (!opportunity) throw new NotFoundException('Draft not found');
-      if (opportunity.creatorId !== userId) {
-        throw new ForbiddenException('You do not have access to this draft');
+    try {
+      if (id) {
+        const opportunity = await this.opportunitiesRepository.findOne({
+          where: { id },
+        });
+        if (!opportunity) throw new NotFoundException('Draft not found');
+        if (opportunity.creatorId !== userId) {
+          throw new ForbiddenException('You do not have access to this draft');
+        }
+        // Draft-saving only applies while the record is still a draft — otherwise a
+        // `{draft:true}` call would silently demote a submitted/approved/live opportunity
+        // back to draft and pull it off Browse.
+        if (String(opportunity.status || '').toLowerCase() !== 'draft') {
+          throw new BadRequestException(
+            'This opportunity has already been submitted and can no longer be saved as a draft',
+          );
+        }
+        Object.assign(opportunity, fields, {
+          title,
+          status: 'draft',
+          sdg: opportunity.sdg || sdg,
+        });
+        const saved = await this.opportunitiesRepository.save(opportunity);
+        return { success: true, data: saved };
       }
-      // Draft-saving only applies while the record is still a draft — otherwise a
-      // `{draft:true}` call would silently demote a submitted/approved/live opportunity
-      // back to draft and pull it off Browse.
-      if (String(opportunity.status || '').toLowerCase() !== 'draft') {
-        throw new BadRequestException(
-          'This opportunity has already been submitted and can no longer be saved as a draft',
-        );
-      }
-      Object.assign(opportunity, fields, { title, status: 'draft' });
+
+      const payload: DeepPartial<Opportunity> = {
+        ...fields,
+        title,
+        creatorId: user.id,
+        status: 'draft',
+        isStudentCreated: ownership.isStudentCreated,
+        visibility: 'restricted',
+        ...(ownership.facultyId !== undefined
+          ? { facultyId: ownership.facultyId }
+          : {}),
+        ...(ownership.organizationId !== undefined
+          ? { organizationId: ownership.organizationId }
+          : {}),
+        // `sdg` is a required (NOT NULL, no default) column kept for backward compatibility, but the
+        // wizard only ever sends the SDG selection nested under `sdg_info.sdg_id` — never a top-level
+        // `sdg` field — and a draft is saved long before the creator reaches that step. Without this
+        // fallback the very first "Save Draft" click fails outright with a NOT NULL violation, since
+        // `fields` never carries a `sdg` key at all. Mirrors the same fallback `createStudentOpportunity`
+        // already applies for a full submit.
+        sdg,
+      };
+      const opportunity = this.opportunitiesRepository.create(payload);
       const saved = await this.opportunitiesRepository.save(opportunity);
       return { success: true, data: saved };
+    } catch (error) {
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException ||
+        error instanceof ForbiddenException
+      ) {
+        throw error;
+      }
+      const detail =
+        error instanceof QueryFailedError
+          ? this.extractQueryFailedDetail(error)
+          : error instanceof Error
+            ? error.message
+            : '';
+      throw new BadRequestException(
+        detail
+          ? `Could not save this draft (${detail})`
+          : 'Could not save this draft',
+      );
     }
-
-    const payload: DeepPartial<Opportunity> = {
-      ...fields,
-      title,
-      creatorId: user.id,
-      status: 'draft',
-      isStudentCreated: ownership.isStudentCreated,
-      visibility: 'restricted',
-      ...(ownership.facultyId !== undefined ? { facultyId: ownership.facultyId } : {}),
-      ...(ownership.organizationId !== undefined
-        ? { organizationId: ownership.organizationId }
-        : {}),
-      // `sdg` is a required (NOT NULL, no default) column kept for backward compatibility, but the
-      // wizard only ever sends the SDG selection nested under `sdg_info.sdg_id` — never a top-level
-      // `sdg` field — and a draft is saved long before the creator reaches that step. Without this
-      // fallback the very first "Save Draft" click fails outright with a NOT NULL violation, since
-      // `fields` never carries a `sdg` key at all. Mirrors the same fallback `createStudentOpportunity`
-      // already applies for a full submit.
-      sdg: (fields as { sdg_info?: { sdg_id?: string } }).sdg_info?.sdg_id || 'SDG',
-    };
-    const opportunity = this.opportunitiesRepository.create(payload);
-    const saved = await this.opportunitiesRepository.save(opportunity);
-    return { success: true, data: saved };
   }
 
   async findAll(userId: string, filters: any) {

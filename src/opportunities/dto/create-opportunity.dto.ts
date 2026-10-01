@@ -5,10 +5,18 @@ import {
   IsObject,
   IsEnum,
   IsBoolean,
+  ValidateIf,
   ValidateNested,
   IsInt,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+
+/** Full create/submit must satisfy title/types/mode/verification. A mid-wizard `{draft:true}`
+ * save is incomplete by definition — StudentController / OpportunitiesService persist it with
+ * fallbacks, so those required-field validators must not reject the first "Save draft" click. */
+function isFullOpportunitySubmit(dto: { draft?: boolean }) {
+  return dto.draft !== true;
+}
 
 export class TimelineDto {
   @IsString()
@@ -31,13 +39,19 @@ export class TimelineDto {
   @IsOptional()
   to_time?: string; // daily window end (e.g. 13:00)
 
+  @Type(() => Number)
   @IsInt()
   @IsOptional()
   expected_hours?: number;
 
+  @Type(() => Number)
   @IsInt()
   @IsOptional()
   volunteers_required?: number;
+
+  @IsBoolean()
+  @IsOptional()
+  close_applications_early?: boolean;
 
   @IsString()
   @IsOptional()
@@ -90,6 +104,10 @@ export class SupervisionDto {
   @IsOptional()
   information_accurate?: boolean;
 
+  @IsBoolean()
+  @IsOptional()
+  private_candidate?: boolean;
+
   @IsString()
   @IsOptional()
   faculty_department?: string;
@@ -123,13 +141,16 @@ export class CreateOpportunityDto {
   @IsOptional()
   draft?: boolean;
 
+  @ValidateIf(isFullOpportunitySubmit)
   @IsString()
   title: string;
 
+  @ValidateIf(isFullOpportunitySubmit)
   @IsArray()
   @IsString({ each: true })
   types: string[];
 
+  @ValidateIf(isFullOpportunitySubmit)
   @IsString()
   mode: string;
 
@@ -141,6 +162,7 @@ export class CreateOpportunityDto {
   @IsOptional()
   location?: any;
 
+  @ValidateIf(isFullOpportunitySubmit)
   @ValidateNested()
   @Type(() => TimelineDto)
   @IsOptional()
@@ -167,11 +189,13 @@ export class CreateOpportunityDto {
   @IsOptional()
   activity_details?: any;
 
+  @ValidateIf(isFullOpportunitySubmit)
   @ValidateNested()
   @Type(() => SupervisionDto)
   @IsOptional()
   supervision?: SupervisionDto;
 
+  @ValidateIf(isFullOpportunitySubmit)
   @IsArray()
   @IsString({ each: true })
   verification_method: string[];
@@ -255,6 +279,7 @@ export class UpdateOpportunityDto {
   @IsOptional()
   location?: any;
 
+  @ValidateIf(isFullOpportunitySubmit)
   @ValidateNested()
   @Type(() => TimelineDto)
   @IsOptional()
@@ -281,6 +306,7 @@ export class UpdateOpportunityDto {
   @IsOptional()
   activity_details?: any;
 
+  @ValidateIf(isFullOpportunitySubmit)
   @ValidateNested()
   @Type(() => SupervisionDto)
   @IsOptional()

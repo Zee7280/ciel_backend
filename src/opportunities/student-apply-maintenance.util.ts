@@ -5,12 +5,16 @@ export const STUDENT_APPLY_MAINTENANCE_MESSAGE_KEY =
   'STUDENT_APPLY_MAINTENANCE_MESSAGE';
 /** ISO timestamp: listings created on or before this cannot accept new applies. */
 export const STUDENT_APPLY_CLOSED_BEFORE_KEY = 'STUDENT_APPLY_CLOSED_BEFORE';
+export const STUDENT_APPLY_EXPIRED_MESSAGE_KEY =
+  'STUDENT_APPLY_EXPIRED_MESSAGE';
 
 export const DEFAULT_STUDENT_APPLY_MAINTENANCE_MESSAGE =
   'Student applications are temporarily paused for maintenance. Existing reports, attendance, and reviews continue as usual.';
 
-export const CATALOG_APPLY_CLOSED_MESSAGE =
-  'Applications for this opportunity have closed. Enrolled students can continue reports and attendance.';
+export const DEFAULT_STUDENT_APPLY_EXPIRED_MESSAGE =
+  'This opportunity has expired. Enrolled students can continue reports and attendance.';
+
+export const CATALOG_APPLY_CLOSED_MESSAGE = DEFAULT_STUDENT_APPLY_EXPIRED_MESSAGE;
 
 export type ApplyBlockedReason = 'maintenance' | 'catalog_closed';
 
@@ -18,6 +22,7 @@ export type ApplyMaintenanceState = {
   maintenanceEnabled: boolean;
   maintenanceMessage: string;
   closedBefore: Date | null;
+  expiredMessage: string;
 };
 
 export type ApplyGateFields = {
@@ -45,6 +50,13 @@ export function parseApplyMaintenanceMessage(
   return text || DEFAULT_STUDENT_APPLY_MAINTENANCE_MESSAGE;
 }
 
+export function parseApplyExpiredMessage(
+  value: string | null | undefined,
+): string {
+  const text = String(value || '').trim();
+  return text || DEFAULT_STUDENT_APPLY_EXPIRED_MESSAGE;
+}
+
 export function parseClosedBeforeSettingValue(
   value: string | null | undefined,
 ): Date | null {
@@ -59,7 +71,8 @@ export function isStudentApplyMaintenanceSettingKey(key: string): boolean {
   return (
     key === STUDENT_APPLY_MAINTENANCE_ENABLED_KEY ||
     key === STUDENT_APPLY_MAINTENANCE_MESSAGE_KEY ||
-    key === STUDENT_APPLY_CLOSED_BEFORE_KEY
+    key === STUDENT_APPLY_CLOSED_BEFORE_KEY ||
+    key === STUDENT_APPLY_EXPIRED_MESSAGE_KEY
   );
 }
 
@@ -91,7 +104,7 @@ export function decorateApplyGate(
     return {
       applications_open: false,
       apply_blocked_reason: 'catalog_closed',
-      apply_blocked_message: CATALOG_APPLY_CLOSED_MESSAGE,
+      apply_blocked_message: state.expiredMessage || CATALOG_APPLY_CLOSED_MESSAGE,
       apply_maintenance: maintenance,
     };
   }

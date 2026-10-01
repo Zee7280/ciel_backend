@@ -6,9 +6,11 @@ import {
   ApplyGateFields,
   ApplyMaintenanceState,
   STUDENT_APPLY_CLOSED_BEFORE_KEY,
+  STUDENT_APPLY_EXPIRED_MESSAGE_KEY,
   STUDENT_APPLY_MAINTENANCE_ENABLED_KEY,
   STUDENT_APPLY_MAINTENANCE_MESSAGE_KEY,
   decorateApplyGate,
+  parseApplyExpiredMessage,
   parseApplyMaintenanceMessage,
   parseBooleanSettingValue,
   parseClosedBeforeSettingValue,
@@ -43,6 +45,7 @@ export class StudentApplyMaintenanceService implements OnModuleInit {
       maintenanceEnabled: false,
       maintenanceMessage: parseApplyMaintenanceMessage(null),
       closedBefore: null,
+      expiredMessage: parseApplyExpiredMessage(null),
     };
     try {
       const rows =
@@ -53,6 +56,7 @@ export class StudentApplyMaintenanceService implements OnModuleInit {
                   STUDENT_APPLY_MAINTENANCE_ENABLED_KEY,
                   STUDENT_APPLY_MAINTENANCE_MESSAGE_KEY,
                   STUDENT_APPLY_CLOSED_BEFORE_KEY,
+                  STUDENT_APPLY_EXPIRED_MESSAGE_KEY,
                 ]),
               },
             })
@@ -68,6 +72,9 @@ export class StudentApplyMaintenanceService implements OnModuleInit {
         ),
         closedBefore: parseClosedBeforeSettingValue(
           map.get(STUDENT_APPLY_CLOSED_BEFORE_KEY),
+        ),
+        expiredMessage: parseApplyExpiredMessage(
+          map.get(STUDENT_APPLY_EXPIRED_MESSAGE_KEY),
         ),
       };
       this.cache = { state, expiresAt: Date.now() + this.cacheTtlMs };

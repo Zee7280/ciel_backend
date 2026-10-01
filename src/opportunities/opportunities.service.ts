@@ -1330,6 +1330,8 @@ export class OpportunitiesService {
     const base = {
       id: opp.id,
       title: opp.title,
+      createdAt: opp.createdAt,
+      created_at: opp.createdAt,
       description: opp.objectives?.description || '',
       status: this.getApiOpportunityStatus(opp),
       mode: opp.mode,

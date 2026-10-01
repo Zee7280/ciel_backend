@@ -12,6 +12,7 @@ describe('student apply maintenance util', () => {
     maintenanceEnabled: false,
     maintenanceMessage: DEFAULT_STUDENT_APPLY_MAINTENANCE_MESSAGE,
     closedBefore: null as Date | null,
+    expiredMessage: CATALOG_APPLY_CLOSED_MESSAGE,
   };
 
   it('parses boolean flags', () => {
@@ -54,6 +55,24 @@ describe('student apply maintenance util', () => {
     expect(gate.applications_open).toBe(false);
     expect(gate.apply_blocked_reason).toBe('catalog_closed');
     expect(gate.apply_blocked_message).toBe(CATALOG_APPLY_CLOSED_MESSAGE);
+  });
+
+  it('uses the admin expired message for cutoff listings', () => {
+    const closedBefore = parseClosedBeforeSettingValue(
+      '2026-10-01T12:00:00.000Z',
+    );
+    const gate = decorateApplyGate(
+      { createdAt: '2026-09-15T00:00:00.000Z' },
+      {
+        ...openState,
+        closedBefore,
+        expiredMessage: 'This listing is expired until further notice.',
+      },
+    );
+    expect(gate.apply_blocked_reason).toBe('catalog_closed');
+    expect(gate.apply_blocked_message).toBe(
+      'This listing is expired until further notice.',
+    );
   });
 
   it('keeps newer listings open when maintenance is off', () => {

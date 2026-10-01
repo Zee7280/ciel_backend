@@ -1606,6 +1606,51 @@ describe('StudentReportsService', () => {
     expect(data.payment_verified).toBe(false);
   });
 
+  it('never sends null team_lead or a non-array team_members on the student report payload', async () => {
+    const opp = 'cfa251f1-2e5b-4836-b0d9-6508254386d7';
+    mockStudentReportsRepository.findOne.mockResolvedValue({
+      id: 'report-null-s1',
+      studentId: 'student-1',
+      opportunityId: opp,
+      project_id: opp,
+      status: 'draft',
+      admin_status: 'pending',
+      faculty_status: 'pending',
+      partner_status: 'pending',
+      section1: {
+        team_lead: null,
+        team_members: { 0: { name: 'Ghost' } },
+        metrics: null,
+        attendance_logs: null,
+      },
+      section2: {},
+      section3: {},
+      section4: {},
+      section5: {},
+      section6: {},
+      section7: {},
+      section8: {},
+      section9: {},
+      section10: {},
+      section11: {},
+      student: { id: 'student-1', name: 'Jane', email: 'jane@test.com' },
+      opportunity: { id: opp, title: 'Teach to Transform' },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const result = await service.findOneByOpportunityOrId(opp, 'student-1');
+    const section1 = (result.data as { section1: Record<string, unknown> }).section1;
+
+    expect(section1.team_lead).toEqual(expect.objectContaining({ name: '', email: '' }));
+    expect(Array.isArray(section1.team_members)).toBe(true);
+    expect(section1.team_members).toEqual([]);
+    expect(section1.metrics).toEqual(
+      expect.objectContaining({ total_verified_hours: 0 }),
+    );
+    expect(Array.isArray(section1.attendance_logs)).toBe(true);
+  });
+
   it('blocks partner or admin approve until reporting fee is cleared', async () => {
     const report = {
       id: 'report-1',

@@ -1509,6 +1509,81 @@ export class StudentReportsService {
       : {};
   }
 
+  /** Empty lead object — production student report UI reads `team_lead.verified` unguarded. */
+  private emptyClientTeamLead(): Record<string, string> {
+    return {
+      name: '',
+      fullName: '',
+      cnic: '',
+      mobile: '',
+      email: '',
+      university: '',
+      degree: '',
+      year: '',
+      role: '',
+      hours: '',
+    };
+  }
+
+  private emptyClientMetrics(): Record<string, unknown> {
+    return {
+      total_verified_hours: 0,
+      total_active_days: 0,
+      engagement_span: 0,
+      attendance_frequency: 0,
+      weekly_continuity: 0,
+      eis_score: 0,
+      engagement_category: 'Introductory Engagement',
+      hec_compliance: 'below',
+    };
+  }
+
+  /**
+   * Student report page (and older deployed FE) crash when section1.team_lead is null
+   * or team_members is a non-array JSON object (`q is not a function` / `.verified` on null).
+   */
+  private sanitizeSection1ForClient(
+    stored: unknown,
+    overrides: {
+      participation_type?: unknown;
+      team_lead?: unknown;
+      team_members?: unknown;
+      attendance_logs?: unknown;
+      metrics?: unknown;
+    },
+  ): Record<string, unknown> {
+    const base = this.asUnknownRecord(stored);
+    const teamLead = {
+      ...this.emptyClientTeamLead(),
+      ...this.asUnknownRecord(overrides.team_lead ?? base.team_lead),
+    };
+    const metrics = {
+      ...this.emptyClientMetrics(),
+      ...this.asUnknownRecord(overrides.metrics ?? base.metrics),
+    };
+    const teamMembers = Array.isArray(overrides.team_members)
+      ? overrides.team_members
+      : Array.isArray(base.team_members)
+        ? base.team_members
+        : [];
+    const attendanceLogs = Array.isArray(overrides.attendance_logs)
+      ? overrides.attendance_logs
+      : Array.isArray(base.attendance_logs)
+        ? base.attendance_logs
+        : [];
+    return {
+      ...base,
+      participation_type:
+        overrides.participation_type ||
+        base.participation_type ||
+        'individual',
+      team_lead: teamLead,
+      team_members: teamMembers,
+      attendance_logs: attendanceLogs,
+      metrics,
+    };
+  }
+
   private pickTrimmedString(value: unknown): string {
     if (typeof value === 'string') return value.trim();
     if (typeof value === 'number' && Number.isFinite(value))
@@ -3874,18 +3949,20 @@ export class StudentReportsService {
           0,
         )
       : 0;
-    const storedTeamLead = report.section1?.team_lead
-      ? {
-          ...report.section1.team_lead,
-          fullName:
-            report.section1.team_lead.fullName ||
-            report.section1.team_lead.name ||
-            '',
-          cnic: this.engagementService.decryptCnicInternal(
-            report.section1.team_lead.cnic,
-          ),
-        }
-      : undefined;
+    const storedLeadRecord = this.asUnknownRecord(report.section1?.team_lead);
+    const storedTeamLead =
+      Object.keys(storedLeadRecord).length > 0
+        ? {
+            ...storedLeadRecord,
+            fullName:
+              this.pickTrimmedString(storedLeadRecord.fullName) ||
+              this.pickTrimmedString(storedLeadRecord.name) ||
+              '',
+            cnic: this.engagementService.decryptCnicInternal(
+              this.pickTrimmedString(storedLeadRecord.cnic),
+            ),
+          }
+        : undefined;
 
     return {
       success: true,
@@ -3933,8 +4010,7 @@ export class StudentReportsService {
         partner_approved_at: report.partnerApprovedAt,
         admin_approved_at: report.adminApprovedAt,
         evidence_urls: this.collectEvidenceUrls(report),
-        section1: {
-          ...report.section1,
+        section1: this.sanitizeSection1ForClient(report.section1, {
           participation_type:
             liveTeamFields.participation_type ||
             report.section1?.participation_type,
@@ -3951,17 +4027,16 @@ export class StudentReportsService {
           // a project where every logged session was rejected has a genuine live total of 0 and
           // must still override the (now-stale) stored metrics rather than silently falling back
           // to them, the same falsy-zero distinction `mapFacultyListPackage` makes.
-          ...(options?.allProjectAttendance &&
-          Array.isArray(mappedAttendanceLogs) &&
-          mappedAttendanceLogs.length > 0
-            ? {
-                metrics: {
-                  ...report.section1?.metrics,
+          metrics:
+            options?.allProjectAttendance &&
+            Array.isArray(mappedAttendanceLogs) &&
+            mappedAttendanceLogs.length > 0
+              ? {
+                  ...this.asUnknownRecord(report.section1?.metrics),
                   total_verified_hours: liveLoggedHours,
-                },
-              }
-            : {}),
-        },
+                }
+              : report.section1?.metrics,
+        }),
         section2: report.section2,
         section3: report.section3,
         section4: report.section4,

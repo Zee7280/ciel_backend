@@ -219,6 +219,9 @@ describe('StudentReportsService', () => {
       id: 'opp-1',
       title: 'Test Opportunity',
       isStudentCreated: false,
+      admin_approved: true,
+      workflowStage: 'live',
+      status: 'active',
       timeline: null,
     });
     mockStudentReportsRepository.findOne.mockReset();
@@ -404,6 +407,8 @@ describe('StudentReportsService', () => {
       id: 'opp-1',
       title: 'Test Opportunity',
       isStudentCreated: true,
+      faculty_verification_status: 'not_required',
+      requiresPartnerApproval: false,
       creatorId: 'student-1',
       admin_approved: true,
       workflowStage: 'live',
@@ -434,6 +439,9 @@ describe('StudentReportsService', () => {
       id: 'opp-1',
       title: 'Test Opportunity',
       isStudentCreated: false,
+      admin_approved: true,
+      workflowStage: 'live',
+      status: 'active',
       timeline: { expected_hours: 16 },
     });
     mockParticipantRepository.find.mockResolvedValue([
@@ -478,6 +486,9 @@ describe('StudentReportsService', () => {
       id: 'opp-1',
       title: 'Test Opportunity',
       isStudentCreated: false,
+      admin_approved: true,
+      workflowStage: 'live',
+      status: 'active',
       timeline: { expected_hours: 16 },
     });
     mockParticipantRepository.find.mockResolvedValue([
@@ -528,6 +539,9 @@ describe('StudentReportsService', () => {
       id: 'opp-1',
       title: 'Test Opportunity',
       isStudentCreated: false,
+      admin_approved: true,
+      workflowStage: 'live',
+      status: 'active',
       timeline: { expected_hours: 16 },
     });
     mockParticipantRepository.find.mockResolvedValue([
@@ -564,6 +578,9 @@ describe('StudentReportsService', () => {
       id: 'opp-1',
       title: 'Test Opportunity',
       isStudentCreated: false,
+      admin_approved: true,
+      workflowStage: 'live',
+      status: 'active',
       timeline: { expected_hours: 16 },
     });
     mockParticipantRepository.find.mockResolvedValue([
@@ -765,6 +782,9 @@ describe('StudentReportsService', () => {
       id: SAMPLE_OPP_UUID,
       title: 'Team Project',
       isStudentCreated: false,
+      admin_approved: true,
+      workflowStage: 'live',
+      status: 'active',
       timeline: null,
     });
     mockCanonicalLeadRows('team-lead-student');
@@ -965,6 +985,9 @@ describe('StudentReportsService', () => {
         id: SAMPLE_OPP_UUID,
         title: 'Team Project',
         isStudentCreated: false,
+      admin_approved: true,
+      workflowStage: 'live',
+      status: 'active',
         timeline: null,
       });
       mockCanonicalLeadRows('team-lead-student');
@@ -1006,6 +1029,9 @@ describe('StudentReportsService', () => {
         id: SAMPLE_OPP_UUID,
         title: 'Team Project',
         isStudentCreated: false,
+      admin_approved: true,
+      workflowStage: 'live',
+      status: 'active',
         timeline: null,
       });
       mockCanonicalLeadRows('hamza-lead', '2019-06-01T00:00:00.000Z');
@@ -1051,6 +1077,9 @@ describe('StudentReportsService', () => {
         id: SAMPLE_OPP_UUID,
         title: 'Team Project',
         isStudentCreated: false,
+      admin_approved: true,
+      workflowStage: 'live',
+      status: 'active',
         timeline: null,
       });
       mockParticipantRepository.find.mockResolvedValue([]);
@@ -1091,6 +1120,9 @@ describe('StudentReportsService', () => {
         id: SAMPLE_OPP_UUID,
         title: 'Solo Project',
         isStudentCreated: false,
+      admin_approved: true,
+      workflowStage: 'live',
+      status: 'active',
         timeline: null,
       });
       mockParticipantRepository.findOne.mockImplementation(
@@ -1130,6 +1162,8 @@ describe('StudentReportsService', () => {
         id: SAMPLE_OPP_UUID,
         title: 'Project',
         isStudentCreated: true,
+      faculty_verification_status: 'not_required',
+      requiresPartnerApproval: false,
         creatorId: 'no-participation-user',
         admin_approved: true,
         workflowStage: 'live',
@@ -1157,6 +1191,9 @@ describe('StudentReportsService', () => {
         id: SAMPLE_OPP_UUID,
         title: 'Team Project',
         isStudentCreated: false,
+      admin_approved: true,
+      workflowStage: 'live',
+      status: 'active',
         timeline: null,
       });
       mockCanonicalLeadRows('team-lead-student');
@@ -1416,6 +1453,83 @@ describe('StudentReportsService', () => {
       };
       expect(data.section2?.problem_statement).toBe(WRITTEN);
       expect(data.report_access?.can_submit_report).toBe(false);
+    });
+
+    it('returns the lead report when the teammate only has a mis-tagged individual seat (no teamId)', async () => {
+      const lead = {
+        id: 'p-lead',
+        studentId: 'team-lead-student',
+        projectId: SAMPLE_OPP_UUID,
+        participationMode: 'team',
+        isTeamLead: true,
+        createdAt: new Date('2020-01-01'),
+        ...TEAM_SCOPE,
+      };
+      const mistaggedMember = {
+        id: 'p-m2-solo',
+        studentId: 'member-2',
+        projectId: SAMPLE_OPP_UUID,
+        participationMode: 'individual',
+        isTeamLead: false,
+        createdAt: new Date('2020-01-02'),
+        teamId: null,
+        applicationId: TEAM_SCOPE.applicationId,
+      };
+      const leadReport = leadReportRow();
+
+      mockParticipantRepository.findOne.mockImplementation(
+        (opts: { where?: Record<string, unknown> }) => {
+          const w = opts?.where ?? {};
+          if (w.studentId === 'member-2') return Promise.resolve(mistaggedMember);
+          if (w.studentId === 'team-lead-student') return Promise.resolve(lead);
+          return Promise.resolve(null);
+        },
+      );
+      mockParticipantRepository.find.mockImplementation(
+        (opts: { where?: Record<string, unknown> }) => {
+          const w = opts?.where ?? {};
+          if (w.studentId === 'member-2' && w.projectId === SAMPLE_OPP_UUID) {
+            return Promise.resolve([mistaggedMember]);
+          }
+          return Promise.resolve(
+            [lead, mistaggedMember].filter((row) => {
+              if (w.projectId && row.projectId !== w.projectId) return false;
+              if (w.teamId && (row as { teamId?: string | null }).teamId !== w.teamId)
+                return false;
+              if (
+                w.applicationId &&
+                (row as { applicationId?: string | null }).applicationId !==
+                  w.applicationId
+              ) {
+                return false;
+              }
+              return true;
+            }),
+          );
+        },
+      );
+      mockStudentReportsRepository.findOne.mockResolvedValue(null);
+      mockStudentReportsRepository.find.mockResolvedValue([leadReport]);
+      mockUsersRepository.findOne.mockResolvedValue({
+        id: 'team-lead-student',
+        name: 'Lead',
+        email: 'lead@test.com',
+      });
+
+      const result = await service.findOneByOpportunityOrId(
+        SAMPLE_OPP_UUID,
+        'member-2',
+      );
+      const data = result.data as {
+        section2?: { problem_statement?: string };
+        report_access?: {
+          is_team_lead?: boolean;
+          can_edit_report_body?: boolean;
+        };
+      };
+      expect(data.section2?.problem_statement).toBe(WRITTEN);
+      expect(data.report_access?.is_team_lead).toBe(false);
+      expect(data.report_access?.can_edit_report_body).toBe(false);
     });
   });
 

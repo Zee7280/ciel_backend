@@ -1040,23 +1040,52 @@ export class StudentReportsService {
       viewerStudentId,
       projectId,
     );
-    if (!mine || !enrollmentLooksLikeTeam(mine)) {
+    if (!mine) {
       return false;
     }
-    const roster = await loadSameTeamParticipations(
-      this.participantRepository,
-      projectId,
-      mine,
-    );
-    if (roster.some((row) => row.studentId === report.studentId)) {
-      return true;
+
+    // Prefer same-team roster when the viewer looks like a team seat.
+    if (enrollmentLooksLikeTeam(mine)) {
+      const roster = await loadSameTeamParticipations(
+        this.participantRepository,
+        projectId,
+        mine,
+      );
+      if (roster.some((row) => row.studentId === report.studentId)) {
+        return true;
+      }
+      const leadId = await resolveCanonicalLeadStudentIdForViewer(
+        this.participantRepository,
+        projectId,
+        mine,
+      );
+      if (leadId && leadId === report.studentId) {
+        return true;
+      }
     }
-    const leadId = await resolveCanonicalLeadStudentIdForViewer(
+
+    // Leftover individual seats (or mis-tagged mode) on the same project: still allow
+    // reading when the report owner is enrolled on this project — shared team report.
+    const owner = await findPreferredProjectEnrollment(
       this.participantRepository,
+      report.studentId,
       projectId,
-      mine,
     );
-    return Boolean(leadId && leadId === report.studentId);
+    if (!owner) {
+      return false;
+    }
+    const myTeam = (mine.teamId || '').trim();
+    const ownerTeam = (owner.teamId || '').trim();
+    if (myTeam && ownerTeam) {
+      return myTeam === ownerTeam;
+    }
+    const myApp = (mine.applicationId || '').trim();
+    const ownerApp = (owner.applicationId || '').trim();
+    if (myApp && ownerApp) {
+      return myApp === ownerApp;
+    }
+    // Same project enrollment + report owned by a team lead on that project.
+    return owner.isTeamLead === true || enrollmentLooksLikeTeam(owner);
   }
 
   /**
@@ -1102,7 +1131,10 @@ export class StudentReportsService {
       return this.studentReportsRepository.findOne({ where, relations });
     };
 
-    if (mine && enrollmentLooksLikeTeam(mine)) {
+    // Always try the shared team report when the viewer has any enrollment on the project.
+    // Do not require enrollmentLooksLikeTeam — mis-tagged individual seats still need the lead's
+    // filled sections 2–11 (attendance stays keyed to the viewer).
+    if (mine) {
       const shared = await this.findSharedTeamReportForViewer(
         viewerStudentId,
         key,
@@ -1111,6 +1143,35 @@ export class StudentReportsService {
       );
       if (shared) {
         return { report: shared, attendanceStudentId: viewerStudentId };
+      }
+
+      // Project-wide fallback: any report on this opportunity the viewer may access.
+      const relations = ['student', 'opportunity', 'opportunity.organization'];
+      if (typeof this.studentReportsRepository.find === 'function') {
+        const onProject = await this.studentReportsRepository.find({
+          where: [{ opportunityId: key }, { project_id: key }],
+          relations,
+        });
+        if (Array.isArray(onProject) && onProject.length) {
+          const seen = new Set<string>();
+          const unique = onProject.filter((row) => {
+            if (!row?.id || seen.has(row.id)) return false;
+            seen.add(row.id);
+            return true;
+          });
+          const accessible: StudentReport[] = [];
+          for (const row of unique) {
+            if (await this.participantMayAccessReport(viewerStudentId, row)) {
+              accessible.push(row);
+            }
+          }
+          if (accessible.length) {
+            return {
+              report: this.pickPreferredTeamReportRow(accessible),
+              attendanceStudentId: viewerStudentId,
+            };
+          }
+        }
       }
     }
 
@@ -2406,7 +2467,6 @@ export class StudentReportsService {
       oid,
     );
     if (!mine) return;
-    if (!enrollmentLooksLikeTeam(mine)) return;
 
     const canonicalLeadId = await resolveCanonicalLeadStudentIdForViewer(
       this.participantRepository,
@@ -2414,6 +2474,7 @@ export class StudentReportsService {
       mine,
     );
     if (!canonicalLeadId) {
+      if (!enrollmentLooksLikeTeam(mine)) return;
       if (mine.isTeamLead) return;
       return;
     }
@@ -3530,7 +3591,7 @@ export class StudentReportsService {
         )
       : null;
 
-    if (!mine || !enrollmentLooksLikeTeam(mine)) {
+    if (!mine) {
       return {
         participation_mode: 'individual' as const,
         is_team_lead: true,
@@ -3541,29 +3602,55 @@ export class StudentReportsService {
       };
     }
 
+    // Mis-tagged individual seats that still share applicationId/team with a lead
+    // must not get can_edit_report_body — they only update attendance.
+    const looksTeam = enrollmentLooksLikeTeam(mine);
     const canonicalLeadId = await resolveCanonicalLeadStudentIdForViewer(
       this.participantRepository,
       projectKey,
       mine,
     );
-    const isLead = canonicalLeadId
-      ? viewerStudentId === canonicalLeadId
-      : mine.isTeamLead === true;
+    let isLead = false;
+    if (looksTeam) {
+      isLead = canonicalLeadId
+        ? viewerStudentId === canonicalLeadId
+        : mine.isTeamLead === true;
+    } else if (canonicalLeadId) {
+      isLead = viewerStudentId === canonicalLeadId;
+    } else if (
+      report.studentId &&
+      report.studentId !== viewerStudentId &&
+      (await this.participantMayAccessReport(viewerStudentId, report))
+    ) {
+      // Shared report owned by someone else on this project → viewer is a teammate.
+      isLead = false;
+    } else {
+      isLead = mine.isTeamLead === true || !report.studentId || report.studentId === viewerStudentId;
+    }
+
     const leadUser = canonicalLeadId
       ? await this.usersRepository.findOne({ where: { id: canonicalLeadId } })
       : report.student;
 
+    const participationMode =
+      looksTeam || Boolean(canonicalLeadId) || (!isLead && report.studentId !== viewerStudentId)
+        ? ('team' as const)
+        : ('individual' as const);
+
     return {
-      participation_mode: 'team' as const,
+      participation_mode: participationMode,
       is_team_lead: isLead,
       can_edit_report_body: isLead,
       can_submit_report: isLead,
       team_member_count: Math.max(Array.isArray(roster) ? roster.length : 0, 1),
-      team_lead: {
-        name: leadUser?.name || '',
-        email: leadUser?.email || '',
-        student_id: canonicalLeadId || report.studentId,
-      },
+      team_lead:
+        participationMode === 'team'
+          ? {
+              name: leadUser?.name || '',
+              email: leadUser?.email || '',
+              student_id: canonicalLeadId || report.studentId,
+            }
+          : null,
     };
   }
 

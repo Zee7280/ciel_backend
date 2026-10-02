@@ -419,4 +419,54 @@ describe('validateReportSectionsForSubmit', () => {
     });
     expect(issues.some((i) => i.section === 8 && i.field === 'description')).toBe(true);
   });
+
+  it('accepts a V13 ladder activity plus a linked before/after outcome', () => {
+    const issues = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section4: {
+        activity_blocks: [
+          {
+            id: 'act-1',
+            title: 'Digital-safety workshops',
+            primary_category: '📚 Education & Learning',
+            sub_category: 'Digital Literacy',
+            status: 'Completed',
+            description: 'Sara ran four sessions, Ali built the slides, the school arranged the lab.',
+            outputs: [{ title: 'Sessions Conducted', type: 'Sessions Conducted', quantity: '4', unit: 'Sessions' }],
+            serves_beneficiaries: true,
+            unique_beneficiaries: '86',
+            beneficiaries_reached: '86',
+            overlap_status: 'Mostly Unique to This Activity',
+            beneficiary_categories: ['Students'],
+            reach_counting_method: 'Verified registration / list',
+            geographic_reach: 'Single Site',
+            sdgs: [4],
+            ladder_ui: { open: 0 },
+          },
+        ],
+        project_summary: { distinct_total_beneficiaries: '86' },
+      },
+      section5: {
+        ...VALID_CORE_SECTIONS.section5,
+        measurable_outcomes: [
+          {
+            id: 'out-1',
+            activity_id: 'act-1',
+            outcome_area: '4. Knowledge / Skills Improvement',
+            outcome_sub_category: 'Awareness Sessions',
+            metric_category: '🔹 Percentage-Based (Advanced)',
+            metric: 'Percentage Improvement (%)',
+            metric_other: 'Attendance rate (%)',
+            baseline: '48',
+            endline: '79',
+            unit: '%',
+            sure: 1,
+            confidence_level: ['Directly Measured'],
+            measurement_explanation: 'Compared the school attendance register four weeks before vs after.',
+          },
+        ],
+      },
+    });
+    expect(issues.filter((i) => i.section === 4 || i.section === 5)).toEqual([]);
+  });
 });

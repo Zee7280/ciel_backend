@@ -99,6 +99,9 @@ describe('buildCielPkAiEvaluationPayload', () => {
             overlap_note: 'same class attended twice',
             reach_counting_method: 'Verified registration / list',
             site_note: 'Classroom 4',
+            sdgs: [4],
+            ladder_ui: { open: 0 },
+            serves_beneficiaries: true,
           },
         ],
         project_summary: {
@@ -111,10 +114,14 @@ describe('buildCielPkAiEvaluationPayload', () => {
         measurable_outcomes: [
           {
             id: 'out-1',
-            metric: 'Quiz score improvement',
+            metric: 'Percentage Improvement (%)',
+            metric_other: 'Quiz score improvement',
             baseline: '20',
             endline: '65',
             unit: 'percentage',
+            activity_id: 'act-1',
+            sure: 1,
+            confidence_level: ['Directly Measured'],
           },
         ],
         challenges: 'Short duration',
@@ -245,6 +252,8 @@ describe('buildCielPkAiEvaluationPayload', () => {
         sub_category?: string;
         partner_host?: string;
         site_note?: string;
+        sdgs?: number[];
+        serves_beneficiaries?: boolean;
         beneficiaries?: { unique_count?: number; overlap_note?: string; counting_method?: string };
       }>;
     };
@@ -254,11 +263,27 @@ describe('buildCielPkAiEvaluationPayload', () => {
       sub_category: 'Workshop',
       partner_host: 'Abroo High School',
       site_note: 'Classroom 4',
+      sdgs: [4],
+      serves_beneficiaries: true,
       beneficiaries: {
         unique_count: 40,
         overlap_note: 'same class attended twice',
         counting_method: 'Verified registration / list',
       },
+    });
+    const section5 = payload.section5_outcomes_systemic_change as {
+      measurable_outcomes?: Array<{
+        activity_id?: string | null;
+        sure?: number | null;
+        confidence_level?: string[];
+        outcome_statement?: string;
+      }>;
+    };
+    expect(section5.measurable_outcomes?.[0]).toMatchObject({
+      activity_id: 'act-1',
+      sure: 1,
+      confidence_level: ['Directly Measured'],
+      outcome_statement: 'Quiz score improvement',
     });
   });
 });

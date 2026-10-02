@@ -353,6 +353,11 @@ function mapSection4(section4: UnknownRecord): UnknownRecord {
             delivery_mode: pickString(row.delivery_mode),
             geographic_reach: pickString(row.geographic_reach),
             site_note: pickString(row.site_note),
+            serves_beneficiaries: row.serves_beneficiaries === false ? false : true,
+            sdgs: asArray(row.sdgs)
+                .map((n) => pickNumber(n))
+                .filter((n): n is number => n != null && n >= 1 && n <= 17),
+            ladder_ui: asRecord(row.ladder_ui),
         };
     });
     const summary = asRecord(section4.project_summary);
@@ -382,15 +387,21 @@ function mapSection5(section5: UnknownRecord, urlToFileId: Map<string, string>):
             const row = asRecord(entry);
             return {
                 outcome_id: pickString(row.id) || `OUT-${String(index + 1).padStart(3, '0')}`,
-                outcome_statement: pickString(row.metric) || pickString(row.outcome_area),
+                outcome_statement:
+                    pickString(row.metric_other) ||
+                    pickString(row.metric) ||
+                    pickString(row.outcome_area),
                 baseline_value: pickNumber(row.baseline),
                 endline_value: pickNumber(row.endline),
-                unit: pickString(row.unit),
+                unit: pickString(row.unit_other) || pickString(row.unit),
                 measurement_tool: pickString(row.measurement_explanation) || asArray(row.confidence_level).join(', '),
                 baseline_date: null,
                 endline_date: null,
                 beneficiary_group: pickString(row.outcome_area),
                 evidence_file_ids: [],
+                activity_id: pickString(row.activity_id) || null,
+                sure: pickNumber(row.sure),
+                confidence_level: asArray(row.confidence_level).map((v) => pickString(v)).filter(Boolean),
             };
         }),
         outcome_evidence_summary: pickString(section5.summary_text),

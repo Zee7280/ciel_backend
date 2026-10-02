@@ -84,5 +84,6 @@ describe('org signup mapping', () => {
     it('composes E.164 from dial code + national digits', () => {
         expect(composeSignupContactPhone('+92', '3001234567')).toBe('+923001234567');
         expect(composeSignupContactPhone('+92', '+923001234567')).toBe('+923001234567');
+        expect(composeSignupContactPhone('+92', '03001234567')).toBe('+923001234567');
     });
 });

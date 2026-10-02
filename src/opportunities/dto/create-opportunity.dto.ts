@@ -154,6 +154,7 @@ export class CreateOpportunityDto {
   @IsString()
   mode: string;
 
+  /** Creator mobile in E.164 (e.g. +923001234567). Private-candidate submit stores the same value on executing_context.private_candidate.phone. */
   @IsString()
   @IsOptional()
   student_contact?: string;

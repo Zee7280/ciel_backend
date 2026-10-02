@@ -17,6 +17,10 @@ import {
   decryptPasswordRecord,
   encryptPasswordRecord,
 } from './password-record.util';
+import {
+  canonicalizePhoneInput,
+  normalizeE164Phone,
+} from '../common/phone-e164.util';
 
 function digitsOnly(s: string): string {
   return s.replace(/\D/g, '');
@@ -32,19 +36,23 @@ function composeContactFromUserPhone(
 ): string | null {
   const rawPhone = (phone ?? '').trim();
   if (!rawPhone) return null;
-  if (rawPhone.startsWith('+')) return rawPhone;
+  if (rawPhone.startsWith('+')) return normalizeE164Phone(rawPhone) || rawPhone;
 
   const cc = (countryCode ?? '').trim();
   const nationalDigits = digitsOnly(rawPhone);
   if (!nationalDigits) return null;
-  if (!cc) return rawPhone;
+  if (!cc) return normalizeE164Phone(rawPhone) || rawPhone;
 
   const dialDigits = digitsOnly(cc);
-  if (!dialDigits) return rawPhone;
-  if (nationalDigits.startsWith(dialDigits)) {
-    return `+${nationalDigits}`;
-  }
-  return `+${dialDigits}${nationalDigits}`;
+  if (!dialDigits) return normalizeE164Phone(rawPhone) || rawPhone;
+  return (
+    normalizeE164Phone(
+      nationalDigits.startsWith(dialDigits)
+        ? `+${nationalDigits}`
+        : rawPhone,
+      `+${dialDigits}`,
+    ) || `+${dialDigits}${nationalDigits}`
+  );
 }
 
 @Injectable()
@@ -144,7 +152,14 @@ export class UsersService {
     if (dto.institution) user.institution = dto.institution;
     if (dto.university) user.university = dto.university;
     if (dto.city) user.city = dto.city;
-    if (dto.phone) user.phone = dto.phone;
+    if (dto.phone) {
+      const parsed = canonicalizePhoneInput(dto.phone, {
+        required: true,
+        requiredMessage: 'Enter a valid mobile number.',
+      });
+      if (parsed.error) throw new BadRequestException(parsed.error);
+      user.phone = parsed.e164;
+    }
     if (dto.avatar) user.avatar = dto.avatar;
     if (dto.bio) user.bio = dto.bio;
     if (dto.department) user.department = dto.department;

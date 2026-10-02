@@ -35,6 +35,7 @@ import {
   isPublicSignupRole,
   resolveOrgSignupAccount,
 } from './org-signup.util';
+import { canonicalizePhoneInput } from '../common/phone-e164.util';
 
 @Injectable()
 export class AuthService implements OnApplicationBootstrap {
@@ -307,9 +308,15 @@ export class AuthService implements OnApplicationBootstrap {
         userCreateData.countryCode,
         userCreateData.phone,
       );
-      if (contactPhone) {
-        userCreateData.phone = contactPhone;
-      }
+      const parsedPhone = canonicalizePhoneInput(
+        contactPhone || userCreateData.phone,
+        {
+          required: true,
+          requiredMessage: 'Enter a valid mobile number.',
+        },
+      );
+      if (parsedPhone.error) throw new BadRequestException(parsedPhone.error);
+      userCreateData.phone = parsedPhone.e164;
 
       let organization: Organization | null = null;
       if (
@@ -327,7 +334,9 @@ export class AuthService implements OnApplicationBootstrap {
             ? {
                 contactName: userCreateData.contactPerson,
                 contactEmail: email,
-                ...(contactPhone ? { contactPhone } : {}),
+                ...(userCreateData.phone
+                  ? { contactPhone: userCreateData.phone }
+                  : {}),
               }
             : {}),
           ...(isOrgSignup &&

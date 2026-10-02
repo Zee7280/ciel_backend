@@ -25,6 +25,7 @@ import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { Report } from '../reports/entities/report.entity';
 import { Participation } from '../engagement/entities/participant.entity';
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
+import { canonicalizePhoneInput } from '../common/phone-e164.util';
 
 const UNIVERSITY_SCOPED_PARTICIPATION_STATUSES = [
   'pending',
@@ -426,8 +427,12 @@ export class OrganizationsService {
     const phoneTrim =
       typeof contactPhone === 'string' ? contactPhone.trim() : '';
     if (phoneTrim && !user.phone?.trim()) {
-      user.phone = phoneTrim;
-      changed = true;
+      const parsed = canonicalizePhoneInput(phoneTrim, { required: false });
+      if (parsed.error) throw new BadRequestException(parsed.error);
+      if (parsed.e164) {
+        user.phone = parsed.e164;
+        changed = true;
+      }
     }
     if (changed) await this.usersRepository.save(user);
   }
@@ -464,6 +469,15 @@ export class OrganizationsService {
     }
     if (dataPolicyAcknowledged !== undefined) {
       updateData.dataPolicyAcknowledged = dataPolicyAcknowledged;
+    }
+
+    if (typeof updateData.contactPhone === 'string' && updateData.contactPhone.trim()) {
+      const parsed = canonicalizePhoneInput(updateData.contactPhone, {
+        required: true,
+        requiredMessage: 'Enter a valid contact phone number.',
+      });
+      if (parsed.error) throw new BadRequestException(parsed.error);
+      updateData.contactPhone = parsed.e164;
     }
 
     if (!user.organization) {

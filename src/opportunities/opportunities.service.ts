@@ -38,7 +38,7 @@ import {
   OpportunityVerificationEmailDetails,
 } from '../mail/mail.service';
 import { randomUUID } from 'crypto';
-import { isPrivateCandidateDto } from './private-candidate.util';
+import { applyCanonicalPrivateCandidatePhone, isPrivateCandidateDto } from './private-candidate.util';
 import {
   OpportunityWorkflowService,
   WORKFLOW_STAGE,
@@ -61,6 +61,7 @@ import {
   communityServicePublicCode,
 } from './opportunity-approval-tracker.util';
 import { isProjectVerificationAuthRequired } from '../common/project-verification-auth.util';
+import { canonicalizePhoneInput } from '../common/phone-e164.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { OpportunityApplication } from './entities/opportunity-application.entity';
 import { OpportunityApplicationsService } from './opportunity-applications.service';
@@ -1178,6 +1179,19 @@ export class OpportunitiesService {
       throw new BadRequestException('faculty_department is required');
     if (supervision.faculty_university_name === '')
       throw new BadRequestException('faculty_university_name is required');
+
+    for (const key of [
+      'whatsapp_e164',
+      'partner_whatsapp_e164',
+      'faculty_whatsapp',
+      'partner_phone',
+    ] as const) {
+      const raw = supervision[key];
+      if (typeof raw !== 'string' || !raw.trim()) continue;
+      const parsed = canonicalizePhoneInput(raw, { required: false });
+      if (parsed.error) throw new BadRequestException(parsed.error);
+      supervision[key] = parsed.e164;
+    }
   }
 
   /** A non-remote opportunity needs a real map pin, not just a picked city — otherwise it can
@@ -2326,6 +2340,7 @@ export class OpportunitiesService {
       dto.safety_declaration,
     );
     const privateCandidate = isPrivateCandidateDto(dto);
+    applyCanonicalPrivateCandidatePhone(dto, { required: true });
     // validation rules for student flow
     if (!privateCandidate) {
       if (!dto.supervision?.contact)
@@ -3310,6 +3325,7 @@ export class OpportunitiesService {
       ...rawFields
     } = dto as Record<string, unknown> & { draft?: unknown; id?: unknown };
     const fields = pickDraftPersistFields(rawFields);
+    applyCanonicalPrivateCandidatePhone(fields, { required: false });
     const title =
       typeof fields.title === 'string' && fields.title.trim()
         ? fields.title.trim()

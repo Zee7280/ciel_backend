@@ -47,6 +47,7 @@ import { resolveParticipationForAttendanceUnlock } from './attendance-unlock.uti
 import { ConfigService } from '@nestjs/config';
 import { MailService } from '../mail/mail.service';
 import * as crypto from 'crypto';
+import { canonicalizePhoneInput } from '../common/phone-e164.util';
 
 /** Roster rows partners/faculty need for attendance UI (exclude only rejected). Aligned with join-enrollment “active seat” statuses. */
 const PROJECT_TEAM_VISIBILITY_STATUSES: readonly string[] = [
@@ -305,6 +306,13 @@ export class EngagementService {
   }
 
   async registerParticipant(studentId: string, dto: RegisterParticipantDto) {
+    const parsedMobile = canonicalizePhoneInput(dto.mobile, {
+      required: true,
+      requiredMessage: 'Enter a valid mobile number.',
+    });
+    if (parsedMobile.error) throw new BadRequestException(parsedMobile.error);
+    dto.mobile = parsedMobile.e164;
+
     return await this.participantRepository.manager.transaction(
       async (manager) => {
         const dtoEmailNorm = this.normalizeParticipantEmail(dto.email);

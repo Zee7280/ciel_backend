@@ -22,6 +22,7 @@ import { UsersService } from '../users/users.service';
 import { User } from '../users/entities/user.entity';
 import { UserRole } from '../users/enums/user-role.enum';
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
+import { canonicalizePhoneInput } from '../common/phone-e164.util';
 import { StudentReport } from '../reports/entities/student-report.entity';
 import { Payment } from '../payments/entities/payment.entity';
 import { Opportunity } from './entities/opportunity.entity';
@@ -626,7 +627,11 @@ export class OpportunityApplicationsService {
         : payloadCopy;
 
     if (dto.mobile !== undefined && dto.mobile.trim().length >= 6) {
-      nextPayload = { ...nextPayload, contact_phone_e164: dto.mobile.trim() };
+      const parsedMobile = canonicalizePhoneInput(dto.mobile, {
+        required: false,
+      });
+      if (parsedMobile.error) throw new BadRequestException(parsedMobile.error);
+      nextPayload = { ...nextPayload, contact_phone_e164: parsedMobile.e164 };
     }
 
     const syncLinkedUserProfile = dto.sync_linked_user_profile !== false;
@@ -634,12 +639,15 @@ export class OpportunityApplicationsService {
       const uPatch: Record<string, unknown> = {};
       if (dto.full_name?.trim()) uPatch.name = dto.full_name.trim();
       if (dto.mobile !== undefined && dto.mobile.trim().length >= 6) {
-        const raw = dto.mobile.trim();
-        if (raw.startsWith('+')) {
-          uPatch.phone = raw;
+        const parsedUserMobile = canonicalizePhoneInput(dto.mobile, {
+          required: false,
+        });
+        if (parsedUserMobile.error) {
+          throw new BadRequestException(parsedUserMobile.error);
+        }
+        if (parsedUserMobile.e164) {
+          uPatch.phone = parsedUserMobile.e164;
           uPatch.countryCode = null;
-        } else {
-          uPatch.phone = raw;
         }
       }
       if (dto.cnic?.trim()) {

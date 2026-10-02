@@ -52,7 +52,7 @@ import { buildOpportunityApprovalTracker } from '../opportunities/opportunity-ap
 import { buildOpportunityDetailView } from '../opportunities/opportunity-detail-view.util';
 import { purifyStudentOpportunityContent } from '../opportunities/opportunity-content-purify.util';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
-import { isPrivateCandidateOpportunity } from '../opportunities/private-candidate.util';
+import { applyCanonicalPrivateCandidatePhone, isPrivateCandidateDto, isPrivateCandidateOpportunity } from '../opportunities/private-candidate.util';
 import { isTeamApplyFromParticipationAndMembers } from '../opportunities/apply-team-payload.util';
 import { isReportPartnerStepSatisfied } from '../reports/report-partner-approval.util';
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
@@ -65,6 +65,7 @@ import { StudentReportsService } from '../reports/student-reports.service';
 import { ReportPartnerApprovalSettingsService } from '../reports/report-partner-approval-settings.service';
 import { StudentApplyMaintenanceService } from '../opportunities/student-apply-maintenance.service';
 import type { ApplyMaintenanceState } from '../opportunities/student-apply-maintenance.util';
+import { canonicalizePhoneInput } from '../common/phone-e164.util';
 
 @Injectable()
 export class StudentsService {
@@ -1985,6 +1986,9 @@ export class StudentsService {
         : null;
 
     purifyStudentOpportunityContent(dto);
+    applyCanonicalPrivateCandidatePhone(dto, {
+      required: isPrivateCandidateDto(dto),
+    });
 
     const patchableFields: (keyof CreateOpportunityDto)[] = [
       'title',
@@ -2261,6 +2265,19 @@ export class StudentsService {
           );
         }
         seenEmails.add(em);
+        if (member && typeof member === 'object') {
+          const parsedMemberPhone = canonicalizePhoneInput(
+            typeof member.mobile === 'string' ? member.mobile : '',
+            {
+              required: true,
+              requiredMessage: 'Each team member needs a valid mobile number.',
+            },
+          );
+          if (parsedMemberPhone.error) {
+            throw new BadRequestException(parsedMemberPhone.error);
+          }
+          member.mobile = parsedMemberPhone.e164;
+        }
         sanitized.push(member);
       }
       teamMembersPayload = sanitized;
@@ -2313,13 +2330,19 @@ export class StudentsService {
       }
     }
 
+    const applyPhone = canonicalizePhoneInput(dto.contact_phone_e164, {
+      required: !isTeamApply,
+      requiredMessage: 'Enter a valid mobile number.',
+    });
+    if (applyPhone.error) throw new BadRequestException(applyPhone.error);
+
     const applyPayload: Record<string, unknown> = {
       participation_type: isTeamApply ? 'team' : dto.participation_type,
       primary_faculty_email: dto.primary_faculty_email,
       secondary_faculty_email: dto.secondary_faculty_email,
       team_id: isTeamApply ? resolvedTeamId : dto.team_id,
       team_members: teamMembersPayload,
-      contact_phone_e164: dto.contact_phone_e164,
+      contact_phone_e164: applyPhone.e164 || undefined,
       attendance_approver_type: attendanceApproverType,
     };
 

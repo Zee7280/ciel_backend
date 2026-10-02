@@ -48,6 +48,10 @@ import { ConfigService } from '@nestjs/config';
 import { MailService } from '../mail/mail.service';
 import * as crypto from 'crypto';
 import { canonicalizePhoneInput } from '../common/phone-e164.util';
+import {
+  isSchoolOrInstituteAcademicLabel,
+  sanitizeReportAcademicDepartment,
+} from '../common/academic-department.util';
 
 /** Roster rows partners/faculty need for attendance UI (exclude only rejected). Aligned with join-enrollment “active seat” statuses. */
 const PROJECT_TEAM_VISIBILITY_STATUSES: readonly string[] = [
@@ -531,6 +535,10 @@ export class EngagementService {
           team_id,
           ...registrationFields
         } = dto;
+        registrationFields.department = sanitizeReportAcademicDepartment(
+          registrationFields.department,
+          registrationFields.academicProgram,
+        );
 
         if (dto.participationMode === 'team' && dto.isTeamLead) {
           if (!effectiveTeamId) {
@@ -701,10 +709,15 @@ export class EngagementService {
   private resolveParticipationProgramLine(p: Participation): string {
     const student = p.student as User | undefined;
     const prog = (p.academicProgram || '').trim();
-    const dept = (p.department || '').trim();
     const major = (student?.major || '').trim();
-    const userDept = (student?.department || '').trim();
-    const base = prog || dept || major || userDept;
+    const program = prog || major;
+    const dept = sanitizeReportAcademicDepartment(
+      (p.department || '').trim() || (student?.department || '').trim(),
+      program,
+    );
+    const deptAsProgram =
+      dept && !isSchoolOrInstituteAcademicLabel(dept) ? dept : '';
+    const base = program || deptAsProgram;
     const year = (p.yearOfStudy || '').trim();
     if (base && year) return `${base} · ${year}`;
     if (base) return base;
@@ -717,18 +730,22 @@ export class EngagementService {
   ): Record<string, unknown> {
     const programLine = this.resolveParticipationProgramLine(participation);
     const student = participation.student as User | undefined;
-    const degreeBase =
+    const program =
       (participation.academicProgram || '').trim() ||
-      (student?.major || '').trim() ||
-      (participation.department || '').trim() ||
-      (student?.department || '').trim() ||
-      '';
+      (student?.major || '').trim();
+    const department =
+      sanitizeReportAcademicDepartment(
+        (participation.department || '').trim() ||
+          (student?.department || '').trim(),
+        program,
+      ) || null;
+    const degreeBase = program || department || '';
     return {
       ...enriched,
       program: programLine,
       academicProgram: participation.academicProgram || degreeBase || null,
       academic_program: participation.academicProgram || degreeBase || null,
-      department: participation.department || student?.department || null,
+      department,
       degree: degreeBase || undefined,
       year: participation.yearOfStudy || undefined,
       yearOfStudy: participation.yearOfStudy || undefined,

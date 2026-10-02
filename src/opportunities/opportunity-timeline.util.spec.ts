@@ -88,5 +88,12 @@ describe('opportunity-timeline.util', () => {
         application_deadline: '2026-10-20',
       }),
     ).toBeNull();
+    expect(
+      validateTimelineForPersist({
+        ...base,
+        close_applications_early: true,
+        application_deadline: '2026-09-01',
+      }),
+    ).toMatch(/before the project start/i);
   });
 });

@@ -1,5 +1,6 @@
 import {
     BadRequestException,
+    ForbiddenException,
     Injectable,
     NotFoundException,
 } from '@nestjs/common';
@@ -12,6 +13,7 @@ import { StudentReport } from '../reports/entities/student-report.entity';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import { User } from '../users/entities/user.entity';
 import { S3Service } from '../common/s3.service';
+import { canDownloadEvidence } from '../reports/evidence-access.util';
 import {
     collectReportEvidenceFiles,
     ReportEvidenceFileRef,
@@ -173,7 +175,21 @@ export class AdminProjectEvidenceService {
             relations: ['participant'],
         });
 
-        const entries = this.buildZipEntries(opportunity.title, reports, attendanceLogs);
+        // Sharing rule: only Public evidence can be downloaded. Restricted/Private is view-only,
+        // blocked for every role including Super Admin.
+        const downloadableReports = reports.filter((r) => canDownloadEvidence(r));
+        if (reports.length > 0 && downloadableReports.length === 0) {
+            throw new ForbiddenException(
+                'Evidence downloads are blocked: this project shares evidence as Restricted/Private. Only Public evidence can be downloaded.',
+            );
+        }
+        const attendanceDownloadable =
+            reports.length > 0 && downloadableReports.length === reports.length;
+        const entries = this.buildZipEntries(
+            opportunity.title,
+            downloadableReports,
+            attendanceDownloadable ? attendanceLogs : [],
+        );
         if (entries.length === 0) {
             throw new NotFoundException('No evidence files found for this project');
         }

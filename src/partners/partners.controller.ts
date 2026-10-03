@@ -542,6 +542,7 @@ export class PartnersController {
     return this.studentReportsService.findOneForPartner(
       id,
       req.user.organizationId,
+      req.user.role,
     );
   }
 
@@ -758,6 +759,7 @@ export class PartnerAliasController {
     return this.studentReportsService.findOneForPartner(
       id,
       req.user.organizationId,
+      req.user.role,
     );
   }
 

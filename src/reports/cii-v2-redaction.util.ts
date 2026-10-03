@@ -59,14 +59,53 @@ export type CiiV2LockInput =
   | null
   | undefined;
 
+export interface RedactCiiV2Options {
+  /**
+   * Partner / NGO / university viewers see the AI score as soon as the analyser has run (marked
+   * `provisional: true` until faculty locks it). Student viewers must NOT pass this — they stay
+   * locked-only. Same whitelist either way: integrityChecks, per-criterion anchors and AI
+   * rationale are never included.
+   */
+  releaseProvisional?: boolean;
+}
+
 export function redactCiiV2Fields(
   ciiV2: Record<string, unknown> | null | undefined,
   ciiV2Lock: CiiV2LockInput,
-): { ciiV2: RedactedCiiV2 | null; ciiV2Lock: RedactedCiiV2Lock | null } {
+  options: RedactCiiV2Options = {},
+): {
+  ciiV2: (RedactedCiiV2 & { provisional?: boolean }) | null;
+  ciiV2Lock: RedactedCiiV2Lock | null;
+} {
   const locked =
     ciiV2Lock?.locked === true || ciiV2Lock?.locked === 'true';
   if (!locked) {
-    return { ciiV2: null, ciiV2Lock: null };
+    const hasScore =
+      ciiV2 != null &&
+      (typeof ciiV2.final === 'number' ||
+        (typeof ciiV2.final === 'string' && ciiV2.final.trim() !== ''));
+    if (!options.releaseProvisional || !hasScore) {
+      return { ciiV2: null, ciiV2Lock: null };
+    }
+    const full = redactCiiV2Fields(
+      ciiV2,
+      { ...(ciiV2Lock ?? {}), locked: true },
+      {},
+    );
+    // Provisional: strip anything that implies faculty sign-off, keep score/level/sections.
+    return {
+      ciiV2: full.ciiV2
+        ? {
+            ...full.ciiV2,
+            studentFeedback: undefined,
+            redFlags: undefined,
+            aiRecommendedScore: undefined,
+            facultyApprovedScore: undefined,
+            provisional: true,
+          }
+        : null,
+      ciiV2Lock: null,
+    };
   }
 
   const sections = Array.isArray(ciiV2?.sections)

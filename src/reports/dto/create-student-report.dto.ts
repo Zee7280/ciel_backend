@@ -285,25 +285,33 @@ export class Section8Dto {
     @IsString()
     description: string;
 
-    @IsNotEmpty()
-    @IsIn(['public', 'limited', 'internal'])
-    media_usage: 'public' | 'limited' | 'internal';
+    @IsOptional()
+    @IsIn(['public', 'restricted', 'private', 'limited', 'internal'])
+    media_visible?: 'public' | 'restricted' | 'private' | 'limited' | 'internal';
 
-    @IsBoolean()
-    @IsNotEmpty()
-    consent_authentic: boolean;
+    @IsOptional()
+    @IsIn(['public', 'restricted', 'private', 'limited', 'internal'])
+    media_usage?: 'public' | 'restricted' | 'private' | 'limited' | 'internal';
 
+    @IsOptional()
     @IsBoolean()
-    @IsNotEmpty()
-    consent_informed: boolean;
+    public_share_permission?: boolean;
 
+    @IsOptional()
     @IsBoolean()
-    @IsNotEmpty()
-    consent_no_harm: boolean;
+    consent_authentic?: boolean;
 
+    @IsOptional()
     @IsBoolean()
-    @IsNotEmpty()
-    partner_verified: boolean;
+    consent_informed?: boolean;
+
+    @IsOptional()
+    @IsBoolean()
+    consent_no_harm?: boolean;
+
+    @IsOptional()
+    @IsBoolean()
+    partner_verified?: boolean;
 
     @IsOptional()
     @IsArray()

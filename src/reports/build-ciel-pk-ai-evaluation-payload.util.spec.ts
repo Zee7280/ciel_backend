@@ -202,9 +202,15 @@ describe('buildCielPkAiEvaluationPayload', () => {
       (
         payload.section8_evidence_verification as {
           evidence_file_ids?: string[];
+          media_visibility?: string;
+          public_share_permission?: boolean;
         }
       ).evidence_file_ids?.length,
     ).toBeGreaterThan(0);
+    expect(
+      (payload.section8_evidence_verification as { media_visibility?: string })
+        .media_visibility,
+    ).toBe('restricted');
     const firstLog = (
       payload.section1_participation_identity_attendance as {
         attendance_logs?: Array<{ evidence_file_ids?: string[] }>;
@@ -285,5 +291,37 @@ describe('buildCielPkAiEvaluationPayload', () => {
       confidence_level: ['Directly Measured'],
       outcome_statement: 'Quiz score improvement',
     });
+  });
+
+  it('derives sessions/geography from ladder activities, drops ladder_ui, sends challenge_tags', () => {
+    const payload = buildCielPkAiEvaluationPayload({
+      id: 'r1',
+      studentId: 's1',
+      section4: {
+        activity_blocks: [
+          {
+            id: 'a1',
+            title: 'Reading circles',
+            geographic_reach: 'Single Site',
+            ladder_ui: { open: 3 },
+            outputs: [
+              { type: 'Sessions Conducted', quantity: '3', unit: 'Sessions' },
+              { type: 'Kits Distributed', quantity: '10', unit: 'Kits' },
+            ],
+          },
+        ],
+      },
+      section5: { challenge_tags: ['limited_budget'], measurable_outcomes: [] },
+    } as unknown as StudentReport);
+    const s4 = payload.section4_activities_outputs_scale as {
+      project_summary: { total_sessions: number; geographic_reach: string };
+      activity_blocks: Array<Record<string, unknown>>;
+    };
+    expect(s4.project_summary.total_sessions).toBe(3);
+    expect(s4.project_summary.geographic_reach).toBe('Single Site');
+    expect(s4.activity_blocks[0]).not.toHaveProperty('ladder_ui');
+    expect(
+      (payload.section5_outcomes_systemic_change as { challenge_tags: string[] }).challenge_tags,
+    ).toEqual(['limited_budget']);
   });
 });

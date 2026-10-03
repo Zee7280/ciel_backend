@@ -164,6 +164,7 @@ export class StudentReportsController {
       return await this.studentReportsService.findOneForPartner(
         id,
         req.user.organizationId,
+        req.user.role,
       );
     }
     // Match /student/reports/:id — accept report UUID or opportunity (project) id for the JWT student.

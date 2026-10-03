@@ -331,7 +331,8 @@ export class StudentReport {
   section8: {
     evidence_types: string[];
     description: string;
-    media_visible: 'public' | 'limited' | 'internal';
+    media_visible: 'public' | 'restricted' | 'private' | 'limited' | 'internal';
+    public_share_permission?: boolean;
     ethical_compliance: {
       authentic: boolean;
       informed_consent: boolean;

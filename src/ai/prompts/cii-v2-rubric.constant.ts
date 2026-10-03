@@ -101,9 +101,11 @@ Emit exactly one JSON object (no markdown fences, no extra text) with this shape
   "integrityPenalty": { "amount": 0+, "why": "..." },
   "evidence": [ { "id": "E-01", "file": "...", "claim": "...", "type": "...", "match": 0-100, "verdict": "MATCH|PARTIAL|MISMATCH", "why": "..." }, ... ],
   "redFlags": [ "short red flag description", ... ],
+  "checks": [ { "level": "hold|review", "title": "short title", "detail": "one or two sentences" }, ... ],
   "needsAdminReview": false,
   "studentFeedback": "2-4 sentences of encouraging, specific, developmental feedback for the student"
 }
+'checks' are admin-only integrity notes: use level "hold" for something that should block verification (e.g. evidence clearly missing for a headline claim, readiness claimed despite incomplete hours) and "review" for claim-to-evidence scope mismatches, SDG mapping that the described activities do not support, or inconsistent resource/beneficiary counts. Use an empty array when there are none. Do not repeat hours-minimum or no-evidence-files issues; the platform checks those itself.
 Do not compute or include a final numeric CII score, level, or badge yourself - the platform recomputes those deterministically from your per-criterion anchors.
 `;
 

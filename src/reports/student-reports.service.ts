@@ -41,6 +41,8 @@ import {
 import { ReportPartnerApprovalSettingsService } from './report-partner-approval-settings.service';
 import { isReportPartnerStepSatisfied } from './report-partner-approval.util';
 import { collectReportEvidenceFiles } from './collect-report-evidence.util';
+import { persistSection8Visibility } from './media-visibility.util';
+import { applyEvidenceAccess, type EvidenceViewerRole } from './evidence-access.util';
 import { buildReportReviewPackage, type ReportReviewPackage } from './review-package.util';
 import { isPrivateCandidateOpportunity, reviewRouteForOpportunity } from '../opportunities/private-candidate.util';
 import {
@@ -3024,7 +3026,9 @@ export class StudentReportsService {
       if (parsedData.section5) report.section5 = parsedData.section5;
       if (parsedData.section6) report.section6 = parsedData.section6;
       if (parsedData.section7) report.section7 = parsedData.section7;
-      if (parsedData.section8) report.section8 = parsedData.section8;
+      if (parsedData.section8) {
+        report.section8 = persistSection8Visibility(parsedData.section8);
+      }
       if (parsedData.section9) report.section9 = parsedData.section9;
       if (parsedData.section10) report.section10 = parsedData.section10;
       if (shouldSubmit) {
@@ -3056,7 +3060,7 @@ export class StudentReportsService {
         section5: parsedData.section5,
         section6: parsedData.section6,
         section7: parsedData.section7,
-        section8: parsedData.section8,
+        section8: persistSection8Visibility(parsedData.section8),
         section9: parsedData.section9,
         section10: parsedData.section10,
         section11: (shouldSubmit
@@ -3347,7 +3351,9 @@ export class StudentReportsService {
       if (parsedData.section5) report.section5 = parsedData.section5;
       if (parsedData.section6) report.section6 = parsedData.section6;
       if (parsedData.section7) report.section7 = parsedData.section7;
-      if (parsedData.section8) report.section8 = parsedData.section8;
+      if (parsedData.section8) {
+        report.section8 = persistSection8Visibility(parsedData.section8);
+      }
       if (parsedData.section9) report.section9 = parsedData.section9;
       if (parsedData.section10) report.section10 = parsedData.section10;
       if (parsedData.section11)
@@ -3367,7 +3373,7 @@ export class StudentReportsService {
         section5: parsedData.section5,
         section6: parsedData.section6,
         section7: parsedData.section7,
-        section8: parsedData.section8,
+        section8: persistSection8Visibility(parsedData.section8),
         section9: parsedData.section9,
         section10: parsedData.section10,
         section11: this.stripDraftCiiFromSection11(parsedData.section11),
@@ -3410,6 +3416,41 @@ export class StudentReportsService {
         ...this.reportVerificationPayload(report),
         last_saved: report.updatedAt,
       },
+    };
+  }
+
+  /**
+   * Partner / NGO / university listing rows: same release rule as the detail path. CII is the
+   * redacted provisional subset (never raw anchors/AI notes/integrity checks), independent AI
+   * analyses are dropped, and evidence file links are removed (lists never need them; the
+   * detail endpoint applies the per-role sharing matrix).
+   */
+  private static restrictListingForExternalViewer<
+    T extends Record<string, any>,
+  >(row: T): T {
+    const wrapped = StudentReportsService.redactCiiV2ForExternalViewer(
+      { data: { ciiV2: row.ciiV2, ciiV2Lock: row.ciiV2Lock } },
+      { releaseProvisional: true },
+    );
+    const pkg = row.review_package as
+      | { documents?: { evidence?: Record<string, unknown> } }
+      | null
+      | undefined;
+    const review_package = pkg?.documents?.evidence
+      ? {
+          ...pkg,
+          documents: {
+            ...pkg.documents,
+            evidence: { ...pkg.documents.evidence, count: 0, files: [] },
+          },
+        }
+      : row.review_package;
+    return {
+      ...row,
+      ciiV2: wrapped.data?.ciiV2 ?? null,
+      ciiV2Lock: wrapped.data?.ciiV2Lock ?? null,
+      independentAiAnalyses: null,
+      review_package,
     };
   }
 
@@ -3571,7 +3612,11 @@ export class StudentReportsService {
 
     return {
       success: true,
-      data: mapped,
+      data: organizationId
+        ? mapped.map((r) =>
+            StudentReportsService.restrictListingForExternalViewer(r),
+          )
+        : mapped,
       pagination: {
         total,
         page: pageNum,
@@ -3644,7 +3689,9 @@ export class StudentReportsService {
     );
     return {
       success: true,
-      data: mapped,
+      data: mapped.map((r) =>
+        StudentReportsService.restrictListingForExternalViewer(r),
+      ),
       pagination: {
         total,
         page: pageNum,
@@ -3675,16 +3722,23 @@ export class StudentReportsService {
   async buildDetailResponse(
     report: StudentReport,
     attendanceParticipantStudentId?: string,
-    options?: { allProjectAttendance?: boolean },
+    options?: { allProjectAttendance?: boolean; evidenceViewer?: EvidenceViewerRole },
   ) {
-    return this.formatReportResponse(
+    const response = await this.formatReportResponse(
       report,
       attendanceParticipantStudentId,
       options,
     );
+    return options?.evidenceViewer
+      ? applyEvidenceAccess(response, options.evidenceViewer)
+      : response;
   }
 
-  async findOneForPartner(id: string, organizationId: string) {
+  async findOneForPartner(
+    id: string,
+    organizationId: string,
+    viewerRole?: string,
+  ) {
     const report = await this.studentReportsRepository.findOne({
       where: { id },
       relations: ['student', 'opportunity'],
@@ -3705,10 +3759,20 @@ export class StudentReportsService {
 
     // Same reasoning as findOne (admin) above — a partner reviewing a team's
     // report must see every member's logged hours, not just the owner's.
-    return StudentReportsService.redactCiiV2ForExternalViewer(
-      await this.formatReportResponse(report, undefined, {
-        allProjectAttendance: true,
-      }),
+    // Evidence links follow the project-level sharing rule: University unlocks after super-admin
+    // approval; Partner / NGO / corporate never (unless the project is Public).
+    const evidenceRole: EvidenceViewerRole =
+      String(viewerRole || '').toLowerCase() === 'university'
+        ? 'university'
+        : 'partner';
+    return applyEvidenceAccess(
+      StudentReportsService.redactCiiV2ForExternalViewer(
+        await this.formatReportResponse(report, undefined, {
+          allProjectAttendance: true,
+        }),
+        { releaseProvisional: true },
+      ),
+      evidenceRole,
     );
   }
 
@@ -4039,11 +4103,12 @@ export class StudentReportsService {
    */
   private static redactCiiV2ForExternalViewer<
     T extends { data?: Record<string, unknown> },
-  >(response: T): T {
+  >(response: T, options: { releaseProvisional?: boolean } = {}): T {
     if (!response?.data) return response;
     const { ciiV2, ciiV2Lock } = redactCiiV2Fields(
       response.data.ciiV2 as Record<string, unknown> | null | undefined,
       response.data.ciiV2Lock as CiiV2LockInput,
+      options,
     );
 
     return {

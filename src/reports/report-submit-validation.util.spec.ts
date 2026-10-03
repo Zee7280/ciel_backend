@@ -131,6 +131,41 @@ describe('validateReportSectionsForSubmit', () => {
     expect(issues.some((i) => i.section === 8)).toBe(false);
   });
 
+  it('accepts Restricted/Private without the old four ethics checkboxes', () => {
+    const issues = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section8: {
+        has_evidence: 'no',
+        media_visible: 'restricted',
+      },
+    });
+    expect(issues.filter((i) => i.section === 8)).toEqual([]);
+  });
+
+  it('requires public-share permission only when visibility is Public', () => {
+    const missing = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section8: {
+        has_evidence: 'no',
+        media_visible: 'public',
+      },
+    });
+    expect(
+      missing.some(
+        (i) => i.section === 8 && i.field === 'public_share_permission',
+      ),
+    ).toBe(true);
+    const ok = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section8: {
+        has_evidence: 'no',
+        media_visible: 'public',
+        public_share_permission: true,
+      },
+    });
+    expect(ok.filter((i) => i.section === 8)).toEqual([]);
+  });
+
   it('rejects an empty or whitespace-only section10 continuation_details', () => {
     const issues = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,

@@ -17,6 +17,10 @@ import { StudentReportsService } from './student-reports.service';
 import { FacultyService } from '../faculty/faculty.service';
 import { AiService } from '../ai/ai.service';
 import { computeCiiV2Result } from './cii-v2.constants';
+import {
+  buildSystemIntegrityChecks,
+  mergeIntegrityChecks,
+} from './cii-integrity-checks.util';
 import { buildCielPkAiEvaluationPayload } from './build-ciel-pk-ai-evaluation-payload.util';
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
@@ -402,6 +406,7 @@ export class FacultyReportsService {
 
     return this.studentReportsService.buildDetailResponse(report, undefined, {
       allProjectAttendance: true,
+      evidenceViewer: 'faculty',
     });
   }
 
@@ -641,6 +646,10 @@ export class FacultyReportsService {
       bonusWhy: ciiV2.bonusWhy,
       integrityWhy: ciiV2.integrityWhy,
       redFlags: ciiV2.redFlags,
+      integrityChecks: mergeIntegrityChecks(
+        buildSystemIntegrityChecks(payload),
+        ciiV2.checks,
+      ),
       needsAdminReview: ciiV2.needsAdminReview,
       studentFeedback: ciiV2.studentFeedback,
       frameworkVersion: ciiV2.frameworkVersion,

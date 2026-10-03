@@ -1,3 +1,8 @@
+import {
+  hasPublicSharePermission,
+  resolveMediaVisibility,
+} from './media-visibility.util';
+
 export type ReportSubmitValidationIssue = {
   section: number;
   field: string;
@@ -56,18 +61,6 @@ function competencyScoresComplete(value: unknown): boolean {
   if (!value || typeof value !== 'object') return false;
   const scores = value as Record<string, unknown>;
   return COMPETENCY_SCORE_KEYS.every((key) => Number(scores[key]) >= 1);
-}
-
-function ethicsAccepted(section8: Record<string, unknown>): boolean {
-  const ethics =
-    section8.ethical_compliance && typeof section8.ethical_compliance === 'object'
-      ? (section8.ethical_compliance as Record<string, unknown>)
-      : {};
-  const authentic = ethics.authentic === true || section8.consent_authentic === true;
-  const informed = ethics.informed_consent === true || section8.consent_informed === true;
-  const noHarm = ethics.no_harm === true || section8.consent_no_harm === true;
-  const privacy = ethics.privacy_respected === true;
-  return Boolean(authentic && informed && noHarm && privacy);
 }
 
 /** Mirrors frontend validateSection4: a titled quantity, a legacy output string, or beneficiary reach. */
@@ -483,19 +476,15 @@ export function validateReportSectionsForSubmit(report: {
     }
   }
 
-  const mediaVisible = section8.media_visible ?? section8.media_usage;
-  if (!mediaVisible) {
+  if (
+    resolveMediaVisibility(section8.media_visible ?? section8.media_usage) ===
+      'public' &&
+    !hasPublicSharePermission(section8)
+  ) {
     issues.push({
       section: 8,
-      field: 'media_visible',
-      message: 'Choose Public, Institutional, or Private',
-    });
-  }
-  if (!ethicsAccepted(section8)) {
-    issues.push({
-      section: 8,
-      field: 'ethical_compliance',
-      message: 'Confirm this evidence was gathered responsibly',
+      field: 'public_share_permission',
+      message: 'I have permission to publicly share this evidence.',
     });
   }
 

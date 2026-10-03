@@ -14,6 +14,8 @@ export interface CiiV2AiEvaluation {
   integrityWhy?: string;
   evidence: CiiV2EvidenceRow[];
   redFlags: string[];
+  /** Optional hold/review integrity checks (additive; absent in older responses). */
+  checks: Array<{ level: 'hold' | 'review'; title: string; detail: string }>;
   needsAdminReview: boolean;
   studentFeedback?: string;
   frameworkVersion: string;
@@ -177,6 +179,18 @@ export function parseCiiV2Response(raw: string): CiiV2AiEvaluation | null {
       .filter(Boolean),
   ];
 
+  const checks = (Array.isArray(rec.checks) ? rec.checks : [])
+    .map((c) => {
+      const r = asRecord(c);
+      const title = pickString(r.title);
+      const detail = pickString(r.detail);
+      if (!title || !detail) return null;
+      const level: 'hold' | 'review' =
+        pickString(r.level).toLowerCase() === 'hold' ? 'hold' : 'review';
+      return { level, title, detail };
+    })
+    .filter((c): c is { level: 'hold' | 'review'; title: string; detail: string } => c !== null);
+
   return {
     sections,
     bonus: {
@@ -193,6 +207,7 @@ export function parseCiiV2Response(raw: string): CiiV2AiEvaluation | null {
     integrityWhy,
     evidence,
     redFlags,
+    checks,
     needsAdminReview: Boolean(rec.needsAdminReview) || redFlags.length > 0,
     studentFeedback: pickString(rec.studentFeedback) || undefined,
     frameworkVersion: pickString(rec.framework_version) || 'v2.0',

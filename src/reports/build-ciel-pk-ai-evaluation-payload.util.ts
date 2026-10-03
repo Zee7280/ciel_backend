@@ -2,6 +2,10 @@ import { MAX_DAILY_ATTENDANCE_HOURS } from '../engagement/attendance-description
 import { collectReportEvidenceFiles } from './collect-report-evidence.util';
 import { getReportScoringConfig } from './cii-section-weights.constants';
 import { StudentReport } from './entities/student-report.entity';
+import {
+    hasPublicSharePermission,
+    resolveMediaVisibility,
+} from './media-visibility.util';
 
 export const CIEL_PK_AI_EVALUATION_SCHEMA_VERSION = 'ciel_pk_ai_evaluation_v1.0';
 export const CIEL_PK_MASTER_PROMPT_VERSION = 'CIEL_PK_AI_Evaluator_Prompt_v8_2';
@@ -357,11 +361,22 @@ function mapSection4(section4: UnknownRecord): UnknownRecord {
             sdgs: asArray(row.sdgs)
                 .map((n) => pickNumber(n))
                 .filter((n): n is number => n != null && n >= 1 && n <= 17),
-            ladder_ui: asRecord(row.ladder_ui),
         };
     });
     const summary = asRecord(section4.project_summary);
-    const totalSessions = blocks.reduce((sum, block) => sum + (pickNumber(asRecord(block).sessions_count) ?? 0), 0);
+    // The activity ladder never writes sessions_count; fall back to delivered outputs counted in Sessions.
+    const sessionsFromOutputs = blocks.reduce(
+        (sum, block) =>
+            sum +
+            asArray(asRecord(block).outputs).reduce<number>((n, output) => {
+                const out = asRecord(output);
+                return /session/i.test(pickString(out.unit)) ? n + (pickNumber(out.quantity) ?? 0) : n;
+            }, 0),
+        0,
+    );
+    const totalSessions =
+        blocks.reduce((sum, block) => sum + (pickNumber(asRecord(block).sessions_count) ?? 0), 0) ||
+        sessionsFromOutputs;
     const fromActivities = blocks.reduce((sum, block) => {
         const people = asRecord(asRecord(block).beneficiaries);
         return sum + (pickNumber(people.unique_count) ?? pickNumber(people.count) ?? 0);
@@ -373,7 +388,9 @@ function mapSection4(section4: UnknownRecord): UnknownRecord {
             total_beneficiaries_reached: distinctBeneficiaries,
             direct_beneficiaries: distinctBeneficiaries,
             indirect_beneficiaries: 0,
-            geographic_reach: pickString(summary.overall_geographic_reach),
+            geographic_reach:
+                pickString(summary.overall_geographic_reach) ||
+                (blocks.map((block) => pickString(asRecord(block).geographic_reach)).find(Boolean) ?? ''),
             implementation_model: asArray(summary.overall_implementation_model).join(', ') || pickString(summary.overall_delivery_mode),
         },
         activity_blocks: blocks,
@@ -407,6 +424,7 @@ function mapSection5(section5: UnknownRecord, urlToFileId: Map<string, string>):
         outcome_evidence_summary: pickString(section5.summary_text),
         limitations: pickString(section5.limitations),
         challenges: pickString(section5.challenges),
+        challenge_tags: asArray(section5.challenge_tags).map((v) => pickString(v)).filter(Boolean),
     };
 }
 
@@ -488,15 +506,20 @@ function mapSection8(section8: UnknownRecord, urlToFileId: Map<string, string>):
         missingEvidenceNotes.push('Section 8 claims evidence, but no accessible evidence files were linked.');
     }
     const ethical = asRecord(section8.ethical_compliance);
+    const mediaVisibility = resolveMediaVisibility(
+        section8.media_visible ?? section8.media_usage,
+    );
     return {
         has_evidence: hasEvidenceClaim,
         evidence_description: pickString(section8.description),
         evidence_types_claimed: asArray(section8.evidence_types),
+        media_visibility: mediaVisibility,
+        public_share_permission: hasPublicSharePermission(section8),
         ethical_compliance: {
             consent_obtained: ethical.informed_consent === true,
             minor_protection_followed: ethical.no_harm === true,
             faces_blurred_where_required: false,
-            permission_to_use_media: ethical.privacy_respected === true,
+            permission_to_use_media: hasPublicSharePermission(section8),
         },
         evidence_file_ids: evidenceFileIds,
         partner_verification: section8.partner_verification === true,

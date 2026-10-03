@@ -6,6 +6,7 @@ import {
   Logger,
   Optional,
 } from '@nestjs/common';
+import { CnicCipher } from '../common/cnic-cipher';
 import { resolveTeamSeatCap, teamCapacityError } from './team-capacity.util';
 import { IssueLogsService } from '../issue-logs/issue-logs.service';
 import {
@@ -70,8 +71,7 @@ const PROJECT_TEAM_VISIBILITY_STATUSES: readonly string[] = [
 @Injectable()
 export class EngagementService {
   private readonly logger = new Logger(EngagementService.name);
-  private readonly ALGORITHM = 'aes-256-cbc';
-  private readonly KEY: Buffer;
+  private readonly cnicCipher: CnicCipher;
 
   constructor(
     @InjectRepository(Participation)
@@ -89,10 +89,18 @@ export class EngagementService {
     private mailService: MailService,
     @Optional() private readonly issueLogsService?: IssueLogsService,
   ) {
-    const secret =
-      this.configService.get<string>('ENCRYPTION_KEY') ||
-      'default-secret-key-32-chars-long!!';
-    this.KEY = crypto.scryptSync(secret, 'salt', 32);
+    const configuredKey = this.configService.get<string>('ENCRYPTION_KEY');
+    if (!configuredKey && process.env.NODE_ENV === 'production') {
+      // Expected setup: the built-in key in common/cnic-cipher.ts is used. Setting ENCRYPTION_KEY later is
+      // optional and safe (old rows keep decrypting); then `npm run rotate:cnic -- --apply` migrates them.
+      this.logger.warn(
+        'ENCRYPTION_KEY not set: using the built-in CNIC key (existing data stays readable).',
+      );
+    }
+    this.cnicCipher = new CnicCipher({
+      current: configuredKey,
+      previous: this.configService.get<string>('ENCRYPTION_KEY_PREVIOUS'),
+    });
   }
 
   /** Match participation rows regardless of stored email casing/whitespace. */
@@ -2924,11 +2932,7 @@ export class EngagementService {
   }
 
   private encrypt(text: string): string {
-    const iv = crypto.randomBytes(16);
-    const cipher = crypto.createCipheriv(this.ALGORITHM, this.KEY, iv);
-    let encrypted = cipher.update(text, 'utf8', 'hex');
-    encrypted += cipher.final('hex');
-    return iv.toString('hex') + ':' + encrypted;
+    return this.cnicCipher.encrypt(text);
   }
 
   public decryptCnicInternal(text: string): string {
@@ -2941,12 +2945,7 @@ export class EngagementService {
   }
 
   private decrypt(text: string): string {
-    const [ivHex, encryptedText] = text.split(':');
-    const iv = Buffer.from(ivHex, 'hex');
-    const decipher = crypto.createDecipheriv(this.ALGORITHM, this.KEY, iv);
-    let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
-    return decrypted;
+    return this.cnicCipher.decrypt(text);
   }
 
   private getWeekNumber(d: Date): number {

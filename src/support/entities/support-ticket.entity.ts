@@ -30,6 +30,17 @@ export class SupportTicket {
     @Column({ default: 'open' })
     status: string;
 
+    /** Reply shown to the student (additive). */
+    @Column({ type: 'text', nullable: true })
+    adminReply?: string | null;
+
+    @Column({ type: 'timestamptz', nullable: true })
+    adminReplyAt?: Date | null;
+
+    /** Staff-only note; never returned to the student (additive). */
+    @Column({ type: 'text', nullable: true })
+    internalNote?: string | null;
+
     @CreateDateColumn()
     createdAt: Date;
 

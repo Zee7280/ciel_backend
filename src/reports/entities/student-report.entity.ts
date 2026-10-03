@@ -71,6 +71,13 @@ export class StudentReport {
   @Column({ name: 'admin_approved_at', type: 'timestamptz', nullable: true })
   adminApprovedAt: Date | null;
 
+  /** Last admin who approved/rejected/unlocked this report (additive audit columns). */
+  @Column({ name: 'admin_reviewed_by', type: 'varchar', length: 255, nullable: true })
+  adminReviewedBy: string | null;
+
+  @Column({ name: 'admin_reviewed_at', type: 'timestamptz', nullable: true })
+  adminReviewedAt: Date | null;
+
   @Column({ default: 'draft' })
   status: string; // 'draft', 'submitted', 'partner_verified', 'payment_pending' (legacy), 'payment_under_review', 'verified', 'rejected', 'paid'
 

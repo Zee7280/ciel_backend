@@ -48,14 +48,21 @@ export class AdminMailController {
             throw new BadRequestException('Message required');
         }
 
-        await this.mailService.sendAdminComposedEmail({
+        const result = await this.mailService.sendAdminComposedEmail({
             to,
             subject,
             messageHtml,
             messageText,
             image,
         });
-        return { success: true };
+        return {
+            success: result.failed.length === 0,
+            sent: result.sent.length,
+            failed: result.failed.length,
+            skipped: result.skipped.length,
+            failedRecipients: result.failed,
+            skippedRecipients: result.skipped,
+        };
     }
 
     private toArray(v: unknown): string[] {

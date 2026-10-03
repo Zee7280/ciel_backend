@@ -29,10 +29,12 @@ export class AdminPaymentsController {
     constructor(private readonly paymentsService: PaymentsService) { }
 
     @Get('pending')
-    async getPendingPayments() {
+    async getPendingPayments(@Query('page') page?: string, @Query('limit') limit?: string) {
+        const result = await this.paymentsService.findAllPendingManualPaged({ page, limit });
         return {
             success: true,
-            data: await this.paymentsService.findAllPendingManual(),
+            data: result.rows,
+            ...(result.page ? { pagination: { total: result.total, page: result.page, limit: result.limit } } : {}),
         };
     }
 
@@ -45,21 +47,29 @@ export class AdminPaymentsController {
     }
 
     @Get()
-    async listByStatus(@Query('status') status?: string) {
+    async listByStatus(
+        @Query('status') status?: string,
+        @Query('page') page?: string,
+        @Query('limit') limit?: string,
+    ) {
         if (!status) {
             throw new BadRequestException('Query parameter status is required (approved or rejected)');
         }
         const normalized = status.trim().toLowerCase();
         if (normalized === 'approved') {
+            const result = await this.paymentsService.findManualPaymentsByStatusPaged(PaymentStatus.APPROVED, { page, limit });
             return {
                 success: true,
-                data: await this.paymentsService.findManualPaymentsByStatus(PaymentStatus.APPROVED),
+                data: result.rows,
+                ...(result.page ? { pagination: { total: result.total, page: result.page, limit: result.limit } } : {}),
             };
         }
         if (normalized === 'rejected') {
+            const result = await this.paymentsService.findManualPaymentsByStatusPaged(PaymentStatus.REJECTED, { page, limit });
             return {
                 success: true,
-                data: await this.paymentsService.findManualPaymentsByStatus(PaymentStatus.REJECTED),
+                data: result.rows,
+                ...(result.page ? { pagination: { total: result.total, page: result.page, limit: result.limit } } : {}),
             };
         }
         throw new BadRequestException('status must be approved or rejected');
@@ -67,6 +77,7 @@ export class AdminPaymentsController {
 
     @Post(':paymentId/verify')
     async verifyPayment(
+        @Request() req: { user: { id: string; email?: string } },
         @Param('paymentId') paymentId: string,
         @Body() body: { status: PaymentStatus; feedback?: string },
     ) {
@@ -80,7 +91,10 @@ export class AdminPaymentsController {
             }
         }
 
-        return await this.paymentsService.verifyManualPayment(paymentId, body.status, body.feedback);
+        return await this.paymentsService.verifyManualPayment(paymentId, body.status, body.feedback, {
+            id: req.user.id,
+            email: req.user.email,
+        });
     }
 
     @Patch(':paymentId/verify')

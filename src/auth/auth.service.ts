@@ -5,6 +5,7 @@ import {
   ConflictException,
   BadRequestException,
   NotFoundException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -35,6 +36,7 @@ import {
   isPublicSignupRole,
   resolveOrgSignupAccount,
 } from './org-signup.util';
+import { PlatformSettingsService } from '../settings/platform-settings.service';
 import { canonicalizePhoneInput } from '../common/phone-e164.util';
 
 @Injectable()
@@ -47,6 +49,7 @@ export class AuthService implements OnApplicationBootstrap {
     private otpService: OtpService,
     private engagementService: EngagementService,
     private organizationMembershipService: OrganizationMembershipService,
+    private platformSettingsService: PlatformSettingsService,
     @InjectRepository(Opportunity)
     private opportunitiesRepository: Repository<Opportunity>,
     @InjectRepository(User)
@@ -169,6 +172,10 @@ export class AuthService implements OnApplicationBootstrap {
   }
 
   async signup(signupDto: SignupDto) {
+    // Admin "allow registrations" switch — covers every public signup role. Login is unaffected.
+    if (!(await this.platformSettingsService.isRegistrationAllowed())) {
+      throw new ForbiddenException('New registrations are temporarily closed.');
+    }
     try {
       const { password, email: rawEmail, ...rawUserData } = signupDto;
       const { status: _clientStatus, ...userData } =
@@ -470,15 +477,6 @@ export class AuthService implements OnApplicationBootstrap {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    void this.usersService
-      .capturePasswordRecordFromLogin(user.id, password)
-      .catch((err) => {
-        console.warn(
-          'Password record capture on login failed (non-fatal):',
-          (err as Error).message,
-        );
-      });
-
     if (user.role === UserRole.STUDENT) {
       try {
         await this.engagementService.linkOrphanParticipationsByEmail(
@@ -514,6 +512,21 @@ export class AuthService implements OnApplicationBootstrap {
         user: await this.usersService.formatUserResponse(user),
       },
     };
+  }
+
+  /**
+   * Admin-triggered reset: emails the user the normal reset link. Never reveals or sets a password.
+   */
+  async adminSendPasswordReset(userId: string): Promise<{ success: true }> {
+    const user = await this.usersService.findOne(userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    const result = await this.forgotPassword(user.email);
+    if (!result.success) {
+      throw new BadRequestException('Could not send the password reset email.');
+    }
+    return { success: true };
   }
 
   async forgotPassword(email: string) {
@@ -567,11 +580,7 @@ export class AuthService implements OnApplicationBootstrap {
     }
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
-    await this.usersService.updatePassword(
-      user.id,
-      hashedPassword,
-      newPassword,
-    );
+    await this.usersService.updatePassword(user.id, hashedPassword);
 
     return { success: true, message: 'Password updated successfully!' };
   }

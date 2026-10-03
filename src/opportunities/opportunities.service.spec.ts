@@ -1982,5 +1982,38 @@ describe('OpportunitiesService — approval actions record actor + timestamp + v
             reason: 'Please clarify the timeline',
         });
     });
+    it('reject() is idempotent, requires a reason, and approve() refuses rejected/revision rows', async () => {
+        const opp = {
+            id: 'opp-rej-1',
+            isStudentCreated: false,
+            admin_approved: false,
+            status: 'pending_approval',
+            workflowStage: 'pending_admin',
+            adminApprovalStatus: 'pending',
+            version: 1,
+            approvalHistory: [],
+        } as unknown as Opportunity;
+        const save = jest.fn(async (row: Opportunity) => row);
+        const service = makeService({ findOne: jest.fn().mockResolvedValue(opp), save });
+        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+
+        await expect(service.reject('opp-rej-1', '  ')).rejects.toBeInstanceOf(BadRequestException);
+        await service.reject('opp-rej-1', 'Not suitable', { id: 'a1', name: 'A' });
+        await service.reject('opp-rej-1', 'Not suitable', { id: 'a1', name: 'A' });
+        expect((opp as any).approvalHistory).toHaveLength(1);
+        expect(save).toHaveBeenCalledTimes(1);
+        await expect(service.revise('opp-rej-1', 'again')).rejects.toBeInstanceOf(BadRequestException);
+        await expect(service.approve('opp-rej-1')).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('setStatus() only allows closed/draft', async () => {
+        const opp = { id: 'o', status: 'active' } as unknown as Opportunity;
+        const save = jest.fn(async (row: Opportunity) => row);
+        const service = makeService({ findOne: jest.fn().mockResolvedValue(opp), save });
+        await expect(service.setStatus('o', 'active')).rejects.toBeInstanceOf(BadRequestException);
+        await expect(service.setStatus('o', 'rejected')).rejects.toBeInstanceOf(BadRequestException);
+        const saved = await service.setStatus('o', 'closed');
+        expect(saved.status).toBe('closed');
+    });
 });
 

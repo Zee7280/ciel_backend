@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import sanitizeHtml from 'sanitize-html';
@@ -31,6 +31,15 @@ export interface OpportunityVerificationEmailDetails {
   /** Display string for volunteers required (e.g. "12" or "Not specified"). */
   volunteersRequired?: string;
 }
+
+export const ADMIN_BULK_EMAIL_MAX_RECIPIENTS = 200;
+const ADMIN_EMAIL_RE = /^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/;
+
+export type AdminBulkEmailResult = {
+  sent: string[];
+  failed: string[];
+  skipped: string[];
+};
 
 @Injectable()
 export class MailService {
@@ -307,14 +316,14 @@ export class MailService {
     to: string,
     subject: string,
     message: string,
-  ): Promise<void>;
+  ): Promise<AdminBulkEmailResult>;
   async sendAdminComposedEmail(opts: {
     to: string[];
     subject: string;
     messageHtml: string;
     messageText?: string;
     image?: Express.Multer.File;
-  }): Promise<void>;
+  }): Promise<AdminBulkEmailResult>;
   async sendAdminComposedEmail(
     arg1:
       | string
@@ -327,7 +336,7 @@ export class MailService {
         },
     arg2?: string,
     arg3?: string,
-  ): Promise<void> {
+  ): Promise<AdminBulkEmailResult> {
     const opts =
       typeof arg1 === 'string'
         ? {
@@ -353,7 +362,29 @@ export class MailService {
       this.htmlToText(sanitizedBody) ||
       ''
     ).trim();
-    const toList = (opts.to || []).map((x) => String(x).trim()).filter(Boolean);
+    const rawList = (opts.to || []).map((x) => String(x).trim()).filter(Boolean);
+    // Validate + dedupe (case-insensitive) server-side; invalid addresses are reported as skipped.
+    const seen = new Set<string>();
+    const toList: string[] = [];
+    const skipped: string[] = [];
+    for (const addr of rawList) {
+      const key = addr.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (!ADMIN_EMAIL_RE.test(addr) || addr.length > 254) {
+        skipped.push(addr);
+        continue;
+      }
+      toList.push(addr);
+    }
+    if (toList.length > ADMIN_BULK_EMAIL_MAX_RECIPIENTS) {
+      throw new BadRequestException(
+        `Too many recipients (${toList.length}). The maximum is ${ADMIN_BULK_EMAIL_MAX_RECIPIENTS} per send.`,
+      );
+    }
+    if (!toList.length) {
+      throw new BadRequestException('No valid recipient email addresses.');
+    }
 
     const attachments: any[] = [];
     if (opts.image?.buffer?.length) {
@@ -364,16 +395,39 @@ export class MailService {
       });
     }
 
-    await this.sendMailReliable({
-      from,
-      to: toList.join(','),
-      subject: subjectTrim || 'CIEL PK message',
-      replyTo: from,
-      text,
-      html: bodyWrapped,
-      attachments: attachments.length ? attachments : undefined,
-    });
-    this.logger.log(`Admin composed email sent to ${toList.join(', ')}`);
+    // One message per recipient so addresses are never exposed to each other and one bad
+    // address cannot fail the whole send.
+    const sent: string[] = [];
+    const failed: string[] = [];
+    let lastError: unknown;
+    for (const recipient of toList) {
+      try {
+        await this.sendMailReliable({
+          from,
+          to: recipient,
+          subject: subjectTrim || 'CIEL PK message',
+          replyTo: from,
+          text,
+          html: bodyWrapped,
+          attachments: attachments.length ? attachments : undefined,
+        });
+        sent.push(recipient);
+      } catch (error) {
+        lastError = error;
+        failed.push(recipient);
+        this.logger.error(
+          `Admin composed email failed for ${recipient}`,
+          (error as Error)?.stack,
+        );
+      }
+    }
+    this.logger.log(
+      `Admin composed email: ${sent.length} sent, ${failed.length} failed, ${skipped.length} skipped`,
+    );
+    if (typeof arg1 === 'string' && !sent.length && lastError) {
+      throw lastError;
+    }
+    return { sent, failed, skipped };
   }
 
   private sanitizeAdminHtml(html: string): string {
@@ -484,6 +538,68 @@ export class MailService {
     } catch (error) {
       this.logger.error(`Failed to send welcome email to ${to}`, error.stack);
       // We don't throw here to avoid failing the signup process just because of an email error
+    }
+  }
+
+  /** Tells an organization's contacts about an admin decision (approved / rejected / suspended / reinstated). */
+  async sendOrganizationDecisionEmail(input: {
+    to: string;
+    organizationName: string;
+    decision: 'approved' | 'rejected' | 'suspended' | 'reinstated';
+    notes?: string | null;
+  }): Promise<void> {
+    const to = String(input.to || '').trim();
+    if (!to) return;
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const orgEsc = this.escHtmlPlain(input.organizationName || 'your organization');
+    const copy: Record<typeof input.decision, { subject: string; headline: string; body: string; color: string }> = {
+      approved: {
+        subject: 'Your organization is approved on CIEL PK',
+        headline: 'Organization approved',
+        body: 'Your organization has been verified. You can now sign in and publish opportunities and review reports.',
+        color: '#0e7d74',
+      },
+      rejected: {
+        subject: 'Update on your CIEL PK organization verification',
+        headline: 'Verification not approved',
+        body: 'We could not approve your organization at this time. You can update your details and contact support if you need help.',
+        color: '#b91c1c',
+      },
+      suspended: {
+        subject: 'Your CIEL PK organization account is suspended',
+        headline: 'Account suspended',
+        body: 'Access for your organization has been suspended. Please contact support to resolve this.',
+        color: '#b45309',
+      },
+      reinstated: {
+        subject: 'Your CIEL PK organization account is active again',
+        headline: 'Account reinstated',
+        body: 'Access for your organization has been restored. You can sign in as usual.',
+        color: '#0e7d74',
+      },
+    };
+    const c = copy[input.decision];
+    const notesHtml = input.notes?.trim()
+      ? `<p style="background:#f8fafc;border-left:4px solid ${c.color};padding:10px 14px;"><strong>Note from CIEL PK:</strong> ${this.escHtmlPlain(input.notes.trim())}</p>`
+      : '';
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color:${c.color};">${c.headline}</h2>
+        <p><strong>${orgEsc}</strong></p>
+        <p>${c.body}</p>
+        ${notesHtml}
+        <div style="text-align:center;margin:28px 0;">
+          <a href="${this.buildFrontendLink('/login', {})}" style="background-color:${c.color};color:white;padding:12px 25px;text-decoration:none;border-radius:5px;font-weight:bold;">Open CIEL PK</a>
+        </div>
+        <p style="font-size:13px;color:#666;">Questions? <a href="mailto:support@cielpk.com">support@cielpk.com</a></p>
+      </div>
+    `;
+    try {
+      await this.sendMailReliable({ from, to, subject: c.subject, html });
+    } catch (error) {
+      this.logger.error(`Failed organization decision email to ${to}`, error.stack);
     }
   }
 

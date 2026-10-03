@@ -40,7 +40,14 @@ export class NotificationsService {
     }
 
     async findAll(userId: string, query: any) {
-        const { status, type } = query;
+        return (await this.findAllPaged(userId, query)).rows;
+    }
+
+    /** Default page 1 / limit 100 (max 200); returns the total for the filter. */
+    async findAllPaged(userId: string, query: any) {
+        const { status, type } = query ?? {};
+        const limit = Math.min(200, Math.max(1, parseInt(String(query?.limit ?? 100), 10) || 100));
+        const page = Math.max(1, parseInt(String(query?.page ?? 1), 10) || 1);
         const whereClause: any = { userId };
 
         if (status === 'read') {
@@ -53,10 +60,13 @@ export class NotificationsService {
             whereClause.type = type;
         }
 
-        return this.notificationsRepository.find({
+        const [rows, total] = await this.notificationsRepository.findAndCount({
             where: whereClause,
             order: { createdAt: 'DESC' },
+            skip: (page - 1) * limit,
+            take: limit,
         });
+        return { rows, total, page, limit };
     }
 
     async markAllAsRead(userId: string) {

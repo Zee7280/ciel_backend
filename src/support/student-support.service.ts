@@ -95,6 +95,8 @@ export class StudentSupportService {
             createdAt: t.createdAt,
             updatedAt: t.updatedAt,
             description: t.description,
+            adminReply: t.adminReply ?? null,
+            adminReplyAt: t.adminReplyAt ?? null,
         };
     }
 

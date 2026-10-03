@@ -13,6 +13,7 @@ import { StudentReport } from '../../reports/entities/student-report.entity';
 import { Organization } from '../../organizations/entities/organization.entity';
 import { FacultyUniversityScopeService } from '../../faculty-university-scope/faculty-university-scope.service';
 import { AnalyticsScope, AnalyticsStakeholder } from './section-analytics.types';
+import { reportStatusRank } from './report-status.util';
 
 const ACTIVE_PARTICIPATION_STATUSES = [
     'pending',
@@ -354,15 +355,18 @@ export class AnalyticsScopeService {
             reports = reports.filter((r) => allowedStudentIds.has(r.studentId));
         }
 
-        // Deduplicate: keep newest report per student+project
-        const seen = new Set<string>();
-        const deduped: StudentReport[] = [];
+        // Deduplicate per student+project: keep the most advanced report (highest status), and
+        // only break ties by newest update — a fresh draft must not hide an approved report.
+        // `reports` is ordered by updatedAt DESC, so the first of equal rank is the newest.
+        const best = new Map<string, StudentReport>();
         for (const r of reports) {
             const key = `${r.studentId}:${r.opportunityId || r.project_id}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            deduped.push(r);
+            const current = best.get(key);
+            if (!current || reportStatusRank(r.status) > reportStatusRank(current.status)) {
+                best.set(key, r);
+            }
         }
+        const deduped: StudentReport[] = [...best.values()];
 
         return { reports: deduped, projectIds, titles };
     }

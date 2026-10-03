@@ -16,7 +16,7 @@ export class User {
     @Column()
     password: string;
 
-    /** Encrypted plaintext copy for super-admin recovery only (`select: false` hides from default queries). */
+    /** @deprecated No longer written or returned (recoverable passwords were removed). Column kept for additive-only schema; safe to drop in a later migration. */
     @Column({ name: 'password_record', type: 'text', nullable: true, select: false })
     passwordRecord: string | null;
 

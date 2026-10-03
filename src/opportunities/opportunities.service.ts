@@ -1457,6 +1457,14 @@ export class OpportunitiesService {
   /** Whether CIEL admin final-approve may run without skipping required gates. */
   private isOpportunityReadyForAdminFinalApprove(opp: Opportunity): boolean {
     if (String(opp.status || '').toLowerCase() === 'draft') return false;
+    if (
+      opp.workflowStage === WORKFLOW_STAGE.REJECTED ||
+      opp.workflowStage === WORKFLOW_STAGE.REVISION ||
+      opp.status === 'rejected' ||
+      opp.status === 'revision'
+    ) {
+      return false;
+    }
     // Executing-org portal confirm must always finish before CIEL final approve —
     // never trust a client-supplied `admin_approval_required` to skip this gate.
     if (opp.execution_verification_token && !opp.execution_verified) {
@@ -4133,27 +4141,32 @@ export class OpportunitiesService {
    * deliberately distinct from approve/reject/revise above (which encode the full admin-approval
    * workflow with its own preconditions, notifications and idempotency rules). */
   async setStatus(id: string, status: string) {
-    const allowed = [
-      'active',
-      'closed',
-      'draft',
-      'pending_approval',
-      'rejected',
-    ];
+    // Going live / rejecting / requesting changes must use approve/reject/revise so the workflow
+    // fields (workflowStage, approval lines, history, notifications) stay consistent.
+    const allowed = ['closed', 'draft'];
     if (!allowed.includes(status)) {
       throw new BadRequestException(
-        `Invalid status. Must be one of: ${allowed.join(', ')}`,
+        `Invalid status. Must be one of: ${allowed.join(', ')}. Use approve, reject or revise to change the approval state.`,
       );
     }
     const opp = await this.findOne(id);
     if (!opp) throw new NotFoundException('Opportunity not found');
+    if (opp.status === status) return opp;
     opp.status = status;
+    // The approval trail (admin_approved / workflowStage) is deliberately untouched: closing an
+    // approved listing is a lifecycle change, not an un-approval, and approve() stays idempotent.
     return this.opportunitiesRepository.save(opp);
   }
 
   async reject(id: string, reason: string, actor?: ApprovalActor) {
+    if (!String(reason ?? '').trim()) {
+      throw new BadRequestException('A reason is required to reject an opportunity.');
+    }
+    reason = String(reason).trim();
     const opp = await this.findOne(id);
     if (!opp) throw new NotFoundException('Opportunity not found');
+    // Idempotent: repeated reject must not duplicate approval history or emails.
+    if (opp.workflowStage === WORKFLOW_STAGE.REJECTED) return opp;
     this.opportunityWorkflow.afterAdminRejected(opp, reason, actor);
     const saved = await this.opportunitiesRepository.save(opp);
     // Faculty creators used to get no notification at all here, unlike revise() below — reject is
@@ -4169,8 +4182,27 @@ export class OpportunitiesService {
   }
 
   async revise(id: string, reason: string, actor?: ApprovalActor) {
+    if (!String(reason ?? '').trim()) {
+      throw new BadRequestException(
+        'A reason is required to request revisions.',
+      );
+    }
+    reason = String(reason).trim();
     const opp = await this.findOne(id);
     if (!opp) throw new NotFoundException('Opportunity not found');
+    if (opp.workflowStage === WORKFLOW_STAGE.REJECTED) {
+      throw new BadRequestException(
+        'This opportunity was permanently rejected and cannot be sent back for revision.',
+      );
+    }
+    // Idempotent for a retried identical request.
+    if (
+      opp.workflowStage === WORKFLOW_STAGE.REVISION &&
+      opp.adminApprovalStatus === LINE_STATUS.REVISION_REQUESTED &&
+      (opp.rejectionReason ?? '') === reason
+    ) {
+      return opp;
+    }
     this.opportunityWorkflow.afterAdminRevision(opp, reason, actor);
     const saved = await this.opportunitiesRepository.save(opp);
     await this.notifyStudentOpportunityUpdate(saved, {

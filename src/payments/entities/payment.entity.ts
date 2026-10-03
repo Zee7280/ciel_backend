@@ -47,6 +47,13 @@ export class Payment {
     @Column({ type: 'text', nullable: true })
     feedback: string | null;
 
+    /** Admin who approved/rejected/reverted this slip (additive audit columns). */
+    @Column({ name: 'reviewed_by', type: 'varchar', length: 64, nullable: true })
+    reviewedBy: string | null;
+
+    @Column({ name: 'reviewed_at', type: 'timestamptz', nullable: true })
+    reviewedAt: Date | null;
+
     @CreateDateColumn()
     created_at: Date;
 

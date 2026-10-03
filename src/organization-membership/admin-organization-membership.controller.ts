@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, UseGuards, Request, UseInterceptors } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Query, UseGuards, Request, UseInterceptors } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -23,16 +23,27 @@ export class AdminOrganizationMembershipController {
     @Get('history')
     @UseGuards(RolesGuard)
     @Roles(UserRole.SUPER_ADMIN)
-    async listHistory() {
-        const data = await this.membershipService.listHistoryForAdmin();
-        return { success: true, data };
+    async listHistory(@Query('page') page?: string, @Query('limit') limit?: string) {
+        const result = await this.membershipService.listHistoryPaged({ page, limit });
+        return {
+            success: true,
+            data: result.rows,
+            total: result.total,
+            pagination: { total: result.total, page: result.page, limit: result.limit },
+        };
     }
 
     @Post(':id/approve')
     @UseGuards(RolesGuard)
     @Roles(UserRole.SUPER_ADMIN)
-    async approve(@Request() req: any, @Param('id') id: string) {
-        const row = await this.membershipService.approveSubmission(id, req.user.id);
+    async approve(
+        @Request() req: any,
+        @Param('id') id: string,
+        @Body() body?: { allowAmountMismatch?: boolean },
+    ) {
+        const row = await this.membershipService.approveSubmission(id, req.user.id, {
+            allowAmountMismatch: body?.allowAmountMismatch === true,
+        });
         return {
             success: true,
             message: 'Membership approved; account activated',

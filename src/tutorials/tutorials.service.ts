@@ -25,6 +25,7 @@ export class TutorialsService {
 
     async listForStudents() {
         const rows = await this.repo.find({
+            where: { published: true },
             order: { sortOrder: 'ASC', createdAt: 'DESC' },
         });
         return { success: true, data: rows.map((r) => this.toPublicDto(r)) };
@@ -93,17 +94,96 @@ export class TutorialsService {
         documentFilename?: string | null;
         posterUrl?: string | null;
     }) {
+        const videoUrl = this.assertTutorialUrl(opts.videoUrl, 'videoUrl');
+        if (!videoUrl) throw new BadRequestException('videoUrl is required');
         const row = this.repo.create({
             title: opts.title.trim(),
             description: (opts.description || '').trim(),
             category: (opts.category || 'General').trim() || 'General',
-            videoUrl: opts.videoUrl,
-            posterUrl: opts.posterUrl ?? null,
+            videoUrl,
+            posterUrl: this.assertTutorialUrl(opts.posterUrl, 'posterUrl'),
             durationLabel: opts.durationLabel?.trim() || null,
-            documentUrl: opts.documentUrl ?? null,
+            documentUrl: this.assertTutorialUrl(opts.documentUrl, 'documentUrl'),
             documentFilename: opts.documentFilename ?? null,
             sortOrder: opts.sortOrder,
         });
+        const saved = await this.repo.save(row);
+        return { success: true, data: saved };
+    }
+
+    /** https only, and must live in the configured storage bucket's tutorials folder. */
+    assertTutorialUrl(url: string | null | undefined, label: string): string | null {
+        if (url === null || url === undefined) return null;
+        const raw = String(url).trim();
+        if (!raw) return null;
+        let parsed: URL;
+        try {
+            parsed = new URL(raw);
+        } catch {
+            throw new BadRequestException(`${label} must be a valid URL`);
+        }
+        if (parsed.protocol !== 'https:') {
+            throw new BadRequestException(`${label} must be an https URL`);
+        }
+        const key = this.s3Service.keyFromPublicUrl(raw);
+        if (!key || !key.startsWith('platform-tutorials/')) {
+            throw new BadRequestException(
+                `${label} must point to the platform storage (platform-tutorials folder)`,
+            );
+        }
+        return raw;
+    }
+
+    async update(
+        id: string,
+        dto: {
+            title?: string;
+            description?: string;
+            category?: string;
+            durationLabel?: string | null;
+            sortOrder?: number | string;
+            published?: boolean | string;
+            videoUrl?: string;
+            posterUrl?: string | null;
+            documentUrl?: string | null;
+            documentFilename?: string | null;
+        },
+    ) {
+        const row = await this.repo.findOne({ where: { id } });
+        if (!row) {
+            throw new NotFoundException('Tutorial not found');
+        }
+        if (dto.title !== undefined) {
+            const t = String(dto.title).trim();
+            if (t.length < 2) throw new BadRequestException('Title is required');
+            row.title = t.slice(0, 255);
+        }
+        if (dto.description !== undefined) row.description = String(dto.description).trim();
+        if (dto.category !== undefined) {
+            row.category = String(dto.category).trim().slice(0, 120) || 'General';
+        }
+        if (dto.durationLabel !== undefined) {
+            row.durationLabel = dto.durationLabel ? String(dto.durationLabel).trim().slice(0, 32) : null;
+        }
+        if (dto.sortOrder !== undefined) {
+            row.sortOrder = Math.max(0, this.normalizeSortOrder(dto.sortOrder));
+        }
+        if (dto.published !== undefined) {
+            row.published = dto.published === true || String(dto.published).toLowerCase() === 'true';
+        }
+        if (dto.videoUrl !== undefined) {
+            const v = this.assertTutorialUrl(dto.videoUrl, 'videoUrl');
+            if (!v) throw new BadRequestException('videoUrl cannot be empty');
+            row.videoUrl = v;
+        }
+        if (dto.posterUrl !== undefined) row.posterUrl = this.assertTutorialUrl(dto.posterUrl, 'posterUrl');
+        if (dto.documentUrl !== undefined) {
+            row.documentUrl = this.assertTutorialUrl(dto.documentUrl, 'documentUrl');
+            if (!row.documentUrl) row.documentFilename = null;
+        }
+        if (dto.documentFilename !== undefined && row.documentUrl) {
+            row.documentFilename = dto.documentFilename ? String(dto.documentFilename).slice(0, 512) : null;
+        }
         const saved = await this.repo.save(row);
         return { success: true, data: saved };
     }

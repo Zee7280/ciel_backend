@@ -4,6 +4,7 @@ import {
   BadRequestException,
   ForbiddenException,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, In, IsNull, Not, Repository } from 'typeorm';
@@ -35,6 +36,8 @@ import {
   findCanonicalTeamLeadParticipation,
   pickCanonicalTeamLeadFromMembers,
 } from '../engagement/team-lead-canonical.util';
+import { MailService } from '../mail/mail.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { buildTeamDisplayName } from '../engagement/team-display-name.util';
 import {
   countSeatsByRosterEmail,
@@ -97,7 +100,57 @@ export class OpportunityApplicationsService {
     private readonly engagementService: EngagementService,
     private readonly usersService: UsersService,
     private readonly facultyUniversityScopeService: FacultyUniversityScopeService,
+    @Optional() private readonly mailService?: MailService,
+    @Optional() private readonly notificationsService?: NotificationsService,
   ) {}
+
+  /** Best-effort in-app + email notice to the applicant; never throws. */
+  private async notifyApplicantOfAdminDecision(
+    app: OpportunityApplication,
+    decision: 'approved' | 'rejected',
+    reason?: string | null,
+  ): Promise<void> {
+    const title =
+      decision === 'approved' ? 'Application approved' : 'Application not approved';
+    const projectTitle = app.opportunity?.title || 'your opportunity';
+    const message =
+      decision === 'approved'
+        ? `Your application to "${projectTitle}" was approved by CIEL PK. You can now start working on the project.`
+        : `Your application to "${projectTitle}" was not approved by CIEL PK.`;
+    try {
+      const studentId = app.studentUser?.id || app.studentUserId;
+      if (studentId && this.notificationsService) {
+        await this.notificationsService.createApprovalNotification(
+          studentId,
+          title,
+          message,
+        );
+      }
+    } catch (error) {
+      console.warn(
+        'Failed to create application decision notification',
+        (error as Error).message,
+      );
+    }
+    try {
+      const email = app.studentUser?.email;
+      if (email && this.mailService) {
+        await this.mailService.sendStudentOpportunityStatusUpdate(
+          email,
+          projectTitle,
+          title,
+          title,
+          message,
+          reason,
+        );
+      }
+    } catch (error) {
+      console.warn(
+        'Failed to send application decision email',
+        (error as Error).message,
+      );
+    }
+  }
 
   normalizeEmail(email?: string | null) {
     return (email || '').trim().toLowerCase();
@@ -3935,6 +3988,13 @@ export class OpportunityApplicationsService {
           created_at: a.createdAt,
           internal_status: a.internalStatus,
           application_status: this.toPublicApplicationStatus(a.internalStatus),
+          admin_decided_at: a.adminDecidedAt ?? null,
+          admin_decided_by: a.adminDecidedBy ?? null,
+          admin_comment: a.adminComment ?? null,
+          faculty_decided_at: a.facultyDecidedAt ?? null,
+          faculty_decided_by: a.facultyDecidedBy ?? null,
+          faculty_comment: a.facultyComment ?? null,
+          partner_comment: a.partnerComment ?? null,
         };
       }),
     };
@@ -4127,6 +4187,7 @@ export class OpportunityApplicationsService {
     app.adminDecidedBy = adminUserId;
     app.adminComment = null;
     await this.appRepo.save(app);
+    await this.notifyApplicantOfAdminDecision(app, 'approved');
 
     return {
       success: true,
@@ -4166,6 +4227,7 @@ export class OpportunityApplicationsService {
   async adminReject(id: string, adminUserId: string, reason: string) {
     const app = await this.appRepo.findOne({
       where: { id, withdrawnAt: IsNull() },
+      relations: ['opportunity', 'studentUser'],
     });
     if (!app) throw new NotFoundException('Application not found');
     if (
@@ -4179,6 +4241,7 @@ export class OpportunityApplicationsService {
     app.adminDecidedBy = adminUserId;
     app.adminComment = reason || null;
     await this.appRepo.save(app);
+    await this.notifyApplicantOfAdminDecision(app, 'rejected', reason);
     return { success: true, message: 'Application rejected', data: app };
   }
 }

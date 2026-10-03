@@ -214,6 +214,16 @@ export class Participation {
   @Column({ type: 'varchar', length: 320, nullable: true })
   attendanceVerificationReviewerEmail: string | null;
 
+  /** Admin who approved/rejected this seat and why (set by AdminService review actions). */
+  @Column({ type: 'uuid', nullable: true })
+  reviewedBy: string | null;
+
+  @Column({ type: 'timestamp', nullable: true })
+  reviewedAt: Date | null;
+
+  @Column({ type: 'text', nullable: true })
+  reviewReason: string | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

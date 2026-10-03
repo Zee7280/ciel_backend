@@ -5,6 +5,8 @@ export const STUDENT_APPLY_MAINTENANCE_MESSAGE_KEY =
   'STUDENT_APPLY_MAINTENANCE_MESSAGE';
 /** ISO timestamp: listings created on or before this cannot accept new applies. */
 export const STUDENT_APPLY_CLOSED_BEFORE_KEY = 'STUDENT_APPLY_CLOSED_BEFORE';
+/** Stored in STUDENT_APPLY_CLOSED_BEFORE to switch catalog expiry off (row stays, so it is never re-seeded). */
+export const CLOSED_BEFORE_DISABLED_SENTINEL = 'disabled';
 export const STUDENT_APPLY_EXPIRED_MESSAGE_KEY =
   'STUDENT_APPLY_EXPIRED_MESSAGE';
 
@@ -61,7 +63,7 @@ export function parseClosedBeforeSettingValue(
   value: string | null | undefined,
 ): Date | null {
   const raw = String(value || '').trim();
-  if (!raw) return null;
+  if (!raw || raw.toLowerCase() === CLOSED_BEFORE_DISABLED_SENTINEL) return null;
   const d = new Date(raw);
   if (Number.isNaN(d.getTime())) return null;
   return d;

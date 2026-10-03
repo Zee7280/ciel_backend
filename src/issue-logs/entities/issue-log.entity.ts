@@ -71,6 +71,13 @@ export class IssueLog {
   @Column({ type: 'jsonb', nullable: true })
   metadata: Record<string, unknown> | null;
 
+  /** Set when an admin marks the incident handled; unresolved error logs count as "open". */
+  @Column({ type: 'timestamp', nullable: true })
+  resolvedAt: Date | null;
+
+  @Column({ type: 'uuid', nullable: true })
+  resolvedBy: string | null;
+
   @CreateDateColumn()
   createdAt: Date;
 }

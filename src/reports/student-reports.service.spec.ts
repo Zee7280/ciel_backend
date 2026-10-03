@@ -2626,12 +2626,78 @@ describe('StudentReportsService', () => {
       cii_index: { totalScore: 82, level: 'High Impact Engagement' },
     });
 
-    expect(mockStudentReportsRepository.save).toHaveBeenCalled();
+    expect(verifyReportQb.execute).toHaveBeenCalled();
     expect(
       (report.section11 as { ai_generated_impact_score?: number })
         .ai_generated_impact_score,
     ).toBe(82);
     expect(result.success).toBe(true);
+  });
+
+  it('refuses admin AI score writes on CII-locked or verified reports', async () => {
+    for (const row of [
+      { status: 'submitted', ciiV2Lock: { lockedAt: new Date() } },
+      { status: 'verified' },
+      { status: 'paid' },
+    ]) {
+      mockStudentReportsRepository.findOne.mockResolvedValue({
+        id: 'report-ai-2',
+        section11: {},
+        ...row,
+      });
+      await expect(
+        service.updateReportAiScore('report-ai-2', { section11: {} }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    }
+  });
+
+  it('verifyReport refuses approving a draft and reject/unlock of verified reports without force', async () => {
+    mockStudentReportsRepository.findOne.mockResolvedValue({
+      id: 'r-d',
+      status: 'draft',
+      admin_status: 'pending',
+      partner_status: 'pending',
+      opportunity: {},
+    });
+    await expect(
+      service.verifyReport('r-d', 'approve', 'admin'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    for (const action of ['reject', 'unlock'] as const) {
+      mockStudentReportsRepository.findOne.mockResolvedValue({
+        id: 'r-v',
+        status: 'verified',
+        admin_status: 'approved',
+        partner_status: 'approved',
+        faculty_status: 'approved',
+        opportunity: {},
+      });
+      await expect(
+        service.verifyReport('r-v', action, 'admin', 'needs work'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    }
+
+    mockStudentReportsRepository.findOne.mockResolvedValue({
+      id: 'r-v',
+      status: 'verified',
+      admin_status: 'approved',
+      partner_status: 'approved',
+      faculty_status: 'approved',
+      opportunity: {},
+    });
+    const forced = await service.verifyReport(
+      'r-v',
+      'reject',
+      'admin',
+      'needs work',
+      undefined,
+      true,
+      { id: 'admin-1', name: 'Admin' },
+    );
+    expect(forced.success).toBe(true);
+    expect(verifyReportQb.__patch).toMatchObject({
+      adminReviewedBy: 'Admin (admin-1)',
+    });
   });
 
   it('admin findAll returns only canonical team lead report per team project', async () => {
@@ -2706,6 +2772,48 @@ describe('StudentReportsService', () => {
     expect(result.data).toHaveLength(1);
     expect(result.data[0].id).toBe('report-lead');
     expect(result.pagination.total).toBe(1);
+  });
+
+  it('admin findAll returns per-queue counts and applies q/status filters before pagination', async () => {
+    const mk = (id: string, status: string, admin_status: string, name: string) => ({
+      id,
+      studentId: `s-${id}`,
+      opportunityId: 'plain',
+      project_id: 'plain',
+      status,
+      partner_status: 'pending',
+      admin_status,
+      submission_date: new Date(),
+      reportSubmittedAt: new Date(),
+      createdAt: new Date(),
+      student: { name, email: `${id}@t.com` },
+      opportunity: { title: 'T', organizationId: 'org-1', organization: { name: 'Org' } },
+      section11: null,
+    });
+    mockStudentReportsRepository.find.mockResolvedValue([
+      mk('a', 'submitted', 'pending', 'Alice'),
+      mk('b', 'partner_verified', 'pending', 'Bob'),
+      mk('c', 'verified', 'approved', 'Carol'),
+      mk('d', 'revision', 'rejected', 'Dave'),
+      mk('e', 'draft', 'pending', 'Eve'),
+    ]);
+    const all = await service.findAll({ page: 1, limit: 50 });
+    expect((all as any).meta.counts).toEqual({
+      needsReview: 2,
+      verified: 1,
+      revision: 1,
+      all: 5,
+    });
+    const filtered = await service.findAll({
+      page: 1,
+      limit: 1,
+      status: 'submitted',
+      q: 'alice',
+      includeHidden: 'true',
+    });
+    expect(filtered.data).toHaveLength(1);
+    expect(filtered.pagination.total).toBe(1);
+    expect((filtered as any).meta.counts.all).toBe(1);
   });
 
   it('admin findAll returns one report per team when multiple teams share a project', async () => {

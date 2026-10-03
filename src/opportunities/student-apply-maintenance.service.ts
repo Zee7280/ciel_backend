@@ -89,16 +89,9 @@ export class StudentApplyMaintenanceService implements OnModuleInit {
     if (this.cache && Date.now() < this.cache.expiresAt) {
       return this.cache.state;
     }
-    const state = await this.refreshCache();
-    if (!state.closedBefore) {
-      try {
-        await this.seedClosedBeforeIfMissing();
-      } catch {
-        return state;
-      }
-      return this.refreshCache();
-    }
-    return state;
+    // Read-only: seeding happens once at boot (onModuleInit) and only when the row is missing,
+    // never from a request path, so an admin-disabled expiry can never be re-enabled by a GET.
+    return this.refreshCache();
   }
 
   decorateOpportunity(
@@ -133,23 +126,21 @@ export class StudentApplyMaintenanceService implements OnModuleInit {
       const existing = await this.settingRepository.findOne({
         where: { key: STUDENT_APPLY_CLOSED_BEFORE_KEY },
       });
-      if (existing?.value && parseClosedBeforeSettingValue(existing.value)) {
+      // Row exists (even as 'disabled' or empty) = an admin decision; never overwrite it.
+      if (existing) {
         return parseClosedBeforeSettingValue(existing.value);
       }
       if (typeof this.settingRepository.create !== 'function') {
         return null;
       }
       const stamped = new Date();
-      const row =
-        existing ||
-        this.settingRepository.create({
-          key: STUDENT_APPLY_CLOSED_BEFORE_KEY,
-          value: stamped.toISOString(),
-          type: 'string',
-          description:
-            'Listings created on or before this time do not accept new student applications.',
-        });
-      row.value = stamped.toISOString();
+      const row = this.settingRepository.create({
+        key: STUDENT_APPLY_CLOSED_BEFORE_KEY,
+        value: stamped.toISOString(),
+        type: 'string',
+        description:
+          'Listings created on or before this time do not accept new student applications.',
+      });
       await this.settingRepository.save(row);
       this.invalidateCache();
       return stamped;

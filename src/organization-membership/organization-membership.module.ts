@@ -8,12 +8,14 @@ import { OrganizationMembershipController } from './organization-membership.cont
 import { AdminOrganizationMembershipController } from './admin-organization-membership.controller';
 import { MembershipActiveGuard } from './membership-active.guard';
 import { PartnerMembershipSettingsService } from './partner-membership-settings.service';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 
 @Module({
     imports: [
         TypeOrmModule.forFeature([OrganizationMembershipFee, User, Setting]),
         AuditLogsModule,
+        NotificationsModule,
     ],
     controllers: [OrganizationMembershipController, AdminOrganizationMembershipController],
     providers: [OrganizationMembershipService, MembershipActiveGuard, PartnerMembershipSettingsService],

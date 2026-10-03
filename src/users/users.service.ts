@@ -3,6 +3,7 @@ import {
   NotFoundException,
   BadRequestException,
   UnauthorizedException,
+  ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -13,14 +14,22 @@ import * as bcrypt from 'bcrypt';
 import { NotificationsService } from '../notifications/notifications.service';
 import { OrganizationMembershipService } from '../organization-membership/organization-membership.service';
 import { getProfileCompletionStatus } from './profile-completion.util';
-import {
-  decryptPasswordRecord,
-  encryptPasswordRecord,
-} from './password-record.util';
+import { AdminCreateUserDto } from './dto/admin-create-user.dto';
 import {
   canonicalizePhoneInput,
   normalizeE164Phone,
 } from '../common/phone-e164.util';
+
+/** Escape LIKE/ILIKE wildcards so admin search text is matched literally. */
+export function escapeLikePattern(input: string): string {
+  return input.replace(/[\\%_]/g, '\\$&');
+}
+
+function normalizeEmail(email: unknown): string {
+  return String(email ?? '')
+    .trim()
+    .toLowerCase();
+}
 
 function digitsOnly(s: string): string {
   return s.replace(/\D/g, '');
@@ -65,18 +74,29 @@ export class UsersService {
   ) {}
 
   async create(
-    createUserDto: CreateUserDto & { settings?: Record<string, unknown> },
+    createUserDto: (CreateUserDto | AdminCreateUserDto) & {
+      settings?: Record<string, unknown>;
+    },
   ): Promise<User> {
-    let plainForRecord: string | null = null;
+    if (createUserDto.email !== undefined) {
+      createUserDto.email = normalizeEmail(createUserDto.email);
+      const taken = await this.findByEmail(createUserDto.email);
+      if (taken) {
+        throw new ConflictException('Email already exists');
+      }
+    }
     if (createUserDto.password && !createUserDto.password.startsWith('$2b$')) {
-      plainForRecord = createUserDto.password;
       createUserDto.password = await bcrypt.hash(createUserDto.password, 10);
     }
-    const user = this.usersRepository.create(createUserDto);
-    if (plainForRecord) {
-      user.passwordRecord = encryptPasswordRecord(plainForRecord);
+    const user = this.usersRepository.create(createUserDto as any as User);
+    try {
+      return await this.usersRepository.save(user);
+    } catch (err) {
+      if ((err as { code?: string })?.code === '23505') {
+        throw new ConflictException('Email already exists');
+      }
+      throw err;
     }
-    return this.usersRepository.save(user);
   }
 
   async formatUserResponse(user: User) {
@@ -360,14 +380,16 @@ export class UsersService {
    */
   async findAllForAdmin(
     options: {
+      /** @deprecated Ignored — recoverable passwords are no longer stored or returned. */
       revealPasswordRecords?: boolean;
       page?: number;
       limit?: number;
       search?: string;
       role?: string;
+      sortBy?: string;
+      sortDir?: string;
     } = {},
   ) {
-    const revealPasswordRecords = options.revealPasswordRecords ?? false;
     // Pagination is opt-in via explicit page/limit — other admin screens (email composer,
     // faculty-university scope picker) call this endpoint expecting the full unpaginated list.
     const paginate = options.page != null || options.limit != null;
@@ -388,7 +410,17 @@ export class UsersService {
         'organization.contactPhone',
         'organization.city',
       ])
-      .orderBy('user.createdAt', 'DESC');
+      .orderBy(
+        {
+          name: 'user.name',
+          email: 'user.email',
+          role: 'user.role',
+          status: 'user.status',
+          createdAt: 'user.createdAt',
+        }[options.sortBy ?? ''] ?? 'user.createdAt',
+        String(options.sortDir).toLowerCase() === 'asc' ? 'ASC' : 'DESC',
+      )
+      .addOrderBy('user.id', 'ASC');
 
     if (paginate) {
       qb.skip((page - 1) * limit).take(limit);
@@ -396,23 +428,18 @@ export class UsersService {
 
     if (search) {
       qb.andWhere('(user.name ILIKE :search OR user.email ILIKE :search)', {
-        search: `%${search}%`,
+        search: `%${escapeLikePattern(search)}%`,
       });
     }
     if (role && role !== 'all') {
       qb.andWhere('user.role = :role', { role });
     }
-    if (revealPasswordRecords) {
-      qb.addSelect('user.passwordRecord');
-    }
-
     const [users, total] = await qb.getManyAndCount();
     const data = users.map((user) => {
       const {
         password: _pw,
         passwordResetToken: _prt,
         passwordResetExpiry: _pre,
-        passwordRecord,
         ...rest
       } = user;
       const { profile_complete, profile_missing_fields } =
@@ -421,9 +448,6 @@ export class UsersService {
         ...rest,
         profile_complete,
         profile_missing_fields,
-        ...(revealPasswordRecords
-          ? { stored_password: decryptPasswordRecord(passwordRecord) }
-          : {}),
       };
     });
     return paginate
@@ -438,19 +462,50 @@ export class UsersService {
     });
   }
 
-  async update(id: string, updateUserDto: any): Promise<User> {
+  async update(
+    id: string,
+    updateUserDto: any,
+    /** Acting admin's id (admin route only). When given, self role/status changes are blocked. */
+    actorId?: string,
+  ): Promise<User> {
     const passwordBeingUpdated = !!updateUserDto?.password;
-    let passwordRecordPatch: string | undefined;
     if (updateUserDto.password && !updateUserDto.password.startsWith('$2b$')) {
-      passwordRecordPatch = encryptPasswordRecord(updateUserDto.password);
       updateUserDto.password = await bcrypt.hash(updateUserDto.password, 10);
     }
     const patch = { ...updateUserDto };
-    if (passwordRecordPatch) {
-      patch.passwordRecord = passwordRecordPatch;
+    // Never accept the deprecated plaintext-copy column from callers.
+    delete patch.passwordRecord;
+
+    const touchesAccess =
+      patch.status !== undefined ||
+      patch.role !== undefined ||
+      patch.email !== undefined;
+    const existing = touchesAccess
+      ? await this.usersRepository.findOne({ where: { id } })
+      : null;
+    if (touchesAccess && !existing) {
+      throw new NotFoundException('User not found');
     }
+
+    if (patch.email !== undefined) {
+      patch.email = normalizeEmail(patch.email);
+      const taken = await this.findByEmail(patch.email);
+      if (taken && taken.id !== id) {
+        throw new ConflictException('Email already exists');
+      }
+    }
+
+    const statusChanged =
+      patch.status !== undefined && patch.status !== existing?.status;
+    const roleChanged =
+      patch.role !== undefined && patch.role !== existing?.role;
+    if (actorId && actorId === id && (statusChanged || roleChanged)) {
+      throw new BadRequestException(
+        'You cannot change your own role or status.',
+      );
+    }
+
     if (patch.status === 'active' || patch.status === 'rejected') {
-      const existing = await this.usersRepository.findOne({ where: { id } });
       if (existing?.role === UserRole.INVESTOR) {
         const settings =
           existing.settings && typeof existing.settings === 'object'
@@ -469,9 +524,17 @@ export class UsersService {
         patch.settings = { ...settings, investor };
       }
     }
-    await this.usersRepository.update(id, patch);
-    if (passwordBeingUpdated) {
-      await this.usersRepository.increment({ id }, 'tokenVersion', 1);
+    try {
+      await this.usersRepository.update(id, patch);
+    } catch (err) {
+      if ((err as { code?: string })?.code === '23505') {
+        throw new ConflictException('Email already exists');
+      }
+      throw err;
+    }
+    // A password, status or role change must invalidate sessions minted under the old values.
+    if (passwordBeingUpdated || statusChanged || roleChanged) {
+      await this.revokeSessions(id);
     }
     const user = await this.findOne(id);
     if (!user) {
@@ -480,8 +543,47 @@ export class UsersService {
     return user;
   }
 
-  async remove(id: string): Promise<void> {
-    await this.usersRepository.delete(id);
+  /** Invalidate every JWT issued to this user (JwtStrategy compares `tokenVersion`). */
+  async revokeSessions(userId: string): Promise<void> {
+    await this.usersRepository.increment({ id: userId }, 'tokenVersion', 1);
+  }
+
+  /** Invalidate every JWT for all users belonging to an organization (e.g. when it is blocked). */
+  async revokeOrganizationSessions(organizationId: string): Promise<void> {
+    await this.usersRepository
+      .createQueryBuilder()
+      .update(User)
+      .set({ tokenVersion: () => '"tokenVersion" + 1' })
+      .where('"organizationId" = :organizationId', { organizationId })
+      .execute();
+  }
+
+  async remove(id: string, actorId?: string): Promise<void> {
+    if (actorId && actorId === id) {
+      throw new BadRequestException('You cannot delete your own account.');
+    }
+    const target = await this.usersRepository.findOne({ where: { id } });
+    if (!target) {
+      throw new NotFoundException('User not found');
+    }
+    if (target.role === UserRole.SUPER_ADMIN) {
+      const admins = await this.usersRepository.count({
+        where: { role: UserRole.SUPER_ADMIN },
+      });
+      if (admins <= 1) {
+        throw new ConflictException('Cannot delete the last remaining admin.');
+      }
+    }
+    try {
+      await this.usersRepository.delete(id);
+    } catch (err) {
+      if ((err as { code?: string })?.code === '23503') {
+        throw new ConflictException(
+          'This user has linked records (projects, applications, reports, etc.) and cannot be deleted. Suspend the account instead.',
+        );
+      }
+      throw err;
+    }
   }
 
   async getProfile(id: string) {
@@ -518,7 +620,6 @@ export class UsersService {
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     user.password = hashedPassword;
-    user.passwordRecord = encryptPasswordRecord(newPassword);
     user.tokenVersion = (user.tokenVersion ?? 0) + 1;
     await this.usersRepository.save(user);
 
@@ -550,32 +651,17 @@ export class UsersService {
     });
   }
 
-  /** Backfill admin-visible password copy when user logs in (existing accounts before password_record existed). */
-  async capturePasswordRecordFromLogin(
-    userId: string,
-    plainPassword: string,
-  ): Promise<void> {
-    const trimmed = String(plainPassword || '').trim();
-    if (!trimmed) return;
-    await this.usersRepository.update(userId, {
-      passwordRecord: encryptPasswordRecord(trimmed),
-    });
-  }
-
   async updatePassword(
     userId: string,
     hashedPassword: string,
-    plainPassword?: string,
+    _plainPassword?: string, // deprecated & ignored: plaintext is never persisted
   ): Promise<void> {
     const patch: Record<string, unknown> = {
       password: hashedPassword,
       passwordResetToken: null,
       passwordResetExpiry: null,
     };
-    if (plainPassword) {
-      patch.passwordRecord = encryptPasswordRecord(plainPassword);
-    }
     await this.usersRepository.update(userId, patch);
-    await this.usersRepository.increment({ id: userId }, 'tokenVersion', 1);
+    await this.revokeSessions(userId);
   }
 }

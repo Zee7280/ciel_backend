@@ -14,6 +14,7 @@ import {
   REPORT_SECTION_TITLES,
 } from './shared/section-analytics.types';
 import { Section1AnalyticsQueryDto } from './dto/section1-analytics-query.dto';
+import { isVerifiedReport } from './shared/report-status.util';
 
 type DistRow = { label: string; count: number };
 
@@ -301,7 +302,7 @@ export class SectionReportAnalyticsService {
           average_completion_percent: avg,
           // A report that only has partner OR admin sign-off (not both) isn't fully verified yet —
           // status only reaches 'verified' once the whole approval chain has completed.
-          verified_reports: reports.filter((r) => r.status === 'verified')
+          verified_reports: reports.filter((r) => isVerifiedReport(r))
             .length,
           total_reports: reports.length,
         },

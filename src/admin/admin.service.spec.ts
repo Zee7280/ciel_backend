@@ -1,6 +1,35 @@
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import { AdminService } from './admin.service';
+import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
+import { Payment } from '../payments/entities/payment.entity';
+import { OrganizationMembershipFee } from '../organization-membership/entities/organization-membership-fee.entity';
+import { IssueLog } from '../issue-logs/entities/issue-log.entity';
+import { SupportTicket } from '../support/entities/support-ticket.entity';
 import { MasterAnalyticsQueryDto } from './dto/master-analytics-query.dto';
 import { ReportPartnerApprovalSettingsService } from '../reports/report-partner-approval-settings.service';
+
+/** Chainable TypeORM query-builder double that resolves to the given raw rows / count. */
+const makeQb = (rows: unknown[] = [], count = 0) => {
+  const qb: Record<string, jest.Mock> = {};
+  for (const m of [
+    'select',
+    'addSelect',
+    'where',
+    'andWhere',
+    'innerJoin',
+    'groupBy',
+    'addGroupBy',
+  ]) {
+    qb[m] = jest.fn(() => qb);
+  }
+  qb.getRawMany = jest.fn().mockResolvedValue(rows);
+  qb.getCount = jest.fn().mockResolvedValue(count);
+  return qb;
+};
+
+const fakeDataSource = (repos: Map<unknown, unknown>) => ({
+  getRepository: (entity: unknown) => repos.get(entity),
+});
 
 const makeAdminServiceForTests = (overrides: Record<string, unknown> = {}) => {
   const repositories = {
@@ -13,6 +42,7 @@ const makeAdminServiceForTests = (overrides: Record<string, unknown> = {}) => {
     reportRepository: {},
     timesheetRepository: {
       find: jest.fn().mockResolvedValue([]),
+      createQueryBuilder: jest.fn(() => makeQb([])),
     },
     auditLogsService: {
       findPaginated: jest.fn().mockResolvedValue({
@@ -78,6 +108,9 @@ const makeAdminServiceForTests = (overrides: Record<string, unknown> = {}) => {
     repositories.feedbackService as any,
     repositories.mailService as any,
     repositories.notificationsService as any,
+    undefined,
+    (repositories as any).dataSource,
+    (repositories as any).platformSettings,
   );
 };
 
@@ -86,7 +119,7 @@ describe('AdminService impact analytics', () => {
     const submittedAt = new Date('2026-05-01T00:00:00.000Z');
     const service = makeAdminServiceForTests({
       usersRepository: {
-        count: jest.fn().mockResolvedValueOnce(57).mockResolvedValueOnce(3),
+        count: jest.fn().mockResolvedValue(3),
       },
       participationRepository: {
         find: jest.fn().mockResolvedValue([{ studentId: 'student-1' }]),
@@ -127,14 +160,20 @@ describe('AdminService impact analytics', () => {
 
     const result = await service.getImpactAnalytics();
 
-    expect(result.data.hours_trend).toEqual([{ month: 'May', hours: 24 }]);
+    expect(result.data.hours_trend).toEqual([
+      { month: 'May', hours: 24, period: '2026-05', label: 'May 2026' },
+    ]);
     expect(result.data.impact_by_sdg).toEqual([
       { name: 'Quality Education', value: 24 },
     ]);
+    // Reached beneficiaries come from the reported project only; the unreported
+    // project's planned 25 is returned separately and never mixed in.
     expect(result.data.stats).toEqual({
       active_volunteers: 1,
       partner_ngos: 3,
-      total_beneficiaries: 175,
+      total_beneficiaries: 150,
+      planned_beneficiaries: 25,
+      verified_hours: 0,
     });
   });
 
@@ -145,15 +184,19 @@ describe('AdminService impact analytics', () => {
         count: jest.fn().mockResolvedValueOnce(57).mockResolvedValueOnce(3),
       },
       timesheetRepository: {
-        find: jest.fn().mockResolvedValue([
-          {
-            studentId: 'student-1',
-            opportunityId: 'project-1',
-            hours: 10,
-            createdAt,
-            opportunity: { id: 'project-1', sdg: 'SDG 4' },
-          },
-        ]),
+        createQueryBuilder: jest.fn(() =>
+          makeQb([
+            {
+              studentId: 'student-1',
+              opportunityId: 'project-1',
+              period: '2026-04',
+              hours: '10',
+            },
+          ]),
+        ),
+      },
+      opportunityRepository: {
+        find: jest.fn().mockResolvedValue([{ id: 'project-1', sdg: 'SDG 4' }]),
       },
       studentReportRepository: {
         find: jest.fn().mockResolvedValue([
@@ -174,7 +217,9 @@ describe('AdminService impact analytics', () => {
 
     const result = await service.getImpactAnalytics();
 
-    expect(result.data.hours_trend).toEqual([{ month: 'Apr', hours: 10 }]);
+    expect(result.data.hours_trend).toEqual([
+      { month: 'Apr', hours: 10, period: '2026-04', label: 'Apr 2026' },
+    ]);
     expect(result.data.impact_by_sdg).toEqual([{ name: 'SDG 4', value: 10 }]);
   });
 
@@ -207,7 +252,9 @@ describe('AdminService impact analytics', () => {
 
     const result = await service.getImpactAnalytics();
 
-    expect(result.data.hours_trend).toEqual([{ month: 'May', hours: 118.2 }]);
+    expect(result.data.hours_trend).toEqual([
+      { month: 'May', hours: 118.2, period: '2026-05', label: 'May 2026' },
+    ]);
     expect(result.data.impact_by_sdg).toEqual([
       { name: 'SDG 4', value: 118.2 },
     ]);
@@ -486,5 +533,254 @@ describe('AdminService getMasterAnalytics', () => {
       }),
     );
     expect(result.data.admin_attendance_editable).toBe(true);
+  });
+});
+
+describe('AdminService verified hours / dashboard', () => {
+  it('attendance wins over timesheets for the same student+project (no double count)', async () => {
+    const attendanceRepo = {
+      createQueryBuilder: jest.fn(() =>
+        makeQb([
+          { studentId: 's1', opportunityId: 'p1', period: '2026-03', hours: '5.5' },
+        ]),
+      ),
+    };
+    const service = makeAdminServiceForTests({
+      dataSource: fakeDataSource(new Map([[AttendanceLog, attendanceRepo]])),
+      timesheetRepository: {
+        createQueryBuilder: jest.fn(() =>
+          makeQb([
+            { studentId: 's1', opportunityId: 'p1', period: '2026-03', hours: '10' },
+            { studentId: 's2', opportunityId: 'p1', period: '2026-03', hours: '2' },
+          ]),
+        ),
+      },
+    });
+    const result = await (service as any).computeVerifiedHours();
+    expect(result.total).toBe(7.5);
+    expect(result.byOpportunity.get('p1')).toBe(7.5);
+  });
+
+  it('dashboard pendingApprovals includes the opportunity queue and reports both report counts', async () => {
+    const service = makeAdminServiceForTests({
+      usersRepository: { count: jest.fn().mockResolvedValue(2) },
+      opportunityRepository: {
+        count: jest.fn().mockResolvedValue(9),
+        find: jest.fn().mockResolvedValue([]),
+        createQueryBuilder: jest.fn(() => makeQb([], 4)),
+      },
+      reportRepository: { count: jest.fn().mockResolvedValue(6) },
+      participationRepository: { count: jest.fn().mockResolvedValue(3) },
+      studentReportRepository: { count: jest.fn().mockResolvedValue(11) },
+      opportunityApplicationsService: {
+        countPendingAdmin: jest.fn().mockResolvedValue(1),
+      },
+    });
+    const { data } = await service.getDashboardStats();
+    // 4 opportunities + 2 users + 3 participations + 1 join application
+    expect(data.metrics.pendingApprovals).toBe(10);
+    expect(data.metrics.totalReports).toBe(6);
+    expect(data.metrics.issueReports).toBe(6);
+    expect(data.metrics.studentReports).toBe(11);
+  });
+
+  it('getPendingCounts returns numeric counts and degrades a failing count to 0', async () => {
+    const service = makeAdminServiceForTests({
+      usersRepository: { count: jest.fn().mockResolvedValue(2) },
+      opportunityRepository: {
+        createQueryBuilder: jest.fn(() => makeQb([], 5)),
+      },
+      participationRepository: { count: jest.fn().mockResolvedValue(1) },
+      studentReportRepository: { count: jest.fn().mockResolvedValue(7) },
+      opportunityApplicationsService: {
+        countPendingAdmin: jest.fn().mockRejectedValue(new Error('boom')),
+      },
+      dataSource: fakeDataSource(
+        new Map<unknown, unknown>([
+          [Payment, { count: jest.fn().mockResolvedValue(4) }],
+          [OrganizationMembershipFee, { count: jest.fn().mockResolvedValue(3) }],
+          [IssueLog, { count: jest.fn().mockResolvedValue(8) }],
+          [SupportTicket, { count: jest.fn().mockResolvedValue(6) }],
+        ]),
+      ),
+    });
+    expect(await service.getPendingCounts()).toEqual({
+      opportunityApprovals: 5,
+      userApprovals: 3,
+      joinApplications: 0,
+      payments: 4,
+      orgMembership: 3,
+      reportsAwaitingAdmin: 7,
+      issueLogsOpen: 8,
+      supportOpen: 6,
+    });
+  });
+});
+
+describe('AdminService participation review', () => {
+  it('rejects re-reviewing a participation that is no longer pending', async () => {
+    const save = jest.fn();
+    const service = makeAdminServiceForTests({
+      participationRepository: {
+        findOne: jest.fn().mockResolvedValue({ id: 'a', status: 'approved' }),
+        save,
+      },
+    });
+    await expect(service.approveApplication('a', 'admin-1')).rejects.toThrow(
+      ConflictException,
+    );
+    await expect(
+      service.rejectApplication('a', 'nope', 'admin-1'),
+    ).rejects.toThrow(ConflictException);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('approves a pending participation and notifies the student', async () => {
+    const notificationsService = {
+      createNotification: jest.fn().mockResolvedValue(undefined),
+    };
+    const service = makeAdminServiceForTests({
+      notificationsService,
+      participationRepository: {
+        findOne: jest
+          .fn()
+          .mockResolvedValue({ id: 'a', status: 'pending', studentId: 'st-1' }),
+        save: jest.fn(),
+      },
+    });
+    await service.approveApplication('a', 'admin-1');
+    expect(notificationsService.createNotification).toHaveBeenCalledWith(
+      'st-1',
+      expect.objectContaining({ type: 'approval' }),
+    );
+  });
+
+  it('persists reviewer, time and reason on participation approve/reject', async () => {
+    const seat: any = { id: 'a', status: 'pending', studentId: 'st-1' };
+    const save = jest.fn();
+    const service = makeAdminServiceForTests({
+      participationRepository: { findOne: jest.fn().mockResolvedValue(seat), save },
+    });
+    await service.rejectApplication('a', '  Missing documents ', 'admin-9');
+    expect(seat).toMatchObject({ status: 'rejected', reviewedBy: 'admin-9', reviewReason: 'Missing documents' });
+    expect(seat.reviewedAt).toBeInstanceOf(Date);
+  });
+});
+
+describe('AdminService settings', () => {
+  const makeSettingsService = (existing: any) => {
+    const settingRepository = {
+      find: jest.fn().mockResolvedValue([]),
+      findOne: jest.fn().mockResolvedValue(existing),
+      create: jest.fn((x) => ({ ...x })),
+      save: jest.fn(async (x) => x),
+    };
+    const auditLogsService = { recordMutation: jest.fn() };
+    const platformSettings = { invalidate: jest.fn() };
+    const service = makeAdminServiceForTests({
+      settingRepository,
+      auditLogsService,
+      platformSettings,
+    });
+    return { service, settingRepository, auditLogsService, platformSettings };
+  };
+
+  it('rejects unknown keys and bad values with 400', async () => {
+    const { service, settingRepository } = makeSettingsService(null);
+    await expect(service.updateSetting('JWT_SECRET', 'x')).rejects.toThrow(
+      BadRequestException,
+    );
+    await expect(
+      service.updateSetting('maintenance_mode', 'maybe'),
+    ).rejects.toThrow(BadRequestException);
+    expect(settingRepository.save).not.toHaveBeenCalled();
+  });
+
+  it('creates with type+description, invalidates the cache and writes an audit entry', async () => {
+    const { service, settingRepository, auditLogsService, platformSettings } =
+      makeSettingsService(null);
+    await service.updateSetting('REPORTING_FEE_PKR', '2500', {
+      id: 'admin-1',
+      email: 'a@b.co',
+    });
+    expect(settingRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: 'REPORTING_FEE_PKR',
+        value: '2500',
+        type: 'number',
+        description: expect.any(String),
+      }),
+    );
+    expect(platformSettings.invalidate).toHaveBeenCalledWith('REPORTING_FEE_PKR');
+    expect(auditLogsService.recordMutation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        details: {
+          adminId: 'admin-1',
+          key: 'REPORTING_FEE_PKR',
+          old: null,
+          new: '2500',
+        },
+      }),
+    );
+  });
+
+  it('getSettings is read-only and returns only registry keys', async () => {
+    const { service, settingRepository } = makeSettingsService(null);
+    settingRepository.find.mockResolvedValue([
+      { id: '1', key: 'site_name', value: 'X', type: 'string', updatedAt: new Date() },
+      { id: '2', key: 'SECRET_THING', value: 'y', type: 'string', updatedAt: new Date() },
+    ]);
+    const res = await service.getSettings();
+    expect(res.data.map((r) => r.key)).toEqual(['site_name']);
+    expect(settingRepository.save).not.toHaveBeenCalled();
+  });
+});
+
+describe('AdminService remindStudentsOnZeroHourProjects', () => {
+  const setup = (over: Record<string, unknown> = {}) => {
+    const mailService = {
+      sendHoursLoggingReminder: jest
+        .fn()
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error('smtp down'))
+        .mockResolvedValue(undefined),
+    };
+    const notificationsService = {
+      createNotification: jest.fn().mockResolvedValue(undefined),
+    };
+    const service = makeAdminServiceForTests({
+      mailService,
+      notificationsService,
+      opportunityRepository: {
+        find: jest.fn().mockResolvedValue([{ id: 'p1', title: 'Live' }]),
+      },
+      participationRepository: {
+        find: jest.fn().mockResolvedValue([
+          { projectId: 'p1', email: 'a@x.co', fullName: 'A', studentId: 'sa' },
+          { projectId: 'p1', email: 'b@x.co', fullName: 'B', studentId: 'sb' },
+        ]),
+      },
+      ...over,
+    });
+    return { service, mailService, notificationsService };
+  };
+
+  it('dry run counts without sending', async () => {
+    const { service, mailService } = setup();
+    const res = await service.remindStudentsOnZeroHourProjects({ dryRun: true });
+    expect(res.would_notify).toBe(2);
+    expect(res.students_notified).toBe(0);
+    expect(mailService.sendHoursLoggingReminder).not.toHaveBeenCalled();
+  });
+
+  it('one failing recipient does not stop the run, and a second run is on cooldown', async () => {
+    const { service, notificationsService } = setup();
+    const res = await service.remindStudentsOnZeroHourProjects();
+    // b's email failed but the in-app notification still went out, so both count as notified.
+    expect(res.students_notified).toBe(2);
+    expect(notificationsService.createNotification).toHaveBeenCalledTimes(2);
+    const again = await service.remindStudentsOnZeroHourProjects();
+    expect(again.students_skipped_cooldown).toBe(2);
+    expect(again.students_notified).toBe(0);
   });
 });

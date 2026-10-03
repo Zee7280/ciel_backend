@@ -15,6 +15,7 @@ import { StorageModule } from '../common/storage.module';
 import { MailModule } from '../mail/mail.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { AiModule } from '../ai/ai.module';
+import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 
 @Module({
     imports: [
@@ -31,6 +32,7 @@ import { AiModule } from '../ai/ai.module';
         MailModule,
         NotificationsModule,
         AiModule,
+        AuditLogsModule,
     ],
     controllers: [PathsController, AdminPathsController, PublicCourseworkVerificationController],
     providers: [PathsService],

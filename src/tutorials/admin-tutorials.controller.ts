@@ -7,6 +7,7 @@ import {
     HttpCode,
     HttpStatus,
     Param,
+    Patch,
     Post,
     UploadedFiles,
     UseGuards,
@@ -169,6 +170,26 @@ export class AdminTutorialsController {
             documentFilename: documentFilename ? String(documentFilename) : null,
             posterUrl: posterUrl ? String(posterUrl) : null,
         });
+    }
+
+    @Patch(':id')
+    update(
+        @Param('id') id: string,
+        @Body()
+        body: {
+            title?: string;
+            description?: string;
+            category?: string;
+            durationLabel?: string | null;
+            sortOrder?: number | string;
+            published?: boolean | string;
+            videoUrl?: string;
+            posterUrl?: string | null;
+            documentUrl?: string | null;
+            documentFilename?: string | null;
+        },
+    ) {
+        return this.tutorialsService.update(id, body ?? {});
     }
 
     @Delete(':id')

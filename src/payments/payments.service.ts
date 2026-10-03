@@ -1,10 +1,12 @@
-import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import { Injectable, Optional, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository, type FindOptionsWhere } from 'typeorm';
 import { Participation } from '../engagement/entities/participant.entity';
 import { findCanonicalTeamLeadStudentId } from '../engagement/team-lead-canonical.util';
 import { Setting } from '../settings/entities/setting.entity';
 import { S3Service } from '../common/s3.service';
+import { MailService } from '../mail/mail.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 import { Payment, PaymentStatus } from './entities/payment.entity';
 import { StudentReport } from '../reports/entities/student-report.entity';
@@ -21,6 +23,8 @@ export class PaymentsService {
         @InjectRepository(StudentReport)
         private readonly studentReportRepository: Repository<StudentReport>,
         private readonly s3Service: S3Service,
+        @Optional() private readonly mailService?: MailService,
+        @Optional() private readonly notificationsService?: NotificationsService,
     ) { }
 
     private async getSetting(key: string, defaultValue: string): Promise<string> {
@@ -51,53 +55,6 @@ export class PaymentsService {
             data: {
                 payment_status: participant.paymentStatus,
                 payment_proof_url: proofUrl,
-            },
-        };
-    }
-
-    async getPendingPayments() {
-        const payments = await this.participantRepository.find({
-            where: { paymentStatus: 'pending_payment_approval' },
-            relations: ['student', 'project', 'project.organization'],
-            order: { updatedAt: 'DESC' }
-        });
-
-        return payments.map(p => ({
-            id: p.id,
-            studentName: p.student?.name || 'Unknown',
-            studentEmail: p.student?.email || 'Unknown',
-            projectTitle: p.project?.title || 'Unknown',
-            organization: p.project?.organization?.name || 'Unknown',
-            proofUrl: p.paymentProofUrl,
-            amount: 5000, // This could be dynamic later
-            submittedAt: p.paymentDate,
-            status: p.paymentStatus
-        }));
-    }
-
-    async verifyPayment(id: string, action: 'approve' | 'reject', feedback?: string) {
-        const participant = await this.participantRepository.findOne({ where: { id } });
-
-        if (!participant) {
-            throw new NotFoundException('Payment record not found');
-        }
-
-        if (action === 'approve') {
-            participant.paymentStatus = 'paid';
-            participant.status = 'paid'; // Sync main status if needed
-        } else {
-            participant.paymentStatus = 'rejected';
-            participant.status = 'rejected';
-        }
-
-        // feedback can be stored in a separate field if needed, for now we just log it or ignore
-        await this.participantRepository.save(participant);
-
-        return {
-            success: true,
-            message: `Payment ${action}d successfully`,
-            data: {
-                payment_status: participant.paymentStatus,
             },
         };
     }
@@ -247,7 +204,10 @@ export class PaymentsService {
         return { participation, roster };
     }
 
-    private async buildManualPaymentTeamContext(p: Payment): Promise<{
+    private async buildManualPaymentTeamContext(
+        p: Payment,
+        preloaded?: { participation: Participation | null; roster: Participation[]; perMember: number },
+    ): Promise<{
         participation_mode: 'individual' | 'team';
         submitted_by: {
             student_id: string;
@@ -260,8 +220,9 @@ export class PaymentsService {
         reporting_fee_per_member_pkr: number;
         expected_paid_amount_pkr: number;
     }> {
-        const { participation, roster } = await this.loadTeamRosterForSubmitter(p.studentId, p.projectId);
-        const perMember = await this.getReportingFeePerMemberPkr();
+        const { participation, roster } =
+            preloaded ?? (await this.loadTeamRosterForSubmitter(p.studentId, p.projectId));
+        const perMember = preloaded?.perMember ?? (await this.getReportingFeePerMemberPkr());
 
         const submitterRow = roster.find((r) => r.studentId === p.studentId) ?? participation;
         const isTeamLead = submitterRow?.isTeamLead === true;
@@ -293,6 +254,56 @@ export class PaymentsService {
             reporting_fee_per_member_pkr: perMember,
             expected_paid_amount_pkr: expectedPaid,
         };
+    }
+
+    /**
+     * Batch version of loadTeamRosterForSubmitter: three queries for the whole page instead of
+     * several per row. Roster membership rules are identical (same applicationId or same teamId).
+     */
+    private async loadTeamContextsForPayments(
+        payments: Payment[],
+    ): Promise<Map<string, { participation: Participation | null; roster: Participation[]; perMember: number }>> {
+        const out = new Map<
+            string,
+            { participation: Participation | null; roster: Participation[]; perMember: number }
+        >();
+        if (!payments.length) return out;
+        const perMember = await this.getReportingFeePerMemberPkr();
+        const projectIds = [...new Set(payments.map((p) => p.projectId))];
+        const rows = await this.participantRepository.find({
+            where: { projectId: In(projectIds) },
+        });
+        const byStudentProject = new Map<string, Participation>();
+        const byProject = new Map<string, Participation[]>();
+        for (const row of rows) {
+            byStudentProject.set(this.paymentScopeKey(row.studentId, row.projectId), row);
+            const list = byProject.get(row.projectId) ?? [];
+            list.push(row);
+            byProject.set(row.projectId, list);
+        }
+        for (const p of payments) {
+            const participation = byStudentProject.get(this.paymentScopeKey(p.studentId, p.projectId)) ?? null;
+            if (!participation) {
+                out.set(p.id, { participation: null, roster: [], perMember });
+                continue;
+            }
+            const teamId = typeof participation.teamId === 'string' ? participation.teamId.trim() : '';
+            const merged = new Map<string, Participation>([[participation.id, participation]]);
+            for (const row of byProject.get(p.projectId) ?? []) {
+                if (
+                    (participation.applicationId && row.applicationId === participation.applicationId) ||
+                    (teamId && row.teamId === teamId)
+                ) {
+                    merged.set(row.id, row);
+                }
+            }
+            const roster = Array.from(merged.values()).sort((a, b) => {
+                if (a.isTeamLead !== b.isTeamLead) return a.isTeamLead ? -1 : 1;
+                return (a.fullName || '').localeCompare(b.fullName || '');
+            });
+            out.set(p.id, { participation, roster, perMember });
+        }
+        return out;
     }
 
     private paymentScopeKey(studentId: string, projectId: string): string {
@@ -351,8 +362,9 @@ export class PaymentsService {
     private async mapManualPaymentRow(
         p: Payment,
         submissionMeta?: { submissionNumber: number; totalInScope: number },
+        preloaded?: { participation: Participation | null; roster: Participation[]; perMember: number },
     ) {
-        const teamCtx = await this.buildManualPaymentTeamContext(p);
+        const teamCtx = await this.buildManualPaymentTeamContext(p, preloaded);
         return {
             id: p.id,
             projectId: p.projectId,
@@ -380,6 +392,9 @@ export class PaymentsService {
             proofUrl: p.proof_url,
             submittedAt: p.created_at,
             status: p.status,
+            feedback: p.feedback,
+            reviewedBy: p.reviewedBy ?? null,
+            reviewedAt: p.reviewedAt ?? null,
             submission_number: submissionMeta?.submissionNumber,
             submissionNumber: submissionMeta?.submissionNumber,
             submission_total: submissionMeta?.totalInScope,
@@ -413,6 +428,7 @@ export class PaymentsService {
             proofUrl: p.proof_url,
             status: p.status,
             feedback: p.feedback,
+            reviewedAt: p.reviewedAt ?? null,
             submittedAt: p.created_at,
             updatedAt: p.updated_at,
             opportunity: p.opportunity
@@ -443,30 +459,57 @@ export class PaymentsService {
         };
     }
 
-    async findAllPendingManual() {
-        const payments = await this.paymentRepository.find({
-            where: { status: PaymentStatus.PENDING },
-            relations: ['student', 'opportunity', 'opportunity.organization'],
-            order: { created_at: 'DESC' },
-        });
-
-        const submissionMeta = await this.buildSubmissionMetaForPayments(payments);
-        return Promise.all(
-            payments.map((p) => this.mapManualPaymentRow(p, submissionMeta.get(p.id))),
-        );
+    private normalizePaging(opts?: { page?: number | string; limit?: number | string }) {
+        if (!opts || (opts.page === undefined && opts.limit === undefined)) return null;
+        const limit = Math.min(200, Math.max(1, parseInt(String(opts.limit ?? 50), 10) || 50));
+        const page = Math.max(1, parseInt(String(opts.page ?? 1), 10) || 1);
+        return { page, limit, skip: (page - 1) * limit };
     }
 
-    async findManualPaymentsByStatus(status: PaymentStatus.APPROVED | PaymentStatus.REJECTED) {
-        const payments = await this.paymentRepository.find({
+    private async listManualPayments(
+        status: PaymentStatus,
+        opts?: { page?: number | string; limit?: number | string },
+    ): Promise<{ rows: any[]; total: number; page: number | null; limit: number | null }> {
+        const paging = this.normalizePaging(opts);
+        const [payments, total] = await this.paymentRepository.findAndCount({
             where: { status },
             relations: ['student', 'opportunity', 'opportunity.organization'],
             order: { created_at: 'DESC' },
+            ...(paging ? { skip: paging.skip, take: paging.limit } : {}),
         });
 
-        const submissionMeta = await this.buildSubmissionMetaForPayments(payments);
-        return Promise.all(
-            payments.map((p) => this.mapManualPaymentRow(p, submissionMeta.get(p.id))),
+        const [submissionMeta, teamContexts] = await Promise.all([
+            this.buildSubmissionMetaForPayments(payments),
+            this.loadTeamContextsForPayments(payments),
+        ]);
+        const rows = await Promise.all(
+            payments.map((p) =>
+                this.mapManualPaymentRow(p, submissionMeta.get(p.id), teamContexts.get(p.id)),
+            ),
         );
+        return { rows, total, page: paging?.page ?? null, limit: paging?.limit ?? null };
+    }
+
+    async findAllPendingManual(opts?: { page?: number | string; limit?: number | string }) {
+        return (await this.listManualPayments(PaymentStatus.PENDING, opts)).rows;
+    }
+
+    async findAllPendingManualPaged(opts?: { page?: number | string; limit?: number | string }) {
+        return this.listManualPayments(PaymentStatus.PENDING, opts);
+    }
+
+    async findManualPaymentsByStatus(
+        status: PaymentStatus.APPROVED | PaymentStatus.REJECTED,
+        opts?: { page?: number | string; limit?: number | string },
+    ) {
+        return (await this.listManualPayments(status, opts)).rows;
+    }
+
+    async findManualPaymentsByStatusPaged(
+        status: PaymentStatus.APPROVED | PaymentStatus.REJECTED,
+        opts?: { page?: number | string; limit?: number | string },
+    ) {
+        return this.listManualPayments(status, opts);
     }
 
     /** All slips for the same student + project (oldest first). */
@@ -488,13 +531,74 @@ export class PaymentsService {
             order: { created_at: 'ASC' },
         });
 
-        const submissionMeta = await this.buildSubmissionMetaForPayments(rows);
+        const [submissionMeta, teamContexts] = await Promise.all([
+            this.buildSubmissionMetaForPayments(rows),
+            this.loadTeamContextsForPayments(rows),
+        ]);
         return Promise.all(
-            rows.map((p) => this.mapManualPaymentRow(p, submissionMeta.get(p.id))),
+            rows.map((p) =>
+                this.mapManualPaymentRow(p, submissionMeta.get(p.id), teamContexts.get(p.id)),
+            ),
         );
     }
 
-    async verifyManualPayment(id: string, status: PaymentStatus, feedback?: string) {
+    /** Best-effort in-app + email notice to the student; never throws. */
+    private async notifyStudentOfPaymentDecision(
+        paymentId: string,
+        decision: 'approved' | 'rejected' | 'reverted',
+        feedback?: string | null,
+    ): Promise<void> {
+        try {
+            const full = await this.paymentRepository.findOne({
+                where: { id: paymentId },
+                relations: ['student', 'opportunity'],
+            });
+            if (!full) return;
+            const projectTitle = full.opportunity?.title || 'your project';
+            const title =
+                decision === 'approved'
+                    ? 'Reporting fee approved'
+                    : decision === 'rejected'
+                      ? 'Reporting fee payment rejected'
+                      : 'Reporting fee under review again';
+            const message =
+                decision === 'approved'
+                    ? `Your reporting fee payment for "${projectTitle}" was approved.`
+                    : decision === 'rejected'
+                      ? `Your reporting fee payment for "${projectTitle}" was rejected. Please submit a new payment proof.`
+                      : `The earlier approval of your reporting fee payment for "${projectTitle}" was reverted and the slip is under review again.`;
+            if (this.notificationsService && full.studentId) {
+                try {
+                    await this.notificationsService.createApprovalNotification(full.studentId, title, message);
+                } catch (error) {
+                    console.warn('Failed to create payment notification', (error as Error).message);
+                }
+            }
+            if (this.mailService && full.student?.email) {
+                try {
+                    await this.mailService.sendStudentOpportunityStatusUpdate(
+                        full.student.email,
+                        projectTitle,
+                        title,
+                        title,
+                        message,
+                        decision === 'rejected' ? feedback : null,
+                    );
+                } catch (error) {
+                    console.warn('Failed to send payment decision email', (error as Error).message);
+                }
+            }
+        } catch (error) {
+            console.warn('Payment decision notification failed', (error as Error).message);
+        }
+    }
+
+    async verifyManualPayment(
+        id: string,
+        status: PaymentStatus,
+        feedback?: string,
+        admin?: { id: string; email?: string },
+    ) {
         const payment = await this.paymentRepository.findOne({
             where: { id },
         });
@@ -507,11 +611,28 @@ export class PaymentsService {
             throw new ConflictException('Only a pending payment can be approved or rejected');
         }
 
+        // Conditional update: two concurrent reviewers can't both decide the same slip.
+        const result = await this.paymentRepository.update(
+            { id, status: PaymentStatus.PENDING },
+            {
+                status,
+                ...(feedback ? { feedback } : {}),
+                reviewedBy: admin?.id ?? null,
+                reviewedAt: new Date(),
+            },
+        );
+        if (!result.affected) {
+            throw new ConflictException('Only a pending payment can be approved or rejected');
+        }
         payment.status = status;
         if (feedback) payment.feedback = feedback;
-        await this.paymentRepository.save(payment);
 
         await this.syncReportStatusForPaymentScope(payment);
+        await this.notifyStudentOfPaymentDecision(
+            id,
+            status === PaymentStatus.APPROVED ? 'approved' : 'rejected',
+            feedback,
+        );
 
         return {
             success: true,
@@ -571,11 +692,23 @@ export class PaymentsService {
             throw new ConflictException('Only an approved payment can be reverted');
         }
 
+        const reverted = await this.paymentRepository.update(
+            { id: paymentId, status: PaymentStatus.APPROVED },
+            {
+                status: PaymentStatus.PENDING,
+                feedback: null,
+                reviewedBy: admin?.id ?? null,
+                reviewedAt: new Date(),
+            },
+        );
+        if (!reverted.affected) {
+            throw new ConflictException('Only an approved payment can be reverted');
+        }
         payment.status = PaymentStatus.PENDING;
         payment.feedback = null;
-        await this.paymentRepository.save(payment);
 
         await this.syncReportStatusForPaymentScope(payment);
+        await this.notifyStudentOfPaymentDecision(paymentId, 'reverted', reason);
 
         const updated = await this.paymentRepository.findOne({
             where: { id: paymentId },

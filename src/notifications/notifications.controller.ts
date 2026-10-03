@@ -16,8 +16,12 @@ export class NotificationsController {
 
     @Get()
     async findAll(@Request() req, @Query() query) {
-        const data = await this.notificationsService.findAll(req.user.id, query);
-        return { success: true, data };
+        const result = await this.notificationsService.findAllPaged(req.user.id, query);
+        return {
+            success: true,
+            data: result.rows,
+            pagination: { total: result.total, page: result.page, limit: result.limit },
+        };
     }
 
     @Put('read-all')

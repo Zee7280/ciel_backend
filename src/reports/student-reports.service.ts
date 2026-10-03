@@ -3458,9 +3458,6 @@ export class StudentReportsService {
     }
 
     const whereClause: any = {};
-    if (status) {
-      whereClause.status = status;
-    }
     if (organizationId) {
       whereClause.opportunity = { organizationId };
     }
@@ -3471,14 +3468,86 @@ export class StudentReportsService {
       order: { submission_date: 'DESC', createdAt: 'DESC' },
     });
 
-    reports = await this.filterReportsForAdminPartnerQueue(reports);
+    const includeHidden =
+      query?.includeHidden === true ||
+      ['true', '1'].includes(String(query?.includeHidden ?? '').toLowerCase());
+    if (!includeHidden) {
+      reports = await this.filterReportsForAdminPartnerQueue(reports);
+    }
 
     if (organizationId) {
-      const cleared: StudentReport[] = [];
-      for (const row of reports) {
-        if (await this.isReportFeeClearedForApprovals(row)) cleared.push(row);
+      const latestPayments = await this.loadLatestPaymentsForReports(reports);
+      reports = reports.filter((row) => {
+        const st = String(row.status || '').toLowerCase();
+        if (['paid', 'partner_verified', 'verified'].includes(st)) return true;
+        const key = `${row.studentId}:${(row.opportunityId || row.project_id || '').trim()}`;
+        return latestPayments.get(key)?.status === PaymentStatus.APPROVED;
+      });
+    }
+
+    const searchTerm = String(query?.q ?? '')
+      .trim()
+      .toLowerCase();
+    if (searchTerm) {
+      reports = reports.filter((row) =>
+        [
+          row.id,
+          row.student?.name,
+          row.student?.email,
+          row.opportunity?.title,
+          row.opportunity?.organization?.name,
+        ].some((v) =>
+          String(v ?? '')
+            .toLowerCase()
+            .includes(searchTerm),
+        ),
+      );
+    }
+    const parseBound = (raw: unknown, endOfDay: boolean): number | null => {
+      if (!raw) return null;
+      const d = new Date(String(raw));
+      if (Number.isNaN(d.getTime())) return null;
+      if (endOfDay && /^\d{4}-\d{2}-\d{2}$/.test(String(raw))) {
+        d.setUTCHours(23, 59, 59, 999);
       }
-      reports = cleared;
+      return d.getTime();
+    };
+    const fromMs = parseBound(query?.dateFrom, false);
+    const toMs = parseBound(query?.dateTo, true);
+    if (fromMs !== null || toMs !== null) {
+      reports = reports.filter((row) => {
+        const ms = new Date(
+          (row.reportSubmittedAt ??
+            row.submission_date ??
+            row.createdAt) as Date,
+        ).getTime();
+        if (Number.isNaN(ms)) return false;
+        if (fromMs !== null && ms < fromMs) return false;
+        if (toMs !== null && ms > toMs) return false;
+        return true;
+      });
+    }
+
+    // Per-queue counts over the full filtered set (before the status tab and pagination).
+    const notYetSubmitted = new Set(['draft', 'continue', '']);
+    const revisionStatuses = new Set([
+      'revision',
+      'revision_requested',
+      'rejected',
+    ]);
+    const counts = { needsReview: 0, verified: 0, revision: 0, all: 0 };
+    for (const row of reports) {
+      const st = String(row.status || '').toLowerCase();
+      counts.all += 1;
+      if (st === 'verified' || st === 'paid') counts.verified += 1;
+      else if (revisionStatuses.has(st)) counts.revision += 1;
+      else if (!notYetSubmitted.has(st) && row.admin_status === 'pending') {
+        counts.needsReview += 1;
+      }
+    }
+
+    if (status) {
+      reports = reports.filter((row) => row.status === status);
     }
 
     const total = reports.length;
@@ -3509,6 +3578,7 @@ export class StudentReportsService {
         limit: limitNum,
         total_pages: Math.max(1, Math.ceil(total / limitNum)),
       },
+      meta: { counts },
     };
   }
 
@@ -4409,6 +4479,8 @@ export class StudentReportsService {
     role: string = 'admin',
     reason?: string,
     organizationId?: string,
+    force?: boolean,
+    actor?: { id: string; name?: string },
   ) {
     if (!['approve', 'reject', 'unlock'].includes(action)) {
       throw new BadRequestException(
@@ -4460,6 +4532,30 @@ export class StudentReportsService {
     }
 
     const decisionStamp = new Date();
+    const currentStatusKey = String(report.status || '').toLowerCase();
+    if (action === 'approve' && ['draft', 'continue', ''].includes(currentStatusKey)) {
+      throw new BadRequestException(
+        'This report has not been submitted yet and cannot be approved.',
+      );
+    }
+    if (
+      !isPartnerReviewer &&
+      role === 'admin' &&
+      (action === 'reject' || action === 'unlock') &&
+      !force
+    ) {
+      const hasAward =
+        Array.isArray(report.awardBadges) && report.awardBadges.length > 0;
+      if (
+        currentStatusKey === 'verified' ||
+        currentStatusKey === 'paid' ||
+        hasAward
+      ) {
+        throw new BadRequestException(
+          `This report is already ${hasAward && currentStatusKey !== 'verified' && currentStatusKey !== 'paid' ? 'awarded' : currentStatusKey}. Re-sending it for changes will undo a published decision; pass force=true to confirm.`,
+        );
+      }
+    }
     if (action === 'unlock') {
       if (isPartnerReviewer) {
         throw new ForbiddenException('Only admins can unlock reports');
@@ -4563,6 +4659,14 @@ export class StudentReportsService {
         partnerApprovedAt: report.partnerApprovedAt,
         adminApprovedAt: report.adminApprovedAt,
         admin_feedback: report.admin_feedback,
+        ...(!isPartnerReviewer && role === 'admin' && actor?.id
+          ? {
+              adminReviewedBy: actor.name
+                ? `${actor.name} (${actor.id})`.slice(0, 255)
+                : actor.id,
+              adminReviewedAt: decisionStamp,
+            }
+          : {}),
       })
       .where('id = :id', { id: report.id })
       .andWhere('admin_status = :originalAdminStatus', { originalAdminStatus })
@@ -5095,6 +5199,17 @@ export class StudentReportsService {
       throw new NotFoundException('Report not found');
     }
 
+    const lockedStatus = String(report.status || '').toLowerCase();
+    if (
+      report.ciiV2Lock ||
+      lockedStatus === 'verified' ||
+      lockedStatus === 'paid'
+    ) {
+      throw new BadRequestException(
+        'This report is already CII-locked or verified; its AI score can no longer be overwritten. Unlock the report first.',
+      );
+    }
+
     const incomingSection11 =
       body.section11 && typeof body.section11 === 'object'
         ? body.section11
@@ -5118,7 +5233,19 @@ export class StudentReportsService {
     }
 
     report.section11 = mergedSection11 as StudentReport['section11'];
-    await this.studentReportsRepository.save(report);
+    const aiScoreUpdate = await this.studentReportsRepository
+      .createQueryBuilder()
+      .update(StudentReport)
+      .set({ section11: report.section11 })
+      .where('id = :id', { id: report.id })
+      .andWhere('"ciiV2Lock" IS NULL')
+      .andWhere("status NOT IN ('verified', 'paid')")
+      .execute();
+    if (!aiScoreUpdate.affected) {
+      throw new BadRequestException(
+        'This report was just locked or verified by another reviewer; the AI score was not saved.',
+      );
+    }
 
     return this.formatReportResponse(report, undefined, {
       allProjectAttendance: true,

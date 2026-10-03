@@ -9,11 +9,13 @@ import { AdminPaymentsController } from './admin-payments.controller';
 
 import { Payment } from './entities/payment.entity';
 import { StudentReport } from '../reports/entities/student-report.entity';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 
 @Module({
     imports: [
         AuditLogsModule,
+        NotificationsModule,
         TypeOrmModule.forFeature([Participation, Setting, Payment, StudentReport]),
         StorageModule,
     ],

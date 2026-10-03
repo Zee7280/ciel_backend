@@ -36,6 +36,7 @@ import {
 } from './community-award.util';
 import { isPrivateCandidateOpportunity, reviewRouteForOpportunity } from '../opportunities/private-candidate.util';
 import { composeFacultyReportRemarks } from './faculty-report-remarks.util';
+import { trackingOrganizationName } from './tracking-org-name.util';
 
 function finiteNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -395,7 +396,7 @@ export class FacultyReportsService {
         student_name: r.student?.name || 'Unknown',
         project_title: r.opportunity?.title || r.project_id,
         project_id: r.opportunityId || r.project_id || null,
-        organization_name: r.opportunity?.organization?.name || 'N/A',
+        organization_name: trackingOrganizationName(r.opportunity),
         status: r.status,
         hours: resolveReportFlashHours(r.section1),
         updated_at: r.updatedAt,
@@ -537,7 +538,7 @@ export class FacultyReportsService {
         student_email: email && email.includes('@') ? email : null,
         project_title: opp.title || 'Project',
         project_id: seat.projectId,
-        organization_name: opp.organization?.name || 'N/A',
+        organization_name: trackingOrganizationName(opp),
         hours: Math.round(liveHours * 10) / 10,
         required_hours: required,
         hours_progress_pct: hoursPct,
@@ -589,7 +590,7 @@ export class FacultyReportsService {
         student_email: email && email.includes('@') ? email : null,
         project_title: opp.title || report.project_id,
         project_id: projectId || null,
-        organization_name: opp.organization?.name || 'N/A',
+        organization_name: trackingOrganizationName(opp),
         hours: Math.round(liveHours * 10) / 10,
         required_hours: required,
         hours_progress_pct:

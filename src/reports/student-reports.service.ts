@@ -928,6 +928,9 @@ export class StudentReportsService {
         certificate_url: this.buildStudentReportViewUrl(report, 'certificate'),
         pdf_url: this.buildStudentReportViewUrl(report, 'print'),
         v17_url: this.buildStudentReportViewUrl(report, 'v17'),
+        evidence_url: this.buildStudentReportViewUrl(report, 'evidence'),
+        flash_url: this.buildStudentReportViewUrl(report, 'flash'),
+        package_url: this.buildStudentReportViewUrl(report, 'package'),
       },
       created_at: report.createdAt,
     };

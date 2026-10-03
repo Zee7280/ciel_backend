@@ -746,12 +746,52 @@ describe('FacultyReportsService — project tracking (assigned students + live h
       student_email: 'ayesha@uni.edu',
       project_title: 'Community survey',
       project_id: 'opp-1',
+      organization_name: 'NGO',
       hours: 4.5,
       required_hours: 16,
       status: 'assigned',
       draft_locked: true,
     });
     expect(JSON.stringify(row)).not.toMatch(/mobile|phone|cnic/i);
+  });
+
+  it('omits helper organization copy and prefers a real partner name', async () => {
+    const { service, facultyService, participationRepository, opportunitiesRepository, attendanceLogsRepository, qb } =
+      makeService(null);
+    facultyService.getScopedOpportunityIds.mockResolvedValue(['opp-1']);
+    opportunitiesRepository.find.mockResolvedValue([
+      {
+        id: 'opp-1',
+        title: 'Lets Make A Difference',
+        status: 'live',
+        workflowStage: 'live',
+        timeline: { expected_hours: 10 },
+        organization: {
+          name: 'add only if theres another organization connected (eg.SOS)',
+        },
+        partner_organization: { organization_name: "SOS Children's Villages" },
+        executing_context: {},
+      },
+    ]);
+    participationRepository.find.mockResolvedValue([
+      {
+        id: 'seat-1',
+        projectId: 'opp-1',
+        studentId: 'stu-1',
+        fullName: 'Spaher Ara',
+        email: 'spaher@uni.edu',
+        student: { id: 'stu-1', name: 'Spaher Ara', email: 'spaher@uni.edu' },
+        updatedAt: new Date('2026-10-03'),
+        createdAt: new Date('2026-09-01'),
+      },
+    ]);
+    attendanceLogsRepository.find.mockResolvedValue([]);
+    qb.getMany = jest.fn(async () => []);
+    const res = await service.listProjectTracking('f-1', 'f@x.com');
+    expect(res.data).toHaveLength(1);
+    const row = res.data[0] as Record<string, unknown>;
+    expect(row.organization_name).toBe("SOS Children's Villages");
+    expect(JSON.stringify(row)).not.toMatch(/add only if/i);
   });
 
   it('returns an empty list when the faculty has no scoped opportunities', async () => {

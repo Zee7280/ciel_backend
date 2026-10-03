@@ -11,9 +11,18 @@ export type ReviewPackageEvidenceItem = {
   previewable: boolean;
 };
 
+export type ReviewPackageAudience =
+  | 'student'
+  | 'faculty'
+  | 'partner'
+  | 'university'
+  | 'admin';
+
 export type ReportReviewPackage = {
   generated_at: string;
   report_id: string;
+  schema: 'impact-package-v1';
+  analysis_attached: boolean;
   documents: {
     flashcard: { title: string; view: 'v17'; href: string };
     detailed_report: { title: string; view: 'print'; href: string };
@@ -22,6 +31,7 @@ export type ReportReviewPackage = {
       count: number;
       files: ReviewPackageEvidenceItem[];
     };
+    analysis_report: { title: string; view: 'cii-v2'; href: string } | null;
   };
   admin_review_href: string;
   ai_analyser_href: string;
@@ -29,6 +39,7 @@ export type ReportReviewPackage = {
     flashcard: string;
     detailed_report: string;
     evidence: string;
+    analysis_report: string;
   };
   stakeholder_hrefs: {
     student: string;
@@ -37,7 +48,33 @@ export type ReportReviewPackage = {
     university: string;
     admin: string;
   };
+  analysis_hrefs: {
+    student: string;
+    faculty: string;
+    university: string;
+    admin: string;
+    partner: string;
+  };
 };
+
+/** Partner / NGO get the student bundle only. Faculty, student, university, admin get analysis after publish. */
+export function reviewPackageIncludesAnalysis(
+  audience: ReviewPackageAudience,
+): boolean {
+  return audience !== 'partner';
+}
+
+export function analysisIsAttached(report: Partial<StudentReport> | null | undefined): boolean {
+  const lock = report?.ciiV2Lock as { locked?: unknown } | null | undefined;
+  const locked = lock?.locked === true || lock?.locked === 'true';
+  const cii = report?.ciiV2 as { final?: unknown } | null | undefined;
+  const final = cii?.final;
+  const hasFinal =
+    typeof final === 'number'
+      ? Number.isFinite(final)
+      : typeof final === 'string' && final.trim() !== '' && Number.isFinite(Number(final));
+  return Boolean(locked && hasFinal);
+}
 
 function extOf(url: string, name: string): string {
   const blob = `${name} ${url.split('?')[0]}`.toLowerCase();
@@ -87,11 +124,11 @@ export function buildReportReviewPackage(
   );
   const studentFlash = joinHref(
     frontendBase,
-    `/dashboard/student/report?projectId=${encodeURIComponent(projectId)}&view=v17`,
+    `/dashboard/student/report?projectId=${encodeURIComponent(projectId)}&view=v17#flash`,
   );
   const studentDetailed = joinHref(
     frontendBase,
-    `/dashboard/student/report?projectId=${encodeURIComponent(projectId)}&view=print`,
+    `/dashboard/student/report?projectId=${encodeURIComponent(projectId)}&view=print#report`,
   );
   const facultyHref = joinHref(
     frontendBase,
@@ -99,14 +136,29 @@ export function buildReportReviewPackage(
   );
   const partnerHref = joinHref(
     frontendBase,
-    `/dashboard/partner/verify/${encodeURIComponent(reportId)}`,
+    `/dashboard/partner/verify/${encodeURIComponent(reportId)}?package=1`,
+  );
+  const universityHref = joinHref(
+    frontendBase,
+    `/dashboard/partner/verify/${encodeURIComponent(reportId)}?package=1`,
+  );
+  const analyserHref = joinHref(
+    frontendBase,
+    `/dashboard/admin/reports/verify/${encodeURIComponent(reportId)}?view=cii-v2`,
+  );
+  const analysisAttached = analysisIsAttached(report);
+  const studentAnalysis = joinHref(
+    frontendBase,
+    `/dashboard/student/report?projectId=${encodeURIComponent(projectId)}&view=v17#analysis`,
   );
   return {
     generated_at: new Date().toISOString(),
     report_id: reportId,
+    schema: 'impact-package-v1',
+    analysis_attached: analysisAttached,
     documents: {
       flashcard: {
-        title: 'Revised flashcard',
+        title: 'Impact flashcard',
         view: 'v17',
         href: studentFlash,
       },
@@ -116,27 +168,39 @@ export function buildReportReviewPackage(
         href: studentDetailed,
       },
       evidence: {
-        title: 'Evidence files',
+        title: 'Evidence gallery',
         count: files.length,
         files,
       },
+      analysis_report: analysisAttached
+        ? {
+            title: 'Analysis report',
+            view: 'cii-v2',
+            href: studentAnalysis,
+          }
+        : null,
     },
     admin_review_href: adminReview,
-    ai_analyser_href: joinHref(
-      frontendBase,
-      `/dashboard/admin/reports/verify/${encodeURIComponent(reportId)}?view=cii-v2`,
-    ),
+    ai_analyser_href: analyserHref,
     admin_doc_hrefs: {
       flashcard: `${adminReview}&doc=flashcard`,
       detailed_report: `${adminReview}&doc=report`,
       evidence: `${adminReview}&doc=evidence`,
+      analysis_report: analyserHref,
     },
     stakeholder_hrefs: {
       student: studentFlash,
       faculty: facultyHref,
       partner: partnerHref,
-      university: partnerHref,
+      university: universityHref,
       admin: adminReview,
+    },
+    analysis_hrefs: {
+      student: studentAnalysis,
+      faculty: `${facultyHref}#analysis`,
+      university: `${universityHref}#analysis`,
+      admin: analyserHref,
+      partner: '',
     },
   };
 }

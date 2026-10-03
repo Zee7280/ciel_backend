@@ -2147,12 +2147,12 @@ export class MailService {
         : '';
     const docLinks = [
       packageLinks?.flashHref
-        ? `<li><a href="${packageLinks.flashHref}">1. Revised flashcard</a></li>`
+        ? `<li><a href="${packageLinks.flashHref}">1. Impact flashcard</a></li>`
         : '',
       packageLinks?.detailedHref
         ? `<li><a href="${packageLinks.detailedHref}">2. Detailed report</a></li>`
         : '',
-      `<li><a href="${reviewHref}">3. Evidence files (large previews)</a></li>`,
+      `<li><a href="${reviewHref}">3. Evidence gallery</a></li>`,
     ]
       .filter(Boolean)
       .join('');
@@ -2160,10 +2160,10 @@ export class MailService {
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
         <h2 style="color: #333;">Student impact report submitted</h2>
         <p><strong>${studentEsc}</strong> uploaded an impact report for <strong>${titleEsc}</strong>.</p>
-        <p>Three documents are ready for Super Admin review:</p>
+        <p>Three documents from the student's Impact Package are ready for Super Admin review:</p>
         <ol style="padding-left: 20px; line-height: 1.7;">${docLinks}</ol>
         ${evidenceLine}
-        <p>Run the AI analyser checker, then publish. After approval the same package goes to the student, partner/NGO, faculty, university, and CIEL PK admin.</p>
+        <p>This is the same bundle the student submitted. Run the AI analyser, then publish. After approval, faculty, the student and the university receive this package plus the analysis report. Partner / NGO receive the same package without the analysis report.</p>
         <div style="text-align: center; margin: 28px 0;">
           <a href="${reviewHref}" style="background-color: #0e7d74; color: white; padding: 12px 22px; text-decoration: none; border-radius: 5px; font-weight: bold; margin-right: 8px;">Open review package</a>
           <a href="${analyserHref}" style="background-color: #2563eb; color: white; padding: 12px 22px; text-decoration: none; border-radius: 5px; font-weight: bold;">Run AI analyser</a>
@@ -2794,7 +2794,7 @@ export class MailService {
     }
   }
 
-  /** After Super Admin publishes, send the same 3-document package to each stakeholder. */
+  /** After Super Admin publishes, send the student Impact Package. Analysis report is attached for faculty / student / university only. */
   async sendReportPackagePublished(input: {
     to: string;
     audience: 'student' | 'faculty' | 'partner' | 'university' | 'admin';
@@ -2803,6 +2803,8 @@ export class MailService {
     reviewHref: string;
     flashHref?: string;
     detailedHref?: string;
+    analysisHref?: string;
+    includeAnalysis?: boolean;
     evidenceCount?: number;
   }): Promise<void> {
     const to = String(input.to || '').trim();
@@ -2819,16 +2821,26 @@ export class MailService {
       university: 'the published university copy',
       admin: 'the published CIEL PK copy',
     };
+    const withAnalysis = Boolean(input.includeAnalysis);
+    const docs = withAnalysis
+      ? `<ol style="padding-left:20px;line-height:1.7;">
+          <li>${input.flashHref ? `<a href="${input.flashHref}">Impact flashcard</a>` : 'Impact flashcard'}</li>
+          <li>${input.detailedHref ? `<a href="${input.detailedHref}">Detailed report</a>` : 'Detailed report'}</li>
+          <li>Evidence gallery${typeof input.evidenceCount === 'number' ? ` (${input.evidenceCount})` : ''}</li>
+          <li>${input.analysisHref ? `<a href="${input.analysisHref}">Analysis report</a>` : 'Analysis report'}</li>
+        </ol>`
+      : `<ol style="padding-left:20px;line-height:1.7;">
+          <li>${input.flashHref ? `<a href="${input.flashHref}">Impact flashcard</a>` : 'Impact flashcard'}</li>
+          <li>${input.detailedHref ? `<a href="${input.detailedHref}">Detailed report</a>` : 'Detailed report'}</li>
+          <li>Evidence gallery${typeof input.evidenceCount === 'number' ? ` (${input.evidenceCount})` : ''}</li>
+        </ol>
+        <p style="font-size:13px;color:#64748b;">The analysis report is not included for Partner / NGO.</p>`;
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
         <h2 style="color: #0e7d74;">CIEL PK · Report published</h2>
         <p>Super Admin approved <strong>${studentEsc}</strong>'s report for <strong>${titleEsc}</strong>.</p>
-        <p>This is ${audienceLabel[input.audience]}. The package has three documents:</p>
-        <ol style="padding-left:20px;line-height:1.7;">
-          <li>${input.flashHref ? `<a href="${input.flashHref}">Revised flashcard</a>` : 'Revised flashcard'}</li>
-          <li>${input.detailedHref ? `<a href="${input.detailedHref}">Detailed report</a>` : 'Detailed report'}</li>
-          <li>Evidence files${typeof input.evidenceCount === 'number' ? ` (${input.evidenceCount})` : ''} — open each thumbnail to view the file</li>
-        </ol>
+        <p>This is ${audienceLabel[input.audience]}. ${withAnalysis ? 'The package has the student Impact Package plus the analysis report:' : 'The package is the student Impact Package (no analysis report):'}</p>
+        ${docs}
         <div style="text-align:center;margin:28px 0;">
           <a href="${input.reviewHref}" style="background-color:#0e7d74;color:white;padding:12px 25px;text-decoration:none;border-radius:5px;font-weight:bold;">Open published package</a>
         </div>

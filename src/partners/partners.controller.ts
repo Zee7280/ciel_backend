@@ -528,14 +528,18 @@ export class PartnersController {
   }
 
   @Get('student-reports')
-  getStudentReports(@Request() req, @Query() query: any) {
+  async getStudentReports(@Request() req, @Query() query: any) {
     if (!req.user.organizationId) {
       throw new BadRequestException('User is not linked to an organization');
     }
-    return this.studentReportsService.findAll({
-      ...query,
-      organizationId: req.user.organizationId,
-    });
+    const org = await this.organizationsService.getMyOrganization(req.user.id);
+    const isUniversity = Boolean(
+      org && this.facultyUniversityScope.isUniversityOrganization(org),
+    );
+    return this.studentReportsService.findAll(
+      { ...query, organizationId: req.user.organizationId },
+      { partnerView: !isUniversity },
+    );
   }
 
   @Get('student-reports/:id')
@@ -708,10 +712,10 @@ export class PartnerAliasController {
         );
       return this.studentReportsService.findAllByOpportunityIds(ids, query);
     }
-    return this.studentReportsService.findAll({
-      ...query,
-      organizationId: req.user.organizationId,
-    });
+    return this.studentReportsService.findAll(
+      { ...query, organizationId: req.user.organizationId },
+      { partnerView: true },
+    );
   }
 
   @Get('opportunity-applications')

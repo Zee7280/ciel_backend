@@ -51,7 +51,11 @@ import {
 import { setNestedProperty as setNestedPropertyUtil } from './nested-path.util';
 import { persistSection8Visibility } from './media-visibility.util';
 import { applyEvidenceAccess, type EvidenceViewerRole } from './evidence-access.util';
-import { buildReportReviewPackage, type ReportReviewPackage } from './review-package.util';
+import {
+  buildReportReviewPackage,
+  reviewPackageIncludesAnalysis,
+  type ReportReviewPackage,
+} from './review-package.util';
 import { isPrivateCandidateOpportunity, reviewRouteForOpportunity } from '../opportunities/private-candidate.util';
 import {
   redactCiiV2Fields,
@@ -2736,7 +2740,7 @@ export class StudentReportsService {
     return '';
   }
 
-  /** After Super Admin publishes, send the same 3-document package to every stakeholder. */
+  /** After Super Admin publishes, send the student Impact Package. Faculty / student / university get the analysis report; partner / NGO get the same package without it. */
   private async notifyReviewPackagePublished(report: StudentReport): Promise<void> {
     if (typeof this.mailService.sendReportPackagePublished !== 'function') {
       return;
@@ -2763,6 +2767,10 @@ export class StudentReportsService {
       if (!email || !email.includes('@') || seen.has(email)) return;
       seen.add(email);
       const reviewHref = pack.stakeholder_hrefs[audience];
+      const includeAnalysis = reviewPackageIncludesAnalysis(audience);
+      const analysisHref = includeAnalysis
+        ? pack.analysis_hrefs[audience] || pack.ai_analyser_href
+        : undefined;
       const flashHref =
         audience === 'admin'
           ? pack.admin_doc_hrefs.flashcard
@@ -2784,6 +2792,8 @@ export class StudentReportsService {
         reviewHref,
         flashHref,
         detailedHref,
+        analysisHref,
+        includeAnalysis: includeAnalysis && pack.analysis_attached,
         evidenceCount: pack.documents.evidence.count,
       });
     };
@@ -2791,8 +2801,9 @@ export class StudentReportsService {
     await send(full.student?.email || '', 'student');
     await send(this.resolveReportFacultyEmail(full, full.opportunity), 'faculty');
     await send(this.resolveReportPartnerEmail(full.opportunity), 'partner');
-
-    // University is intentionally not emailed (its only possible link, the partner verify page, 403s).
+    for (const email of await this.resolveReportUniversityEmails(full)) {
+      await send(email, 'university');
+    }
 
     const adminFromConfig =
       typeof this.mailService.getAdminReviewEmails === 'function'
@@ -2809,6 +2820,30 @@ export class StudentReportsService {
         await send(admin.email, 'admin');
       }
     }
+  }
+
+  private institutionKey(value: unknown): string {
+    return String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, ' ');
+  }
+
+  private async resolveReportUniversityEmails(report: StudentReport): Promise<string[]> {
+    const studentUni = this.institutionKey(
+      report.student?.university || report.student?.institution,
+    );
+    if (!studentUni || typeof this.usersRepository.find !== 'function') return [];
+    const rows = await this.usersRepository.find({
+      where: { role: UserRole.UNIVERSITY },
+    });
+    return (rows || [])
+      .filter((row) => {
+        const uni = this.institutionKey(row.university || row.institution);
+        return uni && uni === studentUni;
+      })
+      .map((row) => this.normalizeEmail(row.email))
+      .filter((email) => email.includes('@'));
   }
 
   /**
@@ -3506,7 +3541,7 @@ export class StudentReportsService {
     };
   }
 
-  async findAll(query: any) {
+  async findAll(query: any, options: { partnerView?: boolean } = {}) {
     const { status, organizationId, studentId, page = 1, limit = 10 } = query;
     const limitNum =
       typeof limit === 'number'
@@ -3665,9 +3700,14 @@ export class StudentReportsService {
     return {
       success: true,
       data: organizationId
-        ? mapped.map((r) =>
-            StudentReportsService.restrictListingForExternalViewer(r),
-          )
+        ? mapped.map((r) => {
+            const restricted =
+              StudentReportsService.restrictListingForExternalViewer(r);
+            // NGO / partner receive the package without the analysis report.
+            return options.partnerView
+              ? StudentReportsService.stripAnalysisFromListingRow(restricted)
+              : restricted;
+          })
         : mapped,
       pagination: {
         total,
@@ -3832,7 +3872,7 @@ export class StudentReportsService {
       String(viewerRole || '').toLowerCase() === 'university'
         ? 'university'
         : 'partner';
-    return applyEvidenceAccess(
+    const formatted = applyEvidenceAccess(
       StudentReportsService.redactCiiV2ForExternalViewer(
         await this.formatReportResponse(report, undefined, {
           allProjectAttendance: true,
@@ -3841,6 +3881,65 @@ export class StudentReportsService {
       ),
       evidenceRole,
     );
+    if (evidenceRole === 'partner') {
+      return StudentReportsService.stripAnalysisReportForPartner(formatted);
+    }
+    return formatted;
+  }
+
+  /** Listing-row twin of stripAnalysisReportForPartner. */
+  private static stripAnalysisFromListingRow<T extends Record<string, any>>(
+    row: T,
+  ): T {
+    const pkg = row.review_package as
+      | { documents?: Record<string, unknown>; analysis_attached?: boolean }
+      | null
+      | undefined;
+    return {
+      ...row,
+      ciiV2: null,
+      ciiV2Lock: null,
+      independentAiAnalyses: null,
+      review_package: pkg
+        ? {
+            ...pkg,
+            analysis_attached: false,
+            documents: pkg.documents
+              ? { ...pkg.documents, analysis_report: null }
+              : pkg.documents,
+          }
+        : pkg,
+    };
+  }
+
+  /** NGO / partner receive the student Impact Package without the CII analysis report. */
+  private static stripAnalysisReportForPartner<
+    T extends { data?: Record<string, unknown> },
+  >(response: T): T {
+    const data = response?.data;
+    if (!data) return response;
+    const pkg = data.review_package as
+      | { documents?: Record<string, unknown>; analysis_attached?: boolean }
+      | null
+      | undefined;
+    return {
+      ...response,
+      data: {
+        ...data,
+        ciiV2: null,
+        ciiV2Lock: null,
+        independentAiAnalyses: null,
+        review_package: pkg
+          ? {
+              ...pkg,
+              analysis_attached: false,
+              documents: pkg.documents
+                ? { ...pkg.documents, analysis_report: null }
+                : pkg.documents,
+            }
+          : pkg,
+      },
+    };
   }
 
   async findOneByOpportunityOrId(id: string, studentId: string) {

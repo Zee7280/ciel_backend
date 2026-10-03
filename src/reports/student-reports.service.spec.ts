@@ -1773,7 +1773,7 @@ describe('StudentReportsService', () => {
     expect(result.data.status).toBe('verified');
   });
 
-  it('sends the 3-document package to student, faculty, partner and admin (not university) after Super Admin publish', async () => {
+  it('sends the student Impact Package after Super Admin publish; faculty/student/university get analysis, partner does not', async () => {
     const report = {
       id: 'report-1',
       status: 'paid',
@@ -1782,6 +1782,7 @@ describe('StudentReportsService', () => {
       faculty_status: 'pending',
       partnerApprovedAt: null,
       adminApprovedAt: null,
+      ciiV2: { final: 82 },
       ciiV2Lock: { locked: true },
       student: {
         name: 'Amina',
@@ -1832,10 +1833,10 @@ describe('StudentReportsService', () => {
         'student',
         'faculty',
         'partner',
+        'university',
         'admin',
       ]),
     );
-    expect(audiences).not.toContain('university');
     expect(mockMailService.sendReportPackagePublished).toHaveBeenCalledWith(
       expect.objectContaining({
         to: 'amina@student.test',
@@ -1843,6 +1844,7 @@ describe('StudentReportsService', () => {
         reviewHref: expect.stringContaining('view=v17'),
         flashHref: expect.stringContaining('view=v17'),
         detailedHref: expect.stringContaining('view=print'),
+        includeAnalysis: true,
         evidenceCount: expect.any(Number),
       }),
     );
@@ -1851,6 +1853,14 @@ describe('StudentReportsService', () => {
         to: 'faculty@uni.test',
         audience: 'faculty',
         reviewHref: expect.stringContaining('/dashboard/faculty/reports/report-1'),
+        includeAnalysis: true,
+      }),
+    );
+    expect(mockMailService.sendReportPackagePublished).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: 'uni@campus.test',
+        audience: 'university',
+        includeAnalysis: true,
       }),
     );
     expect(mockMailService.sendReportPackagePublished).toHaveBeenCalledWith(
@@ -1858,6 +1868,7 @@ describe('StudentReportsService', () => {
         to: 'ngo@partner.test',
         audience: 'partner',
         reviewHref: expect.stringContaining('/dashboard/partner/verify/report-1'),
+        includeAnalysis: false,
       }),
     );
   });

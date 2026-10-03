@@ -47,3 +47,25 @@ describe('restrictListingForExternalViewer', () => {
     expect(out).not.toHaveProperty('ciiV2');
   });
 });
+
+describe('stripAnalysisFromListingRow (partner / NGO)', () => {
+  const strip = (StudentReportsService as any).stripAnalysisFromListingRow;
+  it('removes the analysis report but keeps the package documents', () => {
+    const out = strip({
+      id: 'r1',
+      ciiV2: { final: 70 },
+      ciiV2Lock: { locked: true },
+      independentAiAnalyses: [{}],
+      review_package: {
+        analysis_attached: true,
+        documents: { flashcard: { title: 'Impact flashcard' }, analysis_report: { href: 'x' } },
+      },
+    });
+    expect(out.ciiV2).toBeNull();
+    expect(out.ciiV2Lock).toBeNull();
+    expect(out.independentAiAnalyses).toBeNull();
+    expect(out.review_package.analysis_attached).toBe(false);
+    expect(out.review_package.documents.analysis_report).toBeNull();
+    expect(out.review_package.documents.flashcard.title).toBe('Impact flashcard');
+  });
+});

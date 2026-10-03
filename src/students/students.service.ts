@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { resolveTeamSeatCap, teamCapacityError } from '../engagement/team-capacity.util';
 import {
   Injectable,
   NotFoundException,
@@ -729,7 +730,40 @@ export class StudentsService {
     }
   }
   // Verification
-  async sendTeamMemberOtp(email: string) {
+  async sendTeamMemberOtp(
+    email: string,
+    projectId?: string,
+    blockIfOnRoster = false,
+  ) {
+    const emailNorm = String(email || '')
+      .trim()
+      .toLowerCase();
+    if (!emailNorm) {
+      throw new BadRequestException('Email is required');
+    }
+    const projectKey = String(projectId || '').trim();
+    // Only teammate-add flows opt in. Self-verify / team-lead OTP must still
+    // work after the student already has a participation row.
+    if (projectKey && blockIfOnRoster) {
+      const existingSeat = await this.participantRepository
+        .createQueryBuilder('p')
+        .where('p.projectId = :projectId', { projectId: projectKey })
+        .andWhere("LOWER(TRIM(COALESCE(p.email, ''))) = :emailNorm", {
+          emailNorm,
+        })
+        .andWhere("LOWER(COALESCE(p.status, '')) NOT IN (:...deadStatuses)", {
+          deadStatuses: ['rejected', 'withdrawn', 'cancelled', 'removed'],
+        })
+        .getOne();
+      if (existingSeat) {
+        throw new BadRequestException(
+          existingSeat.isTeamLead
+            ? 'This email is already used by the team lead on this project. Each member must register with their own email address.'
+            : 'This email is already on this team. Each student can appear only once.',
+        );
+      }
+    }
+
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
     // Save OTP in DB with 10 mins expiry
@@ -2281,6 +2315,9 @@ export class StudentsService {
         sanitized.push(member);
       }
       teamMembersPayload = sanitized;
+      const seatCap = resolveTeamSeatCap(opportunity.timeline?.volunteers_required);
+      const capError = teamCapacityError(sanitized.length, seatCap);
+      if (capError) throw new BadRequestException(capError);
     }
 
     let resolvedTeamId = (dto.team_id || '').trim();

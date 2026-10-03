@@ -1,8 +1,7 @@
 import { StudentsService } from './students.service';
 import { ReportPartnerApprovalSettingsService } from '../reports/report-partner-approval-settings.service';
 
-describe('StudentsService impact history', () => {
-  const makeService = (overrides: Record<string, unknown> = {}) => {
+const makeService = (overrides: Record<string, unknown> = {}) => {
     const repositories = {
       usersRepository: {},
       opportunitiesRepository: {},
@@ -48,6 +47,7 @@ describe('StudentsService impact history', () => {
     );
   };
 
+describe('StudentsService impact history', () => {
   it('includes an approved student-created opportunity in the student browse listing', async () => {
     const opportunities = [
       {
@@ -445,5 +445,61 @@ describe('StudentsService getDashboard analytics', () => {
     expect(result.data.student_analytics?.verified).toBe(false);
     expect(result.data.activeProjects[0]?.required_hours_per_student).toBe(24);
     expect(result.data.activeProjects[0]?.team_size).toBe(1);
+  });
+});
+
+describe('StudentsService.sendTeamMemberOtp', () => {
+  const makeOtpService = (existingSeat: { id: string; isTeamLead: boolean } | null) => {
+    const qb = {
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(existingSeat),
+    };
+    return makeService({
+      participantRepository: {
+        find: jest.fn().mockResolvedValue([]),
+        createQueryBuilder: jest.fn().mockReturnValue(qb),
+      },
+      otpRepository: {
+        findOne: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockImplementation((row) => row),
+        save: jest.fn().mockImplementation((row) => row),
+      },
+      mailService: {
+        sendTeamMemberOtp: jest.fn().mockResolvedValue(undefined),
+      },
+    });
+  };
+
+  it('rejects OTP when the email belongs to the team lead on the project', async () => {
+    const service = makeOtpService({ id: 'lead-1', isTeamLead: true });
+    await expect(
+      service.sendTeamMemberOtp('lead@test.edu', 'proj-1', true),
+    ).rejects.toThrow(/already used by the team lead/);
+  });
+
+  it('rejects OTP when the email is already a teammate on the project', async () => {
+    const service = makeOtpService({ id: 'member-1', isTeamLead: false });
+    await expect(
+      service.sendTeamMemberOtp('member@test.edu', 'proj-1', true),
+    ).rejects.toThrow(/already on this team/);
+  });
+
+  it('sends OTP when the email is not already on the project', async () => {
+    const service = makeOtpService(null);
+    const result = await service.sendTeamMemberOtp('new@test.edu', 'proj-1', true);
+    expect(result).toEqual({
+      success: true,
+      message: 'OTP sent successfully',
+    });
+  });
+
+  it('still sends OTP for self-verify when the caller is already seated', async () => {
+    const service = makeOtpService({ id: 'lead-1', isTeamLead: true });
+    const result = await service.sendTeamMemberOtp('lead@test.edu', 'proj-1');
+    expect(result).toEqual({
+      success: true,
+      message: 'OTP sent successfully',
+    });
   });
 });

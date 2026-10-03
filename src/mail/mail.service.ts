@@ -1957,6 +1957,11 @@ export class MailService {
     }
   }
 
+  /** Super Admin + configured review inboxes — used on submit and after publish. */
+  getAdminReviewEmails(): string[] {
+    return this.getAdminReviewRecipientList();
+  }
+
   private getAdminReviewRecipientList(): string[] {
     const primaryAdmin = 'admin@cielpk.com';
     const recipientsRaw =
@@ -1977,6 +1982,13 @@ export class MailService {
     opportunityId: string,
     reportId: string,
     studentName: string,
+    packageLinks?: {
+      reviewHref?: string;
+      analyserHref?: string;
+      flashHref?: string;
+      detailedHref?: string;
+      evidenceCount?: number;
+    },
   ) {
     const recipients = this.getAdminReviewRecipientList();
     if (!recipients.length) {
@@ -1996,14 +2008,44 @@ export class MailService {
     const studentEsc = this.escHtmlPlain(
       studentName?.trim() ? studentName.trim() : 'Student',
     );
+    const reviewHref =
+      packageLinks?.reviewHref ||
+      this.buildFrontendLink(`/dashboard/admin/reports/verify/${reportId}`, {
+        package: '1',
+      });
+    const analyserHref =
+      packageLinks?.analyserHref ||
+      this.buildFrontendLink(`/dashboard/admin/reports/verify/${reportId}`, {
+        view: 'cii-v2',
+      });
+    const evidenceLine =
+      typeof packageLinks?.evidenceCount === 'number'
+        ? `<p>Evidence files in this package: <strong>${packageLinks.evidenceCount}</strong> — open each thumbnail to view the file, not a raw link.</p>`
+        : '';
+    const docLinks = [
+      packageLinks?.flashHref
+        ? `<li><a href="${packageLinks.flashHref}">1. Revised flashcard</a></li>`
+        : '',
+      packageLinks?.detailedHref
+        ? `<li><a href="${packageLinks.detailedHref}">2. Detailed report</a></li>`
+        : '',
+      `<li><a href="${reviewHref}">3. Evidence files (large previews)</a></li>`,
+    ]
+      .filter(Boolean)
+      .join('');
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
         <h2 style="color: #333;">Student impact report submitted</h2>
         <p><strong>${studentEsc}</strong> uploaded an impact report for <strong>${titleEsc}</strong>.</p>
-        <p>Use the admin dashboard to read the narrative, review evidence, and record your decision.</p>
+        <p>Three documents are ready for Super Admin review:</p>
+        <ol style="padding-left: 20px; line-height: 1.7;">${docLinks}</ol>
+        ${evidenceLine}
+        <p>Run the AI analyser checker, then publish. After approval the same package goes to the student, partner/NGO, faculty, university, and CIEL PK admin.</p>
         <div style="text-align: center; margin: 28px 0;">
-          <a href="${adminLink}" style="background-color: #2563eb; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Open admin dashboard</a>
+          <a href="${reviewHref}" style="background-color: #0e7d74; color: white; padding: 12px 22px; text-decoration: none; border-radius: 5px; font-weight: bold; margin-right: 8px;">Open review package</a>
+          <a href="${analyserHref}" style="background-color: #2563eb; color: white; padding: 12px 22px; text-decoration: none; border-radius: 5px; font-weight: bold;">Run AI analyser</a>
         </div>
+        <p style="font-size:12px;color:#64748b;text-align:center;"><a href="${adminLink}">Admin dashboard</a></p>
       </div>
     `;
     try {
@@ -2617,6 +2659,61 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed student impact-report ${status} email to ${to}`,
+        error.stack,
+      );
+    }
+  }
+
+  /** After Super Admin publishes, send the same 3-document package to each stakeholder. */
+  async sendReportPackagePublished(input: {
+    to: string;
+    audience: 'student' | 'faculty' | 'partner' | 'university' | 'admin';
+    projectTitle: string;
+    studentName: string;
+    reviewHref: string;
+    flashHref?: string;
+    detailedHref?: string;
+    evidenceCount?: number;
+  }): Promise<void> {
+    const to = String(input.to || '').trim();
+    if (!to) return;
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const titleEsc = this.escHtmlPlain(input.projectTitle);
+    const studentEsc = this.escHtmlPlain(input.studentName || 'Student');
+    const audienceLabel: Record<typeof input.audience, string> = {
+      student: 'your published impact report',
+      faculty: 'the published faculty copy',
+      partner: 'the published partner/NGO copy',
+      university: 'the published university copy',
+      admin: 'the published CIEL PK copy',
+    };
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #0e7d74;">CIEL PK · Report published</h2>
+        <p>Super Admin approved <strong>${studentEsc}</strong>'s report for <strong>${titleEsc}</strong>.</p>
+        <p>This is ${audienceLabel[input.audience]}. The package has three documents:</p>
+        <ol style="padding-left:20px;line-height:1.7;">
+          <li>${input.flashHref ? `<a href="${input.flashHref}">Revised flashcard</a>` : 'Revised flashcard'}</li>
+          <li>${input.detailedHref ? `<a href="${input.detailedHref}">Detailed report</a>` : 'Detailed report'}</li>
+          <li>Evidence files${typeof input.evidenceCount === 'number' ? ` (${input.evidenceCount})` : ''} — open each thumbnail to view the file</li>
+        </ol>
+        <div style="text-align:center;margin:28px 0;">
+          <a href="${input.reviewHref}" style="background-color:#0e7d74;color:white;padding:12px 25px;text-decoration:none;border-radius:5px;font-weight:bold;">Open published package</a>
+        </div>
+      </div>
+    `;
+    try {
+      await this.sendMailReliable({
+        from,
+        to,
+        subject: `CIEL PK — published report package: ${input.projectTitle}`,
+        html,
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed published-package email to ${to}`,
         error.stack,
       );
     }

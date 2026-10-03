@@ -441,6 +441,13 @@ export class StudentReport {
     note?: string;
   }> | null;
 
+  /**
+   * Three-document review package built on student submit:
+   * revised flashcard, detailed report, evidence files (previewable thumbs).
+   */
+  @Column({ name: 'review_package', type: 'jsonb', nullable: true })
+  review_package: Record<string, unknown> | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

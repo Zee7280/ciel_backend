@@ -150,6 +150,7 @@ describe('StudentReportsService', () => {
   };
   const mockUsersRepository = {
     findOne: jest.fn(),
+    find: jest.fn().mockResolvedValue([]),
   };
   const mockPaymentRepository = {
     findOne: jest.fn().mockResolvedValue(null),
@@ -171,6 +172,8 @@ describe('StudentReportsService', () => {
     sendStudentImpactReportFacultyDecision: jest
       .fn()
       .mockResolvedValue(undefined),
+    sendReportPackagePublished: jest.fn().mockResolvedValue(undefined),
+    getAdminReviewEmails: jest.fn().mockReturnValue(['admin@cielpk.com']),
   };
   const mockConfigService = {
     get: jest.fn().mockReturnValue(''),
@@ -247,6 +250,7 @@ describe('StudentReportsService', () => {
       id: 'student-1',
       name: 'Test Student',
     });
+    mockUsersRepository.find.mockResolvedValue([]);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -335,6 +339,16 @@ describe('StudentReportsService', () => {
     expect(
       mockMailService.sendAdminStudentReportSubmitted,
     ).toHaveBeenCalledTimes(1);
+    expect(mockStudentReportsRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        review_package: expect.objectContaining({
+          documents: expect.objectContaining({
+            flashcard: expect.objectContaining({ view: 'v17' }),
+            detailed_report: expect.objectContaining({ view: 'print' }),
+          }),
+        }),
+      }),
+    );
   });
 
   it('does not rewind a submitted report to draft when createReport is called without submit', async () => {
@@ -1739,6 +1753,95 @@ describe('StudentReportsService', () => {
     expect(result.data.status).toBe('verified');
   });
 
+  it('sends the 3-document package to student, faculty, partner and admin (not university) after Super Admin publish', async () => {
+    const report = {
+      id: 'report-1',
+      status: 'paid',
+      partner_status: 'pending',
+      admin_status: 'pending',
+      faculty_status: 'pending',
+      partnerApprovedAt: null,
+      adminApprovedAt: null,
+      ciiV2Lock: { locked: true },
+      student: {
+        name: 'Amina',
+        email: 'amina@student.test',
+        university: 'LUMS',
+      },
+      faculty: { email: 'faculty@uni.test' },
+      review_package: {
+        admin_review_href: 'https://app.cielpk.com/admin/pkg',
+        ai_analyser_href: 'https://app.cielpk.com/admin/ai',
+        documents: {
+          flashcard: { href: 'https://app.cielpk.com/flash' },
+          detailed_report: { href: 'https://app.cielpk.com/print' },
+          evidence: { count: 2 },
+        },
+      },
+      opportunity: {
+        title: 'Clean water',
+        requiresPartnerApproval: false,
+        partner_organization: { official_email: 'ngo@partner.test' },
+      },
+    };
+    mockStudentReportsRepository.findOne.mockResolvedValue(report);
+    mockUsersRepository.find.mockImplementation(async (opts: { where?: { role?: string } }) => {
+      if (opts?.where?.role === 'university') {
+        return [
+          {
+            email: 'uni@campus.test',
+            university: 'LUMS',
+            institution: 'LUMS',
+          },
+        ];
+      }
+      if (opts?.where?.role === 'admin') {
+        return [{ email: 'super@cielpk.com' }];
+      }
+      return [];
+    });
+
+    await service.verifyReport('report-1', 'approve', 'admin');
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    const audiences = mockMailService.sendReportPackagePublished.mock.calls.map(
+      (call) => call[0].audience,
+    );
+    expect(audiences).toEqual(
+      expect.arrayContaining([
+        'student',
+        'faculty',
+        'partner',
+        'admin',
+      ]),
+    );
+    expect(audiences).not.toContain('university');
+    expect(mockMailService.sendReportPackagePublished).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: 'amina@student.test',
+        audience: 'student',
+        reviewHref: expect.stringContaining('view=v17'),
+        flashHref: expect.stringContaining('view=v17'),
+        detailedHref: expect.stringContaining('view=print'),
+        evidenceCount: expect.any(Number),
+      }),
+    );
+    expect(mockMailService.sendReportPackagePublished).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: 'faculty@uni.test',
+        audience: 'faculty',
+        reviewHref: expect.stringContaining('/dashboard/faculty/reports/report-1'),
+      }),
+    );
+    expect(mockMailService.sendReportPackagePublished).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: 'ngo@partner.test',
+        audience: 'partner',
+        reviewHref: expect.stringContaining('/dashboard/partner/verify/report-1'),
+      }),
+    );
+  });
+
   it('lets CIEL PK publish a private-candidate report after CII is locked, without Faculty', async () => {
     const report = {
       id: 'report-pc',
@@ -1967,6 +2070,8 @@ describe('StudentReportsService', () => {
     expect(report.status).toBe('paid');
     expect(report.admin_status).toBe('approved');
     expect(result.data.status).toBe('paid');
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(mockMailService.sendReportPackagePublished).toHaveBeenCalled();
   });
 
   it('marks partner-required reports verified when partner approves after admin and faculty', async () => {
@@ -1993,6 +2098,8 @@ describe('StudentReportsService', () => {
     expect(report.status).toBe('verified');
     expect(report.partner_status).toBe('approved');
     expect(result.data.status).toBe('verified');
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(mockMailService.sendReportPackagePublished).not.toHaveBeenCalled();
   });
 
   it('blocks partner approve until Faculty has approved the report', async () => {

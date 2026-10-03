@@ -3,6 +3,7 @@ import {
   BadRequestException,
   NotFoundException,
   ForbiddenException,
+  Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -40,6 +41,7 @@ import {
 import { ReportPartnerApprovalSettingsService } from './report-partner-approval-settings.service';
 import { isReportPartnerStepSatisfied } from './report-partner-approval.util';
 import { collectReportEvidenceFiles } from './collect-report-evidence.util';
+import { buildReportReviewPackage, type ReportReviewPackage } from './review-package.util';
 import { isPrivateCandidateOpportunity, reviewRouteForOpportunity } from '../opportunities/private-candidate.util';
 import {
   redactCiiV2Fields,
@@ -87,6 +89,8 @@ function distinctBeneficiariesFromSection4(section4: any): number | string | nul
 
 @Injectable()
 export class StudentReportsService {
+  private readonly logger = new Logger(StudentReportsService.name);
+
   constructor(
     @InjectRepository(Opportunity)
     private readonly opportunitiesRepository: Repository<Opportunity>,
@@ -867,6 +871,7 @@ export class StudentReportsService {
       ciiV2: report.ciiV2 ?? null,
       ciiV2Lock: report.ciiV2Lock ?? null,
       independentAiAnalyses: report.independentAiAnalyses ?? null,
+      review_package: report.review_package ?? null,
       ...this.computeCommunityAwardTotal(report),
       ...this.reportVerificationPayload(report),
       actions: {
@@ -2681,6 +2686,81 @@ export class StudentReportsService {
     return '';
   }
 
+  /** After Super Admin publishes, send the same 3-document package to every stakeholder. */
+  private async notifyReviewPackagePublished(report: StudentReport): Promise<void> {
+    if (typeof this.mailService.sendReportPackagePublished !== 'function') {
+      return;
+    }
+    const full = await this.studentReportsRepository.findOne({
+      where: { id: report.id },
+      relations: ['student', 'faculty', 'opportunity'],
+    });
+    if (!full) return;
+    const frontendBase =
+      this.configService.get<string>('FRONTEND_URL') ||
+      this.configService.get<string>('APP_URL') ||
+      '';
+    const pack = buildReportReviewPackage(full, frontendBase);
+    const projectTitle =
+      full.opportunity?.title || full.project_id || 'Community Service report';
+    const studentName = full.student?.name || 'Student';
+    const seen = new Set<string>();
+    const send = async (
+      to: string,
+      audience: 'student' | 'faculty' | 'partner' | 'university' | 'admin',
+    ) => {
+      const email = this.normalizeEmail(to);
+      if (!email || !email.includes('@') || seen.has(email)) return;
+      seen.add(email);
+      const reviewHref = pack.stakeholder_hrefs[audience];
+      const flashHref =
+        audience === 'admin'
+          ? pack.admin_doc_hrefs.flashcard
+          : audience === 'student'
+            ? pack.documents.flashcard.href
+            : reviewHref;
+      const detailedHref =
+        audience === 'admin'
+          ? pack.admin_doc_hrefs.detailed_report
+          : audience === 'student'
+            ? pack.documents.detailed_report.href
+            : reviewHref;
+      if (!reviewHref) return;
+      await this.mailService.sendReportPackagePublished({
+        to: email,
+        audience,
+        projectTitle,
+        studentName,
+        reviewHref,
+        flashHref,
+        detailedHref,
+        evidenceCount: pack.documents.evidence.count,
+      });
+    };
+
+    await send(full.student?.email || '', 'student');
+    await send(this.resolveReportFacultyEmail(full, full.opportunity), 'faculty');
+    await send(this.resolveReportPartnerEmail(full.opportunity), 'partner');
+
+    // University is intentionally not emailed (its only possible link, the partner verify page, 403s).
+
+    const adminFromConfig =
+      typeof this.mailService.getAdminReviewEmails === 'function'
+        ? this.mailService.getAdminReviewEmails()
+        : [];
+    for (const email of adminFromConfig || []) {
+      await send(email, 'admin');
+    }
+    if (typeof this.usersRepository.find === 'function') {
+      const admins = await this.usersRepository.find({
+        where: { role: UserRole.SUPER_ADMIN },
+      });
+      for (const admin of admins || []) {
+        await send(admin.email, 'admin');
+      }
+    }
+  }
+
   /**
    * Resend the Faculty (or CIEL PK) report-review email. Does not change report status.
    */
@@ -2771,11 +2851,20 @@ export class StudentReportsService {
     }
 
     if (privateCandidate) {
+      const pack = (report.review_package || {}) as Partial<ReportReviewPackage>;
       await this.mailService.sendAdminStudentReportSubmitted(
         projectTitle,
         report.opportunityId || '',
         report.id,
         teamLeadName,
+        {
+          reviewHref: pack.admin_review_href,
+          analyserHref: pack.ai_analyser_href,
+          flashHref: pack.admin_doc_hrefs?.flashcard || pack.documents?.flashcard?.href,
+          detailedHref:
+            pack.admin_doc_hrefs?.detailed_report || pack.documents?.detailed_report?.href,
+          evidenceCount: pack.documents?.evidence?.count,
+        },
       );
       return {
         success: true,
@@ -3094,6 +3183,23 @@ export class StudentReportsService {
       await this.studentReportsRepository.save(report);
     }
 
+    if (shouldSubmit) {
+      try {
+        report.review_package = buildReportReviewPackage(
+          report,
+          this.configService.get<string>('FRONTEND_URL') ||
+            this.configService.get<string>('APP_URL') ||
+            '',
+        ) as unknown as StudentReport['review_package'];
+        await this.studentReportsRepository.save(report);
+      } catch (error) {
+        this.logger.error(
+          `Failed to build review package for report ${report.id}`,
+          error instanceof Error ? error.stack : String(error),
+        );
+      }
+    }
+
     const skipAdminSubmitNotify = new Set([
       'submitted',
       'partner_verified',
@@ -3119,12 +3225,22 @@ export class StudentReportsService {
       const student = await this.usersRepository.findOne({
         where: { id: studentId },
       });
+      const pack = (report.review_package || {}) as Partial<ReportReviewPackage>;
       void this.mailService
         .sendAdminStudentReportSubmitted(
           projectTitle,
           report.opportunityId || opportunityIdFromDto || '',
           report.id,
           student?.name || 'Student',
+          {
+            reviewHref: pack.admin_review_href,
+            analyserHref: pack.ai_analyser_href,
+            flashHref: pack.admin_doc_hrefs?.flashcard || pack.documents?.flashcard?.href,
+            detailedHref:
+              pack.admin_doc_hrefs?.detailed_report ||
+              pack.documents?.detailed_report?.href,
+            evidenceCount: pack.documents?.evidence?.count,
+          },
         )
         .catch(() => undefined);
       const facultyTo = this.resolveReportFacultyEmail(report, oppForTitle);
@@ -4051,6 +4167,18 @@ export class StudentReportsService {
         ciiV2Lock: report.ciiV2Lock,
         // Phase 4: Include independent AI analyses
         independentAiAnalyses: report.independentAiAnalyses,
+        review_package:
+          report.review_package ||
+          (report.status &&
+          report.status !== 'draft' &&
+          report.status !== 'continue'
+            ? buildReportReviewPackage(
+                report,
+                this.configService.get<string>('FRONTEND_URL') ||
+                  this.configService.get<string>('APP_URL') ||
+                  '',
+              )
+            : null),
         created_at: report.createdAt,
         updated_at: report.updatedAt,
         last_saved: report.updatedAt,
@@ -4446,6 +4574,17 @@ export class StudentReportsService {
       throw new BadRequestException(
         'This report was just updated by another reviewer — please refresh and try again.',
       );
+    }
+
+    // Fire once, on the transition into Super Admin approval — not on repeat approves.
+    if (
+      action === 'approve' &&
+      !isPartnerReviewer &&
+      role === 'admin' &&
+      report.admin_status === 'approved' &&
+      originalAdminStatus !== 'approved'
+    ) {
+      void this.notifyReviewPackagePublished(report).catch(() => undefined);
     }
 
     const actionMessage =

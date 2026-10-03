@@ -1578,5 +1578,57 @@ describe('EngagementService', () => {
       );
       expect(mockManager.save).not.toHaveBeenCalled();
     });
+
+    it('rejects registering a teammate with the team lead email', async () => {
+      const t = fx('register-member-reuses-lead-email');
+      const studentId = t.id.u1;
+      const projectId = t.id.project;
+      const dto = {
+        projectId,
+        participationMode: 'team',
+        isTeamLead: false,
+        email: t.email.existing,
+        fullName: t.name.teamMember,
+        cnic: '1234567890123',
+        mobile: '03001234567',
+        team_id: t.id.teamId,
+      } as any;
+
+      const mockOpportunity = {
+        id: projectId,
+        title: t.title,
+        status: 'active',
+        admin_approved: true,
+      };
+      const existingLead = {
+        id: 'lead-row-1',
+        projectId,
+        teamId: t.id.teamId,
+        isTeamLead: true,
+        email: t.email.existing,
+      };
+
+      const mockManager = {
+        findOne: jest
+          .fn()
+          .mockResolvedValueOnce(mockOpportunity)
+          .mockResolvedValueOnce(null),
+        createQueryBuilder: jest
+          .fn()
+          .mockReturnValueOnce(mockUserQueryBuilder(null))
+          .mockReturnValueOnce(mockParticipationQueryBuilder(existingLead as Participation)),
+        create: jest.fn().mockReturnValue({ id: 'new-participation' }),
+        save: jest.fn(),
+      };
+
+      (mockParticipationRepository as any).manager = {
+        transaction: jest.fn().mockImplementation((cb) => cb(mockManager)),
+      };
+
+      await expect(service.registerParticipant(studentId, dto)).rejects.toThrow(
+        'This email is already used by the team lead on this project',
+      );
+      expect(mockManager.save).not.toHaveBeenCalled();
+    });
   });
 });

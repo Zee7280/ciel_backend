@@ -6,6 +6,7 @@ import {
   Logger,
   Optional,
 } from '@nestjs/common';
+import { resolveTeamSeatCap, teamCapacityError } from './team-capacity.util';
 import { IssueLogsService } from '../issue-logs/issue-logs.service';
 import {
   ATTENDANCE_DESCRIPTION_MAX_CHARS,
@@ -413,7 +414,7 @@ export class EngagementService {
           }
         }
 
-        // Team: a new member must not reuse the team lead's row (e.g. lead's email sent again by mistake)
+        // Team: a new member must not reuse the team lead's row (lead email pasted again).
         if (
           dto.participationMode === 'team' &&
           !dto.isTeamLead &&
@@ -557,6 +558,23 @@ export class EngagementService {
             throw new BadRequestException(
               'This team already has a team lead on this project. Register as a team member instead.',
             );
+          }
+        }
+
+        // Team size cap: lead + members may not exceed the opportunity's seats (volunteers_required).
+        if (isTeamMemberRegistration && !participation.id && effectiveTeamId) {
+          const cap = resolveTeamSeatCap(opportunity.timeline?.volunteers_required);
+          if (cap) {
+            // Count teammates only (the lead is not a "team member" for this cap).
+            const currentMembers = await manager.count(Participation, {
+              where: {
+                projectId: opportunity.id,
+                teamId: effectiveTeamId,
+                isTeamLead: false,
+              },
+            });
+            const capError = teamCapacityError(currentMembers + 1, cap);
+            if (capError) throw new BadRequestException(capError);
           }
         }
 

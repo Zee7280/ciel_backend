@@ -1482,10 +1482,10 @@ Keep the full response under 180 words.`;
         return buildSection11MasterRubricUserMessage(data);
 
       // =====================================================
-      // CII v2 EVALUATION (Composite Impact Index Analyser v2)
+      // CII ANALYZER (Balanced CII Rubric v3.1)
       // =====================================================
       case 'cii_v2_evaluation':
-        return `Evaluate this Community Service report against the CII Rubric v2 embedded in your system instructions.
+        return `Evaluate this Community Service report against the Balanced CII Rubric v3.1 embedded in your system instructions.
 
 REPORT DATA:
 ${JSON.stringify(data)}`;
@@ -1545,7 +1545,7 @@ ${JSON.stringify(data)}`;
             }
           : undefined;
 
-    // CII v2: show the model the real evidence images (and say exactly which files it could not see).
+    // CII Analyzer: show the model the real evidence images (and say exactly which files it could not see).
     let userContent: string | OpenAiContentPart[] = prompt;
     let evidenceInspection: EvidenceInspection | undefined;
     if (isCiiV2Evaluation) {

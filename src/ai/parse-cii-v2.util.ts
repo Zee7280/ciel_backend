@@ -9,7 +9,7 @@ import {
 export interface CiiV2AiEvaluation {
   sections: CiiV2SectionInput[];
   bonus: CiiV2BonusInput;
-  bonusWhy: { effort?: string; resources?: string; partners?: string };
+  bonusWhy: { effort?: string; resources?: string; partners?: string; outcome?: string };
   integrityPenalty: number;
   integrityWhy?: string;
   evidence: CiiV2EvidenceRow[];
@@ -60,10 +60,16 @@ function parseEvidenceRow(
 ): CiiV2EvidenceRow | null {
   const rec = asRecord(raw);
   const file =
-    pickString(rec.file) || pickString(rec.filename) || pickString(rec.url);
+    pickString(rec.file) ||
+    pickString(rec.file_name) ||
+    pickString(rec.filename) ||
+    pickString(rec.url);
   const claim = pickString(rec.claim);
   if (!file && !claim) return null;
-  const match = Math.min(100, Math.max(0, pickNumber(rec.match) ?? 0));
+  const match = Math.min(
+    100,
+    Math.max(0, pickNumber(rec.match ?? rec.match_confidence) ?? 0),
+  );
   const verdictRaw = pickString(rec.verdict).toUpperCase();
   // An unknown / missing verdict is derived from the numeric match (≥85 / ≥50 / below) rather than
   // silently softened to PARTIAL — an "unrelated" row must not be upgraded by a parsing gap.
@@ -72,11 +78,13 @@ function parseEvidenceRow(
     verdictRaw === 'PARTIAL' ||
     verdictRaw === 'MISMATCH'
       ? verdictRaw
-      : match >= 85
-        ? 'MATCH'
-        : match >= 50
-          ? 'PARTIAL'
-          : 'MISMATCH';
+      : verdictRaw === 'PROCESSING_REQUIRED'
+        ? 'PARTIAL'
+        : match >= 85
+          ? 'MATCH'
+          : match >= 50
+            ? 'PARTIAL'
+            : 'MISMATCH';
   const supportRaw = pickString(rec.claimSupport ?? rec.claim_support)
     .toLowerCase()
     .replace(/[\s-]+/g, '_');
@@ -86,11 +94,13 @@ function parseEvidenceRow(
     supportRaw === 'unsupported' ||
     supportRaw === 'contradicted'
       ? supportRaw
-      : verdict === 'MATCH'
-        ? 'supported'
-        : verdict === 'PARTIAL'
-          ? 'partially_supported'
-          : 'unsupported';
+      : supportRaw === 'processing_required'
+        ? 'unsupported'
+        : verdict === 'MATCH'
+          ? 'supported'
+          : verdict === 'PARTIAL'
+            ? 'partially_supported'
+            : 'unsupported';
   // The verdict and the plain-words support must agree: a MISMATCH can never read "supported".
   if (verdict === 'MISMATCH' && (claimSupport === 'supported' || claimSupport === 'partially_supported')) {
     claimSupport = 'unsupported';
@@ -173,8 +183,8 @@ export function parseCiiV2Response(raw: string): CiiV2AiEvaluation | null {
   }
 
   // A section or criterion the AI response omits is silently scored as anchor 0 by
-  // parseSectionInput below — that can swing the final score by a lot (Section 4 alone is
-  // 32/94 base points), so surface it as a loud, faculty-visible red flag instead of letting a
+  // parseSectionInput below — that can swing the final score by a lot (Sections 4/5/8
+  // are 15 points each), so surface it as a loud, faculty-visible red flag instead of letting a
   // parsing gap masquerade as a genuinely low score.
   const parsingRedFlags: string[] = [];
   const sections = CII_V2_SECTIONS.map((s) => {
@@ -193,10 +203,21 @@ export function parseCiiV2Response(raw: string): CiiV2AiEvaluation | null {
     return input;
   });
 
+  // v3.1 uses extraMileUplift; older runs used bonus.{effort,resources,partners}.
+  const uplift = asRecord(rec.extraMileUplift ?? rec.extra_mile_uplift);
   const bonusRec = asRecord(rec.bonus);
-  const effort = parseBonusChannel(bonusRec.effort);
-  const resources = parseBonusChannel(bonusRec.resources);
-  const partners = parseBonusChannel(bonusRec.partners);
+  const effort = parseBonusChannel(
+    uplift.extra_effort ?? uplift.extraEffort ?? bonusRec.effort,
+  );
+  const resources = parseBonusChannel(
+    uplift.resource_mobilization ?? uplift.resourceMobilization ?? bonusRec.resources,
+  );
+  const partners = parseBonusChannel(
+    uplift.partnership_building ?? uplift.partnershipBuilding ?? bonusRec.partners,
+  );
+  const outcome = parseBonusChannel(
+    uplift.exceptional_outcome ?? uplift.exceptionalOutcome ?? bonusRec.outcome,
+  );
 
   const integrityRec = asRecord(rec.integrityPenalty);
   const integrityPenalty =
@@ -237,11 +258,13 @@ export function parseCiiV2Response(raw: string): CiiV2AiEvaluation | null {
       effort: effort.amount,
       resources: resources.amount,
       partners: partners.amount,
+      outcome: outcome.amount,
     },
     bonusWhy: {
       effort: effort.why,
       resources: resources.why,
       partners: partners.why,
+      outcome: outcome.why,
     },
     // A single run must not be able to zero a report on its own: cap the penalty (the rubric's
     // harshest tier is -15, so 30 leaves generous headroom).
@@ -250,9 +273,14 @@ export function parseCiiV2Response(raw: string): CiiV2AiEvaluation | null {
     evidence,
     redFlags,
     checks,
-    needsAdminReview: Boolean(rec.needsAdminReview) || redFlags.length > 0,
+    needsAdminReview:
+      Boolean(rec.needsAdminReview) ||
+      redFlags.length > 0 ||
+      pickString(rec.badgeReadiness).toUpperCase() === 'ADMIN_REVIEW_REQUIRED' ||
+      pickString(asRecord(rec.inputCompleteness).scoring_status).toLowerCase() ===
+        'admin_review_required',
     incomplete: parsingRedFlags.length > 0,
     studentFeedback: pickString(rec.studentFeedback) || undefined,
-    frameworkVersion: pickString(rec.framework_version) || 'v2.0',
+    frameworkVersion: pickString(rec.framework_version) || 'v3.1-balanced',
   };
 }

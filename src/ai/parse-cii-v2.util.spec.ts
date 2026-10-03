@@ -3,7 +3,7 @@ import { CII_V2_SECTIONS } from '../reports/cii-v2.constants';
 
 function fullResponse() {
   return {
-    framework_version: 'v2.0',
+    framework_version: 'v3.1-balanced',
     sections: CII_V2_SECTIONS.map((s) => ({
       id: s.id,
       good: 'ok',
@@ -14,10 +14,11 @@ function fullResponse() {
         note: 'because',
       })),
     })),
-    bonus: {
-      effort: { amount: 2 },
-      resources: { amount: 2 },
-      partners: { amount: 2 },
+    extraMileUplift: {
+      extra_effort: { amount: 1.25 },
+      resource_mobilization: { amount: 1.25 },
+      partnership_building: { amount: 1.25 },
+      exceptional_outcome: { amount: 1.25 },
     },
     integrityPenalty: { amount: 0, why: '' },
     evidence: [],
@@ -32,6 +33,13 @@ describe('parseCiiV2Response', () => {
     const result = parseCiiV2Response(JSON.stringify(fullResponse()));
 
     expect(result).not.toBeNull();
+    expect(result!.frameworkVersion).toBe('v3.1-balanced');
+    expect(result!.bonus).toEqual({
+      effort: 1.25,
+      resources: 1.25,
+      partners: 1.25,
+      outcome: 1.25,
+    });
     expect(result!.redFlags).toEqual([]);
     expect(result!.needsAdminReview).toBe(false);
     expect(
@@ -61,18 +69,18 @@ describe('parseCiiV2Response', () => {
     const response = fullResponse();
     const section4 = response.sections.find((s) => s.id === 4)!;
     section4.criteria = section4.criteria.filter(
-      (c) => c.key !== 'measurable_outcomes',
+      (c) => c.key !== 'planned_vs_actual',
     );
 
     const result = parseCiiV2Response(JSON.stringify(response));
 
     expect(result).not.toBeNull();
-    const measurableOutcomes = result!.sections
+    const plannedVsActual = result!.sections
       .find((s) => s.id === 4)!
-      .criteria.find((c) => c.key === 'measurable_outcomes')!;
-    expect(measurableOutcomes.anchor).toBe(0);
+      .criteria.find((c) => c.key === 'planned_vs_actual')!;
+    expect(plannedVsActual.anchor).toBe(0);
     expect(
-      result!.redFlags.some((f) => f.includes('measurable_outcomes')),
+      result!.redFlags.some((f) => f.includes('planned_vs_actual')),
     ).toBe(true);
     expect(result!.needsAdminReview).toBe(true);
   });

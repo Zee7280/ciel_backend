@@ -75,7 +75,7 @@ describe('AiService — CII v2 sees the real evidence images', () => {
   });
 
   const CII_JSON = JSON.stringify({
-    framework_version: 'v2.0',
+    framework_version: 'v3.1-balanced',
     sections: [{ id: 1, criteria: [] }],
     bonus: {},
     integrityPenalty: 0,
@@ -104,6 +104,8 @@ describe('AiService — CII v2 sees the real evidence images', () => {
     });
 
     const sent = JSON.parse(f.mock.calls[0][1].body);
+    expect(sent.messages[0].content).toContain('Balanced Composite Impact Index (CII) Rubric v3.1');
+    expect(sent.messages[0].content).not.toContain('CII Rubric v2');
     const userContent = sent.messages[1].content;
     expect(Array.isArray(userContent)).toBe(true);
     const images = userContent.filter((p: any) => p.type === 'image_url');

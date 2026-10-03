@@ -755,11 +755,22 @@ export class PartnerAliasController {
   }
 
   @Get('reports/:id')
-  getReportById(@Request() req, @Param('id') id: string) {
+  async getReportById(@Request() req, @Param('id') id: string) {
+    let scopedOpportunityIds: string[] | undefined;
+    if (req.user.role === UserRole.UNIVERSITY) {
+      const org = await this.organizationsService.getMyOrganization(req.user.id);
+      if (org && this.facultyUniversityScope.isUniversityOrganization(org)) {
+        scopedOpportunityIds =
+          await this.facultyUniversityScope.resolveOpportunityIdsForUniversityOrganization(
+            org.id,
+          );
+      }
+    }
     return this.studentReportsService.findOneForPartner(
       id,
       req.user.organizationId,
       req.user.role,
+      scopedOpportunityIds,
     );
   }
 

@@ -32,4 +32,18 @@ describe('restrictListingForExternalViewer', () => {
   it('hides ciiV2 when the analyser has not run', () => {
     expect(restrict({ ...row, ciiV2: null }).ciiV2).toBeNull();
   });
+
+  it('reduces an unsubmitted draft to progress only', () => {
+    const out = restrict({
+      ...row,
+      student_name: 'Z',
+      story: 'private',
+      is_submitted: false,
+      progress_pct: 40,
+    });
+    expect(out.draft_locked).toBe(true);
+    expect(out.progress_pct).toBe(40);
+    expect(out).not.toHaveProperty('story');
+    expect(out).not.toHaveProperty('ciiV2');
+  });
 });

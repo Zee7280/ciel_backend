@@ -41,6 +41,11 @@ import {
 import { ReportPartnerApprovalSettingsService } from './report-partner-approval-settings.service';
 import { isReportPartnerStepSatisfied } from './report-partner-approval.util';
 import { collectReportEvidenceFiles } from './collect-report-evidence.util';
+import {
+  computeReportProgress,
+  isReportSubmittedStatus,
+  redactDraftRowForNonAdmin,
+} from './report-progress.util';
 import { persistSection8Visibility } from './media-visibility.util';
 import { applyEvidenceAccess, type EvidenceViewerRole } from './evidence-access.util';
 import { buildReportReviewPackage, type ReportReviewPackage } from './review-package.util';
@@ -874,6 +879,7 @@ export class StudentReportsService {
       ciiV2Lock: report.ciiV2Lock ?? null,
       independentAiAnalyses: report.independentAiAnalyses ?? null,
       review_package: report.review_package ?? null,
+      ...computeReportProgress(report),
       ...this.computeCommunityAwardTotal(report),
       ...this.reportVerificationPayload(report),
       actions: {
@@ -3428,6 +3434,10 @@ export class StudentReportsService {
   private static restrictListingForExternalViewer<
     T extends Record<string, any>,
   >(row: T): T {
+    if (row.is_submitted === false) {
+      // Not submitted yet: reviewers see progress only, never answers or scores.
+      return redactDraftRowForNonAdmin(row) as T;
+    }
     const wrapped = StudentReportsService.redactCiiV2ForExternalViewer(
       { data: { ciiV2: row.ciiV2, ciiV2Lock: row.ciiV2Lock } },
       { releaseProvisional: true },
@@ -3738,6 +3748,9 @@ export class StudentReportsService {
     id: string,
     organizationId: string,
     viewerRole?: string,
+    /** University viewers: opportunities of the institution's faculty scope (reports on those
+     * are readable even when the opportunity itself is owned by another organisation). */
+    scopedOpportunityIds?: string[],
   ) {
     const report = await this.studentReportsRepository.findOne({
       where: { id },
@@ -3748,9 +3761,14 @@ export class StudentReportsService {
       throw new NotFoundException('Report not found');
     }
 
+    const inUniversityScope =
+      !!scopedOpportunityIds?.length &&
+      !!report.opportunityId &&
+      scopedOpportunityIds.includes(report.opportunityId);
     if (
-      !organizationId ||
-      report.opportunity?.organizationId !== organizationId
+      !inUniversityScope &&
+      (!organizationId ||
+        report.opportunity?.organizationId !== organizationId)
     ) {
       throw new ForbiddenException(
         'You can only access reports linked to your organization',
@@ -3759,6 +3777,13 @@ export class StudentReportsService {
 
     // Same reasoning as findOne (admin) above — a partner reviewing a team's
     // report must see every member's logged hours, not just the owner's.
+    // Reports open for review only after the student submits; before that only Admin may open.
+    if (!isReportSubmittedStatus(report.status, report.reportSubmittedAt)) {
+      throw new ForbiddenException(
+        'This report has not been submitted yet. Only CIEL PK Admin can open a report in progress.',
+      );
+    }
+
     // Evidence links follow the project-level sharing rule: University unlocks after super-admin
     // approval; Partner / NGO / corporate never (unless the project is Public).
     const evidenceRole: EvidenceViewerRole =

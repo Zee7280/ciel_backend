@@ -3059,4 +3059,84 @@ describe('StudentReportsService', () => {
       new Set(['lead-a@test.com', 'lead-b@test.com', 'lead-c@test.com']),
     );
   });
+
+  describe('findOneForPartner — open only after submit, university scope', () => {
+    const OPP = '11111111-1111-4111-8111-111111111111';
+    const ORG = 'org-1';
+    const row = (status: string, extra: Record<string, unknown> = {}) => ({
+      id: 'r-1',
+      studentId: 'stu-1',
+      opportunityId: OPP,
+      project_id: OPP,
+      status,
+      admin_status: 'pending',
+      faculty_status: 'pending',
+      partner_status: 'pending',
+      section1: { team_lead: { fullName: 'Lead', email: 'l@t.com', cnic: '' }, team_members: [] },
+      section2: { problem_statement: 'secret draft answer' },
+      section3: {},
+      section4: {},
+      section5: {},
+      section6: {},
+      section7: {},
+      section8: {},
+      section9: {},
+      section10: {},
+      section11: {},
+      student: { id: 'stu-1', name: 'Stu', email: 's@t.com' },
+      opportunity: { id: OPP, title: 'P', organizationId: ORG },
+      createdAt: new Date('2020-01-01'),
+      updatedAt: new Date('2020-06-01'),
+      ...extra,
+    });
+
+    beforeEach(() => {
+      mockParticipantRepository.findOne.mockResolvedValue(null);
+      mockParticipantRepository.find.mockResolvedValue([]);
+      mockStudentReportsRepository.find.mockResolvedValue([]);
+      mockUsersRepository.findOne.mockResolvedValue({ id: 'stu-1', name: 'Stu', email: 's@t.com' });
+    });
+
+    it('refuses a draft report to partner/university even for the owning org', async () => {
+      for (const status of ['draft', 'continue', '']) {
+        mockStudentReportsRepository.findOne.mockResolvedValueOnce(row(status));
+        await expect(service.findOneForPartner('r-1', ORG, 'university')).rejects.toBeInstanceOf(
+          ForbiddenException,
+        );
+      }
+    });
+
+    it('opens a submitted report for the owning org', async () => {
+      mockStudentReportsRepository.findOne.mockResolvedValueOnce(row('submitted'));
+      const res = await service.findOneForPartner('r-1', ORG, 'ngo');
+      expect((res.data as { id: string }).id).toBe('r-1');
+    });
+
+    it('refuses another org with no university scope', async () => {
+      mockStudentReportsRepository.findOne.mockResolvedValueOnce(row('submitted'));
+      await expect(service.findOneForPartner('r-1', 'other-org', 'ngo')).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+    });
+
+    it('opens a submitted report on an opportunity inside the university scope', async () => {
+      mockStudentReportsRepository.findOne.mockResolvedValueOnce(row('submitted'));
+      const res = await service.findOneForPartner('r-1', 'uni-org', 'university', [OPP]);
+      expect((res.data as { id: string }).id).toBe('r-1');
+    });
+
+    it('still refuses a report outside the university scope', async () => {
+      mockStudentReportsRepository.findOne.mockResolvedValueOnce(row('submitted'));
+      await expect(
+        service.findOneForPartner('r-1', 'uni-org', 'university', ['some-other-opp']),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('a university-scope draft is still refused', async () => {
+      mockStudentReportsRepository.findOne.mockResolvedValueOnce(row('draft'));
+      await expect(
+        service.findOneForPartner('r-1', 'uni-org', 'university', [OPP]),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+  });
 });

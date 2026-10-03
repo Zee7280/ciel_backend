@@ -769,3 +769,51 @@ describe('mapFacultyListPackage', () => {
     expect(mapFacultyListPackage(report, 18).member_hours[0].hours).toBe(18);
   });
 });
+
+describe('FacultyReportsService — draft progress (opens only after submit)', () => {
+  it('lists in-progress reports with progress only — no answers, no scores', async () => {
+    const draft = {
+      id: 'd-1',
+      status: 'draft',
+      project_id: 'p-1',
+      opportunityId: 'p-1',
+      updatedAt: new Date('2026-01-01'),
+      student: { name: 'Stu', email: 'stu@x.com' },
+      opportunity: { title: 'Proj', organization: { name: 'Org' } },
+      section1: {},
+      section2: { problem_statement: 'PRIVATE ANSWER' },
+      ciiV2: { final: 80 },
+    };
+    const { service, qb } = makeService(null);
+    qb.orderBy = jest.fn(() => qb);
+    qb.getMany = jest.fn(async () => [draft]);
+    const res = await service.listDraftProgress('f-1', 'f@x.com');
+    expect(qb.andWhere).toHaveBeenCalledWith("report.status IN ('draft', 'continue')");
+    expect(qb.andWhere).toHaveBeenCalledWith('report.reportSubmittedAt IS NULL');
+    expect(res.data).toHaveLength(1);
+    const row = res.data[0] as Record<string, unknown>;
+    expect(row).toMatchObject({
+      id: 'd-1',
+      student_name: 'Stu',
+      project_title: 'Proj',
+      draft_locked: true,
+      is_submitted: false,
+      sections_total: 10,
+    });
+    expect(typeof row.progress_pct).toBe('number');
+    expect(JSON.stringify(row)).not.toContain('PRIVATE ANSWER');
+    expect(JSON.stringify(row)).not.toContain('ciiV2');
+    expect(row).not.toHaveProperty('student_email');
+  });
+
+  it('excludes draft AND continue reports from the submitted-report queries', async () => {
+    const { service, qb } = makeService(null);
+    qb.orderBy = jest.fn(() => qb);
+    qb.getMany = jest.fn(async () => []);
+    await service.listAssignedReports('f-1', 'f@x.com');
+    expect(qb.andWhere).toHaveBeenCalledWith("report.status NOT IN ('draft', 'continue')");
+    qb.andWhere.mockClear();
+    await expect(service.findOne('r-1', 'f-1', 'f@x.com')).rejects.toBeInstanceOf(NotFoundException);
+    expect(qb.andWhere).toHaveBeenCalledWith("report.status NOT IN ('draft', 'continue')");
+  });
+});

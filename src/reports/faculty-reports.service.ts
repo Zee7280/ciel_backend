@@ -17,6 +17,7 @@ import { StudentReportsService } from './student-reports.service';
 import { FacultyService } from '../faculty/faculty.service';
 import { AiService } from '../ai/ai.service';
 import { computeCiiV2Result } from './cii-v2.constants';
+import { computeReportProgress } from './report-progress.util';
 import {
   buildSystemIntegrityChecks,
   mergeIntegrityChecks,
@@ -294,7 +295,7 @@ export class FacultyReportsService {
       // work. Private-candidate rows are excluded below; they stay on the fee gateway
       // until CIEL PK. Leftover university payment_pending rows are reviewable here
       // while the university fee is paused (Dr Moeed).
-      .andWhere("report.status != 'draft'")
+      .andWhere("report.status NOT IN ('draft', 'continue')")
       .andWhere(
         `COALESCE(opportunity.faculty_verification_status, '') <> 'not_required'`,
       )
@@ -305,6 +306,51 @@ export class FacultyReportsService {
       .getMany();
 
     return reports;
+  }
+
+  /**
+   * Reports still being written by students in this faculty's scope: progress only (no answers,
+   * no scores). Opening a report stays blocked until submit (see findOne's 'not yet submitted').
+   */
+  async listDraftProgress(facultyId: string, facultyEmail: string) {
+    const scopedOpportunityIds =
+      await this.facultyService.getScopedOpportunityIds(
+        facultyId,
+        facultyEmail,
+      );
+    const reports = await this.baseReportQuery()
+      .where(
+        new Brackets((qb) =>
+          this.applyFacultyAccessFilter(
+            qb,
+            facultyId,
+            facultyEmail,
+            scopedOpportunityIds,
+          ),
+        ),
+      )
+      .andWhere("report.status IN ('draft', 'continue')")
+      .andWhere('report.reportSubmittedAt IS NULL')
+      .andWhere(
+        `COALESCE(opportunity.executing_context->>'student_pathway', '') <> 'private'`,
+      )
+      .orderBy('report.updatedAt', 'DESC')
+      .getMany();
+    return {
+      success: true,
+      data: reports.map((r) => ({
+        id: r.id,
+        student_name: r.student?.name || 'Unknown',
+        project_title: r.opportunity?.title || r.project_id,
+        project_id: r.opportunityId || r.project_id || null,
+        organization_name: r.opportunity?.organization?.name || 'N/A',
+        status: r.status,
+        hours: resolveReportFlashHours(r.section1),
+        updated_at: r.updatedAt,
+        draft_locked: true,
+        ...computeReportProgress(r),
+      })),
+    };
   }
 
   /** Same submit bar: rejected sessions do not count; pending sessions do. */
@@ -395,7 +441,7 @@ export class FacultyReportsService {
           ),
         ),
       )
-      .andWhere("report.status != 'draft'")
+      .andWhere("report.status NOT IN ('draft', 'continue')")
       .getOne();
 
     if (!report) {
@@ -437,7 +483,7 @@ export class FacultyReportsService {
           ),
         ),
       )
-      .andWhere("report.status != 'draft'")
+      .andWhere("report.status NOT IN ('draft', 'continue')")
       .getOne();
 
     if (!report) {

@@ -3227,9 +3227,15 @@ export class StudentReportsService {
 
     // Sync Summary Fields (Section 2)
     // Re-generate in backend to ensure consistency
-    const opportunityForSummary = await this.opportunitiesRepository.findOne({
-      where: { id: report.opportunityId },
-    });
+    const opportunityForSummary =
+      opportunityForPolicy &&
+      opportunityForPolicy.id === report.opportunityId
+        ? opportunityForPolicy
+        : report.opportunityId
+          ? await this.opportunitiesRepository.findOne({
+              where: { id: report.opportunityId },
+            })
+          : null;
 
     report.problem_category = this.classifyProblem(
       report.section2?.problem_statement,
@@ -3376,13 +3382,7 @@ export class StudentReportsService {
       (priorReportStatus == null ||
         !skipAdminSubmitNotify.has(priorReportStatus));
     if (shouldEmailAdminSubmit) {
-      const oppForTitle =
-        opportunityForPolicy ||
-        (report.opportunityId
-          ? await this.opportunitiesRepository.findOne({
-              where: { id: report.opportunityId },
-            })
-          : null);
+      const oppForTitle = opportunityForPolicy || opportunityForSummary;
       const projectTitle =
         oppForTitle?.title || report.project_id || 'Student project';
       const student = await this.usersRepository.findOne({
@@ -5532,17 +5532,17 @@ export class StudentReportsService {
       const projectTitle =
         opportunity?.title || report.project_id || 'Student Project';
 
-      try {
-        await this.mailService.sendFacultyInvite(
+      void this.mailService
+        .sendFacultyInvite(
           email,
           student?.name || 'A Student',
           projectTitle,
-        );
-      } catch (error) {
-        this.logger.warn(
-          `Faculty invite email failed for report ${report.id}: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
+        )
+        .catch((error) => {
+          this.logger.warn(
+            `Faculty invite email failed for report ${report.id}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        });
     }
   }
 

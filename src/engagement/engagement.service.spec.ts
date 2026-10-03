@@ -990,7 +990,7 @@ describe('EngagementService', () => {
       const dto = {
         dateOfEngagement: '2023-10-01',
         startTime: '09:00',
-        endTime: '10:00',
+        endTime: '11:00',
         description: 'Short valid description here.',
         organizationName: 'Org',
         activityType: 'Activity',
@@ -1577,6 +1577,266 @@ describe('EngagementService', () => {
         'This team already has a team lead',
       );
       expect(mockManager.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects registering a teammate with the team lead email', async () => {
+      const t = fx('register-member-reuses-lead-email');
+      const studentId = t.id.u1;
+      const projectId = t.id.project;
+      const dto = {
+        projectId,
+        participationMode: 'team',
+        isTeamLead: false,
+        email: t.email.existing,
+        fullName: t.name.teamMember,
+        cnic: '1234567890123',
+        mobile: '03001234567',
+        team_id: t.id.teamId,
+      } as any;
+
+      const mockOpportunity = {
+        id: projectId,
+        title: t.title,
+        status: 'active',
+        admin_approved: true,
+      };
+      const existingLead = {
+        id: 'lead-row-1',
+        projectId,
+        teamId: t.id.teamId,
+        isTeamLead: true,
+        email: t.email.existing,
+      };
+
+      const mockManager = {
+        findOne: jest
+          .fn()
+          .mockResolvedValueOnce(mockOpportunity)
+          .mockResolvedValueOnce(null),
+        createQueryBuilder: jest
+          .fn()
+          .mockReturnValueOnce(mockUserQueryBuilder(null))
+          .mockReturnValueOnce(mockParticipationQueryBuilder(existingLead as Participation)),
+        create: jest.fn().mockReturnValue({ id: 'new-participation' }),
+        save: jest.fn(),
+      };
+
+      (mockParticipationRepository as any).manager = {
+        transaction: jest.fn().mockImplementation((cb) => cb(mockManager)),
+      };
+
+      await expect(service.registerParticipant(studentId, dto)).rejects.toThrow(
+        'This email is already used by the team lead on this project',
+      );
+      expect(mockManager.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('one-time verification hour gate uses the form\'s required hours', () => {
+    const run = (opp: Record<string, unknown>, hours: number) => {
+      mockParticipationRepository.find.mockResolvedValue([{ id: 'part-1', fullName: 'Ali' }]);
+      mockAttendanceLogRepository.find.mockResolvedValue([
+        { participantId: 'part-1', sessionHours: hours, approvalStatus: 'approved' },
+      ]);
+      return (service as any).assertAllParticipantsMeetMinimumHoursForVerify(opp, 'proj-1');
+    };
+
+    it('blocks until timeline.expected_hours is met, even though the column default is 16', async () => {
+      await expect(
+        run({ timeline: { expected_hours: 40 }, requiredHours: 16 }, 20),
+      ).rejects.toThrow(/at least 40 hours/);
+    });
+
+    it('does not over-block when the form asked for fewer hours than the legacy 16', async () => {
+      await expect(
+        run({ timeline: { expected_hours: 5 }, requiredHours: 16 }, 6),
+      ).resolves.toBeUndefined();
+    });
+
+    it('falls back to requiredHours when the timeline has no hours', async () => {
+      await expect(run({ timeline: {}, requiredHours: 16 }, 10)).rejects.toThrow(/at least 16 hours/);
+    });
+  });
+
+  describe('attendance entry rules (min 2h, no overlap, PKT "today", reporting window)', () => {
+    const baseParticipation = (logs: any[] = []) => ({
+      id: 'p1',
+      studentId: 'u1',
+      projectId: 'proj1',
+      status: 'approved',
+      primaryFacultyEmail: 'faculty@uni.edu',
+      attendanceLogs: logs,
+    });
+    const dto = (over: Record<string, unknown> = {}) =>
+      ({
+        dateOfEngagement: '2026-10-01',
+        startTime: '09:00',
+        endTime: '12:00',
+        description: 'Valid description.',
+        organizationName: 'Org',
+        activityType: 'Field Visit',
+        ...over,
+      }) as any;
+    const setup = (participation: any, opp: Record<string, unknown> = {}) => {
+      mockParticipationRepository.findOne.mockResolvedValue(participation);
+      mockParticipationRepository.find.mockResolvedValue([]);
+      mockOpportunityRepository.findOne.mockResolvedValue({
+        id: 'proj1',
+        title: 'P',
+        timeline: { start_date: '2026-09-01', end_date: '2026-12-31' },
+        ...opp,
+      });
+      mockUserRepository.findOne.mockResolvedValue(null);
+    };
+
+    it('rejects an entry shorter than 2 hours', async () => {
+      setup(baseParticipation());
+      await expect(service.addAttendanceLog('u1', 'p1', dto({ startTime: '09:00', endTime: '10:30' }))).rejects.toThrow(
+        'at least 2 hours',
+      );
+    });
+
+    it.each([
+      ['partially overlapping', '10:00', '13:00'],
+      ['exact duplicate', '09:00', '12:00'],
+      ['contained', '10:00', '12:00'],
+    ])('rejects a %s session on the same day', async (_l, start, end) => {
+      setup(baseParticipation([{ dateOfEngagement: '2026-10-01', startTime: '09:00', endTime: '12:00', sessionHours: 3 }]));
+      await expect(service.addAttendanceLog('u1', 'p1', dto({ startTime: start, endTime: end }))).rejects.toThrow(
+        'overlaps another entry',
+      );
+    });
+
+    it('ignores a REJECTED earlier entry and different days when checking overlap', async () => {
+      setup(
+        baseParticipation([
+          { dateOfEngagement: '2026-10-01', startTime: '09:00', endTime: '12:00', sessionHours: 3, approvalStatus: 'rejected' },
+          { dateOfEngagement: '2026-09-30', startTime: '09:00', endTime: '12:00', sessionHours: 3 },
+        ]),
+      );
+      // accepted: only a live (non-rejected) entry on the SAME day can overlap
+      await expect(service.addAttendanceLog('u1', 'p1', dto())).resolves.toBeDefined();
+    });
+
+    it('a log for "today" in Pakistan is not "in the future" during 00:00-05:00 PKT', async () => {
+      jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate', 'setTimeout'] });
+      jest.setSystemTime(new Date('2026-10-03T21:30:00Z')); // 02:30 on 4 Oct PKT
+      try {
+        setup(baseParticipation());
+        await expect(service.addAttendanceLog('u1', 'p1', dto({ dateOfEngagement: '2026-10-04' }))).resolves.toBeDefined();
+        await expect(service.addAttendanceLog('u1', 'p1', dto({ dateOfEngagement: '2026-10-05' }))).rejects.toThrow(
+          'cannot be in the future',
+        );
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('no new hours after the reporting window (project end + 60 days) has closed', async () => {
+      setup(baseParticipation(), { timeline: { start_date: '2024-01-01', end_date: '2024-02-01' } });
+      await expect(
+        service.addAttendanceLog('u1', 'p1', dto({ dateOfEngagement: '2024-01-15' })),
+      ).rejects.toThrow(/Reporting period has closed/);
+    });
+  });
+
+  describe('registerParticipant — only for seats the caller already holds', () => {
+    const dto = (over: Record<string, unknown> = {}) =>
+      ({ projectId: 'proj1', email: 'a@b.com', fullName: 'A', cnic: '1234567890123', mobile: '03001234567', ...over }) as any;
+    const mockApprovedApp = (app: unknown) => {
+      (service as any).opportunityApplicationRepository = { findOne: jest.fn().mockResolvedValue(app) };
+    };
+
+    beforeEach(() => {
+      mockOpportunityRepository.findOne.mockResolvedValue({ id: 'proj1', isStudentCreated: false, creatorId: 'someone-else' });
+      mockParticipationRepository.findOne.mockResolvedValue(null);
+      mockApprovedApp(null);
+    });
+
+    it('refuses a student with no application and no seat (cannot mint an approved seat)', async () => {
+      await expect(service.registerParticipant('u1', dto(), 'student')).rejects.toThrow(/Apply to this project/);
+    });
+
+    it('refuses non-students (faculty / NGO accounts) outright', async () => {
+      for (const role of ['faculty', 'ngo', 'university', 'corporate']) {
+        await expect(service.registerParticipant('u1', dto(), role)).rejects.toThrow(/Only students/);
+      }
+    });
+
+    it('refuses a student whose seat was rejected and who has no approved application', async () => {
+      mockParticipationRepository.findOne.mockResolvedValue({ id: 'p1', studentId: 'u1', status: 'rejected' });
+      await expect(service.registerParticipant('u1', dto(), 'student')).rejects.toThrow(/not approved/);
+    });
+
+    it('a plain member cannot register ANOTHER student via a client-supplied studentId', async () => {
+      mockParticipationRepository.findOne.mockResolvedValue({ id: 'p1', studentId: 'u1', status: 'approved', isTeamLead: false });
+      await expect(service.registerParticipant('u1', dto({ studentId: 'victim' }), 'student')).rejects.toThrow(
+        /only register your own/,
+      );
+    });
+
+    it('a seat holder passes the gate (later failures would be about the registration data, not access)', async () => {
+      mockParticipationRepository.findOne.mockResolvedValue({ id: 'p1', studentId: 'u1', status: 'approved', isTeamLead: false });
+      (mockParticipationRepository as any).manager = { transaction: jest.fn().mockRejectedValue(new Error('reached-transaction')) };
+      await expect(service.registerParticipant('u1', dto(), 'student')).rejects.toThrow('reached-transaction');
+    });
+
+    it('the creator of a student-created project may register without applying; admin always may', async () => {
+      mockOpportunityRepository.findOne.mockResolvedValue({ id: 'proj1', isStudentCreated: true, creatorId: 'u1' });
+      (mockParticipationRepository as any).manager = { transaction: jest.fn().mockRejectedValue(new Error('reached-transaction')) };
+      await expect(service.registerParticipant('u1', dto(), 'student')).rejects.toThrow('reached-transaction');
+      mockOpportunityRepository.findOne.mockResolvedValue({ id: 'proj1' });
+      await expect(service.registerParticipant('admin1', dto(), 'admin')).rejects.toThrow('reached-transaction');
+    });
+  });
+
+  describe('attendance log reads do not leak PII or evidence links', () => {
+    const participantRow = {
+      id: 'p1',
+      fullName: 'Sara Khan',
+      studentId: 'u2',
+      isTeamLead: false,
+      cnicHash: 'deadbeefhash',
+      cnic: 'ciphertext',
+      cnicLast4: '1234',
+      mobile: '+923001234567',
+      email: 'sara@uni.edu',
+    };
+    const logRow = (over: Record<string, unknown> = {}) => ({
+      id: 'l1',
+      participantId: 'p1',
+      projectId: 'proj1',
+      sessionHours: 3,
+      evidenceUrl: 'https://bucket.s3.amazonaws.com/attendance-evidence/x.jpg',
+      participant: participantRow,
+      ...over,
+    });
+
+    it('project logs return only id / name / flags for the participant, never CNIC hash, mobile or email', async () => {
+      mockAttendanceLogRepository.find.mockResolvedValue([logRow()]);
+      const out: any[] = await service.getProjectAttendanceLogs('proj1', 'student');
+      expect(out[0].participant).toEqual({ id: 'p1', fullName: 'Sara Khan', studentId: 'u2', isTeamLead: false });
+      expect(JSON.stringify(out)).not.toMatch(/deadbeefhash|ciphertext|\+923001234567|sara@uni\.edu|1234/);
+    });
+
+    it('student and admin keep the evidence link; partner / faculty / university / NGO do not', async () => {
+      mockAttendanceLogRepository.find.mockResolvedValue([logRow()]);
+      for (const role of ['student', 'admin']) {
+        const out: any[] = await service.getProjectAttendanceLogs('proj1', role);
+        expect(out[0].evidenceUrl).toContain('attendance-evidence');
+      }
+      for (const role of ['ngo', 'faculty', 'university', 'corporate', 'organization_admin']) {
+        const out: any[] = await service.getProjectAttendanceLogs('proj1', role);
+        expect(out[0].evidenceUrl).toBeNull();
+      }
+    });
+
+    it('per-participation logs follow the same evidence rule', async () => {
+      mockParticipationRepository.findOne.mockResolvedValue({ id: 'p1', attendanceLogs: [logRow()] });
+      const asNgo: any[] = (await service.getAttendanceLogs('p1', 'ngo')) as any;
+      expect(asNgo[0].evidenceUrl).toBeNull();
+      const asStudent: any[] = (await service.getAttendanceLogs('p1', 'student')) as any;
+      expect(asStudent[0].evidenceUrl).toContain('attendance-evidence');
     });
   });
 });

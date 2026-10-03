@@ -11,10 +11,11 @@ import { AdminSupportService } from './admin-support.service';
 import { AdminSupportController } from './admin-support.controller';
 import { CreateTicketRateLimitGuard } from './guards/create-ticket-rate-limit.guard';
 
+import { NotificationsModule } from '../notifications/notifications.module';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 
 @Module({
-    imports: [TypeOrmModule.forFeature([SupportFaq, SupportTicket, User]), AuditLogsModule],
+    imports: [TypeOrmModule.forFeature([SupportFaq, SupportTicket, User]), AuditLogsModule, NotificationsModule],
     controllers: [
         StudentSupportController,
         FacultySupportController,

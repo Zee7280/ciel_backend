@@ -71,6 +71,13 @@ export class StudentReport {
   @Column({ name: 'admin_approved_at', type: 'timestamptz', nullable: true })
   adminApprovedAt: Date | null;
 
+  /** Last admin who approved/rejected/unlocked this report (additive audit columns). */
+  @Column({ name: 'admin_reviewed_by', type: 'varchar', length: 255, nullable: true })
+  adminReviewedBy: string | null;
+
+  @Column({ name: 'admin_reviewed_at', type: 'timestamptz', nullable: true })
+  adminReviewedAt: Date | null;
+
   @Column({ default: 'draft' })
   status: string; // 'draft', 'submitted', 'partner_verified', 'payment_pending' (legacy), 'payment_under_review', 'verified', 'rejected', 'paid'
 
@@ -324,7 +331,8 @@ export class StudentReport {
   section8: {
     evidence_types: string[];
     description: string;
-    media_visible: 'public' | 'limited' | 'internal';
+    media_visible: 'public' | 'restricted' | 'private' | 'limited' | 'internal';
+    public_share_permission?: boolean;
     ethical_compliance: {
       authentic: boolean;
       informed_consent: boolean;
@@ -440,6 +448,13 @@ export class StudentReport {
     };
     note?: string;
   }> | null;
+
+  /**
+   * Three-document review package built on student submit:
+   * revised flashcard, detailed report, evidence files (previewable thumbs).
+   */
+  @Column({ name: 'review_package', type: 'jsonb', nullable: true })
+  review_package: Record<string, unknown> | null;
 
   @CreateDateColumn()
   createdAt: Date;

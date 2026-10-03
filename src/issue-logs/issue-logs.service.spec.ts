@@ -1,5 +1,6 @@
 import { ArgumentsHost, BadRequestException } from '@nestjs/common';
 import { IssueLogsService } from './issue-logs.service';
+import { MaintenanceException } from '../common/guards/maintenance.guard';
 
 describe('IssueLogsService', () => {
   const makeHost = (request: any): ArgumentsHost =>
@@ -26,6 +27,31 @@ describe('IssueLogsService', () => {
     findAndCount: jest.fn().mockResolvedValue([[], 0]),
     findOne: jest.fn().mockResolvedValue(null),
     createQueryBuilder: jest.fn().mockReturnValue(qb),
+  });
+
+  it('does not log expected maintenance-mode rejections', async () => {
+    const repository = makeRepository();
+    const service = new IssueLogsService(repository as any);
+    await service.logException(new MaintenanceException(), makeHost({ method: 'GET', url: '/api/v1/x', headers: {} }));
+    expect(repository.save).not.toHaveBeenCalled();
+  });
+
+  it('filters open vs resolved logs', async () => {
+    const qb = makeQueryBuilder();
+    const service = new IssueLogsService(makeRepository(qb) as any);
+    await service.findAll({ resolved: 'open' });
+    expect(qb.andWhere).toHaveBeenCalledWith('log.resolvedAt IS NULL');
+    await service.findAll({ resolved: 'resolved' });
+    expect(qb.andWhere).toHaveBeenCalledWith('log.resolvedAt IS NOT NULL');
+  });
+
+  it('resolve is idempotent and ignores blank ids', async () => {
+    const update: any = { update: jest.fn().mockReturnThis(), set: jest.fn().mockReturnThis(), where: jest.fn().mockReturnThis(), andWhere: jest.fn().mockReturnThis(), execute: jest.fn().mockResolvedValue({ affected: 2 }) };
+    const repository: any = { ...makeRepository(), createQueryBuilder: jest.fn().mockReturnValue(update) };
+    const service = new IssueLogsService(repository);
+    expect(await service.resolve([' ', ''], 'adm')).toEqual({ resolved: 0 });
+    expect(await service.resolve(['a', 'a', 'b'], 'adm')).toEqual({ resolved: 2 });
+    expect(update.where).toHaveBeenCalledWith('id IN (:...ids)', { ids: ['a', 'b'] });
   });
 
   it('logs user-facing report errors with safe metadata', async () => {

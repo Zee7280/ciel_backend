@@ -1,10 +1,12 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import sanitizeHtml from 'sanitize-html';
 
 /** Optional structured summary for faculty/partner verification emails. */
 export interface OpportunityVerificationEmailDetails {
+  /** Shown as "Reference ID" in the review-email summary table. */
+  opportunityId?: string;
   /** Display-only CS-YEAR-XXXX — same master record, not a sequential counter. */
   publicCode?: string;
   studentName?: string;
@@ -31,6 +33,15 @@ export interface OpportunityVerificationEmailDetails {
   /** Display string for volunteers required (e.g. "12" or "Not specified"). */
   volunteersRequired?: string;
 }
+
+export const ADMIN_BULK_EMAIL_MAX_RECIPIENTS = 200;
+const ADMIN_EMAIL_RE = /^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/;
+
+export type AdminBulkEmailResult = {
+  sent: string[];
+  failed: string[];
+  skipped: string[];
+};
 
 @Injectable()
 export class MailService {
@@ -307,14 +318,14 @@ export class MailService {
     to: string,
     subject: string,
     message: string,
-  ): Promise<void>;
+  ): Promise<AdminBulkEmailResult>;
   async sendAdminComposedEmail(opts: {
     to: string[];
     subject: string;
     messageHtml: string;
     messageText?: string;
     image?: Express.Multer.File;
-  }): Promise<void>;
+  }): Promise<AdminBulkEmailResult>;
   async sendAdminComposedEmail(
     arg1:
       | string
@@ -327,7 +338,7 @@ export class MailService {
         },
     arg2?: string,
     arg3?: string,
-  ): Promise<void> {
+  ): Promise<AdminBulkEmailResult> {
     const opts =
       typeof arg1 === 'string'
         ? {
@@ -353,7 +364,29 @@ export class MailService {
       this.htmlToText(sanitizedBody) ||
       ''
     ).trim();
-    const toList = (opts.to || []).map((x) => String(x).trim()).filter(Boolean);
+    const rawList = (opts.to || []).map((x) => String(x).trim()).filter(Boolean);
+    // Validate + dedupe (case-insensitive) server-side; invalid addresses are reported as skipped.
+    const seen = new Set<string>();
+    const toList: string[] = [];
+    const skipped: string[] = [];
+    for (const addr of rawList) {
+      const key = addr.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (!ADMIN_EMAIL_RE.test(addr) || addr.length > 254) {
+        skipped.push(addr);
+        continue;
+      }
+      toList.push(addr);
+    }
+    if (toList.length > ADMIN_BULK_EMAIL_MAX_RECIPIENTS) {
+      throw new BadRequestException(
+        `Too many recipients (${toList.length}). The maximum is ${ADMIN_BULK_EMAIL_MAX_RECIPIENTS} per send.`,
+      );
+    }
+    if (!toList.length) {
+      throw new BadRequestException('No valid recipient email addresses.');
+    }
 
     const attachments: any[] = [];
     if (opts.image?.buffer?.length) {
@@ -364,16 +397,39 @@ export class MailService {
       });
     }
 
-    await this.sendMailReliable({
-      from,
-      to: toList.join(','),
-      subject: subjectTrim || 'CIEL PK message',
-      replyTo: from,
-      text,
-      html: bodyWrapped,
-      attachments: attachments.length ? attachments : undefined,
-    });
-    this.logger.log(`Admin composed email sent to ${toList.join(', ')}`);
+    // One message per recipient so addresses are never exposed to each other and one bad
+    // address cannot fail the whole send.
+    const sent: string[] = [];
+    const failed: string[] = [];
+    let lastError: unknown;
+    for (const recipient of toList) {
+      try {
+        await this.sendMailReliable({
+          from,
+          to: recipient,
+          subject: subjectTrim || 'CIEL PK message',
+          replyTo: from,
+          text,
+          html: bodyWrapped,
+          attachments: attachments.length ? attachments : undefined,
+        });
+        sent.push(recipient);
+      } catch (error) {
+        lastError = error;
+        failed.push(recipient);
+        this.logger.error(
+          `Admin composed email failed for ${recipient}`,
+          (error as Error)?.stack,
+        );
+      }
+    }
+    this.logger.log(
+      `Admin composed email: ${sent.length} sent, ${failed.length} failed, ${skipped.length} skipped`,
+    );
+    if (typeof arg1 === 'string' && !sent.length && lastError) {
+      throw lastError;
+    }
+    return { sent, failed, skipped };
   }
 
   private sanitizeAdminHtml(html: string): string {
@@ -487,6 +543,68 @@ export class MailService {
     }
   }
 
+  /** Tells an organization's contacts about an admin decision (approved / rejected / suspended / reinstated). */
+  async sendOrganizationDecisionEmail(input: {
+    to: string;
+    organizationName: string;
+    decision: 'approved' | 'rejected' | 'suspended' | 'reinstated';
+    notes?: string | null;
+  }): Promise<void> {
+    const to = String(input.to || '').trim();
+    if (!to) return;
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const orgEsc = this.escHtmlPlain(input.organizationName || 'your organization');
+    const copy: Record<typeof input.decision, { subject: string; headline: string; body: string; color: string }> = {
+      approved: {
+        subject: 'Your organization is approved on CIEL PK',
+        headline: 'Organization approved',
+        body: 'Your organization has been verified. You can now sign in and publish opportunities and review reports.',
+        color: '#0e7d74',
+      },
+      rejected: {
+        subject: 'Update on your CIEL PK organization verification',
+        headline: 'Verification not approved',
+        body: 'We could not approve your organization at this time. You can update your details and contact support if you need help.',
+        color: '#b91c1c',
+      },
+      suspended: {
+        subject: 'Your CIEL PK organization account is suspended',
+        headline: 'Account suspended',
+        body: 'Access for your organization has been suspended. Please contact support to resolve this.',
+        color: '#b45309',
+      },
+      reinstated: {
+        subject: 'Your CIEL PK organization account is active again',
+        headline: 'Account reinstated',
+        body: 'Access for your organization has been restored. You can sign in as usual.',
+        color: '#0e7d74',
+      },
+    };
+    const c = copy[input.decision];
+    const notesHtml = input.notes?.trim()
+      ? `<p style="background:#f8fafc;border-left:4px solid ${c.color};padding:10px 14px;"><strong>Note from CIEL PK:</strong> ${this.escHtmlPlain(input.notes.trim())}</p>`
+      : '';
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color:${c.color};">${c.headline}</h2>
+        <p><strong>${orgEsc}</strong></p>
+        <p>${c.body}</p>
+        ${notesHtml}
+        <div style="text-align:center;margin:28px 0;">
+          <a href="${this.buildFrontendLink('/login', {})}" style="background-color:${c.color};color:white;padding:12px 25px;text-decoration:none;border-radius:5px;font-weight:bold;">Open CIEL PK</a>
+        </div>
+        <p style="font-size:13px;color:#666;">Questions? <a href="mailto:support@cielpk.com">support@cielpk.com</a></p>
+      </div>
+    `;
+    try {
+      await this.sendMailReliable({ from, to, subject: c.subject, html });
+    } catch (error) {
+      this.logger.error(`Failed organization decision email to ${to}`, error.stack);
+    }
+  }
+
   async sendPasswordResetEmail(to: string, resetLink: string) {
     const from =
       this.configService.get<string>('MAIL_FROM') ||
@@ -521,6 +639,11 @@ export class MailService {
         error.stack,
       );
     }
+  }
+
+  /** Absolute password-reset URL built from FRONTEND_URL (same base every other email uses). */
+  buildPasswordResetLink(token: string): string {
+    return this.buildFrontendLink('/reset-password', { token });
   }
 
   async sendExecutingOrganizationVerificationEmail(
@@ -1543,36 +1666,70 @@ export class MailService {
     requiredHours: string;
     projectPeriod: string;
     reportPath: string;
+    publicCode?: string;
+    isStudentCreator?: boolean;
   }) {
     const from =
       this.configService.get<string>('MAIL_FROM') ||
       'CIEL <no-reply@cielpk.com>';
-    const nameEsc = input.creatorName?.trim()
-      ? this.escHtmlPlain(input.creatorName.trim())
-      : 'there';
+    const first =
+      (input.creatorName || '')
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean)[0] || 'there';
+    const nameEsc = this.escHtmlPlain(first);
     const titleEsc = this.escHtmlPlain(input.projectTitle || 'your opportunity');
     const partnerEsc = this.escHtmlPlain(input.partnerName || '—');
     const hoursEsc = this.escHtmlPlain(input.requiredHours || '—');
     const periodEsc = this.escHtmlPlain(input.projectPeriod || '—');
+    const codeEsc = input.publicCode?.trim()
+      ? this.escHtmlPlain(input.publicCode.trim())
+      : '';
     const startLink = this.buildFrontendLink(input.reportPath, {});
+    const hubLink = this.buildFrontendLink(
+      '/dashboard/student/paths/community-service',
+      { view: 'create', filter: 'history' },
+    );
+    const student = input.isStudentCreator !== false;
 
     const html = `
-      <div style="font-family: Arial, Helvetica, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 10px; color: #1f2937; line-height: 1.55;">
-        <p style="margin: 0 0 16px 0;">Hi <strong>${nameEsc}</strong>,</p>
-        <p style="margin: 0 0 16px 0;">Great news! Your community service opportunity “<strong>${titleEsc}</strong>” has been fully approved and is now <strong>LIVE</strong> on CIEL PK.</p>
-        <p style="margin: 0 0 16px 0;">Your project journey can now begin. As the opportunity creator, you have a report workspace ready for you.</p>
-        <p style="margin: 0 0 8px 0;"><strong>What happens next?</strong></p>
-        <p style="margin: 0 0 20px 0;">Start documenting your activities, verified hours, evidence, outcomes, and impact as your project progresses.</p>
-        <div style="text-align: center; margin: 28px 0;">
-          <a href="${startLink}" style="background-color: #0e4d4e; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">START REPORT →</a>
+      <div style="font-family: Arial, Helvetica, sans-serif; max-width: 640px; margin: 0 auto; padding: 0; color: #16313d; line-height: 1.55;">
+        <div style="background: linear-gradient(125deg, #0d3b45 0%, #0f6e68 70%); color: #fff; border-radius: 14px 14px 0 0; padding: 28px 28px 22px;">
+          <p style="margin: 0 0 8px 0; font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: #e8d48a; font-weight: 700;">CIEL PK · Community Service</p>
+          <h1 style="margin: 0; font-size: 22px; line-height: 1.3; font-weight: 800;">Your opportunity is approved 🎉</h1>
+          <p style="margin: 10px 0 0 0; font-size: 14px; color: rgba(255,255,255,0.9);">You can start your impact report now.</p>
         </div>
-        <p style="margin: 0 0 6px 0;"><strong>Opportunity:</strong> ${titleEsc}</p>
-        <p style="margin: 0 0 6px 0;"><strong>Partner:</strong> ${partnerEsc}</p>
-        <p style="margin: 0 0 6px 0;"><strong>Required Hours:</strong> ${hoursEsc}</p>
-        <p style="margin: 0 0 16px 0;"><strong>Project Period:</strong> ${periodEsc}</p>
-        <p style="margin: 0 0 16px 0;">You don’t need to wait until the project is complete. <strong>Update your report as you go</strong> and keep your progress and evidence organized along the way.</p>
-        <p style="margin: 0 0 16px 0;"><strong>Create impact. Document it. Get it verified.</strong></p>
-        <p style="margin: 20px 0 0 0;">— <strong>CIEL PK</strong><br>Community Impact Education Lab Pakistan</p>
+        <div style="border: 1px solid #d7e3e6; border-top: 0; border-radius: 0 0 14px 14px; padding: 26px 28px 28px; background: #ffffff;">
+          <p style="margin: 0 0 14px 0;">Hi <strong>${nameEsc}</strong>,</p>
+          <p style="margin: 0 0 14px 0;">Great news — CIEL PK has <strong>approved</strong> your community service opportunity <strong>“${titleEsc}”</strong>${codeEsc ? ` (<strong>${codeEsc}</strong>)` : ''}. It is now <strong>LIVE</strong> on the platform.</p>
+          <p style="margin: 0 0 18px 0;">${
+            student
+              ? 'As the student who created this opportunity, you can <strong>start your report</strong> right away — log service hours, add evidence, and submit for verification.'
+              : 'Your listing is live. Students can discover and apply, and you can follow progress from your Community Service dashboard.'
+          }</p>
+
+          <div style="background: #f3faf7; border: 1px solid #d3ebe3; border-radius: 12px; padding: 14px 16px; margin: 0 0 22px 0;">
+            <p style="margin: 0 0 8px 0; font-size: 11px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: #1f7a61;">Opportunity details</p>
+            <p style="margin: 0 0 4px 0; font-size: 14px;"><strong>Title:</strong> ${titleEsc}</p>
+            ${codeEsc ? `<p style="margin: 0 0 4px 0; font-size: 14px;"><strong>ID:</strong> ${codeEsc}</p>` : ''}
+            <p style="margin: 0 0 4px 0; font-size: 14px;"><strong>Partner:</strong> ${partnerEsc}</p>
+            <p style="margin: 0 0 4px 0; font-size: 14px;"><strong>Required hours:</strong> ${hoursEsc}</p>
+            <p style="margin: 0; font-size: 14px;"><strong>Project period:</strong> ${periodEsc}</p>
+          </div>
+
+          <div style="text-align: center; margin: 8px 0 10px;">
+            <a href="${startLink}" style="background-color: #174b43; color: #ffffff; padding: 13px 28px; text-decoration: none; border-radius: 8px; font-weight: 800; display: inline-block; font-size: 14px;">Start Report →</a>
+          </div>
+          ${
+            student
+              ? `<p style="text-align: center; margin: 0 0 18px 0; font-size: 12.5px; color: #5d727a;">Or open <a href="${hubLink}" style="color: #0e7d74; font-weight: 700;">Approved / Live</a> in Create Opportunity.</p>`
+              : ''
+          }
+
+          <p style="margin: 0 0 10px 0; font-size: 14px;"><strong>Tip:</strong> You do not need to wait until the project ends. Update your report as you go — keep dates, hours, and evidence organized.</p>
+          <p style="margin: 0 0 18px 0; font-size: 14px; color: #0f6e62;"><strong>Create impact. Document it. Get it verified.</strong></p>
+          <p style="margin: 0; font-size: 13px; color: #6a7d84;">— <strong style="color: #16313d;">CIEL PK</strong><br>Community Impact Education Lab Pakistan</p>
+        </div>
       </div>
     `;
 
@@ -1580,7 +1737,7 @@ export class MailService {
       await this.sendMailReliable({
         from,
         to: input.to,
-        subject: '🎉 Your Opportunity Is Live — Start Your Impact Report',
+        subject: `Approved — Start your report: ${input.projectTitle || 'Your opportunity'}`,
         html,
       });
       this.logger.log(`Opportunity live start-report email sent to ${input.to}`);
@@ -1923,6 +2080,11 @@ export class MailService {
     }
   }
 
+  /** Super Admin + configured review inboxes — used on submit and after publish. */
+  getAdminReviewEmails(): string[] {
+    return this.getAdminReviewRecipientList();
+  }
+
   private getAdminReviewRecipientList(): string[] {
     const primaryAdmin = 'admin@cielpk.com';
     const recipientsRaw =
@@ -1943,6 +2105,13 @@ export class MailService {
     opportunityId: string,
     reportId: string,
     studentName: string,
+    packageLinks?: {
+      reviewHref?: string;
+      analyserHref?: string;
+      flashHref?: string;
+      detailedHref?: string;
+      evidenceCount?: number;
+    },
   ) {
     const recipients = this.getAdminReviewRecipientList();
     if (!recipients.length) {
@@ -1962,14 +2131,44 @@ export class MailService {
     const studentEsc = this.escHtmlPlain(
       studentName?.trim() ? studentName.trim() : 'Student',
     );
+    const reviewHref =
+      packageLinks?.reviewHref ||
+      this.buildFrontendLink(`/dashboard/admin/reports/verify/${reportId}`, {
+        package: '1',
+      });
+    const analyserHref =
+      packageLinks?.analyserHref ||
+      this.buildFrontendLink(`/dashboard/admin/reports/verify/${reportId}`, {
+        view: 'cii-v2',
+      });
+    const evidenceLine =
+      typeof packageLinks?.evidenceCount === 'number'
+        ? `<p>Evidence files in this package: <strong>${packageLinks.evidenceCount}</strong> — open each thumbnail to view the file, not a raw link.</p>`
+        : '';
+    const docLinks = [
+      packageLinks?.flashHref
+        ? `<li><a href="${packageLinks.flashHref}">1. Impact flashcard</a></li>`
+        : '',
+      packageLinks?.detailedHref
+        ? `<li><a href="${packageLinks.detailedHref}">2. Detailed report</a></li>`
+        : '',
+      `<li><a href="${reviewHref}">3. Evidence gallery</a></li>`,
+    ]
+      .filter(Boolean)
+      .join('');
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
         <h2 style="color: #333;">Student impact report submitted</h2>
         <p><strong>${studentEsc}</strong> uploaded an impact report for <strong>${titleEsc}</strong>.</p>
-        <p>Use the admin dashboard to read the narrative, review evidence, and record your decision.</p>
+        <p>Three documents from the student's Impact Package are ready for Super Admin review:</p>
+        <ol style="padding-left: 20px; line-height: 1.7;">${docLinks}</ol>
+        ${evidenceLine}
+        <p>This is the same bundle the student submitted. Run the AI analyser, then publish. After approval, faculty, the student and the university receive this package plus the analysis report. Partner / NGO receive the same package without the analysis report.</p>
         <div style="text-align: center; margin: 28px 0;">
-          <a href="${adminLink}" style="background-color: #2563eb; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Open admin dashboard</a>
+          <a href="${reviewHref}" style="background-color: #0e7d74; color: white; padding: 12px 22px; text-decoration: none; border-radius: 5px; font-weight: bold; margin-right: 8px;">Open review package</a>
+          <a href="${analyserHref}" style="background-color: #2563eb; color: white; padding: 12px 22px; text-decoration: none; border-radius: 5px; font-weight: bold;">Run AI analyser</a>
         </div>
+        <p style="font-size:12px;color:#64748b;text-align:center;"><a href="${adminLink}">Admin dashboard</a></p>
       </div>
     `;
     try {
@@ -1991,50 +2190,6 @@ export class MailService {
   }
 
   /** Regular Community Service report is waiting on Faculty review. Does not change status. */
-  async sendFacultyStudentReportAwaitingReview(input: {
-    to: string;
-    projectTitle: string;
-    reportId: string;
-    teamLeadName: string;
-  }): Promise<void> {
-    const to = String(input.to || '').trim();
-    if (!to) return;
-    const from =
-      this.configService.get<string>('MAIL_FROM') ||
-      'CIEL <no-reply@cielpk.com>';
-    const facultyLink = this.buildFrontendLink(
-      `/dashboard/faculty/reports/${encodeURIComponent(input.reportId)}`,
-      {},
-    );
-    const titleEsc = this.escHtmlPlain(input.projectTitle);
-    const leadEsc = this.escHtmlPlain(input.teamLeadName || 'Team Lead');
-    const html = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
-        <h2 style="color: #333;">CIEL PK · Report Awaiting Faculty Review</h2>
-        <p>The Community Service report for <strong>${titleEsc}</strong> has been submitted and is awaiting your review.</p>
-        <p>Team Lead: <strong>${leadEsc}</strong></p>
-        <p>Please review the report using the link below.</p>
-        <div style="text-align: center; margin: 28px 0;">
-          <a href="${facultyLink}" style="background-color: #0e7d74; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Open Report Package</a>
-        </div>
-      </div>
-    `;
-    try {
-      await this.sendMailReliable({
-        from,
-        to,
-        subject: `CIEL PK · Report Awaiting Faculty Review · ${input.projectTitle}`,
-        html,
-      });
-    } catch (error) {
-      this.logger.error(
-        `Failed faculty report-awaiting email for ${input.reportId}`,
-        (error as Error).stack,
-      );
-    }
-  }
-
-  /** Student-created opportunity is live; student received "Start report" email (admin FYI). */
   async sendAdminStudentMayStartReport(
     projectTitle: string,
     opportunityId: string,
@@ -2583,6 +2738,124 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed student impact-report ${status} email to ${to}`,
+        error.stack,
+      );
+    }
+  }
+
+  /** CIEL PK Admin sent a report back (revision) or reopened it (unlock) — tell the student what to do. */
+  async sendStudentReportAdminDecision(
+    to: string,
+    studentFirstName: string,
+    projectTitle: string,
+    kind: 'revision' | 'unlocked',
+    note?: string | null,
+  ): Promise<void> {
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const titleEsc = this.escHtmlPlain(projectTitle);
+    const nameEsc = this.escHtmlPlain(studentFirstName);
+    const copy =
+      kind === 'revision'
+        ? {
+            heading: 'Your impact report needs changes',
+            body: `${nameEsc}, CIEL PK reviewed your community service report and sent it back for edits:`,
+            next: 'Open the report, fix the points below, and submit it again.',
+            subject: `CIEL PK — changes requested: ${projectTitle}`,
+          }
+        : {
+            heading: 'Your impact report was reopened',
+            body: `${nameEsc}, CIEL PK reopened your community service report so you can update it:`,
+            next: 'Open the report, make your updates, and submit it again.',
+            subject: `CIEL PK — report reopened: ${projectTitle}`,
+          };
+    const noteBlock =
+      note && note.trim()
+        ? `<p style="margin:16px 0 0 0;"><strong>Notes from CIEL PK:</strong></p><p style="background:#fffbeb;border-left:4px solid #f59e0b;padding:12px 14px;margin:8px 0 0 0;color:#374151;">${this.escHtmlPlain(note.trim())}</p>`
+        : '';
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">${copy.heading}</h2>
+        <p>${copy.body}</p>
+        <p style="font-size:16px;"><strong>${titleEsc}</strong></p>
+        ${noteBlock}
+        <p style="margin-top:20px;color:#555;">${copy.next}</p>
+        <p style="margin-top:24px;">Regards,<br><strong>CIEL PK Team</strong><br><span style="font-size:13px;color:#64748b;">Community Impact Education Lab</span></p>
+      </div>
+    `;
+    try {
+      await this.sendMailReliable({ from, to, subject: copy.subject, html });
+    } catch (error) {
+      this.logger.error(
+        `Failed student report ${kind} email to ${to}`,
+        (error as Error)?.stack,
+      );
+    }
+  }
+
+  /** After Super Admin publishes, send the student Impact Package. Analysis report is attached for faculty / student / university only. */
+  async sendReportPackagePublished(input: {
+    to: string;
+    audience: 'student' | 'faculty' | 'partner' | 'university' | 'admin';
+    projectTitle: string;
+    studentName: string;
+    reviewHref: string;
+    flashHref?: string;
+    detailedHref?: string;
+    analysisHref?: string;
+    includeAnalysis?: boolean;
+    evidenceCount?: number;
+  }): Promise<void> {
+    const to = String(input.to || '').trim();
+    if (!to) return;
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const titleEsc = this.escHtmlPlain(input.projectTitle);
+    const studentEsc = this.escHtmlPlain(input.studentName || 'Student');
+    const audienceLabel: Record<typeof input.audience, string> = {
+      student: 'your published impact report',
+      faculty: 'the published faculty copy',
+      partner: 'the published partner/NGO copy',
+      university: 'the published university copy',
+      admin: 'the published CIEL PK copy',
+    };
+    const withAnalysis = Boolean(input.includeAnalysis);
+    const docs = withAnalysis
+      ? `<ol style="padding-left:20px;line-height:1.7;">
+          <li>${input.flashHref ? `<a href="${input.flashHref}">Impact flashcard</a>` : 'Impact flashcard'}</li>
+          <li>${input.detailedHref ? `<a href="${input.detailedHref}">Detailed report</a>` : 'Detailed report'}</li>
+          <li>Evidence gallery${typeof input.evidenceCount === 'number' ? ` (${input.evidenceCount})` : ''}</li>
+          <li>${input.analysisHref ? `<a href="${input.analysisHref}">Analysis report</a>` : 'Analysis report'}</li>
+        </ol>`
+      : `<ol style="padding-left:20px;line-height:1.7;">
+          <li>${input.flashHref ? `<a href="${input.flashHref}">Impact flashcard</a>` : 'Impact flashcard'}</li>
+          <li>${input.detailedHref ? `<a href="${input.detailedHref}">Detailed report</a>` : 'Detailed report'}</li>
+          <li>Evidence gallery${typeof input.evidenceCount === 'number' ? ` (${input.evidenceCount})` : ''}</li>
+        </ol>
+        <p style="font-size:13px;color:#64748b;">The analysis report is not included for Partner / NGO.</p>`;
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #0e7d74;">CIEL PK · Report published</h2>
+        <p>Super Admin approved <strong>${studentEsc}</strong>'s report for <strong>${titleEsc}</strong>.</p>
+        <p>This is ${audienceLabel[input.audience]}. ${withAnalysis ? 'The package has the student Impact Package plus the analysis report:' : 'The package is the student Impact Package (no analysis report):'}</p>
+        ${docs}
+        <div style="text-align:center;margin:28px 0;">
+          <a href="${input.reviewHref}" style="background-color:#0e7d74;color:white;padding:12px 25px;text-decoration:none;border-radius:5px;font-weight:bold;">Open published package</a>
+        </div>
+      </div>
+    `;
+    try {
+      await this.sendMailReliable({
+        from,
+        to,
+        subject: `CIEL PK — published report package: ${input.projectTitle}`,
+        html,
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed published-package email to ${to}`,
         error.stack,
       );
     }

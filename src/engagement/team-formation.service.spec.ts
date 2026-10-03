@@ -44,6 +44,7 @@ describe('TeamFormationService', () => {
   const mockParticipationRepo = {
     findOne: jest.fn(),
     find: jest.fn(),
+    count: jest.fn().mockResolvedValue(1),
     manager: {
       transaction: jest.fn(
         async (
@@ -144,5 +145,63 @@ describe('TeamFormationService', () => {
   it('returns formed false when no members on individual lead', async () => {
     const result = await service.formTeamFromLead('student-lead', 'proj-1', []);
     expect(result.formed).toBe(false);
+  });
+
+  describe('guards', () => {
+    it('a plain member of another team cannot form / take over a team', async () => {
+      mockParticipationRepo.findOne.mockResolvedValue({
+        ...leadRow,
+        teamId: 'TM-OTHER',
+        isTeamLead: false,
+        participationMode: 'team',
+        student: { name: 'Member' },
+      });
+      await expect(service.formTeamFromLead('student-lead', 'proj-1', ['mem-1'])).rejects.toThrow(/Only the team lead/);
+    });
+
+    it("cannot poach a student who is in another team, or another team's lead", async () => {
+      for (const taken of [
+        { ...memberRow, teamId: 'TM-OTHER' },
+        { ...memberRow, isTeamLead: true, teamId: 'TM-OTHER' },
+        { ...memberRow, isTeamLead: true, teamId: null },
+      ]) {
+        mockParticipationRepo.find.mockImplementation(async (opts: { where?: { id?: unknown } }) =>
+          opts?.where && (opts.where as { id?: unknown }).id ? [taken] : [{ ...leadRow }, taken],
+        );
+        await expect(service.formTeamFromLead('student-lead', 'proj-1', ['mem-1'])).rejects.toThrow(/already belong to another team/);
+      }
+    });
+
+    it('can still add a free student and an existing member of the SAME team', async () => {
+      mockParticipationRepo.findOne.mockResolvedValue({
+        ...leadRow,
+        teamId: 'TM-MINE',
+        isTeamLead: true,
+        participationMode: 'team',
+        student: { name: 'Lead' },
+      });
+      mockParticipationRepo.find.mockImplementation(async (opts: { where?: { id?: unknown } }) =>
+        opts?.where && (opts.where as { id?: unknown }).id ? [{ ...memberRow, teamId: 'TM-MINE' }] : [{ ...leadRow }],
+      );
+      await expect(service.formTeamFromLead('student-lead', 'proj-1', ['mem-1'])).resolves.toMatchObject({ formed: true });
+    });
+
+    it('respects the opportunity seat count and the platform maximum of 20', async () => {
+      mockOpportunityRepo.findOne.mockResolvedValueOnce({ id: 'proj-1', title: 'T', timeline: { volunteers_required: 2 } });
+      const many = Array.from({ length: 3 }, (_, i) => ({ ...memberRow, id: `m${i}` }));
+      mockParticipationRepo.find.mockImplementation(async (opts: { where?: { id?: unknown } }) =>
+        opts?.where && (opts.where as { id?: unknown }).id ? many : [{ ...leadRow }],
+      );
+      await expect(service.formTeamFromLead('student-lead', 'proj-1', ['m0', 'm1', 'm2'])).rejects.toThrow(/seat/);
+
+      mockOpportunityRepo.findOne.mockResolvedValueOnce({ id: 'proj-1', title: 'T' });
+      const twenty = Array.from({ length: 20 }, (_, i) => ({ ...memberRow, id: `m${i}` }));
+      mockParticipationRepo.find.mockImplementation(async (opts: { where?: { id?: unknown } }) =>
+        opts?.where && (opts.where as { id?: unknown }).id ? twenty : [{ ...leadRow }],
+      );
+      await expect(
+        service.formTeamFromLead('student-lead', 'proj-1', twenty.map((m) => m.id)),
+      ).rejects.toThrow(/at most 20/);
+    });
   });
 });

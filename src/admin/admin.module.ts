@@ -17,6 +17,7 @@ import { IssueLogsModule } from '../issue-logs/issue-logs.module';
 import { FacultyUniversityScopeModule } from '../faculty-university-scope/faculty-university-scope.module';
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
+import { PublicConfigController } from './public-config.controller';
 import { AdminProjectEvidenceService } from './admin-project-evidence.service';
 import { ReportPartnerApprovalModule } from '../reports/report-partner-approval.module';
 import { OrganizationMembershipModule } from '../organization-membership/organization-membership.module';
@@ -53,7 +54,7 @@ import { FacultyModule } from '../faculty/faculty.module';
       AttendanceLog,
     ]),
   ],
-  controllers: [AdminController],
+  controllers: [AdminController, PublicConfigController],
   providers: [AdminService, AdminProjectEvidenceService],
 })
 export class AdminModule {}

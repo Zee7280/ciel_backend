@@ -1,9 +1,11 @@
 import { randomUUID } from 'crypto';
+import { resolveTeamSeatCap, teamCapacityError } from '../engagement/team-capacity.util';
 import {
   Injectable,
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, In, Repository } from 'typeorm';
@@ -48,14 +50,13 @@ import { redactOpportunityContactDetails } from '../opportunities/opportunity-se
 import {
   REPORTING_WINDOW_CLOSED_MESSAGE,
   canJoinOrApply,
-  canRecordCompletedService,
   resolveLifecyclePhase,
 } from '../opportunities/opportunity-timeline.util';
 import { buildOpportunityApprovalTracker } from '../opportunities/opportunity-approval-tracker.util';
 import { buildOpportunityDetailView } from '../opportunities/opportunity-detail-view.util';
 import { purifyStudentOpportunityContent } from '../opportunities/opportunity-content-purify.util';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
-import { isPrivateCandidateOpportunity } from '../opportunities/private-candidate.util';
+import { applyCanonicalPrivateCandidatePhone, isPrivateCandidateDto, isPrivateCandidateOpportunity } from '../opportunities/private-candidate.util';
 import { isTeamApplyFromParticipationAndMembers } from '../opportunities/apply-team-payload.util';
 import { isReportPartnerStepSatisfied } from '../reports/report-partner-approval.util';
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
@@ -66,6 +67,9 @@ import {
 } from '../reports/community-award.util';
 import { StudentReportsService } from '../reports/student-reports.service';
 import { ReportPartnerApprovalSettingsService } from '../reports/report-partner-approval-settings.service';
+import { StudentApplyMaintenanceService } from '../opportunities/student-apply-maintenance.service';
+import type { ApplyMaintenanceState } from '../opportunities/student-apply-maintenance.util';
+import { canonicalizePhoneInput } from '../common/phone-e164.util';
 
 @Injectable()
 export class StudentsService {
@@ -92,7 +96,36 @@ export class StudentsService {
     private readonly opportunityApplicationsService: OpportunityApplicationsService,
     private readonly studentReportsService: StudentReportsService,
     private readonly reportPartnerApprovalSettings: ReportPartnerApprovalSettingsService,
+    @Optional()
+    private readonly studentApplyMaintenance?: StudentApplyMaintenanceService,
   ) {}
+
+  private async loadApplyMaintenanceState(): Promise<ApplyMaintenanceState | null> {
+    if (!this.studentApplyMaintenance) return null;
+    try {
+      return await this.studentApplyMaintenance.getState();
+    } catch {
+      return null;
+    }
+  }
+
+  private applyGateFields(
+    opportunity: Opportunity,
+    state: ApplyMaintenanceState | null,
+  ) {
+    if (!this.studentApplyMaintenance || !state) {
+      return {};
+    }
+    return this.studentApplyMaintenance.decorateOpportunity(opportunity, state);
+  }
+
+  private applyMaintenancePayload(state: ApplyMaintenanceState | null) {
+    if (!state) return undefined;
+    return {
+      enabled: state.maintenanceEnabled,
+      message: state.maintenanceMessage,
+    };
+  }
 
   private normalize(str?: string | null) {
     return (str || '').trim().toLowerCase();
@@ -700,7 +733,40 @@ export class StudentsService {
     }
   }
   // Verification
-  async sendTeamMemberOtp(email: string) {
+  async sendTeamMemberOtp(
+    email: string,
+    projectId?: string,
+    blockIfOnRoster = false,
+  ) {
+    const emailNorm = String(email || '')
+      .trim()
+      .toLowerCase();
+    if (!emailNorm) {
+      throw new BadRequestException('Email is required');
+    }
+    const projectKey = String(projectId || '').trim();
+    // Only teammate-add flows opt in. Self-verify / team-lead OTP must still
+    // work after the student already has a participation row.
+    if (projectKey && blockIfOnRoster) {
+      const existingSeat = await this.participantRepository
+        .createQueryBuilder('p')
+        .where('p.projectId = :projectId', { projectId: projectKey })
+        .andWhere("LOWER(TRIM(COALESCE(p.email, ''))) = :emailNorm", {
+          emailNorm,
+        })
+        .andWhere("LOWER(COALESCE(p.status, '')) NOT IN (:...deadStatuses)", {
+          deadStatuses: ['rejected', 'withdrawn', 'cancelled', 'removed'],
+        })
+        .getOne();
+      if (existingSeat) {
+        throw new BadRequestException(
+          existingSeat.isTeamLead
+            ? 'This email is already used by the team lead on this project. Each member must register with their own email address.'
+            : 'This email is already on this team. Each student can appear only once.',
+        );
+      }
+    }
+
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
     // Save OTP in DB with 10 mins expiry
@@ -850,6 +916,40 @@ export class StudentsService {
       }),
       this.studentReportsService.getMergedReportsForParticipant(userId),
     ]);
+
+    // Team seats OTP-registered by email may lack studentId until the teammate opens the app.
+    // Claim + merge so "Teach to Transform" style team projects appear on My Reports.
+    const emailNorm = (studentUser?.email || '').trim().toLowerCase();
+    if (
+      emailNorm &&
+      typeof this.participantRepository.createQueryBuilder === 'function'
+    ) {
+      const byEmail = await this.participantRepository
+        .createQueryBuilder('p')
+        .leftJoinAndSelect('p.project', 'project')
+        .leftJoinAndSelect('project.organization', 'organization')
+        .where("LOWER(TRIM(COALESCE(p.email, ''))) = :emailNorm", { emailNorm })
+        .andWhere('p.status IN (:...statuses)', {
+          statuses: [...participationDashboardStatuses],
+        })
+        .orderBy('p.updatedAt', 'DESC')
+        .take(50)
+        .getMany();
+      const seen = new Set(activeApplications.map((p) => p.id));
+      for (const row of byEmail) {
+        if (row.studentId && row.studentId !== userId) {
+          continue;
+        }
+        if (!row.studentId) {
+          row.studentId = userId;
+          await this.participantRepository.save(row);
+        }
+        if (!seen.has(row.id)) {
+          seen.add(row.id);
+          activeApplications.push(row);
+        }
+      }
+    }
 
     const hoursVolunteered = verifiedTimesheets.reduce(
       (sum, t) => sum + this.safeDashboardNumber(t.hours),
@@ -1385,9 +1485,11 @@ export class StudentsService {
 
     const total = filtered.length;
     const paginated = filtered.slice(skip, skip + limitNumber);
+    const applyState = await this.loadApplyMaintenanceState();
 
     return {
       success: true,
+      apply_maintenance: this.applyMaintenancePayload(applyState),
       data: await Promise.all(
         paginated.map(async (o) => {
           const part = participationByOpp.get(o.id);
@@ -1436,6 +1538,7 @@ export class StudentsService {
             payment_proof_url: part ? part.paymentProofUrl : null,
             status: this.getApiOpportunityStatus(o),
             ...this.getWorkflowResponseFields(o),
+            ...this.applyGateFields(o, applyState),
             teamMembers: [], // We no longer fetch team members in a list view for performance, or we can fetch them if needed.
           };
         }),
@@ -1491,9 +1594,11 @@ export class StudentsService {
 
     const occupiedSeats = await this.getOccupiedSeats(id);
     const volunteersRequired = opportunity.timeline?.volunteers_required || 0;
+    const applyState = await this.loadApplyMaintenanceState();
 
     return {
       success: true,
+      apply_maintenance: this.applyMaintenancePayload(applyState),
       data: {
         ...opportunity,
         application_status: applicationStatus,
@@ -1507,6 +1612,7 @@ export class StudentsService {
         volunteersNeeded: volunteersRequired,
         status: this.getApiOpportunityStatus(opportunity),
         ...this.getWorkflowResponseFields(opportunity),
+        ...this.applyGateFields(opportunity, applyState),
         detail_view: buildOpportunityDetailView(opportunity),
       },
     };
@@ -1789,8 +1895,11 @@ export class StudentsService {
         this.getApiOpportunityStatus(opportunity) || statusForReport;
     }
 
+    const applyState = await this.loadApplyMaintenanceState();
+
     const payload = {
       success: true,
+      apply_maintenance: this.applyMaintenancePayload(applyState),
       data: {
         id: opportunity.id,
         title: opportunity.title,
@@ -1832,6 +1941,7 @@ export class StudentsService {
         verification_method: opportunity.verification_method,
         createdAt: opportunity.createdAt,
         updatedAt: opportunity.updatedAt,
+        ...this.applyGateFields(opportunity, applyState),
       },
     };
     // Supervisor / partner contact details are for the owner, reviewers and admin only.
@@ -1942,6 +2052,9 @@ export class StudentsService {
         : null;
 
     purifyStudentOpportunityContent(dto);
+    applyCanonicalPrivateCandidatePhone(dto, {
+      required: isPrivateCandidateDto(dto),
+    });
 
     const patchableFields: (keyof CreateOpportunityDto)[] = [
       'title',
@@ -1978,16 +2091,35 @@ export class StudentsService {
       }
     }
 
-    const nextRestricted =
-      dto.restricted_universities && dto.restricted_universities.length > 0
-        ? dto.restricted_universities
-        : dto.participation_scope?.creator_university_name
-          ? [dto.participation_scope.creator_university_name]
-          : undefined;
-
-    if (nextRestricted !== undefined) {
-      patch.restricted_universities = nextRestricted;
+    // Same rules as create: a student listing stays scoped to the student's OWN university (never
+    // "open to all", never another university) and every touched key passes the create validators.
+    const owner = await this.usersRepository.findOne({ where: { id: userId } });
+    const ownUniversity =
+      owner?.university?.trim() || owner?.institution?.trim() || '';
+    const executingCtx = (patch.executing_context ??
+      opportunity.executing_context) as { student_pathway?: string } | null;
+    const isPrivatePath = executingCtx?.student_pathway === 'private';
+    if (!isPrivatePath && ownUniversity) {
+      const scopePatch = patch.participation_scope as
+        | Record<string, any>
+        | undefined;
+      if (scopePatch) {
+        const rule = String(scopePatch.rule || '').toLowerCase();
+        if (!['own_university_only', 'own_university_departments'].includes(rule)) {
+          throw new BadRequestException(
+            'Students may only scope an opportunity to their own university — either all departments or specific departments.',
+          );
+        }
+        scopePatch.creator_university_name = ownUniversity;
+        scopePatch.university_names = [ownUniversity];
+      }
+      patch.restricted_universities = [ownUniversity];
+    } else {
+      delete patch.restricted_universities;
     }
+    this.opportunitiesService.validateEditPatch(
+      patch as unknown as Record<string, any>,
+    );
 
     Object.assign(opportunity, patch);
     // Only re-check location.pin when this edit actually touches mode/location — a pre-fix legacy
@@ -2079,6 +2211,16 @@ export class StudentsService {
     if (!opportunity) {
       throw new NotFoundException('Opportunity not found');
     }
+    if (this.studentApplyMaintenance) {
+      try {
+        await this.studentApplyMaintenance.assertNewApplicationsAllowed(
+          opportunity,
+        );
+      } catch (err) {
+        if (err instanceof BadRequestException) throw err;
+        // Gate lookup failed — fall through to existing live/timeline checks.
+      }
+    }
     if (
       !this.isLiveOpportunityStatus(opportunity.status) ||
       !opportunity.admin_approved
@@ -2089,10 +2231,16 @@ export class StudentsService {
     }
 
     const timeline = opportunity.timeline;
+    // Applications run from project start to project END. After the end date NEW applications are
+    // closed (students already enrolled keep their 60-day window to finish and submit the report).
     const joinOpen = canJoinOrApply(timeline);
-    const lateRecord = canRecordCompletedService(timeline);
-    if (!joinOpen && !lateRecord) {
+    if (!joinOpen) {
       const phase = resolveLifecyclePhase(timeline);
+      if (phase === 'service_ended_reporting_open') {
+        throw new BadRequestException(
+          'This project has ended, so new applications are closed. If you are already enrolled you can still complete your report within the reporting window.',
+        );
+      }
       if (phase === 'applications_closed_service_active') {
         throw new BadRequestException(
           'Applications have closed for this opportunity. Service is still active for enrolled students.',
@@ -2210,9 +2358,25 @@ export class StudentsService {
           );
         }
         seenEmails.add(em);
+        if (member && typeof member === 'object') {
+          const parsedMemberPhone = canonicalizePhoneInput(
+            typeof member.mobile === 'string' ? member.mobile : '',
+            {
+              required: true,
+              requiredMessage: 'Each team member needs a valid mobile number.',
+            },
+          );
+          if (parsedMemberPhone.error) {
+            throw new BadRequestException(parsedMemberPhone.error);
+          }
+          member.mobile = parsedMemberPhone.e164;
+        }
         sanitized.push(member);
       }
       teamMembersPayload = sanitized;
+      const seatCap = resolveTeamSeatCap(opportunity.timeline?.volunteers_required);
+      const capError = teamCapacityError(sanitized.length, seatCap);
+      if (capError) throw new BadRequestException(capError);
     }
 
     let resolvedTeamId = (dto.team_id || '').trim();
@@ -2262,13 +2426,62 @@ export class StudentsService {
       }
     }
 
+    // Seats: the whole team (lead + members) must fit in what is still free, counting everything
+    // already seated or in flight — not just the size of this one team.
+    {
+      const seats = resolveTeamSeatCap(opportunity.timeline?.volunteers_required);
+      if (seats > 0) {
+        const requested =
+          1 + (Array.isArray(teamMembersPayload) ? teamMembersPayload.length : 0);
+        const occupied = await this.getOccupiedSeats(dto.opportunityId);
+        if (occupied + requested > seats) {
+          const free = Math.max(0, seats - occupied);
+          throw new BadRequestException(
+            free === 0
+              ? 'All seats for this opportunity are taken.'
+              : `Only ${free} seat${free === 1 ? '' : 's'} left, but this application needs ${requested}.`,
+          );
+        }
+      }
+    }
+
+    // Every team member who already has an account must be eligible for this opportunity too
+    // (a different university / department than the opportunity allows must not ride in on the
+    // lead's eligibility). Members without an account yet are checked when they sign up and claim
+    // their seat.
+    if (isTeamApply && Array.isArray(teamMembersPayload) && teamMembersPayload.length > 0) {
+      const memberEmails = teamMembersPayload
+        .map((m) => (typeof m?.email === 'string' ? m.email.trim().toLowerCase() : ''))
+        .filter(Boolean);
+      if (memberEmails.length) {
+        const memberUsers = await this.usersRepository
+          .createQueryBuilder('u')
+          .where('LOWER(TRIM(u.email)) IN (:...memberEmails)', { memberEmails })
+          .getMany();
+        for (const memberUser of memberUsers) {
+          const memberElig = this.getOpportunityEligibility(memberUser, opportunity);
+          if (!memberElig.eligible) {
+            throw new ForbiddenException(
+              `${memberUser.email} cannot join this opportunity: ${memberElig.message}`,
+            );
+          }
+        }
+      }
+    }
+
+    const applyPhone = canonicalizePhoneInput(dto.contact_phone_e164, {
+      required: !isTeamApply,
+      requiredMessage: 'Enter a valid mobile number.',
+    });
+    if (applyPhone.error) throw new BadRequestException(applyPhone.error);
+
     const applyPayload: Record<string, unknown> = {
       participation_type: isTeamApply ? 'team' : dto.participation_type,
       primary_faculty_email: dto.primary_faculty_email,
       secondary_faculty_email: dto.secondary_faculty_email,
       team_id: isTeamApply ? resolvedTeamId : dto.team_id,
       team_members: teamMembersPayload,
-      contact_phone_e164: dto.contact_phone_e164,
+      contact_phone_e164: applyPhone.e164 || undefined,
       attendance_approver_type: attendanceApproverType,
     };
 

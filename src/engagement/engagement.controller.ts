@@ -135,6 +135,7 @@ export class EngagementController {
     const result = await this.engagementService.registerParticipant(
       req.user.id,
       dto,
+      req.user.role,
     );
     return {
       success: true,
@@ -176,7 +177,7 @@ export class EngagementController {
       req.user.role,
       id,
     );
-    const result = await this.engagementService.getAttendanceLogs(id);
+    const result = await this.engagementService.getAttendanceLogs(id, req.user.role);
     return {
       success: true,
       data: result,
@@ -289,7 +290,7 @@ export class EngagementController {
       projectId,
     );
     const result =
-      await this.engagementService.getProjectAttendanceLogs(projectId);
+      await this.engagementService.getProjectAttendanceLogs(projectId, req.user.role);
     return {
       success: true,
       data: result,

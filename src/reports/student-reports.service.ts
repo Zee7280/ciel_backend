@@ -3,7 +3,10 @@ import {
   BadRequestException,
   NotFoundException,
   ForbiddenException,
+  Logger,
+  Optional,
 } from '@nestjs/common';
+import { NotificationsService } from '../notifications/notifications.service';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, QueryFailedError, Repository } from 'typeorm';
@@ -40,9 +43,23 @@ import {
 import { ReportPartnerApprovalSettingsService } from './report-partner-approval-settings.service';
 import { isReportPartnerStepSatisfied } from './report-partner-approval.util';
 import { collectReportEvidenceFiles } from './collect-report-evidence.util';
+import {
+  computeReportProgress,
+  isReportSubmittedStatus,
+  redactDraftRowForNonAdmin,
+} from './report-progress.util';
+import { setNestedProperty as setNestedPropertyUtil } from './nested-path.util';
+import { persistSection8Visibility } from './media-visibility.util';
+import { applyEvidenceAccess, type EvidenceViewerRole } from './evidence-access.util';
+import {
+  buildReportReviewPackage,
+  reviewPackageIncludesAnalysis,
+  type ReportReviewPackage,
+} from './review-package.util';
 import { isPrivateCandidateOpportunity, reviewRouteForOpportunity } from '../opportunities/private-candidate.util';
 import {
   redactCiiV2Fields,
+  redactIndependentAnalysesForExternal,
   type CiiV2LockInput,
 } from './cii-v2-redaction.util';
 import {
@@ -59,6 +76,7 @@ import {
   isCiiFacultyLocked,
   communityServiceLevel,
   isCommunityAwardLiveReport,
+  isCommunityAwardMedalReport,
   type CommunityServiceLevel,
 } from './community-award.util';
 
@@ -87,6 +105,8 @@ function distinctBeneficiariesFromSection4(section4: any): number | string | nul
 
 @Injectable()
 export class StudentReportsService {
+  private readonly logger = new Logger(StudentReportsService.name);
+
   constructor(
     @InjectRepository(Opportunity)
     private readonly opportunitiesRepository: Repository<Opportunity>,
@@ -105,6 +125,7 @@ export class StudentReportsService {
     private readonly mailService: MailService,
     private readonly configService: ConfigService,
     private readonly reportPartnerApprovalSettings: ReportPartnerApprovalSettingsService,
+    @Optional() private readonly notificationsService?: NotificationsService,
   ) {}
 
   private hasMeaningfulObjectValue(value: any): boolean {
@@ -282,6 +303,33 @@ export class StudentReportsService {
    * never from the client `section1.metrics` blob. Every active member must clear the hour
    * bar on their own logs. Faculty session approval is not required for this check.
    */
+  /**
+   * Only the submitting team's seated members count toward the per-member hours check: another
+   * team on the same opportunity, a pending/withdrawn applicant, or an unapproved seat must not
+   * block (or be required for) this team's report.
+   */
+  private scopeRosterToSubmittingTeam(
+    roster: Participation[],
+    submitterStudentId?: string,
+  ): Participation[] {
+    const seated = roster.filter((p) =>
+      this.participationAllowsReportStart(p.status),
+    );
+    if (!submitterStudentId) return seated;
+    const mine = seated.find((p) => p.studentId === submitterStudentId);
+    if (!mine) return seated;
+    if (mine.teamId) return seated.filter((p) => p.teamId === mine.teamId);
+    if (mine.applicationId) {
+      return seated.filter((p) => p.applicationId === mine.applicationId);
+    }
+    // A solo participant is judged alone; legacy rows with no team/application link keep the
+    // whole-roster behaviour rather than silently dropping teammates from the check.
+    if (String(mine.participationMode || '').toLowerCase() === 'individual') {
+      return [mine];
+    }
+    return seated;
+  }
+
   private async computeServerVerifiedHours(projectId: string): Promise<{
     hoursByParticipationId: Map<string, number>;
     activeRoster: Participation[];
@@ -314,10 +362,15 @@ export class StudentReportsService {
   private async assertEveryTeamMemberMetRequiredHours(
     projectId: string,
     requiredHoursPerStudent: number,
+    submitterStudentId?: string,
   ): Promise<void> {
     if (!(requiredHoursPerStudent > 0)) return;
-    const { hoursByParticipationId, activeRoster } =
+    const { hoursByParticipationId, activeRoster: wholeRoster } =
       await this.computeServerVerifiedHours(projectId);
+    const activeRoster = this.scopeRosterToSubmittingTeam(
+      wholeRoster,
+      submitterStudentId,
+    );
     if (activeRoster.length === 0) return;
     const shortfalls = activeRoster.filter(
       (p) => (hoursByParticipationId.get(p.id) || 0) < requiredHoursPerStudent,
@@ -867,12 +920,17 @@ export class StudentReportsService {
       ciiV2: report.ciiV2 ?? null,
       ciiV2Lock: report.ciiV2Lock ?? null,
       independentAiAnalyses: report.independentAiAnalyses ?? null,
+      review_package: report.review_package ?? null,
+      ...computeReportProgress(report),
       ...this.computeCommunityAwardTotal(report),
       ...this.reportVerificationPayload(report),
       actions: {
         certificate_url: this.buildStudentReportViewUrl(report, 'certificate'),
         pdf_url: this.buildStudentReportViewUrl(report, 'print'),
         v17_url: this.buildStudentReportViewUrl(report, 'v17'),
+        evidence_url: this.buildStudentReportViewUrl(report, 'evidence'),
+        flash_url: this.buildStudentReportViewUrl(report, 'flash'),
+        package_url: this.buildStudentReportViewUrl(report, 'package'),
       },
       created_at: report.createdAt,
     };
@@ -890,6 +948,7 @@ export class StudentReportsService {
     T extends {
       status?: string | null;
       faculty_status?: string | null;
+      admin_status?: string | null;
       cii_score?: number | null;
       total?: number;
       level?: CommunityServiceLevel | null;
@@ -901,10 +960,13 @@ export class StudentReportsService {
       };
     },
   >(row: T): T {
+    // Score, level and certificate are the student's only once CIEL PK Admin has accepted the report
+    // — locking the CII (which mirrors faculty_status to 'approved') is not publication.
     if (
-      isCommunityAwardLiveReport({
+      isCommunityAwardMedalReport({
         status: row.status,
         faculty_status: row.faculty_status,
+        admin_status: row.admin_status,
       })
     ) {
       return row;
@@ -932,7 +994,37 @@ export class StudentReportsService {
     const wrapped = StudentReportsService.redactCiiV2ForExternalViewer({
       data: row as Record<string, unknown>,
     });
-    return wrapped.data as T;
+    return StudentReportsService.withholdAnalysisUntilAdminApproved(
+      wrapped.data as T,
+    );
+  }
+
+  /** Faculty (read-only) get the analysis report only after CIEL PK Admin has accepted the report. */
+  static withholdAnalysisForFacultyUntilApproved<T extends { data?: Record<string, any> }>(
+    response: T,
+  ): T {
+    if (!response?.data) return response;
+    return {
+      ...response,
+      data: StudentReportsService.withholdAnalysisUntilAdminApproved(response.data),
+    };
+  }
+
+  /** The student receives the analysis report only once CIEL PK Admin has accepted the report —
+   * locking the CII is an internal step, not publication. */
+  private static withholdAnalysisUntilAdminApproved<
+    T extends Record<string, any>,
+  >(row: T): T {
+    if (
+      isCommunityAwardMedalReport({
+        status: row.status,
+        faculty_status: row.faculty_status,
+        admin_status: row.admin_status,
+      })
+    ) {
+      return row;
+    }
+    return { ...row, ciiV2: null, ciiV2Lock: null, independentAiAnalyses: null };
   }
 
   /** Same 0-100 total + standing Level badge every faculty/partner/admin community-award view
@@ -1040,23 +1132,89 @@ export class StudentReportsService {
       viewerStudentId,
       projectId,
     );
-    if (!mine || !enrollmentLooksLikeTeam(mine)) {
+    if (!mine) {
       return false;
     }
-    const roster = await loadSameTeamParticipations(
-      this.participantRepository,
-      projectId,
-      mine,
-    );
-    if (roster.some((row) => row.studentId === report.studentId)) {
-      return true;
+
+    // Prefer same-team roster when the viewer looks like a team seat.
+    if (enrollmentLooksLikeTeam(mine)) {
+      const roster = await loadSameTeamParticipations(
+        this.participantRepository,
+        projectId,
+        mine,
+      );
+      if (roster.some((row) => row.studentId === report.studentId)) {
+        return true;
+      }
+      const leadId = await resolveCanonicalLeadStudentIdForViewer(
+        this.participantRepository,
+        projectId,
+        mine,
+      );
+      if (leadId && leadId === report.studentId) {
+        return true;
+      }
     }
-    const leadId = await resolveCanonicalLeadStudentIdForViewer(
+
+    // Leftover individual seats (or mis-tagged mode) on the same project: still allow
+    // reading when the report owner is enrolled on this project — shared team report.
+    const owner = await findPreferredProjectEnrollment(
       this.participantRepository,
+      report.studentId,
       projectId,
-      mine,
     );
-    return Boolean(leadId && leadId === report.studentId);
+    if (!owner) {
+      return false;
+    }
+    const myTeam = (mine.teamId || '').trim();
+    const ownerTeam = (owner.teamId || '').trim();
+    if (myTeam && ownerTeam) {
+      return myTeam === ownerTeam;
+    }
+    const myApp = (mine.applicationId || '').trim();
+    const ownerApp = (owner.applicationId || '').trim();
+    if (myApp && ownerApp) {
+      return myApp === ownerApp;
+    }
+    // Same project enrollment + report owned by a team lead on that project.
+    return owner.isTeamLead === true || enrollmentLooksLikeTeam(owner);
+  }
+
+  /**
+   * OTP team seats are often saved with email before `studentId` is linked.
+   * Claim those rows for the signed-in account so deep-link report GET and shared-read work
+   * without requiring a prior My Reports / dashboard visit.
+   */
+  private async claimUnlinkedParticipationsByEmail(
+    studentId: string,
+  ): Promise<Participation[]> {
+    const claimed: Participation[] = [];
+    const viewer = await this.usersRepository.findOne({
+      where: { id: studentId },
+      select: ['id', 'email'],
+    });
+    const emailNorm = (viewer?.email || '').trim().toLowerCase();
+    if (
+      !emailNorm ||
+      typeof this.participantRepository.createQueryBuilder !== 'function'
+    ) {
+      return claimed;
+    }
+    const byEmail = await this.participantRepository
+      .createQueryBuilder('p')
+      .where("LOWER(TRIM(COALESCE(p.email, ''))) = :emailNorm", { emailNorm })
+      .getMany();
+    for (const row of byEmail) {
+      if (row.studentId && row.studentId !== studentId) {
+        continue;
+      }
+      if (!row.studentId) {
+        row.studentId = studentId;
+        await this.participantRepository.save(row);
+      }
+      claimed.push(row);
+    }
+    return claimed;
   }
 
   /**
@@ -1071,6 +1229,8 @@ export class StudentReportsService {
     if (!this.looksLikeUuid(key)) {
       return { report: null, attendanceStudentId: viewerStudentId };
     }
+
+    await this.claimUnlinkedParticipationsByEmail(viewerStudentId);
 
     const mine = await findPreferredProjectEnrollment(
       this.participantRepository,
@@ -1102,7 +1262,10 @@ export class StudentReportsService {
       return this.studentReportsRepository.findOne({ where, relations });
     };
 
-    if (mine && enrollmentLooksLikeTeam(mine)) {
+    // Always try the shared team report when the viewer has any enrollment on the project.
+    // Do not require enrollmentLooksLikeTeam — mis-tagged individual seats still need the lead's
+    // filled sections 2–11 (attendance stays keyed to the viewer).
+    if (mine) {
       const shared = await this.findSharedTeamReportForViewer(
         viewerStudentId,
         key,
@@ -1111,6 +1274,35 @@ export class StudentReportsService {
       );
       if (shared) {
         return { report: shared, attendanceStudentId: viewerStudentId };
+      }
+
+      // Project-wide fallback: any report on this opportunity the viewer may access.
+      const relations = ['student', 'opportunity', 'opportunity.organization'];
+      if (typeof this.studentReportsRepository.find === 'function') {
+        const onProject = await this.studentReportsRepository.find({
+          where: [{ opportunityId: key }, { project_id: key }],
+          relations,
+        });
+        if (Array.isArray(onProject) && onProject.length) {
+          const seen = new Set<string>();
+          const unique = onProject.filter((row) => {
+            if (!row?.id || seen.has(row.id)) return false;
+            seen.add(row.id);
+            return true;
+          });
+          const accessible: StudentReport[] = [];
+          for (const row of unique) {
+            if (await this.participantMayAccessReport(viewerStudentId, row)) {
+              accessible.push(row);
+            }
+          }
+          if (accessible.length) {
+            return {
+              report: this.pickPreferredTeamReportRow(accessible),
+              attendanceStudentId: viewerStudentId,
+            };
+          }
+        }
       }
     }
 
@@ -1407,6 +1599,81 @@ export class StudentReportsService {
     return value && typeof value === 'object' && !Array.isArray(value)
       ? (value as Record<string, unknown>)
       : {};
+  }
+
+  /** Empty lead object — production student report UI reads `team_lead.verified` unguarded. */
+  private emptyClientTeamLead(): Record<string, string> {
+    return {
+      name: '',
+      fullName: '',
+      cnic: '',
+      mobile: '',
+      email: '',
+      university: '',
+      degree: '',
+      year: '',
+      role: '',
+      hours: '',
+    };
+  }
+
+  private emptyClientMetrics(): Record<string, unknown> {
+    return {
+      total_verified_hours: 0,
+      total_active_days: 0,
+      engagement_span: 0,
+      attendance_frequency: 0,
+      weekly_continuity: 0,
+      eis_score: 0,
+      engagement_category: 'Introductory Engagement',
+      hec_compliance: 'below',
+    };
+  }
+
+  /**
+   * Student report page (and older deployed FE) crash when section1.team_lead is null
+   * or team_members is a non-array JSON object (`q is not a function` / `.verified` on null).
+   */
+  private sanitizeSection1ForClient(
+    stored: unknown,
+    overrides: {
+      participation_type?: unknown;
+      team_lead?: unknown;
+      team_members?: unknown;
+      attendance_logs?: unknown;
+      metrics?: unknown;
+    },
+  ): Record<string, unknown> {
+    const base = this.asUnknownRecord(stored);
+    const teamLead = {
+      ...this.emptyClientTeamLead(),
+      ...this.asUnknownRecord(overrides.team_lead ?? base.team_lead),
+    };
+    const metrics = {
+      ...this.emptyClientMetrics(),
+      ...this.asUnknownRecord(overrides.metrics ?? base.metrics),
+    };
+    const teamMembers = Array.isArray(overrides.team_members)
+      ? overrides.team_members
+      : Array.isArray(base.team_members)
+        ? base.team_members
+        : [];
+    const attendanceLogs = Array.isArray(overrides.attendance_logs)
+      ? overrides.attendance_logs
+      : Array.isArray(base.attendance_logs)
+        ? base.attendance_logs
+        : [];
+    return {
+      ...base,
+      participation_type:
+        overrides.participation_type ||
+        base.participation_type ||
+        'individual',
+      team_lead: teamLead,
+      team_members: teamMembers,
+      attendance_logs: attendanceLogs,
+      metrics,
+    };
   }
 
   private pickTrimmedString(value: unknown): string {
@@ -1978,6 +2245,16 @@ export class StudentReportsService {
       where: { studentId },
     });
 
+    // Reuse the same OTP email-claim path used on report deep-link GET.
+    const claimed = await this.claimUnlinkedParticipationsByEmail(studentId);
+    const seenPid = new Set(participantRows.map((p) => p.id));
+    for (const row of claimed) {
+      if (!seenPid.has(row.id)) {
+        seenPid.add(row.id);
+        participantRows.push(row);
+      }
+    }
+
     const uniqOpp = new Set<string>();
     const registerOpp = (key?: string | null) => {
       const s = (key || '').trim();
@@ -2406,7 +2683,6 @@ export class StudentReportsService {
       oid,
     );
     if (!mine) return;
-    if (!enrollmentLooksLikeTeam(mine)) return;
 
     const canonicalLeadId = await resolveCanonicalLeadStudentIdForViewer(
       this.participantRepository,
@@ -2414,6 +2690,7 @@ export class StudentReportsService {
       mine,
     );
     if (!canonicalLeadId) {
+      if (!enrollmentLooksLikeTeam(mine)) return;
       if (mine.isTeamLead) return;
       return;
     }
@@ -2494,6 +2771,112 @@ export class StudentReportsService {
       if (e && e.includes('@')) return e;
     }
     return '';
+  }
+
+  /** After Super Admin publishes, send the student Impact Package. Faculty / student / university get the analysis report; partner / NGO get the same package without it. */
+  private async notifyReviewPackagePublished(report: StudentReport): Promise<void> {
+    if (typeof this.mailService.sendReportPackagePublished !== 'function') {
+      return;
+    }
+    const full = await this.studentReportsRepository.findOne({
+      where: { id: report.id },
+      relations: ['student', 'faculty', 'opportunity'],
+    });
+    if (!full) return;
+    const frontendBase =
+      this.configService.get<string>('FRONTEND_URL') ||
+      this.configService.get<string>('APP_URL') ||
+      '';
+    const pack = buildReportReviewPackage(full, frontendBase);
+    const projectTitle =
+      full.opportunity?.title || full.project_id || 'Community Service report';
+    const studentName = full.student?.name || 'Student';
+    const seen = new Set<string>();
+    const send = async (
+      to: string,
+      audience: 'student' | 'faculty' | 'partner' | 'university' | 'admin',
+    ) => {
+      const email = this.normalizeEmail(to);
+      if (!email || !email.includes('@') || seen.has(email)) return;
+      seen.add(email);
+      const reviewHref = pack.stakeholder_hrefs[audience];
+      const includeAnalysis = reviewPackageIncludesAnalysis(audience);
+      const analysisHref = includeAnalysis
+        ? pack.analysis_hrefs[audience] || pack.ai_analyser_href
+        : undefined;
+      const flashHref =
+        audience === 'admin'
+          ? pack.admin_doc_hrefs.flashcard
+          : audience === 'student'
+            ? pack.documents.flashcard.href
+            : reviewHref;
+      const detailedHref =
+        audience === 'admin'
+          ? pack.admin_doc_hrefs.detailed_report
+          : audience === 'student'
+            ? pack.documents.detailed_report.href
+            : reviewHref;
+      if (!reviewHref) return;
+      await this.mailService.sendReportPackagePublished({
+        to: email,
+        audience,
+        projectTitle,
+        studentName,
+        reviewHref,
+        flashHref,
+        detailedHref,
+        analysisHref,
+        includeAnalysis: includeAnalysis && pack.analysis_attached,
+        evidenceCount: pack.documents.evidence.count,
+      });
+    };
+
+    await send(full.student?.email || '', 'student');
+    await send(this.resolveReportFacultyEmail(full, full.opportunity), 'faculty');
+    await send(this.resolveReportPartnerEmail(full.opportunity), 'partner');
+    for (const email of await this.resolveReportUniversityEmails(full)) {
+      await send(email, 'university');
+    }
+
+    const adminFromConfig =
+      typeof this.mailService.getAdminReviewEmails === 'function'
+        ? this.mailService.getAdminReviewEmails()
+        : [];
+    for (const email of adminFromConfig || []) {
+      await send(email, 'admin');
+    }
+    if (typeof this.usersRepository.find === 'function') {
+      const admins = await this.usersRepository.find({
+        where: { role: UserRole.SUPER_ADMIN },
+      });
+      for (const admin of admins || []) {
+        await send(admin.email, 'admin');
+      }
+    }
+  }
+
+  private institutionKey(value: unknown): string {
+    return String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, ' ');
+  }
+
+  private async resolveReportUniversityEmails(report: StudentReport): Promise<string[]> {
+    const studentUni = this.institutionKey(
+      report.student?.university || report.student?.institution,
+    );
+    if (!studentUni || typeof this.usersRepository.find !== 'function') return [];
+    const rows = await this.usersRepository.find({
+      where: { role: UserRole.UNIVERSITY },
+    });
+    return (rows || [])
+      .filter((row) => {
+        const uni = this.institutionKey(row.university || row.institution);
+        return uni && uni === studentUni;
+      })
+      .map((row) => this.normalizeEmail(row.email))
+      .filter((email) => email.includes('@'));
   }
 
   /**
@@ -2585,12 +2968,23 @@ export class StudentReportsService {
       };
     }
 
-    if (privateCandidate) {
+    // Every submitted report is reviewed by CIEL PK Admin (Faculty is read-only), so a reminder always
+    // goes to the admin review inbox — never to a Faculty "approval" email that nobody can act on.
+    {
+      const pack = (report.review_package || {}) as Partial<ReportReviewPackage>;
       await this.mailService.sendAdminStudentReportSubmitted(
         projectTitle,
         report.opportunityId || '',
         report.id,
         teamLeadName,
+        {
+          reviewHref: pack.admin_review_href,
+          analyserHref: pack.ai_analyser_href,
+          flashHref: pack.admin_doc_hrefs?.flashcard || pack.documents?.flashcard?.href,
+          detailedHref:
+            pack.admin_doc_hrefs?.detailed_report || pack.documents?.detailed_report?.href,
+          evidenceCount: pack.documents?.evidence?.count,
+        },
       );
       return {
         success: true,
@@ -2598,23 +2992,6 @@ export class StudentReportsService {
         message: 'CIEL PK has been reminded that this report is awaiting review.',
       };
     }
-
-    if (!facultyEmail) {
-      throw new BadRequestException('No faculty email is saved on this report.');
-    }
-    if (typeof this.mailService.sendFacultyStudentReportAwaitingReview === 'function') {
-      await this.mailService.sendFacultyStudentReportAwaitingReview({
-        to: facultyEmail,
-        projectTitle,
-        reportId: report.id,
-        teamLeadName,
-      });
-    }
-    return {
-      success: true,
-      sent_to: 'faculty',
-      message: `Verification email sent to ${facultyEmail}.`,
-    };
   }
 
   async createReport(
@@ -2657,6 +3034,14 @@ export class StudentReportsService {
       }
     }
 
+    if (shouldSubmit && !opportunityForPolicy) {
+      // Every submit gate (live check, report window, enrolment, team lead, per-member hours) hangs
+      // off the opportunity, so a submit that cannot resolve one must not skip them.
+      throw new BadRequestException(
+        'This report is not linked to a valid project. Open it from your project page and submit again.',
+      );
+    }
+
     if (opportunityIdFromDto) {
       await this.assertTeamLeadMayWriteReport(studentId, opportunityIdFromDto);
     }
@@ -2691,6 +3076,45 @@ export class StudentReportsService {
         throw new BadRequestException(
           'This report has already been verified and can no longer be edited.',
         );
+      }
+
+      // A report that is already submitted (under review, awaiting partner, fee under review …) is
+      // locked: a second submit — double click, retry, or a crafted API call — must not overwrite
+      // sections the reviewer is looking at, re-stamp the submit time or regress the status.
+      // Repeating the call is harmless, so answer as the first one did.
+      if (
+        shouldSubmit &&
+        !wasRejectedForRevision &&
+        String(priorReportStatus || '').toLowerCase() === 'rejected'
+      ) {
+        throw new BadRequestException(
+          'This report was rejected by CIEL PK Admin and cannot be submitted again.',
+        );
+      }
+
+      if (
+        shouldSubmit &&
+        !wasRejectedForRevision &&
+        !['draft', 'continue', ''].includes(
+          String(priorReportStatus || '').toLowerCase(),
+        )
+      ) {
+        await this.syncReportProjectKeys(report);
+        return {
+          success: true,
+          message: 'This report has already been submitted and is locked.',
+          data: {
+            report_id: report.id,
+            ...this.reportVerificationPayload(report),
+            project_id: report.project_id,
+            submitted_at: report.submission_date,
+            report_submitted_at: report.reportSubmittedAt,
+            partner_approved_at: report.partnerApprovedAt,
+            admin_approved_at: report.adminApprovedAt,
+            status: report.status,
+            already_submitted: true,
+          },
+        };
       }
 
       // Update existing report
@@ -2750,7 +3174,9 @@ export class StudentReportsService {
       if (parsedData.section5) report.section5 = parsedData.section5;
       if (parsedData.section6) report.section6 = parsedData.section6;
       if (parsedData.section7) report.section7 = parsedData.section7;
-      if (parsedData.section8) report.section8 = parsedData.section8;
+      if (parsedData.section8) {
+        report.section8 = persistSection8Visibility(parsedData.section8);
+      }
       if (parsedData.section9) report.section9 = parsedData.section9;
       if (parsedData.section10) report.section10 = parsedData.section10;
       if (shouldSubmit) {
@@ -2782,7 +3208,7 @@ export class StudentReportsService {
         section5: parsedData.section5,
         section6: parsedData.section6,
         section7: parsedData.section7,
-        section8: parsedData.section8,
+        section8: persistSection8Visibility(parsedData.section8),
         section9: parsedData.section9,
         section10: parsedData.section10,
         section11: (shouldSubmit
@@ -2834,9 +3260,12 @@ export class StudentReportsService {
 
     // Handle Faculty Assignment if faculty email is provided in Section 1
     if (report.section1?.faculty_supervisor_email) {
+      // Link only: the invite email goes out after a successful submit, not on every autosave
+      // or on a submit that is about to be rejected.
       await this.handleFacultyAssignment(
         report,
         report.section1.faculty_supervisor_email,
+        false,
       );
     }
 
@@ -2879,6 +3308,7 @@ export class StudentReportsService {
         await this.assertEveryTeamMemberMetRequiredHours(
           String(opportunityIdFromDto),
           requiredHoursPerStudent,
+          reportOwnerId,
         );
       }
     }
@@ -2909,6 +3339,30 @@ export class StudentReportsService {
       await this.studentReportsRepository.save(report);
     }
 
+    if (shouldSubmit) {
+      try {
+        report.review_package = buildReportReviewPackage(
+          report,
+          this.configService.get<string>('FRONTEND_URL') ||
+            this.configService.get<string>('APP_URL') ||
+            '',
+        ) as unknown as StudentReport['review_package'];
+        await this.studentReportsRepository.save(report);
+      } catch (error) {
+        this.logger.error(
+          `Failed to build review package for report ${report.id}`,
+          error instanceof Error ? error.stack : String(error),
+        );
+      }
+    }
+
+    if (shouldSubmit && !report.facultyId && report.section1?.faculty_supervisor_email) {
+      await this.handleFacultyAssignment(
+        report,
+        report.section1.faculty_supervisor_email,
+      );
+    }
+
     const skipAdminSubmitNotify = new Set([
       'submitted',
       'partner_verified',
@@ -2934,29 +3388,24 @@ export class StudentReportsService {
       const student = await this.usersRepository.findOne({
         where: { id: studentId },
       });
+      const pack = (report.review_package || {}) as Partial<ReportReviewPackage>;
       void this.mailService
         .sendAdminStudentReportSubmitted(
           projectTitle,
           report.opportunityId || opportunityIdFromDto || '',
           report.id,
           student?.name || 'Student',
+          {
+            reviewHref: pack.admin_review_href,
+            analyserHref: pack.ai_analyser_href,
+            flashHref: pack.admin_doc_hrefs?.flashcard || pack.documents?.flashcard?.href,
+            detailedHref:
+              pack.admin_doc_hrefs?.detailed_report ||
+              pack.documents?.detailed_report?.href,
+            evidenceCount: pack.documents?.evidence?.count,
+          },
         )
         .catch(() => undefined);
-      const facultyTo = this.resolveReportFacultyEmail(report, oppForTitle);
-      if (
-        facultyTo &&
-        typeof this.mailService.sendFacultyStudentReportAwaitingReview ===
-          'function'
-      ) {
-        void this.mailService
-          .sendFacultyStudentReportAwaitingReview({
-            to: facultyTo,
-            projectTitle,
-            reportId: report.id,
-            teamLeadName: student?.name || 'Team Lead',
-          })
-          .catch(() => undefined);
-      }
     }
 
     const submitOpportunity =
@@ -3046,7 +3495,9 @@ export class StudentReportsService {
       if (parsedData.section5) report.section5 = parsedData.section5;
       if (parsedData.section6) report.section6 = parsedData.section6;
       if (parsedData.section7) report.section7 = parsedData.section7;
-      if (parsedData.section8) report.section8 = parsedData.section8;
+      if (parsedData.section8) {
+        report.section8 = persistSection8Visibility(parsedData.section8);
+      }
       if (parsedData.section9) report.section9 = parsedData.section9;
       if (parsedData.section10) report.section10 = parsedData.section10;
       if (parsedData.section11)
@@ -3066,7 +3517,7 @@ export class StudentReportsService {
         section5: parsedData.section5,
         section6: parsedData.section6,
         section7: parsedData.section7,
-        section8: parsedData.section8,
+        section8: persistSection8Visibility(parsedData.section8),
         section9: parsedData.section9,
         section10: parsedData.section10,
         section11: this.stripDraftCiiFromSection11(parsedData.section11),
@@ -3112,7 +3563,46 @@ export class StudentReportsService {
     };
   }
 
-  async findAll(query: any) {
+  /**
+   * Partner / NGO / university listing rows: same release rule as the detail path. CII is the
+   * redacted provisional subset (never raw anchors/AI notes/integrity checks), independent AI
+   * analyses are dropped, and evidence file links are removed (lists never need them; the
+   * detail endpoint applies the per-role sharing matrix).
+   */
+  private static restrictListingForExternalViewer<
+    T extends Record<string, any>,
+  >(row: T): T {
+    if (row.is_submitted === false) {
+      // Not submitted yet: reviewers see progress only, never answers or scores.
+      return redactDraftRowForNonAdmin(row) as T;
+    }
+    const wrapped = StudentReportsService.redactCiiV2ForExternalViewer(
+      { data: { ciiV2: row.ciiV2, ciiV2Lock: row.ciiV2Lock } },
+      { releaseProvisional: true },
+    );
+    const pkg = row.review_package as
+      | { documents?: { evidence?: Record<string, unknown> } }
+      | null
+      | undefined;
+    const review_package = pkg?.documents?.evidence
+      ? {
+          ...pkg,
+          documents: {
+            ...pkg.documents,
+            evidence: { ...pkg.documents.evidence, count: 0, files: [] },
+          },
+        }
+      : row.review_package;
+    return {
+      ...row,
+      ciiV2: wrapped.data?.ciiV2 ?? null,
+      ciiV2Lock: wrapped.data?.ciiV2Lock ?? null,
+      independentAiAnalyses: null,
+      review_package,
+    };
+  }
+
+  async findAll(query: any, options: { partnerView?: boolean } = {}) {
     const { status, organizationId, studentId, page = 1, limit = 10 } = query;
     const limitNum =
       typeof limit === 'number'
@@ -3157,9 +3647,6 @@ export class StudentReportsService {
     }
 
     const whereClause: any = {};
-    if (status) {
-      whereClause.status = status;
-    }
     if (organizationId) {
       whereClause.opportunity = { organizationId };
     }
@@ -3170,14 +3657,86 @@ export class StudentReportsService {
       order: { submission_date: 'DESC', createdAt: 'DESC' },
     });
 
-    reports = await this.filterReportsForAdminPartnerQueue(reports);
+    const includeHidden =
+      query?.includeHidden === true ||
+      ['true', '1'].includes(String(query?.includeHidden ?? '').toLowerCase());
+    if (!includeHidden) {
+      reports = await this.filterReportsForAdminPartnerQueue(reports);
+    }
 
     if (organizationId) {
-      const cleared: StudentReport[] = [];
-      for (const row of reports) {
-        if (await this.isReportFeeClearedForApprovals(row)) cleared.push(row);
+      const latestPayments = await this.loadLatestPaymentsForReports(reports);
+      reports = reports.filter((row) => {
+        const st = String(row.status || '').toLowerCase();
+        if (['paid', 'partner_verified', 'verified'].includes(st)) return true;
+        const key = `${row.studentId}:${(row.opportunityId || row.project_id || '').trim()}`;
+        return latestPayments.get(key)?.status === PaymentStatus.APPROVED;
+      });
+    }
+
+    const searchTerm = String(query?.q ?? '')
+      .trim()
+      .toLowerCase();
+    if (searchTerm) {
+      reports = reports.filter((row) =>
+        [
+          row.id,
+          row.student?.name,
+          row.student?.email,
+          row.opportunity?.title,
+          row.opportunity?.organization?.name,
+        ].some((v) =>
+          String(v ?? '')
+            .toLowerCase()
+            .includes(searchTerm),
+        ),
+      );
+    }
+    const parseBound = (raw: unknown, endOfDay: boolean): number | null => {
+      if (!raw) return null;
+      const d = new Date(String(raw));
+      if (Number.isNaN(d.getTime())) return null;
+      if (endOfDay && /^\d{4}-\d{2}-\d{2}$/.test(String(raw))) {
+        d.setUTCHours(23, 59, 59, 999);
       }
-      reports = cleared;
+      return d.getTime();
+    };
+    const fromMs = parseBound(query?.dateFrom, false);
+    const toMs = parseBound(query?.dateTo, true);
+    if (fromMs !== null || toMs !== null) {
+      reports = reports.filter((row) => {
+        const ms = new Date(
+          (row.reportSubmittedAt ??
+            row.submission_date ??
+            row.createdAt) as Date,
+        ).getTime();
+        if (Number.isNaN(ms)) return false;
+        if (fromMs !== null && ms < fromMs) return false;
+        if (toMs !== null && ms > toMs) return false;
+        return true;
+      });
+    }
+
+    // Per-queue counts over the full filtered set (before the status tab and pagination).
+    const notYetSubmitted = new Set(['draft', 'continue', '']);
+    const revisionStatuses = new Set([
+      'revision',
+      'revision_requested',
+      'rejected',
+    ]);
+    const counts = { needsReview: 0, verified: 0, revision: 0, all: 0 };
+    for (const row of reports) {
+      const st = String(row.status || '').toLowerCase();
+      counts.all += 1;
+      if (st === 'verified' || st === 'paid') counts.verified += 1;
+      else if (revisionStatuses.has(st)) counts.revision += 1;
+      else if (!notYetSubmitted.has(st) && row.admin_status === 'pending') {
+        counts.needsReview += 1;
+      }
+    }
+
+    if (status) {
+      reports = reports.filter((row) => row.status === status);
     }
 
     const total = reports.length;
@@ -3201,13 +3760,23 @@ export class StudentReportsService {
 
     return {
       success: true,
-      data: mapped,
+      data: organizationId
+        ? mapped.map((r) => {
+            const restricted =
+              StudentReportsService.restrictListingForExternalViewer(r);
+            // NGO / partner receive the package without the analysis report.
+            return options.partnerView
+              ? StudentReportsService.stripAnalysisFromListingRow(restricted)
+              : restricted;
+          })
+        : mapped,
       pagination: {
         total,
         page: pageNum,
         limit: limitNum,
         total_pages: Math.max(1, Math.ceil(total / limitNum)),
       },
+      meta: { counts },
     };
   }
 
@@ -3273,7 +3842,9 @@ export class StudentReportsService {
     );
     return {
       success: true,
-      data: mapped,
+      data: mapped.map((r) =>
+        StudentReportsService.restrictListingForExternalViewer(r),
+      ),
       pagination: {
         total,
         page: pageNum,
@@ -3304,13 +3875,16 @@ export class StudentReportsService {
   async buildDetailResponse(
     report: StudentReport,
     attendanceParticipantStudentId?: string,
-    options?: { allProjectAttendance?: boolean },
+    options?: { allProjectAttendance?: boolean; evidenceViewer?: EvidenceViewerRole },
   ) {
-    return this.formatReportResponse(
+    const response = await this.formatReportResponse(
       report,
       attendanceParticipantStudentId,
       options,
     );
+    return options?.evidenceViewer
+      ? applyEvidenceAccess(response, options.evidenceViewer)
+      : response;
   }
 
   /**
@@ -3322,7 +3896,7 @@ export class StudentReportsService {
   async findOneForPartner(
     id: string,
     organizationId: string,
-    options?: { universityScopeOpportunityIds?: string[] },
+    options?: { universityScopeOpportunityIds?: string[]; viewerRole?: string },
   ) {
     const report = await this.studentReportsRepository.findOne({
       where: { id },
@@ -3346,11 +3920,45 @@ export class StudentReportsService {
 
     // Same reasoning as findOne (admin) above — a partner reviewing a team's
     // report must see every member's logged hours, not just the owner's.
-    const response = StudentReportsService.redactCiiV2ForExternalViewer(
-      await this.formatReportResponse(report, undefined, {
-        allProjectAttendance: true,
-      }),
+    // Reports open for review only after the student submits; before that only Admin may open.
+    if (!isReportSubmittedStatus(report.status, report.reportSubmittedAt)) {
+      throw new ForbiddenException(
+        'This report has not been submitted yet. Only CIEL PK Admin can open a report in progress.',
+      );
+    }
+
+    const viewerRole = String(options?.viewerRole || '').toLowerCase();
+    // Partner / NGO / corporate receive the package only after CIEL PK Admin has accepted the
+    // report (University keeps its read-only review of submitted reports).
+    if (
+      viewerRole !== 'university' &&
+      !inUniversityScope &&
+      !['approved', 'verified'].includes(
+        String(report.admin_status || '').toLowerCase(),
+      )
+    ) {
+      throw new ForbiddenException(
+        'This report opens for partners after CIEL PK Admin has accepted it.',
+      );
+    }
+
+    // Evidence links follow the project-level sharing rule: University unlocks after super-admin
+    // approval; Partner / NGO / corporate never (unless the project is Public).
+    const evidenceRole: EvidenceViewerRole =
+      viewerRole === 'university' ? 'university' : 'partner';
+    const formatted = applyEvidenceAccess(
+      StudentReportsService.redactCiiV2ForExternalViewer(
+        await this.formatReportResponse(report, undefined, {
+          allProjectAttendance: true,
+        }),
+        { releaseProvisional: true },
+      ),
+      evidenceRole,
     );
+    const response =
+      evidenceRole === 'partner'
+        ? StudentReportsService.stripAnalysisReportForPartner(formatted)
+        : formatted;
     return response?.data
       ? {
           ...response,
@@ -3359,7 +3967,97 @@ export class StudentReportsService {
       : response;
   }
 
+  /** AI / CII values that ride along on the raw report and must never reach NGO / partner viewers. */
+  private static stripAnalysisScalarsForPartner<T extends Record<string, any>>(
+    row: T,
+  ): T {
+    const out: Record<string, any> = { ...row, cii_score: null, total: null, level: null, pts: null };
+    if (out.section11 && typeof out.section11 === 'object') {
+      const {
+        cii_index: _a,
+        ciiIndex: _b,
+        ai_generated_impact_score: _c,
+        institutional_alignment_score: _d,
+        verified_narrative: _e,
+        audit_meta: _f,
+        summary_text: _g,
+        ...rest
+      } = out.section11 as Record<string, unknown>;
+      out.section11 = rest;
+    }
+    const pkg = out.review_package as Record<string, unknown> | null | undefined;
+    if (pkg && typeof pkg === 'object') {
+      const {
+        ai_analyser_href: _h,
+        analysis_hrefs: _i,
+        admin_review_href: _j,
+        admin_doc_hrefs: _k,
+        ...pkgRest
+      } = pkg;
+      out.review_package = pkgRest;
+    }
+    return out as T;
+  }
+
+  /** Listing-row twin of stripAnalysisReportForPartner. */
+  private static stripAnalysisFromListingRow<T extends Record<string, any>>(
+    row: T,
+  ): T {
+    const pkg = row.review_package as
+      | { documents?: Record<string, unknown>; analysis_attached?: boolean }
+      | null
+      | undefined;
+    return StudentReportsService.stripAnalysisScalarsForPartner({
+      ...row,
+      ciiV2: null,
+      ciiV2Lock: null,
+      independentAiAnalyses: null,
+      review_package: pkg
+        ? {
+            ...pkg,
+            analysis_attached: false,
+            documents: pkg.documents
+              ? { ...pkg.documents, analysis_report: null }
+              : pkg.documents,
+          }
+        : pkg,
+    });
+  }
+
+  /** NGO / partner receive the student Impact Package without the CII analysis report. */
+  private static stripAnalysisReportForPartner<
+    T extends { data?: Record<string, unknown> },
+  >(response: T): T {
+    const data = response?.data;
+    if (!data) return response;
+    const pkg = data.review_package as
+      | { documents?: Record<string, unknown>; analysis_attached?: boolean }
+      | null
+      | undefined;
+    return {
+      ...response,
+      data: StudentReportsService.stripAnalysisScalarsForPartner({
+        ...data,
+        ciiV2: null,
+        ciiV2Lock: null,
+        independentAiAnalyses: null,
+        review_package: pkg
+          ? {
+              ...pkg,
+              analysis_attached: false,
+              documents: pkg.documents
+                ? { ...pkg.documents, analysis_report: null }
+                : pkg.documents,
+            }
+          : pkg,
+      }),
+    };
+  }
+
   async findOneByOpportunityOrId(id: string, studentId: string) {
+    // Claim OTP email seats before any enrollment / shared-report lookup.
+    await this.claimUnlinkedParticipationsByEmail(studentId);
+
     // Try finding by primary key (Report ID) first
     let report = await this.studentReportsRepository.findOne({
       where: { id, studentId },
@@ -3412,13 +4110,21 @@ export class StudentReportsService {
       // This is one shared row per team — every team member (lead or not)
       // must see the whole team's logged hours here, not just their own,
       // or a teammate's logged sessions silently never appear to anyone else.
-      return StudentReportsService.redactSection11ScoreForStudent(
+      const studentView = StudentReportsService.redactSection11ScoreForStudent(
         StudentReportsService.redactCiiV2ForExternalViewer(
           await this.formatReportResponse(report, attendanceParticipantId, {
             allProjectAttendance: true,
           }),
         ),
       );
+      return studentView?.data
+        ? {
+            ...studentView,
+            data: StudentReportsService.withholdAnalysisUntilAdminApproved(
+              studentView.data as Record<string, any>,
+            ),
+          }
+        : studentView;
     }
 
     // If no report found, check for an application to pre-populate
@@ -3452,16 +4158,28 @@ export class StudentReportsService {
         !isTeam ||
         application.isTeamLead === true ||
         studentId === canonicalLeadId;
-      const teamMembers = Array.isArray(roster)
-        ? roster.filter(
-            (m: { isTeamLead?: boolean; is_team_lead?: boolean }) => {
-              const flagged =
-                m?.isTeamLead === true ||
-                (m as { is_team_lead?: boolean })?.is_team_lead === true;
-              return !flagged;
-            },
-          )
-        : [];
+      const teamId = (application.teamId || '').trim();
+      const applicationId = (application.applicationId || '').trim();
+      let scopedRoster = Array.isArray(roster) ? roster : [];
+      if (teamId) {
+        scopedRoster = scopedRoster.filter(
+          (m: { teamId?: string; team_id?: string }) =>
+            String(m?.teamId || m?.team_id || '').trim() === teamId,
+        );
+      } else if (applicationId) {
+        scopedRoster = scopedRoster.filter(
+          (m: { applicationId?: string }) =>
+            String(m?.applicationId || '').trim() === applicationId,
+        );
+      }
+      const teamMembers = scopedRoster.filter(
+        (m: { isTeamLead?: boolean; is_team_lead?: boolean }) => {
+          const flagged =
+            m?.isTeamLead === true ||
+            (m as { is_team_lead?: boolean })?.is_team_lead === true;
+          return !flagged;
+        },
+      );
       return {
         success: true,
         data: {
@@ -3548,7 +4266,7 @@ export class StudentReportsService {
         )
       : null;
 
-    if (!mine || !enrollmentLooksLikeTeam(mine)) {
+    if (!mine) {
       return {
         participation_mode: 'individual' as const,
         is_team_lead: true,
@@ -3559,29 +4277,55 @@ export class StudentReportsService {
       };
     }
 
+    // Mis-tagged individual seats that still share applicationId/team with a lead
+    // must not get can_edit_report_body — they only update attendance.
+    const looksTeam = enrollmentLooksLikeTeam(mine);
     const canonicalLeadId = await resolveCanonicalLeadStudentIdForViewer(
       this.participantRepository,
       projectKey,
       mine,
     );
-    const isLead = canonicalLeadId
-      ? viewerStudentId === canonicalLeadId
-      : mine.isTeamLead === true;
+    let isLead = false;
+    if (looksTeam) {
+      isLead = canonicalLeadId
+        ? viewerStudentId === canonicalLeadId
+        : mine.isTeamLead === true;
+    } else if (canonicalLeadId) {
+      isLead = viewerStudentId === canonicalLeadId;
+    } else if (
+      report.studentId &&
+      report.studentId !== viewerStudentId &&
+      (await this.participantMayAccessReport(viewerStudentId, report))
+    ) {
+      // Shared report owned by someone else on this project → viewer is a teammate.
+      isLead = false;
+    } else {
+      isLead = mine.isTeamLead === true || !report.studentId || report.studentId === viewerStudentId;
+    }
+
     const leadUser = canonicalLeadId
       ? await this.usersRepository.findOne({ where: { id: canonicalLeadId } })
       : report.student;
 
+    const participationMode =
+      looksTeam || Boolean(canonicalLeadId) || (!isLead && report.studentId !== viewerStudentId)
+        ? ('team' as const)
+        : ('individual' as const);
+
     return {
-      participation_mode: 'team' as const,
+      participation_mode: participationMode,
       is_team_lead: isLead,
       can_edit_report_body: isLead,
       can_submit_report: isLead,
       team_member_count: Math.max(Array.isArray(roster) ? roster.length : 0, 1),
-      team_lead: {
-        name: leadUser?.name || '',
-        email: leadUser?.email || '',
-        student_id: canonicalLeadId || report.studentId,
-      },
+      team_lead:
+        participationMode === 'team'
+          ? {
+              name: leadUser?.name || '',
+              email: leadUser?.email || '',
+              student_id: canonicalLeadId || report.studentId,
+            }
+          : null,
     };
   }
 
@@ -3645,11 +4389,12 @@ export class StudentReportsService {
    */
   private static redactCiiV2ForExternalViewer<
     T extends { data?: Record<string, unknown> },
-  >(response: T): T {
+  >(response: T, options: { releaseProvisional?: boolean } = {}): T {
     if (!response?.data) return response;
     const { ciiV2, ciiV2Lock } = redactCiiV2Fields(
       response.data.ciiV2 as Record<string, unknown> | null | undefined,
       response.data.ciiV2Lock as CiiV2LockInput,
+      options,
     );
 
     return {
@@ -3658,8 +4403,11 @@ export class StudentReportsService {
         ...response.data,
         ciiV2,
         ciiV2Lock,
-        // Phase 4: Include independent AI analyses (do not overwrite faculty-approved)
-        independentAiAnalyses: response.data.independentAiAnalyses,
+        // Phase 4 independent AI analyses: only after CII is locked, and only the trend fields.
+        independentAiAnalyses: redactIndependentAnalysesForExternal(
+          response.data.independentAiAnalyses,
+          response.data.ciiV2Lock as CiiV2LockInput,
+        ),
       },
     };
   }
@@ -3741,18 +4489,20 @@ export class StudentReportsService {
           0,
         )
       : 0;
-    const storedTeamLead = report.section1?.team_lead
-      ? {
-          ...report.section1.team_lead,
-          fullName:
-            report.section1.team_lead.fullName ||
-            report.section1.team_lead.name ||
-            '',
-          cnic: this.engagementService.decryptCnicInternal(
-            report.section1.team_lead.cnic,
-          ),
-        }
-      : undefined;
+    const storedLeadRecord = this.asUnknownRecord(report.section1?.team_lead);
+    const storedTeamLead =
+      Object.keys(storedLeadRecord).length > 0
+        ? {
+            ...storedLeadRecord,
+            fullName:
+              this.pickTrimmedString(storedLeadRecord.fullName) ||
+              this.pickTrimmedString(storedLeadRecord.name) ||
+              '',
+            cnic: this.engagementService.decryptCnicInternal(
+              this.pickTrimmedString(storedLeadRecord.cnic),
+            ),
+          }
+        : undefined;
 
     return {
       success: true,
@@ -3800,34 +4550,33 @@ export class StudentReportsService {
         partner_approved_at: report.partnerApprovedAt,
         admin_approved_at: report.adminApprovedAt,
         evidence_urls: this.collectEvidenceUrls(report),
-        section1: {
-          ...report.section1,
+        section1: this.sanitizeSection1ForClient(report.section1, {
           participation_type:
             liveTeamFields.participation_type ||
             report.section1?.participation_type,
           team_lead: liveTeamFields.team_lead ?? storedTeamLead,
           team_members:
+            Array.isArray(liveTeamFields.team_members) &&
             liveTeamFields.team_members.length > 0
               ? liveTeamFields.team_members
-              : await this.engagementService.getProjectTeamForReportDossier(
-                  report.opportunityId || report.project_id,
-                ),
+              : Array.isArray(report.section1?.team_members)
+                ? report.section1.team_members
+                : [],
           attendance_logs: mappedAttendanceLogs,
           // Gate on whether any live logs exist at all, not on the resulting total being > 0 —
           // a project where every logged session was rejected has a genuine live total of 0 and
           // must still override the (now-stale) stored metrics rather than silently falling back
           // to them, the same falsy-zero distinction `mapFacultyListPackage` makes.
-          ...(options?.allProjectAttendance &&
-          Array.isArray(mappedAttendanceLogs) &&
-          mappedAttendanceLogs.length > 0
-            ? {
-                metrics: {
-                  ...report.section1?.metrics,
+          metrics:
+            options?.allProjectAttendance &&
+            Array.isArray(mappedAttendanceLogs) &&
+            mappedAttendanceLogs.length > 0
+              ? {
+                  ...this.asUnknownRecord(report.section1?.metrics),
                   total_verified_hours: liveLoggedHours,
-                },
-              }
-            : {}),
-        },
+                }
+              : report.section1?.metrics,
+        }),
         section2: report.section2,
         section3: report.section3,
         section4: report.section4,
@@ -3842,6 +4591,18 @@ export class StudentReportsService {
         ciiV2Lock: report.ciiV2Lock,
         // Phase 4: Include independent AI analyses
         independentAiAnalyses: report.independentAiAnalyses,
+        review_package:
+          report.review_package ||
+          (report.status &&
+          report.status !== 'draft' &&
+          report.status !== 'continue'
+            ? buildReportReviewPackage(
+                report,
+                this.configService.get<string>('FRONTEND_URL') ||
+                  this.configService.get<string>('APP_URL') ||
+                  '',
+              )
+            : null),
         created_at: report.createdAt,
         updated_at: report.updatedAt,
         last_saved: report.updatedAt,
@@ -4072,6 +4833,8 @@ export class StudentReportsService {
     role: string = 'admin',
     reason?: string,
     organizationId?: string,
+    force?: boolean,
+    actor?: { id: string; name?: string },
   ) {
     if (!['approve', 'reject', 'unlock'].includes(action)) {
       throw new BadRequestException(
@@ -4112,17 +4875,50 @@ export class StudentReportsService {
           'This private-candidate report is reviewed by CIEL PK, not a partner organisation.',
         );
       }
+      // Faculty no longer approves reports: the partner step opens once CIEL PK Admin has accepted
+      // the report (faculty_status 'approved' is still honoured for legacy in-flight rows).
       if (
         (action === 'approve' || action === 'reject') &&
-        report.faculty_status !== 'approved'
+        report.admin_status !== 'approved'
       ) {
         throw new ForbiddenException(
-          'This report is not yet approved by Faculty. Partners can view its status and send a reminder, but only Faculty can approve or reject a Community Service report.',
+          'This report has not been accepted by CIEL PK Admin yet. Partners can view its status, and can approve or reject only after CIEL PK Admin accepts the report.',
         );
       }
     }
 
     const decisionStamp = new Date();
+    const currentStatusKey = String(report.status || '').toLowerCase();
+    if (action === 'approve' && ['draft', 'continue', ''].includes(currentStatusKey)) {
+      throw new BadRequestException(
+        'This report has not been submitted yet and cannot be approved.',
+      );
+    }
+    // A report that was sent back stays unpublishable until the student resubmits it — otherwise a
+    // second click on Approve would publish the very content that was just rejected.
+    if (action === 'approve' && ['revision', 'rejected'].includes(currentStatusKey)) {
+      throw new BadRequestException(
+        'This report was sent back for revision. It can be accepted only after the student resubmits it.',
+      );
+    }
+    if (
+      !isPartnerReviewer &&
+      role === 'admin' &&
+      (action === 'reject' || action === 'unlock') &&
+      !force
+    ) {
+      const hasAward =
+        Array.isArray(report.awardBadges) && report.awardBadges.length > 0;
+      if (
+        currentStatusKey === 'verified' ||
+        currentStatusKey === 'paid' ||
+        hasAward
+      ) {
+        throw new BadRequestException(
+          `This report is already ${hasAward && currentStatusKey !== 'verified' && currentStatusKey !== 'paid' ? 'awarded' : currentStatusKey}. Re-sending it for changes will undo a published decision; pass force=true to confirm.`,
+        );
+      }
+    }
     if (action === 'unlock') {
       if (isPartnerReviewer) {
         throw new ForbiddenException('Only admins can unlock reports');
@@ -4132,6 +4928,11 @@ export class StudentReportsService {
       report.partner_status = 'pending';
       report.partnerApprovedAt = null;
       report.adminApprovedAt = null;
+      // Back to a real draft: without clearing the submit stamp the student's autosaves are
+      // silently discarded (the "keep lifecycle" shortcut treats the report as still submitted).
+      report.reportSubmittedAt = null;
+      this.supersedeCiiLock(report, 'unlocked');
+      report.awardBadges = [];
       if (reason) {
         report.admin_feedback = reason;
       }
@@ -4146,9 +4947,18 @@ export class StudentReportsService {
       if (isPartnerReviewer) {
         report.partner_status = 'rejected';
         report.partnerApprovedAt = null;
+        // The report goes back to the student for edits, so CIEL PK's earlier acceptance no longer
+        // covers the content: faculty/university evidence access and the publish package must be
+        // re-earned when the admin accepts the resubmission.
+        if (report.admin_status === 'approved') report.admin_status = 'pending';
       }
       report.adminApprovedAt = null;
       report.admin_feedback = reason.trim();
+      // The score was computed on content that is about to change; it must be re-run and re-locked.
+      if (role === 'admin') {
+        this.supersedeCiiLock(report, 'rejected');
+        report.awardBadges = [];
+      }
     } else if (action === 'approve') {
       await this.assertReportFeeClearedBeforeApproval(report);
       if (isPartnerReviewer) {
@@ -4192,7 +5002,11 @@ export class StudentReportsService {
         // partner-required reports verified when partner approves after admin and faculty") —
         // do not gate admin_status on partner_status here without re-checking that test's intent.
         report.admin_status = 'approved';
-        report.adminApprovedAt = decisionStamp;
+        // Re-approving must not move the publish timestamp.
+        report.adminApprovedAt =
+          originalAdminStatus === 'approved' && report.adminApprovedAt
+            ? report.adminApprovedAt
+            : decisionStamp;
         const requiresPartner =
           this.reportPartnerApprovalSettings.reportRequiresPartnerApprovalSync(
             report,
@@ -4207,6 +5021,25 @@ export class StudentReportsService {
             report.partner_status = 'not_applicable';
           }
         }
+      }
+    }
+
+    // The package saved at submit time predates the analysis lock and any later evidence edits;
+    // rebuild it when CIEL PK publishes so every API payload agrees with the publish email.
+    let refreshedReviewPackage: StudentReport['review_package'] | undefined;
+    if (action === 'approve' && !isPartnerReviewer && role === 'admin') {
+      try {
+        refreshedReviewPackage = buildReportReviewPackage(
+          report,
+          this.configService.get<string>('FRONTEND_URL') ||
+            this.configService.get<string>('APP_URL') ||
+            '',
+        ) as unknown as StudentReport['review_package'];
+        report.review_package = refreshedReviewPackage;
+      } catch (error) {
+        this.logger.warn(
+          `Could not refresh review package for report ${report.id}: ${(error as Error)?.message}`,
+        );
       }
     }
 
@@ -4226,6 +5059,27 @@ export class StudentReportsService {
         partnerApprovedAt: report.partnerApprovedAt,
         adminApprovedAt: report.adminApprovedAt,
         admin_feedback: report.admin_feedback,
+        ...(refreshedReviewPackage
+          ? { review_package: refreshedReviewPackage as any }
+          : {}),
+        ...((action === 'unlock' || (action === 'reject' && role === 'admin')
+          ? {
+              ciiV2: report.ciiV2,
+              ciiV2Lock: report.ciiV2Lock,
+              awardBadges: report.awardBadges,
+              ...(action === 'unlock'
+                ? { reportSubmittedAt: report.reportSubmittedAt }
+                : {}),
+            }
+          : {}) as Record<string, never>),
+        ...(!isPartnerReviewer && role === 'admin' && actor?.id
+          ? {
+              adminReviewedBy: actor.name
+                ? `${actor.name} (${actor.id})`.slice(0, 255)
+                : actor.id,
+              adminReviewedAt: decisionStamp,
+            }
+          : {}),
       })
       .where('id = :id', { id: report.id })
       .andWhere('admin_status = :originalAdminStatus', { originalAdminStatus })
@@ -4236,6 +5090,38 @@ export class StudentReportsService {
     if (!verifyUpdateResult.affected) {
       throw new BadRequestException(
         'This report was just updated by another reviewer — please refresh and try again.',
+      );
+    }
+
+    // Package mail fires once, on the transition into Super Admin approval — not on repeat approves
+    // (and not again when the partner completes later: stakeholders already have the package).
+    if (
+      action === 'approve' &&
+      !isPartnerReviewer &&
+      role === 'admin' &&
+      report.admin_status === 'approved' &&
+      originalAdminStatus !== 'approved'
+    ) {
+      void this.notifyReviewPackagePublished(report).catch((err) =>
+        this.logger.error(
+          `Publish package notification failed for report ${report.id}: ${(err as Error)?.message}`,
+        ),
+      );
+    }
+    // Tell the student when CIEL PK sends the report back or reopens it.
+    if (
+      !isPartnerReviewer &&
+      role === 'admin' &&
+      (action === 'reject' || action === 'unlock')
+    ) {
+      void this.notifyStudentAdminDecision(
+        report,
+        action === 'reject' ? 'revision' : 'unlocked',
+        reason,
+      ).catch((err) =>
+        this.logger.error(
+          `Student decision notification failed for report ${report.id}: ${(err as Error)?.message}`,
+        ),
       );
     }
 
@@ -4260,6 +5146,62 @@ export class StudentReportsService {
         admin_approved_at: report.adminApprovedAt,
       },
     };
+  }
+
+  /** Retires the CII lock (kept in `ciiV2.previousLocks` for audit) so the score must be re-run. */
+  private supersedeCiiLock(report: StudentReport, reason: 'rejected' | 'unlocked') {
+    // The earlier CII approval (faculty_status mirrors the lock) belonged to the content that is
+    // being sent back; without this reset the admin could re-publish the resubmitted report with
+    // no fresh analysis.
+    if (['approved', 'verified'].includes(String(report.faculty_status || '').toLowerCase())) {
+      report.faculty_status = 'pending';
+    }
+    const lock = report.ciiV2Lock as unknown as Record<string, unknown> | null;
+    if (!lock || (lock.locked !== true && lock.locked !== 'true')) return;
+    const prev = (report.ciiV2 ?? {}) as unknown as Record<string, unknown>;
+    const history = Array.isArray(prev.previousLocks) ? prev.previousLocks : [];
+    report.ciiV2 = {
+      ...prev,
+      previousLocks: [
+        ...history,
+        { ...lock, supersededAt: new Date().toISOString(), supersededBy: reason },
+      ],
+    } as unknown as StudentReport['ciiV2'];
+    report.ciiV2Lock = null;
+  }
+
+  private async notifyStudentAdminDecision(
+    report: StudentReport,
+    kind: 'revision' | 'unlocked',
+    note?: string,
+  ): Promise<void> {
+    const student =
+      report.student ??
+      (await this.usersRepository.findOne({ where: { id: report.studentId } }));
+    const title =
+      report.opportunity?.title || report.project_id || 'your community service report';
+    const heading =
+      kind === 'revision' ? 'Report needs changes' : 'Report reopened';
+    const body =
+      kind === 'revision'
+        ? `CIEL PK sent "${title}" back for changes. Open it, fix the notes and submit again.`
+        : `CIEL PK reopened "${title}" so you can update it. Submit it again when ready.`;
+    if (this.notificationsService && report.studentId) {
+      await this.notificationsService.createNotification(report.studentId, {
+        type: 'approval',
+        title: heading,
+        message: note?.trim() ? `${body} ${note.trim()}` : body,
+      });
+    }
+    if (student?.email) {
+      await this.mailService.sendStudentReportAdminDecision(
+        student.email,
+        (student.name || '').split(' ')[0] || 'there',
+        title,
+        kind,
+        note,
+      );
+    }
   }
 
   async checkReportStatus(studentId: string, opportunityId?: string) {
@@ -4514,45 +5456,7 @@ export class StudentReportsService {
   }
 
   private setNestedProperty(obj: any, path: string, value: any) {
-    const keys = path.split('.');
-    let current = obj;
-
-    for (let i = 0; i < keys.length - 1; i++) {
-      const key = keys[i];
-      const arrayMatch = key.match(/^(.+)\[(\d+)\]$/);
-
-      if (arrayMatch) {
-        const arrayKey = arrayMatch[1];
-        const index = parseInt(arrayMatch[2]);
-
-        if (!current[arrayKey]) {
-          current[arrayKey] = [];
-        }
-        if (!current[arrayKey][index]) {
-          current[arrayKey][index] = {};
-        }
-        current = current[arrayKey][index];
-      } else {
-        if (!current[key]) {
-          current[key] = {};
-        }
-        current = current[key];
-      }
-    }
-
-    const lastKey = keys[keys.length - 1];
-    const arrayMatch = lastKey.match(/^(.+)\[(\d+)\]$/);
-
-    if (arrayMatch) {
-      const arrayKey = arrayMatch[1];
-      const index = parseInt(arrayMatch[2]);
-      if (!current[arrayKey]) {
-        current[arrayKey] = [];
-      }
-      current[arrayKey][index] = value;
-    } else {
-      current[lastKey] = value;
-    }
+    setNestedPropertyUtil(obj, path, value);
   }
 
   private async saveFiles(
@@ -4598,7 +5502,11 @@ export class StudentReportsService {
     }
   }
 
-  private async handleFacultyAssignment(report: StudentReport, email: string) {
+  private async handleFacultyAssignment(
+    report: StudentReport,
+    email: string,
+    sendInvite = true,
+  ) {
     // 1. Search for faculty user
     const facultyUser = await this.usersRepository.findOne({
       where: { email: email.toLowerCase(), role: 'faculty' as any },
@@ -4612,6 +5520,7 @@ export class StudentReportsService {
     } else {
       // Does not exist, clear any previous link and trigger invite
       report.facultyId = null;
+      if (!sendInvite) return;
 
       // Get student name and project title for the email
       const student = await this.usersRepository.findOne({
@@ -4623,11 +5532,17 @@ export class StudentReportsService {
       const projectTitle =
         opportunity?.title || report.project_id || 'Student Project';
 
-      await this.mailService.sendFacultyInvite(
-        email,
-        student?.name || 'A Student',
-        projectTitle,
-      );
+      try {
+        await this.mailService.sendFacultyInvite(
+          email,
+          student?.name || 'A Student',
+          projectTitle,
+        );
+      } catch (error) {
+        this.logger.warn(
+          `Faculty invite email failed for report ${report.id}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
   }
 
@@ -4747,6 +5662,17 @@ export class StudentReportsService {
       throw new NotFoundException('Report not found');
     }
 
+    const lockedStatus = String(report.status || '').toLowerCase();
+    if (
+      report.ciiV2Lock ||
+      lockedStatus === 'verified' ||
+      lockedStatus === 'paid'
+    ) {
+      throw new BadRequestException(
+        'This report is already CII-locked or verified; its AI score can no longer be overwritten. Unlock the report first.',
+      );
+    }
+
     const incomingSection11 =
       body.section11 && typeof body.section11 === 'object'
         ? body.section11
@@ -4770,7 +5696,19 @@ export class StudentReportsService {
     }
 
     report.section11 = mergedSection11 as StudentReport['section11'];
-    await this.studentReportsRepository.save(report);
+    const aiScoreUpdate = await this.studentReportsRepository
+      .createQueryBuilder()
+      .update(StudentReport)
+      .set({ section11: report.section11 })
+      .where('id = :id', { id: report.id })
+      .andWhere('"ciiV2Lock" IS NULL')
+      .andWhere("status NOT IN ('verified', 'paid')")
+      .execute();
+    if (!aiScoreUpdate.affected) {
+      throw new BadRequestException(
+        'This report was just locked or verified by another reviewer; the AI score was not saved.',
+      );
+    }
 
     return this.formatReportResponse(report, undefined, {
       allProjectAttendance: true,

@@ -25,10 +25,14 @@ const WIZARD_COMPETENCY_SCORES = {
 
 /** Payload that matches a complete live-form submit (presence only; no word-count). */
 const VALID_CORE_SECTIONS = {
-  section1: { privacy_consent: true },
+  section1: { privacy_consent: true, review_checked: [true, true, true] },
   section2: {
     problem_statement: 'Community lacks access to clean drinking water.',
     discipline: 'Environmental Engineering',
+    discipline_contribution: 'Engineering methods used to install and test filters.',
+    affected_group: 'Households without safe water',
+    affected_count: '40',
+    system_gaps: ['Access'],
     baseline_evidence: ['Survey'],
   },
   section3: {
@@ -125,6 +129,41 @@ describe('validateReportSectionsForSubmit', () => {
       },
     });
     expect(issues.some((i) => i.section === 8)).toBe(false);
+  });
+
+  it('accepts Restricted/Private without the old four ethics checkboxes', () => {
+    const issues = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section8: {
+        has_evidence: 'no',
+        media_visible: 'restricted',
+      },
+    });
+    expect(issues.filter((i) => i.section === 8)).toEqual([]);
+  });
+
+  it('requires public-share permission only when visibility is Public', () => {
+    const missing = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section8: {
+        has_evidence: 'no',
+        media_visible: 'public',
+      },
+    });
+    expect(
+      missing.some(
+        (i) => i.section === 8 && i.field === 'public_share_permission',
+      ),
+    ).toBe(true);
+    const ok = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section8: {
+        has_evidence: 'no',
+        media_visible: 'public',
+        public_share_permission: true,
+      },
+    });
+    expect(ok.filter((i) => i.section === 8)).toEqual([]);
   });
 
   it('rejects an empty or whitespace-only section10 continuation_details', () => {
@@ -332,6 +371,31 @@ describe('validateReportSectionsForSubmit', () => {
     expect(issues.some((i) => i.section === 1)).toBe(true);
   });
 
+  it('rejects privacy_consent alone without the three declaration boxes', () => {
+    const issues = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section1: { privacy_consent: true },
+    });
+    expect(issues.some((i) => i.section === 1 && i.field === 'review_checked')).toBe(
+      true,
+    );
+  });
+
+  it('requires Section 2 affected group, count, gaps, and discipline contribution', () => {
+    const issues = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section2: {
+        problem_statement: 'Community lacks access to clean drinking water.',
+        discipline: 'Environmental Engineering',
+        baseline_evidence: ['Survey'],
+      },
+    });
+    expect(issues.some((i) => i.field === 'affected_group')).toBe(true);
+    expect(issues.some((i) => i.field === 'affected_count')).toBe(true);
+    expect(issues.some((i) => i.field === 'system_gaps')).toBe(true);
+    expect(issues.some((i) => i.field === 'discipline_contribution')).toBe(true);
+  });
+
   it('accepts a Step 8 Academic integration chip id', () => {
     const issues = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,
@@ -389,5 +453,55 @@ describe('validateReportSectionsForSubmit', () => {
       },
     });
     expect(issues.some((i) => i.section === 8 && i.field === 'description')).toBe(true);
+  });
+
+  it('accepts a V13 ladder activity plus a linked before/after outcome', () => {
+    const issues = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section4: {
+        activity_blocks: [
+          {
+            id: 'act-1',
+            title: 'Digital-safety workshops',
+            primary_category: '📚 Education & Learning',
+            sub_category: 'Digital Literacy',
+            status: 'Completed',
+            description: 'Sara ran four sessions, Ali built the slides, the school arranged the lab.',
+            outputs: [{ title: 'Sessions Conducted', type: 'Sessions Conducted', quantity: '4', unit: 'Sessions' }],
+            serves_beneficiaries: true,
+            unique_beneficiaries: '86',
+            beneficiaries_reached: '86',
+            overlap_status: 'Mostly Unique to This Activity',
+            beneficiary_categories: ['Students'],
+            reach_counting_method: 'Verified registration / list',
+            geographic_reach: 'Single Site',
+            sdgs: [4],
+            ladder_ui: { open: 0 },
+          },
+        ],
+        project_summary: { distinct_total_beneficiaries: '86' },
+      },
+      section5: {
+        ...VALID_CORE_SECTIONS.section5,
+        measurable_outcomes: [
+          {
+            id: 'out-1',
+            activity_id: 'act-1',
+            outcome_area: '4. Knowledge / Skills Improvement',
+            outcome_sub_category: 'Awareness Sessions',
+            metric_category: '🔹 Percentage-Based (Advanced)',
+            metric: 'Percentage Improvement (%)',
+            metric_other: 'Attendance rate (%)',
+            baseline: '48',
+            endline: '79',
+            unit: '%',
+            sure: 1,
+            confidence_level: ['Directly Measured'],
+            measurement_explanation: 'Compared the school attendance register four weeks before vs after.',
+          },
+        ],
+      },
+    });
+    expect(issues.filter((i) => i.section === 4 || i.section === 5)).toEqual([]);
   });
 });

@@ -5,7 +5,9 @@ import {
   ForbiddenException,
   BadRequestException,
   ConflictException,
+  Optional,
 } from '@nestjs/common';
+import { MailService } from '../mail/mail.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, In, Repository } from 'typeorm';
 import { Organization } from './entities/organization.entity';
@@ -25,6 +27,7 @@ import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { Report } from '../reports/entities/report.entity';
 import { Participation } from '../engagement/entities/participant.entity';
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
+import { canonicalizePhoneInput } from '../common/phone-e164.util';
 
 const UNIVERSITY_SCOPED_PARTICIPATION_STATUSES = [
   'pending',
@@ -56,7 +59,39 @@ export class OrganizationsService {
     @InjectRepository(Participation)
     private participationRepository: Repository<Participation>,
     private readonly facultyUniversityScopeService: FacultyUniversityScopeService,
+    @Optional() private readonly mailService?: MailService,
   ) {}
+
+  /** Best-effort decision email to the organization's contact + login users; never fails the decision. */
+  private async notifyOrganizationDecision(
+    org: Organization,
+    decision: 'approved' | 'rejected' | 'suspended' | 'reinstated',
+    notes?: string | null,
+  ): Promise<void> {
+    if (!this.mailService?.sendOrganizationDecisionEmail) return;
+    try {
+      const users = await this.usersRepository.find({
+        where: { organizationId: org.id } as never,
+        take: 10,
+      });
+      const emails = new Set<string>();
+      for (const e of [org.contactEmail, ...users.map((u) => u.email)]) {
+        const v = String(e || '').trim().toLowerCase();
+        if (v && v.includes('@')) emails.add(v);
+        if (emails.size >= 5) break;
+      }
+      for (const to of emails) {
+        await this.mailService.sendOrganizationDecisionEmail({
+          to,
+          organizationName: org.name,
+          decision,
+          notes,
+        });
+      }
+    } catch {
+      /* the admin decision is already saved */
+    }
+  }
 
   /**
    * Distinct student IDs genuinely affiliated with this university (same match rules as
@@ -426,8 +461,12 @@ export class OrganizationsService {
     const phoneTrim =
       typeof contactPhone === 'string' ? contactPhone.trim() : '';
     if (phoneTrim && !user.phone?.trim()) {
-      user.phone = phoneTrim;
-      changed = true;
+      const parsed = canonicalizePhoneInput(phoneTrim, { required: false });
+      if (parsed.error) throw new BadRequestException(parsed.error);
+      if (parsed.e164) {
+        user.phone = parsed.e164;
+        changed = true;
+      }
     }
     if (changed) await this.usersRepository.save(user);
   }
@@ -464,6 +503,15 @@ export class OrganizationsService {
     }
     if (dataPolicyAcknowledged !== undefined) {
       updateData.dataPolicyAcknowledged = dataPolicyAcknowledged;
+    }
+
+    if (typeof updateData.contactPhone === 'string' && updateData.contactPhone.trim()) {
+      const parsed = canonicalizePhoneInput(updateData.contactPhone, {
+        required: true,
+        requiredMessage: 'Enter a valid contact phone number.',
+      });
+      if (parsed.error) throw new BadRequestException(parsed.error);
+      updateData.contactPhone = parsed.e164;
     }
 
     if (!user.organization) {
@@ -570,69 +618,27 @@ export class OrganizationsService {
   }
 
   async findAllForAdmin() {
-    // Need to count active opportunities
-    // Assuming there is a relation or we can query opportunities
-    // But OpportunitiesService is injected in Opportunities, and OrganizationsService is injected there.
-    // Circular dependency might be an issue if we inject OpportunitiesService here.
-    // Better to use QueryBuilder with raw relation if possible or just simple query if relation exists.
-    // Organization entity does not have 'opportunities' OneToMany relation in the file I saw.
-    // Let's check Opportunity entity again. It has ManyToOne to Organization.
-    // We can use query builder on Organization and join opportunities if relation exists on Organization side.
-    // Wait, Organization entity DOES NOT have OneToMany opportunities.
-    // Use raw query or add relation. Adding relation is better but I should stick to existing structure if possible.
-    // Actually, without relation on Organization, standard TypeORM join is harder from Organization side.
-    // But we can do a subquery or strictly use QueryBuilder on Opportunity?
-    // Let's assume we can add relation or use a separate query or existing relations.
-    // Checking Opportunity entity again... it has @ManyToOne.
-    // If I can't modify entity easily (risk), I can do a raw query or leftJoin.
-
-    // Let's look at how to get active project count.
-    // select org.*, (select count(*) from opportunities where organizationId = org.id and status = 'active') as active_projects_count
-
-    const query = this.organizationsRepository
-      .createQueryBuilder('org')
-      .leftJoinAndSelect('org.users', 'user') // To get contact info if needed, but Org has contactName/Phone
-      .loadRelationCountAndMap(
-        'org.active_projects_count',
-        'org.opportunities',
-        'opportunities',
-        (qb) =>
-          qb.where('opportunities.status = :status', { status: 'active' }),
-      );
-
-    // Wait, 'org.opportunities' relation does NOT exist on Organization entity in file d:\saevolgo\ciel-api\src\organizations\entities\organization.entity.ts
-    // I need to add it or use subquery.
-    // Adding relation is cleaner.
-
-    // I will first add the relation to Organization entity in a separate step?
-    // Or just use a subquery map.
-
+    // Organization has no OneToMany count shortcut here, so the active-project count is a
+    // correlated subquery; getRawAndEntities gives parallel entity/raw rows keyed by org id.
     const orgs = await this.organizationsRepository
       .createQueryBuilder('org')
       .select('org')
       .addSelect((subQuery) => {
         return subQuery
           .select('COUNT(opp.id)', 'count')
-          .from('opportunities', 'opp') // Assuming table name is 'opportunities'
+          .from('opportunities', 'opp')
           .where('opp.organizationId = org.id')
           .andWhere('opp.status = :status', { status: 'active' });
       }, 'active_projects_count')
       .getRawAndEntities();
 
-    // getRawAndEntities returns { entities: [], raw: [] }
-    // We need to merge them.
+    const countByOrgId = new Map<string, string | number>();
+    for (const r of orgs.raw) {
+      countByOrgId.set(r.org_id, r.active_projects_count);
+    }
 
-    return orgs.entities.map((org, index) => {
-      const raw = orgs.raw.find((r) => r.org_id === org.id); // Check raw structure
-      // Actually, getRawAndEntities mapping is tricky with addSelect subquery.
-      // simpler:
-
-      // Let's use getRawMany just to be safe if we want custom shape
-      // OR map manually.
-
-      const count =
-        orgs.raw.find((r) => r.org_id === org.id)?.active_projects_count || 0;
-      // note: raw field names depend on driver.
+    return orgs.entities.map((org) => {
+      const count = countByOrgId.get(org.id) || 0;
 
       let status = org.verificationStatus.toLowerCase();
       if (org.isBlocked) {
@@ -645,7 +651,7 @@ export class OrganizationsService {
       return {
         id: org.id,
         name: org.name,
-        email: org.contactEmail || 'N/A', // Mapping from org contactEmail
+        email: org.contactEmail || 'N/A',
         organization_type: org.orgType,
         contact_person: org.contactName || 'N/A',
         contact_number: org.contactPhone || 'N/A',
@@ -707,10 +713,14 @@ export class OrganizationsService {
 
   async approveOrganization(id: string, adminId: string) {
     const org = await this.findOne(id);
+    // Idempotent: re-approving must not overwrite who/when the original approval happened.
+    if (org.verificationStatus === 'APPROVED') return org;
     org.verificationStatus = 'APPROVED';
     org.verifiedBy = adminId;
     org.verifiedAt = new Date();
-    return this.organizationsRepository.save(org);
+    const saved = await this.organizationsRepository.save(org);
+    void this.notifyOrganizationDecision(saved, 'approved');
+    return saved;
   }
 
   async rejectOrganization(
@@ -723,70 +733,127 @@ export class OrganizationsService {
     org.verifiedBy = adminId;
     org.verifiedAt = new Date();
     org.verificationNotes = dto.notes;
-    return this.organizationsRepository.save(org);
+    const saved = await this.organizationsRepository.save(org);
+    void this.notifyOrganizationDecision(saved, 'rejected', dto.notes);
+    return saved;
+  }
+
+  /** Invalidate every session of the org's users (JwtStrategy compares tokenVersion). */
+  private async revokeOrganizationSessions(orgId: string): Promise<void> {
+    await this.usersRepository
+      .createQueryBuilder()
+      .update(User)
+      .set({ tokenVersion: () => '"tokenVersion" + 1' })
+      .where('"organizationId" = :orgId', { orgId })
+      .execute();
   }
 
   async blockOrganization(id: string) {
     const org = await this.findOne(id);
     org.isBlocked = true;
-    return this.organizationsRepository.save(org);
+    const saved = await this.organizationsRepository.save(org);
+    await this.revokeOrganizationSessions(org.id);
+    void this.notifyOrganizationDecision(saved, 'suspended');
+    return saved;
   }
 
   async updateStatus(id: string, status: string) {
+    const normalized = String(status ?? '')
+      .trim()
+      .toLowerCase();
+    const validVerificationStatuses = ['approved', 'rejected', 'pending'];
+    if (
+      !['suspended', 'approve', 'active'].includes(normalized) &&
+      !validVerificationStatuses.includes(normalized)
+    ) {
+      throw new BadRequestException(`Unknown organization status: ${status}`);
+    }
     const org = await this.findOne(id);
-    if (status === 'suspended') {
+    let blocked = false;
+    const wasBlocked = org.isBlocked === true;
+    const wasApproved = org.verificationStatus === 'APPROVED';
+    if (normalized === 'suspended') {
       org.isBlocked = true;
-    } else if (status === 'approve' || status === 'active') {
+      blocked = true;
+    } else if (normalized === 'approve' || normalized === 'active') {
       org.isBlocked = false;
-      if (status === 'approve') {
+      if (normalized === 'approve' && org.verificationStatus !== 'APPROVED') {
         org.verificationStatus = 'APPROVED';
         org.verifiedAt = new Date();
-        // We might want to set verifiedBy if we had the admin ID here,
-        // but typically status toggles might not carry user context deep unless passed.
-        // For now, simple status update.
       }
     } else {
-      // Check if status maps to verificationStatus (APPROVED, REJECTED, PENDING)
-      const validVerificationStatuses = ['APPROVED', 'REJECTED', 'PENDING'];
-      if (validVerificationStatuses.includes(status.toUpperCase())) {
-        org.verificationStatus = status.toUpperCase();
-      }
+      org.verificationStatus = normalized.toUpperCase();
     }
-    return this.organizationsRepository.save(org);
+    const saved = await this.organizationsRepository.save(org);
+    if (blocked) await this.revokeOrganizationSessions(org.id);
+    if (blocked && !wasBlocked) {
+      void this.notifyOrganizationDecision(saved, 'suspended');
+    } else if (!blocked && wasBlocked && normalized === 'active') {
+      void this.notifyOrganizationDecision(saved, 'reinstated');
+    } else if (!wasApproved && saved.verificationStatus === 'APPROVED') {
+      void this.notifyOrganizationDecision(saved, 'approved');
+    } else if (normalized === 'rejected') {
+      void this.notifyOrganizationDecision(saved, 'rejected', saved.verificationNotes);
+    }
+    return saved;
   }
 
   async createForAdmin(data: any, adminId: string) {
-    // 1. Create Organization
-    const newOrg = this.organizationsRepository.create({
-      name: data.name,
-      orgType: data.type,
-      contactEmail: data.email,
-      contactPhone: data.contact, // Mapping contact to contactPhone
-      verificationStatus: 'APPROVED',
-      verifiedBy: adminId,
-      verifiedAt: new Date(),
-      verificationScope: 'LOCAL',
-      country: 'Pakistan',
-      countryCode: 'PK',
-    });
-    const savedOrg = await this.organizationsRepository.save(newOrg);
+    const email = String(data?.email ?? '')
+      .trim()
+      .toLowerCase();
+    const password = String(data?.password ?? '');
+    if (!email) throw new BadRequestException('Email is required');
+    if (password.length < 8) {
+      throw new BadRequestException(
+        'Password must be at least 8 characters long.',
+      );
+    }
+    if (await this.usersRepository.findOne({ where: { email } })) {
+      throw new ConflictException('Email already exists');
+    }
 
-    // 2. Create User
-    const salt = await bcrypt.genSalt();
-    const hashedPassword = await bcrypt.hash(data.password, salt);
+    const hashedPassword = await bcrypt.hash(password, 10);
 
-    const newUser = this.usersRepository.create({
-      name: data.name,
-      email: data.email,
-      password: hashedPassword,
-      role: UserRole.ORGANIZATION_ADMIN,
-      orgName: savedOrg.name,
-      orgType: savedOrg.orgType,
-      organization: savedOrg,
-      status: 'active',
-    });
-
-    await this.usersRepository.save(newUser);
+    // Org + user in one transaction so a failed user insert never leaves an orphan org.
+    const { savedOrg, newUser } = await this.organizationsRepository.manager
+      .transaction(async (manager) => {
+        const org = await manager.save(
+          manager.create(Organization, {
+            name: data.name,
+            orgType: data.type,
+            contactEmail: email,
+            // `contact` is the contact person; phone (if supplied) is stored separately.
+            contactName: data.contact,
+            ...(data.phone ? { contactPhone: data.phone } : {}),
+            verificationStatus: 'APPROVED',
+            verifiedBy: adminId,
+            verifiedAt: new Date(),
+            verificationScope: 'LOCAL',
+            country: 'Pakistan',
+            countryCode: 'PK',
+          }),
+        );
+        const user = await manager.save(
+          manager.create(User, {
+            name: data.name,
+            email,
+            password: hashedPassword,
+            role: UserRole.ORGANIZATION_ADMIN,
+            orgName: org.name,
+            orgType: org.orgType,
+            organization: org,
+            status: 'active',
+          }),
+        );
+        return { savedOrg: org, newUser: user };
+      })
+      .catch((err) => {
+        if (err?.code === '23505') {
+          throw new ConflictException('Email already exists');
+        }
+        throw err;
+      });
 
     return {
       success: true,

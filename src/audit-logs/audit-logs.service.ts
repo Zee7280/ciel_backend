@@ -13,6 +13,14 @@ export type AuditMutationRecordInput = {
   details?: Record<string, unknown> | null;
 };
 
+export type AuditLogFilters = {
+  userEmail?: string;
+  /** Substring of the route/action (e.g. "/admin/settings"). */
+  path?: string;
+  dateFrom?: string;
+  dateTo?: string;
+};
+
 @Injectable()
 export class AuditLogsService {
   private readonly logger = new Logger(AuditLogsService.name);
@@ -42,7 +50,11 @@ export class AuditLogsService {
     }
   }
 
-  async findPaginated(rawPage?: number, rawLimit?: number) {
+  async findPaginated(
+    rawPage?: number,
+    rawLimit?: number,
+    filters: AuditLogFilters = {},
+  ) {
     const page =
       typeof rawPage === 'number' && Number.isFinite(rawPage) && rawPage > 0
         ? Math.floor(rawPage)
@@ -52,11 +64,44 @@ export class AuditLogsService {
         ? Math.min(100, Math.floor(rawLimit))
         : 20;
     const skip = (page - 1) * limit;
-    const [logs, total] = await this.auditRepo.findAndCount({
-      order: { created_at: 'DESC' },
-      skip,
-      take: limit,
-    });
+    const qb = this.auditRepo
+      .createQueryBuilder('log')
+      .orderBy('log.created_at', 'DESC')
+      .skip(skip)
+      .take(limit);
+    const email = filters.userEmail?.trim();
+    if (email) {
+      qb.andWhere('LOWER(log.user_email) LIKE :email', {
+        email: `%${this.escapeLike(email.toLowerCase())}%`,
+      });
+    }
+    const path = filters.path?.trim();
+    if (path) {
+      qb.andWhere('LOWER(log.action) LIKE :path', {
+        path: `%${this.escapeLike(path.toLowerCase())}%`,
+      });
+    }
+    const from = this.parseDate(filters.dateFrom, false);
+    if (from) qb.andWhere('log.created_at >= :from', { from });
+    const to = this.parseDate(filters.dateTo, true);
+    if (to) qb.andWhere('log.created_at <= :to', { to });
+    const [logs, total] = await qb.getManyAndCount();
     return { logs, total, page, limit };
+  }
+
+  private escapeLike(value: string): string {
+    return value.replace(/[\\%_]/g, (c) => `\\${c}`);
+  }
+
+  /** ISO date or datetime; a bare YYYY-MM-DD "to" date is inclusive of the whole day. */
+  private parseDate(raw: string | undefined, endOfDay: boolean): Date | null {
+    const v = raw?.trim();
+    if (!v) return null;
+    const d = new Date(v);
+    if (Number.isNaN(d.getTime())) return null;
+    if (endOfDay && /^\d{4}-\d{2}-\d{2}$/.test(v)) {
+      d.setUTCHours(23, 59, 59, 999);
+    }
+    return d;
   }
 }

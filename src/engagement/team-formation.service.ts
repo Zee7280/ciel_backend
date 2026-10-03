@@ -15,8 +15,12 @@ import {
   countDistinctTeamIdsOnProject,
 } from './team-display-name.util';
 import { demoteExtraTeamLeadsInScope } from './team-lead-canonical.util';
+import { resolveTeamSeatCap, teamCapacityError } from './team-capacity.util';
 import { MailService } from '../mail/mail.service';
 import { NotificationsService } from '../notifications/notifications.service';
+
+/** Platform-wide maximum team size (team lead included). */
+export const MAX_TEAM_SIZE = 20;
 
 const ACTIVE_STATUSES = [
   'approved',
@@ -83,6 +87,15 @@ export class TeamFormationService {
       );
     }
 
+    // Only a free (not-yet-teamed) student, or the lead of an existing team, may form / extend a team.
+    // A plain member of someone else's team calling this would otherwise make themselves lead and
+    // demote the real one.
+    if ((lead.teamId || '').trim() && lead.isTeamLead !== true) {
+      throw new ForbiddenException(
+        'Only the team lead can add members to this team.',
+      );
+    }
+
     const memberIds = [
       ...new Set(memberParticipationIds.map((id) => id.trim()).filter(Boolean)),
     ];
@@ -103,6 +116,36 @@ export class TeamFormationService {
       if (members.some((m) => m.id === lead.id)) {
         throw new BadRequestException(
           'Team lead cannot be listed as a team member',
+        );
+      }
+      // A lead may not poach members of another team (or another team's lead): that would also
+      // delete their draft reports below.
+      const leadTeamId = (lead.teamId || '').trim();
+      const taken = members.filter(
+        (m) =>
+          m.isTeamLead === true ||
+          ((m.teamId || '').trim() && (m.teamId || '').trim() !== leadTeamId),
+      );
+      if (taken.length) {
+        throw new BadRequestException(
+          'One or more students already belong to another team and cannot be added.',
+        );
+      }
+      // Team size: never above the opportunity's seats, and never above the platform maximum.
+      const seatCap = resolveTeamSeatCap(
+        (opportunity.timeline as { volunteers_required?: unknown } | null)
+          ?.volunteers_required,
+      );
+      const capError = teamCapacityError(members.length, seatCap);
+      if (capError) throw new BadRequestException(capError);
+      const existingMembers = leadTeamId
+        ? await this.participationRepo.count({
+            where: { projectId, teamId: leadTeamId, status: In([...ACTIVE_STATUSES]) },
+          })
+        : 1;
+      if (members.length + Math.max(existingMembers, 1) > MAX_TEAM_SIZE) {
+        throw new BadRequestException(
+          `A team can have at most ${MAX_TEAM_SIZE} members including the team lead.`,
         );
       }
     }

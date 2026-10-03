@@ -61,6 +61,15 @@ export class StudentReportsController {
         const s = error.getStatus();
         if (s === 403 || s === 401) throw error;
       }
+      // Service-level rejections already carry a precise message (+ validation_issues naming the
+      // section/field or member); wrapping them as a generic "Validation failed" hid that detail.
+      if (
+        error instanceof HttpException &&
+        typeof error.getResponse() === 'object' &&
+        !Array.isArray((error.getResponse() as any)?.message)
+      ) {
+        throw error;
+      }
       if (error.response && error.response.message) {
         throw new BadRequestException({
           success: false,
@@ -188,7 +197,7 @@ export class StudentReportsController {
       return await this.studentReportsService.findOneForPartner(
         id,
         req.user.organizationId,
-        { universityScopeOpportunityIds },
+        { universityScopeOpportunityIds, viewerRole: req.user.role },
       );
     }
     // Match /student/reports/:id — accept report UUID or opportunity (project) id for the JWT student.

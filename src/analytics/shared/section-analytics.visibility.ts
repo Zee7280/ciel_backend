@@ -152,9 +152,9 @@ export const SECTION_FIELD_DEFINITIONS: Record<number, AnalyticsFieldDefinition[
         field('evidence_type_coverage', 'basic', 'Evidence type bar chart'),
         field('partner_verified_percent', 'basic', 'Externally confirmed'),
         field('avg_credibility_score', 'premium', 'Heuristic credibility 0–100', INTERNAL),
-        field('ethics_completion_rate', 'basic', 'Ethics declaration completeness'),
-        field('media_visibility_mix', 'basic', 'Public / limited / internal', UNI_UN),
-        field('consent_risk_count', 'restricted', 'Public + incomplete consent', CIEL_ONLY),
+        field('ethics_completion_rate', 'basic', 'Student visibility / public-share completeness'),
+        field('media_visibility_mix', 'basic', 'Public / Restricted / Private', UNI_UN),
+        field('consent_risk_count', 'restricted', 'Public without share permission', CIEL_ONLY),
         field('red_flag_count', 'restricted', 'Bypass / no-evidence flags', CIEL_ONLY),
     ],
     9: [

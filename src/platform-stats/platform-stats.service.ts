@@ -106,7 +106,10 @@ export type PlatformStatsPayload = {
   sdgs: SdgImpactStat[];
 };
 
+/** A record counts as verified only once CIEL PK Admin accepted it: 'paid' alone is just a cleared reporting fee. */
 const VERIFIED_RECORD_STATUSES = ['verified', 'paid'];
+const verifiedRecordWhere = () =>
+  VERIFIED_RECORD_STATUSES.map((status) => ({ status, admin_status: 'approved' }));
 
 const PUBLIC_LIVE_STATUSES = ['active', 'live', 'open', 'recruiting'];
 
@@ -231,7 +234,7 @@ export class PlatformStatsService {
   /** A "record" is a student report that has cleared verification. */
   private async countVerifiedRecords(): Promise<number> {
     return this.studentReportsRepository.count({
-      where: VERIFIED_RECORD_STATUSES.map((status) => ({ status })),
+      where: verifiedRecordWhere(),
     });
   }
 
@@ -357,7 +360,7 @@ export class PlatformStatsService {
 
   private async getAverageCiiScore(): Promise<number> {
     const reports = await this.studentReportsRepository.find({
-      where: VERIFIED_RECORD_STATUSES.map((status) => ({ status })),
+      where: verifiedRecordWhere(),
       select: ['section11'],
     });
 
@@ -405,7 +408,7 @@ export class PlatformStatsService {
     sdgs: SdgImpactStat[];
   }> {
     const reports = await this.studentReportsRepository.find({
-      where: VERIFIED_RECORD_STATUSES.map((status) => ({ status })),
+      where: verifiedRecordWhere(),
       relations: ['student', 'opportunity', 'opportunity.organization'],
     });
     const verifiedHoursByProjectStudent =
@@ -767,7 +770,7 @@ export class PlatformStatsService {
   /** Unique community-service opportunities with at least one verified/paid report. */
   private async countVerifiedCommunityServiceProjects(): Promise<number> {
     const rows = await this.studentReportsRepository.find({
-      where: VERIFIED_RECORD_STATUSES.map((status) => ({ status })),
+      where: verifiedRecordWhere(),
       select: ['id', 'opportunityId', 'project_id'],
     });
     const ids = new Set<string>();

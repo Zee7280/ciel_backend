@@ -1,10 +1,11 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { SupportFaq } from './entities/support-faq.entity';
 import { SupportTicket } from './entities/support-ticket.entity';
 import { User } from '../users/entities/user.entity';
-import { UpdateSupportTicketDto } from './dto/update-support-ticket.dto';
+import { SUPPORT_TICKET_STATUSES, UpdateSupportTicketDto } from './dto/update-support-ticket.dto';
+import { NotificationsService } from '../notifications/notifications.service';
 import { CreateSupportFaqDto } from './dto/create-support-faq.dto';
 import { UpdateSupportFaqDto } from './dto/update-support-faq.dto';
 
@@ -17,6 +18,7 @@ export class AdminSupportService {
         private readonly ticketRepo: Repository<SupportTicket>,
         @InjectRepository(User)
         private readonly userRepo: Repository<User>,
+        @Optional() private readonly notificationsService?: NotificationsService,
     ) { }
 
     async listFaqs() {
@@ -72,15 +74,30 @@ export class AdminSupportService {
         };
     }
 
-    async listTickets(status?: string) {
-        const where =
-            status && status.trim().length > 0
-                ? { status: status.trim() }
-                : {};
-        const tickets = await this.ticketRepo.find({
+    async listTickets(
+        status?: string,
+        opts?: { page?: number | string; limit?: number | string },
+    ) {
+        const statusTrim = status?.trim().toLowerCase();
+        if (
+            statusTrim &&
+            !(SUPPORT_TICKET_STATUSES as readonly string[]).includes(statusTrim)
+        ) {
+            throw new BadRequestException(
+                `status must be one of: ${SUPPORT_TICKET_STATUSES.join(', ')}`,
+            );
+        }
+        const where = statusTrim ? { status: statusTrim } : {};
+        const limit = Math.min(
+            200,
+            Math.max(1, parseInt(String(opts?.limit ?? 50), 10) || 50),
+        );
+        const page = Math.max(1, parseInt(String(opts?.page ?? 1), 10) || 1);
+        const [tickets, total] = await this.ticketRepo.findAndCount({
             where,
             order: { createdAt: 'DESC' },
-            take: 500,
+            skip: (page - 1) * limit,
+            take: limit,
         });
         const userIds = [...new Set(tickets.map((t) => t.studentUserId))];
         const users =
@@ -95,7 +112,10 @@ export class AdminSupportService {
             ...this.toTicketRow(t),
             student: this.formatStudent(byId.get(t.studentUserId)),
         }));
-        return { success: true, data: { tickets: list } };
+        return {
+            success: true,
+            data: { tickets: list, total, page, limit },
+        };
     }
 
     async getTicket(idOrRef: string) {
@@ -121,9 +141,45 @@ export class AdminSupportService {
         if (!ticket) {
             throw new NotFoundException('Ticket not found');
         }
+        const previousStatus = ticket.status;
+        let changed = false;
+        let replied = false;
         if (dto.status !== undefined) {
-            ticket.status = dto.status.trim();
+            const next = dto.status.trim().toLowerCase();
+            if (!(SUPPORT_TICKET_STATUSES as readonly string[]).includes(next)) {
+                throw new BadRequestException(
+                    `status must be one of: ${SUPPORT_TICKET_STATUSES.join(', ')}`,
+                );
+            }
+            if (next !== previousStatus) {
+                ticket.status = next;
+                changed = true;
+            }
+        }
+        if (dto.adminReply !== undefined && dto.adminReply.trim()) {
+            ticket.adminReply = dto.adminReply.trim();
+            ticket.adminReplyAt = new Date();
+            replied = true;
+        }
+        if (dto.internalNote !== undefined) {
+            ticket.internalNote = dto.internalNote.trim() || null;
+            changed = true;
+        }
+        if (changed || replied) {
             await this.ticketRepo.save(ticket);
+        }
+        if ((ticket.status !== previousStatus || replied) && this.notificationsService) {
+            try {
+                await this.notificationsService.createNotification(ticket.studentUserId, {
+                    type: 'support',
+                    title: replied ? 'New reply on your support ticket' : 'Support ticket updated',
+                    message: replied
+                        ? `CIEL PK replied to your ticket ${ticket.reference}.`
+                        : `Your ticket ${ticket.reference} is now "${ticket.status}".`,
+                });
+            } catch {
+                /* a notification failure must never fail the update */
+            }
         }
         return this.getTicket(idOrRef);
     }
@@ -147,6 +203,9 @@ export class AdminSupportService {
             updatedAt: t.updatedAt,
             description: t.description,
             studentUserId: t.studentUserId,
+            adminReply: t.adminReply ?? null,
+            adminReplyAt: t.adminReplyAt ?? null,
+            internalNote: t.internalNote ?? null,
         };
     }
 

@@ -1,4 +1,5 @@
-import { HttpException, Injectable } from '@nestjs/common';
+import { HttpException, Injectable, Logger, Optional } from '@nestjs/common';
+import { S3Service } from '../common/s3.service';
 import {
   buildSection11EvaluationUserMessage,
   buildSection11MasterRubricUserMessage,
@@ -44,8 +45,27 @@ type OpenAiCompletionOpts = {
   systemMessage?: string;
 };
 
+/** One part of a multimodal chat message (text, or an inline image the model can actually see). */
+export type OpenAiContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string; detail?: 'low' | 'high' | 'auto' } };
+
+/** What the evidence pass could and could not show the model — stored with the analysis. */
+export interface EvidenceInspection {
+  inspected: Array<{ id: string; name: string }>;
+  notInspected: Array<{ id: string; name: string; reason: string }>;
+}
+
+const OPENAI_TIMEOUT_MS = 90_000;
+const OPENAI_MAX_ATTEMPTS = 2;
+const EVIDENCE_MAX_IMAGES = 8;
+const EVIDENCE_MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+const EVIDENCE_IMAGE_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif']);
+
 export interface AiSummarizeResult {
   summary: string;
+  evidenceInspection?: EvidenceInspection;
+  model?: string;
   auditMeta?: unknown;
   evaluationVersion?: string;
   ciiV2?: CiiV2AiEvaluation;
@@ -72,8 +92,63 @@ function resolveOpenAiErrorMessage(error: unknown): string {
 
 @Injectable()
 export class AiService {
+  private readonly logger = new Logger(AiService.name);
+
+  constructor(@Optional() private readonly s3Service?: S3Service) {}
+
+  /**
+   * Loads the report's image evidence from our own bucket so the model SEES it instead of reasoning
+   * from file names. Only objects under our bucket are fetched (never an arbitrary student-supplied
+   * URL); PDFs / docs / video / oversized or unreadable files are reported back as "not inspected"
+   * so the model cannot credit them as verified.
+   */
+  private async buildEvidenceParts(data: unknown): Promise<{
+    parts: OpenAiContentPart[];
+    inspection: EvidenceInspection;
+  }> {
+    const inspection: EvidenceInspection = { inspected: [], notInspected: [] };
+    const parts: OpenAiContentPart[] = [];
+    const files = Array.isArray((data as { uploaded_evidence_files?: unknown })?.uploaded_evidence_files)
+      ? ((data as { uploaded_evidence_files: Array<Record<string, unknown>> }).uploaded_evidence_files)
+      : [];
+    let images = 0;
+    for (const f of files) {
+      const id = String(f?.file_id ?? '');
+      const name = String(f?.file_name ?? f?.url ?? 'file');
+      const url = typeof f?.url === 'string' ? f.url : '';
+      const type = String(f?.file_type ?? '').toLowerCase();
+      const looksImage = /^(jpe?g|png|webp|gif)$/.test(type) || /\.(jpe?g|png|webp|gif)(\?|$)/i.test(url);
+      if (!looksImage) {
+        inspection.notInspected.push({ id, name, reason: 'not an image (documents / video are not shown to the model)' });
+        continue;
+      }
+      if (images >= EVIDENCE_MAX_IMAGES) {
+        inspection.notInspected.push({ id, name, reason: `only the first ${EVIDENCE_MAX_IMAGES} images are inspected` });
+        continue;
+      }
+      const loaded = this.s3Service ? await this.s3Service.getObjectBufferByPublicUrl(url) : null;
+      const contentType = String(loaded?.contentType ?? '').toLowerCase().split(';')[0];
+      if (!loaded || !loaded.buffer?.length) {
+        inspection.notInspected.push({ id, name, reason: 'could not be loaded from storage' });
+        continue;
+      }
+      if (loaded.buffer.length > EVIDENCE_MAX_IMAGE_BYTES || !EVIDENCE_IMAGE_TYPES.has(contentType)) {
+        inspection.notInspected.push({ id, name, reason: 'too large or unsupported image format' });
+        continue;
+      }
+      images += 1;
+      inspection.inspected.push({ id, name });
+      parts.push({ type: 'text', text: `Evidence image ${id} — file "${name}" (claims it is linked to: ${JSON.stringify(f?.linked_claims ?? [])}):` });
+      parts.push({
+        type: 'image_url',
+        image_url: { url: `data:${contentType};base64,${loaded.buffer.toString('base64')}`, detail: 'low' },
+      });
+    }
+    return { parts, inspection };
+  }
+
   private async generateSummaryWithOpenAI(
-    userPrompt: string,
+    userPrompt: string | OpenAiContentPart[],
     opts?: OpenAiCompletionOpts,
   ): Promise<string> {
     const apiKey = process.env.OPENAI_API_KEY?.trim();
@@ -116,26 +191,56 @@ export class AiService {
       requestBody.response_format = opts.responseFormat;
     }
 
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify(requestBody),
-    });
-
-    const responseJson = (await res.json()) as {
+    // Timeout + one retry on transient failures (network, timeout, 429, 5xx). The body is read as
+    // text first so an HTML error page from a proxy is reported clearly instead of crashing res.json().
+    let responseJson: {
       choices?: Array<{ message?: { content?: string | null } }>;
       error?: { message?: string };
-    };
-
-    if (!res.ok) {
-      const err = new Error(
-        responseJson.error?.message || `OpenAI error (${res.status})`,
-      ) as Error & { status?: number };
-      err.status = res.status;
-      throw err;
+    } = {};
+    let lastError: (Error & { status?: number }) | null = null;
+    for (let attempt = 1; attempt <= OPENAI_MAX_ATTEMPTS; attempt++) {
+      try {
+        const res = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify(requestBody),
+          signal: AbortSignal.timeout(OPENAI_TIMEOUT_MS),
+        });
+        const raw = await res.text();
+        try {
+          responseJson = JSON.parse(raw);
+        } catch {
+          responseJson = { error: { message: `OpenAI returned a non-JSON response (${res.status})` } };
+        }
+        if (res.ok) {
+          lastError = null;
+          break;
+        }
+        const err = new Error(
+          responseJson.error?.message || `OpenAI error (${res.status})`,
+        ) as Error & { status?: number };
+        err.status = res.status;
+        lastError = err;
+        const retryable = res.status === 429 || res.status >= 500;
+        if (!retryable || attempt === OPENAI_MAX_ATTEMPTS) throw err;
+      } catch (e) {
+        const err = e as Error & { status?: number; name?: string };
+        const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
+        const retryable = timedOut || err?.status === undefined || err.status === 429 || (err.status ?? 0) >= 500;
+        if (timedOut) {
+          const t = new Error('The AI service took too long to respond. Please try again.') as Error & { status?: number };
+          t.status = 504;
+          lastError = t;
+        } else {
+          lastError = err;
+        }
+        if (!retryable || attempt === OPENAI_MAX_ATTEMPTS) throw lastError;
+      }
+      this.logger.warn(`OpenAI attempt ${attempt} failed (${lastError?.message}); retrying`);
+      await new Promise((r) => setTimeout(r, 1500 * attempt));
     }
 
     const text = responseJson.choices?.[0]?.message?.content?.trim();
@@ -1377,10 +1482,10 @@ Keep the full response under 180 words.`;
         return buildSection11MasterRubricUserMessage(data);
 
       // =====================================================
-      // CII v2 EVALUATION (Composite Impact Index Analyser v2)
+      // CII ANALYZER (Balanced CII Rubric v3.1)
       // =====================================================
       case 'cii_v2_evaluation':
-        return `Evaluate this Community Service report against the CII Rubric v2 embedded in your system instructions.
+        return `Evaluate this Community Service report against the Balanced CII Rubric v3.1 embedded in your system instructions.
 
 REPORT DATA:
 ${JSON.stringify(data)}`;
@@ -1440,9 +1545,31 @@ ${JSON.stringify(data)}`;
             }
           : undefined;
 
+    // CII Analyzer: show the model the real evidence images (and say exactly which files it could not see).
+    let userContent: string | OpenAiContentPart[] = prompt;
+    let evidenceInspection: EvidenceInspection | undefined;
+    if (isCiiV2Evaluation) {
+      const { parts, inspection } = await this.buildEvidenceParts(data);
+      evidenceInspection = inspection;
+      const notShown = inspection.notInspected.length
+        ? inspection.notInspected
+            .map((f) => `- ${f.id || '(no id)'} "${f.name}": ${f.reason}`)
+            .join('\n')
+        : '- none';
+      const note = `EVIDENCE INSPECTION
+Images you were actually shown follow below, each preceded by its id: ${
+        inspection.inspected.map((f) => f.id || f.name).join(', ') || 'none'
+      }. Judge each against the claim it is linked to by LOOKING at it.
+Files you were NOT shown (documents, video, unreadable or over the image limit) — you cannot verify these. Never rate them MATCH; use PARTIAL at most, set "why" to start with "NOT INSPECTED:" and say what is missing:
+${notShown}`;
+      userContent = parts.length
+        ? [{ type: 'text', text: `${prompt}\n\n${note}` }, ...parts]
+        : `${prompt}\n\n${note}`;
+    }
+
     let text: string;
     try {
-      text = await this.generateSummaryWithOpenAI(prompt, openAiOpts);
+      text = await this.generateSummaryWithOpenAI(userContent, openAiOpts);
     } catch (error: unknown) {
       const status =
         typeof error === 'object' && error !== null && 'status' in error
@@ -1490,7 +1617,12 @@ ${JSON.stringify(data)}`;
       if (!ciiV2) {
         throw new HttpException({ error: 'AI returned an unreadable CII v2 evaluation. Please retry.' }, 502);
       }
-      return { summary, ciiV2 };
+      return {
+        summary,
+        ciiV2,
+        evidenceInspection,
+        model: process.env.OPENAI_SUMMARY_MODEL?.trim() || 'gpt-5.4',
+      };
     }
 
     if (isFypAiEvaluationSection) {

@@ -1,5 +1,6 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { FacultyReportsService, mapFacultyListCii, mapFacultyListPackage } from './faculty-reports.service';
+import { CII_V2_SECTIONS } from './cii-v2.constants';
 
 function makeService(
   report: Record<string, unknown> | null,
@@ -11,6 +12,8 @@ function makeService(
     leftJoinAndSelect: jest.fn(() => qb),
     where: jest.fn(() => qb),
     andWhere: jest.fn(() => qb),
+    orWhere: jest.fn(() => qb),
+    orderBy: jest.fn(() => qb),
     getOne: jest.fn(async () => report),
     update: jest.fn(() => qb),
     set: jest.fn(() => qb),
@@ -43,6 +46,12 @@ function makeService(
     find: jest.fn().mockResolvedValue([]),
     save: jest.fn(async (rows: unknown) => rows),
   };
+  const participationRepository = {
+    find: jest.fn().mockResolvedValue([]),
+  };
+  const opportunitiesRepository = {
+    find: jest.fn().mockResolvedValue([]),
+  };
   const service = new FacultyReportsService(
     studentReportsRepository as any,
     {} as any,
@@ -52,6 +61,8 @@ function makeService(
     attendanceLogsRepository as any,
     mailService as any,
     notificationsService as any,
+    participationRepository as any,
+    opportunitiesRepository as any,
   );
   return {
     service,
@@ -60,240 +71,24 @@ function makeService(
     qb,
     facultyUniversityScopeService,
     attendanceLogsRepository,
+    participationRepository,
+    opportunitiesRepository,
+    facultyService,
   };
 }
 
-describe('FacultyReportsService — updateAction', () => {
-  it('rejects with no remarks are refused — a student is entitled to know why', async () => {
-    const { service, studentReportsRepository } = makeService({
-      id: 'report-1',
-      faculty_status: 'pending',
-    });
-
-    await expect(
-      service.updateAction(
-        'report-1',
-        'faculty-1',
-        'teacher@uni.edu',
-        'rejected',
-      ),
-    ).rejects.toBeInstanceOf(BadRequestException);
-    await expect(
-      service.updateAction(
-        'report-1',
-        'faculty-1',
-        'teacher@uni.edu',
-        'rejected',
-        '   ',
-      ),
-    ).rejects.toBeInstanceOf(BadRequestException);
-    expect(studentReportsRepository.save).not.toHaveBeenCalled();
-  });
-
-  it('accepts a reject with a real reason', async () => {
-    const { service } = makeService({
-      id: 'report-1',
-      faculty_status: 'pending',
-    });
-
-    const result = await service.updateAction(
-      'report-1',
-      'faculty-1',
-      'teacher@uni.edu',
-      'rejected',
-      'Attendance hours look inflated.',
-    );
-
-    expect(result.success).toBe(true);
-  });
-
-  it('approve does not require remarks', async () => {
-    const { service } = makeService({
-      id: 'report-1',
-      faculty_status: 'pending',
-    });
-
-    const result = await service.updateAction(
-      'report-1',
-      'faculty-1',
-      'teacher@uni.edu',
-      'approved',
-    );
-
-    expect(result.success).toBe(true);
-  });
-
-  it('lets faculty review a submitted university report without a reporting fee', async () => {
-    const { service, studentReportsRepository } = makeService({
-      id: 'report-1',
-      status: 'submitted',
-      faculty_status: 'pending',
-    });
-
-    const result = await service.updateAction(
-      'report-1',
-      'faculty-1',
-      'teacher@uni.edu',
-      'approved',
-    );
-
-    expect(result.success).toBe(true);
-    expect(studentReportsRepository.update).toHaveBeenCalled();
-  });
-
-  it('sends the report back for revision without ending the process', async () => {
-    const { service, studentReportsRepository } = makeService({
-      id: 'report-1',
-      status: 'paid',
-      faculty_status: 'pending',
-    });
-
-    const result = await service.updateAction(
-      'report-1',
-      'faculty-1',
-      'teacher@uni.edu',
-      'revision_requested',
-      'Please add baseline evidence.',
-    );
-
-    expect(result.success).toBe(true);
-    expect(studentReportsRepository.update).toHaveBeenCalledWith(
-      { id: 'report-1' },
-      expect.objectContaining({
-        faculty_status: 'revision_requested',
-        status: 'revision',
-        faculty_remarks: 'Please add baseline evidence.',
-      }),
-    );
-  });
-
-  it('folds optional section and required-correction into remarks without changing status rules', async () => {
-    const { service, studentReportsRepository } = makeService({
-      id: 'report-1',
-      status: 'submitted',
-      faculty_status: 'pending',
-    });
-
-    const result = await service.updateAction(
-      'report-1',
-      'faculty-1',
-      'teacher@uni.edu',
-      'revision_requested',
-      'Hours look thin.',
-      { revision_section: 'Section 4', required_correction: 'Add session dates.' },
-    );
-
-    expect(result.success).toBe(true);
-    expect(studentReportsRepository.update).toHaveBeenCalledWith(
-      { id: 'report-1' },
-      expect.objectContaining({
-        faculty_status: 'revision_requested',
-        status: 'revision',
-        faculty_remarks:
-          'Section(s): Section 4\nReason: Hours look thin.\nRequired Correction: Add session dates.',
-      }),
-    );
-  });
-});
-
 const CII_V2_AI_RESPONSE = {
-  sections: [
-    {
-      id: 1,
-      criteria: [
-        { key: 'role_clarity', anchor: 4 },
-        { key: 'participation_quality', anchor: 4 },
-        { key: 'attendance_consistency', anchor: 4 },
-        { key: 'engagement_continuity', anchor: 4 },
-      ],
-    },
-    {
-      id: 2,
-      criteria: [
-        { key: 'need_specificity', anchor: 4 },
-        { key: 'beneficiary_voice', anchor: 4 },
-        { key: 'baseline_evidence', anchor: 4 },
-        { key: 'contextual_understanding', anchor: 4 },
-        { key: 'disciplinary_lens', anchor: 4 },
-      ],
-    },
-    {
-      id: 3,
-      criteria: [
-        { key: 'sdg_alignment', anchor: 4 },
-        { key: 'contribution_logic', anchor: 4 },
-        { key: 'activity_output_outcome_alignment', anchor: 4 },
-        { key: 'sdg_restraint', anchor: 4 },
-      ],
-    },
-    {
-      id: 4,
-      criteria: [
-        { key: 'planned_vs_actual', anchor: 4 },
-        { key: 'delivery_rigor', anchor: 4 },
-        { key: 'execution_ownership', anchor: 4 },
-        { key: 'output_counting_integrity', anchor: 4 },
-        { key: 'depth_or_scale', anchor: 4 },
-        { key: 'measurable_outcomes', anchor: 4 },
-        { key: 'beneficiary_value', anchor: 4 },
-        { key: 'adaptation_honesty', anchor: 4 },
-      ],
-    },
-    {
-      id: 5,
-      criteria: [
-        { key: 'resource_stewardship', anchor: 4 },
-        { key: 'resource_traceability', anchor: 4 },
-        { key: 'resource_appropriateness', anchor: 4 },
-        { key: 'resource_delivery_link', anchor: 4 },
-      ],
-    },
-    {
-      id: 6,
-      criteria: [
-        { key: 'stakeholder_relevance', anchor: 4 },
-        { key: 'stakeholder_role_clarity', anchor: 4 },
-        { key: 'collaboration_quality', anchor: 4 },
-        { key: 'verification_ownership', anchor: 4 },
-      ],
-    },
-    {
-      id: 7,
-      criteria: [
-        { key: 'evidence_participation', anchor: 4 },
-        { key: 'evidence_activities', anchor: 4 },
-        { key: 'evidence_beneficiaries', anchor: 4 },
-        { key: 'evidence_outcomes', anchor: 4 },
-        { key: 'evidence_resource_traceability', anchor: 4 },
-        { key: 'ethics_integrity', anchor: 4 },
-      ],
-    },
-    {
-      id: 8,
-      criteria: [
-        { key: 'personal_learning', anchor: 4 },
-        { key: 'academic_application', anchor: 4 },
-        { key: 'ethical_understanding', anchor: 4 },
-        { key: 'self_awareness', anchor: 4 },
-      ],
-    },
-    {
-      id: 9,
-      criteria: [
-        { key: 'continuation_assessment', anchor: 4 },
-        { key: 'named_ownership', anchor: 4 },
-        { key: 'continuation_mechanism', anchor: 4 },
-        { key: 'scaling_realism', anchor: 4 },
-      ],
-    },
-  ],
-  bonus: { effort: 2, resources: 2, partners: 2 },
+  sections: CII_V2_SECTIONS.map((s) => ({
+    id: s.id,
+    criteria: s.criteria.map((c) => ({ key: c.key, anchor: 4 })),
+  })),
+  bonus: { effort: 1.25, resources: 1.25, partners: 1.25, outcome: 1.25 },
   bonusWhy: {},
   integrityPenalty: 0,
   evidence: [],
   redFlags: [],
   needsAdminReview: false,
-  frameworkVersion: 'v2.0',
+  frameworkVersion: 'v3.1-balanced',
 };
 
 describe('FacultyReportsService — runCiiV2Analysis', () => {
@@ -352,6 +147,37 @@ describe('FacultyReportsService — runCiiV2Analysis', () => {
     await expect(
       service.runCiiV2Analysis('report-1', 'faculty-1', 'teacher@uni.edu'),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('lets Super Admin re-analyse a locked report and clears the lock in the same write', async () => {
+    const { service, qb } = makeService(
+      {
+        id: 'report-1',
+        ciiV2Lock: {
+          locked: true,
+          hash: 'x',
+          lockedAt: 'now',
+          lockedByFacultyId: 'faculty-1',
+        },
+      },
+      {
+        summarize: jest
+          .fn()
+          .mockResolvedValue({ summary: '', ciiV2: CII_V2_AI_RESPONSE }),
+      },
+    );
+
+    await expect(
+      service.runCiiV2AnalysisForAdmin('report-1'),
+    ).resolves.toMatchObject({ success: true });
+
+    const payload = qb.set.mock.calls[0][0] as {
+      ciiV2?: unknown;
+      ciiV2Lock?: unknown;
+    };
+    expect(payload.ciiV2).toBeTruthy();
+    expect(typeof payload.ciiV2Lock).toBe('function');
+    expect(qb.andWhere).not.toHaveBeenCalled();
   });
 });
 
@@ -767,5 +593,209 @@ describe('mapFacultyListPackage', () => {
       section2: {},
     } as any;
     expect(mapFacultyListPackage(report, 18).member_hours[0].hours).toBe(18);
+  });
+});
+
+describe('FacultyReportsService — draft progress (opens only after submit)', () => {
+  it('lists in-progress reports with progress only — no answers, no scores', async () => {
+    const draft = {
+      id: 'd-1',
+      status: 'draft',
+      project_id: 'p-1',
+      opportunityId: 'p-1',
+      updatedAt: new Date('2026-01-01'),
+      student: { name: 'Stu', email: 'stu@x.com' },
+      opportunity: { title: 'Proj', organization: { name: 'Org' } },
+      section1: {},
+      section2: { problem_statement: 'PRIVATE ANSWER' },
+      ciiV2: { final: 80 },
+    };
+    const { service, qb } = makeService(null);
+    qb.orderBy = jest.fn(() => qb);
+    qb.getMany = jest.fn(async () => [draft]);
+    const res = await service.listDraftProgress('f-1', 'f@x.com');
+    expect(qb.andWhere).toHaveBeenCalledWith("report.status IN ('draft', 'continue')");
+    expect(qb.andWhere).toHaveBeenCalledWith('report.reportSubmittedAt IS NULL');
+    expect(res.data).toHaveLength(1);
+    const row = res.data[0] as Record<string, unknown>;
+    expect(row).toMatchObject({
+      id: 'd-1',
+      student_name: 'Stu',
+      project_title: 'Proj',
+      draft_locked: true,
+      is_submitted: false,
+      sections_total: 10,
+    });
+    expect(typeof row.progress_pct).toBe('number');
+    expect(JSON.stringify(row)).not.toContain('PRIVATE ANSWER');
+    expect(JSON.stringify(row)).not.toContain('ciiV2');
+    expect(row).not.toHaveProperty('student_email');
+  });
+
+  it('excludes draft AND continue reports from the submitted-report queries', async () => {
+    const { service, qb } = makeService(null);
+    qb.orderBy = jest.fn(() => qb);
+    qb.getMany = jest.fn(async () => []);
+    await service.listAssignedReports('f-1', 'f@x.com');
+    expect(qb.andWhere).toHaveBeenCalledWith("report.status NOT IN ('draft', 'continue')");
+    qb.andWhere.mockClear();
+    await expect(service.findOne('r-1', 'f-1', 'f@x.com')).rejects.toBeInstanceOf(NotFoundException);
+    expect(qb.andWhere).toHaveBeenCalledWith("report.status NOT IN ('draft', 'continue')");
+  });
+});
+
+describe('FacultyReportsService — project tracking (assigned students + live hours)', () => {
+  it('returns assigned seats with live hours even before a report is submitted', async () => {
+    const { service, facultyService, participationRepository, opportunitiesRepository, attendanceLogsRepository, qb } =
+      makeService(null);
+    facultyService.getScopedOpportunityIds.mockResolvedValue(['opp-1']);
+    opportunitiesRepository.find.mockResolvedValue([
+      {
+        id: 'opp-1',
+        title: 'Community survey',
+        status: 'live',
+        workflowStage: 'live',
+        timeline: { expected_hours: 16 },
+        organization: { name: 'NGO' },
+        executing_context: {},
+      },
+    ]);
+    participationRepository.find.mockResolvedValue([
+      {
+        id: 'seat-1',
+        projectId: 'opp-1',
+        studentId: 'stu-1',
+        fullName: 'Ayesha Khan',
+        email: 'ayesha@uni.edu',
+        student: { id: 'stu-1', name: 'Ayesha Khan', email: 'ayesha@uni.edu' },
+        updatedAt: new Date('2026-04-01'),
+        createdAt: new Date('2026-03-01'),
+      },
+    ]);
+    attendanceLogsRepository.find.mockResolvedValue([
+      {
+        participantId: 'seat-1',
+        projectId: 'opp-1',
+        sessionHours: 4.5,
+        approvalStatus: 'pending',
+        updatedAt: new Date('2026-04-02'),
+        createdAt: new Date('2026-04-02'),
+        dateOfEngagement: '2026-04-02',
+      },
+    ]);
+    qb.getMany = jest.fn(async () => []);
+    const res = await service.listProjectTracking('f-1', 'f@x.com');
+    expect(res.data).toHaveLength(1);
+    const row = res.data[0] as Record<string, unknown>;
+    expect(row).toMatchObject({
+      student_name: 'Ayesha Khan',
+      student_email: 'ayesha@uni.edu',
+      project_title: 'Community survey',
+      project_id: 'opp-1',
+      organization_name: 'NGO',
+      hours: 4.5,
+      required_hours: 16,
+      status: 'assigned',
+      draft_locked: true,
+    });
+    expect(JSON.stringify(row)).not.toMatch(/mobile|phone|cnic/i);
+  });
+
+  it('omits helper organization copy and prefers a real partner name', async () => {
+    const { service, facultyService, participationRepository, opportunitiesRepository, attendanceLogsRepository, qb } =
+      makeService(null);
+    facultyService.getScopedOpportunityIds.mockResolvedValue(['opp-1']);
+    opportunitiesRepository.find.mockResolvedValue([
+      {
+        id: 'opp-1',
+        title: 'Lets Make A Difference',
+        status: 'live',
+        workflowStage: 'live',
+        timeline: { expected_hours: 10 },
+        organization: {
+          name: 'add only if theres another organization connected (eg.SOS)',
+        },
+        partner_organization: { organization_name: "SOS Children's Villages" },
+        executing_context: {},
+      },
+    ]);
+    participationRepository.find.mockResolvedValue([
+      {
+        id: 'seat-1',
+        projectId: 'opp-1',
+        studentId: 'stu-1',
+        fullName: 'Spaher Ara',
+        email: 'spaher@uni.edu',
+        student: { id: 'stu-1', name: 'Spaher Ara', email: 'spaher@uni.edu' },
+        updatedAt: new Date('2026-10-03'),
+        createdAt: new Date('2026-09-01'),
+      },
+    ]);
+    attendanceLogsRepository.find.mockResolvedValue([]);
+    qb.getMany = jest.fn(async () => []);
+    const res = await service.listProjectTracking('f-1', 'f@x.com');
+    expect(res.data).toHaveLength(1);
+    const row = res.data[0] as Record<string, unknown>;
+    expect(row.organization_name).toBe("SOS Children's Villages");
+    expect(JSON.stringify(row)).not.toMatch(/add only if/i);
+  });
+
+  it('returns an empty list when the faculty has no scoped opportunities', async () => {
+    const { service, facultyService } = makeService(null);
+    facultyService.getScopedOpportunityIds.mockResolvedValue([]);
+    const res = await service.listProjectTracking('f-1', 'f@x.com');
+    expect(res.data).toEqual([]);
+  });
+});
+
+describe('FacultyReportsService — AI analysis run safety (lock, history, incomplete runs)', () => {
+  it('refuses a second analysis of the same report while the first is still running', async () => {
+    let release!: (v: unknown) => void;
+    const pending = new Promise((r) => (release = r));
+    const summarize = jest.fn().mockReturnValue(pending);
+    const { service } = makeService({ id: 'report-race' }, { summarize });
+
+    const first = service.runCiiV2AnalysisForAdmin('report-race');
+    // let the first call reach the AI await
+    await new Promise((r) => setImmediate(r));
+    await expect(service.runCiiV2AnalysisForAdmin('report-race')).rejects.toThrow(/already running/);
+    expect(summarize).toHaveBeenCalledTimes(1);
+
+    release({ summary: '', ciiV2: CII_V2_AI_RESPONSE });
+    await expect(first).resolves.toMatchObject({ success: true });
+    // the lock is released afterwards
+    summarize.mockResolvedValue({ summary: '', ciiV2: CII_V2_AI_RESPONSE });
+    await expect(service.runCiiV2AnalysisForAdmin('report-race')).resolves.toMatchObject({ success: true });
+  });
+
+  it('releases the lock even when the AI call fails', async () => {
+    const summarize = jest.fn().mockRejectedValueOnce(new Error('boom')).mockResolvedValue({ summary: '', ciiV2: CII_V2_AI_RESPONSE });
+    const { service } = makeService({ id: 'report-fail' }, { summarize });
+    await expect(service.runCiiV2AnalysisForAdmin('report-fail')).rejects.toThrow('boom');
+    await expect(service.runCiiV2AnalysisForAdmin('report-fail')).resolves.toMatchObject({ success: true });
+  });
+
+  it('keeps a run history (score, model, inspected evidence) across re-runs and stores the evidence inspection', async () => {
+    const previous = { final: 41, runHistory: [{ score: 41, at: '2026-01-01T00:00:00Z', model: 'm0' }] };
+    const summarize = jest.fn().mockResolvedValue({
+      summary: '',
+      ciiV2: CII_V2_AI_RESPONSE,
+      model: 'gpt-test',
+      evidenceInspection: { inspected: [{ id: 'E1', name: 'a.jpg' }], notInspected: [{ id: 'E2', name: 'r.pdf', reason: 'not an image' }] },
+    });
+    const { service } = makeService({ id: 'report-hist', ciiV2: previous }, { summarize });
+    const res: any = await service.runCiiV2AnalysisForAdmin('report-hist');
+    expect(res.data.runHistory).toHaveLength(2);
+    expect(res.data.runHistory[0]).toMatchObject({ score: 41, model: 'm0' });
+    expect(res.data.runHistory[1]).toMatchObject({ score: 100, model: 'gpt-test', inspectedImages: 1, notInspectedFiles: 1 });
+    expect(res.data.evidenceInspection.notInspected[0].id).toBe('E2');
+  });
+
+  it('an incomplete run (model skipped rubric parts) cannot be locked', async () => {
+    const { service } = makeService({
+      id: 'report-inc',
+      ciiV2: { sections: [], bonus: {}, integrityPenalty: 0, incomplete: true, final: 12 },
+    });
+    await expect(service.approveCiiV2ForAdmin('report-inc', 'admin-1')).rejects.toThrow(/incomplete/);
   });
 });

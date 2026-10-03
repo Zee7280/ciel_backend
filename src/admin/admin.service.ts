@@ -1,6 +1,12 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  Optional,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { User } from '../users/entities/user.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { Report } from '../reports/entities/report.entity';
@@ -12,7 +18,10 @@ import { isTeamApplyFromParticipationAndMembers } from '../opportunities/apply-t
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 import { StudentsService } from '../students/students.service';
 
-import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import {
+  AuditLogFilters,
+  AuditLogsService,
+} from '../audit-logs/audit-logs.service';
 import { UserRole } from '../users/enums/user-role.enum';
 import {
   In,
@@ -21,7 +30,25 @@ import {
   Not,
   SelectQueryBuilder,
   Brackets,
+  ILike,
+  MoreThanOrEqual,
 } from 'typeorm';
+import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
+import { Notification } from '../notifications/entities/notification.entity';
+import { Payment, PaymentStatus } from '../payments/entities/payment.entity';
+import { OrganizationMembershipFee } from '../organization-membership/entities/organization-membership-fee.entity';
+import { SupportTicket } from '../support/entities/support-ticket.entity';
+import { IssueLog } from '../issue-logs/entities/issue-log.entity';
+import { Organization } from '../organizations/entities/organization.entity';
+import { LINE_STATUS } from '../opportunities/opportunity-workflow.service';
+import { PlatformSettingsService } from '../settings/platform-settings.service';
+import { reportStatusRank } from '../analytics/shared/report-status.util';
+import {
+  getSettingSpec,
+  settingColumnType,
+  SETTINGS_REGISTRY_KEYS,
+  validateSettingValue,
+} from './settings-registry';
 
 import { Setting } from '../settings/entities/setting.entity';
 import { MasterAnalyticsQueryDto } from './dto/master-analytics-query.dto';
@@ -33,6 +60,8 @@ import {
 import { OrganizationMembershipService } from '../organization-membership/organization-membership.service';
 import { PartnerMembershipSettingsService } from '../organization-membership/partner-membership-settings.service';
 import { PARTNER_MEMBERSHIP_REQUIRED_KEY } from '../organization-membership/partner-membership.util';
+import { StudentApplyMaintenanceService } from '../opportunities/student-apply-maintenance.service';
+import { isStudentApplyMaintenanceSettingKey } from '../opportunities/student-apply-maintenance.util';
 import {
   isTeamConfigurationComplete,
   resolveAttendanceUnlockStatus,
@@ -210,6 +239,9 @@ const OCCUPIED_SEAT_STATUSES = [
   'pending_faculty_approval',
 ];
 
+/** Participations that count as an active volunteer (excludes pending / awaiting-approval). */
+const ACTIVE_VOLUNTEER_STATUSES = ['accepted', 'approved', 'verified', 'paid'];
+
 @Injectable()
 export class AdminService {
   constructor(
@@ -238,24 +270,66 @@ export class AdminService {
     private readonly feedbackService: FeedbackService,
     private readonly mailService: MailService,
     private readonly notificationsService: NotificationsService,
+    @Optional()
+    private readonly studentApplyMaintenance?: StudentApplyMaintenanceService,
+    @Optional() private readonly dataSource?: DataSource,
+    @Optional() private readonly platformSettings?: PlatformSettingsService,
   ) {}
 
+  private readonly logger = new Logger(AdminService.name);
+
+  /** Repository for entities that aren't constructor-injected (keeps the constructor stable). */
+  private repoOf<T extends object>(
+    entity: new () => T,
+  ): Repository<T> | undefined {
+    try {
+      return this.dataSource?.getRepository(entity);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Read-only (no seeding side effects). Only allowlisted registry keys are returned. */
   async getSettings() {
-    const settings = await this.settingRepository.find();
+    const rows = await this.settingRepository.find();
+    const allowed = new Set(SETTINGS_REGISTRY_KEYS);
+    const settings = rows
+      .filter((r) => allowed.has(r.key))
+      .map((r) => ({
+        id: r.id,
+        key: r.key,
+        value: r.value,
+        description: r.description ?? getSettingSpec(r.key)?.description ?? null,
+        type: r.type,
+        updatedAt: r.updatedAt,
+      }));
     return {
       success: true,
       data: settings,
     };
   }
 
-  async updateSetting(key: string, value: string) {
+  async updateSetting(
+    key: string,
+    rawValue: unknown,
+    actor?: { id?: string; email?: string },
+  ) {
+    const { spec, value } = validateSettingValue(key, rawValue);
     let setting = await this.settingRepository.findOne({ where: { key } });
+    const oldValue = setting?.value ?? null;
     if (setting) {
       setting.value = value;
+      if (!setting.description) setting.description = spec.description;
     } else {
-      setting = this.settingRepository.create({ key, value });
+      setting = this.settingRepository.create({
+        key,
+        value,
+        type: settingColumnType(spec.kind),
+        description: spec.description,
+      });
     }
     await this.settingRepository.save(setting);
+    this.platformSettings?.invalidate(key);
     if (key === REPORT_PARTNER_APPROVAL_SETTING_KEY) {
       this.reportPartnerApprovalSettings.invalidateCache();
       await this.reportPartnerApprovalSettings.refreshCache();
@@ -267,10 +341,282 @@ export class AdminService {
         await this.organizationMembershipService.releasePendingPartnerMembershipAccounts();
       }
     }
+    if (isStudentApplyMaintenanceSettingKey(key)) {
+      this.studentApplyMaintenance?.invalidateCache();
+      await this.studentApplyMaintenance?.refreshCache();
+    }
+    await this.auditLogsService.recordMutation?.({
+      action: 'SETTING_UPDATE',
+      user: actor?.email ?? actor?.id ?? null,
+      user_email: actor?.email ?? null,
+      target: key,
+      target_type: 'setting',
+      details: { adminId: actor?.id ?? null, key, old: oldValue, new: value },
+    });
     return {
       success: true,
       data: setting,
     };
+  }
+
+  /** Same predicate as OpportunitiesService.adminPendingQueueWhere (admin approvals "pending" queue). */
+  private opportunityPendingApprovalWhere(): Brackets {
+    return new Brackets((qb) => {
+      qb.where(
+        new Brackets((inner) => {
+          inner
+            .where('opportunity.status = :st', { st: 'pending_approval' })
+            .andWhere(
+              '(opportunity.admin_approved = :aa OR opportunity.admin_approved IS NULL)',
+              { aa: false },
+            );
+        }),
+      )
+        .orWhere(
+          new Brackets((inner) => {
+            inner
+              .where('opportunity.isStudentCreated = :isc', { isc: true })
+              .andWhere(
+                '(opportunity.admin_approved = :aa OR opportunity.admin_approved IS NULL)',
+                { aa: false },
+              )
+              .andWhere('opportunity.status IN (:...early)', {
+                early: [
+                  'pending_faculty',
+                  'pending_partner',
+                  'pending_verification',
+                ],
+              });
+          }),
+        )
+        .orWhere(
+          new Brackets((inner) => {
+            inner
+              .where('opportunity.isStudentCreated = :isc2', { isc2: false })
+              .andWhere(
+                '(opportunity.admin_approved = :aa2 OR opportunity.admin_approved IS NULL)',
+                { aa2: false },
+              )
+              .andWhere(
+                '(opportunity.adminApprovalStatus IS NULL OR opportunity.adminApprovalStatus NOT IN (:...cielSelfApproved))',
+                {
+                  cielSelfApproved: [
+                    LINE_STATUS.APPROVED,
+                    LINE_STATUS.NOT_REQUIRED,
+                  ],
+                },
+              )
+              .andWhere('opportunity.status IN (:...partnerOrg)', {
+                partnerOrg: ['pending_execution', 'pending_partner'],
+              });
+          }),
+        );
+    });
+  }
+
+  private countOpportunityApprovalQueue(): Promise<number> {
+    return this.opportunityRepository
+      .createQueryBuilder('opportunity')
+      .where(this.opportunityPendingApprovalWhere())
+      .getCount();
+  }
+
+  /** Student reports that are past draft (submitted and later). */
+  private static readonly STUDENT_REPORT_NOT_SUBMITTED = ['draft', 'continue'];
+
+  /** One COUNT per badge; a failing count degrades to 0 rather than failing the whole sidebar. */
+  async getPendingCounts() {
+    const safe = async (label: string, fn: () => Promise<number>) => {
+      try {
+        return Number(await fn()) || 0;
+      } catch (err) {
+        this.logger.warn(
+          `pending-counts ${label} failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return 0;
+      }
+    };
+    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const [
+      opportunityApprovals,
+      pendingUsers,
+      pendingParticipations,
+      joinApplications,
+      payments,
+      orgMembership,
+      reportsAwaitingAdmin,
+      issueLogsOpen,
+      supportOpen,
+    ] = await Promise.all([
+      safe('opportunityApprovals', () => this.countOpportunityApprovalQueue()),
+      safe('users', () =>
+        this.usersRepository.count({ where: { status: 'pending' } }),
+      ),
+      safe('participations', () =>
+        this.participationRepository.count({
+          where: { status: In(['pending', 'pending_ciel_approval']) },
+        }),
+      ),
+      safe('joinApplications', () =>
+        this.opportunityApplicationsService.countPendingAdmin(),
+      ),
+      safe('payments', async () =>
+        (await this.repoOf(Payment)?.count({
+          where: { status: PaymentStatus.PENDING },
+        })) ?? 0,
+      ),
+      safe('orgMembership', async () =>
+        (await this.repoOf(OrganizationMembershipFee)?.count({
+          where: { status: 'pending_review' },
+        })) ?? 0,
+      ),
+      safe('reportsAwaitingAdmin', () =>
+        this.studentReportRepository.count({
+          where: {
+            admin_status: 'pending',
+            status: In(['submitted', 'under_review', 'partner_verified']),
+          },
+        }),
+      ),
+      // "open" = unresolved error-severity entries from the last 7 days (admins resolve them in Issue Logs).
+      safe('issueLogsOpen', async () =>
+        (await this.repoOf(IssueLog)?.count({
+          where: {
+            severity: 'error',
+            resolvedAt: IsNull(),
+            createdAt: MoreThanOrEqual(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)),
+          },
+        })) ?? 0,
+      ),
+      safe('supportOpen', async () =>
+        (await this.repoOf(SupportTicket)?.count({
+          where: { status: 'open' },
+        })) ?? 0,
+      ),
+    ]);
+    return {
+      opportunityApprovals,
+      userApprovals: pendingUsers + pendingParticipations,
+      joinApplications,
+      payments,
+      orgMembership,
+      reportsAwaitingAdmin,
+      issueLogsOpen,
+      supportOpen,
+    };
+  }
+
+  /**
+   * Verified volunteer hours — the single source for the dashboard, impact analytics and project
+   * lists. Approved attendance logs (the live system) plus verified timesheets, where a
+   * student+project pair that has approved attendance ignores its timesheets (no double counting).
+   * Aggregated in SQL (SUM/GROUP BY); months are bucketed in Asia/Karachi (fixed UTC+5).
+   */
+  private async computeVerifiedHours(
+    opts: { opportunityIds?: string[] } = {},
+  ): Promise<{
+    total: number;
+    byOpportunity: Map<string, number>;
+    rows: Array<{
+      studentId: string | null;
+      opportunityId: string | null;
+      period: string;
+      hours: number;
+    }>;
+  }> {
+    const ids = opts.opportunityIds;
+    type Raw = {
+      studentId: string | null;
+      opportunityId: string | null;
+      period: string;
+      hours: string | number;
+    };
+    let attendance: Raw[] = [];
+    const attendanceRepo = this.repoOf(AttendanceLog);
+    if (attendanceRepo && (!ids || ids.length)) {
+      const qb = attendanceRepo
+        .createQueryBuilder('a')
+        .innerJoin('a.participant', 'p')
+        .select('p.studentId', 'studentId')
+        .addSelect('a.projectId', 'opportunityId')
+        .addSelect("to_char(a.dateOfEngagement, 'YYYY-MM')", 'period')
+        .addSelect('COALESCE(SUM(a.sessionHours), 0)', 'hours')
+        .where('a.approvalStatus = :approved', { approved: 'approved' });
+      if (ids) qb.andWhere('a.projectId IN (:...ids)', { ids });
+      attendance = await qb
+        .groupBy('p.studentId')
+        .addGroupBy('a.projectId')
+        .addGroupBy("to_char(a.dateOfEngagement, 'YYYY-MM')")
+        .getRawMany<Raw>();
+    }
+
+    let timesheets: Raw[] = [];
+    if (!ids || ids.length) {
+      const tqb = this.timesheetRepository
+        .createQueryBuilder('t')
+        .select('t.studentId', 'studentId')
+        .addSelect('t.opportunityId', 'opportunityId')
+        .addSelect("to_char(t.createdAt + interval '5 hours', 'YYYY-MM')", 'period')
+        .addSelect('COALESCE(SUM(t.hours), 0)', 'hours')
+        .where('t.status = :verified', { verified: 'verified' });
+      if (ids) tqb.andWhere('t.opportunityId IN (:...ids)', { ids });
+      timesheets = await tqb
+        .groupBy('t.studentId')
+        .addGroupBy('t.opportunityId')
+        .addGroupBy("to_char(t.createdAt + interval '5 hours', 'YYYY-MM')")
+        .getRawMany<Raw>();
+    }
+
+    const rows: Array<{
+      studentId: string | null;
+      opportunityId: string | null;
+      period: string;
+      hours: number;
+    }> = [];
+    const coveredByAttendance = new Set<string>();
+    for (const r of attendance) {
+      const hours = Number(r.hours) || 0;
+      if (hours <= 0) continue;
+      if (r.studentId && r.opportunityId) {
+        coveredByAttendance.add(`${r.studentId}:${r.opportunityId}`);
+      }
+      rows.push({
+        studentId: r.studentId ?? null,
+        opportunityId: r.opportunityId ?? null,
+        period: r.period,
+        hours,
+      });
+    }
+    for (const r of timesheets) {
+      const hours = Number(r.hours) || 0;
+      if (hours <= 0) continue;
+      if (
+        r.studentId &&
+        r.opportunityId &&
+        coveredByAttendance.has(`${r.studentId}:${r.opportunityId}`)
+      ) {
+        continue;
+      }
+      rows.push({
+        studentId: r.studentId ?? null,
+        opportunityId: r.opportunityId ?? null,
+        period: r.period,
+        hours,
+      });
+    }
+
+    const byOpportunity = new Map<string, number>();
+    let total = 0;
+    for (const r of rows) {
+      total += r.hours;
+      if (r.opportunityId) {
+        byOpportunity.set(
+          r.opportunityId,
+          (byOpportunity.get(r.opportunityId) ?? 0) + r.hours,
+        );
+      }
+    }
+    return { total: Math.round(total * 100) / 100, byOpportunity, rows };
   }
 
   async getDashboardStats() {
@@ -278,34 +624,34 @@ export class AdminService {
     const totalStudents = await this.usersRepository.count({
       where: { role: UserRole.STUDENT },
     });
-    // Fetch all org types
-    const orgUsers = await this.usersRepository.find({
-      where: {
-        role: In([
-          UserRole.NGO,
-          UserRole.CORPORATE,
-          UserRole.ORGANIZATION_ADMIN,
-          'org',
-        ]),
-      },
+    const orgRoles = In([UserRole.ORGANIZATION_ADMIN, 'org']);
+    const totalNgos = await this.usersRepository.count({
+      where: [
+        { role: UserRole.NGO },
+        { role: orgRoles, orgType: ILike('%ngo%') },
+      ],
     });
-    const totalNgos = orgUsers.filter(
-      (u) =>
-        u.orgType?.toLowerCase().includes('ngo') || u.role === UserRole.NGO,
-    ).length;
-    const totalCorporates = orgUsers.filter(
-      (u) =>
-        u.orgType?.toLowerCase().includes('corporate') ||
-        u.role === UserRole.CORPORATE,
-    ).length;
+    const totalCorporates = await this.usersRepository.count({
+      where: [
+        { role: UserRole.CORPORATE },
+        { role: orgRoles, orgType: ILike('%corporate%') },
+      ],
+    });
     // Every account on the platform, not just students + a hand-picked subset of org roles
     // (that list previously omitted University and Faculty accounts entirely).
     const totalUsers = await this.usersRepository.count();
 
     const totalOpportunities = await this.opportunityRepository.count();
-    const totalReports = await this.reportRepository.count();
+    // Two different things used to share the "reports" label: keep both explicit.
+    const issueReports = await this.reportRepository.count();
+    const studentReports = await this.studentReportRepository.count({
+      where: {
+        status: Not(In(AdminService.STUDENT_REPORT_NOT_SUBMITTED)),
+      },
+    });
 
-    // Pending Approvals (Users + Applications)
+    // Pending Approvals (Opportunity queue + Users + Applications) — distinct tables, so no overlap.
+    const pendingOpportunities = await this.countOpportunityApprovalQueue();
     const pendingUsers = await this.usersRepository.count({
       where: { status: 'pending' },
     });
@@ -315,16 +661,12 @@ export class AdminService {
     const pendingOppApplications =
       await this.opportunityApplicationsService.countPendingAdmin();
     const pendingApprovals =
-      pendingUsers + pendingApplications + pendingOppApplications;
+      pendingOpportunities +
+      pendingUsers +
+      pendingApplications +
+      pendingOppApplications;
 
-    // Verified Hours
-    const verifiedTimesheets = await this.timesheetRepository.find({
-      where: { status: 'verified' },
-    });
-    const verifiedHours = verifiedTimesheets.reduce(
-      (sum, sheet) => sum + sheet.hours,
-      0,
-    );
+    const verifiedHours = (await this.computeVerifiedHours()).total;
 
     // SDG Distribution
     const opportunities = await this.opportunityRepository.find();
@@ -353,11 +695,22 @@ export class AdminService {
           opportunities: totalOpportunities,
           verifiedHours: verifiedHours,
           pendingApprovals: pendingApprovals,
-          totalReports: totalReports,
+          // Legacy name kept: this is the generic issue/moderation Report table.
+          totalReports: issueReports,
+          issueReports,
+          studentReports,
         },
         pendingSummary: {
           total: pendingApprovals,
           items: [
+            {
+              key: 'admin_pending_opportunities',
+              title: 'Opportunity approvals',
+              count: pendingOpportunities,
+              href: '/dashboard/admin/approvals',
+              tone: 'urgent',
+              description: 'Opportunities waiting for admin approval.',
+            },
             {
               key: 'admin_pending_users',
               title: 'User approvals',
@@ -1425,7 +1778,10 @@ export class AdminService {
     );
   }
 
-  async getProjects(studentEmailRaw?: string) {
+  async getProjects(
+    studentEmailRaw?: string,
+    opts: { page?: number; limit?: number; fields?: 'lite' } = {},
+  ) {
     const normalizedEmail = this.normalizeStudentEmailFilter(
       studentEmailRaw ?? undefined,
     );
@@ -1439,234 +1795,466 @@ export class AdminService {
         await this.buildStudentEmailProjectMatchMap(normalizedEmail);
     }
 
+    const paginated =
+      Number.isFinite(opts.page) || Number.isFinite(opts.limit);
+    const limit = paginated
+      ? Math.min(Math.max(Math.floor(opts.limit as number) || 50, 1), 200)
+      : undefined;
+    const page = paginated
+      ? Math.max(Math.floor(opts.page as number) || 1, 1)
+      : 1;
+
+    // Dropdown mode: id/title/status only — no joins, no aggregates.
+    if (opts.fields === 'lite') {
+      let lite = await this.opportunityRepository.find({
+        select: ['id', 'title', 'status'],
+        order: { createdAt: 'DESC' },
+      });
+      if (normalizedEmail) lite = lite.filter((o) => matchByOppId.has(o.id));
+      const total = lite.length;
+      if (paginated) lite = lite.slice((page - 1) * limit!, page * limit!);
+      return {
+        success: true,
+        data: lite.map((o) => ({ id: o.id, title: o.title, status: o.status })),
+        ...(paginated ? { meta: { page, limit, total } } : {}),
+      };
+    }
+
     let opportunities = await this.opportunityRepository.find({
       relations: ['organization'],
+      ...(paginated ? { order: { createdAt: 'DESC' as const } } : {}),
     });
 
     if (normalizedEmail) {
       const allowIds = matchByOppId;
       opportunities = opportunities.filter((o) => allowIds.has(o.id));
     }
+    const total = opportunities.length;
+    if (paginated) {
+      opportunities = opportunities.slice((page - 1) * limit!, page * limit!);
+    }
 
-    const enrollmentsByProject = await this.loadOccupiedEnrollmentsByProject(
-      opportunities.map((opp) => opp.id),
-    );
+    const oppIds = opportunities.map((opp) => opp.id);
+    const creatorIds = [
+      ...new Set(opportunities.map((o) => o.creatorId).filter(Boolean)),
+    ] as string[];
 
-    const projects = await Promise.all(
-      opportunities.map(async (opp) => {
-        const timesheets = await this.timesheetRepository.find({
-          where: { opportunityId: opp.id },
-        });
-        const hours = timesheets
-          .filter((t) => t.status === 'verified')
-          .reduce((sum, t) => sum + Number(t.hours || 0), 0);
-
-        const participationSeats = await this.participationRepository.count({
-          where: {
-            projectId: opp.id,
-            status: In(OCCUPIED_SEAT_STATUSES),
-          },
-        });
-        const pipelineSeats =
-          await this.opportunityApplicationsService.countSeatsInFlight(opp.id);
-        const occupiedSeats = participationSeats + pipelineSeats;
-
-        const volunteersRequired =
-          Number(opp.timeline?.volunteers_required) || 0;
-        const perVolunteerHours =
-          Number(opp.timeline?.expected_hours) || opp.requiredHours || 0;
-        let targetHours = 0;
-        if (volunteersRequired > 0 && perVolunteerHours > 0) {
-          targetHours = volunteersRequired * perVolunteerHours;
-        } else if (occupiedSeats > 0 && perVolunteerHours > 0) {
-          targetHours = occupiedSeats * perVolunteerHours;
-        }
-
-        const remainingSeats = Math.max(0, volunteersRequired - occupiedSeats);
-        const remainingHours = Math.max(0, targetHours - hours);
-
-        let creator: {
-          id: string;
-          name: string;
-          email: string;
-          phone: string | null;
-        } | null = null;
-        if (opp.creatorId) {
-          const creatorUser = await this.usersRepository.findOne({
-            where: { id: opp.creatorId },
+    const [
+      enrollmentsByProject,
+      verified,
+      participationSeatRows,
+      pipelineApps,
+      creatorUsers,
+    ] = await Promise.all([
+      this.loadOccupiedEnrollmentsByProject(oppIds),
+      this.computeVerifiedHours({ opportunityIds: oppIds }),
+      oppIds.length
+        ? this.participationRepository
+            .createQueryBuilder('p')
+            .select('p.projectId', 'projectId')
+            .addSelect('COUNT(*)', 'cnt')
+            .where('p.projectId IN (:...oppIds)', { oppIds })
+            .andWhere('p.status IN (:...statuses)', {
+              statuses: OCCUPIED_SEAT_STATUSES,
+            })
+            .groupBy('p.projectId')
+            .getRawMany<{ projectId: string; cnt: string }>()
+        : Promise.resolve([] as { projectId: string; cnt: string }[]),
+      oppIds.length
+        ? this.opportunityApplicationRepository.find({
+            where: {
+              opportunityId: In(oppIds),
+              withdrawnAt: IsNull(),
+              internalStatus: In(['pending_faculty', 'pending_partner', 'pending_admin']),
+            },
+            relations: ['studentUser'],
+          })
+        : Promise.resolve([] as OpportunityApplication[]),
+      creatorIds.length
+        ? this.usersRepository.find({
+            where: { id: In(creatorIds) },
             select: ['id', 'name', 'email', 'phone'],
-          });
-          if (creatorUser) {
-            creator = {
-              id: creatorUser.id,
-              name: creatorUser.name,
-              email: creatorUser.email,
-              phone: creatorUser.phone ?? null,
-            };
-          }
-        }
+          })
+        : Promise.resolve([] as User[]),
+    ]);
 
-        const row: Record<string, unknown> = {
-          id: opp.id,
-          title: opp.title,
-          org: opp.organization?.name || 'Unknown',
-          status: opp.status,
-          volunteers: occupiedSeats,
-          volunteers_required: volunteersRequired,
-          hours,
-          remaining_hours: remainingHours,
-          remaining_seats: remainingSeats,
-          remaining_members: remainingSeats,
-          location: opp.location?.city || 'Unknown',
-          supervision: opp.supervision,
-          timeline: opp.timeline,
-          participation_scope: opp.participation_scope,
-          creator,
-          attendance_routing_override: opp.attendanceRoutingOverride ?? 'auto',
-          team_enrollments: (enrollmentsByProject.get(opp.id) ?? []).map(
-            (row) =>
-              this.formatAdminEnrollmentSummary(
-                row,
-                enrollmentsByProject.get(opp.id) ?? [],
-              ),
-          ),
-        };
-        if (normalizedEmail) {
-          const meta = matchByOppId.get(opp.id);
-          if (meta) row['student_match'] = meta;
-        }
-        return row;
-      }),
+    const participationSeatsByOpp = new Map(
+      participationSeatRows.map((r) => [r.projectId, Number(r.cnt) || 0]),
     );
+    const pipelineSeatsByOpp = new Map<string, number>();
+    for (const app of pipelineApps) {
+      const team =
+        this.opportunityApplicationsService.adminBrowseApplicationTeamSummaryForQueue(
+          app,
+        );
+      const seats = team && team.team_member_count >= 1 ? team.team_member_count : 1;
+      pipelineSeatsByOpp.set(
+        app.opportunityId,
+        (pipelineSeatsByOpp.get(app.opportunityId) ?? 0) + seats,
+      );
+    }
+    const creatorById = new Map(creatorUsers.map((u) => [u.id, u]));
 
-    return { success: true, data: projects };
-  }
+    const projects = opportunities.map((opp) => {
+      const hours = verified.byOpportunity.get(opp.id) ?? 0;
+      const occupiedSeats =
+        (participationSeatsByOpp.get(opp.id) ?? 0) +
+        (pipelineSeatsByOpp.get(opp.id) ?? 0);
 
-  /** Emails + notifies every enrolled student on opportunities with 0 verified hours logged. */
-  async remindStudentsOnZeroHourProjects() {
-    const opportunities = await this.opportunityRepository.find({
-      select: ['id', 'title'],
+      const volunteersRequired = Number(opp.timeline?.volunteers_required) || 0;
+      const perVolunteerHours =
+        Number(opp.timeline?.expected_hours) || opp.requiredHours || 0;
+      let targetHours = 0;
+      if (volunteersRequired > 0 && perVolunteerHours > 0) {
+        targetHours = volunteersRequired * perVolunteerHours;
+      } else if (occupiedSeats > 0 && perVolunteerHours > 0) {
+        targetHours = occupiedSeats * perVolunteerHours;
+      }
+
+      const remainingSeats = Math.max(0, volunteersRequired - occupiedSeats);
+      const remainingHours = Math.max(0, targetHours - hours);
+
+      const creatorUser = opp.creatorId
+        ? creatorById.get(opp.creatorId)
+        : undefined;
+      const creator = creatorUser
+        ? {
+            id: creatorUser.id,
+            name: creatorUser.name,
+            email: creatorUser.email,
+            phone: creatorUser.phone ?? null,
+          }
+        : null;
+
+      const row: Record<string, unknown> = {
+        id: opp.id,
+        title: opp.title,
+        org: opp.organization?.name || 'Unknown',
+        status: opp.status,
+        workflow_stage: opp.workflowStage ?? null,
+        admin_approval_status: opp.adminApprovalStatus ?? null,
+        faculty_approval_status: opp.facultyApprovalStatus ?? null,
+        partner_approval_status: opp.partnerApprovalStatus ?? null,
+        admin_approved: opp.admin_approved ?? false,
+        volunteers: occupiedSeats,
+        volunteers_required: volunteersRequired,
+        hours,
+        remaining_hours: remainingHours,
+        remaining_seats: remainingSeats,
+        remaining_members: remainingSeats,
+        location: opp.location?.city || 'Unknown',
+        supervision: opp.supervision,
+        timeline: opp.timeline,
+        participation_scope: opp.participation_scope,
+        creator,
+        attendance_routing_override: opp.attendanceRoutingOverride ?? 'auto',
+        team_enrollments: (enrollmentsByProject.get(opp.id) ?? []).map((er) =>
+          this.formatAdminEnrollmentSummary(
+            er,
+            enrollmentsByProject.get(opp.id) ?? [],
+          ),
+        ),
+      };
+      if (normalizedEmail) {
+        const meta = matchByOppId.get(opp.id);
+        if (meta) row['student_match'] = meta;
+      }
+      return row;
     });
 
-    const verifiedHoursByOpportunity = await this.timesheetRepository
-      .createQueryBuilder('t')
-      .select('t.opportunityId', 'opportunityId')
-      .addSelect('SUM(t.hours)', 'verifiedHours')
-      .where('t.status = :status', { status: 'verified' })
-      .groupBy('t.opportunityId')
-      .getRawMany<{ opportunityId: string; verifiedHours: string }>();
+    return {
+      success: true,
+      data: projects,
+      ...(paginated ? { meta: { page, limit, total } } : {}),
+    };
+  }
 
-    const verifiedHoursByOppId = new Map(
-      verifiedHoursByOpportunity.map((row) => [
-        row.opportunityId,
-        Number(row.verifiedHours) || 0,
-      ]),
-    );
+  /** Last-sent marker per recipient when no DB notification record is available (resets on restart). */
+  private readonly zeroHourReminderSentAt = new Map<string, number>();
+
+  private static readonly ZERO_HOURS_REMINDER_TITLE = 'Log your volunteer hours';
+  private static readonly ZERO_HOURS_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+  private static readonly ZERO_HOURS_BATCH_SIZE = 10;
+  private static readonly ZERO_HOURS_MAIL_TIMEOUT_MS = 15_000;
+
+  /**
+   * Emails + notifies enrolled students on LIVE opportunities with 0 verified hours logged.
+   * `dryRun` only returns the counts. A student is reminded at most once per 24h (DB notification
+   * record, plus an in-memory marker for students without an account id).
+   */
+  async remindStudentsOnZeroHourProjects(opts: { dryRun?: boolean } = {}) {
+    const dryRun = opts.dryRun === true;
+    const opportunities = await this.opportunityRepository.find({
+      where: { status: In(['active', 'live']) },
+      select: ['id', 'title'],
+    });
+    const oppIds = opportunities.map((o) => o.id);
+    const verified = oppIds.length
+      ? await this.computeVerifiedHours({ opportunityIds: oppIds })
+      : { byOpportunity: new Map<string, number>() };
 
     const zeroHourOpportunities = opportunities.filter(
-      (opp) => (verifiedHoursByOppId.get(opp.id) ?? 0) <= 0,
+      (opp) => (verified.byOpportunity.get(opp.id) ?? 0) <= 0,
     );
 
+    const base = {
+      success: true,
+      dry_run: dryRun,
+      opportunities_scanned: opportunities.length,
+      opportunities_with_zero_hours: zeroHourOpportunities.length,
+    };
     if (!zeroHourOpportunities.length) {
       return {
-        success: true,
-        opportunities_scanned: opportunities.length,
-        opportunities_with_zero_hours: 0,
+        ...base,
         students_notified: 0,
+        students_failed: 0,
+        students_skipped_cooldown: 0,
+        would_notify: 0,
+        students_to_notify: 0,
+        students_would_notify: 0,
       };
     }
 
     const opportunityTitleById = new Map(
       zeroHourOpportunities.map((opp) => [opp.id, opp.title]),
     );
-
     const participations = await this.participationRepository.find({
       where: {
         projectId: In(zeroHourOpportunities.map((opp) => opp.id)),
-        status: In(OCCUPIED_SEAT_STATUSES),
+        status: In(['accepted', 'approved', 'verified', 'paid']),
       },
     });
 
-    let studentsNotified = 0;
+    // One reminder per student, listing every zero-hour project they are on.
+    type ZeroHourRecipient = {
+      email: string;
+      name: string;
+      studentId: string | null;
+      titles: string[];
+    };
+    const recipients = new Map<string, ZeroHourRecipient>();
     for (const participation of participations) {
       const email = participation.email?.trim();
       if (!email) continue;
-      const projectTitle =
+      const key = participation.studentId || email.toLowerCase();
+      const title =
         opportunityTitleById.get(participation.projectId) ?? 'your project';
+      const existing = recipients.get(key);
+      if (existing) {
+        if (!existing.titles.includes(title)) existing.titles.push(title);
+      } else {
+        recipients.set(key, {
+          email,
+          name: participation.fullName || 'Student',
+          studentId: participation.studentId || null,
+          titles: [title],
+        });
+      }
+    }
 
-      await this.mailService.sendHoursLoggingReminder(
-        email,
-        participation.fullName || 'Student',
-        projectTitle,
-      );
-      if (participation.studentId) {
-        await this.notificationsService.createNotification(
-          participation.studentId,
-          {
-            type: 'reminder',
-            title: 'Log your volunteer hours',
-            message: `You have 0 verified hours logged on "${projectTitle}". Please submit your timesheet so your contribution can be verified.`,
+    const now = Date.now();
+    const cooldownMs = AdminService.ZERO_HOURS_COOLDOWN_MS;
+    const dbRecent = new Set<string>();
+    const notificationRepo = this.repoOf(Notification);
+    const studentIds = [...recipients.values()]
+      .map((r) => r.studentId)
+      .filter(Boolean) as string[];
+    if (notificationRepo && studentIds.length) {
+      try {
+        const recent = await notificationRepo.find({
+          where: {
+            userId: In(studentIds),
+            title: AdminService.ZERO_HOURS_REMINDER_TITLE,
+            createdAt: MoreThanOrEqual(new Date(now - cooldownMs)),
           },
+          select: ['userId'],
+        });
+        for (const n of recent) dbRecent.add(n.userId);
+      } catch (err) {
+        this.logger.warn(
+          `zero-hours cooldown lookup failed: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
-      studentsNotified += 1;
+    }
+
+    const eligible: Array<[string, ZeroHourRecipient]> = [];
+    let skippedCooldown = 0;
+    for (const [key, r] of recipients) {
+      const lastMem = this.zeroHourReminderSentAt.get(key) ?? 0;
+      if ((r.studentId && dbRecent.has(r.studentId)) || now - lastMem < cooldownMs) {
+        skippedCooldown += 1;
+        continue;
+      }
+      eligible.push([key, r]);
+    }
+
+    if (dryRun) {
+      return {
+        ...base,
+        students_notified: 0,
+        students_failed: 0,
+        students_skipped_cooldown: skippedCooldown,
+        would_notify: eligible.length,
+        students_to_notify: eligible.length,
+        students_would_notify: eligible.length,
+      };
+    }
+
+    let notified = 0;
+    let failed = 0;
+    const batchSize = AdminService.ZERO_HOURS_BATCH_SIZE;
+    for (let i = 0; i < eligible.length; i += batchSize) {
+      const batch = eligible.slice(i, i + batchSize);
+      const results = await Promise.all(
+        batch.map(async ([key, r]) => {
+          const projectTitle = r.titles.slice(0, 3).join(', ');
+          let ok = false;
+          try {
+            await this.withTimeout(
+              this.mailService.sendHoursLoggingReminder(
+                r.email,
+                r.name,
+                projectTitle,
+              ),
+              AdminService.ZERO_HOURS_MAIL_TIMEOUT_MS,
+            );
+            ok = true;
+          } catch (err) {
+            this.logger.warn(
+              `zero-hours email failed for ${key}: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+          if (r.studentId) {
+            try {
+              await this.notificationsService.createNotification(r.studentId, {
+                type: 'reminder',
+                title: AdminService.ZERO_HOURS_REMINDER_TITLE,
+                message: `You have 0 verified hours logged on "${projectTitle}". Please submit your timesheet so your contribution can be verified.`,
+              });
+              ok = true;
+            } catch (err) {
+              this.logger.warn(
+                `zero-hours notification failed for ${key}: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
+          }
+          if (ok) this.zeroHourReminderSentAt.set(key, Date.now());
+          return ok;
+        }),
+      );
+      for (const ok of results) {
+        if (ok) notified += 1;
+        else failed += 1;
+      }
     }
 
     return {
-      success: true,
-      opportunities_scanned: opportunities.length,
-      opportunities_with_zero_hours: zeroHourOpportunities.length,
-      students_notified: studentsNotified,
+      ...base,
+      students_notified: notified,
+      students_failed: failed,
+      students_skipped_cooldown: skippedCooldown,
+      would_notify: eligible.length,
+      students_to_notify: eligible.length,
+      students_would_notify: eligible.length,
     };
+  }
+
+  private withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+    let timer: NodeJS.Timeout;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('timed out')), ms);
+    });
+    return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+  }
+
+  /** One report per student+project: highest status wins, then newest update (not newest-only). */
+  private dedupeReportsPerStudentProject(reports: StudentReport[]): StudentReport[] {
+    const best = new Map<string, StudentReport>();
+    for (const report of reports) {
+      const projectId = this.getReportProjectId(report);
+      const key =
+        report.studentId && projectId
+          ? `${report.studentId}:${projectId}`
+          : `report:${report.id}`;
+      const current = best.get(key);
+      if (!current) {
+        best.set(key, report);
+        continue;
+      }
+      const rankDiff =
+        reportStatusRank(report.status) -
+        reportStatusRank(current.status);
+      const newer =
+        new Date(report.updatedAt ?? report.createdAt ?? 0).getTime() >
+        new Date(current.updatedAt ?? current.createdAt ?? 0).getTime();
+      if (rankDiff > 0 || (rankDiff === 0 && newer)) best.set(key, report);
+    }
+    return [...best.values()];
+  }
+
+  /** YYYY-MM in Asia/Karachi (fixed UTC+5, no DST). */
+  private pktPeriod(date: Date): string {
+    return new Date(date.getTime() + 5 * 60 * 60 * 1000)
+      .toISOString()
+      .slice(0, 7);
+  }
+
+  private async countPartnerOrganizations(): Promise<number> {
+    const orgRepo = this.repoOf(Organization);
+    if (orgRepo) {
+      return orgRepo
+        .createQueryBuilder('o')
+        .where("LOWER(o.orgType) = 'ngo'")
+        .andWhere("UPPER(COALESCE(o.verificationStatus, '')) <> 'REJECTED'")
+        .getCount();
+    }
+    return this.usersRepository.count({ where: { role: UserRole.NGO } });
   }
 
   async getImpactAnalytics() {
     const [
-      verifiedTimesheets,
+      verified,
       studentReports,
       participations,
-      totalStudents,
       partnerNgosCount,
       opportunities,
     ] = await Promise.all([
-      this.timesheetRepository.find({
-        where: { status: 'verified' },
-        relations: ['opportunity'],
-      }),
+      this.computeVerifiedHours(),
       this.studentReportRepository.find({
         relations: ['opportunity'],
         order: { submission_date: 'DESC' },
       }),
       this.participationRepository.find({
-        where: { status: In([...OCCUPIED_SEAT_STATUSES]) },
+        where: { status: In(ACTIVE_VOLUNTEER_STATUSES) },
         select: ['studentId'],
       }),
-      this.usersRepository.count({ where: { role: UserRole.STUDENT } }),
-      this.usersRepository.count({ where: { role: UserRole.NGO } }),
+      this.countPartnerOrganizations(),
       this.opportunityRepository.find(),
     ]);
 
-    const approvedReports = studentReports.filter((report) =>
-      this.isApprovedImpactReport(report),
+    const oppById = new Map(opportunities.map((o) => [o.id, o]));
+    const approvedReports = this.dedupeReportsPerStudentProject(
+      studentReports.filter((report) => this.isApprovedImpactReport(report)),
     );
-    const coveredTimesheetKeys = new Set(
-      verifiedTimesheets
-        .map((t) =>
-          t.studentId && t.opportunityId
-            ? `${t.studentId}:${t.opportunityId}`
+    const coveredKeys = new Set(
+      verified.rows
+        .map((r) =>
+          r.studentId && r.opportunityId
+            ? `${r.studentId}:${r.opportunityId}`
             : null,
         )
         .filter(Boolean) as string[],
     );
-    const impactEvents: Array<{ date: Date; hours: number; sdg: string }> = [];
+    const impactEvents: Array<{ period: string; hours: number; sdg: string }> =
+      [];
 
-    for (const t of verifiedTimesheets) {
-      const hours = this.toAnalyticsNumber(t.hours) ?? 0;
-      if (hours <= 0) continue;
+    for (const row of verified.rows) {
       impactEvents.push({
-        date: new Date(t.createdAt),
-        hours,
-        sdg: this.getSdgName(t.opportunity),
+        period: row.period,
+        hours: row.hours,
+        sdg: this.getSdgName(
+          row.opportunityId ? oppById.get(row.opportunityId) : undefined,
+        ),
       });
     }
 
@@ -1676,41 +2264,44 @@ export class AdminService {
         report.studentId && projectId
           ? `${report.studentId}:${projectId}`
           : null;
-      if (key && coveredTimesheetKeys.has(key)) {
+      if (key && coveredKeys.has(key)) {
         continue;
       }
 
       const hours = this.getReportImpactHours(report);
       if (hours <= 0) continue;
       impactEvents.push({
-        date: report.submission_date
-          ? new Date(report.submission_date)
-          : new Date(report.createdAt),
+        period: this.pktPeriod(
+          report.submission_date
+            ? new Date(report.submission_date)
+            : new Date(report.createdAt),
+        ),
         hours,
         sdg: this.getSdgName(report.opportunity, report),
       });
     }
 
-    const hoursTrendMap: Record<
-      string,
-      { month: string; sortKey: string; hours: number }
-    > = {};
+    const MONTHS = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    const hoursTrendMap: Record<string, number> = {};
     for (const event of impactEvents) {
-      const year = event.date.getFullYear();
-      const monthIndex = event.date.getMonth();
-      const sortKey = `${year}-${String(monthIndex + 1).padStart(2, '0')}`;
-      const month = event.date.toLocaleString('default', { month: 'short' });
-      hoursTrendMap[sortKey] = hoursTrendMap[sortKey] || {
-        month,
-        sortKey,
-        hours: 0,
-      };
-      hoursTrendMap[sortKey].hours += event.hours;
+      hoursTrendMap[event.period] = (hoursTrendMap[event.period] || 0) + event.hours;
     }
-
-    const hoursTrend = Object.values(hoursTrendMap)
-      .sort((a, b) => a.sortKey.localeCompare(b.sortKey))
-      .map(({ month, hours }) => ({ month, hours }));
+    const hoursTrend = Object.entries(hoursTrendMap)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([period, hours]) => {
+        const [year, month] = period.split('-');
+        const monthName = MONTHS[Number(month) - 1] ?? month;
+        return {
+          month: monthName,
+          hours,
+          // Year-qualified key so Jan 2025 and Jan 2026 never merge or collide.
+          period,
+          label: `${monthName} ${year}`,
+        };
+      });
 
     const sdgImpactMap: Record<string, number> = {};
     for (const event of impactEvents) {
@@ -1721,33 +2312,36 @@ export class AdminService {
       .sort(([, a], [, b]) => b - a)
       .map(([name, value]) => ({ name, value }));
 
+    // Active = enrolled (accepted and later) or has verified output. No fallback to total students.
     const activeVolunteerIds = new Set(
       participations.map((p) => p.studentId).filter(Boolean),
     );
-    for (const t of verifiedTimesheets) {
-      if (t.studentId) activeVolunteerIds.add(t.studentId);
+    for (const row of verified.rows) {
+      if (row.studentId) activeVolunteerIds.add(row.studentId);
     }
     for (const report of approvedReports) {
       if (report.studentId) activeVolunteerIds.add(report.studentId);
     }
-    const activeVolunteersCount = activeVolunteerIds.size || totalStudents;
 
-    const beneficiaryProjectsFromReports = new Set<string>();
-    const reportBeneficiaries = approvedReports.reduce((sum, report) => {
-      const projectId = this.getReportProjectId(report);
-      if (projectId) beneficiaryProjectsFromReports.add(projectId);
-      return sum + this.getReportBeneficiaries(report);
-    }, 0);
-    const opportunityBeneficiaries = opportunities.reduce(
-      (sum, opportunity) => {
-        if (beneficiaryProjectsFromReports.has(opportunity.id)) {
-          return sum;
-        }
-        return sum + this.getOpportunityBeneficiaries(opportunity);
-      },
+    // Beneficiaries are counted once per project (team members' reports describe the same reach).
+    const reportedByProject = new Map<string, number>();
+    for (const report of approvedReports) {
+      const key = this.getReportProjectId(report) ?? `report:${report.id}`;
+      reportedByProject.set(
+        key,
+        Math.max(reportedByProject.get(key) ?? 0, this.getReportBeneficiaries(report)),
+      );
+    }
+    let totalBeneficiaries = 0;
+    for (const n of reportedByProject.values()) totalBeneficiaries += n;
+    // Planned-only opportunities are reported separately, never mixed into the reached total.
+    const plannedBeneficiaries = opportunities.reduce(
+      (sum, opportunity) =>
+        reportedByProject.has(opportunity.id)
+          ? sum
+          : sum + this.getOpportunityBeneficiaries(opportunity),
       0,
     );
-    const totalBeneficiaries = reportBeneficiaries + opportunityBeneficiaries;
 
     return {
       success: true,
@@ -1755,9 +2349,11 @@ export class AdminService {
         hours_trend: hoursTrend,
         impact_by_sdg: sdgImpact,
         stats: {
-          active_volunteers: activeVolunteersCount,
+          active_volunteers: activeVolunteerIds.size,
           partner_ngos: partnerNgosCount,
           total_beneficiaries: totalBeneficiaries,
+          planned_beneficiaries: plannedBeneficiaries,
+          verified_hours: verified.total,
         },
       },
     };
@@ -1789,13 +2385,17 @@ export class AdminService {
     );
   }
 
-  async getAuditLogs(page?: number, limit?: number) {
+  async getAuditLogs(
+    page?: number,
+    limit?: number,
+    filters?: AuditLogFilters,
+  ) {
     const {
       logs,
       total,
       page: p,
       limit: l,
-    } = await this.auditLogsService.findPaginated(page ?? 1, limit ?? 20);
+    } = await this.auditLogsService.findPaginated(page ?? 1, limit ?? 20, filters);
 
     return {
       success: true,
@@ -1879,13 +2479,62 @@ export class AdminService {
     };
   }
 
+  private static readonly PARTICIPATION_REVIEWABLE = [
+    'pending',
+    'pending_ciel_approval',
+  ];
+
+  private assertParticipationReviewable(status: string): void {
+    if (!AdminService.PARTICIPATION_REVIEWABLE.includes(status)) {
+      throw new ConflictException(
+        `This application is already "${status}" and can no longer be reviewed.`,
+      );
+    }
+  }
+
+  /** In-app notice to the student; a notification failure never fails the review. */
+  private async notifyParticipationDecision(
+    participation: Participation,
+    decision: 'approved' | 'rejected',
+    reason?: string,
+  ): Promise<void> {
+    if (!participation.studentId) return;
+    try {
+      await this.notificationsService.createNotification(
+        participation.studentId,
+        {
+          type: 'approval',
+          title:
+            decision === 'approved'
+              ? 'Participation approved'
+              : 'Participation request rejected',
+          message:
+            decision === 'approved'
+              ? 'Your participation request has been approved by CIEL.'
+              : `Your participation request was rejected by CIEL.${reason ? ` Reason: ${reason}` : ''}`,
+        },
+      );
+    } catch (err) {
+      this.logger.warn(
+        `participation decision notification failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  // Participation has no reviewer-id / reason columns; the actor + reason are captured by the
+  // admin mutation audit log (route params + body) and the student notification.
   async approveApplication(id: string, adminUserId: string) {
     const application = await this.participationRepository.findOne({
       where: { id },
     });
     if (application) {
+      this.assertParticipationReviewable(application.status);
       application.status = 'approved';
+      application.reviewedBy = adminUserId || null;
+      application.reviewedAt = new Date();
+      application.reviewReason = null;
       await this.participationRepository.save(application);
+      await this.notifyParticipationDecision(application, 'approved');
       return {
         success: true,
         message: 'Application approved successfully',
@@ -1899,8 +2548,13 @@ export class AdminService {
       where: { id },
     });
     if (application) {
+      this.assertParticipationReviewable(application.status);
       application.status = 'rejected';
+      application.reviewedBy = adminUserId || null;
+      application.reviewedAt = new Date();
+      application.reviewReason = (reason || '').trim().slice(0, 2000) || null;
       await this.participationRepository.save(application);
+      await this.notifyParticipationDecision(application, 'rejected', reason);
       return {
         success: true,
         message: 'Application rejected successfully',

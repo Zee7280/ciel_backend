@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -17,9 +18,16 @@ import { StudentReportsService } from './student-reports.service';
 import { FacultyService } from '../faculty/faculty.service';
 import { AiService } from '../ai/ai.service';
 import { computeCiiV2Result } from './cii-v2.constants';
+import { computeReportProgress } from './report-progress.util';
+import {
+  buildSystemIntegrityChecks,
+  mergeIntegrityChecks,
+} from './cii-integrity-checks.util';
 import { buildCielPkAiEvaluationPayload } from './build-ciel-pk-ai-evaluation-payload.util';
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
+import { Participation } from '../engagement/entities/participant.entity';
+import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { MailService } from '../mail/mail.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import {
@@ -28,6 +36,7 @@ import {
 } from './community-award.util';
 import { isPrivateCandidateOpportunity, reviewRouteForOpportunity } from '../opportunities/private-candidate.util';
 import { composeFacultyReportRemarks } from './faculty-report-remarks.util';
+import { trackingOrganizationName } from './tracking-org-name.util';
 
 function finiteNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -85,6 +94,51 @@ function pickListString(...values: unknown[]): string {
     if (typeof value === 'string' && value.trim()) return value.trim();
   }
   return '';
+}
+
+/** Assigned seats faculty can monitor (not pending join, not rejected). */
+const TRACKING_SEAT_STATUSES = [
+  'accepted',
+  'approved',
+  'verified',
+  'paid',
+  'pending_ciel_approval',
+  'pending_faculty_approval',
+  'pending_payment_approval',
+  'finalized',
+] as const;
+
+function isPrivateStudentPathway(opp: Opportunity | null | undefined): boolean {
+  const ctx = opp?.executing_context;
+  if (!ctx || typeof ctx !== 'object') return false;
+  return (
+    String((ctx as { student_pathway?: unknown }).student_pathway || '')
+      .trim()
+      .toLowerCase() === 'private'
+  );
+}
+
+function isRejectedOpportunity(opp: Opportunity): boolean {
+  const status = String(opp.status || '')
+    .trim()
+    .toLowerCase();
+  const stage = String(opp.workflowStage || '')
+    .trim()
+    .toLowerCase();
+  return status === 'rejected' || stage === 'rejected';
+}
+
+function latestActivityIso(
+  values: Array<Date | string | null | undefined>,
+): string | undefined {
+  let max = 0;
+  for (const value of values) {
+    if (!value) continue;
+    const ms =
+      value instanceof Date ? value.getTime() : Date.parse(String(value));
+    if (Number.isFinite(ms) && ms > max) max = ms;
+  }
+  return max > 0 ? new Date(max).toISOString() : undefined;
 }
 
 export function mapFacultyListPackage(
@@ -176,6 +230,10 @@ export class FacultyReportsService {
     private readonly attendanceLogsRepository: Repository<AttendanceLog>,
     private readonly mailService: MailService,
     private readonly notificationsService: NotificationsService,
+    @InjectRepository(Participation)
+    private readonly participationRepository: Repository<Participation>,
+    @InjectRepository(Opportunity)
+    private readonly opportunitiesRepository: Repository<Opportunity>,
   ) {}
 
   private normalizeFacultyEmail(facultyEmail: string): string {
@@ -290,7 +348,7 @@ export class FacultyReportsService {
       // work. Private-candidate rows are excluded below; they stay on the fee gateway
       // until CIEL PK. Leftover university payment_pending rows are reviewable here
       // while the university fee is paused (Dr Moeed).
-      .andWhere("report.status != 'draft'")
+      .andWhere("report.status NOT IN ('draft', 'continue')")
       .andWhere(
         `COALESCE(opportunity.faculty_verification_status, '') <> 'not_required'`,
       )
@@ -301,6 +359,267 @@ export class FacultyReportsService {
       .getMany();
 
     return reports;
+  }
+
+  /**
+   * Reports still being written by students in this faculty's scope: progress only (no answers,
+   * no scores). Opening a report stays blocked until submit (see findOne's 'not yet submitted').
+   */
+  async listDraftProgress(facultyId: string, facultyEmail: string) {
+    const scopedOpportunityIds =
+      await this.facultyService.getScopedOpportunityIds(
+        facultyId,
+        facultyEmail,
+      );
+    const reports = await this.baseReportQuery()
+      .where(
+        new Brackets((qb) =>
+          this.applyFacultyAccessFilter(
+            qb,
+            facultyId,
+            facultyEmail,
+            scopedOpportunityIds,
+          ),
+        ),
+      )
+      .andWhere("report.status IN ('draft', 'continue')")
+      .andWhere('report.reportSubmittedAt IS NULL')
+      .andWhere(
+        `COALESCE(opportunity.executing_context->>'student_pathway', '') <> 'private'`,
+      )
+      .orderBy('report.updatedAt', 'DESC')
+      .getMany();
+    return {
+      success: true,
+      data: reports.map((r) => ({
+        id: r.id,
+        student_name: r.student?.name || 'Unknown',
+        project_title: r.opportunity?.title || r.project_id,
+        project_id: r.opportunityId || r.project_id || null,
+        organization_name: trackingOrganizationName(r.opportunity),
+        status: r.status,
+        hours: resolveReportFlashHours(r.section1),
+        updated_at: r.updatedAt,
+        draft_locked: true,
+        ...computeReportProgress(r),
+      })),
+    };
+  }
+
+  /**
+   * Assigned students on this faculty's opportunities: live hours + report progress.
+   * Source of truth for Community Service Projects monitoring — not submitted-reports-only.
+   * Never returns student phone numbers.
+   */
+  async listProjectTracking(facultyId: string, facultyEmail: string) {
+    const scopedOpportunityIds =
+      await this.facultyService.getScopedOpportunityIds(
+        facultyId,
+        facultyEmail,
+      );
+    if (scopedOpportunityIds.length === 0) {
+      return { success: true, data: [] as Record<string, unknown>[] };
+    }
+
+    const [opportunities, participants, reports, logs] = await Promise.all([
+      this.opportunitiesRepository.find({
+        where: { id: In(scopedOpportunityIds) },
+        relations: ['organization'],
+      }),
+      this.participationRepository.find({
+        where: {
+          projectId: In(scopedOpportunityIds),
+          status: In([...TRACKING_SEAT_STATUSES]),
+        },
+        relations: ['student'],
+      }),
+      this.baseReportQuery()
+        .where('report."opportunityId"::text IN (:...scopedOppIds)', {
+          scopedOppIds: scopedOpportunityIds,
+        })
+        .orWhere(`TRIM(COALESCE(report.project_id, '')) IN (:...scopedOppIds)`, {
+          scopedOppIds: scopedOpportunityIds,
+        })
+        .orderBy('report.updatedAt', 'DESC')
+        .getMany(),
+      this.attendanceLogsRepository.find({
+        where: { projectId: In(scopedOpportunityIds) },
+      }),
+    ]);
+
+    const oppById = new Map(
+      opportunities
+        .filter((opp) => !isRejectedOpportunity(opp) && !isPrivateStudentPathway(opp))
+        .map((opp) => [opp.id, opp]),
+    );
+    const allowedIds = new Set(oppById.keys());
+
+    const logsByParticipant = new Map<string, AttendanceLog[]>();
+    const logsByProject = new Map<string, AttendanceLog[]>();
+    for (const log of logs) {
+      if (!allowedIds.has(log.projectId)) continue;
+      const byP = logsByParticipant.get(log.participantId) ?? [];
+      byP.push(log);
+      logsByParticipant.set(log.participantId, byP);
+      const byProj = logsByProject.get(log.projectId) ?? [];
+      byProj.push(log);
+      logsByProject.set(log.projectId, byProj);
+    }
+
+    const reportsForProject = (projectId: string) =>
+      reports.filter((r) => {
+        const key = String(r.opportunityId || r.project_id || '').trim();
+        return key === projectId && allowedIds.has(projectId);
+      });
+
+    const matchReport = (
+      projectId: string,
+      studentId: string,
+      email: string,
+    ): StudentReport | undefined => {
+      const pool = reportsForProject(projectId);
+      const sid = studentId.trim();
+      const em = email.trim().toLowerCase();
+      return (
+        pool.find((r) => sid && String(r.studentId || r.student?.id || '') === sid) ||
+        pool.find(
+          (r) =>
+            em &&
+            String(r.student?.email || '')
+              .trim()
+              .toLowerCase() === em,
+        )
+      );
+    };
+
+    const usedReportIds = new Set<string>();
+    const data: Record<string, unknown>[] = [];
+
+    for (const seat of participants) {
+      const opp = oppById.get(seat.projectId);
+      if (!opp) continue;
+      const email = pickListString(seat.student?.email, seat.email);
+      const report = matchReport(
+        seat.projectId,
+        String(seat.studentId || seat.student?.id || ''),
+        email,
+      );
+      if (report?.id) usedReportIds.add(report.id);
+      const seatLogs = logsByParticipant.get(seat.id) ?? [];
+      const liveHours = this.loggedHoursForProject(seatLogs);
+      const required =
+        Number(
+          (opp.timeline as { expected_hours?: unknown } | undefined)
+            ?.expected_hours,
+        ) ||
+        Number(opp.requiredHours) ||
+        16;
+      const progress = report ? computeReportProgress(report) : null;
+      const submitted = progress?.is_submitted === true;
+      const hoursPct =
+        required > 0
+          ? Math.min(100, Math.round((liveHours / required) * 100))
+          : 0;
+      const lastActivity = latestActivityIso([
+        ...seatLogs.map((l) => l.updatedAt),
+        ...seatLogs.map((l) => l.createdAt),
+        ...seatLogs.map((l) => l.dateOfEngagement),
+        report?.updatedAt,
+        report?.reportSubmittedAt,
+        seat.updatedAt,
+        seat.createdAt,
+      ]);
+      data.push({
+        id: report?.id || `track:${seat.id}`,
+        participation_id: seat.id,
+        report_id: report?.id || null,
+        student_name:
+          pickListString(seat.student?.name, seat.fullName) || 'Student',
+        student_email: email && email.includes('@') ? email : null,
+        project_title: opp.title || 'Project',
+        project_id: seat.projectId,
+        organization_name: trackingOrganizationName(opp),
+        hours: Math.round(liveHours * 10) / 10,
+        required_hours: required,
+        hours_progress_pct: hoursPct,
+        progress_pct: submitted
+          ? 100
+          : progress
+            ? progress.progress_pct
+            : hoursPct,
+        sections_complete: progress?.sections_complete,
+        sections_total: progress?.sections_total ?? 10,
+        status: report?.status || 'assigned',
+        faculty_status: report?.faculty_status || null,
+        submission_date: report?.submission_date || null,
+        report_submitted_at: report?.reportSubmittedAt || null,
+        updated_at: lastActivity || report?.updatedAt || seat.updatedAt,
+        last_activity_at: lastActivity || null,
+        draft_locked: !submitted,
+        member_hours: [
+          {
+            name: pickListString(seat.student?.name, seat.fullName) || 'Student',
+            hours: Math.round(liveHours * 10) / 10,
+            required,
+          },
+        ],
+      });
+    }
+
+    for (const report of reports) {
+      if (usedReportIds.has(report.id)) continue;
+      const projectId = String(report.opportunityId || report.project_id || '').trim();
+      const opp = oppById.get(projectId);
+      if (!opp) continue;
+      const projectLogs = logsByProject.get(projectId) ?? [];
+      const liveHours = projectLogs.length
+        ? this.loggedHoursForProject(projectLogs)
+        : resolveReportFlashHours(report.section1);
+      const required =
+        Number(
+          (opp.timeline as { expected_hours?: unknown } | undefined)
+            ?.expected_hours,
+        ) || 16;
+      const progress = computeReportProgress(report);
+      const email = pickListString(report.student?.email);
+      data.push({
+        id: report.id,
+        participation_id: null,
+        report_id: report.id,
+        student_name: report.student?.name || 'Unknown',
+        student_email: email && email.includes('@') ? email : null,
+        project_title: opp.title || report.project_id,
+        project_id: projectId || null,
+        organization_name: trackingOrganizationName(opp),
+        hours: Math.round(liveHours * 10) / 10,
+        required_hours: required,
+        hours_progress_pct:
+          required > 0 ? Math.min(100, Math.round((liveHours / required) * 100)) : 0,
+        ...progress,
+        status: report.status,
+        faculty_status: report.faculty_status,
+        submission_date: report.submission_date,
+        report_submitted_at: report.reportSubmittedAt,
+        updated_at: report.updatedAt,
+        last_activity_at: latestActivityIso([report.updatedAt, report.reportSubmittedAt]) || null,
+        draft_locked: !progress.is_submitted,
+        member_hours: [
+          {
+            name: report.student?.name || 'Student',
+            hours: Math.round(liveHours * 10) / 10,
+            required,
+          },
+        ],
+      });
+    }
+
+    data.sort((a, b) => {
+      const ta = Date.parse(String(a.last_activity_at || a.updated_at || '')) || 0;
+      const tb = Date.parse(String(b.last_activity_at || b.updated_at || '')) || 0;
+      return tb - ta;
+    });
+
+    return { success: true, data };
   }
 
   /** Same submit bar: rejected sessions do not count; pending sessions do. */
@@ -391,7 +710,7 @@ export class FacultyReportsService {
           ),
         ),
       )
-      .andWhere("report.status != 'draft'")
+      .andWhere("report.status NOT IN ('draft', 'continue')")
       .getOne();
 
     if (!report) {
@@ -400,9 +719,12 @@ export class FacultyReportsService {
       );
     }
 
-    return this.studentReportsService.buildDetailResponse(report, undefined, {
-      allProjectAttendance: true,
-    });
+    return StudentReportsService.withholdAnalysisForFacultyUntilApproved(
+      await this.studentReportsService.buildDetailResponse(report, undefined, {
+        allProjectAttendance: true,
+        evidenceViewer: 'faculty',
+      }),
+    );
   }
 
   /** Shared lookup for faculty-scoped mutations (decision actions, CII v2 analyse/approve). */
@@ -432,7 +754,7 @@ export class FacultyReportsService {
           ),
         ),
       )
-      .andWhere("report.status != 'draft'")
+      .andWhere("report.status NOT IN ('draft', 'continue')")
       .getOne();
 
     if (!report) {
@@ -476,122 +798,6 @@ export class FacultyReportsService {
     return report;
   }
 
-  async updateAction(
-    id: string,
-    facultyId: string,
-    facultyEmail: string,
-    status: 'approved' | 'rejected' | 'revision_requested',
-    remarks?: string,
-    extras?: { revision_section?: string; required_correction?: string },
-  ) {
-    const report = await this.findAssignedReportForAction(
-      id,
-      facultyId,
-      facultyEmail,
-    );
-
-    if (
-      (status === 'rejected' || status === 'revision_requested') &&
-      !remarks?.trim()
-    ) {
-      throw new BadRequestException(
-        status === 'revision_requested'
-          ? 'A reason is required when sending a report back for revision.'
-          : 'A reason is required when rejecting a report.',
-      );
-    }
-
-    // Once the CII v2 record is locked the review decision is final — mirrors the
-    // lock checks in runCiiV2Analysis/approveCiiV2 so faculty_status can't be flipped
-    // afterwards into a state contradicting the locked score.
-    if (report.ciiV2Lock?.locked) {
-      throw new BadRequestException(
-        "This report's CII v2 analysis is locked; further review actions are not permitted.",
-      );
-    }
-
-    const composedRemarks = composeFacultyReportRemarks({
-      remarks,
-      revision_section: extras?.revision_section,
-      required_correction: extras?.required_correction,
-    });
-    const patch: Record<string, unknown> = {
-      faculty_status: status,
-      ...(composedRemarks ? { faculty_remarks: composedRemarks } : {}),
-    };
-    if (status === 'revision_requested') {
-      patch.status = 'revision';
-    } else if (status === 'rejected') {
-      patch.status = 'rejected';
-    }
-
-    await this.studentReportsRepository.update({ id: report.id }, patch as never);
-
-    const projectTitle =
-      report.opportunity?.title || report.project_id || 'Community service report';
-    const studentName = report.student?.name || 'Student';
-    const studentEmail = report.student?.email;
-    const note = composedRemarks;
-    void this.notifyStudentFacultyDecision(
-      report.studentId,
-      studentEmail,
-      studentName,
-      projectTitle,
-      status,
-      note,
-    ).catch(() => undefined);
-
-    const verb =
-      status === 'revision_requested'
-        ? 'returned for revision'
-        : status === 'rejected'
-          ? 'rejected'
-          : 'approved';
-    return {
-      success: true,
-      message: `Report ${verb} successfully.`,
-      data: {
-        id: report.id,
-        faculty_status: status,
-        status: (patch.status as string) || report.status,
-      },
-    };
-  }
-
-  private async notifyStudentFacultyDecision(
-    studentId: string,
-    studentEmail: string | null | undefined,
-    studentName: string,
-    projectTitle: string,
-    status: 'approved' | 'rejected' | 'revision_requested',
-    note: string,
-  ): Promise<void> {
-    const titles = {
-      approved: 'Impact report approved',
-      rejected: 'Impact report rejected',
-      revision_requested: 'Impact report needs revision',
-    };
-    const messages = {
-      approved: `${projectTitle} was approved by faculty.`,
-      rejected: `${projectTitle} was rejected by faculty. The reporting process has ended.`,
-      revision_requested: `${projectTitle} was sent back for revision. Open Action Required to edit and resubmit.`,
-    };
-    await this.notificationsService.createNotification(studentId, {
-      type: 'approval',
-      title: titles[status],
-      message: note ? `${messages[status]} ${note}` : messages[status],
-    });
-    if (studentEmail) {
-      await this.mailService.sendStudentImpactReportFacultyDecision(
-        studentEmail,
-        studentName.split(' ')[0] || studentName,
-        projectTitle,
-        status,
-        note,
-      );
-    }
-  }
-
   /** Runs the CII v2 AI evaluation and persists a server-recomputed score snapshot. Re-runnable while unlocked. */
   async runCiiV2Analysis(id: string, facultyId: string, facultyEmail: string) {
     const report = await this.findAssignedReportForAction(
@@ -604,22 +810,45 @@ export class FacultyReportsService {
 
   async runCiiV2AnalysisForAdmin(id: string) {
     const report = await this.findReportForAdminCii(id);
-    return this.persistCiiV2Analysis(report);
+    return this.persistCiiV2Analysis(report, { adminRescore: true });
   }
 
-  private async persistCiiV2Analysis(report: StudentReport) {
+  /** Reports whose AI analysis is running right now in this process (double click / two admins). */
+  private static readonly ciiRunsInFlight = new Set<string>();
 
-    if (report.ciiV2Lock?.locked) {
+  private async persistCiiV2Analysis(
+    report: StudentReport,
+    opts: { adminRescore?: boolean } = {},
+  ) {
+    if (!opts.adminRescore && report.ciiV2Lock?.locked) {
       throw new BadRequestException(
         "This report's CII v2 score is already locked and cannot be re-analysed.",
       );
     }
+    // One analysis per report at a time: a second click used to start a second paid AI call and the
+    // last write won silently.
+    if (FacultyReportsService.ciiRunsInFlight.has(report.id)) {
+      throw new ConflictException(
+        'An analysis is already running for this report. Wait for it to finish, then refresh.',
+      );
+    }
+    FacultyReportsService.ciiRunsInFlight.add(report.id);
+    try {
+      return await this.runAndStoreCiiV2Analysis(report, opts);
+    } finally {
+      FacultyReportsService.ciiRunsInFlight.delete(report.id);
+    }
+  }
 
+  private async runAndStoreCiiV2Analysis(
+    report: StudentReport,
+    opts: { adminRescore?: boolean } = {},
+  ) {
     // Reuse the canonical, security-reviewed payload builder (strips CNIC, legacy scores and
     // other sensitive/internal fields) instead of forwarding raw section JSON to the AI vendor.
     const payload = buildCielPkAiEvaluationPayload(report);
 
-    const { ciiV2 } = await this.aiService.summarize(
+    const { ciiV2, evidenceInspection, model } = await this.aiService.summarize(
       'cii_v2_evaluation',
       payload,
     );
@@ -641,24 +870,49 @@ export class FacultyReportsService {
       bonusWhy: ciiV2.bonusWhy,
       integrityWhy: ciiV2.integrityWhy,
       redFlags: ciiV2.redFlags,
+      integrityChecks: mergeIntegrityChecks(
+        buildSystemIntegrityChecks(payload),
+        ciiV2.checks,
+      ),
       needsAdminReview: ciiV2.needsAdminReview,
+      incomplete: ciiV2.incomplete === true,
       studentFeedback: ciiV2.studentFeedback,
       frameworkVersion: ciiV2.frameworkVersion,
+      // Which evidence the model could actually look at (images) and which it could not.
+      evidenceInspection,
       computedAt: new Date().toISOString(),
+      // Every run is kept (score, when, model, how much evidence was inspected) — a re-run no
+      // longer erases what the previous run said.
+      runHistory: [
+        ...(((report.ciiV2 as Record<string, unknown> | null)?.runHistory as unknown[]) ?? []).slice(-19),
+        {
+          score: result.final,
+          at: new Date().toISOString(),
+          model: model ?? null,
+          inspectedImages: evidenceInspection?.inspected.length ?? 0,
+          notInspectedFiles: evidenceInspection?.notInspected.length ?? 0,
+          incomplete: ciiV2.incomplete === true,
+        },
+      ],
     };
 
-    // Targeted, guarded update: only touches the ciiV2 column (never ciiV2Lock or any other
-    // field this method didn't read/intend to change), and re-checks "not locked" at write
-    // time in case the AI call above raced with a concurrent approve.
-    const updateResult = await this.studentReportsRepository
+    // Targeted update: faculty writes are blocked while locked. Super Admin rescore
+    // clears the lock in the same write (QueryBuilder drops `.set({ json: null })`).
+    const qb = this.studentReportsRepository
       .createQueryBuilder()
       .update(StudentReport)
-      .set({ ciiV2: nextCiiV2 })
-      .where('id = :id', { id: report.id })
-      .andWhere(
-        `("ciiV2Lock" IS NULL OR ("ciiV2Lock"->>'locked') IS DISTINCT FROM 'true')`,
+      .set(
+        opts.adminRescore
+          ? { ciiV2: nextCiiV2, ciiV2Lock: () => 'NULL' }
+          : { ciiV2: nextCiiV2 },
       )
-      .execute();
+      .where('id = :id', { id: report.id });
+    if (!opts.adminRescore) {
+      qb.andWhere(
+        `("ciiV2Lock" IS NULL OR ("ciiV2Lock"->>'locked') IS DISTINCT FROM 'true')`,
+      );
+    }
+    const updateResult = await qb.execute();
 
     if (!updateResult.affected) {
       throw new BadRequestException(
@@ -770,6 +1024,11 @@ export class FacultyReportsService {
     if (!stored) {
       throw new BadRequestException(
         'Run the CII v2 analysis before approving.',
+      );
+    }
+    if ((stored as { incomplete?: boolean }).incomplete === true) {
+      throw new BadRequestException(
+        'The last AI run was incomplete (it skipped part of the rubric, which was scored as 0). Re-run the analysis before locking the score.',
       );
     }
     if (report.ciiV2Lock?.locked) {

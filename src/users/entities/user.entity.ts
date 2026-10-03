@@ -16,7 +16,7 @@ export class User {
     @Column()
     password: string;
 
-    /** Encrypted plaintext copy for super-admin recovery only (`select: false` hides from default queries). */
+    /** @deprecated No longer written or returned (recoverable passwords were removed). Column kept for additive-only schema; safe to drop in a later migration. */
     @Column({ name: 'password_record', type: 'text', nullable: true, select: false })
     passwordRecord: string | null;
 
@@ -105,6 +105,10 @@ export class User {
     /** Bumped on password change so existing JWTs are rejected (e.g. after reset on another device). */
     @Column({ type: 'int', default: 0 })
     tokenVersion: number;
+
+    /** When the user accepted the Terms & Privacy Policy at signup (null for legacy accounts). */
+    @Column({ type: 'timestamptz', nullable: true })
+    termsAcceptedAt: Date | null;
 
     @Column({ default: false })
     requires_cnic: boolean;

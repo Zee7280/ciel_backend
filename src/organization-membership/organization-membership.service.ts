@@ -3,6 +3,7 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, Repository, In } from 'typeorm';
@@ -11,6 +12,8 @@ import { User } from '../users/entities/user.entity';
 import { Setting } from '../settings/entities/setting.entity';
 import { UserRole } from '../users/enums/user-role.enum';
 import { MEMBERSHIP_FEE_DEFAULT_PKR } from './membership-fee.defaults';
+import { MailService } from '../mail/mail.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PartnerMembershipSettingsService } from './partner-membership-settings.service';
 
 const SETTING_KEY_UNI = 'MEMBERSHIP_FEE_UNIVERSITY_PKR';
@@ -34,6 +37,9 @@ export type AdminMembershipFeeRowDto = {
   reviewedAt: Date | null;
   adminFeedback: string | null;
   reviewedByUserId: string | null;
+  /** Pending list only: fee the role is expected to pay, and whether the slip differs from it. */
+  expectedAmountPkr?: number | null;
+  amountMismatch?: boolean;
   user: {
     id: string;
     name: string;
@@ -79,7 +85,51 @@ export class OrganizationMembershipService {
     @InjectRepository(Setting)
     private readonly settingRepo: Repository<Setting>,
     private readonly partnerMembershipSettings: PartnerMembershipSettingsService,
+    @Optional() private readonly mailService?: MailService,
+    @Optional() private readonly notificationsService?: NotificationsService,
   ) {}
+
+  /** Best-effort in-app + email notice; a failure here never fails the decision. */
+  private async notifyMembershipDecision(
+    userId: string,
+    email: string | null | undefined,
+    decision: 'approved' | 'rejected',
+    feedback?: string | null,
+  ): Promise<void> {
+    const title =
+      decision === 'approved'
+        ? 'Membership fee approved'
+        : 'Membership fee payment rejected';
+    const message =
+      decision === 'approved'
+        ? 'Your membership fee payment was approved. Your account is now active.'
+        : 'Your membership fee payment proof was rejected. Please submit a new payment proof.';
+    try {
+      if (this.notificationsService) {
+        await this.notificationsService.createApprovalNotification(
+          userId,
+          title,
+          message,
+        );
+      }
+    } catch {
+      /* ignore */
+    }
+    try {
+      if (this.mailService && email) {
+        await this.mailService.sendStudentOpportunityStatusUpdate(
+          email,
+          'CIEL PK membership',
+          title,
+          title,
+          message,
+          decision === 'rejected' ? feedback : null,
+        );
+      }
+    } catch {
+      /* ignore */
+    }
+  }
 
   async roleRequiresMembershipPayment(role: UserRole): Promise<boolean> {
     if (role === UserRole.UNIVERSITY || role === UserRole.CORPORATE) {
@@ -209,7 +259,11 @@ export class OrganizationMembershipService {
     userId: string,
     organizationId?: string | null,
   ) {
-    await this.userRepo.update(userId, { status: 'active' });
+    // Only release accounts still waiting on the fee — never re-activate one an admin suspended.
+    await this.userRepo.update(
+      { id: userId, status: 'pending_membership_payment' },
+      { status: 'active' },
+    );
     if (organizationId) {
       await this.userRepo
         .createQueryBuilder()
@@ -279,7 +333,30 @@ export class OrganizationMembershipService {
       relations: ['user', 'user.organization'],
       order: { createdAt: 'ASC' },
     });
-    return rows.map((r) => this.formatAdminMembershipRow(r));
+    return this.formatRowsWithExpected(rows);
+  }
+
+  private async formatRowsWithExpected(
+    rows: OrganizationMembershipFee[],
+  ): Promise<AdminMembershipFeeRowDto[]> {
+    const expectedByRole = new Map<string, number>();
+    for (const r of rows) {
+      const role = r.user?.role;
+      if (role && !expectedByRole.has(role)) {
+        expectedByRole.set(role, await this.getExpectedFeePkr(role));
+      }
+    }
+    return rows.map((r) => {
+      const dto = this.formatAdminMembershipRow(r);
+      const expected = r.user?.role
+        ? (expectedByRole.get(r.user.role) ?? null)
+        : null;
+      return {
+        ...dto,
+        expectedAmountPkr: expected,
+        amountMismatch: expected !== null && r.paidAmountPkr !== expected,
+      };
+    });
   }
 
   async listHistoryForAdmin(take = 150): Promise<AdminMembershipFeeRowDto[]> {
@@ -290,6 +367,38 @@ export class OrganizationMembershipService {
       take,
     });
     return rows.map((r) => this.formatAdminMembershipRow(r));
+  }
+
+  /** Paginated history; with no page/limit it behaves like listHistoryForAdmin (first 150) plus total. */
+  async listHistoryPaged(opts?: {
+    page?: number | string;
+    limit?: number | string;
+  }): Promise<{
+    rows: AdminMembershipFeeRowDto[];
+    total: number;
+    page: number;
+    limit: number;
+  }> {
+    const paged = opts?.page !== undefined || opts?.limit !== undefined;
+    const limit = paged
+      ? Math.min(200, Math.max(1, parseInt(String(opts?.limit ?? 50), 10) || 50))
+      : 150;
+    const page = paged
+      ? Math.max(1, parseInt(String(opts?.page ?? 1), 10) || 1)
+      : 1;
+    const [rows, total] = await this.feeRepo.findAndCount({
+      where: { status: In(['approved', 'rejected']) },
+      relations: ['user', 'user.organization'],
+      order: { reviewedAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+    return {
+      rows: rows.map((r) => this.formatAdminMembershipRow(r)),
+      total,
+      page,
+      limit,
+    };
   }
 
   private formatAdminMembershipRow(
@@ -351,6 +460,7 @@ export class OrganizationMembershipService {
   async approveSubmission(
     id: string,
     adminUserId: string,
+    opts?: { allowAmountMismatch?: boolean },
   ): Promise<OrganizationMembershipFee> {
     const row = await this.feeRepo.findOne({
       where: { id },
@@ -362,11 +472,31 @@ export class OrganizationMembershipService {
     if (row.status !== 'pending_review') {
       throw new BadRequestException('This submission is not pending review');
     }
+    if (row.user?.role && !opts?.allowAmountMismatch) {
+      const expected = await this.getExpectedFeePkr(row.user.role);
+      if (row.paidAmountPkr !== expected) {
+        throw new BadRequestException(
+          `Paid amount (PKR ${row.paidAmountPkr}) does not match the expected fee (PKR ${expected}). Re-send with allowAmountMismatch=true to approve anyway.`,
+        );
+      }
+    }
+    const reviewedAt = new Date();
+    const result = await this.feeRepo.update(
+      { id, status: 'pending_review' },
+      { status: 'approved', reviewedByUserId: adminUserId, reviewedAt },
+    );
+    if (!result.affected) {
+      throw new BadRequestException('This submission is not pending review');
+    }
     row.status = 'approved';
     row.reviewedByUserId = adminUserId;
-    row.reviewedAt = new Date();
-    await this.feeRepo.save(row);
+    row.reviewedAt = reviewedAt;
     await this.activateMembershipAccounts(row.userId, row.organizationId);
+    await this.notifyMembershipDecision(
+      row.userId,
+      row.user?.email,
+      'approved',
+    );
     return row;
   }
 
@@ -385,11 +515,30 @@ export class OrganizationMembershipService {
     if (row.status !== 'pending_review') {
       throw new BadRequestException('This submission is not pending review');
     }
+    const reviewedAt = new Date();
+    const adminFeedback = feedback?.trim() || null;
+    const result = await this.feeRepo.update(
+      { id, status: 'pending_review' },
+      {
+        status: 'rejected',
+        adminFeedback,
+        reviewedByUserId: adminUserId,
+        reviewedAt,
+      },
+    );
+    if (!result.affected) {
+      throw new BadRequestException('This submission is not pending review');
+    }
     row.status = 'rejected';
-    row.adminFeedback = feedback?.trim() || null;
+    row.adminFeedback = adminFeedback;
     row.reviewedByUserId = adminUserId;
-    row.reviewedAt = new Date();
-    await this.feeRepo.save(row);
+    row.reviewedAt = reviewedAt;
+    await this.notifyMembershipDecision(
+      row.userId,
+      row.user?.email,
+      'rejected',
+      adminFeedback,
+    );
     return row;
   }
 }

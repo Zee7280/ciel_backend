@@ -34,6 +34,18 @@ export class FacultyCommunityServiceController {
     private readonly opportunitiesRepository: Repository<Opportunity>,
   ) {}
 
+  /**
+   * Assigned students on opportunities this faculty supervises: live hours, last activity,
+   * and report progress. Does not expose student phone numbers.
+   */
+  @Get('tracking')
+  async tracking(@Request() req) {
+    return this.facultyReportsService.listProjectTracking(
+      req.user.id,
+      req.user.email,
+    );
+  }
+
   /** Read-only pool for linked projects. Faculty cannot run or publish Ruberix ranking. */
   @Get('award-cards')
   async awardCards(@Request() req) {

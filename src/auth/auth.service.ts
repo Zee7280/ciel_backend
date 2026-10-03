@@ -5,6 +5,7 @@ import {
   ConflictException,
   BadRequestException,
   NotFoundException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -35,6 +36,8 @@ import {
   isPublicSignupRole,
   resolveOrgSignupAccount,
 } from './org-signup.util';
+import { PlatformSettingsService } from '../settings/platform-settings.service';
+import { canonicalizePhoneInput } from '../common/phone-e164.util';
 
 @Injectable()
 export class AuthService implements OnApplicationBootstrap {
@@ -46,6 +49,7 @@ export class AuthService implements OnApplicationBootstrap {
     private otpService: OtpService,
     private engagementService: EngagementService,
     private organizationMembershipService: OrganizationMembershipService,
+    private platformSettingsService: PlatformSettingsService,
     @InjectRepository(Opportunity)
     private opportunitiesRepository: Repository<Opportunity>,
     @InjectRepository(User)
@@ -168,8 +172,17 @@ export class AuthService implements OnApplicationBootstrap {
   }
 
   async signup(signupDto: SignupDto) {
+    // Admin "allow registrations" switch — covers every public signup role. Login is unaffected.
+    if (!(await this.platformSettingsService.isRegistrationAllowed())) {
+      throw new ForbiddenException('New registrations are temporarily closed.');
+    }
     try {
-      const { password, email: rawEmail, ...rawUserData } = signupDto;
+      const {
+        password,
+        email: rawEmail,
+        acceptedTerms: _acceptedTerms,
+        ...rawUserData
+      } = signupDto;
       const { status: _clientStatus, ...userData } =
         rawUserData as SignupDto & { status?: string };
       const email = rawEmail.trim().toLowerCase();
@@ -307,12 +320,22 @@ export class AuthService implements OnApplicationBootstrap {
         userCreateData.countryCode,
         userCreateData.phone,
       );
-      if (contactPhone) {
-        userCreateData.phone = contactPhone;
-      }
+      const parsedPhone = canonicalizePhoneInput(
+        contactPhone || userCreateData.phone,
+        {
+          required: true,
+          requiredMessage: 'Enter a valid mobile number.',
+        },
+      );
+      if (parsedPhone.error) throw new BadRequestException(parsedPhone.error);
+      userCreateData.phone = parsedPhone.e164;
 
       let organization: Organization | null = null;
+      // Only org signups (university / NGO / corporate) create an Organization. A student or
+      // faculty body carrying orgName/orgType must not mint one (and get an organizationId in
+      // their token).
       if (
+        isOrgSignup &&
         userCreateData.orgName &&
         userCreateData.orgType &&
         userCreateData.role !== UserRole.INVESTOR
@@ -327,7 +350,9 @@ export class AuthService implements OnApplicationBootstrap {
             ? {
                 contactName: userCreateData.contactPerson,
                 contactEmail: email,
-                ...(contactPhone ? { contactPhone } : {}),
+                ...(userCreateData.phone
+                  ? { contactPhone: userCreateData.phone }
+                  : {}),
               }
             : {}),
           ...(isOrgSignup &&
@@ -366,6 +391,7 @@ export class AuthService implements OnApplicationBootstrap {
         email,
         password: hashedPassword,
         organization,
+        termsAcceptedAt: new Date(),
         ...(needsMembershipFee ? { status: 'pending_membership_payment' } : {}),
       });
 
@@ -424,6 +450,14 @@ export class AuthService implements OnApplicationBootstrap {
       throw new UnauthorizedException('Invalid credentials');
     }
 
+    // Check the password FIRST: account status / org-verification messages below are only shown to
+    // someone who proved they know the password, so they can't be used to probe which emails
+    // exist or what state they are in.
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
     const investorPending =
       user.role === UserRole.INVESTOR && user.status === 'pending';
     if (
@@ -456,20 +490,6 @@ export class AuthService implements OnApplicationBootstrap {
       }
     }
 
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid) {
-      throw new UnauthorizedException('Invalid credentials');
-    }
-
-    void this.usersService
-      .capturePasswordRecordFromLogin(user.id, password)
-      .catch((err) => {
-        console.warn(
-          'Password record capture on login failed (non-fatal):',
-          (err as Error).message,
-        );
-      });
-
     if (user.role === UserRole.STUDENT) {
       try {
         await this.engagementService.linkOrphanParticipationsByEmail(
@@ -496,7 +516,9 @@ export class AuthService implements OnApplicationBootstrap {
       university: user.university || user.institution,
       tokenVersion: user.tokenVersion ?? 0,
     };
-    const expiresIn = loginDto.isMobile ? '30d' : '10h';
+    // Mobile sessions live longer than web, but a client-chosen flag must not buy a month-long
+    // token that can't be revoked (logout bumps tokenVersion, which kills it).
+    const expiresIn = loginDto.isMobile ? '7d' : '10h';
 
     return {
       success: true,
@@ -507,6 +529,25 @@ export class AuthService implements OnApplicationBootstrap {
     };
   }
 
+  /**
+   * Admin-triggered reset: emails the user the normal reset link. Never reveals or sets a password.
+   */
+  async adminSendPasswordReset(userId: string): Promise<{ success: true }> {
+    const user = await this.usersService.findOne(userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    const result = await this.forgotPassword(user.email);
+    if (!result.success) {
+      throw new BadRequestException('Could not send the password reset email.');
+    }
+    return { success: true };
+  }
+
+  async logout(userId: string): Promise<void> {
+    await this.usersService.revokeSessions(userId);
+  }
+
   async forgotPassword(email: string) {
     const trimmed = typeof email === 'string' ? email.trim() : '';
     if (!trimmed) {
@@ -515,12 +556,15 @@ export class AuthService implements OnApplicationBootstrap {
 
     const user = await this.usersService.findByEmail(trimmed.toLowerCase());
 
+    // Always the same answer, whether or not the email has an account — otherwise this endpoint
+    // is an account-existence oracle.
+    const genericReply = {
+      success: true,
+      message:
+        'If an account exists for this email, we sent a password reset link. Check your inbox and spam folder.',
+    };
     if (!user) {
-      return {
-        success: false,
-        message:
-          'No account exists for this email. Please check that you spelled it correctly or use the email you registered with.',
-      };
+      return genericReply;
     }
 
     // Generate a secure random token
@@ -532,15 +576,10 @@ export class AuthService implements OnApplicationBootstrap {
     await this.usersService.savePasswordResetToken(user.id, resetToken, expiry);
 
     // Send the reset email
-    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-    const resetLink = `${baseUrl}/reset-password?token=${resetToken}`;
+    const resetLink = this.mailService.buildPasswordResetLink(resetToken);
     await this.mailService.sendPasswordResetEmail(user.email, resetLink);
 
-    return {
-      success: true,
-      message:
-        'We sent a password reset link to your email. Check your inbox and spam folder.',
-    };
+    return genericReply;
   }
 
   async resetPassword(token: string, newPassword: string) {
@@ -558,11 +597,7 @@ export class AuthService implements OnApplicationBootstrap {
     }
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
-    await this.usersService.updatePassword(
-      user.id,
-      hashedPassword,
-      newPassword,
-    );
+    await this.usersService.updatePassword(user.id, hashedPassword);
 
     return { success: true, message: 'Password updated successfully!' };
   }

@@ -99,6 +99,9 @@ describe('buildCielPkAiEvaluationPayload', () => {
             overlap_note: 'same class attended twice',
             reach_counting_method: 'Verified registration / list',
             site_note: 'Classroom 4',
+            sdgs: [4],
+            ladder_ui: { open: 0 },
+            serves_beneficiaries: true,
           },
         ],
         project_summary: {
@@ -111,10 +114,14 @@ describe('buildCielPkAiEvaluationPayload', () => {
         measurable_outcomes: [
           {
             id: 'out-1',
-            metric: 'Quiz score improvement',
+            metric: 'Percentage Improvement (%)',
+            metric_other: 'Quiz score improvement',
             baseline: '20',
             endline: '65',
             unit: 'percentage',
+            activity_id: 'act-1',
+            sure: 1,
+            confidence_level: ['Directly Measured'],
           },
         ],
         challenges: 'Short duration',
@@ -195,9 +202,15 @@ describe('buildCielPkAiEvaluationPayload', () => {
       (
         payload.section8_evidence_verification as {
           evidence_file_ids?: string[];
+          media_visibility?: string;
+          public_share_permission?: boolean;
         }
       ).evidence_file_ids?.length,
     ).toBeGreaterThan(0);
+    expect(
+      (payload.section8_evidence_verification as { media_visibility?: string })
+        .media_visibility,
+    ).toBe('restricted');
     const firstLog = (
       payload.section1_participation_identity_attendance as {
         attendance_logs?: Array<{ evidence_file_ids?: string[] }>;
@@ -245,6 +258,8 @@ describe('buildCielPkAiEvaluationPayload', () => {
         sub_category?: string;
         partner_host?: string;
         site_note?: string;
+        sdgs?: number[];
+        serves_beneficiaries?: boolean;
         beneficiaries?: { unique_count?: number; overlap_note?: string; counting_method?: string };
       }>;
     };
@@ -254,11 +269,59 @@ describe('buildCielPkAiEvaluationPayload', () => {
       sub_category: 'Workshop',
       partner_host: 'Abroo High School',
       site_note: 'Classroom 4',
+      sdgs: [4],
+      serves_beneficiaries: true,
       beneficiaries: {
         unique_count: 40,
         overlap_note: 'same class attended twice',
         counting_method: 'Verified registration / list',
       },
     });
+    const section5 = payload.section5_outcomes_systemic_change as {
+      measurable_outcomes?: Array<{
+        activity_id?: string | null;
+        sure?: number | null;
+        confidence_level?: string[];
+        outcome_statement?: string;
+      }>;
+    };
+    expect(section5.measurable_outcomes?.[0]).toMatchObject({
+      activity_id: 'act-1',
+      sure: 1,
+      confidence_level: ['Directly Measured'],
+      outcome_statement: 'Quiz score improvement',
+    });
+  });
+
+  it('derives sessions/geography from ladder activities, drops ladder_ui, sends challenge_tags', () => {
+    const payload = buildCielPkAiEvaluationPayload({
+      id: 'r1',
+      studentId: 's1',
+      section4: {
+        activity_blocks: [
+          {
+            id: 'a1',
+            title: 'Reading circles',
+            geographic_reach: 'Single Site',
+            ladder_ui: { open: 3 },
+            outputs: [
+              { type: 'Sessions Conducted', quantity: '3', unit: 'Sessions' },
+              { type: 'Kits Distributed', quantity: '10', unit: 'Kits' },
+            ],
+          },
+        ],
+      },
+      section5: { challenge_tags: ['limited_budget'], measurable_outcomes: [] },
+    } as unknown as StudentReport);
+    const s4 = payload.section4_activities_outputs_scale as {
+      project_summary: { total_sessions: number; geographic_reach: string };
+      activity_blocks: Array<Record<string, unknown>>;
+    };
+    expect(s4.project_summary.total_sessions).toBe(3);
+    expect(s4.project_summary.geographic_reach).toBe('Single Site');
+    expect(s4.activity_blocks[0]).not.toHaveProperty('ladder_ui');
+    expect(
+      (payload.section5_outcomes_systemic_change as { challenge_tags: string[] }).challenge_tags,
+    ).toEqual(['limited_budget']);
   });
 });

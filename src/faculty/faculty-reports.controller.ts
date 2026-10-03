@@ -35,6 +35,15 @@ export class FacultyReportsController {
     );
   }
 
+  /** In-progress (not yet submitted) reports: progress only; opening stays blocked until submit. */
+  @Get('progress')
+  async getDraftProgress(@Request() req) {
+    return await this.facultyReportsService.listDraftProgress(
+      req.user.id,
+      req.user.email,
+    );
+  }
+
   @Get(':id')
   async getReportById(@Request() req, @Param('id') id: string) {
     return await this.facultyReportsService.findOne(

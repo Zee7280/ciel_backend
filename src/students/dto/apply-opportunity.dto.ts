@@ -1,4 +1,4 @@
-import { IsString, IsUUID, IsOptional, IsEmail, IsIn } from 'class-validator';
+import { IsString, IsUUID, IsOptional, IsEmail, IsIn, IsArray, ArrayMaxSize } from 'class-validator';
 
 export class ApplyOpportunityDto {
     @IsUUID()
@@ -24,7 +24,10 @@ export class ApplyOpportunityDto {
     @IsString()
     team_id?: string;
 
+    /** Team lead + members may not exceed 20 (the lead is not part of this list → at most 19). */
     @IsOptional()
+    @IsArray()
+    @ArrayMaxSize(19, { message: 'A team can have at most 20 members including the team lead.' })
     team_members?: any[];
 
     @IsOptional()

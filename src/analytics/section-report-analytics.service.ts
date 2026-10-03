@@ -14,6 +14,13 @@ import {
   REPORT_SECTION_TITLES,
 } from './shared/section-analytics.types';
 import { Section1AnalyticsQueryDto } from './dto/section1-analytics-query.dto';
+import { isVerifiedReport } from './shared/report-status.util';
+import {
+  MEDIA_VISIBILITY_LABELS,
+  hasPublicSharePermission,
+  isPublicMediaVisibility,
+  resolveMediaVisibility,
+} from '../reports/media-visibility.util';
 
 type DistRow = { label: string; count: number };
 
@@ -301,7 +308,7 @@ export class SectionReportAnalyticsService {
           average_completion_percent: avg,
           // A report that only has partner OR admin sign-off (not both) isn't fully verified yet —
           // status only reaches 'verified' once the whole approval chain has completed.
-          verified_reports: reports.filter((r) => r.status === 'verified')
+          verified_reports: reports.filter((r) => isVerifiedReport(r))
             .length,
           total_reports: reports.length,
         },
@@ -459,41 +466,80 @@ export class SectionReportAnalyticsService {
     };
   }
 
+  /**
+   * Per-report Section 4 numbers. Legacy flat fields win when present; reports built with the
+   * activity ladder only carry `activity_blocks` / `project_summary`, so derive from those.
+   */
+  private section4View(r: StudentReport) {
+    const s4 = (r.section4 || {}) as Record<string, any>;
+    const blocks: Array<Record<string, any>> = Array.isArray(s4.activity_blocks)
+      ? s4.activity_blocks.filter((b: unknown) => b && typeof b === 'object')
+      : [];
+    const sessionOutputs = blocks.reduce((sum, b) => {
+      const outs: Array<Record<string, any>> = Array.isArray(b.outputs) ? b.outputs : [];
+      return (
+        sum +
+        outs
+          .filter((o) => /session/i.test(String(o?.unit || '')))
+          .reduce((n, o) => n + (this.parseNum(o?.quantity) || 0), 0)
+      );
+    }, 0);
+    const blockPeople = blocks.reduce(
+      (sum, b) =>
+        sum + (this.parseNum(b.unique_beneficiaries) || this.parseNum(b.beneficiaries_reached) || 0),
+      0,
+    );
+    const firstType = blocks
+      .map((b) => String(b.primary_category || b.sub_category || '').trim())
+      .find(Boolean);
+    return {
+      activityType: s4.activity_type || firstType || 'Unspecified',
+      deliveryMode:
+        s4.delivery_mode ||
+        blocks.map((b) => String(b.geographic_reach || '').trim()).find(Boolean) ||
+        'Unspecified',
+      beneficiaries:
+        this.parseNum(s4.total_beneficiaries) ||
+        this.parseNum(s4.my_beneficiaries) ||
+        this.parseNum(s4.project_summary?.distinct_total_beneficiaries) ||
+        blockPeople ||
+        0,
+      sessions:
+        this.parseNum(s4.total_sessions) ||
+        this.parseNum(s4.my_sessions) ||
+        sessionOutputs ||
+        0,
+      hours: this.parseNum(s4.my_hours) || 0,
+      categories: [
+        ...(Array.isArray(s4.beneficiary_categories) ? s4.beneficiary_categories : []),
+        ...blocks.flatMap((b) =>
+          Array.isArray(b.beneficiary_categories) ? b.beneficiary_categories : [],
+        ),
+      ] as unknown[],
+    };
+  }
+
   private computeSection4(
     reports: StudentReport[],
     projectTitle: unknown,
   ): AnalyticsFieldValues {
     const withSec = reports.filter((r) => this.hasContent(r.section4));
-    const types = this.dist(
-      withSec.map((r) => r.section4?.activity_type || 'Unspecified'),
-    );
-    const modes = this.dist(
-      withSec.map((r) => r.section4?.delivery_mode || 'Unspecified'),
-    );
+    const views = withSec.map((r) => this.section4View(r));
+    const types = this.dist(views.map((v) => v.activityType));
+    const modes = this.dist(views.map((v) => v.deliveryMode));
     let beneficiaries = 0;
     let hours = 0;
     let sessions = 0;
     const catMap = new Map<string, number>();
-    for (const r of withSec) {
-      beneficiaries +=
-        this.parseNum(r.section4?.total_beneficiaries) ||
-        this.parseNum(r.section4?.my_beneficiaries) ||
-        0;
-      hours += this.parseNum(r.section4?.my_hours) || 0;
-      sessions +=
-        this.parseNum(r.section4?.total_sessions) ||
-        this.parseNum(r.section4?.my_sessions) ||
-        0;
-      for (const c of r.section4?.beneficiary_categories || []) {
-        const key = this.labelKey(c);
-        catMap.set(key, (catMap.get(key) || 0) + 1);
+    for (const v of views) {
+      beneficiaries += v.beneficiaries;
+      hours += v.hours;
+      sessions += v.sessions;
+      for (const c of new Set(v.categories.map((c) => this.labelKey(c)))) {
+        catMap.set(c, (catMap.get(c) || 0) + 1);
       }
     }
-    const missingBen = withSec.filter(
-      (r) =>
-        !this.parseNum(r.section4?.total_beneficiaries) &&
-        !this.parseNum(r.section4?.my_beneficiaries),
-    ).length;
+    const missingBen = views.filter((v) => !v.beneficiaries).length;
     return {
       project_title: projectTitle,
       section_completion_rate: this.pctObj(withSec.length, reports.length),
@@ -703,20 +749,15 @@ export class SectionReportAnalyticsService {
       const types = r.section8?.evidence_types || [];
       if (types.length === 0) bypass += 1;
       for (const t of types) typeMap.set(t, (typeMap.get(t) || 0) + 1);
-      const vis = r.section8?.media_visible || 'internal';
-      visMap.set(vis, (visMap.get(vis) || 0) + 1);
+      const vis = resolveMediaVisibility(r.section8?.media_visible);
+      visMap.set(MEDIA_VISIBILITY_LABELS[vis], (visMap.get(MEDIA_VISIBILITY_LABELS[vis]) || 0) + 1);
       if (r.section8?.partner_verification) partnerVerified += 1;
-      const eth = r.section8?.ethical_compliance;
-      const ethCount = eth
-        ? [
-            eth.authentic,
-            eth.informed_consent,
-            eth.no_harm,
-            eth.privacy_respected,
-          ].filter(Boolean).length
-        : 0;
-      if (ethCount === 4) ethicsOk += 1;
-      if (vis === 'public' && ethCount < 4) consentRisk += 1;
+      const studentConsentOk =
+        vis !== 'public' || hasPublicSharePermission(r.section8);
+      if (studentConsentOk) ethicsOk += 1;
+      if (isPublicMediaVisibility(vis) && !hasPublicSharePermission(r.section8)) {
+        consentRisk += 1;
+      }
       credibilitySum += this.credibilityScore(r);
     }
 

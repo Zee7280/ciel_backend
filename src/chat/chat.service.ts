@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, Not } from 'typeorm';
 import { Conversation } from './entities/conversation.entity';
@@ -6,6 +6,41 @@ import { Message } from './entities/message.entity';
 import { ConversationParticipant } from './entities/conversation-participant.entity';
 import { CreateConversationDto, CreateMessageDto } from './dto/chat.dto';
 import { User } from '../users/entities/user.entity';
+
+/** The ONLY user fields chat ever returns. Never serialise a User entity: it carries the bcrypt
+ * hash, the (plaintext) password-reset token, CNIC and settings. */
+export function toChatUser(user: Pick<User, 'id' | 'name' | 'avatar' | 'role'> | null | undefined) {
+    if (!user) return null;
+    return { id: user.id, name: user.name, avatar: user.avatar, role: user.role };
+}
+
+/** Conversation as returned to the client: participants/lastMessage reduced to safe fields. */
+export function toChatConversation(
+    conv: Conversation,
+    creatorId: string,
+) {
+    const otherParticipants = (conv.participants || [])
+        .filter((p) => p.userId !== creatorId)
+        .map((p) => toChatUser(p.user) ?? { id: p.userId, name: 'Unknown', avatar: undefined, role: undefined });
+    return {
+        id: conv.id,
+        type: conv.type,
+        lastMessageId: conv.lastMessageId,
+        lastMessage: conv.lastMessage
+            ? {
+                  id: conv.lastMessage.id,
+                  conversationId: conv.lastMessage.conversationId,
+                  senderId: conv.lastMessage.senderId,
+                  content: conv.lastMessage.content,
+                  isRead: conv.lastMessage.isRead,
+                  createdAt: conv.lastMessage.createdAt,
+              }
+            : null,
+        createdAt: conv.createdAt,
+        updatedAt: conv.updatedAt,
+        otherParticipants,
+    };
+}
 
 @Injectable()
 export class ChatService {
@@ -24,7 +59,25 @@ export class ChatService {
         const { participantIds, type = 'DIRECT' } = createConversationDto;
 
         // Ensure creator is included
-        const allParticipants = Array.from(new Set([...participantIds, creatorId]));
+        const allParticipants = Array.from(
+            new Set([...(participantIds || []).filter((id) => typeof id === 'string' && id.trim()), creatorId]),
+        );
+        if (allParticipants.length < 2) {
+            throw new BadRequestException('Choose at least one other participant.');
+        }
+        if (allParticipants.length > 50) {
+            throw new BadRequestException('Too many participants.');
+        }
+        if (type === 'DIRECT' && allParticipants.length !== 2) {
+            throw new BadRequestException('A direct conversation has exactly one other participant.');
+        }
+        // Every participant must be a real, active account — no chats with arbitrary / suspended ids.
+        const activeCount = await this.usersRepository.count({
+            where: { id: In(allParticipants), status: 'active' as never },
+        });
+        if (activeCount !== allParticipants.length) {
+            throw new BadRequestException('One or more participants are not available for chat.');
+        }
 
         // Check if direct conversation already exists
         if (type === 'DIRECT' && allParticipants.length === 2) {
@@ -38,19 +91,7 @@ export class ChatService {
                 .getOne();
 
             if (existingConversation) {
-                const otherParticipants = existingConversation.participants
-                    .filter(p => p.userId !== creatorId)
-                    .map(p => ({
-                        id: p.user.id,
-                        name: p.user.name,
-                        avatar: p.user.avatar,
-                        role: p.user.role
-                    }));
-
-                return {
-                    ...existingConversation,
-                    otherParticipants
-                };
+                return toChatConversation(existingConversation, creatorId);
             }
         }
 
@@ -77,19 +118,7 @@ export class ChatService {
             throw new NotFoundException('Conversation could not be created');
         }
 
-        const otherParticipants = fullConversation.participants
-            .filter(p => p.userId !== creatorId)
-            .map(p => ({
-                id: p.user.id,
-                name: p.user.name,
-                avatar: p.user.avatar,
-                role: p.user.role
-            }));
-
-        return {
-            ...fullConversation,
-            otherParticipants
-        };
+        return toChatConversation(fullConversation, creatorId);
     }
 
     async getConversations(userId: string) {
@@ -164,7 +193,17 @@ export class ChatService {
             relations: ['sender']
         });
 
-        return messages;
+        // Never return the sender's full User row (hash / reset token / CNIC).
+        return messages.map((m) => ({
+            id: m.id,
+            conversationId: m.conversationId,
+            senderId: m.senderId,
+            content: m.content,
+            isRead: m.isRead,
+            createdAt: m.createdAt,
+            updatedAt: m.updatedAt,
+            sender: toChatUser(m.sender),
+        }));
     }
 
     async sendMessage(createMessageDto: CreateMessageDto, senderId: string) {

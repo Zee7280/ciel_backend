@@ -4,6 +4,7 @@ import {
   Injectable,
   Logger,
 } from '@nestjs/common';
+import { MaintenanceException } from '../common/guards/maintenance.guard';
 import { InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'crypto';
 import { Request } from 'express';
@@ -36,6 +37,8 @@ export type IssueLogListQuery = {
   search?: string;
   dateFrom?: string;
   dateTo?: string;
+  /** 'open' | 'resolved' | omitted = all */
+  resolved?: string;
 };
 
 /** Max JSON size for `metadata` before we drop bulky fields (Postgres handles large JSONB; still cap for safety). */
@@ -91,6 +94,8 @@ export class IssueLogsService {
   ) {}
 
   async logException(exception: unknown, host: ArgumentsHost): Promise<void> {
+    // Expected maintenance-mode rejections are not incidents.
+    if (exception instanceof MaintenanceException) return;
     try {
       const ctx = host.switchToHttp();
       const request = ctx.getRequest<Request & { user?: RequestUser }>();
@@ -180,6 +185,20 @@ export class IssueLogsService {
     };
   }
 
+  /** Marks logs handled (idempotent); returns how many rows changed. */
+  async resolve(ids: string[], adminId: string | null): Promise<{ resolved: number }> {
+    const clean = [...new Set((ids || []).map((x) => String(x).trim()).filter(Boolean))].slice(0, 500);
+    if (!clean.length) return { resolved: 0 };
+    const res = await this.issueLogRepository
+      .createQueryBuilder()
+      .update()
+      .set({ resolvedAt: () => 'now()', resolvedBy: adminId })
+      .where('id IN (:...ids)', { ids: clean })
+      .andWhere('"resolvedAt" IS NULL')
+      .execute();
+    return { resolved: res.affected ?? 0 };
+  }
+
   /** Module dropdown aliases (student vs students) and shared student routes. */
   private resolveModuleFilterValues(module: string): string[] {
     const key = module.trim().toLowerCase();
@@ -243,6 +262,9 @@ export class IssueLogsService {
         requestId: query.requestId.trim(),
       });
     }
+    const resolvedFilter = (query.resolved || '').trim().toLowerCase();
+    if (resolvedFilter === 'open') qb.andWhere('log.resolvedAt IS NULL');
+    else if (resolvedFilter === 'resolved') qb.andWhere('log.resolvedAt IS NOT NULL');
     if (query.dateFrom && query.dateTo) {
       qb.andWhere('log.createdAt BETWEEN :dateFrom AND :dateTo', {
         dateFrom: new Date(query.dateFrom),

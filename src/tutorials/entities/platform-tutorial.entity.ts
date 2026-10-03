@@ -38,6 +38,10 @@ export class PlatformTutorial {
     @Column({ type: 'int', default: 0 })
     sortOrder: number;
 
+    /** Unpublished tutorials stay visible to admins only (additive, defaults to published). */
+    @Column({ type: 'boolean', default: true })
+    published: boolean;
+
     @CreateDateColumn({ type: 'timestamptz' })
     createdAt: Date;
 

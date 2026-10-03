@@ -15,6 +15,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { ReportsModule } from './reports/reports.module';
 import { FundingModule } from './funding/funding.module';
 import { SettingsModule } from './settings/settings.module';
+import { PlatformSettingsModule } from './settings/platform-settings.module';
 import { Setting } from './settings/entities/setting.entity';
 import { ChatModule } from './chat/chat.module';
 import { MailModule } from './mail/mail.module';
@@ -25,7 +26,8 @@ import { FacultyModule } from './faculty/faculty.module';
 import { ContactModule } from './contact/contact.module';
 import { PlatformStatsModule } from './platform-stats/platform-stats.module';
 import { SupportModule } from './support/support.module';
-import { APP_FILTER } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD } from '@nestjs/core';
+import { MaintenanceGuard } from './common/guards/maintenance.guard';
 import { IssueLogsExceptionFilter } from './issue-logs/issue-logs.filter';
 import { IssueLogsModule } from './issue-logs/issue-logs.module';
 import { OrganizationMembershipModule } from './organization-membership/organization-membership.module';
@@ -79,6 +81,7 @@ import { AiModule } from './ai/ai.module';
     FundingModule,
     NotificationsModule,
     SettingsModule,
+    PlatformSettingsModule,
     ChatModule,
     MailModule,
     EngagementModule,
@@ -105,6 +108,10 @@ import { AiModule } from './ai/ai.module';
     {
       provide: APP_FILTER,
       useClass: IssueLogsExceptionFilter,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: MaintenanceGuard,
     },
   ],
 })

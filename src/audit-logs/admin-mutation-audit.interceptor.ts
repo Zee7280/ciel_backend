@@ -19,16 +19,56 @@ export class AdminMutationAuditInterceptor implements NestInterceptor {
     return next.handle().pipe(
       tap({
         next: () => {
-          void this.recordIfMutation(context);
+          void this.recordIfMutation(context, { outcome: 'success' });
+        },
+        // Failed attempts (403/400/500...) are as relevant to an audit trail as successes.
+        error: (err: unknown) => {
+          void this.recordIfMutation(context, {
+            outcome: 'failure',
+            statusCode: this.statusOf(err),
+            error: err instanceof Error ? err.message.slice(0, 300) : undefined,
+          });
         },
       }),
     );
   }
 
-  private async recordIfMutation(context: ExecutionContext): Promise<void> {
-    const req = context
-      .switchToHttp()
-      .getRequest<Request & { user?: RequestUser }>();
+  private statusOf(err: unknown): number {
+    const getStatus = (err as { getStatus?: () => number } | null)?.getStatus;
+    if (typeof getStatus === 'function') {
+      try {
+        return getStatus.call(err);
+      } catch {
+        /* fall through */
+      }
+    }
+    return 500;
+  }
+
+  /** Cheap human-readable label for the target, taken from the request body when present. */
+  private targetLabel(body: unknown): string | undefined {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return undefined;
+    }
+    const obj = body as Record<string, unknown>;
+    for (const k of ['title', 'name', 'email', 'key', 'subject']) {
+      const v = obj[k];
+      if (typeof v === 'string' && v.trim()) return v.trim().slice(0, 120);
+    }
+    return undefined;
+  }
+
+  private async recordIfMutation(
+    context: ExecutionContext,
+    result: { outcome: 'success' | 'failure'; statusCode?: number; error?: string } = {
+      outcome: 'success',
+    },
+  ): Promise<void> {
+    const http = context.switchToHttp();
+    const req = http.getRequest<Request & { user?: RequestUser }>();
+    const statusCode =
+      result.statusCode ??
+      (http.getResponse<{ statusCode?: number }>()?.statusCode || undefined);
     const method = (req.method || '').toUpperCase();
     if (['GET', 'HEAD', 'OPTIONS'].includes(method)) {
       return;
@@ -90,6 +130,10 @@ export class AdminMutationAuditInterceptor implements NestInterceptor {
         query: this.sanitizeQuery(req.query),
         body: this.sanitizeBody(req.body),
         user_role: user?.role ?? undefined,
+        outcome: result.outcome,
+        status_code: statusCode,
+        error: result.error,
+        target_label: this.targetLabel(req.body),
       },
     });
   }

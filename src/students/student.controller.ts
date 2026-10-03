@@ -187,11 +187,22 @@ export class StudentController {
   }
 
   @Post('verify-team-member/send')
-  async sendOtp(@Body() body: { email: string }) {
+  async sendOtp(
+    @Body()
+    body: {
+      email: string;
+      projectId?: string;
+      blockIfOnRoster?: boolean;
+    },
+  ) {
     if (!body.email) {
       throw new BadRequestException('Email is required');
     }
-    return this.studentsService.sendTeamMemberOtp(body.email);
+    return this.studentsService.sendTeamMemberOtp(
+      body.email,
+      body.projectId,
+      body.blockIfOnRoster === true,
+    );
   }
 
   @Post('verify-team-member/confirm')

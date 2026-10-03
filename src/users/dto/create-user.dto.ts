@@ -1,5 +1,9 @@
-import { Type } from 'class-transformer';
-import { IsString, IsEmail, IsOptional, IsEnum, MinLength, ValidateIf, IsArray, ValidateNested } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
+import { IsString, IsEmail, IsOptional, IsEnum, MinLength, ValidateIf, IsArray, ValidateNested, IsNotEmpty, Matches } from 'class-validator';
+import { IsAcceptablePassword } from '../../auth/password-policy.util';
+
+/** Trim surrounding whitespace so "  " can never satisfy a required text field. */
+const trimString = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
 import { UserRole } from '../enums/user-role.enum';
 
 /** Mandate / KYC extras for Investor / VC signup — stored on `users.settings.investor`. */
@@ -32,19 +36,23 @@ const isStudentOrFaculty = (o: CreateUserDto) => o.role === UserRole.STUDENT || 
 const isPublicSignupRole = (o: CreateUserDto) => o.role !== UserRole.SUPER_ADMIN;
 
 export class CreateUserDto {
+    @Transform(trimString)
     @IsString()
+    @IsNotEmpty({ message: 'Name is required' })
     name: string;
 
+    @Transform(trimString)
     @IsEmail()
     email: string;
 
     @IsString()
-    @MinLength(8, { message: 'Password must be at least 8 characters long.' })
+    @IsAcceptablePassword()
     password: string;
 
     @ValidateIf(isStudentOrFaculty)
+    @Transform(trimString)
     @IsString()
-    @MinLength(1, { message: 'Institution is required' })
+    @IsNotEmpty({ message: 'Institution is required' })
     institution?: string;
 
     @IsOptional()
@@ -52,8 +60,9 @@ export class CreateUserDto {
     university?: string;
 
     @ValidateIf(isStudentOrFaculty)
+    @Transform(trimString)
     @IsString()
-    @MinLength(1, { message: 'Department is required' })
+    @IsNotEmpty({ message: 'Department is required' })
     department?: string;
 
     @IsOptional()
@@ -61,18 +70,22 @@ export class CreateUserDto {
     faculty_department?: string;
 
     @ValidateIf(isPublicSignupRole)
+    @Transform(trimString)
     @IsString()
-    @MinLength(1, { message: 'City is required' })
+    @IsNotEmpty({ message: 'City is required' })
     city?: string;
 
     @ValidateIf((o: CreateUserDto) => o.role === UserRole.STUDENT)
+    @Transform(trimString)
     @IsString()
-    @MinLength(1, { message: 'Enrollment year is required' })
+    @IsNotEmpty({ message: 'Enrollment year is required' })
     enrollmentYear?: string;
 
     /** Optional student ID / faculty-employee ID, stored on the existing `registrationNumber` column. */
     @IsOptional()
+    @Transform(trimString)
     @IsString()
+    @Matches(/^[\w\-/. ]{0,40}$/, { message: 'Student / employee ID may only contain letters, numbers, spaces and - / . _ (max 40).' })
     registrationNumber?: string;
 
     @IsOptional()

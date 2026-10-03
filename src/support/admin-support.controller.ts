@@ -55,8 +55,12 @@ export class AdminSupportController {
     }
 
     @Get('tickets')
-    listTickets(@Query('status') status?: string) {
-        return this.adminSupportService.listTickets(status);
+    listTickets(
+        @Query('status') status?: string,
+        @Query('page') page?: string,
+        @Query('limit') limit?: string,
+    ) {
+        return this.adminSupportService.listTickets(status, { page, limit });
     }
 
     @Get('tickets/:id')

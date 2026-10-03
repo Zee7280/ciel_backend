@@ -1,5 +1,6 @@
 import {
     BadRequestException,
+    ForbiddenException,
     Injectable,
     NotFoundException,
 } from '@nestjs/common';
@@ -12,6 +13,7 @@ import { StudentReport } from '../reports/entities/student-report.entity';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import { User } from '../users/entities/user.entity';
 import { S3Service } from '../common/s3.service';
+import { canDownloadEvidence } from '../reports/evidence-access.util';
 import {
     collectReportEvidenceFiles,
     ReportEvidenceFileRef,
@@ -173,7 +175,21 @@ export class AdminProjectEvidenceService {
             relations: ['participant'],
         });
 
-        const entries = this.buildZipEntries(opportunity.title, reports, attendanceLogs);
+        // Sharing rule: only Public evidence can be downloaded. Restricted/Private is view-only,
+        // blocked for every role including Super Admin.
+        const downloadableReports = reports.filter((r) => canDownloadEvidence(r));
+        if (reports.length > 0 && downloadableReports.length === 0) {
+            throw new ForbiddenException(
+                'Evidence downloads are blocked: this project shares evidence as Restricted/Private. Only Public evidence can be downloaded.',
+            );
+        }
+        const attendanceDownloadable =
+            reports.length > 0 && downloadableReports.length === reports.length;
+        const entries = this.buildZipEntries(
+            opportunity.title,
+            downloadableReports,
+            attendanceDownloadable ? attendanceLogs : [],
+        );
         if (entries.length === 0) {
             throw new NotFoundException('No evidence files found for this project');
         }
@@ -186,8 +202,27 @@ export class AdminProjectEvidenceService {
         const safeTitle = this.sanitizePathSegment(opportunity.title) || 'project';
         const filename = `${safeTitle}-${id.slice(0, 8)}-evidence.zip`;
 
+        // Download first so the skipped count is known before headers are sent.
+        const downloadedEntries: Array<{ zipPath: string; buffer: Buffer }> = [];
+        let skipped = 0;
+        for (const entry of entries) {
+            const downloaded = await this.s3Service.getObjectBufferByPublicUrl(entry.url);
+            if (!downloaded || downloaded.buffer.length === 0) {
+                skipped += 1;
+                continue;
+            }
+            downloadedEntries.push({ zipPath: entry.zipPath, buffer: downloaded.buffer });
+        }
+
+        // ASCII fallback + RFC 5987 filename* so non-ASCII titles don't break the header.
+        const asciiFallback = filename.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
         res.setHeader('Content-Type', 'application/zip');
-        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.setHeader(
+            'Content-Disposition',
+            `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(filename).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`,
+        );
+        res.setHeader('X-Evidence-Skipped', String(skipped));
+        res.setHeader('Access-Control-Expose-Headers', 'X-Evidence-Skipped, Content-Disposition');
 
         const archive = archiver('zip', { zlib: { level: 6 } });
         archive.on('error', (err) => {
@@ -203,14 +238,8 @@ export class AdminProjectEvidenceService {
 
         const usedPaths = new Set<string>();
         let added = 0;
-        let skipped = 0;
 
-        for (const entry of entries) {
-            const downloaded = await this.s3Service.getObjectBufferByPublicUrl(entry.url);
-            if (!downloaded || downloaded.buffer.length === 0) {
-                skipped += 1;
-                continue;
-            }
+        for (const entry of downloadedEntries) {
             let zipPath = entry.zipPath;
             let suffix = 1;
             while (usedPaths.has(zipPath)) {
@@ -223,7 +252,7 @@ export class AdminProjectEvidenceService {
                 suffix += 1;
             }
             usedPaths.add(zipPath);
-            archive.append(downloaded.buffer, { name: zipPath });
+            archive.append(entry.buffer, { name: zipPath });
             added += 1;
         }
 

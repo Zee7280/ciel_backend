@@ -110,7 +110,11 @@ export class ImpactSummaryService {
     // Only fully verified (or paid, which implies verified) reports — an abandoned draft or a
     // rejected report's stale AI score must not drag down a student's composite score.
     const reports = await this.studentReportRepo.find({
-      where: { studentId: userId, status: In(['verified', 'paid']) },
+      where: {
+        studentId: userId,
+        status: In(['verified', 'paid']),
+        admin_status: 'approved',
+      },
     });
     const scores: number[] = [];
     for (const report of reports) {

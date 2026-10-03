@@ -8,6 +8,7 @@ import { PassportModule } from '@nestjs/passport';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtStrategy } from './jwt.strategy';
+import { resolveJwtSecret } from './jwt-secret.util';
 import { EmailOtp } from './entities/email-otp.entity';
 import { OtpService } from './otp.service';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
@@ -27,7 +28,7 @@ import { Organization } from '../organizations/entities/organization.entity';
         JwtModule.registerAsync({
             imports: [ConfigModule],
             useFactory: async (configService: ConfigService) => ({
-                secret: configService.get<string>('JWT_SECRET') || 'secretKey',
+                secret: resolveJwtSecret(configService.get<string>('JWT_SECRET')),
                 signOptions: { expiresIn: '10h' },
             }),
             inject: [ConfigService],

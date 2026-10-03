@@ -14,6 +14,15 @@ describe('buildStudentReportPageUrl', () => {
     expect(buildStudentReportPagePath('abc-1', 'v17')).toBe(
       '/dashboard/student/report?projectId=abc-1&view=v17',
     );
+    expect(buildStudentReportPagePath('abc-1', 'evidence')).toBe(
+      '/dashboard/student/report?projectId=abc-1&view=evidence',
+    );
+    expect(buildStudentReportPagePath('abc-1', 'flash')).toBe(
+      '/dashboard/student/report?projectId=abc-1&view=flash',
+    );
+    expect(buildStudentReportPagePath('abc-1', 'package')).toBe(
+      '/dashboard/student/report?projectId=abc-1&view=package',
+    );
   });
 
   it('prefixes FRONTEND_URL when provided and skips blank project ids', () => {

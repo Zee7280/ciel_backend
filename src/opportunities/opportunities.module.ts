@@ -24,6 +24,8 @@ import { VerificationVerifyAuthGuard } from '../auth/verification-verify-auth.gu
 import { NotificationsModule } from '../notifications/notifications.module';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 import { FacultyUniversityScopeModule } from '../faculty-university-scope/faculty-university-scope.module';
+import { Setting } from '../settings/entities/setting.entity';
+import { StudentApplyMaintenanceService } from './student-apply-maintenance.service';
 
 @Module({
     imports: [
@@ -35,6 +37,7 @@ import { FacultyUniversityScopeModule } from '../faculty-university-scope/facult
             OpportunityApplication,
             StudentReport,
             AttendanceLog,
+            Setting,
         ]),
         OrganizationsModule,
         UsersModule,
@@ -45,7 +48,7 @@ import { FacultyUniversityScopeModule } from '../faculty-university-scope/facult
         FacultyUniversityScopeModule,
     ],
     controllers: [OpportunitiesController, AdminOpportunitiesController, PublicOpportunitiesController, ParticipantsController, StudentOpportunitiesController, StudentOpportunitySingularController],
-    providers: [OpportunitiesService, OpportunityWorkflowService, OpportunityApplicationsService, VerificationVerifyAuthGuard, OpportunityTokenExpirySubscriber],
-    exports: [OpportunitiesService, OpportunityWorkflowService, OpportunityApplicationsService],
+    providers: [OpportunitiesService, OpportunityWorkflowService, OpportunityApplicationsService, VerificationVerifyAuthGuard, OpportunityTokenExpirySubscriber, StudentApplyMaintenanceService],
+    exports: [OpportunitiesService, OpportunityWorkflowService, OpportunityApplicationsService, StudentApplyMaintenanceService],
 })
 export class OpportunitiesModule { }

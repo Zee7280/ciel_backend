@@ -7,6 +7,7 @@ import {
   Patch,
   Query,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
@@ -14,10 +15,12 @@ import { Roles } from '../auth/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
 import { PathsService } from './paths.service';
 import { SetVentureSpotlightDto } from './dto/update-venture.dto';
+import { AdminMutationAuditInterceptor } from '../audit-logs/admin-mutation-audit.interceptor';
 
 @Controller('admin/paths')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.SUPER_ADMIN)
+@UseInterceptors(AdminMutationAuditInterceptor)
 export class AdminPathsController {
   constructor(private readonly pathsService: PathsService) {}
 

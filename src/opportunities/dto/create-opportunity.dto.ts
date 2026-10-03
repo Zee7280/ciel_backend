@@ -5,15 +5,26 @@ import {
   IsObject,
   IsEnum,
   IsBoolean,
+  ValidateIf,
   ValidateNested,
   IsInt,
   IsUUID,
+  IsNotEmpty,
+  ArrayNotEmpty,
+  ArrayMaxSize,
   MaxLength,
   Min,
   Max,
-  ArrayMaxSize,
+  Matches,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+
+/** Full create/submit must satisfy title/types/mode/verification. A mid-wizard `{draft:true}`
+ * save is incomplete by definition — StudentController / OpportunitiesService persist it with
+ * fallbacks, so those required-field validators must not reject the first "Save draft" click. */
+function isFullOpportunitySubmit(dto: { draft?: boolean }) {
+  return dto.draft !== true;
+}
 
 export class TimelineDto {
   @IsString()
@@ -36,21 +47,20 @@ export class TimelineDto {
   @IsOptional()
   to_time?: string; // daily window end (e.g. 13:00)
 
+  /** Same bounds the create forms enforce (hours 1–500, seats 1–5000). */
+  @Type(() => Number)
   @IsInt()
-  @Min(0)
-  @Max(10000)
+  @Min(1)
+  @Max(500)
   @IsOptional()
   expected_hours?: number;
 
+  @Type(() => Number)
   @IsInt()
   @Min(1)
-  @Max(100000)
+  @Max(5000)
   @IsOptional()
   volunteers_required?: number;
-
-  @IsString()
-  @IsOptional()
-  application_deadline?: string;
 
   @IsString()
   @IsOptional()
@@ -99,6 +109,10 @@ export class SupervisionDto {
   @IsOptional()
   information_accurate?: boolean;
 
+  @IsBoolean()
+  @IsOptional()
+  private_candidate?: boolean;
+
   @IsString()
   @IsOptional()
   faculty_department?: string;
@@ -132,18 +146,26 @@ export class CreateOpportunityDto {
   @IsOptional()
   draft?: boolean;
 
+  @ValidateIf(isFullOpportunitySubmit)
   @IsString()
+  @IsNotEmpty()
+  @Matches(/\S/, { message: 'title must not be blank' })
   @MaxLength(200)
   title: string;
 
+  @ValidateIf(isFullOpportunitySubmit)
   @IsArray()
+  @ArrayNotEmpty()
   @ArrayMaxSize(20)
   @IsString({ each: true })
   types: string[];
 
+  @ValidateIf(isFullOpportunitySubmit)
   @IsString()
+  @IsNotEmpty()
   mode: string;
 
+  /** Creator mobile in E.164 (e.g. +923001234567). Private-candidate submit stores the same value on executing_context.private_candidate.phone. */
   @IsString()
   @IsOptional()
   student_contact?: string;
@@ -152,6 +174,7 @@ export class CreateOpportunityDto {
   @IsOptional()
   location?: any;
 
+  @ValidateIf(isFullOpportunitySubmit)
   @ValidateNested()
   @Type(() => TimelineDto)
   @IsOptional()
@@ -178,11 +201,13 @@ export class CreateOpportunityDto {
   @IsOptional()
   activity_details?: any;
 
+  @ValidateIf(isFullOpportunitySubmit)
   @ValidateNested()
   @Type(() => SupervisionDto)
   @IsOptional()
   supervision?: SupervisionDto;
 
+  @ValidateIf(isFullOpportunitySubmit)
   @IsArray()
   @IsString({ each: true })
   verification_method: string[];
@@ -267,6 +292,7 @@ export class UpdateOpportunityDto {
   @IsOptional()
   location?: any;
 
+  @ValidateIf(isFullOpportunitySubmit)
   @ValidateNested()
   @Type(() => TimelineDto)
   @IsOptional()
@@ -293,6 +319,7 @@ export class UpdateOpportunityDto {
   @IsOptional()
   activity_details?: any;
 
+  @ValidateIf(isFullOpportunitySubmit)
   @ValidateNested()
   @Type(() => SupervisionDto)
   @IsOptional()
@@ -307,13 +334,8 @@ export class UpdateOpportunityDto {
   @IsOptional()
   visibility?: string;
 
-  @IsString()
-  @IsOptional()
-  status?: string; // active, closed, draft
-
-  @IsString()
-  @IsOptional()
-  sdg?: string;
+  // NOTE: status / sdg / admin_approval_required are intentionally NOT editable here — workflow
+  // state is server-owned and sdg is derived from sdg_info.sdg_id.
 
   @IsObject()
   @IsOptional()
@@ -359,7 +381,4 @@ export class UpdateOpportunityDto {
   @IsOptional()
   visibility_and_academic_linkage?: any;
 
-  @IsBoolean()
-  @IsOptional()
-  admin_approval_required?: boolean;
 }

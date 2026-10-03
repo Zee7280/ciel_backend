@@ -1,3 +1,4 @@
+import { imageUploadOptions } from '../common/safe-upload';
 import { Controller, Get, Request, UseGuards, Post, Body, UseInterceptors, UploadedFiles } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -31,7 +32,7 @@ export class UsersController {
     @UseInterceptors(FileFieldsInterceptor([
         { name: 'image', maxCount: 1 },
         { name: 'avatar', maxCount: 1 },
-    ]))
+    ], imageUploadOptions))
     async updateProfile(@Request() req, @Body() body: any, @UploadedFiles() files: any) {
         // `userId` in the body is only honoured as an admin override. Any other caller edits
         // their own profile only — otherwise any authenticated user could rewrite (and self-verify)

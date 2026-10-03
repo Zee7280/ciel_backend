@@ -6,8 +6,13 @@ import {
   Logger,
   Optional,
 } from '@nestjs/common';
+import { CnicCipher } from '../common/cnic-cipher';
+import { resolveTeamSeatCap, teamCapacityError } from './team-capacity.util';
 import { IssueLogsService } from '../issue-logs/issue-logs.service';
+import { sessionsOverlap } from './attendance-time.util';
 import {
+  MIN_ATTENDANCE_SESSION_HOURS,
+  minAttendanceSessionMessage,
   ATTENDANCE_DESCRIPTION_MAX_CHARS,
   ATTENDANCE_DESCRIPTION_MAX_WORDS,
   MAX_DAILY_ATTENDANCE_HOURS,
@@ -30,6 +35,9 @@ import {
   getProjectStartDate,
   isServiceDateAllowed,
   toDateOnlyString,
+  todayDateOnlyPk,
+  canEditOrSubmitReport,
+  REPORTING_WINDOW_CLOSED_MESSAGE,
 } from '../opportunities/opportunity-timeline.util';
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 import { User } from '../users/entities/user.entity';
@@ -47,6 +55,11 @@ import { resolveParticipationForAttendanceUnlock } from './attendance-unlock.uti
 import { ConfigService } from '@nestjs/config';
 import { MailService } from '../mail/mail.service';
 import * as crypto from 'crypto';
+import { canonicalizePhoneInput } from '../common/phone-e164.util';
+import {
+  isSchoolOrInstituteAcademicLabel,
+  sanitizeReportAcademicDepartment,
+} from '../common/academic-department.util';
 
 /** Roster rows partners/faculty need for attendance UI (exclude only rejected). Aligned with join-enrollment “active seat” statuses. */
 const PROJECT_TEAM_VISIBILITY_STATUSES: readonly string[] = [
@@ -61,11 +74,15 @@ const PROJECT_TEAM_VISIBILITY_STATUSES: readonly string[] = [
   'finalized',
 ];
 
+/** New stakeholder flow: attendance is confirmed when faculty / CIEL PK lock the flash-card score,
+ * not through a pending-attendance email queue. Typed `boolean` (not a literal) so the legacy code
+ * paths guarded by it stay reachable for the compiler. */
+const ATTENDANCE_REVIEW_DEFERRED_TO_FLASHCARD: boolean = true;
+
 @Injectable()
 export class EngagementService {
   private readonly logger = new Logger(EngagementService.name);
-  private readonly ALGORITHM = 'aes-256-cbc';
-  private readonly KEY: Buffer;
+  private readonly cnicCipher: CnicCipher;
 
   constructor(
     @InjectRepository(Participation)
@@ -83,10 +100,18 @@ export class EngagementService {
     private mailService: MailService,
     @Optional() private readonly issueLogsService?: IssueLogsService,
   ) {
-    const secret =
-      this.configService.get<string>('ENCRYPTION_KEY') ||
-      'default-secret-key-32-chars-long!!';
-    this.KEY = crypto.scryptSync(secret, 'salt', 32);
+    const configuredKey = this.configService.get<string>('ENCRYPTION_KEY');
+    if (!configuredKey && process.env.NODE_ENV === 'production') {
+      // Expected setup: the built-in key in common/cnic-cipher.ts is used. Setting ENCRYPTION_KEY later is
+      // optional and safe (old rows keep decrypting); then `npm run rotate:cnic -- --apply` migrates them.
+      this.logger.warn(
+        'ENCRYPTION_KEY not set: using the built-in CNIC key (existing data stays readable).',
+      );
+    }
+    this.cnicCipher = new CnicCipher({
+      current: configuredKey,
+      previous: this.configService.get<string>('ENCRYPTION_KEY_PREVIOUS'),
+    });
   }
 
   /** Match participation rows regardless of stored email casing/whitespace. */
@@ -304,7 +329,78 @@ export class EngagementService {
     return this.decryptParticipation(saved);
   }
 
-  async registerParticipant(studentId: string, dto: RegisterParticipantDto) {
+  /**
+   * `POST /engagement/register` completes identity details for a seat the student already holds
+   * (approved application / participation) — it is not a way to enter a project. Without this gate
+   * any logged-in account could mint an approved seat on any live project: ended, full, outside
+   * their university, or another student's seat via a client-supplied `studentId`.
+   *
+   * Returns whether the caller may register OTHER students (team lead / admin).
+   */
+  private async assertMayRegisterOnProject(
+    callerId: string,
+    callerRole: string,
+    dto: RegisterParticipantDto,
+  ): Promise<{ mayRegisterOthers: boolean }> {
+    if (callerRole === UserRole.SUPER_ADMIN) return { mayRegisterOthers: true };
+    if (callerRole !== UserRole.STUDENT) {
+      throw new ForbiddenException('Only students can register a project participation.');
+    }
+    // The creator of a student-created opportunity registers their own seat on it without applying.
+    const projectRow = await this.opportunityRepository.findOne({
+      where: { id: dto.projectId },
+    });
+    if (projectRow?.isStudentCreated && projectRow.creatorId === callerId) {
+      return { mayRegisterOthers: true };
+    }
+    const [mine, approvedApp] = await Promise.all([
+      this.participantRepository.findOne({
+        where: { studentId: callerId, projectId: dto.projectId },
+      }),
+      this.opportunityApplicationRepository.findOne({
+        where: {
+          studentUserId: callerId,
+          opportunityId: dto.projectId,
+          internalStatus: 'approved' as never,
+          withdrawnAt: IsNull(),
+        },
+      }),
+    ]);
+    if (mine?.status === 'rejected' && !approvedApp) {
+      throw new ForbiddenException('Your application for this project was not approved.');
+    }
+    if (!mine && !approvedApp) {
+      throw new ForbiddenException(
+        'Apply to this project and wait for approval before registering your participation.',
+      );
+    }
+    const mayRegisterOthers = mine?.isTeamLead === true || !!approvedApp;
+    if (
+      dto.studentId &&
+      dto.studentId !== callerId &&
+      !mayRegisterOthers
+    ) {
+      throw new ForbiddenException('You can only register your own participation.');
+    }
+    return { mayRegisterOthers };
+  }
+
+  async registerParticipant(
+    studentId: string,
+    dto: RegisterParticipantDto,
+    callerRole?: string,
+  ) {
+    const { mayRegisterOthers } =
+      callerRole === undefined
+        ? { mayRegisterOthers: true } // internal callers; the HTTP route always passes the role
+        : await this.assertMayRegisterOnProject(studentId, callerRole, dto);
+    const parsedMobile = canonicalizePhoneInput(dto.mobile, {
+      required: true,
+      requiredMessage: 'Enter a valid mobile number.',
+    });
+    if (parsedMobile.error) throw new BadRequestException(parsedMobile.error);
+    dto.mobile = parsedMobile.e164;
+
     return await this.participantRepository.manager.transaction(
       async (manager) => {
         const dtoEmailNorm = this.normalizeParticipantEmail(dto.email);
@@ -329,6 +425,11 @@ export class EngagementService {
         // Lead logged in while registering a teammate must not attach seat to the lead account.
         if (isTeamMemberRegistration && targetStudentId === studentId) {
           targetStudentId = null;
+        }
+        // Registering a seat for ANOTHER student (resolved from dto.studentId or the email) is the
+        // team lead's / admin's job only.
+        if (targetStudentId && targetStudentId !== studentId && !mayRegisterOthers) {
+          throw new ForbiddenException('You can only register your own participation.');
         }
 
         const opportunity = await manager.findOne(Opportunity, {
@@ -401,7 +502,7 @@ export class EngagementService {
           }
         }
 
-        // Team: a new member must not reuse the team lead's row (e.g. lead's email sent again by mistake)
+        // Team: a new member must not reuse the team lead's row (lead email pasted again).
         if (
           dto.participationMode === 'team' &&
           !dto.isTeamLead &&
@@ -523,6 +624,10 @@ export class EngagementService {
           team_id,
           ...registrationFields
         } = dto;
+        registrationFields.department = sanitizeReportAcademicDepartment(
+          registrationFields.department,
+          registrationFields.academicProgram,
+        );
 
         if (dto.participationMode === 'team' && dto.isTeamLead) {
           if (!effectiveTeamId) {
@@ -541,6 +646,23 @@ export class EngagementService {
             throw new BadRequestException(
               'This team already has a team lead on this project. Register as a team member instead.',
             );
+          }
+        }
+
+        // Team size cap: lead + members may not exceed the opportunity's seats (volunteers_required).
+        if (isTeamMemberRegistration && !participation.id && effectiveTeamId) {
+          const cap = resolveTeamSeatCap(opportunity.timeline?.volunteers_required);
+          if (cap) {
+            // Count teammates only (the lead is not a "team member" for this cap).
+            const currentMembers = await manager.count(Participation, {
+              where: {
+                projectId: opportunity.id,
+                teamId: effectiveTeamId,
+                isTeamLead: false,
+              },
+            });
+            const capError = teamCapacityError(currentMembers + 1, cap);
+            if (capError) throw new BadRequestException(capError);
           }
         }
 
@@ -631,6 +753,30 @@ export class EngagementService {
   }
 
   async getMyParticipants(studentId: string) {
+    // Claim OTP seats linked by email before listing — report deep-link identity sync
+    // calls `/engagement/my` and must see the same seats as My Reports.
+    const viewer = await this.userRepository.findOne({
+      where: { id: studentId },
+      select: ['id', 'email'],
+    });
+    const emailNorm = (viewer?.email || '').trim().toLowerCase();
+    if (
+      emailNorm &&
+      typeof this.participantRepository.createQueryBuilder === 'function'
+    ) {
+      const byEmail = await this.participantRepository
+        .createQueryBuilder('p')
+        .where("LOWER(TRIM(COALESCE(p.email, ''))) = :emailNorm", { emailNorm })
+        .getMany();
+      for (const row of byEmail) {
+        if (row.studentId && row.studentId !== studentId) continue;
+        if (!row.studentId) {
+          row.studentId = studentId;
+          await this.participantRepository.save(row);
+        }
+      }
+    }
+
     const result = await this.participantRepository.find({
       where: { studentId },
       relations: ['attendanceLogs'],
@@ -669,10 +815,15 @@ export class EngagementService {
   private resolveParticipationProgramLine(p: Participation): string {
     const student = p.student as User | undefined;
     const prog = (p.academicProgram || '').trim();
-    const dept = (p.department || '').trim();
     const major = (student?.major || '').trim();
-    const userDept = (student?.department || '').trim();
-    const base = prog || dept || major || userDept;
+    const program = prog || major;
+    const dept = sanitizeReportAcademicDepartment(
+      (p.department || '').trim() || (student?.department || '').trim(),
+      program,
+    );
+    const deptAsProgram =
+      dept && !isSchoolOrInstituteAcademicLabel(dept) ? dept : '';
+    const base = program || deptAsProgram;
     const year = (p.yearOfStudy || '').trim();
     if (base && year) return `${base} · ${year}`;
     if (base) return base;
@@ -685,18 +836,22 @@ export class EngagementService {
   ): Record<string, unknown> {
     const programLine = this.resolveParticipationProgramLine(participation);
     const student = participation.student as User | undefined;
-    const degreeBase =
+    const program =
       (participation.academicProgram || '').trim() ||
-      (student?.major || '').trim() ||
-      (participation.department || '').trim() ||
-      (student?.department || '').trim() ||
-      '';
+      (student?.major || '').trim();
+    const department =
+      sanitizeReportAcademicDepartment(
+        (participation.department || '').trim() ||
+          (student?.department || '').trim(),
+        program,
+      ) || null;
+    const degreeBase = program || department || '';
     return {
       ...enriched,
       program: programLine,
       academicProgram: participation.academicProgram || degreeBase || null,
       academic_program: participation.academicProgram || degreeBase || null,
-      department: participation.department || student?.department || null,
+      department,
       degree: degreeBase || undefined,
       year: participation.yearOfStudy || undefined,
       yearOfStudy: participation.yearOfStudy || undefined,
@@ -1318,93 +1473,32 @@ export class EngagementService {
           }
         }
 
-        // Self-serve team flow (registerParticipant) often leaves applicationId/teamId unset.
-        // When the project has exactly one team lead row, treat that student as lead for any non-lead team participation on the same project.
+        // A team lead may log for members of THEIR OWN team only (matched by applicationId / teamId)
+        // — e.g. a teammate who has no account yet. Loose project-wide fallbacks ("the only lead on
+        // the project", "one lead for that faculty email") are gone: they let a lead enter hours for
+        // students outside their team, which breaks the per-member hours rule.
         if (!isAuthorizedAsLead && mayReceiveTeamLeadAttendance) {
-          const teamLeads = await this.participantRepository.find({
+          const myLeadRows = await this.participantRepository.find({
             where: {
               projectId: participation.projectId,
               isTeamLead: true,
+              studentId,
             },
           });
-          if (teamLeads.length === 1 && teamLeads[0].studentId === studentId) {
+          const linkedToMyLead = myLeadRows.some(
+            (l) =>
+              (Boolean(l.applicationId) &&
+                Boolean(participation.applicationId) &&
+                l.applicationId === participation.applicationId) ||
+              (Boolean(l.teamId) &&
+                Boolean(participation.teamId) &&
+                l.teamId === participation.teamId),
+          );
+          if (linkedToMyLead) {
             isAuthorizedAsLead = true;
             this.logger.log(
-              `Attendance entry by sole Team Lead ${studentId} authorized for team member record ${participation.id} (single-lead fallback)`,
+              `Attendance entry by Team Lead ${studentId} authorized for team member record ${participation.id} (same team by applicationId/teamId)`,
             );
-          }
-        }
-
-        // Multiple teams on one project: allow when this member's primaryFacultyEmail matches
-        // exactly one team lead row on the same project (same normalized email).
-        if (!isAuthorizedAsLead && mayReceiveTeamLeadAttendance) {
-          const memberFaculty = (participation.primaryFacultyEmail || '')
-            .trim()
-            .toLowerCase();
-          if (memberFaculty) {
-            const allTeamLeads = await this.participantRepository.find({
-              where: {
-                projectId: participation.projectId,
-                isTeamLead: true,
-              },
-            });
-            const leadsSameFaculty = allTeamLeads.filter(
-              (p) =>
-                (p.primaryFacultyEmail || '').trim().toLowerCase() ===
-                memberFaculty,
-            );
-            if (
-              leadsSameFaculty.length === 1 &&
-              leadsSameFaculty[0].studentId === studentId
-            ) {
-              isAuthorizedAsLead = true;
-              this.logger.log(
-                `Attendance entry by Team Lead ${studentId} authorized for team member record ${participation.id} (single lead for primaryFacultyEmail)`,
-              );
-            }
-          }
-        }
-
-        // Report flow: lead logs attendance for every team member. Allow when this user has at
-        // least one team-lead row on the project and no *other student* is also a team lead here
-        // (covers duplicate lead rows for the same lead). If another student is a lead, require
-        // applicationId/teamId to match one of this user's lead rows (same team only).
-        if (!isAuthorizedAsLead && mayReceiveTeamLeadAttendance) {
-          const allTeamLeadsOnProject = await this.participantRepository.find({
-            where: {
-              projectId: participation.projectId,
-              isTeamLead: true,
-            },
-          });
-          const myTeamLeadRows = allTeamLeadsOnProject.filter(
-            (l) => l.studentId === studentId,
-          );
-          const otherStudentLeads = allTeamLeadsOnProject.filter(
-            (l) => l.studentId != null && l.studentId !== studentId,
-          );
-          if (myTeamLeadRows.length > 0) {
-            if (otherStudentLeads.length === 0) {
-              isAuthorizedAsLead = true;
-              this.logger.log(
-                `Attendance entry by Team Lead ${studentId} authorized for team member record ${participation.id} (only this student has team-lead rows on project)`,
-              );
-            } else {
-              const linkedToMyLead = myTeamLeadRows.some(
-                (l) =>
-                  (Boolean(l.applicationId) &&
-                    Boolean(participation.applicationId) &&
-                    l.applicationId === participation.applicationId) ||
-                  (Boolean(l.teamId) &&
-                    Boolean(participation.teamId) &&
-                    l.teamId === participation.teamId),
-              );
-              if (linkedToMyLead) {
-                isAuthorizedAsLead = true;
-                this.logger.log(
-                  `Attendance entry by Team Lead ${studentId} authorized for team member record ${participation.id} (team scoped by applicationId/teamId)`,
-                );
-              }
-            }
           }
         }
 
@@ -1440,6 +1534,22 @@ export class EngagementService {
       studentId,
       opportunity,
     );
+    // Hours can no longer be added once the reporting window (project end + 60 days) has closed.
+    if (opportunity && !canEditOrSubmitReport(opportunity.timeline)) {
+      this.recordAttendanceFailure(
+        'reporting_window_closed',
+        REPORTING_WINDOW_CLOSED_MESSAGE,
+        400,
+        studentId,
+        participantId,
+        {
+          hasEvidence,
+          participationId: participation.id,
+          projectId: participation.projectId,
+        },
+      );
+      throw new BadRequestException(REPORTING_WINDOW_CLOSED_MESSAGE);
+    }
 
     const teamPeers = participation.projectId
       ? await this.participantRepository.find({
@@ -1482,7 +1592,10 @@ export class EngagementService {
 
     // Rule 1: Date Validation (Not in future)
     const date = new Date(dto.dateOfEngagement);
-    if (date > new Date()) {
+    // Compare calendar days in Pakistan time: a date-only value parses as 00:00 UTC, which made
+    // "today" look like the future for the first five hours of the Pakistani day.
+    const engagementDay = toDateOnlyString(dto.dateOfEngagement);
+    if (engagementDay && engagementDay > todayDateOnlyPk()) {
       this.recordAttendanceFailure(
         'date_in_future',
         'Attendance date cannot be in the future',
@@ -1578,6 +1691,24 @@ export class EngagementService {
       );
       throw new BadRequestException('End time must be after start time');
     }
+    if (sessionHours < MIN_ATTENDANCE_SESSION_HOURS) {
+      const minMessage = minAttendanceSessionMessage();
+      this.recordAttendanceFailure(
+        'session_below_minimum',
+        minMessage,
+        400,
+        studentId,
+        participantId,
+        {
+          hasEvidence,
+          participationId: participation.id,
+          projectId: participation.projectId,
+          sessionHours,
+          minHours: MIN_ATTENDANCE_SESSION_HOURS,
+        },
+      );
+      throw new BadRequestException(minMessage);
+    }
     if (sessionHours > MAX_DAILY_ATTENDANCE_HOURS) {
       this.recordAttendanceFailure(
         'session_exceeds_daily_cap',
@@ -1597,6 +1728,33 @@ export class EngagementService {
     }
 
     const engagementDateKey = dto.dateOfEngagement.split('T')[0];
+    // A person cannot be in two places at once: reject a session that overlaps (or exactly
+    // duplicates) another entry the same day — otherwise 09–12 + 10–13 would be paid as 6 hours.
+    const overlapping = (participation.attendanceLogs ?? []).find(
+      (log) =>
+        String(log.dateOfEngagement).split('T')[0] === engagementDateKey &&
+        String(log.approvalStatus ?? '').toLowerCase() !== 'rejected' &&
+        sessionsOverlap(startTime, endTime, log.startTime, log.endTime),
+    );
+    if (overlapping) {
+      const overlapMessage = `This overlaps another entry you logged for ${engagementDateKey} (${overlapping.startTime}–${overlapping.endTime}).`;
+      this.recordAttendanceFailure(
+        'overlapping_session',
+        overlapMessage,
+        400,
+        studentId,
+        participantId,
+        {
+          hasEvidence,
+          participationId: participation.id,
+          projectId: participation.projectId,
+          startTime,
+          endTime,
+          dateOfEngagement: engagementDateKey,
+        },
+      );
+      throw new BadRequestException(overlapMessage);
+    }
     const existingDailyHours = (participation.attendanceLogs ?? [])
       .filter(
         (log) =>
@@ -1902,9 +2060,134 @@ export class EngagementService {
       throw new BadRequestException('Invalid projectId — expected a UUID.');
     }
 
-    void actorUserId;
-    void actorRole;
-    return { pending: [] as AttendanceLog[], count: 0 };
+    // Pending-attendance review is deferred to the faculty flash-card flow. The legacy queue below
+    // is kept intact (and type-checked) behind this switch instead of as unreachable code.
+    if (ATTENDANCE_REVIEW_DEFERRED_TO_FLASHCARD) {
+      void actorUserId;
+      void actorRole;
+      return { pending: [] as AttendanceLog[], count: 0 };
+    }
+
+    const actor = await this.userRepository.findOne({
+      where: { id: actorUserId },
+      relations: ['organization'],
+    });
+    const actorEmail = (actor?.email || '').trim().toLowerCase();
+
+    const isPartnerActor =
+      actorRole === UserRole.NGO ||
+      actorRole === UserRole.CORPORATE ||
+      actorRole === UserRole.ORGANIZATION_ADMIN;
+
+    if (scopedProjectId) {
+      const opportunity = await this.opportunityRepository.findOne({
+        where: { id: scopedProjectId },
+        relations: ['organization'],
+      });
+      if (!opportunity) {
+        throw new NotFoundException(
+          'No opportunity exists for this projectId. Use the same opportunity id as in your faculty list or attendance email links (the project UUID).',
+        );
+      }
+      if (actorRole === UserRole.FACULTY) {
+        const canAccess =
+          await this.facultyMemberCanAccessOpportunityForPendingAttendance(
+            actorUserId,
+            actorEmail,
+            opportunity,
+          );
+        if (!canAccess) {
+          throw new ForbiddenException(
+            'This projectId is valid but you are not listed as faculty or supervisor for that opportunity, so pending attendance cannot be loaded for it.',
+          );
+        }
+        if (opportunity.isStudentCreated) {
+          await this.reconcileMisroutedPartnerAttendanceForOpportunity(
+            opportunity,
+          );
+        }
+      } else if (isPartnerActor) {
+        await this.reconcilePartnerAttendanceAssigneeForOpportunity(
+          opportunity,
+        );
+      }
+    } else if (isPartnerActor && actor?.organization?.id) {
+      const orgOpportunities = await this.opportunityRepository.find({
+        where: { organizationId: actor.organization.id },
+        relations: ['organization'],
+      });
+      for (const opportunity of orgOpportunities) {
+        await this.reconcilePartnerAttendanceAssigneeForOpportunity(
+          opportunity,
+        );
+      }
+    }
+
+    const qb = this.attendanceLogRepository
+      .createQueryBuilder('log')
+      .leftJoinAndSelect('log.participant', 'participant')
+      .leftJoinAndSelect('log.project', 'project')
+      .where('log.approvalStatus = :pending', { pending: 'pending' });
+
+    if (scopedProjectId) {
+      qb.andWhere('log.projectId = :projectId', { projectId: scopedProjectId });
+    }
+
+    if (actorRole === UserRole.FACULTY) {
+      qb.andWhere('log.assignedApproverType = :facultyType', {
+        facultyType: 'faculty',
+      });
+      if (actorEmail) {
+        qb.andWhere(
+          `(
+                        "log"."assignedApproverUserId"::text = :uid
+                        OR LOWER(TRIM(COALESCE("participant"."facultySupervisorEmail", ''))) = :actorEmail
+                        OR LOWER(TRIM(COALESCE("participant"."primaryFacultyEmail", ''))) = :actorEmail
+                        OR LOWER(TRIM(COALESCE("participant"."secondaryFacultyEmail", ''))) = :actorEmail
+                    )`,
+          { uid: actorUserId, actorEmail },
+        );
+      } else {
+        qb.andWhere('"log"."assignedApproverUserId"::text = :uid', {
+          uid: actorUserId,
+        });
+      }
+    } else if (actorRole === UserRole.SUPER_ADMIN) {
+      qb.andWhere('log.assignedApproverType = :adminType', {
+        adminType: 'admin',
+      });
+    } else {
+      qb.andWhere('log.assignedApproverType = :partnerType', {
+        partnerType: 'partner',
+      });
+      const actorOrgId = actor?.organization?.id ?? null;
+      qb.andWhere(
+        new Brackets((w) => {
+          w.where('"log"."assignedApproverUserId"::text = :uid', {
+            uid: actorUserId,
+          });
+          if (actorOrgId) {
+            w.orWhere(
+              new Brackets((w2) => {
+                w2.where('"log"."assignedApproverUserId" IS NULL').andWhere(
+                  'project.organizationId = :actorOrgId',
+                  { actorOrgId },
+                );
+              }),
+            );
+          }
+        }),
+      );
+    }
+
+    const logs = await qb.orderBy('log.createdAt', 'DESC').getMany();
+    if (scopedProjectId) {
+      await this.hydratePendingAttendanceParticipantTeamIds(
+        logs,
+        scopedProjectId,
+      );
+    }
+    return this.formatPendingAttendanceResponse(logs, scopedProjectId);
   }
 
   /**
@@ -2360,12 +2643,115 @@ export class EngagementService {
 
     // New stakeholder flow: do not lock hours or email a faculty/partner queue.
     // Faculty (or CIEL PK) confirms attendance when locking the flash-card score.
-    void dto;
-    void opportunity;
+    if (ATTENDANCE_REVIEW_DEFERRED_TO_FLASHCARD) {
+      void dto;
+      void opportunity;
+      return {
+        emailNotified: false,
+        reviewerType: null,
+        type: 'deferred_to_faculty_flash_card',
+      };
+    }
+
+    // Idempotent: already-requested seats never fail on the newer oath/min-hours gates.
+    if (participant.attendanceVerificationRequested) {
+      if (!participant.attendanceLocked) {
+        participant.attendanceLocked = true;
+        await this.participantRepository.save(participant);
+      }
+      return {
+        emailNotified: Boolean(participant.attendanceVerificationEmailSentAt),
+        reviewerType: participant.attendanceVerificationReviewerType || null,
+        type: 'already_requested',
+      };
+    }
+
+    const usesNewApprovalWorkflow =
+      dto.attendanceApproverType === 'faculty' ||
+      dto.attendanceApproverType === 'partner' ||
+      dto.oathCompleted === true;
+
+    // New UI always sends both fields — enforce fully. Legacy clients omit them.
+    if (usesNewApprovalWorkflow) {
+      if (dto.oathCompleted !== true) {
+        throw new BadRequestException(
+          'Complete the oath (confirmation checklist) before requesting attendance verification.',
+        );
+      }
+      if (
+        dto.attendanceApproverType !== 'faculty' &&
+        dto.attendanceApproverType !== 'partner'
+      ) {
+        throw new BadRequestException(
+          'Select who should approve attendance: Faculty or Partner.',
+        );
+      }
+      await this.assertAllParticipantsMeetMinimumHoursForVerify(
+        opportunity,
+        projectId,
+      );
+    }
+
+    const preferredApproverType =
+      dto.attendanceApproverType === 'faculty' ||
+      dto.attendanceApproverType === 'partner'
+        ? dto.attendanceApproverType
+        : undefined;
+    const preferredFacultyEmail =
+      typeof dto.facultyEmail === 'string' ? dto.facultyEmail.trim() : '';
+
+    const reviewer = await this.resolveAttendanceVerificationReviewer(
+      opportunity,
+      participant,
+      preferredApproverType,
+      preferredFacultyEmail || undefined,
+    );
+
+    // Persist student choice so pending logs + future reviews follow the selected queue.
+    if (participant.attendanceApproverType !== reviewer.reviewerType) {
+      participant.attendanceApproverType = reviewer.reviewerType;
+    }
+    await this.reassignPendingAttendanceLogsToReviewerType(
+      opportunity,
+      participant,
+      reviewer.reviewerType,
+      preferredFacultyEmail || undefined,
+    );
+
+    participant.attendanceVerificationRequested = true;
+    participant.attendanceLocked = true;
+    participant.attendanceVerificationRequestedAt = requestedAt;
+    participant.attendanceVerificationReviewerType = reviewer.reviewerType;
+    participant.attendanceVerificationReviewerEmail = reviewer.reviewerEmail;
+
+    if (
+      reviewer.reviewerType === 'faculty' &&
+      preferredFacultyEmail &&
+      preferredFacultyEmail.includes('@')
+    ) {
+      participant.primaryFacultyEmail = reviewer.reviewerEmail;
+    }
+
+    let emailNotified = false;
+    try {
+      await this.mailService.sendAttendanceVerificationRequestNotice(
+        reviewer.reviewerEmail,
+        reviewer.reviewerType,
+        opportunity.title || 'Project',
+        opportunity.id,
+      );
+      participant.attendanceVerificationEmailSentAt = new Date();
+      emailNotified = true;
+    } catch (error) {
+      this.logger.warn(
+        `Attendance verification request email failed for project ${projectId}: ${error?.message || error}`,
+      );
+    }
+
+    await this.participantRepository.save(participant);
     return {
-      emailNotified: false,
-      reviewerType: null,
-      type: 'deferred_to_faculty_flash_card',
+      emailNotified,
+      reviewerType: reviewer.reviewerType,
     };
   }
 
@@ -2528,21 +2914,52 @@ export class EngagementService {
     return summary;
   }
 
-  async getAttendanceLogs(participantId: string) {
+  /**
+   * Attendance evidence links belong to the evidence package, which follows the Public /
+   * Restricted / Private rule (and Partner/NGO never see restricted evidence). Only the student
+   * (own team) and CIEL PK Admin get the raw file link here; every other viewer reads evidence
+   * through the report package, where `applyEvidenceAccess` decides.
+   */
+  private mayViewAttendanceEvidenceLinks(viewerRole?: string): boolean {
+    return (
+      viewerRole === undefined ||
+      viewerRole === UserRole.STUDENT ||
+      viewerRole === UserRole.SUPER_ADMIN
+    );
+  }
+
+  async getAttendanceLogs(participantId: string, viewerRole?: string) {
     const participation = await this.findParticipationByIdentifier(
       participantId,
       ['attendanceLogs'],
     );
     if (!participation) throw new NotFoundException('Participation not found');
-    return participation.attendanceLogs;
+    const logs = participation.attendanceLogs ?? [];
+    if (this.mayViewAttendanceEvidenceLinks(viewerRole)) return logs;
+    return logs.map((log) => ({ ...log, evidenceUrl: null }));
   }
 
-  async getProjectAttendanceLogs(projectId: string) {
-    return await this.attendanceLogRepository.find({
+  async getProjectAttendanceLogs(projectId: string, viewerRole?: string) {
+    const logs = await this.attendanceLogRepository.find({
       where: { projectId },
       relations: ['participant'],
       order: { dateOfEngagement: 'DESC' },
     });
+    const showEvidence = this.mayViewAttendanceEvidenceLinks(viewerRole);
+    // Never return the whole Participation row: it carries the CNIC hash / ciphertext, mobile and
+    // email of every teammate. The report UI only needs the participant's id and display name.
+    return logs.map((log) => ({
+      ...log,
+      evidenceUrl: showEvidence ? log.evidenceUrl : null,
+      participant: log.participant
+        ? {
+            id: log.participant.id,
+            fullName: log.participant.fullName,
+            studentId: log.participant.studentId,
+            isTeamLead: log.participant.isTeamLead,
+          }
+        : undefined,
+    }));
   }
 
   async facultyApprove(
@@ -2635,11 +3052,7 @@ export class EngagementService {
   }
 
   private encrypt(text: string): string {
-    const iv = crypto.randomBytes(16);
-    const cipher = crypto.createCipheriv(this.ALGORITHM, this.KEY, iv);
-    let encrypted = cipher.update(text, 'utf8', 'hex');
-    encrypted += cipher.final('hex');
-    return iv.toString('hex') + ':' + encrypted;
+    return this.cnicCipher.encrypt(text);
   }
 
   public decryptCnicInternal(text: string): string {
@@ -2652,12 +3065,7 @@ export class EngagementService {
   }
 
   private decrypt(text: string): string {
-    const [ivHex, encryptedText] = text.split(':');
-    const iv = Buffer.from(ivHex, 'hex');
-    const decipher = crypto.createDecipheriv(this.ALGORITHM, this.KEY, iv);
-    let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
-    return decrypted;
+    return this.cnicCipher.decrypt(text);
   }
 
   private getWeekNumber(d: Date): number {
@@ -3088,7 +3496,16 @@ export class EngagementService {
     opportunity: Opportunity,
     projectId: string,
   ): Promise<void> {
-    const requiredHours = Number(opportunity.requiredHours) || 16;
+    // timeline.expected_hours is what the creation form sets (and what every other service reads
+    // first); the requiredHours column is only a legacy default of 16.
+    const fromTimeline = Number(
+      (opportunity.timeline as { expected_hours?: unknown } | null | undefined)
+        ?.expected_hours,
+    );
+    const requiredHours =
+      Number.isFinite(fromTimeline) && fromTimeline > 0
+        ? fromTimeline
+        : Number(opportunity.requiredHours) || 16;
     const participants = await this.participantRepository.find({
       where: { projectId },
     });

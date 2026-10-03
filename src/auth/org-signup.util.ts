@@ -1,5 +1,7 @@
 /** Shared signup mapping for university / NGO / corporate — keep user.name and org contact in sync. */
 
+import { normalizeE164Phone } from '../common/phone-e164.util';
+
 const ORG_SIGNUP_ROLES = new Set(['university', 'ngo', 'corporate']);
 
 /** Public /signup roles only — admin and organization_admin are created internally. */
@@ -45,13 +47,12 @@ export function composeSignupContactPhone(
 ): string | undefined {
     const rawPhone = (phone ?? '').trim();
     if (!rawPhone) return undefined;
-    if (rawPhone.startsWith('+')) return rawPhone;
-    const national = rawPhone.replace(/\D/g, '');
-    if (!national) return undefined;
-    const dial = (countryCode ?? '').trim().replace(/\D/g, '');
-    if (!dial) return rawPhone;
-    if (national.startsWith(dial)) return `+${national}`;
-    return `+${dial}${national}`;
+    const dialDigits = (countryCode ?? '').trim().replace(/\D/g, '');
+    const defaultDial = dialDigits ? `+${dialDigits}` : '+92';
+    if (rawPhone.startsWith('+')) {
+        return normalizeE164Phone(rawPhone) || undefined;
+    }
+    return normalizeE164Phone(rawPhone, defaultDial) || undefined;
 }
 
 export function resolveOrgSignupAccount(input: {

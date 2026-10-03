@@ -84,4 +84,32 @@ describe('MailService — SMTP reliability', () => {
     expect(sendMailReliable.mock.calls[0][0].to).toBe('partner@ngo.org');
     expect(sendMailReliable.mock.calls[1][0].to).toBe('faculty@uni.edu');
   });
+  it('admin bulk email: one message per recipient, dedupes, skips invalid, survives failures', async () => {
+    const service = makeService();
+    const send = jest
+      .spyOn(service as any, 'sendMailReliable')
+      .mockImplementation(async (m: any) => {
+        if (m.to === 'bad@x.com') throw new Error('smtp');
+      });
+    const result = await service.sendAdminComposedEmail({
+      to: ['a@x.com', 'A@x.com', 'bad@x.com', 'not-an-email', 'b@x.com'],
+      subject: 'Hi',
+      messageHtml: '<p>x</p>',
+    });
+    expect(result).toEqual({
+      sent: ['a@x.com', 'b@x.com'],
+      failed: ['bad@x.com'],
+      skipped: ['not-an-email'],
+    });
+    expect(send).toHaveBeenCalledTimes(3);
+    expect((send.mock.calls[0][0] as any).to).toBe('a@x.com');
+  });
+
+  it('admin bulk email: rejects more than 200 recipients', async () => {
+    const service = makeService();
+    const to = Array.from({ length: 201 }, (_, i) => `u${i}@x.com`);
+    await expect(
+      service.sendAdminComposedEmail({ to, subject: 'Hi', messageHtml: '<p>x</p>' }),
+    ).rejects.toThrow(/Too many recipients/);
+  });
 });

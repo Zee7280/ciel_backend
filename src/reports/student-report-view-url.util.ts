@@ -1,6 +1,12 @@
 /** Student report page deep-links used by listing actions (certificate / print dossier / V17 package). */
 
-export type StudentReportPageView = 'certificate' | 'print' | 'v17';
+export type StudentReportPageView =
+  | 'certificate'
+  | 'print'
+  | 'v17'
+  | 'evidence'
+  | 'flash'
+  | 'package';
 
 export function buildStudentReportPagePath(
   projectId: string,

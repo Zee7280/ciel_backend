@@ -1,3 +1,4 @@
+import { proofUploadOptions } from '../common/safe-upload';
 import {
     BadRequestException,
     Controller,
@@ -45,7 +46,7 @@ export class OrganizationMembershipController {
     }
 
     @Post('submit-proof')
-    @UseInterceptors(FileInterceptor('proof'))
+    @UseInterceptors(FileInterceptor('proof', proofUploadOptions))
     async submitProof(
         @Request() req: any,
         @UploadedFile() file: any,

@@ -7,6 +7,10 @@ import {
   SummaryAnalyticsResponse,
 } from './shared/section-analytics.types';
 import {
+  isSubmittedAndLiveReport,
+  isVerifiedReport,
+} from './shared/report-status.util';
+import {
   UnifiedAnalyticsResponse,
   UnifiedAnalyticsSeries,
 } from './shared/unified-analytics.types';
@@ -61,17 +65,20 @@ export class UnifiedAnalyticsService {
       facultyId: requester.role === 'faculty' ? requester.id : undefined,
     });
 
-    const verifiedReports = summary.data.composite.verified_reports;
+    // Same predicate as the donut below, so the KPI and the chart always agree.
+    const verifiedReports = reports.filter((r) => isVerifiedReport(r)).length;
     const totalReports = summary.data.composite.total_reports;
     const verificationRate =
       totalReports === 0
         ? 0
         : Math.round((verifiedReports / totalReports) * 100);
+    // Hours / reach only from submitted-and-later, non-rejected reports (never drafts).
+    const liveReports = reports.filter((r) => isSubmittedAndLiveReport(r));
     const reportedHours = this.sumReportValue(
-      reports.map((report) => report.section4?.my_hours),
+      liveReports.map((report) => report.section4?.my_hours),
     );
     const reportedBeneficiaries = this.sumReportValue(
-      reports.map((report) => report.section4?.my_beneficiaries),
+      liveReports.map((report) => report.section4?.my_beneficiaries),
     );
 
     return {
@@ -242,7 +249,7 @@ export class UnifiedAnalyticsService {
 
   private normalizeStatus(status: string, adminStatus: string): string {
     const normalized = String(status || 'draft').toLowerCase();
-    if (normalized === 'verified' || adminStatus === 'approved') {
+    if (isVerifiedReport({ status: normalized, admin_status: adminStatus })) {
       return 'verified';
     }
     if (normalized.includes('reject')) return 'rejected';

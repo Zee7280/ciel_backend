@@ -1,3 +1,4 @@
+import { imageUploadOptions } from '../common/safe-upload';
 import {
   Controller,
   Get,
@@ -41,6 +42,9 @@ import { OpportunityApplicationsService } from '../opportunities/opportunity-app
 import { FacultyReportsService } from '../reports/faculty-reports.service';
 import { RunIndependentAnalysisDto } from '../faculty/dto/run-independent-analysis.dto';
 import { RunIndependentAnalysisBatchDto } from '../faculty/dto/run-independent-analysis-batch.dto';
+
+/** The AI analyzer feeds scores and rankings, so only CIEL PK Admin may run it. */
+const ANALYZER_ADMIN_ONLY = 'The AI analyzer can only be run by CIEL PK Admin.';
 
 @Controller('partners')
 @UseGuards(JwtAuthGuard, RolesGuard, MembershipActiveGuard)
@@ -116,7 +120,7 @@ export class PartnersController {
   }
 
   @Post('me/logo')
-  @UseInterceptors(FileInterceptor('logo'))
+  @UseInterceptors(FileInterceptor('logo', imageUploadOptions))
   async uploadLogo(
     @Request() req,
     @UploadedFile() file: any,
@@ -143,7 +147,7 @@ export class PartnersController {
   }
 
   @Post('profile/logo')
-  @UseInterceptors(FileInterceptor('logo'))
+  @UseInterceptors(FileInterceptor('logo', imageUploadOptions))
   async uploadLogoProfile(
     @Request() req,
     @UploadedFile() file: any,
@@ -185,7 +189,9 @@ export class PartnersController {
       .includes('university');
     const data = isUni
       ? await this.communityAward.listForUniversity(req.user.organizationId)
-      : await this.communityAward.listForPartnerOrg(req.user.organizationId);
+      : (
+          await this.communityAward.listForPartnerOrg(req.user.organizationId)
+        ).map((card) => CommunityAwardService.stripAnalysisFromCard(card));
     return { success: true, data, scope: isUni ? 'university' : 'partner' };
   }
 
@@ -221,32 +227,14 @@ export class PartnersController {
     return { success: true, data };
   }
 
-  /** Phase 4 (My Impact Wall): university runs an additional AI analysis on an already
-   * faculty-approved report — same engine as faculty's independent-analysis action, scoped to
-   * students at this university org, and never overwrites the faculty-approved score. */
+  /** Blocked: independent AI analysis is an admin-only action (see admin/community-service). */
   @Post('community-service/reports/:id/independent-analysis')
   async communityServiceIndependentAnalysis(
-    @Request() req,
-    @Param('id') id: string,
-    @Body() body: RunIndependentAnalysisDto,
+    @Request() _req,
+    @Param('id') _id: string,
+    @Body() _body: RunIndependentAnalysisDto,
   ) {
-    const org = await this.organizationsService.getMyOrganization(req.user.id);
-    const isUni = String(org?.orgType || '')
-      .toLowerCase()
-      .includes('university');
-    if (!isUni) {
-      throw new ForbiddenException(
-        'Running an independent AI analysis is only available for university organizations.',
-      );
-    }
-    return await this.facultyReportsService.runIndependentAiAnalysis(
-      id,
-      req.user.id,
-      'university',
-      req.user.name || req.user.email,
-      body.note,
-      { universityOrganizationName: org?.name || '' },
-    );
+    throw new ForbiddenException(ANALYZER_ADMIN_ONLY);
   }
 
   /** Batch counterpart — run independent analysis across several reports from this university's
@@ -254,26 +242,10 @@ export class PartnersController {
    * Wall in a single action instead of one report at a time. */
   @Post('community-service/reports/independent-analysis/batch')
   async communityServiceIndependentAnalysisBatch(
-    @Request() req,
-    @Body() body: RunIndependentAnalysisBatchDto,
+    @Request() _req,
+    @Body() _body: RunIndependentAnalysisBatchDto,
   ) {
-    const org = await this.organizationsService.getMyOrganization(req.user.id);
-    const isUni = String(org?.orgType || '')
-      .toLowerCase()
-      .includes('university');
-    if (!isUni) {
-      throw new ForbiddenException(
-        'Running an independent AI analysis is only available for university organizations.',
-      );
-    }
-    return await this.facultyReportsService.runIndependentAiAnalysisBatch(
-      body.reportIds,
-      req.user.id,
-      'university',
-      req.user.name || req.user.email,
-      body.note,
-      { universityOrganizationName: org?.name || '' },
-    );
+    throw new ForbiddenException(ANALYZER_ADMIN_ONLY);
   }
 
   /** Read-only CII v2 breakdown (section scores + verified highlights, never per-criterion
@@ -290,6 +262,11 @@ export class PartnersController {
     const isUni = String(org?.orgType || '')
       .toLowerCase()
       .includes('university');
+    if (!isUni) {
+      throw new ForbiddenException(
+        'The analysis report is not shared with Partner / NGO organisations.',
+      );
+    }
     const data = await this.communityAward.getCiiV2BreakdownForOrg(
       id,
       req.user.organizationId,
@@ -528,14 +505,18 @@ export class PartnersController {
   }
 
   @Get('student-reports')
-  getStudentReports(@Request() req, @Query() query: any) {
+  async getStudentReports(@Request() req, @Query() query: any) {
     if (!req.user.organizationId) {
       throw new BadRequestException('User is not linked to an organization');
     }
-    return this.studentReportsService.findAll({
-      ...query,
-      organizationId: req.user.organizationId,
-    });
+    const org = await this.organizationsService.getMyOrganization(req.user.id);
+    const isUniversity = Boolean(
+      org && this.facultyUniversityScope.isUniversityOrganization(org),
+    );
+    return this.studentReportsService.findAll(
+      { ...query, organizationId: req.user.organizationId },
+      { partnerView: !isUniversity },
+    );
   }
 
   @Get('student-reports/:id')
@@ -543,6 +524,7 @@ export class PartnersController {
     return this.studentReportsService.findOneForPartner(
       id,
       req.user.organizationId,
+      { viewerRole: req.user.role },
     );
   }
 
@@ -707,10 +689,10 @@ export class PartnerAliasController {
         );
       return this.studentReportsService.findAllByOpportunityIds(ids, query);
     }
-    return this.studentReportsService.findAll({
-      ...query,
-      organizationId: req.user.organizationId,
-    });
+    return this.studentReportsService.findAll(
+      { ...query, organizationId: req.user.organizationId },
+      { partnerView: true },
+    );
   }
 
   @Get('opportunity-applications')
@@ -773,7 +755,7 @@ export class PartnerAliasController {
     return this.studentReportsService.findOneForPartner(
       id,
       req.user.organizationId,
-      { universityScopeOpportunityIds },
+      { universityScopeOpportunityIds, viewerRole: req.user.role },
     );
   }
 

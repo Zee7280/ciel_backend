@@ -161,7 +161,7 @@ export class CommunityAwardService {
       .andWhere(
         `LOWER(TRIM(COALESCE(report.faculty_status, ''))) IN (:...liveFaculty)`,
         {
-          liveFaculty: ['approved', 'verified'],
+          liveFaculty: ['approved', 'verified', 'not_applicable', 'not_required'],
         },
       )
       .andWhere(
@@ -179,6 +179,17 @@ export class CommunityAwardService {
           );
         }),
       );
+  }
+
+  /** NGO / partner cards never carry the CII-derived score, points, total or level. */
+  static stripAnalysisFromCard<T extends CommunityAwardCard>(card: T): T {
+    return {
+      ...card,
+      cii: null as unknown as T['cii'],
+      pts: null as unknown as T['pts'],
+      total: null as unknown as T['total'],
+      level: '' as T['level'],
+    };
   }
 
   async listForPartnerOrg(
@@ -337,18 +348,26 @@ export class CommunityAwardService {
     const topN = awardTopN(kind);
     // CIEL PK national ranking publishes the whole reviewed cohort. Faculty, partner
     // and university awards stay capped at their top-N medal.
-    const picks = (
-      dto.picks?.length
-        ? dto.picks
-        : (dto.reportIds || []).map((reportId, i) => ({
-            reportId,
-            rank: i + 1,
-            of: pool.length,
-            total: undefined as number | undefined,
-          }))
-    )
-      .filter((p) => p.reportId && allowed.has(p.reportId))
-      .slice(0, kind === 'ciel' ? undefined : topN);
+    // Rank, "of" and score are computed HERE from the caller's own pool — never taken from the
+    // request body. The client only says which reports to publish; otherwise any in-pool report
+    // could be awarded "#1 of 1 · 100/100" by a crafted request.
+    const totalOf = (id: string) => pool.find((c) => c.id === id)?.total ?? 0;
+    const serverRank = (id: string) =>
+      1 + pool.filter((c) => (c.total ?? 0) > totalOf(id)).length;
+    const requestedIds = (
+      dto.picks?.length ? dto.picks.map((p) => p.reportId) : dto.reportIds || []
+    ).filter((id) => id && allowed.has(id));
+    const picks = Array.from(new Set(requestedIds))
+      // Faculty / partner / university medals are strictly the top-N by SERVER rank; CIEL PK
+      // publishes the whole reviewed cohort.
+      .filter((id) => kind === 'ciel' || serverRank(id) <= topN)
+      .sort((a, b) => serverRank(a) - serverRank(b))
+      .map((reportId) => ({
+        reportId,
+        rank: serverRank(reportId),
+        of: pool.length,
+        total: totalOf(reportId),
+      }));
     const label = awardBadgeLabel(kind, scope);
     const seen = new Set<string>();
     let sent = 0;
@@ -360,14 +379,13 @@ export class CommunityAwardService {
         relations: ['opportunity'],
       });
       if (!report || !this.facultyApproved(report)) continue;
-      const of = pick.of || pool.length;
+      const of = pick.of;
       const badge = {
         kind,
         label,
         rank: pick.rank,
         of,
-        score:
-          pick.total ?? pool.find((c) => c.id === pick.reportId)?.total ?? 0,
+        score: pick.total,
         scope,
         at: new Date().toISOString(),
         by: actorName || undefined,
@@ -381,7 +399,10 @@ export class CommunityAwardService {
           b.scope === badge.scope,
       );
       report.awardBadges = [...prev, badge];
-      report.awardBadgeHistory = [...(report.awardBadgeHistory || []), badge];
+      // Re-publishing an identical ranking must not pile duplicate rows into the history.
+      if (!same) {
+        report.awardBadgeHistory = [...(report.awardBadgeHistory || []), badge];
+      }
       await this.reports.save(report);
       if (same) {
         sent += 1;

@@ -924,9 +924,25 @@ describe('StudentReportsService', () => {
       expect(result.ciiV2Lock).toBeNull();
     });
 
-    it('surfaces the locked score/level/feedback once faculty has approved it', () => {
+    it('withholds a locked score until CIEL PK Admin has accepted the report', () => {
+      const result = redactListing({
+        id: 'r-2a',
+        status: 'submitted',
+        admin_status: 'pending',
+        faculty_status: 'approved',
+        ciiV2: { final: 91.5, sections: [] },
+        ciiV2Lock: { locked: true, hash: 'abc' },
+      });
+      expect(result.ciiV2).toBeNull();
+      expect(result.ciiV2Lock).toBeNull();
+    });
+
+    it('surfaces the locked score/level/feedback once CIEL PK Admin has accepted the report', () => {
       const result = redactListing({
         id: 'r-2',
+        status: 'verified',
+        admin_status: 'approved',
+        faculty_status: 'approved',
         ciiV2: {
           final: 91.5,
           level: { level: 6, name: 'Distinguished Impact Contributor' },
@@ -3139,10 +3155,23 @@ describe('StudentReportsService', () => {
       }
     });
 
-    it('opens a submitted report for the owning org', async () => {
-      mockStudentReportsRepository.findOne.mockResolvedValueOnce(row('submitted'));
+    it('opens a report for the owning org once CIEL PK Admin has accepted it', async () => {
+      mockStudentReportsRepository.findOne.mockResolvedValueOnce({
+        ...row('submitted'),
+        admin_status: 'approved',
+      });
       const res = await service.findOneForPartner('r-1', ORG, 'ngo');
       expect((res.data as { id: string }).id).toBe('r-1');
+    });
+
+    it('keeps a submitted report closed to the partner until CIEL PK Admin accepts it', async () => {
+      mockStudentReportsRepository.findOne.mockResolvedValueOnce({
+        ...row('submitted'),
+        admin_status: 'pending',
+      });
+      await expect(service.findOneForPartner('r-1', ORG, 'ngo')).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
     });
 
     it('refuses another org with no university scope', async () => {
@@ -3209,6 +3238,29 @@ describe('StudentReportsService', () => {
       expect(res.data.status).toBe('partner_verified');
       expect(report.section2.problem_statement).toBe('ORIGINAL');
       expect(mockStudentReportsRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('a submit that cannot resolve a project is refused instead of skipping every gate', async () => {
+      mockStudentReportsRepository.findOne.mockResolvedValue(null);
+      mockStudentReportsRepository.save.mockClear();
+      await expect(
+        service.createReport('student-1', { section2: { problem_statement: 'x' } }, [], true),
+      ).rejects.toThrow(/not linked to a valid project/);
+      expect(mockStudentReportsRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('a finally rejected report cannot be "submitted" again with a fake success', async () => {
+      mockStudentReportsRepository.findOne.mockResolvedValue({
+        id: 'report-1',
+        studentId: 'student-1',
+        opportunityId: 'opp-1',
+        status: 'rejected',
+        admin_status: 'pending',
+        faculty_status: 'rejected',
+      });
+      await expect(
+        service.createReport('student-1', { opportunityId: 'opp-1' }, [], true),
+      ).rejects.toThrow(/rejected/);
     });
 
     it('admin cannot accept a report that is still in revision', async () => {

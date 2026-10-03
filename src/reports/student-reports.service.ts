@@ -991,7 +991,37 @@ export class StudentReportsService {
     const wrapped = StudentReportsService.redactCiiV2ForExternalViewer({
       data: row as Record<string, unknown>,
     });
-    return wrapped.data as T;
+    return StudentReportsService.withholdAnalysisUntilAdminApproved(
+      wrapped.data as T,
+    );
+  }
+
+  /** Faculty (read-only) get the analysis report only after CIEL PK Admin has accepted the report. */
+  static withholdAnalysisForFacultyUntilApproved<T extends { data?: Record<string, any> }>(
+    response: T,
+  ): T {
+    if (!response?.data) return response;
+    return {
+      ...response,
+      data: StudentReportsService.withholdAnalysisUntilAdminApproved(response.data),
+    };
+  }
+
+  /** The student receives the analysis report only once CIEL PK Admin has accepted the report —
+   * locking the CII is an internal step, not publication. */
+  private static withholdAnalysisUntilAdminApproved<
+    T extends Record<string, any>,
+  >(row: T): T {
+    if (
+      isCommunityAwardMedalReport({
+        status: row.status,
+        faculty_status: row.faculty_status,
+        admin_status: row.admin_status,
+      })
+    ) {
+      return row;
+    }
+    return { ...row, ciiV2: null, ciiV2Lock: null, independentAiAnalyses: null };
   }
 
   /** Same 0-100 total + standing Level badge every faculty/partner/admin community-award view
@@ -3001,6 +3031,14 @@ export class StudentReportsService {
       }
     }
 
+    if (shouldSubmit && !opportunityForPolicy) {
+      // Every submit gate (live check, report window, enrolment, team lead, per-member hours) hangs
+      // off the opportunity, so a submit that cannot resolve one must not skip them.
+      throw new BadRequestException(
+        'This report is not linked to a valid project. Open it from your project page and submit again.',
+      );
+    }
+
     if (opportunityIdFromDto) {
       await this.assertTeamLeadMayWriteReport(studentId, opportunityIdFromDto);
     }
@@ -3041,6 +3079,16 @@ export class StudentReportsService {
       // locked: a second submit — double click, retry, or a crafted API call — must not overwrite
       // sections the reviewer is looking at, re-stamp the submit time or regress the status.
       // Repeating the call is harmless, so answer as the first one did.
+      if (
+        shouldSubmit &&
+        !wasRejectedForRevision &&
+        String(priorReportStatus || '').toLowerCase() === 'rejected'
+      ) {
+        throw new BadRequestException(
+          'This report was rejected by CIEL PK Admin and cannot be submitted again.',
+        );
+      }
+
       if (
         shouldSubmit &&
         !wasRejectedForRevision &&
@@ -3209,9 +3257,12 @@ export class StudentReportsService {
 
     // Handle Faculty Assignment if faculty email is provided in Section 1
     if (report.section1?.faculty_supervisor_email) {
+      // Link only: the invite email goes out after a successful submit, not on every autosave
+      // or on a submit that is about to be rejected.
       await this.handleFacultyAssignment(
         report,
         report.section1.faculty_supervisor_email,
+        false,
       );
     }
 
@@ -3300,6 +3351,13 @@ export class StudentReportsService {
           error instanceof Error ? error.stack : String(error),
         );
       }
+    }
+
+    if (shouldSubmit && !report.facultyId && report.section1?.faculty_supervisor_email) {
+      await this.handleFacultyAssignment(
+        report,
+        report.section1.faculty_supervisor_email,
+      );
     }
 
     const skipAdminSubmitNotify = new Set([
@@ -3866,6 +3924,20 @@ export class StudentReportsService {
       );
     }
 
+    // Partner / NGO / corporate receive the package only after CIEL PK Admin has accepted the
+    // report (University keeps its read-only review of submitted reports).
+    if (
+      String(viewerRole || '').toLowerCase() !== 'university' &&
+      !inUniversityScope &&
+      !['approved', 'verified'].includes(
+        String(report.admin_status || '').toLowerCase(),
+      )
+    ) {
+      throw new ForbiddenException(
+        'This report opens for partners after CIEL PK Admin has accepted it.',
+      );
+    }
+
     // Evidence links follow the project-level sharing rule: University unlocks after super-admin
     // approval; Partner / NGO / corporate never (unless the project is Public).
     const evidenceRole: EvidenceViewerRole =
@@ -3887,6 +3959,38 @@ export class StudentReportsService {
     return formatted;
   }
 
+  /** AI / CII values that ride along on the raw report and must never reach NGO / partner viewers. */
+  private static stripAnalysisScalarsForPartner<T extends Record<string, any>>(
+    row: T,
+  ): T {
+    const out: Record<string, any> = { ...row, cii_score: null, total: null, level: null, pts: null };
+    if (out.section11 && typeof out.section11 === 'object') {
+      const {
+        cii_index: _a,
+        ciiIndex: _b,
+        ai_generated_impact_score: _c,
+        institutional_alignment_score: _d,
+        verified_narrative: _e,
+        audit_meta: _f,
+        summary_text: _g,
+        ...rest
+      } = out.section11 as Record<string, unknown>;
+      out.section11 = rest;
+    }
+    const pkg = out.review_package as Record<string, unknown> | null | undefined;
+    if (pkg && typeof pkg === 'object') {
+      const {
+        ai_analyser_href: _h,
+        analysis_hrefs: _i,
+        admin_review_href: _j,
+        admin_doc_hrefs: _k,
+        ...pkgRest
+      } = pkg;
+      out.review_package = pkgRest;
+    }
+    return out as T;
+  }
+
   /** Listing-row twin of stripAnalysisReportForPartner. */
   private static stripAnalysisFromListingRow<T extends Record<string, any>>(
     row: T,
@@ -3895,7 +3999,7 @@ export class StudentReportsService {
       | { documents?: Record<string, unknown>; analysis_attached?: boolean }
       | null
       | undefined;
-    return {
+    return StudentReportsService.stripAnalysisScalarsForPartner({
       ...row,
       ciiV2: null,
       ciiV2Lock: null,
@@ -3909,7 +4013,7 @@ export class StudentReportsService {
               : pkg.documents,
           }
         : pkg,
-    };
+    });
   }
 
   /** NGO / partner receive the student Impact Package without the CII analysis report. */
@@ -3924,7 +4028,7 @@ export class StudentReportsService {
       | undefined;
     return {
       ...response,
-      data: {
+      data: StudentReportsService.stripAnalysisScalarsForPartner({
         ...data,
         ciiV2: null,
         ciiV2Lock: null,
@@ -3938,7 +4042,7 @@ export class StudentReportsService {
                 : pkg.documents,
             }
           : pkg,
-      },
+      }),
     };
   }
 
@@ -3998,13 +4102,21 @@ export class StudentReportsService {
       // This is one shared row per team — every team member (lead or not)
       // must see the whole team's logged hours here, not just their own,
       // or a teammate's logged sessions silently never appear to anyone else.
-      return StudentReportsService.redactSection11ScoreForStudent(
+      const studentView = StudentReportsService.redactSection11ScoreForStudent(
         StudentReportsService.redactCiiV2ForExternalViewer(
           await this.formatReportResponse(report, attendanceParticipantId, {
             allProjectAttendance: true,
           }),
         ),
       );
+      return studentView?.data
+        ? {
+            ...studentView,
+            data: StudentReportsService.withholdAnalysisUntilAdminApproved(
+              studentView.data as Record<string, any>,
+            ),
+          }
+        : studentView;
     }
 
     // If no report found, check for an application to pre-populate
@@ -4759,8 +4871,7 @@ export class StudentReportsService {
       // the report (faculty_status 'approved' is still honoured for legacy in-flight rows).
       if (
         (action === 'approve' || action === 'reject') &&
-        report.admin_status !== 'approved' &&
-        report.faculty_status !== 'approved'
+        report.admin_status !== 'approved'
       ) {
         throw new ForbiddenException(
           'This report has not been accepted by CIEL PK Admin yet. Partners can view its status, and can approve or reject only after CIEL PK Admin accepts the report.',
@@ -4828,6 +4939,10 @@ export class StudentReportsService {
       if (isPartnerReviewer) {
         report.partner_status = 'rejected';
         report.partnerApprovedAt = null;
+        // The report goes back to the student for edits, so CIEL PK's earlier acceptance no longer
+        // covers the content: faculty/university evidence access and the publish package must be
+        // re-earned when the admin accepts the resubmission.
+        if (report.admin_status === 'approved') report.admin_status = 'pending';
       }
       report.adminApprovedAt = null;
       report.admin_feedback = reason.trim();
@@ -4901,6 +5016,25 @@ export class StudentReportsService {
       }
     }
 
+    // The package saved at submit time predates the analysis lock and any later evidence edits;
+    // rebuild it when CIEL PK publishes so every API payload agrees with the publish email.
+    let refreshedReviewPackage: StudentReport['review_package'] | undefined;
+    if (action === 'approve' && !isPartnerReviewer && role === 'admin') {
+      try {
+        refreshedReviewPackage = buildReportReviewPackage(
+          report,
+          this.configService.get<string>('FRONTEND_URL') ||
+            this.configService.get<string>('APP_URL') ||
+            '',
+        ) as unknown as StudentReport['review_package'];
+        report.review_package = refreshedReviewPackage;
+      } catch (error) {
+        this.logger.warn(
+          `Could not refresh review package for report ${report.id}: ${(error as Error)?.message}`,
+        );
+      }
+    }
+
     // Atomic compare-and-swap: the WHERE guard re-checks that admin_status/partner_status haven't
     // changed since we read them above, so two concurrent reviewers (double-click, two tabs, or a
     // partner-reject racing an admin-approve) can't silently clobber each other via a blind
@@ -4917,6 +5051,9 @@ export class StudentReportsService {
         partnerApprovedAt: report.partnerApprovedAt,
         adminApprovedAt: report.adminApprovedAt,
         admin_feedback: report.admin_feedback,
+        ...(refreshedReviewPackage
+          ? { review_package: refreshedReviewPackage as any }
+          : {}),
         ...((action === 'unlock' || (action === 'reject' && role === 'admin')
           ? {
               ciiV2: report.ciiV2,
@@ -5005,6 +5142,12 @@ export class StudentReportsService {
 
   /** Retires the CII lock (kept in `ciiV2.previousLocks` for audit) so the score must be re-run. */
   private supersedeCiiLock(report: StudentReport, reason: 'rejected' | 'unlocked') {
+    // The earlier CII approval (faculty_status mirrors the lock) belonged to the content that is
+    // being sent back; without this reset the admin could re-publish the resubmitted report with
+    // no fresh analysis.
+    if (['approved', 'verified'].includes(String(report.faculty_status || '').toLowerCase())) {
+      report.faculty_status = 'pending';
+    }
     const lock = report.ciiV2Lock as unknown as Record<string, unknown> | null;
     if (!lock || (lock.locked !== true && lock.locked !== 'true')) return;
     const prev = (report.ciiV2 ?? {}) as unknown as Record<string, unknown>;
@@ -5351,7 +5494,11 @@ export class StudentReportsService {
     }
   }
 
-  private async handleFacultyAssignment(report: StudentReport, email: string) {
+  private async handleFacultyAssignment(
+    report: StudentReport,
+    email: string,
+    sendInvite = true,
+  ) {
     // 1. Search for faculty user
     const facultyUser = await this.usersRepository.findOne({
       where: { email: email.toLowerCase(), role: 'faculty' as any },
@@ -5365,6 +5512,7 @@ export class StudentReportsService {
     } else {
       // Does not exist, clear any previous link and trigger invite
       report.facultyId = null;
+      if (!sendInvite) return;
 
       // Get student name and project title for the email
       const student = await this.usersRepository.findOne({
@@ -5376,11 +5524,17 @@ export class StudentReportsService {
       const projectTitle =
         opportunity?.title || report.project_id || 'Student Project';
 
-      await this.mailService.sendFacultyInvite(
-        email,
-        student?.name || 'A Student',
-        projectTitle,
-      );
+      try {
+        await this.mailService.sendFacultyInvite(
+          email,
+          student?.name || 'A Student',
+          projectTitle,
+        );
+      } catch (error) {
+        this.logger.warn(
+          `Faculty invite email failed for report ${report.id}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
   }
 

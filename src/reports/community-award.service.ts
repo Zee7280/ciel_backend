@@ -161,7 +161,7 @@ export class CommunityAwardService {
       .andWhere(
         `LOWER(TRIM(COALESCE(report.faculty_status, ''))) IN (:...liveFaculty)`,
         {
-          liveFaculty: ['approved', 'verified'],
+          liveFaculty: ['approved', 'verified', 'not_applicable', 'not_required'],
         },
       )
       .andWhere(
@@ -179,6 +179,17 @@ export class CommunityAwardService {
           );
         }),
       );
+  }
+
+  /** NGO / partner cards never carry the CII-derived score, points, total or level. */
+  static stripAnalysisFromCard<T extends CommunityAwardCard>(card: T): T {
+    return {
+      ...card,
+      cii: null as unknown as T['cii'],
+      pts: null as unknown as T['pts'],
+      total: null as unknown as T['total'],
+      level: '' as T['level'],
+    };
   }
 
   async listForPartnerOrg(

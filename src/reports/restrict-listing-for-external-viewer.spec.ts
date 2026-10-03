@@ -69,3 +69,32 @@ describe('stripAnalysisFromListingRow (partner / NGO)', () => {
     expect(out.review_package.documents.flashcard.title).toBe('Impact flashcard');
   });
 });
+
+describe('partner payload carries no AI / CII scalars', () => {
+  const strip = (StudentReportsService as any).stripAnalysisScalarsForPartner;
+  it('removes scores, AI section11 keys and analyser links', () => {
+    const out = strip({
+      cii_score: 80,
+      total: 70,
+      level: 'L3',
+      section11: { cii_index: { totalScore: 80 }, summary_text: 'CII 80', ai_generated_impact_score: 80, keep: 1 },
+      review_package: { ai_analyser_href: 'x', analysis_hrefs: {}, documents: { flashcard: {} } },
+    });
+    expect(out.cii_score).toBeNull();
+    expect(out.total).toBeNull();
+    expect(JSON.stringify(out.section11)).toBe('{"keep":1}');
+    expect(out.review_package.ai_analyser_href).toBeUndefined();
+    expect(out.review_package.documents.flashcard).toEqual({});
+  });
+});
+
+describe('supersedeCiiLock', () => {
+  it('resets faculty approval so a resubmitted report needs a fresh analysis', () => {
+    const svc = Object.create(StudentReportsService.prototype);
+    const report: any = { faculty_status: 'approved', ciiV2: { final: 70 }, ciiV2Lock: { locked: true } };
+    svc.supersedeCiiLock(report, 'rejected');
+    expect(report.faculty_status).toBe('pending');
+    expect(report.ciiV2Lock).toBeNull();
+    expect(report.ciiV2.previousLocks).toHaveLength(1);
+  });
+});

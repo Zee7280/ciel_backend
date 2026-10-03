@@ -718,10 +718,12 @@ export class FacultyReportsService {
       );
     }
 
-    return this.studentReportsService.buildDetailResponse(report, undefined, {
-      allProjectAttendance: true,
-      evidenceViewer: 'faculty',
-    });
+    return StudentReportsService.withholdAnalysisForFacultyUntilApproved(
+      await this.studentReportsService.buildDetailResponse(report, undefined, {
+        allProjectAttendance: true,
+        evidenceViewer: 'faculty',
+      }),
+    );
   }
 
   /** Shared lookup for faculty-scoped mutations (decision actions, CII v2 analyse/approve). */

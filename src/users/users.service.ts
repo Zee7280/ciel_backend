@@ -11,6 +11,12 @@ import { User } from './entities/user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UserRole } from './enums/user-role.enum';
 import * as bcrypt from 'bcrypt';
+import { createHash } from 'crypto';
+
+/** Reset tokens are stored hashed: a DB read must not hand out working reset links. */
+export function hashResetToken(token: string): string {
+  return createHash('sha256').update(String(token ?? '')).digest('hex');
+}
 import { NotificationsService } from '../notifications/notifications.service';
 import { OrganizationMembershipService } from '../organization-membership/organization-membership.service';
 import { getProfileCompletionStatus } from './profile-completion.util';
@@ -76,6 +82,7 @@ export class UsersService {
   async create(
     createUserDto: (CreateUserDto | AdminCreateUserDto) & {
       settings?: Record<string, unknown>;
+      termsAcceptedAt?: Date;
     },
   ): Promise<User> {
     if (createUserDto.email !== undefined) {
@@ -640,14 +647,15 @@ export class UsersService {
     expiry: Date,
   ): Promise<void> {
     await this.usersRepository.update(userId, {
-      passwordResetToken: token,
+      passwordResetToken: hashResetToken(token),
       passwordResetExpiry: expiry,
     });
   }
 
   async findByResetToken(token: string): Promise<User | null> {
+    if (typeof token !== 'string' || !token.trim()) return null;
     return this.usersRepository.findOne({
-      where: { passwordResetToken: token },
+      where: { passwordResetToken: hashResetToken(token.trim()) },
     });
   }
 

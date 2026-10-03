@@ -7,6 +7,7 @@ import { join } from 'path';
 import * as fs from 'fs';
 import { json, urlencoded } from 'express';
 import compression from 'compression';
+import { StripSecretsInterceptor } from './common/interceptors/strip-secrets.interceptor';
 
 async function bootstrap() {
   const bodyLimit = process.env.REQUEST_BODY_LIMIT ?? '50mb';
@@ -18,18 +19,50 @@ async function bootstrap() {
   app.use(json({ limit: bodyLimit }));
   app.use(urlencoded({ extended: true, limit: bodyLimit }));
 
-  // Enable CORS
+  // Basic security headers (no extra dependency). The API serves JSON, so these are safe everywhere.
+  app.use((_req: any, res: any, next: () => void) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
+    if (process.env.NODE_ENV === 'production') {
+      res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+    }
+    next();
+  });
+
+  // CORS. Auth is a Bearer token (not a cookie), so reflecting an origin cannot be abused for CSRF —
+  // but production should still pin the origins. Set CORS_ALLOWED_ORIGINS (comma-separated) to
+  // enforce an allowlist; without it the previous permissive behaviour is kept.
+  const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS ?? '')
+    .split(',')
+    .map((o) => o.trim().replace(/\/+$/, ''))
+    .filter(Boolean);
+  if (process.env.NODE_ENV === 'production' && allowedOrigins.length === 0) {
+    // eslint-disable-next-line no-console
+    console.warn('[security] CORS_ALLOWED_ORIGINS is not set — any origin may call this API. Set it in production.');
+  }
+  if (process.env.NODE_ENV === 'production' && !process.env.FRONTEND_URL && !process.env.APP_URL) {
+    // eslint-disable-next-line no-console
+    console.warn('[config] FRONTEND_URL / APP_URL is not set — emailed links and QR codes may point to the wrong site.');
+  }
   app.enableCors({
     origin: (origin, callback) => {
-      // Always allow the incoming origin to bypass any strict environment blocks
-      // This ensures Access-Control-Allow-Origin perfectly matches the request
-      callback(null, origin || '*');
+      if (allowedOrigins.length === 0) {
+        callback(null, origin || '*');
+      } else if (!origin || allowedOrigins.includes(origin.replace(/\/+$/, ''))) {
+        callback(null, origin || true);
+      } else {
+        callback(null, false);
+      }
     },
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
     allowedHeaders: 'Content-Type, Accept, Authorization, X-Requested-With, Origin, X-Csrf-Token',
   });
 
+
+  // Never let a password hash / reset token leave the server, even if a service serialises a User.
+  app.useGlobalInterceptors(new StripSecretsInterceptor());
 
   // Enable validation pipe
   app.useGlobalPipes(new ValidationPipe({

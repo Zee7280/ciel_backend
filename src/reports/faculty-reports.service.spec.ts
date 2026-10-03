@@ -63,139 +63,6 @@ function makeService(
   };
 }
 
-describe('FacultyReportsService — updateAction', () => {
-  it('rejects with no remarks are refused — a student is entitled to know why', async () => {
-    const { service, studentReportsRepository } = makeService({
-      id: 'report-1',
-      faculty_status: 'pending',
-    });
-
-    await expect(
-      service.updateAction(
-        'report-1',
-        'faculty-1',
-        'teacher@uni.edu',
-        'rejected',
-      ),
-    ).rejects.toBeInstanceOf(BadRequestException);
-    await expect(
-      service.updateAction(
-        'report-1',
-        'faculty-1',
-        'teacher@uni.edu',
-        'rejected',
-        '   ',
-      ),
-    ).rejects.toBeInstanceOf(BadRequestException);
-    expect(studentReportsRepository.save).not.toHaveBeenCalled();
-  });
-
-  it('accepts a reject with a real reason', async () => {
-    const { service } = makeService({
-      id: 'report-1',
-      faculty_status: 'pending',
-    });
-
-    const result = await service.updateAction(
-      'report-1',
-      'faculty-1',
-      'teacher@uni.edu',
-      'rejected',
-      'Attendance hours look inflated.',
-    );
-
-    expect(result.success).toBe(true);
-  });
-
-  it('approve does not require remarks', async () => {
-    const { service } = makeService({
-      id: 'report-1',
-      faculty_status: 'pending',
-    });
-
-    const result = await service.updateAction(
-      'report-1',
-      'faculty-1',
-      'teacher@uni.edu',
-      'approved',
-    );
-
-    expect(result.success).toBe(true);
-  });
-
-  it('lets faculty review a submitted university report without a reporting fee', async () => {
-    const { service, studentReportsRepository } = makeService({
-      id: 'report-1',
-      status: 'submitted',
-      faculty_status: 'pending',
-    });
-
-    const result = await service.updateAction(
-      'report-1',
-      'faculty-1',
-      'teacher@uni.edu',
-      'approved',
-    );
-
-    expect(result.success).toBe(true);
-    expect(studentReportsRepository.update).toHaveBeenCalled();
-  });
-
-  it('sends the report back for revision without ending the process', async () => {
-    const { service, studentReportsRepository } = makeService({
-      id: 'report-1',
-      status: 'paid',
-      faculty_status: 'pending',
-    });
-
-    const result = await service.updateAction(
-      'report-1',
-      'faculty-1',
-      'teacher@uni.edu',
-      'revision_requested',
-      'Please add baseline evidence.',
-    );
-
-    expect(result.success).toBe(true);
-    expect(studentReportsRepository.update).toHaveBeenCalledWith(
-      { id: 'report-1' },
-      expect.objectContaining({
-        faculty_status: 'revision_requested',
-        status: 'revision',
-        faculty_remarks: 'Please add baseline evidence.',
-      }),
-    );
-  });
-
-  it('folds optional section and required-correction into remarks without changing status rules', async () => {
-    const { service, studentReportsRepository } = makeService({
-      id: 'report-1',
-      status: 'submitted',
-      faculty_status: 'pending',
-    });
-
-    const result = await service.updateAction(
-      'report-1',
-      'faculty-1',
-      'teacher@uni.edu',
-      'revision_requested',
-      'Hours look thin.',
-      { revision_section: 'Section 4', required_correction: 'Add session dates.' },
-    );
-
-    expect(result.success).toBe(true);
-    expect(studentReportsRepository.update).toHaveBeenCalledWith(
-      { id: 'report-1' },
-      expect.objectContaining({
-        faculty_status: 'revision_requested',
-        status: 'revision',
-        faculty_remarks:
-          'Section(s): Section 4\nReason: Hours look thin.\nRequired Correction: Add session dates.',
-      }),
-    );
-  });
-});
-
 const CII_V2_AI_RESPONSE = {
   sections: [
     {
@@ -815,5 +682,57 @@ describe('FacultyReportsService — draft progress (opens only after submit)', (
     qb.andWhere.mockClear();
     await expect(service.findOne('r-1', 'f-1', 'f@x.com')).rejects.toBeInstanceOf(NotFoundException);
     expect(qb.andWhere).toHaveBeenCalledWith("report.status NOT IN ('draft', 'continue')");
+  });
+});
+
+describe('FacultyReportsService — AI analysis run safety (lock, history, incomplete runs)', () => {
+  it('refuses a second analysis of the same report while the first is still running', async () => {
+    let release!: (v: unknown) => void;
+    const pending = new Promise((r) => (release = r));
+    const summarize = jest.fn().mockReturnValue(pending);
+    const { service } = makeService({ id: 'report-race' }, { summarize });
+
+    const first = service.runCiiV2AnalysisForAdmin('report-race');
+    // let the first call reach the AI await
+    await new Promise((r) => setImmediate(r));
+    await expect(service.runCiiV2AnalysisForAdmin('report-race')).rejects.toThrow(/already running/);
+    expect(summarize).toHaveBeenCalledTimes(1);
+
+    release({ summary: '', ciiV2: CII_V2_AI_RESPONSE });
+    await expect(first).resolves.toMatchObject({ success: true });
+    // the lock is released afterwards
+    summarize.mockResolvedValue({ summary: '', ciiV2: CII_V2_AI_RESPONSE });
+    await expect(service.runCiiV2AnalysisForAdmin('report-race')).resolves.toMatchObject({ success: true });
+  });
+
+  it('releases the lock even when the AI call fails', async () => {
+    const summarize = jest.fn().mockRejectedValueOnce(new Error('boom')).mockResolvedValue({ summary: '', ciiV2: CII_V2_AI_RESPONSE });
+    const { service } = makeService({ id: 'report-fail' }, { summarize });
+    await expect(service.runCiiV2AnalysisForAdmin('report-fail')).rejects.toThrow('boom');
+    await expect(service.runCiiV2AnalysisForAdmin('report-fail')).resolves.toMatchObject({ success: true });
+  });
+
+  it('keeps a run history (score, model, inspected evidence) across re-runs and stores the evidence inspection', async () => {
+    const previous = { final: 41, runHistory: [{ score: 41, at: '2026-01-01T00:00:00Z', model: 'm0' }] };
+    const summarize = jest.fn().mockResolvedValue({
+      summary: '',
+      ciiV2: CII_V2_AI_RESPONSE,
+      model: 'gpt-test',
+      evidenceInspection: { inspected: [{ id: 'E1', name: 'a.jpg' }], notInspected: [{ id: 'E2', name: 'r.pdf', reason: 'not an image' }] },
+    });
+    const { service } = makeService({ id: 'report-hist', ciiV2: previous }, { summarize });
+    const res: any = await service.runCiiV2AnalysisForAdmin('report-hist');
+    expect(res.data.runHistory).toHaveLength(2);
+    expect(res.data.runHistory[0]).toMatchObject({ score: 41, model: 'm0' });
+    expect(res.data.runHistory[1]).toMatchObject({ score: 100, model: 'gpt-test', inspectedImages: 1, notInspectedFiles: 1 });
+    expect(res.data.evidenceInspection.notInspected[0].id).toBe('E2');
+  });
+
+  it('an incomplete run (model skipped rubric parts) cannot be locked', async () => {
+    const { service } = makeService({
+      id: 'report-inc',
+      ciiV2: { sections: [], bonus: {}, integrityPenalty: 0, incomplete: true, final: 12 },
+    });
+    await expect(service.approveCiiV2ForAdmin('report-inc', 'admin-1')).rejects.toThrow(/incomplete/);
   });
 });

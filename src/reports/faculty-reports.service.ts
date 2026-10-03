@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -527,122 +528,6 @@ export class FacultyReportsService {
     return report;
   }
 
-  async updateAction(
-    id: string,
-    facultyId: string,
-    facultyEmail: string,
-    status: 'approved' | 'rejected' | 'revision_requested',
-    remarks?: string,
-    extras?: { revision_section?: string; required_correction?: string },
-  ) {
-    const report = await this.findAssignedReportForAction(
-      id,
-      facultyId,
-      facultyEmail,
-    );
-
-    if (
-      (status === 'rejected' || status === 'revision_requested') &&
-      !remarks?.trim()
-    ) {
-      throw new BadRequestException(
-        status === 'revision_requested'
-          ? 'A reason is required when sending a report back for revision.'
-          : 'A reason is required when rejecting a report.',
-      );
-    }
-
-    // Once the CII v2 record is locked the review decision is final — mirrors the
-    // lock checks in runCiiV2Analysis/approveCiiV2 so faculty_status can't be flipped
-    // afterwards into a state contradicting the locked score.
-    if (report.ciiV2Lock?.locked) {
-      throw new BadRequestException(
-        "This report's CII v2 analysis is locked; further review actions are not permitted.",
-      );
-    }
-
-    const composedRemarks = composeFacultyReportRemarks({
-      remarks,
-      revision_section: extras?.revision_section,
-      required_correction: extras?.required_correction,
-    });
-    const patch: Record<string, unknown> = {
-      faculty_status: status,
-      ...(composedRemarks ? { faculty_remarks: composedRemarks } : {}),
-    };
-    if (status === 'revision_requested') {
-      patch.status = 'revision';
-    } else if (status === 'rejected') {
-      patch.status = 'rejected';
-    }
-
-    await this.studentReportsRepository.update({ id: report.id }, patch as never);
-
-    const projectTitle =
-      report.opportunity?.title || report.project_id || 'Community service report';
-    const studentName = report.student?.name || 'Student';
-    const studentEmail = report.student?.email;
-    const note = composedRemarks;
-    void this.notifyStudentFacultyDecision(
-      report.studentId,
-      studentEmail,
-      studentName,
-      projectTitle,
-      status,
-      note,
-    ).catch(() => undefined);
-
-    const verb =
-      status === 'revision_requested'
-        ? 'returned for revision'
-        : status === 'rejected'
-          ? 'rejected'
-          : 'approved';
-    return {
-      success: true,
-      message: `Report ${verb} successfully.`,
-      data: {
-        id: report.id,
-        faculty_status: status,
-        status: (patch.status as string) || report.status,
-      },
-    };
-  }
-
-  private async notifyStudentFacultyDecision(
-    studentId: string,
-    studentEmail: string | null | undefined,
-    studentName: string,
-    projectTitle: string,
-    status: 'approved' | 'rejected' | 'revision_requested',
-    note: string,
-  ): Promise<void> {
-    const titles = {
-      approved: 'Impact report approved',
-      rejected: 'Impact report rejected',
-      revision_requested: 'Impact report needs revision',
-    };
-    const messages = {
-      approved: `${projectTitle} was approved by faculty.`,
-      rejected: `${projectTitle} was rejected by faculty. The reporting process has ended.`,
-      revision_requested: `${projectTitle} was sent back for revision. Open Action Required to edit and resubmit.`,
-    };
-    await this.notificationsService.createNotification(studentId, {
-      type: 'approval',
-      title: titles[status],
-      message: note ? `${messages[status]} ${note}` : messages[status],
-    });
-    if (studentEmail) {
-      await this.mailService.sendStudentImpactReportFacultyDecision(
-        studentEmail,
-        studentName.split(' ')[0] || studentName,
-        projectTitle,
-        status,
-        note,
-      );
-    }
-  }
-
   /** Runs the CII v2 AI evaluation and persists a server-recomputed score snapshot. Re-runnable while unlocked. */
   async runCiiV2Analysis(id: string, facultyId: string, facultyEmail: string) {
     const report = await this.findAssignedReportForAction(
@@ -658,19 +543,36 @@ export class FacultyReportsService {
     return this.persistCiiV2Analysis(report);
   }
 
-  private async persistCiiV2Analysis(report: StudentReport) {
+  /** Reports whose AI analysis is running right now in this process (double click / two admins). */
+  private static readonly ciiRunsInFlight = new Set<string>();
 
+  private async persistCiiV2Analysis(report: StudentReport) {
     if (report.ciiV2Lock?.locked) {
       throw new BadRequestException(
         "This report's CII v2 score is already locked and cannot be re-analysed.",
       );
     }
+    // One analysis per report at a time: a second click used to start a second paid AI call and the
+    // last write won silently.
+    if (FacultyReportsService.ciiRunsInFlight.has(report.id)) {
+      throw new ConflictException(
+        'An analysis is already running for this report. Wait for it to finish, then refresh.',
+      );
+    }
+    FacultyReportsService.ciiRunsInFlight.add(report.id);
+    try {
+      return await this.runAndStoreCiiV2Analysis(report);
+    } finally {
+      FacultyReportsService.ciiRunsInFlight.delete(report.id);
+    }
+  }
 
+  private async runAndStoreCiiV2Analysis(report: StudentReport) {
     // Reuse the canonical, security-reviewed payload builder (strips CNIC, legacy scores and
     // other sensitive/internal fields) instead of forwarding raw section JSON to the AI vendor.
     const payload = buildCielPkAiEvaluationPayload(report);
 
-    const { ciiV2 } = await this.aiService.summarize(
+    const { ciiV2, evidenceInspection, model } = await this.aiService.summarize(
       'cii_v2_evaluation',
       payload,
     );
@@ -697,9 +599,25 @@ export class FacultyReportsService {
         ciiV2.checks,
       ),
       needsAdminReview: ciiV2.needsAdminReview,
+      incomplete: ciiV2.incomplete === true,
       studentFeedback: ciiV2.studentFeedback,
       frameworkVersion: ciiV2.frameworkVersion,
+      // Which evidence the model could actually look at (images) and which it could not.
+      evidenceInspection,
       computedAt: new Date().toISOString(),
+      // Every run is kept (score, when, model, how much evidence was inspected) — a re-run no
+      // longer erases what the previous run said.
+      runHistory: [
+        ...(((report.ciiV2 as Record<string, unknown> | null)?.runHistory as unknown[]) ?? []).slice(-19),
+        {
+          score: result.final,
+          at: new Date().toISOString(),
+          model: model ?? null,
+          inspectedImages: evidenceInspection?.inspected.length ?? 0,
+          notInspectedFiles: evidenceInspection?.notInspected.length ?? 0,
+          incomplete: ciiV2.incomplete === true,
+        },
+      ],
     };
 
     // Targeted, guarded update: only touches the ciiV2 column (never ciiV2Lock or any other
@@ -825,6 +743,11 @@ export class FacultyReportsService {
     if (!stored) {
       throw new BadRequestException(
         'Run the CII v2 analysis before approving.',
+      );
+    }
+    if ((stored as { incomplete?: boolean }).incomplete === true) {
+      throw new BadRequestException(
+        'The last AI run was incomplete (it skipped part of the rubric, which was scored as 0). Re-run the analysis before locking the score.',
       );
     }
     if (report.ciiV2Lock?.locked) {

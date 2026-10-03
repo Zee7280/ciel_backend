@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
-import { UsersService, escapeLikePattern } from './users.service';
+import { UsersService, escapeLikePattern, hashResetToken } from './users.service';
 
 function build(repo: any) {
   return new UsersService(repo, {} as any, {} as any);
@@ -65,5 +65,27 @@ describe('UsersService', () => {
     repo.findOne.mockResolvedValue({ id: 's', role: 'student' });
     repo.delete.mockRejectedValue({ code: '23503' });
     await expect(svc.remove('s', 'other')).rejects.toThrow(ConflictException);
+  });
+});
+
+describe('UsersService — password reset tokens are stored hashed', () => {
+  it('savePasswordResetToken persists the SHA-256 hash, never the raw token', async () => {
+    const repo: any = { update: jest.fn() };
+    await build(repo).savePasswordResetToken('u1', 'raw-token-abc', new Date());
+    const patch = repo.update.mock.calls[0][1];
+    expect(patch.passwordResetToken).toBe(hashResetToken('raw-token-abc'));
+    expect(patch.passwordResetToken).not.toContain('raw-token-abc');
+    expect(patch.passwordResetToken).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it('findByResetToken looks up by hash and refuses empty tokens (cannot match a null/empty column)', async () => {
+    const repo: any = { findOne: jest.fn().mockResolvedValue({ id: 'u1' }) };
+    const svc = build(repo);
+    await svc.findByResetToken('raw-token-abc');
+    expect(repo.findOne).toHaveBeenCalledWith({ where: { passwordResetToken: hashResetToken('raw-token-abc') } });
+    repo.findOne.mockClear();
+    expect(await svc.findByResetToken('')).toBeNull();
+    expect(await svc.findByResetToken('   ')).toBeNull();
+    expect(repo.findOne).not.toHaveBeenCalled();
   });
 });

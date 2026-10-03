@@ -1,3 +1,4 @@
+import { imageUploadOptions } from '../common/safe-upload';
 import {
   Controller,
   Get,
@@ -115,7 +116,7 @@ export class PartnersController {
   }
 
   @Post('me/logo')
-  @UseInterceptors(FileInterceptor('logo'))
+  @UseInterceptors(FileInterceptor('logo', imageUploadOptions))
   async uploadLogo(
     @Request() req,
     @UploadedFile() file: any,
@@ -142,7 +143,7 @@ export class PartnersController {
   }
 
   @Post('profile/logo')
-  @UseInterceptors(FileInterceptor('logo'))
+  @UseInterceptors(FileInterceptor('logo', imageUploadOptions))
   async uploadLogoProfile(
     @Request() req,
     @UploadedFile() file: any,

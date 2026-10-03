@@ -8,14 +8,11 @@ type StatusLike = { status?: string | null; admin_status?: string | null };
 /** Not yet submitted (or terminally rejected): excluded from reported hours / reach. */
 const NOT_SUBMITTED_STATUSES = ['draft', 'continue'];
 
-/** Verified = admin approved the report OR it already reached verified / paid. */
+/** Verified = CIEL PK Admin accepted the report, or it reached 'verified'. A bare 'paid' only means
+ * the reporting fee cleared — it has not been reviewed — so it does not count. */
 export function isVerifiedReport(report: StatusLike): boolean {
   const status = String(report.status || '').toLowerCase();
-  return (
-    report.admin_status === 'approved' ||
-    status === 'verified' ||
-    status === 'paid'
-  );
+  return report.admin_status === 'approved' || status === 'verified';
 }
 
 /** Submitted or later and not rejected — the only reports that count toward hours / reach. */

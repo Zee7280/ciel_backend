@@ -1,5 +1,5 @@
 import { ArgumentMetadata, ValidationPipe } from '@nestjs/common';
-import { CreateOpportunityDto } from './create-opportunity.dto';
+import { CreateOpportunityDto, UpdateOpportunityDto } from './create-opportunity.dto';
 
 describe('CreateOpportunityDto — draft flag survives whitelist', () => {
   const pipe = new ValidationPipe({ whitelist: true, transform: true });
@@ -132,5 +132,56 @@ describe('CreateOpportunityDto — draft flag survives whitelist', () => {
 
     expect(result.draft).toBe(true);
     expect(result.title).toBe('Untitled opportunity');
+  });
+});
+
+describe('CreateOpportunityDto / UpdateOpportunityDto — hardened validation', () => {
+  const pipe = new ValidationPipe({ whitelist: true, transform: true });
+  const create = { type: 'body', metatype: CreateOpportunityDto } as ArgumentMetadata;
+  const update = { type: 'body', metatype: UpdateOpportunityDto } as ArgumentMetadata;
+  const full = {
+    title: 'Campus cleanup',
+    types: ['Community Service'],
+    mode: 'Remote',
+    verification_method: [],
+    timeline: { expected_hours: 16, volunteers_required: 10 },
+  };
+
+  it('accepts a valid full submit', async () => {
+    await expect(pipe.transform(full, create)).resolves.toBeTruthy();
+  });
+
+  it.each([
+    ['blank title', { title: '   ' }],
+    ['empty title', { title: '' }],
+    ['no types', { types: [] }],
+    ['empty mode', { mode: '' }],
+    ['negative hours', { timeline: { expected_hours: -5 } }],
+    ['zero hours', { timeline: { expected_hours: 0 } }],
+    ['hours over cap', { timeline: { expected_hours: 501 } }],
+    ['zero seats', { timeline: { volunteers_required: 0 } }],
+    ['seats over cap', { timeline: { volunteers_required: 5001 } }],
+  ])('rejects a full submit with %s', async (_label, patch) => {
+    await expect(pipe.transform({ ...full, ...patch }, create)).rejects.toBeTruthy();
+  });
+
+  it('still lets an incomplete draft through (0 hours / empty title)', async () => {
+    await expect(
+      pipe.transform(
+        { draft: true, title: '', types: [], mode: '', timeline: { expected_hours: 0, volunteers_required: 0 } },
+        create,
+      ),
+    ).resolves.toBeTruthy();
+  });
+
+  it('UpdateOpportunityDto no longer accepts status / sdg / admin_approval_required', async () => {
+    const out = (await pipe.transform(
+      { id: 'o1', title: 'x', status: 'active', sdg: 'forged', admin_approval_required: false },
+      update,
+    )) as Record<string, unknown>;
+    expect(out).not.toHaveProperty('status');
+    expect(out).not.toHaveProperty('sdg');
+    expect(out).not.toHaveProperty('admin_approval_required');
+    expect(out.title).toBe('x');
   });
 });

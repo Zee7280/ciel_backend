@@ -106,6 +106,10 @@ export class User {
     @Column({ type: 'int', default: 0 })
     tokenVersion: number;
 
+    /** When the user accepted the Terms & Privacy Policy at signup (null for legacy accounts). */
+    @Column({ type: 'timestamptz', nullable: true })
+    termsAcceptedAt: Date | null;
+
     @Column({ default: false })
     requires_cnic: boolean;
 

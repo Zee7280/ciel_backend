@@ -1,3 +1,4 @@
+import { resolveJwtSecret } from '../../auth/jwt-secret.util';
 import {
   CanActivate,
   ExecutionContext,
@@ -82,10 +83,9 @@ export class MaintenanceGuard implements CanActivate {
       const value = Array.isArray(header) ? header[0] : header;
       const match = /^Bearer\s+(.+)$/i.exec(value ?? '');
       if (!match) return false;
-      const secret =
-        this.config?.get<string>('JWT_SECRET') ||
-        process.env.JWT_SECRET ||
-        'secretKey';
+      const secret = resolveJwtSecret(
+        this.config?.get<string>('JWT_SECRET') || process.env.JWT_SECRET,
+      );
       const payload = jwt.verify(match[1], secret) as { role?: string };
       return payload?.role === 'admin';
     } catch {

@@ -65,3 +65,41 @@ describe('integrity checks', () => {
     expect(merged[2].source).toBe('ai');
   });
 });
+
+import { redactIndependentAnalysesForExternal } from './cii-v2-redaction.util';
+
+describe('independent AI analyses for external viewers', () => {
+  const runs = [
+    {
+      id: 'a1',
+      runAt: '2026-05-01T00:00:00Z',
+      runByUserId: 'secret-user-id',
+      runByRole: 'ciel_admin',
+      runByName: 'Admin',
+      score: 81,
+      level: { level: 5, name: 'High Impact', quality: 'x' },
+      sections: [{ id: 1, score: 9, good: 'g', limit: 'l' }],
+      bonus: { total: 2 },
+      integrityPenalty: 1,
+      feedback: { opening_praise: 'private feedback text' },
+      note: 'n',
+    },
+  ];
+
+  it('is hidden until the CII is locked', () => {
+    expect(redactIndependentAnalysesForExternal(runs, null)).toBeNull();
+    expect(redactIndependentAnalysesForExternal(runs, { locked: false })).toBeNull();
+  });
+
+  it('after lock, exposes only the trend fields', () => {
+    const out = redactIndependentAnalysesForExternal(runs, { locked: true }) as any[];
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ id: 'a1', score: 81, level: { name: 'High Impact' }, runByRole: 'ciel_admin' });
+    const json = JSON.stringify(out);
+    expect(json).not.toMatch(/secret-user-id|private feedback|sections|bonus|integrityPenalty/);
+  });
+
+  it('is safe for non-arrays', () => {
+    expect(redactIndependentAnalysesForExternal(undefined, { locked: true })).toBeNull();
+  });
+});

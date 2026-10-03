@@ -503,3 +503,208 @@ describe('StudentsService.sendTeamMemberOtp', () => {
     });
   });
 });
+
+describe('StudentsService.updateStudentOpportunity — same guards as create', () => {
+  const baseOpp = () => ({
+    id: 'opp-1',
+    creatorId: 'stu-1',
+    isStudentCreated: true,
+    admin_approved: false,
+    status: 'pending_faculty',
+    workflowStage: 'pending_faculty',
+    executing_context: { student_pathway: 'university' },
+    restricted_universities: ['BNU'],
+    participation_scope: { rule: 'own_university_only' },
+  });
+
+  const setup = () => {
+    const opp = baseOpp();
+    const save = jest.fn(async (row: unknown) => row);
+    const validateEditPatch = jest.fn();
+    const service = makeService({
+      opportunitiesRepository: { findOne: jest.fn().mockResolvedValue(opp), save },
+      usersRepository: { findOne: jest.fn().mockResolvedValue({ id: 'stu-1', university: 'BNU' }) },
+      opportunitiesService: {
+        validateEditPatch,
+        validateLocation: jest.fn(),
+        validateTimeline: jest.fn(),
+        snapshotStudentOpportunityResubmit: jest.fn(),
+      },
+    });
+    return { service, opp, save, validateEditPatch };
+  };
+
+  it('refuses to widen the scope to all universities', async () => {
+    const { service } = setup();
+    await expect(
+      service.updateStudentOpportunity('stu-1', 'opp-1', {
+        participation_scope: { rule: 'open_all_universities' },
+      } as any),
+    ).rejects.toThrow(/own university/);
+  });
+
+  it('forces restricted_universities to the student\'s own university, ignoring the client value', async () => {
+    const { service, opp } = setup();
+    await service.updateStudentOpportunity('stu-1', 'opp-1', {
+      title: 'New title',
+      restricted_universities: ['LUMS', 'IBA'],
+      participation_scope: { rule: 'own_university_only', university_names: ['LUMS'] },
+    } as any);
+    expect(opp.restricted_universities).toEqual(['BNU']);
+    expect((opp.participation_scope as any).university_names).toEqual(['BNU']);
+    expect((opp.participation_scope as any).creator_university_name).toBe('BNU');
+  });
+
+  it('runs the create-time validators on the edited keys', async () => {
+    const { service, validateEditPatch } = setup();
+    await service.updateStudentOpportunity('stu-1', 'opp-1', {
+      supervision: { contact: 'teacher@uni.edu' },
+    } as any);
+    expect(validateEditPatch).toHaveBeenCalledWith(
+      expect.objectContaining({ supervision: { contact: 'teacher@uni.edu' } }),
+    );
+  });
+
+  it('propagates a validator rejection (nothing is saved)', async () => {
+    const { service, save, validateEditPatch } = setup();
+    validateEditPatch.mockImplementation(() => {
+      throw new Error('All safety_declaration checks must be true');
+    });
+    await expect(
+      service.updateStudentOpportunity('stu-1', 'opp-1', { safety_declaration: {} } as any),
+    ).rejects.toThrow(/safety_declaration/);
+    expect(save).not.toHaveBeenCalled();
+  });
+});
+
+describe('StudentsService.applyToOpportunity — dates, seats and team eligibility', () => {
+  const TODAY = new Date().toISOString().slice(0, 10);
+  const addDays = (d: number) => new Date(Date.now() + d * 86400000).toISOString().slice(0, 10);
+
+  const build = (opts: {
+    timeline?: Record<string, unknown>;
+    occupied?: number;
+    scope?: Record<string, unknown>;
+    memberUsers?: Array<Record<string, unknown>>;
+  }) => {
+    const opportunity: any = {
+      id: '11111111-1111-4111-8111-111111111111',
+      title: 'Project',
+      status: 'active',
+      admin_approved: true,
+      workflowStage: 'live',
+      timeline: opts.timeline ?? { start_date: addDays(-5), end_date: addDays(20), volunteers_required: 10 },
+      participation_scope: opts.scope ?? { rule: 'open_all_universities' },
+      supervision: { contact: 'faculty@uni.edu' },
+    };
+    const user = { id: 'lead', name: 'Lead', email: 'lead@uni.edu', university: 'BNU', department: 'Arch' };
+    const qb = {
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+      getMany: jest.fn().mockResolvedValue(opts.memberUsers ?? []),
+    };
+    const createApplication = jest.fn().mockResolvedValue({ id: 'app-1', internalStatus: 'pending_faculty' });
+    const chain: any = new Proxy(
+      {},
+      {
+        get: (_t, prop: string) => {
+          if (prop === 'getMany' || prop === 'getRawMany') return jest.fn().mockResolvedValue([]);
+          if (prop === 'getOne' || prop === 'getRawOne') return jest.fn().mockResolvedValue(null);
+          if (prop === 'getCount') return jest.fn().mockResolvedValue(0);
+          return jest.fn().mockReturnValue(chain);
+        },
+      },
+    );
+    const apps = {
+      hasOpenPipelineApplication: jest.fn().mockResolvedValue(false),
+      findLatestForStudentOpportunity: jest.fn().mockResolvedValue(null),
+      isTerminalRejection: jest.fn().mockReturnValue(false),
+      collectClaimedEmailsOnOpenApplications: jest.fn().mockResolvedValue(new Set()),
+      isTeamSlugInUseOnOpportunity: jest.fn().mockResolvedValue(false),
+      countSeatsInFlight: jest.fn().mockResolvedValue(0),
+      createApplication,
+      toPublicApplicationStatus: jest.fn().mockReturnValue('pending'),
+      applicationStage: jest.fn().mockReturnValue('faculty'),
+    };
+    const service = makeService({
+      opportunitiesRepository: { findOne: jest.fn().mockResolvedValue(opportunity) },
+      usersRepository: { findOne: jest.fn().mockResolvedValue(user), createQueryBuilder: jest.fn(() => qb) },
+      participantRepository: {
+        findOne: jest.fn().mockResolvedValue(null),
+        find: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(opts.occupied ?? 0),
+        createQueryBuilder: jest.fn(() => chain),
+      },
+      opportunityApplicationsService: apps,
+      mailService: {
+        sendFacultyApprovalRequest: jest.fn(),
+        sendFacultyCollaboratorNotice: jest.fn(),
+        sendApplicationSubmitted: jest.fn(),
+      },
+    });
+    return { service, opportunity, createApplication };
+  };
+
+  const dto = (over: Record<string, unknown> = {}) =>
+    ({
+      opportunityId: '11111111-1111-4111-8111-111111111111',
+      participation_type: 'individual',
+      primary_faculty_email: 'faculty@uni.edu',
+      contact_phone_e164: '+923001234567',
+      ...over,
+    }) as any;
+
+  it('accepts an eligible individual application while the project is running', async () => {
+    const { service, createApplication } = build({});
+    await expect(service.applyToOpportunity('lead', dto())).resolves.toMatchObject({ success: true });
+    expect(createApplication).toHaveBeenCalled();
+  });
+
+  it('refuses NEW applications after the project end date, even inside the 60-day reporting window', async () => {
+    const { service, createApplication } = build({
+      timeline: { start_date: addDays(-40), end_date: addDays(-10), volunteers_required: 10 },
+    });
+    await expect(service.applyToOpportunity('lead', dto())).rejects.toThrow(/has ended, so new applications are closed/);
+    expect(createApplication).not.toHaveBeenCalled();
+  });
+
+  it('refuses when every seat is taken', async () => {
+    const { service, createApplication } = build({ occupied: 10 });
+    await expect(service.applyToOpportunity('lead', dto())).rejects.toThrow(/All seats .* are taken/);
+    expect(createApplication).not.toHaveBeenCalled();
+  });
+
+  it('refuses a team that needs more seats than are still free', async () => {
+    const { service } = build({ occupied: 8 }); // 2 free; lead + 2 members needs 3
+    await expect(
+      service.applyToOpportunity(
+        'lead',
+        dto({
+          participation_type: 'team',
+          team_members: [
+            { email: 'a@uni.edu', name: 'A', mobile: '03001111111' },
+            { email: 'b@uni.edu', name: 'B', mobile: '03002222222' },
+          ],
+        }),
+      ),
+    ).rejects.toThrow(/Only 2 seats left/);
+  });
+
+  it("refuses a team member whose account is not eligible (different university than the opportunity allows)", async () => {
+    const { service, createApplication } = build({
+      scope: { rule: 'own_university_only', creator_university_name: 'BNU', university_names: ['BNU'] },
+      memberUsers: [{ id: 'm1', email: 'a@other.edu', university: 'LUMS', department: 'CS' }],
+    });
+    await expect(
+      service.applyToOpportunity(
+        'lead',
+        dto({
+          participation_type: 'team',
+          team_members: [{ email: 'a@other.edu', name: 'A', mobile: '03001111111' }],
+        }),
+      ),
+    ).rejects.toThrow(/a@other.edu cannot join/);
+    expect(createApplication).not.toHaveBeenCalled();
+  });
+});

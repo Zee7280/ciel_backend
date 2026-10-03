@@ -17,9 +17,14 @@ export interface CiiV2AiEvaluation {
   /** Optional hold/review integrity checks (additive; absent in older responses). */
   checks: Array<{ level: 'hold' | 'review'; title: string; detail: string }>;
   needsAdminReview: boolean;
+  /** True when the model omitted whole sections / criteria (they were scored 0): re-run, don't lock. */
+  incomplete?: boolean;
   studentFeedback?: string;
   frameworkVersion: string;
 }
+
+/** Explicit wording shown wherever evidence does not support a claim. */
+export const EVIDENCE_UNSUPPORTED_FLAG = 'UNRELATED / DOES NOT SUPPORT CLAIM';
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -58,21 +63,56 @@ function parseEvidenceRow(
     pickString(rec.file) || pickString(rec.filename) || pickString(rec.url);
   const claim = pickString(rec.claim);
   if (!file && !claim) return null;
+  const match = Math.min(100, Math.max(0, pickNumber(rec.match) ?? 0));
   const verdictRaw = pickString(rec.verdict).toUpperCase();
+  // An unknown / missing verdict is derived from the numeric match (≥85 / ≥50 / below) rather than
+  // silently softened to PARTIAL — an "unrelated" row must not be upgraded by a parsing gap.
   const verdict: CiiV2EvidenceRow['verdict'] =
     verdictRaw === 'MATCH' ||
     verdictRaw === 'PARTIAL' ||
     verdictRaw === 'MISMATCH'
       ? verdictRaw
-      : 'PARTIAL';
+      : match >= 85
+        ? 'MATCH'
+        : match >= 50
+          ? 'PARTIAL'
+          : 'MISMATCH';
+  const supportRaw = pickString(rec.claimSupport ?? rec.claim_support)
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  let claimSupport: NonNullable<CiiV2EvidenceRow['claimSupport']> =
+    supportRaw === 'supported' ||
+    supportRaw === 'partially_supported' ||
+    supportRaw === 'unsupported' ||
+    supportRaw === 'contradicted'
+      ? supportRaw
+      : verdict === 'MATCH'
+        ? 'supported'
+        : verdict === 'PARTIAL'
+          ? 'partially_supported'
+          : 'unsupported';
+  // The verdict and the plain-words support must agree: a MISMATCH can never read "supported".
+  if (verdict === 'MISMATCH' && (claimSupport === 'supported' || claimSupport === 'partially_supported')) {
+    claimSupport = 'unsupported';
+  }
+  if (verdict === 'MATCH' && (claimSupport === 'unsupported' || claimSupport === 'contradicted')) {
+    claimSupport = 'partially_supported';
+  }
+  const flagged = claimSupport === 'unsupported' || claimSupport === 'contradicted';
+  let why = pickString(rec.why);
+  if (flagged && !/^UNRELATED \/ DOES NOT SUPPORT CLAIM/i.test(why)) {
+    why = `${EVIDENCE_UNSUPPORTED_FLAG}: ${why || 'The evidence does not substantiate this claim.'}`;
+  }
   return {
     id: pickString(rec.id) || `E-${String(index + 1).padStart(2, '0')}`,
     file: file || 'Uploaded evidence',
     claim: claim || 'Report claim',
     type: pickString(rec.type) || 'Document',
-    match: Math.min(100, Math.max(0, pickNumber(rec.match) ?? 0)),
+    match,
     verdict,
-    why: pickString(rec.why),
+    claimSupport,
+    ...(flagged ? { flag: EVIDENCE_UNSUPPORTED_FLAG } : {}),
+    why,
   };
 }
 
@@ -203,12 +243,15 @@ export function parseCiiV2Response(raw: string): CiiV2AiEvaluation | null {
       resources: resources.why,
       partners: partners.why,
     },
-    integrityPenalty: Math.max(0, integrityPenalty),
+    // A single run must not be able to zero a report on its own: cap the penalty (the rubric's
+    // harshest tier is -15, so 30 leaves generous headroom).
+    integrityPenalty: Math.min(30, Math.max(0, integrityPenalty)),
     integrityWhy,
     evidence,
     redFlags,
     checks,
     needsAdminReview: Boolean(rec.needsAdminReview) || redFlags.length > 0,
+    incomplete: parsingRedFlags.length > 0,
     studentFeedback: pickString(rec.studentFeedback) || undefined,
     frameworkVersion: pickString(rec.framework_version) || 'v2.0',
   };

@@ -34,15 +34,28 @@ describe('JwtStrategy.validate', () => {
 });
 
 describe('resolveJwtSecret', () => {
-  it('logs loudly in production when missing but still returns a value', () => {
-    const logger = { error: jest.fn() } as unknown as Logger;
-    expect(resolveJwtSecret(undefined, logger, 'production')).toBeTruthy();
-    expect((logger as any).error).toHaveBeenCalled();
+  const logger = () => ({ error: jest.fn() }) as unknown as Logger;
+  const STRONG = 'a-strong-production-secret-1234567890';
+
+  it('refuses to start in production without a strong secret', () => {
+    for (const bad of [undefined, '', '   ', 'secretKey', 'short']) {
+      expect(() => resolveJwtSecret(bad, logger(), 'production', false)).toThrow(/JWT_SECRET/);
+    }
   });
-  it('is silent when configured or in dev', () => {
-    const logger = { error: jest.fn() } as unknown as Logger;
-    expect(resolveJwtSecret('s', logger, 'production')).toBe('s');
-    resolveJwtSecret(undefined, logger, 'development');
-    expect((logger as any).error).not.toHaveBeenCalled();
+  it('accepts a strong secret in production, silently', () => {
+    const l = logger();
+    expect(resolveJwtSecret(STRONG, l, 'production', false)).toBe(STRONG);
+    expect((l as any).error).not.toHaveBeenCalled();
+  });
+  it('the explicit emergency flag downgrades the refusal to a loud error log', () => {
+    const l = logger();
+    expect(resolveJwtSecret(undefined, l, 'production', true)).toBeTruthy();
+    expect((l as any).error).toHaveBeenCalled();
+  });
+  it('development / test keep the convenient fallback and stay quiet', () => {
+    const l = logger();
+    expect(resolveJwtSecret(undefined, l, 'development', false)).toBe('secretKey');
+    expect(resolveJwtSecret('s', l, 'test', false)).toBe('s');
+    expect((l as any).error).not.toHaveBeenCalled();
   });
 });

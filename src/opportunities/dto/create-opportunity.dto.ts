@@ -8,6 +8,12 @@ import {
   ValidateIf,
   ValidateNested,
   IsInt,
+  IsNotEmpty,
+  ArrayNotEmpty,
+  MaxLength,
+  Min,
+  Max,
+  Matches,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -39,23 +45,20 @@ export class TimelineDto {
   @IsOptional()
   to_time?: string; // daily window end (e.g. 13:00)
 
+  /** Same bounds the create forms enforce (hours 1–500, seats 1–5000). */
   @Type(() => Number)
   @IsInt()
+  @Min(1)
+  @Max(500)
   @IsOptional()
   expected_hours?: number;
 
   @Type(() => Number)
   @IsInt()
+  @Min(1)
+  @Max(5000)
   @IsOptional()
   volunteers_required?: number;
-
-  @IsBoolean()
-  @IsOptional()
-  close_applications_early?: boolean;
-
-  @IsString()
-  @IsOptional()
-  application_deadline?: string;
 
   @IsString()
   @IsOptional()
@@ -143,15 +146,20 @@ export class CreateOpportunityDto {
 
   @ValidateIf(isFullOpportunitySubmit)
   @IsString()
+  @IsNotEmpty()
+  @Matches(/\S/, { message: 'title must not be blank' })
+  @MaxLength(300)
   title: string;
 
   @ValidateIf(isFullOpportunitySubmit)
   @IsArray()
+  @ArrayNotEmpty()
   @IsString({ each: true })
   types: string[];
 
   @ValidateIf(isFullOpportunitySubmit)
   @IsString()
+  @IsNotEmpty()
   mode: string;
 
   /** Creator mobile in E.164 (e.g. +923001234567). Private-candidate submit stores the same value on executing_context.private_candidate.phone. */
@@ -322,13 +330,8 @@ export class UpdateOpportunityDto {
   @IsOptional()
   visibility?: string;
 
-  @IsString()
-  @IsOptional()
-  status?: string; // active, closed, draft
-
-  @IsString()
-  @IsOptional()
-  sdg?: string;
+  // NOTE: status / sdg / admin_approval_required are intentionally NOT editable here — workflow
+  // state is server-owned and sdg is derived from sdg_info.sdg_id.
 
   @IsObject()
   @IsOptional()
@@ -374,7 +377,4 @@ export class UpdateOpportunityDto {
   @IsOptional()
   visibility_and_academic_linkage?: any;
 
-  @IsBoolean()
-  @IsOptional()
-  admin_approval_required?: boolean;
 }

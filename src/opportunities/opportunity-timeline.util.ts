@@ -38,8 +38,27 @@ export function toDateOnlyString(input: unknown): string | null {
   return m ? m[1] : null;
 }
 
+/** Platform calendar is Pakistan Standard Time (UTC+5, no DST): "today" for apply / service / report
+ * windows is the PKT date, not the UTC date (UTC is still "yesterday" between 00:00 and 05:00 PKT). */
+export const PLATFORM_UTC_OFFSET_HOURS = 5;
+
+export function todayDateOnlyPk(now: Date = new Date()): string {
+  return new Date(now.getTime() + PLATFORM_UTC_OFFSET_HOURS * 3600 * 1000)
+    .toISOString()
+    .slice(0, 10);
+}
+
 export function todayDateOnlyUtc(now: Date = new Date()): string {
   return now.toISOString().slice(0, 10);
+}
+
+/** True for a genuine calendar date written as YYYY-MM-DD (optionally followed by a time part). */
+export function isRealCalendarDate(input: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:$|[T\s])/.exec(input.trim());
+  if (!m) return false;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d;
 }
 
 /** Lexicographic compare for YYYY-MM-DD (ascending). */
@@ -74,28 +93,18 @@ export function getProjectEndDate(timeline: unknown): string | null {
 }
 
 /**
- * True when creator opted into an early applications close date.
- * Legacy rows that stored application_deadline before end_date are treated as early close.
+ * There is NO separate application deadline: students may apply and serve any time between the
+ * Project Start Date and the Project End Date. Legacy listings that stored an early
+ * `application_deadline` / `close_applications_early` are ignored — applications close after the
+ * project end date, never before.
  */
-export function isCloseApplicationsEarly(timeline: unknown): boolean {
-  const t = asTimeline(timeline);
-  if (t.close_applications_early === true) return true;
-  if (t.close_applications_early === false) return false;
-  const deadline = toDateOnlyString(t.application_deadline);
-  const end = toDateOnlyString(t.end_date);
-  if (deadline && end && compareDateOnly(deadline, end) < 0) return true;
+export function isCloseApplicationsEarly(_timeline: unknown): boolean {
   return false;
 }
 
-/** Last day students may Join / Apply (inclusive). Defaults to project end. */
+/** Last day students may Join / Apply (inclusive): the project end date. */
 export function getApplicationsCloseDate(timeline: unknown): string | null {
-  const t = asTimeline(timeline);
-  const end = toDateOnlyString(t.end_date);
-  if (isCloseApplicationsEarly(t)) {
-    const deadline = toDateOnlyString(t.application_deadline);
-    if (deadline) return deadline;
-  }
-  return end;
+  return toDateOnlyString(asTimeline(timeline).end_date);
 }
 
 /** Last day of the reporting window (inclusive). */
@@ -112,7 +121,7 @@ export function getReportingCloseDate(timeline: unknown): string | null {
 
 export function resolveLifecyclePhase(
   timeline: unknown,
-  today: string = todayDateOnlyUtc(),
+  today: string = todayDateOnlyPk(),
 ): OpportunityLifecyclePhase {
   const start = getProjectStartDate(timeline);
   const end = getProjectEndDate(timeline);
@@ -135,7 +144,7 @@ export function resolveLifecyclePhase(
 
 export function canJoinOrApply(
   timeline: unknown,
-  today: string = todayDateOnlyUtc(),
+  today: string = todayDateOnlyPk(),
 ): boolean {
   const phase = resolveLifecyclePhase(timeline, today);
   // Legacy listings without start/end must not suddenly block apply.
@@ -145,14 +154,14 @@ export function canJoinOrApply(
 
 export function canRecordCompletedService(
   timeline: unknown,
-  today: string = todayDateOnlyUtc(),
+  today: string = todayDateOnlyPk(),
 ): boolean {
   return resolveLifecyclePhase(timeline, today) === 'service_ended_reporting_open';
 }
 
 export function canEditOrSubmitReport(
   timeline: unknown,
-  today: string = todayDateOnlyUtc(),
+  today: string = todayDateOnlyPk(),
 ): boolean {
   const phase = resolveLifecyclePhase(timeline, today);
   if (phase === 'no_dates') return true;
@@ -176,7 +185,7 @@ export function isServiceDateAllowed(
 
 export function lifecycleStatusLabel(
   timeline: unknown,
-  today: string = todayDateOnlyUtc(),
+  today: string = todayDateOnlyPk(),
 ): string | null {
   switch (resolveLifecyclePhase(timeline, today)) {
     case 'join_open':
@@ -205,12 +214,29 @@ export function validateTimelineForPersist(
 ): string | null {
   const requireDates = opts?.requireDates !== false;
   const t = asTimeline(timeline);
+
+  // Real calendar dates only: the prefix regex in toDateOnlyString accepts "2026-13-45".
+  for (const raw of [t.start_date, t.end_date]) {
+    const text = raw == null ? '' : String(raw).trim();
+    if (!text) continue;
+    if (!isRealCalendarDate(text)) {
+      return 'Dates must be valid calendar dates (YYYY-MM-DD).';
+    }
+  }
+  const from = String((t as { from_time?: unknown }).from_time ?? '').trim();
+  const to = String((t as { to_time?: unknown }).to_time ?? '').trim();
+  const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+  if ((from && !HHMM.test(from)) || (to && !HHMM.test(to))) {
+    return 'Daily start and end times must be in HH:mm format.';
+  }
+  if (from && to && from >= to) {
+    return 'Daily end time must be after the daily start time.';
+  }
+
   const start = toDateOnlyString(t.start_date);
   const end = toDateOnlyString(t.end_date);
-  const deadline = toDateOnlyString(t.application_deadline);
-  const closeEarly = t.close_applications_early === true;
 
-  if (!start && !end && !deadline && !closeEarly) {
+  if (!start && !end) {
     return requireDates
       ? 'Please set both a project start date and a project end date.'
       : null;
@@ -221,16 +247,6 @@ export function validateTimelineForPersist(
   if (compareDateOnly(start, end) > 0) {
     return 'Project end date must be on or after the project start date.';
   }
-  if (closeEarly) {
-    if (!deadline) {
-      return 'Please set an application closing date, or turn off early application close.';
-    }
-    if (compareDateOnly(deadline, start) < 0) {
-      return 'Application closing date cannot be before the project start date.';
-    }
-    if (compareDateOnly(deadline, end) >= 0) {
-      return 'Application closing date must be before the project end date.';
-    }
-  }
+  // No application deadline: applications simply close after the project end date.
   return null;
 }

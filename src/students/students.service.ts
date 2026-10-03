@@ -46,7 +46,6 @@ import { OpportunitiesService } from '../opportunities/opportunities.service';
 import {
   REPORTING_WINDOW_CLOSED_MESSAGE,
   canJoinOrApply,
-  canRecordCompletedService,
   resolveLifecyclePhase,
 } from '../opportunities/opportunity-timeline.util';
 import { buildOpportunityApprovalTracker } from '../opportunities/opportunity-approval-tracker.util';
@@ -2059,16 +2058,35 @@ export class StudentsService {
       }
     }
 
-    const nextRestricted =
-      dto.restricted_universities && dto.restricted_universities.length > 0
-        ? dto.restricted_universities
-        : dto.participation_scope?.creator_university_name
-          ? [dto.participation_scope.creator_university_name]
-          : undefined;
-
-    if (nextRestricted !== undefined) {
-      patch.restricted_universities = nextRestricted;
+    // Same rules as create: a student listing stays scoped to the student's OWN university (never
+    // "open to all", never another university) and every touched key passes the create validators.
+    const owner = await this.usersRepository.findOne({ where: { id: userId } });
+    const ownUniversity =
+      owner?.university?.trim() || owner?.institution?.trim() || '';
+    const executingCtx = (patch.executing_context ??
+      opportunity.executing_context) as { student_pathway?: string } | null;
+    const isPrivatePath = executingCtx?.student_pathway === 'private';
+    if (!isPrivatePath && ownUniversity) {
+      const scopePatch = patch.participation_scope as
+        | Record<string, any>
+        | undefined;
+      if (scopePatch) {
+        const rule = String(scopePatch.rule || '').toLowerCase();
+        if (!['own_university_only', 'own_university_departments'].includes(rule)) {
+          throw new BadRequestException(
+            'Students may only scope an opportunity to their own university — either all departments or specific departments.',
+          );
+        }
+        scopePatch.creator_university_name = ownUniversity;
+        scopePatch.university_names = [ownUniversity];
+      }
+      patch.restricted_universities = [ownUniversity];
+    } else {
+      delete patch.restricted_universities;
     }
+    this.opportunitiesService.validateEditPatch(
+      patch as unknown as Record<string, any>,
+    );
 
     Object.assign(opportunity, patch);
     // Only re-check location.pin when this edit actually touches mode/location — a pre-fix legacy
@@ -2178,10 +2196,16 @@ export class StudentsService {
     }
 
     const timeline = opportunity.timeline;
+    // Applications run from project start to project END. After the end date NEW applications are
+    // closed (students already enrolled keep their 60-day window to finish and submit the report).
     const joinOpen = canJoinOrApply(timeline);
-    const lateRecord = canRecordCompletedService(timeline);
-    if (!joinOpen && !lateRecord) {
+    if (!joinOpen) {
       const phase = resolveLifecyclePhase(timeline);
+      if (phase === 'service_ended_reporting_open') {
+        throw new BadRequestException(
+          'This project has ended, so new applications are closed. If you are already enrolled you can still complete your report within the reporting window.',
+        );
+      }
       if (phase === 'applications_closed_service_active') {
         throw new BadRequestException(
           'Applications have closed for this opportunity. Service is still active for enrolled students.',
@@ -2364,6 +2388,49 @@ export class StudentsService {
         throw new BadRequestException(
           'This team_id is already used on this opportunity. Use a different team identifier.',
         );
+      }
+    }
+
+    // Seats: the whole team (lead + members) must fit in what is still free, counting everything
+    // already seated or in flight — not just the size of this one team.
+    {
+      const seats = resolveTeamSeatCap(opportunity.timeline?.volunteers_required);
+      if (seats > 0) {
+        const requested =
+          1 + (Array.isArray(teamMembersPayload) ? teamMembersPayload.length : 0);
+        const occupied = await this.getOccupiedSeats(dto.opportunityId);
+        if (occupied + requested > seats) {
+          const free = Math.max(0, seats - occupied);
+          throw new BadRequestException(
+            free === 0
+              ? 'All seats for this opportunity are taken.'
+              : `Only ${free} seat${free === 1 ? '' : 's'} left, but this application needs ${requested}.`,
+          );
+        }
+      }
+    }
+
+    // Every team member who already has an account must be eligible for this opportunity too
+    // (a different university / department than the opportunity allows must not ride in on the
+    // lead's eligibility). Members without an account yet are checked when they sign up and claim
+    // their seat.
+    if (isTeamApply && Array.isArray(teamMembersPayload) && teamMembersPayload.length > 0) {
+      const memberEmails = teamMembersPayload
+        .map((m) => (typeof m?.email === 'string' ? m.email.trim().toLowerCase() : ''))
+        .filter(Boolean);
+      if (memberEmails.length) {
+        const memberUsers = await this.usersRepository
+          .createQueryBuilder('u')
+          .where('LOWER(TRIM(u.email)) IN (:...memberEmails)', { memberEmails })
+          .getMany();
+        for (const memberUser of memberUsers) {
+          const memberElig = this.getOpportunityEligibility(memberUser, opportunity);
+          if (!memberElig.eligible) {
+            throw new ForbiddenException(
+              `${memberUser.email} cannot join this opportunity: ${memberElig.message}`,
+            );
+          }
+        }
       }
     }
 

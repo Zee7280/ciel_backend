@@ -570,6 +570,10 @@ export interface CiiV2EvidenceRow {
   type: string;
   match: number;
   verdict: 'MATCH' | 'PARTIAL' | 'MISMATCH';
+  /** Claim–evidence verdict in plain words (derived from `verdict` when the model omits it). */
+  claimSupport?: 'supported' | 'partially_supported' | 'unsupported' | 'contradicted';
+  /** Set on unsupported / contradicted rows: "UNRELATED / DOES NOT SUPPORT CLAIM". */
+  flag?: string;
   why: string;
 }
 

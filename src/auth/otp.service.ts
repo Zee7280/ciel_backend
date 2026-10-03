@@ -122,8 +122,31 @@ export class OtpService {
         };
     }
 
+    /** Serialises verifyOtp per email inside this process: the attempt counter is a read-modify-write,
+     * so without this 200 parallel guesses would all read attempts=0 and bypass the 5-try cap. */
+    private readonly verifyLocks = new Map<string, Promise<unknown>>();
+
+    private async withVerifyLock<T>(email: string, fn: () => Promise<T>): Promise<T> {
+        const prev = this.verifyLocks.get(email) ?? Promise.resolve();
+        let release!: () => void;
+        const gate = new Promise<void>((r) => (release = r));
+        const tail = prev.then(() => gate);
+        this.verifyLocks.set(email, tail);
+        try {
+            await prev.catch(() => undefined);
+            return await fn();
+        } finally {
+            release();
+            if (this.verifyLocks.get(email) === tail) this.verifyLocks.delete(email);
+        }
+    }
+
     async verifyOtp(rawEmail: string, rawOtp: string) {
         const email = this.normalizeEmail(rawEmail);
+        return this.withVerifyLock(email, () => this.verifyOtpUnlocked(email, rawOtp));
+    }
+
+    private async verifyOtpUnlocked(email: string, rawOtp: string) {
         const otp = String(rawOtp || '').trim();
 
         // Latest row for this email — including already-verified — so a retry after a

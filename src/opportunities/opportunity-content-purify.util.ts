@@ -70,6 +70,7 @@ export function purifyStudentOpportunityContent(dto: PurifiableOpportunityPayloa
         if (purified) dto.activity_details = purified;
     }
     if (typeof dto.title === 'string') {
-        dto.title = dto.title.replace(/\s+/g, ' ').trim();
+        // Control characters (bell, NUL, ...) are removed, then whitespace is collapsed.
+        dto.title = dto.title.replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim();
     }
 }

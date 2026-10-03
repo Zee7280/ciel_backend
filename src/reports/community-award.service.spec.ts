@@ -104,3 +104,82 @@ describe('CommunityAwardService — notify run is unlimited for every stakeholde
         }
     });
 });
+
+describe('CommunityAwardService.notifyFromPool — ranking is computed server-side', () => {
+    const report = (id: string) => ({
+        id,
+        faculty_status: 'approved',
+        admin_status: 'approved',
+        status: 'verified',
+        studentId: `student-${id}`,
+        awardBadges: [] as any[],
+        awardBadgeHistory: [] as any[],
+        section1: { team_lead: { name: 'Ali Raza' } },
+        opportunity: { title: `Project ${id}` },
+    });
+    const build = () => {
+        const rows = new Map<string, any>();
+        const reports = {
+            findOne: jest.fn(async ({ where }) => {
+                if (!rows.has(where.id)) rows.set(where.id, report(where.id));
+                return rows.get(where.id);
+            }),
+            save: jest.fn(async (row) => row),
+        };
+        const notifications = { createNotification: jest.fn().mockResolvedValue(undefined) };
+        return { service: new CommunityAwardService(reports as any, {} as any, notifications as any), rows, notifications };
+    };
+    const pool = [
+        { id: 'r1', total: 91 },
+        { id: 'r2', total: 77 },
+        { id: 'r3', total: 77 },
+        { id: 'r4', total: 40 },
+    ] as any;
+
+    it('ignores a crafted rank / of / total and stores the server-computed ones', async () => {
+        const { service, rows } = build();
+        await service.notifyFromPool(pool, {
+            kind: 'ciel',
+            scopeLabel: 'National',
+            picks: [{ reportId: 'r4', rank: 1, of: 1, total: 100 }],
+        } as any);
+        const badge = rows.get('r4').awardBadges[0];
+        expect(badge).toMatchObject({ rank: 4, of: 4, score: 40 });
+    });
+
+    it('equal totals share a rank (competition ranking)', async () => {
+        const { service, rows } = build();
+        await service.notifyFromPool(pool, { kind: 'ciel', reportIds: ['r2', 'r3'] } as any);
+        expect(rows.get('r2').awardBadges[0].rank).toBe(2);
+        expect(rows.get('r3').awardBadges[0].rank).toBe(2);
+    });
+
+    it('faculty / university medals only go to the TRUE top-N — a lower-ranked report cannot be promoted by the client', async () => {
+        const { service, rows } = build();
+        const res = await service.notifyFromPool(pool, {
+            kind: 'fac', // top 1
+            picks: [
+                { reportId: 'r4', rank: 1 },
+                { reportId: 'r1', rank: 9 },
+            ],
+        } as any);
+        expect(rows.has('r4')).toBe(false);
+        expect(rows.get('r1').awardBadges[0]).toMatchObject({ rank: 1, score: 91 });
+        expect(res.notified).toBe(1);
+    });
+
+    it('re-publishing the same ranking does not duplicate the history or re-notify', async () => {
+        const { service, rows, notifications } = build();
+        await service.notifyFromPool(pool, { kind: 'ciel', reportIds: ['r1'] } as any);
+        await service.notifyFromPool(pool, { kind: 'ciel', reportIds: ['r1'] } as any);
+        expect(rows.get('r1').awardBadgeHistory).toHaveLength(1);
+        expect(notifications.createNotification).toHaveBeenCalledTimes(1);
+    });
+
+    it('drops duplicate ids and ids outside the pool', async () => {
+        const { service, rows } = build();
+        const res = await service.notifyFromPool(pool, { kind: 'ciel', reportIds: ['r1', 'r1', 'ghost'] } as any);
+        expect(res.notified).toBe(1);
+        expect(rows.has('ghost')).toBe(false);
+    });
+});

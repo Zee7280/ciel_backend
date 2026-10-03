@@ -1,3 +1,4 @@
+import { proofUploadOptions } from '../common/safe-upload';
 import {
     Controller,
     Get,
@@ -37,7 +38,7 @@ export class StudentPaymentsController {
     }
 
     @Post('payments/submit')
-    @UseInterceptors(FileInterceptor('proof'))
+    @UseInterceptors(FileInterceptor('proof', proofUploadOptions))
     async submitPayment(
         @Request() req,
         @Body('projectId') projectId: string,

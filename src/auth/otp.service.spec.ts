@@ -189,3 +189,37 @@ describe('OtpService.requireVerifiedEmailForSignup', () => {
         expect(where.expiresAt).toBeDefined(); // MoreThan(now) — a stale verification no longer counts
     });
 });
+
+describe('OtpService.verifyOtp — parallel guesses cannot bypass the attempt cap', () => {
+    it('200 simultaneous wrong guesses only ever consume 5 attempts, then the code is dropped', async () => {
+        const row: any = {
+            email: 'a@b.com',
+            otp: null,
+            otpHash: await bcrypt.hash('123456', 4),
+            expiresAt: new Date(Date.now() + 60_000),
+            verified: false,
+            attempts: 0,
+        };
+        let deleted = false;
+        const repo = {
+            // simulate real I/O latency so un-serialised calls would interleave
+            findOne: jest.fn(async () => {
+                await new Promise((r) => setTimeout(r, 1));
+                return deleted ? null : row;
+            }),
+            save: jest.fn(async () => {
+                await new Promise((r) => setTimeout(r, 1));
+            }),
+            delete: jest.fn(async () => {
+                deleted = true;
+            }),
+        };
+        const service = new OtpService(repo as never, { sendOtpEmail: jest.fn() } as never, { findByEmail: jest.fn() } as never);
+        const results = await Promise.allSettled(
+            Array.from({ length: 200 }, (_, i) => service.verifyOtp('a@b.com', String(100000 + i).slice(0, 6))),
+        );
+        expect(results.every((r) => r.status === 'rejected')).toBe(true);
+        expect(row.attempts).toBeLessThanOrEqual(5);
+        expect(deleted).toBe(true);
+    });
+});

@@ -5,6 +5,8 @@ import sanitizeHtml from 'sanitize-html';
 
 /** Optional structured summary for faculty/partner verification emails. */
 export interface OpportunityVerificationEmailDetails {
+  /** Shown as "Reference ID" in the review-email summary table. */
+  opportunityId?: string;
   /** Display-only CS-YEAR-XXXX — same master record, not a sequential counter. */
   publicCode?: string;
   studentName?: string;
@@ -637,6 +639,11 @@ export class MailService {
         error.stack,
       );
     }
+  }
+
+  /** Absolute password-reset URL built from FRONTEND_URL (same base every other email uses). */
+  buildPasswordResetLink(token: string): string {
+    return this.buildFrontendLink('/reset-password', { token });
   }
 
   async sendExecutingOrganizationVerificationEmail(
@@ -2183,50 +2190,6 @@ export class MailService {
   }
 
   /** Regular Community Service report is waiting on Faculty review. Does not change status. */
-  async sendFacultyStudentReportAwaitingReview(input: {
-    to: string;
-    projectTitle: string;
-    reportId: string;
-    teamLeadName: string;
-  }): Promise<void> {
-    const to = String(input.to || '').trim();
-    if (!to) return;
-    const from =
-      this.configService.get<string>('MAIL_FROM') ||
-      'CIEL <no-reply@cielpk.com>';
-    const facultyLink = this.buildFrontendLink(
-      `/dashboard/faculty/reports/${encodeURIComponent(input.reportId)}`,
-      {},
-    );
-    const titleEsc = this.escHtmlPlain(input.projectTitle);
-    const leadEsc = this.escHtmlPlain(input.teamLeadName || 'Team Lead');
-    const html = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
-        <h2 style="color: #333;">CIEL PK · Report Awaiting Faculty Review</h2>
-        <p>The Community Service report for <strong>${titleEsc}</strong> has been submitted and is awaiting your review.</p>
-        <p>Team Lead: <strong>${leadEsc}</strong></p>
-        <p>Please review the report using the link below.</p>
-        <div style="text-align: center; margin: 28px 0;">
-          <a href="${facultyLink}" style="background-color: #0e7d74; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Open Report Package</a>
-        </div>
-      </div>
-    `;
-    try {
-      await this.sendMailReliable({
-        from,
-        to,
-        subject: `CIEL PK · Report Awaiting Faculty Review · ${input.projectTitle}`,
-        html,
-      });
-    } catch (error) {
-      this.logger.error(
-        `Failed faculty report-awaiting email for ${input.reportId}`,
-        (error as Error).stack,
-      );
-    }
-  }
-
-  /** Student-created opportunity is live; student received "Start report" email (admin FYI). */
   async sendAdminStudentMayStartReport(
     projectTitle: string,
     opportunityId: string,
@@ -2776,6 +2739,57 @@ export class MailService {
       this.logger.error(
         `Failed student impact-report ${status} email to ${to}`,
         error.stack,
+      );
+    }
+  }
+
+  /** CIEL PK Admin sent a report back (revision) or reopened it (unlock) — tell the student what to do. */
+  async sendStudentReportAdminDecision(
+    to: string,
+    studentFirstName: string,
+    projectTitle: string,
+    kind: 'revision' | 'unlocked',
+    note?: string | null,
+  ): Promise<void> {
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const titleEsc = this.escHtmlPlain(projectTitle);
+    const nameEsc = this.escHtmlPlain(studentFirstName);
+    const copy =
+      kind === 'revision'
+        ? {
+            heading: 'Your impact report needs changes',
+            body: `${nameEsc}, CIEL PK reviewed your community service report and sent it back for edits:`,
+            next: 'Open the report, fix the points below, and submit it again.',
+            subject: `CIEL PK — changes requested: ${projectTitle}`,
+          }
+        : {
+            heading: 'Your impact report was reopened',
+            body: `${nameEsc}, CIEL PK reopened your community service report so you can update it:`,
+            next: 'Open the report, make your updates, and submit it again.',
+            subject: `CIEL PK — report reopened: ${projectTitle}`,
+          };
+    const noteBlock =
+      note && note.trim()
+        ? `<p style="margin:16px 0 0 0;"><strong>Notes from CIEL PK:</strong></p><p style="background:#fffbeb;border-left:4px solid #f59e0b;padding:12px 14px;margin:8px 0 0 0;color:#374151;">${this.escHtmlPlain(note.trim())}</p>`
+        : '';
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <h2 style="color: #333;">${copy.heading}</h2>
+        <p>${copy.body}</p>
+        <p style="font-size:16px;"><strong>${titleEsc}</strong></p>
+        ${noteBlock}
+        <p style="margin-top:20px;color:#555;">${copy.next}</p>
+        <p style="margin-top:24px;">Regards,<br><strong>CIEL PK Team</strong><br><span style="font-size:13px;color:#64748b;">Community Impact Education Lab</span></p>
+      </div>
+    `;
+    try {
+      await this.sendMailReliable({ from, to, subject: copy.subject, html });
+    } catch (error) {
+      this.logger.error(
+        `Failed student report ${kind} email to ${to}`,
+        (error as Error)?.stack,
       );
     }
   }

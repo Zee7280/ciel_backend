@@ -1,4 +1,5 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import { BadRequestException, Injectable, InternalServerErrorException } from '@nestjs/common';
+import { UNSAFE_UPLOAD_MIME, safeFileExtension } from './safe-upload';
 import { ConfigService } from '@nestjs/config';
 import {
     S3Client,
@@ -57,8 +58,13 @@ export class S3Service {
     }
 
     async uploadFile(file: Express.Multer.File, folder: string): Promise<string> {
-        const fileExt = path.extname(file.originalname);
+        // Public bucket: never store something a browser would execute when the URL is opened.
+        if (UNSAFE_UPLOAD_MIME.test(String(file.mimetype || ''))) {
+            throw new BadRequestException('This file type is not allowed.');
+        }
+        const fileExt = safeFileExtension(file.originalname);
         const fileName = `${folder}/${crypto.randomUUID()}${fileExt}`;
+        const inline = /^(image\/|application\/pdf$|video\/|audio\/)/i.test(String(file.mimetype || ''));
 
         try {
             const command = new PutObjectCommand({
@@ -66,6 +72,8 @@ export class S3Service {
                 Key: fileName,
                 Body: file.buffer,
                 ContentType: file.mimetype,
+                // Anything that is not media / PDF downloads instead of rendering in the browser.
+                ContentDisposition: inline ? 'inline' : 'attachment',
             });
 
             await this.s3Client.send(command);

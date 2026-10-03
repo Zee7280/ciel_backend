@@ -177,7 +177,12 @@ export class AuthService implements OnApplicationBootstrap {
       throw new ForbiddenException('New registrations are temporarily closed.');
     }
     try {
-      const { password, email: rawEmail, ...rawUserData } = signupDto;
+      const {
+        password,
+        email: rawEmail,
+        acceptedTerms: _acceptedTerms,
+        ...rawUserData
+      } = signupDto;
       const { status: _clientStatus, ...userData } =
         rawUserData as SignupDto & { status?: string };
       const email = rawEmail.trim().toLowerCase();
@@ -326,7 +331,11 @@ export class AuthService implements OnApplicationBootstrap {
       userCreateData.phone = parsedPhone.e164;
 
       let organization: Organization | null = null;
+      // Only org signups (university / NGO / corporate) create an Organization. A student or
+      // faculty body carrying orgName/orgType must not mint one (and get an organizationId in
+      // their token).
       if (
+        isOrgSignup &&
         userCreateData.orgName &&
         userCreateData.orgType &&
         userCreateData.role !== UserRole.INVESTOR
@@ -382,6 +391,7 @@ export class AuthService implements OnApplicationBootstrap {
         email,
         password: hashedPassword,
         organization,
+        termsAcceptedAt: new Date(),
         ...(needsMembershipFee ? { status: 'pending_membership_payment' } : {}),
       });
 
@@ -440,6 +450,14 @@ export class AuthService implements OnApplicationBootstrap {
       throw new UnauthorizedException('Invalid credentials');
     }
 
+    // Check the password FIRST: account status / org-verification messages below are only shown to
+    // someone who proved they know the password, so they can't be used to probe which emails
+    // exist or what state they are in.
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
     const investorPending =
       user.role === UserRole.INVESTOR && user.status === 'pending';
     if (
@@ -472,11 +490,6 @@ export class AuthService implements OnApplicationBootstrap {
       }
     }
 
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid) {
-      throw new UnauthorizedException('Invalid credentials');
-    }
-
     if (user.role === UserRole.STUDENT) {
       try {
         await this.engagementService.linkOrphanParticipationsByEmail(
@@ -503,7 +516,9 @@ export class AuthService implements OnApplicationBootstrap {
       university: user.university || user.institution,
       tokenVersion: user.tokenVersion ?? 0,
     };
-    const expiresIn = loginDto.isMobile ? '30d' : '10h';
+    // Mobile sessions live longer than web, but a client-chosen flag must not buy a month-long
+    // token that can't be revoked (logout bumps tokenVersion, which kills it).
+    const expiresIn = loginDto.isMobile ? '7d' : '10h';
 
     return {
       success: true,
@@ -529,6 +544,10 @@ export class AuthService implements OnApplicationBootstrap {
     return { success: true };
   }
 
+  async logout(userId: string): Promise<void> {
+    await this.usersService.revokeSessions(userId);
+  }
+
   async forgotPassword(email: string) {
     const trimmed = typeof email === 'string' ? email.trim() : '';
     if (!trimmed) {
@@ -537,12 +556,15 @@ export class AuthService implements OnApplicationBootstrap {
 
     const user = await this.usersService.findByEmail(trimmed.toLowerCase());
 
+    // Always the same answer, whether or not the email has an account — otherwise this endpoint
+    // is an account-existence oracle.
+    const genericReply = {
+      success: true,
+      message:
+        'If an account exists for this email, we sent a password reset link. Check your inbox and spam folder.',
+    };
     if (!user) {
-      return {
-        success: false,
-        message:
-          'No account exists for this email. Please check that you spelled it correctly or use the email you registered with.',
-      };
+      return genericReply;
     }
 
     // Generate a secure random token
@@ -554,15 +576,10 @@ export class AuthService implements OnApplicationBootstrap {
     await this.usersService.savePasswordResetToken(user.id, resetToken, expiry);
 
     // Send the reset email
-    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-    const resetLink = `${baseUrl}/reset-password?token=${resetToken}`;
+    const resetLink = this.mailService.buildPasswordResetLink(resetToken);
     await this.mailService.sendPasswordResetEmail(user.email, resetLink);
 
-    return {
-      success: true,
-      message:
-        'We sent a password reset link to your email. Check your inbox and spam folder.',
-    };
+    return genericReply;
   }
 
   async resetPassword(token: string, newPassword: string) {

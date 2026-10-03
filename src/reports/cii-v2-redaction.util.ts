@@ -178,3 +178,30 @@ export function redactCiiV2Fields(
     },
   };
 }
+
+/**
+ * Independent (re-run) AI analyses for non-faculty viewers: only once the CII is locked/published,
+ * and only the fields the Impact Wall trend needs. Never per-section scores, bonus / integrity
+ * detail, student-feedback text or the runner's user id.
+ */
+export function redactIndependentAnalysesForExternal(
+  analyses: unknown,
+  ciiV2Lock: CiiV2LockInput,
+): Array<Record<string, unknown>> | null {
+  const locked = ciiV2Lock?.locked === true || ciiV2Lock?.locked === 'true';
+  if (!locked || !Array.isArray(analyses)) return null;
+  return (analyses as Array<Record<string, unknown>>)
+    .filter((a) => a && typeof a === 'object')
+    .map((a) => {
+      const level = a.level as { name?: unknown } | undefined;
+      return {
+        id: a.id,
+        runAt: a.runAt,
+        runByRole: a.runByRole,
+        runByName: a.runByName,
+        score: a.score,
+        level: level && typeof level === 'object' ? { name: level.name } : undefined,
+        note: a.note,
+      };
+    });
+}

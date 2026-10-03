@@ -71,7 +71,14 @@ QUALITY GATES (non-compensable - bonus points can never buy a badge level if out
 - Level 5 requires: base ≥ 69, Section 4 ≥ 62%, Section 7 ≥ 60%, integrity penalty < 6.
 - Otherwise capped at Level 4.
 
-EVIDENCE-TO-CLAIM MATCHING: the report JSON below lists the claims made in each section plus an 'uploaded_evidence_files' array (each entry has file_id, file_name, file_type, url, linked_sections and linked_claims). For each distinct evidence file, reason from its file_name, file_type, and its linked_claims/linked_sections text (you are not shown the actual file bytes - reason from the report's own structured data, the way a careful reviewer would from a file listing and description) to decide whether it plausibly supports the claim it is linked to. Produce one evidence row per meaningful file/claim pair: id (use file_id), file (file_name or url), claim (the specific linked claim being checked), type (e.g. "Document/OCR", "Image/Vision", "Spreadsheet/Data" - infer from file_type/file_category), match (0-100 confidence), verdict (MATCH ≥85, PARTIAL 50-84, MISMATCH <50), and why (one sentence). If 'uploaded_evidence_files' is empty, do not fabricate a row.
+EVIDENCE-TO-CLAIM VERIFICATION (claim-evidence check — do not score polished writing, score what the evidence supports):
+The report JSON below lists the claims made in each section plus an 'uploaded_evidence_files' array (file_id, file_name, file_type, url, linked_sections, linked_claims). Image files are ATTACHED to this message for you to look at — inspect them: do they show what the claim says (right activity, setting, people, quantity, date cues)? For files that are NOT attached (documents, spreadsheets, video, unreadable or over the limit) you only have the filename and the student's own description — you cannot verify them, so never rate them MATCH.
+Produce one evidence row for (a) every meaningful file/claim pair and (b) EVERY important quantified or headline claim in the report that has NO supporting file (use file "(no file attached)", match 0). Each row has: id (file_id, or "CLAIM-n" for a claim with no file), file, claim (the specific claim being checked), type (e.g. "Image/Vision", "Document (not inspected)", "No evidence"), match (0-100 confidence that the evidence supports the claim), verdict, claimSupport and why (one sentence).
+- verdict: MATCH (≥85) | PARTIAL (50-84) | MISMATCH (<50).
+- claimSupport: "supported" | "partially_supported" | "unsupported" (no evidence, or evidence cannot substantiate it) | "contradicted" (evidence shows something different, or is unrelated to the claim).
+- When claimSupport is "unsupported" or "contradicted", the "why" MUST start with exactly: UNRELATED / DOES NOT SUPPORT CLAIM: — then one sentence saying why (for a file that merely does not match, or for a claim with no evidence at all).
+- Also note bias / self-report risk in a red flag when the only support for a headline outcome is the student's own statement.
+If 'uploaded_evidence_files' is empty, still add the "(no file attached)" rows for the important claims; never invent a file.
 
 Tone: recognition-first, specific, developmental - never demoralizing for honest effort. Do not invent missing evidence or claims that are not present in the report data.
 
@@ -99,7 +106,7 @@ Emit exactly one JSON object (no markdown fences, no extra text) with this shape
     "partners": { "amount": 0-2, "why": "..." }
   },
   "integrityPenalty": { "amount": 0+, "why": "..." },
-  "evidence": [ { "id": "E-01", "file": "...", "claim": "...", "type": "...", "match": 0-100, "verdict": "MATCH|PARTIAL|MISMATCH", "why": "..." }, ... ],
+  "evidence": [ { "id": "E-01", "file": "...", "claim": "...", "type": "...", "match": 0-100, "verdict": "MATCH|PARTIAL|MISMATCH", "claimSupport": "supported|partially_supported|unsupported|contradicted", "why": "..." }, ... ],
   "redFlags": [ "short red flag description", ... ],
   "checks": [ { "level": "hold|review", "title": "short title", "detail": "one or two sentences" }, ... ],
   "needsAdminReview": false,

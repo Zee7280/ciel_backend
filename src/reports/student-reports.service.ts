@@ -4,7 +4,9 @@ import {
   NotFoundException,
   ForbiddenException,
   Logger,
+  Optional,
 } from '@nestjs/common';
+import { NotificationsService } from '../notifications/notifications.service';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, QueryFailedError, Repository } from 'typeorm';
@@ -46,12 +48,14 @@ import {
   isReportSubmittedStatus,
   redactDraftRowForNonAdmin,
 } from './report-progress.util';
+import { setNestedProperty as setNestedPropertyUtil } from './nested-path.util';
 import { persistSection8Visibility } from './media-visibility.util';
 import { applyEvidenceAccess, type EvidenceViewerRole } from './evidence-access.util';
 import { buildReportReviewPackage, type ReportReviewPackage } from './review-package.util';
 import { isPrivateCandidateOpportunity, reviewRouteForOpportunity } from '../opportunities/private-candidate.util';
 import {
   redactCiiV2Fields,
+  redactIndependentAnalysesForExternal,
   type CiiV2LockInput,
 } from './cii-v2-redaction.util';
 import {
@@ -68,6 +72,7 @@ import {
   isCiiFacultyLocked,
   communityServiceLevel,
   isCommunityAwardLiveReport,
+  isCommunityAwardMedalReport,
   type CommunityServiceLevel,
 } from './community-award.util';
 
@@ -116,6 +121,7 @@ export class StudentReportsService {
     private readonly mailService: MailService,
     private readonly configService: ConfigService,
     private readonly reportPartnerApprovalSettings: ReportPartnerApprovalSettingsService,
+    @Optional() private readonly notificationsService?: NotificationsService,
   ) {}
 
   private hasMeaningfulObjectValue(value: any): boolean {
@@ -293,6 +299,33 @@ export class StudentReportsService {
    * never from the client `section1.metrics` blob. Every active member must clear the hour
    * bar on their own logs. Faculty session approval is not required for this check.
    */
+  /**
+   * Only the submitting team's seated members count toward the per-member hours check: another
+   * team on the same opportunity, a pending/withdrawn applicant, or an unapproved seat must not
+   * block (or be required for) this team's report.
+   */
+  private scopeRosterToSubmittingTeam(
+    roster: Participation[],
+    submitterStudentId?: string,
+  ): Participation[] {
+    const seated = roster.filter((p) =>
+      this.participationAllowsReportStart(p.status),
+    );
+    if (!submitterStudentId) return seated;
+    const mine = seated.find((p) => p.studentId === submitterStudentId);
+    if (!mine) return seated;
+    if (mine.teamId) return seated.filter((p) => p.teamId === mine.teamId);
+    if (mine.applicationId) {
+      return seated.filter((p) => p.applicationId === mine.applicationId);
+    }
+    // A solo participant is judged alone; legacy rows with no team/application link keep the
+    // whole-roster behaviour rather than silently dropping teammates from the check.
+    if (String(mine.participationMode || '').toLowerCase() === 'individual') {
+      return [mine];
+    }
+    return seated;
+  }
+
   private async computeServerVerifiedHours(projectId: string): Promise<{
     hoursByParticipationId: Map<string, number>;
     activeRoster: Participation[];
@@ -325,10 +358,15 @@ export class StudentReportsService {
   private async assertEveryTeamMemberMetRequiredHours(
     projectId: string,
     requiredHoursPerStudent: number,
+    submitterStudentId?: string,
   ): Promise<void> {
     if (!(requiredHoursPerStudent > 0)) return;
-    const { hoursByParticipationId, activeRoster } =
+    const { hoursByParticipationId, activeRoster: wholeRoster } =
       await this.computeServerVerifiedHours(projectId);
+    const activeRoster = this.scopeRosterToSubmittingTeam(
+      wholeRoster,
+      submitterStudentId,
+    );
     if (activeRoster.length === 0) return;
     const shortfalls = activeRoster.filter(
       (p) => (hoursByParticipationId.get(p.id) || 0) < requiredHoursPerStudent,
@@ -903,6 +941,7 @@ export class StudentReportsService {
     T extends {
       status?: string | null;
       faculty_status?: string | null;
+      admin_status?: string | null;
       cii_score?: number | null;
       total?: number;
       level?: CommunityServiceLevel | null;
@@ -914,10 +953,13 @@ export class StudentReportsService {
       };
     },
   >(row: T): T {
+    // Score, level and certificate are the student's only once CIEL PK Admin has accepted the report
+    // — locking the CII (which mirrors faculty_status to 'approved') is not publication.
     if (
-      isCommunityAwardLiveReport({
+      isCommunityAwardMedalReport({
         status: row.status,
         faculty_status: row.faculty_status,
+        admin_status: row.admin_status,
       })
     ) {
       return row;
@@ -2858,7 +2900,9 @@ export class StudentReportsService {
       };
     }
 
-    if (privateCandidate) {
+    // Every submitted report is reviewed by CIEL PK Admin (Faculty is read-only), so a reminder always
+    // goes to the admin review inbox — never to a Faculty "approval" email that nobody can act on.
+    {
       const pack = (report.review_package || {}) as Partial<ReportReviewPackage>;
       await this.mailService.sendAdminStudentReportSubmitted(
         projectTitle,
@@ -2880,23 +2924,6 @@ export class StudentReportsService {
         message: 'CIEL PK has been reminded that this report is awaiting review.',
       };
     }
-
-    if (!facultyEmail) {
-      throw new BadRequestException('No faculty email is saved on this report.');
-    }
-    if (typeof this.mailService.sendFacultyStudentReportAwaitingReview === 'function') {
-      await this.mailService.sendFacultyStudentReportAwaitingReview({
-        to: facultyEmail,
-        projectTitle,
-        reportId: report.id,
-        teamLeadName,
-      });
-    }
-    return {
-      success: true,
-      sent_to: 'faculty',
-      message: `Verification email sent to ${facultyEmail}.`,
-    };
   }
 
   async createReport(
@@ -2973,6 +3000,35 @@ export class StudentReportsService {
         throw new BadRequestException(
           'This report has already been verified and can no longer be edited.',
         );
+      }
+
+      // A report that is already submitted (under review, awaiting partner, fee under review …) is
+      // locked: a second submit — double click, retry, or a crafted API call — must not overwrite
+      // sections the reviewer is looking at, re-stamp the submit time or regress the status.
+      // Repeating the call is harmless, so answer as the first one did.
+      if (
+        shouldSubmit &&
+        !wasRejectedForRevision &&
+        !['draft', 'continue', ''].includes(
+          String(priorReportStatus || '').toLowerCase(),
+        )
+      ) {
+        await this.syncReportProjectKeys(report);
+        return {
+          success: true,
+          message: 'This report has already been submitted and is locked.',
+          data: {
+            report_id: report.id,
+            ...this.reportVerificationPayload(report),
+            project_id: report.project_id,
+            submitted_at: report.submission_date,
+            report_submitted_at: report.reportSubmittedAt,
+            partner_approved_at: report.partnerApprovedAt,
+            admin_approved_at: report.adminApprovedAt,
+            status: report.status,
+            already_submitted: true,
+          },
+        };
       }
 
       // Update existing report
@@ -3163,6 +3219,7 @@ export class StudentReportsService {
         await this.assertEveryTeamMemberMetRequiredHours(
           String(opportunityIdFromDto),
           requiredHoursPerStudent,
+          reportOwnerId,
         );
       }
     }
@@ -3253,21 +3310,6 @@ export class StudentReportsService {
           },
         )
         .catch(() => undefined);
-      const facultyTo = this.resolveReportFacultyEmail(report, oppForTitle);
-      if (
-        facultyTo &&
-        typeof this.mailService.sendFacultyStudentReportAwaitingReview ===
-          'function'
-      ) {
-        void this.mailService
-          .sendFacultyStudentReportAwaitingReview({
-            to: facultyTo,
-            projectTitle,
-            reportId: report.id,
-            teamLeadName: student?.name || 'Team Lead',
-          })
-          .catch(() => undefined);
-      }
     }
 
     const submitOpportunity =
@@ -4142,8 +4184,11 @@ export class StudentReportsService {
         ...response.data,
         ciiV2,
         ciiV2Lock,
-        // Phase 4: Include independent AI analyses (do not overwrite faculty-approved)
-        independentAiAnalyses: response.data.independentAiAnalyses,
+        // Phase 4 independent AI analyses: only after CII is locked, and only the trend fields.
+        independentAiAnalyses: redactIndependentAnalysesForExternal(
+          response.data.independentAiAnalyses,
+          response.data.ciiV2Lock as CiiV2LockInput,
+        ),
       },
     };
   }
@@ -4611,12 +4656,15 @@ export class StudentReportsService {
           'This private-candidate report is reviewed by CIEL PK, not a partner organisation.',
         );
       }
+      // Faculty no longer approves reports: the partner step opens once CIEL PK Admin has accepted
+      // the report (faculty_status 'approved' is still honoured for legacy in-flight rows).
       if (
         (action === 'approve' || action === 'reject') &&
+        report.admin_status !== 'approved' &&
         report.faculty_status !== 'approved'
       ) {
         throw new ForbiddenException(
-          'This report is not yet approved by Faculty. Partners can view its status and send a reminder, but only Faculty can approve or reject a Community Service report.',
+          'This report has not been accepted by CIEL PK Admin yet. Partners can view its status, and can approve or reject only after CIEL PK Admin accepts the report.',
         );
       }
     }
@@ -4626,6 +4674,13 @@ export class StudentReportsService {
     if (action === 'approve' && ['draft', 'continue', ''].includes(currentStatusKey)) {
       throw new BadRequestException(
         'This report has not been submitted yet and cannot be approved.',
+      );
+    }
+    // A report that was sent back stays unpublishable until the student resubmits it — otherwise a
+    // second click on Approve would publish the very content that was just rejected.
+    if (action === 'approve' && ['revision', 'rejected'].includes(currentStatusKey)) {
+      throw new BadRequestException(
+        'This report was sent back for revision. It can be accepted only after the student resubmits it.',
       );
     }
     if (
@@ -4655,6 +4710,11 @@ export class StudentReportsService {
       report.partner_status = 'pending';
       report.partnerApprovedAt = null;
       report.adminApprovedAt = null;
+      // Back to a real draft: without clearing the submit stamp the student's autosaves are
+      // silently discarded (the "keep lifecycle" shortcut treats the report as still submitted).
+      report.reportSubmittedAt = null;
+      this.supersedeCiiLock(report, 'unlocked');
+      report.awardBadges = [];
       if (reason) {
         report.admin_feedback = reason;
       }
@@ -4672,6 +4732,11 @@ export class StudentReportsService {
       }
       report.adminApprovedAt = null;
       report.admin_feedback = reason.trim();
+      // The score was computed on content that is about to change; it must be re-run and re-locked.
+      if (role === 'admin') {
+        this.supersedeCiiLock(report, 'rejected');
+        report.awardBadges = [];
+      }
     } else if (action === 'approve') {
       await this.assertReportFeeClearedBeforeApproval(report);
       if (isPartnerReviewer) {
@@ -4715,7 +4780,11 @@ export class StudentReportsService {
         // partner-required reports verified when partner approves after admin and faculty") —
         // do not gate admin_status on partner_status here without re-checking that test's intent.
         report.admin_status = 'approved';
-        report.adminApprovedAt = decisionStamp;
+        // Re-approving must not move the publish timestamp.
+        report.adminApprovedAt =
+          originalAdminStatus === 'approved' && report.adminApprovedAt
+            ? report.adminApprovedAt
+            : decisionStamp;
         const requiresPartner =
           this.reportPartnerApprovalSettings.reportRequiresPartnerApprovalSync(
             report,
@@ -4749,6 +4818,16 @@ export class StudentReportsService {
         partnerApprovedAt: report.partnerApprovedAt,
         adminApprovedAt: report.adminApprovedAt,
         admin_feedback: report.admin_feedback,
+        ...((action === 'unlock' || (action === 'reject' && role === 'admin')
+          ? {
+              ciiV2: report.ciiV2,
+              ciiV2Lock: report.ciiV2Lock,
+              awardBadges: report.awardBadges,
+              ...(action === 'unlock'
+                ? { reportSubmittedAt: report.reportSubmittedAt }
+                : {}),
+            }
+          : {}) as Record<string, never>),
         ...(!isPartnerReviewer && role === 'admin' && actor?.id
           ? {
               adminReviewedBy: actor.name
@@ -4770,7 +4849,8 @@ export class StudentReportsService {
       );
     }
 
-    // Fire once, on the transition into Super Admin approval — not on repeat approves.
+    // Package mail fires once, on the transition into Super Admin approval — not on repeat approves
+    // (and not again when the partner completes later: stakeholders already have the package).
     if (
       action === 'approve' &&
       !isPartnerReviewer &&
@@ -4778,7 +4858,27 @@ export class StudentReportsService {
       report.admin_status === 'approved' &&
       originalAdminStatus !== 'approved'
     ) {
-      void this.notifyReviewPackagePublished(report).catch(() => undefined);
+      void this.notifyReviewPackagePublished(report).catch((err) =>
+        this.logger.error(
+          `Publish package notification failed for report ${report.id}: ${(err as Error)?.message}`,
+        ),
+      );
+    }
+    // Tell the student when CIEL PK sends the report back or reopens it.
+    if (
+      !isPartnerReviewer &&
+      role === 'admin' &&
+      (action === 'reject' || action === 'unlock')
+    ) {
+      void this.notifyStudentAdminDecision(
+        report,
+        action === 'reject' ? 'revision' : 'unlocked',
+        reason,
+      ).catch((err) =>
+        this.logger.error(
+          `Student decision notification failed for report ${report.id}: ${(err as Error)?.message}`,
+        ),
+      );
     }
 
     const actionMessage =
@@ -4802,6 +4902,56 @@ export class StudentReportsService {
         admin_approved_at: report.adminApprovedAt,
       },
     };
+  }
+
+  /** Retires the CII lock (kept in `ciiV2.previousLocks` for audit) so the score must be re-run. */
+  private supersedeCiiLock(report: StudentReport, reason: 'rejected' | 'unlocked') {
+    const lock = report.ciiV2Lock as unknown as Record<string, unknown> | null;
+    if (!lock || (lock.locked !== true && lock.locked !== 'true')) return;
+    const prev = (report.ciiV2 ?? {}) as unknown as Record<string, unknown>;
+    const history = Array.isArray(prev.previousLocks) ? prev.previousLocks : [];
+    report.ciiV2 = {
+      ...prev,
+      previousLocks: [
+        ...history,
+        { ...lock, supersededAt: new Date().toISOString(), supersededBy: reason },
+      ],
+    } as unknown as StudentReport['ciiV2'];
+    report.ciiV2Lock = null;
+  }
+
+  private async notifyStudentAdminDecision(
+    report: StudentReport,
+    kind: 'revision' | 'unlocked',
+    note?: string,
+  ): Promise<void> {
+    const student =
+      report.student ??
+      (await this.usersRepository.findOne({ where: { id: report.studentId } }));
+    const title =
+      report.opportunity?.title || report.project_id || 'your community service report';
+    const heading =
+      kind === 'revision' ? 'Report needs changes' : 'Report reopened';
+    const body =
+      kind === 'revision'
+        ? `CIEL PK sent "${title}" back for changes. Open it, fix the notes and submit again.`
+        : `CIEL PK reopened "${title}" so you can update it. Submit it again when ready.`;
+    if (this.notificationsService && report.studentId) {
+      await this.notificationsService.createNotification(report.studentId, {
+        type: 'approval',
+        title: heading,
+        message: note?.trim() ? `${body} ${note.trim()}` : body,
+      });
+    }
+    if (student?.email) {
+      await this.mailService.sendStudentReportAdminDecision(
+        student.email,
+        (student.name || '').split(' ')[0] || 'there',
+        title,
+        kind,
+        note,
+      );
+    }
   }
 
   async checkReportStatus(studentId: string, opportunityId?: string) {
@@ -5056,45 +5206,7 @@ export class StudentReportsService {
   }
 
   private setNestedProperty(obj: any, path: string, value: any) {
-    const keys = path.split('.');
-    let current = obj;
-
-    for (let i = 0; i < keys.length - 1; i++) {
-      const key = keys[i];
-      const arrayMatch = key.match(/^(.+)\[(\d+)\]$/);
-
-      if (arrayMatch) {
-        const arrayKey = arrayMatch[1];
-        const index = parseInt(arrayMatch[2]);
-
-        if (!current[arrayKey]) {
-          current[arrayKey] = [];
-        }
-        if (!current[arrayKey][index]) {
-          current[arrayKey][index] = {};
-        }
-        current = current[arrayKey][index];
-      } else {
-        if (!current[key]) {
-          current[key] = {};
-        }
-        current = current[key];
-      }
-    }
-
-    const lastKey = keys[keys.length - 1];
-    const arrayMatch = lastKey.match(/^(.+)\[(\d+)\]$/);
-
-    if (arrayMatch) {
-      const arrayKey = arrayMatch[1];
-      const index = parseInt(arrayMatch[2]);
-      if (!current[arrayKey]) {
-        current[arrayKey] = [];
-      }
-      current[arrayKey][index] = value;
-    } else {
-      current[lastKey] = value;
-    }
+    setNestedPropertyUtil(obj, path, value);
   }
 
   private async saveFiles(

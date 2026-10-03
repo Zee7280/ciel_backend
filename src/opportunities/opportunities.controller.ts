@@ -17,19 +17,34 @@ import { CreateOpportunityDto, UpdateOpportunityDto } from './dto/create-opportu
 import { buildOpportunityDetailView } from './opportunity-detail-view.util';
 import { GetOpportunityDetailDto } from './dto/get-opportunity-detail.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
+import { UserRole } from '../users/enums/user-role.enum';
+import { MembershipActiveGuard } from '../organization-membership/membership-active.guard';
 
 @Controller('opportunities')
 export class OpportunitiesController {
     constructor(private readonly opportunitiesService: OpportunitiesService) { }
 
+    // Members whose fee is still pending cannot create/edit listings (guard is a no-op for everyone else).
+    // Student-proposed projects go through /student/opportunity; this route is for faculty, partner
+    // organisations, universities and CIEL PK admins.
     @Post()
-    @UseGuards(JwtAuthGuard)
+    @UseGuards(JwtAuthGuard, RolesGuard, MembershipActiveGuard)
+    @Roles(
+        UserRole.FACULTY,
+        UserRole.NGO,
+        UserRole.CORPORATE,
+        UserRole.ORGANIZATION_ADMIN,
+        UserRole.UNIVERSITY,
+        UserRole.SUPER_ADMIN,
+    )
     create(@Request() req, @Body() createOpportunityDto: CreateOpportunityDto) {
         return this.opportunitiesService.create(req.user.id, createOpportunityDto);
     }
 
 
-    @UseGuards(JwtAuthGuard)
+    @UseGuards(JwtAuthGuard, MembershipActiveGuard)
     @Post('update')
     update(@Request() req, @Body() updateOpportunityDto: UpdateOpportunityDto) {
         return this.opportunitiesService.update(req.user.id, updateOpportunityDto, req.user.organizationId);
@@ -117,7 +132,7 @@ export class OpportunitiesController {
         };
     }
 
-    @UseGuards(JwtAuthGuard)
+    @UseGuards(JwtAuthGuard, MembershipActiveGuard)
     @Patch(':id')
     async patchById(@Request() req, @Param('id') id: string, @Body() body: Record<string, unknown>) {
         const dto = { ...body, id } as UpdateOpportunityDto;

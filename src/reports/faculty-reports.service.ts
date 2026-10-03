@@ -810,6 +810,17 @@ export class FacultyReportsService {
 
   async runCiiV2AnalysisForAdmin(id: string) {
     const report = await this.findReportForAdminCii(id);
+    // Super Admin may rescore a locked report after a rubric change (v2 → v3.1).
+    // Faculty still cannot re-run a locked CII.
+    if (report.ciiV2Lock?.locked) {
+      await this.studentReportsRepository
+        .createQueryBuilder()
+        .update(StudentReport)
+        .set({ ciiV2Lock: null })
+        .where('id = :id', { id: report.id })
+        .execute();
+      report.ciiV2Lock = null;
+    }
     return this.persistCiiV2Analysis(report);
   }
 

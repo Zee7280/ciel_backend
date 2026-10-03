@@ -138,3 +138,127 @@ describe('CII v3.1 — level helpers', () => {
     expect(levelFor(92, 5).level).toBe(5);
   });
 });
+
+describe('CII v3.1 — legacy 9-section remap', () => {
+  const legacyNineSectionAllFours = [
+    {
+      id: 1,
+      criteria: [
+        { key: 'role_clarity', anchor: 4 },
+        { key: 'participation_quality', anchor: 4 },
+        { key: 'attendance_consistency', anchor: 4 },
+        { key: 'engagement_continuity', anchor: 4 },
+      ],
+    },
+    {
+      id: 2,
+      criteria: [
+        { key: 'need_specificity', anchor: 4 },
+        { key: 'beneficiary_voice', anchor: 4 },
+        { key: 'baseline_evidence', anchor: 4 },
+        { key: 'contextual_understanding', anchor: 4 },
+        { key: 'disciplinary_lens', anchor: 4 },
+      ],
+    },
+    {
+      id: 3,
+      criteria: [
+        { key: 'sdg_alignment', anchor: 4 },
+        { key: 'contribution_logic', anchor: 4 },
+        { key: 'activity_output_outcome_alignment', anchor: 4 },
+        { key: 'sdg_restraint', anchor: 4 },
+      ],
+    },
+    {
+      id: 4,
+      criteria: [
+        { key: 'planned_vs_actual', anchor: 4 },
+        { key: 'delivery_rigor', anchor: 4 },
+        { key: 'execution_ownership', anchor: 4 },
+        { key: 'output_counting_integrity', anchor: 4 },
+        { key: 'depth_or_scale', anchor: 4 },
+        { key: 'measurable_outcomes', anchor: 4 },
+        { key: 'beneficiary_value', anchor: 4 },
+        { key: 'adaptation_honesty', anchor: 4 },
+      ],
+    },
+    {
+      id: 5,
+      criteria: [
+        { key: 'resource_stewardship', anchor: 4 },
+        { key: 'resource_traceability', anchor: 4 },
+        { key: 'resource_appropriateness', anchor: 4 },
+        { key: 'resource_delivery_link', anchor: 4 },
+      ],
+    },
+    {
+      id: 6,
+      criteria: [
+        { key: 'stakeholder_relevance', anchor: 4 },
+        { key: 'stakeholder_role_clarity', anchor: 4 },
+        { key: 'collaboration_quality', anchor: 4 },
+        { key: 'verification_ownership', anchor: 4 },
+      ],
+    },
+    {
+      id: 7,
+      criteria: [
+        { key: 'evidence_participation', anchor: 4 },
+        { key: 'evidence_activities', anchor: 4 },
+        { key: 'evidence_beneficiaries', anchor: 4 },
+        { key: 'evidence_outcomes', anchor: 4 },
+        { key: 'evidence_resource_traceability', anchor: 4 },
+        { key: 'ethics_integrity', anchor: 4 },
+      ],
+    },
+    {
+      id: 8,
+      criteria: [
+        { key: 'personal_learning', anchor: 4 },
+        { key: 'academic_application', anchor: 4 },
+        { key: 'ethical_understanding', anchor: 4 },
+        { key: 'self_awareness', anchor: 4 },
+      ],
+    },
+    {
+      id: 9,
+      criteria: [
+        { key: 'continuation_assessment', anchor: 4 },
+        { key: 'named_ownership', anchor: 4 },
+        { key: 'continuation_mechanism', anchor: 4 },
+        { key: 'scaling_realism', anchor: 4 },
+      ],
+    },
+  ];
+
+  it('does not collapse a full-marks v2 payload to ~36 after the v3.1 rubric shift', () => {
+    const result = computeCiiV2Result({
+      sections: legacyNineSectionAllFours,
+      bonus: { effort: 1.25, resources: 1.25, partners: 1.25, outcome: 1.25 },
+      integrityPenalty: 0,
+    });
+
+    expect(result.final).toBeGreaterThanOrEqual(95);
+    expect(result.base).toBeGreaterThanOrEqual(95);
+    expect(result.sections).toHaveLength(10);
+    expect(result.sections.find((s) => s.id === 5)?.score).toBeGreaterThan(10);
+    expect(result.sections.find((s) => s.id === 10)?.score).toBeGreaterThan(5);
+  });
+
+  it('does not remap a live v3.1 payload that only omitted section 10', () => {
+    const sections = CII_V2_SECTIONS.filter((s) => s.id !== 10).map((s) => ({
+      id: s.id,
+      criteria: s.criteria.map((c) => ({ key: c.key, anchor: 4 })),
+    }));
+    const result = computeCiiV2Result({
+      sections,
+      bonus: { effort: 0, resources: 0, partners: 0, outcome: 0 },
+      integrityPenalty: 0,
+    });
+
+    expect(result.sections.find((s) => s.id === 5)?.key).toBe('outcomes');
+    expect(result.sections.find((s) => s.id === 6)?.key).toBe('resources');
+    expect(result.sections.find((s) => s.id === 5)?.score).toBe(15);
+    expect(result.sections.find((s) => s.id === 10)?.score).toBe(0);
+  });
+});

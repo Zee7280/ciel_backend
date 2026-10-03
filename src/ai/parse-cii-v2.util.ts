@@ -4,6 +4,7 @@ import {
   CiiV2BonusInput,
   CiiV2EvidenceRow,
   CiiV2SectionInput,
+  normalizeCiiSectionInputsForRubric,
 } from '../reports/cii-v2.constants';
 
 export interface CiiV2AiEvaluation {
@@ -176,11 +177,32 @@ export function parseCiiV2Response(raw: string): CiiV2AiEvaluation | null {
 
   const rec = parsed as Record<string, unknown>;
   const sectionsRaw = Array.isArray(rec.sections) ? rec.sections : [];
-  const sectionsById = new Map<number, unknown>();
+  const looseInputs: CiiV2SectionInput[] = [];
   for (const s of sectionsRaw) {
-    const id = pickNumber(asRecord(s).id);
-    if (id !== null) sectionsById.set(id, s);
+    const recSection = asRecord(s);
+    const id = pickNumber(recSection.id);
+    if (id === null) continue;
+    const criteria = Array.isArray(recSection.criteria)
+      ? recSection.criteria
+          .map((c) => {
+            const cRec = asRecord(c);
+            return {
+              key: pickString(cRec.key),
+              anchor: pickNumber(cRec.anchor) ?? 0,
+              note: pickString(cRec.note) || undefined,
+            };
+          })
+          .filter((c) => c.key)
+      : [];
+    looseInputs.push({
+      id,
+      good: pickString(recSection.good) || undefined,
+      limit: pickString(recSection.limit) || undefined,
+      criteria,
+    });
   }
+  const normalized = normalizeCiiSectionInputsForRubric(looseInputs);
+  const sectionsById = new Map(normalized.map((s) => [s.id, s]));
 
   // A section or criterion the AI response omits is silently scored as anchor 0 by
   // parseSectionInput below — that can swing the final score by a lot (Sections 4/5/8
@@ -188,14 +210,14 @@ export function parseCiiV2Response(raw: string): CiiV2AiEvaluation | null {
   // parsing gap masquerade as a genuinely low score.
   const parsingRedFlags: string[] = [];
   const sections = CII_V2_SECTIONS.map((s) => {
-    const raw = sectionsById.get(s.id);
-    if (raw === undefined) {
+    const mapped = sectionsById.get(s.id);
+    if (mapped === undefined) {
       parsingRedFlags.push(
         `AI response did not include Section ${s.id} (${s.title}) — it was scored as 0 and MUST be re-run or manually reviewed before approval.`,
       );
     }
-    const { input, missingCriteriaKeys } = parseSectionInput(raw, s.id);
-    if (raw !== undefined && missingCriteriaKeys.length > 0) {
+    const { input, missingCriteriaKeys } = parseSectionInput(mapped, s.id);
+    if (mapped !== undefined && missingCriteriaKeys.length > 0) {
       parsingRedFlags.push(
         `Section ${s.id}: AI response was missing criteria [${missingCriteriaKeys.join(', ')}] — defaulted to anchor 0.`,
       );

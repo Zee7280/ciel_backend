@@ -282,6 +282,179 @@ export function sectionById(id: number): CiiV2Section | undefined {
   return CII_V2_SECTIONS.find((s) => s.id === id);
 }
 
+/** Previous 9-section CII v2 keys → Balanced CII v3.1 keys. */
+export const CII_V2_CRITERION_KEY_ALIASES: Record<string, string> = {
+  baseline_evidence: 'baseline_context',
+  disciplinary_lens: 'disciplinary_relevance',
+  output_counting_integrity: 'output_quality_integrity',
+  verification_ownership: 'ownership_verification',
+  evidence_participation: 'participation_evidence',
+  evidence_activities: 'activity_output_evidence',
+  evidence_beneficiaries: 'beneficiary_scale_evidence',
+  evidence_outcomes: 'outcome_evidence',
+  evidence_resource_traceability: 'resource_partner_evidence',
+  measurable_outcomes: 'measurable_change',
+  adaptation_honesty: 'attribution_honesty',
+};
+
+export function canonicalizeCiiCriterionKey(key: string): string {
+  const trimmed = (key || '').trim();
+  return CII_V2_CRITERION_KEY_ALIASES[trimmed] || trimmed;
+}
+
+const LEGACY_RESOURCE_KEYS = new Set([
+  'resource_stewardship',
+  'resource_traceability',
+  'resource_appropriateness',
+  'resource_delivery_link',
+]);
+
+const LEGACY_SECTION4_OUTCOME_KEYS = new Set([
+  'measurable_outcomes',
+  'measurable_change',
+  'beneficiary_value',
+  'adaptation_honesty',
+  'attribution_honesty',
+  'outcome_clarity',
+  'outcome_source_quality',
+]);
+
+/** Old 9-section layout: S5=resources, S9=sustainability, no S10. */
+export function isLegacyNineSectionCii(sections: CiiV2SectionInput[]): boolean {
+  const ids = new Set(sections.map((s) => s.id));
+  if (ids.has(10)) return false;
+  const section5 = sections.find((s) => s.id === 5);
+  const section4 = sections.find((s) => s.id === 4);
+  if (
+    section5?.criteria.some((c) =>
+      LEGACY_RESOURCE_KEYS.has(canonicalizeCiiCriterionKey(c.key)),
+    )
+  ) {
+    return true;
+  }
+  if (
+    section4?.criteria.some(
+      (c) => c.key === 'measurable_outcomes' || c.key === 'adaptation_honesty',
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function mergeCiiSectionInputs(
+  sections: CiiV2SectionInput[],
+): CiiV2SectionInput[] {
+  const byId = new Map<number, CiiV2SectionInput>();
+  for (const section of sections) {
+    const prev = byId.get(section.id);
+    if (!prev) {
+      byId.set(section.id, {
+        id: section.id,
+        good: section.good,
+        limit: section.limit,
+        criteria: [...section.criteria],
+      });
+      continue;
+    }
+    const seen = new Set(prev.criteria.map((c) => c.key));
+    for (const criterion of section.criteria) {
+      if (!seen.has(criterion.key)) {
+        prev.criteria.push(criterion);
+        seen.add(criterion.key);
+      }
+    }
+    prev.good = prev.good || section.good;
+    prev.limit = prev.limit || section.limit;
+  }
+  return [...byId.values()];
+}
+
+const MISSING_CRITERION_FILL_FROM: Record<string, string[]> = {
+  outcome_clarity: ['measurable_change'],
+  outcome_source_quality: ['measurable_change'],
+  evidence_coverage_traceability: ['ethics_integrity'],
+};
+
+function fillMissingV31Criteria(sections: CiiV2SectionInput[]): CiiV2SectionInput[] {
+  return sections.map((current) => {
+    const rubric = CII_V2_SECTIONS.find((s) => s.id === current.id);
+    if (!rubric) return current;
+    const byKey = new Map(current.criteria.map((c) => [c.key, c]));
+    for (const criterion of rubric.criteria) {
+      if (byKey.has(criterion.key)) continue;
+      const donor = (MISSING_CRITERION_FILL_FROM[criterion.key] || [])
+        .map((key) => byKey.get(key))
+        .find((row) => row != null);
+      if (donor) {
+        byKey.set(criterion.key, {
+          key: criterion.key,
+          anchor: donor.anchor,
+          note: donor.note,
+        });
+      }
+    }
+    return { ...current, criteria: [...byKey.values()] };
+  });
+}
+
+/**
+ * Map a stored/AI CII payload onto the live v3.1 rubric.
+ * Old 9-section runs used shifted section IDs (S5=resources … S9=sustainability),
+ * which otherwise score as ~36/100 because most v3.1 keys miss.
+ */
+export function normalizeCiiSectionInputsForRubric(
+  sections: CiiV2SectionInput[],
+): CiiV2SectionInput[] {
+  const canonical = sections.map((section) => ({
+    ...section,
+    criteria: section.criteria.map((criterion) => ({
+      ...criterion,
+      key: canonicalizeCiiCriterionKey(criterion.key),
+    })),
+  }));
+
+  if (!isLegacyNineSectionCii(sections)) {
+    return fillMissingV31Criteria(mergeCiiSectionInputs(canonical));
+  }
+
+  const remapped: CiiV2SectionInput[] = [];
+  for (const section of canonical) {
+    if (section.id === 4) {
+      remapped.push({
+        ...section,
+        id: 4,
+        criteria: section.criteria.filter(
+          (c) => !LEGACY_SECTION4_OUTCOME_KEYS.has(c.key),
+        ),
+      });
+      remapped.push({
+        ...section,
+        id: 5,
+        criteria: section.criteria.filter((c) =>
+          LEGACY_SECTION4_OUTCOME_KEYS.has(c.key),
+        ),
+      });
+      continue;
+    }
+    const nextId =
+      section.id === 5
+        ? 6
+        : section.id === 6
+          ? 7
+          : section.id === 7
+            ? 8
+            : section.id === 8
+              ? 9
+              : section.id === 9
+                ? 10
+                : section.id;
+    remapped.push({ ...section, id: nextId });
+  }
+
+  return fillMissingV31Criteria(mergeCiiSectionInputs(remapped));
+}
+
 function round1(n: number): number {
   return Math.round(n * 10) / 10;
 }
@@ -461,7 +634,9 @@ export function gateExplanationFor(finalScore: number, gateCap: number): string 
 }
 
 export function computeCiiV2Result(input: CiiV2ComputeInput): CiiV2Result {
-  const inputById = new Map(input.sections.map((s) => [s.id, s]));
+  const inputById = new Map(
+    normalizeCiiSectionInputsForRubric(input.sections).map((s) => [s.id, s]),
+  );
   const sections = CII_V2_SECTIONS.map((s) => scoreSection(s, inputById.get(s.id)));
 
   const individualCore = sections.find((s) => s.id === 1)?.score ?? 0;

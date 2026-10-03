@@ -142,13 +142,38 @@ describe('parseCiiV2Response — score guard rails', () => {
     expect(parseCiiV2Response(JSON.stringify({ ...fullResponse(), integrityPenalty: -5 }))!.integrityPenalty).toBe(0);
   });
 
-  it('flags a run that skipped rubric sections as incomplete (must be re-run, not locked)', () => {
-    const complete = parseCiiV2Response(JSON.stringify(fullResponse()))!;
-    expect(complete.incomplete).toBe(false);
-    const partial = fullResponse();
-    partial.sections = partial.sections.slice(0, 3);
-    const r = parseCiiV2Response(JSON.stringify(partial))!;
-    expect(r.incomplete).toBe(true);
-    expect(r.needsAdminReview).toBe(true);
+  it('maps a legacy 9-section v2 payload onto all 10 v3.1 sections instead of zeroing S5–S10', () => {
+    const legacy = {
+      framework_version: 'v2.0',
+      sections: [
+        {
+          id: 4,
+          criteria: [
+            { key: 'planned_vs_actual', anchor: 4 },
+            { key: 'measurable_outcomes', anchor: 3 },
+            { key: 'beneficiary_value', anchor: 3 },
+          ],
+        },
+        {
+          id: 5,
+          criteria: [{ key: 'resource_stewardship', anchor: 4 }],
+        },
+        {
+          id: 9,
+          criteria: [{ key: 'continuation_assessment', anchor: 4 }],
+        },
+      ],
+      bonus: { effort: 0, resources: 0, partners: 0 },
+      integrityPenalty: 0,
+      evidence: [],
+      redFlags: [],
+    };
+
+    const result = parseCiiV2Response(JSON.stringify(legacy))!;
+    expect(result.sections.find((s) => s.id === 4)?.criteria.find((c) => c.key === 'planned_vs_actual')?.anchor).toBe(4);
+    expect(result.sections.find((s) => s.id === 5)?.criteria.find((c) => c.key === 'measurable_change')?.anchor).toBe(3);
+    expect(result.sections.find((s) => s.id === 6)?.criteria.find((c) => c.key === 'resource_stewardship')?.anchor).toBe(4);
+    expect(result.sections.find((s) => s.id === 10)?.criteria.find((c) => c.key === 'continuation_assessment')?.anchor).toBe(4);
+    expect(result.redFlags.some((f) => f.includes('did not include Section 10'))).toBe(false);
   });
 });

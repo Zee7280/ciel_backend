@@ -148,6 +148,37 @@ describe('FacultyReportsService — runCiiV2Analysis', () => {
       service.runCiiV2Analysis('report-1', 'faculty-1', 'teacher@uni.edu'),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
+
+  it('lets Super Admin re-analyse a locked report and clears the lock in the same write', async () => {
+    const { service, qb } = makeService(
+      {
+        id: 'report-1',
+        ciiV2Lock: {
+          locked: true,
+          hash: 'x',
+          lockedAt: 'now',
+          lockedByFacultyId: 'faculty-1',
+        },
+      },
+      {
+        summarize: jest
+          .fn()
+          .mockResolvedValue({ summary: '', ciiV2: CII_V2_AI_RESPONSE }),
+      },
+    );
+
+    await expect(
+      service.runCiiV2AnalysisForAdmin('report-1'),
+    ).resolves.toMatchObject({ success: true });
+
+    const payload = qb.set.mock.calls[0][0] as {
+      ciiV2?: unknown;
+      ciiV2Lock?: unknown;
+    };
+    expect(payload.ciiV2).toBeTruthy();
+    expect(typeof payload.ciiV2Lock).toBe('function');
+    expect(qb.andWhere).not.toHaveBeenCalled();
+  });
 });
 
 describe('FacultyReportsService — approveCiiV2', () => {

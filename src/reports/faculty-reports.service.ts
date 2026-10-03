@@ -810,25 +810,17 @@ export class FacultyReportsService {
 
   async runCiiV2AnalysisForAdmin(id: string) {
     const report = await this.findReportForAdminCii(id);
-    // Super Admin may rescore a locked report after a rubric change (v2 → v3.1).
-    // Faculty still cannot re-run a locked CII.
-    if (report.ciiV2Lock?.locked) {
-      await this.studentReportsRepository
-        .createQueryBuilder()
-        .update(StudentReport)
-        .set({ ciiV2Lock: null })
-        .where('id = :id', { id: report.id })
-        .execute();
-      report.ciiV2Lock = null;
-    }
-    return this.persistCiiV2Analysis(report);
+    return this.persistCiiV2Analysis(report, { adminRescore: true });
   }
 
   /** Reports whose AI analysis is running right now in this process (double click / two admins). */
   private static readonly ciiRunsInFlight = new Set<string>();
 
-  private async persistCiiV2Analysis(report: StudentReport) {
-    if (report.ciiV2Lock?.locked) {
+  private async persistCiiV2Analysis(
+    report: StudentReport,
+    opts: { adminRescore?: boolean } = {},
+  ) {
+    if (!opts.adminRescore && report.ciiV2Lock?.locked) {
       throw new BadRequestException(
         "This report's CII v2 score is already locked and cannot be re-analysed.",
       );
@@ -842,13 +834,16 @@ export class FacultyReportsService {
     }
     FacultyReportsService.ciiRunsInFlight.add(report.id);
     try {
-      return await this.runAndStoreCiiV2Analysis(report);
+      return await this.runAndStoreCiiV2Analysis(report, opts);
     } finally {
       FacultyReportsService.ciiRunsInFlight.delete(report.id);
     }
   }
 
-  private async runAndStoreCiiV2Analysis(report: StudentReport) {
+  private async runAndStoreCiiV2Analysis(
+    report: StudentReport,
+    opts: { adminRescore?: boolean } = {},
+  ) {
     // Reuse the canonical, security-reviewed payload builder (strips CNIC, legacy scores and
     // other sensitive/internal fields) instead of forwarding raw section JSON to the AI vendor.
     const payload = buildCielPkAiEvaluationPayload(report);
@@ -901,18 +896,23 @@ export class FacultyReportsService {
       ],
     };
 
-    // Targeted, guarded update: only touches the ciiV2 column (never ciiV2Lock or any other
-    // field this method didn't read/intend to change), and re-checks "not locked" at write
-    // time in case the AI call above raced with a concurrent approve.
-    const updateResult = await this.studentReportsRepository
+    // Targeted update: faculty writes are blocked while locked. Super Admin rescore
+    // clears the lock in the same write (QueryBuilder drops `.set({ json: null })`).
+    const qb = this.studentReportsRepository
       .createQueryBuilder()
       .update(StudentReport)
-      .set({ ciiV2: nextCiiV2 })
-      .where('id = :id', { id: report.id })
-      .andWhere(
-        `("ciiV2Lock" IS NULL OR ("ciiV2Lock"->>'locked') IS DISTINCT FROM 'true')`,
+      .set(
+        opts.adminRescore
+          ? { ciiV2: nextCiiV2, ciiV2Lock: () => 'NULL' }
+          : { ciiV2: nextCiiV2 },
       )
-      .execute();
+      .where('id = :id', { id: report.id });
+    if (!opts.adminRescore) {
+      qb.andWhere(
+        `("ciiV2Lock" IS NULL OR ("ciiV2Lock"->>'locked') IS DISTINCT FROM 'true')`,
+      );
+    }
+    const updateResult = await qb.execute();
 
     if (!updateResult.affected) {
       throw new BadRequestException(

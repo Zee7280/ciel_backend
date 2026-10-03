@@ -26,6 +26,8 @@ import {
 import { buildCielPkAiEvaluationPayload } from './build-ciel-pk-ai-evaluation-payload.util';
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
+import { Participation } from '../engagement/entities/participant.entity';
+import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { MailService } from '../mail/mail.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import {
@@ -91,6 +93,51 @@ function pickListString(...values: unknown[]): string {
     if (typeof value === 'string' && value.trim()) return value.trim();
   }
   return '';
+}
+
+/** Assigned seats faculty can monitor (not pending join, not rejected). */
+const TRACKING_SEAT_STATUSES = [
+  'accepted',
+  'approved',
+  'verified',
+  'paid',
+  'pending_ciel_approval',
+  'pending_faculty_approval',
+  'pending_payment_approval',
+  'finalized',
+] as const;
+
+function isPrivateStudentPathway(opp: Opportunity | null | undefined): boolean {
+  const ctx = opp?.executing_context;
+  if (!ctx || typeof ctx !== 'object') return false;
+  return (
+    String((ctx as { student_pathway?: unknown }).student_pathway || '')
+      .trim()
+      .toLowerCase() === 'private'
+  );
+}
+
+function isRejectedOpportunity(opp: Opportunity): boolean {
+  const status = String(opp.status || '')
+    .trim()
+    .toLowerCase();
+  const stage = String(opp.workflowStage || '')
+    .trim()
+    .toLowerCase();
+  return status === 'rejected' || stage === 'rejected';
+}
+
+function latestActivityIso(
+  values: Array<Date | string | null | undefined>,
+): string | undefined {
+  let max = 0;
+  for (const value of values) {
+    if (!value) continue;
+    const ms =
+      value instanceof Date ? value.getTime() : Date.parse(String(value));
+    if (Number.isFinite(ms) && ms > max) max = ms;
+  }
+  return max > 0 ? new Date(max).toISOString() : undefined;
 }
 
 export function mapFacultyListPackage(
@@ -182,6 +229,10 @@ export class FacultyReportsService {
     private readonly attendanceLogsRepository: Repository<AttendanceLog>,
     private readonly mailService: MailService,
     private readonly notificationsService: NotificationsService,
+    @InjectRepository(Participation)
+    private readonly participationRepository: Repository<Participation>,
+    @InjectRepository(Opportunity)
+    private readonly opportunitiesRepository: Repository<Opportunity>,
   ) {}
 
   private normalizeFacultyEmail(facultyEmail: string): string {
@@ -352,6 +403,222 @@ export class FacultyReportsService {
         ...computeReportProgress(r),
       })),
     };
+  }
+
+  /**
+   * Assigned students on this faculty's opportunities: live hours + report progress.
+   * Source of truth for Community Service Projects monitoring — not submitted-reports-only.
+   * Never returns student phone numbers.
+   */
+  async listProjectTracking(facultyId: string, facultyEmail: string) {
+    const scopedOpportunityIds =
+      await this.facultyService.getScopedOpportunityIds(
+        facultyId,
+        facultyEmail,
+      );
+    if (scopedOpportunityIds.length === 0) {
+      return { success: true, data: [] as Record<string, unknown>[] };
+    }
+
+    const [opportunities, participants, reports, logs] = await Promise.all([
+      this.opportunitiesRepository.find({
+        where: { id: In(scopedOpportunityIds) },
+        relations: ['organization'],
+      }),
+      this.participationRepository.find({
+        where: {
+          projectId: In(scopedOpportunityIds),
+          status: In([...TRACKING_SEAT_STATUSES]),
+        },
+        relations: ['student'],
+      }),
+      this.baseReportQuery()
+        .where('report."opportunityId"::text IN (:...scopedOppIds)', {
+          scopedOppIds: scopedOpportunityIds,
+        })
+        .orWhere(`TRIM(COALESCE(report.project_id, '')) IN (:...scopedOppIds)`, {
+          scopedOppIds: scopedOpportunityIds,
+        })
+        .orderBy('report.updatedAt', 'DESC')
+        .getMany(),
+      this.attendanceLogsRepository.find({
+        where: { projectId: In(scopedOpportunityIds) },
+      }),
+    ]);
+
+    const oppById = new Map(
+      opportunities
+        .filter((opp) => !isRejectedOpportunity(opp) && !isPrivateStudentPathway(opp))
+        .map((opp) => [opp.id, opp]),
+    );
+    const allowedIds = new Set(oppById.keys());
+
+    const logsByParticipant = new Map<string, AttendanceLog[]>();
+    const logsByProject = new Map<string, AttendanceLog[]>();
+    for (const log of logs) {
+      if (!allowedIds.has(log.projectId)) continue;
+      const byP = logsByParticipant.get(log.participantId) ?? [];
+      byP.push(log);
+      logsByParticipant.set(log.participantId, byP);
+      const byProj = logsByProject.get(log.projectId) ?? [];
+      byProj.push(log);
+      logsByProject.set(log.projectId, byProj);
+    }
+
+    const reportsForProject = (projectId: string) =>
+      reports.filter((r) => {
+        const key = String(r.opportunityId || r.project_id || '').trim();
+        return key === projectId && allowedIds.has(projectId);
+      });
+
+    const matchReport = (
+      projectId: string,
+      studentId: string,
+      email: string,
+    ): StudentReport | undefined => {
+      const pool = reportsForProject(projectId);
+      const sid = studentId.trim();
+      const em = email.trim().toLowerCase();
+      return (
+        pool.find((r) => sid && String(r.studentId || r.student?.id || '') === sid) ||
+        pool.find(
+          (r) =>
+            em &&
+            String(r.student?.email || '')
+              .trim()
+              .toLowerCase() === em,
+        )
+      );
+    };
+
+    const usedReportIds = new Set<string>();
+    const data: Record<string, unknown>[] = [];
+
+    for (const seat of participants) {
+      const opp = oppById.get(seat.projectId);
+      if (!opp) continue;
+      const email = pickListString(seat.student?.email, seat.email);
+      const report = matchReport(
+        seat.projectId,
+        String(seat.studentId || seat.student?.id || ''),
+        email,
+      );
+      if (report?.id) usedReportIds.add(report.id);
+      const seatLogs = logsByParticipant.get(seat.id) ?? [];
+      const liveHours = this.loggedHoursForProject(seatLogs);
+      const required =
+        Number(
+          (opp.timeline as { expected_hours?: unknown } | undefined)
+            ?.expected_hours,
+        ) ||
+        Number(opp.requiredHours) ||
+        16;
+      const progress = report ? computeReportProgress(report) : null;
+      const submitted = progress?.is_submitted === true;
+      const hoursPct =
+        required > 0
+          ? Math.min(100, Math.round((liveHours / required) * 100))
+          : 0;
+      const lastActivity = latestActivityIso([
+        ...seatLogs.map((l) => l.updatedAt),
+        ...seatLogs.map((l) => l.createdAt),
+        ...seatLogs.map((l) => l.dateOfEngagement),
+        report?.updatedAt,
+        report?.reportSubmittedAt,
+        seat.updatedAt,
+        seat.createdAt,
+      ]);
+      data.push({
+        id: report?.id || `track:${seat.id}`,
+        participation_id: seat.id,
+        report_id: report?.id || null,
+        student_name:
+          pickListString(seat.student?.name, seat.fullName) || 'Student',
+        student_email: email && email.includes('@') ? email : null,
+        project_title: opp.title || 'Project',
+        project_id: seat.projectId,
+        organization_name: opp.organization?.name || 'N/A',
+        hours: Math.round(liveHours * 10) / 10,
+        required_hours: required,
+        hours_progress_pct: hoursPct,
+        progress_pct: submitted
+          ? 100
+          : progress
+            ? progress.progress_pct
+            : hoursPct,
+        sections_complete: progress?.sections_complete,
+        sections_total: progress?.sections_total ?? 10,
+        status: report?.status || 'assigned',
+        faculty_status: report?.faculty_status || null,
+        submission_date: report?.submission_date || null,
+        report_submitted_at: report?.reportSubmittedAt || null,
+        updated_at: lastActivity || report?.updatedAt || seat.updatedAt,
+        last_activity_at: lastActivity || null,
+        draft_locked: !submitted,
+        member_hours: [
+          {
+            name: pickListString(seat.student?.name, seat.fullName) || 'Student',
+            hours: Math.round(liveHours * 10) / 10,
+            required,
+          },
+        ],
+      });
+    }
+
+    for (const report of reports) {
+      if (usedReportIds.has(report.id)) continue;
+      const projectId = String(report.opportunityId || report.project_id || '').trim();
+      const opp = oppById.get(projectId);
+      if (!opp) continue;
+      const projectLogs = logsByProject.get(projectId) ?? [];
+      const liveHours = projectLogs.length
+        ? this.loggedHoursForProject(projectLogs)
+        : resolveReportFlashHours(report.section1);
+      const required =
+        Number(
+          (opp.timeline as { expected_hours?: unknown } | undefined)
+            ?.expected_hours,
+        ) || 16;
+      const progress = computeReportProgress(report);
+      const email = pickListString(report.student?.email);
+      data.push({
+        id: report.id,
+        participation_id: null,
+        report_id: report.id,
+        student_name: report.student?.name || 'Unknown',
+        student_email: email && email.includes('@') ? email : null,
+        project_title: opp.title || report.project_id,
+        project_id: projectId || null,
+        organization_name: opp.organization?.name || 'N/A',
+        hours: Math.round(liveHours * 10) / 10,
+        required_hours: required,
+        hours_progress_pct:
+          required > 0 ? Math.min(100, Math.round((liveHours / required) * 100)) : 0,
+        ...progress,
+        status: report.status,
+        faculty_status: report.faculty_status,
+        submission_date: report.submission_date,
+        report_submitted_at: report.reportSubmittedAt,
+        updated_at: report.updatedAt,
+        last_activity_at: latestActivityIso([report.updatedAt, report.reportSubmittedAt]) || null,
+        draft_locked: !progress.is_submitted,
+        member_hours: [
+          {
+            name: report.student?.name || 'Student',
+            hours: Math.round(liveHours * 10) / 10,
+            required,
+          },
+        ],
+      });
+    }
+
+    data.sort((a, b) => {
+      const ta = Date.parse(String(a.last_activity_at || a.updated_at || '')) || 0;
+      const tb = Date.parse(String(b.last_activity_at || b.updated_at || '')) || 0;
+      return tb - ta;
+    });
+
+    return { success: true, data };
   }
 
   /** Same submit bar: rejected sessions do not count; pending sessions do. */

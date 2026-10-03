@@ -11,6 +11,8 @@ function makeService(
     leftJoinAndSelect: jest.fn(() => qb),
     where: jest.fn(() => qb),
     andWhere: jest.fn(() => qb),
+    orWhere: jest.fn(() => qb),
+    orderBy: jest.fn(() => qb),
     getOne: jest.fn(async () => report),
     update: jest.fn(() => qb),
     set: jest.fn(() => qb),
@@ -43,6 +45,12 @@ function makeService(
     find: jest.fn().mockResolvedValue([]),
     save: jest.fn(async (rows: unknown) => rows),
   };
+  const participationRepository = {
+    find: jest.fn().mockResolvedValue([]),
+  };
+  const opportunitiesRepository = {
+    find: jest.fn().mockResolvedValue([]),
+  };
   const service = new FacultyReportsService(
     studentReportsRepository as any,
     {} as any,
@@ -52,6 +60,8 @@ function makeService(
     attendanceLogsRepository as any,
     mailService as any,
     notificationsService as any,
+    participationRepository as any,
+    opportunitiesRepository as any,
   );
   return {
     service,
@@ -60,6 +70,9 @@ function makeService(
     qb,
     facultyUniversityScopeService,
     attendanceLogsRepository,
+    participationRepository,
+    opportunitiesRepository,
+    facultyService,
   };
 }
 
@@ -682,6 +695,70 @@ describe('FacultyReportsService — draft progress (opens only after submit)', (
     qb.andWhere.mockClear();
     await expect(service.findOne('r-1', 'f-1', 'f@x.com')).rejects.toBeInstanceOf(NotFoundException);
     expect(qb.andWhere).toHaveBeenCalledWith("report.status NOT IN ('draft', 'continue')");
+  });
+});
+
+describe('FacultyReportsService — project tracking (assigned students + live hours)', () => {
+  it('returns assigned seats with live hours even before a report is submitted', async () => {
+    const { service, facultyService, participationRepository, opportunitiesRepository, attendanceLogsRepository, qb } =
+      makeService(null);
+    facultyService.getScopedOpportunityIds.mockResolvedValue(['opp-1']);
+    opportunitiesRepository.find.mockResolvedValue([
+      {
+        id: 'opp-1',
+        title: 'Community survey',
+        status: 'live',
+        workflowStage: 'live',
+        timeline: { expected_hours: 16 },
+        organization: { name: 'NGO' },
+        executing_context: {},
+      },
+    ]);
+    participationRepository.find.mockResolvedValue([
+      {
+        id: 'seat-1',
+        projectId: 'opp-1',
+        studentId: 'stu-1',
+        fullName: 'Ayesha Khan',
+        email: 'ayesha@uni.edu',
+        student: { id: 'stu-1', name: 'Ayesha Khan', email: 'ayesha@uni.edu' },
+        updatedAt: new Date('2026-04-01'),
+        createdAt: new Date('2026-03-01'),
+      },
+    ]);
+    attendanceLogsRepository.find.mockResolvedValue([
+      {
+        participantId: 'seat-1',
+        projectId: 'opp-1',
+        sessionHours: 4.5,
+        approvalStatus: 'pending',
+        updatedAt: new Date('2026-04-02'),
+        createdAt: new Date('2026-04-02'),
+        dateOfEngagement: '2026-04-02',
+      },
+    ]);
+    qb.getMany = jest.fn(async () => []);
+    const res = await service.listProjectTracking('f-1', 'f@x.com');
+    expect(res.data).toHaveLength(1);
+    const row = res.data[0] as Record<string, unknown>;
+    expect(row).toMatchObject({
+      student_name: 'Ayesha Khan',
+      student_email: 'ayesha@uni.edu',
+      project_title: 'Community survey',
+      project_id: 'opp-1',
+      hours: 4.5,
+      required_hours: 16,
+      status: 'assigned',
+      draft_locked: true,
+    });
+    expect(JSON.stringify(row)).not.toMatch(/mobile|phone|cnic/i);
+  });
+
+  it('returns an empty list when the faculty has no scoped opportunities', async () => {
+    const { service, facultyService } = makeService(null);
+    facultyService.getScopedOpportunityIds.mockResolvedValue([]);
+    const res = await service.listProjectTracking('f-1', 'f@x.com');
+    expect(res.data).toEqual([]);
   });
 });
 

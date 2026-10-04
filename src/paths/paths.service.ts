@@ -2495,7 +2495,7 @@ export class PathsService implements OnModuleInit {
    * even once locked, only the already-decided outcome (per-dimension score, total, classification)
    * is student-facing, never the AI's internal rationale or the faculty's private note. Faculty
    * reads (getFypForSupervisorReview) return the entry unredacted. Mirrors
-   * StudentReportsService.redactCiiV2ForExternalViewer.
+   * StudentReportsService.redactCiiV45ForExternalViewer.
    */
   private static redactFypAiAnalysisForStudent<
     T extends {
@@ -2556,7 +2556,7 @@ export class PathsService implements OnModuleInit {
       throw new NotFoundException('FYP entry not found');
     }
     // Once the AI analysis is locked (approved via approveFypAiAnalysis) the review decision is
-    // final — mirrors the ciiV2Lock guard in FacultyReportsService.updateAction.
+    // final — mirrors the ciiV45Lock guard in FacultyReportsService.updateAction.
     if (entry.aiAnalysisLock?.locked) {
       throw new BadRequestException(
         "This FYP's AI analysis is locked; further review actions are not permitted.",
@@ -2663,7 +2663,7 @@ export class PathsService implements OnModuleInit {
   }
 
   /** Runs the FYP-MM 1.0 AI evaluation and persists a server-recomputed score snapshot.
-   * Re-runnable while unlocked — mirrors FacultyReportsService.runCiiV2Analysis. */
+   * Re-runnable while unlocked — mirrors FacultyReportsService.runCiiV45AnalysisForAdmin. */
   async runFypAiAnalysis(supervisorEmail: string, id: string) {
     const entry = await this.findSupervisedFypForAction(id, supervisorEmail);
 
@@ -2706,7 +2706,7 @@ export class PathsService implements OnModuleInit {
 
     // Targeted, guarded update: only touches the aiAnalysis column (never aiAnalysisLock or any
     // other field), and re-checks "not locked" at write time in case the AI call above raced with
-    // a concurrent approve — mirrors runCiiV2Analysis's guarded update.
+    // a concurrent approve — mirrors runCiiV45AnalysisForAdmin's guarded update.
     const updateResult = await this.fypRepo
       .createQueryBuilder()
       .update(FypEntry)
@@ -2800,7 +2800,7 @@ export class PathsService implements OnModuleInit {
 
   /**
    * Approves and hash-locks the FYP AI analysis, and — in the same atomic update — records the
-   * supervisor's approval decision (mirrors approveCiiV2's approve+lock+faculty_status write).
+   * supervisor's approval decision (mirrors approveCiiV45ForAdmin's approve+lock+admin_status write).
    * Recomputes the final score from the stored per-dimension scores (never trusts a client-sent
    * score) before hashing the decision.
    */
@@ -2854,7 +2854,7 @@ export class PathsService implements OnModuleInit {
     };
 
     // Atomic compare-and-swap: the WHERE guard re-checks "not already locked" at write time, so
-    // two concurrent approve requests can't both win the lock — mirrors approveCiiV2.
+    // two concurrent approve requests can't both win the lock — mirrors approveCiiV45ForAdmin.
     const updateResult = await this.fypRepo
       .createQueryBuilder()
       .update(FypEntry)

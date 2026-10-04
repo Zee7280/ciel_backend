@@ -165,42 +165,42 @@ describe('resolveDisplayCii', () => {
         expect(
             resolveDisplayCii({
                 section11: { ai_generated_impact_score: 54 },
-                ciiV2: { final: 54 },
-                ciiV2Lock: { locked: false },
+                ciiV45: { finalCII: 54 },
+                ciiV45Lock: { locked: false },
             }),
         ).toBeNull();
     });
 
-    it('returns the faculty-locked final score', () => {
+    it('returns the admin-locked final score', () => {
         expect(
             resolveDisplayCii({
                 section11: { ai_generated_impact_score: 54 },
-                ciiV2: { final: 71.4 },
-                ciiV2Lock: { locked: true },
+                ciiV45: { finalCII: 71.4 },
+                ciiV45Lock: { locked: true },
             }),
         ).toBe(71);
         expect(
             resolveDisplayCii({
                 section11: { ai_generated_impact_score: 54 },
-                ciiV2: { final: '90.5' },
-                ciiV2Lock: { locked: true },
+                ciiV45: { finalCII: '90.5' },
+                ciiV45Lock: { locked: true },
             }),
         ).toBe(91);
     });
 
-    it('treats JSON string "true" as a faculty lock, same as the flashcard', () => {
+    it('treats JSON string "true" as an admin lock, same as the flashcard', () => {
         expect(
             resolveDisplayCii({
                 section11: { ai_generated_impact_score: 54 },
-                ciiV2: { final: 71.4 },
-                ciiV2Lock: { locked: 'true' },
+                ciiV45: { finalCII: 71.4 },
+                ciiV45Lock: { locked: 'true' },
             }),
         ).toBe(71);
         expect(
             resolveDisplayCii({
                 section11: { ai_generated_impact_score: 54 },
-                ciiV2: { final: 71.4 },
-                ciiV2Lock: { locked: 'false' },
+                ciiV45: { finalCII: 71.4 },
+                ciiV45Lock: { locked: 'false' },
             }),
         ).toBeNull();
     });

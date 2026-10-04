@@ -397,33 +397,55 @@ export class StudentReport {
     signed_at?: string;
   };
 
-  /** Composite Impact Index v2 snapshot (server-recomputed from the AI's per-criterion anchors). */
+  /**
+   * Retired CII v3.1 ("Balanced CII Rubric") snapshot + faculty approve+lock decision. The v3.1
+   * analyzer, prompt, parser and redaction logic have been fully removed — CII v4.5 (`ciiV45`/
+   * `ciiV45Lock` below) is now the only path for every report. These two columns are kept
+   * declared here, UNUSED BY ANY CODE, purely so TypeORM's `synchronize: true` does not drop
+   * them (and the historical v3.1 score data already stored in them) on the next deploy. Do not
+   * read or write these from new code — read `ciiV45`/`ciiV45Lock` instead.
+   */
   @Column({ type: 'jsonb', nullable: true })
   ciiV2?: Record<string, unknown> | null;
 
-  /** Faculty approve+lock decision for the CII v2 score — immutable once locked. */
+  /** @deprecated retired alongside `ciiV2` above — kept only to avoid an automatic column drop. */
   @Column({ type: 'jsonb', nullable: true })
-  ciiV2Lock?: {
+  ciiV2Lock?: Record<string, unknown> | null;
+
+  /** Composite Impact Index v4.5 evaluation (AI anchors/claims/evidence/narrative + server-computed
+   * scores) — the only CII path for Community Service reports. */
+  @Column({ type: 'jsonb', nullable: true })
+  ciiV45?: Record<string, unknown> | null;
+
+  /** Admin Accept & Publish decision for the CII v4.5 score — immutable once locked. */
+  @Column({ type: 'jsonb', nullable: true })
+  ciiV45Lock?: {
     locked: boolean;
     hash: string;
     lockedAt: string;
-    lockedByFacultyId: string;
-    facultyNote?: string;
-    // Phase 2: Audit trail fields
+    lockedByAdminId: string;
+    adminNote?: string;
+    /** The fingerprint this lock was taken against — a live recheck must match this before publish. */
+    inputFingerprint: string;
+    /** Locking is only ever possible from a stored `ciiV45.scoreStatus === 'FINAL'`. */
+    scoreStatusAtLock: 'FINAL';
     aiRecommendedScore?: number;
-    facultyApprovedScore?: number;
-    scoreWasAdjusted?: boolean;
-    scoreAdjustmentReason?: string;
-    criteriaOverrides?: Record<
-      string,
-      { aiAnchor: number; facultyAnchor: number; reason: string }
-    >;
+    adminApprovedScore?: number;
+    scoreWasModerated?: boolean;
+    scoreModerationReason?: string;
+    finalBadge?: {
+      code: string;
+      name: string;
+      level: number;
+      numericLevel: number;
+      gateCapped: boolean;
+    } | null;
   } | null;
 
   /**
-   * Phase 4: Independent AI analyses run from My Impact Wall.
+   * Independent AI analyses run from My Impact Wall.
    *
-   * These do NOT overwrite the faculty-approved record. Each analysis is
+   * These do NOT overwrite the admin-approved record. Each analysis is
    * stored separately with timestamp and who ran it, creating an audit trail.
    * Authorized stakeholders (Faculty, University, CIEL PK) can run additional
    * analyses without disturbing the official approved score.
@@ -435,29 +457,23 @@ export class StudentReport {
     runByUserId: string;
     runByRole: 'faculty' | 'university' | 'ciel_admin';
     runByName?: string;
-    score: number;
-    level?: { level: number; name: string; quality: string };
+    score: number | null;
+    badge?: {
+      code: string;
+      name: string;
+      level: number;
+      numericLevel: number;
+      gateCapped: boolean;
+    } | null;
     sections?: Array<{
-      id: number;
-      title: string;
-      score: number;
-      weight: number;
-      good?: string;
-      limit?: string;
+      dimension: string;
+      name: string;
+      maximumPoints: number;
+      score: number | null;
     }>;
-    bonus?: {
-      effort: number;
-      resources: number;
-      partners: number;
-      total: number;
-    };
+    extraMileUplift?: { total: number | null };
     integrityPenalty?: number;
-    feedback?: {
-      opening_praise?: string;
-      why_score_is_high_or_low?: string;
-      encouragement?: string;
-      five_specific_actions?: string[];
-    };
+    feedback?: string;
     note?: string;
   }> | null;
 

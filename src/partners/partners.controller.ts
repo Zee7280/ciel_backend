@@ -248,10 +248,10 @@ export class PartnersController {
     throw new ForbiddenException(ANALYZER_ADMIN_ONLY);
   }
 
-  /** Read-only CII v2 breakdown (section scores + verified highlights, never per-criterion
-   * detail) for a single faculty-approved report this org can already see via award-cards. */
-  @Get('community-service/reports/:id/cii-v2')
-  async communityServiceCiiV2Breakdown(
+  /** Read-only CII v4.5 breakdown (section scores + verified highlights, never per-criterion
+   * detail) for a single admin-approved report this org can already see via award-cards. */
+  @Get('community-service/reports/:id/cii-v4-5')
+  async communityServiceCiiV45Breakdown(
     @Request() req,
     @Param('id') id: string,
   ) {
@@ -267,14 +267,14 @@ export class PartnersController {
         'The analysis report is not shared with Partner / NGO organisations.',
       );
     }
-    const data = await this.communityAward.getCiiV2BreakdownForOrg(
+    const data = await this.communityAward.getCiiV45BreakdownForOrg(
       id,
       req.user.organizationId,
       isUni,
     );
     if (!data) {
       throw new NotFoundException(
-        'No faculty-approved CII v2 record found for this report in your scope.',
+        'No admin-approved CII v4.5 record found for this report in your scope.',
       );
     }
     return { success: true, data };

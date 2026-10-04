@@ -18,10 +18,10 @@ import {
   type CommunityServiceLevel,
 } from './community-award.util';
 import {
-  redactCiiV2Fields,
-  type RedactedCiiV2,
-  type RedactedCiiV2Lock,
-} from './cii-v2-redaction.util';
+  redactCiiV45Fields,
+  type RedactedCiiV45,
+  type RedactedCiiV45Lock,
+} from './cii-v4-5-redaction.util';
 import { buildImpactVerifyUrl } from './certificate-verification-code.util';
 
 export type CommunityAwardCard = {
@@ -263,7 +263,7 @@ export class CommunityAwardService {
   }
 
   /** Same org-scoping WHERE clause as listForPartnerOrg/listForUniversity, narrowed to one
-   * report id — backs the read-only CII v2 breakdown endpoint so a partner/NGO/university can
+   * report id — backs the read-only CII v4.5 breakdown endpoint so a partner/NGO/university can
    * never fetch a report outside their own scope just by guessing its id. */
   private async findScopedReport(
     reportId: string,
@@ -304,37 +304,37 @@ export class CommunityAwardService {
     return qb.getOne();
   }
 
-  /** Read-only CII v2 breakdown (sections/bonus/evidence — never per-criterion detail) for a
-   * report this org can see, or null when the report doesn't exist, isn't in scope, or Faculty
+  /** Read-only CII v4.5 breakdown (sections/uplift/evidence — never per-criterion detail) for a
+   * report this org can see, or null when the report doesn't exist, isn't in scope, or Admin
    * hasn't approved/locked it yet. Same redaction whitelist the student flashcard already uses. */
-  async getCiiV2BreakdownForOrg(
+  async getCiiV45BreakdownForOrg(
     reportId: string,
     organizationId: string,
     isUni: boolean,
-  ): Promise<{ ciiV2: RedactedCiiV2; ciiV2Lock: RedactedCiiV2Lock } | null> {
+  ): Promise<{ ciiV45: RedactedCiiV45; ciiV45Lock: RedactedCiiV45Lock } | null> {
     const report = await this.findScopedReport(reportId, organizationId, isUni);
     if (!report || !this.facultyApproved(report)) return null;
-    const { ciiV2, ciiV2Lock } = redactCiiV2Fields(
-      report.ciiV2 as Record<string, unknown> | null,
-      report.ciiV2Lock,
+    const { ciiV45, ciiV45Lock } = redactCiiV45Fields(
+      report.ciiV45 as Record<string, unknown> | null,
+      report.ciiV45Lock,
     );
-    if (!ciiV2 || !ciiV2Lock) return null;
-    return { ciiV2, ciiV2Lock };
+    if (!ciiV45 || !ciiV45Lock) return null;
+    return { ciiV45, ciiV45Lock };
   }
 
-  /** Same as getCiiV2BreakdownForOrg but unrestricted (Super Admin — platform-wide). */
-  async getCiiV2BreakdownForAdmin(
+  /** Same as getCiiV45BreakdownForOrg but unrestricted (Super Admin — platform-wide). */
+  async getCiiV45BreakdownForAdmin(
     reportId: string,
-  ): Promise<{ ciiV2: RedactedCiiV2; ciiV2Lock: RedactedCiiV2Lock } | null> {
+  ): Promise<{ ciiV45: RedactedCiiV45; ciiV45Lock: RedactedCiiV45Lock } | null> {
     if (!reportId) return null;
     const report = await this.reports.findOne({ where: { id: reportId } });
     if (!report || !this.facultyApproved(report)) return null;
-    const { ciiV2, ciiV2Lock } = redactCiiV2Fields(
-      report.ciiV2 as Record<string, unknown> | null,
-      report.ciiV2Lock,
+    const { ciiV45, ciiV45Lock } = redactCiiV45Fields(
+      report.ciiV45 as Record<string, unknown> | null,
+      report.ciiV45Lock,
     );
-    if (!ciiV2 || !ciiV2Lock) return null;
-    return { ciiV2, ciiV2Lock };
+    if (!ciiV45 || !ciiV45Lock) return null;
+    return { ciiV45, ciiV45Lock };
   }
 
   async notifyFromPool(

@@ -58,10 +58,10 @@ import {
 } from './review-package.util';
 import { isPrivateCandidateOpportunity, reviewRouteForOpportunity } from '../opportunities/private-candidate.util';
 import {
-  redactCiiV2Fields,
+  redactCiiV45Fields,
   redactIndependentAnalysesForExternal,
-  type CiiV2LockInput,
-} from './cii-v2-redaction.util';
+  type CiiV45LockInput,
+} from './cii-v4-5-redaction.util';
 import {
   buildStudentReportPageUrl,
   type StudentReportPageView,
@@ -884,7 +884,7 @@ export class StudentReportsService {
         },
       },
       // Student's own self-rated reflection competencies (not AI-scored — safe to always
-      // return, unlike ciiV2 below, which needs faculty-lock redaction).
+      // return, unlike ciiV45 below, which needs admin-lock redaction).
       section9: {
         competency_scores: report.section9?.competency_scores ?? null,
       },
@@ -913,12 +913,12 @@ export class StudentReportsService {
       awardBadges: report.awardBadges ?? [],
       awardBadgeHistory: report.awardBadgeHistory ?? [],
       cii_score: resolveDisplayCii(report),
-      // Raw CII v2 (Phase 1-4) — redacted for the student's own listing via
-      // redactCiiV2ListingForStudent below, same rule as the detail read path
-      // (redactCiiV2ForExternalViewer). Faculty/admin/partner/university listings call this
+      // Raw CII v4.5 — redacted for the student's own listing via
+      // redactCiiV45ListingForStudent below, same rule as the detail read path
+      // (redactCiiV45ForExternalViewer). Faculty/admin/partner/university listings call this
       // method directly and keep the full record, same as cii_score above.
-      ciiV2: report.ciiV2 ?? null,
-      ciiV2Lock: report.ciiV2Lock ?? null,
+      ciiV45: report.ciiV45 ?? null,
+      ciiV45Lock: report.ciiV45Lock ?? null,
       independentAiAnalyses: report.independentAiAnalyses ?? null,
       review_package: report.review_package ?? null,
       ...computeReportProgress(report),
@@ -940,7 +940,7 @@ export class StudentReportsService {
   /**
    * The student's own report listing (`GET /student/reports`) must never expose the AI-generated
    * CII — nor the award `total`/`level` derived from it — before Faculty has signed the report
-   * off. Same rule `redactCiiV2ForExternalViewer` enforces on the detail read path, and the same
+   * off. Same rule `redactCiiV45ForExternalViewer` enforces on the detail read path, and the same
    * bug class already fixed for Coursework's merit score. Faculty/admin/partner/university
    * listings call `mapReportListing`/`mapReportListingsWithTeam` without this wrapper and keep
    * the full record, which is what their review screens need.
@@ -987,14 +987,14 @@ export class StudentReportsService {
     } as T;
   }
 
-  /** Same redaction rule as redactCiiV2ForExternalViewer (detail path), reused here for the
+  /** Same redaction rule as redactCiiV45ForExternalViewer (detail path), reused here for the
    * student's own report listing (`GET /student/reports`) — mapReportListing now carries raw
-   * `ciiV2`/`ciiV2Lock`, so the listing endpoint must strip it exactly like the detail endpoint
+   * `ciiV45`/`ciiV45Lock`, so the listing endpoint must strip it exactly like the detail endpoint
    * already does, not just the legacy `cii_score` (see redactUnapprovedAiScoreForStudent above). */
-  private static redactCiiV2ListingForStudent<
-    T extends { ciiV2?: unknown; ciiV2Lock?: unknown },
+  private static redactCiiV45ListingForStudent<
+    T extends { ciiV45?: unknown; ciiV45Lock?: unknown },
   >(row: T): T {
-    const wrapped = StudentReportsService.redactCiiV2ForExternalViewer({
+    const wrapped = StudentReportsService.redactCiiV45ForExternalViewer({
       data: row as Record<string, unknown>,
     });
     return StudentReportsService.withholdAnalysisUntilAdminApproved(
@@ -1027,7 +1027,7 @@ export class StudentReportsService {
     ) {
       return row;
     }
-    return { ...row, ciiV2: null, ciiV2Lock: null, independentAiAnalyses: null };
+    return { ...row, ciiV45: null, ciiV45Lock: null, independentAiAnalyses: null };
   }
 
   /** Same 0-100 total + standing Level badge every faculty/partner/admin community-award view
@@ -2405,22 +2405,22 @@ export class StudentReportsService {
       };
     }
 
-    // Faculty-locked CII v2 (community-service reports only) is safe to publish here — it's the
-    // same final score + level band the certificate/badge already display, no per-criterion detail.
-    const ciiV2Lock = report.ciiV2Lock;
-    const ciiV2 = report.ciiV2 as { final?: unknown } | null | undefined;
-    const locked = isCiiFacultyLocked(ciiV2Lock);
+    // Admin-locked CII v4.5 (community-service reports only) is safe to publish here — it's the
+    // same final score + badge band the certificate already display, no per-criterion detail.
+    const ciiV45Lock = report.ciiV45Lock;
+    const ciiV45 = report.ciiV45 as { finalCII?: unknown } | null | undefined;
+    const locked = isCiiFacultyLocked(ciiV45Lock);
     const publicLevel = locked
-      ? ((report.ciiV2 as { level?: { level?: number; name?: string } })
-          ?.level ?? null)
+      ? ((report.ciiV45 as { finalBadge?: { level?: number; name?: string } })
+          ?.finalBadge ?? null)
       : null;
     const lockedFinal =
-      typeof ciiV2?.final === 'number' && Number.isFinite(ciiV2.final)
-        ? Math.round(ciiV2.final)
-        : typeof ciiV2?.final === 'string' &&
-            ciiV2.final.trim() &&
-            Number.isFinite(Number(ciiV2.final))
-          ? Math.round(Number(ciiV2.final))
+      typeof ciiV45?.finalCII === 'number' && Number.isFinite(ciiV45.finalCII)
+        ? Math.round(ciiV45.finalCII)
+        : typeof ciiV45?.finalCII === 'string' &&
+            ciiV45.finalCII.trim() &&
+            Number.isFinite(Number(ciiV45.finalCII))
+          ? Math.round(Number(ciiV45.finalCII))
           : null;
 
     return {
@@ -3579,9 +3579,10 @@ export class StudentReportsService {
 
   /**
    * Partner / NGO / university listing rows: same release rule as the detail path. CII is the
-   * redacted provisional subset (never raw anchors/AI notes/integrity checks), independent AI
-   * analyses are dropped, and evidence file links are removed (lists never need them; the
-   * detail endpoint applies the per-role sharing matrix).
+   * redacted subset (never raw anchors/AI notes/integrity checks, and never released before an
+   * Admin lock — v4.5 has no pre-lock provisional release), independent AI analyses are dropped,
+   * and evidence file links are removed (lists never need them; the detail endpoint applies the
+   * per-role sharing matrix).
    */
   private static restrictListingForExternalViewer<
     T extends Record<string, any>,
@@ -3590,10 +3591,9 @@ export class StudentReportsService {
       // Not submitted yet: reviewers see progress only, never answers or scores.
       return redactDraftRowForNonAdmin(row) as T;
     }
-    const wrapped = StudentReportsService.redactCiiV2ForExternalViewer(
-      { data: { ciiV2: row.ciiV2, ciiV2Lock: row.ciiV2Lock } },
-      { releaseProvisional: true },
-    );
+    const wrapped = StudentReportsService.redactCiiV45ForExternalViewer({
+      data: { ciiV45: row.ciiV45, ciiV45Lock: row.ciiV45Lock },
+    });
     const pkg = row.review_package as
       | { documents?: { evidence?: Record<string, unknown> } }
       | null
@@ -3609,8 +3609,8 @@ export class StudentReportsService {
       : row.review_package;
     return {
       ...row,
-      ciiV2: wrapped.data?.ciiV2 ?? null,
-      ciiV2Lock: wrapped.data?.ciiV2Lock ?? null,
+      ciiV45: wrapped.data?.ciiV45 ?? null,
+      ciiV45Lock: wrapped.data?.ciiV45Lock ?? null,
       independentAiAnalyses: null,
       review_package,
     };
@@ -3646,7 +3646,7 @@ export class StudentReportsService {
         success: true,
         data: paginated.map((r) =>
           this.redactUnapprovedAiScoreForStudent(
-            StudentReportsService.redactCiiV2ListingForStudent(
+            StudentReportsService.redactCiiV45ListingForStudent(
               this.mapReportListing(r, opportunityByProjectId),
             ),
           ),
@@ -3961,11 +3961,10 @@ export class StudentReportsService {
     const evidenceRole: EvidenceViewerRole =
       viewerRole === 'university' ? 'university' : 'partner';
     const formatted = applyEvidenceAccess(
-      StudentReportsService.redactCiiV2ForExternalViewer(
+      StudentReportsService.redactCiiV45ForExternalViewer(
         await this.formatReportResponse(report, undefined, {
           allProjectAttendance: true,
         }),
-        { releaseProvisional: true },
       ),
       evidenceRole,
     );
@@ -4023,8 +4022,8 @@ export class StudentReportsService {
       | undefined;
     return StudentReportsService.stripAnalysisScalarsForPartner({
       ...row,
-      ciiV2: null,
-      ciiV2Lock: null,
+      ciiV45: null,
+      ciiV45Lock: null,
       independentAiAnalyses: null,
       review_package: pkg
         ? {
@@ -4052,8 +4051,8 @@ export class StudentReportsService {
       ...response,
       data: StudentReportsService.stripAnalysisScalarsForPartner({
         ...data,
-        ciiV2: null,
-        ciiV2Lock: null,
+        ciiV45: null,
+        ciiV45Lock: null,
         independentAiAnalyses: null,
         review_package: pkg
           ? {
@@ -4125,7 +4124,7 @@ export class StudentReportsService {
       // must see the whole team's logged hours here, not just their own,
       // or a teammate's logged sessions silently never appear to anyone else.
       const studentView = StudentReportsService.redactSection11ScoreForStudent(
-        StudentReportsService.redactCiiV2ForExternalViewer(
+        StudentReportsService.redactCiiV45ForExternalViewer(
           await this.formatReportResponse(report, attendanceParticipantId, {
             allProjectAttendance: true,
           }),
@@ -4251,8 +4250,8 @@ export class StudentReportsService {
           section10: {},
           section11: {},
           cii_index: null,
-          ciiV2: null,
-          ciiV2Lock: null,
+          ciiV45: null,
+          ciiV45Lock: null,
         },
       };
     }
@@ -4344,9 +4343,9 @@ export class StudentReportsService {
   }
 
   /**
-   * Legacy (pre-ciiV2) AI audit score, same rule as redactCiiV2ForExternalViewer: the student's own
+   * Legacy (pre-ciiV45) AI audit score, same rule as redactCiiV45ForExternalViewer: the student's own
    * report detail read (findOneByOpportunityOrId) must not see ai_generated_impact_score /
-   * institutional_alignment_score before Faculty has signed off — mirrors the gate
+   * institutional_alignment_score before Admin has signed off — mirrors the gate
    * redactUnapprovedAiScoreForStudent already applies on the list endpoint's derived cii_score,
    * which this detail-read path was missing (section11 was passed through raw).
    */
@@ -4381,46 +4380,44 @@ export class StudentReportsService {
   }
 
   /**
-   * The CII v2 evaluation (per-criterion anchors, faculty-facing rationale notes, integrity/bonus
-   * reasoning, red flags, needsAdminReview) must never reach the student or the partner
-   * organization before Faculty has approved and locked it — and even once locked, only the
-   * already-decided outcome (final score, level, section point totals, evidence average, lock
+   * The CII v4.5 evaluation (per-criterion anchors, admin-facing rationale notes,
+   * claim/evidence audit detail) must never reach the student or the partner organization
+   * before Admin has approved and locked it — and even once locked, only the already-decided
+   * outcome (final score, badge, section point totals, uplift/integrity totals, lock
    * hash/timestamp) is student/partner-facing, never the AI's internal reasoning. Faculty/admin
    * reads call formatReportResponse directly and keep the full record.
-   */
-  /**
-   * Phase 3: Redact CII v2 for external viewers (students).
    *
-   * Students can see the approved record with:
-   * - Final score (AI or Faculty-adjusted)
-   * - Level and badge
+   * Redact CII v4.5 for external viewers (students, partners, universities):
+   *
+   * Non-admin viewers can see the approved record with:
+   * - Final score (AI or Admin-adjusted)
+   * - Badge
    * - Section scores
-   * - Bonus and penalty
+   * - Uplift and integrity penalty totals
    * - Student feedback
-   * - Audit trail (AI Score → Faculty Score if adjusted)
+   * - Audit trail (AI Score → Admin Approved Score if moderated)
    *
-   * Students cannot edit the approved assessment.
+   * No one but Admin can edit the approved assessment.
    */
-  private static redactCiiV2ForExternalViewer<
+  private static redactCiiV45ForExternalViewer<
     T extends { data?: Record<string, unknown> },
-  >(response: T, options: { releaseProvisional?: boolean } = {}): T {
+  >(response: T): T {
     if (!response?.data) return response;
-    const { ciiV2, ciiV2Lock } = redactCiiV2Fields(
-      response.data.ciiV2 as Record<string, unknown> | null | undefined,
-      response.data.ciiV2Lock as CiiV2LockInput,
-      options,
+    const { ciiV45, ciiV45Lock } = redactCiiV45Fields(
+      response.data.ciiV45 as Record<string, unknown> | null | undefined,
+      response.data.ciiV45Lock as CiiV45LockInput,
     );
 
     return {
       ...response,
       data: {
         ...response.data,
-        ciiV2,
-        ciiV2Lock,
-        // Phase 4 independent AI analyses: only after CII is locked, and only the trend fields.
+        ciiV45,
+        ciiV45Lock,
+        // Independent AI analyses: only after CII is locked, and only the trend fields.
         independentAiAnalyses: redactIndependentAnalysesForExternal(
           response.data.independentAiAnalyses,
-          response.data.ciiV2Lock as CiiV2LockInput,
+          response.data.ciiV45Lock as CiiV45LockInput,
         ),
       },
     };
@@ -4603,9 +4600,8 @@ export class StudentReportsService {
         section9: report.section9,
         section10: report.section10,
         section11: report.section11,
-        ciiV2: report.ciiV2,
-        ciiV2Lock: report.ciiV2Lock,
-        // Phase 4: Include independent AI analyses
+        ciiV45: report.ciiV45,
+        ciiV45Lock: report.ciiV45Lock,
         independentAiAnalyses: report.independentAiAnalyses,
         review_package:
           report.review_package ||
@@ -4949,7 +4945,7 @@ export class StudentReportsService {
           'Only an already-approved/published report can be closed. Use reject or unlock for a report still in review.',
         );
       }
-      // Deliberately does not touch ciiV2/ciiV2Lock/awardBadges — unlike reject/unlock, close does
+      // Deliberately does not touch ciiV45/ciiV45Lock/awardBadges — unlike reject/unlock, close does
       // not anticipate the student fixing and resubmitting content, so the locked analysis stays
       // as the historical record of what was published. isVerifiedReport/isSubmittedAndLiveReport
       // (report-status.util.ts) already exclude status 'closed' from every count/leaderboard.
@@ -5006,7 +5002,7 @@ export class StudentReportsService {
           report.admin_status === 'approved' ? 'verified' : 'partner_verified';
       } else if (role === 'admin') {
         if (privateCandidate) {
-          if (action === 'approve' && !isCiiFacultyLocked(report.ciiV2Lock)) {
+          if (action === 'approve' && !isCiiFacultyLocked(report.ciiV45Lock)) {
             throw new BadRequestException(
               'Run and confirm the CII analysis before publishing this private-candidate report.',
             );
@@ -5022,7 +5018,7 @@ export class StudentReportsService {
           // Faculty login is read-only going forward. Allow publish when:
           // - CII is locked by CIEL PK Admin (new path), or
           // - faculty_status is already approved (legacy in-flight reports).
-          const ciiLocked = isCiiFacultyLocked(report.ciiV2Lock);
+          const ciiLocked = isCiiFacultyLocked(report.ciiV45Lock);
           const facultyAlreadyApproved = report.faculty_status === 'approved';
           if (!ciiLocked && !facultyAlreadyApproved) {
             throw new BadRequestException(
@@ -5085,7 +5081,7 @@ export class StudentReportsService {
     // changed since we read them above, so two concurrent reviewers (double-click, two tabs, or a
     // partner-reject racing an admin-approve) can't silently clobber each other via a blind
     // full-entity save() — same bug class already fixed elsewhere this session (FYP's
-    // supervisorReviewFyp, approveCiiV2/runCiiV2Analysis).
+    // supervisorReviewFyp, approveCiiV45ForAdmin/runCiiV45AnalysisForAdmin).
     const verifyUpdateResult = await this.studentReportsRepository
       .createQueryBuilder()
       .update(StudentReport)
@@ -5109,8 +5105,8 @@ export class StudentReportsService {
           : {}),
         ...((action === 'unlock' || (action === 'reject' && role === 'admin')
           ? {
-              ciiV2: report.ciiV2,
-              ciiV2Lock: report.ciiV2Lock,
+              ciiV45: report.ciiV45,
+              ciiV45Lock: report.ciiV45Lock,
               awardBadges: report.awardBadges,
               ...(action === 'unlock'
                 ? { reportSubmittedAt: report.reportSubmittedAt }
@@ -5197,7 +5193,7 @@ export class StudentReportsService {
     };
   }
 
-  /** Retires the CII lock (kept in `ciiV2.previousLocks` for audit) so the score must be re-run. */
+  /** Retires the CII lock (kept in `ciiV45.previousLocks` for audit) so the score must be re-run. */
   private supersedeCiiLock(report: StudentReport, reason: 'rejected' | 'unlocked') {
     // The earlier CII approval (faculty_status mirrors the lock) belonged to the content that is
     // being sent back; without this reset the admin could re-publish the resubmitted report with
@@ -5205,18 +5201,18 @@ export class StudentReportsService {
     if (['approved', 'verified'].includes(String(report.faculty_status || '').toLowerCase())) {
       report.faculty_status = 'pending';
     }
-    const lock = report.ciiV2Lock as unknown as Record<string, unknown> | null;
+    const lock = report.ciiV45Lock as unknown as Record<string, unknown> | null;
     if (!lock || (lock.locked !== true && lock.locked !== 'true')) return;
-    const prev = (report.ciiV2 ?? {}) as unknown as Record<string, unknown>;
+    const prev = (report.ciiV45 ?? {}) as unknown as Record<string, unknown>;
     const history = Array.isArray(prev.previousLocks) ? prev.previousLocks : [];
-    report.ciiV2 = {
+    report.ciiV45 = {
       ...prev,
       previousLocks: [
         ...history,
         { ...lock, supersededAt: new Date().toISOString(), supersededBy: reason },
       ],
-    } as unknown as StudentReport['ciiV2'];
-    report.ciiV2Lock = null;
+    } as unknown as StudentReport['ciiV45'];
+    report.ciiV45Lock = null;
   }
 
   private async notifyStudentAdminDecision(
@@ -5719,7 +5715,7 @@ export class StudentReportsService {
 
     const lockedStatus = String(report.status || '').toLowerCase();
     if (
-      report.ciiV2Lock ||
+      report.ciiV45Lock ||
       lockedStatus === 'verified' ||
       lockedStatus === 'paid'
     ) {
@@ -5756,7 +5752,7 @@ export class StudentReportsService {
       .update(StudentReport)
       .set({ section11: report.section11 })
       .where('id = :id', { id: report.id })
-      .andWhere('"ciiV2Lock" IS NULL')
+      .andWhere('"ciiV45Lock" IS NULL')
       .andWhere("status NOT IN ('verified', 'paid')")
       .execute();
     if (!aiScoreUpdate.affected) {

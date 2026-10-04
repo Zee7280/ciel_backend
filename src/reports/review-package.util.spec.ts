@@ -34,7 +34,7 @@ describe('review-package.util', () => {
     });
     expect(pack.documents.evidence.files[1].kind).toBe('pdf');
     expect(pack.admin_review_href).toContain('/dashboard/admin/reports/verify/rep-1');
-    expect(pack.ai_analyser_href).toContain('view=cii-v2');
+    expect(pack.ai_analyser_href).toContain('view=cii-v4-5');
     expect(pack.documents.flashcard.href).toContain('view=flash');
     expect(pack.documents.flashcard.href).toContain('#flash');
     expect(pack.stakeholder_hrefs.faculty).toContain(
@@ -47,14 +47,14 @@ describe('review-package.util', () => {
     expect(pack.admin_doc_hrefs.flashcard).toContain('package=1&doc=flashcard');
     expect(pack.admin_doc_hrefs.detailed_report).toContain('package=1&doc=report');
     expect(pack.admin_doc_hrefs.evidence).toContain('package=1&doc=evidence');
-    expect(pack.admin_doc_hrefs.analysis_report).toContain('view=cii-v2');
+    expect(pack.admin_doc_hrefs.analysis_report).toContain('view=cii-v4-5');
     expect(pack.documents.analysis_report).toBeNull();
     expect(pack.analysis_attached).toBe(false);
     const locked = buildReportReviewPackage(
       {
         ...report,
-        ciiV2: { final: 82 },
-        ciiV2Lock: { locked: true },
+        ciiV45: { finalCII: 82 },
+        ciiV45Lock: { locked: true },
       } as unknown as StudentReport,
       'https://app.cielpk.com',
     );
@@ -63,7 +63,7 @@ describe('review-package.util', () => {
     expect(locked.analysis_hrefs.student).toContain('view=analysis');
     expect(locked.analysis_hrefs.student).toContain('#analysis');
     expect(locked.analysis_hrefs.faculty).toContain(
-      '/dashboard/faculty/reports/rep-1?view=cii-v2',
+      '/dashboard/faculty/reports/rep-1?view=cii-v4-5',
     );
     expect(locked.analysis_hrefs.university).toContain('doc=analysis');
     expect(locked.analysis_hrefs.partner).toBe('');

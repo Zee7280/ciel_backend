@@ -1,7 +1,7 @@
 /** Deterministic community-service award model — same 5 criteria for every stakeholder. */
 
 export const COMMUNITY_AWARD_CRITERIA = [
-  { key: 'cii', max: 40, title: 'Composite Impact Index (CII v8.2)' },
+  { key: 'cii', max: 40, title: 'Composite Impact Index (CII)' },
   { key: 'quality', max: 20, title: 'Quality & depth of execution' },
   { key: 'evidence', max: 15, title: 'Evidence integrity' },
   { key: 'outcome', max: 15, title: 'Measured community outcome' },
@@ -141,8 +141,8 @@ export type ReportFlashSource = {
   section9?: { media_urls?: unknown } | null;
   section10?: { media_urls?: unknown } | null;
   section11?: Record<string, unknown> | null;
-  ciiV2?: { final?: unknown } | null;
-  ciiV2Lock?: { locked?: unknown } | null;
+  ciiV45?: { finalCII?: unknown } | null;
+  ciiV45Lock?: { locked?: unknown } | null;
   evidence_urls?: unknown;
 };
 
@@ -201,12 +201,12 @@ export function isCiiFacultyLocked(
   return lock?.locked === true || lock?.locked === 'true';
 }
 
-/** CII chip on walls/flashcards: locked v2 final, else legacy section11 only when no lock row exists. */
+/** CII chip on walls/flashcards: locked v4.5 final, else legacy section11 only when no lock row exists. */
 export function resolveDisplayCii(report: ReportFlashSource): number | null {
-  const lock = report.ciiV2Lock;
+  const lock = report.ciiV45Lock;
   const hasLockRecord = lock != null && typeof lock === 'object';
   const locked = isCiiFacultyLocked(lock);
-  const final = finiteCii(report.ciiV2?.final);
+  const final = finiteCii(report.ciiV45?.finalCII);
   if (locked && final != null) {
     return Math.round(final);
   }
@@ -218,9 +218,9 @@ export function resolveDisplayCii(report: ReportFlashSource): number | null {
 
 /** Ranking still uses a numeric CII; prefer locked final, else section11. */
 export function resolveScoringCii(report: ReportFlashSource): number | null {
-  const lock = report.ciiV2Lock;
+  const lock = report.ciiV45Lock;
   const locked = isCiiFacultyLocked(lock);
-  const final = finiteCii(report.ciiV2?.final);
+  const final = finiteCii(report.ciiV45?.finalCII);
   if (locked && final != null) {
     return Math.round(final);
   }

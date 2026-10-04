@@ -5,7 +5,7 @@
  * that rubric keeps ranking approved FYPs exactly as it does today. This is a separate, AI-scored
  * 100-point rubric ("FYP-MM 1.0" per the locked design mockup) that a supervisor can run before
  * deciding whether to approve/revise/reject a submission, mirroring the CII v2 pattern used for
- * Community Service reports (see reports/cii-v2.constants.ts): the AI supplies a per-dimension
+ * Community Service reports (see reports/cii-v4-5.constants.ts): the AI supplies a per-dimension
  * score + rationale, all arithmetic (total, anti-inflation gates, classification band) is
  * recomputed server-side from those scores — the model's own totals are never trusted.
  *
@@ -117,7 +117,7 @@ function dimensionScore(
 
 /**
  * Recomputes the FYP AI total + classification server-side from per-dimension scores — never
- * trusts the AI's (or a faculty edit request's) own reported total. Mirrors computeCiiV2Result.
+ * trusts the AI's (or a faculty edit request's) own reported total. Mirrors computeCiiV45Result.
  * Anti-inflation gates are ported 1:1 from the locked design mockup's saveFacultyEdits() gates.
  */
 export function computeFypAiResult(input: FypAiComputeInput): FypAiResult {

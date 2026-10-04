@@ -925,18 +925,18 @@ describe('StudentReportsService', () => {
     });
   });
 
-  describe('redactCiiV2ListingForStudent (My Impact Wall list)', () => {
+  describe('redactCiiV45ListingForStudent (My Impact Wall list)', () => {
     const redactListing = (row: Record<string, unknown>) =>
-      (StudentReportsService as any).redactCiiV2ListingForStudent(row);
+      (StudentReportsService as any).redactCiiV45ListingForStudent(row);
 
-    it('strips ciiV2/ciiV2Lock when the score is not yet faculty-locked', () => {
+    it('strips ciiV45/ciiV45Lock when the score is not yet locked', () => {
       const result = redactListing({
         id: 'r-1',
-        ciiV2: { final: 91.5, sections: [] },
-        ciiV2Lock: null,
+        ciiV45: { finalCII: 91.5, sectionScores: [] },
+        ciiV45Lock: null,
       });
-      expect(result.ciiV2).toBeNull();
-      expect(result.ciiV2Lock).toBeNull();
+      expect(result.ciiV45).toBeNull();
+      expect(result.ciiV45Lock).toBeNull();
     });
 
     it('withholds a locked score until CIEL PK Admin has accepted the report', () => {
@@ -945,44 +945,58 @@ describe('StudentReportsService', () => {
         status: 'submitted',
         admin_status: 'pending',
         faculty_status: 'approved',
-        ciiV2: { final: 91.5, sections: [] },
-        ciiV2Lock: { locked: true, hash: 'abc' },
+        ciiV45: { finalCII: 91.5, sectionScores: [] },
+        ciiV45Lock: { locked: true, hash: 'abc' },
       });
-      expect(result.ciiV2).toBeNull();
-      expect(result.ciiV2Lock).toBeNull();
+      expect(result.ciiV45).toBeNull();
+      expect(result.ciiV45Lock).toBeNull();
     });
 
-    it('surfaces the locked score/level/feedback once CIEL PK Admin has accepted the report', () => {
+    it('surfaces the locked score/badge/feedback once CIEL PK Admin has accepted the report', () => {
       const result = redactListing({
         id: 'r-2',
         status: 'verified',
         admin_status: 'approved',
         faculty_status: 'approved',
-        ciiV2: {
-          final: 91.5,
-          level: { level: 6, name: 'Distinguished Impact Contributor' },
-          evidenceAverage: 88,
-          sections: [{ id: 1, title: 'Problem', weight: 10, score: 9, good: 'x', limit: 'y' }],
+        ciiV45: {
+          finalCII: 91.5,
+          finalBadge: {
+            code: 'L6',
+            name: 'Distinguished Impact Contributor',
+            level: 6,
+            numericLevel: 6,
+            gateCapped: false,
+          },
+          sectionScores: [
+            { dimension: '1', name: 'Participation & Verified Effort', maximumPoints: 10, score: 9 },
+          ],
+          studentFeedback: 'Great work.',
         },
-        ciiV2Lock: {
+        ciiV45Lock: {
           locked: true,
           hash: 'abc',
           lockedAt: '2026-01-01T00:00:00.000Z',
           aiRecommendedScore: 90,
-          facultyApprovedScore: 91.5,
+          adminApprovedScore: 91.5,
         },
       });
-      expect(result.ciiV2.final).toBe(91.5);
-      expect(result.ciiV2.level).toEqual({ level: 6, name: 'Distinguished Impact Contributor' });
-      expect(result.ciiV2Lock.locked).toBe(true);
+      expect(result.ciiV45.finalCII).toBe(91.5);
+      expect(result.ciiV45.finalBadge).toEqual({
+        code: 'L6',
+        name: 'Distinguished Impact Contributor',
+        level: 6,
+        numericLevel: 6,
+        gateCapped: false,
+      });
+      expect(result.ciiV45Lock.locked).toBe(true);
     });
 
     it('leaves every other listing field untouched', () => {
       const result = redactListing({
         id: 'r-3',
         project_title: 'Clean water drive',
-        ciiV2: null,
-        ciiV2Lock: null,
+        ciiV45: null,
+        ciiV45Lock: null,
       });
       expect(result.project_title).toBe('Clean water drive');
     });
@@ -1832,7 +1846,7 @@ describe('StudentReportsService', () => {
       faculty_status: 'pending',
       partnerApprovedAt: null,
       adminApprovedAt: null,
-      ciiV2Lock: { locked: true },
+      ciiV45Lock: { locked: true },
       opportunity: { requiresPartnerApproval: false },
     };
     mockStudentReportsRepository.findOne.mockResolvedValue(report);
@@ -1854,8 +1868,8 @@ describe('StudentReportsService', () => {
       faculty_status: 'pending',
       partnerApprovedAt: null,
       adminApprovedAt: null,
-      ciiV2: { final: 82 },
-      ciiV2Lock: { locked: true },
+      ciiV45: { finalCII: 82 },
+      ciiV45Lock: { locked: true },
       student: {
         name: 'Amina',
         email: 'amina@student.test',
@@ -1957,7 +1971,7 @@ describe('StudentReportsService', () => {
       faculty_status: 'pending',
       partnerApprovedAt: null,
       adminApprovedAt: null,
-      ciiV2Lock: { locked: true },
+      ciiV45Lock: { locked: true },
       opportunity: {
         requiresPartnerApproval: false,
         faculty_verification_status: 'not_required',
@@ -2018,7 +2032,7 @@ describe('StudentReportsService', () => {
       faculty_status: 'pending',
       partnerApprovedAt: null,
       adminApprovedAt: null,
-      ciiV2Lock: { locked: true },
+      ciiV45Lock: { locked: true },
       opportunity: {
         requiresPartnerApproval: false,
         faculty_verification_status: 'not_required',
@@ -2079,7 +2093,7 @@ describe('StudentReportsService', () => {
       faculty_status: 'pending',
       partnerApprovedAt: null,
       adminApprovedAt: null,
-      ciiV2Lock: { locked: true },
+      ciiV45Lock: { locked: true },
       opportunity: {
         requiresPartnerApproval: false,
         faculty_verification_status: 'not_required',
@@ -2744,7 +2758,7 @@ describe('StudentReportsService', () => {
 
   it('refuses admin AI score writes on CII-locked or verified reports', async () => {
     for (const row of [
-      { status: 'submitted', ciiV2Lock: { lockedAt: new Date() } },
+      { status: 'submitted', ciiV45Lock: { lockedAt: new Date() } },
       { status: 'verified' },
       { status: 'paid' },
     ]) {
@@ -3276,7 +3290,7 @@ describe('StudentReportsService', () => {
       hash: 'h',
       lockedAt: '2026-05-01T00:00:00.000Z',
       aiRecommendedScore: 70,
-      facultyApprovedScore: 70,
+      adminApprovedScore: 70,
     });
 
     it('a second submit of an already-submitted report is locked: no overwrite, no status regression', async () => {
@@ -3349,8 +3363,8 @@ describe('StudentReportsService', () => {
         status: 'submitted',
         admin_status: 'approved',
         partner_status: 'pending',
-        ciiV2: { final: 72, sections: [] },
-        ciiV2Lock: lockedCii(),
+        ciiV45: { finalCII: 72, sectionScores: [] },
+        ciiV45Lock: lockedCii(),
         awardBadges: [{ rank: 1 }],
         opportunity: { title: 'Beach clean-up', requiresPartnerApproval: false },
         student: { id: 'student-1', name: 'Ali Khan', email: 'ali@uni.edu' },
@@ -3361,10 +3375,10 @@ describe('StudentReportsService', () => {
       await service.verifyReport('report-1', 'reject', 'admin', 'Hours do not match the register.', undefined, true);
 
       expect(report.status).toBe('revision');
-      expect(report.ciiV2Lock).toBeNull();
-      expect(report.ciiV2.final).toBe(72); // old score text kept for audit …
-      expect(report.ciiV2.previousLocks).toHaveLength(1); // … but the lock is retired
-      expect(report.ciiV2.previousLocks[0]).toMatchObject({ locked: true, supersededBy: 'rejected' });
+      expect(report.ciiV45Lock).toBeNull();
+      expect(report.ciiV45.finalCII).toBe(72); // old score text kept for audit …
+      expect(report.ciiV45.previousLocks).toHaveLength(1); // … but the lock is retired
+      expect(report.ciiV45.previousLocks[0]).toMatchObject({ locked: true, supersededBy: 'rejected' });
       expect(report.awardBadges).toEqual([]);
       await new Promise((r) => setTimeout(r, 30));
       expect(mockMailService.sendStudentReportAdminDecision).toHaveBeenCalledWith(
@@ -3384,8 +3398,8 @@ describe('StudentReportsService', () => {
         admin_status: 'pending',
         partner_status: 'pending',
         reportSubmittedAt: new Date('2026-05-01T00:00:00.000Z'),
-        ciiV2: { final: 60 },
-        ciiV2Lock: lockedCii(),
+        ciiV45: { finalCII: 60 },
+        ciiV45Lock: lockedCii(),
         opportunity: { title: 'T', requiresPartnerApproval: false },
         student: { id: 'student-1', name: 'Ali', email: 'a@b.c' },
       };
@@ -3396,10 +3410,10 @@ describe('StudentReportsService', () => {
 
       expect(report.status).toBe('draft');
       expect(report.reportSubmittedAt).toBeNull();
-      expect(report.ciiV2Lock).toBeNull();
+      expect(report.ciiV45Lock).toBeNull();
       // the compare-and-swap UPDATE must actually persist the cleared stamp
       expect(verifyReportQb.set).toHaveBeenCalledWith(
-        expect.objectContaining({ reportSubmittedAt: null, ciiV2Lock: null, status: 'draft' }),
+        expect.objectContaining({ reportSubmittedAt: null, ciiV45Lock: null, status: 'draft' }),
       );
     });
 
@@ -3412,7 +3426,7 @@ describe('StudentReportsService', () => {
         partner_status: 'pending',
         faculty_status: 'approved',
         adminApprovedAt: publishedAt,
-        ciiV2Lock: lockedCii(),
+        ciiV45Lock: lockedCii(),
         opportunity: { requiresPartnerApproval: true },
       };
       mockStudentReportsRepository.findOne.mockResolvedValue(report);

@@ -36,14 +36,14 @@ describe('report progress', () => {
       student_name: 'Z',
       project_title: 'P',
       story: 'private answer',
-      ciiV2: { final: 50 },
+      ciiV45: { finalCII: 50 },
       student_email: 'a@b.c',
       is_submitted: false,
       progress_pct: 30,
     }) as Record<string, unknown>;
     expect(out).toMatchObject({ id: 'r1', progress_pct: 30, draft_locked: true });
     expect(out).not.toHaveProperty('story');
-    expect(out).not.toHaveProperty('ciiV2');
+    expect(out).not.toHaveProperty('ciiV45');
     expect(out).not.toHaveProperty('student_email');
     const submitted = { id: 'r2', is_submitted: true, story: 's' };
     expect(redactDraftRowForNonAdmin(submitted)).toBe(submitted);

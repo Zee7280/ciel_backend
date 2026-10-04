@@ -2139,7 +2139,7 @@ export class MailService {
     const analyserHref =
       packageLinks?.analyserHref ||
       this.buildFrontendLink(`/dashboard/admin/reports/verify/${reportId}`, {
-        view: 'cii-v2',
+        view: 'cii-v4-5',
       });
     const evidenceLine =
       typeof packageLinks?.evidenceCount === 'number'

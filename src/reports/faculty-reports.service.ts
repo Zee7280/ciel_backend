@@ -17,13 +17,18 @@ import { StudentReport } from './entities/student-report.entity';
 import { StudentReportsService } from './student-reports.service';
 import { FacultyService } from '../faculty/faculty.service';
 import { AiService } from '../ai/ai.service';
-import { computeCiiV2Result } from './cii-v2.constants';
 import { computeReportProgress } from './report-progress.util';
 import {
-  buildSystemIntegrityChecks,
-  mergeIntegrityChecks,
-} from './cii-integrity-checks.util';
-import { buildCielPkAiEvaluationPayload } from './build-ciel-pk-ai-evaluation-payload.util';
+  buildCielPkAiEvaluationPayloadV45,
+  computeCiiV45InputFingerprint,
+} from './build-ciel-pk-ai-evaluation-payload.util';
+import {
+  computeCiiV45Result,
+  resolveBadgeForScore,
+  CiiV45EvaluatorPayload,
+  CiiV45Result,
+} from './cii-v4-5.constants';
+import { S3Service } from '../common/s3.service';
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import { Participation } from '../engagement/entities/participant.entity';
@@ -48,8 +53,8 @@ function finiteNumber(value: unknown): number | null {
 
 /** List-card CII fields only — never mutates scores or lock state. */
 export function mapFacultyListCii(report: {
-  ciiV2?: unknown;
-  ciiV2Lock?: { locked?: unknown } | null;
+  ciiV45?: unknown;
+  ciiV45Lock?: { locked?: unknown } | null;
 }): {
   cii_analyser_run: boolean;
   cii_provisional: number | null;
@@ -57,26 +62,31 @@ export function mapFacultyListCii(report: {
   cii_level_name: string | null;
   cii_numeric_level: number | null;
 } {
-  const ciiV2 =
-    report.ciiV2 && typeof report.ciiV2 === 'object'
-      ? (report.ciiV2 as Record<string, unknown>)
+  const ciiV45 =
+    report.ciiV45 && typeof report.ciiV45 === 'object'
+      ? (report.ciiV45 as Record<string, unknown>)
       : null;
-  const finalNum = finiteNumber(ciiV2?.final);
+  const finalNum = finiteNumber(ciiV45?.diagnosticCII ?? ciiV45?.finalCII);
   const ciiFinal = finalNum == null ? null : Math.round(finalNum * 10) / 10;
-  const level =
-    ciiV2?.level && typeof ciiV2.level === 'object'
-      ? (ciiV2.level as { name?: unknown; level?: unknown })
-      : null;
-  const lockedRaw = report.ciiV2Lock?.locked;
-  const levelName =
-    typeof level?.name === 'string' && level.name.trim() ? level.name : null;
+  const badge =
+    (ciiV45?.finalBadge && typeof ciiV45.finalBadge === 'object'
+      ? (ciiV45.finalBadge as { name?: unknown; level?: unknown })
+      : null) ??
+    (ciiV45?.recommendedBadge && typeof ciiV45.recommendedBadge === 'object'
+      ? (ciiV45.recommendedBadge as { name?: unknown; level?: unknown })
+      : null) ??
+    (ciiV45?.diagnosticBadge && typeof ciiV45.diagnosticBadge === 'object'
+      ? (ciiV45.diagnosticBadge as { name?: unknown; level?: unknown })
+      : null);
+  const lockedRaw = report.ciiV45Lock?.locked;
+  const badgeName =
+    typeof badge?.name === 'string' && badge.name.trim() ? badge.name : null;
   return {
     cii_analyser_run: ciiFinal != null,
     cii_provisional: ciiFinal,
     cii_locked: lockedRaw === true || lockedRaw === 'true',
-    cii_level_name: levelName,
-    cii_numeric_level:
-      finiteNumber(ciiV2?.numericLevel) ?? finiteNumber(level?.level),
+    cii_level_name: badgeName,
+    cii_numeric_level: finiteNumber(badge?.level),
   };
 }
 
@@ -234,6 +244,7 @@ export class FacultyReportsService {
     private readonly participationRepository: Repository<Participation>,
     @InjectRepository(Opportunity)
     private readonly opportunitiesRepository: Repository<Opportunity>,
+    private readonly s3Service: S3Service,
   ) {}
 
   private normalizeFacultyEmail(facultyEmail: string): string {
@@ -798,378 +809,240 @@ export class FacultyReportsService {
     return report;
   }
 
-  /** Runs the CII v2 AI evaluation and persists a server-recomputed score snapshot. Re-runnable while unlocked. */
-  async runCiiV2Analysis(id: string, facultyId: string, facultyEmail: string) {
-    const report = await this.findAssignedReportForAction(
-      id,
-      facultyId,
-      facultyEmail,
-    );
-    return this.persistCiiV2Analysis(report);
-  }
+  /** Reports whose CII v4.5 AI analysis is running right now (double click / two admins). */
+  private static readonly ciiV45RunsInFlight = new Set<string>();
 
-  async runCiiV2AnalysisForAdmin(id: string) {
+  /**
+   * Runs the CII v4.5 AI evaluation and persists a server-recomputed score snapshot. Admin-only
+   * (there is no faculty entrypoint, matching the live product: faculty report review is
+   * read-only everywhere else). This method only ever writes `ciiV45`/`ciiV45Lock`.
+   */
+  async runCiiV45AnalysisForAdmin(id: string) {
     const report = await this.findReportForAdminCii(id);
-    return this.persistCiiV2Analysis(report, { adminRescore: true });
+    return this.persistCiiV45Analysis(report, { adminRescore: true });
   }
 
-  /** Reports whose AI analysis is running right now in this process (double click / two admins). */
-  private static readonly ciiRunsInFlight = new Set<string>();
-
-  private async persistCiiV2Analysis(
+  private async persistCiiV45Analysis(
     report: StudentReport,
     opts: { adminRescore?: boolean } = {},
   ) {
-    if (!opts.adminRescore && report.ciiV2Lock?.locked) {
+    if (!opts.adminRescore && report.ciiV45Lock?.locked) {
       throw new BadRequestException(
-        "This report's CII v2 score is already locked and cannot be re-analysed.",
+        "This report's CII v4.5 score is already locked and cannot be re-analysed.",
       );
     }
-    // One analysis per report at a time: a second click used to start a second paid AI call and the
-    // last write won silently.
-    if (FacultyReportsService.ciiRunsInFlight.has(report.id)) {
+    if (FacultyReportsService.ciiV45RunsInFlight.has(report.id)) {
       throw new ConflictException(
         'An analysis is already running for this report. Wait for it to finish, then refresh.',
       );
     }
-    FacultyReportsService.ciiRunsInFlight.add(report.id);
+    FacultyReportsService.ciiV45RunsInFlight.add(report.id);
     try {
-      return await this.runAndStoreCiiV2Analysis(report, opts);
+      return await this.runAndStoreCiiV45Analysis(report, opts);
     } finally {
-      FacultyReportsService.ciiRunsInFlight.delete(report.id);
+      FacultyReportsService.ciiV45RunsInFlight.delete(report.id);
     }
   }
 
-  private async runAndStoreCiiV2Analysis(
+  private async runAndStoreCiiV45Analysis(
     report: StudentReport,
     opts: { adminRescore?: boolean } = {},
   ) {
-    // Reuse the canonical, security-reviewed payload builder (strips CNIC, legacy scores and
-    // other sensitive/internal fields) instead of forwarding raw section JSON to the AI vendor.
-    const payload = buildCielPkAiEvaluationPayload(report);
+    const payload = await buildCielPkAiEvaluationPayloadV45(report, this.s3Service);
 
-    const { ciiV2, evidenceInspection, model } = await this.aiService.summarize(
-      'cii_v2_evaluation',
+    const { ciiV45, evidenceInspection, model } = await this.aiService.summarize(
+      'cii_v4_5_evaluation',
       payload,
     );
-    if (!ciiV2) {
+    if (!ciiV45) {
       throw new BadRequestException(
-        'The AI did not return a readable CII v2 evaluation. Please retry.',
+        'The AI did not return a readable CII v4.5 evaluation. Please retry.',
       );
     }
 
-    const result = computeCiiV2Result({
-      sections: ciiV2.sections,
-      bonus: ciiV2.bonus,
-      integrityPenalty: ciiV2.integrityPenalty,
-      evidence: ciiV2.evidence,
-    });
+    const result = computeCiiV45Result(ciiV45 as CiiV45EvaluatorPayload);
 
-    const nextCiiV2 = {
+    const nextCiiV45 = {
       ...result,
-      bonusWhy: ciiV2.bonusWhy,
-      integrityWhy: ciiV2.integrityWhy,
-      redFlags: ciiV2.redFlags,
-      integrityChecks: mergeIntegrityChecks(
-        buildSystemIntegrityChecks(payload),
-        ciiV2.checks,
-      ),
-      needsAdminReview: ciiV2.needsAdminReview,
-      incomplete: ciiV2.incomplete === true,
-      studentFeedback: ciiV2.studentFeedback,
-      frameworkVersion: ciiV2.frameworkVersion,
-      // Which evidence the model could actually look at (images) and which it could not.
       evidenceInspection,
       computedAt: new Date().toISOString(),
-      // Every run is kept (score, when, model, how much evidence was inspected) — a re-run no
-      // longer erases what the previous run said.
       runHistory: [
-        ...(((report.ciiV2 as Record<string, unknown> | null)?.runHistory as unknown[]) ?? []).slice(-19),
+        ...(((report.ciiV45 as Record<string, unknown> | null)?.runHistory as unknown[]) ?? []).slice(-19),
         {
-          score: result.final,
+          score: result.diagnosticCII,
+          status: result.scoreStatus,
           at: new Date().toISOString(),
           model: model ?? null,
           inspectedImages: evidenceInspection?.inspected.length ?? 0,
           notInspectedFiles: evidenceInspection?.notInspected.length ?? 0,
-          incomplete: ciiV2.incomplete === true,
         },
       ],
     };
 
-    // Targeted update: faculty writes are blocked while locked. Super Admin rescore
-    // clears the lock in the same write (QueryBuilder drops `.set({ json: null })`).
+    // Same guarded CAS pattern as the v2 path: faculty writes would be blocked while locked;
+    // admin rescore clears the lock in the same write.
     const qb = this.studentReportsRepository
       .createQueryBuilder()
       .update(StudentReport)
       .set(
-        opts.adminRescore
-          ? { ciiV2: nextCiiV2, ciiV2Lock: () => 'NULL' }
-          : { ciiV2: nextCiiV2 },
+        (opts.adminRescore
+          ? { ciiV45: nextCiiV45, ciiV45Lock: () => 'NULL' }
+          : { ciiV45: nextCiiV45 }) as unknown as import('typeorm').QueryDeepPartialEntity<StudentReport>,
       )
       .where('id = :id', { id: report.id });
     if (!opts.adminRescore) {
       qb.andWhere(
-        `("ciiV2Lock" IS NULL OR ("ciiV2Lock"->>'locked') IS DISTINCT FROM 'true')`,
+        `("ciiV45Lock" IS NULL OR ("ciiV45Lock"->>'locked') IS DISTINCT FROM 'true')`,
       );
     }
     const updateResult = await qb.execute();
 
     if (!updateResult.affected) {
       throw new BadRequestException(
-        "This report's CII v2 score is already locked and cannot be re-analysed.",
+        "This report's CII v4.5 score is already locked and cannot be re-analysed.",
       );
     }
 
-    return { success: true, data: nextCiiV2 };
+    return { success: true, data: nextCiiV45 };
   }
 
   /**
-   * Phase 2: Approves and hash-locks the CII v2 score with audit trail.
-   *
-   * Recomputes the final score from the stored per-criterion anchors (never trusts a
-   * client-sent score) before hashing the decision.
-   *
-   * If faculty adjusts the score, the system stores both:
-   * - AI Recommended Score (original)
-   * - Faculty Approved Score (adjusted)
-   * - Score Adjustment Reason (audit trail)
-   * - Per-criterion overrides (if any)
+   * Approves and hash-locks the CII v4.5 score. Admin-only, same as the run step. Two gates the
+   * v2 path does not have:
+   *  - the stored evaluation's `scoreStatus` must be `FINAL` (v4.5's own eligibility state —
+   *    `RESUBMISSION_REQUIRED`/`ADMIN_REVIEW_REQUIRED` block publication entirely, not just a
+   *    stale-snapshot recheck);
+   *  - the report's live data must still hash to the same `inputFingerprint` the analysis ran
+   *    against — a changed section or evidence file since the last run invalidates it, the same
+   *    protective role the v2 path's fresh-integrity-holds recheck plays, but via content hash.
    */
-  async approveCiiV2(
-    id: string,
-    facultyId: string,
-    facultyEmail: string,
-    note?: string,
-    facultyAdjustedScore?: number,
-    scoreAdjustmentReason?: string,
-    criteriaOverrides?: Record<
-      string,
-      { aiAnchor: number; facultyAnchor: number; reason: string }
-    >,
-  ) {
-    const report = await this.findAssignedReportForAction(
-      id,
-      facultyId,
-      facultyEmail,
-    );
-    return this.persistCiiV2Approval(
-      report,
-      facultyId,
-      'approved',
-      note,
-      facultyAdjustedScore,
-      scoreAdjustmentReason,
-      criteriaOverrides,
-    );
-  }
-
-  async approveCiiV2ForAdmin(
+  async approveCiiV45ForAdmin(
     id: string,
     adminId: string,
     note?: string,
-    facultyAdjustedScore?: number,
-    scoreAdjustmentReason?: string,
-    criteriaOverrides?: Record<
-      string,
-      { aiAnchor: number; facultyAnchor: number; reason: string }
-    >,
+    adminAdjustedScore?: number,
+    scoreModerationReason?: string,
   ) {
     const report = await this.findReportForAdminCii(id);
-    // Private-candidate: no faculty step. Regular reports: CIEL PK CII lock stands in for
-    // the former faculty academic sign-off so partner/admin verify gates stay consistent.
-    const facultyStatus = isPrivateCandidateOpportunity(report.opportunity)
-      ? 'not_applicable'
-      : 'approved';
-    return this.persistCiiV2Approval(
+    return this.persistCiiV45Approval(
       report,
       adminId,
-      facultyStatus,
       note,
-      facultyAdjustedScore,
-      scoreAdjustmentReason,
-      criteriaOverrides,
+      adminAdjustedScore,
+      scoreModerationReason,
     );
   }
 
-  private async persistCiiV2Approval(
+  private async persistCiiV45Approval(
     report: StudentReport,
-    lockerUserId: string,
-    facultyStatus: 'approved' | 'not_applicable',
+    adminId: string,
     note?: string,
-    facultyAdjustedScore?: number,
-    scoreAdjustmentReason?: string,
-    criteriaOverrides?: Record<
-      string,
-      { aiAnchor: number; facultyAnchor: number; reason: string }
-    >,
+    adminAdjustedScore?: number,
+    scoreModerationReason?: string,
   ) {
-
-    const stored = report.ciiV2 as
-      | {
-          sections: Array<{
-            id: number;
-            good?: string;
-            limit?: string;
-            criteria: Array<{ key: string; anchor: number; note?: string }>;
-          }>;
-          bonus: { effort: number; resources: number; partners: number };
-          integrityPenalty: number;
-          evidence?: unknown[];
-          computedAt?: string;
-          final?: number;
-        }
-      | null
-      | undefined;
+    const stored = report.ciiV45 as unknown as CiiV45Result | null | undefined;
 
     if (!stored) {
-      throw new BadRequestException(
-        'Run the CII v2 analysis before approving.',
-      );
+      throw new BadRequestException('Run the CII v4.5 analysis before approving.');
     }
-    if ((stored as { incomplete?: boolean }).incomplete === true) {
-      throw new BadRequestException(
-        'The last AI run was incomplete (it skipped part of the rubric, which was scored as 0). Re-run the analysis before locking the score.',
-      );
+    if (report.ciiV45Lock?.locked) {
+      throw new BadRequestException("This report's CII v4.5 score is already locked.");
     }
-    if (report.ciiV2Lock?.locked) {
+    if (stored.scoreStatus !== 'FINAL') {
+      const reasons = Array.isArray(stored.adminReviewReasons) ? stored.adminReviewReasons : [];
       throw new BadRequestException(
-        "This report's CII v2 score is already locked.",
-      );
-    }
-
-    // Recompute integrity holds from the report's CURRENT data, not the last analysis's stored
-    // snapshot — evidence can be deleted from storage or sections edited between the last AI run
-    // and this approval, and a stale "no holds" snapshot must not be trusted to lock the score.
-    const freshHolds = buildSystemIntegrityChecks(
-      buildCielPkAiEvaluationPayload(report),
-    ).filter((check) => check.level === 'hold');
-    if (freshHolds.length > 0) {
-      throw new BadRequestException(
-        `This report has unresolved integrity holds and cannot be approved: ${freshHolds
-          .map((check) => check.title)
-          .join('; ')}. Re-run the analysis after resolving them.`,
+        stored.scoreStatus === 'RESUBMISSION_REQUIRED'
+          ? 'This report cannot be published yet — mandatory hours or student material are incomplete. The student must resubmit.'
+          : `This report cannot be published yet: ${reasons.join('; ') || 'the evaluation is still ADMIN_REVIEW_REQUIRED'}. Resolve the blockers, then re-run the analysis.`,
       );
     }
 
-    // Compute the AI-recommended score from stored anchors
-    const aiResult = computeCiiV2Result({
-      sections: stored.sections.map((s) => ({
-        id: s.id,
-        good: s.good,
-        limit: s.limit,
-        criteria: s.criteria.map((c) => ({
-          key: c.key,
-          anchor: c.anchor,
-          note: c.note,
-        })),
-      })),
-      bonus: stored.bonus,
-      integrityPenalty: stored.integrityPenalty,
-      evidence: (stored.evidence as any) || [],
-    });
-
-    const aiRecommendedScore = aiResult.final;
-
-    // Determine the faculty-approved score
-    // If faculty provided an adjusted score, use it; otherwise use AI score
-    const hasFacultyAdjustment =
-      facultyAdjustedScore !== undefined &&
-      Math.round(facultyAdjustedScore) !== Math.round(aiRecommendedScore);
-
-    // Require reason when faculty adjusts the score
-    if (hasFacultyAdjustment && !scoreAdjustmentReason?.trim()) {
+    // Recompute the fingerprint fresh from the report's CURRENT live data — the same protective
+    // role the v2 path's fresh-integrity-holds recheck plays, but via content hash: if a section
+    // was edited or an evidence file changed since the analysis ran, the fingerprint will not
+    // match the stored one and the stale evaluation must not be published.
+    const liveFingerprint = computeCiiV45InputFingerprint(
+      report,
+      (await buildCielPkAiEvaluationPayloadV45(report, this.s3Service)).uploaded_evidence_files,
+    );
+    if (liveFingerprint !== stored.inputFingerprint) {
       throw new BadRequestException(
-        'A reason is required when adjusting the AI-recommended score.',
+        'This report has changed since the analysis ran. Re-run the analysis before approving.',
       );
     }
 
-    const facultyApprovedScore = hasFacultyAdjustment
-      ? Math.round(Math.min(100, Math.max(0, facultyAdjustedScore)))
+    const aiRecommendedScore = stored.diagnosticCII ?? 0;
+    const hasModeration =
+      adminAdjustedScore !== undefined &&
+      Math.round(adminAdjustedScore * 10) / 10 !== Math.round(aiRecommendedScore * 10) / 10;
+    if (hasModeration && !scoreModerationReason?.trim()) {
+      throw new BadRequestException('A reason is required when moderating the AI-recommended score.');
+    }
+    const adminApprovedScore = hasModeration
+      ? Math.round(Math.min(100, Math.max(0, adminAdjustedScore!)) * 10) / 10
       : aiRecommendedScore;
 
-    // Use the same AI-computed level structure, but note the score adjustment
-    // Level is still determined by the AI anchors (not the override score)
-    // to maintain consistency with the rubric
-    const finalResult = aiResult;
+    // Moderation changes only the published number — it can never invent a badge the quality
+    // gates don't support. Re-derive the badge from the SAME gate results the calculator already
+    // computed (never hand-roll a second gate-walk), just against the (possibly moderated) score.
+    const finalBadge = resolveBadgeForScore(adminApprovedScore, stored.qualityGates);
 
     const approvedAt = new Date().toISOString();
-
-    // Build the audit-ready decision record
     const decisionRecord = {
       reportId: report.id,
+      inputFingerprint: stored.inputFingerprint,
       aiRecommendedScore,
-      facultyApprovedScore,
-      scoreWasAdjusted: hasFacultyAdjustment,
-      scoreAdjustmentReason: hasFacultyAdjustment
-        ? scoreAdjustmentReason
-        : null,
-      criteriaOverrides: criteriaOverrides || null,
-      level: finalResult.level.level,
-      badge: finalResult.level.name,
-      facultyId: lockerUserId,
+      adminApprovedScore,
+      scoreWasModerated: hasModeration,
+      scoreModerationReason: hasModeration ? scoreModerationReason : null,
+      badge: finalBadge?.name ?? null,
+      adminId,
       approvedAt,
       note: note || '',
     };
+    const hash = crypto.createHash('sha256').update(JSON.stringify(decisionRecord)).digest('hex');
 
-    const hash = crypto
-      .createHash('sha256')
-      .update(JSON.stringify(decisionRecord))
-      .digest('hex');
-
-    const nextCiiV2 = {
-      ...(report.ciiV2 as Record<string, unknown>),
-      ...finalResult,
-      // Store both scores for audit trail
-      aiRecommendedScore,
-      facultyApprovedScore,
-      final: facultyApprovedScore, // The final score is what faculty approved
-      computedAt: stored.computedAt || approvedAt,
+    const nextCiiV45 = {
+      ...(report.ciiV45 as Record<string, unknown>),
+      finalCII: adminApprovedScore,
+      finalBadge,
     };
-
-    const nextCiiV2Lock = {
+    const nextCiiV45Lock: StudentReport['ciiV45Lock'] = {
       locked: true,
       hash,
       lockedAt: approvedAt,
-      lockedByFacultyId: lockerUserId,
-      facultyNote: note,
-      // Phase 2: Audit trail fields
+      lockedByAdminId: adminId,
+      adminNote: note,
+      inputFingerprint: stored.inputFingerprint,
+      scoreStatusAtLock: 'FINAL',
       aiRecommendedScore,
-      facultyApprovedScore,
-      scoreWasAdjusted: hasFacultyAdjustment,
-      scoreAdjustmentReason: hasFacultyAdjustment
-        ? scoreAdjustmentReason
-        : null,
-      criteriaOverrides: criteriaOverrides || null,
+      adminApprovedScore,
+      scoreWasModerated: hasModeration,
+      scoreModerationReason: hasModeration ? scoreModerationReason : undefined,
+      finalBadge,
     };
 
-    // Atomic compare-and-swap: the WHERE guard re-checks "not already locked" at write time
-    // (not just at the read above), so two concurrent approve requests can't both win the lock —
-    // the second one's UPDATE affects 0 rows instead of silently overwriting the first's decision.
     const updateResult = await this.studentReportsRepository
       .createQueryBuilder()
       .update(StudentReport)
       .set({
-        ciiV2: nextCiiV2,
-        ciiV2Lock: nextCiiV2Lock as StudentReport['ciiV2Lock'],
-        faculty_status: facultyStatus,
-      })
+        ciiV45: nextCiiV45,
+        ciiV45Lock: nextCiiV45Lock,
+        admin_status: 'approved',
+      } as unknown as import('typeorm').QueryDeepPartialEntity<StudentReport>)
       .where('id = :id', { id: report.id })
-      .andWhere(
-        `("ciiV2Lock" IS NULL OR ("ciiV2Lock"->>'locked') IS DISTINCT FROM 'true')`,
-      )
+      .andWhere(`("ciiV45Lock" IS NULL OR ("ciiV45Lock"->>'locked') IS DISTINCT FROM 'true')`)
       .execute();
 
     if (!updateResult.affected) {
-      throw new BadRequestException(
-        "This report's CII v2 score is already locked.",
-      );
+      throw new BadRequestException("This report's CII v4.5 score is already locked.");
     }
 
-    await this.approveAttendanceLogsOnFlashCardLock(report, lockerUserId);
+    await this.approveAttendanceLogsOnFlashCardLock(report, adminId);
 
     return {
       success: true,
-      data: { ciiV2: nextCiiV2, ciiV2Lock: nextCiiV2Lock },
+      data: { ciiV45: nextCiiV45, ciiV45Lock: nextCiiV45Lock },
     };
   }
 
@@ -1238,7 +1111,7 @@ export class FacultyReportsService {
 
   /** Scoping for runIndependentAiAnalysis, split out by caller role — previously this method
    * took no scope at all (any faculty could run it against any report id, university/ciel_admin
-   * had no route yet). Faculty reuses the same assignment-based scope as runCiiV2Analysis;
+   * had no route yet). Faculty reuses the same assignment-based scope as the admin CII run;
    * university is restricted to reports whose student's profile matches the caller's university
    * org (same rule FacultyUniversityScopeService uses elsewhere); ciel_admin/CIEL PK has no scope
    * restriction, matching SUPER_ADMIN's usual platform-wide access. */
@@ -1285,16 +1158,16 @@ export class FacultyReportsService {
   }
 
   /**
-   * Phase 4: Run Independent AI Analysis from My Impact Wall.
+   * Run Independent AI Analysis from My Impact Wall.
    *
    * This is for authorized stakeholders (Faculty, University, CIEL PK) to run
    * additional AI analysis on an already-approved record WITHOUT overwriting
-   * the faculty-approved score.
+   * the admin-approved score.
    *
-   * - Uses the same approved formula/rubric
+   * - Uses the same CII v4.5 rubric/calculator as the admin run
    * - Results stored in `independentAiAnalyses` array
    * - Creates an audit trail with who ran it and when
-   * - The faculty-approved record remains unchanged
+   * - The admin-approved record remains unchanged
    * - Scoped per caller role — see findReportForIndependentAnalysis.
    */
   async runIndependentAiAnalysis(
@@ -1313,34 +1186,28 @@ export class FacultyReportsService {
     );
 
     // Only allow independent analysis on locked (approved) records
-    if (!report.ciiV2Lock?.locked) {
+    if (!report.ciiV45Lock?.locked) {
       throw new BadRequestException(
-        'Independent AI analysis can only be run on faculty-approved records.',
+        'Independent AI analysis can only be run on admin-approved records.',
       );
     }
 
-    // Build the AI evaluation payload (same as faculty stage)
-    const aiPayload = buildCielPkAiEvaluationPayload(report);
+    // Build the AI evaluation payload (same as the admin run)
+    const aiPayload = await buildCielPkAiEvaluationPayloadV45(report, this.s3Service);
 
-    // Run the AI analysis using the same method as runCiiV2Analysis
-    const { ciiV2 } = await this.aiService.summarize(
-      'cii_v2_evaluation',
+    const { ciiV45 } = await this.aiService.summarize(
+      'cii_v4_5_evaluation',
       aiPayload,
     );
 
-    if (!ciiV2) {
+    if (!ciiV45) {
       throw new BadRequestException(
         'AI analysis failed. Please try again later.',
       );
     }
 
-    // Compute the CII v2 result using the same formula/rubric
-    const ciiResult = computeCiiV2Result({
-      sections: ciiV2.sections,
-      bonus: ciiV2.bonus,
-      integrityPenalty: ciiV2.integrityPenalty,
-      evidence: ciiV2.evidence || [],
-    });
+    // Compute the CII v4.5 result using the same formula/rubric
+    const ciiResult = computeCiiV45Result(ciiV45 as CiiV45EvaluatorPayload);
 
     // Build the independent analysis record
     const analysisId = crypto.randomUUID();
@@ -1352,19 +1219,17 @@ export class FacultyReportsService {
       runByUserId: userId,
       runByRole: userRole,
       runByName: userName,
-      score: ciiResult.final,
-      level: ciiResult.level,
-      sections: ciiResult.sections.map((s) => ({
-        id: s.id,
-        title: s.title,
+      score: ciiResult.diagnosticCII,
+      badge: ciiResult.recommendedBadge ?? ciiResult.diagnosticBadge,
+      sections: ciiResult.sectionScores.map((s) => ({
+        dimension: s.dimension,
+        name: s.name,
+        maximumPoints: s.maximumPoints,
         score: s.score,
-        weight: s.weight,
-        good: s.good,
-        limit: s.limit,
       })),
-      bonus: ciiResult.bonus,
-      integrityPenalty: ciiResult.integrityPenalty,
-      feedback: ciiV2.studentFeedback || undefined,
+      extraMileUplift: { total: ciiResult.extraMileUplift.total },
+      integrityPenalty: ciiResult.integrityPenalty.points,
+      feedback: ciiV45.studentFeedback || undefined,
       note: note || undefined,
     };
 
@@ -1382,15 +1247,15 @@ export class FacultyReportsService {
       success: true,
       data: {
         analysis: independentAnalysis,
-        // Also return the original faculty-approved score for comparison
-        facultyApprovedScore:
-          report.ciiV2Lock?.facultyApprovedScore ??
-          (report.ciiV2 as Record<string, unknown> | null)?.final ??
+        // Also return the original admin-approved score for comparison
+        adminApprovedScore:
+          report.ciiV45Lock?.adminApprovedScore ??
+          (report.ciiV45 as Record<string, unknown> | null)?.finalCII ??
           null,
         aiRecommendedScore:
-          report.ciiV2Lock?.aiRecommendedScore ??
-          (report.ciiV2 as Record<string, unknown> | null)
-            ?.aiRecommendedScore ??
+          report.ciiV45Lock?.aiRecommendedScore ??
+          (report.ciiV45 as Record<string, unknown> | null)
+            ?.diagnosticCII ??
           null,
       },
     };
@@ -1444,7 +1309,7 @@ export class FacultyReportsService {
         results.push({
           reportId,
           success: true,
-          score: result.data.analysis.score,
+          score: result.data.analysis.score ?? undefined,
         });
       } catch (err) {
         results.push({

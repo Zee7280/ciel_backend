@@ -59,7 +59,7 @@ export function parseFypAiResponse(raw: string): FypAiEvaluation | null {
   // A dimension the AI response omits is silently scored as 0 below — that can swing the final
   // score materially (Rigor alone is 20/100 and gates the score at ≤59 below 10), so surface it as
   // a loud, faculty-visible red flag instead of letting a parsing gap masquerade as a genuinely low
-  // score — same convention as parseCiiV2Response's missing-section handling.
+  // score — same convention as parseCiiV45Response's missing-section handling.
   const parsingRedFlags: string[] = [];
   const dimensions: FypAiDimensionInput[] = FYP_AI_RUBRIC.map((d) => {
     const rawDim = dimsByKey.get(d.key);

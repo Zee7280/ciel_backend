@@ -1,6 +1,11 @@
+import * as crypto from 'crypto';
 import {
   buildCielPkAiEvaluationPayload,
+  buildCielPkAiEvaluationPayloadV45,
+  computeCiiV45InputFingerprint,
   CIEL_PK_AI_EVALUATION_SCHEMA_VERSION,
+  CIEL_PK_AI_EVALUATION_SCHEMA_VERSION_V45,
+  EvidenceByteSource,
 } from './build-ciel-pk-ai-evaluation-payload.util';
 import { StudentReport } from './entities/student-report.entity';
 
@@ -219,10 +224,10 @@ describe('buildCielPkAiEvaluationPayload', () => {
     expect(firstLog?.evidence_file_ids?.length).toBeGreaterThan(0);
     expect(payload.system_validation.legacy_score_removed).toBe(true);
     expect(payload.system_validation.sensitive_fields_removed).toBe(true);
-    // Must match the live v3.1 evaluator (cii-v2.constants.ts), not the retired v8.2/v1.2
-    // public-scoring-API config — a mismatch here would send the model a contradictory rubric.
+    // Must match the live v4.5 evaluator (cii-v4-5.constants.ts) — a mismatch here would send the
+    // model a contradictory rubric.
     expect(payload.system_validation.scoring_rubric).toMatchObject({
-      cii_v2_framework_version: 'v3.1-balanced',
+      cii_v45_framework_version: '4.5',
       max_total: 100,
     });
     const attendanceSummary = (
@@ -313,5 +318,180 @@ describe('buildCielPkAiEvaluationPayload', () => {
     expect(
       (payload.section5_outcomes_systemic_change as { challenge_tags: string[] }).challenge_tags,
     ).toEqual(['limited_budget']);
+  });
+
+  it('treats attendance-log hours as complete even when roster team_lead.hours is empty', () => {
+    const payload = buildCielPkAiEvaluationPayload({
+      id: 'r-hours',
+      studentId: 's1',
+      opportunity: { timeline: { expected_hours: 16 } },
+      section1: {
+        participation_type: 'individual',
+        team_lead: { name: 'Zara Ijaz', email: 'student@bnu.edu.pk', hours: 0 },
+        team_members: [],
+        attendance_logs: [
+          { student_name: 'Zara Ijaz', hours: 8, approval_status: 'pending' },
+          { student_name: 'Zara Ijaz', hours: 8, approval_status: 'approved' },
+          { student_name: 'Zara Ijaz', hours: 4, approval_status: 'rejected' },
+        ],
+        metrics: { total_verified_hours: 0 },
+      },
+      section8: {
+        evidence_files: [{ url: 'https://example.com/a.jpg', name: 'a.jpg' }],
+      },
+    } as unknown as StudentReport);
+    const summary = (
+      payload.section1_participation_identity_attendance as {
+        attendance_summary?: {
+          required_hours_met?: boolean;
+          total_verified_team_hours?: number;
+          students_below_required_hours?: string[];
+        };
+      }
+    ).attendance_summary;
+    expect(summary?.required_hours_met).toBe(true);
+    expect(summary?.students_below_required_hours).toEqual([]);
+    expect(summary?.total_verified_team_hours).toBeGreaterThanOrEqual(16);
+  });
+
+  it('counts live sessionHours on attendance logs the same way submit does', () => {
+    const payload = buildCielPkAiEvaluationPayload({
+      id: 'r-session-hours',
+      studentId: 's1',
+      opportunity: { timeline: { expected_hours: 16 } },
+      section1: {
+        participation_type: 'individual',
+        team_lead: { name: 'Saber Ara', hours: 0 },
+        team_members: [],
+        attendance_logs: [
+          { student_name: 'Saber Ara', sessionHours: 7, approval_status: 'pending' },
+          { student_name: 'Saber Ara', sessionHours: 9, approvalStatus: 'pending' },
+        ],
+        metrics: { total_verified_hours: 0 },
+      },
+      section8: {
+        evidence_files: [{ url: 'https://example.com/a.jpg', name: 'a.jpg' }],
+      },
+    } as unknown as StudentReport);
+    const summary = (
+      payload.section1_participation_identity_attendance as {
+        attendance_summary?: { required_hours_met?: boolean };
+      }
+    ).attendance_summary;
+    expect(summary?.required_hours_met).toBe(true);
+  });
+});
+
+function minimalV45Report(): StudentReport {
+  return {
+    id: 'report-45',
+    studentId: 'student-45',
+    project_id: 'project-45',
+    opportunityId: 'opp-45',
+    submission_date: new Date('2026-06-04T09:20:00.000Z'),
+    reportSubmittedAt: new Date('2026-06-04T09:20:00.000Z'),
+    status: 'submitted',
+    faculty_status: 'pending',
+    partner_status: 'pending',
+    admin_status: 'pending',
+    student: { id: 'student-45', name: 'Zara Ijaz', email: 'student@bnu.edu.pk' },
+    opportunity: {
+      id: 'opp-45',
+      title: 'Abroo Teaching Initiative',
+      location: { city: 'Lahore', country: 'Pakistan' },
+      timeline: { start_date: '2026-05-01', end_date: '2026-05-30', expected_hours: 16 },
+    },
+    section1: {
+      participation_type: 'individual',
+      team_lead: { name: 'Zara Ijaz', fullName: 'Zara Ijaz', email: 'student@bnu.edu.pk', hours: '18' },
+      team_members: [],
+      attendance_logs: [],
+      metrics: { total_verified_hours: 18, verified_session_count: 1 },
+    },
+    section2: { discipline: 'Economics', problem_statement: 'Limited exposure.' },
+    section3: { primary_sdg: { goal_number: 4 }, secondary_sdgs: [] },
+    section4: { activity_blocks: [], project_summary: {} },
+    section5: { observed_change: 'Improved awareness.', measurable_outcomes: [] },
+    section6: { use_resources: 'no' },
+    section7: { has_partners: 'no' },
+    section8: {
+      has_evidence: 'yes',
+      evidence_files: [{ url: 'https://example.com/files/evidence-1.jpg', name: 'evidence-1.jpg' }],
+    },
+    section9: { personal_learning: 'Grew communication skills.' },
+    section10: { continuation_status: 'partially' },
+  } as unknown as StudentReport;
+}
+
+function fakeS3(buffer: Buffer | null): EvidenceByteSource {
+  return {
+    getObjectBufferByPublicUrl: jest.fn(async () => (buffer ? { buffer } : null)),
+  };
+}
+
+describe('buildCielPkAiEvaluationPayloadV45', () => {
+  it('builds the v4.5 payload with a real sha256 hash per evidence file and the v4.5 scoring rubric', async () => {
+    const bytes = Buffer.from('fake evidence bytes');
+    const payload = await buildCielPkAiEvaluationPayloadV45(minimalV45Report(), fakeS3(bytes));
+
+    expect(payload.schema_version).toBe(CIEL_PK_AI_EVALUATION_SCHEMA_VERSION_V45);
+    expect(payload.report_id).toBe('report-45');
+    expect(payload.uploaded_evidence_files).toHaveLength(1);
+    expect(payload.uploaded_evidence_files[0].file_integrity.sha256).toBe(
+      crypto.createHash('sha256').update(bytes).digest('hex'),
+    );
+    expect(payload.uploaded_evidence_files[0].file_integrity.size_bytes).toBe(bytes.byteLength);
+    expect(
+      (payload.system_validation.scoring_rubric as { cii_v45_framework_version: string }).cii_v45_framework_version,
+    ).toBe('4.5');
+    expect(typeof payload.input_fingerprint).toBe('string');
+    expect(payload.input_fingerprint.length).toBeGreaterThan(0);
+  });
+
+  it('degrades gracefully (null hash) when an evidence file fails to fetch, without throwing', async () => {
+    const payload = await buildCielPkAiEvaluationPayloadV45(minimalV45Report(), fakeS3(null));
+    expect(payload.uploaded_evidence_files[0].file_integrity.sha256).toBeNull();
+    expect(typeof payload.input_fingerprint).toBe('string');
+  });
+});
+
+describe('computeCiiV45InputFingerprint', () => {
+  it('is deterministic for identical input and changes when a section changes', () => {
+    const report = minimalV45Report();
+    const files = [{ file_id: 'EV-001', file_integrity: { sha256: 'abc' } }];
+
+    const fp1 = computeCiiV45InputFingerprint(report, files);
+    const fp2 = computeCiiV45InputFingerprint({ ...report } as StudentReport, files);
+    expect(fp1).toBe(fp2);
+
+    const changed = computeCiiV45InputFingerprint(
+      { ...report, section9: { personal_learning: 'A different reflection entirely.' } } as StudentReport,
+      files,
+    );
+    expect(changed).not.toBe(fp1);
+  });
+
+  it('changes when an evidence file hash changes', () => {
+    const report = minimalV45Report();
+    const fp1 = computeCiiV45InputFingerprint(report, [
+      { file_id: 'EV-001', file_integrity: { sha256: 'abc' } },
+    ]);
+    const fp2 = computeCiiV45InputFingerprint(report, [
+      { file_id: 'EV-001', file_integrity: { sha256: 'different' } },
+    ]);
+    expect(fp1).not.toBe(fp2);
+  });
+
+  it('is stable regardless of evidence-file array order', () => {
+    const report = minimalV45Report();
+    const fp1 = computeCiiV45InputFingerprint(report, [
+      { file_id: 'EV-001', file_integrity: { sha256: 'a' } },
+      { file_id: 'EV-002', file_integrity: { sha256: 'b' } },
+    ]);
+    const fp2 = computeCiiV45InputFingerprint(report, [
+      { file_id: 'EV-002', file_integrity: { sha256: 'b' } },
+      { file_id: 'EV-001', file_integrity: { sha256: 'a' } },
+    ]);
+    expect(fp1).toBe(fp2);
   });
 });

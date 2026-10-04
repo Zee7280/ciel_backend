@@ -1,10 +1,11 @@
 import { HttpException, Injectable, Logger, Optional } from '@nestjs/common';
 import { S3Service } from '../common/s3.service';
 import {
-  buildCiiV2EvaluatorPrompt,
-  CII_V2_JSON_ONLY_DEPLOYMENT_NOTE,
-} from './prompts/cii-v2-rubric.constant';
-import { CiiV2AiEvaluation, parseCiiV2Response } from './parse-cii-v2.util';
+  CII_V4_5_EVALUATOR_PROMPT,
+  CII_V4_5_JSON_ONLY_DEPLOYMENT_NOTE,
+} from './prompts/cii-v4-5-prompt.constant';
+import { parseCiiV45Response } from './parse-cii-v4-5.util';
+import { CiiV45EvaluatorPayload } from '../reports/cii-v4-5.constants';
 import {
   buildFypAiEvaluatorPrompt,
   FYP_AI_JSON_ONLY_DEPLOYMENT_NOTE,
@@ -72,7 +73,7 @@ export interface AiSummarizeResult {
   model?: string;
   auditMeta?: unknown;
   evaluationVersion?: string;
-  ciiV2?: CiiV2AiEvaluation;
+  ciiV45?: CiiV45EvaluatorPayload;
   fypAi?: FypAiEvaluation;
 }
 
@@ -1498,10 +1499,10 @@ Audit Remark: ___
 Keep the full response under 180 words.`;
 
       // =====================================================
-      // CII ANALYZER (Balanced CII Rubric v3.1)
+      // CII ANALYZER (CII Rubric v4.5)
       // =====================================================
-      case 'cii_v2_evaluation':
-        return `Evaluate this Community Service report against the Balanced CII Rubric v3.1 embedded in your system instructions.
+      case 'cii_v4_5_evaluation':
+        return `Evaluate this Community Service report against the CII Rubric v4.5 embedded in your system instructions. Return only anchors, claims, evidence audit and narrative text — never a numeric score or badge.
 
 REPORT DATA:
 ${JSON.stringify(data)}`;
@@ -1527,10 +1528,10 @@ ${JSON.stringify(data)}`;
 
     const prompt = this.buildPrompt(section, data);
 
-    const isCiiV2Evaluation = section === 'cii_v2_evaluation';
+    const isCiiV45Evaluation = section === 'cii_v4_5_evaluation';
     const isFypAiEvaluationSection = section === 'fyp_ai_evaluation';
 
-    const openAiOpts: OpenAiCompletionOpts | undefined = isCiiV2Evaluation
+    const openAiOpts: OpenAiCompletionOpts | undefined = isCiiV45Evaluation
       ? {
           model: resolveCiiAnalyzerModel(),
           reasoningEffort: 'high',
@@ -1538,7 +1539,7 @@ ${JSON.stringify(data)}`;
           seed: 4220,
           maxTokens: 16000,
           responseFormat: { type: 'json_object' },
-          systemMessage: `${buildCiiV2EvaluatorPrompt()}\n\n${CII_V2_JSON_ONLY_DEPLOYMENT_NOTE}`,
+          systemMessage: `${CII_V4_5_EVALUATOR_PROMPT}\n\n${CII_V4_5_JSON_ONLY_DEPLOYMENT_NOTE}`,
           // High reasoning + multimodal images: one long attempt, no doubled retry.
           timeoutMs: 180_000,
           maxAttempts: 1,
@@ -1556,7 +1557,7 @@ ${JSON.stringify(data)}`;
     // CII Analyzer: show the model the real evidence images (and say exactly which files it could not see).
     let userContent: string | OpenAiContentPart[] = prompt;
     let evidenceInspection: EvidenceInspection | undefined;
-    if (isCiiV2Evaluation) {
+    if (isCiiV45Evaluation) {
       const { parts, inspection } = await this.buildEvidenceParts(data);
       evidenceInspection = inspection;
       const notShown = inspection.notInspected.length
@@ -1594,14 +1595,14 @@ ${notShown}`;
 
     const summary = text.trim();
 
-    if (isCiiV2Evaluation) {
-      const ciiV2 = parseCiiV2Response(summary);
-      if (!ciiV2) {
-        throw new HttpException({ error: 'AI returned an unreadable CII v2 evaluation. Please retry.' }, 502);
+    if (isCiiV45Evaluation) {
+      const ciiV45 = parseCiiV45Response(summary);
+      if (!ciiV45) {
+        throw new HttpException({ error: 'AI returned an unreadable CII v4.5 evaluation. Please retry.' }, 502);
       }
       return {
         summary,
-        ciiV2,
+        ciiV45,
         evidenceInspection,
         model: resolveCiiAnalyzerModel(),
       };

@@ -31,7 +31,7 @@ export type ReportReviewPackage = {
       count: number;
       files: ReviewPackageEvidenceItem[];
     };
-    analysis_report: { title: string; view: 'cii-v2'; href: string } | null;
+    analysis_report: { title: string; view: 'cii-v4-5'; href: string } | null;
   };
   admin_review_href: string;
   ai_analyser_href: string;
@@ -65,10 +65,10 @@ export function reviewPackageIncludesAnalysis(
 }
 
 export function analysisIsAttached(report: Partial<StudentReport> | null | undefined): boolean {
-  const lock = report?.ciiV2Lock as { locked?: unknown } | null | undefined;
+  const lock = report?.ciiV45Lock as { locked?: unknown } | null | undefined;
   const locked = lock?.locked === true || lock?.locked === 'true';
-  const cii = report?.ciiV2 as { final?: unknown } | null | undefined;
-  const final = cii?.final;
+  const cii = report?.ciiV45 as { finalCII?: unknown } | null | undefined;
+  const final = cii?.finalCII;
   const hasFinal =
     typeof final === 'number'
       ? Number.isFinite(final)
@@ -136,7 +136,7 @@ export function buildReportReviewPackage(
   );
   const facultyAnalysisHref = joinHref(
     frontendBase,
-    `/dashboard/faculty/reports/${encodeURIComponent(reportId)}?view=cii-v2`,
+    `/dashboard/faculty/reports/${encodeURIComponent(reportId)}?view=cii-v4-5`,
   );
   const partnerHref = joinHref(
     frontendBase,
@@ -148,7 +148,7 @@ export function buildReportReviewPackage(
   );
   const analyserHref = joinHref(
     frontendBase,
-    `/dashboard/admin/reports/verify/${encodeURIComponent(reportId)}?view=cii-v2`,
+    `/dashboard/admin/reports/verify/${encodeURIComponent(reportId)}?view=cii-v4-5`,
   );
   const analysisAttached = analysisIsAttached(report);
   const studentAnalysis = joinHref(
@@ -179,7 +179,7 @@ export function buildReportReviewPackage(
       analysis_report: analysisAttached
         ? {
             title: 'Analysis report',
-            view: 'cii-v2',
+            view: 'cii-v4-5',
             href: studentAnalysis,
           }
         : null,

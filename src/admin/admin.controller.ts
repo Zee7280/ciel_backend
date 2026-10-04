@@ -50,7 +50,7 @@ import { PlatformJobsService } from '../jobs/platform-jobs.service';
 import { FacultyReportsService } from '../reports/faculty-reports.service';
 import { RunIndependentAnalysisDto } from '../faculty/dto/run-independent-analysis.dto';
 import { RunIndependentAnalysisBatchDto } from '../faculty/dto/run-independent-analysis-batch.dto';
-import { ApproveCiiV2Dto } from '../faculty/dto/approve-cii-v2.dto';
+import { ApproveCiiV45Dto } from '../faculty/dto/approve-cii-v4-5.dto';
 
 /** Never echo credential material (password hash / deprecated password record) back to the browser. */
 function stripUserSecrets<T>(user: T): T {
@@ -357,34 +357,33 @@ export class AdminController {
     return { success: true, data };
   }
 
-  @Post('community-service/reports/:id/cii-v2/analyse')
+  @Post('community-service/reports/:id/cii-v4-5/analyse')
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
-  async communityServiceCiiV2Analyse(@Param('id') id: string) {
-    return await this.facultyReportsService.runCiiV2AnalysisForAdmin(id);
+  async communityServiceCiiV45Analyse(@Param('id') id: string) {
+    return await this.facultyReportsService.runCiiV45AnalysisForAdmin(id);
   }
 
-  @Post('community-service/reports/:id/cii-v2/approve')
+  @Post('community-service/reports/:id/cii-v4-5/approve')
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
-  async communityServiceCiiV2Approve(
+  async communityServiceCiiV45Approve(
     @Request() req,
     @Param('id') id: string,
-    @Body() body: ApproveCiiV2Dto,
+    @Body() body: ApproveCiiV45Dto,
   ) {
-    return await this.facultyReportsService.approveCiiV2ForAdmin(
+    return await this.facultyReportsService.approveCiiV45ForAdmin(
       id,
       req.user.id,
       body.note,
-      body.facultyAdjustedScore,
-      body.scoreAdjustmentReason,
-      body.criteriaOverrides,
+      body.adminAdjustedScore,
+      body.scoreModerationReason,
     );
   }
 
-  /** Phase 4 (My Impact Wall): CIEL PK runs an additional AI analysis on an already
-   * faculty-approved report — same engine as faculty's independent-analysis action, unrestricted
-   * (platform-wide), and never overwrites the faculty-approved score. */
+  /** CIEL PK runs an additional AI analysis on an already admin-approved report — same engine as
+   * faculty's independent-analysis action, unrestricted (platform-wide), and never overwrites the
+   * admin-approved score. */
   @Post('community-service/reports/:id/independent-analysis')
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
@@ -421,16 +420,16 @@ export class AdminController {
     );
   }
 
-  /** Read-only CII v2 breakdown (section scores + verified highlights, never per-criterion
+  /** Read-only CII v4.5 breakdown (section scores + verified highlights, never per-criterion
    * detail) for a single faculty-approved report — platform-wide, unrestricted. */
-  @Get('community-service/reports/:id/cii-v2')
+  @Get('community-service/reports/:id/cii-v4-5')
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
-  async communityServiceCiiV2Breakdown(@Param('id') id: string) {
-    const data = await this.communityAward.getCiiV2BreakdownForAdmin(id);
+  async communityServiceCiiV45Breakdown(@Param('id') id: string) {
+    const data = await this.communityAward.getCiiV45BreakdownForAdmin(id);
     if (!data) {
       throw new NotFoundException(
-        'No faculty-approved CII v2 record found for this report.',
+        'No admin-approved CII v4.5 record found for this report.',
       );
     }
     return { success: true, data };

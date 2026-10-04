@@ -1,6 +1,7 @@
+import * as crypto from 'crypto';
 import { MAX_DAILY_ATTENDANCE_HOURS } from '../engagement/attendance-description.constants';
 import { collectReportEvidenceFiles } from './collect-report-evidence.util';
-import { getCiiV2ScoringConfig } from './cii-v2.constants';
+import { getCiiV45ScoringConfig } from './cii-v4-5.constants';
 import { StudentReport } from './entities/student-report.entity';
 import {
     hasPublicSharePermission,
@@ -8,6 +9,7 @@ import {
 } from './media-visibility.util';
 
 export const CIEL_PK_AI_EVALUATION_SCHEMA_VERSION = 'ciel_pk_ai_evaluation_v1.0';
+export const CIEL_PK_AI_EVALUATION_SCHEMA_VERSION_V45 = 'ciel_pk_ai_evaluation_v4.5';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -117,30 +119,134 @@ function studentIdFromRow(row: UnknownRecord, fallback: string): string {
         pickString(row.university_id) ||
         pickString(row.registrationNumber) ||
         pickString(row.registration_number) ||
+        pickString(row.studentId) ||
+        pickString(row.student_id) ||
+        pickString(row.participantId) ||
         pickString(row.id) ||
         fallback
     );
 }
 
-function mapTeamLead(lead: UnknownRecord, fallbackStudentId: string): UnknownRecord {
+function normalizePersonKey(value: string): string {
+    return value.trim().toLowerCase();
+}
+
+function rowPersonKeys(row: UnknownRecord): string[] {
+    return [
+        pickString(row.studentId),
+        pickString(row.student_id),
+        pickString(row.participantId),
+        pickString(row.id),
+        pickString(row.email),
+        pickString(row.student_email),
+        pickString(row.fullName),
+        pickString(row.name),
+        pickString(row.student_name),
+        pickString(row.studentName),
+    ]
+        .map(normalizePersonKey)
+        .filter(Boolean);
+}
+
+function rowsMatchPerson(a: UnknownRecord, b: UnknownRecord): boolean {
+    const aKeys = new Set(rowPersonKeys(a));
+    return rowPersonKeys(b).some((key) => aKeys.has(key));
+}
+
+function isRejectedAttendance(row: UnknownRecord): boolean {
+    const status = (
+        pickString(row.approval_status) ||
+        pickString(row.approvalStatus) ||
+        pickString(row.entryStatus) ||
+        ''
+    ).toLowerCase();
+    return status === 'rejected';
+}
+
+function attendanceLogHours(row: UnknownRecord): number {
+    return (
+        pickNumber(row.hours) ??
+        pickNumber(row.sessionHours) ??
+        pickNumber(row.session_hours) ??
+        0
+    );
+}
+
+function isPresentRosterPerson(row: UnknownRecord): boolean {
+    return Boolean(
+        pickString(row.name) ||
+            pickString(row.fullName) ||
+            pickString(row.email) ||
+            pickString(row.id) ||
+            pickString(row.studentId) ||
+            (pickNumber(row.hours) ?? 0) > 0,
+    );
+}
+
+function hoursFromAttendanceLogs(logs: unknown[], person: UnknownRecord): number {
+    return logs.reduce<number>((sum, raw) => {
+        const log = asRecord(raw);
+        if (isRejectedAttendance(log)) return sum;
+        if (!rowsMatchPerson(person, log)) return sum;
+        return sum + attendanceLogHours(log);
+    }, 0);
+}
+
+function hoursFromIndividualMetrics(metrics: UnknownRecord, person: UnknownRecord): number {
+    return asArray(metrics.individual_metrics).reduce<number>((sum, raw) => {
+        const row = asRecord(raw);
+        if (!rowsMatchPerson(person, row)) return sum;
+        return (
+            sum +
+            (pickNumber(row.individual_hours) ??
+                pickNumber(row.hours) ??
+                pickNumber(row.verified_hours) ??
+                0)
+        );
+    }, 0);
+}
+
+function effectivePersonHours(
+    person: UnknownRecord,
+    logs: unknown[],
+    metrics: UnknownRecord,
+): number {
+    return Math.max(
+        pickNumber(person.hours) ?? 0,
+        hoursFromAttendanceLogs(logs, person),
+        hoursFromIndividualMetrics(metrics, person),
+    );
+}
+
+function mapTeamLead(
+    lead: UnknownRecord,
+    fallbackStudentId: string,
+    verifiedHours?: number | null,
+): UnknownRecord {
+    const hours = verifiedHours ?? pickNumber(lead.hours);
     return {
         student_id: studentIdFromRow(lead, fallbackStudentId),
         full_name: pickString(lead.fullName) || pickString(lead.name),
         email: pickString(lead.email),
         role: pickString(lead.role) || 'Team Lead',
         declared_hours: pickNumber(lead.hours),
-        verified_hours: pickNumber(lead.hours),
+        verified_hours: hours,
     };
 }
 
-function mapTeamMember(member: UnknownRecord, fallbackStudentId: string): UnknownRecord {
+function mapTeamMember(
+    member: UnknownRecord,
+    fallbackStudentId: string,
+    verifiedHours?: number | null,
+): UnknownRecord {
+    const hours = verifiedHours ?? pickNumber(member.hours);
     return {
         student_id: studentIdFromRow(member, fallbackStudentId),
         full_name: pickString(member.fullName) || pickString(member.name),
         email: pickString(member.email),
         role: pickString(member.role) || 'Team Member',
         declared_hours: pickNumber(member.hours),
-        verified_hours: pickNumber(member.hours),
+        verified_hours: hours,
     };
 }
 
@@ -220,31 +326,54 @@ function resolveRequiredHours(report: StudentReport): number {
 
 function buildAttendanceSummary(section1: UnknownRecord, requiredHours: number): UnknownRecord {
     const lead = asRecord(section1.team_lead);
-    const members = asArray(section1.team_members);
+    const members = asArray(section1.team_members).map(asRecord).filter(isPresentRosterPerson);
     const logs = asArray(section1.attendance_logs);
-    const leadHours = pickNumber(lead.hours) ?? 0;
-    const memberHours = members.reduce<number>((sum, member) => sum + (pickNumber(asRecord(member).hours) ?? 0), 0);
-    const totalDeclaredTeamHours = leadHours + memberHours;
-    const verifiedHours = pickNumber(asRecord(section1.metrics).total_verified_hours) ?? totalDeclaredTeamHours;
-    const studentsBelowRequiredHours: string[] = [];
-    if ((pickNumber(lead.hours) ?? 0) < requiredHours) {
-        studentsBelowRequiredHours.push(studentIdFromRow(lead, 'team_lead'));
-    }
-    for (const member of members) {
-        const row = asRecord(member);
-        if ((pickNumber(row.hours) ?? 0) < requiredHours) {
-            studentsBelowRequiredHours.push(studentIdFromRow(row, pickString(row.id)));
+    const metrics = asRecord(section1.metrics);
+    const solo = members.length === 0;
+    const allNonRejectedLogHours = logs.reduce<number>((sum, raw) => {
+        const log = asRecord(raw);
+        if (isRejectedAttendance(log)) return sum;
+        return sum + attendanceLogHours(log);
+    }, 0);
+
+    const hoursFor = (person: UnknownRecord, fallbackId: string): { id: string; hours: number } => {
+        let hours = effectivePersonHours(person, logs, metrics);
+        // Solo / individual reports often store hours only on attendance logs, not team_lead.hours.
+        if (solo) {
+            hours = Math.max(
+                hours,
+                allNonRejectedLogHours,
+                pickNumber(metrics.total_verified_hours) ?? 0,
+            );
         }
-    }
+        return { id: studentIdFromRow(person, fallbackId), hours };
+    };
+
+    const leadResult = hoursFor(lead, 'team_lead');
+    const memberResults = members.map((row, index) =>
+        hoursFor(row, pickString(row.id) || `member_${index + 1}`),
+    );
+    const totalDeclaredTeamHours =
+        (pickNumber(lead.hours) ?? 0) +
+        members.reduce((sum, row) => sum + (pickNumber(row.hours) ?? 0), 0);
+    const totalVerifiedTeamHours = Math.max(
+        pickNumber(metrics.total_verified_hours) ?? 0,
+        leadResult.hours + memberResults.reduce((sum, row) => sum + row.hours, 0),
+        allNonRejectedLogHours,
+        totalDeclaredTeamHours,
+    );
+    const studentsBelowRequiredHours = [leadResult, ...memberResults]
+        .filter((row) => row.hours + 1e-9 < requiredHours)
+        .map((row) => row.id);
 
     return {
         total_declared_team_hours: totalDeclaredTeamHours,
-        total_verified_team_hours: verifiedHours,
+        total_verified_team_hours: totalVerifiedTeamHours,
         required_hours_met: studentsBelowRequiredHours.length === 0,
         minimum_required_hours_per_student: requiredHours,
         max_daily_attendance_hours_per_student: MAX_DAILY_ATTENDANCE_HOURS,
         students_below_required_hours: studentsBelowRequiredHours,
-        verified_session_count: pickNumber(asRecord(section1.metrics).verified_session_count) ?? logs.length,
+        verified_session_count: pickNumber(metrics.verified_session_count) ?? logs.length,
     };
 }
 
@@ -589,10 +718,8 @@ function buildSystemValidation(
         legacy_score_removed: true,
         ready_for_ai_evaluation: requiredSectionsPresent && warnings.length === 0,
         validation_warnings: warnings,
-        // The live evaluator is CII v3.1 (see cii-v2.constants.ts / cii-v3-1-balanced-prompt);
-        // this used to inject the retired v8.2/v1.2 public-scoring-API config here, contradicting
-        // the system prompt's own v3.1 weights/version in the same request.
-        scoring_rubric: getCiiV2ScoringConfig(),
+        // The live evaluator is CII v4.5 (see cii-v4-5.constants.ts / cii-v4-5-prompt.constant.ts).
+        scoring_rubric: getCiiV45ScoringConfig(),
     };
 }
 
@@ -684,5 +811,98 @@ export function buildCielPkAiEvaluationPayload(report: StudentReport): CielPkAiE
         section10_sustainability_continuation: mapSection10(section10Raw),
         uploaded_evidence_files: uploadedEvidenceFiles,
         system_validation: buildSystemValidation(report, uploadedEvidenceFiles, section8),
+    };
+}
+
+export type CielPkAiEvaluationPayloadV45 = Omit<CielPkAiEvaluationPayload, 'schema_version'> & {
+    schema_version: typeof CIEL_PK_AI_EVALUATION_SCHEMA_VERSION_V45;
+    report_id: string;
+    input_fingerprint: string;
+};
+
+/** Minimal surface this module needs from `S3Service` — kept narrow so this stays a plain util, not a NestJS provider. */
+export interface EvidenceByteSource {
+    getObjectBufferByPublicUrl(url: string): Promise<{ buffer: Buffer; contentType?: string } | null>;
+}
+
+function sha256Hex(buffer: Buffer): string {
+    return crypto.createHash('sha256').update(buffer).digest('hex');
+}
+
+/** Stable, deterministic JSON stringify (sorted keys) so the fingerprint never changes merely
+ * from object-key reordering — only from an actual change in content. */
+function stableStringify(value: unknown): string {
+    if (value === null || typeof value !== 'object') return JSON.stringify(value);
+    if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+    const keys = Object.keys(value as Record<string, unknown>).sort();
+    return `{${keys
+        .map((key) => `${JSON.stringify(key)}:${stableStringify((value as Record<string, unknown>)[key])}`)
+        .join(',')}}`;
+}
+
+/**
+ * sha256 fingerprint binding a v4.5 evaluation to the exact report content + evidence bytes it
+ * ran against. Callable twice independently — once when the payload is built, again at Accept &
+ * Publish time against the report's then-current live data — so a changed fingerprint reveals
+ * that the source has moved since the evaluation ran and the stale result must not be published.
+ */
+export function computeCiiV45InputFingerprint(
+    report: StudentReport,
+    evidenceFiles: Array<{ file_id: string; file_integrity: { sha256: string | null } }>,
+): string {
+    const sections = [
+        report.section1, report.section2, report.section3, report.section4, report.section5,
+        report.section6, report.section7, report.section8, report.section9, report.section10,
+    ].map((section) => section ?? null);
+    const evidence = evidenceFiles
+        .map((f) => ({ file_id: f.file_id, sha256: f.file_integrity.sha256 }))
+        .sort((a, b) => a.file_id.localeCompare(b.file_id));
+    return sha256Hex(Buffer.from(stableStringify({ sections, evidence }), 'utf8'));
+}
+
+/** Fetches + hashes every evidence file's actual bytes. Never throws — a file that fails to
+ * fetch gets `sha256: null` (still contributes to the fingerprint, just as a known-missing
+ * value), so one bad URL cannot block building the rest of the evaluation payload. */
+async function hashEvidenceFiles(
+    files: CielPkUploadedEvidenceFile[],
+    s3: EvidenceByteSource,
+): Promise<CielPkUploadedEvidenceFile[]> {
+    return Promise.all(
+        files.map(async (file) => {
+            try {
+                const object = await s3.getObjectBufferByPublicUrl(file.url);
+                if (!object) return file;
+                return {
+                    ...file,
+                    file_integrity: { sha256: sha256Hex(object.buffer), size_bytes: object.buffer.byteLength },
+                };
+            } catch (error) {
+                console.error('CII v4.5 evidence hash failed:', file.url, error);
+                return file;
+            }
+        }),
+    );
+}
+
+/**
+ * v4.5 variant of `buildCielPkAiEvaluationPayload`: reuses every section mapper as-is, then adds
+ * the `report_id`/`input_fingerprint` the v4.5 prompt requires to be echoed back. Evidence file
+ * hashes are computed here (fetch-and-hash), not cached at upload time — simpler and lower-risk
+ * than touching the shared evidence-upload path, at the cost of re-fetching bytes on each call
+ * (evaluation time, and again at Accept & Publish time).
+ */
+export async function buildCielPkAiEvaluationPayloadV45(
+    report: StudentReport,
+    s3: EvidenceByteSource,
+): Promise<CielPkAiEvaluationPayloadV45> {
+    const base = buildCielPkAiEvaluationPayload(report);
+    const hashedFiles = await hashEvidenceFiles(base.uploaded_evidence_files, s3);
+    const inputFingerprint = computeCiiV45InputFingerprint(report, hashedFiles);
+    return {
+        ...base,
+        schema_version: CIEL_PK_AI_EVALUATION_SCHEMA_VERSION_V45,
+        uploaded_evidence_files: hashedFiles,
+        report_id: report.id,
+        input_fingerprint: inputFingerprint,
     };
 }

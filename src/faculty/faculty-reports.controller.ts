@@ -14,7 +14,7 @@ import { Roles } from '../auth/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
 import { FacultyReportsService } from '../reports/faculty-reports.service';
 import { FacultyReportActionDto } from './dto/faculty-report-action.dto';
-import { ApproveCiiV2Dto } from './dto/approve-cii-v2.dto';
+import { ApproveCiiV45Dto } from './dto/approve-cii-v4-5.dto';
 import { RunIndependentAnalysisDto } from './dto/run-independent-analysis.dto';
 import { RunIndependentAnalysisBatchDto } from './dto/run-independent-analysis-batch.dto';
 
@@ -63,21 +63,21 @@ export class FacultyReportsController {
     throw new ForbiddenException(FACULTY_REPORT_WRITE_BLOCKED);
   }
 
-  @Post(':id/cii-v2/analyse')
-  async analyseCiiV2(@Request() _req, @Param('id') _id: string) {
+  @Post(':id/cii-v4-5/analyse')
+  async analyseCiiV45(@Request() _req, @Param('id') _id: string) {
     throw new ForbiddenException(FACULTY_REPORT_WRITE_BLOCKED);
   }
 
-  @Post(':id/cii-v2/approve')
-  async approveCiiV2(
+  @Post(':id/cii-v4-5/approve')
+  async approveCiiV45(
     @Request() _req,
     @Param('id') _id: string,
-    @Body() _body: ApproveCiiV2Dto,
+    @Body() _body: ApproveCiiV45Dto,
   ) {
     throw new ForbiddenException(FACULTY_REPORT_WRITE_BLOCKED);
   }
 
-  @Post(':id/cii-v2/independent-analysis')
+  @Post(':id/cii-v4-5/independent-analysis')
   async runIndependentAnalysis(
     @Request() _req,
     @Param('id') _id: string,
@@ -86,7 +86,7 @@ export class FacultyReportsController {
     throw new ForbiddenException(FACULTY_REPORT_WRITE_BLOCKED);
   }
 
-  @Post('cii-v2/independent-analysis/batch')
+  @Post('cii-v4-5/independent-analysis/batch')
   async runIndependentAnalysisBatch(
     @Request() _req,
     @Body() _body: RunIndependentAnalysisBatchDto,

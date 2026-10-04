@@ -59,6 +59,10 @@ import {
   buildOpportunityDetailView,
   STUDENT_RESPONSIBILITIES_MAX_LENGTH,
 } from './opportunity-detail-view.util';
+import {
+  buildStudentBrowseListingFields,
+  classifyBrowseCreator,
+} from './student-browse-listing.util';
 import { purifyStudentOpportunityContent } from './opportunity-content-purify.util';
 import {
   buildApprovalReminderCopy,
@@ -1727,6 +1731,12 @@ export class OpportunitiesService {
         : null) ||
       null;
 
+    const remainingSeats = Math.max(0, volunteersRequired - occupiedSeats);
+    const listing = buildStudentBrowseListingFields(opp, {
+      remaining_seats: remainingSeats,
+      organization_name: organizationName || 'Unknown',
+    });
+
     const base = {
       id: opp.id,
       title: opp.title,
@@ -1744,15 +1754,18 @@ export class OpportunitiesService {
       organization_name: organizationName,
       organization,
       participant_count: occupiedSeats,
-      remaining_seats: Math.max(0, volunteersRequired - occupiedSeats),
+      remaining_seats: remainingSeats,
       volunteersNeeded: volunteersRequired,
       location: opp.location,
       timeline: opp.timeline,
-      start_date: opp.timeline?.start_date,
-      end_date: opp.timeline?.end_date,
       from_time: opp.timeline?.from_time,
       to_time: opp.timeline?.to_time,
       ...this.getWorkflowResponseFields(opp),
+      ...listing,
+      created_by_role: classifyBrowseCreator(opp),
+      faculty_verified: opp.faculty_verified === true,
+      execution_verified: opp.execution_verified === true,
+      admin_approved: opp.admin_approved === true,
     };
 
     if (!detail) {

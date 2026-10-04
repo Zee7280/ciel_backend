@@ -98,6 +98,17 @@ describe('StudentsService impact history', () => {
     const result = await service.getOpportunities({}, 'user-1');
 
     expect(result.data.map((o: any) => o.id)).toEqual(['opp-team-1', 'opp-normal-1']);
+    expect(result.path_counts).toEqual({
+      all: 2,
+      community_service: 2,
+      coursework: 0,
+      fyp: 0,
+      startup: 0,
+    });
+    expect(result.data[0].path_key).toBe('community_service');
+    expect(result.data[0].path_label).toBe('Community Service');
+    expect(result.data[0].created_by_role).toBe('student');
+    expect(result.data[1].created_by_role).toBeNull();
   });
 
   it('attributes a faculty-created opportunity (no Organization row) to the faculty institution instead of "Unknown"', async () => {
@@ -146,6 +157,7 @@ describe('StudentsService impact history', () => {
 
     expect(result.data[0].organization).toBe('Acme University');
     expect(result.data[0].organization_name).toBe('Acme University');
+    expect(result.data[0].created_by_role).toBe('faculty');
   });
 
   it('uses approved report hours when no verified timesheet exists', async () => {

@@ -43,6 +43,10 @@ type OpenAiCompletionOpts = {
   maxTokens?: number;
   responseFormat?: { type: 'json_object' };
   systemMessage?: string;
+  /** Per-call OpenAI HTTP timeout. Defaults to OPENAI_TIMEOUT_MS. */
+  timeoutMs?: number;
+  /** Per-call retries. CII skips the extra attempt so a slow run is not doubled. */
+  maxAttempts?: number;
 };
 
 /** One part of a multimodal chat message (text, or an inline image the model can actually see). */
@@ -111,7 +115,7 @@ export class AiService {
     const files = Array.isArray((data as { uploaded_evidence_files?: unknown })?.uploaded_evidence_files)
       ? ((data as { uploaded_evidence_files: Array<Record<string, unknown>> }).uploaded_evidence_files)
       : [];
-    let images = 0;
+    const imageCandidates: Array<Record<string, unknown>> = [];
     for (const f of files) {
       const id = String(f?.file_id ?? '');
       const name = String(f?.file_name ?? f?.url ?? 'file');
@@ -122,11 +126,28 @@ export class AiService {
         inspection.notInspected.push({ id, name, reason: 'not an image (documents / video are not shown to the model)' });
         continue;
       }
-      if (images >= EVIDENCE_MAX_IMAGES) {
-        inspection.notInspected.push({ id, name, reason: `only the first ${EVIDENCE_MAX_IMAGES} images are inspected` });
-        continue;
-      }
-      const loaded = this.s3Service ? await this.s3Service.getObjectBufferByPublicUrl(url) : null;
+      imageCandidates.push(f);
+    }
+    const toLoad = imageCandidates.slice(0, EVIDENCE_MAX_IMAGES);
+    for (const f of imageCandidates.slice(EVIDENCE_MAX_IMAGES)) {
+      inspection.notInspected.push({
+        id: String(f?.file_id ?? ''),
+        name: String(f?.file_name ?? f?.url ?? 'file'),
+        reason: `only the first ${EVIDENCE_MAX_IMAGES} images are inspected`,
+      });
+    }
+
+    const loadedRows = await Promise.all(
+      toLoad.map(async (f) => {
+        const url = typeof f?.url === 'string' ? f.url : '';
+        const loaded = this.s3Service ? await this.s3Service.getObjectBufferByPublicUrl(url) : null;
+        return { f, loaded };
+      }),
+    );
+
+    for (const { f, loaded } of loadedRows) {
+      const id = String(f?.file_id ?? '');
+      const name = String(f?.file_name ?? f?.url ?? 'file');
       const contentType = String(loaded?.contentType ?? '').toLowerCase().split(';')[0];
       if (!loaded || !loaded.buffer?.length) {
         inspection.notInspected.push({ id, name, reason: 'could not be loaded from storage' });
@@ -136,7 +157,6 @@ export class AiService {
         inspection.notInspected.push({ id, name, reason: 'too large or unsupported image format' });
         continue;
       }
-      images += 1;
       inspection.inspected.push({ id, name });
       parts.push({ type: 'text', text: `Evidence image ${id} — file "${name}" (claims it is linked to: ${JSON.stringify(f?.linked_claims ?? [])}):` });
       parts.push({
@@ -191,14 +211,16 @@ export class AiService {
       requestBody.response_format = opts.responseFormat;
     }
 
-    // Timeout + one retry on transient failures (network, timeout, 429, 5xx). The body is read as
+    // Timeout + retry on transient failures (network, timeout, 429, 5xx). The body is read as
     // text first so an HTML error page from a proxy is reported clearly instead of crashing res.json().
+    const timeoutMs = opts?.timeoutMs ?? OPENAI_TIMEOUT_MS;
+    const maxAttempts = opts?.maxAttempts ?? OPENAI_MAX_ATTEMPTS;
     let responseJson: {
       choices?: Array<{ message?: { content?: string | null } }>;
       error?: { message?: string };
     } = {};
     let lastError: (Error & { status?: number }) | null = null;
-    for (let attempt = 1; attempt <= OPENAI_MAX_ATTEMPTS; attempt++) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         const res = await fetch('https://api.openai.com/v1/chat/completions', {
           method: 'POST',
@@ -207,7 +229,7 @@ export class AiService {
             Authorization: `Bearer ${apiKey}`,
           },
           body: JSON.stringify(requestBody),
-          signal: AbortSignal.timeout(OPENAI_TIMEOUT_MS),
+          signal: AbortSignal.timeout(timeoutMs),
         });
         const raw = await res.text();
         try {
@@ -225,7 +247,7 @@ export class AiService {
         err.status = res.status;
         lastError = err;
         const retryable = res.status === 429 || res.status >= 500;
-        if (!retryable || attempt === OPENAI_MAX_ATTEMPTS) throw err;
+        if (!retryable || attempt === maxAttempts) throw err;
       } catch (e) {
         const err = e as Error & { status?: number; name?: string };
         const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
@@ -237,7 +259,7 @@ export class AiService {
         } else {
           lastError = err;
         }
-        if (!retryable || attempt === OPENAI_MAX_ATTEMPTS) throw lastError;
+        if (!retryable || attempt === maxAttempts) throw lastError;
       }
       this.logger.warn(`OpenAI attempt ${attempt} failed (${lastError?.message}); retrying`);
       await new Promise((r) => setTimeout(r, 1500 * attempt));
@@ -1534,6 +1556,9 @@ ${JSON.stringify(data)}`;
             maxTokens: 16000,
             responseFormat: { type: 'json_object' },
             systemMessage: `${buildCiiV2EvaluatorPrompt()}\n\n${CII_V2_JSON_ONLY_DEPLOYMENT_NOTE}`,
+            // One long attempt: a 90s abort + retry was doubling wait time on a live Analyzer click.
+            timeoutMs: 120_000,
+            maxAttempts: 1,
           }
         : isFypAiEvaluationSection
           ? {

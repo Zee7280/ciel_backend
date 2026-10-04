@@ -24,7 +24,7 @@ export type ReportReviewPackage = {
   schema: 'impact-package-v1';
   analysis_attached: boolean;
   documents: {
-    flashcard: { title: string; view: 'v17'; href: string };
+    flashcard: { title: string; view: 'flash'; href: string };
     detailed_report: { title: string; view: 'print'; href: string };
     evidence: {
       title: string;
@@ -124,7 +124,7 @@ export function buildReportReviewPackage(
   );
   const studentFlash = joinHref(
     frontendBase,
-    `/dashboard/student/report?projectId=${encodeURIComponent(projectId)}&view=v17#flash`,
+    `/dashboard/student/report?projectId=${encodeURIComponent(projectId)}&view=flash#flash`,
   );
   const studentDetailed = joinHref(
     frontendBase,
@@ -149,7 +149,7 @@ export function buildReportReviewPackage(
   const analysisAttached = analysisIsAttached(report);
   const studentAnalysis = joinHref(
     frontendBase,
-    `/dashboard/student/report?projectId=${encodeURIComponent(projectId)}&view=v17#analysis`,
+    `/dashboard/student/report?projectId=${encodeURIComponent(projectId)}&view=analysis#analysis`,
   );
   return {
     generated_at: new Date().toISOString(),
@@ -159,7 +159,7 @@ export function buildReportReviewPackage(
     documents: {
       flashcard: {
         title: 'Impact flashcard',
-        view: 'v17',
+        view: 'flash',
         href: studentFlash,
       },
       detailed_report: {

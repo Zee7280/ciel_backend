@@ -799,7 +799,7 @@ export class StudentReportsService {
 
   /** Same URL-sniffing heuristic as the student impact-history endpoint — kept local to this
    * service to avoid a cross-module dependency on StudentsService. */
-  /** Real "Certificate" / official dossier / faculty V17 package links for My Impact Wall.
+  /** Real Certificate / official dossier / Impact Package links for My Impact Wall.
    * Section11Summary.tsx auto-opens those views from `?view=`. Do not scan uploaded evidence
    * files for a URL that happens to contain "certificat" or end in ".pdf". */
   private buildStudentReportViewUrl(
@@ -927,7 +927,8 @@ export class StudentReportsService {
       actions: {
         certificate_url: this.buildStudentReportViewUrl(report, 'certificate'),
         pdf_url: this.buildStudentReportViewUrl(report, 'print'),
-        v17_url: this.buildStudentReportViewUrl(report, 'v17'),
+        report_url: this.buildStudentReportViewUrl(report, 'report'),
+        v17_url: this.buildStudentReportViewUrl(report, 'report'),
         evidence_url: this.buildStudentReportViewUrl(report, 'evidence'),
         flash_url: this.buildStudentReportViewUrl(report, 'flash'),
         package_url: this.buildStudentReportViewUrl(report, 'package'),
@@ -955,6 +956,7 @@ export class StudentReportsService {
       actions?: {
         certificate_url?: string | null;
         pdf_url?: string | null;
+        report_url?: string | null;
         v17_url?: string | null;
         evidence_url?: string | null;
       };
@@ -971,8 +973,9 @@ export class StudentReportsService {
     ) {
       return row;
     }
-    // Certificate + official print dossier stay hidden until the record is live. The V17 locked
-    // package is the student's own source record (HOLD until faculty lock), so keep v17_url.
+    // Certificate + official print dossier stay hidden until the record is live. The locked
+    // detailed report is the student's own source record (HOLD until faculty lock), so keep
+    // report_url / v17_url.
     return {
       ...row,
       cii_score: null,
@@ -2809,13 +2812,17 @@ export class StudentReportsService {
           ? pack.admin_doc_hrefs.flashcard
           : audience === 'student'
             ? pack.documents.flashcard.href
-            : reviewHref;
+            : audience === 'faculty'
+              ? `${reviewHref}#flash`
+              : `${reviewHref}&doc=flashcard`;
       const detailedHref =
         audience === 'admin'
           ? pack.admin_doc_hrefs.detailed_report
           : audience === 'student'
             ? pack.documents.detailed_report.href
-            : reviewHref;
+            : audience === 'faculty'
+              ? `${reviewHref}#report`
+              : `${reviewHref}&doc=report`;
       if (!reviewHref) return;
       await this.mailService.sendReportPackagePublished({
         to: email,

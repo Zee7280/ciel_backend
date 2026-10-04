@@ -352,7 +352,7 @@ describe('StudentReportsService', () => {
       expect.objectContaining({
         review_package: expect.objectContaining({
           documents: expect.objectContaining({
-            flashcard: expect.objectContaining({ view: 'v17' }),
+            flashcard: expect.objectContaining({ view: 'flash' }),
             detailed_report: expect.objectContaining({ view: 'print' }),
           }),
         }),
@@ -887,7 +887,7 @@ describe('StudentReportsService', () => {
       ).toMatchObject({ cii_score: 88, total: 91, level: 'Transformative' });
     });
 
-    it('hides certificate/print until published but keeps the V17 locked-package link', () => {
+    it('hides certificate/print until published but keeps the locked detailed-report link', () => {
       expect(
         redact({
           status: 'submitted',
@@ -896,14 +896,16 @@ describe('StudentReportsService', () => {
           actions: {
             certificate_url: '/cert',
             pdf_url: '/print',
-            v17_url: '/v17',
+            report_url: '/report',
+            v17_url: '/report',
           },
         }),
       ).toMatchObject({
         actions: {
           certificate_url: null,
           pdf_url: null,
-          v17_url: '/v17',
+          report_url: '/report',
+          v17_url: '/report',
         },
       });
     });
@@ -1847,8 +1849,8 @@ describe('StudentReportsService', () => {
       expect.objectContaining({
         to: 'amina@student.test',
         audience: 'student',
-        reviewHref: expect.stringContaining('view=v17'),
-        flashHref: expect.stringContaining('view=v17'),
+        reviewHref: expect.stringContaining('view=flash'),
+        flashHref: expect.stringContaining('view=flash'),
         detailedHref: expect.stringContaining('view=print'),
         includeAnalysis: true,
         evidenceCount: expect.any(Number),
@@ -1859,6 +1861,8 @@ describe('StudentReportsService', () => {
         to: 'faculty@uni.test',
         audience: 'faculty',
         reviewHref: expect.stringContaining('/dashboard/faculty/reports/report-1'),
+        flashHref: expect.stringContaining('#flash'),
+        detailedHref: expect.stringContaining('#report'),
         includeAnalysis: true,
       }),
     );

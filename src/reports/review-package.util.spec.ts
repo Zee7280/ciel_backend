@@ -24,7 +24,7 @@ describe('review-package.util', () => {
 
     const pack = buildReportReviewPackage(report, 'https://app.cielpk.com');
 
-    expect(pack.documents.flashcard.view).toBe('v17');
+    expect(pack.documents.flashcard.view).toBe('flash');
     expect(pack.documents.detailed_report.view).toBe('print');
     expect(pack.documents.evidence.count).toBe(2);
     expect(pack.documents.evidence.files[0]).toMatchObject({
@@ -35,7 +35,8 @@ describe('review-package.util', () => {
     expect(pack.documents.evidence.files[1].kind).toBe('pdf');
     expect(pack.admin_review_href).toContain('/dashboard/admin/reports/verify/rep-1');
     expect(pack.ai_analyser_href).toContain('view=cii-v2');
-    expect(pack.documents.flashcard.href).toContain('view=v17');
+    expect(pack.documents.flashcard.href).toContain('view=flash');
+    expect(pack.documents.flashcard.href).toContain('#flash');
     expect(pack.stakeholder_hrefs.faculty).toContain('/dashboard/faculty/reports/rep-1');
     expect(pack.stakeholder_hrefs.partner).toContain('/dashboard/partner/verify/rep-1');
     expect(pack.stakeholder_hrefs.university).toContain('/dashboard/partner/verify/rep-1');
@@ -51,6 +52,7 @@ describe('review-package.util', () => {
     );
     expect(locked.analysis_attached).toBe(true);
     expect(locked.documents.analysis_report?.title).toBe('Analysis report');
+    expect(locked.analysis_hrefs.student).toContain('view=analysis');
     expect(locked.analysis_hrefs.student).toContain('#analysis');
     expect(locked.analysis_hrefs.partner).toBe('');
   });

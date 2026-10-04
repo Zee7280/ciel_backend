@@ -54,6 +54,11 @@ import {
 } from '../opportunities/opportunity-timeline.util';
 import { buildOpportunityApprovalTracker } from '../opportunities/opportunity-approval-tracker.util';
 import { buildOpportunityDetailView } from '../opportunities/opportunity-detail-view.util';
+import {
+  buildStudentBrowseListingFields,
+  classifyBrowseCreator,
+  countBrowsePaths,
+} from '../opportunities/student-browse-listing.util';
 import { purifyStudentOpportunityContent } from '../opportunities/opportunity-content-purify.util';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
 import { applyCanonicalPrivateCandidatePhone, isPrivateCandidateDto, isPrivateCandidateOpportunity } from '../opportunities/private-candidate.util';
@@ -1490,6 +1495,7 @@ export class StudentsService {
     return {
       success: true,
       apply_maintenance: this.applyMaintenancePayload(applyState),
+      path_counts: countBrowsePaths(filtered),
       data: await Promise.all(
         paginated.map(async (o) => {
           const part = participationByOpp.get(o.id);
@@ -1501,6 +1507,7 @@ export class StudentsService {
             );
           const occupiedSeats = await this.getOccupiedSeats(o.id);
           const volunteersRequired = o.timeline?.volunteers_required || 0;
+          const remainingSeats = Math.max(0, volunteersRequired - occupiedSeats);
           const applicationStatus = overlay.applicationStatus;
           const hasApplied = overlay.hasApplied;
           const app = overlay.app;
@@ -1522,7 +1529,7 @@ export class StudentsService {
             organization: organizationName,
             organization_name: organizationName,
             volunteersNeeded: volunteersRequired,
-            remaining_seats: Math.max(0, volunteersRequired - occupiedSeats),
+            remaining_seats: remainingSeats,
             description: o.objectives?.description || 'No description',
             application_status: applicationStatus,
             application_stage: app
@@ -1539,6 +1546,11 @@ export class StudentsService {
             status: this.getApiOpportunityStatus(o),
             ...this.getWorkflowResponseFields(o),
             ...this.applyGateFields(o, applyState),
+            ...buildStudentBrowseListingFields(o, {
+              remaining_seats: remainingSeats,
+              organization_name: organizationName,
+            }),
+            created_by_role: classifyBrowseCreator(o),
             teamMembers: [], // We no longer fetch team members in a list view for performance, or we can fetch them if needed.
           };
         }),

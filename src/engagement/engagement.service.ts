@@ -56,6 +56,7 @@ import { ConfigService } from '@nestjs/config';
 import { MailService } from '../mail/mail.service';
 import * as crypto from 'crypto';
 import { canonicalizePhoneInput } from '../common/phone-e164.util';
+import { Otp } from '../students/entities/otp.entity';
 import {
   isSchoolOrInstituteAcademicLabel,
   sanitizeReportAcademicDepartment,
@@ -95,6 +96,8 @@ export class EngagementService {
     private opportunityApplicationRepository: Repository<OpportunityApplication>,
     @InjectRepository(User)
     private userRepository: Repository<User>,
+    @InjectRepository(Otp)
+    private readonly otpRepository: Repository<Otp>,
     private configService: ConfigService,
     private s3Service: S3Service,
     private mailService: MailService,
@@ -1383,6 +1386,12 @@ export class EngagementService {
     if (!participation)
       throw new NotFoundException('Participation record not found');
 
+    // True only when a Team Lead is logging this session on behalf of a teammate whose own
+    // account the request did not come from — i.e. exactly the proxy-entry case that needs the
+    // teammate's own OTP confirmation below, as opposed to an auto-claim (same person, unlinked
+    // record) which needs no extra proof.
+    let proxyEnteredByLead = false;
+
     if (participation.studentId !== studentId) {
       const user = await this.userRepository.findOne({
         where: { id: studentId },
@@ -1520,7 +1529,19 @@ export class EngagementService {
           );
           throw new BadRequestException('Not authorized');
         }
+        proxyEnteredByLead = true;
       }
+    }
+
+    // A Team Lead logging a session for a teammate is exactly the fake-hour-claim risk the OTP
+    // check exists for — the teammate must have handed the lead a code that was just emailed to
+    // the teammate's own registered address. Self-logged sessions (studentId === owner, or an
+    // auto-claim above) need no such proof.
+    if (proxyEnteredByLead) {
+      await this.verifyTeammateAttendanceOtp(
+        participation.email,
+        dto.teammateOtp,
+      );
     }
 
     const opportunity = participation.projectId
@@ -1953,8 +1974,9 @@ export class EngagementService {
       assignedPartnerUserId,
     );
 
+    const { teammateOtp: _teammateOtp, ...dtoWithoutOtp } = dto;
     const log = this.attendanceLogRepository.create({
-      ...dto,
+      ...dtoWithoutOtp,
       locationPin: dto.locationPin?.trim() || null,
       participantId: participation.id,
       projectId: participation.projectId,
@@ -1965,10 +1987,45 @@ export class EngagementService {
       assignedApproverType: routing.assignedApproverType,
       assignedApproverUserId: routing.assignedApproverUserId,
       opportunityCreatorKind: routing.opportunityCreatorKind,
+      teammateOtpVerified: proxyEnteredByLead,
+      teammateOtpVerifiedAt: proxyEnteredByLead ? new Date() : null,
     });
 
     const saved = await this.attendanceLogRepository.save(log);
     return saved;
+  }
+
+  /** Same table/semantics as StudentsService.confirmTeamMemberOtp (sent via the existing
+   * POST /student/verify-team-member/send) — consumed here instead to confirm a teammate endorses
+   * one specific proxy-logged session, not to add them to the team. */
+  private async verifyTeammateAttendanceOtp(
+    rawEmail: string | null | undefined,
+    rawOtp: string | null | undefined,
+  ): Promise<void> {
+    const email = String(rawEmail || '').trim().toLowerCase();
+    const otp = String(rawOtp || '').trim();
+    if (!email || !otp) {
+      throw new BadRequestException(
+        'Ask your teammate for the verification code sent to their email before logging this session on their behalf.',
+      );
+    }
+
+    const record = await this.otpRepository.findOne({ where: { email, otp } });
+    if (!record) {
+      throw new BadRequestException(
+        'Invalid or expired teammate verification code. Ask them to request a new one.',
+      );
+    }
+    if (record.expiresAt < new Date()) {
+      await this.otpRepository.remove(record).catch(() => undefined);
+      throw new BadRequestException(
+        'That teammate verification code has expired. Ask them to request a new one.',
+      );
+    }
+
+    // One-time use, same as the team-join confirm flow — a verified session code cannot be
+    // replayed for a second session.
+    await this.otpRepository.remove(record).catch(() => undefined);
   }
 
   private async notifyAttendancePendingReview(

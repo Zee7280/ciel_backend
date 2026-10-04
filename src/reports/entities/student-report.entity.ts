@@ -79,7 +79,7 @@ export class StudentReport {
   adminReviewedAt: Date | null;
 
   @Column({ default: 'draft' })
-  status: string; // 'draft', 'submitted', 'partner_verified', 'payment_pending' (legacy), 'payment_under_review', 'verified', 'rejected', 'paid'
+  status: string; // 'draft', 'submitted', 'partner_verified', 'payment_pending' (legacy), 'payment_under_review', 'verified', 'rejected', 'paid', 'closed'
 
   @Column({ default: 'pending' })
   partner_status: string; // 'pending', 'approved', 'rejected'
@@ -89,6 +89,18 @@ export class StudentReport {
 
   @Column({ type: 'text', nullable: true })
   admin_feedback: string;
+
+  /** Set when CIEL PK Admin retracts an already-published report (e.g. fraud found later) —
+   * distinct from 'reject' (sends back for student revision) and 'unlock' (reopens as draft).
+   * 'closed' is terminal: the report stops counting anywhere it was already published. */
+  @Column({ name: 'closed_at', type: 'timestamptz', nullable: true })
+  closedAt: Date | null;
+
+  @Column({ name: 'closed_by_admin_id', type: 'varchar', length: 255, nullable: true })
+  closedByAdminId: string | null;
+
+  @Column({ name: 'close_reason', type: 'text', nullable: true })
+  closeReason: string | null;
 
   /** Badges pinned when a stakeholder runs the community-service award model (faculty / partner / university / CIEL).
    * One entry per kind — a new run replaces the previous entry of the same kind here. */

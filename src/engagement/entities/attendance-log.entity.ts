@@ -62,6 +62,15 @@ export class AttendanceLog {
   @Column({ default: false })
   evidenceUploaded: boolean;
 
+  /** Set only on proxy entries (a Team Lead logging for a teammate) — confirms the teammate
+   * themselves supplied the one-time code emailed to their own address for this session. Self-
+   * logged sessions leave this false/null; there is no proxy risk to prove against. */
+  @Column({ default: false })
+  teammateOtpVerified: boolean;
+
+  @Column({ type: 'timestamp', nullable: true })
+  teammateOtpVerifiedAt: Date | null;
+
   @Column({ type: 'varchar', nullable: true })
   evidenceUrl: string;
 

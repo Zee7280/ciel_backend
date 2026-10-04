@@ -2,8 +2,8 @@ import { Transform } from 'class-transformer';
 import { IsBoolean, IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class AdminReportVerifyDto {
-  @IsIn(['approve', 'reject', 'unlock'])
-  action: 'approve' | 'reject' | 'unlock';
+  @IsIn(['approve', 'reject', 'unlock', 'close'])
+  action: 'approve' | 'reject' | 'unlock' | 'close';
 
   @IsOptional()
   @IsString()

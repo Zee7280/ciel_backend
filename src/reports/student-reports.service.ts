@@ -4836,16 +4836,16 @@ export class StudentReportsService {
 
   async verifyReport(
     id: string,
-    action: 'approve' | 'reject' | 'unlock',
+    action: 'approve' | 'reject' | 'unlock' | 'close',
     role: string = 'admin',
     reason?: string,
     organizationId?: string,
     force?: boolean,
     actor?: { id: string; name?: string },
   ) {
-    if (!['approve', 'reject', 'unlock'].includes(action)) {
+    if (!['approve', 'reject', 'unlock', 'close'].includes(action)) {
       throw new BadRequestException(
-        'action must be approve, reject, or unlock',
+        'action must be approve, reject, unlock, or close',
       );
     }
 
@@ -4926,7 +4926,29 @@ export class StudentReportsService {
         );
       }
     }
-    if (action === 'unlock') {
+    if (action === 'close') {
+      if (isPartnerReviewer) {
+        throw new ForbiddenException('Only admins can close reports');
+      }
+      if (!reason?.trim()) {
+        throw new BadRequestException(
+          'A reason is required to close a report.',
+        );
+      }
+      if (currentStatusKey !== 'verified' && currentStatusKey !== 'paid' && report.admin_status !== 'approved') {
+        throw new BadRequestException(
+          'Only an already-approved/published report can be closed. Use reject or unlock for a report still in review.',
+        );
+      }
+      // Deliberately does not touch ciiV2/ciiV2Lock/awardBadges — unlike reject/unlock, close does
+      // not anticipate the student fixing and resubmitting content, so the locked analysis stays
+      // as the historical record of what was published. isVerifiedReport/isSubmittedAndLiveReport
+      // (report-status.util.ts) already exclude status 'closed' from every count/leaderboard.
+      report.status = 'closed';
+      report.closedAt = decisionStamp;
+      report.closedByAdminId = actor?.id ?? null;
+      report.closeReason = reason.trim();
+    } else if (action === 'unlock') {
       if (isPartnerReviewer) {
         throw new ForbiddenException('Only admins can unlock reports');
       }
@@ -5066,6 +5088,13 @@ export class StudentReportsService {
         partnerApprovedAt: report.partnerApprovedAt,
         adminApprovedAt: report.adminApprovedAt,
         admin_feedback: report.admin_feedback,
+        ...(action === 'close'
+          ? {
+              closedAt: report.closedAt,
+              closedByAdminId: report.closedByAdminId,
+              closeReason: report.closeReason,
+            }
+          : {}),
         ...(refreshedReviewPackage
           ? { review_package: refreshedReviewPackage as any }
           : {}),
@@ -5115,15 +5144,15 @@ export class StudentReportsService {
         ),
       );
     }
-    // Tell the student when CIEL PK sends the report back or reopens it.
+    // Tell the student when CIEL PK sends the report back, reopens it, or closes it.
     if (
       !isPartnerReviewer &&
       role === 'admin' &&
-      (action === 'reject' || action === 'unlock')
+      (action === 'reject' || action === 'unlock' || action === 'close')
     ) {
       void this.notifyStudentAdminDecision(
         report,
-        action === 'reject' ? 'revision' : 'unlocked',
+        action === 'reject' ? 'revision' : action === 'close' ? 'closed' : 'unlocked',
         reason,
       ).catch((err) =>
         this.logger.error(
@@ -5137,7 +5166,9 @@ export class StudentReportsService {
         ? 'approved'
         : action === 'reject'
           ? 'rejected'
-          : 'unlocked';
+          : action === 'close'
+            ? 'closed'
+            : 'unlocked';
 
     return {
       success: true,
@@ -5151,6 +5182,8 @@ export class StudentReportsService {
         report_submitted_at: report.reportSubmittedAt,
         partner_approved_at: report.partnerApprovedAt,
         admin_approved_at: report.adminApprovedAt,
+        closed_at: report.closedAt,
+        close_reason: report.closeReason,
       },
     };
   }
@@ -5179,7 +5212,7 @@ export class StudentReportsService {
 
   private async notifyStudentAdminDecision(
     report: StudentReport,
-    kind: 'revision' | 'unlocked',
+    kind: 'revision' | 'unlocked' | 'closed',
     note?: string,
   ): Promise<void> {
     const student =
@@ -5188,11 +5221,17 @@ export class StudentReportsService {
     const title =
       report.opportunity?.title || report.project_id || 'your community service report';
     const heading =
-      kind === 'revision' ? 'Report needs changes' : 'Report reopened';
+      kind === 'revision'
+        ? 'Report needs changes'
+        : kind === 'closed'
+          ? 'Report closed'
+          : 'Report reopened';
     const body =
       kind === 'revision'
         ? `CIEL PK sent "${title}" back for changes. Open it, fix the notes and submit again.`
-        : `CIEL PK reopened "${title}" so you can update it. Submit it again when ready.`;
+        : kind === 'closed'
+          ? `CIEL PK closed "${title}" and removed it from published results.`
+          : `CIEL PK reopened "${title}" so you can update it. Submit it again when ready.`;
     if (this.notificationsService && report.studentId) {
       await this.notificationsService.createNotification(report.studentId, {
         type: 'approval',

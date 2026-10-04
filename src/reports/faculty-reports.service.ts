@@ -1037,6 +1037,20 @@ export class FacultyReportsService {
       );
     }
 
+    // Recompute integrity holds from the report's CURRENT data, not the last analysis's stored
+    // snapshot — evidence can be deleted from storage or sections edited between the last AI run
+    // and this approval, and a stale "no holds" snapshot must not be trusted to lock the score.
+    const freshHolds = buildSystemIntegrityChecks(
+      buildCielPkAiEvaluationPayload(report),
+    ).filter((check) => check.level === 'hold');
+    if (freshHolds.length > 0) {
+      throw new BadRequestException(
+        `This report has unresolved integrity holds and cannot be approved: ${freshHolds
+          .map((check) => check.title)
+          .join('; ')}. Re-run the analysis after resolving them.`,
+      );
+    }
+
     // Compute the AI-recommended score from stored anchors
     const aiResult = computeCiiV2Result({
       sections: stored.sections.map((s) => ({

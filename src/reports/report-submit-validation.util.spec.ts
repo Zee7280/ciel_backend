@@ -23,20 +23,23 @@ const WIZARD_COMPETENCY_SCORES = {
   transformative_sustainability: 3,
 };
 
-/** Payload that matches a complete live-form submit (presence only; no word-count). */
+/** Payload that matches a complete live-form submit, including word-count ranges. */
 const VALID_CORE_SECTIONS = {
   section1: { privacy_consent: true, review_checked: [true, true, true] },
   section2: {
-    problem_statement: 'Community lacks access to clean drinking water.',
+    problem_statement:
+      'Community lacks access to clean drinking water, and many households have relied on unsafe open wells for years, leading to repeated illness among children and elderly residents during the dry season.',
     discipline: 'Environmental Engineering',
-    discipline_contribution: 'Engineering methods used to install and test filters.',
+    discipline_contribution:
+      'Engineering methods were used to design, install and pressure-test the filtration units, then train household members on routine cleaning and maintenance procedures.',
     affected_group: 'Households without safe water',
     affected_count: '40',
     system_gaps: ['Access'],
     baseline_evidence: ['Survey'],
   },
   section3: {
-    contribution_intent_statement: 'Students will support safer water handling in the host community.',
+    contribution_intent_statement:
+      'Students will support safer water handling in the host community by installing household filtration units, demonstrating correct usage, and documenting baseline and follow-up water quality readings so that the partner organization can track improvement over the coming months and plan further interventions where needed.',
   },
   section4: {
     activity_blocks: [
@@ -45,15 +48,18 @@ const VALID_CORE_SECTIONS = {
         primary_category: 'Infrastructure',
         sub_category: 'Water / Sanitation Infrastructure',
         status: 'Completed',
-        description: 'Installed filters and showed households how to use them.',
+        description:
+          'Installed household water filters across five homes, showed each family how to assemble, clean and use the units correctly, and answered questions about ongoing maintenance.',
         outputs: [{ title: 'Filters installed', quantity: '5' }],
       },
     ],
     project_summary: { distinct_total_beneficiaries: 50, counting_method: 'Headcount' },
   },
   section5: {
-    observed_change: 'Households report improved water quality.',
-    challenges: 'Parts were hard to find in the first week.',
+    observed_change:
+      'Households report improved water quality and fewer stomach illnesses since the filters were installed, with several families noting that children miss fewer school days and that water now looks and tastes noticeably cleaner than before the project began, according to informal household feedback collected during follow-up visits.',
+    challenges:
+      'Replacement parts were hard to find locally in the first week, and the team had to travel to a neighboring town to source the correct filter cartridges before installation could continue.',
     measurable_outcomes: [
       {
         outcome_area: 'Health',
@@ -64,7 +70,8 @@ const VALID_CORE_SECTIONS = {
         endline: 50,
         unit: 'households',
         confidence_level: ['Directly Measured'],
-        measurement_explanation: 'Counted from the partner register.',
+        measurement_explanation:
+          "Counted directly from the partner organization's household register, which was updated and cross-checked by the team at each site visit during the project.",
       },
     ],
   },
@@ -81,13 +88,16 @@ const VALID_CORE_SECTIONS = {
     reflection_biggest_learning: 'listening to the community',
     reflection_moment: 'children choosing books on day one',
     reflection_discipline_help: 'simple data tracking for attendance',
-    personal_learning: 'I learned how to document community work.',
-    academic_application: 'The project used fieldwork methods from my course.',
+    personal_learning:
+      'I learned how to document community work carefully, listen to residents before proposing solutions, and record evidence in a way that other people could later verify.',
+    academic_application:
+      'The project used fieldwork and data-collection methods from my engineering coursework, including basic water-quality testing and structured household interviews to track outcomes over time.',
     competency_scores: WIZARD_COMPETENCY_SCORES,
   },
   section10: {
     continuation_status: 'no',
-    continuation_details: 'Funding is exhausted; no further sessions planned.',
+    continuation_details:
+      'Funding is exhausted and no further paid sessions are planned, but the partner organization has agreed to keep one filter-maintenance volunteer on site so households can still get help with basic repairs and replacement parts if something breaks after the project formally ends this term, and the school has also offered to store spare parts so the volunteer does not need to travel far to get them when a filter needs attention.',
     mechanisms: ['No continuation mechanism'],
     scaling_potential: 'Not scalable',
     policy_influence: 'No',
@@ -183,7 +193,7 @@ describe('validateReportSectionsForSubmit', () => {
     ).toBe(true);
   });
 
-  it('accepts a short (no minimum word count) section10 continuation_details', () => {
+  it('rejects a section10 continuation_details below the 60-120 word minimum (mirrors the frontend wizard policy server-side)', () => {
     const issues = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,
       section10: {
@@ -197,7 +207,7 @@ describe('validateReportSectionsForSubmit', () => {
       issues.some(
         (i) => i.section === 10 && i.field === 'continuation_details',
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it('flags missing continuation_status among other Step 9 sustainability gaps', () => {
@@ -238,7 +248,7 @@ describe('validateReportSectionsForSubmit', () => {
           primary_category: '🩺 Health & Clinical Outreach',
           sub_category: 'Health Education',
           status: 'Ongoing',
-          description: 'Ran a hygiene session with the host clinic.',
+          description: 'Ran a hygiene session with the host clinic, demonstrating handwashing steps and distributing soap to every family that attended.',
           beneficiaries_reached: '180',
           unique_beneficiaries: '120',
         },
@@ -259,7 +269,7 @@ describe('validateReportSectionsForSubmit', () => {
           primary_category: '🩺 Health & Clinical Outreach',
           sub_category: 'Health Education',
           status: 'Ongoing',
-          description: 'Ran a hygiene session with the host clinic.',
+          description: 'Ran a hygiene session with the host clinic, demonstrating handwashing steps and distributing soap to every family that attended.',
           beneficiaries_reached: '40',
         },
       ],
@@ -287,7 +297,7 @@ describe('validateReportSectionsForSubmit', () => {
           primary_category: '🩺 Health & Clinical Outreach',
           sub_category: 'Health Education',
           status: 'Ongoing',
-          description: 'Ran a hygiene session with the host clinic.',
+          description: 'Ran a hygiene session with the host clinic, demonstrating handwashing steps and distributing soap to every family that attended.',
           outputs: [],
         },
       ],
@@ -307,7 +317,7 @@ describe('validateReportSectionsForSubmit', () => {
           primary_category: 'Resource Distribution',
           sub_category: 'Other Essential Resource Support',
           status: 'Completed',
-          description: 'Distributed hygiene kits at the school gate.',
+          description: 'Distributed hygiene kits at the school gate, showing each family how to use every item safely and answering their questions.',
           outputs: [{ title: 'Hygiene kits', quantity: '40' }],
         },
       ],
@@ -432,7 +442,7 @@ describe('validateReportSectionsForSubmit', () => {
         has_evidence: 'yes',
         evidence_types: ['Attendance sheet'],
         evidence_files: [{ url: 'https://cdn.example/sheet.jpg', name: 'sheet.jpg' }],
-        description: 'the attendance sheet confirms 40 participants across three sessions',
+        description: 'the attendance sheet confirms 40 participants took part across three separate sessions this month',
         media_visible: 'internal',
         ethical_compliance: WIZARD_ETHICS,
       },
@@ -466,7 +476,8 @@ describe('validateReportSectionsForSubmit', () => {
             primary_category: '📚 Education & Learning',
             sub_category: 'Digital Literacy',
             status: 'Completed',
-            description: 'Sara ran four sessions, Ali built the slides, the school arranged the lab.',
+            description:
+              'Sara ran four sessions, Ali built the slides, and the school arranged the computer lab and projector for every session.',
             outputs: [{ title: 'Sessions Conducted', type: 'Sessions Conducted', quantity: '4', unit: 'Sessions' }],
             serves_beneficiaries: true,
             unique_beneficiaries: '86',
@@ -497,7 +508,8 @@ describe('validateReportSectionsForSubmit', () => {
             unit: '%',
             sure: 1,
             confidence_level: ['Directly Measured'],
-            measurement_explanation: 'Compared the school attendance register four weeks before vs after.',
+            measurement_explanation:
+              'Compared the school attendance register from four weeks before the workshops to four weeks after, using the same register the school already keeps.',
           },
         ],
       },

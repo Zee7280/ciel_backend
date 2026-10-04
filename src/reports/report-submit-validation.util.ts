@@ -41,6 +41,56 @@ function listHasItems(value: unknown): boolean {
   return Array.isArray(value) && value.length > 0;
 }
 
+/** Mirrors ciel_frontend report/utils/validation.ts FIELD_WORD_POLICY/countWords — the frontend
+ * wizard enforces these ranges live, but a direct API submit skipped them entirely. Keep both
+ * copies in sync if the frontend policy changes. */
+const DEFAULT_WORD_MIN = 20;
+const DEFAULT_WORD_MAX = 200;
+const FIELD_WORD_POLICY: Record<string, { min: number; max: number }> = {
+  problem_statement: { min: 20, max: 60 },
+  discipline_contribution: { min: 15, max: 50 },
+  contribution_intent_statement: { min: 30, max: 80 },
+  observed_change: { min: 40, max: 100 },
+  challenges: { min: 15, max: 60 },
+  continuation_details: { min: 60, max: 120 },
+  description: { min: 15, max: 60 },
+  measurement_explanation: { min: 20, max: 80 },
+  evidence_caption: { min: 10, max: 45 },
+};
+
+function countWords(value: unknown): number {
+  return stringField(value)
+    .trim()
+    .split(/\s+/)
+    .filter((w) => w.length > 0).length;
+}
+
+/** Only checks the range when text is present — the plain presence/required checks above already
+ * raise a separate issue for empty fields, so this never double-reports "field is required". */
+function checkWordRange(
+  issues: ReportSubmitValidationIssue[],
+  section: number,
+  field: string,
+  value: unknown,
+  label: string,
+  policyKey?: string,
+): void {
+  const text = stringField(value);
+  if (!text.trim()) return;
+  const { min, max } = FIELD_WORD_POLICY[policyKey ?? field] ?? {
+    min: DEFAULT_WORD_MIN,
+    max: DEFAULT_WORD_MAX,
+  };
+  const n = countWords(text);
+  if (n < min || n > max) {
+    issues.push({
+      section,
+      field,
+      message: `${label} must be ${min}–${max} words (${n} current)`,
+    });
+  }
+}
+
 /** Same 12 keys the live Reflection tab (validateSection9) requires. */
 const COMPETENCY_SCORE_KEYS = [
   'cognitive_systemic',
@@ -77,11 +127,9 @@ function activityHasOutputOrReach(block: Record<string, unknown>): boolean {
 }
 
 /**
- * Presence-only safety net that mirrors the live wizard
- * (ciel_frontend report/utils/validation.ts). Word-count / phrasing rules stay
- * owned by the frontend so a complete wizard submit is never rejected here for
- * being "too short". This exists so a direct API submit cannot skip the fields
- * that are actually on form tabs 1–9.
+ * Safety net that mirrors the live wizard (ciel_frontend report/utils/validation.ts), including
+ * its FIELD_WORD_POLICY word-count ranges (see checkWordRange above) — a direct API submit can no
+ * longer skip either the required fields or the word-count minimums the wizard UI already enforces.
  */
 function hasChosenValue(value: unknown): boolean {
   if (Array.isArray(value)) return value.length > 0;
@@ -128,6 +176,8 @@ function validateCoreSectionsPresence(report: {
   const section2 = report.section2 || {};
   if (!stringField(section2.problem_statement).trim()) {
     issues.push({ section: 2, field: 'problem_statement', message: 'Problem statement is required' });
+  } else {
+    checkWordRange(issues, 2, 'problem_statement', section2.problem_statement, 'Problem statement');
   }
   if (!stringField(section2.affected_group).trim()) {
     issues.push({ section: 2, field: 'affected_group', message: 'Who was affected is required' });
@@ -172,11 +222,15 @@ function validateCoreSectionsPresence(report: {
       field: 'discipline_contribution',
       message: 'Discipline contribution explanation is required',
     });
+  } else {
+    checkWordRange(issues, 2, 'discipline_contribution', section2.discipline_contribution, 'Discipline contribution explanation');
   }
 
   const section3 = report.section3 || {};
   if (!stringField(section3.contribution_intent_statement).trim()) {
     issues.push({ section: 3, field: 'contribution_intent_statement', message: 'Contribution logic is required' });
+  } else {
+    checkWordRange(issues, 3, 'contribution_intent_statement', section3.contribution_intent_statement, 'Contribution logic');
   }
   if (!Array.isArray(section2.baseline_evidence) || !section2.baseline_evidence.length) {
     issues.push({ section: 2, field: 'baseline_evidence', message: 'At least one baseline evidence type is required' });
@@ -209,6 +263,8 @@ function validateCoreSectionsPresence(report: {
       }
       if (!stringField(block.description).trim()) {
         issues.push({ section: 4, field: `activity_blocks.${index}.description`, message: `Activity ${index + 1}: what was done is required` });
+      } else {
+        checkWordRange(issues, 4, `activity_blocks.${index}.description`, block.description, `Activity ${index + 1} description`, 'description');
       }
       if (!activityHasOutputOrReach(block)) {
         issues.push({ section: 4, field: `activity_blocks.${index}.outputs`, message: `Activity ${index + 1}: add a countable output or a beneficiary reach` });
@@ -219,6 +275,8 @@ function validateCoreSectionsPresence(report: {
   const section5 = report.section5 || {};
   if (!stringField(section5.observed_change).trim()) {
     issues.push({ section: 5, field: 'observed_change', message: 'Observed change narrative is required' });
+  } else {
+    checkWordRange(issues, 5, 'observed_change', section5.observed_change, 'Observed change narrative');
   }
   const outcomes = Array.isArray(section5.measurable_outcomes) ? section5.measurable_outcomes : [];
   if (!outcomes.length) {
@@ -261,11 +319,15 @@ function validateCoreSectionsPresence(report: {
       }
       if (!stringField(outcome.measurement_explanation).trim()) {
         issues.push({ section: 5, field: `measurable_outcomes.${index}.measurement_explanation`, message: 'Measurement explanation is required' });
+      } else {
+        checkWordRange(issues, 5, `measurable_outcomes.${index}.measurement_explanation`, outcome.measurement_explanation, 'Measurement explanation', 'measurement_explanation');
       }
     });
   }
   if (!stringField(section5.challenges).trim()) {
     issues.push({ section: 5, field: 'challenges', message: 'Challenges description is required' });
+  } else {
+    checkWordRange(issues, 5, 'challenges', section5.challenges, 'Challenges description');
   }
 
   const section7 = report.section7 || {};
@@ -328,9 +390,13 @@ function validateCoreSectionsPresence(report: {
   }
   if (!stringField(section9.personal_learning).trim()) {
     issues.push({ section: 9, field: 'personal_learning', message: 'Personal growth statement is required' });
+  } else {
+    checkWordRange(issues, 9, 'personal_learning', section9.personal_learning, 'Personal growth statement');
   }
   if (!stringField(section9.academic_application).trim()) {
     issues.push({ section: 9, field: 'academic_application', message: 'Academic application explanation is required' });
+  } else {
+    checkWordRange(issues, 9, 'academic_application', section9.academic_application, 'Academic application explanation');
   }
   if (!competencyScoresComplete(section9.competency_scores)) {
     issues.push({ section: 9, field: 'competency_scores', message: 'Rate all 12 competencies' });
@@ -473,6 +539,8 @@ export function validateReportSectionsForSubmit(report: {
         field: 'description',
         message: 'What does your evidence show? is required',
       });
+    } else {
+      checkWordRange(issues, 8, 'description', section8.description, 'What does your evidence show?', 'evidence_caption');
     }
   }
 
@@ -511,6 +579,8 @@ export function validateReportSectionsForSubmit(report: {
       field: 'continuation_details',
       message: 'What continues, what stops? is required',
     });
+  } else {
+    checkWordRange(issues, 10, 'continuation_details', continuationDetails, 'What continues, what stops?');
   }
   const mechanisms = Array.isArray(section10.mechanisms)
     ? section10.mechanisms

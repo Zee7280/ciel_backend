@@ -241,6 +241,8 @@ describe('FacultyReportsService — approveCiiV2', () => {
       id: 'report-1',
       studentId: 'stu-1',
       opportunityId: 'opp-1',
+      section1: { team_lead: { hours: 20 } },
+      section8: { evidence_files: ['https://example.com/evidence.jpg'] },
       ciiV2: {
         sections: CII_V2_AI_RESPONSE.sections,
         bonus: CII_V2_AI_RESPONSE.bonus,
@@ -272,6 +274,8 @@ describe('FacultyReportsService — approveCiiV2', () => {
     try {
       const baseReport = () => ({
         id: 'report-1',
+        section1: { team_lead: { hours: 20 } },
+        section8: { evidence_files: ['https://example.com/evidence.jpg'] },
         ciiV2: {
           sections: CII_V2_AI_RESPONSE.sections,
           bonus: CII_V2_AI_RESPONSE.bonus,

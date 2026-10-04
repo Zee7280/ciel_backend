@@ -54,4 +54,12 @@ export class CreateAttendanceLogDto {
   @IsOptional()
   @IsString()
   evidenceUrl?: string;
+
+  /** Required only when a Team Lead logs this session for a teammate (proxy entry) — the 6-digit
+   * code the teammate received at their own registered email, sent via
+   * POST /student/verify-team-member/send, confirming they endorse this specific session. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(6)
+  teammateOtp?: string;
 }

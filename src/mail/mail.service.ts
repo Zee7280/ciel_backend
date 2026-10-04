@@ -2743,12 +2743,13 @@ export class MailService {
     }
   }
 
-  /** CIEL PK Admin sent a report back (revision) or reopened it (unlock) — tell the student what to do. */
+  /** CIEL PK Admin sent a report back (revision), reopened it (unlock), or retracted an
+   * already-published report (closed) — tell the student what happened. */
   async sendStudentReportAdminDecision(
     to: string,
     studentFirstName: string,
     projectTitle: string,
-    kind: 'revision' | 'unlocked',
+    kind: 'revision' | 'unlocked' | 'closed',
     note?: string | null,
   ): Promise<void> {
     const from =
@@ -2764,12 +2765,19 @@ export class MailService {
             next: 'Open the report, fix the points below, and submit it again.',
             subject: `CIEL PK — changes requested: ${projectTitle}`,
           }
-        : {
-            heading: 'Your impact report was reopened',
-            body: `${nameEsc}, CIEL PK reopened your community service report so you can update it:`,
-            next: 'Open the report, make your updates, and submit it again.',
-            subject: `CIEL PK — report reopened: ${projectTitle}`,
-          };
+        : kind === 'closed'
+          ? {
+              heading: 'Your impact report was closed',
+              body: `${nameEsc}, CIEL PK has closed your previously published community service report and removed it from published results:`,
+              next: 'Contact your faculty supervisor or CIEL PK if you have questions about this decision.',
+              subject: `CIEL PK — report closed: ${projectTitle}`,
+            }
+          : {
+              heading: 'Your impact report was reopened',
+              body: `${nameEsc}, CIEL PK reopened your community service report so you can update it:`,
+              next: 'Open the report, make your updates, and submit it again.',
+              subject: `CIEL PK — report reopened: ${projectTitle}`,
+            };
     const noteBlock =
       note && note.trim()
         ? `<p style="margin:16px 0 0 0;"><strong>Notes from CIEL PK:</strong></p><p style="background:#fffbeb;border-left:4px solid #f59e0b;padding:12px 14px;margin:8px 0 0 0;color:#374151;">${this.escHtmlPlain(note.trim())}</p>`

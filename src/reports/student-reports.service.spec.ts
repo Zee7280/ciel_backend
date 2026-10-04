@@ -19,16 +19,19 @@ import { evaluateReportRequiresPartnerApproval } from './report-partner-approval
 const MIN_VALID_SUBMIT_SECTIONS = {
   section1: { privacy_consent: true, review_checked: [true, true, true] },
   section2: {
-    problem_statement: 'Community lacks access to clean drinking water.',
+    problem_statement:
+      'Community lacks access to clean drinking water, and many households have relied on unsafe open wells for years, leading to repeated illness among children and elderly residents during the dry season.',
     discipline: 'Environmental Engineering',
-    discipline_contribution: 'Engineering methods used to install and test filters.',
+    discipline_contribution:
+      'Engineering methods were used to design, install and pressure-test the filtration units, then train household members on routine cleaning and maintenance procedures.',
     affected_group: 'Households without safe water',
     affected_count: '40',
     system_gaps: ['Access'],
     baseline_evidence: ['Survey'],
   },
   section3: {
-    contribution_intent_statement: 'Students will support safer water handling in the host community.',
+    contribution_intent_statement:
+      'Students will support safer water handling in the host community by installing household filtration units, demonstrating correct usage, and documenting baseline and follow-up water quality readings so that the partner organization can track improvement over the coming months and plan further interventions where needed.',
   },
   section4: {
     activity_blocks: [
@@ -37,7 +40,8 @@ const MIN_VALID_SUBMIT_SECTIONS = {
         primary_category: 'Infrastructure',
         sub_category: 'Water / Sanitation Infrastructure',
         status: 'Completed',
-        description: 'Installed filters and showed households how to use them.',
+        description:
+          'Installed household water filters across five homes, showed each family how to assemble, clean and use the units correctly, and answered questions about ongoing maintenance.',
         outputs: [{ title: 'Filters installed', quantity: '5' }],
       },
     ],
@@ -47,8 +51,10 @@ const MIN_VALID_SUBMIT_SECTIONS = {
     },
   },
   section5: {
-    observed_change: 'Households report improved water quality.',
-    challenges: 'Parts were hard to find in the first week.',
+    observed_change:
+      'Households report improved water quality and fewer stomach illnesses since the filters were installed, with several families noting that children miss fewer school days and that water now looks and tastes noticeably cleaner than before the project began, according to informal household feedback collected during follow-up visits.',
+    challenges:
+      'Replacement parts were hard to find locally in the first week, and the team had to travel to a neighboring town to source the correct filter cartridges before installation could continue.',
     measurable_outcomes: [
       {
         outcome_area: 'Health',
@@ -59,7 +65,8 @@ const MIN_VALID_SUBMIT_SECTIONS = {
         endline: 50,
         unit: 'households',
         confidence_level: ['Directly Measured'],
-        measurement_explanation: 'Counted from the partner register.',
+        measurement_explanation:
+          "Counted directly from the partner organization's household register, which was updated and cross-checked by the team at each site visit during the project.",
       },
     ],
   },
@@ -81,8 +88,10 @@ const MIN_VALID_SUBMIT_SECTIONS = {
     reflection_biggest_learning: 'listening to the community',
     reflection_moment: 'children choosing books on day one',
     reflection_discipline_help: 'simple data tracking for attendance',
-    personal_learning: 'I learned how to document community work.',
-    academic_application: 'The project used fieldwork methods from my course.',
+    personal_learning:
+      'I learned how to document community work carefully, listen to residents before proposing solutions, and record evidence in a way that other people could later verify.',
+    academic_application:
+      'The project used fieldwork and data-collection methods from my engineering coursework, including basic water-quality testing and structured household interviews to track outcomes over time.',
     competency_scores: {
       cognitive_systemic: 3,
       cognitive_critical: 3,
@@ -738,14 +747,16 @@ describe('StudentReportsService', () => {
         ...MIN_VALID_SUBMIT_SECTIONS,
         section2: {
           ...MIN_VALID_SUBMIT_SECTIONS.section2,
-          problem_statement: 'Mental health awareness among students',
+          problem_statement:
+            'Mental health awareness among students has been limited, leaving many undergraduates unsure where to seek help when they are struggling, especially during stressful exam periods throughout the academic year.',
           baseline_evidence: ['Survey Data', '__o_0', '__o_1', '__o_2'],
           baseline_evidence_other: 'Clinical psychologist consultation',
           discipline: 'Education',
         },
         section3: {
           primary_sdg: { target_id: '', goal_number: '', indicator_id: '' },
-          contribution_intent_statement: 'Contribution logic for SDG 3',
+          contribution_intent_statement:
+            'Contribution logic for SDG 3 centers on improving student mental wellbeing by organizing peer-support sessions, distributing awareness materials, and connecting students with a clinical psychologist for follow-up consultations across the semester so outcomes can be tracked consistently over time.',
         },
       },
       [],

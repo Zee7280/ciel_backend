@@ -200,6 +200,14 @@ export class Opportunity {
     @Column({ type: 'varchar', length: 16, default: 'auto' })
     attendanceRoutingOverride: 'auto' | 'partner' | 'faculty';
 
+    /** Super Admin hide: drop from public Explore + student Browse. Enrolled reports stay. */
+    @Column({ default: false })
+    admin_hidden: boolean;
+
+    /** Super Admin expire: listing stays visible, new applications close. Reports/attendance stay. */
+    @Column({ default: false })
+    admin_expired: boolean;
+
     @CreateDateColumn()
     createdAt: Date;
 

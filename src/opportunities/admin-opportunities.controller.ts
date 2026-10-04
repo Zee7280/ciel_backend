@@ -28,6 +28,7 @@ import { AdminPatchTeamMemberDto } from './dto/admin-patch-team-member.dto';
 import { AdminMergeTeamMembersDto } from './dto/admin-merge-team-members.dto';
 import { SetAttendanceRoutingDto } from './dto/set-attendance-routing.dto';
 import { AdminSetOpportunityContactsDto } from './dto/admin-set-opportunity-contacts.dto';
+import { AdminDirectoryControlDto } from './dto/admin-directory-control.dto';
 
 @Controller('admin/opportunities')
 @UseGuards(JwtAuthGuard)
@@ -132,6 +133,16 @@ export class AdminOpportunitiesController {
   ) {
     const saved = await this.opportunitiesService.setStatus(id, body.status);
     return { success: true, data: { id: saved.id, status: saved.status } };
+  }
+
+  @Patch(':id/directory-control')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  async setDirectoryControl(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() body: AdminDirectoryControlDto,
+  ) {
+    return this.opportunitiesService.setDirectoryControl(id, body);
   }
 
   @Post(':id/reject')

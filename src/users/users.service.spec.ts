@@ -25,12 +25,14 @@ describe('UsersService', () => {
     expect(escapeLikePattern('50%_a\\')).toBe('50\\%\\_a\\\\');
   });
 
-  it('create lowercases email, hashes password and never writes passwordRecord', async () => {
+  it('create lowercases email, hashes password and writes encrypted passwordRecord', async () => {
     const repo = repoMock();
     const saved = await build(repo).create({ name: 'A', email: '  A@B.C ', password: 'password1', role: 'student' } as any);
     expect(saved.email).toBe('a@b.c');
     expect(saved.password).not.toBe('password1');
-    expect((saved as any).passwordRecord).toBeUndefined();
+    expect(typeof (saved as any).passwordRecord).toBe('string');
+    expect((saved as any).passwordRecord).toContain(':');
+    expect((saved as any).passwordRecord).not.toBe('password1');
   });
 
   it('create returns 409 on duplicate email', async () => {
@@ -89,3 +91,62 @@ describe('UsersService — password reset tokens are stored hashed', () => {
     expect(repo.findOne).not.toHaveBeenCalled();
   });
 });
+
+describe('UsersService — admin list filters', () => {
+  function listRepo(rows: any[]) {
+    const qb: any = {
+      leftJoin: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getManyAndCount: jest.fn().mockResolvedValue([rows, rows.length]),
+    };
+    return {
+      createQueryBuilder: jest.fn().mockReturnValue(qb),
+      _qb: qb,
+    };
+  }
+
+  it('filters by status and expands search across university fields', async () => {
+    const repo = listRepo([
+      { id: '1', name: 'A', email: 'a@b.c', role: 'student', status: 'active', university: 'BNU' },
+    ]);
+    await build(repo).findAllForAdmin({
+      page: 1,
+      limit: 10,
+      status: 'active',
+      search: 'BNU',
+    });
+    const sql = repo._qb.andWhere.mock.calls.map((c: any[]) => c[0]).join(' ');
+    expect(sql).toContain('user.status = :status');
+    expect(sql).toContain('user.university ILIKE :search');
+  });
+
+  it('returns stored_password only when revealPasswordRecords is on', async () => {
+    const { encryptPasswordRecord } = require('./password-record.util');
+    const rows = [
+      {
+        id: '1',
+        name: 'A',
+        email: 'a@b.c',
+        role: 'student',
+        status: 'active',
+        password: 'hash',
+        passwordRecord: encryptPasswordRecord('secret1234'),
+      },
+    ];
+    const hidden = await build(listRepo(rows)).findAllForAdmin({ page: 1, limit: 10 });
+    expect((hidden.data[0] as any).stored_password).toBeUndefined();
+    const shown = await build(listRepo(rows)).findAllForAdmin({
+      page: 1,
+      limit: 10,
+      revealPasswordRecords: true,
+    });
+    expect((shown.data[0] as any).stored_password).toBe('secret1234');
+    expect((shown.data[0] as any).password).toBeUndefined();
+  });
+});
+

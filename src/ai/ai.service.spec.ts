@@ -6,12 +6,20 @@ const res = (status: number, body: string) => ({ ok: status >= 200 && status < 3
 describe('AiService — OpenAI transport hardening', () => {
   const realFetch = global.fetch;
   const realKey = process.env.OPENAI_API_KEY;
+  const realSummaryModel = process.env.OPENAI_SUMMARY_MODEL;
+  const realCiiModel = process.env.OPENAI_CII_MODEL;
   beforeEach(() => {
     process.env.OPENAI_API_KEY = 'sk-test';
+    delete process.env.OPENAI_SUMMARY_MODEL;
+    delete process.env.OPENAI_CII_MODEL;
   });
   afterEach(() => {
     global.fetch = realFetch;
     process.env.OPENAI_API_KEY = realKey;
+    if (realSummaryModel === undefined) delete process.env.OPENAI_SUMMARY_MODEL;
+    else process.env.OPENAI_SUMMARY_MODEL = realSummaryModel;
+    if (realCiiModel === undefined) delete process.env.OPENAI_CII_MODEL;
+    else process.env.OPENAI_CII_MODEL = realCiiModel;
     jest.useRealTimers();
   });
 
@@ -22,6 +30,10 @@ describe('AiService — OpenAI transport hardening', () => {
     global.fetch = f as never;
     await run(new AiService());
     expect(f.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+    const sent = JSON.parse(f.mock.calls[0][1].body);
+    expect(sent.model).toBe('gpt-5.4');
+    expect(sent.reasoning_effort).toBeUndefined();
+    expect(sent.response_format).toBeUndefined();
   });
 
   it('retries once on a 5xx and then succeeds', async () => {
@@ -67,11 +79,21 @@ describe('AiService — OpenAI transport hardening', () => {
 
 describe('AiService — CII v2 sees the real evidence images', () => {
   const realFetch = global.fetch;
+  const realKey = process.env.OPENAI_API_KEY;
+  const realSummaryModel = process.env.OPENAI_SUMMARY_MODEL;
+  const realCiiModel = process.env.OPENAI_CII_MODEL;
   beforeEach(() => {
     process.env.OPENAI_API_KEY = 'sk-test';
+    delete process.env.OPENAI_SUMMARY_MODEL;
+    delete process.env.OPENAI_CII_MODEL;
   });
   afterEach(() => {
     global.fetch = realFetch;
+    process.env.OPENAI_API_KEY = realKey;
+    if (realSummaryModel === undefined) delete process.env.OPENAI_SUMMARY_MODEL;
+    else process.env.OPENAI_SUMMARY_MODEL = realSummaryModel;
+    if (realCiiModel === undefined) delete process.env.OPENAI_CII_MODEL;
+    else process.env.OPENAI_CII_MODEL = realCiiModel;
   });
 
   const CII_JSON = JSON.stringify({
@@ -104,6 +126,9 @@ describe('AiService — CII v2 sees the real evidence images', () => {
     });
 
     const sent = JSON.parse(f.mock.calls[0][1].body);
+    expect(sent.model).toBe('gpt-5.6-sol');
+    expect(sent.reasoning_effort).toBe('high');
+    expect(sent.response_format).toEqual({ type: 'json_object' });
     expect(sent.messages[0].content).toContain('Balanced Composite Impact Index (CII) Rubric v3.1');
     expect(sent.messages[0].content).not.toContain('CII Rubric v2');
     const userContent = sent.messages[1].content;

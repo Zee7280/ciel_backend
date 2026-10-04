@@ -86,4 +86,35 @@ describe('student apply maintenance util', () => {
     expect(gate.applications_open).toBe(true);
     expect(gate.apply_blocked_reason).toBeNull();
   });
+
+  it('blocks apply when Super Admin expires a single listing', () => {
+    const gate = decorateApplyGate({ createdAt: new Date('2026-12-01T00:00:00.000Z'), admin_expired: true }, openState);
+    expect(gate.applications_open).toBe(false);
+    expect(gate.apply_blocked_reason).toBe('opportunity_expired');
+  });
+
+  it('blocks apply when Super Admin hides a listing', () => {
+    const gate = decorateApplyGate({ createdAt: new Date('2026-12-01T00:00:00.000Z'), admin_hidden: true }, openState);
+    expect(gate.applications_open).toBe(false);
+    expect(gate.apply_blocked_reason).toBe('opportunity_hidden');
+  });
+
+  it('global maintenance pause wins over a hidden/expired single listing, with one non-contradictory reason', () => {
+    const gate = decorateApplyGate(
+      { createdAt: new Date('2026-12-01T00:00:00.000Z'), admin_hidden: true, admin_expired: true },
+      { ...openState, maintenanceEnabled: true, maintenanceMessage: 'Paused until Monday.' },
+    );
+    expect(gate.applications_open).toBe(false);
+    expect(gate.apply_blocked_reason).toBe('maintenance');
+    expect(gate.apply_blocked_message).toBe('Paused until Monday.');
+  });
+
+  it('hidden takes precedence over expired when both are set on the same listing', () => {
+    const gate = decorateApplyGate(
+      { createdAt: new Date('2026-12-01T00:00:00.000Z'), admin_hidden: true, admin_expired: true },
+      openState,
+    );
+    expect(gate.applications_open).toBe(false);
+    expect(gate.apply_blocked_reason).toBe('opportunity_hidden');
+  });
 });

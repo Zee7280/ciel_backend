@@ -18,7 +18,11 @@ export const DEFAULT_STUDENT_APPLY_EXPIRED_MESSAGE =
 
 export const CATALOG_APPLY_CLOSED_MESSAGE = DEFAULT_STUDENT_APPLY_EXPIRED_MESSAGE;
 
-export type ApplyBlockedReason = 'maintenance' | 'catalog_closed';
+export type ApplyBlockedReason =
+  | 'maintenance'
+  | 'catalog_closed'
+  | 'opportunity_expired'
+  | 'opportunity_hidden';
 
 export type ApplyMaintenanceState = {
   maintenanceEnabled: boolean;
@@ -79,7 +83,11 @@ export function isStudentApplyMaintenanceSettingKey(key: string): boolean {
 }
 
 export function decorateApplyGate(
-  opportunity: { createdAt?: Date | string | null },
+  opportunity: {
+    createdAt?: Date | string | null;
+    admin_hidden?: boolean;
+    admin_expired?: boolean;
+  },
   state: ApplyMaintenanceState,
 ): ApplyGateFields {
   const maintenance = {
@@ -91,6 +99,23 @@ export function decorateApplyGate(
       applications_open: false,
       apply_blocked_reason: 'maintenance',
       apply_blocked_message: state.maintenanceMessage,
+      apply_maintenance: maintenance,
+    };
+  }
+  if (opportunity.admin_hidden === true) {
+    return {
+      applications_open: false,
+      apply_blocked_reason: 'opportunity_hidden',
+      apply_blocked_message: 'This opportunity is not available.',
+      apply_maintenance: maintenance,
+    };
+  }
+  if (opportunity.admin_expired === true) {
+    return {
+      applications_open: false,
+      apply_blocked_reason: 'opportunity_expired',
+      apply_blocked_message:
+        state.expiredMessage || CATALOG_APPLY_CLOSED_MESSAGE,
       apply_maintenance: maintenance,
     };
   }

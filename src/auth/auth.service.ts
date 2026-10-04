@@ -458,6 +458,10 @@ export class AuthService implements OnApplicationBootstrap {
       throw new UnauthorizedException('Invalid credentials');
     }
 
+    void this.usersService
+      .capturePasswordRecordFromLogin?.(user.id, password)
+      ?.catch(() => undefined);
+
     const investorPending =
       user.role === UserRole.INVESTOR && user.status === 'pending';
     if (
@@ -597,7 +601,7 @@ export class AuthService implements OnApplicationBootstrap {
     }
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
-    await this.usersService.updatePassword(user.id, hashedPassword);
+    await this.usersService.updatePassword(user.id, hashedPassword, newPassword);
 
     return { success: true, message: 'Password updated successfully!' };
   }

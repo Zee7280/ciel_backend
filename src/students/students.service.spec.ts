@@ -1,3 +1,4 @@
+import { NotFoundException } from '@nestjs/common';
 import { StudentsService } from './students.service';
 import { ReportPartnerApprovalSettingsService } from '../reports/report-partner-approval-settings.service';
 
@@ -109,6 +110,113 @@ describe('StudentsService impact history', () => {
     expect(result.data[0].path_label).toBe('Community Service');
     expect(result.data[0].created_by_role).toBe('student');
     expect(result.data[1].created_by_role).toBeNull();
+  });
+
+  it('omits Super Admin-hidden opportunities from the student browse listing', async () => {
+    const opportunities = [
+      {
+        id: 'opp-visible',
+        isStudentCreated: false,
+        status: 'active',
+        admin_approved: true,
+        workflowStage: 'live',
+        types: [],
+        organization: null,
+        timeline: {},
+        objectives: {},
+      },
+      {
+        id: 'opp-hidden',
+        isStudentCreated: false,
+        status: 'active',
+        admin_approved: true,
+        workflowStage: 'live',
+        admin_hidden: true,
+        types: [],
+        organization: null,
+        timeline: {},
+        objectives: {},
+      },
+    ];
+    const service = makeService({
+      opportunitiesRepository: {
+        find: jest.fn().mockResolvedValue(opportunities),
+      },
+      participantRepository: {
+        find: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+      },
+      opportunityApplicationsService: {
+        mapCurrentApplicationsForOpportunities: jest.fn().mockResolvedValue(new Map()),
+        resolveStudentJoinOverlay: jest.fn().mockResolvedValue({
+          applicationStatus: null,
+          hasApplied: false,
+          app: null,
+        }),
+        countSeatsInFlight: jest.fn().mockResolvedValue(0),
+      },
+      opportunitiesService: {
+        getFacultyOrgFallback: jest.fn().mockResolvedValue(null),
+      },
+    });
+
+    const result = await service.getOpportunities({}, 'user-1');
+    expect(result.data.map((o: any) => o.id)).toEqual(['opp-visible']);
+  });
+
+  it('getOpportunityById: a stranger gets 404 on a hidden opportunity, but an already-applied student still sees it', async () => {
+    const hidden = {
+      id: 'opp-hidden',
+      isStudentCreated: false,
+      status: 'active',
+      admin_approved: true,
+      workflowStage: 'live',
+      admin_hidden: true,
+      types: [],
+      organization: null,
+      timeline: {},
+      objectives: {},
+    };
+
+    const strangerService = makeService({
+      opportunitiesRepository: { findOne: jest.fn().mockResolvedValue(hidden) },
+      participantRepository: {
+        findOne: jest.fn().mockResolvedValue(null),
+        count: jest.fn().mockResolvedValue(0),
+      },
+      opportunityApplicationsService: {
+        resolveStudentJoinOverlay: jest.fn().mockResolvedValue({
+          applicationStatus: null,
+          applicationStage: null,
+          applicationInternalStatus: null,
+          hasApplied: false,
+        }),
+        countSeatsInFlight: jest.fn().mockResolvedValue(0),
+      },
+    });
+    await expect(
+      strangerService.getOpportunityById('opp-hidden', 'stranger-user'),
+    ).rejects.toBeInstanceOf(NotFoundException);
+
+    const enrolledService = makeService({
+      opportunitiesRepository: { findOne: jest.fn().mockResolvedValue(hidden) },
+      participantRepository: {
+        findOne: jest.fn().mockResolvedValue({ studentId: 'enrolled-user', projectId: 'opp-hidden' }),
+        count: jest.fn().mockResolvedValue(0),
+      },
+      opportunityApplicationsService: {
+        resolveStudentJoinOverlay: jest.fn().mockResolvedValue({
+          applicationStatus: 'accepted',
+          applicationStage: null,
+          applicationInternalStatus: null,
+          hasApplied: true,
+        }),
+        countSeatsInFlight: jest.fn().mockResolvedValue(0),
+      },
+    });
+    const result = await enrolledService.getOpportunityById('opp-hidden', 'enrolled-user');
+    expect(result.success).toBe(true);
+    expect(result.data.id).toBe('opp-hidden');
   });
 
   it('attributes a faculty-created opportunity (no Organization row) to the faculty institution instead of "Unknown"', async () => {
@@ -513,6 +621,110 @@ describe('StudentsService.sendTeamMemberOtp', () => {
       success: true,
       message: 'OTP sent successfully',
     });
+  });
+
+  it('stores the OTP record against a normalized (trimmed, lowercased) email', async () => {
+    const save = jest.fn().mockImplementation((row) => row);
+    const service = makeService({
+      participantRepository: { find: jest.fn().mockResolvedValue([]) },
+      otpRepository: {
+        findOne: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockImplementation((row) => row),
+        save,
+      },
+      mailService: { sendTeamMemberOtp: jest.fn().mockResolvedValue(undefined) },
+    });
+    await service.sendTeamMemberOtp('  New@Test.EDU  ');
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ email: 'new@test.edu' }),
+    );
+  });
+
+  it('skips a broken roster duplicate-check instead of 500ing the whole OTP send', async () => {
+    const save = jest.fn().mockImplementation((row) => row);
+    const service = makeService({
+      participantRepository: {
+        find: jest.fn().mockResolvedValue([]),
+        createQueryBuilder: jest.fn().mockReturnValue({
+          where: jest.fn().mockReturnThis(),
+          andWhere: jest.fn().mockReturnThis(),
+          getOne: jest.fn().mockRejectedValue(new Error('invalid input syntax for type uuid')),
+        }),
+      },
+      otpRepository: {
+        findOne: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockImplementation((row) => row),
+        save,
+      },
+      mailService: { sendTeamMemberOtp: jest.fn().mockResolvedValue(undefined) },
+    });
+    const result = await service.sendTeamMemberOtp('new@test.edu', 'not-a-real-uuid', true);
+    expect(result).toEqual({ success: true, message: 'OTP sent successfully' });
+    expect(save).toHaveBeenCalled();
+  });
+
+  it('turns an OTP-record save failure into a clean message instead of an unhandled 500', async () => {
+    const service = makeService({
+      participantRepository: { find: jest.fn().mockResolvedValue([]) },
+      otpRepository: {
+        findOne: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockImplementation((row) => row),
+        save: jest.fn().mockRejectedValue(new Error('relation "otps" has no column "foo"')),
+      },
+      mailService: { sendTeamMemberOtp: jest.fn().mockResolvedValue(undefined) },
+    });
+    await expect(service.sendTeamMemberOtp('new@test.edu')).rejects.toThrow(
+      /Failed to send verification code/,
+    );
+  });
+});
+
+describe('StudentsService.confirmTeamMemberOtp', () => {
+  it('looks up the OTP record by normalized email', async () => {
+    const findOne = jest.fn().mockResolvedValue(null);
+    const service = makeService({ otpRepository: { findOne } });
+    await expect(
+      service.confirmTeamMemberOtp(' New@Test.EDU ', '123456'),
+    ).rejects.toThrow(/Invalid OTP/);
+    expect(findOne).toHaveBeenCalledWith({
+      where: { email: 'new@test.edu', otp: '123456' },
+    });
+  });
+
+  it('turns an OTP lookup failure into a clean message instead of an unhandled 500', async () => {
+    const service = makeService({
+      otpRepository: {
+        findOne: jest.fn().mockRejectedValue(new Error('connection terminated')),
+      },
+    });
+    await expect(
+      service.confirmTeamMemberOtp('new@test.edu', '123456'),
+    ).rejects.toThrow(/Could not verify the code right now/);
+  });
+
+  it('still reports success when verification passed but the cleanup delete fails', async () => {
+    const record = { email: 'new@test.edu', otp: '123456', expiresAt: new Date(Date.now() + 60000) };
+    const service = makeService({
+      otpRepository: {
+        findOne: jest.fn().mockResolvedValue(record),
+        remove: jest.fn().mockRejectedValue(new Error('row locked')),
+      },
+    });
+    const result = await service.confirmTeamMemberOtp('new@test.edu', '123456');
+    expect(result).toEqual({ success: true, message: 'Email verified' });
+  });
+});
+
+describe('StudentsService.sendTeamMemberVerification', () => {
+  it('turns a mail-send failure into a clean message instead of an unhandled 500', async () => {
+    const service = makeService({
+      mailService: {
+        sendTeamMemberInvite: jest.fn().mockRejectedValue(new Error('SMTP auth failed')),
+      },
+    });
+    await expect(service.sendTeamMemberVerification('new@test.edu')).rejects.toThrow(
+      /Failed to send the invitation email/,
+    );
   });
 });
 

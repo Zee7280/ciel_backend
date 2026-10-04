@@ -279,6 +279,26 @@ describe('OpportunitiesService — public directory visibility (isPubliclyVisibl
             }),
         ).toBe(true);
     });
+
+    it('drops a live listing from the public directory when Super Admin hides it', () => {
+        expect(
+            isVisible({
+                isStudentCreated: false,
+                admin_hidden: true,
+                visibility_and_academic_linkage: { visibility_type: 'open_all_universities' },
+            }),
+        ).toBe(false);
+    });
+
+    it('keeps an expired listing in the public directory (apply is gated separately)', () => {
+        expect(
+            isVisible({
+                isStudentCreated: false,
+                admin_expired: true,
+                visibility_and_academic_linkage: { visibility_type: 'open_all_universities' },
+            }),
+        ).toBe(true);
+    });
 });
 
 describe('OpportunitiesService — student create-opportunity is locked to their own university', () => {
@@ -2145,14 +2165,168 @@ describe('OpportunitiesService — approval actions record actor + timestamp + v
         await expect(service.approve('opp-rej-1')).rejects.toBeInstanceOf(BadRequestException);
     });
 
-    it('setStatus() only allows closed/draft', async () => {
-        const opp = { id: 'o', status: 'active' } as unknown as Opportunity;
+    it('setStatus() allows closed/draft, and active only as reopen/republish of an approved listing', async () => {
+        const opp = {
+            id: 'o',
+            status: 'active',
+            admin_approved: true,
+            workflowStage: 'live',
+        } as unknown as Opportunity;
         const save = jest.fn(async (row: Opportunity) => row);
         const service = makeService({ findOne: jest.fn().mockResolvedValue(opp), save });
-        await expect(service.setStatus('o', 'active')).rejects.toBeInstanceOf(BadRequestException);
+        const same = await service.setStatus('o', 'active');
+        expect(same.status).toBe('active');
+        expect(save).not.toHaveBeenCalled();
         await expect(service.setStatus('o', 'rejected')).rejects.toBeInstanceOf(BadRequestException);
-        const saved = await service.setStatus('o', 'closed');
-        expect(saved.status).toBe('closed');
+        const closed = await service.setStatus('o', 'closed');
+        expect(closed.status).toBe('closed');
+        expect(opp.admin_approved).toBe(true);
+        expect((opp as any).workflowStage).toBe('live');
+        const reopened = await service.setStatus('o', 'active');
+        expect(reopened.status).toBe('active');
+        expect(opp.admin_approved).toBe(true);
+        expect((opp as any).workflowStage).toBe('live');
+    });
+
+    it('setStatus(active) republishes an approved draft without re-approval', async () => {
+        const opp = {
+            id: 'o',
+            status: 'draft',
+            admin_approved: true,
+            workflowStage: 'live',
+        } as unknown as Opportunity;
+        const save = jest.fn(async (row: Opportunity) => row);
+        const service = makeService({ findOne: jest.fn().mockResolvedValue(opp), save });
+        const saved = await service.setStatus('o', 'active');
+        expect(saved.status).toBe('active');
+        expect(opp.admin_approved).toBe(true);
+        expect((opp as any).workflowStage).toBe('live');
+    });
+
+    it('setStatus(active) refuses unapproved, rejected, or in-revision listings', async () => {
+        const save = jest.fn(async (row: Opportunity) => row);
+        const unapproved = {
+            id: 'o',
+            status: 'draft',
+            admin_approved: false,
+            workflowStage: 'pending_admin',
+        } as unknown as Opportunity;
+        const unapprovedService = makeService({
+            findOne: jest.fn().mockResolvedValue(unapproved),
+            save,
+        });
+        await expect(unapprovedService.setStatus('o', 'active')).rejects.toBeInstanceOf(
+            BadRequestException,
+        );
+
+        const rejected = {
+            id: 'o',
+            status: 'closed',
+            admin_approved: true,
+            workflowStage: 'rejected',
+        } as unknown as Opportunity;
+        const rejectedService = makeService({
+            findOne: jest.fn().mockResolvedValue(rejected),
+            save,
+        });
+        await expect(rejectedService.setStatus('o', 'active')).rejects.toBeInstanceOf(
+            BadRequestException,
+        );
+
+        const revision = {
+            id: 'o',
+            status: 'draft',
+            admin_approved: true,
+            workflowStage: 'revision',
+        } as unknown as Opportunity;
+        const revisionService = makeService({
+            findOne: jest.fn().mockResolvedValue(revision),
+            save,
+        });
+        await expect(revisionService.setStatus('o', 'active')).rejects.toBeInstanceOf(
+            BadRequestException,
+        );
+        expect(save).not.toHaveBeenCalled();
+    });
+
+    it('setDirectoryControl() toggles hide/expire without changing status', async () => {
+        const opp = {
+            id: 'o',
+            status: 'active',
+            admin_hidden: false,
+            admin_expired: false,
+            isStudentCreated: false,
+            visibility_and_academic_linkage: { visibility_type: 'open_all_universities' },
+        } as unknown as Opportunity;
+        const save = jest.fn(async (row: Opportunity) => row);
+        const service = makeService({ findOne: jest.fn().mockResolvedValue(opp), save });
+
+        await expect(service.setDirectoryControl('o', {})).rejects.toBeInstanceOf(BadRequestException);
+
+        const hidden = await service.setDirectoryControl('o', { hidden: true });
+        expect(hidden.data.admin_hidden).toBe(true);
+        expect(hidden.data.directory_visible).toBe(false);
+        expect(opp.status).toBe('active');
+
+        const expired = await service.setDirectoryControl('o', { expired: true, hidden: false });
+        expect(expired.data.admin_hidden).toBe(false);
+        expect(expired.data.admin_expired).toBe(true);
+        expect(expired.data.directory_visible).toBe(true);
+        expect(opp.status).toBe('active');
+    });
+
+    it('setDirectoryControl() allows hidden+expired together, hidden wins for directory_visible', async () => {
+        const opp = {
+            id: 'o',
+            status: 'active',
+            admin_hidden: false,
+            admin_expired: false,
+            isStudentCreated: false,
+            visibility_and_academic_linkage: { visibility_type: 'open_all_universities' },
+        } as unknown as Opportunity;
+        const save = jest.fn(async (row: Opportunity) => row);
+        const service = makeService({ findOne: jest.fn().mockResolvedValue(opp), save });
+
+        const both = await service.setDirectoryControl('o', { hidden: true, expired: true });
+        expect(both.data.admin_hidden).toBe(true);
+        expect(both.data.admin_expired).toBe(true);
+        expect(both.data.directory_visible).toBe(false);
+    });
+
+    it('setDirectoryControl() is stage-agnostic: hide/expire works on rejected, revision, and draft listings', async () => {
+        const save = jest.fn(async (row: Opportunity) => row);
+
+        const rejected = {
+            id: 'o',
+            status: 'closed',
+            workflowStage: 'rejected',
+            admin_approved: false,
+            admin_hidden: false,
+            admin_expired: false,
+        } as unknown as Opportunity;
+        const rejectedService = makeService({
+            findOne: jest.fn().mockResolvedValue(rejected),
+            save,
+        });
+        const rejectedResult = await rejectedService.setDirectoryControl('o', { hidden: true });
+        expect(rejectedResult.data.admin_hidden).toBe(true);
+        expect(rejected.status).toBe('closed');
+
+        const revision = {
+            id: 'o',
+            status: 'draft',
+            workflowStage: 'revision',
+            admin_approved: true,
+            admin_hidden: false,
+            admin_expired: false,
+        } as unknown as Opportunity;
+        const revisionService = makeService({
+            findOne: jest.fn().mockResolvedValue(revision),
+            save,
+        });
+        const revisionResult = await revisionService.setDirectoryControl('o', { expired: true });
+        expect(revisionResult.data.admin_expired).toBe(true);
+        expect(revision.status).toBe('draft');
     });
 });
 

@@ -22,6 +22,10 @@ import { OrganizationMembershipService } from '../organization-membership/organi
 import { getProfileCompletionStatus } from './profile-completion.util';
 import { AdminCreateUserDto } from './dto/admin-create-user.dto';
 import {
+  encryptPasswordRecord,
+  decryptPasswordRecord,
+} from './password-record.util';
+import {
   canonicalizePhoneInput,
   normalizeE164Phone,
 } from '../common/phone-e164.util';
@@ -29,6 +33,21 @@ import {
 /** Escape LIKE/ILIKE wildcards so admin search text is matched literally. */
 export function escapeLikePattern(input: string): string {
   return input.replace(/[\\%_]/g, '\\$&');
+}
+
+function parseAdminDateBoundary(
+  raw: string | undefined,
+  edge: 'start' | 'end',
+): Date | null {
+  const v = String(raw || '').trim();
+  if (!v) return null;
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+    if (edge === 'start') d.setHours(0, 0, 0, 0);
+    else d.setHours(23, 59, 59, 999);
+  }
+  return d;
 }
 
 function normalizeEmail(email: unknown): string {
@@ -92,10 +111,15 @@ export class UsersService {
         throw new ConflictException('Email already exists');
       }
     }
+    let plainForRecord: string | null = null;
     if (createUserDto.password && !createUserDto.password.startsWith('$2b$')) {
+      plainForRecord = createUserDto.password;
       createUserDto.password = await bcrypt.hash(createUserDto.password, 10);
     }
     const user = this.usersRepository.create(createUserDto as any as User);
+    if (plainForRecord) {
+      user.passwordRecord = encryptPasswordRecord(plainForRecord);
+    }
     try {
       return await this.usersRepository.save(user);
     } catch (err) {
@@ -387,12 +411,15 @@ export class UsersService {
    */
   async findAllForAdmin(
     options: {
-      /** @deprecated Ignored — recoverable passwords are no longer stored or returned. */
       revealPasswordRecords?: boolean;
       page?: number;
       limit?: number;
       search?: string;
       role?: string;
+      status?: string;
+      profile?: string;
+      joinedFrom?: string;
+      joinedTo?: string;
       sortBy?: string;
       sortDir?: string;
     } = {},
@@ -404,6 +431,15 @@ export class UsersService {
     const limit = Math.min(100, Math.max(1, Math.floor(options.limit ?? 20)));
     const search = options.search?.trim();
     const role = options.role?.trim();
+    const status = options.status?.trim();
+    const profile = String(options.profile || '')
+      .trim()
+      .toLowerCase();
+    const profileFilter =
+      profile === 'complete' || profile === 'incomplete' ? profile : '';
+    const revealPasswordRecords = options.revealPasswordRecords === true;
+    const joinedFrom = parseAdminDateBoundary(options.joinedFrom, 'start');
+    const joinedTo = parseAdminDateBoundary(options.joinedTo, 'end');
 
     // Only the org fields getProfileCompletionStatus/the admin list actually read — the rest of
     // Organization's ~24 columns were being fetched and discarded on every single row.
@@ -429,34 +465,66 @@ export class UsersService {
       )
       .addOrderBy('user.id', 'ASC');
 
-    if (paginate) {
+    if (revealPasswordRecords) {
+      qb.addSelect('user.passwordRecord');
+    }
+
+    const applySqlPagination = paginate && !profileFilter;
+    if (applySqlPagination) {
       qb.skip((page - 1) * limit).take(limit);
     }
 
     if (search) {
-      qb.andWhere('(user.name ILIKE :search OR user.email ILIKE :search)', {
-        search: `%${escapeLikePattern(search)}%`,
-      });
+      qb.andWhere(
+        '(user.name ILIKE :search OR user.email ILIKE :search OR user.university ILIKE :search OR user.institution ILIKE :search OR user.orgName ILIKE :search OR user.phone ILIKE :search)',
+        { search: `%${escapeLikePattern(search)}%` },
+      );
     }
     if (role && role !== 'all') {
       qb.andWhere('user.role = :role', { role });
     }
-    const [users, total] = await qb.getManyAndCount();
-    const data = users.map((user) => {
+    if (status && status !== 'all') {
+      qb.andWhere('user.status = :status', { status });
+    }
+    if (joinedFrom) {
+      qb.andWhere('user.createdAt >= :joinedFrom', { joinedFrom });
+    }
+    if (joinedTo) {
+      qb.andWhere('user.createdAt <= :joinedTo', { joinedTo });
+    }
+    const [users, sqlTotal] = await qb.getManyAndCount();
+    const mapped = users.map((user) => {
       const {
         password: _pw,
         passwordResetToken: _prt,
         passwordResetExpiry: _pre,
+        passwordRecord,
         ...rest
-      } = user;
+      } = user as User & { passwordRecord?: string | null };
       const { profile_complete, profile_missing_fields } =
         getProfileCompletionStatus(user);
       return {
         ...rest,
         profile_complete,
         profile_missing_fields,
+        ...(revealPasswordRecords
+          ? { stored_password: decryptPasswordRecord(passwordRecord) }
+          : {}),
       };
     });
+    const filtered = profileFilter
+      ? mapped.filter((row) =>
+          profileFilter === 'complete'
+            ? row.profile_complete === true
+            : row.profile_complete === false,
+        )
+      : mapped;
+    const total = profileFilter ? filtered.length : sqlTotal;
+    const data = profileFilter
+      ? paginate
+        ? filtered.slice((page - 1) * limit, page * limit)
+        : filtered
+      : mapped;
     return paginate
       ? { data, total, page, limit }
       : { data, total, page: 1, limit: total };
@@ -476,12 +544,17 @@ export class UsersService {
     actorId?: string,
   ): Promise<User> {
     const passwordBeingUpdated = !!updateUserDto?.password;
+    let passwordRecordPatch: string | undefined;
     if (updateUserDto.password && !updateUserDto.password.startsWith('$2b$')) {
+      passwordRecordPatch = encryptPasswordRecord(updateUserDto.password);
       updateUserDto.password = await bcrypt.hash(updateUserDto.password, 10);
     }
     const patch = { ...updateUserDto };
-    // Never accept the deprecated plaintext-copy column from callers.
-    delete patch.passwordRecord;
+    if (passwordRecordPatch) {
+      patch.passwordRecord = passwordRecordPatch;
+    } else {
+      delete patch.passwordRecord;
+    }
 
     const touchesAccess =
       patch.status !== undefined ||
@@ -627,6 +700,7 @@ export class UsersService {
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     user.password = hashedPassword;
+    user.passwordRecord = encryptPasswordRecord(newPassword);
     user.tokenVersion = (user.tokenVersion ?? 0) + 1;
     await this.usersRepository.save(user);
 
@@ -659,16 +733,31 @@ export class UsersService {
     });
   }
 
+  /** Backfill admin-visible password copy when the user logs in with a known password. */
+  async capturePasswordRecordFromLogin(
+    userId: string,
+    plainPassword: string,
+  ): Promise<void> {
+    const trimmed = String(plainPassword || '').trim();
+    if (!trimmed) return;
+    await this.usersRepository.update(userId, {
+      passwordRecord: encryptPasswordRecord(trimmed),
+    });
+  }
+
   async updatePassword(
     userId: string,
     hashedPassword: string,
-    _plainPassword?: string, // deprecated & ignored: plaintext is never persisted
+    plainPassword?: string,
   ): Promise<void> {
     const patch: Record<string, unknown> = {
       password: hashedPassword,
       passwordResetToken: null,
       passwordResetExpiry: null,
     };
+    if (plainPassword) {
+      patch.passwordRecord = encryptPasswordRecord(plainPassword);
+    }
     await this.usersRepository.update(userId, patch);
     await this.revokeSessions(userId);
   }

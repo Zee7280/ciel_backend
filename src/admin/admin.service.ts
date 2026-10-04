@@ -15,6 +15,7 @@ import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { Participation } from '../engagement/entities/participant.entity';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
 import { isTeamApplyFromParticipationAndMembers } from '../opportunities/apply-team-payload.util';
+import { isPubliclyVisibleOpportunity } from '../opportunities/opportunity-visibility.util';
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 import { StudentsService } from '../students/students.service';
 
@@ -61,7 +62,15 @@ import { OrganizationMembershipService } from '../organization-membership/organi
 import { PartnerMembershipSettingsService } from '../organization-membership/partner-membership-settings.service';
 import { PARTNER_MEMBERSHIP_REQUIRED_KEY } from '../organization-membership/partner-membership.util';
 import { StudentApplyMaintenanceService } from '../opportunities/student-apply-maintenance.service';
-import { isStudentApplyMaintenanceSettingKey } from '../opportunities/student-apply-maintenance.util';
+import {
+  decorateApplyGate,
+  isStudentApplyMaintenanceSettingKey,
+} from '../opportunities/student-apply-maintenance.util';
+import {
+  classifyBrowseCreator,
+  classifyBrowsePath,
+} from '../opportunities/student-browse-listing.util';
+import { buildOpportunityApprovalTracker } from '../opportunities/opportunity-approval-tracker.util';
 import {
   isTeamConfigurationComplete,
   resolveAttendanceUnlockStatus,
@@ -241,6 +250,13 @@ const OCCUPIED_SEAT_STATUSES = [
 
 /** Participations that count as an active volunteer (excludes pending / awaiting-approval). */
 const ACTIVE_VOLUNTEER_STATUSES = ['accepted', 'approved', 'verified', 'paid'];
+
+/** ISO only — never return raw verification tokens on admin list payloads. */
+function isoOrNull(value: Date | string | null | undefined): string | null {
+  if (!value) return null;
+  const d = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
 
 @Injectable()
 export class AdminService {
@@ -1894,6 +1910,14 @@ export class AdminService {
       );
     }
     const creatorById = new Map(creatorUsers.map((u) => [u.id, u]));
+    const applyState = this.studentApplyMaintenance
+      ? await this.studentApplyMaintenance.getState()
+      : {
+          maintenanceEnabled: false,
+          maintenanceMessage: '',
+          closedBefore: null,
+          expiredMessage: '',
+        };
 
     const projects = opportunities.map((opp) => {
       const hours = verified.byOpportunity.get(opp.id) ?? 0;
@@ -1926,6 +1950,13 @@ export class AdminService {
           }
         : null;
 
+      const tracker = buildOpportunityApprovalTracker(opp);
+      const applyGate = decorateApplyGate(opp, applyState);
+      const timeline =
+        opp.timeline && typeof opp.timeline === 'object'
+          ? (opp.timeline as Record<string, unknown>)
+          : null;
+
       const row: Record<string, unknown> = {
         id: opp.id,
         title: opp.title,
@@ -1936,6 +1967,9 @@ export class AdminService {
         faculty_approval_status: opp.facultyApprovalStatus ?? null,
         partner_approval_status: opp.partnerApprovalStatus ?? null,
         admin_approved: opp.admin_approved ?? false,
+        admin_hidden: opp.admin_hidden === true,
+        admin_expired: opp.admin_expired === true,
+        directory_visible: isPubliclyVisibleOpportunity(opp),
         volunteers: occupiedSeats,
         volunteers_required: volunteersRequired,
         hours,
@@ -1948,6 +1982,22 @@ export class AdminService {
         participation_scope: opp.participation_scope,
         creator,
         attendance_routing_override: opp.attendanceRoutingOverride ?? 'auto',
+        created_by_role: classifyBrowseCreator(opp),
+        path_key: classifyBrowsePath(opp.types),
+        is_student_created: opp.isStudentCreated === true,
+        faculty_verified: opp.faculty_verified === true,
+        execution_verified: opp.execution_verified === true,
+        public_code: tracker.public_code,
+        currently_with: tracker.currently_with,
+        currently_with_role: tracker.currently_with_role,
+        next_step: tracker.next_step,
+        applications_open: applyGate.applications_open,
+        apply_blocked_reason: applyGate.apply_blocked_reason,
+        apply_blocked_message: applyGate.apply_blocked_message,
+        faculty_token_expires_at: isoOrNull(opp.facultyTokenExpiresAt),
+        partner_token_expires_at: isoOrNull(opp.partnerTokenExpiresAt),
+        reporting_window_reopened_until:
+          timeline?.reporting_window_reopened_until ?? null,
         team_enrollments: (enrollmentsByProject.get(opp.id) ?? []).map((er) =>
           this.formatAdminEnrollmentSummary(
             er,

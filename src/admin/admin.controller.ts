@@ -165,8 +165,11 @@ export class AdminController {
   // (src/opportunities), which passes the acting admin. They were duplicated here without the actor.
 
   @Delete('opportunities/:id')
-  removeOpportunity(@Param('id', new ParseUUIDPipe()) id: string) {
-    return this.opportunitiesService.remove(id);
+  removeOpportunity(
+    @Request() req,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    return this.opportunitiesService.remove(id, req.user.id);
   }
 
   @Get('projects/evidence-overview')
@@ -526,13 +529,26 @@ export class AdminController {
 
   @Get('users')
   async findAll(
+    @Request() req,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('search') search?: string,
     @Query('role') role?: string,
+    @Query('status') status?: string,
+    @Query('profile') profile?: string,
+    @Query('joined_from') joinedFrom?: string,
+    @Query('joined_to') joinedTo?: string,
     @Query('sortBy') sortBy?: string,
     @Query('sortDir') sortDir?: string,
+    @Query('reveal_passwords') revealPasswords?: string,
   ) {
+    const reveal =
+      req.user?.role === UserRole.SUPER_ADMIN &&
+      ['1', 'true', 'yes', 'on'].includes(
+        String(revealPasswords || '')
+          .trim()
+          .toLowerCase(),
+      );
     const result = await this.usersService.findAllForAdmin({
       sortBy,
       sortDir,
@@ -540,6 +556,11 @@ export class AdminController {
       limit: limit ? parseInt(limit, 10) : undefined,
       search,
       role,
+      status,
+      profile,
+      joinedFrom,
+      joinedTo,
+      revealPasswordRecords: reveal,
     });
     return { success: true, ...result };
   }

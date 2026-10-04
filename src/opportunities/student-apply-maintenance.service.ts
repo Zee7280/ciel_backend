@@ -95,7 +95,11 @@ export class StudentApplyMaintenanceService implements OnModuleInit {
   }
 
   decorateOpportunity(
-    opportunity: { createdAt?: Date | string | null },
+    opportunity: {
+      createdAt?: Date | string | null;
+      admin_hidden?: boolean;
+      admin_expired?: boolean;
+    },
     state: ApplyMaintenanceState,
   ): ApplyGateFields {
     return decorateApplyGate(opportunity, state);
@@ -103,6 +107,8 @@ export class StudentApplyMaintenanceService implements OnModuleInit {
 
   async assertNewApplicationsAllowed(opportunity: {
     createdAt?: Date | string | null;
+    admin_hidden?: boolean;
+    admin_expired?: boolean;
   }): Promise<void> {
     const state = await this.getState();
     const gate = decorateApplyGate(opportunity, state);

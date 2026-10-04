@@ -44,6 +44,7 @@ import {
 } from '../mail/mail.service';
 import { randomUUID } from 'crypto';
 import { applyCanonicalPrivateCandidatePhone, isPrivateCandidateDto } from './private-candidate.util';
+import { isPubliclyVisibleOpportunity as isPubliclyVisibleOpportunityUtil } from './opportunity-visibility.util';
 import {
   OpportunityWorkflowService,
   WORKFLOW_STAGE,
@@ -139,6 +140,8 @@ const SERVER_CONTROLLED_OPPORTUNITY_FIELDS = [
   'version',
   'approvalHistory',
   'attendanceRoutingOverride',
+  'admin_hidden',
+  'admin_expired',
   'createdAt',
   'updatedAt',
 ] as const;
@@ -1766,6 +1769,7 @@ export class OpportunitiesService {
       faculty_verified: opp.faculty_verified === true,
       execution_verified: opp.execution_verified === true,
       admin_approved: opp.admin_approved === true,
+      ...this.getDirectoryControlFields(opp),
     };
 
     if (!detail) {
@@ -1933,69 +1937,21 @@ export class OpportunitiesService {
    * After that they are listed like any other live opportunity (browse + homepage).
    * Apply Now still uses participation_scope; the stored default visibility is "restricted".
    */
-  private isApprovedLiveStudentOpportunity(opp: Opportunity): boolean {
-    if (opp.admin_approved !== true) return false;
-    const status = String(opp.status || '').toLowerCase();
-    if (status === 'draft' || status === 'rejected' || status === 'closed') {
-      return false;
-    }
-    if (opp.workflowStage === WORKFLOW_STAGE.LIVE) return true;
-    return this.publicLiveStatuses.includes(status);
+  private getDirectoryControlFields(opp: Opportunity) {
+    return {
+      admin_hidden: opp.admin_hidden === true,
+      admin_expired: opp.admin_expired === true,
+      directory_visible: this.isPubliclyVisibleOpportunity(opp),
+    };
   }
 
-  /** Public directory: honor org/creator visibility flags only. Participation rules apply at apply/enroll time. */
+  /**
+   * Public directory: honor org/creator visibility flags only. Participation rules apply at
+   * apply/enroll time. Delegates to the shared util so admin list payloads can report the exact
+   * same `directory_visible` truth instead of re-deriving a simplified (and driftable) version.
+   */
   private isPubliclyVisibleOpportunity(opp: Opportunity): boolean {
-    if (String(opp.status || '').toLowerCase() === 'draft') return false;
-    if (opp.isStudentCreated) {
-      return this.isApprovedLiveStudentOpportunity(opp);
-    }
-    const linkage = opp.visibility_and_academic_linkage;
-    const explicitType =
-      linkage && typeof linkage.visibility_type === 'string'
-        ? linkage.visibility_type.trim().toLowerCase()
-        : '';
-
-    const scopeRule =
-      opp.participation_scope && typeof opp.participation_scope === 'object'
-        ? String(
-            (opp.participation_scope as { rule?: string }).rule || '',
-          ).trim()
-        : '';
-
-    if (explicitType) {
-      const restrictive = [
-        'own_university_only',
-        'restricted_specific_universities',
-        'restricted',
-      ].includes(explicitType);
-      if (!restrictive) return true;
-      // Same leniency as the legacy `visibility` fallback below: a restrictive
-      // visibility_and_academic_linkage type only hides the directory card when there's no real
-      // participation_scope backing it (nothing to gate Apply Now with). When a scope rule does
-      // exist, Apply Now eligibility is what enforces the restriction — the card itself still
-      // shows publicly. "Public card + scoped Apply Now" is the product rule everywhere else.
-      return Boolean(scopeRule);
-    }
-
-    // Student flow defaults top-level `visibility` to "restricted" while scope lives in
-    // participation_scope; treat that default as public listing. Faculty/org "restricted"
-    // without a participation rule still suppresses the directory (previous hide-the-card behavior).
-    const legacy = String(opp.visibility || '')
-      .trim()
-      .toLowerCase();
-    if (
-      ['own_university_only', 'restricted_specific_universities'].includes(
-        legacy,
-      )
-    ) {
-      return false;
-    }
-    if (legacy === 'restricted') {
-      // Apply Now targeting is not a directory hide. Public card + scoped Apply Now is the product rule.
-      if (scopeRule) return true;
-      return false;
-    }
-    return true;
+    return isPubliclyVisibleOpportunityUtil(opp);
   }
 
   private getFacultyApprovalReturnTo(opportunityId: string): string {
@@ -5038,9 +4994,9 @@ export class OpportunitiesService {
    * deliberately distinct from approve/reject/revise above (which encode the full admin-approval
    * workflow with its own preconditions, notifications and idempotency rules). */
   async setStatus(id: string, status: string) {
-    // Going live / rejecting / requesting changes must use approve/reject/revise so the workflow
-    // fields (workflowStage, approval lines, history, notifications) stay consistent.
-    const allowed = ['closed', 'draft'];
+    // Going live for the first time / rejecting / requesting changes must use approve/reject/revise
+    // so workflow fields stay consistent. `active` here is reopen/republish of an already-approved listing.
+    const allowed = ['closed', 'draft', 'active'];
     if (!allowed.includes(status)) {
       throw new BadRequestException(
         `Invalid status. Must be one of: ${allowed.join(', ')}. Use approve, reject or revise to change the approval state.`,
@@ -5049,10 +5005,75 @@ export class OpportunitiesService {
     const opp = await this.findOne(id);
     if (!opp) throw new NotFoundException('Opportunity not found');
     if (opp.status === status) return opp;
+    if (status === 'active') {
+      return this.reopenApprovedListing(opp);
+    }
     opp.status = status;
     // The approval trail (admin_approved / workflowStage) is deliberately untouched: closing an
     // approved listing is a lifecycle change, not an un-approval, and approve() stays idempotent.
     return this.opportunitiesRepository.save(opp);
+  }
+
+  /**
+   * Super Admin reopen/republish: `closed` or `draft` → `active` without re-running
+   * faculty/partner/admin approval. Rejected/revision rows stay on their own workflows.
+   */
+  private async reopenApprovedListing(opp: Opportunity) {
+    const current = String(opp.status || '').toLowerCase();
+    if (!['closed', 'draft'].includes(current)) {
+      throw new BadRequestException(
+        'Only a closed or draft listing can be reopened this way. Use Approve to publish a new listing.',
+      );
+    }
+    if (opp.admin_approved !== true) {
+      throw new BadRequestException(
+        'This listing is not CIEL-approved yet. Use Approve to publish it.',
+      );
+    }
+    if (
+      opp.workflowStage === WORKFLOW_STAGE.REJECTED ||
+      String(opp.status || '').toLowerCase() === 'rejected'
+    ) {
+      throw new BadRequestException(
+        'A rejected opportunity cannot be reopened. The creator must submit a new listing.',
+      );
+    }
+    if (opp.workflowStage === WORKFLOW_STAGE.REVISION) {
+      throw new BadRequestException(
+        'This listing is in revision. The creator must resubmit before it can go live.',
+      );
+    }
+    opp.status = 'active';
+    return this.opportunitiesRepository.save(opp);
+  }
+
+  /**
+   * Super Admin directory controls. Distinct from Close (`status=closed`, drops from live lists)
+   * and Draft (`status=draft`, unpublished). Hidden listings stay in admin + enrolled My Projects.
+   * Expired listings stay on Explore/Browse with apply closed.
+   * Deliberately stage-agnostic (unlike `reopenApprovedListing`, which gates on approval/stage):
+   * hide/expire never changes `status`/`workflowStage`, so an admin can hide or expire a listing
+   * regardless of where it sits in the approval pipeline without that being a workflow transition.
+   */
+  async setDirectoryControl(
+    id: string,
+    patch: { hidden?: boolean; expired?: boolean },
+  ) {
+    if (patch.hidden === undefined && patch.expired === undefined) {
+      throw new BadRequestException('Provide hidden and/or expired.');
+    }
+    const opp = await this.findOne(id);
+    if (!opp) throw new NotFoundException('Opportunity not found');
+    if (patch.hidden !== undefined) opp.admin_hidden = patch.hidden === true;
+    if (patch.expired !== undefined) opp.admin_expired = patch.expired === true;
+    const saved = await this.opportunitiesRepository.save(opp);
+    return {
+      success: true,
+      data: {
+        id: saved.id,
+        ...this.getDirectoryControlFields(saved),
+      },
+    };
   }
 
   async reject(id: string, rawReason: string, actor?: ApprovalActor) {

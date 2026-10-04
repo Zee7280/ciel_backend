@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { resolveTeamSeatCap, teamCapacityError } from '../engagement/team-capacity.util';
 import {
   Injectable,
+  Logger,
   NotFoundException,
   ForbiddenException,
   BadRequestException,
@@ -78,6 +79,8 @@ import { canonicalizePhoneInput } from '../common/phone-e164.util';
 
 @Injectable()
 export class StudentsService {
+  private readonly logger = new Logger(StudentsService.name);
+
   constructor(
     @InjectRepository(User)
     private usersRepository: Repository<User>,
@@ -753,21 +756,31 @@ export class StudentsService {
     // Only teammate-add flows opt in. Self-verify / team-lead OTP must still
     // work after the student already has a participation row.
     if (projectKey && blockIfOnRoster) {
-      const existingSeat = await this.participantRepository
-        .createQueryBuilder('p')
-        .where('p.projectId = :projectId', { projectId: projectKey })
-        .andWhere("LOWER(TRIM(COALESCE(p.email, ''))) = :emailNorm", {
-          emailNorm,
-        })
-        .andWhere("LOWER(COALESCE(p.status, '')) NOT IN (:...deadStatuses)", {
-          deadStatuses: ['rejected', 'withdrawn', 'cancelled', 'removed'],
-        })
-        .getOne();
-      if (existingSeat) {
-        throw new BadRequestException(
-          existingSeat.isTeamLead
-            ? 'This email is already used by the team lead on this project. Each member must register with their own email address.'
-            : 'This email is already on this team. Each student can appear only once.',
+      try {
+        const existingSeat = await this.participantRepository
+          .createQueryBuilder('p')
+          .where('p.projectId = :projectId', { projectId: projectKey })
+          .andWhere("LOWER(TRIM(COALESCE(p.email, ''))) = :emailNorm", {
+            emailNorm,
+          })
+          .andWhere("LOWER(COALESCE(p.status, '')) NOT IN (:...deadStatuses)", {
+            deadStatuses: ['rejected', 'withdrawn', 'cancelled', 'removed'],
+          })
+          .getOne();
+        if (existingSeat) {
+          throw new BadRequestException(
+            existingSeat.isTeamLead
+              ? 'This email is already used by the team lead on this project. Each member must register with their own email address.'
+              : 'This email is already on this team. Each student can appear only once.',
+          );
+        }
+      } catch (err) {
+        // A genuine duplicate-seat match must still block (rethrow it as-is). Anything else
+        // (e.g. a malformed projectId the DB can't compare) must not turn a routine OTP send
+        // into an opaque 500 — skip the roster pre-check rather than failing the whole request.
+        if (err instanceof BadRequestException) throw err;
+        this.logger.warn(
+          `Roster duplicate-email check failed for project ${projectKey}: ${(err as Error)?.message || err}`,
         );
       }
     }
@@ -777,17 +790,32 @@ export class StudentsService {
     // Save OTP in DB with 10 mins expiry
     const expiresAt = new Date(Date.now() + 600000);
 
-    // We can either update existing or create new. Given many requests might happen,
-    // let's just create or update if already exists for this email.
-    let otpRecord = await this.otpRepository.findOne({ where: { email } });
-    if (otpRecord) {
-      otpRecord.otp = otp;
-      otpRecord.expiresAt = expiresAt;
-    } else {
-      otpRecord = this.otpRepository.create({ email, otp, expiresAt });
+    try {
+      // We can either update existing or create new. Given many requests might happen,
+      // let's just create or update if already exists for this email.
+      let otpRecord = await this.otpRepository.findOne({
+        where: { email: emailNorm },
+      });
+      if (otpRecord) {
+        otpRecord.otp = otp;
+        otpRecord.expiresAt = expiresAt;
+      } else {
+        otpRecord = this.otpRepository.create({
+          email: emailNorm,
+          otp,
+          expiresAt,
+        });
+      }
+      await this.otpRepository.save(otpRecord);
+    } catch (err) {
+      this.logger.error(
+        `Failed to persist OTP record for ${emailNorm}: ${(err as Error)?.message || err}`,
+      );
+      throw new BadRequestException(
+        'Failed to send verification code. Please try again in a moment.',
+      );
     }
 
-    await this.otpRepository.save(otpRecord);
     try {
       await this.mailService.sendTeamMemberOtp(email, otp);
     } catch {
@@ -802,9 +830,26 @@ export class StudentsService {
   }
 
   async confirmTeamMemberOtp(email: string, otp: string) {
-    const record = await this.otpRepository.findOne({
-      where: { email, otp },
-    });
+    const emailNorm = String(email || '')
+      .trim()
+      .toLowerCase();
+    if (!emailNorm || !String(otp || '').trim()) {
+      throw new BadRequestException('Email and OTP required');
+    }
+
+    let record: Otp | null;
+    try {
+      record = await this.otpRepository.findOne({
+        where: { email: emailNorm, otp },
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to look up OTP record for ${emailNorm}: ${(err as Error)?.message || err}`,
+      );
+      throw new BadRequestException(
+        'Could not verify the code right now. Please try again.',
+      );
+    }
 
     if (!record) {
       throw new BadRequestException('Invalid OTP');
@@ -814,16 +859,30 @@ export class StudentsService {
       throw new BadRequestException('OTP has expired');
     }
 
-    // Success! We can delete the OTP record now to prevent reuse
-    await this.otpRepository.remove(record);
+    // Success! We can delete the OTP record now to prevent reuse. Verification itself has
+    // already succeeded at this point, so a cleanup failure here must not fail the request.
+    try {
+      await this.otpRepository.remove(record);
+    } catch (err) {
+      this.logger.warn(
+        `Verified OTP for ${emailNorm} but failed to delete the record: ${(err as Error)?.message || err}`,
+      );
+    }
 
     return { success: true, message: 'Email verified' };
   }
 
   async sendTeamMemberVerification(email: string) {
-    // 1. You can check if the user is already registered (optional)
-    // 2. Call MailService to send the email
-    await this.mailService.sendTeamMemberInvite(email);
+    try {
+      await this.mailService.sendTeamMemberInvite(email);
+    } catch (err) {
+      this.logger.error(
+        `Failed to send team-member invite to ${email}: ${(err as Error)?.message || err}`,
+      );
+      throw new BadRequestException(
+        'Failed to send the invitation email. Please try again in a moment.',
+      );
+    }
     return { success: true, message: 'Verification email sent' };
   }
 
@@ -1471,6 +1530,7 @@ export class StudentsService {
     // The query above is already CIEL-approved + live. Student-created rows stay in that
     // list once approved so browse matches the public homepage.
     const filtered = opportunities.filter((opportunity) => {
+      if (opportunity.admin_hidden === true) return false;
       const matchesSdg =
         !normalizedSdg ||
         this.normalize(opportunity.sdg) === normalizedSdg ||
@@ -1604,6 +1664,10 @@ export class StudentsService {
       paymentProofUrl = part?.paymentProofUrl ?? null;
     }
 
+    if (opportunity.admin_hidden === true && !hasApplied) {
+      throw new NotFoundException('Opportunity not found');
+    }
+
     const occupiedSeats = await this.getOccupiedSeats(id);
     const volunteersRequired = opportunity.timeline?.volunteers_required || 0;
     const applyState = await this.loadApplyMaintenanceState();
@@ -1644,7 +1708,7 @@ export class StudentsService {
 
     return {
       success: true,
-      data: opportunities,
+      data: opportunities.filter((o) => o.admin_hidden !== true),
     };
   }
 

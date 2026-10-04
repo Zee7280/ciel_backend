@@ -47,7 +47,22 @@ type OpenAiCompletionOpts = {
   timeoutMs?: number;
   /** Per-call retries. CII skips the extra attempt so a slow run is not doubled. */
   maxAttempts?: number;
+  /** Overrides OPENAI_SUMMARY_MODEL for this call only (CII Analyzer uses its own model). */
+  model?: string;
+  /** GPT-5 reasoning effort. CII Analyzer uses `high`; other AI paths omit this. */
+  reasoningEffort?: 'low' | 'medium' | 'high';
 };
+
+const DEFAULT_OPENAI_SUMMARY_MODEL = 'gpt-5.4';
+const DEFAULT_OPENAI_CII_MODEL = 'gpt-5.6-sol';
+
+function resolveOpenAiSummaryModel(): string {
+  return process.env.OPENAI_SUMMARY_MODEL?.trim() || DEFAULT_OPENAI_SUMMARY_MODEL;
+}
+
+function resolveCiiAnalyzerModel(): string {
+  return process.env.OPENAI_CII_MODEL?.trim() || DEFAULT_OPENAI_CII_MODEL;
+}
 
 /** One part of a multimodal chat message (text, or an inline image the model can actually see). */
 export type OpenAiContentPart =
@@ -176,7 +191,7 @@ export class AiService {
       throw new Error('OPENAI_API_KEY missing');
     }
 
-    const model = process.env.OPENAI_SUMMARY_MODEL?.trim() || 'gpt-5.4';
+    const model = opts?.model?.trim() || resolveOpenAiSummaryModel();
     const reasoningModel = isOpenAiReasoningModel(model);
 
     const temperature = opts?.temperature ?? 0.4;
@@ -209,6 +224,9 @@ export class AiService {
     }
     if (opts?.responseFormat) {
       requestBody.response_format = opts.responseFormat;
+    }
+    if (opts?.reasoningEffort && reasoningModel) {
+      requestBody.reasoning_effort = opts.reasoningEffort;
     }
 
     // Timeout + retry on transient failures (network, timeout, 429, 5xx). The body is read as
@@ -1551,13 +1569,15 @@ ${JSON.stringify(data)}`;
         }
       : isCiiV2Evaluation
         ? {
+            model: resolveCiiAnalyzerModel(),
+            reasoningEffort: 'high',
             temperature: 0.15,
             seed: 4220,
             maxTokens: 16000,
             responseFormat: { type: 'json_object' },
             systemMessage: `${buildCiiV2EvaluatorPrompt()}\n\n${CII_V2_JSON_ONLY_DEPLOYMENT_NOTE}`,
-            // One long attempt: a 90s abort + retry was doubling wait time on a live Analyzer click.
-            timeoutMs: 120_000,
+            // High reasoning + multimodal images: one long attempt, no doubled retry.
+            timeoutMs: 180_000,
             maxAttempts: 1,
           }
         : isFypAiEvaluationSection
@@ -1646,7 +1666,7 @@ ${notShown}`;
         summary,
         ciiV2,
         evidenceInspection,
-        model: process.env.OPENAI_SUMMARY_MODEL?.trim() || 'gpt-5.4',
+        model: resolveCiiAnalyzerModel(),
       };
     }
 

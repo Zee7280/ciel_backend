@@ -1,21 +1,6 @@
 import { HttpException, Injectable, Logger, Optional } from '@nestjs/common';
 import { S3Service } from '../common/s3.service';
 import {
-  buildSection11EvaluationUserMessage,
-  buildSection11MasterRubricUserMessage,
-} from './build-section11-evaluation-user-message.util';
-import {
-  SECTION11_MASTER_RUBRIC_EVALUATOR_PROMPT,
-  SECTION11_MASTER_RUBRIC_JSON_ONLY_DEPLOYMENT_NOTE,
-} from './prompts/section11-master-rubric-prompt.constants';
-import {
-  SECTION11_EVALUATOR_PROMPT,
-  SECTION11_JSON_ONLY_DEPLOYMENT_NOTE,
-} from './prompts/section11-prompt.constants';
-import { parseSection11AuditSummary } from './parse-cii-audit-summary.util';
-import { parseSection11V61Response } from './parse-section11-v61.util';
-import { parseSection11V81Response } from './parse-section11-v81.util';
-import {
   buildCiiV2EvaluatorPrompt,
   CII_V2_JSON_ONLY_DEPLOYMENT_NOTE,
 } from './prompts/cii-v2-rubric.constant';
@@ -1513,15 +1498,6 @@ Audit Remark: ___
 Keep the full response under 180 words.`;
 
       // =====================================================
-      // SECTION 11 EXECUTIVE SUMMARY
-      // =====================================================
-      case 'section11':
-        return buildSection11EvaluationUserMessage(data);
-
-      case 'section11_master_rubric':
-        return buildSection11MasterRubricUserMessage(data);
-
-      // =====================================================
       // CII ANALYZER (Balanced CII Rubric v3.1)
       // =====================================================
       case 'cii_v2_evaluation':
@@ -1551,44 +1527,31 @@ ${JSON.stringify(data)}`;
 
     const prompt = this.buildPrompt(section, data);
 
-    const isSection11Evaluation =
-      section === 'section11' || section === 'section11_master_rubric';
     const isCiiV2Evaluation = section === 'cii_v2_evaluation';
     const isFypAiEvaluationSection = section === 'fyp_ai_evaluation';
 
-    const openAiOpts: OpenAiCompletionOpts | undefined = isSection11Evaluation
+    const openAiOpts: OpenAiCompletionOpts | undefined = isCiiV2Evaluation
       ? {
+          model: resolveCiiAnalyzerModel(),
+          reasoningEffort: 'high',
           temperature: 0.15,
-          seed: section === 'section11_master_rubric' ? 4212 : 4210,
+          seed: 4220,
           maxTokens: 16000,
           responseFormat: { type: 'json_object' },
-          systemMessage:
-            section === 'section11_master_rubric'
-              ? `${SECTION11_MASTER_RUBRIC_EVALUATOR_PROMPT}\n\n${SECTION11_MASTER_RUBRIC_JSON_ONLY_DEPLOYMENT_NOTE}`
-              : `${SECTION11_EVALUATOR_PROMPT}\n\n${SECTION11_JSON_ONLY_DEPLOYMENT_NOTE}`,
+          systemMessage: `${buildCiiV2EvaluatorPrompt()}\n\n${CII_V2_JSON_ONLY_DEPLOYMENT_NOTE}`,
+          // High reasoning + multimodal images: one long attempt, no doubled retry.
+          timeoutMs: 180_000,
+          maxAttempts: 1,
         }
-      : isCiiV2Evaluation
+      : isFypAiEvaluationSection
         ? {
-            model: resolveCiiAnalyzerModel(),
-            reasoningEffort: 'high',
             temperature: 0.15,
-            seed: 4220,
+            seed: 4230,
             maxTokens: 16000,
             responseFormat: { type: 'json_object' },
-            systemMessage: `${buildCiiV2EvaluatorPrompt()}\n\n${CII_V2_JSON_ONLY_DEPLOYMENT_NOTE}`,
-            // High reasoning + multimodal images: one long attempt, no doubled retry.
-            timeoutMs: 180_000,
-            maxAttempts: 1,
+            systemMessage: `${buildFypAiEvaluatorPrompt()}\n\n${FYP_AI_JSON_ONLY_DEPLOYMENT_NOTE}`,
           }
-        : isFypAiEvaluationSection
-          ? {
-              temperature: 0.15,
-              seed: 4230,
-              maxTokens: 16000,
-              responseFormat: { type: 'json_object' },
-              systemMessage: `${buildFypAiEvaluatorPrompt()}\n\n${FYP_AI_JSON_ONLY_DEPLOYMENT_NOTE}`,
-            }
-          : undefined;
+        : undefined;
 
     // CII Analyzer: show the model the real evidence images (and say exactly which files it could not see).
     let userContent: string | OpenAiContentPart[] = prompt;
@@ -1630,32 +1593,6 @@ ${notShown}`;
     }
 
     const summary = text.trim();
-
-    if (isSection11Evaluation) {
-      const v81 = parseSection11V81Response(summary);
-      if (v81) {
-        return {
-          summary: v81.summaryText,
-          auditMeta: v81.auditMeta,
-          evaluationVersion: v81.evaluation.framework_version || 'v8.2',
-        };
-      }
-
-      const v61 = parseSection11V61Response(summary);
-      if (v61) {
-        return {
-          summary: v61.summaryText,
-          auditMeta: v61.auditMeta,
-          evaluationVersion: v61.evaluation.evaluation_version || 'v6.4',
-        };
-      }
-
-      const auditMeta = parseSection11AuditSummary(summary);
-      return {
-        summary,
-        ...(auditMeta ? { auditMeta } : {}),
-      };
-    }
 
     if (isCiiV2Evaluation) {
       const ciiV2 = parseCiiV2Response(summary);

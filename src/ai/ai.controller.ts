@@ -17,11 +17,7 @@ import { SummarizeAiDto } from './dto/summarize-ai.dto';
  * (the dedicated admin analyse routes already do, server-side, bound to a real report). Students,
  * faculty and org users must not be able to run the final analyzer with a self-written payload.
  */
-const ADMIN_ONLY_SECTIONS = new Set([
-  'section11_master_rubric',
-  'cii_v2_evaluation',
-  'fyp_ai_evaluation',
-]);
+const ADMIN_ONLY_SECTIONS = new Set(['cii_v2_evaluation', 'fyp_ai_evaluation']);
 
 @Controller('ai')
 @UseGuards(JwtAuthGuard, RateLimitGuard)

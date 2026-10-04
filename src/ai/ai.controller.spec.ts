@@ -8,7 +8,7 @@ describe('AiController.summarize — evaluator sections are CIEL PK Admin only',
 
   beforeEach(() => ai.summarize.mockClear());
 
-  it.each(['cii_v2_evaluation', 'fyp_ai_evaluation', 'section11_master_rubric'])(
+  it.each(['cii_v2_evaluation', 'fyp_ai_evaluation'])(
     'refuses %s for student / faculty / ngo',
     async (section) => {
       for (const role of ['student', 'faculty', 'ngo', 'university', 'corporate']) {

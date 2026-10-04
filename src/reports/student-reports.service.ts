@@ -2812,17 +2812,13 @@ export class StudentReportsService {
           ? pack.admin_doc_hrefs.flashcard
           : audience === 'student'
             ? pack.documents.flashcard.href
-            : audience === 'faculty'
-              ? `${reviewHref}#flash`
-              : `${reviewHref}&doc=flashcard`;
+            : `${reviewHref}${reviewHref.includes('?') ? '&' : '?'}doc=flashcard`;
       const detailedHref =
         audience === 'admin'
           ? pack.admin_doc_hrefs.detailed_report
           : audience === 'student'
             ? pack.documents.detailed_report.href
-            : audience === 'faculty'
-              ? `${reviewHref}#report`
-              : `${reviewHref}&doc=report`;
+            : `${reviewHref}${reviewHref.includes('?') ? '&' : '?'}doc=report`;
       if (!reviewHref) return;
       await this.mailService.sendReportPackagePublished({
         to: email,

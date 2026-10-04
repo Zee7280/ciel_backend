@@ -1871,9 +1871,9 @@ describe('StudentReportsService', () => {
       expect.objectContaining({
         to: 'faculty@uni.test',
         audience: 'faculty',
-        reviewHref: expect.stringContaining('/dashboard/faculty/reports/report-1'),
-        flashHref: expect.stringContaining('#flash'),
-        detailedHref: expect.stringContaining('#report'),
+        reviewHref: expect.stringContaining('/dashboard/faculty/reports/report-1?view=dossier'),
+        flashHref: expect.stringContaining('doc=flashcard'),
+        detailedHref: expect.stringContaining('doc=report'),
         includeAnalysis: true,
       }),
     );
@@ -1881,6 +1881,7 @@ describe('StudentReportsService', () => {
       expect.objectContaining({
         to: 'uni@campus.test',
         audience: 'university',
+        reviewHref: expect.stringContaining('/dashboard/partner/verify/report-1?package=1'),
         includeAnalysis: true,
       }),
     );
@@ -1888,7 +1889,7 @@ describe('StudentReportsService', () => {
       expect.objectContaining({
         to: 'ngo@partner.test',
         audience: 'partner',
-        reviewHref: expect.stringContaining('/dashboard/partner/verify/report-1'),
+        reviewHref: expect.stringContaining('/dashboard/partner/verify/report-1?package=1'),
         includeAnalysis: false,
       }),
     );

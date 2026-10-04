@@ -132,7 +132,11 @@ export function buildReportReviewPackage(
   );
   const facultyHref = joinHref(
     frontendBase,
-    `/dashboard/faculty/reports/${encodeURIComponent(reportId)}`,
+    `/dashboard/faculty/reports/${encodeURIComponent(reportId)}?view=dossier`,
+  );
+  const facultyAnalysisHref = joinHref(
+    frontendBase,
+    `/dashboard/faculty/reports/${encodeURIComponent(reportId)}?view=cii-v2`,
   );
   const partnerHref = joinHref(
     frontendBase,
@@ -197,8 +201,8 @@ export function buildReportReviewPackage(
     },
     analysis_hrefs: {
       student: studentAnalysis,
-      faculty: `${facultyHref}#analysis`,
-      university: `${universityHref}#analysis`,
+      faculty: facultyAnalysisHref,
+      university: `${universityHref}&doc=analysis`,
       admin: analyserHref,
       partner: '',
     },

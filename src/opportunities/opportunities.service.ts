@@ -2328,6 +2328,16 @@ export class OpportunitiesService {
     if (!createOpportunityDto.title?.trim()) {
       throw new BadRequestException('Title is required');
     }
+    if (
+      !(createOpportunityDto.objectives as { description?: unknown })
+        ?.description ||
+      !String(
+        (createOpportunityDto.objectives as { description?: unknown })
+          .description,
+      ).trim()
+    ) {
+      throw new BadRequestException('objectives.description is required');
+    }
     createOpportunityDto.safety_declaration =
       this.resolveSafetyDeclarationPayload(createOpportunityDto);
     createOpportunityDto.safety_declaration = this.normalizeSafetyDeclaration(
@@ -2800,6 +2810,14 @@ export class OpportunitiesService {
     );
     const privateCandidate = isPrivateCandidateDto(dto);
     applyCanonicalPrivateCandidatePhone(dto, { required: true });
+    if (
+      !(dto.objectives as { description?: unknown })?.description ||
+      !String(
+        (dto.objectives as { description?: unknown }).description,
+      ).trim()
+    ) {
+      throw new BadRequestException('objectives.description is required');
+    }
     // validation rules for student flow
     if (!privateCandidate) {
       if (!dto.supervision?.contact)
@@ -3389,6 +3407,15 @@ export class OpportunitiesService {
     }
     if (patch.timeline !== undefined) {
       this.validateTimeline(opportunity.timeline, { requireDates: true });
+    }
+    if (
+      patch.objectives !== undefined &&
+      !String(
+        (opportunity.objectives as { description?: unknown } | null)
+          ?.description ?? '',
+      ).trim()
+    ) {
+      throw new BadRequestException('objectives.description is required');
     }
 
     if (updateOpportunityDto.sdg_info) {

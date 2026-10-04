@@ -1,6 +1,6 @@
 import { MAX_DAILY_ATTENDANCE_HOURS } from '../engagement/attendance-description.constants';
 import { collectReportEvidenceFiles } from './collect-report-evidence.util';
-import { getReportScoringConfig } from './cii-section-weights.constants';
+import { getCiiV2ScoringConfig } from './cii-v2.constants';
 import { StudentReport } from './entities/student-report.entity';
 import {
     hasPublicSharePermission,
@@ -8,7 +8,6 @@ import {
 } from './media-visibility.util';
 
 export const CIEL_PK_AI_EVALUATION_SCHEMA_VERSION = 'ciel_pk_ai_evaluation_v1.0';
-export const CIEL_PK_MASTER_PROMPT_VERSION = 'CIEL_PK_AI_Evaluator_Prompt_v8_2';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -590,7 +589,10 @@ function buildSystemValidation(
         legacy_score_removed: true,
         ready_for_ai_evaluation: requiredSectionsPresent && warnings.length === 0,
         validation_warnings: warnings,
-        scoring_rubric: getReportScoringConfig(),
+        // The live evaluator is CII v3.1 (see cii-v2.constants.ts / cii-v3-1-balanced-prompt);
+        // this used to inject the retired v8.2/v1.2 public-scoring-API config here, contradicting
+        // the system prompt's own v3.1 weights/version in the same request.
+        scoring_rubric: getCiiV2ScoringConfig(),
     };
 }
 

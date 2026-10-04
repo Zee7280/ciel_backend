@@ -352,8 +352,11 @@ describe('StudentReportsService', () => {
         status: 'submitted',
         opportunityId: 'opp-1',
         project_id: 'opp-1',
+        reportSubmittedAt: expect.any(Date),
+        submission_date: expect.any(Date),
       }),
     );
+    expect(result.data.report_submitted_at).toBeInstanceOf(Date);
     expect(
       mockMailService.sendAdminStudentReportSubmitted,
     ).toHaveBeenCalledTimes(1);
@@ -1662,6 +1665,56 @@ describe('StudentReportsService', () => {
     expect(data.status).toBe('draft');
     expect(data.is_editable).toBe(true);
     expect(data.payment_verified).toBe(false);
+  });
+
+  it('reads a closed report as "closed", not "verified", even with an old approved payment row', async () => {
+    const opp = '7c2e7c79-6c2a-4e59-9b23-2f6d2d7b9b11';
+    mockStudentReportsRepository.findOne.mockResolvedValue({
+      id: 'report-closed-1',
+      studentId: 'student-1',
+      opportunityId: opp,
+      project_id: opp,
+      status: 'closed',
+      admin_status: 'approved',
+      faculty_status: 'approved',
+      partner_status: 'approved',
+      closedAt: new Date('2026-10-01T00:00:00Z'),
+      closedByAdminId: 'admin-1',
+      closeReason: 'Evidence disappeared after approval.',
+      section1: { team_lead: { fullName: 'Jane', cnic: '' } },
+      section2: {},
+      section3: {},
+      section4: {},
+      section5: {},
+      section6: {},
+      section7: {},
+      section8: {},
+      section9: {},
+      section10: {},
+      section11: {},
+      student: { id: 'student-1', name: 'Jane', email: 'jane@test.com' },
+      opportunity: { id: opp, title: 'SOS Class Transformation' },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    mockPaymentRepository.findOne.mockResolvedValue({
+      status: 'approved',
+      studentId: 'student-1',
+      projectId: opp,
+    });
+
+    const result = await service.findOneByOpportunityOrId(opp, 'student-1');
+    const data = result.data as {
+      status?: string;
+      payment_verified?: boolean;
+      closed_at?: Date | null;
+      close_reason?: string | null;
+    };
+
+    expect(data.status).toBe('closed');
+    expect(data.payment_verified).toBe(false);
+    expect(data.closed_at).toEqual(new Date('2026-10-01T00:00:00Z'));
+    expect(data.close_reason).toBe('Evidence disappeared after approval.');
   });
 
   it('never sends null team_lead or a non-array team_members on the student report payload', async () => {

@@ -240,6 +240,130 @@ describe('validateReportSectionsForSubmit', () => {
     expect(issues).toEqual([]);
   });
 
+  it('requires student_contribution_intent_statement only once the student picked their own SDG mapping', () => {
+    const noMapping = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+    });
+    expect(
+      noMapping.some((i) => i.section === 3 && i.field === 'student_contribution_intent_statement'),
+    ).toBe(false);
+
+    const missing = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section3: {
+        ...VALID_CORE_SECTIONS.section3,
+        primary_sdg: { goal_number: 6, target_id: '6.1' },
+      },
+    });
+    expect(
+      missing.some((i) => i.section === 3 && i.field === 'student_contribution_intent_statement'),
+    ).toBe(true);
+
+    const tooShort = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section3: {
+        ...VALID_CORE_SECTIONS.section3,
+        primary_sdg: { goal_number: 6, target_id: '6.1' },
+        student_contribution_intent_statement: 'too short',
+      },
+    });
+    expect(
+      tooShort.some((i) => i.section === 3 && i.field === 'student_contribution_intent_statement'),
+    ).toBe(true);
+
+    const ok = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section3: {
+        ...VALID_CORE_SECTIONS.section3,
+        primary_sdg: { goal_number: 6, target_id: '6.1' },
+        student_contribution_intent_statement:
+          'We mapped the gap against SDG 6 and focused on safe water handling, training household members on filter maintenance and documenting readings for the partner.',
+      },
+    });
+    expect(
+      ok.some((i) => i.section === 3 && i.field === 'student_contribution_intent_statement'),
+    ).toBe(false);
+  });
+
+  it('requires a justification for every secondary SDG', () => {
+    const missing = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section3: {
+        ...VALID_CORE_SECTIONS.section3,
+        secondary_sdgs: [{ sdg_id: '6', target_id: '6.1' }],
+      },
+    });
+    expect(
+      missing.some((i) => i.section === 3 && i.field === 'secondary_sdgs.0.justification_text'),
+    ).toBe(true);
+
+    const tooShort = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section3: {
+        ...VALID_CORE_SECTIONS.section3,
+        secondary_sdgs: [{ sdg_id: '6', target_id: '6.1', justification_text: 'too short' }],
+      },
+    });
+    expect(
+      tooShort.some((i) => i.section === 3 && i.field === 'secondary_sdgs.0.justification_text'),
+    ).toBe(true);
+  });
+
+  it('requires an overlap note when an activity serves beneficiaries and reach is not "mostly unique"', () => {
+    const baseActivity = VALID_CORE_SECTIONS.section4.activity_blocks[0];
+
+    const missing = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section4: {
+        ...VALID_CORE_SECTIONS.section4,
+        activity_blocks: [{ ...baseActivity, overlap_status: 'Some overlap with another activity' }],
+      },
+    });
+    expect(
+      missing.some((i) => i.section === 4 && i.field === 'activity_blocks.0.overlap_note'),
+    ).toBe(true);
+
+    const notRequiredWhenMostlyUnique = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section4: {
+        ...VALID_CORE_SECTIONS.section4,
+        activity_blocks: [{ ...baseActivity, overlap_status: 'Mostly unique' }],
+      },
+    });
+    expect(
+      notRequiredWhenMostlyUnique.some((i) => i.section === 4 && i.field === 'activity_blocks.0.overlap_note'),
+    ).toBe(false);
+
+    const notRequiredWhenNoBeneficiaries = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section4: {
+        ...VALID_CORE_SECTIONS.section4,
+        activity_blocks: [{ ...baseActivity, serves_beneficiaries: false }],
+      },
+    });
+    expect(
+      notRequiredWhenNoBeneficiaries.some((i) => i.section === 4 && i.field === 'activity_blocks.0.overlap_note'),
+    ).toBe(false);
+
+    const ok = validateReportSectionsForSubmit({
+      ...VALID_CORE_SECTIONS,
+      section4: {
+        ...VALID_CORE_SECTIONS.section4,
+        activity_blocks: [
+          {
+            ...baseActivity,
+            overlap_status: 'Some overlap with another activity',
+            overlap_note:
+              'Roughly a quarter of the households also appeared in the hygiene session roster from the same week, so their water-quality readings may double count toward beneficiary totals.',
+          },
+        ],
+      },
+    });
+    expect(
+      ok.some((i) => i.section === 4 && i.field === 'activity_blocks.0.overlap_note'),
+    ).toBe(false);
+  });
+
   it('accepts an activity with reach and no delivery mode or project summary', () => {
     const section4 = {
       activity_blocks: [

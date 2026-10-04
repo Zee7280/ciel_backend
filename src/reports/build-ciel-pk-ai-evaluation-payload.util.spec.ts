@@ -219,21 +219,11 @@ describe('buildCielPkAiEvaluationPayload', () => {
     expect(firstLog?.evidence_file_ids?.length).toBeGreaterThan(0);
     expect(payload.system_validation.legacy_score_removed).toBe(true);
     expect(payload.system_validation.sensitive_fields_removed).toBe(true);
+    // Must match the live v3.1 evaluator (cii-v2.constants.ts), not the retired v8.2/v1.2
+    // public-scoring-API config — a mismatch here would send the model a contradictory rubric.
     expect(payload.system_validation.scoring_rubric).toMatchObject({
-      cii_section_max_total: 100,
-      max_daily_attendance_hours_per_student: 9,
-      cii_section_max_by_key: {
-        participation: 10,
-        context: 10,
-        sdg: 10,
-        outputs: 15,
-        outcomes: 10,
-        resources: 15,
-        partnerships: 10,
-        evidence: 10,
-        learning: 5,
-        sustainability: 5,
-      },
+      cii_v2_framework_version: 'v3.1-balanced',
+      max_total: 100,
     });
     const attendanceSummary = (
       payload.section1_participation_identity_attendance as {

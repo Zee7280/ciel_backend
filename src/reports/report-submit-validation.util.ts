@@ -50,11 +50,14 @@ const FIELD_WORD_POLICY: Record<string, { min: number; max: number }> = {
   problem_statement: { min: 20, max: 60 },
   discipline_contribution: { min: 15, max: 50 },
   contribution_intent_statement: { min: 30, max: 80 },
+  student_contribution_intent_statement: { min: 20, max: 60 },
+  justification_text: { min: 20, max: 60 },
   observed_change: { min: 40, max: 100 },
   challenges: { min: 15, max: 60 },
   continuation_details: { min: 60, max: 120 },
   description: { min: 15, max: 60 },
   measurement_explanation: { min: 20, max: 80 },
+  overlap_note: { min: 20, max: 80 },
   evidence_caption: { min: 10, max: 45 },
 };
 
@@ -232,6 +235,32 @@ function validateCoreSectionsPresence(report: {
   } else {
     checkWordRange(issues, 3, 'contribution_intent_statement', section3.contribution_intent_statement, 'Contribution logic');
   }
+  // Mirrors frontend validateSection3's hasStudentMappingSelection: only required once the
+  // student has actually picked their own SDG mapping (primary_sdg), not for every report.
+  const studentPrimarySdg = (section3.primary_sdg || {}) as Record<string, unknown>;
+  const hasStudentMappingSelection = Boolean(
+    studentPrimarySdg.goal_number ||
+      studentPrimarySdg.target_id ||
+      studentPrimarySdg.target_code ||
+      studentPrimarySdg.indicator_id ||
+      studentPrimarySdg.indicator_code,
+  );
+  if (hasStudentMappingSelection) {
+    if (!stringField(section3.student_contribution_intent_statement).trim()) {
+      issues.push({ section: 3, field: 'student_contribution_intent_statement', message: 'Student contribution logic is required' });
+    } else {
+      checkWordRange(issues, 3, 'student_contribution_intent_statement', section3.student_contribution_intent_statement, 'Student contribution logic');
+    }
+  }
+  const secondarySdgs = Array.isArray(section3.secondary_sdgs) ? section3.secondary_sdgs : [];
+  secondarySdgs.forEach((entry, index) => {
+    const sdg = (entry || {}) as Record<string, unknown>;
+    if (!stringField(sdg.justification_text).trim()) {
+      issues.push({ section: 3, field: `secondary_sdgs.${index}.justification_text`, message: `Secondary SDG ${index + 1}: justification is required` });
+    } else {
+      checkWordRange(issues, 3, `secondary_sdgs.${index}.justification_text`, sdg.justification_text, `Secondary SDG ${index + 1} justification`, 'justification_text');
+    }
+  });
   if (!Array.isArray(section2.baseline_evidence) || !section2.baseline_evidence.length) {
     issues.push({ section: 2, field: 'baseline_evidence', message: 'At least one baseline evidence type is required' });
   }
@@ -268,6 +297,16 @@ function validateCoreSectionsPresence(report: {
       }
       if (!activityHasOutputOrReach(block)) {
         issues.push({ section: 4, field: `activity_blocks.${index}.outputs`, message: `Activity ${index + 1}: add a countable output or a beneficiary reach` });
+      }
+      // Mirrors frontend step3Ok/stepNeedText: the overlap note is only required once the
+      // activity serves beneficiaries and the student didn't say reach was "mostly unique".
+      const mostlyUnique = /mostly unique/i.test(stringField(block.overlap_status));
+      if (block.serves_beneficiaries !== false && stringField(block.overlap_status).trim() && !mostlyUnique) {
+        if (!stringField(block.overlap_note).trim()) {
+          issues.push({ section: 4, field: `activity_blocks.${index}.overlap_note`, message: `Activity ${index + 1}: overlap note is required` });
+        } else {
+          checkWordRange(issues, 4, `activity_blocks.${index}.overlap_note`, block.overlap_note, `Activity ${index + 1} overlap note`, 'overlap_note');
+        }
       }
     });
   }

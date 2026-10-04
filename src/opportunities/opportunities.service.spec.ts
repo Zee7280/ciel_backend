@@ -407,6 +407,7 @@ describe('OpportunitiesService — createStudentOpportunity advisory lock', () =
         const result = await service.createStudentOpportunity('student-1', {
             title: 'CS', // < 6 chars — findSimilarStudentCreatedOpportunities short-circuits, no queryBuilder needed
             mode: 'Remote', // location.pin isn't relevant to this test — keep it out of the way
+            objectives: { description: 'Help clean the local park and raise awareness.' },
             timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
             supervision: { contact: 'teacher@uni.edu', faculty_department: 'CS' },
             executing_context: {
@@ -464,6 +465,7 @@ describe('OpportunitiesService — createStudentOpportunity advisory lock', () =
             service.createStudentOpportunity('student-1', {
                 title: 'Beach clean-up drive', // >= 6 chars — reaches the real duplicate check
                 mode: 'Remote', // location.pin isn't relevant to this test — keep it out of the way
+                objectives: { description: 'Help clean the local park and raise awareness.' },
                 timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
                 supervision: { contact: 'teacher@uni.edu', faculty_department: 'CS' },
                 executing_context: {
@@ -903,6 +905,7 @@ describe('OpportunitiesService — create() CIEL PK review requirement is server
         return {
             title: 'Beach cleanup drive',
             mode: 'Remote', // sidesteps the location.pin requirement — not the concern of this test
+            objectives: { description: 'Clean the beach and raise awareness.' },
             timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
             safety_declaration: {
                 environment_safe_and_appropriate: true,
@@ -955,6 +958,17 @@ describe('OpportunitiesService — create() CIEL PK review requirement is server
     it('rejects a whitespace-only title and persists nothing', async () => {
         const { service, save } = makeOrgCreatorService();
         await expect(service.create('ngo-user-1', minimalOrgCreatorDto({ title: '   ' }))).rejects.toThrow(/title/i);
+        expect(save).not.toHaveBeenCalled();
+    });
+
+    it('rejects a missing/blank objectives.description and persists nothing', async () => {
+        const { service, save } = makeOrgCreatorService();
+        await expect(
+            service.create('ngo-user-1', minimalOrgCreatorDto({ objectives: { description: '   ' } })),
+        ).rejects.toThrow(/objectives\.description/i);
+        await expect(
+            service.create('ngo-user-1', minimalOrgCreatorDto({ objectives: undefined })),
+        ).rejects.toThrow(/objectives\.description/i);
         expect(save).not.toHaveBeenCalled();
     });
 
@@ -1148,6 +1162,7 @@ describe('OpportunitiesService — Super Admin create skips a second CIEL gate u
         return {
             title: 'National tree plantation',
             mode: 'Remote',
+            objectives: { description: 'Plant trees across campus and raise awareness.' },
             timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
             safety_declaration: {
                 environment_safe_and_appropriate: true,
@@ -2705,6 +2720,7 @@ describe('OpportunitiesService — create() idempotency for org / faculty / admi
     const dto = (over: Record<string, unknown> = {}) => ({
         title: 'Beach cleanup drive',
         mode: 'Remote',
+        objectives: { description: 'Clean the beach and raise awareness.' },
         timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
         safety_declaration: {
             environment_safe_and_appropriate: true,
@@ -3145,6 +3161,7 @@ describe('OpportunitiesService — org-created routing, live-edit re-review, adm
         ({
             title: 'Beach cleanup drive',
             mode: 'Remote',
+            objectives: { description: 'Clean the beach and raise awareness.' },
             timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
             supervision: exec,
             safety_declaration: {
@@ -3395,6 +3412,7 @@ describe('OpportunitiesService — non-student creators cannot double-submit the
         ({
             title: 'Beach cleanup drive',
             mode: 'Remote',
+            objectives: { description: 'Clean the beach and raise awareness.' },
             timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
             safety_declaration: {
                 environment_safe_and_appropriate: true,

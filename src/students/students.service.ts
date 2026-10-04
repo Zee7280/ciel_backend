@@ -2212,6 +2212,15 @@ export class StudentsService {
         requireDates: true,
       });
     }
+    if (
+      dto.objectives !== undefined &&
+      !String(
+        (opportunity.objectives as { description?: unknown } | null)
+          ?.description ?? '',
+      ).trim()
+    ) {
+      throw new BadRequestException('objectives.description is required');
+    }
 
     if (dto.sdg_info) {
       opportunity.sdg = dto.sdg_info.sdg_id || opportunity.sdg;

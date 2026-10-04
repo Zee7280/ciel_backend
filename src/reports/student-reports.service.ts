@@ -2493,6 +2493,17 @@ export class StudentReportsService {
         payment_status: latest?.status ?? null,
       };
     }
+    // A retracted report must read as 'closed' even when an old approved payment row exists for
+    // this project — otherwise a stale `latest.status === APPROVED` (e.g. a private-candidate fee
+    // paid long before the admin later closed the report) silently promotes it back to
+    // 'verified'/'paid', indistinguishable from a live published report.
+    if (reportStatus === 'closed') {
+      return {
+        status: 'closed',
+        payment_verified: false,
+        payment_status: latest?.status ?? null,
+      };
+    }
     const payment_verified =
       latest?.status === PaymentStatus.APPROVED ||
       ['paid', 'partner_verified', 'verified'].includes(reportStatus);
@@ -4552,6 +4563,8 @@ export class StudentReportsService {
         report_submitted_at: report.reportSubmittedAt,
         partner_approved_at: report.partnerApprovedAt,
         admin_approved_at: report.adminApprovedAt,
+        closed_at: report.closedAt,
+        close_reason: report.closeReason,
         evidence_urls: this.collectEvidenceUrls(report),
         section1: this.sanitizeSection1ForClient(report.section1, {
           participation_type:

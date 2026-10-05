@@ -162,4 +162,20 @@ describe('parseCiiV45Response', () => {
     });
     expect(() => computeCiiV45Result(result!)).not.toThrow();
   });
+
+  it('keeps an omitted criterion pending instead of rejecting the evaluation', () => {
+    const response = fullResponse();
+    response.sectionScores = response.sectionScores
+      .filter((s) => s.dimension !== '7')
+      .map((s) =>
+        s.dimension === '1' ? { ...s, criterionScores: s.criterionScores.slice(0, 3) } : s,
+      );
+    const result = parseCiiV45Response(JSON.stringify(response));
+    expect(result).not.toBeNull();
+    const dim1 = result!.sectionScores.find((s) => s.dimension === '1')!;
+    expect(dim1.criterionScores).toHaveLength(4);
+    expect(dim1.criterionScores.some((c) => c.anchor === 'P')).toBe(true);
+    expect(() => computeCiiV45Result(result!)).not.toThrow();
+    expect(computeCiiV45Result(result!).scoreStatus).toBe('ADMIN_REVIEW_REQUIRED');
+  });
 });

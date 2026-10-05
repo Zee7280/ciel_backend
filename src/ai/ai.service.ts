@@ -149,21 +149,28 @@ function textOnlyUserContent(content: string | OpenAiContentPart[]): string {
     .join('\n\n');
 }
 
-/** Drop evidence originals/filenames from the v5.0 report-quality prompt. */
+/** Drop evidence originals/filenames and the bulky scoring table from the v5.0 report-quality prompt. */
 function slimCiiPayloadForModel(data: unknown): unknown {
   if (!data || typeof data !== 'object') return data;
   const rec = data as Record<string, unknown>;
   const {
     uploaded_evidence_files: _files,
     section8_evidence_verification: section8Raw,
+    system_validation: sysRaw,
     ...rest
   } = rec;
   const section8 =
     section8Raw && typeof section8Raw === 'object' && !Array.isArray(section8Raw)
       ? (section8Raw as Record<string, unknown>)
       : {};
+  const sys =
+    sysRaw && typeof sysRaw === 'object' && !Array.isArray(sysRaw)
+      ? { ...(sysRaw as Record<string, unknown>) }
+      : {};
+  delete sys.scoring_rubric;
   return {
     ...rest,
+    system_validation: sys,
     section8_evidence_verification: {
       has_evidence: section8.has_evidence,
       evidence_description: section8.evidence_description,
@@ -337,7 +344,7 @@ export class AiService {
             if (reasoningModel) {
               const currentMax =
                 typeof requestBody.max_completion_tokens === 'number' ? requestBody.max_completion_tokens : 0;
-              requestBody.max_completion_tokens = Math.max(currentMax, 48_000);
+              requestBody.max_completion_tokens = Math.max(currentMax, 24_000);
               requestBody.reasoning_effort = 'low';
             }
             const messages = requestBody.messages as Array<{ role: string; content: unknown }>;
@@ -1645,12 +1652,11 @@ ${JSON.stringify(data)}`;
           reasoningEffort: 'low',
           temperature: 0.15,
           seed: 4220,
-          maxTokens: 32_000,
+          maxTokens: 16_000,
           responseFormat: { type: 'json_object' },
           systemMessage: `${CII_V4_5_EVALUATOR_PROMPT}\n\n${CII_V4_5_JSON_ONLY_DEPLOYMENT_NOTE}`,
-          // Low + 32k: high/medium ate the 16k budget (empty JSON). Keep total wait
-          // (120s + one empty retry) under the FE/BFF 300s analyser timeout.
-          timeoutMs: 120_000,
+          // Compact JSON + 16k. One empty retry at 24k stays under the FE analyser timeout.
+          timeoutMs: 90_000,
           maxAttempts: 1,
           retryEmptyOnce: true,
         }

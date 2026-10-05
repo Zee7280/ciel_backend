@@ -264,69 +264,57 @@ describe('FacultyReportsService — runCiiV45AnalysisForAdmin', () => {
     await expect(service.runCiiV45AnalysisForAdmin('report-1')).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('surfaces a malformed AI response (wrong criterion count) as a retryable 400, not an unhandled 500', async () => {
-    // Reproduces the exact production failure: AI returns valid JSON, but dimension "1" has only
-    // 3 of its 4 fixed criteria — `computeCiiV45Result` throws `CiiV45ValidationError`, which must
-    // be caught and turned into a BadRequestException, never left to fall through as a bare 500.
-    const malformed: CiiV45EvaluatorPayload = {
+  it('fills omitted AI criteria as pending instead of a 400', async () => {
+    const incomplete: CiiV45EvaluatorPayload = {
       ...CII_V45_AI_RESPONSE,
       sectionScores: CII_V45_AI_RESPONSE.sectionScores.map((s) =>
         s.dimension === '1' ? { ...s, criterionScores: s.criterionScores.slice(0, 3) } : s,
       ),
     };
     const { service } = makeService(
-      { id: 'report-1' },
-      { summarize: jest.fn().mockResolvedValue({ ciiV45: malformed }) },
+      analysableReport(),
+      { summarize: jest.fn().mockResolvedValue({ ciiV45: incomplete }) },
     );
-    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
 
-    await expect(service.runCiiV45AnalysisForAdmin('report-1')).rejects.toMatchObject({
-      response: { statusCode: 400 },
-      message: expect.stringContaining('Invalid criterion count 1'),
-    });
-    // The 400 message alone doesn't carry the AI's raw (malformed) payload — that must be
-    // logged server-side, otherwise a recurring failure on the same report is undebuggable.
-    expect(consoleError).toHaveBeenCalledWith(
-      expect.stringContaining('report-1'),
-      expect.stringContaining('"dimension":"1"'),
-    );
-    consoleError.mockRestore();
+    const result = await service.runCiiV45AnalysisForAdmin('report-1');
+    expect(result.success).toBe(true);
+    expect((result.data as any).scoreStatus).toBe('ADMIN_REVIEW_REQUIRED');
+    const dim1 = (result.data as any).sectionScores.find((s: { dimension: string }) => s.dimension === '1');
+    expect(dim1.criterionScores).toHaveLength(4);
+    expect(dim1.criterionScores.some((c: { anchor: unknown }) => c.anchor === 'P')).toBe(true);
   });
 
   it('calls the model once with evidence images omitted (v5.0 report-quality layer)', async () => {
-    const malformed: CiiV45EvaluatorPayload = {
+    const incomplete: CiiV45EvaluatorPayload = {
       ...CII_V45_AI_RESPONSE,
       sectionScores: CII_V45_AI_RESPONSE.sectionScores.map((s) =>
         s.dimension === '1' ? { ...s, criterionScores: s.criterionScores.slice(0, 3) } : s,
       ),
     };
-    const summarize = jest.fn().mockResolvedValue({ ciiV45: malformed });
-    const { service } = makeService({ id: 'report-2' }, { summarize });
+    const summarize = jest.fn().mockResolvedValue({ ciiV45: incomplete });
+    const { service } = makeService(analysableReport('report-2'), { summarize });
 
-    await expect(service.runCiiV45AnalysisForAdmin('report-2')).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.runCiiV45AnalysisForAdmin('report-2')).resolves.toMatchObject({ success: true });
 
     expect(summarize).toHaveBeenCalledTimes(1);
     expect(summarize.mock.calls[0][2]).toMatchObject({ skipEvidenceImages: true });
   });
 
-  it('clears the in-flight guard after BOTH attempts fail, so the next run is not stuck', async () => {
-    const malformed: CiiV45EvaluatorPayload = {
-      ...CII_V45_AI_RESPONSE,
-      sectionScores: CII_V45_AI_RESPONSE.sectionScores.map((s) =>
-        s.dimension === '1' ? { ...s, criterionScores: s.criterionScores.slice(0, 3) } : s,
-      ),
-    };
+  it('clears the in-flight guard after an unreadable response, so the next run is not stuck', async () => {
     const { service } = makeService(
-      { id: 'report-3' },
+      analysableReport('report-3'),
       {
         summarize: jest
           .fn()
-          .mockResolvedValueOnce({ ciiV45: malformed })
+          .mockResolvedValueOnce({ ciiV45: null })
           .mockResolvedValue({ ciiV45: CII_V45_AI_RESPONSE }),
       },
     );
 
-    await expect(service.runCiiV45AnalysisForAdmin('report-3')).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.runCiiV45AnalysisForAdmin('report-3')).rejects.toMatchObject({
+      response: { statusCode: 400 },
+      message: expect.stringContaining('readable'),
+    });
     await expect(service.runCiiV45AnalysisForAdmin('report-3')).resolves.toMatchObject({ success: true });
   });
 

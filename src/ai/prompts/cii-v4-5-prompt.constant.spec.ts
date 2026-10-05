@@ -16,6 +16,8 @@ describe('CII_V4_5_JSON_ONLY_DEPLOYMENT_NOTE — per-dimension criterion manifes
 
   it('warns explicitly that criterionScores count never scales with team size', () => {
     expect(CII_V4_5_JSON_ONLY_DEPLOYMENT_NOTE).toMatch(/NEVER one entry per team member/);
+    expect(CII_V4_5_JSON_ONLY_DEPLOYMENT_NOTE).toMatch(/Omitted criteria are held pending/);
+    expect(CII_V4_5_JSON_ONLY_DEPLOYMENT_NOTE).toMatch(/max 25 words/);
   });
 
   it('tells the model not to flag pending attendance verification or live-attendance gates', () => {

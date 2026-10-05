@@ -847,29 +847,36 @@ function stableStringify(value: unknown): string {
 }
 
 /**
- * sha256 fingerprint binding a v4.5 evaluation to the exact report content + evidence bytes it
- * ran against. Callable twice independently — once when the payload is built, again at Accept &
- * Publish time against the report's then-current live data — so a changed fingerprint reveals
- * that the source has moved since the evaluation ran and the stale result must not be published.
+ * Fingerprint binding a v5.0 evaluation to report sections + evidence identity (id/url/path/size).
+ * Callable twice independently — once when the payload is built, again at Confirm — so a changed
+ * fingerprint reveals the source moved and the stale result must not be published. Metadata only:
+ * downloading every evidence file from S3 just to SHA-256 it made Run Analyzer wait tens of seconds
+ * before the model even started, and Admin never sends originals to the model.
  */
 export function computeCiiV45InputFingerprint(
     report: StudentReport,
-    evidenceFiles: Array<{ file_id: string; file_integrity: { sha256: string | null } }>,
+    evidenceFiles: Array<{
+        file_id: string;
+        url?: string;
+        storage_path?: string;
+        file_integrity?: { sha256?: string | null; size_bytes?: number | null };
+    }>,
 ): string {
     const sections = [
         report.section1, report.section2, report.section3, report.section4, report.section5,
         report.section6, report.section7, report.section8, report.section9, report.section10,
     ].map((section) => section ?? null);
     const evidence = evidenceFiles
-        .map((f) => ({ file_id: f.file_id, sha256: f.file_integrity.sha256 }))
+        .map((f) => ({
+            file_id: f.file_id,
+            url: f.url ?? '',
+            storage_path: f.storage_path ?? '',
+            size_bytes: f.file_integrity?.size_bytes ?? null,
+        }))
         .sort((a, b) => a.file_id.localeCompare(b.file_id));
     return sha256Hex(Buffer.from(stableStringify({ sections, evidence }), 'utf8'));
 }
 
-/** Fetches + hashes every evidence file's actual bytes. Never throws — a file that fails to
- * fetch gets `sha256: null` (still contributes to the fingerprint, just as a known-missing
- * value), so one bad URL cannot block building the rest of the evaluation payload.
- * Image bytes are kept on a non-enumerable cache so the Analyzer can attach them without a second S3 fetch. */
 const CII_EVIDENCE_INSPECT_KEY = '__ciiEvidenceInspect';
 
 export type CiiEvidenceInspectCache = Map<string, { buffer: Buffer; contentType?: string }>;
@@ -880,64 +887,23 @@ export function ciiEvidenceInspectCache(data: unknown): CiiEvidenceInspectCache 
     return cache instanceof Map ? (cache as CiiEvidenceInspectCache) : undefined;
 }
 
-async function hashEvidenceFiles(
-    files: CielPkUploadedEvidenceFile[],
-    s3: EvidenceByteSource,
-): Promise<{ files: CielPkUploadedEvidenceFile[]; inspectByUrl: CiiEvidenceInspectCache }> {
-    const inspectByUrl: CiiEvidenceInspectCache = new Map();
-    const hashed = await Promise.all(
-        files.map(async (file) => {
-            try {
-                const object = await s3.getObjectBufferByPublicUrl(file.url);
-                if (!object) return file;
-                const type = String(object.contentType ?? '').toLowerCase().split(';')[0];
-                const looksImage =
-                    EVIDENCE_IMAGE_TYPES_FOR_INSPECT.has(type) ||
-                    /\.(jpe?g|png|webp|gif)(\?|$)/i.test(file.url || file.file_name || '');
-                if (looksImage && object.buffer.length > 0 && object.buffer.length <= 4 * 1024 * 1024) {
-                    inspectByUrl.set(file.url, { buffer: object.buffer, contentType: object.contentType });
-                }
-                return {
-                    ...file,
-                    file_integrity: { sha256: sha256Hex(object.buffer), size_bytes: object.buffer.byteLength },
-                };
-            } catch (error) {
-                console.error('CII v4.5 evidence hash failed:', file.url, error);
-                return file;
-            }
-        }),
-    );
-    return { files: hashed, inspectByUrl };
-}
-
-const EVIDENCE_IMAGE_TYPES_FOR_INSPECT = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif']);
-
 /**
- * v4.5 variant of `buildCielPkAiEvaluationPayload`: reuses every section mapper as-is, then adds
- * the `report_id`/`input_fingerprint` the v4.5 prompt requires to be echoed back. Evidence file
- * hashes are computed here (fetch-and-hash), not cached at upload time — simpler and lower-risk
- * than touching the shared evidence-upload path, at the cost of re-fetching bytes on each call
- * (evaluation time, and again at Accept & Publish time).
+ * v5.0 variant of `buildCielPkAiEvaluationPayload`: reuses every section mapper, then adds
+ * `report_id` / `input_fingerprint`. Evidence bytes are not fetched — Admin scores originals in
+ * Dimension 7, and the model is report-quality only.
  */
 export async function buildCielPkAiEvaluationPayloadV45(
     report: StudentReport,
-    s3: EvidenceByteSource,
+    _s3?: EvidenceByteSource,
 ): Promise<CielPkAiEvaluationPayloadV45> {
+    void _s3;
     const base = buildCielPkAiEvaluationPayload(report);
-    const { files: hashedFiles, inspectByUrl } = await hashEvidenceFiles(base.uploaded_evidence_files, s3);
-    const inputFingerprint = computeCiiV45InputFingerprint(report, hashedFiles);
-    const payload: CielPkAiEvaluationPayloadV45 = {
+    return {
         ...base,
         schema_version: CIEL_PK_AI_EVALUATION_SCHEMA_VERSION_V45,
-        uploaded_evidence_files: hashedFiles,
         report_id: report.id,
-        input_fingerprint: inputFingerprint,
+        input_fingerprint: computeCiiV45InputFingerprint(report, base.uploaded_evidence_files),
     };
-    Object.defineProperty(payload, CII_EVIDENCE_INSPECT_KEY, {
-        value: inspectByUrl,
-        enumerable: false,
-    });
-    return payload;
 }
 
 export function buildCiiV45InputCompletenessFromEvalPayload(

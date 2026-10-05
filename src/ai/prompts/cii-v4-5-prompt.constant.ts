@@ -182,6 +182,7 @@ Emit exactly one JSON object matching the CIEL PK CII v5.0.2 Hybrid report-quali
 Set frameworkVersion to "5.0" at the top level. Echo reportId and inputFingerprint exactly as given to you.
 Include exactly nine sectionScores entries (dimensions "1","2","3","4A","4B","5","6","8","9"), each with every fixed criterion for that dimension rated. Do NOT return dimension "7".
 Include sectionAnalyses with exactly those nine dimensions.
+Keep each \`reasoningSummary\` to one sentence (max 25 words). Keep each \`sectionAnalyses\` summary to two sentences.
 Never include a numeric CII, scoreStatus, baseCII, diagnosticCII, finalCII, aiReportScore, adminEvidenceScore or badge field — the server computes those.
 Always return evidenceIds as [] on every criterion.
 Do not emit markdown fences or any text outside the JSON object.
@@ -191,7 +192,7 @@ criterionScores array has exactly one entry per fixed criterion below, covering 
 whole — NEVER one entry per team member, per session or per activity. A team of 5 students still
 produces only these entries; synthesize the team's performance into a single judgement per criterion
 (the \`role\`/\`quality\` criteria themselves are about how responsibility and involvement were
-distributed, not a per-student scorecard). Any sectionScores entry with the wrong criterionScores
-count is rejected outright by the server and the whole evaluation fails — get the count exactly right:
+distributed, not a per-student scorecard). Omitted criteria are held pending by the server — still
+emit every key below so the analysis can complete:
 ${CII_V45_DIMENSION_CRITERION_MANIFEST}
 `.trim();

@@ -447,6 +447,26 @@ describe('computeCiiV45Result', () => {
     expect(result.finalCII).toBeNull();
   });
 
+  it('fills omitted AI criteria as pending so compute does not throw', () => {
+    const base = buildValidPayload();
+    const truncated = {
+      ...base,
+      sectionScores: base.sectionScores
+        .filter((s) => s.dimension !== '7')
+        .map((s) =>
+          s.dimension !== '1' ? s : { ...s, criterionScores: s.criterionScores.slice(0, 2) },
+        ),
+    };
+    const payload = normalizeCiiV5AiPayload(truncated);
+    const dim1 = payload.sectionScores.find((s) => s.dimension === '1')!;
+    expect(dim1.criterionScores).toHaveLength(4);
+    expect(dim1.criterionScores.filter((c) => c.anchor === 'P')).toHaveLength(2);
+    expect(payload.adminReviewReasons.some((r) => r.includes('AI omitted criteria'))).toBe(true);
+    const result = computeCiiV45Result(payload);
+    expect(result.scoreStatus).toBe('ADMIN_REVIEW_REQUIRED');
+    expect(result.aiReportScore).toBeNull();
+  });
+
   it('aliases hoursConsistency from older AI payloads onto hoursCompletion', () => {
     const payload = normalizeCiiV5AiPayload({
       ...buildValidPayload(),

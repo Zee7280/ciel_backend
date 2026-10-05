@@ -1,13 +1,10 @@
-import * as crypto from 'crypto';
 import {
   buildCielPkAiEvaluationPayload,
   buildCielPkAiEvaluationPayloadV45,
   buildCiiV45InputCompletenessFromEvalPayload,
   computeCiiV45InputFingerprint,
-  ciiEvidenceInspectCache,
   CIEL_PK_AI_EVALUATION_SCHEMA_VERSION,
   CIEL_PK_AI_EVALUATION_SCHEMA_VERSION_V45,
-  EvidenceByteSource,
 } from './build-ciel-pk-ai-evaluation-payload.util';
 import { StudentReport } from './entities/student-report.entity';
 
@@ -433,36 +430,25 @@ function minimalV45Report(): StudentReport {
   } as unknown as StudentReport;
 }
 
-function fakeS3(buffer: Buffer | null): EvidenceByteSource {
-  return {
-    getObjectBufferByPublicUrl: jest.fn(async () => (buffer ? { buffer } : null)),
-  };
-}
-
 describe('buildCielPkAiEvaluationPayloadV45', () => {
-  it('builds the v4.5 payload with a real sha256 hash per evidence file and the v4.5 scoring rubric', async () => {
-    const bytes = Buffer.from('fake evidence bytes');
-    const payload = await buildCielPkAiEvaluationPayloadV45(minimalV45Report(), fakeS3(bytes));
+  it('builds the v5.0 payload with a metadata fingerprint and does not fetch evidence bytes', async () => {
+    const s3 = { getObjectBufferByPublicUrl: jest.fn() };
+    const payload = await buildCielPkAiEvaluationPayloadV45(minimalV45Report(), s3 as never);
 
     expect(payload.schema_version).toBe(CIEL_PK_AI_EVALUATION_SCHEMA_VERSION_V45);
     expect(payload.report_id).toBe('report-45');
     expect(payload.uploaded_evidence_files).toHaveLength(1);
-    expect(payload.uploaded_evidence_files[0].file_integrity.sha256).toBe(
-      crypto.createHash('sha256').update(bytes).digest('hex'),
-    );
-    expect(payload.uploaded_evidence_files[0].file_integrity.size_bytes).toBe(bytes.byteLength);
+    expect(payload.uploaded_evidence_files[0].file_integrity.sha256).toBeNull();
+    expect(s3.getObjectBufferByPublicUrl).not.toHaveBeenCalled();
     expect(
       (payload.system_validation.scoring_rubric as { cii_v45_framework_version: string }).cii_v45_framework_version,
     ).toBe('5.0');
     expect(typeof payload.input_fingerprint).toBe('string');
     expect(payload.input_fingerprint.length).toBeGreaterThan(0);
-    const inspect = ciiEvidenceInspectCache(payload);
-    expect(inspect?.get('https://example.com/files/evidence-1.jpg')?.buffer.equals(bytes)).toBe(true);
-    expect(JSON.stringify(payload)).not.toContain('__ciiEvidenceInspect');
   });
 
-  it('degrades gracefully (null hash) when an evidence file fails to fetch, without throwing', async () => {
-    const payload = await buildCielPkAiEvaluationPayloadV45(minimalV45Report(), fakeS3(null));
+  it('still fingerprints when evidence size is unknown', async () => {
+    const payload = await buildCielPkAiEvaluationPayloadV45(minimalV45Report());
     expect(payload.uploaded_evidence_files[0].file_integrity.sha256).toBeNull();
     expect(typeof payload.input_fingerprint).toBe('string');
   });
@@ -471,7 +457,7 @@ describe('buildCielPkAiEvaluationPayloadV45', () => {
 describe('computeCiiV45InputFingerprint', () => {
   it('is deterministic for identical input and changes when a section changes', () => {
     const report = minimalV45Report();
-    const files = [{ file_id: 'EV-001', file_integrity: { sha256: 'abc' } }];
+    const files = [{ file_id: 'EV-001', url: 'https://a.example/1', storage_path: '/1' }];
 
     const fp1 = computeCiiV45InputFingerprint(report, files);
     const fp2 = computeCiiV45InputFingerprint({ ...report } as StudentReport, files);
@@ -484,13 +470,13 @@ describe('computeCiiV45InputFingerprint', () => {
     expect(changed).not.toBe(fp1);
   });
 
-  it('changes when an evidence file hash changes', () => {
+  it('changes when an evidence file identity changes', () => {
     const report = minimalV45Report();
     const fp1 = computeCiiV45InputFingerprint(report, [
-      { file_id: 'EV-001', file_integrity: { sha256: 'abc' } },
+      { file_id: 'EV-001', url: 'https://a.example/1', storage_path: '/1' },
     ]);
     const fp2 = computeCiiV45InputFingerprint(report, [
-      { file_id: 'EV-001', file_integrity: { sha256: 'different' } },
+      { file_id: 'EV-001', url: 'https://a.example/replaced', storage_path: '/1' },
     ]);
     expect(fp1).not.toBe(fp2);
   });
@@ -498,12 +484,12 @@ describe('computeCiiV45InputFingerprint', () => {
   it('is stable regardless of evidence-file array order', () => {
     const report = minimalV45Report();
     const fp1 = computeCiiV45InputFingerprint(report, [
-      { file_id: 'EV-001', file_integrity: { sha256: 'a' } },
-      { file_id: 'EV-002', file_integrity: { sha256: 'b' } },
+      { file_id: 'EV-001', url: 'https://a.example/1', storage_path: '/1' },
+      { file_id: 'EV-002', url: 'https://a.example/2', storage_path: '/2' },
     ]);
     const fp2 = computeCiiV45InputFingerprint(report, [
-      { file_id: 'EV-002', file_integrity: { sha256: 'b' } },
-      { file_id: 'EV-001', file_integrity: { sha256: 'a' } },
+      { file_id: 'EV-002', url: 'https://a.example/2', storage_path: '/2' },
+      { file_id: 'EV-001', url: 'https://a.example/1', storage_path: '/1' },
     ]);
     expect(fp1).toBe(fp2);
   });

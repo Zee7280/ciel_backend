@@ -459,33 +459,94 @@ export function pendingDimension7Section(): CiiV45SectionScore {
   };
 }
 
+function compactReasoning(value: unknown): string {
+  const text = typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
+  if (!text) return 'AI report-quality judgement.';
+  return text.length > 180 ? `${text.slice(0, 177).trimEnd()}…` : text;
+}
+
+function omittedAiCriterion(key: string): CiiV45CriterionScore {
+  return {
+    criterion: key,
+    anchor: 'P',
+    qualityAnchor: 'P',
+    verificationStatus: 'PROCESSING_REQUIRED',
+    sourceRefs: [],
+    evidenceIds: [],
+    reasoningSummary: 'AI omitted this criterion; Admin should confirm from the saved report.',
+  };
+}
+
+function coerceAiAnchor(value: unknown): CiiV45Anchor | null {
+  if (value === 'P' || value === 'p') return 'P';
+  const n = typeof value === 'string' && value.trim() ? Number(value) : value;
+  if (Number.isInteger(n) && (n as number) >= 0 && (n as number) <= 4) {
+    return n as 0 | 1 | 2 | 3 | 4;
+  }
+  return null;
+}
+
+function coerceAiSectionScores(raw: CiiV45SectionScore[] | undefined): {
+  sections: CiiV45SectionScore[];
+  omittedKeys: string[];
+} {
+  const rows = Array.isArray(raw) ? raw : [];
+  const omittedKeys: string[] = [];
+  const sections = CII_V45_AI_DIMENSIONS.map((dim) => {
+    const section = rows.find((s) => s.dimension === dim.id);
+    const byKey = new Map(
+      (Array.isArray(section?.criterionScores) ? section.criterionScores : []).map((c) => [
+        aliasAiCriterionKey(String(c.criterion || '')),
+        c,
+      ]),
+    );
+    return {
+      dimension: dim.id,
+      criterionScores: dim.criteria.map(({ key }) => {
+        const c = byKey.get(key);
+        if (!c) {
+          omittedKeys.push(`${dim.id}.${key}`);
+          return omittedAiCriterion(key);
+        }
+        const anchor = coerceAiAnchor(c.anchor) ?? 'P';
+        const quality = coerceAiAnchor(c.qualityAnchor) ?? anchor;
+        const status = VERIFICATION_STATUSES.includes(c.verificationStatus)
+          ? c.verificationStatus
+          : 'AI_REPORT';
+        return {
+          criterion: key,
+          anchor,
+          qualityAnchor: quality === 'P' ? anchor : quality,
+          verificationStatus: status === 'VERIFIED' ? 'AI_REPORT' : status,
+          sourceRefs: Array.isArray(c.sourceRefs) ? c.sourceRefs : [],
+          evidenceIds: [],
+          reasoningSummary: compactReasoning(c.reasoningSummary),
+          deductionReason: c.deductionReason ?? null,
+        };
+      }),
+    };
+  });
+  return { sections, omittedKeys };
+}
+
 /** Forces an AI evaluator payload onto the v5.0 hybrid contract (9 quality dims, D7 pending). */
 export function normalizeCiiV5AiPayload(raw: CiiV45EvaluatorPayload): CiiV45EvaluatorPayload {
   const extras = raw.extraMileUplift;
   const candidates = Array.isArray(extras?.items) ? extras.items : [];
+  const { sections, omittedKeys } = coerceAiSectionScores(raw.sectionScores);
+  const reasons = Array.isArray(raw.adminReviewReasons) ? [...raw.adminReviewReasons] : [];
+  if (omittedKeys.length) {
+    const note = `AI omitted criteria: ${omittedKeys.join(', ')}. Confirm from the saved report.`;
+    if (!reasons.includes(note)) reasons.push(note);
+  }
   return {
     ...raw,
     frameworkVersion: CII_V45_FRAMEWORK_VERSION,
     claimInventory: Array.isArray(raw.claimInventory) ? raw.claimInventory : [],
     evidenceAudit: Array.isArray(raw.evidenceAudit) ? raw.evidenceAudit : [],
     deductionLedger: Array.isArray(raw.deductionLedger) ? raw.deductionLedger : [],
-    adminReviewReasons: Array.isArray(raw.adminReviewReasons) ? raw.adminReviewReasons : [],
-    sectionScores: [
-      ...raw.sectionScores
-        .filter((s) => s.dimension !== '7')
-        .map((s) => ({
-          ...s,
-          criterionScores: s.criterionScores.map((c) => ({
-            ...c,
-            criterion: aliasAiCriterionKey(c.criterion),
-            evidenceIds: [],
-            verificationStatus:
-              c.verificationStatus === 'VERIFIED' ? 'AI_REPORT' : c.verificationStatus,
-            qualityAnchor: c.qualityAnchor === 'P' ? c.anchor : c.qualityAnchor,
-          })),
-        })),
-      pendingDimension7Section(),
-    ],
+    adminReviewReasons: reasons,
+    sectionScores: [...sections, pendingDimension7Section()],
     extraMileUplift: { assessmentStatus: 'PENDING_ADMIN', items: [] },
     extraMileCandidates: Array.isArray(raw.extraMileCandidates)
       ? raw.extraMileCandidates

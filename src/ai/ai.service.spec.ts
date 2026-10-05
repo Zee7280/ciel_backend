@@ -136,15 +136,17 @@ describe('AiService — CII v4.5 evaluation branch', () => {
 
     const out = await new AiService().summarize('cii_v4_5_evaluation', {
       uploaded_evidence_files: [{ file_id: 'EV-001', file_name: 'a.jpg', file_type: 'jpg', url: 'https://bkt.s3.amazonaws.com/a.jpg' }],
+      system_validation: { scoring_rubric: { cii_v45_framework_version: '5.0', tables: ['bulky'] } },
     });
 
     const sent = JSON.parse(f.mock.calls[0][1].body);
     expect(sent.model).toBe('gpt-5.6-sol');
     expect(sent.reasoning_effort).toBe('low');
-    expect(sent.max_completion_tokens).toBe(32000);
+    expect(sent.max_completion_tokens).toBe(16000);
     expect(sent.response_format).toEqual({ type: 'json_object' });
     expect(sent.messages[0].content).toContain('CII AI ANALYSER v5.0');
     expect(JSON.stringify(sent.messages)).not.toContain('uploaded_evidence_files');
+    expect(JSON.stringify(sent.messages)).not.toContain('scoring_rubric');
     expect(out.ciiV45?.frameworkVersion).toBe('5.0');
     expect(out.ciiV45?.sectionScores).toHaveLength(10);
     expect(out.ciiV45?.adminEvidenceAssessment).toEqual({ status: 'PENDING' });
@@ -234,9 +236,9 @@ describe('AiService — CII v4.5 evaluation branch', () => {
     expect(f).toHaveBeenCalledTimes(2);
     const first = JSON.parse(f.mock.calls[0][1].body);
     const second = JSON.parse(f.mock.calls[1][1].body);
-    expect(first.max_completion_tokens).toBe(32000);
+    expect(first.max_completion_tokens).toBe(16000);
     expect(typeof first.messages[1].content).toBe('string');
-    expect(second.max_completion_tokens).toBe(48000);
+    expect(second.max_completion_tokens).toBe(24000);
     expect(second.reasoning_effort).toBe('low');
     expect(typeof second.messages[1].content).toBe('string');
   });

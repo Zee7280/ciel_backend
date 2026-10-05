@@ -32,11 +32,16 @@ type OpenAiCompletionOpts = {
   systemMessage?: string;
   /** Per-call OpenAI HTTP timeout. Defaults to OPENAI_TIMEOUT_MS. */
   timeoutMs?: number;
-  /** Per-call retries. CII skips the extra attempt so a slow run is not doubled. */
+  /** Per-call retries. CII skips HTTP retries so a slow run is not doubled. */
   maxAttempts?: number;
+  /**
+   * One extra attempt when HTTP 200 has no message text (typical when a reasoning
+   * model spends max_completion_tokens on thinking and finish_reason is `length`).
+   */
+  retryEmptyOnce?: boolean;
   /** Overrides OPENAI_SUMMARY_MODEL for this call only (CII Analyzer uses its own model). */
   model?: string;
-  /** GPT-5 reasoning effort. CII Analyzer uses `medium` so Analyze finishes in time. */
+  /** GPT-5 reasoning effort. CII Analyzer uses `low` so JSON still has token budget. */
   reasoningEffort?: 'low' | 'medium' | 'high';
 };
 
@@ -95,6 +100,53 @@ function resolveOpenAiErrorMessage(error: unknown): string {
     return error.message.trim();
   }
   return 'Failed to generate AI response';
+}
+
+type OpenAiChatResponse = {
+  choices?: Array<{
+    finish_reason?: string | null;
+    message?: {
+      content?: string | Array<{ type?: string; text?: string }> | null;
+    };
+  }>;
+  error?: { message?: string };
+};
+
+/** Chat Completions may return a string, an array of parts, or blank content after reasoning. */
+function extractOpenAiMessageText(responseJson: OpenAiChatResponse): string {
+  const content = responseJson.choices?.[0]?.message?.content;
+  if (typeof content === 'string' && content.trim()) return content.trim();
+  if (Array.isArray(content)) {
+    const joined = content
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (part && typeof part === 'object' && typeof part.text === 'string') return part.text;
+        return '';
+      })
+      .join('')
+      .trim();
+    if (joined) return joined;
+  }
+  return '';
+}
+
+function emptyOpenAiContentError(responseJson: OpenAiChatResponse): Error & { status: number } {
+  const finish = responseJson.choices?.[0]?.finish_reason ?? '';
+  const err = new Error(
+    finish === 'length'
+      ? 'The AI used its token budget on reasoning and returned no analysis. Please retry.'
+      : 'OpenAI returned empty content',
+  ) as Error & { status: number };
+  err.status = 400;
+  return err;
+}
+
+function textOnlyUserContent(content: string | OpenAiContentPart[]): string {
+  if (typeof content === 'string') return content;
+  return content
+    .filter((part): part is { type: 'text'; text: string } => part.type === 'text')
+    .map((part) => part.text)
+    .join('\n\n');
 }
 
 /** Drop storage URLs/hashes from the CII prompt — images are attached separately. */
@@ -245,12 +297,11 @@ export class AiService {
     // text first so an HTML error page from a proxy is reported clearly instead of crashing res.json().
     const timeoutMs = opts?.timeoutMs ?? OPENAI_TIMEOUT_MS;
     const maxAttempts = opts?.maxAttempts ?? OPENAI_MAX_ATTEMPTS;
-    let responseJson: {
-      choices?: Array<{ message?: { content?: string | null } }>;
-      error?: { message?: string };
-    } = {};
+    const extraEmptyAttempt = opts?.retryEmptyOnce ? 1 : 0;
+    let responseJson: OpenAiChatResponse = {};
     let lastError: (Error & { status?: number }) | null = null;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    let didEmptyRetry = false;
+    for (let attempt = 1; attempt <= maxAttempts + extraEmptyAttempt; attempt++) {
       try {
         const res = await fetch('https://api.openai.com/v1/chat/completions', {
           method: 'POST',
@@ -268,8 +319,28 @@ export class AiService {
           responseJson = { error: { message: `OpenAI returned a non-JSON response (${res.status})` } };
         }
         if (res.ok) {
-          lastError = null;
-          break;
+          if (extractOpenAiMessageText(responseJson)) {
+            lastError = null;
+            break;
+          }
+          lastError = emptyOpenAiContentError(responseJson);
+          this.logger.warn(
+            `OpenAI empty content (model=${model} finish_reason=${responseJson.choices?.[0]?.finish_reason ?? 'unknown'})`,
+          );
+          if (opts?.retryEmptyOnce && !didEmptyRetry) {
+            didEmptyRetry = true;
+            if (reasoningModel) {
+              const currentMax =
+                typeof requestBody.max_completion_tokens === 'number' ? requestBody.max_completion_tokens : 0;
+              requestBody.max_completion_tokens = Math.max(currentMax, 48_000);
+              requestBody.reasoning_effort = 'low';
+            }
+            const messages = requestBody.messages as Array<{ role: string; content: unknown }>;
+            if (messages[1]) messages[1].content = textOnlyUserContent(userPrompt);
+            this.logger.warn('Retrying OpenAI without images and with a larger token budget');
+            continue;
+          }
+          throw lastError;
         }
         const err = new Error(
           responseJson.error?.message || `OpenAI error (${res.status})`,
@@ -277,7 +348,7 @@ export class AiService {
         err.status = res.status;
         lastError = err;
         const retryable = res.status === 429 || res.status >= 500;
-        if (!retryable || attempt === maxAttempts) throw err;
+        if (!retryable || attempt >= maxAttempts) throw err;
       } catch (e) {
         const err = e as Error & { status?: number; name?: string };
         const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
@@ -289,15 +360,15 @@ export class AiService {
         } else {
           lastError = err;
         }
-        if (!retryable || attempt === maxAttempts) throw lastError;
+        if (!retryable || attempt >= maxAttempts) throw lastError;
       }
       this.logger.warn(`OpenAI attempt ${attempt} failed (${lastError?.message}); retrying`);
       await new Promise((r) => setTimeout(r, 1500 * attempt));
     }
 
-    const text = responseJson.choices?.[0]?.message?.content?.trim();
+    const text = extractOpenAiMessageText(responseJson);
     if (!text) {
-      throw new Error('OpenAI returned empty content');
+      throw lastError ?? new Error('OpenAI returned empty content');
     }
 
     return text;
@@ -1562,15 +1633,17 @@ ${JSON.stringify(data)}`;
     const openAiOpts: OpenAiCompletionOpts | undefined = isCiiV45Evaluation
       ? {
           model: resolveCiiAnalyzerModel(),
-          reasoningEffort: 'medium',
+          reasoningEffort: 'low',
           temperature: 0.15,
           seed: 4220,
-          maxTokens: 16000,
+          maxTokens: 32_000,
           responseFormat: { type: 'json_object' },
           systemMessage: `${CII_V4_5_EVALUATOR_PROMPT}\n\n${CII_V4_5_JSON_ONLY_DEPLOYMENT_NOTE}`,
-          // Medium reasoning + 4 images: one attempt. High + 8 images timed out on 17-file reports.
-          timeoutMs: 180_000,
+          // Low + 32k: high/medium ate the 16k budget (empty JSON). Keep total wait
+          // (120s + one empty retry) under the FE/BFF 300s analyser timeout.
+          timeoutMs: 120_000,
           maxAttempts: 1,
+          retryEmptyOnce: true,
         }
       : isFypAiEvaluationSection
         ? {

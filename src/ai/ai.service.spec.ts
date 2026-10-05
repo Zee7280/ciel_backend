@@ -140,7 +140,8 @@ describe('AiService — CII v4.5 evaluation branch', () => {
 
     const sent = JSON.parse(f.mock.calls[0][1].body);
     expect(sent.model).toBe('gpt-5.6-sol');
-    expect(sent.reasoning_effort).toBe('medium');
+    expect(sent.reasoning_effort).toBe('low');
+    expect(sent.max_completion_tokens).toBe(32000);
     expect(sent.response_format).toEqual({ type: 'json_object' });
     expect(sent.messages[0].content).toContain('CII v4.5');
     expect(out.ciiV45?.frameworkVersion).toBe('4.5');
@@ -227,5 +228,60 @@ describe('AiService — CII v4.5 evaluation branch', () => {
     });
     expect(out.evidenceInspection?.inspected).toHaveLength(0);
     expect(out.evidenceInspection?.notInspected).toHaveLength(1);
+  });
+
+  it('parses CII JSON from array-shaped message content', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          choices: [{ message: { content: [{ type: 'text', text: CII_V45_JSON }] } }],
+        }),
+    }) as never;
+    const out = await new AiService().summarize('cii_v4_5_evaluation', { uploaded_evidence_files: [] });
+    expect(out.ciiV45?.frameworkVersion).toBe('4.5');
+  });
+
+  it('retries empty length once without images and with a larger token budget', async () => {
+    const bucketImg = 'https://bkt.s3.eu.amazonaws.com/evidence/a.jpg';
+    const s3 = {
+      getObjectBufferByPublicUrl: jest.fn(async () => ({ buffer: Buffer.from('JPEGDATA'), contentType: 'image/jpeg' })),
+    };
+    const empty = JSON.stringify({
+      choices: [{ finish_reason: 'length', message: { content: '' } }],
+    });
+    const ok = JSON.stringify({ choices: [{ message: { content: CII_V45_JSON } }] });
+    const f = jest.fn().mockResolvedValueOnce(res(200, empty)).mockResolvedValueOnce(res(200, ok));
+    global.fetch = f as never;
+
+    const out = await new AiService(s3 as never).summarize('cii_v4_5_evaluation', {
+      uploaded_evidence_files: [{ file_id: 'E1', file_name: 'a.jpg', file_type: 'jpg', url: bucketImg }],
+    });
+
+    expect(out.ciiV45?.frameworkVersion).toBe('4.5');
+    expect(f).toHaveBeenCalledTimes(2);
+    const first = JSON.parse(f.mock.calls[0][1].body);
+    const second = JSON.parse(f.mock.calls[1][1].body);
+    expect(first.max_completion_tokens).toBe(32000);
+    expect(Array.isArray(first.messages[1].content)).toBe(true);
+    expect(second.max_completion_tokens).toBe(48000);
+    expect(second.reasoning_effort).toBe('low');
+    expect(typeof second.messages[1].content).toBe('string');
+    expect(second.messages[1].content).not.toMatch(/^data:image/);
+  });
+
+  it('surfaces a token-budget error when the retry is also empty', async () => {
+    const empty = JSON.stringify({
+      choices: [{ finish_reason: 'length', message: { content: null } }],
+    });
+    global.fetch = jest.fn().mockResolvedValue(res(200, empty)) as never;
+    await expect(
+      new AiService().summarize('cii_v4_5_evaluation', { uploaded_evidence_files: [] }),
+    ).rejects.toMatchObject({
+      status: 500,
+      response: { error: expect.stringContaining('token budget') },
+    });
+    expect(global.fetch).toHaveBeenCalledTimes(2);
   });
 });

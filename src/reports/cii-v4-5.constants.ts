@@ -608,7 +608,7 @@ export function computeCiiV45Result(payload: CiiV45EvaluatorPayload): CiiV45Resu
     if (typeof h.hours === 'number' && h.hours < h.requiredHours && h.recordComplete === true) {
       hoursFail = true;
     }
-    if (h.hours === null || !h.verified) {
+    if (h.hours === null) {
       hoursPending = true;
       continue;
     }
@@ -634,9 +634,10 @@ export function computeCiiV45Result(payload: CiiV45EvaluatorPayload): CiiV45Resu
         : 'FINAL';
 
   const base = sections.some((s) => s.score === null) ? null : sections.reduce((t, s) => t + (s.score as number), 0);
-  // Diagnostic CII is the numeric rollup of scored criteria. Uninspected files, unverified
-  // hours, or extra-mile still-processing block publication (`finalCII` / FINAL), they must
+  // Diagnostic CII is the numeric rollup of scored criteria. Uninspected files
+  // or extra-mile still-processing block publication (`finalCII` / FINAL); they must
   // not hide the overall score the Analyzer already computed.
+  // Pending faculty/partner attendance verification is not an analyser gate.
   const extraForDiag =
     extras.assessmentStatus === 'PROCESSING_REQUIRED' ? 0 : uplift;
   const diag =

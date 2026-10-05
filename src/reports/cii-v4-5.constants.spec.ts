@@ -274,7 +274,7 @@ describe('computeCiiV45Result', () => {
     expect(result.recommendedBadge).toBeNull();
   });
 
-  it('keeps diagnostic CII when hours are logged but not yet verified', () => {
+  it('does not treat pending attendance verification as ADMIN_REVIEW when hours are logged', () => {
     const payload = buildValidPayload({
       inputCompleteness: {
         gaps: [],
@@ -285,8 +285,9 @@ describe('computeCiiV45Result', () => {
       },
     });
     const result = computeCiiV45Result(payload);
-    expect(result.scoreStatus).toBe('ADMIN_REVIEW_REQUIRED');
-    expect(result.finalCII).toBeNull();
+    expect(result.scoreStatus).toBe('FINAL');
+    expect(result.publicationEligible).toBe(true);
+    expect(result.finalCII).toBe(70);
     expect(result.diagnosticCII).toBe(70);
   });
 

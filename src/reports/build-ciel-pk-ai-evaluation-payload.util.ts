@@ -274,8 +274,9 @@ function mapAttendanceLog(
         activity_title: pickString(log.activity_title) || pickString(log.description),
         activity_description: pickString(log.description),
         location: pickString(log.location),
-        verification_status: pickString(log.approval_status) || pickString(log.entryStatus) || 'pending',
-        verified_by: pickString(log.assigned_approver_type) || null,
+        // Logged vs rejected only. Faculty/partner pending verification is confirmed
+        // when Admin locks CII — it is not an analyser input.
+        verification_status: isRejectedAttendance(log) ? 'rejected' : 'logged',
         evidence_file_ids: evidenceFileIds,
         evidence_urls: evidenceUrls,
     };

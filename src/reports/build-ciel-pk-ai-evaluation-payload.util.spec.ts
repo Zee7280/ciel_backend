@@ -353,6 +353,12 @@ describe('buildCielPkAiEvaluationPayload', () => {
     expect(summary?.required_hours_met).toBe(true);
     expect(summary?.students_below_required_hours).toEqual([]);
     expect(summary?.total_verified_team_hours).toBeGreaterThanOrEqual(16);
+    const logs = (
+      payload.section1_participation_identity_attendance as {
+        attendance_logs?: Array<{ verification_status?: string }>;
+      }
+    ).attendance_logs;
+    expect(logs?.map((row) => row.verification_status)).toEqual(['logged', 'logged', 'rejected']);
   });
 
   it('counts live sessionHours on attendance logs the same way submit does', () => {

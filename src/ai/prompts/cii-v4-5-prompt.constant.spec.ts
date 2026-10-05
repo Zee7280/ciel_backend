@@ -1,4 +1,4 @@
-import { CII_V4_5_JSON_ONLY_DEPLOYMENT_NOTE } from './cii-v4-5-prompt.constant';
+import { CII_V4_5_EVALUATOR_PROMPT, CII_V4_5_JSON_ONLY_DEPLOYMENT_NOTE } from './cii-v4-5-prompt.constant';
 import { CII_V45_DIMENSIONS } from '../../reports/cii-v4-5.constants';
 
 describe('CII_V4_5_JSON_ONLY_DEPLOYMENT_NOTE — per-dimension criterion manifest', () => {
@@ -16,5 +16,10 @@ describe('CII_V4_5_JSON_ONLY_DEPLOYMENT_NOTE — per-dimension criterion manifes
 
   it('warns explicitly that criterionScores count never scales with team size', () => {
     expect(CII_V4_5_JSON_ONLY_DEPLOYMENT_NOTE).toMatch(/NEVER one entry per team member/);
+  });
+
+  it('tells the model not to flag pending attendance verification', () => {
+    expect(CII_V4_5_EVALUATOR_PROMPT).toMatch(/pending faculty\/partner attendance verification/i);
+    expect(CII_V4_5_EVALUATOR_PROMPT).not.toMatch(/Unverified logs with no requirement data/);
   });
 });

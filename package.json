@@ -15,6 +15,7 @@
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "s3:cors": "ts-node scripts/set-s3-cors.ts",
     "rotate:cnic": "ts-node scripts/rotate-cnic-key.ts",
+    "expire:opportunities": "ts-node scripts/expire-opportunities.ts",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",

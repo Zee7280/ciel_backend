@@ -1,5 +1,5 @@
 import { parseCiiV45Response } from './parse-cii-v4-5.util';
-import { CII_V45_DIMENSIONS } from '../reports/cii-v4-5.constants';
+import { CII_V45_DIMENSIONS, computeCiiV45Result } from '../reports/cii-v4-5.constants';
 
 function fullResponse() {
   return {
@@ -90,5 +90,61 @@ describe('parseCiiV45Response', () => {
     };
     const result = parseCiiV45Response(JSON.stringify(response));
     expect(result!.integrityPenalty).toEqual({ points: 0, issues: [] });
+  });
+
+  it('coerces drifted claim/evidence rows so computeCiiV45Result does not fail Invalid claim inventory', () => {
+    const response = fullResponse() as Record<string, unknown>;
+    response.evidenceAudit = [
+      {
+        evidenceId: 'E1',
+        privacy: 'restricted',
+        material: 'true',
+        processingStatus: 'not_inspected',
+        claimIds: ['C1', 'missing'],
+        supportStatus: 'PARTIAL',
+      },
+    ];
+    response.claimInventory = [
+      {
+        claimId: 'C1',
+        text: 'Repaint day happened.',
+        material: 'true',
+        evidenceIds: ['E1', 'ghost'],
+        supportStatus: 'MATCH',
+      },
+      {
+        id: 'C1',
+        text: 'duplicate id',
+        material: 1,
+        supportStatus: 'partially supported',
+      },
+    ];
+    const result = parseCiiV45Response(JSON.stringify(response));
+    expect(result).not.toBeNull();
+    expect(result!.claimInventory).toEqual([
+      {
+        claimId: 'C1',
+        text: 'Repaint day happened.',
+        material: true,
+        evidenceIds: ['E1'],
+        supportStatus: 'SUPPORTED',
+      },
+      {
+        claimId: 'C1-2',
+        text: 'duplicate id',
+        material: true,
+        evidenceIds: [],
+        supportStatus: 'PARTIALLY_SUPPORTED',
+      },
+    ]);
+    expect(result!.evidenceAudit[0]).toMatchObject({
+      evidenceId: 'E1',
+      privacy: 'RESTRICTED',
+      material: true,
+      processingStatus: 'INACCESSIBLE',
+      claimIds: ['C1'],
+      supportStatus: 'PARTIALLY_SUPPORTED',
+    });
+    expect(() => computeCiiV45Result(result!)).not.toThrow();
   });
 });

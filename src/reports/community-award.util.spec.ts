@@ -186,6 +186,13 @@ describe('resolveDisplayCii', () => {
                 ciiV45Lock: { locked: true },
             }),
         ).toBe(91);
+        expect(
+            resolveDisplayCii({
+                section11: { ai_generated_impact_score: 54 },
+                ciiV45: { diagnosticCII: 80, finalCII: 75 },
+                ciiV45Lock: { locked: true, adminApprovedScore: 75 },
+            }),
+        ).toBe(75);
     });
 
     it('treats JSON string "true" as an admin lock, same as the flashcard', () => {

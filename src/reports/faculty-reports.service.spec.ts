@@ -727,6 +727,45 @@ describe('mapFacultyListCii', () => {
       cii_numeric_level: null,
     });
   });
+
+  it('shows baseCII when diagnosticCII is still null (reviewer overall)', () => {
+    expect(
+      mapFacultyListCii({
+        ciiV45: {
+          diagnosticCII: null,
+          baseCII: 70,
+          diagnosticBadge: { name: 'Sound', level: 3 },
+        },
+        ciiV45Lock: null,
+      }),
+    ).toMatchObject({
+      cii_analyser_run: true,
+      cii_provisional: 70,
+      cii_locked: false,
+      cii_level_name: 'Sound',
+      cii_numeric_level: 3,
+    });
+  });
+
+  it('shows the locked published score, not the earlier diagnostic, after moderation', () => {
+    expect(
+      mapFacultyListCii({
+        ciiV45: {
+          diagnosticCII: 80,
+          finalCII: 75,
+          finalBadge: { name: 'Published band', level: 4 },
+          diagnosticBadge: { name: 'Provisional band', level: 4 },
+        },
+        ciiV45Lock: { locked: true, adminApprovedScore: 75 },
+      }),
+    ).toMatchObject({
+      cii_analyser_run: true,
+      cii_provisional: 75,
+      cii_locked: true,
+      cii_level_name: 'Published band',
+      cii_numeric_level: 4,
+    });
+  });
 });
 
 describe('mapFacultyListPackage', () => {

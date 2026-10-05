@@ -17,6 +17,7 @@ import {
   canEditOrSubmitReport,
   getReportingCloseDate,
 } from '../opportunities/opportunity-timeline.util';
+import { pickCiiV45DisplayScore } from './cii-v4-5-display.util';
 import { Participation } from '../engagement/entities/participant.entity';
 import { S3Service } from '../common/s3.service';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
@@ -2408,20 +2409,16 @@ export class StudentReportsService {
     // Admin-locked CII v4.5 (community-service reports only) is safe to publish here — it's the
     // same final score + badge band the certificate already display, no per-criterion detail.
     const ciiV45Lock = report.ciiV45Lock;
-    const ciiV45 = report.ciiV45 as { finalCII?: unknown } | null | undefined;
     const locked = isCiiFacultyLocked(ciiV45Lock);
     const publicLevel = locked
       ? ((report.ciiV45 as { finalBadge?: { level?: number; name?: string } })
           ?.finalBadge ?? null)
       : null;
+    const publishedScore = locked
+      ? pickCiiV45DisplayScore(report.ciiV45, ciiV45Lock)
+      : null;
     const lockedFinal =
-      typeof ciiV45?.finalCII === 'number' && Number.isFinite(ciiV45.finalCII)
-        ? Math.round(ciiV45.finalCII)
-        : typeof ciiV45?.finalCII === 'string' &&
-            ciiV45.finalCII.trim() &&
-            Number.isFinite(Number(ciiV45.finalCII))
-          ? Math.round(Number(ciiV45.finalCII))
-          : null;
+      publishedScore == null ? null : Math.round(publishedScore);
 
     return {
       success: true,

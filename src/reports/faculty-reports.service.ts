@@ -30,6 +30,10 @@ import {
   CiiV45Result,
   CiiV45ValidationError,
 } from './cii-v4-5.constants';
+import {
+  pickCiiV45DisplayBadge,
+  pickCiiV45DisplayScore,
+} from './cii-v4-5-display.util';
 import { S3Service } from '../common/s3.service';
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
@@ -45,18 +49,10 @@ import { isPrivateCandidateOpportunity, reviewRouteForOpportunity } from '../opp
 import { composeFacultyReportRemarks } from './faculty-report-remarks.util';
 import { trackingOrganizationName } from './tracking-org-name.util';
 
-function finiteNumber(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string' && value.trim() && Number.isFinite(Number(value))) {
-    return Number(value);
-  }
-  return null;
-}
-
 /** List-card CII fields only — never mutates scores or lock state. */
 export function mapFacultyListCii(report: {
   ciiV45?: unknown;
-  ciiV45Lock?: { locked?: unknown } | null;
+  ciiV45Lock?: { locked?: unknown; adminApprovedScore?: unknown } | null;
 }): {
   cii_analyser_run: boolean;
   cii_provisional: number | null;
@@ -64,31 +60,16 @@ export function mapFacultyListCii(report: {
   cii_level_name: string | null;
   cii_numeric_level: number | null;
 } {
-  const ciiV45 =
-    report.ciiV45 && typeof report.ciiV45 === 'object'
-      ? (report.ciiV45 as Record<string, unknown>)
-      : null;
-  const finalNum = finiteNumber(ciiV45?.diagnosticCII ?? ciiV45?.finalCII);
-  const ciiFinal = finalNum == null ? null : Math.round(finalNum * 10) / 10;
-  const badge =
-    (ciiV45?.finalBadge && typeof ciiV45.finalBadge === 'object'
-      ? (ciiV45.finalBadge as { name?: unknown; level?: unknown })
-      : null) ??
-    (ciiV45?.recommendedBadge && typeof ciiV45.recommendedBadge === 'object'
-      ? (ciiV45.recommendedBadge as { name?: unknown; level?: unknown })
-      : null) ??
-    (ciiV45?.diagnosticBadge && typeof ciiV45.diagnosticBadge === 'object'
-      ? (ciiV45.diagnosticBadge as { name?: unknown; level?: unknown })
-      : null);
+  const score = pickCiiV45DisplayScore(report.ciiV45, report.ciiV45Lock);
+  const ciiFinal = score == null ? null : Math.round(score * 10) / 10;
+  const badge = pickCiiV45DisplayBadge(report.ciiV45, report.ciiV45Lock);
   const lockedRaw = report.ciiV45Lock?.locked;
-  const badgeName =
-    typeof badge?.name === 'string' && badge.name.trim() ? badge.name : null;
   return {
     cii_analyser_run: ciiFinal != null,
     cii_provisional: ciiFinal,
     cii_locked: lockedRaw === true || lockedRaw === 'true',
-    cii_level_name: badgeName,
-    cii_numeric_level: finiteNumber(badge?.level),
+    cii_level_name: badge?.name ?? null,
+    cii_numeric_level: badge?.level ?? null,
   };
 }
 

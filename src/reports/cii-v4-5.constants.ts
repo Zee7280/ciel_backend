@@ -634,10 +634,15 @@ export function computeCiiV45Result(payload: CiiV45EvaluatorPayload): CiiV45Resu
         : 'FINAL';
 
   const base = sections.some((s) => s.score === null) ? null : sections.reduce((t, s) => t + (s.score as number), 0);
+  // Diagnostic CII is the numeric rollup of scored criteria. Uninspected files, unverified
+  // hours, or extra-mile still-processing block publication (`finalCII` / FINAL), they must
+  // not hide the overall score the Analyzer already computed.
+  const extraForDiag =
+    extras.assessmentStatus === 'PROCESSING_REQUIRED' ? 0 : uplift;
   const diag =
-    base === null || extras.assessmentStatus === 'PROCESSING_REQUIRED' || pendingOverall
+    base === null
       ? null
-      : round1(Math.min(100, Math.max(0, base + uplift - penalty)));
+      : round1(Math.min(100, Math.max(0, base + extraForDiag - penalty)));
 
   const scoreRatio = (id: CiiV45Dimension): number | null => {
     const s = sections.find((x) => x.dimension === id)!;

@@ -1,5 +1,6 @@
 import { StudentReport } from './entities/student-report.entity';
 import { collectReportEvidenceFiles } from './collect-report-evidence.util';
+import { pickCiiV45DisplayScore } from './cii-v4-5-display.util';
 
 export type ReviewPackageEvidenceKind = 'image' | 'pdf' | 'video' | 'file';
 
@@ -67,13 +68,7 @@ export function reviewPackageIncludesAnalysis(
 export function analysisIsAttached(report: Partial<StudentReport> | null | undefined): boolean {
   const lock = report?.ciiV45Lock as { locked?: unknown } | null | undefined;
   const locked = lock?.locked === true || lock?.locked === 'true';
-  const cii = report?.ciiV45 as { finalCII?: unknown } | null | undefined;
-  const final = cii?.finalCII;
-  const hasFinal =
-    typeof final === 'number'
-      ? Number.isFinite(final)
-      : typeof final === 'string' && final.trim() !== '' && Number.isFinite(Number(final));
-  return Boolean(locked && hasFinal);
+  return Boolean(locked && pickCiiV45DisplayScore(report?.ciiV45, lock) != null);
 }
 
 function extOf(url: string, name: string): string {

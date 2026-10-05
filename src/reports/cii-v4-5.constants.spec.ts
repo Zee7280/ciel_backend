@@ -195,6 +195,8 @@ describe('computeCiiV45Result', () => {
     const result = computeCiiV45Result(payload);
     expect(result.scoreStatus).toBe('RESUBMISSION_REQUIRED');
     expect(result.finalCII).toBeNull();
+    expect(result.publicationEligible).toBe(false);
+    expect(result.diagnosticCII).toBe(70);
   });
 
   it('flags RESUBMISSION_REQUIRED on a mandatory STUDENT_NOT_PROVIDED gap', () => {
@@ -208,6 +210,8 @@ describe('computeCiiV45Result', () => {
       },
     });
     expect(computeCiiV45Result(payload).scoreStatus).toBe('RESUBMISSION_REQUIRED');
+    expect(computeCiiV45Result(payload).diagnosticCII).toBe(70);
+    expect(computeCiiV45Result(payload).finalCII).toBeNull();
   });
 
   it('flags ADMIN_REVIEW_REQUIRED on an unresolved material system data gap', () => {
@@ -223,6 +227,65 @@ describe('computeCiiV45Result', () => {
     const result = computeCiiV45Result(payload);
     expect(result.scoreStatus).toBe('ADMIN_REVIEW_REQUIRED');
     expect(result.finalCII).toBeNull();
+    expect(result.publicationEligible).toBe(false);
+    expect(result.diagnosticCII).not.toBeNull();
+    expect(result.diagnosticCII).toBe(result.baseCII);
+  });
+
+  it('keeps diagnostic CII when extra-mile uplift is still processing', () => {
+    const payload = buildValidPayload({
+      extraMileUplift: { assessmentStatus: 'PROCESSING_REQUIRED', items: [] },
+    });
+    const result = computeCiiV45Result(payload);
+    expect(result.scoreStatus).toBe('ADMIN_REVIEW_REQUIRED');
+    expect(result.finalCII).toBeNull();
+    expect(result.diagnosticCII).toBe(result.baseCII);
+    expect(result.diagnosticCII).not.toBeNull();
+    expect(result.diagnosticBadge).not.toBeNull();
+    expect(result.recommendedBadge).toBeNull();
+  });
+
+  it('keeps diagnostic CII when material evidence was not inspected (screenshot / Pending overall)', () => {
+    const payload = buildValidPayload({
+      extraMileUplift: { assessmentStatus: 'PROCESSING_REQUIRED', items: [] },
+      evidenceAudit: [
+        {
+          evidenceId: 'ev-pdf',
+          fileName: 'register.pdf',
+          fileType: 'pdf',
+          privacy: 'RESTRICTED',
+          material: true,
+          processingStatus: 'INACCESSIBLE',
+          claimIds: [],
+          supportStatus: 'PROCESSING_REQUIRED',
+        },
+      ],
+    });
+    const result = computeCiiV45Result(payload);
+    expect(result.scoreStatus).toBe('ADMIN_REVIEW_REQUIRED');
+    expect(result.needsAdminReview).toBe(true);
+    expect(result.finalCII).toBeNull();
+    expect(result.publicationEligible).toBe(false);
+    expect(result.baseCII).toBe(70);
+    expect(result.diagnosticCII).toBe(70);
+    expect(result.diagnosticBadge?.code).toMatch(/^L/);
+    expect(result.recommendedBadge).toBeNull();
+  });
+
+  it('keeps diagnostic CII when hours are logged but not yet verified', () => {
+    const payload = buildValidPayload({
+      inputCompleteness: {
+        gaps: [],
+        individualHours: [
+          { studentId: 's1', hours: 20, requiredHours: 16, verified: false, recordComplete: true },
+        ],
+        mandatoryFieldsComplete: true,
+      },
+    });
+    const result = computeCiiV45Result(payload);
+    expect(result.scoreStatus).toBe('ADMIN_REVIEW_REQUIRED');
+    expect(result.finalCII).toBeNull();
+    expect(result.diagnosticCII).toBe(70);
   });
 
   it('caps the badge to the highest passing level when a numeric band fails its quality gate', () => {

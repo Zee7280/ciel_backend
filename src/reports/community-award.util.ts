@@ -1,5 +1,7 @@
 /** Deterministic community-service award model — same 5 criteria for every stakeholder. */
 
+import { pickCiiV45DisplayScore } from './cii-v4-5-display.util';
+
 export const COMMUNITY_AWARD_CRITERIA = [
   { key: 'cii', max: 40, title: 'Composite Impact Index (CII)' },
   { key: 'quality', max: 20, title: 'Quality & depth of execution' },
@@ -141,8 +143,8 @@ export type ReportFlashSource = {
   section9?: { media_urls?: unknown } | null;
   section10?: { media_urls?: unknown } | null;
   section11?: Record<string, unknown> | null;
-  ciiV45?: { finalCII?: unknown } | null;
-  ciiV45Lock?: { locked?: unknown } | null;
+  ciiV45?: { finalCII?: unknown; diagnosticCII?: unknown; baseCII?: unknown; knownBasePoints?: unknown } | null;
+  ciiV45Lock?: { locked?: unknown; adminApprovedScore?: unknown } | null;
   evidence_urls?: unknown;
 };
 
@@ -206,9 +208,9 @@ export function resolveDisplayCii(report: ReportFlashSource): number | null {
   const lock = report.ciiV45Lock;
   const hasLockRecord = lock != null && typeof lock === 'object';
   const locked = isCiiFacultyLocked(lock);
-  const final = finiteCii(report.ciiV45?.finalCII);
-  if (locked && final != null) {
-    return Math.round(final);
+  if (locked) {
+    const score = pickCiiV45DisplayScore(report.ciiV45, lock);
+    return score == null ? null : Math.round(score);
   }
   if (!hasLockRecord) {
     return readCii(report.section11);

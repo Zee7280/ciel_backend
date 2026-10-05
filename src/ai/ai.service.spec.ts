@@ -167,6 +167,9 @@ describe('AiService — CII v4.5 evaluation branch', () => {
     expect(sent.max_completion_tokens).toBe(48000);
     expect(typeof sent.messages[1].content).toBe('string');
     expect(sent.messages[1].content).toContain('No evidence images are attached');
+    expect(sent.messages[1].content).toMatch(/processingStatus to "INACCESSIBLE"/);
+    expect(sent.messages[1].content).not.toMatch(/\bMATCH\b/);
+    expect(sent.messages[1].content).not.toMatch(/\bPARTIAL\b/);
     expect(out.ciiV45?.frameworkVersion).toBe('4.5');
   });
 
@@ -210,6 +213,15 @@ describe('AiService — CII v4.5 evaluation branch', () => {
     expect(userContent[0].text).toMatch(/NOT shown/);
     expect(userContent[0].text).toMatch(/E2/);
     expect(userContent[0].text).not.toContain(bucketImg);
+    // The not-shown-evidence note must only ever tell the model to use real CiiV45EvaluatorPayload
+    // field/enum values (processingStatus: INACCESSIBLE, verificationStatus: PROCESSING_REQUIRED /
+    // NARRATIVE_ONLY, reasoningSummary) — a prior version used "MATCH"/"PARTIAL"/"why", none of
+    // which exist in the schema, and a model trying to honor that produced malformed JSON.
+    expect(userContent[0].text).toMatch(/processingStatus to\s+"INACCESSIBLE"/);
+    expect(userContent[0].text).toMatch(/verificationStatus to "PROCESSING_REQUIRED" or "NARRATIVE_ONLY"/);
+    expect(userContent[0].text).not.toMatch(/\bMATCH\b/);
+    expect(userContent[0].text).not.toMatch(/\bPARTIAL\b/);
+    expect(userContent[0].text).not.toMatch(/"why"/);
     expect(s3.getObjectBufferByPublicUrl).toHaveBeenCalledWith(foreign); // refused by the S3 service (not our bucket)
     expect(out.evidenceInspection?.inspected.map((x) => x.id)).toEqual(['E1']);
     expect(out.evidenceInspection?.notInspected.map((x) => x.id).sort()).toEqual(['E2', 'E3']);

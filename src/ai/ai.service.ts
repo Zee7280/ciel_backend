@@ -1676,16 +1676,28 @@ ${JSON.stringify(data)}`;
             .map((f) => `- ${f.id || '(no id)'} "${f.name}": ${f.reason}`)
             .join('\n')
         : '- none';
+      // Field names/enum values below must match CiiV45EvaluatorPayload exactly (cii-v4-5.constants.ts)
+      // — an earlier version of this note used "MATCH"/"PARTIAL"/"why", none of which exist in the
+      // v4.5 schema (that's leftover wording from an older rubric), and asking the model to emit a
+      // value with no valid schema slot is a plausible cause of the structural validation failures
+      // this note exists right next to (claimInventory/evidenceAudit entries with an invalid shape).
       const note = skipEvidenceImages
         ? `EVIDENCE INSPECTION
 No evidence images are attached to this request — judge section 8 / evidence claims from the
-report text only (file names, categories and linked claims/sections), and mark anything that
-needed a visual check as NOT INSPECTED / PARTIAL rather than MATCH.`
+report text only (file names, categories and linked claims/sections). For every evidenceAudit
+entry, set processingStatus to "INACCESSIBLE" (never "INSPECTED" — you were not shown any image
+this run). For any criterionScore or claim that would need a visual check to confirm, set
+verificationStatus to "PROCESSING_REQUIRED" or "NARRATIVE_ONLY" (never "VERIFIED"), and start
+reasoningSummary with "NOT INSPECTED:" explaining what is missing.`
         : `EVIDENCE INSPECTION
 Images you were actually shown follow below, each preceded by its id: ${
             inspection.inspected.map((f) => f.id || f.name).join(', ') || 'none'
           }. Judge each against the claim it is linked to by LOOKING at it.
-Files you were NOT shown (documents, video, unreadable or over the image limit) — you cannot verify these. Never rate them MATCH; use PARTIAL at most, set "why" to start with "NOT INSPECTED:" and say what is missing:
+Files you were NOT shown (documents, video, unreadable or over the image limit) — you cannot verify
+these directly. For any evidenceAudit entry on one of these files, set processingStatus to
+"INACCESSIBLE" (never "INSPECTED"). For any criterionScore or claim that depends on one of these
+files, set verificationStatus to "PROCESSING_REQUIRED" or "NARRATIVE_ONLY" (never "VERIFIED"), and
+start reasoningSummary with "NOT INSPECTED:" explaining what is missing:
 ${notShown}`;
       userContent = parts.length
         ? [{ type: 'text', text: `${prompt}\n\n${note}` }, ...parts]

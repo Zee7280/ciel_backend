@@ -140,7 +140,7 @@ describe('AiService — CII v4.5 evaluation branch', () => {
 
     const sent = JSON.parse(f.mock.calls[0][1].body);
     expect(sent.model).toBe('gpt-5.6-sol');
-    expect(sent.reasoning_effort).toBe('high');
+    expect(sent.reasoning_effort).toBe('medium');
     expect(sent.response_format).toEqual({ type: 'json_object' });
     expect(sent.messages[0].content).toContain('CII v4.5');
     expect(out.ciiV45?.frameworkVersion).toBe('4.5');
@@ -186,6 +186,7 @@ describe('AiService — CII v4.5 evaluation branch', () => {
     expect(images[0].image_url.url).toMatch(/^data:image\/jpeg;base64,/);
     expect(userContent[0].text).toMatch(/NOT shown/);
     expect(userContent[0].text).toMatch(/E2/);
+    expect(userContent[0].text).not.toContain(bucketImg);
     expect(s3.getObjectBufferByPublicUrl).toHaveBeenCalledWith(foreign); // refused by the S3 service (not our bucket)
     expect(out.evidenceInspection?.inspected.map((x) => x.id)).toEqual(['E1']);
     expect(out.evidenceInspection?.notInspected.map((x) => x.id).sort()).toEqual(['E2', 'E3']);
@@ -198,8 +199,25 @@ describe('AiService — CII v4.5 evaluation branch', () => {
     const out = await new AiService(s3 as never).summarize('cii_v4_5_evaluation', {
       uploaded_evidence_files: urls.map((url, i) => ({ file_id: `E${i}`, file_name: `${i}.png`, file_type: 'png', url })),
     });
-    expect(out.evidenceInspection?.inspected).toHaveLength(8);
-    expect(out.evidenceInspection?.notInspected).toHaveLength(4);
+    expect(out.evidenceInspection?.inspected).toHaveLength(4);
+    expect(out.evidenceInspection?.notInspected).toHaveLength(8);
+    expect(s3.getObjectBufferByPublicUrl).toHaveBeenCalledTimes(4);
+  });
+
+  it('reuses hashed image bytes and does not fetch them from S3 a second time', async () => {
+    const url = 'https://bkt.s3.eu.amazonaws.com/e/0.png';
+    const s3 = { getObjectBufferByPublicUrl: jest.fn() };
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ choices: [{ message: { content: CII_V45_JSON } }] }) }) as never;
+    const data = {
+      uploaded_evidence_files: [{ file_id: 'E0', file_name: '0.png', file_type: 'png', url }],
+    };
+    Object.defineProperty(data, '__ciiEvidenceInspect', {
+      value: new Map([[url, { buffer: Buffer.from('cached'), contentType: 'image/png' }]]),
+      enumerable: false,
+    });
+    const out = await new AiService(s3 as never).summarize('cii_v4_5_evaluation', data);
+    expect(s3.getObjectBufferByPublicUrl).not.toHaveBeenCalled();
+    expect(out.evidenceInspection?.inspected).toEqual([{ id: 'E0', name: '0.png' }]);
   });
 
   it('with no S3 service every image is reported as not inspected (the model is told so)', async () => {

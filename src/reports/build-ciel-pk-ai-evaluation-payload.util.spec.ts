@@ -3,6 +3,7 @@ import {
   buildCielPkAiEvaluationPayload,
   buildCielPkAiEvaluationPayloadV45,
   computeCiiV45InputFingerprint,
+  ciiEvidenceInspectCache,
   CIEL_PK_AI_EVALUATION_SCHEMA_VERSION,
   CIEL_PK_AI_EVALUATION_SCHEMA_VERSION_V45,
   EvidenceByteSource,
@@ -446,6 +447,9 @@ describe('buildCielPkAiEvaluationPayloadV45', () => {
     ).toBe('4.5');
     expect(typeof payload.input_fingerprint).toBe('string');
     expect(payload.input_fingerprint.length).toBeGreaterThan(0);
+    const inspect = ciiEvidenceInspectCache(payload);
+    expect(inspect?.get('https://example.com/files/evidence-1.jpg')?.buffer.equals(bytes)).toBe(true);
+    expect(JSON.stringify(payload)).not.toContain('__ciiEvidenceInspect');
   });
 
   it('degrades gracefully (null hash) when an evidence file fails to fetch, without throwing', async () => {

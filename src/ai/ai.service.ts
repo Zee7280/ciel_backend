@@ -11,6 +11,7 @@ import {
   FYP_AI_JSON_ONLY_DEPLOYMENT_NOTE,
 } from './prompts/fyp-ai-rubric.constant';
 import { FypAiEvaluation, parseFypAiResponse } from './parse-fyp-ai.util';
+import { ciiEvidenceInspectCache } from '../reports/build-ciel-pk-ai-evaluation-payload.util';
 
 /** Shared rules for the executive flashcard section summaries (V12). Scoring prompts do not use this. */
 const FLASHCARD_SUMMARY_RULES = `You write one section of the CIEL PK executive impact flashcard. This compresses recorded report fields for rapid academic review. It is not a score, and it does not replace the detailed report.
@@ -35,7 +36,7 @@ type OpenAiCompletionOpts = {
   maxAttempts?: number;
   /** Overrides OPENAI_SUMMARY_MODEL for this call only (CII Analyzer uses its own model). */
   model?: string;
-  /** GPT-5 reasoning effort. CII Analyzer uses `high`; other AI paths omit this. */
+  /** GPT-5 reasoning effort. CII Analyzer uses `medium` so Analyze finishes in time. */
   reasoningEffort?: 'low' | 'medium' | 'high';
 };
 
@@ -63,7 +64,8 @@ export interface EvidenceInspection {
 
 const OPENAI_TIMEOUT_MS = 90_000;
 const OPENAI_MAX_ATTEMPTS = 2;
-const EVIDENCE_MAX_IMAGES = 8;
+/** High-reasoning + 8 photos made Analyze wait 2–3 minutes. Four low-detail images still verify claims. */
+const EVIDENCE_MAX_IMAGES = 4;
 const EVIDENCE_MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 const EVIDENCE_IMAGE_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif']);
 
@@ -93,6 +95,27 @@ function resolveOpenAiErrorMessage(error: unknown): string {
     return error.message.trim();
   }
   return 'Failed to generate AI response';
+}
+
+/** Drop storage URLs/hashes from the CII prompt — images are attached separately. */
+function slimCiiPayloadForModel(data: unknown): unknown {
+  if (!data || typeof data !== 'object') return data;
+  const rec = data as Record<string, unknown>;
+  const files = Array.isArray(rec.uploaded_evidence_files) ? rec.uploaded_evidence_files : [];
+  return {
+    ...rec,
+    uploaded_evidence_files: files.map((raw) => {
+      const f = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+      return {
+        file_id: f.file_id,
+        file_name: f.file_name,
+        file_type: f.file_type,
+        file_category: f.file_category,
+        linked_sections: f.linked_sections,
+        linked_claims: f.linked_claims,
+      };
+    }),
+  };
 }
 
 @Injectable()
@@ -138,9 +161,12 @@ export class AiService {
       });
     }
 
+    const inspectCache = ciiEvidenceInspectCache(data);
     const loadedRows = await Promise.all(
       toLoad.map(async (f) => {
         const url = typeof f?.url === 'string' ? f.url : '';
+        const cached = url ? inspectCache?.get(url) : undefined;
+        if (cached) return { f, loaded: cached };
         const loaded = this.s3Service ? await this.s3Service.getObjectBufferByPublicUrl(url) : null;
         return { f, loaded };
       }),
@@ -1526,21 +1552,23 @@ ${JSON.stringify(data)}`;
       throw new HttpException({ error: 'OpenAI API key is not configured' }, 500);
     }
 
-    const prompt = this.buildPrompt(section, data);
-
     const isCiiV45Evaluation = section === 'cii_v4_5_evaluation';
     const isFypAiEvaluationSection = section === 'fyp_ai_evaluation';
+    const prompt = this.buildPrompt(
+      section,
+      isCiiV45Evaluation ? slimCiiPayloadForModel(data) : data,
+    );
 
     const openAiOpts: OpenAiCompletionOpts | undefined = isCiiV45Evaluation
       ? {
           model: resolveCiiAnalyzerModel(),
-          reasoningEffort: 'high',
+          reasoningEffort: 'medium',
           temperature: 0.15,
           seed: 4220,
           maxTokens: 16000,
           responseFormat: { type: 'json_object' },
           systemMessage: `${CII_V4_5_EVALUATOR_PROMPT}\n\n${CII_V4_5_JSON_ONLY_DEPLOYMENT_NOTE}`,
-          // High reasoning + multimodal images: one long attempt, no doubled retry.
+          // Medium reasoning + 4 images: one attempt. High + 8 images timed out on 17-file reports.
           timeoutMs: 180_000,
           maxAttempts: 1,
         }

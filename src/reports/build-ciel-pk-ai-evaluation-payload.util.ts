@@ -862,16 +862,35 @@ export function computeCiiV45InputFingerprint(
 
 /** Fetches + hashes every evidence file's actual bytes. Never throws — a file that fails to
  * fetch gets `sha256: null` (still contributes to the fingerprint, just as a known-missing
- * value), so one bad URL cannot block building the rest of the evaluation payload. */
+ * value), so one bad URL cannot block building the rest of the evaluation payload.
+ * Image bytes are kept on a non-enumerable cache so the Analyzer can attach them without a second S3 fetch. */
+const CII_EVIDENCE_INSPECT_KEY = '__ciiEvidenceInspect';
+
+export type CiiEvidenceInspectCache = Map<string, { buffer: Buffer; contentType?: string }>;
+
+export function ciiEvidenceInspectCache(data: unknown): CiiEvidenceInspectCache | undefined {
+    if (!data || typeof data !== 'object') return undefined;
+    const cache = Object.getOwnPropertyDescriptor(data, CII_EVIDENCE_INSPECT_KEY)?.value;
+    return cache instanceof Map ? (cache as CiiEvidenceInspectCache) : undefined;
+}
+
 async function hashEvidenceFiles(
     files: CielPkUploadedEvidenceFile[],
     s3: EvidenceByteSource,
-): Promise<CielPkUploadedEvidenceFile[]> {
-    return Promise.all(
+): Promise<{ files: CielPkUploadedEvidenceFile[]; inspectByUrl: CiiEvidenceInspectCache }> {
+    const inspectByUrl: CiiEvidenceInspectCache = new Map();
+    const hashed = await Promise.all(
         files.map(async (file) => {
             try {
                 const object = await s3.getObjectBufferByPublicUrl(file.url);
                 if (!object) return file;
+                const type = String(object.contentType ?? '').toLowerCase().split(';')[0];
+                const looksImage =
+                    EVIDENCE_IMAGE_TYPES_FOR_INSPECT.has(type) ||
+                    /\.(jpe?g|png|webp|gif)(\?|$)/i.test(file.url || file.file_name || '');
+                if (looksImage && object.buffer.length > 0 && object.buffer.length <= 4 * 1024 * 1024) {
+                    inspectByUrl.set(file.url, { buffer: object.buffer, contentType: object.contentType });
+                }
                 return {
                     ...file,
                     file_integrity: { sha256: sha256Hex(object.buffer), size_bytes: object.buffer.byteLength },
@@ -882,7 +901,10 @@ async function hashEvidenceFiles(
             }
         }),
     );
+    return { files: hashed, inspectByUrl };
 }
+
+const EVIDENCE_IMAGE_TYPES_FOR_INSPECT = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif']);
 
 /**
  * v4.5 variant of `buildCielPkAiEvaluationPayload`: reuses every section mapper as-is, then adds
@@ -896,13 +918,18 @@ export async function buildCielPkAiEvaluationPayloadV45(
     s3: EvidenceByteSource,
 ): Promise<CielPkAiEvaluationPayloadV45> {
     const base = buildCielPkAiEvaluationPayload(report);
-    const hashedFiles = await hashEvidenceFiles(base.uploaded_evidence_files, s3);
+    const { files: hashedFiles, inspectByUrl } = await hashEvidenceFiles(base.uploaded_evidence_files, s3);
     const inputFingerprint = computeCiiV45InputFingerprint(report, hashedFiles);
-    return {
+    const payload: CielPkAiEvaluationPayloadV45 = {
         ...base,
         schema_version: CIEL_PK_AI_EVALUATION_SCHEMA_VERSION_V45,
         uploaded_evidence_files: hashedFiles,
         report_id: report.id,
         input_fingerprint: inputFingerprint,
     };
+    Object.defineProperty(payload, CII_EVIDENCE_INSPECT_KEY, {
+        value: inspectByUrl,
+        enumerable: false,
+    });
+    return payload;
 }

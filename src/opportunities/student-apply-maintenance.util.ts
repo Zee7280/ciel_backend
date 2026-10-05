@@ -94,14 +94,6 @@ export function decorateApplyGate(
     enabled: state.maintenanceEnabled,
     message: state.maintenanceMessage,
   };
-  if (state.maintenanceEnabled) {
-    return {
-      applications_open: false,
-      apply_blocked_reason: 'maintenance',
-      apply_blocked_message: state.maintenanceMessage,
-      apply_maintenance: maintenance,
-    };
-  }
   if (opportunity.admin_hidden === true) {
     return {
       applications_open: false,
@@ -116,6 +108,14 @@ export function decorateApplyGate(
       apply_blocked_reason: 'opportunity_expired',
       apply_blocked_message:
         state.expiredMessage || CATALOG_APPLY_CLOSED_MESSAGE,
+      apply_maintenance: maintenance,
+    };
+  }
+  if (state.maintenanceEnabled) {
+    return {
+      applications_open: false,
+      apply_blocked_reason: 'maintenance',
+      apply_blocked_message: state.maintenanceMessage,
       apply_maintenance: maintenance,
     };
   }

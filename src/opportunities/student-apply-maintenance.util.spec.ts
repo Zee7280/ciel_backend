@@ -99,9 +99,18 @@ describe('student apply maintenance util', () => {
     expect(gate.apply_blocked_reason).toBe('opportunity_hidden');
   });
 
-  it('global maintenance pause wins over a hidden/expired single listing, with one non-contradictory reason', () => {
+  it('expired listing stays expired even while global maintenance is on', () => {
     const gate = decorateApplyGate(
-      { createdAt: new Date('2026-12-01T00:00:00.000Z'), admin_hidden: true, admin_expired: true },
+      { createdAt: new Date('2026-12-01T00:00:00.000Z'), admin_expired: true },
+      { ...openState, maintenanceEnabled: true, maintenanceMessage: 'Paused until Monday.' },
+    );
+    expect(gate.applications_open).toBe(false);
+    expect(gate.apply_blocked_reason).toBe('opportunity_expired');
+  });
+
+  it('global maintenance still pauses listings that are not hidden or expired', () => {
+    const gate = decorateApplyGate(
+      { createdAt: new Date('2026-12-01T00:00:00.000Z') },
       { ...openState, maintenanceEnabled: true, maintenanceMessage: 'Paused until Monday.' },
     );
     expect(gate.applications_open).toBe(false);

@@ -148,6 +148,28 @@ describe('AiService — CII v4.5 evaluation branch', () => {
     expect(out.ciiV45?.sectionScores).toHaveLength(10);
   });
 
+  it('skipEvidenceImages drops image parts, raises the token budget, and sends a text-only user message', async () => {
+    const s3 = { getObjectBufferByPublicUrl: jest.fn() };
+    const f = jest
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ choices: [{ message: { content: CII_V45_JSON } }] }) });
+    global.fetch = f as never;
+
+    const out = await new AiService(s3 as never).summarize(
+      'cii_v4_5_evaluation',
+      { uploaded_evidence_files: [{ file_id: 'EV-001', file_name: 'a.jpg', file_type: 'jpg', url: 'https://bkt.s3.amazonaws.com/a.jpg' }] },
+      { skipEvidenceImages: true },
+    );
+
+    // Never fetches evidence bytes when images are being skipped.
+    expect(s3.getObjectBufferByPublicUrl).not.toHaveBeenCalled();
+    const sent = JSON.parse(f.mock.calls[0][1].body);
+    expect(sent.max_completion_tokens).toBe(48000);
+    expect(typeof sent.messages[1].content).toBe('string');
+    expect(sent.messages[1].content).toContain('No evidence images are attached');
+    expect(out.ciiV45?.frameworkVersion).toBe('4.5');
+  });
+
   it('rejects with a 502 when the model returns an unparseable CII v4.5 response', async () => {
     global.fetch = jest
       .fn()

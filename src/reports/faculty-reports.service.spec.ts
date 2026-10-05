@@ -210,7 +210,30 @@ describe('FacultyReportsService — runCiiV45AnalysisForAdmin', () => {
     consoleError.mockRestore();
   });
 
-  it('clears the in-flight guard after a malformed-AI-response failure, so the next run is not stuck', async () => {
+  it('self-heals within a single run: a malformed first attempt falls back to a no-images retry that succeeds', async () => {
+    // Production theory: attending to multimodal evidence while also holding the fixed
+    // criterion-count schema in mind is where the reasoning model is most likely to drift.
+    // `evaluateCiiV45` gets one bounded fallback attempt with images dropped before giving up.
+    const malformed: CiiV45EvaluatorPayload = {
+      ...CII_V45_AI_RESPONSE,
+      sectionScores: CII_V45_AI_RESPONSE.sectionScores.map((s) =>
+        s.dimension === '1' ? { ...s, criterionScores: s.criterionScores.slice(0, 3) } : s,
+      ),
+    };
+    const summarize = jest
+      .fn()
+      .mockResolvedValueOnce({ ciiV45: malformed })
+      .mockResolvedValueOnce({ ciiV45: CII_V45_AI_RESPONSE });
+    const { service } = makeService({ id: 'report-2' }, { summarize });
+
+    await expect(service.runCiiV45AnalysisForAdmin('report-2')).resolves.toMatchObject({ success: true });
+
+    expect(summarize).toHaveBeenCalledTimes(2);
+    expect(summarize.mock.calls[0][2]).toMatchObject({ skipEvidenceImages: false });
+    expect(summarize.mock.calls[1][2]).toMatchObject({ skipEvidenceImages: true });
+  });
+
+  it('clears the in-flight guard after BOTH attempts fail, so the next run is not stuck', async () => {
     const malformed: CiiV45EvaluatorPayload = {
       ...CII_V45_AI_RESPONSE,
       sectionScores: CII_V45_AI_RESPONSE.sectionScores.map((s) =>
@@ -218,17 +241,18 @@ describe('FacultyReportsService — runCiiV45AnalysisForAdmin', () => {
       ),
     };
     const { service } = makeService(
-      { id: 'report-2' },
+      { id: 'report-3' },
       {
         summarize: jest
           .fn()
           .mockResolvedValueOnce({ ciiV45: malformed })
-          .mockResolvedValueOnce({ ciiV45: CII_V45_AI_RESPONSE }),
+          .mockResolvedValueOnce({ ciiV45: malformed })
+          .mockResolvedValue({ ciiV45: CII_V45_AI_RESPONSE }),
       },
     );
 
-    await expect(service.runCiiV45AnalysisForAdmin('report-2')).rejects.toBeInstanceOf(BadRequestException);
-    await expect(service.runCiiV45AnalysisForAdmin('report-2')).resolves.toMatchObject({ success: true });
+    await expect(service.runCiiV45AnalysisForAdmin('report-3')).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.runCiiV45AnalysisForAdmin('report-3')).resolves.toMatchObject({ success: true });
   });
 
   it('re-analyses a locked report and clears the lock in the same write', async () => {

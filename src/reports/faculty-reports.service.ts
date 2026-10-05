@@ -16,11 +16,12 @@ import * as crypto from 'crypto';
 import { StudentReport } from './entities/student-report.entity';
 import { StudentReportsService } from './student-reports.service';
 import { FacultyService } from '../faculty/faculty.service';
-import { AiService } from '../ai/ai.service';
+import { AiService, EvidenceInspection } from '../ai/ai.service';
 import { computeReportProgress } from './report-progress.util';
 import {
   buildCielPkAiEvaluationPayloadV45,
   computeCiiV45InputFingerprint,
+  CielPkAiEvaluationPayloadV45,
 } from './build-ciel-pk-ai-evaluation-payload.util';
 import {
   computeCiiV45Result,
@@ -823,30 +824,57 @@ export class FacultyReportsService {
     return this.persistCiiV45Analysis(report, { adminRescore: true });
   }
 
-  /** The AI's JSON can parse fine yet still fail `computeCiiV45Result`'s structural checks (wrong
-   * dimension/criterion count, invalid anchor, …) — that's a retryable AI-quality issue, not a
-   * server bug, so surface it as a 400 instead of letting `CiiV45ValidationError` fall through to
-   * Nest's generic 500. Logs the raw offending payload server-side first — the 400 message alone
-   * (e.g. "Invalid criterion count 1") says which dimension failed but not what the AI actually
-   * sent, so a recurring failure on the same report would otherwise be undebuggable. */
-  private computeCiiV45ResultOrRetry(
-    ciiV45: CiiV45EvaluatorPayload,
+  /** Runs the CII v4.5 AI call and validates the structural shape `computeCiiV45Result` requires
+   * (fixed dimension/criterion counts, valid anchors, …). The AI's JSON can parse fine yet still
+   * fail that structural check — observed in production as a reproducible "Invalid criterion
+   * count" on a specific report, every time it was retried unchanged.
+   *
+   * One automatic fallback attempt: drop the evidence images and raise the token budget (the same
+   * image-drop/budget-raise mitigation already used below for empty-content responses), on the
+   * theory that attending to multimodal evidence while also holding the fixed-criterion-count
+   * schema in mind is exactly where a reasoning model is most likely to drift. This is a single
+   * bounded extra call (not a loop) so worst-case latency stays within the FE's 300s budget.
+   *
+   * Only once both attempts fail does this surface a 400 instead of letting `CiiV45ValidationError`
+   * fall through to Nest's generic 500 — and it logs the raw offending payload server-side first,
+   * since the 400 message alone (e.g. "Invalid criterion count 1") says which dimension failed but
+   * not what the AI actually sent. */
+  private async evaluateCiiV45(
+    payload: CielPkAiEvaluationPayloadV45,
     reportId: string,
-  ): CiiV45Result {
-    try {
-      return computeCiiV45Result(ciiV45);
-    } catch (error) {
-      if (error instanceof CiiV45ValidationError) {
-        console.error(
-          `CII v4.5 validation failed for report ${reportId}: ${error.message}`,
-          JSON.stringify(ciiV45.sectionScores),
-        );
+  ): Promise<{
+    result: CiiV45Result;
+    ciiV45: CiiV45EvaluatorPayload;
+    evidenceInspection?: EvidenceInspection;
+    model?: string;
+  }> {
+    let lastValidationError: CiiV45ValidationError | null = null;
+    for (const skipEvidenceImages of [false, true]) {
+      const { ciiV45, evidenceInspection, model } = await this.aiService.summarize(
+        'cii_v4_5_evaluation',
+        payload,
+        { skipEvidenceImages },
+      );
+      if (!ciiV45) {
         throw new BadRequestException(
-          `The AI returned an invalid CII v4.5 evaluation (${error.message}). Please retry.`,
+          'The AI did not return a readable CII v4.5 evaluation. Please retry.',
         );
       }
-      throw error;
+      try {
+        const result = computeCiiV45Result(ciiV45 as CiiV45EvaluatorPayload);
+        return { result, ciiV45: ciiV45 as CiiV45EvaluatorPayload, evidenceInspection, model };
+      } catch (error) {
+        if (!(error instanceof CiiV45ValidationError)) throw error;
+        lastValidationError = error;
+        console.error(
+          `CII v4.5 validation failed for report ${reportId} (evidence images ${skipEvidenceImages ? 'skipped' : 'attached'}): ${error.message}`,
+          JSON.stringify((ciiV45 as CiiV45EvaluatorPayload).sectionScores),
+        );
+      }
     }
+    throw new BadRequestException(
+      `The AI returned an invalid CII v4.5 evaluation (${lastValidationError!.message}). Please retry.`,
+    );
   }
 
   private async persistCiiV45Analysis(
@@ -877,17 +905,7 @@ export class FacultyReportsService {
   ) {
     const payload = await buildCielPkAiEvaluationPayloadV45(report, this.s3Service);
 
-    const { ciiV45, evidenceInspection, model } = await this.aiService.summarize(
-      'cii_v4_5_evaluation',
-      payload,
-    );
-    if (!ciiV45) {
-      throw new BadRequestException(
-        'The AI did not return a readable CII v4.5 evaluation. Please retry.',
-      );
-    }
-
-    const result = this.computeCiiV45ResultOrRetry(ciiV45 as CiiV45EvaluatorPayload, report.id);
+    const { result, evidenceInspection, model } = await this.evaluateCiiV45(payload, report.id);
 
     const nextCiiV45 = {
       ...result,
@@ -1222,19 +1240,8 @@ export class FacultyReportsService {
     // Build the AI evaluation payload (same as the admin run)
     const aiPayload = await buildCielPkAiEvaluationPayloadV45(report, this.s3Service);
 
-    const { ciiV45 } = await this.aiService.summarize(
-      'cii_v4_5_evaluation',
-      aiPayload,
-    );
-
-    if (!ciiV45) {
-      throw new BadRequestException(
-        'AI analysis failed. Please try again later.',
-      );
-    }
-
-    // Compute the CII v4.5 result using the same formula/rubric
-    const ciiResult = this.computeCiiV45ResultOrRetry(ciiV45 as CiiV45EvaluatorPayload, report.id);
+    // Same evaluate-with-one-fallback-attempt flow as the admin run
+    const { result: ciiResult, ciiV45 } = await this.evaluateCiiV45(aiPayload, report.id);
 
     // Build the independent analysis record
     const analysisId = crypto.randomUUID();

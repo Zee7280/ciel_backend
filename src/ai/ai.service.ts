@@ -1618,7 +1618,11 @@ ${JSON.stringify(data)}`;
     }
   }
 
-  async summarize(section: string, data: any): Promise<AiSummarizeResult> {
+  async summarize(
+    section: string,
+    data: any,
+    opts?: { skipEvidenceImages?: boolean },
+  ): Promise<AiSummarizeResult> {
     if (!process.env.OPENAI_API_KEY?.trim()) {
       throw new HttpException({ error: 'OpenAI API key is not configured' }, 500);
     }
@@ -1629,6 +1633,10 @@ ${JSON.stringify(data)}`;
       section,
       isCiiV45Evaluation ? slimCiiPayloadForModel(data) : data,
     );
+    // Caller-requested fallback (used after a structurally-invalid JSON response): drop the
+    // multimodal image parts and spend the freed context/attention on getting the fixed
+    // sectionScores shape right instead. Mirrors the existing empty-content image-drop retry below.
+    const skipEvidenceImages = isCiiV45Evaluation && opts?.skipEvidenceImages === true;
 
     const openAiOpts: OpenAiCompletionOpts | undefined = isCiiV45Evaluation
       ? {
@@ -1636,7 +1644,7 @@ ${JSON.stringify(data)}`;
           reasoningEffort: 'low',
           temperature: 0.15,
           seed: 4220,
-          maxTokens: 32_000,
+          maxTokens: skipEvidenceImages ? 48_000 : 32_000,
           responseFormat: { type: 'json_object' },
           systemMessage: `${CII_V4_5_EVALUATOR_PROMPT}\n\n${CII_V4_5_JSON_ONLY_DEPLOYMENT_NOTE}`,
           // Low + 32k: high/medium ate the 16k budget (empty JSON). Keep total wait
@@ -1659,17 +1667,24 @@ ${JSON.stringify(data)}`;
     let userContent: string | OpenAiContentPart[] = prompt;
     let evidenceInspection: EvidenceInspection | undefined;
     if (isCiiV45Evaluation) {
-      const { parts, inspection } = await this.buildEvidenceParts(data);
+      const { parts, inspection } = skipEvidenceImages
+        ? { parts: [], inspection: { inspected: [], notInspected: [] } as EvidenceInspection }
+        : await this.buildEvidenceParts(data);
       evidenceInspection = inspection;
       const notShown = inspection.notInspected.length
         ? inspection.notInspected
             .map((f) => `- ${f.id || '(no id)'} "${f.name}": ${f.reason}`)
             .join('\n')
         : '- none';
-      const note = `EVIDENCE INSPECTION
+      const note = skipEvidenceImages
+        ? `EVIDENCE INSPECTION
+No evidence images are attached to this request — judge section 8 / evidence claims from the
+report text only (file names, categories and linked claims/sections), and mark anything that
+needed a visual check as NOT INSPECTED / PARTIAL rather than MATCH.`
+        : `EVIDENCE INSPECTION
 Images you were actually shown follow below, each preceded by its id: ${
-        inspection.inspected.map((f) => f.id || f.name).join(', ') || 'none'
-      }. Judge each against the claim it is linked to by LOOKING at it.
+            inspection.inspected.map((f) => f.id || f.name).join(', ') || 'none'
+          }. Judge each against the claim it is linked to by LOOKING at it.
 Files you were NOT shown (documents, video, unreadable or over the image limit) — you cannot verify these. Never rate them MATCH; use PARTIAL at most, set "why" to start with "NOT INSPECTED:" and say what is missing:
 ${notShown}`;
       userContent = parts.length

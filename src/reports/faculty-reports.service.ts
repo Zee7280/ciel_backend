@@ -27,6 +27,7 @@ import {
   resolveBadgeForScore,
   CiiV45EvaluatorPayload,
   CiiV45Result,
+  CiiV45ValidationError,
 } from './cii-v4-5.constants';
 import { S3Service } from '../common/s3.service';
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
@@ -822,6 +823,23 @@ export class FacultyReportsService {
     return this.persistCiiV45Analysis(report, { adminRescore: true });
   }
 
+  /** The AI's JSON can parse fine yet still fail `computeCiiV45Result`'s structural checks (wrong
+   * dimension/criterion count, invalid anchor, …) — that's a retryable AI-quality issue, not a
+   * server bug, so surface it as a 400 instead of letting `CiiV45ValidationError` fall through to
+   * Nest's generic 500. */
+  private computeCiiV45ResultOrRetry(ciiV45: CiiV45EvaluatorPayload): CiiV45Result {
+    try {
+      return computeCiiV45Result(ciiV45);
+    } catch (error) {
+      if (error instanceof CiiV45ValidationError) {
+        throw new BadRequestException(
+          `The AI returned an invalid CII v4.5 evaluation (${error.message}). Please retry.`,
+        );
+      }
+      throw error;
+    }
+  }
+
   private async persistCiiV45Analysis(
     report: StudentReport,
     opts: { adminRescore?: boolean } = {},
@@ -860,7 +878,7 @@ export class FacultyReportsService {
       );
     }
 
-    const result = computeCiiV45Result(ciiV45 as CiiV45EvaluatorPayload);
+    const result = this.computeCiiV45ResultOrRetry(ciiV45 as CiiV45EvaluatorPayload);
 
     const nextCiiV45 = {
       ...result,
@@ -1207,7 +1225,7 @@ export class FacultyReportsService {
     }
 
     // Compute the CII v4.5 result using the same formula/rubric
-    const ciiResult = computeCiiV45Result(ciiV45 as CiiV45EvaluatorPayload);
+    const ciiResult = this.computeCiiV45ResultOrRetry(ciiV45 as CiiV45EvaluatorPayload);
 
     // Build the independent analysis record
     const analysisId = crypto.randomUUID();

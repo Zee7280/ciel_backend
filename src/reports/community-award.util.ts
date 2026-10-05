@@ -411,7 +411,13 @@ export function awardTopN(kind: CommunityAwardKind) {
 }
 
 const LIVE_STATUS = new Set(['approved', 'verified']);
-const BLOCKED_STATUS = new Set(['draft', 'rejected', 'declined']);
+const BLOCKED_STATUS = new Set([
+  'draft',
+  'rejected',
+  'declined',
+  'closed',
+  'revision',
+]);
 
 /**
  * Live deck = faculty or admin actually signed off.

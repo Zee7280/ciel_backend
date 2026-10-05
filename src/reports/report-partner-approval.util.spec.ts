@@ -17,27 +17,24 @@ describe('report-partner-approval.util', () => {
         expect(parseReportPartnerApprovalSettingValue('true')).toBe(true);
     });
 
-    it('evaluateReportRequiresPartnerApproval returns false when globally disabled', () => {
+    it('evaluateReportRequiresPartnerApproval is always false (Admin-only report approval)', () => {
         expect(
             evaluateReportRequiresPartnerApproval(
                 {
                     opportunity: { requiresPartnerApproval: true },
                     section7: { has_partners: 'yes' },
                 },
-                false,
+                true,
                 hasValue,
             ),
         ).toBe(false);
-    });
-
-    it('evaluateReportRequiresPartnerApproval respects opportunity flag when enabled', () => {
         expect(
             evaluateReportRequiresPartnerApproval(
                 { opportunity: { requiresPartnerApproval: true } },
                 true,
                 hasValue,
             ),
-        ).toBe(true);
+        ).toBe(false);
     });
 
     it('isReportPartnerStepSatisfied treats not_applicable as satisfied', () => {

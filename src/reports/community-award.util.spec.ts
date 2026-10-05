@@ -114,6 +114,20 @@ describe('isCommunityAwardMedalReport', () => {
                 status: 'verified',
             }),
         ).toBe(true);
+        expect(
+            isCommunityAwardMedalReport({
+                faculty_status: 'approved',
+                admin_status: 'approved',
+                status: 'closed',
+            }),
+        ).toBe(false);
+        expect(
+            isCommunityAwardMedalReport({
+                faculty_status: 'approved',
+                admin_status: 'rejected',
+                status: 'revision',
+            }),
+        ).toBe(false);
     });
 });
 

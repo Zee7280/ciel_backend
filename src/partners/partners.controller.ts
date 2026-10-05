@@ -530,23 +530,9 @@ export class PartnersController {
 
   @Patch('student-reports/:id/verify')
   @Post('student-reports/:id/verify')
-  verifyStudentReport(
-    @Request() req,
-    @Param('id') id: string,
-    @Body()
-    body: {
-      action: 'approve' | 'reject';
-      reason?: string;
-      feedback?: string;
-      verified_by?: string;
-    },
-  ) {
-    return this.studentReportsService.verifyReport(
-      id,
-      body.action,
-      req.user.role,
-      body.reason || body.feedback,
-      req.user.organizationId,
+  verifyStudentReport() {
+    throw new ForbiddenException(
+      'Report approval is handled by CIEL PK Admin only. Partners can open the published package read-only.',
     );
   }
 
@@ -761,23 +747,9 @@ export class PartnerAliasController {
 
   @Patch('reports/:id/verify')
   @Post('reports/:id/verify')
-  verifyReport(
-    @Request() req,
-    @Param('id') id: string,
-    @Body()
-    body: {
-      action: 'approve' | 'reject';
-      reason?: string;
-      feedback?: string;
-      verified_by?: string;
-    },
-  ) {
-    return this.studentReportsService.verifyReport(
-      id,
-      body.action,
-      req.user.role,
-      body.reason || body.feedback,
-      req.user.organizationId,
+  verifyReport() {
+    throw new ForbiddenException(
+      'Report approval is handled by CIEL PK Admin only. Partners can open the published package read-only.',
     );
   }
 

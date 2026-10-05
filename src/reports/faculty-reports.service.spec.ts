@@ -177,7 +177,7 @@ describe('FacultyReportsService — runCiiV45AnalysisForAdmin', () => {
       id: 'report-1',
       section1: { team_lead: { hours: 20 } },
     };
-    const { service } = makeService(
+    const { service, qb } = makeService(
       report,
       { summarize: jest.fn().mockResolvedValue({ ciiV45: CII_V45_AI_RESPONSE }) },
     );
@@ -202,6 +202,14 @@ describe('FacultyReportsService — runCiiV45AnalysisForAdmin', () => {
     expect((result.data as any).ciiV45Lock.locked).toBe(true);
     expect((result.data as any).ciiV45.finalCII).toBe(100);
     expect((result.data as any).ciiV45.adminEvidenceScore).toBe(15);
+    expect(qb.set).toHaveBeenCalledWith(
+      expect.objectContaining({
+        admin_status: 'approved',
+        faculty_status: 'approved',
+        status: 'verified',
+        partner_status: 'not_applicable',
+      }),
+    );
   });
 
   it('refuses when the update affects 0 rows (defensive guard against a concurrent write)', async () => {

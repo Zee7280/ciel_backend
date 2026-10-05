@@ -33,32 +33,13 @@ export function isReportPartnerStepSatisfied(partnerStatus: string | null | unde
 }
 
 /**
- * Whether this report row needs partner/NGO sign-off before CIEL admin can mark it verified.
- * When `partnerApprovalGloballyEnabled` is false (DB setting), always returns false.
+ * Report approval is CIEL PK Admin only. Opportunity / attendance partner flows are unchanged.
+ * Kept as a function so existing callers and the settings registry stay compiling.
  */
 export function evaluateReportRequiresPartnerApproval(
-    report: ReportPartnerApprovalInput,
-    partnerApprovalGloballyEnabled: boolean,
-    hasMeaningfulObjectValue: (value: unknown) => boolean,
+    _report: ReportPartnerApprovalInput,
+    _partnerApprovalGloballyEnabled: boolean,
+    _hasMeaningfulObjectValue: (value: unknown) => boolean,
 ): boolean {
-    if (!partnerApprovalGloballyEnabled) return false;
-
-    const partners = Array.isArray(report.section7?.partners) ? report.section7.partners : [];
-    const hasSectionPartner =
-        report.section7?.has_partners === 'yes' ||
-        report.section8?.partner_verification === true ||
-        partners.some((partner) => hasMeaningfulObjectValue(partner));
-    const hasNgo = partners.some((partner) => {
-        if (!partner || typeof partner !== 'object') return false;
-        const row = partner as Record<string, unknown>;
-        const type = String(row.type || row.name || '').toLowerCase();
-        return type.includes('ngo') || type.includes('non-government');
-    });
-
-    return Boolean(
-        report.opportunity?.requiresPartnerApproval ||
-        hasSectionPartner ||
-        hasNgo ||
-        report.partner_status === 'approved',
-    );
+    return false;
 }

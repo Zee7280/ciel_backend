@@ -863,6 +863,9 @@ export class StudentReportsService {
       status: this.toPublicReportStatus(report.status, opportunity),
       partner_status: report.partner_status,
       admin_status: report.admin_status,
+      admin_feedback: report.admin_feedback ?? null,
+      feedback: this.buildStudentReportFeedback(report),
+      is_editable: this.isReportEditableForStudent(report),
       submission_date: report.submission_date,
       submitted_at:
         report.reportSubmittedAt ?? report.submission_date ?? report.createdAt,
@@ -2782,6 +2785,19 @@ export class StudentReportsService {
       if (e && e.includes('@')) return e;
     }
     return '';
+  }
+
+  /** CII Confirm already sets admin_status, so a later Approve would skip package mail. */
+  async notifyPackagePublishedAfterCiiLock(reportId: string): Promise<void> {
+    const report = await this.studentReportsRepository.findOne({
+      where: { id: reportId },
+    });
+    if (!report) return;
+    const admin = String(report.admin_status || '')
+      .trim()
+      .toLowerCase();
+    if (admin !== 'approved' && admin !== 'verified') return;
+    await this.notifyReviewPackagePublished(report);
   }
 
   /** After Super Admin publishes, send the student Impact Package. Faculty / student / university get the analysis report; partner / NGO get the same package without it. */
@@ -4869,31 +4885,9 @@ export class StudentReportsService {
 
     const isPartnerReviewer = this.isPartnerReviewerRole(role);
     if (isPartnerReviewer) {
-      if (
-        !organizationId ||
-        report.opportunity?.organizationId !== organizationId
-      ) {
-        throw new ForbiddenException(
-          'You can only verify reports linked to your organization',
-        );
-      }
-      // Regular route: Faculty is the first report reviewer. Private-candidate
-      // reports are reviewed by CIEL PK, not a partner.
-      if (privateCandidate) {
-        throw new ForbiddenException(
-          'This private-candidate report is reviewed by CIEL PK, not a partner organisation.',
-        );
-      }
-      // Faculty no longer approves reports: the partner step opens once CIEL PK Admin has accepted
-      // the report (faculty_status 'approved' is still honoured for legacy in-flight rows).
-      if (
-        (action === 'approve' || action === 'reject') &&
-        report.admin_status !== 'approved'
-      ) {
-        throw new ForbiddenException(
-          'This report has not been accepted by CIEL PK Admin yet. Partners can view its status, and can approve or reject only after CIEL PK Admin accepts the report.',
-        );
-      }
+      throw new ForbiddenException(
+        'Report approval is handled by CIEL PK Admin only. Partners can open the published package read-only.',
+      );
     }
 
     const decisionStamp = new Date();
@@ -5026,31 +5020,17 @@ export class StudentReportsService {
             report.faculty_status = 'approved';
           }
         }
-        // NOTE: admin_status intentionally records CIEL PK's own decision independently of
-        // partner_status — the two are separate, order-independent sign-offs, and only the
-        // derived `status` field waits for both (see isReportPartnerStepSatisfied below). This is
-        // a deliberate, already-tested design (see student-reports.service.spec.ts "marks
-        // partner-required reports verified when partner approves after admin and faculty") —
-        // do not gate admin_status on partner_status here without re-checking that test's intent.
+        // NOTE: admin_status records CIEL PK's own decision. Report approval no longer
+        // waits on partner_status — CIEL PK Admin is the sole report approver.
         report.admin_status = 'approved';
         // Re-approving must not move the publish timestamp.
         report.adminApprovedAt =
           originalAdminStatus === 'approved' && report.adminApprovedAt
             ? report.adminApprovedAt
             : decisionStamp;
-        const requiresPartner =
-          this.reportPartnerApprovalSettings.reportRequiresPartnerApprovalSync(
-            report,
-            (value) => this.hasMeaningfulObjectValue(value),
-          );
-        if (
-          isReportPartnerStepSatisfied(report.partner_status) ||
-          !requiresPartner
-        ) {
-          report.status = 'verified';
-          if (!requiresPartner && report.partner_status === 'pending') {
-            report.partner_status = 'not_applicable';
-          }
+        report.status = 'verified';
+        if (!isReportPartnerStepSatisfied(report.partner_status)) {
+          report.partner_status = 'not_applicable';
         }
       }
     }

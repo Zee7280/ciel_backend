@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -52,6 +53,7 @@ import {
 import { isPrivateCandidateOpportunity, reviewRouteForOpportunity } from '../opportunities/private-candidate.util';
 import { composeFacultyReportRemarks } from './faculty-report-remarks.util';
 import { trackingOrganizationName } from './tracking-org-name.util';
+import { isReportPartnerStepSatisfied } from './report-partner-approval.util';
 
 /** List-card CII fields only — never mutates scores or lock state. */
 export function mapFacultyListCii(report: {
@@ -272,6 +274,7 @@ export function mapFacultyListPackage(
 
 @Injectable()
 export class FacultyReportsService {
+  private readonly logger = new Logger(FacultyReportsService.name);
   constructor(
     @InjectRepository(StudentReport)
     private studentReportsRepository: Repository<StudentReport>,
@@ -1135,6 +1138,29 @@ export class FacultyReportsService {
       finalBadge,
     };
 
+    const privateCandidate = isPrivateCandidateOpportunity(report.opportunity);
+    const facultyNow = String(report.faculty_status || '')
+      .trim()
+      .toLowerCase();
+    let nextFacultyStatus = report.faculty_status;
+    if (facultyNow !== 'rejected') {
+      if (privateCandidate) {
+        if (
+          facultyNow !== 'approved' &&
+          facultyNow !== 'not_applicable' &&
+          facultyNow !== 'not_required'
+        ) {
+          nextFacultyStatus = 'not_applicable';
+        }
+      } else if (facultyNow !== 'approved') {
+        nextFacultyStatus = 'approved';
+      }
+    }
+    const nextAdminApprovedAt = report.adminApprovedAt ?? new Date();
+    const nextPartnerStatus = isReportPartnerStepSatisfied(report.partner_status)
+      ? report.partner_status
+      : 'not_applicable';
+
     const updateResult = await this.studentReportsRepository
       .createQueryBuilder()
       .update(StudentReport)
@@ -1142,6 +1168,10 @@ export class FacultyReportsService {
         ciiV45: nextCiiV45,
         ciiV45Lock: nextCiiV45Lock,
         admin_status: 'approved',
+        faculty_status: nextFacultyStatus,
+        partner_status: nextPartnerStatus,
+        adminApprovedAt: nextAdminApprovedAt,
+        status: 'verified',
       } as unknown as import('typeorm').QueryDeepPartialEntity<StudentReport>)
       .where('id = :id', { id: report.id })
       .andWhere(`("ciiV45Lock" IS NULL OR ("ciiV45Lock"->>'locked') IS DISTINCT FROM 'true')`)
@@ -1152,6 +1182,21 @@ export class FacultyReportsService {
     }
 
     await this.approveAttendanceLogsOnFlashCardLock(report, adminId);
+
+    // Confirm is the Admin publish click. verifyReport emails skip when admin_status is
+    // already approved, so send the stakeholder package from here once the lock is committed.
+    if (
+      typeof this.studentReportsService.notifyPackagePublishedAfterCiiLock ===
+      'function'
+    ) {
+      void this.studentReportsService
+        .notifyPackagePublishedAfterCiiLock(report.id)
+        .catch((err) =>
+          this.logger.warn(
+            `Publish package notification failed after CII confirm for report ${report.id}: ${(err as Error)?.message}`,
+          ),
+        );
+    }
 
     return {
       success: true,

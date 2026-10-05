@@ -2172,7 +2172,7 @@ describe('StudentReportsService', () => {
     expect(result.data.status).toBe('verified');
   });
 
-  it('keeps reports pending partner approval when that approval is required', async () => {
+  it('marks partner-required reports verified on admin approve even when the opportunity asked for partner sign-off', async () => {
     const report = {
       id: 'report-1',
       status: 'paid',
@@ -2187,48 +2187,21 @@ describe('StudentReportsService', () => {
 
     const result = await service.verifyReport('report-1', 'approve', 'admin');
 
-    expect(report.status).toBe('paid');
+    expect(report.status).toBe('verified');
     expect(report.admin_status).toBe('approved');
-    expect(result.data.status).toBe('paid');
+    expect(report.partner_status).toBe('not_applicable');
+    expect(result.data.status).toBe('verified');
     await new Promise((resolve) => setTimeout(resolve, 40));
     expect(mockMailService.sendReportPackagePublished).toHaveBeenCalled();
   });
 
-  it('marks partner-required reports verified when partner approves after admin and faculty', async () => {
+  it('refuses partner report approve — CIEL PK Admin is the only report approver', async () => {
     const report = {
       id: 'report-1',
       status: 'paid',
       partner_status: 'pending',
       admin_status: 'approved',
       faculty_status: 'approved',
-      partnerApprovedAt: null,
-      adminApprovedAt: new Date('2026-05-01T00:00:00.000Z'),
-      opportunity: { organizationId: 'org-1', requiresPartnerApproval: true },
-    };
-    mockStudentReportsRepository.findOne.mockResolvedValue(report);
-
-    const result = await service.verifyReport(
-      'report-1',
-      'approve',
-      'partner',
-      undefined,
-      'org-1',
-    );
-
-    expect(report.status).toBe('verified');
-    expect(report.partner_status).toBe('approved');
-    expect(result.data.status).toBe('verified');
-    await new Promise((resolve) => setTimeout(resolve, 40));
-    expect(mockMailService.sendReportPackagePublished).not.toHaveBeenCalled();
-  });
-
-  it('blocks partner approve until CIEL PK Admin has accepted the report', async () => {
-    const report = {
-      id: 'report-1',
-      status: 'submitted',
-      partner_status: 'pending',
-      admin_status: 'pending',
-      faculty_status: 'pending',
       partnerApprovedAt: null,
       adminApprovedAt: new Date('2026-05-01T00:00:00.000Z'),
       opportunity: { organizationId: 'org-1', requiresPartnerApproval: true },
@@ -2243,20 +2216,19 @@ describe('StudentReportsService', () => {
         undefined,
         'org-1',
       ),
-    ).rejects.toThrow('not been accepted by CIEL PK Admin');
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(report.status).toBe('paid');
     expect(report.partner_status).toBe('pending');
     expect(mockStudentReportsRepository.save).not.toHaveBeenCalled();
   });
 
-  it('blocks partner reject until CIEL PK Admin has accepted the report', async () => {
+  it('refuses partner reject and university unlock — report decisions are admin-only', async () => {
     const report = {
       id: 'report-1',
       status: 'submitted',
       partner_status: 'pending',
       admin_status: 'pending',
-      faculty_status: null as string | null,
-      partnerApprovedAt: null,
-      adminApprovedAt: new Date('2026-05-01T00:00:00.000Z'),
+      faculty_status: 'pending',
       opportunity: { organizationId: 'org-1', requiresPartnerApproval: true },
     };
     mockStudentReportsRepository.findOne.mockResolvedValue(report);
@@ -2269,77 +2241,17 @@ describe('StudentReportsService', () => {
         'Not enough evidence',
         'org-1',
       ),
-    ).rejects.toThrow('not been accepted by CIEL PK Admin');
-    expect(report.partner_status).toBe('pending');
-  });
-
-  it('treats a University caller as a partner reviewer — org-scoped, and blocked until CIEL PK Admin accepts', async () => {
-    const report = {
-      id: 'report-1',
-      status: 'submitted',
-      partner_status: 'pending',
-      admin_status: 'pending',
-      faculty_status: 'pending',
-      partnerApprovedAt: null,
-      adminApprovedAt: null,
-      opportunity: { organizationId: 'org-1', requiresPartnerApproval: true },
-    };
-    mockStudentReportsRepository.findOne.mockResolvedValue(report);
-
-    // Cross-org: a University caller from a different org must be refused outright.
-    await expect(
-      service.verifyReport(
-        'report-1',
-        'reject',
-        'university',
-        'not ours',
-        'org-OTHER',
-      ),
-    ).rejects.toThrow('your organization');
-    expect(mockStudentReportsRepository.save).not.toHaveBeenCalled();
-  });
-
-  it('blocks a University caller from rejecting before CIEL PK Admin has accepted', async () => {
-    const report = {
-      id: 'report-1',
-      status: 'submitted',
-      partner_status: 'pending',
-      admin_status: 'pending',
-      faculty_status: 'pending',
-      partnerApprovedAt: null,
-      adminApprovedAt: null,
-      opportunity: { organizationId: 'org-1', requiresPartnerApproval: true },
-    };
-    mockStudentReportsRepository.findOne.mockResolvedValue(report);
+    ).rejects.toThrow('CIEL PK Admin only');
 
     await expect(
       service.verifyReport('report-1', 'reject', 'university', 'no', 'org-1'),
-    ).rejects.toThrow('not been accepted by CIEL PK Admin');
-    expect(report.status).toBe('submitted');
-    expect(mockStudentReportsRepository.save).not.toHaveBeenCalled();
-  });
-
-  it('refuses a University caller trying to unlock (admin-only)', async () => {
-    const report = {
-      id: 'report-1',
-      status: 'verified',
-      partner_status: 'approved',
-      admin_status: 'approved',
-      faculty_status: 'approved',
-      opportunity: { organizationId: 'org-1', requiresPartnerApproval: true },
-    };
-    mockStudentReportsRepository.findOne.mockResolvedValue(report);
+    ).rejects.toThrow('CIEL PK Admin only');
 
     await expect(
-      service.verifyReport(
-        'report-1',
-        'unlock',
-        'university',
-        undefined,
-        'org-1',
-      ),
-    ).rejects.toThrow('Only admins can unlock');
-    expect(report.status).toBe('verified');
+      service.verifyReport('report-1', 'unlock', 'university', undefined, 'org-1'),
+    ).rejects.toThrow('CIEL PK Admin only');
+
+    expect(report.status).toBe('submitted');
     expect(mockStudentReportsRepository.save).not.toHaveBeenCalled();
   });
 
@@ -2367,6 +2279,50 @@ describe('StudentReportsService', () => {
     expect(report.admin_status).toBe('rejected');
     expect(report.admin_feedback).toBe('Please fix attendance hours.');
     expect(report.adminApprovedAt).toBeNull();
+  });
+
+  it('admin close retracts a published report without sending it back as revision', async () => {
+    const report = {
+      id: 'report-1',
+      status: 'verified',
+      partner_status: 'not_applicable',
+      admin_status: 'approved',
+      faculty_status: 'approved',
+      closedAt: null as Date | null,
+      closedByAdminId: null as string | null,
+      closeReason: null as string | null,
+      opportunity: { requiresPartnerApproval: false },
+    };
+    mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+    const result = await service.verifyReport(
+      'report-1',
+      'close',
+      'admin',
+      'Evidence disappeared after approval.',
+      undefined,
+      undefined,
+      { id: 'admin-1', name: 'Admin' },
+    );
+
+    expect(report.status).toBe('closed');
+    expect(report.closeReason).toBe('Evidence disappeared after approval.');
+    expect(result.data.status).toBe('closed');
+    expect(report.admin_status).toBe('approved');
+  });
+
+  it('refuses to close a report that is still in revision', async () => {
+    mockStudentReportsRepository.findOne.mockResolvedValue({
+      id: 'report-1',
+      status: 'revision',
+      admin_status: 'rejected',
+      partner_status: 'pending',
+      opportunity: {},
+    });
+
+    await expect(
+      service.verifyReport('report-1', 'close', 'admin', 'closing a revision'),
+    ).rejects.toThrow(/already-approved\/published report can be closed/);
   });
 
   it('refuses to edit a verified report that was not legitimately rejected/revision', async () => {
@@ -2537,6 +2493,49 @@ describe('StudentReportsService', () => {
     expect(result.data).toHaveLength(1);
     expect(row.faculty_remarks).toBe('Please add baseline evidence.');
     expect(row.last_edited_by).toBe('Lead');
+  });
+
+  it('exposes admin revision comments and is_editable on listing rows for student Action Required', async () => {
+    const opp = '582da802-e41e-488d-bd3d-d6dee59982b9';
+    const leadReport = {
+      id: 'report-admin-rev',
+      studentId: 'lead-student',
+      opportunityId: opp,
+      project_id: opp,
+      status: 'revision',
+      faculty_status: 'approved',
+      faculty_remarks: null as string | null,
+      partner_status: 'pending',
+      admin_status: 'rejected',
+      admin_feedback: 'Please add SDG evidence and resubmit.',
+      submission_date: new Date(),
+      reportSubmittedAt: new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date('2026-09-01T10:00:00.000Z'),
+      student: { name: 'Lead', email: 'lead@test.com' },
+      opportunity: {
+        title: 'Team Project',
+        organizationId: 'org-1',
+        organization: { name: 'Org' },
+      },
+      section11: null,
+    };
+
+    mockStudentReportsRepository.find.mockResolvedValue([leadReport]);
+    mockParticipantRepository.find.mockResolvedValue([]);
+
+    const result = await service.findAll({ page: 1, limit: 50 });
+    const row = result.data[0] as {
+      status?: string;
+      feedback?: string | null;
+      admin_feedback?: string | null;
+      is_editable?: boolean;
+    };
+
+    expect(row.status).toBe('revision');
+    expect(row.admin_feedback).toBe('Please add SDG evidence and resubmit.');
+    expect(row.feedback).toBe('Please add SDG evidence and resubmit.');
+    expect(row.is_editable).toBe(true);
   });
 
   it('remindReportReviewer reminds CIEL PK Admin (not Faculty) without changing report status', async () => {

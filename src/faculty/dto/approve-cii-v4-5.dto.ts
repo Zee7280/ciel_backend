@@ -1,11 +1,44 @@
-import { IsOptional, IsString, IsNumber, ValidateIf } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+  ArrayMaxSize,
+  ArrayMinSize,
+  IsArray,
+  IsBoolean,
+  IsInt,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+  ValidateIf,
+  ValidateNested,
+} from 'class-validator';
+
+export class AdminEvidenceCriterionDto {
+  @IsString()
+  criterion: string;
+
+  @IsInt()
+  @Min(0)
+  @Max(4)
+  anchor: 0 | 1 | 2 | 3 | 4;
+
+  @IsString()
+  reasoningSummary: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  evidenceIds?: string[];
+}
 
 /**
- * Admin Accept & Publish for the CII v4.5 score.
+ * Admin Accept & Publish for the CII v5.0 Hybrid score.
  *
- * Admin may accept the AI-recommended score as-is, or record a reasoned numeric moderation
- * (whole-score only — v4.5 has no per-criterion override). The system retains both: AI
- * Recommended Score → Admin Approved Score.
+ * Dimension 7 (15 evidence points) is scored here by Admin. Admin may also
+ * accept the combined score as-is, or record a reasoned numeric moderation
+ * of the published total. The system retains both: AI Recommended Score →
+ * Admin Approved Score.
  */
 export class ApproveCiiV45Dto {
   /** Optional overall note from Admin. */
@@ -29,4 +62,18 @@ export class ApproveCiiV45Dto {
   @IsOptional()
   @IsString()
   scoreModerationReason?: string;
+
+  /** Seven Dimension-7 evidence criteria (required for a v5.0 analysis still pending Admin D7). */
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(7)
+  @ArrayMaxSize(7)
+  @ValidateNested({ each: true })
+  @Type(() => AdminEvidenceCriterionDto)
+  evidenceCriteria?: AdminEvidenceCriterionDto[];
+
+  /** Admin confirmation that an AI-nominated exceptional feature is verified (L6 gate). */
+  @IsOptional()
+  @IsBoolean()
+  exceptionalFeatureAdminVerified?: boolean;
 }

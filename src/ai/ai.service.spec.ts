@@ -90,10 +90,10 @@ describe('AiService — CII v4.5 evaluation branch', () => {
 
   const DIMENSIONS: Array<[string, number]> = [
     ['1', 4], ['2', 5], ['3', 4], ['4A', 5], ['4B', 5],
-    ['5', 4], ['6', 4], ['7', 7], ['8', 4], ['9', 4],
+    ['5', 4], ['6', 4], ['8', 4], ['9', 4],
   ];
   const CII_V45_JSON = JSON.stringify({
-    frameworkVersion: '4.5',
+    frameworkVersion: '5.0',
     reportId: 'report-1',
     inputFingerprint: 'fp-1',
     inputCompleteness: {
@@ -128,14 +128,14 @@ describe('AiService — CII v4.5 evaluation branch', () => {
     studentFeedback: 'Good work.',
   });
 
-  it('sends the v4.5 prompt/model and parses the response into ciiV45', async () => {
+  it('sends the v5.0 prompt/model and parses the response into ciiV45', async () => {
     const f = jest
       .fn()
       .mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ choices: [{ message: { content: CII_V45_JSON } }] }) });
     global.fetch = f as never;
 
     const out = await new AiService().summarize('cii_v4_5_evaluation', {
-      uploaded_evidence_files: [],
+      uploaded_evidence_files: [{ file_id: 'EV-001', file_name: 'a.jpg', file_type: 'jpg', url: 'https://bkt.s3.amazonaws.com/a.jpg' }],
     });
 
     const sent = JSON.parse(f.mock.calls[0][1].body);
@@ -143,12 +143,14 @@ describe('AiService — CII v4.5 evaluation branch', () => {
     expect(sent.reasoning_effort).toBe('low');
     expect(sent.max_completion_tokens).toBe(32000);
     expect(sent.response_format).toEqual({ type: 'json_object' });
-    expect(sent.messages[0].content).toContain('CII v4.5');
-    expect(out.ciiV45?.frameworkVersion).toBe('4.5');
+    expect(sent.messages[0].content).toContain('CII AI ANALYSER v5.0');
+    expect(JSON.stringify(sent.messages)).not.toContain('uploaded_evidence_files');
+    expect(out.ciiV45?.frameworkVersion).toBe('5.0');
     expect(out.ciiV45?.sectionScores).toHaveLength(10);
+    expect(out.ciiV45?.adminEvidenceAssessment).toEqual({ status: 'PENDING' });
   });
 
-  it('skipEvidenceImages drops image parts, raises the token budget, and sends a text-only user message', async () => {
+  it('never fetches or attaches evidence originals on the report-quality call', async () => {
     const s3 = { getObjectBufferByPublicUrl: jest.fn() };
     const f = jest
       .fn()
@@ -158,19 +160,14 @@ describe('AiService — CII v4.5 evaluation branch', () => {
     const out = await new AiService(s3 as never).summarize(
       'cii_v4_5_evaluation',
       { uploaded_evidence_files: [{ file_id: 'EV-001', file_name: 'a.jpg', file_type: 'jpg', url: 'https://bkt.s3.amazonaws.com/a.jpg' }] },
-      { skipEvidenceImages: true },
     );
 
-    // Never fetches evidence bytes when images are being skipped.
     expect(s3.getObjectBufferByPublicUrl).not.toHaveBeenCalled();
     const sent = JSON.parse(f.mock.calls[0][1].body);
-    expect(sent.max_completion_tokens).toBe(48000);
     expect(typeof sent.messages[1].content).toBe('string');
-    expect(sent.messages[1].content).toContain('No evidence images are attached');
-    expect(sent.messages[1].content).toMatch(/processingStatus to "INACCESSIBLE"/);
-    expect(sent.messages[1].content).not.toMatch(/\bMATCH\b/);
-    expect(sent.messages[1].content).not.toMatch(/\bPARTIAL\b/);
-    expect(out.ciiV45?.frameworkVersion).toBe('4.5');
+    expect(sent.messages[1].content).toContain('EVIDENCE FIREWALL');
+    expect(out.evidenceInspection?.inspected).toEqual([]);
+    expect(out.ciiV45?.frameworkVersion).toBe('5.0');
   });
 
   it('rejects with a 502 when the model returns an unparseable CII v4.5 response', async () => {
@@ -183,85 +180,25 @@ describe('AiService — CII v4.5 evaluation branch', () => {
     ).rejects.toMatchObject({ status: 502 });
   });
 
-  it('attaches bucket images as image_url parts, lists documents / unfetchable files as NOT inspected, never fetches foreign URLs', async () => {
+  it('does not attach evidence images even when files are present on the payload', async () => {
     const bucketImg = 'https://bkt.s3.eu.amazonaws.com/evidence/a.jpg';
-    const foreign = 'https://evil.example.com/steal.png';
-    const s3 = {
-      getObjectBufferByPublicUrl: jest.fn(async (url: string) =>
-        url === bucketImg ? { buffer: Buffer.from('JPEGDATA'), contentType: 'image/jpeg' } : null,
-      ),
-    };
+    const s3 = { getObjectBufferByPublicUrl: jest.fn() };
     const f = jest.fn().mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ choices: [{ message: { content: CII_V45_JSON } }] }) });
     global.fetch = f as never;
-    const svc = new AiService(s3 as never);
 
-    const out = await svc.summarize('cii_v4_5_evaluation', {
+    const out = await new AiService(s3 as never).summarize('cii_v4_5_evaluation', {
       uploaded_evidence_files: [
-        { file_id: 'E1', file_name: 'a.jpg', file_type: 'jpg', url: bucketImg, linked_claims: ['Repaint day'] },
+        { file_id: 'E1', file_name: 'a.jpg', file_type: 'jpg', url: bucketImg },
         { file_id: 'E2', file_name: 'register.pdf', file_type: 'pdf', url: 'https://bkt.s3.eu.amazonaws.com/evidence/r.pdf' },
-        { file_id: 'E3', file_name: 'steal.png', file_type: 'png', url: foreign },
       ],
     });
 
-    const sent = JSON.parse(f.mock.calls[0][1].body);
-    expect(sent.messages[0].content).toContain('CII v4.5');
-    const userContent = sent.messages[1].content;
-    expect(Array.isArray(userContent)).toBe(true);
-    const images = userContent.filter((p: any) => p.type === 'image_url');
-    expect(images).toHaveLength(1);
-    expect(images[0].image_url.url).toMatch(/^data:image\/jpeg;base64,/);
-    expect(userContent[0].text).toMatch(/NOT shown/);
-    expect(userContent[0].text).toMatch(/E2/);
-    expect(userContent[0].text).not.toContain(bucketImg);
-    // The not-shown-evidence note must only ever tell the model to use real CiiV45EvaluatorPayload
-    // field/enum values (processingStatus: INACCESSIBLE, verificationStatus: PROCESSING_REQUIRED /
-    // NARRATIVE_ONLY, reasoningSummary) — a prior version used "MATCH"/"PARTIAL"/"why", none of
-    // which exist in the schema, and a model trying to honor that produced malformed JSON.
-    expect(userContent[0].text).toMatch(/processingStatus to\s+"INACCESSIBLE"/);
-    expect(userContent[0].text).toMatch(/verificationStatus to "PROCESSING_REQUIRED" or "NARRATIVE_ONLY"/);
-    expect(userContent[0].text).not.toMatch(/\bMATCH\b/);
-    expect(userContent[0].text).not.toMatch(/\bPARTIAL\b/);
-    expect(userContent[0].text).not.toMatch(/"why"/);
-    expect(s3.getObjectBufferByPublicUrl).toHaveBeenCalledWith(foreign); // refused by the S3 service (not our bucket)
-    expect(out.evidenceInspection?.inspected.map((x) => x.id)).toEqual(['E1']);
-    expect(out.evidenceInspection?.notInspected.map((x) => x.id).sort()).toEqual(['E2', 'E3']);
-  });
-
-  it('caps the number of inspected images', async () => {
-    const urls = Array.from({ length: 12 }, (_, i) => `https://bkt.s3.eu.amazonaws.com/e/${i}.png`);
-    const s3 = { getObjectBufferByPublicUrl: jest.fn(async () => ({ buffer: Buffer.from('x'), contentType: 'image/png' })) };
-    global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ choices: [{ message: { content: CII_V45_JSON } }] }) }) as never;
-    const out = await new AiService(s3 as never).summarize('cii_v4_5_evaluation', {
-      uploaded_evidence_files: urls.map((url, i) => ({ file_id: `E${i}`, file_name: `${i}.png`, file_type: 'png', url })),
-    });
-    expect(out.evidenceInspection?.inspected).toHaveLength(4);
-    expect(out.evidenceInspection?.notInspected).toHaveLength(8);
-    expect(s3.getObjectBufferByPublicUrl).toHaveBeenCalledTimes(4);
-  });
-
-  it('reuses hashed image bytes and does not fetch them from S3 a second time', async () => {
-    const url = 'https://bkt.s3.eu.amazonaws.com/e/0.png';
-    const s3 = { getObjectBufferByPublicUrl: jest.fn() };
-    global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ choices: [{ message: { content: CII_V45_JSON } }] }) }) as never;
-    const data = {
-      uploaded_evidence_files: [{ file_id: 'E0', file_name: '0.png', file_type: 'png', url }],
-    };
-    Object.defineProperty(data, '__ciiEvidenceInspect', {
-      value: new Map([[url, { buffer: Buffer.from('cached'), contentType: 'image/png' }]]),
-      enumerable: false,
-    });
-    const out = await new AiService(s3 as never).summarize('cii_v4_5_evaluation', data);
     expect(s3.getObjectBufferByPublicUrl).not.toHaveBeenCalled();
-    expect(out.evidenceInspection?.inspected).toEqual([{ id: 'E0', name: '0.png' }]);
-  });
-
-  it('with no S3 service every image is reported as not inspected (the model is told so)', async () => {
-    global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ choices: [{ message: { content: CII_V45_JSON } }] }) }) as never;
-    const out = await new AiService().summarize('cii_v4_5_evaluation', {
-      uploaded_evidence_files: [{ file_id: 'E1', file_name: 'a.png', file_type: 'png', url: 'https://x/a.png' }],
-    });
-    expect(out.evidenceInspection?.inspected).toHaveLength(0);
-    expect(out.evidenceInspection?.notInspected).toHaveLength(1);
+    const userContent = JSON.parse(f.mock.calls[0][1].body).messages[1].content;
+    expect(typeof userContent).toBe('string');
+    expect(userContent).toContain('EVIDENCE FIREWALL');
+    expect(out.evidenceInspection?.inspected).toEqual([]);
+    expect(out.evidenceInspection?.notInspected).toEqual([]);
   });
 
   it('parses CII JSON from array-shaped message content', async () => {
@@ -274,7 +211,7 @@ describe('AiService — CII v4.5 evaluation branch', () => {
         }),
     }) as never;
     const out = await new AiService().summarize('cii_v4_5_evaluation', { uploaded_evidence_files: [] });
-    expect(out.ciiV45?.frameworkVersion).toBe('4.5');
+    expect(out.ciiV45?.frameworkVersion).toBe('5.0');
   });
 
   it('retries empty length once without images and with a larger token budget', async () => {
@@ -293,16 +230,15 @@ describe('AiService — CII v4.5 evaluation branch', () => {
       uploaded_evidence_files: [{ file_id: 'E1', file_name: 'a.jpg', file_type: 'jpg', url: bucketImg }],
     });
 
-    expect(out.ciiV45?.frameworkVersion).toBe('4.5');
+    expect(out.ciiV45?.frameworkVersion).toBe('5.0');
     expect(f).toHaveBeenCalledTimes(2);
     const first = JSON.parse(f.mock.calls[0][1].body);
     const second = JSON.parse(f.mock.calls[1][1].body);
     expect(first.max_completion_tokens).toBe(32000);
-    expect(Array.isArray(first.messages[1].content)).toBe(true);
+    expect(typeof first.messages[1].content).toBe('string');
     expect(second.max_completion_tokens).toBe(48000);
     expect(second.reasoning_effort).toBe('low');
     expect(typeof second.messages[1].content).toBe('string');
-    expect(second.messages[1].content).not.toMatch(/^data:image/);
   });
 
   it('surfaces a token-budget error when the retry is also empty', async () => {

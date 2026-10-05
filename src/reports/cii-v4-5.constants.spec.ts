@@ -4,7 +4,24 @@ import {
   CiiV45CriterionScore,
   computeCiiV45Result,
   CiiV45ValidationError,
+  applyAdminEvidenceAssessment,
+  normalizeCiiV5AiPayload,
 } from './cii-v4-5.constants';
+
+function adminEvidenceFor(payload: CiiV45EvaluatorPayload) {
+  const d7 = payload.sectionScores.find((s) => s.dimension === '7')!;
+  return {
+    status: 'ASSESSED' as const,
+    assessorId: 'admin-1',
+    assessedAt: '2026-01-01T00:00:00.000Z',
+    criteria: d7.criterionScores.map((c) => ({
+      criterion: c.criterion,
+      anchor: c.anchor as 0 | 1 | 2 | 3 | 4,
+      reasoningSummary: c.reasoningSummary,
+      evidenceIds: c.evidenceIds,
+    })),
+  };
+}
 
 /** A minimally valid, all-"Sound" (anchor=2) payload: scores 70 base, FINAL status. */
 function buildValidPayload(
@@ -16,7 +33,7 @@ function buildValidPayload(
       criterion: key,
       anchor: 2,
       qualityAnchor: 2,
-      verificationStatus: 'VERIFIED',
+      verificationStatus: dim.id === '7' ? 'ADMIN_VERIFIED' : 'AI_REPORT',
       sourceRefs: ['s1'],
       evidenceIds: [],
       reasoningSummary: 'Sound, credible undergraduate service.',
@@ -24,8 +41,8 @@ function buildValidPayload(
     })),
   }));
 
-  return {
-    frameworkVersion: '4.5',
+  const base: CiiV45EvaluatorPayload = {
+    frameworkVersion: '5.0',
     reportId: 'report-1',
     inputFingerprint: 'fp-1',
     inputCompleteness: {
@@ -46,10 +63,14 @@ function buildValidPayload(
     strengths: ['Attendance register confirmed all hours.'],
     developmentPriorities: ['Add a baseline measurement next time.'],
     analysisSummary: 'Sound, credible community service project.',
-    evidenceSummary: 'Evidence set partially inspected.',
+    evidenceSummary: 'Admin evidence assessment complete.',
     studentFeedback: 'Good work — keep documenting outcomes.',
-    ...overrides,
   };
+  const merged = { ...base, ...overrides };
+  if (!overrides.adminEvidenceAssessment) {
+    merged.adminEvidenceAssessment = adminEvidenceFor(merged);
+  }
+  return merged;
 }
 
 /** Mutates one criterion (by dimension + criterion key) across a cloned payload. */
@@ -75,15 +96,16 @@ function withCriterion(
 }
 
 describe('computeCiiV45Result', () => {
-  it('scores an all-Sound payload at 70/100 base and FINAL status', () => {
+  it('scores an all-Sound payload at 70/100 (59.5 AI + 10.5 Admin evidence) and FINAL status', () => {
     const result = computeCiiV45Result(buildValidPayload());
     expect(result.baseCII).toBe(70);
+    expect(result.aiReportScore).toBe(59.5);
+    expect(result.adminEvidenceScore).toBe(10.5);
     expect(result.diagnosticCII).toBe(70);
     expect(result.scoreStatus).toBe('FINAL');
     expect(result.finalCII).toBe(70);
     expect(result.needsAdminReview).toBe(false);
     expect(result.publicationEligible).toBe(true);
-    // Sound-everywhere calibration intent: lands on L4 Developing (70).
     expect(result.recommendedBadge?.code).toBe('L4');
     expect(result.finalBadge).toBeNull();
   });
@@ -136,37 +158,30 @@ describe('computeCiiV45Result', () => {
     expect(result.finalCII).toBeNull();
   });
 
-  it('requires inspected evidence for a dimension-7 anchor above 2 (non-ethics)', () => {
-    const payload = withCriterion(buildValidPayload(), '7', 'activities', {
-      anchor: 3,
-      verificationStatus: 'VERIFIED',
-      evidenceIds: [],
-    });
-    expect(() => computeCiiV45Result(payload)).toThrow(/High evidence anchor requires inspected proof/);
-  });
-
-  it('allows a dimension-7 anchor above 2 when backed by inspected evidence', () => {
-    const base = buildValidPayload();
-    const payload = {
-      ...withCriterion(base, '7', 'activities', {
-        anchor: 3,
-        verificationStatus: 'VERIFIED',
-        evidenceIds: ['ev1'],
+  it('keeps Dimension 7 pending until Admin evidence assessment (ADMIN_EVIDENCE_REQUIRED)', () => {
+    const payload = normalizeCiiV5AiPayload(buildValidPayload());
+    const result = computeCiiV45Result(payload);
+    expect(result.aiReportScore).toBe(59.5);
+    expect(result.adminEvidenceScore).toBeNull();
+    expect(result.baseCII).toBeNull();
+    expect(result.diagnosticCII).toBeNull();
+    expect(result.scoreStatus).toBe('ADMIN_EVIDENCE_REQUIRED');
+    expect(result.finalCII).toBeNull();
+    const combined = computeCiiV45Result(
+      applyAdminEvidenceAssessment(payload, {
+        assessorId: 'admin-1',
+        assessedAt: '2026-01-01T00:00:00.000Z',
+        criteria: CII_V45_DIMENSIONS.find((d) => d.id === '7')!.criteria.map((c) => ({
+          criterion: c.key,
+          anchor: 2 as const,
+          reasoningSummary: 'Admin reviewed originals — sound coverage.',
+          evidenceIds: ['ev-1'],
+        })),
       }),
-      evidenceAudit: [
-        {
-          evidenceId: 'ev1',
-          fileName: 'photo.jpg',
-          fileType: 'jpg',
-          privacy: 'RESTRICTED' as const,
-          material: true,
-          processingStatus: 'INSPECTED' as const,
-          claimIds: [],
-          supportStatus: 'SUPPORTED' as const,
-        },
-      ],
-    };
-    expect(() => computeCiiV45Result(payload)).not.toThrow();
+    );
+    expect(combined.scoreStatus).toBe('FINAL');
+    expect(combined.diagnosticCII).toBe(70);
+    expect(combined.adminEvidenceScore).toBe(10.5);
   });
 
   it('rejects a positive extra-mile item without a beyond-base justification / inspected evidence', () => {
@@ -234,22 +249,20 @@ describe('computeCiiV45Result', () => {
     expect(result.diagnosticCII).toBe(result.baseCII);
   });
 
-  it('keeps diagnostic CII when extra-mile uplift is still processing', () => {
+  it('holds diagnostic CII until extra-mile is Admin-assessed', () => {
     const payload = buildValidPayload({
-      extraMileUplift: { assessmentStatus: 'PROCESSING_REQUIRED', items: [] },
+      extraMileUplift: { assessmentStatus: 'PENDING_ADMIN', items: [] },
     });
     const result = computeCiiV45Result(payload);
-    expect(result.scoreStatus).toBe('ADMIN_REVIEW_REQUIRED');
+    expect(result.scoreStatus).toBe('ADMIN_EVIDENCE_REQUIRED');
     expect(result.finalCII).toBeNull();
-    expect(result.diagnosticCII).toBe(result.baseCII);
-    expect(result.diagnosticCII).not.toBeNull();
-    expect(result.diagnosticBadge).not.toBeNull();
-    expect(result.recommendedBadge).toBeNull();
+    expect(result.diagnosticCII).toBeNull();
+    expect(result.aiReportScore).toBe(59.5);
+    expect(result.adminEvidenceScore).toBe(10.5);
   });
 
-  it('keeps diagnostic CII when material evidence was not inspected (screenshot / Pending overall)', () => {
+  it('does not hold the CII for uninspected evidence files (Admin owns Dimension 7)', () => {
     const payload = buildValidPayload({
-      extraMileUplift: { assessmentStatus: 'PROCESSING_REQUIRED', items: [] },
       evidenceAudit: [
         {
           evidenceId: 'ev-pdf',
@@ -264,14 +277,9 @@ describe('computeCiiV45Result', () => {
       ],
     });
     const result = computeCiiV45Result(payload);
-    expect(result.scoreStatus).toBe('ADMIN_REVIEW_REQUIRED');
-    expect(result.needsAdminReview).toBe(true);
-    expect(result.finalCII).toBeNull();
-    expect(result.publicationEligible).toBe(false);
-    expect(result.baseCII).toBe(70);
+    expect(result.scoreStatus).toBe('FINAL');
+    expect(result.finalCII).toBe(70);
     expect(result.diagnosticCII).toBe(70);
-    expect(result.diagnosticBadge?.code).toMatch(/^L/);
-    expect(result.recommendedBadge).toBeNull();
   });
 
   it('does not treat pending attendance verification as ADMIN_REVIEW when hours are logged', () => {
@@ -321,6 +329,7 @@ describe('computeCiiV45Result', () => {
     }
     payload = {
       ...payload,
+      adminEvidenceAssessment: adminEvidenceFor(payload),
       evidenceAudit: [
         {
           evidenceId: 'ev1',
@@ -340,7 +349,12 @@ describe('computeCiiV45Result', () => {
 
     const withFeature = computeCiiV45Result({
       ...payload,
-      exceptionalFeature: { verified: true, explanation: 'Sustained partner ownership.', evidenceIds: ['ev1'] },
+      exceptionalFeature: {
+        verified: true,
+        adminVerified: true,
+        explanation: 'Sustained partner ownership.',
+        evidenceIds: ['ev1'],
+      },
     });
     expect(withFeature.recommendedBadge?.level).toBe(6);
     expect(withFeature.recommendedBadge?.gateCapped).toBe(false);

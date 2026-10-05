@@ -3,6 +3,10 @@ import { redactCiiV45Fields } from './cii-v4-5-redaction.util';
 const SENSITIVE_CII_V45 = {
   finalCII: 84.5,
   diagnosticCII: 84.5,
+  frameworkVersion: '5.0',
+  aiReportScore: 70,
+  adminEvidenceScore: 13,
+  baseCII: 83,
   finalBadge: { code: 'L5', name: 'Distinguished Impact Contributor', level: 5, numericLevel: 5, gateCapped: false },
   recommendedBadge: { code: 'L5', name: 'Distinguished Impact Contributor', level: 5, numericLevel: 5, gateCapped: false },
   sectionScores: [
@@ -81,6 +85,10 @@ describe('redactCiiV45Fields', () => {
 
     // Whitelisted fields, present and correct.
     expect(result.ciiV45?.finalCII).toBe(84.5);
+    expect(result.ciiV45?.aiReportScore).toBe(70);
+    expect(result.ciiV45?.adminEvidenceScore).toBe(13);
+    expect(result.ciiV45?.baseCII).toBe(83);
+    expect(result.ciiV45?.frameworkVersion).toBe('5.0');
     expect(result.ciiV45?.recommendedBadge).toEqual({
       code: 'L5', name: 'Distinguished Impact Contributor', level: 5, numericLevel: 5, gateCapped: false,
     });

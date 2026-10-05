@@ -228,8 +228,10 @@ describe('buildCielPkAiEvaluationPayload', () => {
     // Must match the live v4.5 evaluator (cii-v4-5.constants.ts) — a mismatch here would send the
     // model a contradictory rubric.
     expect(payload.system_validation.scoring_rubric).toMatchObject({
-      cii_v45_framework_version: '4.5',
+      cii_v45_framework_version: '5.0',
       max_total: 100,
+      ai_report_max: 85,
+      admin_evidence_max: 15,
     });
     const attendanceSummary = (
       payload.section1_participation_identity_attendance as {
@@ -450,7 +452,7 @@ describe('buildCielPkAiEvaluationPayloadV45', () => {
     expect(payload.uploaded_evidence_files[0].file_integrity.size_bytes).toBe(bytes.byteLength);
     expect(
       (payload.system_validation.scoring_rubric as { cii_v45_framework_version: string }).cii_v45_framework_version,
-    ).toBe('4.5');
+    ).toBe('5.0');
     expect(typeof payload.input_fingerprint).toBe('string');
     expect(payload.input_fingerprint.length).toBeGreaterThan(0);
     const inspect = ciiEvidenceInspectCache(payload);

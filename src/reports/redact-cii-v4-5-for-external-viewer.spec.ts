@@ -11,6 +11,10 @@ const UNLOCKED_RESPONSE = {
     ciiV45: {
       finalCII: 91.5,
       diagnosticCII: 91.5,
+      frameworkVersion: '5.0',
+      aiReportScore: 76.5,
+      adminEvidenceScore: 13,
+      baseCII: 89.5,
       finalBadge: { code: 'L6', name: 'Transformative Impact Contributor', level: 6, numericLevel: 6, gateCapped: false },
       recommendedBadge: { code: 'L6', name: 'Transformative Impact Contributor', level: 6, numericLevel: 6, gateCapped: false },
       sectionScores: [
@@ -86,6 +90,10 @@ describe('StudentReportsService.redactCiiV45ForExternalViewer', () => {
       ],
       extraMileUplift: { total: 2.5 },
       integrityPenalty: { points: 0 },
+      frameworkVersion: '5.0',
+      aiReportScore: 76.5,
+      adminEvidenceScore: 13,
+      baseCII: 89.5,
       strengths: ['Attendance register confirmed all hours across 4 sessions'],
       developmentPriorities: ['Add a baseline measure before delivery'],
       studentFeedback: 'Great work overall.',

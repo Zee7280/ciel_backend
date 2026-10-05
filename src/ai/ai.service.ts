@@ -149,24 +149,29 @@ function textOnlyUserContent(content: string | OpenAiContentPart[]): string {
     .join('\n\n');
 }
 
-/** Drop storage URLs/hashes from the CII prompt — images are attached separately. */
+/** Drop evidence originals/filenames from the v5.0 report-quality prompt. */
 function slimCiiPayloadForModel(data: unknown): unknown {
   if (!data || typeof data !== 'object') return data;
   const rec = data as Record<string, unknown>;
-  const files = Array.isArray(rec.uploaded_evidence_files) ? rec.uploaded_evidence_files : [];
+  const {
+    uploaded_evidence_files: _files,
+    section8_evidence_verification: section8Raw,
+    ...rest
+  } = rec;
+  const section8 =
+    section8Raw && typeof section8Raw === 'object' && !Array.isArray(section8Raw)
+      ? (section8Raw as Record<string, unknown>)
+      : {};
   return {
-    ...rec,
-    uploaded_evidence_files: files.map((raw) => {
-      const f = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
-      return {
-        file_id: f.file_id,
-        file_name: f.file_name,
-        file_type: f.file_type,
-        file_category: f.file_category,
-        linked_sections: f.linked_sections,
-        linked_claims: f.linked_claims,
-      };
-    }),
+    ...rest,
+    section8_evidence_verification: {
+      has_evidence: section8.has_evidence,
+      evidence_description: section8.evidence_description,
+      ethical_compliance: section8.ethical_compliance,
+      partner_verification: section8.partner_verification,
+      media_visibility: section8.media_visibility,
+      public_share_permission: section8.public_share_permission,
+    },
   };
 }
 
@@ -1599,7 +1604,7 @@ Keep the full response under 180 words.`;
       // CII ANALYZER (CII Rubric v4.5)
       // =====================================================
       case 'cii_v4_5_evaluation':
-        return `Evaluate this Community Service report against the CII Rubric v4.5 embedded in your system instructions. Return only anchors, claims, evidence audit and narrative text — never a numeric score or badge.
+        return `Evaluate this Community Service report against the CII Rubric v5.0 Hybrid (85-point report-quality layer) embedded in your system instructions. Return only the nine AI dimensions, anchors and narrative text — never Dimension 7, a numeric score or a badge.
 
 REPORT DATA:
 ${JSON.stringify(data)}`;
@@ -1633,10 +1638,6 @@ ${JSON.stringify(data)}`;
       section,
       isCiiV45Evaluation ? slimCiiPayloadForModel(data) : data,
     );
-    // Caller-requested fallback (used after a structurally-invalid JSON response): drop the
-    // multimodal image parts and spend the freed context/attention on getting the fixed
-    // sectionScores shape right instead. Mirrors the existing empty-content image-drop retry below.
-    const skipEvidenceImages = isCiiV45Evaluation && opts?.skipEvidenceImages === true;
 
     const openAiOpts: OpenAiCompletionOpts | undefined = isCiiV45Evaluation
       ? {
@@ -1644,7 +1645,7 @@ ${JSON.stringify(data)}`;
           reasoningEffort: 'low',
           temperature: 0.15,
           seed: 4220,
-          maxTokens: skipEvidenceImages ? 48_000 : 32_000,
+          maxTokens: 32_000,
           responseFormat: { type: 'json_object' },
           systemMessage: `${CII_V4_5_EVALUATOR_PROMPT}\n\n${CII_V4_5_JSON_ONLY_DEPLOYMENT_NOTE}`,
           // Low + 32k: high/medium ate the 16k budget (empty JSON). Keep total wait
@@ -1663,45 +1664,15 @@ ${JSON.stringify(data)}`;
           }
         : undefined;
 
-    // CII Analyzer: show the model the real evidence images (and say exactly which files it could not see).
+    // CII v5.0 Hybrid: report-quality only. Evidence originals stay with Admin Dimension 7.
     let userContent: string | OpenAiContentPart[] = prompt;
     let evidenceInspection: EvidenceInspection | undefined;
     if (isCiiV45Evaluation) {
-      const { parts, inspection } = skipEvidenceImages
-        ? { parts: [], inspection: { inspected: [], notInspected: [] } as EvidenceInspection }
-        : await this.buildEvidenceParts(data);
-      evidenceInspection = inspection;
-      const notShown = inspection.notInspected.length
-        ? inspection.notInspected
-            .map((f) => `- ${f.id || '(no id)'} "${f.name}": ${f.reason}`)
-            .join('\n')
-        : '- none';
-      // Field names/enum values below must match CiiV45EvaluatorPayload exactly (cii-v4-5.constants.ts)
-      // — an earlier version of this note used "MATCH"/"PARTIAL"/"why", none of which exist in the
-      // v4.5 schema (that's leftover wording from an older rubric), and asking the model to emit a
-      // value with no valid schema slot is a plausible cause of the structural validation failures
-      // this note exists right next to (claimInventory/evidenceAudit entries with an invalid shape).
-      const note = skipEvidenceImages
-        ? `EVIDENCE INSPECTION
-No evidence images are attached to this request — judge section 8 / evidence claims from the
-report text only (file names, categories and linked claims/sections). For every evidenceAudit
-entry, set processingStatus to "INACCESSIBLE" (never "INSPECTED" — you were not shown any image
-this run). For any criterionScore or claim that would need a visual check to confirm, set
-verificationStatus to "PROCESSING_REQUIRED" or "NARRATIVE_ONLY" (never "VERIFIED"), and start
-reasoningSummary with "NOT INSPECTED:" explaining what is missing.`
-        : `EVIDENCE INSPECTION
-Images you were actually shown follow below, each preceded by its id: ${
-            inspection.inspected.map((f) => f.id || f.name).join(', ') || 'none'
-          }. Judge each against the claim it is linked to by LOOKING at it.
-Files you were NOT shown (documents, video, unreadable or over the image limit) — you cannot verify
-these directly. For any evidenceAudit entry on one of these files, set processingStatus to
-"INACCESSIBLE" (never "INSPECTED"). For any criterionScore or claim that depends on one of these
-files, set verificationStatus to "PROCESSING_REQUIRED" or "NARRATIVE_ONLY" (never "VERIFIED"), and
-start reasoningSummary with "NOT INSPECTED:" explaining what is missing:
-${notShown}`;
-      userContent = parts.length
-        ? [{ type: 'text', text: `${prompt}\n\n${note}` }, ...parts]
-        : `${prompt}\n\n${note}`;
+      evidenceInspection = { inspected: [], notInspected: [] };
+      userContent = `${prompt}
+
+EVIDENCE FIREWALL
+No evidence originals, filenames, captions or file metadata are attached to this request. Score report quality only. Always set evidenceIds to []. Do not return Dimension 7. Do not mark claims as photograph-verified.`;
     }
 
     let text: string;
@@ -1726,7 +1697,7 @@ ${notShown}`;
     if (isCiiV45Evaluation) {
       const ciiV45 = parseCiiV45Response(summary);
       if (!ciiV45) {
-        throw new HttpException({ error: 'AI returned an unreadable CII v4.5 evaluation. Please retry.' }, 502);
+        throw new HttpException({ error: 'AI returned an unreadable CII v5.0 evaluation. Please retry.' }, 502);
       }
       return {
         summary,

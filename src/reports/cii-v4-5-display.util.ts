@@ -31,6 +31,11 @@ export function pickCiiV45DisplayScore(
       finiteCii(cii.diagnosticCII)
     );
   }
+  const evidence = asRecord(cii.adminEvidenceAssessment);
+  // v5.0: knownBasePoints while D7 is pending is the /85 mix, not a /100 CII.
+  if (evidence?.status === 'PENDING') {
+    return finiteCii(cii.diagnosticCII) ?? finiteCii(cii.baseCII) ?? finiteCii(cii.finalCII);
+  }
   return (
     finiteCii(cii.diagnosticCII) ??
     finiteCii(cii.baseCII) ??
@@ -60,6 +65,9 @@ export function pickCiiV45DisplayBadge(
       read(cii.diagnosticBadge)
     );
   }
+  const evidence = asRecord(cii.adminEvidenceAssessment);
+  // v5.0: diagnosticBadge from the /85 mix is not an overall /100 standing.
+  if (evidence?.status === 'PENDING') return null;
   return (
     read(cii.recommendedBadge) ??
     read(cii.diagnosticBadge) ??

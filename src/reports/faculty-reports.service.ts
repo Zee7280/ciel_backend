@@ -24,8 +24,12 @@ import {
   CielPkAiEvaluationPayloadV45,
 } from './build-ciel-pk-ai-evaluation-payload.util';
 import {
+  applyAdminEvidenceAssessment,
   computeCiiV45Result,
+  normalizeCiiV5AiPayload,
   resolveBadgeForScore,
+  CII_V45_EVIDENCE_DIMENSION,
+  CiiV45Anchor,
   CiiV45EvaluatorPayload,
   CiiV45Result,
   CiiV45ValidationError,
@@ -62,14 +66,70 @@ export function mapFacultyListCii(report: {
 } {
   const score = pickCiiV45DisplayScore(report.ciiV45, report.ciiV45Lock);
   const ciiFinal = score == null ? null : Math.round(score * 10) / 10;
-  const badge = pickCiiV45DisplayBadge(report.ciiV45, report.ciiV45Lock);
   const lockedRaw = report.ciiV45Lock?.locked;
+  const locked = lockedRaw === true || lockedRaw === 'true';
+  // Don't advertise a /100 badge from the /85 mix while Admin evidence is still pending.
+  const badge =
+    ciiFinal != null || locked ? pickCiiV45DisplayBadge(report.ciiV45, report.ciiV45Lock) : null;
+  const stored =
+    report.ciiV45 && typeof report.ciiV45 === 'object' && !Array.isArray(report.ciiV45)
+      ? (report.ciiV45 as { aiReportScore?: unknown })
+      : undefined;
   return {
-    cii_analyser_run: ciiFinal != null,
+    cii_analyser_run: ciiFinal != null || stored?.aiReportScore != null,
     cii_provisional: ciiFinal,
-    cii_locked: lockedRaw === true || lockedRaw === 'true',
+    cii_locked: locked,
     cii_level_name: badge?.name ?? null,
     cii_numeric_level: badge?.level ?? null,
+  };
+}
+
+function lockedAdminEvidenceCriteria(locked: CiiV45Result | null): {
+  assessorId: string;
+  assessedAt: string;
+  criteria: Array<{
+    criterion: string;
+    anchor: Exclude<CiiV45Anchor, 'P'>;
+    reasoningSummary: string;
+    evidenceIds?: string[];
+  }>;
+} | null {
+  if (!locked) return null;
+  const assessed = locked.adminEvidenceAssessment;
+  if (
+    assessed?.status === 'ASSESSED' &&
+    Array.isArray(assessed.criteria) &&
+    assessed.criteria.length === CII_V45_EVIDENCE_DIMENSION.criteria.length &&
+    assessed.criteria.every((c) => c && c.anchor !== 'P' && typeof c.reasoningSummary === 'string')
+  ) {
+    return {
+      assessorId: assessed.assessorId || 'locked-admin',
+      assessedAt: assessed.assessedAt || new Date().toISOString(),
+      criteria: assessed.criteria.map((c) => ({
+        criterion: c.criterion,
+        anchor: c.anchor,
+        reasoningSummary: c.reasoningSummary,
+        evidenceIds: c.evidenceIds,
+      })),
+    };
+  }
+  const dim7 = locked.sectionScores?.find((s) => s.dimension === '7');
+  const rows = dim7?.criterionScores ?? [];
+  if (
+    rows.length !== CII_V45_EVIDENCE_DIMENSION.criteria.length ||
+    rows.some((c) => !c || c.anchor === 'P')
+  ) {
+    return null;
+  }
+  return {
+    assessorId: 'locked-admin',
+    assessedAt: new Date().toISOString(),
+    criteria: rows.map((c) => ({
+      criterion: c.criterion,
+      anchor: c.anchor as Exclude<CiiV45Anchor, 'P'>,
+      reasoningSummary: c.reasoningSummary?.trim() || 'Locked Admin evidence assessment.',
+      evidenceIds: c.evidenceIds,
+    })),
   };
 }
 
@@ -805,21 +865,9 @@ export class FacultyReportsService {
     return this.persistCiiV45Analysis(report, { adminRescore: true });
   }
 
-  /** Runs the CII v4.5 AI call and validates the structural shape `computeCiiV45Result` requires
-   * (fixed dimension/criterion counts, valid anchors, …). The AI's JSON can parse fine yet still
-   * fail that structural check — observed in production as a reproducible "Invalid criterion
-   * count" on a specific report, every time it was retried unchanged.
-   *
-   * One automatic fallback attempt: drop the evidence images and raise the token budget (the same
-   * image-drop/budget-raise mitigation already used below for empty-content responses), on the
-   * theory that attending to multimodal evidence while also holding the fixed-criterion-count
-   * schema in mind is exactly where a reasoning model is most likely to drift. This is a single
-   * bounded extra call (not a loop) so worst-case latency stays within the FE's 300s budget.
-   *
-   * Only once both attempts fail does this surface a 400 instead of letting `CiiV45ValidationError`
-   * fall through to Nest's generic 500 — and it logs the raw offending payload server-side first,
-   * since the 400 message alone (e.g. "Invalid criterion count 1") says which dimension failed but
-   * not what the AI actually sent. */
+  /** Runs the CII v5.0 Hybrid AI call (report-quality /85 only) and validates
+   * the structural shape `computeCiiV45Result` requires. Evidence originals are
+   * never sent to the model — Admin scores Dimension 7 separately. */
   private async evaluateCiiV45(
     payload: CielPkAiEvaluationPayloadV45,
     reportId: string,
@@ -829,33 +877,30 @@ export class FacultyReportsService {
     evidenceInspection?: EvidenceInspection;
     model?: string;
   }> {
-    let lastValidationError: CiiV45ValidationError | null = null;
-    for (const skipEvidenceImages of [false, true]) {
-      const { ciiV45, evidenceInspection, model } = await this.aiService.summarize(
-        'cii_v4_5_evaluation',
-        payload,
-        { skipEvidenceImages },
-      );
-      if (!ciiV45) {
-        throw new BadRequestException(
-          'The AI did not return a readable CII v4.5 evaluation. Please retry.',
-        );
-      }
-      try {
-        const result = computeCiiV45Result(ciiV45 as CiiV45EvaluatorPayload);
-        return { result, ciiV45: ciiV45 as CiiV45EvaluatorPayload, evidenceInspection, model };
-      } catch (error) {
-        if (!(error instanceof CiiV45ValidationError)) throw error;
-        lastValidationError = error;
-        console.error(
-          `CII v4.5 validation failed for report ${reportId} (evidence images ${skipEvidenceImages ? 'skipped' : 'attached'}): ${error.message}`,
-          JSON.stringify((ciiV45 as CiiV45EvaluatorPayload).sectionScores),
-        );
-      }
-    }
-    throw new BadRequestException(
-      `The AI returned an invalid CII v4.5 evaluation (${lastValidationError!.message}). Please retry.`,
+    const { ciiV45, evidenceInspection, model } = await this.aiService.summarize(
+      'cii_v4_5_evaluation',
+      payload,
+      { skipEvidenceImages: true },
     );
+    if (!ciiV45) {
+      throw new BadRequestException(
+        'The AI did not return a readable CII v5.0 evaluation. Please retry.',
+      );
+    }
+    try {
+      const normalized = normalizeCiiV5AiPayload(ciiV45 as CiiV45EvaluatorPayload);
+      const result = computeCiiV45Result(normalized);
+      return { result, ciiV45: normalized, evidenceInspection, model };
+    } catch (error) {
+      if (!(error instanceof CiiV45ValidationError)) throw error;
+      console.error(
+        `CII v5.0 validation failed for report ${reportId}: ${error.message}`,
+        JSON.stringify((ciiV45 as CiiV45EvaluatorPayload).sectionScores),
+      );
+      throw new BadRequestException(
+        `The AI returned an invalid CII v5.0 evaluation (${error.message}). Please retry.`,
+      );
+    }
   }
 
   private async persistCiiV45Analysis(
@@ -895,7 +940,7 @@ export class FacultyReportsService {
       runHistory: [
         ...(((report.ciiV45 as Record<string, unknown> | null)?.runHistory as unknown[]) ?? []).slice(-19),
         {
-          score: pickCiiV45DisplayScore(result, null),
+          score: result.diagnosticCII ?? result.aiReportScore ?? pickCiiV45DisplayScore(result, null),
           status: result.scoreStatus,
           at: new Date().toISOString(),
           model: model ?? null,
@@ -933,11 +978,11 @@ export class FacultyReportsService {
   }
 
   /**
-   * Approves and hash-locks the CII v4.5 score. Admin-only, same as the run step.
+   * Approves and hash-locks the CII v5.0 Hybrid score. Admin-only, same as the run step.
    * `RESUBMISSION_REQUIRED` / `ADMIN_REVIEW_REQUIRED` are warnings for the analyser UI — Admin
-   * may still publish the displayed score. The report's live data must still hash to the same
-   * `inputFingerprint` the analysis ran against; a changed section or evidence file since the
-   * last run invalidates it.
+   * may still publish the displayed score. A v5.0 run with Dimension 7 still pending must
+   * include the Admin evidence assessment in this same request. The report's live data must
+   * still hash to the same `inputFingerprint` the analysis ran against.
    */
   async approveCiiV45ForAdmin(
     id: string,
@@ -945,6 +990,13 @@ export class FacultyReportsService {
     note?: string,
     adminAdjustedScore?: number,
     scoreModerationReason?: string,
+    evidenceCriteria?: Array<{
+      criterion: string;
+      anchor: 0 | 1 | 2 | 3 | 4;
+      reasoningSummary: string;
+      evidenceIds?: string[];
+    }>,
+    exceptionalFeatureAdminVerified?: boolean,
   ) {
     const report = await this.findReportForAdminCii(id);
     return this.persistCiiV45Approval(
@@ -953,6 +1005,8 @@ export class FacultyReportsService {
       note,
       adminAdjustedScore,
       scoreModerationReason,
+      evidenceCriteria,
+      exceptionalFeatureAdminVerified,
     );
   }
 
@@ -962,14 +1016,54 @@ export class FacultyReportsService {
     note?: string,
     adminAdjustedScore?: number,
     scoreModerationReason?: string,
+    evidenceCriteria?: Array<{
+      criterion: string;
+      anchor: 0 | 1 | 2 | 3 | 4;
+      reasoningSummary: string;
+      evidenceIds?: string[];
+    }>,
+    exceptionalFeatureAdminVerified?: boolean,
   ) {
-    const stored = report.ciiV45 as unknown as CiiV45Result | null | undefined;
+    const storedRaw = report.ciiV45 as unknown as CiiV45Result | null | undefined;
 
-    if (!stored) {
+    if (!storedRaw) {
       throw new BadRequestException('Run the CII v4.5 analysis before approving.');
     }
     if (report.ciiV45Lock?.locked) {
       throw new BadRequestException("This report's CII v4.5 score is already locked.");
+    }
+
+    let stored = storedRaw;
+    const evidenceStatus = stored.adminEvidenceAssessment?.status;
+    const isV5Pending =
+      stored.frameworkVersion === '5.0' || evidenceStatus === 'PENDING';
+    if (isV5Pending && evidenceStatus !== 'ASSESSED') {
+      if (!evidenceCriteria?.length) {
+        throw new BadRequestException(
+          'Score Dimension 7 (evidence) before confirming the CII.',
+        );
+      }
+      const exceptional = stored.exceptionalFeature
+        ? {
+            ...stored.exceptionalFeature,
+            adminVerified: exceptionalFeatureAdminVerified === true,
+          }
+        : stored.exceptionalFeature;
+      try {
+        stored = computeCiiV45Result(
+          applyAdminEvidenceAssessment(stored, {
+            assessorId: adminId,
+            assessedAt: new Date().toISOString(),
+            criteria: evidenceCriteria,
+            exceptionalFeature: exceptional,
+          }),
+        );
+      } catch (error) {
+        if (error instanceof CiiV45ValidationError) {
+          throw new BadRequestException(error.message);
+        }
+        throw error;
+      }
     }
 
     const aiRecommendedScore = pickCiiV45DisplayScore(stored, report.ciiV45Lock);
@@ -1022,7 +1116,7 @@ export class FacultyReportsService {
     const hash = crypto.createHash('sha256').update(JSON.stringify(decisionRecord)).digest('hex');
 
     const nextCiiV45 = {
-      ...(report.ciiV45 as Record<string, unknown>),
+      ...(stored as unknown as Record<string, unknown>),
       finalCII: adminApprovedScore,
       finalBadge,
     };
@@ -1177,6 +1271,31 @@ export class FacultyReportsService {
   }
 
   /**
+   * Independent re-runs score report quality only. Re-apply the locked Admin Dim 7
+   * so the stored wall score is the combined /100 CII, not the /85 AI mix.
+   */
+  private combineIndependentAnalysisWithLockedEvidence(
+    independentPayload: CiiV45EvaluatorPayload,
+    locked: CiiV45Result | null,
+  ): CiiV45Result {
+    const criteria = lockedAdminEvidenceCriteria(locked);
+    if (!criteria) return computeCiiV45Result(independentPayload);
+    try {
+      return computeCiiV45Result(
+        applyAdminEvidenceAssessment(independentPayload, {
+          assessorId: criteria.assessorId,
+          assessedAt: criteria.assessedAt,
+          criteria: criteria.criteria,
+          extraMile: locked?.extraMileUplift,
+          exceptionalFeature: locked?.exceptionalFeature,
+        }),
+      );
+    } catch {
+      return computeCiiV45Result(independentPayload);
+    }
+  }
+
+  /**
    * Run Independent AI Analysis from My Impact Wall.
    *
    * This is for authorized stakeholders (Faculty, University, CIEL PK) to run
@@ -1214,8 +1333,13 @@ export class FacultyReportsService {
     // Build the AI evaluation payload (same as the admin run)
     const aiPayload = await buildCielPkAiEvaluationPayloadV45(report, this.s3Service);
 
-    // Same evaluate-with-one-fallback-attempt flow as the admin run
-    const { result: ciiResult, ciiV45 } = await this.evaluateCiiV45(aiPayload, report.id);
+    // Same evaluate-with-one-fallback-attempt flow as the admin run.
+    // Reuse locked Admin Dim 7 so the stored score is comparable /100, not the /85 mix.
+    const { ciiV45 } = await this.evaluateCiiV45(aiPayload, report.id);
+    const ciiResult = this.combineIndependentAnalysisWithLockedEvidence(
+      ciiV45,
+      report.ciiV45 as unknown as CiiV45Result | null,
+    );
 
     // Build the independent analysis record
     const analysisId = crypto.randomUUID();
@@ -1227,7 +1351,7 @@ export class FacultyReportsService {
       runByUserId: userId,
       runByRole: userRole,
       runByName: userName,
-      score: pickCiiV45DisplayScore(ciiResult, null),
+      score: pickCiiV45DisplayScore(ciiResult, null) ?? ciiResult.aiReportScore,
       badge: ciiResult.recommendedBadge ?? ciiResult.diagnosticBadge,
       sections: ciiResult.sectionScores.map((s) => ({
         dimension: s.dimension,

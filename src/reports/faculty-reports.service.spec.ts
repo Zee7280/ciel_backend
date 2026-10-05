@@ -162,13 +162,46 @@ describe('FacultyReportsService — runCiiV45AnalysisForAdmin', () => {
     const result = await service.runCiiV45AnalysisForAdmin('report-1');
 
     expect(result.success).toBe(true);
-    expect((result.data as any).finalCII).toBe(100);
-    expect((result.data as any).scoreStatus).toBe('FINAL');
-    expect((result.data as any).diagnosticBadge.level).toBe(6);
+    expect((result.data as any).finalCII).toBeNull();
+    expect((result.data as any).scoreStatus).toBe('ADMIN_EVIDENCE_REQUIRED');
+    expect((result.data as any).aiReportScore).toBe(85);
+    expect((result.data as any).adminEvidenceScore).toBeNull();
     expect(qb.execute).toHaveBeenCalled();
     // Must never full-entity save() a stale `report` object — that would clobber a
     // concurrently-set ciiV45Lock (see the dedicated race-condition test below).
     expect(studentReportsRepository.save).not.toHaveBeenCalled();
+  });
+
+  it('combines 85 AI + 15 Admin evidence on Confirm', async () => {
+    const report: any = {
+      id: 'report-1',
+      section1: { team_lead: { hours: 20 } },
+    };
+    const { service } = makeService(
+      report,
+      { summarize: jest.fn().mockResolvedValue({ ciiV45: CII_V45_AI_RESPONSE }) },
+    );
+    const analysed = await service.runCiiV45AnalysisForAdmin('report-1');
+    report.ciiV45 = analysed.data;
+    report.ciiV45.inputFingerprint = await fingerprintForReport(report);
+
+    const dim7 = CII_V45_DIMENSIONS.find((d) => d.id === '7')!;
+    const result = await service.approveCiiV45ForAdmin(
+      'report-1',
+      'admin-1',
+      undefined,
+      undefined,
+      undefined,
+      dim7.criteria.map((c) => ({
+        criterion: c.key,
+        anchor: 4 as const,
+        reasoningSummary: 'Admin inspected originals — exceptional coverage.',
+        evidenceIds: ['E1'],
+      })),
+    );
+    expect((result.data as any).ciiV45Lock.locked).toBe(true);
+    expect((result.data as any).ciiV45.finalCII).toBe(100);
+    expect((result.data as any).ciiV45.adminEvidenceScore).toBe(15);
   });
 
   it('refuses when the update affects 0 rows (defensive guard against a concurrent write)', async () => {
@@ -210,27 +243,20 @@ describe('FacultyReportsService — runCiiV45AnalysisForAdmin', () => {
     consoleError.mockRestore();
   });
 
-  it('self-heals within a single run: a malformed first attempt falls back to a no-images retry that succeeds', async () => {
-    // Production theory: attending to multimodal evidence while also holding the fixed
-    // criterion-count schema in mind is where the reasoning model is most likely to drift.
-    // `evaluateCiiV45` gets one bounded fallback attempt with images dropped before giving up.
+  it('calls the model once with evidence images omitted (v5.0 report-quality layer)', async () => {
     const malformed: CiiV45EvaluatorPayload = {
       ...CII_V45_AI_RESPONSE,
       sectionScores: CII_V45_AI_RESPONSE.sectionScores.map((s) =>
         s.dimension === '1' ? { ...s, criterionScores: s.criterionScores.slice(0, 3) } : s,
       ),
     };
-    const summarize = jest
-      .fn()
-      .mockResolvedValueOnce({ ciiV45: malformed })
-      .mockResolvedValueOnce({ ciiV45: CII_V45_AI_RESPONSE });
+    const summarize = jest.fn().mockResolvedValue({ ciiV45: malformed });
     const { service } = makeService({ id: 'report-2' }, { summarize });
 
-    await expect(service.runCiiV45AnalysisForAdmin('report-2')).resolves.toMatchObject({ success: true });
+    await expect(service.runCiiV45AnalysisForAdmin('report-2')).rejects.toBeInstanceOf(BadRequestException);
 
-    expect(summarize).toHaveBeenCalledTimes(2);
-    expect(summarize.mock.calls[0][2]).toMatchObject({ skipEvidenceImages: false });
-    expect(summarize.mock.calls[1][2]).toMatchObject({ skipEvidenceImages: true });
+    expect(summarize).toHaveBeenCalledTimes(1);
+    expect(summarize.mock.calls[0][2]).toMatchObject({ skipEvidenceImages: true });
   });
 
   it('clears the in-flight guard after BOTH attempts fail, so the next run is not stuck', async () => {
@@ -245,7 +271,6 @@ describe('FacultyReportsService — runCiiV45AnalysisForAdmin', () => {
       {
         summarize: jest
           .fn()
-          .mockResolvedValueOnce({ ciiV45: malformed })
           .mockResolvedValueOnce({ ciiV45: malformed })
           .mockResolvedValue({ ciiV45: CII_V45_AI_RESPONSE }),
       },
@@ -508,6 +533,20 @@ describe('FacultyReportsService — runIndependentAiAnalysis (multi-stakeholder 
       inputFingerprint: 'fp',
       scoreStatusAtLock: 'FINAL',
     },
+    ciiV45: {
+      adminEvidenceAssessment: {
+        status: 'ASSESSED',
+        assessorId: 'admin-1',
+        assessedAt: '2026-01-01T00:00:00.000Z',
+        criteria: CII_V45_DIMENSIONS.find((d) => d.id === '7')!.criteria.map((c) => ({
+          criterion: c.key,
+          anchor: 4 as const,
+          reasoningSummary: 'Locked admin evidence.',
+          evidenceIds: ['E1'],
+        })),
+      },
+      extraMileUplift: { assessmentStatus: 'ASSESSED' as const, items: [] },
+    },
     independentAiAnalyses: null,
   });
 
@@ -622,6 +661,20 @@ describe('FacultyReportsService — runIndependentAiAnalysisBatch', () => {
       lockedByAdminId: 'admin-1',
       inputFingerprint: 'fp',
       scoreStatusAtLock: 'FINAL',
+    },
+    ciiV45: {
+      adminEvidenceAssessment: {
+        status: 'ASSESSED',
+        assessorId: 'admin-1',
+        assessedAt: '2026-01-01T00:00:00.000Z',
+        criteria: CII_V45_DIMENSIONS.find((d) => d.id === '7')!.criteria.map((c) => ({
+          criterion: c.key,
+          anchor: 4 as const,
+          reasoningSummary: 'Locked admin evidence.',
+          evidenceIds: ['E1'],
+        })),
+      },
+      extraMileUplift: { assessmentStatus: 'ASSESSED' as const, items: [] },
     },
     independentAiAnalyses: null,
   });
@@ -801,6 +854,28 @@ describe('mapFacultyListCii', () => {
       cii_locked: true,
       cii_level_name: 'Published band',
       cii_numeric_level: 4,
+    });
+  });
+
+  it('does not treat pending Admin evidence /85 mix as an overall /100 CII or badge', () => {
+    expect(
+      mapFacultyListCii({
+        ciiV45: {
+          diagnosticCII: null,
+          finalCII: null,
+          aiReportScore: 85,
+          knownBasePoints: 85,
+          diagnosticBadge: { name: 'Sound Community Contributor', level: 3 },
+          adminEvidenceAssessment: { status: 'PENDING' },
+        },
+        ciiV45Lock: { locked: false },
+      }),
+    ).toEqual({
+      cii_analyser_run: true,
+      cii_provisional: null,
+      cii_locked: false,
+      cii_level_name: null,
+      cii_numeric_level: null,
     });
   });
 });
@@ -1054,7 +1129,7 @@ describe('FacultyReportsService — AI analysis run safety (lock, history, incom
     expect(res.data.runHistory).toHaveLength(2);
     expect(res.data.runHistory[0]).toMatchObject({ score: 41, model: 'm0' });
     expect(res.data.runHistory[1]).toMatchObject({
-      score: 100,
+      score: 85,
       model: 'gpt-test',
       inspectedImages: 1,
       notInspectedFiles: 1,

@@ -1,14 +1,14 @@
 /**
- * Composite Impact Index (CII) v4.5 — Community Service scoring engine.
+ * Composite Impact Index (CII) v5.0 Hybrid — Community Service scoring engine.
  *
- * Ported near line-for-line from the reference `cii-calculator.js` (CIEL PK
- * CII v4.5 package) so the exact math/validation/gating stays traceable back
- * to that ground truth. The AI never returns a numeric score or badge here —
- * it returns only per-criterion anchors, claims, evidence audit and
- * narrative text. All arithmetic, status derivation, bands and quality gates
- * are computed here, server-side, by `computeCiiV45Result()`.
+ * Ported from the reference `cii-calculator.js` in CIEL_PK_CII_ANALYSER_v5.0:
+ * 85 AI report-quality points (dims 1,2,3,4A,4B,5,6,8,9) + 15 Admin evidence
+ * points (Dimension 7 only). The AI never scores Dimension 7, never inspects
+ * evidence originals, and never returns a numeric CII or badge. Arithmetic,
+ * status, bands and quality gates are computed here by `computeCiiV45Result()`.
  *
- * Keep in sync with `ciel_frontend/src/utils/communityCiiAnalyser.ts`.
+ * Stored JSON still lives on `report.ciiV45` / lock fields (unchanged publish
+ * path). Keep in sync with `ciel_frontend/src/utils/communityCiiAnalyser.ts`.
  */
 
 export class CiiV45ValidationError extends Error {}
@@ -21,6 +21,9 @@ export type CiiV45Anchor = 0 | 1 | 2 | 3 | 4 | 'P';
 
 export type CiiV45VerificationStatus =
   | 'VERIFIED'
+  | 'SYSTEM_VERIFIED'
+  | 'AI_REPORT'
+  | 'ADMIN_VERIFIED'
   | 'NARRATIVE_ONLY'
   | 'PROCESSING_REQUIRED'
   | 'NOT_APPLICABLE'
@@ -116,10 +119,11 @@ export interface CiiV45UpliftItem {
   studentId?: string;
   beyondBaseJustification?: string;
   evidenceIds?: string[];
+  adminVerified?: boolean;
 }
 
 export interface CiiV45ExtraMileUplift {
-  assessmentStatus: 'ASSESSED' | 'PROCESSING_REQUIRED';
+  assessmentStatus: 'ASSESSED' | 'PROCESSING_REQUIRED' | 'PENDING_ADMIN';
   items: CiiV45UpliftItem[];
   total?: number | null;
   knownTotal?: number;
@@ -131,6 +135,7 @@ export interface CiiV45IntegrityIssue {
   claimId?: string;
   evidenceIds: string[];
   reason: string;
+  adminVerified?: boolean;
 }
 
 export interface CiiV45IntegrityPenalty {
@@ -142,13 +147,28 @@ export interface CiiV45ExceptionalFeature {
   verified: boolean;
   explanation?: string;
   evidenceIds?: string[];
+  adminVerified?: boolean;
+}
+
+export interface CiiV45AdminEvidenceCriterion {
+  criterion: string;
+  anchor: Exclude<CiiV45Anchor, 'P'>;
+  reasoningSummary: string;
+  evidenceIds: string[];
+}
+
+export interface CiiV45AdminEvidenceAssessment {
+  status: 'PENDING' | 'ASSESSED';
+  assessorId?: string;
+  assessedAt?: string;
+  criteria?: CiiV45AdminEvidenceCriterion[];
 }
 
 export type CiiV45DeductionLedgerEntry = Record<string, unknown>;
 
-/** Shape the AI actually returns — anchors/claims/evidence/narrative only, no score fields. */
+/** Shape the AI actually returns — anchors/narrative only, no score fields. */
 export interface CiiV45EvaluatorPayload {
-  frameworkVersion: '4.5';
+  frameworkVersion: '4.5' | '5.0';
   reportId: string;
   inputFingerprint: string;
   inputCompleteness: CiiV45InputCompleteness;
@@ -157,8 +177,10 @@ export interface CiiV45EvaluatorPayload {
   sectionScores: CiiV45SectionScore[];
   deductionLedger: CiiV45DeductionLedgerEntry[];
   extraMileUplift: CiiV45ExtraMileUplift;
+  extraMileCandidates?: CiiV45UpliftItem[];
   integrityPenalty: CiiV45IntegrityPenalty;
   exceptionalFeature: CiiV45ExceptionalFeature | null;
+  adminEvidenceAssessment?: CiiV45AdminEvidenceAssessment;
   adminReviewReasons: string[];
   strengths: string[];
   developmentPriorities: string[];
@@ -170,6 +192,7 @@ export interface CiiV45EvaluatorPayload {
 export type CiiV45ScoreStatus =
   | 'RESUBMISSION_REQUIRED'
   | 'ADMIN_REVIEW_REQUIRED'
+  | 'ADMIN_EVIDENCE_REQUIRED'
   | 'FINAL';
 
 export interface CiiV45Band {
@@ -206,8 +229,13 @@ export interface CiiV45Result
   extends Omit<CiiV45EvaluatorPayload, 'sectionScores' | 'extraMileUplift'> {
   sectionScores: CiiV45SectionResult[];
   knownBasePoints: number;
+  /** Weighted sum of the nine AI report-quality dimensions (max 85). */
+  aiReportScore: number | null;
+  /** Weighted sum of Admin Dimension 7 (max 15). */
+  adminEvidenceScore: number | null;
   baseCII: number | null;
   extraMileUplift: CiiV45ExtraMileUplift;
+  adminEvidenceAssessment: CiiV45AdminEvidenceAssessment;
   diagnosticCII: number | null;
   scoreStatus: CiiV45ScoreStatus;
   needsAdminReview: boolean;
@@ -358,8 +386,13 @@ export const CII_V45_DIMENSIONS: CiiV45DimensionDef[] = [
 export const CII_V45_BASE_MAX = CII_V45_DIMENSIONS.reduce((sum, d) => sum + d.maxPoints, 0); // 100
 export const CII_V45_BONUS_MAX = 5;
 export const CII_V45_MAX = 100;
+export const CII_V45_FRAMEWORK_VERSION = '5.0' as const;
+export const CII_V45_AI_DIMENSIONS = CII_V45_DIMENSIONS.filter((d) => d.id !== '7');
+export const CII_V45_EVIDENCE_DIMENSION = CII_V45_DIMENSIONS.find((d) => d.id === '7')!;
+export const CII_V45_AI_REPORT_MAX = CII_V45_AI_DIMENSIONS.reduce((sum, d) => sum + d.maxPoints, 0); // 85
+export const CII_V45_ADMIN_EVIDENCE_MAX = CII_V45_EVIDENCE_DIMENSION.maxPoints; // 15
 
-/** Six contiguous locked bands (CIEL PK CII v4.5 badge manifest). */
+/** Six contiguous locked bands (CIEL PK CII v5.0 badge manifest — same cut-points as v4.5). */
 export const CII_V45_BANDS: CiiV45Band[] = [
   { level: 1, min: 0, max: 49, name: 'Participation Acknowledgement', assetKey: 'L1' },
   { level: 2, min: 50, max: 59, name: 'Foundation Stage Contributor', assetKey: 'L2' },
@@ -379,24 +412,134 @@ function isValidAnchor(value: unknown): value is CiiV45Anchor {
 }
 
 const VERIFICATION_STATUSES: CiiV45VerificationStatus[] = [
-  'VERIFIED', 'NARRATIVE_ONLY', 'PROCESSING_REQUIRED', 'NOT_APPLICABLE', 'CONTRADICTED',
-];
-const CLAIM_SUPPORT_STATUSES: CiiV45SupportStatus[] = [
-  'SUPPORTED', 'PARTIALLY_SUPPORTED', 'UNSUPPORTED', 'CONTRADICTED', 'PROCESSING_REQUIRED',
-];
-const PRIVACY_VALUES: CiiV45Privacy[] = ['PUBLIC', 'RESTRICTED', 'PRIVATE'];
-const PROCESSING_STATUSES: CiiV45ProcessingStatus[] = [
-  'INSPECTED', 'UNREADABLE', 'CORRUPTED', 'CONVERSION_FAILED', 'INACCESSIBLE', 'DUPLICATE',
+  'VERIFIED',
+  'SYSTEM_VERIFIED',
+  'AI_REPORT',
+  'ADMIN_VERIFIED',
+  'NARRATIVE_ONLY',
+  'PROCESSING_REQUIRED',
+  'NOT_APPLICABLE',
+  'CONTRADICTED',
 ];
 const UPLIFT_CATEGORIES: CiiV45UpliftCategory[] = ['effort', 'resources', 'partnerships', 'outcomes'];
 
+export function pendingDimension7Section(): CiiV45SectionScore {
+  return {
+    dimension: '7',
+    criterionScores: CII_V45_EVIDENCE_DIMENSION.criteria.map(({ key }) => ({
+      criterion: key,
+      anchor: 'P',
+      qualityAnchor: 'P',
+      verificationStatus: 'PROCESSING_REQUIRED',
+      sourceRefs: [],
+      evidenceIds: [],
+      reasoningSummary: 'Pending CIEL PK Admin evidence assessment.',
+    })),
+  };
+}
+
+/** Forces an AI evaluator payload onto the v5.0 hybrid contract (9 quality dims, D7 pending). */
+export function normalizeCiiV5AiPayload(raw: CiiV45EvaluatorPayload): CiiV45EvaluatorPayload {
+  const extras = raw.extraMileUplift;
+  const candidates = Array.isArray(extras?.items) ? extras.items : [];
+  return {
+    ...raw,
+    frameworkVersion: CII_V45_FRAMEWORK_VERSION,
+    claimInventory: Array.isArray(raw.claimInventory) ? raw.claimInventory : [],
+    evidenceAudit: Array.isArray(raw.evidenceAudit) ? raw.evidenceAudit : [],
+    deductionLedger: Array.isArray(raw.deductionLedger) ? raw.deductionLedger : [],
+    adminReviewReasons: Array.isArray(raw.adminReviewReasons) ? raw.adminReviewReasons : [],
+    sectionScores: [
+      ...raw.sectionScores
+        .filter((s) => s.dimension !== '7')
+        .map((s) => ({
+          ...s,
+          criterionScores: s.criterionScores.map((c) => ({
+            ...c,
+            evidenceIds: [],
+            verificationStatus:
+              c.verificationStatus === 'VERIFIED' ? 'AI_REPORT' : c.verificationStatus,
+            qualityAnchor: c.qualityAnchor === 'P' ? c.anchor : c.qualityAnchor,
+          })),
+        })),
+      pendingDimension7Section(),
+    ],
+    extraMileUplift: { assessmentStatus: 'PENDING_ADMIN', items: [] },
+    extraMileCandidates: candidates,
+    integrityPenalty: { points: 0, issues: [] },
+    exceptionalFeature: raw.exceptionalFeature
+      ? { ...raw.exceptionalFeature, adminVerified: false }
+      : null,
+    adminEvidenceAssessment: { status: 'PENDING' },
+  };
+}
+
+export function applyAdminEvidenceAssessment(
+  payload: CiiV45EvaluatorPayload,
+  input: {
+    assessorId: string;
+    assessedAt: string;
+    criteria: Array<{
+      criterion: string;
+      anchor: Exclude<CiiV45Anchor, 'P'>;
+      reasoningSummary: string;
+      evidenceIds?: string[];
+    }>;
+    extraMile?: CiiV45ExtraMileUplift;
+    exceptionalFeature?: CiiV45ExceptionalFeature | null;
+  },
+): CiiV45EvaluatorPayload {
+  if (!Array.isArray(input.criteria) || input.criteria.length !== CII_V45_EVIDENCE_DIMENSION.criteria.length) {
+    fail('Complete Admin evidence assessment required.');
+  }
+  const dim7Section: CiiV45SectionScore = {
+    dimension: '7',
+    criterionScores: CII_V45_EVIDENCE_DIMENSION.criteria.map(({ key }) => {
+      const a = input.criteria.find((c) => c.criterion === key);
+      if (!a || typeof a.reasoningSummary !== 'string' || !a.reasoningSummary.trim()) {
+        fail('Dimension 7 must match the saved Admin evidence assessment.');
+      }
+      return {
+        criterion: key,
+        anchor: a.anchor,
+        qualityAnchor: a.anchor,
+        verificationStatus: 'ADMIN_VERIFIED' as const,
+        sourceRefs: ['admin_evidence_assessment'],
+        evidenceIds: Array.isArray(a.evidenceIds) ? a.evidenceIds : [],
+        reasoningSummary: a.reasoningSummary.trim(),
+      };
+    }),
+  };
+  const extras = input.extraMile ?? payload.extraMileUplift;
+  const extraMileUplift: CiiV45ExtraMileUplift =
+    extras?.assessmentStatus === 'ASSESSED'
+      ? extras
+      : { assessmentStatus: 'ASSESSED', items: [] };
+  return {
+    ...payload,
+    frameworkVersion: CII_V45_FRAMEWORK_VERSION,
+    sectionScores: [...payload.sectionScores.filter((s) => s.dimension !== '7'), dim7Section],
+    extraMileUplift,
+    exceptionalFeature:
+      input.exceptionalFeature !== undefined ? input.exceptionalFeature : payload.exceptionalFeature,
+    adminEvidenceAssessment: {
+      status: 'ASSESSED',
+      assessorId: input.assessorId,
+      assessedAt: input.assessedAt,
+      criteria: dim7Section.criterionScores.map((c) => ({
+        criterion: c.criterion,
+        anchor: c.anchor as Exclude<CiiV45Anchor, 'P'>,
+        reasoningSummary: c.reasoningSummary,
+        evidenceIds: c.evidenceIds,
+      })),
+    },
+  };
+}
+
 /**
- * Deterministically computes the full CII v4.5 result from the AI's raw
- * evaluator payload (anchors/claims/evidence/narrative only — no score
- * fields). Ported near line-for-line from `cii-calculator.js`'s `calculate()`
- * so every validation rule and its exact failure message stays traceable
- * back to that reference. Throws `CiiV45ValidationError` on any structural
- * violation.
+ * Deterministically computes the full CII v5.0 Hybrid result from anchors only
+ * (no numeric score fields). Ported from `cii-calculator.js` v5.0. Throws
+ * `CiiV45ValidationError` on any structural violation.
  */
 /**
  * Maps a (possibly null) score onto the six locked bands and walks the badge down to the
@@ -426,7 +569,7 @@ export function resolveBadgeForScore(
 
 export function computeCiiV45Result(payload: CiiV45EvaluatorPayload): CiiV45Result {
   const p = payload;
-  if (p.frameworkVersion !== '4.5') fail('Expected frameworkVersion 4.5.');
+  if (p.frameworkVersion !== '5.0') fail('Expected frameworkVersion 5.0.');
   if (!p.reportId || !p.inputFingerprint) fail('Report ID and input fingerprint required.');
   if (!Array.isArray(p.sectionScores) || p.sectionScores.length !== 10) {
     fail('Exactly ten analytical dimensions required.');
@@ -482,65 +625,37 @@ export function computeCiiV45Result(payload: CiiV45EvaluatorPayload): CiiV45Resu
   ) {
     fail('Input audit and individual hours required.');
   }
-  if (
-    !Array.isArray(p.claimInventory) ||
-    !Array.isArray(p.evidenceAudit) ||
-    !Array.isArray(p.adminReviewReasons)
-  ) {
-    fail('Claim / evidence / review arrays required.');
-  }
+  const claimInventory = Array.isArray(p.claimInventory) ? p.claimInventory : [];
+  const evidenceAudit = Array.isArray(p.evidenceAudit) ? p.evidenceAudit : [];
+  const adminReviewReasons = Array.isArray(p.adminReviewReasons) ? p.adminReviewReasons : [];
 
-  const claimIds = p.claimInventory.map((x) => x.claimId);
-  const evidenceIds = p.evidenceAudit.map((x) => x.evidenceId);
-  if (new Set(claimIds).size !== claimIds.length || new Set(evidenceIds).size !== evidenceIds.length) {
-    fail('Duplicate claim / evidence IDs');
-  }
-  for (const c of p.claimInventory) {
-    if (
-      !c.claimId ||
-      typeof c.material !== 'boolean' ||
-      !Array.isArray(c.evidenceIds) ||
-      !CLAIM_SUPPORT_STATUSES.includes(c.supportStatus)
-    ) {
-      fail('Invalid claim inventory');
-    }
-    if (c.evidenceIds.some((id) => !evidenceIds.includes(id))) fail('Unknown evidence in claim');
-  }
-  for (const e of p.evidenceAudit) {
-    if (
-      !e.evidenceId ||
-      typeof e.material !== 'boolean' ||
-      !PRIVACY_VALUES.includes(e.privacy) ||
-      !PROCESSING_STATUSES.includes(e.processingStatus) ||
-      !Array.isArray(e.claimIds) ||
-      e.claimIds.some((id) => !claimIds.includes(id))
-    ) {
-      fail('Invalid evidence audit');
-    }
-  }
-  for (const s of sections) {
-    for (const c of s.criterionScores) {
-      if (c.evidenceIds.some((id) => !evidenceIds.includes(id))) fail('Unknown criterion evidence ID');
-    }
-  }
+  const evidence = p.adminEvidenceAssessment || ({ status: 'PENDING' } as CiiV45AdminEvidenceAssessment);
+  if (!['PENDING', 'ASSESSED'].includes(evidence.status)) fail('Admin evidence assessment status required.');
   const dimension7 = sections.find((s) => s.dimension === '7')!;
-  for (const c of dimension7.criterionScores) {
-    if (
-      c.criterion !== 'ethics' &&
-      typeof c.anchor === 'number' &&
-      c.anchor > 2 &&
-      c.verificationStatus !== 'PROCESSING_REQUIRED' &&
-      (!c.evidenceIds.length ||
-        !c.evidenceIds.some((id) =>
-          p.evidenceAudit.some((e) => e.evidenceId === id && e.processingStatus === 'INSPECTED'),
-        ))
-    ) {
-      fail('High evidence anchor requires inspected proof.');
+  if (evidence.status === 'PENDING' && dimension7.criterionScores.some((c) => c.anchor !== 'P')) {
+    fail('Dimension 7 must remain pending until Admin evidence assessment.');
+  }
+  if (evidence.status === 'ASSESSED') {
+    if (!evidence.assessorId || !evidence.assessedAt || !Array.isArray(evidence.criteria) || evidence.criteria.length !== 7) {
+      fail('Complete Admin evidence assessment required.');
+    }
+    for (const c of dimension7.criterionScores) {
+      const a = evidence.criteria.find((x) => x.criterion === c.criterion);
+      if (
+        !a ||
+        a.anchor !== c.anchor ||
+        a.anchor === ('P' as never) ||
+        typeof a.reasoningSummary !== 'string' ||
+        !a.reasoningSummary.trim() ||
+        !Array.isArray(a.evidenceIds)
+      ) {
+        fail('Dimension 7 must match the saved Admin evidence assessment.');
+      }
     }
   }
 
   const extras = p.extraMileUplift || ({} as CiiV45ExtraMileUplift);
-  if (!['ASSESSED', 'PROCESSING_REQUIRED'].includes(extras.assessmentStatus)) {
+  if (!['ASSESSED', 'PROCESSING_REQUIRED', 'PENDING_ADMIN'].includes(extras.assessmentStatus)) {
     fail('Extra-mile assessment status required.');
   }
   if (!Array.isArray(extras.items) || extras.items.length > 4) {
@@ -567,13 +682,14 @@ export function computeCiiV45Result(payload: CiiV45EvaluatorPayload): CiiV45Resu
         !x.beyondBaseJustification ||
         !Array.isArray(x.evidenceIds) ||
         !x.evidenceIds.length ||
-        x.evidenceIds.some(
-          (id) => !p.evidenceAudit.some((e) => e.evidenceId === id && e.processingStatus === 'INSPECTED'),
-        ))
+        x.adminVerified !== true)
     ) {
       fail('Uplift requires individual, beyond-base justification and inspected evidence');
     }
     uplift += x.points;
+  }
+  if (extras.assessmentStatus === 'PENDING_ADMIN' && extras.items.length) {
+    fail('Pending uplift cannot contain awarded items.');
   }
 
   const integrity = p.integrityPenalty || ({} as CiiV45IntegrityPenalty);
@@ -591,7 +707,7 @@ export function computeCiiV45Result(payload: CiiV45EvaluatorPayload): CiiV45Resu
           !i.reason ||
           !Array.isArray(i.evidenceIds) ||
           !i.evidenceIds.length ||
-          i.evidenceIds.some((id) => !p.evidenceAudit.some((e) => e.evidenceId === id && e.processingStatus === 'INSPECTED')),
+          !i.adminVerified,
       ))
   ) {
     fail('Integrity penalty requires confirmed student-origin issue with inspected evidence.');
@@ -608,6 +724,8 @@ export function computeCiiV45Result(payload: CiiV45EvaluatorPayload): CiiV45Resu
     if (typeof h.hours === 'number' && h.hours < h.requiredHours && h.recordComplete === true) {
       hoursFail = true;
     }
+    // Pending faculty/partner attendance verification is not an analyser gate —
+    // only a missing hours record (`hours === null`) holds the score.
     if (h.hours === null) {
       hoursPending = true;
       continue;
@@ -617,72 +735,76 @@ export function computeCiiV45Result(payload: CiiV45EvaluatorPayload): CiiV45Resu
   }
 
   const studentGap = inputs.gaps.some((g) => g.material && g.type === 'STUDENT_NOT_PROVIDED' && g.mandatory);
-  const pendingOverall =
-    extras.assessmentStatus === 'PROCESSING_REQUIRED' ||
-    sections.some((s) => s.score === null) ||
+  const aiPending =
+    sections.filter((s) => s.dimension !== '7').some((s) => s.score === null) ||
     hoursPending ||
     inputs.gaps.some((g) => g.material && ['SYSTEM_DATA_GAP', 'PROCESSING_REQUIRED'].includes(g.type)) ||
-    p.claimInventory.some((c) => c.material && c.supportStatus === 'PROCESSING_REQUIRED') ||
-    p.evidenceAudit.some((e) => e.material && !['INSPECTED', 'DUPLICATE'].includes(e.processingStatus)) ||
-    p.adminReviewReasons.length > 0;
-
+    adminReviewReasons.length > 0;
+  const evidencePending = evidence.status !== 'ASSESSED' || extras.assessmentStatus !== 'ASSESSED';
   const status: CiiV45ScoreStatus =
     hoursFail || studentGap || !inputs.mandatoryFieldsComplete
       ? 'RESUBMISSION_REQUIRED'
-      : pendingOverall
+      : aiPending
         ? 'ADMIN_REVIEW_REQUIRED'
-        : 'FINAL';
+        : evidencePending
+          ? 'ADMIN_EVIDENCE_REQUIRED'
+          : 'FINAL';
 
-  const base = sections.some((s) => s.score === null) ? null : sections.reduce((t, s) => t + (s.score as number), 0);
-  // Diagnostic CII is the numeric rollup of scored criteria. Uninspected files
-  // or extra-mile still-processing block publication (`finalCII` / FINAL); they must
-  // not hide the overall score the Analyzer already computed.
-  // Pending faculty/partner attendance verification is not an analyser gate.
-  const extraForDiag =
-    extras.assessmentStatus === 'PROCESSING_REQUIRED' ? 0 : uplift;
+  const aiSections = sections.filter((s) => s.dimension !== '7');
+  const rawAi = aiSections.some((s) => s.score === null) ? null : aiSections.reduce((t, s) => t + (s.score as number), 0);
+  const rawEvidence = dimension7.score === null ? null : dimension7.score;
+  const aiReportScore = rawAi === null ? null : round1(rawAi);
+  const adminEvidenceScore = rawEvidence === null ? null : round1(rawEvidence);
+  const rawBase = rawAi === null || rawEvidence === null ? null : rawAi + rawEvidence;
+  const base = rawBase === null ? null : round1(rawBase);
+  // Combine raw /85 + /15 then round once. Do not add separately rounded display values.
   const diag =
-    base === null
+    rawBase === null || extras.assessmentStatus !== 'ASSESSED'
       ? null
-      : round1(Math.min(100, Math.max(0, base + extraForDiag - penalty)));
+      : round1(Math.min(100, Math.max(0, rawBase + uplift - penalty)));
 
   const scoreRatio = (id: CiiV45Dimension): number | null => {
     const s = sections.find((x) => x.dimension === id)!;
     return s.score === null ? null : s.score / s.maximumPoints;
   };
-  const ratio4A = scoreRatio('4A');
-  const ratio4B = scoreRatio('4B');
-  const ratio7 = scoreRatio('7');
-  const ratio9 = scoreRatio('9');
-  const g4 = (ratio4A ?? 0) >= 0.65 && (ratio4B ?? 0) >= 0.55 && (ratio7 ?? 0) >= 0.55 && penalty < 5;
-  const g5 = g4 && (ratio4B ?? 0) >= 0.7 && (ratio7 ?? 0) >= 0.7 && (ratio9 ?? 0) >= 0.55 && penalty < 3;
+  const get = (id: CiiV45Dimension): number | null => scoreRatio(id);
+  const g4 = diag !== null && (get('4A') ?? 0) >= 0.65 && (get('4B') ?? 0) >= 0.55 && (get('7') ?? 0) >= 0.55 && penalty < 5;
+  const g5 = g4 && (get('4B') ?? 0) >= 0.7 && (get('7') ?? 0) >= 0.7 && (get('9') ?? 0) >= 0.55 && penalty < 3;
   const feature = p.exceptionalFeature;
   const exceptional = !!(
     feature?.verified &&
+    feature.adminVerified &&
     feature.explanation &&
     Array.isArray(feature.evidenceIds) &&
-    feature.evidenceIds.length &&
-    feature.evidenceIds.every((id) => p.evidenceAudit.some((e) => e.evidenceId === id && e.processingStatus === 'INSPECTED'))
+    feature.evidenceIds.length
   );
-  const g6 = g5 && (ratio4B ?? 0) >= 0.8 && (ratio7 ?? 0) >= 0.85 && (ratio9 ?? 0) >= 0.7 && penalty === 0 && exceptional;
+  const g6 = g5 && (get('4B') ?? 0) >= 0.8 && (get('7') ?? 0) >= 0.85 && (get('9') ?? 0) >= 0.7 && penalty === 0 && exceptional;
   const qualityGates = { L4: g4, L5: g5, L6: g6 };
   const knownBasePoints = round1(sections.reduce((t, s) => t + s.knownPoints, 0));
   const badgeScore = diag ?? (knownBasePoints > 0 ? knownBasePoints : null);
   const finalBadgeShape = resolveBadgeForScore(badgeScore, qualityGates);
+  const extrasPending = extras.assessmentStatus !== 'ASSESSED';
 
   return {
     ...p,
+    claimInventory,
+    evidenceAudit,
+    adminReviewReasons,
     knownBasePoints,
     sectionScores: sections,
-    baseCII: base === null ? null : round1(base),
+    aiReportScore,
+    adminEvidenceScore,
+    baseCII: base,
     extraMileUplift: {
       ...extras,
-      total: extras.assessmentStatus === 'PROCESSING_REQUIRED' ? null : uplift,
-      knownTotal: uplift,
+      total: extrasPending ? null : round1(uplift),
+      knownTotal: round1(uplift),
     },
+    adminEvidenceAssessment: evidence,
     integrityPenalty: integrity,
     diagnosticCII: diag,
     scoreStatus: status,
-    needsAdminReview: pendingOverall,
+    needsAdminReview: status !== 'FINAL',
     finalCII: status === 'FINAL' ? diag : null,
     recommendedBadge: status === 'FINAL' ? finalBadgeShape : null,
     diagnosticBadge: finalBadgeShape,
@@ -690,16 +812,18 @@ export function computeCiiV45Result(payload: CiiV45EvaluatorPayload): CiiV45Resu
     qualityGates,
     publicationEligible: status === 'FINAL',
     rounding:
-      'Clamp 0..100; round once to 1 decimal; map to locked six-level bands; apply cumulative L4-L6 gates.',
+      'Hybrid CII v5.0: 85 AI report-quality points + 15 Admin evidence points + verified uplift <=5 - confirmed integrity deduction <=10; clamp 0..100; round once to 1 decimal; apply locked badge bands and cumulative L4-L6 gates.',
   };
 }
 
 export function getCiiV45ScoringConfig() {
   return {
-    cii_v45_framework_version: '4.5',
+    cii_v45_framework_version: CII_V45_FRAMEWORK_VERSION,
     base_max: CII_V45_BASE_MAX,
     bonus_max: CII_V45_BONUS_MAX,
     max_total: CII_V45_MAX,
+    ai_report_max: CII_V45_AI_REPORT_MAX,
+    admin_evidence_max: CII_V45_ADMIN_EVIDENCE_MAX,
     dimensions: CII_V45_DIMENSIONS,
     bands: CII_V45_BANDS,
     anchor_factors: CII_V45_ANCHOR_FACTORS,

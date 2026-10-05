@@ -37,6 +37,21 @@ describe('pickCiiV45DisplayScore', () => {
     ).toBe(60.3);
   });
 
+  it('does not use knownBasePoints as /100 while Admin evidence is pending', () => {
+    expect(
+      pickCiiV45DisplayScore(
+        {
+          diagnosticCII: null,
+          baseCII: null,
+          knownBasePoints: 59.5,
+          aiReportScore: 59.5,
+          adminEvidenceAssessment: { status: 'PENDING' },
+        },
+        null,
+      ),
+    ).toBeNull();
+  });
+
   it('does not invent a score when the analyser has not produced numbers', () => {
     expect(pickCiiV45DisplayScore(null, null)).toBeNull();
     expect(pickCiiV45DisplayScore({ diagnosticCII: null, baseCII: null }, null)).toBeNull();
@@ -51,5 +66,18 @@ describe('pickCiiV45DisplayBadge', () => {
     };
     expect(pickCiiV45DisplayBadge(cii, { locked: true })?.name).toBe('Published');
     expect(pickCiiV45DisplayBadge(cii, { locked: false })?.name).toBe('Provisional');
+  });
+
+  it('does not attach a /100 badge from the /85 mix while Admin evidence is pending', () => {
+    expect(
+      pickCiiV45DisplayBadge(
+        {
+          diagnosticBadge: { name: 'Sound Community Contributor', level: 3 },
+          recommendedBadge: { name: 'Sound Community Contributor', level: 3 },
+          adminEvidenceAssessment: { status: 'PENDING' },
+        },
+        null,
+      ),
+    ).toBeNull();
   });
 });

@@ -378,6 +378,8 @@ export class AdminController {
       body.note,
       body.adminAdjustedScore,
       body.scoreModerationReason,
+      body.evidenceCriteria,
+      body.exceptionalFeatureAdminVerified,
     );
   }
 

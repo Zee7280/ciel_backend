@@ -6,6 +6,7 @@ import {
   CiiV45Privacy,
   CiiV45ProcessingStatus,
   CiiV45SupportStatus,
+  normalizeCiiV5AiPayload,
 } from '../reports/cii-v4-5.constants';
 
 /**
@@ -21,18 +22,14 @@ const REQUIRED_KEYS: (keyof CiiV45EvaluatorPayload)[] = [
   'reportId',
   'inputFingerprint',
   'inputCompleteness',
-  'claimInventory',
-  'evidenceAudit',
   'sectionScores',
   'deductionLedger',
-  'extraMileUplift',
   'integrityPenalty',
   'exceptionalFeature',
   'adminReviewReasons',
   'strengths',
   'developmentPriorities',
   'analysisSummary',
-  'evidenceSummary',
   'studentFeedback',
 ];
 
@@ -54,26 +51,29 @@ export function parseCiiV45Response(raw: string): CiiV45EvaluatorPayload | null 
   }
   if (!hasOwn(value, 'exceptionalFeature')) return null;
 
-  if (value.frameworkVersion !== '4.5') return null;
+  if (value.frameworkVersion !== '5.0' && value.frameworkVersion !== '4.5') return null;
   if (typeof value.reportId !== 'string' || !value.reportId.trim()) return null;
   if (typeof value.inputFingerprint !== 'string' || !value.inputFingerprint.trim()) return null;
   if (!Array.isArray(value.sectionScores)) return null;
-  if (!Array.isArray(value.claimInventory)) return null;
-  if (!Array.isArray(value.evidenceAudit)) return null;
   if (!Array.isArray(value.deductionLedger)) return null;
   if (!Array.isArray(value.adminReviewReasons)) return null;
   if (!Array.isArray(value.strengths)) return null;
   if (!Array.isArray(value.developmentPriorities)) return null;
+  if (!Array.isArray(value.claimInventory)) value.claimInventory = [];
+  if (!Array.isArray(value.evidenceAudit)) value.evidenceAudit = [];
+  if (typeof value.evidenceSummary !== 'string') value.evidenceSummary = '';
+  if (!value.extraMileUplift || typeof value.extraMileUplift !== 'object') {
+    value.extraMileUplift = { assessmentStatus: 'PENDING_ADMIN', items: [] };
+  }
 
   const payload = value as unknown as CiiV45EvaluatorPayload;
 
   // The AI must never assert a positive integrity penalty — only a separately-saved, verified
-  // Admin adjudication can (not implemented in this core-swap pass). Force it to zero/empty on
-  // ingestion as a belt-and-suspenders guard against a model that ignores that instruction.
+  // Admin adjudication can. Force it to zero/empty on ingestion.
   payload.integrityPenalty = { points: 0, issues: [] };
   normalizeClaimAndEvidenceArrays(payload);
 
-  return payload;
+  return normalizeCiiV5AiPayload(payload);
 }
 
 const SUPPORT_ALIASES: Record<string, CiiV45SupportStatus> = {

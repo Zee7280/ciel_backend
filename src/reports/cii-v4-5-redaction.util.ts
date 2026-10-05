@@ -31,6 +31,10 @@ export interface RedactedCiiV45Badge {
 export interface RedactedCiiV45 {
   finalCII?: unknown;
   diagnosticCII?: unknown;
+  frameworkVersion?: unknown;
+  aiReportScore?: unknown;
+  adminEvidenceScore?: unknown;
+  baseCII?: unknown;
   finalBadge: RedactedCiiV45Badge | null;
   recommendedBadge: RedactedCiiV45Badge | null;
   sectionScores: Array<{
@@ -105,6 +109,10 @@ export function redactCiiV45Fields(
       sectionScores,
       extraMileUplift: { total: extraMileUplift?.total ?? null },
       integrityPenalty: { points: integrityPenalty?.points ?? 0 },
+      frameworkVersion: ciiV45?.frameworkVersion,
+      aiReportScore: ciiV45?.aiReportScore,
+      adminEvidenceScore: ciiV45?.adminEvidenceScore,
+      baseCII: ciiV45?.baseCII,
       strengths: ciiV45?.strengths,
       developmentPriorities: ciiV45?.developmentPriorities,
       studentFeedback: ciiV45?.studentFeedback,

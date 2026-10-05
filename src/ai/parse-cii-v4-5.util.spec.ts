@@ -3,7 +3,7 @@ import { CII_V45_DIMENSIONS, computeCiiV45Result } from '../reports/cii-v4-5.con
 
 function fullResponse() {
   return {
-    frameworkVersion: '4.5',
+    frameworkVersion: '5.0',
     reportId: 'report-1',
     inputFingerprint: 'fp-1',
     inputCompleteness: {
@@ -45,9 +45,14 @@ describe('parseCiiV45Response', () => {
   it('parses a complete, well-formed response', () => {
     const result = parseCiiV45Response(JSON.stringify(fullResponse()));
     expect(result).not.toBeNull();
-    expect(result!.frameworkVersion).toBe('4.5');
+    expect(result!.frameworkVersion).toBe('5.0');
     expect(result!.reportId).toBe('report-1');
     expect(result!.sectionScores).toHaveLength(10);
+    expect(result!.sectionScores.find((s) => s.dimension === '7')?.criterionScores.every((c) => c.anchor === 'P')).toBe(
+      true,
+    );
+    expect(result!.adminEvidenceAssessment).toEqual({ status: 'PENDING' });
+    expect(result!.extraMileUplift.assessmentStatus).toBe('PENDING_ADMIN');
   });
 
   it('parses JSON wrapped in a fenced code block', () => {

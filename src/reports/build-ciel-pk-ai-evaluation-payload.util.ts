@@ -1,7 +1,7 @@
 import * as crypto from 'crypto';
 import { MAX_DAILY_ATTENDANCE_HOURS } from '../engagement/attendance-description.constants';
 import { collectReportEvidenceFiles } from './collect-report-evidence.util';
-import { getCiiV45ScoringConfig } from './cii-v4-5.constants';
+import { getCiiV45ScoringConfig, CiiV45InputCompleteness } from './cii-v4-5.constants';
 import { StudentReport } from './entities/student-report.entity';
 import {
     hasPublicSharePermission,
@@ -711,12 +711,17 @@ function buildSystemValidation(
         if (text) warnings.push(text);
     }
 
+    const s11 = asRecord(report.section11);
+    const hasSignoff = Boolean(report.section11 && typeof report.section11 === 'object');
+    const signatureName = pickString(s11.signature_name);
+
     return {
         required_sections_present: requiredSectionsPresent,
         evidence_urls_present: uploadedEvidenceFiles.length > 0,
         evidence_files_accessible: uploadedEvidenceFiles.every((file) => /^https?:\/\//i.test(file.url)),
         sensitive_fields_removed: true,
         legacy_score_removed: true,
+        team_lead_signature_valid: hasSignoff ? Boolean(signatureName) : null,
         ready_for_ai_evaluation: requiredSectionsPresent && warnings.length === 0,
         validation_warnings: warnings,
         // The live evaluator is CII v4.5 (see cii-v4-5.constants.ts / cii-v4-5-prompt.constant.ts).
@@ -933,4 +938,65 @@ export async function buildCielPkAiEvaluationPayloadV45(
         enumerable: false,
     });
     return payload;
+}
+
+export function buildCiiV45InputCompletenessFromEvalPayload(
+    payload: CielPkAiEvaluationPayloadV45,
+): CiiV45InputCompleteness {
+    const s1 = asRecord(payload.section1_participation_identity_attendance);
+    const summary = asRecord(s1.attendance_summary);
+    const required =
+        pickNumber(summary.minimum_required_hours_per_student) ||
+        pickNumber(asRecord(payload.submission_metadata).required_hours_per_student) ||
+        16;
+    const people = [asRecord(s1.team_lead), ...asArray(s1.team_members).map(asRecord)];
+    const individualHours = people
+        .map((person, index) => {
+            const studentId =
+                pickString(person.student_id) ||
+                pickString(person.id) ||
+                (index === 0 ? 'team_lead' : `member_${index}`);
+            const hours =
+                pickNumber(person.verified_hours) ??
+                pickNumber(person.declared_hours) ??
+                pickNumber(person.hours);
+            const hasHours = typeof hours === 'number' && Number.isFinite(hours);
+            return {
+                studentId,
+                hours: hasHours ? hours : null,
+                requiredHours: required,
+                verified: true,
+                recordComplete: hasHours,
+            };
+        })
+        .filter((row, index, rows) => rows.findIndex((other) => other.studentId === row.studentId) === index);
+    if (!individualHours.length) {
+        individualHours.push({
+            studentId: payload.report_id || 'unknown',
+            hours: null,
+            requiredHours: required,
+            verified: false,
+            recordComplete: false,
+        });
+    }
+    const sys = asRecord(payload.system_validation);
+    const gaps: CiiV45InputCompleteness['gaps'] = [];
+    if (sys.required_sections_present === false) {
+        gaps.push({ type: 'SYSTEM_DATA_GAP', material: true });
+    }
+    let mandatoryFieldsComplete = sys.required_sections_present !== false;
+    if (sys.team_lead_signature_valid === false) {
+        gaps.push({
+            type: 'SIGNATURE_INVALID',
+            material: true,
+            mandatory: true,
+            field: 'signature_name',
+        });
+        mandatoryFieldsComplete = false;
+    }
+    return {
+        gaps,
+        individualHours,
+        mandatoryFieldsComplete,
+    };
 }

@@ -21,6 +21,7 @@ import { AiService, EvidenceInspection } from '../ai/ai.service';
 import { computeReportProgress } from './report-progress.util';
 import {
   buildCielPkAiEvaluationPayloadV45,
+  buildCiiV45InputCompletenessFromEvalPayload,
   computeCiiV45InputFingerprint,
   CielPkAiEvaluationPayloadV45,
 } from './build-ciel-pk-ai-evaluation-payload.util';
@@ -880,9 +881,10 @@ export class FacultyReportsService {
     evidenceInspection?: EvidenceInspection;
     model?: string;
   }> {
+    const completeness = buildCiiV45InputCompletenessFromEvalPayload(payload);
     const { ciiV45, evidenceInspection, model } = await this.aiService.summarize(
       'cii_v4_5_evaluation',
-      payload,
+      { ...payload, sourceValidation: { inputCompleteness: completeness } },
       { skipEvidenceImages: true },
     );
     if (!ciiV45) {
@@ -891,7 +893,12 @@ export class FacultyReportsService {
       );
     }
     try {
-      const normalized = normalizeCiiV5AiPayload(ciiV45 as CiiV45EvaluatorPayload);
+      const normalized = normalizeCiiV5AiPayload({
+        ...(ciiV45 as CiiV45EvaluatorPayload),
+        reportId,
+        inputFingerprint: payload.input_fingerprint,
+        inputCompleteness: completeness,
+      });
       const result = computeCiiV45Result(normalized);
       return { result, ciiV45: normalized, evidenceInspection, model };
     } catch (error) {
@@ -996,7 +1003,7 @@ export class FacultyReportsService {
     evidenceCriteria?: Array<{
       criterion: string;
       anchor: 0 | 1 | 2 | 3 | 4;
-      reasoningSummary: string;
+      reasoningSummary?: string;
       evidenceIds?: string[];
     }>,
     exceptionalFeatureAdminVerified?: boolean,
@@ -1022,7 +1029,7 @@ export class FacultyReportsService {
     evidenceCriteria?: Array<{
       criterion: string;
       anchor: 0 | 1 | 2 | 3 | 4;
-      reasoningSummary: string;
+      reasoningSummary?: string;
       evidenceIds?: string[];
     }>,
     exceptionalFeatureAdminVerified?: boolean,
@@ -1088,15 +1095,10 @@ export class FacultyReportsService {
       );
     }
 
-    const hasModeration =
-      adminAdjustedScore !== undefined &&
-      Math.round(adminAdjustedScore * 10) / 10 !== Math.round(aiRecommendedScore * 10) / 10;
-    if (hasModeration && !scoreModerationReason?.trim()) {
-      throw new BadRequestException('A reason is required when moderating the AI-recommended score.');
-    }
-    const adminApprovedScore = hasModeration
-      ? Math.round(Math.min(100, Math.max(0, adminAdjustedScore!)) * 10) / 10
-      : aiRecommendedScore;
+    void adminAdjustedScore;
+    void scoreModerationReason;
+    const adminApprovedScore = aiRecommendedScore;
+    const hasModeration = false;
 
     // Moderation changes only the published number — it can never invent a badge the quality
     // gates don't support. Re-derive the badge from the SAME gate results the calculator already

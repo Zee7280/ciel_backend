@@ -60,16 +60,26 @@ describe('parseCiiV45Response', () => {
     expect(parseCiiV45Response(wrapped)).not.toBeNull();
   });
 
-  it('returns null when a required key is missing (deductionLedger)', () => {
+  it('parses v5.0.2 report-quality JSON without deductionLedger / inputCompleteness', () => {
     const response = fullResponse() as Record<string, unknown>;
     delete response.deductionLedger;
-    expect(parseCiiV45Response(JSON.stringify(response))).toBeNull();
+    delete response.inputCompleteness;
+    delete response.claimInventory;
+    delete response.evidenceAudit;
+    delete response.integrityPenalty;
+    delete response.exceptionalFeature;
+    const result = parseCiiV45Response(JSON.stringify(response));
+    expect(result).not.toBeNull();
+    expect(result!.deductionLedger).toEqual([]);
+    expect(result!.integrityPenalty).toEqual({ points: 0, issues: [] });
   });
 
-  it('returns null when a required key is missing (exceptionalFeature is absent, not just null)', () => {
+  it('defaults exceptionalFeature to null when the v5.0.2 JSON omits it', () => {
     const response = fullResponse() as Record<string, unknown>;
     delete response.exceptionalFeature;
-    expect(parseCiiV45Response(JSON.stringify(response))).toBeNull();
+    const result = parseCiiV45Response(JSON.stringify(response));
+    expect(result).not.toBeNull();
+    expect(result!.exceptionalFeature).toBeNull();
   });
 
   it('accepts exceptionalFeature explicitly set to null', () => {

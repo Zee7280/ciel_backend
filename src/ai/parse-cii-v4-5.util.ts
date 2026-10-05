@@ -21,11 +21,7 @@ const REQUIRED_KEYS: (keyof CiiV45EvaluatorPayload)[] = [
   'frameworkVersion',
   'reportId',
   'inputFingerprint',
-  'inputCompleteness',
   'sectionScores',
-  'deductionLedger',
-  'integrityPenalty',
-  'exceptionalFeature',
   'adminReviewReasons',
   'strengths',
   'developmentPriorities',
@@ -42,29 +38,36 @@ export function parseCiiV45Response(raw: string): CiiV45EvaluatorPayload | null 
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
   const value = parsed as Record<string, unknown>;
 
-  // exceptionalFeature is nullable by contract; every other required key must be present
-  // (though it may legitimately be an empty array/string) — a missing key forces a retry
-  // rather than silently defaulting to a wrong shape.
+  // exceptionalFeature is nullable; v5.0.2 report-quality JSON does not require
+  // inputCompleteness / deductionLedger (the server injects the source audit).
   for (const key of REQUIRED_KEYS) {
-    if (key === 'exceptionalFeature') continue;
     if (!hasOwn(value, key) || value[key] === undefined) return null;
   }
-  if (!hasOwn(value, 'exceptionalFeature')) return null;
 
   if (value.frameworkVersion !== '5.0' && value.frameworkVersion !== '4.5') return null;
   if (typeof value.reportId !== 'string' || !value.reportId.trim()) return null;
   if (typeof value.inputFingerprint !== 'string' || !value.inputFingerprint.trim()) return null;
   if (!Array.isArray(value.sectionScores)) return null;
-  if (!Array.isArray(value.deductionLedger)) return null;
   if (!Array.isArray(value.adminReviewReasons)) return null;
   if (!Array.isArray(value.strengths)) return null;
   if (!Array.isArray(value.developmentPriorities)) return null;
   if (!Array.isArray(value.claimInventory)) value.claimInventory = [];
   if (!Array.isArray(value.evidenceAudit)) value.evidenceAudit = [];
+  if (!Array.isArray(value.deductionLedger)) value.deductionLedger = [];
+  if (!Array.isArray(value.sectionAnalyses)) value.sectionAnalyses = [];
+  if (!Array.isArray(value.extraMileCandidates)) value.extraMileCandidates = [];
   if (typeof value.evidenceSummary !== 'string') value.evidenceSummary = '';
   if (!value.extraMileUplift || typeof value.extraMileUplift !== 'object') {
     value.extraMileUplift = { assessmentStatus: 'PENDING_ADMIN', items: [] };
   }
+  if (!value.inputCompleteness || typeof value.inputCompleteness !== 'object') {
+    value.inputCompleteness = {
+      gaps: [],
+      individualHours: [{ studentId: 'pending', hours: null, requiredHours: 16, verified: false, recordComplete: false }],
+      mandatoryFieldsComplete: true,
+    };
+  }
+  if (!hasOwn(value, 'exceptionalFeature')) value.exceptionalFeature = null;
 
   const payload = value as unknown as CiiV45EvaluatorPayload;
 

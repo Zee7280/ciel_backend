@@ -178,6 +178,13 @@ export interface CiiV45EvaluatorPayload {
   deductionLedger: CiiV45DeductionLedgerEntry[];
   extraMileUplift: CiiV45ExtraMileUplift;
   extraMileCandidates?: CiiV45UpliftItem[];
+  sectionAnalyses?: Array<{
+    dimension: Exclude<CiiV45Dimension, '7'>;
+    summary: string;
+    strengths: string[];
+    limitations: string[];
+    adminFlags: string[];
+  }>;
   integrityPenalty: CiiV45IntegrityPenalty;
   exceptionalFeature: CiiV45ExceptionalFeature | null;
   adminEvidenceAssessment?: CiiV45AdminEvidenceAssessment;
@@ -267,12 +274,12 @@ export interface CiiV45DimensionDef {
 export const CII_V45_DIMENSIONS: CiiV45DimensionDef[] = [
   {
     id: '1',
-    name: 'Participation & Verified Effort',
+    name: 'Participation & Individual Effort',
     maxPoints: 10,
     criteria: [
       { key: 'role', weight: 2.5 },
       { key: 'quality', weight: 2.5 },
-      { key: 'hoursConsistency', weight: 2.5 },
+      { key: 'hoursCompletion', weight: 2.5 },
       { key: 'continuity', weight: 2.5 },
     ],
   },
@@ -293,9 +300,9 @@ export const CII_V45_DIMENSIONS: CiiV45DimensionDef[] = [
     name: 'SDG Contribution',
     maxPoints: 5,
     criteria: [
-      { key: 'alignment', weight: 1.5 },
+      { key: 'alignment', weight: 2.5 },
       { key: 'logic', weight: 1.5 },
-      { key: 'coherence', weight: 1.5 },
+      { key: 'coherence', weight: 0.5 },
       { key: 'focus', weight: 0.5 },
     ],
   },
@@ -423,6 +430,20 @@ const VERIFICATION_STATUSES: CiiV45VerificationStatus[] = [
 ];
 const UPLIFT_CATEGORIES: CiiV45UpliftCategory[] = ['effort', 'resources', 'partnerships', 'outcomes'];
 
+const CII_V45_ANCHOR_NAMES = ['Missing', 'Basic', 'Sound', 'Strong', 'Exceptional'] as const;
+
+export function defaultAdminEvidenceRationale(
+  criterion: string,
+  anchor: Exclude<CiiV45Anchor, 'P'>,
+): string {
+  const label = CII_V45_ANCHOR_NAMES[anchor] ?? String(anchor);
+  return `CIEL PK Admin assigned Anchor ${anchor} (${label}) for ${criterion} after reviewing original evidence.`;
+}
+
+function aliasAiCriterionKey(key: string): string {
+  return key === 'hoursConsistency' ? 'hoursCompletion' : key;
+}
+
 export function pendingDimension7Section(): CiiV45SectionScore {
   return {
     dimension: '7',
@@ -456,6 +477,7 @@ export function normalizeCiiV5AiPayload(raw: CiiV45EvaluatorPayload): CiiV45Eval
           ...s,
           criterionScores: s.criterionScores.map((c) => ({
             ...c,
+            criterion: aliasAiCriterionKey(c.criterion),
             evidenceIds: [],
             verificationStatus:
               c.verificationStatus === 'VERIFIED' ? 'AI_REPORT' : c.verificationStatus,
@@ -465,7 +487,10 @@ export function normalizeCiiV5AiPayload(raw: CiiV45EvaluatorPayload): CiiV45Eval
       pendingDimension7Section(),
     ],
     extraMileUplift: { assessmentStatus: 'PENDING_ADMIN', items: [] },
-    extraMileCandidates: candidates,
+    extraMileCandidates: Array.isArray(raw.extraMileCandidates)
+      ? raw.extraMileCandidates
+      : candidates,
+    sectionAnalyses: Array.isArray(raw.sectionAnalyses) ? raw.sectionAnalyses : [],
     integrityPenalty: { points: 0, issues: [] },
     exceptionalFeature: raw.exceptionalFeature
       ? { ...raw.exceptionalFeature, adminVerified: false }
@@ -482,7 +507,7 @@ export function applyAdminEvidenceAssessment(
     criteria: Array<{
       criterion: string;
       anchor: Exclude<CiiV45Anchor, 'P'>;
-      reasoningSummary: string;
+      reasoningSummary?: string;
       evidenceIds?: string[];
     }>;
     extraMile?: CiiV45ExtraMileUplift;
@@ -496,9 +521,13 @@ export function applyAdminEvidenceAssessment(
     dimension: '7',
     criterionScores: CII_V45_EVIDENCE_DIMENSION.criteria.map(({ key }) => {
       const a = input.criteria.find((c) => c.criterion === key);
-      if (!a || typeof a.reasoningSummary !== 'string' || !a.reasoningSummary.trim()) {
+      if (!a) {
         fail('Dimension 7 must match the saved Admin evidence assessment.');
       }
+      const reasoning =
+        typeof a.reasoningSummary === 'string' && a.reasoningSummary.trim()
+          ? a.reasoningSummary.trim()
+          : defaultAdminEvidenceRationale(key, a.anchor);
       return {
         criterion: key,
         anchor: a.anchor,
@@ -506,7 +535,7 @@ export function applyAdminEvidenceAssessment(
         verificationStatus: 'ADMIN_VERIFIED' as const,
         sourceRefs: ['admin_evidence_assessment'],
         evidenceIds: Array.isArray(a.evidenceIds) ? a.evidenceIds : [],
-        reasoningSummary: a.reasoningSummary.trim(),
+        reasoningSummary: reasoning,
       };
     }),
   };
@@ -721,12 +750,7 @@ export function computeCiiV45Result(payload: CiiV45EvaluatorPayload): CiiV45Resu
     if (!h.studentId || typeof h.requiredHours !== 'number' || !Number.isFinite(h.requiredHours) || h.requiredHours <= 0) {
       fail('Individual requirement required');
     }
-    if (typeof h.hours === 'number' && h.hours < h.requiredHours && h.recordComplete === true) {
-      hoursFail = true;
-    }
-    // Pending faculty/partner attendance verification is not an analyser gate —
-    // only a missing hours record (`hours === null`) holds the score.
-    if (h.hours === null) {
+    if (h.hours === null || h.recordComplete !== true) {
       hoursPending = true;
       continue;
     }
@@ -734,12 +758,14 @@ export function computeCiiV45Result(payload: CiiV45EvaluatorPayload): CiiV45Resu
     hoursFail ||= h.hours < h.requiredHours;
   }
 
-  const studentGap = inputs.gaps.some((g) => g.material && g.type === 'STUDENT_NOT_PROVIDED' && g.mandatory);
+  const studentGap = inputs.gaps.some(
+    (g) => g.material && ['STUDENT_NOT_PROVIDED', 'SIGNATURE_INVALID'].includes(g.type) && g.mandatory,
+  );
+  // Advisory Admin review reasons do not suppress a valid score. Only unresolved source/system gaps do.
   const aiPending =
     sections.filter((s) => s.dimension !== '7').some((s) => s.score === null) ||
     hoursPending ||
-    inputs.gaps.some((g) => g.material && ['SYSTEM_DATA_GAP', 'PROCESSING_REQUIRED'].includes(g.type)) ||
-    adminReviewReasons.length > 0;
+    inputs.gaps.some((g) => g.material && ['SYSTEM_DATA_GAP', 'PROCESSING_REQUIRED'].includes(g.type));
   const evidencePending = evidence.status !== 'ASSESSED' || extras.assessmentStatus !== 'ASSESSED';
   const status: CiiV45ScoreStatus =
     hoursFail || studentGap || !inputs.mandatoryFieldsComplete
@@ -812,7 +838,7 @@ export function computeCiiV45Result(payload: CiiV45EvaluatorPayload): CiiV45Resu
     qualityGates,
     publicationEligible: status === 'FINAL',
     rounding:
-      'Hybrid CII v5.0: 85 AI report-quality points + 15 Admin evidence points + verified uplift <=5 - confirmed integrity deduction <=10; clamp 0..100; round once to 1 decimal; apply locked badge bands and cumulative L4-L6 gates.',
+      'Hybrid CII v5.0.2: 85 AI report-quality points + 15 Admin evidence points + Admin-confirmed uplift <=5 - confirmed integrity deduction <=10; individual attendance is system-recorded; advisory Admin flags do not suppress CII; clamp 0..100; round once to 1 decimal; apply locked badge bands and cumulative L4-L6 gates.',
   };
 }
 

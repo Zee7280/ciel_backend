@@ -35,6 +35,15 @@ const SENSITIVE_CII_V45 = {
   exceptionalFeature: { verified: true, explanation: 'Private explanation of the exceptional feature.', evidenceIds: ['ev-1'] },
   extraMileUplift: { assessmentStatus: 'ASSESSED', items: [{ category: 'effort', points: 1, studentId: 's1', beyondBaseJustification: 'Private justification.', evidenceIds: ['ev-1'] }], total: 1 },
   integrityPenalty: { points: 0, issues: [] },
+  sectionAnalyses: [
+    {
+      dimension: '4B',
+      summary: 'Private Admin-only outcome critique naming the beneficiary.',
+      strengths: ['Private internal strength note.'],
+      limitations: ['Private internal limitation.'],
+      adminFlags: ['Private Admin flag.'],
+    },
+  ],
   strengths: ['Attendance register confirmed all hours.'],
   developmentPriorities: ['Add a baseline measurement.'],
   analysisSummary: 'Internal analysis summary for Faculty/Admin.',
@@ -82,6 +91,8 @@ describe('redactCiiV45Fields', () => {
     expect(serialized).not.toContain('evidenceAudit');
     expect(serialized).not.toContain('adminReviewReasons');
     expect(serialized).not.toContain('exceptionalFeature');
+    expect(serialized).not.toContain('sectionAnalyses');
+    expect(serialized).not.toContain('Private Admin-only outcome critique');
 
     // Whitelisted fields, present and correct.
     expect(result.ciiV45?.finalCII).toBe(84.5);

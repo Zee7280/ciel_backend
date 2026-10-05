@@ -95,6 +95,22 @@ async function fingerprintForReport(report: Record<string, unknown>): Promise<st
   return payload.input_fingerprint;
 }
 
+function analysableReport(id = 'report-1'): Record<string, unknown> {
+  return {
+    id,
+    section1: { team_lead: { hours: 20 } },
+    section2: {},
+    section3: {},
+    section4: {},
+    section5: {},
+    section6: {},
+    section7: {},
+    section8: {},
+    section9: {},
+    section10: {},
+  };
+}
+
 /** Every one of the 10 fixed CII v4.5 dimensions, every criterion anchored at 4 ("Exceptional")
  * with full narrative/evidence so `computeCiiV45Result` accepts the payload and scores it 100. */
 function fullMarksSectionScores(): CiiV45EvaluatorPayload['sectionScores'] {
@@ -155,7 +171,7 @@ describe('FacultyReportsService — runCiiV45AnalysisForAdmin', () => {
 
   it('computes and persists a full-marks evaluation as a perfect 100, via a targeted (non-clobbering) update', async () => {
     const { service, studentReportsRepository, qb } = makeService(
-      { id: 'report-1' },
+      analysableReport(),
       { summarize: jest.fn().mockResolvedValue({ ciiV45: CII_V45_AI_RESPONSE }) },
     );
 
@@ -173,10 +189,7 @@ describe('FacultyReportsService — runCiiV45AnalysisForAdmin', () => {
   });
 
   it('combines 85 AI + 15 Admin evidence on Confirm', async () => {
-    const report: any = {
-      id: 'report-1',
-      section1: { team_lead: { hours: 20 } },
-    };
+    const report: any = analysableReport();
     const { service, qb } = makeService(
       report,
       { summarize: jest.fn().mockResolvedValue({ ciiV45: CII_V45_AI_RESPONSE }) },
@@ -210,6 +223,35 @@ describe('FacultyReportsService — runCiiV45AnalysisForAdmin', () => {
         partner_status: 'not_applicable',
       }),
     );
+  });
+
+  it('Confirm fills a default evidence rationale when Admin leaves Dim 7 notes blank', async () => {
+    const report: any = analysableReport();
+    const { service } = makeService(
+      report,
+      { summarize: jest.fn().mockResolvedValue({ ciiV45: CII_V45_AI_RESPONSE }) },
+    );
+    const analysed = await service.runCiiV45AnalysisForAdmin('report-1');
+    report.ciiV45 = analysed.data;
+    report.ciiV45.inputFingerprint = await fingerprintForReport(report);
+
+    const dim7 = CII_V45_DIMENSIONS.find((d) => d.id === '7')!;
+    const result = await service.approveCiiV45ForAdmin(
+      'report-1',
+      'admin-1',
+      undefined,
+      undefined,
+      undefined,
+      dim7.criteria.map((c) => ({
+        criterion: c.key,
+        anchor: 4 as const,
+      })),
+    );
+    expect((result.data as any).ciiV45Lock.locked).toBe(true);
+    expect((result.data as any).ciiV45.finalCII).toBe(100);
+    expect((result.data as any).ciiV45.adminEvidenceAssessment.criteria.every(
+      (c: { reasoningSummary: string }) => typeof c.reasoningSummary === 'string' && c.reasoningSummary.trim(),
+    )).toBe(true);
   });
 
   it('refuses when the update affects 0 rows (defensive guard against a concurrent write)', async () => {
@@ -497,7 +539,7 @@ describe('FacultyReportsService — approveCiiV45ForAdmin', () => {
     }
   });
 
-  it('requires a reason when moderating the AI-recommended score, then records the moderated score once given', async () => {
+  it('ignores a manual final-score override — Confirm publishes the generated Composite CII', async () => {
     const report: any = {
       id: 'report-1',
       ciiV45: {
@@ -510,21 +552,15 @@ describe('FacultyReportsService — approveCiiV45ForAdmin', () => {
     };
     report.ciiV45.inputFingerprint = await fingerprintForReport(report);
     const { service } = makeService(report);
-
-    await expect(
-      service.approveCiiV45ForAdmin('report-1', 'admin-1', undefined, 75),
-    ).rejects.toThrow(/reason is required/i);
-
-    const { service: service2 } = makeService(report);
-    const result = await service2.approveCiiV45ForAdmin(
+    const result = await service.approveCiiV45ForAdmin(
       'report-1',
       'admin-1',
       undefined,
       75,
       'Evidence was weaker than the AI assessed.',
     );
-    expect((result.data as any).ciiV45Lock.scoreWasModerated).toBe(true);
-    expect((result.data as any).ciiV45Lock.adminApprovedScore).toBe(75);
+    expect((result.data as any).ciiV45Lock.scoreWasModerated).toBe(false);
+    expect((result.data as any).ciiV45Lock.adminApprovedScore).toBe(80);
     expect((result.data as any).ciiV45Lock.aiRecommendedScore).toBe(80);
   });
 });

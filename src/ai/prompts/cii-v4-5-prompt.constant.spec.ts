@@ -18,8 +18,12 @@ describe('CII_V4_5_JSON_ONLY_DEPLOYMENT_NOTE — per-dimension criterion manifes
     expect(CII_V4_5_JSON_ONLY_DEPLOYMENT_NOTE).toMatch(/NEVER one entry per team member/);
   });
 
-  it('tells the model not to flag pending attendance verification', () => {
+  it('tells the model not to flag pending attendance verification or live-attendance gates', () => {
     expect(CII_V4_5_EVALUATOR_PROMPT).toMatch(/pending faculty\/partner attendance verification/i);
-    expect(CII_V4_5_EVALUATOR_PROMPT).not.toMatch(/Unverified logs with no requirement data/);
+    expect(CII_V4_5_EVALUATOR_PROMPT).toMatch(/no separate live-attendance/i);
+    expect(CII_V4_5_EVALUATOR_PROMPT).toContain('hoursCompletion');
+    expect(CII_V4_5_EVALUATOR_PROMPT).not.toContain('hoursConsistency');
+    expect(CII_V4_5_EVALUATOR_PROMPT).toContain('sectionAnalyses');
+    expect(CII_V4_5_EVALUATOR_PROMPT).toMatch(/primary\/main SDG/i);
   });
 });

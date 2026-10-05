@@ -2,6 +2,7 @@ import * as crypto from 'crypto';
 import {
   buildCielPkAiEvaluationPayload,
   buildCielPkAiEvaluationPayloadV45,
+  buildCiiV45InputCompletenessFromEvalPayload,
   computeCiiV45InputFingerprint,
   ciiEvidenceInspectCache,
   CIEL_PK_AI_EVALUATION_SCHEMA_VERSION,
@@ -505,5 +506,39 @@ describe('computeCiiV45InputFingerprint', () => {
       { file_id: 'EV-001', file_integrity: { sha256: 'a' } },
     ]);
     expect(fp1).toBe(fp2);
+  });
+});
+
+describe('buildCiiV45InputCompletenessFromEvalPayload', () => {
+  it('uses recorded team hours and does not invent a live-attendance hold', () => {
+    const completeness = buildCiiV45InputCompletenessFromEvalPayload({
+      report_id: 'r1',
+      section1_participation_identity_attendance: {
+        team_lead: { student_id: 's1', declared_hours: 16 },
+        team_members: [],
+        attendance_summary: { minimum_required_hours_per_student: 16 },
+      },
+      submission_metadata: {},
+      system_validation: { required_sections_present: true },
+    } as any);
+    expect(completeness.individualHours).toEqual([
+      { studentId: 's1', hours: 16, requiredHours: 16, verified: true, recordComplete: true },
+    ]);
+    expect(completeness.mandatoryFieldsComplete).toBe(true);
+    expect(completeness.gaps).toEqual([]);
+  });
+
+  it('flags an explicit invalid Team Lead signature as SIGNATURE_INVALID', () => {
+    const completeness = buildCiiV45InputCompletenessFromEvalPayload({
+      report_id: 'r1',
+      section1_participation_identity_attendance: {
+        team_lead: { student_id: 's1', declared_hours: 16 },
+        team_members: [],
+      },
+      submission_metadata: {},
+      system_validation: { required_sections_present: true, team_lead_signature_valid: false },
+    } as any);
+    expect(completeness.mandatoryFieldsComplete).toBe(false);
+    expect(completeness.gaps.some((g) => g.type === 'SIGNATURE_INVALID' && g.mandatory)).toBe(true);
   });
 });

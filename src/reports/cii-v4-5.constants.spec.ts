@@ -1,4 +1,6 @@
 import {
+  CII_V45_ADMIN_EVIDENCE_MAX,
+  CII_V45_AI_REPORT_MAX,
   CII_V45_DIMENSIONS,
   CiiV45EvaluatorPayload,
   CiiV45CriterionScore,
@@ -95,7 +97,45 @@ function withCriterion(
   };
 }
 
+function withUniformAnchors(
+  aiAnchor: 0 | 1 | 2 | 3 | 4,
+  evidenceAnchor: 0 | 1 | 2 | 3 | 4,
+): CiiV45EvaluatorPayload {
+  return buildValidPayload({
+    sectionScores: CII_V45_DIMENSIONS.map((dim) => ({
+      dimension: dim.id,
+      criterionScores: dim.criteria.map(
+        ({ key }): CiiV45CriterionScore => ({
+          criterion: key,
+          anchor: dim.id === '7' ? evidenceAnchor : aiAnchor,
+          qualityAnchor: dim.id === '7' ? evidenceAnchor : aiAnchor,
+          verificationStatus: dim.id === '7' ? 'ADMIN_VERIFIED' : 'AI_REPORT',
+          sourceRefs: ['s1'],
+          evidenceIds: [],
+          reasoningSummary: 'Uniform package-alignment anchors.',
+        }),
+      ),
+    })),
+  });
+}
+
 describe('computeCiiV45Result', () => {
+  it('keeps hybrid weights at 85 AI + 15 Admin with v5.0.2 Dim 1/3 keys', () => {
+    expect(CII_V45_DIMENSIONS.reduce((t, d) => t + d.maxPoints, 0)).toBe(100);
+    expect(CII_V45_AI_REPORT_MAX).toBe(85);
+    expect(CII_V45_ADMIN_EVIDENCE_MAX).toBe(15);
+    const dim1 = CII_V45_DIMENSIONS.find((d) => d.id === '1')!;
+    expect(dim1.name).toBe('Participation & Individual Effort');
+    expect(dim1.criteria.map((c) => c.key)).toEqual(['role', 'quality', 'hoursCompletion', 'continuity']);
+    const dim3 = CII_V45_DIMENSIONS.find((d) => d.id === '3')!;
+    expect(dim3.criteria.map((c) => [c.key, c.weight])).toEqual([
+      ['alignment', 2.5],
+      ['logic', 1.5],
+      ['coherence', 0.5],
+      ['focus', 0.5],
+    ]);
+  });
+
   it('scores an all-Sound payload at 70/100 (59.5 AI + 10.5 Admin evidence) and FINAL status', () => {
     const result = computeCiiV45Result(buildValidPayload());
     expect(result.baseCII).toBe(70);
@@ -363,6 +403,124 @@ describe('computeCiiV45Result', () => {
   it('rounds the diagnostic score to exactly one decimal place', () => {
     const result = computeCiiV45Result(buildValidPayload());
     expect(result.diagnosticCII).toBe(Math.round((result.diagnosticCII as number) * 10) / 10);
+  });
+
+  it('does not let advisory Admin review reasons suppress a valid Composite CII', () => {
+    const result = computeCiiV45Result(
+      buildValidPayload({
+        adminReviewReasons: ['Outcome label and proof should be reconciled by Admin.'],
+      }),
+    );
+    expect(result.scoreStatus).toBe('FINAL');
+    expect(result.finalCII).toBe(70);
+  });
+
+  it('flags RESUBMISSION_REQUIRED on a mandatory SIGNATURE_INVALID gap', () => {
+    const result = computeCiiV45Result(
+      buildValidPayload({
+        inputCompleteness: {
+          gaps: [{ type: 'SIGNATURE_INVALID', material: true, mandatory: true, field: 'signature_name' }],
+          individualHours: [
+            { studentId: 's1', hours: 20, requiredHours: 16, verified: true, recordComplete: true },
+          ],
+          mandatoryFieldsComplete: false,
+        },
+      }),
+    );
+    expect(result.scoreStatus).toBe('RESUBMISSION_REQUIRED');
+    expect(result.finalCII).toBeNull();
+  });
+
+  it('treats an incomplete hours record as ADMIN_REVIEW_REQUIRED, not resubmission', () => {
+    const result = computeCiiV45Result(
+      buildValidPayload({
+        inputCompleteness: {
+          gaps: [],
+          individualHours: [
+            { studentId: 's1', hours: 16, requiredHours: 16, verified: true, recordComplete: false },
+          ],
+          mandatoryFieldsComplete: true,
+        },
+      }),
+    );
+    expect(result.scoreStatus).toBe('ADMIN_REVIEW_REQUIRED');
+    expect(result.finalCII).toBeNull();
+  });
+
+  it('aliases hoursConsistency from older AI payloads onto hoursCompletion', () => {
+    const payload = normalizeCiiV5AiPayload({
+      ...buildValidPayload(),
+      sectionScores: CII_V45_DIMENSIONS.filter((d) => d.id !== '7').map((dim) => ({
+        dimension: dim.id,
+        criterionScores: dim.criteria.map(({ key }) => ({
+          criterion: dim.id === '1' && key === 'hoursCompletion' ? 'hoursConsistency' : key,
+          anchor: 2 as const,
+          qualityAnchor: 2 as const,
+          verificationStatus: 'AI_REPORT' as const,
+          sourceRefs: ['s1'],
+          evidenceIds: [],
+          reasoningSummary: 'Sound.',
+        })),
+      })),
+    });
+    const dim1 = payload.sectionScores.find((s) => s.dimension === '1')!;
+    expect(dim1.criterionScores.some((c) => c.criterion === 'hoursCompletion')).toBe(true);
+    expect(computeCiiV45Result(payload).aiReportScore).toBe(59.5);
+  });
+
+  it('matches the v5.0.2 package: Anchor 3 is AI 72.3 + Admin 12.8 = Composite 85 / L5', () => {
+    const result = computeCiiV45Result(withUniformAnchors(3, 3));
+    expect(result.aiReportScore).toBe(72.3);
+    expect(result.adminEvidenceScore).toBe(12.8);
+    expect(result.baseCII).toBe(85);
+    expect(result.finalCII).toBe(85);
+    expect(result.scoreStatus).toBe('FINAL');
+    expect(result.recommendedBadge?.code).toBe('L5');
+  });
+
+  it('lets evidence weakness affect Dimension 7 only and gate a high numeric score', () => {
+    const result = computeCiiV45Result(withUniformAnchors(4, 1));
+    expect(result.aiReportScore).toBe(85);
+    expect(result.adminEvidenceScore).toBe(7.5);
+    expect(result.finalCII).toBe(92.5);
+    expect(result.diagnosticBadge?.numericLevel).toBe(6);
+    expect(result.recommendedBadge?.code).toBe('L3');
+    expect(result.recommendedBadge?.gateCapped).toBe(true);
+  });
+
+  it('adds Admin-verified extra-mile uplift onto the raw hybrid total before the single rounding step', () => {
+    const payload = withUniformAnchors(3, 3);
+    payload.extraMileUplift = {
+      assessmentStatus: 'ASSESSED',
+      items: [
+        {
+          category: 'effort',
+          points: 1.25,
+          studentId: 's1',
+          evidenceIds: ['E1'],
+          beyondBaseJustification: 'Distinct extra effort beyond the 16-hour base.',
+          adminVerified: true,
+        },
+      ],
+    };
+    expect(computeCiiV45Result(payload).finalCII).toBe(86.3);
+  });
+
+  it('writes a default Admin evidence rationale when the standard UI omits per-criterion notes', () => {
+    const pending = normalizeCiiV5AiPayload(buildValidPayload());
+    const combined = applyAdminEvidenceAssessment(pending, {
+      assessorId: 'admin-1',
+      assessedAt: '2026-01-01T00:00:00.000Z',
+      criteria: CII_V45_DIMENSIONS.find((d) => d.id === '7')!.criteria.map((c) => ({
+        criterion: c.key,
+        anchor: 2 as const,
+        evidenceIds: [],
+      })),
+    });
+    for (const row of combined.adminEvidenceAssessment?.criteria ?? []) {
+      expect(row.reasoningSummary).toMatch(/CIEL PK Admin assigned Anchor 2/);
+    }
+    expect(computeCiiV45Result(combined).finalCII).toBe(70);
   });
 
   it('never populates finalBadge from the calculator itself, regardless of status', () => {

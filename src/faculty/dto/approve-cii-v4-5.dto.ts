@@ -23,8 +23,9 @@ export class AdminEvidenceCriterionDto {
   @Max(4)
   anchor: 0 | 1 | 2 | 3 | 4;
 
+  @IsOptional()
   @IsString()
-  reasoningSummary: string;
+  reasoningSummary?: string;
 
   @IsOptional()
   @IsArray()
@@ -35,10 +36,9 @@ export class AdminEvidenceCriterionDto {
 /**
  * Admin Accept & Publish for the CII v5.0 Hybrid score.
  *
- * Dimension 7 (15 evidence points) is scored here by Admin. Admin may also
- * accept the combined score as-is, or record a reasoned numeric moderation
- * of the published total. The system retains both: AI Recommended Score →
- * Admin Approved Score.
+ * Dimension 7 (15 evidence points) is scored here by Admin. The published CII is
+ * always the generated Composite (AI /85 + Admin evidence /15). Manual final-score
+ * override is not part of the standard v5.0.2 flow.
  */
 export class ApproveCiiV45Dto {
   /** Optional overall note from Admin. */
@@ -47,16 +47,15 @@ export class ApproveCiiV45Dto {
   note?: string;
 
   /**
-   * If Admin moderates the final score, this holds their adjusted value.
-   * When provided and different from the AI-computed score, the system stores both for audit.
+   * Ignored by v5.0.2 Confirm. Kept on the DTO so older clients do not 400;
+   * the published score is always the generated Composite CII.
    */
   @IsOptional()
   @IsNumber()
   adminAdjustedScore?: number;
 
   /**
-   * Required when adminAdjustedScore differs from the AI-computed score.
-   * Creates an audit trail explaining why Admin changed the AI recommendation.
+   * Ignored by v5.0.2 Confirm together with adminAdjustedScore.
    */
   @ValidateIf((o) => o.adminAdjustedScore !== undefined)
   @IsOptional()

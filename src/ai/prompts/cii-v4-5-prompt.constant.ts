@@ -27,6 +27,8 @@
  * `computeCiiV45Result()` (`cii-v4-5.constants.ts`).
  */
 
+import { CII_V45_DIMENSIONS } from '../../reports/cii-v4-5.constants';
+
 export const CII_V4_5_FRAMEWORK_VERSION = '4.5';
 
 export const CII_V4_5_EVALUATOR_PROMPT = `# CIEL PK — CII AI ANALYSER v4.5
@@ -301,6 +303,16 @@ All summaries are publication-safe: no protected identities, no sensitive quotat
 ## 10. This deployment's operating context
 You receive one combined request containing the full report data, the opportunity record, and whichever evidence files could be attached as images for you to inspect directly (JPEG/PNG/WebP/GIF, up to a fixed count/size). A note in the request explicitly lists which evidence files you were actually shown and which were not (wrong type, too large, fetch failed) — treat anything not listed as shown to you as unseen, mark it PROCESSING_REQUIRED or INACCESSIBLE accordingly, and never assert INSPECTED for a file you were not given. There is no separate claim-extraction pass and no document/video/audio conversion in this deployment: build your own \`claimInventory\` and \`evidenceAudit\` directly from what you are given in this single turn.`;
 
+/** One line per dimension, e.g. `Dimension "1": exactly 4 criterionScores — "role", "quality", "hoursConsistency", "continuity".`
+ * Generated from `CII_V45_DIMENSIONS` (the same table `computeCiiV45Result` validates against) so
+ * the prompt can never drift out of sync with the server-side schema it is read against. */
+const CII_V45_DIMENSION_CRITERION_MANIFEST = CII_V45_DIMENSIONS.map(
+  (dim) =>
+    `Dimension "${dim.id}": exactly ${dim.criteria.length} criterionScores — ${dim.criteria
+      .map((c) => `"${c.key}"`)
+      .join(', ')}.`,
+).join('\n');
+
 export const CII_V4_5_JSON_ONLY_DEPLOYMENT_NOTE = `
 DEPLOYMENT MODE: JSON-ONLY OUTPUT.
 Emit exactly one JSON object matching the CIEL PK CII v4.5 response schema.
@@ -309,4 +321,13 @@ Include all ten sectionScores entries (dimensions "1","2","3","4A","4B","5","6",
 Never include a numeric CII, scoreStatus, baseCII, diagnosticCII, finalCII or badge field — the server computes those.
 Always return integrityPenalty exactly as {"points":0,"issues":[]} — only a separately saved Admin adjudication can set it to anything else.
 Do not emit markdown fences or any text outside the JSON object.
+
+CRITICAL — criterionScores count per dimension is FIXED, regardless of team size. Each dimension's
+criterionScores array has exactly one entry per fixed criterion below, covering the record/team as a
+whole — NEVER one entry per team member, per session or per activity. A team of 5 students still
+produces only these entries; synthesize the team's performance into a single judgement per criterion
+(the \`role\`/\`quality\` criteria themselves are about how responsibility and involvement were
+distributed, not a per-student scorecard). Any sectionScores entry with the wrong criterionScores
+count is rejected outright by the server and the whole evaluation fails — get the count exactly right:
+${CII_V45_DIMENSION_CRITERION_MANIFEST}
 `.trim();

@@ -28,6 +28,15 @@ describe('pickCiiV45DisplayScore', () => {
     ).toBe(62);
   });
 
+  it('uses knownBasePoints as the reviewer overall when diagnosticCII is null', () => {
+    expect(
+      pickCiiV45DisplayScore(
+        { diagnosticCII: null, baseCII: null, knownBasePoints: 60.3 },
+        { locked: false },
+      ),
+    ).toBe(60.3);
+  });
+
   it('does not invent a score when the analyser has not produced numbers', () => {
     expect(pickCiiV45DisplayScore(null, null)).toBeNull();
     expect(pickCiiV45DisplayScore({ diagnosticCII: null, baseCII: null }, null)).toBeNull();

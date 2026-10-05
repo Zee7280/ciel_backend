@@ -308,29 +308,46 @@ describe('FacultyReportsService — approveCiiV45ForAdmin', () => {
     );
   });
 
-  it('refuses to publish while the evaluation still requires the student to resubmit', async () => {
-    const { service } = makeService({
+  it('lets admin publish when analysis flagged RESUBMISSION_REQUIRED', async () => {
+    const report: any = {
       id: 'report-1',
-      ciiV45: { scoreStatus: 'RESUBMISSION_REQUIRED', adminReviewReasons: [] },
+      section1: { team_lead: { hours: 20 } },
+      ciiV45: {
+        scoreStatus: 'RESUBMISSION_REQUIRED',
+        diagnosticCII: 60.3,
+        knownBasePoints: 60.3,
+        qualityGates: { L4: false, L5: false, L6: false },
+        adminReviewReasons: [],
+      },
       ciiV45Lock: null,
-    });
+    };
+    report.ciiV45.inputFingerprint = await fingerprintForReport(report);
+    const { service } = makeService(report);
 
-    await expect(service.approveCiiV45ForAdmin('report-1', 'admin-1')).rejects.toThrow(/resubmit/i);
+    const result = await service.approveCiiV45ForAdmin('report-1', 'admin-1');
+    expect((result.data as any).ciiV45Lock.locked).toBe(true);
+    expect((result.data as any).ciiV45.finalCII).toBe(60.3);
+    expect((result.data as any).ciiV45Lock.aiRecommendedScore).toBe(60.3);
   });
 
-  it('refuses to publish while the evaluation still needs admin review, surfacing the blocking reasons', async () => {
-    const { service } = makeService({
+  it('lets admin publish when analysis is still ADMIN_REVIEW_REQUIRED', async () => {
+    const report: any = {
       id: 'report-1',
+      section1: { team_lead: { hours: 20 } },
       ciiV45: {
         scoreStatus: 'ADMIN_REVIEW_REQUIRED',
+        diagnosticCII: 70,
+        qualityGates: { L4: false, L5: false, L6: false },
         adminReviewReasons: ['Evidence pending inspection'],
       },
       ciiV45Lock: null,
-    });
+    };
+    report.ciiV45.inputFingerprint = await fingerprintForReport(report);
+    const { service } = makeService(report);
 
-    await expect(service.approveCiiV45ForAdmin('report-1', 'admin-1')).rejects.toThrow(
-      /Evidence pending inspection/,
-    );
+    const result = await service.approveCiiV45ForAdmin('report-1', 'admin-1');
+    expect((result.data as any).ciiV45Lock.locked).toBe(true);
+    expect((result.data as any).ciiV45.finalCII).toBe(70);
   });
 
   it('refuses to publish when the report changed since the analysis ran (fingerprint mismatch)', async () => {
@@ -728,6 +745,26 @@ describe('mapFacultyListCii', () => {
     });
   });
 
+  it('shows knownBasePoints when diagnostic and base are still null (reviewer overall)', () => {
+    expect(
+      mapFacultyListCii({
+        ciiV45: {
+          diagnosticCII: null,
+          baseCII: null,
+          knownBasePoints: 60.3,
+          diagnosticBadge: { name: 'Structured', level: 2 },
+        },
+        ciiV45Lock: null,
+      }),
+    ).toMatchObject({
+      cii_analyser_run: true,
+      cii_provisional: 60.3,
+      cii_locked: false,
+      cii_level_name: 'Structured',
+      cii_numeric_level: 2,
+    });
+  });
+
   it('shows baseCII when diagnosticCII is still null (reviewer overall)', () => {
     expect(
       mapFacultyListCii({
@@ -1025,14 +1062,14 @@ describe('FacultyReportsService — AI analysis run safety (lock, history, incom
     expect(res.data.evidenceInspection.notInspected[0].id).toBe('E2');
   });
 
-  it('an incomplete run (model skipped rubric parts) cannot be locked', async () => {
+  it('an incomplete run with no numeric score still cannot be locked', async () => {
     const { service } = makeService({
       id: 'report-inc',
       ciiV45: { scoreStatus: 'ADMIN_REVIEW_REQUIRED', adminReviewReasons: ['Model skipped rubric parts.'] },
       ciiV45Lock: null,
     });
     await expect(service.approveCiiV45ForAdmin('report-inc', 'admin-1')).rejects.toThrow(
-      /Model skipped rubric parts|ADMIN_REVIEW_REQUIRED/,
+      /Run the CII v4.5 analysis/,
     );
   });
 });

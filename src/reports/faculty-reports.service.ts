@@ -895,7 +895,7 @@ export class FacultyReportsService {
       runHistory: [
         ...(((report.ciiV45 as Record<string, unknown> | null)?.runHistory as unknown[]) ?? []).slice(-19),
         {
-          score: result.diagnosticCII,
+          score: pickCiiV45DisplayScore(result, null),
           status: result.scoreStatus,
           at: new Date().toISOString(),
           model: model ?? null,
@@ -933,14 +933,11 @@ export class FacultyReportsService {
   }
 
   /**
-   * Approves and hash-locks the CII v4.5 score. Admin-only, same as the run step. Two gates the
-   * v2 path does not have:
-   *  - the stored evaluation's `scoreStatus` must be `FINAL` (v4.5's own eligibility state —
-   *    `RESUBMISSION_REQUIRED`/`ADMIN_REVIEW_REQUIRED` block publication entirely, not just a
-   *    stale-snapshot recheck);
-   *  - the report's live data must still hash to the same `inputFingerprint` the analysis ran
-   *    against — a changed section or evidence file since the last run invalidates it, the same
-   *    protective role the v2 path's fresh-integrity-holds recheck plays, but via content hash.
+   * Approves and hash-locks the CII v4.5 score. Admin-only, same as the run step.
+   * `RESUBMISSION_REQUIRED` / `ADMIN_REVIEW_REQUIRED` are warnings for the analyser UI — Admin
+   * may still publish the displayed score. The report's live data must still hash to the same
+   * `inputFingerprint` the analysis ran against; a changed section or evidence file since the
+   * last run invalidates it.
    */
   async approveCiiV45ForAdmin(
     id: string,
@@ -974,13 +971,10 @@ export class FacultyReportsService {
     if (report.ciiV45Lock?.locked) {
       throw new BadRequestException("This report's CII v4.5 score is already locked.");
     }
-    if (stored.scoreStatus !== 'FINAL') {
-      const reasons = Array.isArray(stored.adminReviewReasons) ? stored.adminReviewReasons : [];
-      throw new BadRequestException(
-        stored.scoreStatus === 'RESUBMISSION_REQUIRED'
-          ? 'This report cannot be published yet — mandatory hours or student material are incomplete. The student must resubmit.'
-          : `This report cannot be published yet: ${reasons.join('; ') || 'the evaluation is still ADMIN_REVIEW_REQUIRED'}. Resolve the blockers, then re-run the analysis.`,
-      );
+
+    const aiRecommendedScore = pickCiiV45DisplayScore(stored, report.ciiV45Lock);
+    if (aiRecommendedScore == null) {
+      throw new BadRequestException('Run the CII v4.5 analysis before approving.');
     }
 
     // Recompute the fingerprint fresh from the report's CURRENT live data — the same protective
@@ -997,7 +991,6 @@ export class FacultyReportsService {
       );
     }
 
-    const aiRecommendedScore = stored.diagnosticCII ?? 0;
     const hasModeration =
       adminAdjustedScore !== undefined &&
       Math.round(adminAdjustedScore * 10) / 10 !== Math.round(aiRecommendedScore * 10) / 10;
@@ -1234,7 +1227,7 @@ export class FacultyReportsService {
       runByUserId: userId,
       runByRole: userRole,
       runByName: userName,
-      score: ciiResult.diagnosticCII,
+      score: pickCiiV45DisplayScore(ciiResult, null),
       badge: ciiResult.recommendedBadge ?? ciiResult.diagnosticBadge,
       sections: ciiResult.sectionScores.map((s) => ({
         dimension: s.dimension,
@@ -1265,12 +1258,11 @@ export class FacultyReportsService {
         // Also return the original admin-approved score for comparison
         adminApprovedScore:
           report.ciiV45Lock?.adminApprovedScore ??
-          (report.ciiV45 as Record<string, unknown> | null)?.finalCII ??
+          pickCiiV45DisplayScore(report.ciiV45, report.ciiV45Lock) ??
           null,
         aiRecommendedScore:
           report.ciiV45Lock?.aiRecommendedScore ??
-          (report.ciiV45 as Record<string, unknown> | null)
-            ?.diagnosticCII ??
+          pickCiiV45DisplayScore(report.ciiV45, report.ciiV45Lock) ??
           null,
       },
     };

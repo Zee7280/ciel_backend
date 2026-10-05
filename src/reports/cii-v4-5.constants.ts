@@ -664,9 +664,9 @@ export function computeCiiV45Result(payload: CiiV45EvaluatorPayload): CiiV45Resu
   );
   const g6 = g5 && (ratio4B ?? 0) >= 0.8 && (ratio7 ?? 0) >= 0.85 && (ratio9 ?? 0) >= 0.7 && penalty === 0 && exceptional;
   const qualityGates = { L4: g4, L5: g5, L6: g6 };
-  const finalBadgeShape = resolveBadgeForScore(diag, qualityGates);
-
   const knownBasePoints = round1(sections.reduce((t, s) => t + s.knownPoints, 0));
+  const badgeScore = diag ?? (knownBasePoints > 0 ? knownBasePoints : null);
+  const finalBadgeShape = resolveBadgeForScore(badgeScore, qualityGates);
 
   return {
     ...p,

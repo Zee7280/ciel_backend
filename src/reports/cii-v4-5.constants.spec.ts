@@ -129,6 +129,8 @@ describe('computeCiiV45Result', () => {
     expect(dim1.knownPoints).toBeGreaterThan(0); // the other 3 criteria still counted
     expect(result.baseCII).toBeNull();
     expect(result.diagnosticCII).toBeNull();
+    expect(result.knownBasePoints).toBeGreaterThan(0);
+    expect(result.diagnosticBadge).not.toBeNull();
     expect(result.scoreStatus).toBe('ADMIN_REVIEW_REQUIRED');
     expect(result.needsAdminReview).toBe(true);
     expect(result.finalCII).toBeNull();

@@ -181,6 +181,56 @@ describe('FacultyReportsService — runCiiV45AnalysisForAdmin', () => {
     await expect(service.runCiiV45AnalysisForAdmin('report-1')).rejects.toBeInstanceOf(BadRequestException);
   });
 
+  it('surfaces a malformed AI response (wrong criterion count) as a retryable 400, not an unhandled 500', async () => {
+    // Reproduces the exact production failure: AI returns valid JSON, but dimension "1" has only
+    // 3 of its 4 fixed criteria — `computeCiiV45Result` throws `CiiV45ValidationError`, which must
+    // be caught and turned into a BadRequestException, never left to fall through as a bare 500.
+    const malformed: CiiV45EvaluatorPayload = {
+      ...CII_V45_AI_RESPONSE,
+      sectionScores: CII_V45_AI_RESPONSE.sectionScores.map((s) =>
+        s.dimension === '1' ? { ...s, criterionScores: s.criterionScores.slice(0, 3) } : s,
+      ),
+    };
+    const { service } = makeService(
+      { id: 'report-1' },
+      { summarize: jest.fn().mockResolvedValue({ ciiV45: malformed }) },
+    );
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await expect(service.runCiiV45AnalysisForAdmin('report-1')).rejects.toMatchObject({
+      response: { statusCode: 400 },
+      message: expect.stringContaining('Invalid criterion count 1'),
+    });
+    // The 400 message alone doesn't carry the AI's raw (malformed) payload — that must be
+    // logged server-side, otherwise a recurring failure on the same report is undebuggable.
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining('report-1'),
+      expect.stringContaining('"dimension":"1"'),
+    );
+    consoleError.mockRestore();
+  });
+
+  it('clears the in-flight guard after a malformed-AI-response failure, so the next run is not stuck', async () => {
+    const malformed: CiiV45EvaluatorPayload = {
+      ...CII_V45_AI_RESPONSE,
+      sectionScores: CII_V45_AI_RESPONSE.sectionScores.map((s) =>
+        s.dimension === '1' ? { ...s, criterionScores: s.criterionScores.slice(0, 3) } : s,
+      ),
+    };
+    const { service } = makeService(
+      { id: 'report-2' },
+      {
+        summarize: jest
+          .fn()
+          .mockResolvedValueOnce({ ciiV45: malformed })
+          .mockResolvedValueOnce({ ciiV45: CII_V45_AI_RESPONSE }),
+      },
+    );
+
+    await expect(service.runCiiV45AnalysisForAdmin('report-2')).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.runCiiV45AnalysisForAdmin('report-2')).resolves.toMatchObject({ success: true });
+  });
+
   it('re-analyses a locked report and clears the lock in the same write', async () => {
     const { service, qb } = makeService(
       {

@@ -157,6 +157,9 @@ function slimCiiPayloadForModel(data: unknown): unknown {
     uploaded_evidence_files: _files,
     section8_evidence_verification: section8Raw,
     system_validation: sysRaw,
+    evaluation_mode: _mode,
+    generated_at: _generated,
+    schema_version: _schema,
     ...rest
   } = rec;
   const section8 =
@@ -170,6 +173,8 @@ function slimCiiPayloadForModel(data: unknown): unknown {
   delete sys.scoring_rubric;
   return {
     ...rest,
+    reportId: rec.reportId ?? rec.report_id,
+    inputFingerprint: rec.inputFingerprint ?? rec.input_fingerprint,
     system_validation: sys,
     section8_evidence_verification: {
       has_evidence: section8.has_evidence,
@@ -310,6 +315,7 @@ export class AiService {
     const timeoutMs = opts?.timeoutMs ?? OPENAI_TIMEOUT_MS;
     const maxAttempts = opts?.maxAttempts ?? OPENAI_MAX_ATTEMPTS;
     const extraEmptyAttempt = opts?.retryEmptyOnce ? 1 : 0;
+    const startedAt = Date.now();
     let responseJson: OpenAiChatResponse = {};
     let lastError: (Error & { status?: number }) | null = null;
     let didEmptyRetry = false;
@@ -339,7 +345,7 @@ export class AiService {
           this.logger.warn(
             `OpenAI empty content (model=${model} finish_reason=${responseJson.choices?.[0]?.finish_reason ?? 'unknown'})`,
           );
-          if (opts?.retryEmptyOnce && !didEmptyRetry) {
+          if (opts?.retryEmptyOnce && !didEmptyRetry && Date.now() - startedAt < 80_000) {
             didEmptyRetry = true;
             if (reasoningModel) {
               const currentMax =
@@ -1655,8 +1661,9 @@ ${JSON.stringify(data)}`;
           maxTokens: 16_000,
           responseFormat: { type: 'json_object' },
           systemMessage: `${CII_V4_5_EVALUATOR_PROMPT}\n\n${CII_V4_5_JSON_ONLY_DEPLOYMENT_NOTE}`,
-          // Compact JSON + 16k. One empty retry at 24k stays under the FE analyser timeout.
-          timeoutMs: 90_000,
+          // gpt-5.6-sol regularly needs >90s. 180s + empty retry only if the first
+          // call finished quickly stays under the FE/BFF 300s analyser timeout.
+          timeoutMs: 180_000,
           maxAttempts: 1,
           retryEmptyOnce: true,
         }

@@ -18,6 +18,7 @@ describe('CII_V4_5_JSON_ONLY_DEPLOYMENT_NOTE — per-dimension criterion manifes
     expect(CII_V4_5_JSON_ONLY_DEPLOYMENT_NOTE).toMatch(/NEVER one entry per team member/);
     expect(CII_V4_5_JSON_ONLY_DEPLOYMENT_NOTE).toMatch(/Omitted criteria are held pending/);
     expect(CII_V4_5_JSON_ONLY_DEPLOYMENT_NOTE).toMatch(/max 25 words/);
+    expect(CII_V4_5_JSON_ONLY_DEPLOYMENT_NOTE).toMatch(/Omit claimInventory/);
   });
 
   it('tells the model not to flag pending attendance verification or live-attendance gates', () => {

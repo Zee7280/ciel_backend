@@ -441,7 +441,42 @@ export function defaultAdminEvidenceRationale(
 }
 
 function aliasAiCriterionKey(key: string): string {
-  return key === 'hoursConsistency' ? 'hoursCompletion' : key;
+  const compact = key.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+  if (compact === 'hoursconsistency' || compact === 'hourscompletion') return 'hoursCompletion';
+  return key;
+}
+
+function normalizeAiDimensionId(value: unknown): string {
+  const raw = String(value ?? '').trim();
+  const match = raw.match(/^(?:dimension\s*)?(4A|4B|[1-9])$/i);
+  return match ? match[1].toUpperCase() : raw;
+}
+
+function asScoreRow(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function aiCriterionRows(section: unknown): Record<string, unknown>[] {
+  const rec = asScoreRow(section);
+  const raw = rec.criterionScores ?? rec.criteria ?? rec.scores;
+  return Array.isArray(raw) ? raw.map(asScoreRow) : [];
+}
+
+function pickAiCriterionKey(row: Record<string, unknown>): string {
+  return aliasAiCriterionKey(String(row.criterion ?? row.key ?? row.id ?? row.criterionId ?? row.name ?? ''));
+}
+
+function pickAiAnchor(row: Record<string, unknown>, fallback?: CiiV45Anchor | null): CiiV45Anchor | null {
+  return (
+    coerceAiAnchor(row.anchor) ??
+    coerceAiAnchor(row.qualityAnchor) ??
+    coerceAiAnchor(row.score) ??
+    coerceAiAnchor(row.rating) ??
+    fallback ??
+    null
+  );
 }
 
 export function pendingDimension7Section(): CiiV45SectionScore {
@@ -493,35 +528,38 @@ function coerceAiSectionScores(raw: CiiV45SectionScore[] | undefined): {
   const rows = Array.isArray(raw) ? raw : [];
   const omittedKeys: string[] = [];
   const sections = CII_V45_AI_DIMENSIONS.map((dim) => {
-    const section = rows.find((s) => s.dimension === dim.id);
-    const byKey = new Map(
-      (Array.isArray(section?.criterionScores) ? section.criterionScores : []).map((c) => [
-        aliasAiCriterionKey(String(c.criterion || '')),
-        c,
-      ]),
-    );
+    const section = rows.find((s) => normalizeAiDimensionId(s.dimension) === dim.id);
+    const list = aiCriterionRows(section);
+    const byKey = new Map<string, Record<string, unknown>>();
+    for (const row of list) {
+      const mapped = pickAiCriterionKey(row);
+      if (mapped && mapped !== 'undefined' && mapped !== 'null') {
+        byKey.set(mapped, row);
+      }
+    }
     return {
       dimension: dim.id,
-      criterionScores: dim.criteria.map(({ key }) => {
-        const c = byKey.get(key);
+      criterionScores: dim.criteria.map(({ key }, index) => {
+        const c = byKey.get(key) ?? (list.length === dim.criteria.length ? list[index] : undefined);
         if (!c) {
           omittedKeys.push(`${dim.id}.${key}`);
           return omittedAiCriterion(key);
         }
-        const anchor = coerceAiAnchor(c.anchor) ?? 'P';
-        const quality = coerceAiAnchor(c.qualityAnchor) ?? anchor;
-        const status = VERIFICATION_STATUSES.includes(c.verificationStatus)
-          ? c.verificationStatus
+        const anchor = pickAiAnchor(c) ?? 'P';
+        const quality = pickAiAnchor(c, anchor) ?? anchor;
+        const statusRaw = c.verificationStatus;
+        const status = VERIFICATION_STATUSES.includes(statusRaw as never)
+          ? (statusRaw as (typeof VERIFICATION_STATUSES)[number])
           : 'AI_REPORT';
         return {
           criterion: key,
           anchor,
           qualityAnchor: quality === 'P' ? anchor : quality,
           verificationStatus: status === 'VERIFIED' ? 'AI_REPORT' : status,
-          sourceRefs: Array.isArray(c.sourceRefs) ? c.sourceRefs : [],
+          sourceRefs: Array.isArray(c.sourceRefs) ? (c.sourceRefs as string[]) : [],
           evidenceIds: [],
-          reasoningSummary: compactReasoning(c.reasoningSummary),
-          deductionReason: c.deductionReason ?? null,
+          reasoningSummary: compactReasoning(c.reasoningSummary ?? c.reasoning ?? c.rationale),
+          deductionReason: (c.deductionReason as string | null) ?? null,
         };
       }),
     };

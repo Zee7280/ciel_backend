@@ -178,4 +178,21 @@ describe('parseCiiV45Response', () => {
     expect(() => computeCiiV45Result(result!)).not.toThrow();
     expect(computeCiiV45Result(result!).scoreStatus).toBe('ADMIN_REVIEW_REQUIRED');
   });
+
+  it('still parses when the model omits echo IDs and narrative arrays', () => {
+    const response = fullResponse() as Record<string, unknown>;
+    delete response.reportId;
+    delete response.inputFingerprint;
+    delete response.adminReviewReasons;
+    delete response.strengths;
+    delete response.developmentPriorities;
+    delete response.analysisSummary;
+    delete response.studentFeedback;
+    const result = parseCiiV45Response(JSON.stringify(response));
+    expect(result).not.toBeNull();
+    expect(result!.reportId).toBe('pending');
+    expect(result!.inputFingerprint).toBe('pending');
+    expect(result!.strengths).toEqual([]);
+    expect(() => computeCiiV45Result(result!)).not.toThrow();
+  });
 });

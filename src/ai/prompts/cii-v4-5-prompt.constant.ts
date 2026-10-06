@@ -182,6 +182,7 @@ Emit exactly one JSON object matching the CIEL PK CII v5.0.2 Hybrid report-quali
 Set frameworkVersion to "5.0" at the top level. Echo reportId and inputFingerprint exactly as given to you.
 Include exactly nine sectionScores entries (dimensions "1","2","3","4A","4B","5","6","8","9"), each with every fixed criterion for that dimension rated. Do NOT return dimension "7".
 Include sectionAnalyses with exactly those nine dimensions.
+Omit claimInventory, evidenceAudit, deductionLedger, extraMileUplift, integrityPenalty and Dimension 7 — the server fills those.
 Keep each \`reasoningSummary\` to one sentence (max 25 words). Keep each \`sectionAnalyses\` summary to two sentences.
 Never include a numeric CII, scoreStatus, baseCII, diagnosticCII, finalCII, aiReportScore, adminEvidenceScore or badge field — the server computes those.
 Always return evidenceIds as [] on every criterion.

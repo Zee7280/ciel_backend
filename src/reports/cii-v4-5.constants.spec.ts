@@ -467,6 +467,48 @@ describe('computeCiiV45Result', () => {
     expect(result.aiReportScore).toBeNull();
   });
 
+  it('maps criterionId from the live gpt-5.6-sol payload onto official keys', () => {
+    const base = buildValidPayload();
+    const renamed = {
+      ...base,
+      sectionScores: base.sectionScores
+        .filter((s) => s.dimension !== '7')
+        .map((s) => ({
+          dimension: s.dimension,
+          criterionScores: s.criterionScores.map(({ criterion, ...rest }) => ({
+            criterionId: criterion,
+            ...rest,
+          })),
+        })),
+    };
+    const payload = normalizeCiiV5AiPayload(renamed as never);
+    expect(computeCiiV45Result(payload).aiReportScore).toBe(59.5);
+    expect(computeCiiV45Result(payload).scoreStatus).toBe('ADMIN_EVIDENCE_REQUIRED');
+  });
+
+  it('maps unnamed AI criterion rows by position when the count matches', () => {
+    const base = buildValidPayload();
+    const stripped = {
+      ...base,
+      sectionScores: base.sectionScores
+        .filter((s) => s.dimension !== '7')
+        .map((s) => ({
+          dimension: s.dimension,
+          criterionScores: s.criterionScores.map(({ criterion: _ignored, ...rest }) => rest),
+        })),
+    };
+    const payload = normalizeCiiV5AiPayload(stripped as never);
+    const result = computeCiiV45Result(payload);
+    expect(payload.sectionScores.find((s) => s.dimension === '1')?.criterionScores.map((c) => c.criterion)).toEqual([
+      'role',
+      'quality',
+      'hoursCompletion',
+      'continuity',
+    ]);
+    expect(result.aiReportScore).toBe(59.5);
+    expect(result.scoreStatus).toBe('ADMIN_EVIDENCE_REQUIRED');
+  });
+
   it('aliases hoursConsistency from older AI payloads onto hoursCompletion', () => {
     const payload = normalizeCiiV5AiPayload({
       ...buildValidPayload(),

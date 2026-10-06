@@ -18,15 +18,7 @@ import {
  */
 
 const REQUIRED_KEYS: (keyof CiiV45EvaluatorPayload)[] = [
-  'frameworkVersion',
-  'reportId',
-  'inputFingerprint',
   'sectionScores',
-  'adminReviewReasons',
-  'strengths',
-  'developmentPriorities',
-  'analysisSummary',
-  'studentFeedback',
 ];
 
 function hasOwn(value: Record<string, unknown>, key: string): boolean {
@@ -39,18 +31,30 @@ export function parseCiiV45Response(raw: string): CiiV45EvaluatorPayload | null 
   const value = parsed as Record<string, unknown>;
 
   // exceptionalFeature is nullable; v5.0.2 report-quality JSON does not require
-  // inputCompleteness / deductionLedger (the server injects the source audit).
+  // inputCompleteness / deductionLedger / echo IDs (the server injects those).
   for (const key of REQUIRED_KEYS) {
     if (!hasOwn(value, key) || value[key] === undefined) return null;
   }
 
-  if (value.frameworkVersion !== '5.0' && value.frameworkVersion !== '4.5') return null;
-  if (typeof value.reportId !== 'string' || !value.reportId.trim()) return null;
-  if (typeof value.inputFingerprint !== 'string' || !value.inputFingerprint.trim()) return null;
+  const framework = String(value.frameworkVersion ?? '5.0').trim();
+  if (framework !== '5.0' && framework !== '4.5') return null;
+  value.frameworkVersion = '5.0';
+  const reportId =
+    (typeof value.reportId === 'string' && value.reportId.trim()) ||
+    (typeof value.report_id === 'string' && value.report_id.trim()) ||
+    'pending';
+  const inputFingerprint =
+    (typeof value.inputFingerprint === 'string' && value.inputFingerprint.trim()) ||
+    (typeof value.input_fingerprint === 'string' && value.input_fingerprint.trim()) ||
+    'pending';
+  value.reportId = reportId;
+  value.inputFingerprint = inputFingerprint;
   if (!Array.isArray(value.sectionScores)) return null;
-  if (!Array.isArray(value.adminReviewReasons)) return null;
-  if (!Array.isArray(value.strengths)) return null;
-  if (!Array.isArray(value.developmentPriorities)) return null;
+  if (!Array.isArray(value.adminReviewReasons)) value.adminReviewReasons = [];
+  if (!Array.isArray(value.strengths)) value.strengths = [];
+  if (!Array.isArray(value.developmentPriorities)) value.developmentPriorities = [];
+  if (typeof value.analysisSummary !== 'string') value.analysisSummary = '';
+  if (typeof value.studentFeedback !== 'string') value.studentFeedback = '';
   if (!Array.isArray(value.claimInventory)) value.claimInventory = [];
   if (!Array.isArray(value.evidenceAudit)) value.evidenceAudit = [];
   if (!Array.isArray(value.deductionLedger)) value.deductionLedger = [];

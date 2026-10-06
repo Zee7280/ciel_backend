@@ -845,7 +845,7 @@ describe('StudentReportsService', () => {
     const redact = (row: Record<string, unknown>) =>
       (service as any).redactUnapprovedAiScoreForStudent(row);
 
-    it('strips the AI CII score, total and level before faculty sign-off', () => {
+    it('strips the certificate before faculty sign-off but keeps the CII score', () => {
       expect(
         redact({
           status: 'submitted',
@@ -854,10 +854,10 @@ describe('StudentReportsService', () => {
           total: 91,
           level: 'Transformative',
         }),
-      ).toMatchObject({ cii_score: null, total: 0, level: null });
+      ).toMatchObject({ cii_score: 88, total: 91, level: 'Transformative' });
     });
 
-    it('strips them on a rejected report too', () => {
+    it('keeps the CII score on a rejected report too', () => {
       expect(
         redact({
           status: 'rejected',
@@ -866,10 +866,10 @@ describe('StudentReportsService', () => {
           total: 91,
           level: 'Transformative',
         }),
-      ).toMatchObject({ cii_score: null, total: 0, level: null });
+      ).toMatchObject({ cii_score: 88, total: 91, level: 'Transformative' });
     });
 
-    it('hides score + certificate when CIEL PK locked the CII (faculty_status mirrored to approved) but has not published yet', () => {
+    it('hides certificate when CIEL PK locked the CII but has not published yet, and keeps the score', () => {
       expect(
         redact({
           status: 'submitted',
@@ -881,9 +881,9 @@ describe('StudentReportsService', () => {
           actions: { certificate_url: '/cert', pdf_url: '/print' },
         }),
       ).toMatchObject({
-        cii_score: null,
-        total: 0,
-        level: null,
+        cii_score: 88,
+        total: 91,
+        level: 'Transformative',
         actions: { certificate_url: null, pdf_url: null },
       });
     });
@@ -929,17 +929,17 @@ describe('StudentReportsService', () => {
     const redactListing = (row: Record<string, unknown>) =>
       (StudentReportsService as any).redactCiiV45ListingForStudent(row);
 
-    it('strips ciiV45/ciiV45Lock when the score is not yet locked', () => {
+    it('keeps the redacted CII score on the listing even before the score is locked', () => {
       const result = redactListing({
         id: 'r-1',
         ciiV45: { finalCII: 91.5, sectionScores: [] },
         ciiV45Lock: null,
       });
-      expect(result.ciiV45).toBeNull();
+      expect(result.ciiV45.finalCII).toBe(91.5);
       expect(result.ciiV45Lock).toBeNull();
     });
 
-    it('withholds a locked score until CIEL PK Admin has accepted the report', () => {
+    it('keeps a locked score visible before CIEL PK Admin has accepted the report', () => {
       const result = redactListing({
         id: 'r-2a',
         status: 'submitted',
@@ -948,8 +948,8 @@ describe('StudentReportsService', () => {
         ciiV45: { finalCII: 91.5, sectionScores: [] },
         ciiV45Lock: { locked: true, hash: 'abc' },
       });
-      expect(result.ciiV45).toBeNull();
-      expect(result.ciiV45Lock).toBeNull();
+      expect(result.ciiV45.finalCII).toBe(91.5);
+      expect(result.ciiV45Lock.locked).toBe(true);
     });
 
     it('surfaces the locked score/badge/feedback once CIEL PK Admin has accepted the report', () => {

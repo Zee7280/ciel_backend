@@ -189,9 +189,7 @@ export class PartnersController {
       .includes('university');
     const data = isUni
       ? await this.communityAward.listForUniversity(req.user.organizationId)
-      : (
-          await this.communityAward.listForPartnerOrg(req.user.organizationId)
-        ).map((card) => CommunityAwardService.stripAnalysisFromCard(card));
+      : await this.communityAward.listForPartnerOrg(req.user.organizationId);
     return { success: true, data, scope: isUni ? 'university' : 'partner' };
   }
 

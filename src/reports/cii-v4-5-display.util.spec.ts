@@ -37,7 +37,7 @@ describe('pickCiiV45DisplayScore', () => {
     ).toBe(60.3);
   });
 
-  it('does not use knownBasePoints as /100 while Admin evidence is pending', () => {
+  it('shows the AI report score while Admin evidence is still pending', () => {
     expect(
       pickCiiV45DisplayScore(
         {
@@ -49,7 +49,7 @@ describe('pickCiiV45DisplayScore', () => {
         },
         null,
       ),
-    ).toBeNull();
+    ).toBe(59.5);
   });
 
   it('does not invent a score when the analyser has not produced numbers', () => {
@@ -68,7 +68,7 @@ describe('pickCiiV45DisplayBadge', () => {
     expect(pickCiiV45DisplayBadge(cii, { locked: false })?.name).toBe('Provisional');
   });
 
-  it('does not attach a /100 badge from the /85 mix while Admin evidence is pending', () => {
+  it('keeps the diagnostic badge while Admin evidence is still pending', () => {
     expect(
       pickCiiV45DisplayBadge(
         {
@@ -77,7 +77,7 @@ describe('pickCiiV45DisplayBadge', () => {
           adminEvidenceAssessment: { status: 'PENDING' },
         },
         null,
-      ),
-    ).toBeNull();
+      )?.name,
+    ).toBe('Sound Community Contributor');
   });
 });

@@ -63,14 +63,20 @@ const LOCKED = {
 };
 
 describe('redactCiiV45Fields', () => {
-  it('strips everything before an Admin has locked the evaluation (no provisional release)', () => {
+  it('exposes the curated score subset before an Admin has locked the evaluation', () => {
     const result = redactCiiV45Fields(SENSITIVE_CII_V45, null);
-    expect(result).toEqual({ ciiV45: null, ciiV45Lock: null });
+    expect(result.ciiV45?.finalCII).toBe(84.5);
+    expect(result.ciiV45?.aiReportScore).toBe(70);
+    expect(result.ciiV45Lock).toBeNull();
+    expect(JSON.stringify(result)).not.toContain('Private faculty-facing rationale');
+    expect(JSON.stringify(result)).not.toContain('claimInventory');
   });
 
-  it('strips everything when ciiV45Lock.locked is false', () => {
+  it('keeps the curated score subset when ciiV45Lock.locked is false', () => {
     const result = redactCiiV45Fields(SENSITIVE_CII_V45, { ...LOCKED, locked: false });
-    expect(result).toEqual({ ciiV45: null, ciiV45Lock: null });
+    expect(result.ciiV45?.finalCII).toBe(84.5);
+    expect(result.ciiV45Lock).toEqual({ locked: false });
+    expect(JSON.stringify(result)).not.toContain('Private claim text');
   });
 
   it('once locked, exposes only the curated outcome subset — never per-criterion or raw-content fields', () => {
@@ -103,6 +109,7 @@ describe('redactCiiV45Fields', () => {
     expect(result.ciiV45?.recommendedBadge).toEqual({
       code: 'L5', name: 'Distinguished Impact Contributor', level: 5, numericLevel: 5, gateCapped: false,
     });
+    expect(result.ciiV45?.diagnosticBadge).toBeNull();
     expect(result.ciiV45?.sectionScores).toEqual([
       { dimension: '7', name: 'Evidence, Ethics & Verification', maximumPoints: 15, score: 13 },
     ]);

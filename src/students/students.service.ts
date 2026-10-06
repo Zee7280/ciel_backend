@@ -70,6 +70,7 @@ import { StudentReport } from '../reports/entities/student-report.entity';
 import {
   readCii,
   isCommunityAwardMedalReport,
+  resolveDisplayCii,
 } from '../reports/community-award.util';
 import { StudentReportsService } from '../reports/student-reports.service';
 import { ReportPartnerApprovalSettingsService } from '../reports/report-partner-approval-settings.service';
@@ -3173,13 +3174,8 @@ export class StudentsService {
     ]).size;
 
     const scoresFromReports = approvedReports
-      .map((r) =>
-        Number(
-          (r.section11 as { ai_generated_impact_score?: number } | undefined)
-            ?.ai_generated_impact_score,
-        ),
-      )
-      .filter((n) => Number.isFinite(n));
+      .map((r) => resolveDisplayCii(r))
+      .filter((n): n is number => n != null && Number.isFinite(n));
     const maxReportScore = scoresFromReports.length
       ? Math.max(...scoresFromReports)
       : null;
@@ -3328,7 +3324,7 @@ export class StudentsService {
           project_id: oppId,
           opportunity_id: oppId,
           report_id: r.id,
-          cii_score: s11.ai_generated_impact_score ?? null,
+          cii_score: resolveDisplayCii(r),
           institutional_alignment_score:
             s11.institutional_alignment_score ?? null,
           actions: {
@@ -3365,7 +3361,7 @@ export class StudentsService {
           project_id: oppId,
           opportunity_id: oppId,
           report_id: r.id,
-          cii_score: s11.ai_generated_impact_score ?? null,
+          cii_score: resolveDisplayCii(r),
           institutional_alignment_score:
             s11.institutional_alignment_score ?? null,
           actions: {

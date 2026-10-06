@@ -1,4 +1,4 @@
-/** Display CII for every role: published score when locked, diagnostic/base otherwise. */
+/** Display CII for every role: published score when locked, otherwise the latest available number. */
 
 function finiteCii(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -31,16 +31,12 @@ export function pickCiiV45DisplayScore(
       finiteCii(cii.diagnosticCII)
     );
   }
-  const evidence = asRecord(cii.adminEvidenceAssessment);
-  // v5.0: knownBasePoints while D7 is pending is the /85 mix, not a /100 CII.
-  if (evidence?.status === 'PENDING') {
-    return finiteCii(cii.diagnosticCII) ?? finiteCii(cii.baseCII) ?? finiteCii(cii.finalCII);
-  }
   return (
     finiteCii(cii.diagnosticCII) ??
     finiteCii(cii.baseCII) ??
+    finiteCii(cii.finalCII) ??
     finiteCii(cii.knownBasePoints) ??
-    finiteCii(cii.finalCII)
+    finiteCii(cii.aiReportScore)
   );
 }
 
@@ -65,9 +61,6 @@ export function pickCiiV45DisplayBadge(
       read(cii.diagnosticBadge)
     );
   }
-  const evidence = asRecord(cii.adminEvidenceAssessment);
-  // v5.0: diagnosticBadge from the /85 mix is not an overall /100 standing.
-  if (evidence?.status === 'PENDING') return null;
   return (
     read(cii.recommendedBadge) ??
     read(cii.diagnosticBadge) ??

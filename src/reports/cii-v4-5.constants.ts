@@ -440,6 +440,34 @@ export function defaultAdminEvidenceRationale(
   return `CIEL PK Admin assigned Anchor ${anchor} (${label}) for ${criterion} after reviewing original evidence.`;
 }
 
+/** Seven Dimension-7 rows. Missing/invalid Admin marks default to Sound (2) so Confirm can publish. */
+export function completeAdminEvidenceCriteria(
+  raw?: Array<{
+    criterion: string;
+    anchor: 0 | 1 | 2 | 3 | 4;
+    reasoningSummary?: string;
+    evidenceIds?: string[];
+  }>,
+): Array<{
+  criterion: string;
+  anchor: Exclude<CiiV45Anchor, 'P'>;
+  reasoningSummary?: string;
+  evidenceIds?: string[];
+}> {
+  const byKey = new Map((Array.isArray(raw) ? raw : []).map((row) => [row.criterion, row]));
+  return CII_V45_EVIDENCE_DIMENSION.criteria.map(({ key }) => {
+    const row = byKey.get(key);
+    const anchor =
+      row && Number.isInteger(row.anchor) && row.anchor >= 0 && row.anchor <= 4 ? row.anchor : 2;
+    return {
+      criterion: key,
+      anchor,
+      reasoningSummary: row?.reasoningSummary,
+      evidenceIds: row?.evidenceIds,
+    };
+  });
+}
+
 function aliasAiCriterionKey(key: string): string {
   const compact = key.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
   if (compact === 'hoursconsistency' || compact === 'hourscompletion') return 'hoursCompletion';

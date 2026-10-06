@@ -318,8 +318,8 @@ export class CommunityAwardService {
       report.ciiV45 as Record<string, unknown> | null,
       report.ciiV45Lock,
     );
-    if (!ciiV45 || !ciiV45Lock) return null;
-    return { ciiV45, ciiV45Lock };
+    if (!ciiV45) return null;
+    return { ciiV45, ciiV45Lock: ciiV45Lock ?? { locked: false } };
   }
 
   /** Same as getCiiV45BreakdownForOrg but unrestricted (Super Admin — platform-wide). */
@@ -333,8 +333,8 @@ export class CommunityAwardService {
       report.ciiV45 as Record<string, unknown> | null,
       report.ciiV45Lock,
     );
-    if (!ciiV45 || !ciiV45Lock) return null;
-    return { ciiV45, ciiV45Lock };
+    if (!ciiV45) return null;
+    return { ciiV45, ciiV45Lock: ciiV45Lock ?? { locked: false } };
   }
 
   async notifyFromPool(

@@ -313,7 +313,50 @@ describe('StudentsService impact history', () => {
           hours: 12,
           record_type: 'cii_report',
           status: 'certified',
+          cii_score: 88,
         }),
+      ]),
+    );
+  });
+
+  it('uses the v4.5 flashcard CII on impact history, not only legacy section11', async () => {
+    const now = new Date();
+    const queryBuilder = {
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue([]),
+    };
+    const service = makeService({
+      studentReportsRepository: {
+        find: jest.fn().mockResolvedValue([
+          {
+            id: 'report-v45',
+            studentId: 'student-1',
+            opportunityId: 'project-1',
+            status: 'verified',
+            partner_status: 'approved',
+            admin_status: 'approved',
+            submission_date: now,
+            createdAt: now,
+            section1: { metrics: { total_verified_hours: 12 } },
+            section11: { ai_generated_impact_score: 40 },
+            ciiV45: { diagnosticCII: 57.9, aiReportScore: 57.9 },
+            ciiV45Lock: { locked: false },
+          },
+        ]),
+        createQueryBuilder: jest.fn().mockReturnValue(queryBuilder),
+      },
+    });
+
+    const result = await service.getImpactHistory('student-1', 'student');
+
+    expect(result.data.impact_score).toBe(58);
+    expect(result.data.activities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'report-v45', cii_score: 58 }),
       ]),
     );
   });

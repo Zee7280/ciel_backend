@@ -225,6 +225,29 @@ describe('FacultyReportsService — runCiiV45AnalysisForAdmin', () => {
     );
   });
 
+  it('Confirm without Dim 7 marks defaults Sound (2) and publishes a /100 CII', async () => {
+    const report: any = analysableReport();
+    const { service, qb } = makeService(
+      report,
+      { summarize: jest.fn().mockResolvedValue({ ciiV45: CII_V45_AI_RESPONSE }) },
+    );
+    const analysed = await service.runCiiV45AnalysisForAdmin('report-1');
+    report.ciiV45 = analysed.data;
+    report.ciiV45.inputFingerprint = await fingerprintForReport(report);
+
+    const result = await service.approveCiiV45ForAdmin('report-1', 'admin-1');
+    expect((result.data as any).ciiV45Lock.locked).toBe(true);
+    expect((result.data as any).ciiV45.adminEvidenceScore).toBe(10.5);
+    expect((result.data as any).ciiV45.finalCII).toBe(95.5);
+    expect((result.data as any).ciiV45.adminEvidenceAssessment.status).toBe('ASSESSED');
+    expect(qb.set).toHaveBeenCalledWith(
+      expect.objectContaining({
+        admin_status: 'approved',
+        status: 'verified',
+      }),
+    );
+  });
+
   it('Confirm fills a default evidence rationale when Admin leaves Dim 7 notes blank', async () => {
     const report: any = analysableReport();
     const { service } = makeService(
@@ -889,7 +912,7 @@ describe('mapFacultyListCii', () => {
     });
   });
 
-  it('does not treat pending Admin evidence /85 mix as an overall /100 CII or badge', () => {
+  it('shows pending Admin evidence score and badge on review cards', () => {
     expect(
       mapFacultyListCii({
         ciiV45: {
@@ -904,10 +927,10 @@ describe('mapFacultyListCii', () => {
       }),
     ).toEqual({
       cii_analyser_run: true,
-      cii_provisional: null,
+      cii_provisional: 85,
       cii_locked: false,
-      cii_level_name: null,
-      cii_numeric_level: null,
+      cii_level_name: 'Sound Community Contributor',
+      cii_numeric_level: 3,
     });
   });
 });

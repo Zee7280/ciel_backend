@@ -6,8 +6,8 @@
  * `reasoningSummary`/`sourceRefs`/`deductionReason`, `adminReviewReasons` detail, or
  * `exceptionalFeature.explanation`.
  *
- * There is no provisional pre-lock release path for v4.5: `finalCII` is null unless
- * `scoreStatus === 'FINAL'`, so there is nothing trustworthy to release before an Admin locks it.
+ * Score, badge and section totals are visible to every role as soon as analysis exists.
+ * Per-criterion reasoning, claim text and evidence-content audits stay stripped.
  */
 
 export interface RedactedCiiV45Lock {
@@ -35,8 +35,10 @@ export interface RedactedCiiV45 {
   aiReportScore?: unknown;
   adminEvidenceScore?: unknown;
   baseCII?: unknown;
+  knownBasePoints?: unknown;
   finalBadge: RedactedCiiV45Badge | null;
   recommendedBadge: RedactedCiiV45Badge | null;
+  diagnosticBadge: RedactedCiiV45Badge | null;
   sectionScores: Array<{
     dimension: unknown;
     name: unknown;
@@ -75,6 +77,23 @@ function redactBadge(badge: unknown): RedactedCiiV45Badge | null {
   };
 }
 
+function redactLock(
+  ciiV45Lock: CiiV45LockInput,
+  locked: boolean,
+): RedactedCiiV45Lock | null {
+  if (!ciiV45Lock) return null;
+  if (!locked) return { locked: false };
+  return {
+    locked: true,
+    hash: ciiV45Lock.hash,
+    lockedAt: ciiV45Lock.lockedAt,
+    aiRecommendedScore: ciiV45Lock.aiRecommendedScore,
+    adminApprovedScore: ciiV45Lock.adminApprovedScore,
+    scoreWasModerated: ciiV45Lock.scoreWasModerated,
+    scoreModerationReason: ciiV45Lock.scoreModerationReason,
+  };
+}
+
 export function redactCiiV45Fields(
   ciiV45: Record<string, unknown> | null | undefined,
   ciiV45Lock: CiiV45LockInput,
@@ -83,13 +102,12 @@ export function redactCiiV45Fields(
   ciiV45Lock: RedactedCiiV45Lock | null;
 } {
   const locked = ciiV45Lock?.locked === true || ciiV45Lock?.locked === 'true';
-  if (!locked || !ciiV45Lock) {
-    // No provisional release for v4.5 — nothing trustworthy exists before an Admin lock.
-    return { ciiV45: null, ciiV45Lock: null };
+  if (!ciiV45) {
+    return { ciiV45: null, ciiV45Lock: redactLock(ciiV45Lock, locked) };
   }
 
-  const sectionScores = Array.isArray(ciiV45?.sectionScores)
-    ? (ciiV45!.sectionScores as Array<Record<string, unknown>>).map((s) => ({
+  const sectionScores = Array.isArray(ciiV45.sectionScores)
+    ? (ciiV45.sectionScores as Array<Record<string, unknown>>).map((s) => ({
         dimension: s.dimension,
         name: s.name,
         maximumPoints: s.maximumPoints,
@@ -97,35 +115,29 @@ export function redactCiiV45Fields(
       }))
     : [];
 
-  const extraMileUplift = ciiV45?.extraMileUplift as { total?: unknown } | undefined;
-  const integrityPenalty = ciiV45?.integrityPenalty as { points?: unknown } | undefined;
+  const extraMileUplift = ciiV45.extraMileUplift as { total?: unknown } | undefined;
+  const integrityPenalty = ciiV45.integrityPenalty as { points?: unknown } | undefined;
 
   return {
     ciiV45: {
-      finalCII: ciiV45?.finalCII,
-      diagnosticCII: ciiV45?.diagnosticCII,
-      finalBadge: redactBadge(ciiV45?.finalBadge),
-      recommendedBadge: redactBadge(ciiV45?.recommendedBadge),
+      finalCII: ciiV45.finalCII,
+      diagnosticCII: ciiV45.diagnosticCII,
+      finalBadge: redactBadge(ciiV45.finalBadge),
+      recommendedBadge: redactBadge(ciiV45.recommendedBadge),
+      diagnosticBadge: redactBadge(ciiV45.diagnosticBadge),
       sectionScores,
       extraMileUplift: { total: extraMileUplift?.total ?? null },
       integrityPenalty: { points: integrityPenalty?.points ?? 0 },
-      frameworkVersion: ciiV45?.frameworkVersion,
-      aiReportScore: ciiV45?.aiReportScore,
-      adminEvidenceScore: ciiV45?.adminEvidenceScore,
-      baseCII: ciiV45?.baseCII,
-      strengths: ciiV45?.strengths,
-      developmentPriorities: ciiV45?.developmentPriorities,
-      studentFeedback: ciiV45?.studentFeedback,
+      frameworkVersion: ciiV45.frameworkVersion,
+      aiReportScore: ciiV45.aiReportScore,
+      adminEvidenceScore: ciiV45.adminEvidenceScore,
+      baseCII: ciiV45.baseCII,
+      knownBasePoints: ciiV45.knownBasePoints,
+      strengths: ciiV45.strengths,
+      developmentPriorities: ciiV45.developmentPriorities,
+      studentFeedback: ciiV45.studentFeedback,
     },
-    ciiV45Lock: {
-      locked: true,
-      hash: ciiV45Lock.hash,
-      lockedAt: ciiV45Lock.lockedAt,
-      aiRecommendedScore: ciiV45Lock.aiRecommendedScore,
-      adminApprovedScore: ciiV45Lock.adminApprovedScore,
-      scoreWasModerated: ciiV45Lock.scoreWasModerated,
-      scoreModerationReason: ciiV45Lock.scoreModerationReason,
-    },
+    ciiV45Lock: redactLock(ciiV45Lock, locked),
   };
 }
 

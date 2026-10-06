@@ -17,7 +17,10 @@ import {
   canEditOrSubmitReport,
   getReportingCloseDate,
 } from '../opportunities/opportunity-timeline.util';
-import { pickCiiV45DisplayScore } from './cii-v4-5-display.util';
+import {
+  pickCiiV45DisplayBadge,
+  pickCiiV45DisplayScore,
+} from './cii-v4-5-display.util';
 import { Participation } from '../engagement/entities/participant.entity';
 import { S3Service } from '../common/s3.service';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
@@ -942,12 +945,8 @@ export class StudentReportsService {
   }
 
   /**
-   * The student's own report listing (`GET /student/reports`) must never expose the AI-generated
-   * CII — nor the award `total`/`level` derived from it — before Faculty has signed the report
-   * off. Same rule `redactCiiV45ForExternalViewer` enforces on the detail read path, and the same
-   * bug class already fixed for Coursework's merit score. Faculty/admin/partner/university
-   * listings call `mapReportListing`/`mapReportListingsWithTeam` without this wrapper and keep
-   * the full record, which is what their review screens need.
+   * Certificate / official print stay hidden until CIEL PK Admin has accepted the report.
+   * The numeric CII chip, award total and level stay visible on the student's listing/flashcard.
    */
   private redactUnapprovedAiScoreForStudent<
     T extends {
@@ -966,8 +965,6 @@ export class StudentReportsService {
       };
     },
   >(row: T): T {
-    // Score, level and certificate are the student's only once CIEL PK Admin has accepted the report
-    // — locking the CII (which mirrors faculty_status to 'approved') is not publication.
     if (
       isCommunityAwardMedalReport({
         status: row.status,
@@ -977,14 +974,10 @@ export class StudentReportsService {
     ) {
       return row;
     }
-    // Certificate + official print dossier stay hidden until the record is live. The locked
-    // detailed report is the student's own source record (HOLD until faculty lock), so keep
-    // report_url / v17_url.
+    // Certificate + official print dossier stay hidden until the record is live. Keep
+    // report_url / v17_url and the CII score/level already on the listing row.
     return {
       ...row,
-      cii_score: null,
-      total: 0,
-      level: null,
       actions: row.actions
         ? { ...row.actions, certificate_url: null, pdf_url: null }
         : row.actions,
@@ -1017,8 +1010,8 @@ export class StudentReportsService {
     };
   }
 
-  /** The student receives the analysis report only once CIEL PK Admin has accepted the report —
-   * locking the CII is an internal step, not publication. */
+  /** Independent re-run analyses stay hidden until CIEL PK Admin has accepted the report.
+   * Redacted CII score/badge already on the row stay visible for flashcards. */
   private static withholdAnalysisUntilAdminApproved<
     T extends Record<string, any>,
   >(row: T): T {
@@ -1031,7 +1024,7 @@ export class StudentReportsService {
     ) {
       return row;
     }
-    return { ...row, ciiV45: null, ciiV45Lock: null, independentAiAnalyses: null };
+    return { ...row, independentAiAnalyses: null };
   }
 
   /** Same 0-100 total + standing Level badge every faculty/partner/admin community-award view
@@ -2409,17 +2402,13 @@ export class StudentReportsService {
       };
     }
 
-    // Admin-locked CII v4.5 (community-service reports only) is safe to publish here — it's the
-    // same final score + badge band the certificate already display, no per-criterion detail.
+    // Flashcard / verification CII: latest available score and badge, no per-criterion detail.
     const ciiV45Lock = report.ciiV45Lock;
-    const locked = isCiiFacultyLocked(ciiV45Lock);
-    const publicLevel = locked
-      ? ((report.ciiV45 as { finalBadge?: { level?: number; name?: string } })
-          ?.finalBadge ?? null)
-      : null;
-    const publishedScore = locked
-      ? pickCiiV45DisplayScore(report.ciiV45, ciiV45Lock)
-      : null;
+    const publicLevel =
+      pickCiiV45DisplayBadge(report.ciiV45, ciiV45Lock) ??
+      ((report.ciiV45 as { finalBadge?: { level?: number; name?: string } })
+        ?.finalBadge ?? null);
+    const publishedScore = pickCiiV45DisplayScore(report.ciiV45, ciiV45Lock);
     const lockedFinal =
       publishedScore == null ? null : Math.round(publishedScore);
 
@@ -2440,7 +2429,7 @@ export class StudentReportsService {
             | undefined
         )?.organization_name ||
         null,
-      cii_score: locked ? lockedFinal : null,
+      cii_score: lockedFinal,
       level: publicLevel
         ? { level: publicLevel.level, name: publicLevel.name }
         : null,
@@ -3993,11 +3982,11 @@ export class StudentReportsService {
       : response;
   }
 
-  /** AI / CII values that ride along on the raw report and must never reach NGO / partner viewers. */
+  /** Analyser internals that must never reach NGO / partner viewers. Score/badge stay on the flashcard. */
   private static stripAnalysisScalarsForPartner<T extends Record<string, any>>(
     row: T,
   ): T {
-    const out: Record<string, any> = { ...row, cii_score: null, total: null, level: null, pts: null };
+    const out: Record<string, any> = { ...row };
     if (out.section11 && typeof out.section11 === 'object') {
       const {
         cii_index: _a,
@@ -4025,7 +4014,7 @@ export class StudentReportsService {
     return out as T;
   }
 
-  /** Listing-row twin of stripAnalysisReportForPartner. */
+  /** Listing-row twin of stripAnalysisReportForPartner. Keeps redacted CII score/badge for flashcards. */
   private static stripAnalysisFromListingRow<T extends Record<string, any>>(
     row: T,
   ): T {
@@ -4035,8 +4024,6 @@ export class StudentReportsService {
       | undefined;
     return StudentReportsService.stripAnalysisScalarsForPartner({
       ...row,
-      ciiV45: null,
-      ciiV45Lock: null,
       independentAiAnalyses: null,
       review_package: pkg
         ? {
@@ -4064,8 +4051,6 @@ export class StudentReportsService {
       ...response,
       data: StudentReportsService.stripAnalysisScalarsForPartner({
         ...data,
-        ciiV45: null,
-        ciiV45Lock: null,
         independentAiAnalyses: null,
         review_package: pkg
           ? {
@@ -4615,6 +4600,7 @@ export class StudentReportsService {
         section11: report.section11,
         ciiV45: report.ciiV45,
         ciiV45Lock: report.ciiV45Lock,
+        cii_score: resolveDisplayCii(report),
         independentAiAnalyses: report.independentAiAnalyses,
         review_package:
           report.review_package ||

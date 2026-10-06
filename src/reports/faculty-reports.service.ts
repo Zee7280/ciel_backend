@@ -27,6 +27,7 @@ import {
 } from './build-ciel-pk-ai-evaluation-payload.util';
 import {
   applyAdminEvidenceAssessment,
+  completeAdminEvidenceCriteria,
   computeCiiV45Result,
   normalizeCiiV5AiPayload,
   resolveBadgeForScore,
@@ -71,7 +72,6 @@ export function mapFacultyListCii(report: {
   const ciiFinal = score == null ? null : Math.round(score * 10) / 10;
   const lockedRaw = report.ciiV45Lock?.locked;
   const locked = lockedRaw === true || lockedRaw === 'true';
-  // Don't advertise a /100 badge from the /85 mix while Admin evidence is still pending.
   const badge =
     ciiFinal != null || locked ? pickCiiV45DisplayBadge(report.ciiV45, report.ciiV45Lock) : null;
   const stored =
@@ -1048,11 +1048,6 @@ export class FacultyReportsService {
     const isV5Pending =
       stored.frameworkVersion === '5.0' || evidenceStatus === 'PENDING';
     if (isV5Pending && evidenceStatus !== 'ASSESSED') {
-      if (!evidenceCriteria?.length) {
-        throw new BadRequestException(
-          'Score Dimension 7 (evidence) before confirming the CII.',
-        );
-      }
       const exceptional = stored.exceptionalFeature
         ? {
             ...stored.exceptionalFeature,
@@ -1064,15 +1059,19 @@ export class FacultyReportsService {
           applyAdminEvidenceAssessment(stored, {
             assessorId: adminId,
             assessedAt: new Date().toISOString(),
-            criteria: evidenceCriteria,
+            criteria: completeAdminEvidenceCriteria(evidenceCriteria),
             exceptionalFeature: exceptional,
           }),
         );
       } catch (error) {
         if (error instanceof CiiV45ValidationError) {
-          throw new BadRequestException(error.message);
+          if (evidenceCriteria?.length) {
+            throw new BadRequestException(error.message);
+          }
+          // Legacy/incomplete snapshots have no Dimension-7 shape — publish the displayed score.
+        } else {
+          throw error;
         }
-        throw error;
       }
     }
 

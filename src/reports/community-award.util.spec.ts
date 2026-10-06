@@ -175,14 +175,14 @@ describe('resolveReportFlashHours — same cascade as the V23 flashcard', () => 
 });
 
 describe('resolveDisplayCii', () => {
-    it('hides provisional CII while a lock row exists but is unlocked', () => {
+    it('shows the v4.5 score on flashcards even while the lock row is still unlocked', () => {
         expect(
             resolveDisplayCii({
                 section11: { ai_generated_impact_score: 54 },
                 ciiV45: { finalCII: 54 },
                 ciiV45Lock: { locked: false },
             }),
-        ).toBeNull();
+        ).toBe(54);
     });
 
     it('returns the admin-locked final score', () => {
@@ -223,7 +223,7 @@ describe('resolveDisplayCii', () => {
                 ciiV45: { finalCII: 71.4 },
                 ciiV45Lock: { locked: 'false' },
             }),
-        ).toBeNull();
+        ).toBe(71);
     });
 
     it('keeps legacy section11 CII when there is no lock record', () => {
@@ -232,6 +232,22 @@ describe('resolveDisplayCii', () => {
                 section11: { ai_generated_impact_score: 88 },
             }),
         ).toBe(88);
+    });
+
+    it('shows the AI score on flashcards while Admin evidence is still pending', () => {
+        expect(
+            resolveDisplayCii({
+                section11: { ai_generated_impact_score: 54 },
+                ciiV45: {
+                    diagnosticCII: null,
+                    finalCII: null,
+                    aiReportScore: 57.9,
+                    knownBasePoints: 57.9,
+                    adminEvidenceAssessment: { status: 'PENDING' },
+                },
+                ciiV45Lock: { locked: false },
+            }),
+        ).toBe(58);
     });
 });
 

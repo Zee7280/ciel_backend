@@ -203,19 +203,11 @@ export function isCiiFacultyLocked(
   return lock?.locked === true || lock?.locked === 'true';
 }
 
-/** CII chip on walls/flashcards: locked v4.5 final, else legacy section11 only when no lock row exists. */
+/** CII chip on walls/flashcards: latest v4.5 display score, else legacy section11. */
 export function resolveDisplayCii(report: ReportFlashSource): number | null {
-  const lock = report.ciiV45Lock;
-  const hasLockRecord = lock != null && typeof lock === 'object';
-  const locked = isCiiFacultyLocked(lock);
-  if (locked) {
-    const score = pickCiiV45DisplayScore(report.ciiV45, lock);
-    return score == null ? null : Math.round(score);
-  }
-  if (!hasLockRecord) {
-    return readCii(report.section11);
-  }
-  return null;
+  const score = pickCiiV45DisplayScore(report.ciiV45, report.ciiV45Lock);
+  if (score != null) return Math.round(score);
+  return readCii(report.section11);
 }
 
 /** Ranking still uses a numeric CII; prefer locked final, else section11. */

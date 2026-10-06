@@ -52,11 +52,15 @@ const UNLOCKED_RESPONSE = {
 };
 
 describe('StudentReportsService.redactCiiV45ForExternalViewer', () => {
-  it('strips the entire CII v4.5 evaluation before Admin has locked it', () => {
+  it('exposes the curated score subset before Admin has locked it — never per-criterion detail', () => {
     const result = redact(UNLOCKED_RESPONSE);
 
-    expect(result.data.ciiV45).toBeNull();
+    expect(result.data.ciiV45.finalCII).toBe(91.5);
+    expect(result.data.ciiV45.aiReportScore).toBe(76.5);
     expect(result.data.ciiV45Lock).toBeNull();
+    expect(result.data.ciiV45).not.toHaveProperty('claimInventory');
+    expect(result.data.ciiV45).not.toHaveProperty('evidenceAudit');
+    expect(result.data.ciiV45.sectionScores[0]).not.toHaveProperty('criterionScores');
   });
 
   it('exposes only the curated outcome once locked — never per-criterion anchors/notes, claim text, evidence content summaries, or admin-review reasons', () => {
@@ -80,6 +84,7 @@ describe('StudentReportsService.redactCiiV45ForExternalViewer', () => {
       diagnosticCII: 91.5,
       finalBadge: { code: 'L6', name: 'Transformative Impact Contributor', level: 6, numericLevel: 6, gateCapped: false },
       recommendedBadge: { code: 'L6', name: 'Transformative Impact Contributor', level: 6, numericLevel: 6, gateCapped: false },
+      diagnosticBadge: null,
       sectionScores: [
         {
           dimension: '7',
@@ -94,6 +99,7 @@ describe('StudentReportsService.redactCiiV45ForExternalViewer', () => {
       aiReportScore: 76.5,
       adminEvidenceScore: 13,
       baseCII: 89.5,
+      knownBasePoints: undefined,
       strengths: ['Attendance register confirmed all hours across 4 sessions'],
       developmentPriorities: ['Add a baseline measure before delivery'],
       studentFeedback: 'Great work overall.',

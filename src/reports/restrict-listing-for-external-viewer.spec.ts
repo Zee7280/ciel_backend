@@ -32,8 +32,8 @@ describe('restrictListingForExternalViewer', () => {
     expect(out.review_package.documents.evidence.count).toBe(0);
   });
 
-  it('hides ciiV45 when unlocked — v4.5 has no pre-lock provisional release', () => {
-    expect(restrict({ ...lockedRow, ciiV45Lock: null }).ciiV45).toBeNull();
+  it('hides ciiV45 only when there is no analysis payload', () => {
+    expect(restrict({ ...lockedRow, ciiV45Lock: null }).ciiV45.finalCII).toBe(70);
     expect(restrict({ ...lockedRow, ciiV45: null, ciiV45Lock: null }).ciiV45).toBeNull();
   });
 
@@ -65,8 +65,8 @@ describe('stripAnalysisFromListingRow (partner / NGO)', () => {
         documents: { flashcard: { title: 'Impact flashcard' }, analysis_report: { href: 'x' } },
       },
     });
-    expect(out.ciiV45).toBeNull();
-    expect(out.ciiV45Lock).toBeNull();
+    expect(out.ciiV45.finalCII).toBe(70);
+    expect(out.ciiV45Lock).toEqual({ locked: true });
     expect(out.independentAiAnalyses).toBeNull();
     expect(out.review_package.analysis_attached).toBe(false);
     expect(out.review_package.documents.analysis_report).toBeNull();
@@ -74,9 +74,9 @@ describe('stripAnalysisFromListingRow (partner / NGO)', () => {
   });
 });
 
-describe('partner payload carries no AI / CII scalars', () => {
+describe('partner payload keeps CII score but drops analyser internals', () => {
   const strip = (StudentReportsService as any).stripAnalysisScalarsForPartner;
-  it('removes scores, AI section11 keys and analyser links', () => {
+  it('keeps scores and removes AI section11 keys and analyser links', () => {
     const out = strip({
       cii_score: 80,
       total: 70,
@@ -84,8 +84,8 @@ describe('partner payload carries no AI / CII scalars', () => {
       section11: { cii_index: { totalScore: 80 }, summary_text: 'CII 80', ai_generated_impact_score: 80, keep: 1 },
       review_package: { ai_analyser_href: 'x', analysis_hrefs: {}, documents: { flashcard: {} } },
     });
-    expect(out.cii_score).toBeNull();
-    expect(out.total).toBeNull();
+    expect(out.cii_score).toBe(80);
+    expect(out.total).toBe(70);
     expect(JSON.stringify(out.section11)).toBe('{"keep":1}');
     expect(out.review_package.ai_analyser_href).toBeUndefined();
     expect(out.review_package.documents.flashcard).toEqual({});

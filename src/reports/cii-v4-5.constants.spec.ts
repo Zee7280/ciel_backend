@@ -7,6 +7,7 @@ import {
   computeCiiV45Result,
   CiiV45ValidationError,
   applyAdminEvidenceAssessment,
+  completeAdminEvidenceCriteria,
   normalizeCiiV5AiPayload,
 } from './cii-v4-5.constants';
 
@@ -445,6 +446,13 @@ describe('computeCiiV45Result', () => {
     );
     expect(result.scoreStatus).toBe('ADMIN_REVIEW_REQUIRED');
     expect(result.finalCII).toBeNull();
+  });
+
+  it('defaults missing Dimension 7 marks to Sound (2)', () => {
+    const filled = completeAdminEvidenceCriteria([{ criterion: 'ethics', anchor: 4 }]);
+    expect(filled).toHaveLength(7);
+    expect(filled.find((c) => c.criterion === 'ethics')?.anchor).toBe(4);
+    expect(filled.filter((c) => c.anchor === 2)).toHaveLength(6);
   });
 
   it('fills omitted AI criteria as pending so compute does not throw', () => {

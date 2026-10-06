@@ -163,6 +163,7 @@ describe('StudentReportsService', () => {
     find: jest.fn().mockResolvedValue([]),
     create: jest.fn(),
     save: jest.fn(),
+    update: jest.fn().mockResolvedValue({ affected: 1 }),
     createQueryBuilder: jest.fn(() => verifyReportQb),
   };
   const mockAttendanceLogsRepository = {
@@ -367,6 +368,10 @@ describe('StudentReportsService', () => {
             flashcard: expect.objectContaining({ view: 'flash' }),
             detailed_report: expect.objectContaining({ view: 'print' }),
           }),
+          sync_contract: expect.objectContaining({
+            final_authority: 'CIEL PK Super Admin',
+          }),
+          packet_integrity: expect.objectContaining({ ok: true }),
         }),
       }),
     );
@@ -999,6 +1004,37 @@ describe('StudentReportsService', () => {
         ciiV45Lock: null,
       });
       expect(result.project_title).toBe('Clean water drive');
+    });
+  });
+
+  describe('withholdAnalysisForFacultyUntilApproved', () => {
+    it('keeps display scores and strips criterion reasoning plus independent analyses until Admin accept', () => {
+      const result = StudentReportsService.withholdAnalysisForFacultyUntilApproved({
+        success: true,
+        data: {
+          id: 'r-fac',
+          admin_status: 'pending',
+          status: 'submitted',
+          ciiV45: {
+            diagnosticCII: 57.9,
+            finalCII: 57.9,
+            claimInventory: [{ text: 'private claim text' }],
+            sectionScores: [
+              {
+                dimension: '7',
+                score: 13,
+                criterionScores: [{ reasoningSummary: 'private faculty-facing rationale' }],
+              },
+            ],
+          },
+          independentAiAnalyses: [{ id: 'run-1', score: 80 }],
+        },
+      });
+      expect(result.data.ciiV45.diagnosticCII).toBe(57.9);
+      expect(result.data.ciiV45.finalCII).toBe(57.9);
+      expect(JSON.stringify(result.data)).not.toContain('private claim text');
+      expect(JSON.stringify(result.data)).not.toContain('private faculty-facing rationale');
+      expect(result.data.independentAiAnalyses).toBeNull();
     });
   });
 

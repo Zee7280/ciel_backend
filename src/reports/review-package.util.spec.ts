@@ -14,12 +14,21 @@ describe('review-package.util', () => {
       id: 'rep-1',
       opportunityId: 'opp-1',
       project_id: 'opp-1',
+      section1: {},
+      section2: {},
+      section3: {},
+      section4: {},
+      section5: {},
+      section6: {},
+      section7: {},
       section8: {
         evidence_files: [
           { url: 'https://cdn.example/photo.png', name: 'classroom.png' },
           { url: 'https://cdn.example/register.pdf', name: 'attendance.pdf' },
         ],
       },
+      section9: {},
+      section10: {},
     } as unknown as StudentReport;
 
     const pack = buildReportReviewPackage(report, 'https://app.cielpk.com');
@@ -63,9 +72,23 @@ describe('review-package.util', () => {
     expect(locked.analysis_hrefs.student).toContain('view=analysis');
     expect(locked.analysis_hrefs.student).toContain('#analysis');
     expect(locked.analysis_hrefs.faculty).toContain(
-      '/dashboard/faculty/reports/rep-1?view=cii-v4-5',
+      '/dashboard/faculty/reports/rep-1?view=dossier',
     );
+    expect(locked.analysis_hrefs.faculty).toContain('#analysis');
     expect(locked.analysis_hrefs.university).toContain('doc=analysis');
     expect(locked.analysis_hrefs.partner).toBe('');
+    expect(pack.sync_contract.final_authority).toBe('CIEL PK Super Admin');
+    expect(pack.sync_contract.scoring.rule).toBe(
+      'AI_REPORT_QUALITY_85_PLUS_ADMIN_EVIDENCE_15_ONLY',
+    );
+    expect(pack.packet_integrity.ok).toBe(true);
+    expect(pack.canonical_packet.detailed_report.sections).toHaveLength(9);
+
+    const { section3: _drop, ...broken } = report as unknown as Record<string, unknown>;
+    const held = buildReportReviewPackage(broken as unknown as StudentReport, '');
+    expect(held.packet_integrity.ok).toBe(false);
+    expect(held.packet_integrity.issues.some((issue) => /section 3/i.test(issue))).toBe(
+      true,
+    );
   });
 });

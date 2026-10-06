@@ -188,6 +188,18 @@ describe('FacultyReportsService — runCiiV45AnalysisForAdmin', () => {
     expect(studentReportsRepository.save).not.toHaveBeenCalled();
   });
 
+  it('refuses to run the Analyser when the locked student packet is incomplete', async () => {
+    const incomplete = analysableReport();
+    delete incomplete.section3;
+    const { service, aiService } = makeService(incomplete, {
+      summarize: jest.fn().mockResolvedValue({ ciiV45: CII_V45_AI_RESPONSE }),
+    });
+    await expect(service.runCiiV45AnalysisForAdmin('report-1')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(aiService.summarize).not.toHaveBeenCalled();
+  });
+
   it('combines 85 AI + 15 Admin evidence on Confirm', async () => {
     const report: any = analysableReport();
     const { service, qb } = makeService(
@@ -279,7 +291,7 @@ describe('FacultyReportsService — runCiiV45AnalysisForAdmin', () => {
 
   it('refuses when the update affects 0 rows (defensive guard against a concurrent write)', async () => {
     const { service } = makeService(
-      { id: 'report-1' },
+      analysableReport(),
       { summarize: jest.fn().mockResolvedValue({ ciiV45: CII_V45_AI_RESPONSE }) },
       0,
     );
@@ -344,7 +356,7 @@ describe('FacultyReportsService — runCiiV45AnalysisForAdmin', () => {
   it('re-analyses a locked report and clears the lock in the same write', async () => {
     const { service, qb } = makeService(
       {
-        id: 'report-1',
+        ...analysableReport(),
         ciiV45Lock: {
           locked: true,
           hash: 'x',
@@ -1140,7 +1152,7 @@ describe('FacultyReportsService — AI analysis run safety (lock, history, incom
     let release!: (v: unknown) => void;
     const pending = new Promise((r) => (release = r));
     const summarize = jest.fn().mockReturnValue(pending);
-    const { service } = makeService({ id: 'report-race' }, { summarize });
+    const { service } = makeService(analysableReport('report-race'), { summarize });
 
     const first = service.runCiiV45AnalysisForAdmin('report-race');
     // let the first call reach the AI await
@@ -1160,7 +1172,7 @@ describe('FacultyReportsService — AI analysis run safety (lock, history, incom
       .fn()
       .mockRejectedValueOnce(new Error('boom'))
       .mockResolvedValue({ ciiV45: CII_V45_AI_RESPONSE });
-    const { service } = makeService({ id: 'report-fail' }, { summarize });
+    const { service } = makeService(analysableReport('report-fail'), { summarize });
     await expect(service.runCiiV45AnalysisForAdmin('report-fail')).rejects.toThrow('boom');
     await expect(service.runCiiV45AnalysisForAdmin('report-fail')).resolves.toMatchObject({ success: true });
   });
@@ -1179,7 +1191,7 @@ describe('FacultyReportsService — AI analysis run safety (lock, history, incom
         notInspected: [{ id: 'E2', name: 'r.pdf', reason: 'not an image' }],
       },
     });
-    const { service } = makeService({ id: 'report-hist', ciiV45: previous }, { summarize });
+    const { service } = makeService({ ...analysableReport('report-hist'), ciiV45: previous }, { summarize });
     const res: any = await service.runCiiV45AnalysisForAdmin('report-hist');
     expect(res.data.runHistory).toHaveLength(2);
     expect(res.data.runHistory[0]).toMatchObject({ score: 41, model: 'm0' });

@@ -56,6 +56,7 @@ import { isPrivateCandidateOpportunity, reviewRouteForOpportunity } from '../opp
 import { composeFacultyReportRemarks } from './faculty-report-remarks.util';
 import { trackingOrganizationName } from './tracking-org-name.util';
 import { isReportPartnerStepSatisfied } from './report-partner-approval.util';
+import { assertPacketReadyForAnalysis } from './impact-package-packet.util';
 
 /** List-card CII fields only — never mutates scores or lock state. */
 export function mapFacultyListCii(report: {
@@ -917,6 +918,7 @@ export class FacultyReportsService {
     report: StudentReport,
     opts: { adminRescore?: boolean } = {},
   ) {
+    assertPacketReadyForAnalysis(report);
     if (!opts.adminRescore && report.ciiV45Lock?.locked) {
       throw new BadRequestException(
         "This report's CII v4.5 score is already locked and cannot be re-analysed.",

@@ -999,14 +999,16 @@ export class StudentReportsService {
     );
   }
 
-  /** Faculty (read-only) get the analysis report only after CIEL PK Admin has accepted the report. */
+  /** Faculty (read-only) get the analysis report only after CIEL PK Admin has accepted the report.
+   * CII internals are redacted the same way as student/partner/university detail reads. */
   static withholdAnalysisForFacultyUntilApproved<T extends { data?: Record<string, any> }>(
     response: T,
   ): T {
     if (!response?.data) return response;
+    const redacted = StudentReportsService.redactCiiV45ForExternalViewer(response);
     return {
-      ...response,
-      data: StudentReportsService.withholdAnalysisUntilAdminApproved(response.data),
+      ...redacted,
+      data: StudentReportsService.withholdAnalysisUntilAdminApproved(redacted.data),
     };
   }
 
@@ -2804,6 +2806,15 @@ export class StudentReportsService {
       this.configService.get<string>('APP_URL') ||
       '';
     const pack = buildReportReviewPackage(full, frontendBase);
+    try {
+      await this.studentReportsRepository.update(full.id, {
+        review_package: pack as unknown as StudentReport['review_package'],
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Could not persist published review package for report ${full.id}: ${(error as Error)?.message}`,
+      );
+    }
     const projectTitle =
       full.opportunity?.title || full.project_id || 'Community Service report';
     const studentName = full.student?.name || 'Student';

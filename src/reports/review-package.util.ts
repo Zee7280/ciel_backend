@@ -1,6 +1,12 @@
 import { StudentReport } from './entities/student-report.entity';
 import { collectReportEvidenceFiles } from './collect-report-evidence.util';
 import { pickCiiV45DisplayScore } from './cii-v4-5-display.util';
+import {
+  buildCanonicalImpactPacket,
+  IMPACT_PACKAGE_SYNC_CONTRACT,
+  type CanonicalImpactPacket,
+  type PacketIntegrity,
+} from './impact-package-packet.util';
 
 export type ReviewPackageEvidenceKind = 'image' | 'pdf' | 'video' | 'file';
 
@@ -56,6 +62,9 @@ export type ReportReviewPackage = {
     admin: string;
     partner: string;
   };
+  sync_contract: typeof IMPACT_PACKAGE_SYNC_CONTRACT;
+  packet_integrity: PacketIntegrity;
+  canonical_packet: CanonicalImpactPacket;
 };
 
 /** Partner / NGO get the student bundle only. Faculty, student, university, admin get analysis after publish. */
@@ -131,7 +140,7 @@ export function buildReportReviewPackage(
   );
   const facultyAnalysisHref = joinHref(
     frontendBase,
-    `/dashboard/faculty/reports/${encodeURIComponent(reportId)}?view=cii-v4-5`,
+    `/dashboard/faculty/reports/${encodeURIComponent(reportId)}?view=dossier#analysis`,
   );
   const partnerHref = joinHref(
     frontendBase,
@@ -150,6 +159,7 @@ export function buildReportReviewPackage(
     frontendBase,
     `/dashboard/student/report?projectId=${encodeURIComponent(projectId)}&view=analysis#analysis`,
   );
+  const packet = buildCanonicalImpactPacket(report);
   return {
     generated_at: new Date().toISOString(),
     report_id: reportId,
@@ -201,5 +211,8 @@ export function buildReportReviewPackage(
       admin: analyserHref,
       partner: '',
     },
+    sync_contract: IMPACT_PACKAGE_SYNC_CONTRACT,
+    packet_integrity: packet.packet_integrity,
+    canonical_packet: packet,
   };
 }

@@ -184,6 +184,24 @@ describe('TeamFormationService', () => {
         opts?.where && (opts.where as { id?: unknown }).id ? [{ ...memberRow, teamId: 'TM-MINE' }] : [{ ...leadRow }],
       );
       await expect(service.formTeamFromLead('student-lead', 'proj-1', ['mem-1'])).resolves.toMatchObject({ formed: true });
+      expect(mailService.sendTeamMemberAddedToProject).not.toHaveBeenCalled();
+    });
+
+    it('emails a member only the first time they join the team', async () => {
+      mockParticipationRepo.findOne.mockResolvedValue({
+        ...leadRow,
+        teamId: 'TM-MINE',
+        isTeamLead: true,
+        participationMode: 'team',
+        student: { name: 'Lead' },
+      });
+      mockParticipationRepo.find.mockImplementation(async (opts: { where?: { id?: unknown } }) =>
+        opts?.where && (opts.where as { id?: unknown }).id
+          ? [{ ...memberRow, teamId: null }]
+          : [{ ...leadRow }],
+      );
+      await service.formTeamFromLead('student-lead', 'proj-1', ['mem-1']);
+      expect(mailService.sendTeamMemberAddedToProject).toHaveBeenCalledTimes(1);
     });
 
     it('respects the opportunity seat count and the platform maximum of 20', async () => {

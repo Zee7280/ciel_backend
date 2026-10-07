@@ -786,28 +786,36 @@ export class StudentsService {
       }
     }
 
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-
-    // Save OTP in DB with 10 mins expiry
-    const expiresAt = new Date(Date.now() + 600000);
+    const OTP_TTL_MS = 600_000;
+    const OTP_RESEND_COOLDOWN_MS = 120_000;
+    let otp = '';
 
     try {
-      // We can either update existing or create new. Given many requests might happen,
-      // let's just create or update if already exists for this email.
-      let otpRecord = await this.otpRepository.findOne({
+      const existing = await this.otpRepository.findOne({
         where: { email: emailNorm },
       });
-      if (otpRecord) {
-        otpRecord.otp = otp;
-        otpRecord.expiresAt = expiresAt;
-      } else {
-        otpRecord = this.otpRepository.create({
-          email: emailNorm,
-          otp,
-          expiresAt,
-        });
+      if (existing && existing.expiresAt > new Date()) {
+        const lastSentAt = existing.expiresAt.getTime() - OTP_TTL_MS;
+        if (Date.now() - lastSentAt < OTP_RESEND_COOLDOWN_MS) {
+          return { success: true, message: 'OTP sent successfully' };
+        }
       }
-      await this.otpRepository.save(otpRecord);
+
+      otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiresAt = new Date(Date.now() + OTP_TTL_MS);
+      if (existing) {
+        existing.otp = otp;
+        existing.expiresAt = expiresAt;
+        await this.otpRepository.save(existing);
+      } else {
+        await this.otpRepository.save(
+          this.otpRepository.create({
+            email: emailNorm,
+            otp,
+            expiresAt,
+          }),
+        );
+      }
     } catch (err) {
       this.logger.error(
         `Failed to persist OTP record for ${emailNorm}: ${(err as Error)?.message || err}`,

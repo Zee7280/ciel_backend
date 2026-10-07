@@ -10,7 +10,6 @@ import { StudentReport } from '../reports/entities/student-report.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 import { User } from '../users/entities/user.entity';
-import { Otp } from '../students/entities/otp.entity';
 
 import { MailModule } from '../mail/mail.module';
 import { IssueLogsModule } from '../issue-logs/issue-logs.module';
@@ -25,7 +24,6 @@ import { NotificationsModule } from '../notifications/notifications.module';
       OpportunityApplication,
       User,
       StudentReport,
-      Otp,
     ]),
     StorageModule,
     MailModule,

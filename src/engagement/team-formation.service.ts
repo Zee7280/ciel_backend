@@ -208,7 +208,10 @@ export class TeamFormationService {
         );
 
         const linked: Participation[] = [];
+        const newlyLinkedIds: string[] = [];
         for (const member of members) {
+          const alreadyOnThisTeam =
+            (member.teamId || '').trim() === targetTeamId;
           member.teamId = targetTeamId;
           member.participationMode = 'team';
           member.isTeamLead = false;
@@ -224,6 +227,7 @@ export class TeamFormationService {
           member.secondaryFacultyEmail =
             freshLead.secondaryFacultyEmail ?? member.secondaryFacultyEmail;
           linked.push(member);
+          if (!alreadyOnThisTeam) newlyLinkedIds.push(member.id);
         }
         if (linked.length) {
           await participationRepo.save(linked);
@@ -255,17 +259,18 @@ export class TeamFormationService {
           team_display_name: displayName,
           lead_participation_id: freshLead.id,
           member_participation_ids: linked.map((m) => m.id),
+          newly_linked_participation_ids: newlyLinkedIds,
         };
       },
     );
 
-    if (result.formed && result.member_participation_ids?.length) {
+    if (result.formed && result.newly_linked_participation_ids?.length) {
       await this.notifyLinkedTeamMembers({
         projectId,
         opportunity,
         leadName,
         teamDisplayName: result.team_display_name,
-        memberParticipationIds: result.member_participation_ids,
+        memberParticipationIds: result.newly_linked_participation_ids,
       });
     }
 

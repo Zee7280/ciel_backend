@@ -657,6 +657,26 @@ describe('StudentsService.sendTeamMemberOtp', () => {
     });
   });
 
+  it('does not send a second OTP email while the previous code is still fresh', async () => {
+    const sendTeamMemberOtp = jest.fn().mockResolvedValue(undefined);
+    const service = makeService({
+      participantRepository: { find: jest.fn().mockResolvedValue([]) },
+      otpRepository: {
+        findOne: jest.fn().mockResolvedValue({
+          email: 'new@test.edu',
+          otp: '111111',
+          expiresAt: new Date(Date.now() + 9 * 60 * 1000),
+        }),
+        create: jest.fn().mockImplementation((row) => row),
+        save: jest.fn().mockImplementation((row) => row),
+      },
+      mailService: { sendTeamMemberOtp },
+    });
+    const result = await service.sendTeamMemberOtp('new@test.edu');
+    expect(result).toEqual({ success: true, message: 'OTP sent successfully' });
+    expect(sendTeamMemberOtp).not.toHaveBeenCalled();
+  });
+
   it('still sends OTP for self-verify when the caller is already seated', async () => {
     const service = makeOtpService({ id: 'lead-1', isTeamLead: true });
     const result = await service.sendTeamMemberOtp('lead@test.edu', 'proj-1');

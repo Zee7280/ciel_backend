@@ -7,7 +7,6 @@ import { AttendanceLog } from './entities/attendance-log.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 import { User } from '../users/entities/user.entity';
-import { Otp } from '../students/entities/otp.entity';
 // import { OpportunityTeamMember } from '../opportunities/entities/opportunity-team-member.entity';
 import { ConfigService } from '@nestjs/config';
 import { S3Service } from '../common/s3.service';
@@ -55,11 +54,6 @@ describe('EngagementService', () => {
   const mockUserRepository = {
     findOne: jest.fn(),
     createQueryBuilder: jest.fn(),
-  };
-
-  const mockOtpRepository = {
-    findOne: jest.fn(),
-    remove: jest.fn().mockResolvedValue(undefined),
   };
 
   // const mockTeamMemberRepository = {
@@ -127,10 +121,6 @@ describe('EngagementService', () => {
         {
           provide: getRepositoryToken(User),
           useValue: mockUserRepository,
-        },
-        {
-          provide: getRepositoryToken(Otp),
-          useValue: mockOtpRepository,
         },
         // {
         //     provide: getRepositoryToken(OpportunityTeamMember),
@@ -1127,54 +1117,6 @@ describe('EngagementService', () => {
       await expect(service.addAttendanceLog('u1', 'p1', dto)).rejects.toThrow(
         'Attendance logging is only allowed for approved/verified records',
       );
-    });
-  });
-
-  // addAttendanceLog's proxy path (a Team Lead logging for a teammate) gates on this directly —
-  // exercised here against the private method rather than re-mocking the whole addAttendanceLog
-  // pipeline (opportunity/faculty-routing/etc.), since those are already covered above and this
-  // is the one new piece of logic the OTP gate actually added.
-  describe('verifyTeammateAttendanceOtp (proxy attendance entries)', () => {
-    const verify = (email: unknown, otp: unknown) =>
-      (service as any).verifyTeammateAttendanceOtp(email, otp);
-
-    it('rejects when no code was provided', async () => {
-      await expect(verify('teammate@example.com', '')).rejects.toThrow(
-        'Ask your teammate for the verification code',
-      );
-    });
-
-    it('rejects an unknown/incorrect code', async () => {
-      mockOtpRepository.findOne.mockResolvedValue(null);
-      await expect(verify('teammate@example.com', '999999')).rejects.toThrow(
-        'Invalid or expired teammate verification code',
-      );
-    });
-
-    it('rejects and deletes an expired code', async () => {
-      const record = {
-        id: 'otp-1',
-        email: 'teammate@example.com',
-        otp: '123456',
-        expiresAt: new Date(Date.now() - 1000),
-      };
-      mockOtpRepository.findOne.mockResolvedValue(record);
-      await expect(verify('teammate@example.com', '123456')).rejects.toThrow(
-        'expired',
-      );
-      expect(mockOtpRepository.remove).toHaveBeenCalledWith(record);
-    });
-
-    it('accepts a valid code and consumes it (one-time use)', async () => {
-      const record = {
-        id: 'otp-2',
-        email: 'teammate@example.com',
-        otp: '654321',
-        expiresAt: new Date(Date.now() + 60000),
-      };
-      mockOtpRepository.findOne.mockResolvedValue(record);
-      await expect(verify('teammate@example.com', '654321')).resolves.toBeUndefined();
-      expect(mockOtpRepository.remove).toHaveBeenCalledWith(record);
     });
   });
 

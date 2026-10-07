@@ -7,6 +7,7 @@ import { OpportunitiesModule } from '../opportunities/opportunities.module';
 import { StudentsModule } from '../students/students.module';
 import { OrganizationMembershipModule } from '../organization-membership/organization-membership.module';
 import { CommunityAwardModule } from '../reports/community-award.module';
+import { NpeRankingModule } from '../ranking/npe-ranking.module';
 import { FacultyUniversityScopeModule } from '../faculty-university-scope/faculty-university-scope.module';
 import { FacultyModule } from '../faculty/faculty.module';
 
@@ -19,6 +20,7 @@ import { FacultyModule } from '../faculty/faculty.module';
         StudentsModule,
         OrganizationMembershipModule,
         CommunityAwardModule,
+        NpeRankingModule,
         FacultyUniversityScopeModule,
         FacultyModule,
     ],

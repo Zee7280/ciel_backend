@@ -51,6 +51,12 @@ import { FacultyReportsService } from '../reports/faculty-reports.service';
 import { RunIndependentAnalysisDto } from '../faculty/dto/run-independent-analysis.dto';
 import { RunIndependentAnalysisBatchDto } from '../faculty/dto/run-independent-analysis-batch.dto';
 import { ApproveCiiV45Dto } from '../faculty/dto/approve-cii-v4-5.dto';
+import { NpeRankingService } from '../ranking/npe-ranking.service';
+import {
+  NpeAnalyzeDto,
+  NpeClearReviewDto,
+  NpePublishDto,
+} from '../ranking/dto/npe-ranking.dto';
 
 /** Never echo credential material (password hash / deprecated password record) back to the browser. */
 function stripUserSecrets<T>(user: T): T {
@@ -76,6 +82,7 @@ export class AdminController {
     private readonly opportunitiesService: OpportunitiesService,
     private readonly studentReportsService: StudentReportsService,
     private readonly communityAward: CommunityAwardService,
+    private readonly npeRanking: NpeRankingService,
     private readonly opportunityApplicationsService: OpportunityApplicationsService,
     private readonly issueLogsService: IssueLogsService,
     private readonly adminProjectEvidenceService: AdminProjectEvidenceService,
@@ -334,6 +341,49 @@ export class AdminController {
   @Roles(UserRole.SUPER_ADMIN)
   async communityAwardCards() {
     const data = await this.communityAward.listForAdmin();
+    return {
+      success: true,
+      data: await this.npeRanking.decorateAwardCards(data, {
+        userId: '',
+        role: 'ciel_admin',
+      }),
+    };
+  }
+
+  @Get('community-service/ranking/packages')
+  async npeRankingPackages(@Request() req) {
+    const data = await this.npeRanking.listPackages({
+      userId: req.user.id,
+      role: 'ciel_admin',
+    });
+    return { success: true, data };
+  }
+
+  @Post('community-service/ranking/analyze')
+  async npeRankingAnalyze(@Request() req, @Body() dto: NpeAnalyzeDto) {
+    const data = await this.npeRanking.analyze(
+      { userId: req.user.id, role: 'ciel_admin' },
+      dto,
+    );
+    return { success: true, data };
+  }
+
+  @Post('community-service/ranking/reviews')
+  async npeRankingClearReview(@Request() req, @Body() dto: NpeClearReviewDto) {
+    const data = await this.npeRanking.clearReview(
+      { userId: req.user.id, role: 'ciel_admin' },
+      dto.runId,
+      dto.itemId,
+    );
+    return { success: true, data };
+  }
+
+  @Post('community-service/ranking/publish')
+  async npeRankingPublish(@Request() req, @Body() dto: NpePublishDto) {
+    const data = await this.npeRanking.publish(
+      { userId: req.user.id, role: 'ciel_admin' },
+      dto.runId,
+    );
     return { success: true, data };
   }
 

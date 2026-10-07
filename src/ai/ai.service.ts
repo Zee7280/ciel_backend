@@ -11,6 +11,14 @@ import {
   FYP_AI_JSON_ONLY_DEPLOYMENT_NOTE,
 } from './prompts/fyp-ai-rubric.constant';
 import { FypAiEvaluation, parseFypAiResponse } from './parse-fyp-ai.util';
+import {
+  NPE_RANKING_EVALUATOR_PROMPT,
+  NPE_RANKING_JSON_ONLY_NOTE,
+} from './prompts/npe-ranking-prompt.constant';
+import {
+  parseNpeRankingResponse,
+  type NpeAiEvaluation,
+} from '../ranking/parse-npe-ranking.util';
 import { ciiEvidenceInspectCache } from '../reports/build-ciel-pk-ai-evaluation-payload.util';
 
 /** Shared rules for the executive flashcard section summaries (V12). Scoring prompts do not use this. */
@@ -82,6 +90,7 @@ export interface AiSummarizeResult {
   evaluationVersion?: string;
   ciiV45?: CiiV45EvaluatorPayload;
   fypAi?: FypAiEvaluation;
+  npeRanking?: NpeAiEvaluation;
 }
 
 function isOpenAiReasoningModel(model: string): boolean {
@@ -1631,6 +1640,12 @@ ${JSON.stringify(data)}`;
 SUBMISSION DATA:
 ${JSON.stringify(data)}`;
 
+      case 'npe_ranking_evaluation':
+        return `Evaluate this approved Community Service package against the National Project Excellence rubric (${NPE_RANKING_JSON_ONLY_NOTE}).
+
+PACKAGE DATA:
+${JSON.stringify(data)}`;
+
       default:
         return `Summarize project data professionally: ${JSON.stringify(data)}`;
     }
@@ -1647,6 +1662,7 @@ ${JSON.stringify(data)}`;
 
     const isCiiV45Evaluation = section === 'cii_v4_5_evaluation';
     const isFypAiEvaluationSection = section === 'fyp_ai_evaluation';
+    const isNpeRanking = section === 'npe_ranking_evaluation';
     const prompt = this.buildPrompt(
       section,
       isCiiV45Evaluation ? slimCiiPayloadForModel(data) : data,
@@ -1675,9 +1691,23 @@ ${JSON.stringify(data)}`;
             responseFormat: { type: 'json_object' },
             systemMessage: `${buildFypAiEvaluatorPrompt()}\n\n${FYP_AI_JSON_ONLY_DEPLOYMENT_NOTE}`,
           }
-        : undefined;
+        : isNpeRanking
+          ? {
+              model: resolveCiiAnalyzerModel(),
+              reasoningEffort: 'low',
+              temperature: 0.15,
+              seed: 4240,
+              maxTokens: 12_000,
+              responseFormat: { type: 'json_object' },
+              systemMessage: `${NPE_RANKING_EVALUATOR_PROMPT}\n\n${NPE_RANKING_JSON_ONLY_NOTE}`,
+              timeoutMs: 120_000,
+              maxAttempts: 1,
+              retryEmptyOnce: true,
+            }
+          : undefined;
 
     // CII v5.0 Hybrid: report-quality only. Evidence originals stay with Admin Dimension 7.
+    // NPE ranking reads originals when they can be loaded; unread files are flagged, not guessed.
     let userContent: string | OpenAiContentPart[] = prompt;
     let evidenceInspection: EvidenceInspection | undefined;
     if (isCiiV45Evaluation) {
@@ -1686,6 +1716,15 @@ ${JSON.stringify(data)}`;
 
 EVIDENCE FIREWALL
 No evidence originals, filenames, captions or file metadata are attached to this request. Score report quality only. Always set evidenceIds to []. Do not return Dimension 7. Do not mark claims as photograph-verified.`;
+    } else if (isNpeRanking && !opts?.skipEvidenceImages) {
+      const built = await this.buildEvidenceParts(data);
+      evidenceInspection = built.inspection;
+      if (built.parts.length) {
+        userContent = [
+          { type: 'text', text: prompt },
+          ...built.parts,
+        ];
+      }
     }
 
     let text: string;
@@ -1726,6 +1765,22 @@ No evidence originals, filenames, captions or file metadata are attached to this
         throw new HttpException({ error: 'AI returned an unreadable FYP evaluation. Please retry.' }, 502);
       }
       return { summary, fypAi };
+    }
+
+    if (isNpeRanking) {
+      const npeRanking = parseNpeRankingResponse(summary);
+      if (!npeRanking) {
+        throw new HttpException(
+          { error: 'AI returned an unreadable national ranking evaluation. Please retry.' },
+          502,
+        );
+      }
+      return {
+        summary,
+        npeRanking,
+        evidenceInspection,
+        model: resolveCiiAnalyzerModel(),
+      };
     }
 
     return { summary };

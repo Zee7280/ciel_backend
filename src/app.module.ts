@@ -38,6 +38,7 @@ import { JobsModule } from './jobs/jobs.module';
 import { PathsModule } from './paths/paths.module';
 import { ImpactSummaryModule } from './impact-summary/impact-summary.module';
 import { AiModule } from './ai/ai.module';
+import { NpeRankingModule } from './ranking/npe-ranking.module';
 
 @Module({
   imports: [
@@ -100,6 +101,7 @@ import { AiModule } from './ai/ai.module';
     PathsModule,
     ImpactSummaryModule,
     AiModule,
+    NpeRankingModule,
     TypeOrmModule.forFeature([Setting]),
   ],
   controllers: [AppController],

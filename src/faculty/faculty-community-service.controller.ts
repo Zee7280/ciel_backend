@@ -16,6 +16,7 @@ import { Roles } from '../auth/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
 import { FacultyReportsService } from '../reports/faculty-reports.service';
 import { CommunityAwardService } from '../reports/community-award.service';
+import { NpeRankingService } from '../ranking/npe-ranking.service';
 import { NotifyCommunityAwardDto } from '../reports/dto/notify-community-award.dto';
 import { OpportunitiesService } from '../opportunities/opportunities.service';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -29,6 +30,7 @@ export class FacultyCommunityServiceController {
   constructor(
     private readonly facultyReportsService: FacultyReportsService,
     private readonly communityAward: CommunityAwardService,
+    private readonly npeRanking: NpeRankingService,
     private readonly opportunitiesService: OpportunitiesService,
     @InjectRepository(Opportunity)
     private readonly opportunitiesRepository: Repository<Opportunity>,
@@ -55,7 +57,9 @@ export class FacultyCommunityServiceController {
     );
     return {
       success: true,
-      data: this.communityAward.cardsFrom(reports, true),
+      data: await this.npeRanking.decorateAwardCards(
+        this.communityAward.cardsFrom(reports, true),
+      ),
     };
   }
 

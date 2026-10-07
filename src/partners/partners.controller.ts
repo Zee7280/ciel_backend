@@ -42,6 +42,12 @@ import { OpportunityApplicationsService } from '../opportunities/opportunity-app
 import { FacultyReportsService } from '../reports/faculty-reports.service';
 import { RunIndependentAnalysisDto } from '../faculty/dto/run-independent-analysis.dto';
 import { RunIndependentAnalysisBatchDto } from '../faculty/dto/run-independent-analysis-batch.dto';
+import { NpeRankingService } from '../ranking/npe-ranking.service';
+import {
+  NpeAnalyzeDto,
+  NpeClearReviewDto,
+  NpePublishDto,
+} from '../ranking/dto/npe-ranking.dto';
 
 /** The AI analyzer feeds scores and rankings, so only CIEL PK Admin may run it. */
 const ANALYZER_ADMIN_ONLY = 'The AI analyzer can only be run by CIEL PK Admin.';
@@ -64,6 +70,7 @@ export class PartnersController {
     private readonly s3Service: S3Service,
     private readonly opportunityApplicationsService: OpportunityApplicationsService,
     private readonly communityAward: CommunityAwardService,
+    private readonly npeRanking: NpeRankingService,
     private readonly facultyUniversityScope: FacultyUniversityScopeService,
     private readonly facultyReportsService: FacultyReportsService,
   ) {}
@@ -190,7 +197,18 @@ export class PartnersController {
     const data = isUni
       ? await this.communityAward.listForUniversity(req.user.organizationId)
       : await this.communityAward.listForPartnerOrg(req.user.organizationId);
-    return { success: true, data, scope: isUni ? 'university' : 'partner' };
+    const decorated = await this.npeRanking.decorateAwardCards(
+      data,
+      isUni
+        ? {
+            userId: req.user.id,
+            role: 'university',
+            organizationId: req.user.organizationId,
+            organizationName: org?.name,
+          }
+        : undefined,
+    );
+    return { success: true, data: decorated, scope: isUni ? 'university' : 'partner' };
   }
 
   @Post('community-service/award-notify')
@@ -222,6 +240,34 @@ export class PartnersController {
       },
       req.user.name,
     );
+    return { success: true, data };
+  }
+
+  @Get('community-service/ranking/packages')
+  async npeRankingPackages(@Request() req) {
+    const actor = await this.assertUniversityRankingActor(req);
+    const data = await this.npeRanking.listPackages(actor);
+    return { success: true, data };
+  }
+
+  @Post('community-service/ranking/analyze')
+  async npeRankingAnalyze(@Request() req, @Body() dto: NpeAnalyzeDto) {
+    const actor = await this.assertUniversityRankingActor(req);
+    const data = await this.npeRanking.analyze(actor, dto);
+    return { success: true, data };
+  }
+
+  @Post('community-service/ranking/reviews')
+  async npeRankingClearReview(@Request() req, @Body() dto: NpeClearReviewDto) {
+    const actor = await this.assertUniversityRankingActor(req);
+    const data = await this.npeRanking.clearReview(actor, dto.runId, dto.itemId);
+    return { success: true, data };
+  }
+
+  @Post('community-service/ranking/publish')
+  async npeRankingPublish(@Request() req, @Body() dto: NpePublishDto) {
+    const actor = await this.assertUniversityRankingActor(req);
+    const data = await this.npeRanking.publish(actor, dto.runId);
     return { success: true, data };
   }
 
@@ -629,6 +675,29 @@ export class PartnersController {
         partner_approval_status: saved.partnerApprovalStatus,
         workflow_stage: saved.workflowStage,
       },
+    };
+  }
+
+  private async assertUniversityRankingActor(req: {
+    user: { id: string; organizationId?: string };
+  }) {
+    if (!req.user.organizationId) {
+      throw new BadRequestException('User is not linked to an organization');
+    }
+    const org = await this.organizationsService.getMyOrganization(req.user.id);
+    const isUni = String(org?.orgType || '')
+      .toLowerCase()
+      .includes('university');
+    if (!isUni) {
+      throw new ForbiddenException(
+        'Only University and CIEL PK Super Admin can run or publish national rankings. Partner / NGO can view published ranks only.',
+      );
+    }
+    return {
+      userId: req.user.id,
+      role: 'university' as const,
+      organizationId: req.user.organizationId,
+      organizationName: org?.name || null,
     };
   }
 }

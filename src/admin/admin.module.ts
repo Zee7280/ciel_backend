@@ -26,6 +26,7 @@ import { JobsModule } from '../jobs/jobs.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { CommunityAwardModule } from '../reports/community-award.module';
 import { FacultyModule } from '../faculty/faculty.module';
+import { NpeRankingModule } from '../ranking/npe-ranking.module';
 
 @Module({
   imports: [
@@ -42,6 +43,7 @@ import { FacultyModule } from '../faculty/faculty.module';
     NotificationsModule,
     CommunityAwardModule,
     FacultyModule,
+    NpeRankingModule,
     TypeOrmModule.forFeature([
       User,
       Opportunity,

@@ -966,3 +966,10 @@ export function buildCiiV45InputCompletenessFromEvalPayload(
         mandatoryFieldsComplete,
     };
 }
+
+/** Ranking eligibility only — never used to rewrite CII. Team totals do not count. */
+export function reportIndividualHoursMet(report: StudentReport): boolean {
+    const required = resolveRequiredHours(report);
+    const summary = buildAttendanceSummary(asRecord(report.section1) || {}, required);
+    return summary.required_hours_met === true;
+}

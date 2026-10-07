@@ -17,6 +17,7 @@ import { FacultyApplicationsController } from './faculty-applications.controller
 import { FacultyUniversityScopeModule } from '../faculty-university-scope/faculty-university-scope.module';
 import { StudentsModule } from '../students/students.module';
 import { CommunityAwardModule } from '../reports/community-award.module';
+import { NpeRankingModule } from '../ranking/npe-ranking.module';
 import { FacultyCommunityServiceController } from './faculty-community-service.controller';
 import { AiModule } from '../ai/ai.module';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -36,6 +37,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
         FacultyUniversityScopeModule,
         StudentsModule,
         CommunityAwardModule,
+        NpeRankingModule,
         AiModule,
         NotificationsModule,
     ],

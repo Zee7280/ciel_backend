@@ -727,7 +727,7 @@ export class FacultyReportsService {
           student_name: r.student?.name || 'Unknown',
           student_email: r.student?.email || null,
           project_title: r.opportunity?.title || r.project_id,
-          organization_name: r.opportunity?.organization?.name || 'N/A',
+          organization_name: trackingOrganizationName(r.opportunity) || null,
           status: r.status,
           faculty_status: r.faculty_status,
           private_candidate: isPrivateCandidateOpportunity(r.opportunity),

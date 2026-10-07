@@ -183,3 +183,46 @@ describe('CommunityAwardService.notifyFromPool — ranking is computed server-si
         expect(rows.has('ghost')).toBe(false);
     });
 });
+
+describe('CommunityAwardService.toCard — organization name', () => {
+    const baseReport = {
+        id: 'r1',
+        studentId: 's1',
+        faculty_status: 'approved',
+        admin_status: 'approved',
+        status: 'verified',
+        awardBadges: [],
+        awardBadgeHistory: [],
+        section1: {
+            team_lead: { name: 'Ali', university: 'BNU', year: '1st' },
+            team_members: [],
+            metrics: { total_verified_hours: 16 },
+        },
+        section2: { summary_text: 'Story' },
+        section8: { evidence_files: [] },
+    };
+
+    it('uses a real partner name instead of the student-opportunity bookkeeping org', () => {
+        const card = makeService().toCard({
+            ...baseReport,
+            opportunity: {
+                title: 'Aabpashi',
+                organization: { name: 'Student opportunity — Aabpashi — 9f84bc1f' },
+                partner_organization: { organization_name: 'Abroo' },
+            },
+        } as any);
+        expect(card.organization_name).toBe('Abroo');
+        expect(card.organization_name).not.toMatch(/student opportunity|9f84bc1f/i);
+    });
+
+    it('falls back to Partner when only a bookkeeping org name exists', () => {
+        const card = makeService().toCard({
+            ...baseReport,
+            opportunity: {
+                title: 'Aabpashi',
+                organization: { name: 'Student opportunity — Aabpashi — 9f84bc1f' },
+            },
+        } as any);
+        expect(card.organization_name).toBe('Partner');
+    });
+});

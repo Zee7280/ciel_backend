@@ -143,7 +143,7 @@ export function buildNpePackageRecord(report: StudentReport): NpePackageRecord {
     integrity: approval === 'rejected' ? 'confirmed_fraud' : 'clear',
     parts: [
       'Flashcard',
-      'V13 detailed report',
+      'Detailed report',
       'Original evidence',
       'CII analysis',
       'Locked CII',

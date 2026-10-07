@@ -1,3 +1,5 @@
+import { isDisplayableOrgName } from '../reports/tracking-org-name.util';
+
 /** Shared browse-listing shape for student marketplace cards. Keep FE `browseOpportunityPath.ts` aligned. */
 
 export type BrowsePathKey =
@@ -101,7 +103,7 @@ export function buildPublicExploreStats(
   let verified = 0;
   for (const row of rows) {
     const org = str(row.partner_name || row.organization_name);
-    if (org && org.toLowerCase() !== 'unknown') partners.add(org);
+    if (isDisplayableOrgName(org)) partners.add(org);
     const occupied = Number(row.participant_count);
     if (Number.isFinite(occupied) && occupied > 0) studentsImpacted += occupied;
     if (
@@ -196,11 +198,11 @@ function pickPartnerName(
   const fromPartner = str(
     partner?.organization_name || partner?.name || partner?.partner_name,
   );
-  if (fromPartner) return fromPartner;
+  if (isDisplayableOrgName(fromPartner)) return fromPartner;
   const executing = asRecord(opportunity.executing_organization);
   const fromExec = str(executing?.name || executing?.organization_name);
-  if (fromExec) return fromExec;
-  return organizationName;
+  if (isDisplayableOrgName(fromExec)) return fromExec;
+  return isDisplayableOrgName(organizationName) ? organizationName : '';
 }
 
 function collectSdgIds(opportunity: {

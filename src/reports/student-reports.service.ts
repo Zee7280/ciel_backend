@@ -83,6 +83,7 @@ import {
   isCommunityAwardMedalReport,
   type CommunityServiceLevel,
 } from './community-award.util';
+import { trackingOrganizationName } from './tracking-org-name.util';
 
 /** Project-level total, or the sum of each activity's unique reach when that field is no longer on the form. */
 function distinctBeneficiariesFromSection4(section4: any): number | string | null {
@@ -846,7 +847,7 @@ export class StudentReportsService {
       project_title: opportunity?.title || report.project_id,
       organization_id:
         opportunity?.organizationId ?? opportunity?.organization?.id ?? null,
-      organization_name: opportunity?.organization?.name || 'N/A',
+      organization_name: trackingOrganizationName(opportunity) || 'N/A',
       // The impact-wall / portfolio flashcards read `university` and `story`; without them every
       // verified card fell back to the partner org name and a canned "Approved Community Service
       // report…" sentence instead of the student's own project summary. Resolved exactly the way

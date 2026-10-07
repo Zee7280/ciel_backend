@@ -18,6 +18,7 @@ import {
     collectReportEvidenceFiles,
     ReportEvidenceFileRef,
 } from '../reports/collect-report-evidence.util';
+import { trackingOrganizationName } from '../reports/tracking-org-name.util';
 
 const MAX_FILES_PER_ZIP = 250;
 
@@ -116,7 +117,7 @@ export class AdminProjectEvidenceService {
                 id: opp.id,
                 title: opp.title,
                 status: opp.status,
-                organization_name: opp.organization?.name ?? 'Unknown',
+                organization_name: trackingOrganizationName(opp) || '—',
                 report_count: projectReports.length,
                 evidence_file_count: fileUrls.size,
                 ...faculty,

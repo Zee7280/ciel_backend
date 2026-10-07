@@ -23,6 +23,7 @@ import {
   type RedactedCiiV45Lock,
 } from './cii-v4-5-redaction.util';
 import { buildImpactVerifyUrl } from './certificate-verification-code.util';
+import { trackingOrganizationName } from './tracking-org-name.util';
 
 export type CommunityAwardCard = {
   id: string;
@@ -94,7 +95,7 @@ export class CommunityAwardService {
       student_name: report.student?.name || lead?.name || 'Student',
       project_title:
         report.opportunity?.title || report.project_id || 'Community service',
-      organization_name: report.opportunity?.organization?.name || 'Partner',
+      organization_name: trackingOrganizationName(report.opportunity) || 'Partner',
       university:
         lead?.university ||
         report.student?.university ||

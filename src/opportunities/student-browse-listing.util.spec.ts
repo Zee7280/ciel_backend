@@ -70,6 +70,17 @@ describe('student browse listing fields', () => {
     });
   });
 
+  it('hides student-opportunity bookkeeping names from partner_name', () => {
+    const fields = buildStudentBrowseListingFields(
+      { types: ['Volunteer Activity'] },
+      {
+        remaining_seats: 5,
+        organization_name: 'Student opportunity — Aabpashi — 9f84bc1f',
+      },
+    );
+    expect(fields.partner_name).toBe('');
+  });
+
   it('marks a listing full and virtual from seats + remote mode', () => {
     const fields = buildStudentBrowseListingFields(
       {

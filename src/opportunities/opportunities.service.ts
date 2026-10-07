@@ -77,6 +77,10 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { OpportunityApplication } from './entities/opportunity-application.entity';
 import { OpportunityApplicationsService } from './opportunity-applications.service';
 import { StudentReport } from '../reports/entities/student-report.entity';
+import {
+  isDisplayableOrgName,
+  trackingOrganizationName,
+} from '../reports/tracking-org-name.util';
 import { Report } from '../reports/entities/report.entity';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import { Payment } from '../payments/entities/payment.entity';
@@ -3883,16 +3887,10 @@ export class OpportunitiesService {
           remaining_seats: Math.max(0, volunteersRequired - occupiedSeats),
           volunteers_required: volunteersRequired,
           expected_hours: Number(opp.timeline?.expected_hours) || 0,
-          organization_name: opp.organization?.name || null,
-          partner_name:
-            (typeof opp.partner_organization?.organization_name === 'string' &&
-              opp.partner_organization.organization_name) ||
-            (typeof opp.partner_organization?.name === 'string' &&
-              opp.partner_organization.name) ||
-            (typeof opp.external_partner_collaboration?.organization_name ===
-              'string' &&
-              opp.external_partner_collaboration.organization_name) ||
-            null,
+          organization_name: isDisplayableOrgName(opp.organization?.name)
+            ? String(opp.organization?.name).trim()
+            : null,
+          partner_name: trackingOrganizationName(opp),
           // Lets the "Pending Partner" status line name the actual person, same contact
           // resolution used on the student "mine" list.
           partner_contact_name:

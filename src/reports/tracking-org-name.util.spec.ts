@@ -37,6 +37,17 @@ describe('trackingOrganizationName', () => {
     ).toBe("SOS Children's Villages");
   });
 
+  it('hides student-opportunity bookkeeping names that include the listing id', () => {
+    expect(
+      isDisplayableOrgName('Student opportunity — Aabpashi — 9f84bc1f'),
+    ).toBe(false);
+    expect(
+      trackingOrganizationName({
+        organization: { name: 'Student opportunity — Aabpashi — 9f84bc1f' },
+      }),
+    ).toBeNull();
+  });
+
   it('reads executing-context partner when linked org is empty', () => {
     expect(
       trackingOrganizationName({

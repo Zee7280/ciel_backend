@@ -8,10 +8,10 @@ import {
  * Evidence sharing matrix (CIEL PK Impact Package, "Sharing rules"). One project-level choice
  * (`section8.media_visible`) applies to every evidence file:
  *
- *  - public:     anyone views; originals downloadable. Needs the public-share permission,
- *                otherwise it behaves as restricted.
- *  - restricted / private: Student + Super Admin always view; Faculty + University only after
- *                super-admin approval; Partner / NGO never; never shown publicly.
+ *  - public:     anyone views (student, NGO, partner, faculty, university, admin, public);
+ *                originals downloadable. Needs the public-share permission, otherwise restricted.
+ *  - restricted / private: Student, Super Admin, Faculty and University may view (read-only).
+ *                Partner / NGO / public never see the files. Never shown publicly.
  *                Downloads blocked for every role, Super Admin included.
  */
 export type EvidenceViewerRole =
@@ -47,9 +47,13 @@ export function canViewEvidence(
   role: EvidenceViewerRole,
 ): boolean {
   if (effectiveEvidenceVisibility(report.section8) === 'public') return true;
-  if (role === 'student' || role === 'admin') return true;
-  if (role === 'faculty' || role === 'university') {
-    return isAdminApprovedForEvidence(report);
+  if (
+    role === 'student' ||
+    role === 'admin' ||
+    role === 'faculty' ||
+    role === 'university'
+  ) {
+    return true;
   }
   return false;
 }
@@ -104,12 +108,7 @@ export function applyEvidenceAccess<
     can_download: canDownloadEvidence({ section8: data.section8 }),
     message: allowed
       ? null
-      : (role === 'faculty' || role === 'university') &&
-          !isAdminApprovedForEvidence({
-            admin_status: data.admin_status as string | null | undefined,
-          })
-        ? `Awaiting super-admin approval · ${visibility} evidence is locked`
-        : 'Evidence verified — not publicly available',
+      : 'Evidence verified — not publicly available',
   };
   if (allowed) {
     return { ...response, data: { ...data, evidence_access: access } };

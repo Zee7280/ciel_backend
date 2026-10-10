@@ -22,8 +22,8 @@ describe('evidence access matrix', () => {
     const approved = { ...pending, admin_status: 'approved' };
     expect(canViewEvidence(pending, 'student')).toBe(true);
     expect(canViewEvidence(pending, 'admin')).toBe(true);
-    expect(canViewEvidence(pending, 'faculty')).toBe(false);
-    expect(canViewEvidence(pending, 'university')).toBe(false);
+    expect(canViewEvidence(pending, 'faculty')).toBe(true);
+    expect(canViewEvidence(pending, 'university')).toBe(true);
     expect(canViewEvidence(approved, 'faculty')).toBe(true);
     expect(canViewEvidence(approved, 'university')).toBe(true);
     expect(canViewEvidence(approved, 'partner')).toBe(false);
@@ -57,13 +57,14 @@ describe('evidence access matrix', () => {
     expect(resp.data.evidence_urls).toHaveLength(1); // input not mutated
   });
 
-  it('keeps URLs for admin and approved faculty, with message for pending faculty', () => {
+  it('keeps URLs for admin and faculty on restricted (view only); partner stays locked', () => {
     const resp = { data: { admin_status: 'pending', section8: { ...restricted, evidence_files: ['https://x/a'] } } };
     expect((applyEvidenceAccess(resp, 'admin').data as any).section8.evidence_files).toHaveLength(1);
     const f = applyEvidenceAccess(resp, 'faculty').data as any;
-    expect(f.section8.evidence_files).toEqual([]);
-    expect(f.evidence_access.message).toMatch(/Awaiting super-admin approval/);
-    const approved = { data: { ...resp.data, admin_status: 'approved' } };
-    expect((applyEvidenceAccess(approved, 'faculty').data as any).section8.evidence_files).toHaveLength(1);
+    expect(f.section8.evidence_files).toHaveLength(1);
+    expect(f.evidence_access.can_download).toBe(false);
+    const p = applyEvidenceAccess(resp, 'partner').data as any;
+    expect(p.section8.evidence_files).toEqual([]);
+    expect(p.evidence_access.message).toMatch(/not publicly available/);
   });
 });

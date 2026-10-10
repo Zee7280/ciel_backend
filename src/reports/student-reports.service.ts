@@ -3970,8 +3970,8 @@ export class StudentReportsService {
       );
     }
 
-    // Evidence links follow the project-level sharing rule: University unlocks after super-admin
-    // approval; Partner / NGO / corporate never (unless the project is Public).
+    // Evidence links follow the project-level sharing rule: University / Faculty may view
+    // Restricted as read-only; Partner / NGO / corporate never (unless the project is Public).
     const evidenceRole: EvidenceViewerRole =
       viewerRole === 'university' ? 'university' : 'partner';
     const formatted = applyEvidenceAccess(

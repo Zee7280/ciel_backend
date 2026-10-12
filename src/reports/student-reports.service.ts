@@ -81,6 +81,9 @@ import {
   communityServiceLevel,
   isCommunityAwardLiveReport,
   isCommunityAwardMedalReport,
+  hoursFromAttendanceLog,
+  attendanceLogCountsTowardHours,
+  requiredHoursPerStudentFromOpportunity,
   type CommunityServiceLevel,
 } from './community-award.util';
 import { trackingOrganizationName } from './tracking-org-name.util';
@@ -300,14 +303,11 @@ export class StudentReportsService {
   private isAttendanceLogCountedForSubmitHours(
     log: Pick<AttendanceLog, 'approvalStatus'>,
   ): boolean {
-    return String(log.approvalStatus || '').toLowerCase() !== 'rejected';
+    return attendanceLogCountsTowardHours(
+      log as unknown as Record<string, unknown>,
+    );
   }
 
-  /**
-   * Server-computed logged hours per team member, from `participations` / `attendance_logs`,
-   * never from the client `section1.metrics` blob. Every active member must clear the hour
-   * bar on their own logs. Faculty session approval is not required for this check.
-   */
   /**
    * Only the submitting team's seated members count toward the per-member hours check: another
    * team on the same opportunity, a pending/withdrawn applicant, or an unapproved seat must not
@@ -335,24 +335,56 @@ export class StudentReportsService {
     return seated;
   }
 
-  private async computeServerVerifiedHours(projectId: string): Promise<{
+  private async computeServerVerifiedHours(
+    projectId: string,
+    extraProjectIds?: string[],
+  ): Promise<{
     hoursByParticipationId: Map<string, number>;
     activeRoster: Participation[];
     totalVerifiedHours: number;
   }> {
+    const projectKeys = [
+      ...new Set(
+        [projectId, ...(extraProjectIds || [])]
+          .map((id) => String(id || '').trim())
+          .filter(Boolean),
+      ),
+    ];
+    if (projectKeys.length === 0) {
+      return {
+        hoursByParticipationId: new Map(),
+        activeRoster: [],
+        totalVerifiedHours: 0,
+      };
+    }
     const [roster, logs] = await Promise.all([
-      this.participantRepository.find({ where: { projectId } }),
-      this.attendanceLogsRepository.find({ where: { projectId } }),
+      this.participantRepository.find({
+        where: projectKeys.map((id) => ({ projectId: id })),
+      }),
+      this.attendanceLogsRepository.find({
+        where: projectKeys.map((id) => ({ projectId: id })),
+      }),
     ]);
     const activeRoster = roster.filter((p) => p.status !== 'rejected');
+    const rosterById = new Set(activeRoster.map((p) => p.id));
+    const rosterIdByStudentId = new Map(
+      activeRoster
+        .filter((p) => p.studentId)
+        .map((p) => [p.studentId, p.id] as const),
+    );
     const hoursByParticipationId = new Map<string, number>();
     let totalVerifiedHours = 0;
     for (const log of logs) {
       if (!this.isAttendanceLogCountedForSubmitHours(log)) continue;
-      const hours = Number(log.sessionHours) || 0;
+      const hours = hoursFromAttendanceLog(log as unknown as Record<string, unknown>);
+      if (!(hours > 0)) continue;
+      const rawOwner = String(log.participantId || '');
+      const ownerId = rosterById.has(rawOwner)
+        ? rawOwner
+        : rosterIdByStudentId.get(rawOwner) || rawOwner;
       hoursByParticipationId.set(
-        log.participantId,
-        (hoursByParticipationId.get(log.participantId) || 0) + hours,
+        ownerId,
+        (hoursByParticipationId.get(ownerId) || 0) + hours,
       );
       totalVerifiedHours += hours;
     }
@@ -368,17 +400,20 @@ export class StudentReportsService {
     projectId: string,
     requiredHoursPerStudent: number,
     submitterStudentId?: string,
+    extraProjectIds?: string[],
   ): Promise<void> {
     if (!(requiredHoursPerStudent > 0)) return;
     const { hoursByParticipationId, activeRoster: wholeRoster } =
-      await this.computeServerVerifiedHours(projectId);
+      await this.computeServerVerifiedHours(projectId, extraProjectIds);
     const activeRoster = this.scopeRosterToSubmittingTeam(
       wholeRoster,
       submitterStudentId,
     );
     if (activeRoster.length === 0) return;
     const shortfalls = activeRoster.filter(
-      (p) => (hoursByParticipationId.get(p.id) || 0) < requiredHoursPerStudent,
+      (p) =>
+        (hoursByParticipationId.get(p.id) || 0) + 1e-9 <
+        requiredHoursPerStudent,
     );
     if (shortfalls.length > 0) {
       throw new BadRequestException({
@@ -901,11 +936,7 @@ export class StudentReportsService {
       // 'approved' — a flashcard checklist that only accepted 'approved' would wrongly show
       // "partner not verified" on a fully live, no-partner-needed record.
       partner_verified: isReportPartnerStepSatisfied(report.partner_status),
-      required_hours:
-        Number(
-          (opportunity?.timeline as { expected_hours?: unknown } | undefined)
-            ?.expected_hours,
-        ) || null,
+      required_hours: requiredHoursPerStudentFromOpportunity(opportunity),
       sdgs,
       faculty_status: report.faculty_status,
       faculty_remarks: report.faculty_remarks ?? null,
@@ -3332,17 +3363,14 @@ export class StudentReportsService {
       }
       if (opportunityIdFromDto) {
         const requiredHoursPerStudent =
-          Number(
-            (
-              opportunityForSummary?.timeline as
-                | { expected_hours?: unknown }
-                | undefined
-            )?.expected_hours,
-          ) || 16;
+          requiredHoursPerStudentFromOpportunity(opportunityForSummary);
         await this.assertEveryTeamMemberMetRequiredHours(
           String(opportunityIdFromDto),
           requiredHoursPerStudent,
           reportOwnerId,
+          [report.project_id, opportunityForSummary?.id].filter(
+            (id): id is string => Boolean(id && String(id) !== String(opportunityIdFromDto)),
+          ),
         );
       }
     }
@@ -4480,7 +4508,7 @@ export class StudentReportsService {
             (log as { locationPin?: string | null }).locationPin ?? null,
           activity_type: log.activityType,
           description: log.description,
-          hours: Number(log.sessionHours),
+          hours: hoursFromAttendanceLog(log as unknown as Record<string, unknown>),
           evidence_url: log.evidenceUrl,
           entryStatus: log.entryStatus,
           approval_status: (log as { approvalStatus?: string | null })
@@ -4548,6 +4576,9 @@ export class StudentReportsService {
           end_date: report.opportunity?.timeline?.end_date,
           expected_hours: report.opportunity?.timeline?.expected_hours,
         },
+        required_hours: requiredHoursPerStudentFromOpportunity(
+          report.opportunity,
+        ),
         project_id: report.project_id,
         projectId: projectKey,
         opportunityId: report.opportunityId,
@@ -5653,7 +5684,7 @@ export class StudentReportsService {
               location_pin: (log as { locationPin?: string | null }).locationPin ?? null,
               activity_type: log.activityType,
               description: log.description,
-              hours: Number(log.sessionHours),
+              hours: hoursFromAttendanceLog(log as unknown as Record<string, unknown>),
               evidence_url: log.evidenceUrl,
               entryStatus: log.entryStatus,
               approval_status: (log as any).approvalStatus ?? null,

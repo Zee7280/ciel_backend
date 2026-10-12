@@ -74,6 +74,8 @@ describe('OpportunitiesService — public partner verification', () => {
             expect(preview.title).toBe('Community clean-up');
             expect(preview.alreadyVerified).toBe(false);
             expect(preview.detail.supervision.faculty.name).toBe('Dr Khan');
+            expect(preview.record).not.toHaveProperty('partnerToken');
+            expect(preview.record.supervision).toEqual({ supervisor_name: 'Dr Khan', contact: 'khan@uni.edu' });
         });
 
         it('reflects an already-verified opportunity', async () => {

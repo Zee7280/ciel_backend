@@ -49,6 +49,9 @@ import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { MailService } from '../mail/mail.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import {
+  attendanceLogCountsTowardHours,
+  hoursFromAttendanceLog,
+  requiredHoursPerStudentFromOpportunity,
   resolveReportFlashEvidence,
   resolveReportFlashHours,
 } from './community-award.util';
@@ -217,11 +220,7 @@ export function mapFacultyListPackage(
   const s2 = report.section2 as StudentReport['section2'] | null;
   const lead = s1?.team_lead;
   const members = Array.isArray(s1?.team_members) ? s1.team_members : [];
-  const required =
-    Number(
-      (report.opportunity?.timeline as { expected_hours?: unknown } | undefined)
-        ?.expected_hours,
-    ) || 16;
+  const required = requiredHoursPerStudentFromOpportunity(report.opportunity);
   // Live non-rejected project logs are the source of truth when present (team, not lead-only
   // blob) — including a genuine live total of 0 (e.g. every session was rejected), which must
   // not fall back to a stale stored value. Only the absence of live data (null) falls back.
@@ -566,13 +565,7 @@ export class FacultyReportsService {
       if (report?.id) usedReportIds.add(report.id);
       const seatLogs = logsByParticipant.get(seat.id) ?? [];
       const liveHours = this.loggedHoursForProject(seatLogs);
-      const required =
-        Number(
-          (opp.timeline as { expected_hours?: unknown } | undefined)
-            ?.expected_hours,
-        ) ||
-        Number(opp.requiredHours) ||
-        16;
+      const required = requiredHoursPerStudentFromOpportunity(opp);
       const progress = report ? computeReportProgress(report) : null;
       const submitted = progress?.is_submitted === true;
       const hoursPct =
@@ -634,11 +627,7 @@ export class FacultyReportsService {
       const liveHours = projectLogs.length
         ? this.loggedHoursForProject(projectLogs)
         : resolveReportFlashHours(report.section1);
-      const required =
-        Number(
-          (opp.timeline as { expected_hours?: unknown } | undefined)
-            ?.expected_hours,
-        ) || 16;
+      const required = requiredHoursPerStudentFromOpportunity(opp);
       const progress = computeReportProgress(report);
       const email = pickListString(report.student?.email);
       data.push({
@@ -681,13 +670,14 @@ export class FacultyReportsService {
     return { success: true, data };
   }
 
-  /** Same submit bar: rejected sessions do not count; pending sessions do. */
+  /** Same submit bar: rejected sessions do not count; pending sessions do. Clock fallback matches student wizard. */
   private loggedHoursForProject(
     logs: Pick<AttendanceLog, 'approvalStatus' | 'sessionHours'>[],
   ): number {
     return logs.reduce((sum, log) => {
-      if (String(log.approvalStatus || '').toLowerCase() === 'rejected') return sum;
-      return sum + (Number(log.sessionHours) || 0);
+      const raw = log as unknown as Record<string, unknown>;
+      if (!attendanceLogCountsTowardHours(raw)) return sum;
+      return sum + hoursFromAttendanceLog(raw);
     }, 0);
   }
 

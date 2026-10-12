@@ -73,6 +73,10 @@ function pickFlashNumber(value: unknown): number {
     const parsed = Number(value.replace(/,/g, '').trim());
     return Number.isFinite(parsed) ? parsed : 0;
   }
+  if (value != null && typeof value === 'object' && typeof (value as { toString?: unknown }).toString === 'function') {
+    const parsed = Number(String(value).replace(/,/g, '').trim());
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
   return 0;
 }
 
@@ -86,8 +90,9 @@ function logCountsTowardHours(log: Record<string, unknown>): boolean {
 }
 
 function clockToMinutes(value: unknown): number | null {
-  if (typeof value !== 'string') return null;
-  const match = value.trim().match(/^(\d{1,2}):(\d{2})/);
+  if (value == null) return null;
+  const raw = typeof value === 'string' ? value : String(value);
+  const match = raw.trim().match(/^(\d{1,2}):(\d{2})/);
   if (!match) return null;
   return parseInt(match[1], 10) * 60 + parseInt(match[2], 10);
 }
@@ -101,6 +106,44 @@ function effectiveHoursFromLog(log: Record<string, unknown>): number {
   let diffMin = end - start;
   if (diffMin < 0) diffMin += 24 * 60;
   return Math.round((diffMin / 60) * 10) / 10;
+}
+
+/** Same hour math the student report wizard uses: stored hours, else start/end clock. */
+export function hoursFromAttendanceLog(
+  log: Record<string, unknown> | null | undefined,
+): number {
+  if (!log) return 0;
+  return effectiveHoursFromLog(log);
+}
+
+/** Rejected sessions never count toward the pre-submit hour bar. */
+export function attendanceLogCountsTowardHours(
+  log: Record<string, unknown> | null | undefined,
+): boolean {
+  if (!log) return false;
+  return logCountsTowardHours(log);
+}
+
+/**
+ * Per-student hour bar used by submit, GET, and listing.
+ * Timeline `expected_hours` first (create form), then the opportunity `requiredHours`
+ * column, then the product default of 16 — never a null that the wizard would treat as 16
+ * while submit used a different number.
+ */
+export function requiredHoursPerStudentFromOpportunity(
+  opportunity?: {
+    timeline?: { expected_hours?: unknown; required_hours?: unknown } | null;
+    requiredHours?: unknown;
+  } | null,
+): number {
+  const fromTimeline = pickFlashNumber(
+    opportunity?.timeline?.expected_hours ??
+      opportunity?.timeline?.required_hours,
+  );
+  if (fromTimeline > 0) return fromTimeline;
+  const fromColumn = pickFlashNumber(opportunity?.requiredHours);
+  if (fromColumn > 0) return fromColumn;
+  return 16;
 }
 
 function logHasEvidence(log: Record<string, unknown>): boolean {

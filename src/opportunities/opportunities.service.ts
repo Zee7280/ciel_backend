@@ -5388,6 +5388,20 @@ export class OpportunitiesService {
       // hide that button rather than let the reviewer hit a 400 after picking it.
       isStudentCreated: !!opportunity.isStudentCreated,
       detail: buildOpportunityDetailView(opportunity),
+      record: {
+        title: opportunity.title,
+        types: opportunity.types,
+        mode: opportunity.mode,
+        location: opportunity.location,
+        timeline: opportunity.timeline,
+        objectives: opportunity.objectives,
+        activity_details: opportunity.activity_details,
+        supervision: opportunity.supervision,
+        sdg_info: opportunity.sdg_info,
+        secondary_sdgs: opportunity.secondary_sdgs,
+        verification_method: opportunity.verification_method,
+        visibility: opportunity.visibility,
+      },
     };
   }
 

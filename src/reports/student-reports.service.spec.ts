@@ -3523,5 +3523,360 @@ describe('StudentReportsService', () => {
         ),
       ).resolves.toBeUndefined();
     });
+
+    it('counts start/end clock hours when sessionHours is 0 — same as the student wizard', async () => {
+      await expect(
+        run(
+          [row('a1', 'student-1', { teamId: 'T1' }), row('a2', 'student-2', { teamId: 'T1' })],
+          [
+            { participantId: 'a1', projectId: 'opp-1', sessionHours: 0, startTime: '09:00', endTime: '13:00', approvalStatus: 'pending' },
+            { participantId: 'a1', projectId: 'opp-1', sessionHours: 0, startTime: '09:00', endTime: '13:00', approvalStatus: null },
+            { participantId: 'a1', projectId: 'opp-1', sessionHours: 0, startTime: '08:00', endTime: '16:00', approvalStatus: 'pending' },
+            { participantId: 'a2', projectId: 'opp-1', sessionHours: 0, startTime: '09:00', endTime: '13:00', approvalStatus: 'pending' },
+            { participantId: 'a2', projectId: 'opp-1', sessionHours: 0, startTime: '09:00', endTime: '13:00', approvalStatus: null },
+            { participantId: 'a2', projectId: 'opp-1', sessionHours: 0, startTime: '08:00', endTime: '16:00', approvalStatus: 'pending' },
+          ],
+        ),
+      ).resolves.toBeUndefined();
+    });
+
+    it('credits a log stored against studentId onto that seat', async () => {
+      await expect(
+        run(
+          [row('a1', 'student-1', { teamId: 'T1' })],
+          [{ participantId: 'student-1', projectId: 'opp-1', sessionHours: 16, approvalStatus: 'pending' }],
+        ),
+      ).resolves.toBeUndefined();
+    });
+
+    it('still ignores rejected sessions even when start/end would clear the bar', async () => {
+      await expect(
+        run(
+          [row('a1', 'student-1', { teamId: 'T1' })],
+          [
+            {
+              participantId: 'a1',
+              projectId: 'opp-1',
+              sessionHours: 0,
+              startTime: '08:00',
+              endTime: '17:00',
+              approvalStatus: 'rejected',
+            },
+          ],
+        ),
+      ).rejects.toThrow(/Required engagement hours must be met/);
+    });
+
+    it('prefers stored sessionHours over a longer start/end window', async () => {
+      await expect(
+        run(
+          [row('a1', 'student-1', { teamId: 'T1' }), row('a2', 'student-2', { teamId: 'T1' })],
+          [
+            { participantId: 'a1', projectId: 'opp-1', sessionHours: 4, startTime: '08:00', endTime: '17:00', approvalStatus: 'pending' },
+            { participantId: 'a2', projectId: 'opp-1', sessionHours: 16, approvalStatus: 'pending' },
+          ],
+        ),
+      ).rejects.toThrow(/individually meet the required hours/);
+    });
+  });
+
+  describe('report decision lifecycle — submit, reject, revision, resubmit, publish, unlock, close', () => {
+    const verifiedReport = () => ({
+      id: 'report-1',
+      studentId: 'student-1',
+      opportunityId: 'opp-1',
+      project_id: 'opp-1',
+      status: 'verified',
+      admin_status: 'approved',
+      partner_status: 'not_applicable',
+      faculty_status: 'approved',
+      admin_feedback: '' as string | null,
+      faculty_remarks: '' as string | null,
+      reportSubmittedAt: new Date('2026-05-01T00:00:00.000Z'),
+      adminApprovedAt: new Date('2026-05-02T00:00:00.000Z'),
+      partnerApprovedAt: null as Date | null,
+      ciiV45: { displayScore: 81 } as Record<string, unknown>,
+      ciiV45Lock: { locked: true, hash: 'abc' } as Record<string, unknown> | null,
+      awardBadges: ['gold'] as string[],
+      opportunity: { id: 'opp-1', ...LIVE_OPP_GATES, timeline: null },
+    });
+
+    it('a repeated submit on an already-submitted report is a locked no-op (no save, no second mail)', async () => {
+      const report = {
+        id: 'report-1',
+        studentId: 'student-1',
+        opportunityId: 'opp-1',
+        project_id: 'opp-1',
+        status: 'submitted',
+        admin_status: 'pending',
+        partner_status: 'pending',
+        faculty_status: 'pending',
+        reportSubmittedAt: new Date('2026-05-01T00:00:00.000Z'),
+        submission_date: new Date('2026-05-01T00:00:00.000Z'),
+        section2: { problem_statement: 'original reviewed text' },
+      };
+      mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+      const result: any = await service.createReport(
+        'student-1',
+        { opportunityId: 'opp-1', ...MIN_VALID_SUBMIT_SECTIONS },
+        [],
+        true,
+      );
+
+      expect(result.data.already_submitted).toBe(true);
+      expect(result.message).toMatch(/already been submitted and is locked/);
+      expect(report.status).toBe('submitted');
+      expect(report.section2.problem_statement).toBe('original reviewed text');
+      expect(mockStudentReportsRepository.save).not.toHaveBeenCalled();
+      expect(mockMailService.sendAdminStudentReportSubmitted).not.toHaveBeenCalled();
+    });
+
+    it('student autosave during revision keeps status "revision" (never regresses to draft or re-stamps submit)', async () => {
+      const report = {
+        id: 'report-1',
+        studentId: 'student-1',
+        opportunityId: 'opp-1',
+        project_id: 'opp-1',
+        status: 'revision',
+        admin_status: 'rejected',
+        partner_status: 'pending',
+        faculty_status: 'pending',
+        admin_feedback: 'Fix hours',
+        reportSubmittedAt: new Date('2026-05-01T00:00:00.000Z'),
+      };
+      mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+      const result = await service.saveDraft(
+        'student-1',
+        { opportunityId: 'opp-1', section2: { problem_statement: 'edited after feedback' } },
+        [],
+      );
+
+      expect(result.success).toBe(true);
+      expect(mockStudentReportsRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 'revision',
+          admin_status: 'rejected',
+          admin_feedback: 'Fix hours',
+          reportSubmittedAt: report.reportSubmittedAt,
+        }),
+      );
+    });
+
+    it('resubmit after admin reject clears the rejection and returns the report to pending review', async () => {
+      const report = {
+        id: 'report-1',
+        studentId: 'student-1',
+        opportunityId: 'opp-1',
+        project_id: 'opp-1',
+        status: 'revision',
+        admin_status: 'rejected',
+        partner_status: 'pending',
+        faculty_status: 'pending',
+        admin_feedback: 'Fix attendance hours.',
+        reportSubmittedAt: new Date('2026-05-01T00:00:00.000Z'),
+        adminApprovedAt: new Date('2026-05-02T00:00:00.000Z'),
+      };
+      mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+      const result: any = await service.createReport(
+        'student-1',
+        { opportunityId: 'opp-1', ...MIN_VALID_SUBMIT_SECTIONS },
+        [],
+        true,
+      );
+
+      expect(result.message).toBe('Report submitted successfully.');
+      expect(mockStudentReportsRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 'submitted',
+          admin_status: 'pending',
+          admin_feedback: '',
+          adminApprovedAt: null,
+        }),
+      );
+      expect(report.reportSubmittedAt.getTime()).toBeGreaterThan(
+        new Date('2026-05-01T00:00:00.000Z').getTime(),
+      );
+      expect(mockMailService.sendAdminStudentReportSubmitted).toHaveBeenCalledTimes(1);
+    });
+
+    it('reject on a published report needs force; forced reject retires the CII lock and award so re-publish needs a fresh analysis', async () => {
+      const report = verifiedReport();
+      mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+      await expect(
+        service.verifyReport('report-1', 'reject', 'admin', 'Evidence mismatch'),
+      ).rejects.toThrow(/undo a published decision/);
+      expect(report.status).toBe('verified');
+
+      await service.verifyReport(
+        'report-1',
+        'reject',
+        'admin',
+        'Evidence mismatch',
+        undefined,
+        true,
+        { id: 'admin-1', name: 'Admin' },
+      );
+
+      expect(report.status).toBe('revision');
+      expect(report.admin_status).toBe('rejected');
+      expect(report.faculty_status).toBe('pending');
+      expect(report.adminApprovedAt).toBeNull();
+      expect(report.ciiV45Lock).toBeNull();
+      expect(report.awardBadges).toEqual([]);
+      const previousLocks = (report.ciiV45 as { previousLocks?: Array<Record<string, unknown>> }).previousLocks;
+      expect(previousLocks).toHaveLength(1);
+      expect(previousLocks?.[0]).toEqual(
+        expect.objectContaining({ locked: true, hash: 'abc', supersededBy: 'rejected' }),
+      );
+      expect(verifyReportQb.__patch).toEqual(
+        expect.objectContaining({
+          status: 'revision',
+          admin_status: 'rejected',
+          ciiV45Lock: null,
+          awardBadges: [],
+          adminReviewedBy: 'Admin (admin-1)',
+        }),
+      );
+
+      // Student resubmits the fixed content …
+      report.status = 'submitted';
+      report.admin_status = 'pending';
+      // … but CIEL PK cannot publish again until the analysis is re-run and re-locked.
+      await expect(
+        service.verifyReport('report-1', 'approve', 'admin'),
+      ).rejects.toThrow(/Run and confirm the CII analysis/);
+      expect(report.status).toBe('submitted');
+
+      report.ciiV45Lock = { locked: true, hash: 'def' };
+      const result = await service.verifyReport(
+        'report-1',
+        'approve',
+        'admin',
+        undefined,
+        undefined,
+        undefined,
+        { id: 'admin-1', name: 'Admin' },
+      );
+      expect(result.data.status).toBe('verified');
+      expect(report.admin_status).toBe('approved');
+      expect(report.faculty_status).toBe('approved');
+      expect(report.adminApprovedAt).toBeInstanceOf(Date);
+    });
+
+    it('unlock on a published report needs force; forced unlock returns a real draft the student can save again', async () => {
+      const report = verifiedReport();
+      mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+      await expect(
+        service.verifyReport('report-1', 'unlock', 'admin', 'Reopen'),
+      ).rejects.toThrow(/undo a published decision/);
+
+      await service.verifyReport('report-1', 'unlock', 'admin', 'Reopen', undefined, true);
+
+      expect(report.status).toBe('draft');
+      expect(report.admin_status).toBe('pending');
+      expect(report.partner_status).toBe('pending');
+      expect(report.reportSubmittedAt).toBeNull();
+      expect(report.adminApprovedAt).toBeNull();
+      expect(report.ciiV45Lock).toBeNull();
+      expect(report.awardBadges).toEqual([]);
+      expect(report.admin_feedback).toBe('Reopen');
+      expect(verifyReportQb.__patch).toEqual(
+        expect.objectContaining({ status: 'draft', reportSubmittedAt: null }),
+      );
+
+      // The reopened draft accepts a student autosave as a plain draft.
+      const saved = await service.saveDraft(
+        'student-1',
+        { opportunityId: 'opp-1', section2: { problem_statement: 'reworked' } },
+        [],
+      );
+      expect(saved.success).toBe(true);
+      expect(mockStudentReportsRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'draft' }),
+      );
+    });
+
+    it('close refuses a report still under review and requires a reason on a published one', async () => {
+      mockStudentReportsRepository.findOne.mockResolvedValue({
+        id: 'report-1',
+        status: 'submitted',
+        admin_status: 'pending',
+        partner_status: 'pending',
+        opportunity: {},
+      });
+      await expect(
+        service.verifyReport('report-1', 'close', 'admin', 'closing early'),
+      ).rejects.toThrow(/already-approved\/published report can be closed/);
+
+      const published = verifiedReport();
+      mockStudentReportsRepository.findOne.mockResolvedValue(published);
+      await expect(
+        service.verifyReport('report-1', 'close', 'admin', '   '),
+      ).rejects.toThrow(/reason is required to close/);
+      expect(published.status).toBe('verified');
+      expect(published.ciiV45Lock).toEqual({ locked: true, hash: 'abc' });
+    });
+
+    it('a student cannot edit a closed report', async () => {
+      mockStudentReportsRepository.findOne.mockResolvedValue({
+        id: 'report-1',
+        studentId: 'student-1',
+        opportunityId: 'opp-1',
+        project_id: 'opp-1',
+        status: 'closed',
+        admin_status: 'approved',
+        partner_status: 'not_applicable',
+        faculty_status: 'approved',
+        reportSubmittedAt: new Date('2026-05-01T00:00:00.000Z'),
+        section2: { problem_statement: 'final published text' },
+      });
+
+      const result = await service.saveDraft(
+        'student-1',
+        { opportunityId: 'opp-1', section2: { problem_statement: 'post-close edit' } },
+        [],
+      );
+      expect(result.message).toBe('Draft saved successfully.');
+      expect(mockStudentReportsRepository.save).not.toHaveBeenCalled();
+
+      const submitted: any = await service.createReport(
+        'student-1',
+        { opportunityId: 'opp-1', ...MIN_VALID_SUBMIT_SECTIONS },
+        [],
+        true,
+      );
+      expect(submitted.data.already_submitted).toBe(true);
+      expect(mockStudentReportsRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('listing and status endpoints flag a revision report as editable with the admin feedback', async () => {
+      const OPP = '582da802-e41e-488d-bd3d-d6dee59982b7';
+      const report = {
+        id: 'report-1',
+        studentId: 'student-1',
+        opportunityId: OPP,
+        project_id: OPP,
+        status: 'revision',
+        admin_status: 'rejected',
+        partner_status: 'pending',
+        faculty_status: 'pending',
+        admin_feedback: 'Add signed attendance sheet.',
+        faculty_remarks: null,
+        reportSubmittedAt: new Date('2026-05-01T00:00:00.000Z'),
+        section1: {},
+        opportunity: { id: OPP, title: 'Test Opportunity', timeline: null },
+      };
+      mockStudentReportsRepository.findOne.mockResolvedValue(report);
+
+      const status: any = await service.checkReportStatus('student-1', OPP);
+      expect(status.data.is_editable).toBe(true);
+      expect(status.data.status).toBe('revision');
+      expect(JSON.stringify(status.data)).toContain('Add signed attendance sheet.');
+    });
   });
 });

@@ -1,6 +1,9 @@
 import {
+    attendanceLogCountsTowardHours,
     communityAwardInputsFromReport,
     communityServiceLevel,
+    hoursFromAttendanceLog,
+    requiredHoursPerStudentFromOpportunity,
     isCommunityAwardLiveReport,
     isCommunityAwardMedalReport,
     resolveDisplayCii,
@@ -141,6 +144,62 @@ describe('communityServiceLevel', () => {
         expect(communityServiceLevel(50)).toBe('Strong');
         expect(communityServiceLevel(49)).toBe('Developing');
         expect(communityServiceLevel(0)).toBe('Developing');
+    });
+});
+
+describe('requiredHoursPerStudentFromOpportunity — same bar as submit + wizard', () => {
+    it('uses timeline expected_hours when set', () => {
+        expect(
+            requiredHoursPerStudentFromOpportunity({
+                timeline: { expected_hours: 24 },
+                requiredHours: 16,
+            }),
+        ).toBe(24);
+    });
+
+    it('falls back to the requiredHours column, then 16', () => {
+        expect(
+            requiredHoursPerStudentFromOpportunity({
+                timeline: {},
+                requiredHours: 40,
+            }),
+        ).toBe(40);
+        expect(requiredHoursPerStudentFromOpportunity({ timeline: {} })).toBe(16);
+        expect(requiredHoursPerStudentFromOpportunity(null)).toBe(16);
+    });
+});
+
+describe('hoursFromAttendanceLog — same clock math as the student wizard', () => {
+    it('uses start/end when sessionHours is 0', () => {
+        expect(
+            hoursFromAttendanceLog({
+                sessionHours: 0,
+                startTime: '09:00',
+                endTime: '13:00',
+            }),
+        ).toBe(4);
+        expect(
+            hoursFromAttendanceLog({
+                hours: 0,
+                start_time: '08:00:00',
+                end_time: '17:00:00',
+            }),
+        ).toBe(9);
+    });
+
+    it('ignores rejected sessions', () => {
+        expect(
+            attendanceLogCountsTowardHours({
+                approvalStatus: 'rejected',
+                sessionHours: 16,
+            }),
+        ).toBe(false);
+        expect(
+            attendanceLogCountsTowardHours({
+                approval_status: 'pending',
+                sessionHours: 4,
+            }),
+        ).toBe(true);
     });
 });
 

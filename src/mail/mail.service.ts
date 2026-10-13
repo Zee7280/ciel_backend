@@ -689,17 +689,33 @@ export class MailService {
     }
   }
 
-  async sendPartnerOpportunityNotice(to: string, projectTitle: string) {
+  async sendPartnerOpportunityNotice(
+    to: string,
+    projectTitle: string,
+    options?: {
+      /** Replaces the generic "your email appears on the record" lead — plain text, escaped here. */
+      leadText?: string;
+      /** Extra plain-text line after the lead (e.g. when the approval link will follow). */
+      nextStepText?: string;
+    },
+  ) {
     const from =
       this.configService.get<string>('MAIL_FROM') ||
       'CIEL <no-reply@cielpk.com>';
     const titleEsc = this.escHtmlPlain(projectTitle);
     const dashboardLink = this.buildFrontendLink('/login', {});
+    const leadHtml = options?.leadText?.trim()
+      ? `<p>${this.escHtmlPlain(options.leadText.trim())}</p>`
+      : `<p>Your email address appears on the record for <strong>${titleEsc}</strong> on CIEL PK (Community Impact Education Lab).</p>`;
+    const nextStepHtml = options?.nextStepText?.trim()
+      ? `<p><strong>${this.escHtmlPlain(options.nextStepText.trim())}</strong></p>`
+      : '';
 
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
         <h2 style="color: #333;">You are listed on a CIEL PK opportunity</h2>
-        <p>Your email address appears on the record for <strong>${titleEsc}</strong> on CIEL PK (Community Impact Education Lab).</p>
+        ${leadHtml}
+        ${nextStepHtml}
         <p>If you have a partner or liaison role for this activity, sign in with this email address to review details and complete any steps assigned to you.</p>
         <div style="text-align: center; margin: 30px 0;">
           <a href="${dashboardLink}" style="background-color: #4CAF50; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Sign in to CIEL PK</a>

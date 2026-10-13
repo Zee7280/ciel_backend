@@ -3193,6 +3193,34 @@ export class OpportunitiesService {
       }
     }
 
+    // Regular student listing: the partner's APPROVAL link only goes out once faculty approves
+    // (handleFacultyApprovedSideEffects — the link is refused before that stage anyway). But the
+    // partner must still hear right away that they were named, with the timing spelled out —
+    // otherwise "I added a partner and they received nothing" reads as a lost email, and the
+    // partner has no way to expect the later link. Best-effort: never fails the student's submit.
+    if (!privateCandidate && partnerEmail) {
+      const studentName = resolveDisplayNameForProfile(user) || 'A student';
+      const studentUni = user.university || user.institution || '';
+      try {
+        await this.mailService.sendPartnerOpportunityNotice(
+          partnerEmail,
+          saved.title,
+          {
+            leadText:
+              `${studentName}${studentUni ? ` (${studentUni})` : ''} has submitted the community service opportunity "${saved.title}" on CIEL PK and listed your organization as the partner / host.`,
+            nextStepText:
+              'Next step: the faculty supervisor reviews it first. Once they approve, you will receive a separate email with your partner approval link — no action is needed from you yet.',
+          },
+        );
+      } catch (e) {
+        console.warn(
+          'Failed to send partner heads-up notice on student create',
+          (e as Error).message,
+          { opportunityId: saved.id, to: partnerEmail },
+        );
+      }
+    }
+
     // Private-candidate has no faculty gate, so partner is next immediately.
     // Regular student listings wait until faculty approves (handleFacultyApprovedSideEffects).
     if (privateCandidate && partnerEmail && partnerToken) {

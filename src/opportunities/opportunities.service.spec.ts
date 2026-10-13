@@ -3700,3 +3700,104 @@ describe('OpportunitiesService — remove() ownership and dependency guards', ()
         expect(admin.transaction).toHaveBeenCalledTimes(1);
     });
 });
+
+describe('OpportunitiesService — student submit tells the partner right away, approval link waits for faculty', () => {
+    const studentDto = (withPartner: boolean) => ({
+        title: 'CS',
+        mode: 'Remote',
+        objectives: { description: 'Teach basic Microsoft Office skills to learners at a community centre.' },
+        timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
+        supervision: {
+            contact: 'teacher@uni.edu',
+            faculty_department: 'CS',
+            ...(withPartner ? { partner_org_name: 'Door of Awareness', partner_email: 'host@door.org', external_partner_email: 'host@door.org' } : {}),
+        },
+        ...(withPartner
+            ? {
+                  external_partner_collaboration: { organization_name: 'Door of Awareness', contact_person: 'Computer Lab', official_email: 'host@door.org' },
+                  partner_organization: { organization_name: 'Door of Awareness', contact_person: 'Computer Lab', official_email: 'host@door.org' },
+              }
+            : {}),
+        executing_context: {
+            type: 'independent',
+            independent_community_activity: { activity_site_description: 'Community centre' },
+        },
+        safety_declaration: {
+            environment_safe_and_appropriate: true,
+            students_guided_and_supervised: true,
+            lawful_ethical_and_non_hazardous: true,
+            precautions_and_basic_safety: true,
+        },
+        submission_confirmations: {
+            academically_valid_and_accurately_described: true,
+            activity_properly_supervised: true,
+            environment_safe_and_appropriate: true,
+            information_correct_and_verifiable: true,
+        },
+    });
+
+    const build = () => {
+        const opportunitiesRepo = {
+            manager: lockManager(jest.fn().mockResolvedValue(undefined)),
+            create: jest.fn((payload: any) => payload),
+            save: jest.fn(async (row: any) => ({ ...row, id: row.id ?? 'opp-new' })),
+        };
+        const service = makeService(opportunitiesRepo);
+        (service as any).usersRepository = {
+            findOne: jest.fn().mockResolvedValue({
+                id: 'student-1',
+                role: 'student',
+                name: 'Ali Raza',
+                phone: '0300',
+                email: 'ali@uni.edu',
+                city: 'Lahore',
+                university: 'University A',
+                department: 'CS',
+            }),
+        };
+        (service as any).organizationsRepository = {
+            create: jest.fn((row: any) => row),
+            save: jest.fn(async (row: any) => ({ ...row, id: 'org-1' })),
+        };
+        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+        const mailService = {
+            sendFacultyStudentOpportunityVerification: jest.fn().mockResolvedValue(undefined),
+            sendPartnerVerification: jest.fn().mockResolvedValue(undefined),
+            sendPartnerOpportunityNotice: jest.fn().mockResolvedValue(undefined),
+        };
+        (service as any).mailService = mailService;
+        return { service, mailService, opportunitiesRepo };
+    };
+
+    it('emails the faculty link and a partner heads-up notice at submit — never the partner approval link', async () => {
+        const { service, mailService } = build();
+        const result: any = await service.createStudentOpportunity('student-1', studentDto(true) as any);
+
+        expect(result.success).toBe(true);
+        expect(result.data.requiresPartnerApproval).toBe(true);
+        expect(result.data.workflowStage).toBe('pending_faculty');
+        expect(mailService.sendFacultyStudentOpportunityVerification).toHaveBeenCalledTimes(1);
+        expect(mailService.sendFacultyStudentOpportunityVerification.mock.calls[0][0]).toBe('teacher@uni.edu');
+        expect(mailService.sendPartnerOpportunityNotice).toHaveBeenCalledTimes(1);
+        const [to, title, opts] = mailService.sendPartnerOpportunityNotice.mock.calls[0];
+        expect(to).toBe('host@door.org');
+        expect(title).toBe('CS');
+        expect(opts.leadText).toContain('Ali Raza');
+        expect(opts.nextStepText).toMatch(/faculty supervisor reviews it first/i);
+        expect(mailService.sendPartnerVerification).not.toHaveBeenCalled();
+    });
+
+    it('sends no partner mail at all when the student added no partner', async () => {
+        const { service, mailService } = build();
+        await service.createStudentOpportunity('student-1', studentDto(false) as any);
+        expect(mailService.sendPartnerOpportunityNotice).not.toHaveBeenCalled();
+        expect(mailService.sendPartnerVerification).not.toHaveBeenCalled();
+    });
+
+    it('a failing heads-up notice never fails the student submit', async () => {
+        const { service, mailService } = build();
+        mailService.sendPartnerOpportunityNotice.mockRejectedValueOnce(new Error('smtp down'));
+        const result: any = await service.createStudentOpportunity('student-1', studentDto(true) as any);
+        expect(result.success).toBe(true);
+    });
+});

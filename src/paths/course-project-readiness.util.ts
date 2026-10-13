@@ -19,9 +19,16 @@ export function computeCourseworkReadiness(
     entry: Pick<
         CourseProjectEntry,
         'studentInfo' | 'assignmentInfo' | 'aimsInfo' | 'processInfo' | 'resultsInfo' | 'sdgMapping' | 'reflectionInfo'
-    >,
+    > & { moduleInclusion?: CourseProjectEntry['moduleInclusion'] },
 ): CourseworkReadiness {
     const missing: string[] = [];
+    // The Format step lets the student switch off modules their format doesn't use (Aim, Activities,
+    // Method, Findings, Results). A switched-off module is a legitimate blank, never a missing answer —
+    // the wizard already hides those fields, so demanding them here would block an honest submit.
+    const inc = entry.moduleInclusion ?? {};
+    const aimApplies = inc.aim !== false;
+    const processApplies = inc.act !== false || inc.meth !== false;
+    const resultsApply = !(inc.find === false && inc.res === false);
     const si = entry.studentInfo;
     const ai = entry.assignmentInfo;
     const aims = entry.aimsInfo;
@@ -37,13 +44,13 @@ export function computeCourseworkReadiness(
     const hasFormat = hasText(ai?.format) || !!ai?.formats?.length;
     if (!hasFormat) missing.push('Assignment format (Step 2)');
 
-    if (!hasText(aims?.aimStatement)) missing.push('Aim statement (Step 3)');
+    if (aimApplies && !hasText(aims?.aimStatement)) missing.push('Aim statement (Step 3)');
 
     const hasProcessDetail = !!process?.activities?.length || !!process?.methods?.length;
-    if (!hasProcessDetail) missing.push('At least one activity or method (Step 4)');
+    if (processApplies && !hasProcessDetail) missing.push('At least one activity or method (Step 4)');
 
     const hasResults = hasText(results?.measured) || hasText(results?.resultsSummary) || !!results?.metrics?.length;
-    if (!hasResults) missing.push('Results summary or at least one result (Step 5)');
+    if (resultsApply && !hasResults) missing.push('Results summary or at least one result (Step 5)');
 
     const hasSdg = !!sdg?.notApplicable || !!sdg?.entries?.length;
     if (!hasSdg) missing.push('SDG mapping — pick a goal or mark "not applicable" (Step 6)');

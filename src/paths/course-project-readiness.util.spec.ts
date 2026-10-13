@@ -58,4 +58,30 @@ describe('computeCourseworkReadiness', () => {
         });
         expect(result.ready).toBe(true);
     });
+    it('does not demand Aim / Process / Results answers for modules the format switched off', () => {
+        const result = computeCourseworkReadiness({
+            ...COMPLETE,
+            aimsInfo: null,
+            processInfo: null,
+            resultsInfo: null,
+            moduleInclusion: { aim: false, act: false, meth: false, find: false, res: false },
+        });
+        expect(result).toEqual({ ready: true, missing: [] });
+    });
+
+    it('still demands them when only one of the paired modules is switched off', () => {
+        const result = computeCourseworkReadiness({
+            ...COMPLETE,
+            processInfo: null,
+            resultsInfo: null,
+            moduleInclusion: { act: false, find: false },
+        });
+        expect(result.ready).toBe(false);
+        expect(result.missing).toEqual(
+            expect.arrayContaining([
+                expect.stringContaining('activity or method'),
+                expect.stringContaining('Results summary'),
+            ]),
+        );
+    });
 });

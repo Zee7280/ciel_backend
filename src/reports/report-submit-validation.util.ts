@@ -44,20 +44,20 @@ function listHasItems(value: unknown): boolean {
 /** Mirrors ciel_frontend report/utils/validation.ts FIELD_WORD_POLICY/countWords — the frontend
  * wizard enforces these ranges live, but a direct API submit skipped them entirely. Keep both
  * copies in sync if the frontend policy changes. */
-const DEFAULT_WORD_MIN = 20;
+const DEFAULT_WORD_MIN = 10;
 const DEFAULT_WORD_MAX = 200;
 const FIELD_WORD_POLICY: Record<string, { min: number; max: number }> = {
-  problem_statement: { min: 20, max: 60 },
+  problem_statement: { min: 10, max: 60 },
   discipline_contribution: { min: 15, max: 50 },
   contribution_intent_statement: { min: 30, max: 80 },
-  student_contribution_intent_statement: { min: 20, max: 60 },
-  justification_text: { min: 20, max: 60 },
+  student_contribution_intent_statement: { min: 10, max: 60 },
+  justification_text: { min: 10, max: 60 },
   observed_change: { min: 40, max: 100 },
   challenges: { min: 15, max: 60 },
   continuation_details: { min: 60, max: 120 },
   description: { min: 15, max: 60 },
-  measurement_explanation: { min: 20, max: 80 },
-  overlap_note: { min: 20, max: 80 },
+  measurement_explanation: { min: 10, max: 80 },
+  overlap_note: { min: 10, max: 80 },
   evidence_caption: { min: 10, max: 45 },
 };
 

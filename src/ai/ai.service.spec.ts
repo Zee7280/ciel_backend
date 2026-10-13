@@ -243,6 +243,26 @@ describe('AiService — CII v4.5 evaluation branch', () => {
     expect(typeof second.messages[1].content).toBe('string');
   });
 
+  it('skips student section summaries when OPENAI_API_KEY is missing', async () => {
+    delete process.env.OPENAI_API_KEY;
+    const f = jest.fn();
+    global.fetch = f as never;
+    await expect(
+      new AiService().summarize('section5_summary', { x: 1 }),
+    ).resolves.toEqual({ summary: '', skipped: true });
+    expect(f).not.toHaveBeenCalled();
+  });
+
+  it('still fails CII evaluation when OPENAI_API_KEY is missing', async () => {
+    delete process.env.OPENAI_API_KEY;
+    await expect(
+      new AiService().summarize('cii_v4_5_evaluation', {}),
+    ).rejects.toMatchObject({
+      status: 500,
+      response: { error: 'OpenAI API key is not configured' },
+    });
+  });
+
   it('surfaces a token-budget error when the retry is also empty', async () => {
     const empty = JSON.stringify({
       choices: [{ finish_reason: 'length', message: { content: null } }],

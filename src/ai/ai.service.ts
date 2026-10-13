@@ -84,6 +84,8 @@ const EVIDENCE_IMAGE_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'i
 
 export interface AiSummarizeResult {
   summary: string;
+  /** Student section summaries skip without a 500 when OpenAI is not configured. */
+  skipped?: boolean;
   evidenceInspection?: EvidenceInspection;
   model?: string;
   auditMeta?: unknown;
@@ -92,6 +94,12 @@ export interface AiSummarizeResult {
   fypAi?: FypAiEvaluation;
   npeRanking?: NpeAiEvaluation;
 }
+
+const ADMIN_EVAL_SECTIONS = new Set([
+  'cii_v4_5_evaluation',
+  'fyp_ai_evaluation',
+  'npe_ranking_evaluation',
+]);
 
 function isOpenAiReasoningModel(model: string): boolean {
   const m = model.toLowerCase();
@@ -1657,6 +1665,11 @@ ${JSON.stringify(data)}`;
     opts?: { skipEvidenceImages?: boolean },
   ): Promise<AiSummarizeResult> {
     if (!process.env.OPENAI_API_KEY?.trim()) {
+      // Student Next-step summaries are optional. Do not 500 (or toast the key) when
+      // OpenAI is unset — Admin CII / FYP / NPE still need a hard failure.
+      if (!ADMIN_EVAL_SECTIONS.has(section)) {
+        return { summary: '', skipped: true };
+      }
       throw new HttpException({ error: 'OpenAI API key is not configured' }, 500);
     }
 

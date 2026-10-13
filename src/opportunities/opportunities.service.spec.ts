@@ -3501,3 +3501,202 @@ describe('OpportunitiesService.decideOpportunityViaPartnerToken — a stale link
         expect(save).toHaveBeenCalled();
     });
 });
+
+describe('OpportunitiesService — student resubmit after CIEL PK / partner revision (lines already cleared stay cleared)', () => {
+    const studentUser = () => ({
+        findOne: jest.fn().mockResolvedValue({ id: 'student-1', role: 'student' }),
+    });
+
+    it('after a CIEL PK revision request, saving goes straight back to the admin queue without re-asking faculty', async () => {
+        const opp = {
+            id: 'opp-1',
+            creatorId: 'student-1',
+            isStudentCreated: true,
+            status: 'revision',
+            workflowStage: 'revision',
+            facultyApprovalStatus: 'approved',
+            faculty_verified: true,
+            faculty_verification_status: 'faculty_verified',
+            faculty_verification_token: 'faculty-token-1',
+            partnerApprovalStatus: 'not_applicable',
+            partnerVerified: true,
+            requiresPartnerApproval: false,
+            adminApprovalStatus: 'revision_requested',
+            admin_approved: false,
+            rejectionReason: 'Please add the activity schedule.',
+            supervision: { contact: 'teacher@uni.edu' },
+        } as unknown as Opportunity;
+        const save = jest.fn(async (row: Opportunity) => row);
+        const service = makeService({ findOne: jest.fn().mockResolvedValue(opp), save });
+        (service as any).usersRepository = studentUser();
+        (service as any).organizationsService = { getMyOrganization: jest.fn().mockResolvedValue(null) };
+
+        const saved = (await service.update('student-1', {
+            id: 'opp-1',
+            title: 'Added the activity schedule as requested',
+        } as any)) as any;
+
+        expect(saved.workflowStage).toBe('pending_admin');
+        expect(saved.status).toBe('pending_approval');
+        expect(saved.adminApprovalStatus).toBe('pending');
+        expect(saved.facultyApprovalStatus).toBe('approved');
+        expect(saved.faculty_verified).toBe(true);
+        expect(saved.faculty_verification_token).toBe('faculty-token-1');
+        expect(save).toHaveBeenCalledTimes(1);
+    });
+
+    it('after a partner revision request, saving re-opens only the partner line with a fresh token', async () => {
+        const opp = {
+            id: 'opp-2',
+            creatorId: 'student-1',
+            isStudentCreated: true,
+            status: 'revision',
+            workflowStage: 'revision',
+            facultyApprovalStatus: 'approved',
+            faculty_verified: true,
+            faculty_verification_status: 'faculty_verified',
+            faculty_verification_token: 'faculty-token-2',
+            partnerApprovalStatus: 'revision_requested',
+            partnerVerified: false,
+            partnerToken: 'old-partner-token',
+            requiresPartnerApproval: true,
+            adminApprovalStatus: 'pending',
+            admin_approved: false,
+            supervision: { contact: 'teacher@uni.edu' },
+            partner_organization: { official_email: 'partner@org.com' },
+        } as unknown as Opportunity;
+        const save = jest.fn(async (row: Opportunity) => row);
+        const service = makeService({ findOne: jest.fn().mockResolvedValue(opp), save });
+        (service as any).usersRepository = studentUser();
+        (service as any).organizationsService = { getMyOrganization: jest.fn().mockResolvedValue(null) };
+
+        const saved = (await service.update('student-1', {
+            id: 'opp-2',
+            title: 'Partner details corrected',
+        } as any)) as any;
+
+        expect(saved.workflowStage).toBe('pending_partner');
+        expect(saved.status).toBe('pending_partner');
+        expect(saved.partnerApprovalStatus).toBe('pending');
+        expect(saved.partnerToken).toBeTruthy();
+        expect(saved.partnerToken).not.toBe('old-partner-token');
+        expect(saved.facultyApprovalStatus).toBe('approved');
+        expect(saved.faculty_verification_token).toBe('faculty-token-2');
+    });
+});
+
+describe('OpportunitiesService — draft save can never demote a submitted listing', () => {
+    it('refuses {draft:true} on a row that already left draft, and saves nothing', async () => {
+        const opp = {
+            id: 'opp-1',
+            creatorId: 'student-1',
+            isStudentCreated: true,
+            status: 'pending_faculty',
+            workflowStage: 'pending_faculty',
+            title: 'Submitted listing',
+        } as unknown as Opportunity;
+        const save = jest.fn();
+        const service = makeService({ findOne: jest.fn().mockResolvedValue(opp), save });
+        (service as any).usersRepository = {
+            findOne: jest.fn().mockResolvedValue({ id: 'student-1', role: 'student' }),
+        };
+
+        await expect(
+            service.saveStudentOpportunityDraft('student-1', 'opp-1', {
+                draft: true,
+                title: 'Sneaky demotion',
+            }),
+        ).rejects.toThrow(/already been submitted and can no longer be saved as a draft/);
+        expect(save).not.toHaveBeenCalled();
+        expect(opp.status).toBe('pending_faculty');
+    });
+
+    it('refuses a draft save on someone else\'s draft', async () => {
+        const opp = {
+            id: 'opp-1',
+            creatorId: 'student-1',
+            isStudentCreated: true,
+            status: 'draft',
+        } as unknown as Opportunity;
+        const save = jest.fn();
+        const service = makeService({ findOne: jest.fn().mockResolvedValue(opp), save });
+        (service as any).usersRepository = {
+            findOne: jest.fn().mockResolvedValue({ id: 'student-2', role: 'student' }),
+        };
+
+        await expect(
+            service.saveStudentOpportunityDraft('student-2', 'opp-1', { draft: true, title: 'x' }),
+        ).rejects.toBeInstanceOf(ForbiddenException);
+        expect(save).not.toHaveBeenCalled();
+    });
+});
+
+describe('OpportunitiesService — remove() ownership and dependency guards', () => {
+    const buildRemoveHarness = (opts: {
+        requester: { id: string; role: string };
+        creatorId: string;
+        foreignParticipations?: number;
+    }) => {
+        const opp = { id: 'opp-1', creatorId: opts.creatorId } as unknown as Opportunity;
+        const transaction = jest.fn(async (cb: (m: unknown) => Promise<unknown>) =>
+            cb({ delete: jest.fn().mockResolvedValue({ affected: 1 }) }),
+        );
+        const otherRows = Array.from({ length: opts.foreignParticipations ?? 0 }, (_, i) => ({
+            studentId: `other-${i}`,
+        }));
+        const manager = {
+            transaction,
+            getRepository: jest.fn(() => ({ find: jest.fn().mockResolvedValue([]) })),
+        };
+        const service = makeService({
+            findOne: jest.fn().mockResolvedValue(opp),
+            manager,
+        });
+        (service as any).usersRepository = { findOne: jest.fn().mockResolvedValue(opts.requester) };
+        (service as any).participationRepository = {
+            find: jest.fn().mockResolvedValue([{ studentId: opts.creatorId }, ...otherRows]),
+        };
+        (service as any).deleteOpportunityChildren = jest.fn().mockResolvedValue({ participations: 1 });
+        return { service, transaction };
+    };
+
+    it('a student who did not create the listing cannot delete it', async () => {
+        const { service, transaction } = buildRemoveHarness({
+            requester: { id: 'student-2', role: 'student' },
+            creatorId: 'student-1',
+        });
+        await expect(service.remove('opp-1', 'student-2')).rejects.toBeInstanceOf(ForbiddenException);
+        expect(transaction).not.toHaveBeenCalled();
+    });
+
+    it('the creator can delete their own listing while nobody else depends on it', async () => {
+        const { service, transaction } = buildRemoveHarness({
+            requester: { id: 'student-1', role: 'student' },
+            creatorId: 'student-1',
+        });
+        const res = await service.remove('opp-1', 'student-1');
+        expect(res.success).toBe(true);
+        expect(transaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('the creator is blocked once other students have enrolled — only CIEL PK admin may force it', async () => {
+        const blocked = buildRemoveHarness({
+            requester: { id: 'student-1', role: 'student' },
+            creatorId: 'student-1',
+            foreignParticipations: 2,
+        });
+        await expect(blocked.service.remove('opp-1', 'student-1')).rejects.toThrow(
+            /can no longer be deleted/,
+        );
+        expect(blocked.transaction).not.toHaveBeenCalled();
+
+        const admin = buildRemoveHarness({
+            requester: { id: 'admin-1', role: 'admin' },
+            creatorId: 'student-1',
+            foreignParticipations: 2,
+        });
+        const res = await admin.service.remove('opp-1', 'admin-1');
+        expect(res.success).toBe(true);
+        expect(admin.transaction).toHaveBeenCalledTimes(1);
+    });
+});

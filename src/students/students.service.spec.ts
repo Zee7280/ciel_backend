@@ -995,3 +995,111 @@ describe('StudentsService.applyToOpportunity — dates, seats and team eligibili
     expect(createApplication).not.toHaveBeenCalled();
   });
 });
+
+describe('StudentsService.updateStudentOpportunity — lifecycle guards and resubmit', () => {
+  const setupWith = (oppOverrides: Record<string, unknown>, serviceOverrides: Record<string, unknown> = {}) => {
+    const opp: Record<string, unknown> = {
+      id: 'opp-1',
+      creatorId: 'stu-1',
+      isStudentCreated: true,
+      admin_approved: false,
+      status: 'pending_faculty',
+      workflowStage: 'pending_faculty',
+      executing_context: { student_pathway: 'university' },
+      restricted_universities: ['BNU'],
+      participation_scope: { rule: 'own_university_only' },
+      version: 1,
+      rejectionReason: null,
+      ...oppOverrides,
+    };
+    const save = jest.fn(async (row: unknown) => row);
+    const notifyFaculty = jest.fn().mockResolvedValue(undefined);
+    const notifyPartner = jest.fn().mockResolvedValue(undefined);
+    const applyResubmit = jest.fn(async (row: Record<string, unknown>) => {
+      row.workflowStage = 'pending_admin';
+      row.status = 'pending_approval';
+      row.adminApprovalStatus = 'pending';
+      return { notifyFaculty: false, notifyPartner: false };
+    });
+    const service = makeService({
+      opportunitiesRepository: { findOne: jest.fn().mockResolvedValue(opp), save },
+      usersRepository: { findOne: jest.fn().mockResolvedValue({ id: 'stu-1', university: 'BNU' }) },
+      opportunitiesService: {
+        validateEditPatch: jest.fn(),
+        validateLocation: jest.fn(),
+        validateTimeline: jest.fn(),
+        snapshotStudentOpportunityResubmit: jest.fn().mockReturnValue({
+          facultyEmail: 'teacher@uni.edu',
+          partnerEmail: null,
+          requiresPartner: false,
+        }),
+        applyStudentCreatedOpportunityResubmit: applyResubmit,
+        notifyFacultyForStudentOpportunityVerification: notifyFaculty,
+        notifyPartnerForStudentOpportunityPartnerQueue: notifyPartner,
+      },
+      ...serviceOverrides,
+    });
+    return { service, opp, save, applyResubmit, notifyFaculty, notifyPartner };
+  };
+
+  it('refuses to edit a LIVE listing (nothing saved)', async () => {
+    const { service, save } = setupWith({ admin_approved: true, status: 'active', workflowStage: 'live' });
+    await expect(
+      service.updateStudentOpportunity('stu-1', 'opp-1', { title: 'Rewrite after going live' } as any),
+    ).rejects.toThrow(/Approved opportunities cannot be updated/);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('refuses to edit a permanently rejected listing (nothing saved)', async () => {
+    const { service, save } = setupWith({
+      status: 'rejected',
+      workflowStage: 'rejected',
+      facultyApprovalStatus: 'rejected',
+    });
+    await expect(
+      service.updateStudentOpportunity('stu-1', 'opp-1', { title: 'Try again' } as any),
+    ).rejects.toThrow(/permanently rejected/);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('refuses a student who is not the creator', async () => {
+    const { service, save } = setupWith({ creatorId: 'someone-else' });
+    await expect(
+      service.updateStudentOpportunity('stu-1', 'opp-1', { title: 'Not mine' } as any),
+    ).rejects.toThrow(/do not have access/);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('a routine edit while pending keeps the stage, bumps nothing, and reports a plain update', async () => {
+    const { service, opp, applyResubmit } = setupWith({});
+    const res = await service.updateStudentOpportunity('stu-1', 'opp-1', { title: 'Typo fix' } as any);
+    expect(res.message).toBe('Opportunity updated successfully');
+    expect(opp.workflowStage).toBe('pending_faculty');
+    expect(opp.version).toBe(1);
+    expect(applyResubmit).not.toHaveBeenCalled();
+  });
+
+  it('an edit during revision resubmits: pipeline re-planned, reason cleared, version bumped, reviewers notified per plan', async () => {
+    const { service, opp, applyResubmit, notifyFaculty, notifyPartner } = setupWith({
+      status: 'revision',
+      workflowStage: 'revision',
+      adminApprovalStatus: 'revision_requested',
+      rejectionReason: 'Add the schedule.',
+    });
+    applyResubmit.mockImplementationOnce(async (row: Record<string, unknown>) => {
+      row.workflowStage = 'pending_faculty';
+      row.status = 'pending_faculty';
+      return { notifyFaculty: true, notifyPartner: false };
+    });
+
+    const res = await service.updateStudentOpportunity('stu-1', 'opp-1', { title: 'Schedule added' } as any);
+
+    expect(res.message).toBe('Opportunity updated and resubmitted for review');
+    expect(applyResubmit).toHaveBeenCalledTimes(1);
+    expect(opp.rejectionReason).toBeNull();
+    expect(opp.version).toBe(2);
+    expect(opp.workflowStage).toBe('pending_faculty');
+    expect(notifyFaculty).toHaveBeenCalledTimes(1);
+    expect(notifyPartner).not.toHaveBeenCalled();
+  });
+});

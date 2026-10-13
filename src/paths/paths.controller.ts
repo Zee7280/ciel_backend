@@ -250,6 +250,22 @@ export class PathsController {
     return { success: true, data };
   }
 
+  /** Student nudges the reviewing faculty — CIEL PK sends the email, once per 24h. */
+  @Post('course-projects/:id/remind-faculty')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.STUDENT)
+  async remindCourseProjectFaculty(
+    @Request() req,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const data = await this.pathsService.remindCourseProjectFaculty(
+      req.user.id,
+      id,
+      req.user.email,
+    );
+    return { success: true, data };
+  }
+
   @Delete('course-projects/:id')
   @UseGuards(RolesGuard)
   @Roles(UserRole.STUDENT)

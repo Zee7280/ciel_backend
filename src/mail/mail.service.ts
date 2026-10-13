@@ -2349,6 +2349,64 @@ export class MailService {
     }
   }
 
+  /** Student-triggered nudge to the reviewing faculty. Unlike the submit-time mails this RETURNS
+   * whether delivery succeeded, because the student is told "sent" / "could not send" in the UI. */
+  async sendCourseworkReviewReminder(
+    to: string,
+    studentName: string,
+    projectTitle: string,
+    facultyName?: string,
+    submittedAt?: Date | null,
+  ): Promise<boolean> {
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const reviewLink = this.buildFrontendLink(
+      '/dashboard/faculty/coursework-projects',
+      {},
+    );
+    const facultyEsc = this.escHtmlPlain(
+      facultyName?.trim() ? facultyName.trim() : 'there',
+    );
+    const studentEsc = this.escHtmlPlain(
+      studentName?.trim() ? studentName.trim() : 'A student',
+    );
+    const titleEsc = this.escHtmlPlain(projectTitle);
+    const waitingDays =
+      submittedAt instanceof Date && !Number.isNaN(submittedAt.getTime())
+        ? Math.max(0, Math.floor((Date.now() - submittedAt.getTime()) / 86_400_000))
+        : null;
+    const waitingLine =
+      waitingDays === null
+        ? ''
+        : `<p>It has been waiting for your review for <strong>${waitingDays} day${waitingDays === 1 ? '' : 's'}</strong>.</p>`;
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <p>Dear ${facultyEsc},</p>
+        <p>A friendly reminder from <strong>${studentEsc}</strong>: the coursework report "<strong>${titleEsc}</strong>" is still awaiting your approval on <strong>CIEL PK</strong>.</p>
+        ${waitingLine}
+        <p>Please log in to <a href="${reviewLink}">CIELPK.com</a> to review it. Approving it makes the record live in the Merit Model rankings.</p>
+        <p>Best regards,<br><strong>CIEL PK Team</strong></p>
+      </div>
+    `;
+    try {
+      await this.sendMailReliable({
+        from,
+        to,
+        subject: `Reminder: "${projectTitle}" is awaiting your review on CIEL PK`,
+        html,
+      });
+      this.logger.log(`Coursework review reminder email sent to ${to}`);
+      return true;
+    } catch (error) {
+      this.logger.error(
+        `Failed to send coursework review reminder email to ${to}`,
+        (error as Error).stack,
+      );
+      return false;
+    }
+  }
+
   async sendCourseworkSubmissionConfirmation(
     to: string,
     studentFirstName: string,

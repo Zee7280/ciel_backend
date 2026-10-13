@@ -4575,6 +4575,8 @@ export class StudentReportsService {
           start_date: report.opportunity?.timeline?.start_date,
           end_date: report.opportunity?.timeline?.end_date,
           expected_hours: report.opportunity?.timeline?.expected_hours,
+          participation_scope: report.opportunity?.participation_scope ?? null,
+          restricted_universities: report.opportunity?.restricted_universities ?? null,
         },
         required_hours: requiredHoursPerStudentFromOpportunity(
           report.opportunity,

@@ -1017,6 +1017,69 @@ export class PathsService implements OnModuleInit {
     return !!invite;
   }
 
+  /**
+   * "Email <teacher>" on a submitted coursework card. The old button was a bare mailto: — it did
+   * nothing on a machine with no mail client, and the student had no way to know whether anything
+   * went out. This sends the reminder from CIEL PK itself and reports the outcome, once per 24h.
+   */
+  async remindCourseProjectFaculty(
+    userId: string,
+    id: string,
+    userEmail?: string,
+  ): Promise<{ sent: true; to: string; sentAt: Date }> {
+    const entry = await this.courseProjectRepo.findOne({ where: { id } });
+    if (!entry) throw new NotFoundException('Course project entry not found');
+    if (!(await this.canEditCourseProject(entry, userId, userEmail))) {
+      throw new NotFoundException('Course project entry not found');
+    }
+    const teacherEmail = (entry.studentInfo?.teacherEmail || '').trim();
+    if (!teacherEmail) {
+      throw new BadRequestException(
+        'No instructor email is saved on this record. Add it in Step 1 first.',
+      );
+    }
+    const approval = String(entry.facultyApprovalStatus || 'pending').toLowerCase();
+    if (entry.status !== 'submitted' || approval !== 'pending') {
+      throw new BadRequestException(
+        approval === 'approved'
+          ? 'This record has already been approved — no reminder needed.'
+          : approval === 'rejected' || approval === 'revision_requested'
+            ? 'Your instructor has already responded. Update and resubmit the record instead.'
+            : 'Submit the record for review before sending a reminder.',
+      );
+    }
+    const last = entry.facultyReminderSentAt
+      ? new Date(entry.facultyReminderSentAt)
+      : null;
+    const REMIND_EVERY_MS = 24 * 60 * 60 * 1000;
+    if (last && !Number.isNaN(last.getTime())) {
+      const elapsed = Date.now() - last.getTime();
+      if (elapsed < REMIND_EVERY_MS) {
+        const hoursLeft = Math.max(1, Math.ceil((REMIND_EVERY_MS - elapsed) / 3_600_000));
+        throw new BadRequestException(
+          `A reminder was already emailed to ${teacherEmail} in the last 24 hours. You can send another in about ${hoursLeft} hour${hoursLeft === 1 ? '' : 's'}.`,
+        );
+      }
+    }
+    const studentName = entry.studentInfo?.studentName?.trim() || 'Your student';
+    const title = entry.projectTitle || entry.course || 'Untitled coursework';
+    const ok = await this.mailService.sendCourseworkReviewReminder(
+      teacherEmail,
+      studentName,
+      title,
+      entry.studentInfo?.teacherName?.trim() || undefined,
+      entry.updatedAt ?? null,
+    );
+    if (!ok) {
+      throw new BadRequestException(
+        `CIEL PK could not deliver the email to ${teacherEmail} right now. Please try again in a few minutes.`,
+      );
+    }
+    const sentAt = new Date();
+    await this.courseProjectRepo.update({ id: entry.id }, { facultyReminderSentAt: sentAt });
+    return { sent: true, to: teacherEmail, sentAt };
+  }
+
   async updateCourseProjectByIdForUser(
     userId: string,
     id: string,

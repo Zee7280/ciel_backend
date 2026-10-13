@@ -3256,3 +3256,88 @@ describe('PathsService — listVenturesForAdmin excludes drafts from decision-st
     expect(statusFilterCalls).toHaveLength(0);
   });
 });
+
+describe('PathsService.remindCourseProjectFaculty — student nudges the reviewing faculty', () => {
+  const build = (entryOverrides: Record<string, unknown> = {}, mailOk = true) => {
+    const entry: Record<string, unknown> = {
+      id: 'entry-1',
+      userId: 'stu-1',
+      status: 'submitted',
+      facultyApprovalStatus: 'pending',
+      facultyReminderSentAt: null,
+      projectTitle: 'Network Audit',
+      course: 'Computer Networking',
+      updatedAt: new Date(Date.now() - 3 * 86_400_000),
+      studentInfo: { studentName: 'Zubair Ali', teacherName: 'Dr Khan', teacherEmail: 'khan@uni.edu.pk' },
+      ...entryOverrides,
+    };
+    const courseProjectRepo = {
+      findOne: jest.fn().mockResolvedValue(entry),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+      save: jest.fn(async (row: Record<string, unknown>) => row),
+    };
+    const mailService = {
+      sendCourseworkReviewReminder: jest.fn().mockResolvedValue(mailOk),
+    };
+    const service = new PathsService(
+      courseProjectRepo as any,
+      { findOne: jest.fn().mockResolvedValue(null) } as any,
+      { findOne: jest.fn().mockResolvedValue(null) } as any,
+      { findOne: jest.fn().mockResolvedValue(null) } as any,
+      { findOne: jest.fn().mockResolvedValue(null) } as any,
+      {} as any,
+      mailService as any,
+      { createNotification: jest.fn() } as any,
+      {} as any,
+      {} as any,
+    );
+    return { service, entry, courseProjectRepo, mailService };
+  };
+
+  it('emails the instructor from CIEL PK, stamps the send time, and reports the recipient', async () => {
+    const { service, courseProjectRepo, mailService } = build();
+    const res = await service.remindCourseProjectFaculty('stu-1', 'entry-1');
+    expect(res.sent).toBe(true);
+    expect(res.to).toBe('khan@uni.edu.pk');
+    expect(mailService.sendCourseworkReviewReminder).toHaveBeenCalledWith(
+      'khan@uni.edu.pk',
+      'Zubair Ali',
+      'Network Audit',
+      'Dr Khan',
+      expect.any(Date),
+    );
+    expect(courseProjectRepo.update).toHaveBeenCalledWith(
+      { id: 'entry-1' },
+      { facultyReminderSentAt: expect.any(Date) },
+    );
+  });
+
+  it('refuses a second reminder inside 24 hours and says when the next one is allowed', async () => {
+    const { service, mailService } = build({ facultyReminderSentAt: new Date(Date.now() - 2 * 3_600_000) });
+    await expect(service.remindCourseProjectFaculty('stu-1', 'entry-1')).rejects.toThrow(/last 24 hours/);
+    expect(mailService.sendCourseworkReviewReminder).not.toHaveBeenCalled();
+  });
+
+  it('allows a reminder again once 24 hours have passed', async () => {
+    const { service, mailService } = build({ facultyReminderSentAt: new Date(Date.now() - 25 * 3_600_000) });
+    await expect(service.remindCourseProjectFaculty('stu-1', 'entry-1')).resolves.toMatchObject({ sent: true });
+    expect(mailService.sendCourseworkReviewReminder).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses when the record is a draft, already approved, or already answered', async () => {
+    await expect(build({ status: 'draft' }).service.remindCourseProjectFaculty('stu-1', 'entry-1')).rejects.toThrow(/Submit the record/);
+    await expect(build({ facultyApprovalStatus: 'approved' }).service.remindCourseProjectFaculty('stu-1', 'entry-1')).rejects.toThrow(/already been approved/);
+    await expect(build({ facultyApprovalStatus: 'revision_requested' }).service.remindCourseProjectFaculty('stu-1', 'entry-1')).rejects.toThrow(/already responded/);
+  });
+
+  it('refuses without an instructor email, and a stranger gets 404', async () => {
+    await expect(build({ studentInfo: { studentName: 'Z' } }).service.remindCourseProjectFaculty('stu-1', 'entry-1')).rejects.toThrow(/No instructor email/);
+    await expect(build().service.remindCourseProjectFaculty('someone-else', 'entry-1')).rejects.toThrow(/not found/);
+  });
+
+  it('surfaces a delivery failure instead of pretending it was sent, and does not stamp the time', async () => {
+    const { service, courseProjectRepo } = build({}, false);
+    await expect(service.remindCourseProjectFaculty('stu-1', 'entry-1')).rejects.toThrow(/could not deliver/);
+    expect(courseProjectRepo.update).not.toHaveBeenCalled();
+  });
+});

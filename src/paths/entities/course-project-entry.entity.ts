@@ -37,6 +37,10 @@ export interface CourseProjectStudentInfo {
     courseworkType?: string;
     teacherName?: string;
     teacherEmail?: string;
+    /** Instructor's WhatsApp (optional) — lets the student's "WhatsApp <teacher>" reminder open a
+     * direct chat instead of the generic share sheet. Same code+number split as groupMembers. */
+    teacherWhatsappCode?: string;
+    teacherWhatsappNumber?: string;
     notes?: string;
 }
 
@@ -256,6 +260,11 @@ export class CourseProjectEntry {
 
     @Column({ type: 'timestamp', nullable: true })
     facultyApprovalAt: Date | null;
+
+    /** Last time the student asked CIEL PK to re-email the reviewing faculty (POST …/remind-faculty).
+     * Rate-limits the nudge to once per 24h so a reviewer is never spammed. */
+    @Column({ type: 'timestamp', nullable: true })
+    facultyReminderSentAt: Date | null;
 
     /** The faculty's own per-criterion moderation of the AI proposal, captured and frozen at approval —
      * without this, the "Faculty Moderation" tab's overrides/reasons/audit hash were computed in the UI

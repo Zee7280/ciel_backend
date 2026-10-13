@@ -2025,6 +2025,10 @@ export class StudentsService {
         activity_details: opportunity.activity_details,
         supervision: opportunity.supervision,
         verification_method: opportunity.verification_method,
+        // University scope (e.g. "BNU only") — the report / identity forms lock the university
+        // picker to this so a BNU-only listing never ends up with a seat recorded at another university.
+        participation_scope: opportunity.participation_scope ?? null,
+        restricted_universities: opportunity.restricted_universities ?? null,
         createdAt: opportunity.createdAt,
         updatedAt: opportunity.updatedAt,
         ...this.applyGateFields(opportunity, applyState),

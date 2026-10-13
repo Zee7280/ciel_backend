@@ -37,6 +37,8 @@ export class CourseProjectStudentInfoDto {
     /** @deprecated pre-multi-select shape */
     @IsOptional() @IsString() courseworkType?: string;
     @IsOptional() @IsString() teacherName?: string;
+    @IsOptional() @IsString() teacherWhatsappCode?: string;
+    @IsOptional() @IsString() teacherWhatsappNumber?: string;
     /** Self-declared by the student, matched verbatim against the reviewing faculty's own login
      * email in facultyReviewCourseProject — format-checked only, never verified against a roster. */
     @IsOptional() @ValidateIf((o) => !!o.teacherEmail) @IsEmail() teacherEmail?: string;

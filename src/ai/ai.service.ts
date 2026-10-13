@@ -208,7 +208,16 @@ function slimCiiPayloadForModel(data: unknown): unknown {
 export class AiService {
   private readonly logger = new Logger(AiService.name);
 
-  constructor(@Optional() private readonly s3Service?: S3Service) {}
+  constructor(@Optional() private readonly s3Service?: S3Service) {
+    // Surfaces a missing key at boot, in the server log, instead of only as a 500 toast the
+    // Admin sees hours later on "Run AI Analyser". The key lives in the HOST environment
+    // (Vercel → Project → Settings → Environment Variables), never in the repo (.env is ignored).
+    if (!process.env.OPENAI_API_KEY?.trim()) {
+      this.logger.warn(
+        'OPENAI_API_KEY is not set in this environment — Admin CII / FYP / NPE analysers will fail with "OpenAI API key is not configured" until it is added and the service is redeployed.',
+      );
+    }
+  }
 
   /**
    * Loads the report's image evidence from our own bucket so the model SEES it instead of reasoning
@@ -1670,7 +1679,14 @@ ${JSON.stringify(data)}`;
       if (!ADMIN_EVAL_SECTIONS.has(section)) {
         return { summary: '', skipped: true };
       }
-      throw new HttpException({ error: 'OpenAI API key is not configured' }, 500);
+      throw new HttpException(
+        {
+          error:
+            'OpenAI API key is not configured on the backend server. Set OPENAI_API_KEY in the backend hosting environment (e.g. Vercel → Settings → Environment Variables) and redeploy, then run the analyser again.',
+          code: 'OPENAI_API_KEY_MISSING',
+        },
+        500,
+      );
     }
 
     const isCiiV45Evaluation = section === 'cii_v4_5_evaluation';

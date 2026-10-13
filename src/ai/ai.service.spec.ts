@@ -259,7 +259,10 @@ describe('AiService — CII v4.5 evaluation branch', () => {
       new AiService().summarize('cii_v4_5_evaluation', {}),
     ).rejects.toMatchObject({
       status: 500,
-      response: { error: 'OpenAI API key is not configured' },
+      response: {
+        error: expect.stringContaining('OpenAI API key is not configured'),
+        code: 'OPENAI_API_KEY_MISSING',
+      },
     });
   });
 

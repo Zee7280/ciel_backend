@@ -146,6 +146,11 @@ export class CreateOpportunityDto {
   @IsOptional()
   draft?: boolean;
 
+  /** Wizard resume marker sent with draft saves: { resume_step, updated_at }. Sanitised server-side. */
+  @IsObject()
+  @IsOptional()
+  wizard_progress?: { resume_step?: string; updated_at?: string };
+
   @ValidateIf(isFullOpportunitySubmit)
   @IsString()
   @IsNotEmpty()
@@ -273,6 +278,11 @@ export class UpdateOpportunityDto {
   @IsBoolean()
   @IsOptional()
   draft?: boolean;
+
+  /** Wizard resume marker sent with draft saves: { resume_step, updated_at }. Sanitised server-side. */
+  @IsObject()
+  @IsOptional()
+  wizard_progress?: { resume_step?: string; updated_at?: string };
 
   @IsString()
   @MaxLength(200)

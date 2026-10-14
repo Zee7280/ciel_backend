@@ -900,6 +900,51 @@ describe('OpportunitiesService — saveStudentOpportunityDraft (first-save regre
         expect(payload.mode).toBeNull();
         expect(payload.types).toEqual([]);
     });
+
+    it('stores the wizard resume step from wizard_progress, with a server timestamp and only a known step key', async () => {
+        const create = jest.fn((payload) => payload);
+        const save = jest.fn((payload) => Promise.resolve({ id: 'new-draft-id', ...payload }));
+        const service = makeService({ create, save });
+        (service as any).usersRepository = {
+            findOne: jest.fn().mockResolvedValue({ id: 'student-1' }),
+        };
+
+        await service.saveStudentOpportunityDraft('student-1', null, {
+            draft: true,
+            title: 'Untitled opportunity',
+            wizard_progress: { resume_step: 'C', updated_at: 'client-clock', extra: 'dropped' },
+        });
+
+        const payload = create.mock.calls[0][0] as Record<string, unknown>;
+        expect(payload.wizard_progress).toEqual({
+            resume_step: 'C',
+            updated_at: expect.any(String),
+        });
+        expect((payload.wizard_progress as { updated_at: string }).updated_at).not.toBe('client-clock');
+    });
+
+    it('drops an unknown or malformed wizard_progress instead of persisting it', async () => {
+        const create = jest.fn((payload) => payload);
+        const save = jest.fn((payload) => Promise.resolve({ id: 'new-draft-id', ...payload }));
+        const service = makeService({ create, save });
+        (service as any).usersRepository = {
+            findOne: jest.fn().mockResolvedValue({ id: 'student-1' }),
+        };
+
+        await service.saveStudentOpportunityDraft('student-1', null, {
+            draft: true,
+            title: 'Untitled opportunity',
+            wizard_progress: { resume_step: 'NOT_A_STEP' },
+        });
+        await service.saveStudentOpportunityDraft('student-1', null, {
+            draft: true,
+            title: 'Untitled opportunity',
+            wizard_progress: 'C',
+        });
+
+        expect((create.mock.calls[0][0] as Record<string, unknown>).wizard_progress).toBeUndefined();
+        expect((create.mock.calls[1][0] as Record<string, unknown>).wizard_progress).toBeUndefined();
+    });
 });
 
 describe('OpportunitiesService — create() CIEL PK review requirement is server-computed, not client-trusted', () => {

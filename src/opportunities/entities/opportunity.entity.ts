@@ -86,6 +86,11 @@ export class Opportunity {
     @Column({ type: 'jsonb', nullable: true })
     academic_linkage: any;
 
+    /** Student wizard resume marker for drafts: { resume_step: "A"|"B"|"SCHED"|..., updated_at }.
+     * Written on every mid-wizard draft save so "Continue Existing" reopens the step the student left. */
+    @Column({ type: 'jsonb', nullable: true })
+    wizard_progress: { resume_step?: string; updated_at?: string } | null;
+
     @Column({ nullable: true })
     student_contact: string;
 

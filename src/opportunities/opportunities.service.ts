@@ -205,10 +205,34 @@ const DRAFT_PERSIST_KEYS = [
   'academic_linkage',
   'student_contact',
   'visibility',
+  'wizard_progress',
 ] as const;
 
 /** Same wizard fields, for full (non-draft) edits through update(). Server-owned keys stay out. */
 const UPDATE_PERSIST_KEYS = DRAFT_PERSIST_KEYS;
+
+/** Student wizard step keys (mirrors WIZARD_STEPS in the student create-opportunity page). */
+const STUDENT_WIZARD_STEP_KEYS = new Set([
+  'A',
+  'B',
+  'SCHED',
+  'C',
+  'E',
+  'F',
+  'VIS',
+  'SAFE',
+  'SUBMIT',
+]);
+
+/** Keep only a known step key + server timestamp; anything else the client sent is dropped. */
+function sanitizeWizardProgress(
+  raw: unknown,
+): { resume_step: string; updated_at: string } | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const step = (raw as { resume_step?: unknown }).resume_step;
+  if (typeof step !== 'string' || !STUDENT_WIZARD_STEP_KEYS.has(step)) return null;
+  return { resume_step: step, updated_at: new Date().toISOString() };
+}
 
 function pickDraftPersistFields(dto: Record<string, unknown>): Record<string, unknown> {
   let plain: Record<string, unknown>;
@@ -234,6 +258,11 @@ function pickDraftPersistFields(dto: Record<string, unknown>): Record<string, un
     !Array.isArray(picked.verification_method)
   ) {
     picked.verification_method = [];
+  }
+  if (Object.prototype.hasOwnProperty.call(picked, 'wizard_progress')) {
+    const clean = sanitizeWizardProgress(picked.wizard_progress);
+    if (clean) picked.wizard_progress = clean;
+    else delete picked.wizard_progress;
   }
   return picked;
 }
@@ -2530,6 +2559,7 @@ export class OpportunitiesService {
       isStudentCreated: _clientIsStudentCreated,
       partnerVerified: _clientPartnerVerified,
       execution_verified: _clientExecVerified,
+      wizard_progress: _clientWizardProgress, // draft-only resume marker; never stored on a submission
       ...safeCreateFields
     } = createFields as CreateOpportunityDto & Record<string, unknown>;
     const payload: DeepPartial<Opportunity> = {
@@ -3084,6 +3114,7 @@ export class OpportunitiesService {
         adminApprovalStatus: _clientAdminStatus,
         status: _clientStatus,
         isStudentCreated: _clientIsStudentCreated,
+        wizard_progress: _clientWizardProgress, // draft-only resume marker; a submission has no wizard to resume
         ...safeCreateFields
       } = createFields as CreateOpportunityDto & Record<string, unknown>;
       const payload: DeepPartial<Opportunity> = {
@@ -3421,6 +3452,16 @@ export class OpportunitiesService {
         continue;
       }
       patch[key] = stripped[key];
+    }
+    // The resume marker only means something on a draft; a full edit never carries one, and it
+    // must never land unsanitised in jsonb.
+    if (Object.prototype.hasOwnProperty.call(patch, 'wizard_progress')) {
+      const clean =
+        String(opportunity.status || '').toLowerCase() === 'draft'
+          ? sanitizeWizardProgress(patch.wizard_progress)
+          : null;
+      if (clean) patch.wizard_progress = clean;
+      else delete patch.wizard_progress;
     }
     this.sanitizeAndBoundContent(patch as never);
     // Edits must satisfy the same rules as create for every key they touch.

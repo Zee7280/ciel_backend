@@ -8,7 +8,12 @@ import { resolveJwtSecret } from './jwt-secret.util';
 
 /** Mirrors the statuses AuthService.login() accepts (investors may log in while 'pending'). */
 export function isSessionStatusAllowed(status: string, role: string): boolean {
-    if (status === 'active' || status === 'approved' || status === 'pending_membership_payment') {
+    if (
+        status === 'active' ||
+        status === 'approved' ||
+        status === 'pending_membership_payment' ||
+        status === 'pending_subscription_payment'
+    ) {
         return true;
     }
     return role === UserRole.INVESTOR && status === 'pending';

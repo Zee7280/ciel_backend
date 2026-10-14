@@ -16,6 +16,7 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
+import { SubscriptionActiveGuard } from '../student-subscription/subscription-active.guard';
 import { Roles } from '../auth/roles.decorator';
 import { StudentsService } from './students.service';
 import { StudentParticipationService } from './student-participation.service';
@@ -33,7 +34,7 @@ import { S3Service } from '../common/s3.service';
 import { RedactOpportunitySecretsInterceptor } from '../opportunities/redact-opportunity-secrets.interceptor';
 
 @Controller('student')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, SubscriptionActiveGuard)
 @Roles(UserRole.STUDENT, UserRole.SUPER_ADMIN)
 export class StudentController {
   constructor(

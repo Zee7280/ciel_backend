@@ -14,11 +14,12 @@ import {
     ParseUUIDPipe,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { SubscriptionActiveGuard } from '../student-subscription/subscription-active.guard';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { PaymentsService } from './payments.service';
 
 @Controller('student')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, SubscriptionActiveGuard)
 export class StudentPaymentsController {
     constructor(private readonly paymentsService: PaymentsService) { }
 

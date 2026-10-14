@@ -18,6 +18,7 @@ export function hashResetToken(token: string): string {
   return createHash('sha256').update(String(token ?? '')).digest('hex');
 }
 import { NotificationsService } from '../notifications/notifications.service';
+import { StudentSubscriptionService } from '../student-subscription/student-subscription.service';
 import { OrganizationMembershipService } from '../organization-membership/organization-membership.service';
 import { getProfileCompletionStatus } from './profile-completion.util';
 import { AdminCreateUserDto } from './dto/admin-create-user.dto';
@@ -96,6 +97,7 @@ export class UsersService {
     private usersRepository: Repository<User>,
     private readonly notificationsService: NotificationsService,
     private readonly organizationMembershipService: OrganizationMembershipService,
+    private readonly studentSubscriptionService: StudentSubscriptionService,
   ) {}
 
   async create(
@@ -131,9 +133,10 @@ export class UsersService {
   }
 
   async formatUserResponse(user: User) {
-    const [notifications_count, membershipFlags] = await Promise.all([
+    const [notifications_count, membershipFlags, subscriptionFlags] = await Promise.all([
       this.notificationsService.countUnread(user.id),
       this.organizationMembershipService.getUiFlags(user),
+      this.studentSubscriptionService.getUiFlags(user),
     ]);
     let roleTitle: string = user.role;
     // Simple mapping based on known roles
@@ -182,6 +185,7 @@ export class UsersService {
       identity_verified: user.identity_verified,
       investor: user.settings?.investor ?? null,
       ...membershipFlags,
+      ...subscriptionFlags,
     };
   }
 

@@ -25,6 +25,8 @@ import { UserRole } from '../users/enums/user-role.enum';
 import { PAKISTANI_UNIVERSITIES_SET } from './constants/pakistani-universities';
 import { EngagementService } from '../engagement/engagement.service';
 import { OrganizationMembershipService } from '../organization-membership/organization-membership.service';
+import { StudentSubscriptionService } from '../student-subscription/student-subscription.service';
+import { PENDING_SUBSCRIPTION_STATUS } from '../student-subscription/student-subscription.util';
 import {
   LEGAL_REGISTRATION_TYPE_SET,
   ORGANIZATION_CATEGORY_SET,
@@ -49,6 +51,7 @@ export class AuthService implements OnApplicationBootstrap {
     private otpService: OtpService,
     private engagementService: EngagementService,
     private organizationMembershipService: OrganizationMembershipService,
+    private studentSubscriptionService: StudentSubscriptionService,
     private platformSettingsService: PlatformSettingsService,
     @InjectRepository(Opportunity)
     private opportunitiesRepository: Repository<Opportunity>,
@@ -384,6 +387,14 @@ export class AuthService implements OnApplicationBootstrap {
         (await this.organizationMembershipService.roleRequiresMembershipPayment(
           userCreateData.role,
         ));
+      // Students from a university that is not a CIEL member pay a one-time subscription fee first.
+      const needsSubscriptionFee =
+        !needsMembershipFee &&
+        (await this.studentSubscriptionService.studentNeedsSubscriptionAtSignup({
+          role: userCreateData.role,
+          institution: userCreateData.institution,
+          university: userCreateData.university,
+        }));
 
       const user = await this.usersService.create({
         ...userCreateData,
@@ -393,6 +404,7 @@ export class AuthService implements OnApplicationBootstrap {
         organization,
         termsAcceptedAt: new Date(),
         ...(needsMembershipFee ? { status: 'pending_membership_payment' } : {}),
+        ...(needsSubscriptionFee ? { status: PENDING_SUBSCRIPTION_STATUS } : {}),
       });
 
       try {
@@ -422,7 +434,9 @@ export class AuthService implements OnApplicationBootstrap {
         success: true,
         message: needsMembershipFee
           ? 'Account created. Pay the membership fee and submit proof, or wait for admin activation.'
-          : user.role === UserRole.INVESTOR
+          : needsSubscriptionFee
+            ? 'Account created. Pay the one-time subscription fee and submit proof to activate your student portal.'
+            : user.role === UserRole.INVESTOR
             ? 'Application received. CIEL PK verifies investor accounts within 3 working days.'
             : 'User created successfully',
         data: {
@@ -468,6 +482,7 @@ export class AuthService implements OnApplicationBootstrap {
       user.status !== 'active' &&
       user.status !== 'approved' &&
       user.status !== 'pending_membership_payment' &&
+      user.status !== PENDING_SUBSCRIPTION_STATUS &&
       !investorPending
     ) {
       throw new UnauthorizedException('Account is not active');

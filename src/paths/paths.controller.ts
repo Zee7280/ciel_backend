@@ -12,6 +12,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { SubscriptionActiveGuard } from '../student-subscription/subscription-active.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
@@ -49,7 +50,7 @@ import { VentureMeritModelQueryDto } from './dto/venture-merit-model-query.dto';
 import { ResendTeamInviteDto } from './dto/team-invite.dto';
 
 @Controller('paths')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, SubscriptionActiveGuard)
 export class PathsController {
   constructor(
     private readonly pathsService: PathsService,

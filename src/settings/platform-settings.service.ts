@@ -53,18 +53,36 @@ export class PlatformSettingsService {
 
   /** Non-sensitive config for the public site shell (GET /public/config). */
   async getPublicConfig() {
-    const [maintenance, allowRegistrations, siteName, contactEmail] =
-      await Promise.all([
-        this.isMaintenanceMode(),
-        this.isRegistrationAllowed(),
-        this.getString(PLATFORM_SETTING_KEYS.SITE_NAME),
-        this.getString(PLATFORM_SETTING_KEYS.CONTACT_EMAIL),
-      ]);
+    const [
+      maintenance,
+      allowRegistrations,
+      siteName,
+      contactEmail,
+      reportingFee,
+      subscriptionRequired,
+      subscriptionFee,
+    ] = await Promise.all([
+      this.isMaintenanceMode(),
+      this.isRegistrationAllowed(),
+      this.getString(PLATFORM_SETTING_KEYS.SITE_NAME),
+      this.getString(PLATFORM_SETTING_KEYS.CONTACT_EMAIL),
+      this.getString(PLATFORM_SETTING_KEYS.REPORTING_FEE_PKR),
+      this.getBool(PLATFORM_SETTING_KEYS.STUDENT_SUBSCRIPTION_REQUIRED, true),
+      this.getString(PLATFORM_SETTING_KEYS.STUDENT_SUBSCRIPTION_FEE_PKR),
+    ]);
+    const positiveInt = (raw: string | null, fallback: number) => {
+      const n = parseInt(String(raw ?? '').replace(/[^\d]/g, ''), 10);
+      return Number.isFinite(n) && n > 0 ? n : fallback;
+    };
     return {
       maintenance_mode: maintenance,
       allow_registrations: allowRegistrations,
       site_name: siteName?.trim() || 'CIEL Pakistan',
       contact_email: contactEmail?.trim() || '',
+      // Admin-set fees, so the student screens show the live amounts instead of build-time constants.
+      reporting_fee_pkr: positiveInt(reportingFee, 200),
+      student_subscription_required: subscriptionRequired,
+      student_subscription_fee_pkr: positiveInt(subscriptionFee, 300),
     };
   }
 }

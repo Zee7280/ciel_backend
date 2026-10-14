@@ -14,6 +14,7 @@ import { OtpService } from './otp.service';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { EngagementModule } from '../engagement/engagement.module';
 import { OrganizationMembershipModule } from '../organization-membership/organization-membership.module';
+import { StudentSubscriptionModule } from '../student-subscription/student-subscription.module';
 import { User } from '../users/entities/user.entity';
 import { Organization } from '../organizations/entities/organization.entity';
 
@@ -24,6 +25,7 @@ import { Organization } from '../organizations/entities/organization.entity';
         OrganizationsModule,
         EngagementModule,
         OrganizationMembershipModule,
+        StudentSubscriptionModule,
         PassportModule,
         JwtModule.registerAsync({
             imports: [ConfigModule],

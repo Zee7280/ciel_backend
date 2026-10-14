@@ -105,6 +105,7 @@ const makeAdminServiceForTests = (overrides: Record<string, unknown> = {}) => {
     repositories.reportPartnerApprovalSettings as any,
     repositories.organizationMembershipService as any,
     repositories.partnerMembershipSettings as any,
+    (repositories as any).studentSubscriptionService ?? { releasePendingStudentAccounts: jest.fn().mockResolvedValue(0) },
     repositories.feedbackService as any,
     repositories.mailService as any,
     repositories.notificationsService as any,

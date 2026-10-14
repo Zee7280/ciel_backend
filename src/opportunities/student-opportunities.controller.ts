@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
+import { SubscriptionActiveGuard } from '../student-subscription/subscription-active.guard';
 import { Roles } from '../auth/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
 import { VerificationVerifyAuthGuard } from '../auth/verification-verify-auth.guard';
@@ -20,7 +21,7 @@ export class StudentOpportunitiesController {
   constructor(private readonly opportunitiesService: OpportunitiesService) {}
 
   @Post()
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, SubscriptionActiveGuard)
   @Roles(UserRole.STUDENT, UserRole.SUPER_ADMIN)
   create(@Request() req, @Body() dto: CreateOpportunityDto) {
     return this.opportunitiesService.createStudentOpportunity(req.user.id, dto);
@@ -48,7 +49,7 @@ export class StudentOpportunitiesController {
 export class StudentOpportunitySingularController {
   constructor(private readonly opportunitiesService: OpportunitiesService) {}
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, SubscriptionActiveGuard)
   @Roles(UserRole.STUDENT, UserRole.SUPER_ADMIN)
   @Get('mine')
   mine(@Request() req, @Query('status') status?: string) {

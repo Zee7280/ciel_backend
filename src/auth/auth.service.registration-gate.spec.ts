@@ -13,7 +13,8 @@ function build(allowed: boolean, user: any = { id: 'u1', email: 'x@y.z' }) {
   } as any;
   const settings = { isRegistrationAllowed: jest.fn().mockResolvedValue(allowed) } as any;
   const svc = new AuthService(
-    usersService, {} as any, {} as any, mailService, {} as any, {} as any, {} as any, settings,
+    usersService, {} as any, {} as any, mailService, {} as any, {} as any, {} as any,
+    { studentNeedsSubscriptionAtSignup: jest.fn().mockResolvedValue(false) } as any, settings,
     {} as any, {} as any, {} as any,
   );
   return { svc, usersService, mailService };
@@ -50,7 +51,7 @@ describe('AuthService — login does not leak account status before the password
     } as any;
     const jwt = { sign: jest.fn().mockReturnValue('jwt') } as any;
     const svc = new AuthService(
-      usersService, jwt, {} as any, {} as any, {} as any, {} as any, {} as any,
+      usersService, jwt, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
       { isRegistrationAllowed: jest.fn() } as any, {} as any, {} as any, {} as any,
     );
     return { svc, jwt };
@@ -92,7 +93,7 @@ describe('AuthService.forgotPassword — no account-existence oracle', () => {
     const unknownUsers = { findByEmail: jest.fn().mockResolvedValue(null) } as any;
     const unknownSvc = new AuthService(
       unknownUsers, {} as any, {} as any, { sendPasswordResetEmail: jest.fn() } as any, {} as any, {} as any, {} as any,
-      {} as any, {} as any, {} as any, {} as any,
+      {} as any, {} as any, {} as any, {} as any, {} as any,
     );
     const a = await known.svc.forgotPassword('x@y.z');
     const b = await unknownSvc.forgotPassword('nobody@y.z');

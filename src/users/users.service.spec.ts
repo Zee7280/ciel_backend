@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException } from '@nestjs/common';
 import { UsersService, escapeLikePattern, hashResetToken } from './users.service';
 
 function build(repo: any) {
-  return new UsersService(repo, {} as any, {} as any);
+  return new UsersService(repo, {} as any, {} as any, { getUiFlags: jest.fn().mockResolvedValue({}) } as any);
 }
 function repoMock(overrides: any = {}) {
   const qb = { leftJoinAndSelect: jest.fn().mockReturnThis(), where: jest.fn().mockReturnThis(), getOne: jest.fn().mockResolvedValue(null) };

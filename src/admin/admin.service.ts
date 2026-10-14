@@ -61,6 +61,8 @@ import {
 import { OrganizationMembershipService } from '../organization-membership/organization-membership.service';
 import { PartnerMembershipSettingsService } from '../organization-membership/partner-membership-settings.service';
 import { PARTNER_MEMBERSHIP_REQUIRED_KEY } from '../organization-membership/partner-membership.util';
+import { StudentSubscriptionService } from '../student-subscription/student-subscription.service';
+import { STUDENT_SUBSCRIPTION_REQUIRED_KEY } from '../student-subscription/student-subscription.util';
 import { StudentApplyMaintenanceService } from '../opportunities/student-apply-maintenance.service';
 import {
   decorateApplyGate,
@@ -283,6 +285,7 @@ export class AdminService {
     private readonly reportPartnerApprovalSettings: ReportPartnerApprovalSettingsService,
     private readonly organizationMembershipService: OrganizationMembershipService,
     private readonly partnerMembershipSettings: PartnerMembershipSettingsService,
+    private readonly studentSubscriptionService: StudentSubscriptionService,
     private readonly feedbackService: FeedbackService,
     private readonly mailService: MailService,
     private readonly notificationsService: NotificationsService,
@@ -356,6 +359,10 @@ export class AdminService {
       if (!enabled) {
         await this.organizationMembershipService.releasePendingPartnerMembershipAccounts();
       }
+    }
+    if (key === STUDENT_SUBSCRIPTION_REQUIRED_KEY && value === 'false') {
+      // Switch off: students still waiting on the subscription fee get their portal right away.
+      await this.studentSubscriptionService.releasePendingStudentAccounts();
     }
     if (isStudentApplyMaintenanceSettingKey(key)) {
       this.studentApplyMaintenance?.invalidateCache();

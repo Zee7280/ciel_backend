@@ -9,6 +9,9 @@ export const PLATFORM_SETTING_KEYS = {
   MEMBERSHIP_FEE_UNIVERSITY_PKR: 'MEMBERSHIP_FEE_UNIVERSITY_PKR',
   MEMBERSHIP_FEE_CORPORATE_PKR: 'MEMBERSHIP_FEE_CORPORATE_PKR',
   REVIEW_SLA_DAYS: 'REVIEW_SLA_DAYS',
+  /** Student subscription fee for non-member-university students (see student-subscription.util.ts). */
+  STUDENT_SUBSCRIPTION_REQUIRED: 'STUDENT_SUBSCRIPTION_REQUIRED',
+  STUDENT_SUBSCRIPTION_FEE_PKR: 'STUDENT_SUBSCRIPTION_FEE_PKR',
 } as const;
 
 export function parseBooleanSetting(

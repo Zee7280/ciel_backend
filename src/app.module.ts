@@ -31,6 +31,7 @@ import { MaintenanceGuard } from './common/guards/maintenance.guard';
 import { IssueLogsExceptionFilter } from './issue-logs/issue-logs.filter';
 import { IssueLogsModule } from './issue-logs/issue-logs.module';
 import { OrganizationMembershipModule } from './organization-membership/organization-membership.module';
+import { StudentSubscriptionModule } from './student-subscription/student-subscription.module';
 import { FeedbackModule } from './feedback/feedback.module';
 import { TutorialsModule } from './tutorials/tutorials.module';
 import { AnalyticsModule } from './analytics/analytics.module';
@@ -94,6 +95,7 @@ import { NpeRankingModule } from './ranking/npe-ranking.module';
     SupportModule,
     IssueLogsModule,
     OrganizationMembershipModule,
+    StudentSubscriptionModule,
     FeedbackModule,
     TutorialsModule,
     AnalyticsModule,

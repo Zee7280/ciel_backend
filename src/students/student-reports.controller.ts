@@ -21,6 +21,7 @@ import {
 } from '../common/student-report-file-upload';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
+import { SubscriptionActiveGuard } from '../student-subscription/subscription-active.guard';
 import { Roles } from '../auth/roles.decorator';
 import { StudentReportsService } from '../reports/student-reports.service';
 import { OrganizationsService } from '../organizations/organizations.service';
@@ -28,7 +29,7 @@ import { FacultyUniversityScopeService } from '../faculty-university-scope/facul
 import { UserRole } from '../users/enums/user-role.enum';
 
 @Controller('students/reports')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, SubscriptionActiveGuard)
 export class StudentReportsController {
   constructor(
     private readonly studentReportsService: StudentReportsService,

@@ -90,6 +90,17 @@ export const SETTINGS_REGISTRY: readonly SettingSpec[] = [
     ...FEE,
   },
   {
+    key: PLATFORM_SETTING_KEYS.STUDENT_SUBSCRIPTION_REQUIRED,
+    kind: 'boolean',
+    description:
+      'Require subscription fee from students whose university is not a CIEL member',
+  },
+  {
+    key: PLATFORM_SETTING_KEYS.STUDENT_SUBSCRIPTION_FEE_PKR,
+    description: 'Student subscription fee (PKR)',
+    ...FEE,
+  },
+  {
     key: PLATFORM_SETTING_KEYS.MAINTENANCE_MODE,
     kind: 'boolean',
     description: 'Platform-wide maintenance mode (admins can still sign in)',

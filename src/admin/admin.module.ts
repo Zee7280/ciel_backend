@@ -21,6 +21,7 @@ import { PublicConfigController } from './public-config.controller';
 import { AdminProjectEvidenceService } from './admin-project-evidence.service';
 import { ReportPartnerApprovalModule } from '../reports/report-partner-approval.module';
 import { OrganizationMembershipModule } from '../organization-membership/organization-membership.module';
+import { StudentSubscriptionModule } from '../student-subscription/student-subscription.module';
 import { FeedbackModule } from '../feedback/feedback.module';
 import { JobsModule } from '../jobs/jobs.module';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -35,6 +36,7 @@ import { NpeRankingModule } from '../ranking/npe-ranking.module';
     StudentsModule,
     ReportPartnerApprovalModule,
     OrganizationMembershipModule,
+    StudentSubscriptionModule,
     IssueLogsModule,
     FacultyUniversityScopeModule,
     AuditLogsModule,

@@ -23,6 +23,7 @@ import { CreateAttendanceLogDto } from './dto/create-attendance-log.dto';
 import { PatchAttendanceApprovalDto } from './dto/patch-attendance-approval.dto';
 import { CreateAttendanceVerifyRequestDto } from './dto/create-attendance-verify-request.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { SubscriptionActiveGuard } from '../student-subscription/subscription-active.guard';
 import {
   assertStudentReportUploadMeta,
   studentReportMulterFileFilter,
@@ -32,7 +33,7 @@ import {
 import { S3Service } from '../common/s3.service';
 
 @Controller('engagement')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, SubscriptionActiveGuard)
 export class EngagementController {
   constructor(
     private readonly engagementService: EngagementService,

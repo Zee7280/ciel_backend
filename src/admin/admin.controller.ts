@@ -241,6 +241,18 @@ export class AdminController {
     return this.adminService.reconcileOpportunityEnrollments(opportunityId);
   }
 
+  /** One click: approve + enrol every application still waiting on CIEL admin for this project. */
+  @Post('projects/:opportunityId/enroll-pending')
+  enrollPendingApplications(
+    @Request() req,
+    @Param('opportunityId') opportunityId: string,
+  ) {
+    return this.adminService.enrollPendingApplications(
+      opportunityId,
+      req.user.id,
+    );
+  }
+
   @Post('projects/:opportunityId/heal-team-enrollments')
   healOpportunityTeamEnrollments(
     @Param('opportunityId') opportunityId: string,
@@ -395,14 +407,19 @@ export class AdminController {
     @Body() dto: NotifyCommunityAwardDto,
   ) {
     const pool = await this.communityAward.listForAdmin();
+    // After a national NPE ranking is published, medals carry THAT ranking (rank / cohort / score).
+    const published = await this.npeRanking.publishedStandings('national');
     const data = await this.communityAward.notifyFromPool(
       pool,
       {
         ...dto,
         kind: 'ciel',
-        scopeLabel: dto.scopeLabel || 'CIEL PK',
+        scopeLabel:
+          dto.scopeLabel ||
+          (published ? 'CIEL PK National Ranking (NPE-1.1)' : 'CIEL PK'),
       },
       req.user.name,
+      published?.standings ?? null,
     );
     return { success: true, data };
   }

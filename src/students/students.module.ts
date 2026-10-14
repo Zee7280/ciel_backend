@@ -14,6 +14,7 @@ import { StudentReportsService } from '../reports/student-reports.service';
 import { StudentReportsController } from './student-reports.controller';
 import { PublicImpactReportsController } from './public-impact-reports.controller';
 import { PublicReportScoringController } from '../reports/public-report-scoring.controller';
+import { NpeRankingSnapshot } from '../ranking/entities/npe-ranking-snapshot.entity';
 import { UsersModule } from '../users/users.module';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import { Organization } from '../organizations/entities/organization.entity';
@@ -38,6 +39,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
       AttendanceLog,
       Organization,
       Payment,
+      NpeRankingSnapshot,
     ]),
     UsersModule,
     EngagementModule,

@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, Repository, SelectQueryBuilder } from 'typeorm';
+import { Brackets, In, Repository, SelectQueryBuilder } from 'typeorm';
 import { StudentReport } from './entities/student-report.entity';
 import { Organization } from '../organizations/entities/organization.entity';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -24,6 +24,13 @@ import {
 } from './cii-v4-5-redaction.util';
 import { buildImpactVerifyUrl } from './certificate-verification-code.util';
 import { trackingOrganizationName } from './tracking-org-name.util';
+
+/** One row of a published NPE ranking snapshot, as the badge layer needs it. */
+export type PublishedRankingStanding = {
+  reportId: string;
+  rank: number;
+  score: number;
+};
 
 export type CommunityAwardCard = {
   id: string;
@@ -193,16 +200,29 @@ export class CommunityAwardService {
     };
   }
 
+  /**
+   * @param linkedOpportunityIds opportunities that name this partner by email / organisation name
+   *   but are not owned by it (student-created listings) — see
+   *   OpportunitiesService.resolvePartnerLinkedOpportunityIds.
+   */
   async listForPartnerOrg(
     organizationId: string,
+    linkedOpportunityIds: string[] = [],
   ): Promise<CommunityAwardCard[]> {
     if (!organizationId) return [];
     const qb = this.reports
       .createQueryBuilder('report')
       .leftJoinAndSelect('report.student', 'student')
       .leftJoinAndSelect('report.opportunity', 'opportunity')
-      .leftJoinAndSelect('opportunity.organization', 'organization')
-      .where('opportunity.organizationId = :oid', { oid: organizationId });
+      .leftJoinAndSelect('opportunity.organization', 'organization');
+    if (linkedOpportunityIds.length) {
+      qb.where(
+        '(opportunity.organizationId = :oid OR opportunity.id IN (:...linkedOppIds))',
+        { oid: organizationId, linkedOppIds: linkedOpportunityIds },
+      );
+    } else {
+      qb.where('opportunity.organizationId = :oid', { oid: organizationId });
+    }
     this.applyLiveDeckWhere(qb);
     const rows = await qb.orderBy('report.submission_date', 'DESC').getMany();
     return rows
@@ -338,13 +358,99 @@ export class CommunityAwardService {
     return { ciiV45, ciiV45Lock: ciiV45Lock ?? { locked: false } };
   }
 
+  /**
+   * A ranking was just published: bring EXISTING badges of this kind in line with it so every role
+   * sees one consistent rank. Only reports that already hold a badge of `kind` and appear in the
+   * published standings are touched (creating new medals stays the explicit award-notify step).
+   * Changed ranks are appended to the badge history and the student is told.
+   */
+  async syncBadgesToPublishedRanking(
+    kind: CommunityAwardKind,
+    scopeLabel: string,
+    standings: PublishedRankingStanding[],
+    actorName?: string,
+  ): Promise<{ updated: number }> {
+    if (!standings.length) return { updated: 0 };
+    const byId = new Map(standings.map((row) => [row.reportId, row]));
+    const reports = await this.reports.find({
+      where: { id: In([...byId.keys()]) },
+      relations: ['opportunity'],
+    });
+    const label = awardBadgeLabel(kind, scopeLabel);
+    // National medals cover the whole reviewed cohort; faculty / partner / university honours are
+    // top-N only, so a project that is no longer inside the top N under the published ranking
+    // stops holding the honour (its history is kept).
+    const topN = kind === 'ciel' ? Number.POSITIVE_INFINITY : awardTopN(kind);
+    let updated = 0;
+    for (const report of reports) {
+      const current = (report.awardBadges || []).find((b) => b.kind === kind);
+      const row = byId.get(report.id);
+      if (!current || !row) continue;
+      const stillQualifies = row.rank <= topN;
+      const unchanged =
+        current.rank === row.rank &&
+        current.of === standings.length &&
+        current.score === row.score &&
+        current.scope === scopeLabel;
+      if (unchanged) continue;
+      const badge = {
+        kind,
+        label,
+        rank: row.rank,
+        of: standings.length,
+        score: row.score,
+        scope: scopeLabel,
+        at: new Date().toISOString(),
+        by: actorName || undefined,
+      };
+      report.awardBadges = [
+        ...(report.awardBadges || []).filter((b) => b.kind !== kind),
+        ...(stillQualifies ? [badge] : []),
+      ];
+      report.awardBadgeHistory = [...(report.awardBadgeHistory || []), badge];
+      await this.reports.save(report);
+      updated += 1;
+      try {
+        const title =
+          report.opportunity?.title || report.project_id || 'your community service';
+        await this.notifications.createNotification(report.studentId, {
+          type: 'update',
+          title: stillQualifies
+            ? `${label} — ranked #${row.rank}`
+            : `Ranking updated — #${row.rank} in ${scopeLabel}`,
+          message: stillQualifies
+            ? `“${title}” is now ranked #${row.rank} of ${standings.length} in ${scopeLabel} (${row.score}/100) after the ranking was published. Open Community Service → My Impact Wall.`
+            : `“${title}” is ranked #${row.rank} of ${standings.length} in ${scopeLabel} (${row.score}/100) under the published ranking. The ${label} is held for the top ${topN}; your history is kept on My Impact Wall.`,
+        });
+      } catch (err) {
+        this.logger.warn(
+          `Badge sync notify failed for ${report.id}: ${(err as Error).message}`,
+        );
+      }
+    }
+    return { updated };
+  }
+
+  /**
+   * @param published When a ranking (NPE national / university) has been published for this scope,
+   *   badges must carry THAT ranking — rank, cohort size and excellence score come from the
+   *   published standings, and only projects it actually ranked can be awarded. Without it the
+   *   legacy CII-points ranking of `pool` is used.
+   */
   async notifyFromPool(
     pool: CommunityAwardCard[],
     dto: NotifyCommunityAwardDto,
     actorName?: string,
+    published?: PublishedRankingStanding[] | null,
   ) {
     const kind = dto.kind as CommunityAwardKind;
-    const allowed = new Set(pool.map((c) => c.id));
+    const publishedById = new Map(
+      (published ?? []).map((row) => [row.reportId, row]),
+    );
+    const usePublished = publishedById.size > 0;
+    const allowed = new Set(
+      usePublished ? [...publishedById.keys()] : pool.map((c) => c.id),
+    );
     const scope = (dto.scopeLabel || 'this ranking').trim();
     const topN = awardTopN(kind);
     // CIEL PK national ranking publishes the whole reviewed cohort. Faculty, partner
@@ -352,9 +458,15 @@ export class CommunityAwardService {
     // Rank, "of" and score are computed HERE from the caller's own pool — never taken from the
     // request body. The client only says which reports to publish; otherwise any in-pool report
     // could be awarded "#1 of 1 · 100/100" by a crafted request.
-    const totalOf = (id: string) => pool.find((c) => c.id === id)?.total ?? 0;
+    const totalOf = (id: string) =>
+      usePublished
+        ? (publishedById.get(id)?.score ?? 0)
+        : (pool.find((c) => c.id === id)?.total ?? 0);
     const serverRank = (id: string) =>
-      1 + pool.filter((c) => (c.total ?? 0) > totalOf(id)).length;
+      usePublished
+        ? (publishedById.get(id)?.rank ?? Number.MAX_SAFE_INTEGER)
+        : 1 + pool.filter((c) => (c.total ?? 0) > totalOf(id)).length;
+    const cohortSize = usePublished ? publishedById.size : pool.length;
     const requestedIds = (
       dto.picks?.length ? dto.picks.map((p) => p.reportId) : dto.reportIds || []
     ).filter((id) => id && allowed.has(id));
@@ -366,7 +478,7 @@ export class CommunityAwardService {
       .map((reportId) => ({
         reportId,
         rank: serverRank(reportId),
-        of: pool.length,
+        of: cohortSize,
         total: totalOf(reportId),
       }));
     const label = awardBadgeLabel(kind, scope);

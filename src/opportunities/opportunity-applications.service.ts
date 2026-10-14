@@ -1520,6 +1520,9 @@ export class OpportunityApplicationsService {
               id: `pending:${app.id}`,
               supports_admin_patch: true,
               member_source: 'pending_application',
+              enrolled: false,
+              application_id: app.id,
+              application_status: app.internalStatus,
               name: leadUser?.name ?? null,
               email: leadUser?.email ?? null,
               role: 'lead',
@@ -1577,6 +1580,9 @@ export class OpportunityApplicationsService {
           id: app.id,
           supports_admin_patch: true,
           member_source: 'pending_application',
+              enrolled: false,
+              application_id: app.id,
+              application_status: app.internalStatus,
           name: leadUser?.name ?? null,
           email: leadUser?.email ?? null,
           role: 'lead',
@@ -1618,6 +1624,9 @@ export class OpportunityApplicationsService {
           id: `pending:${app.id}:m:${em}`,
           supports_admin_patch: true,
           member_source: 'pending_application',
+              enrolled: false,
+              application_id: app.id,
+              application_status: app.internalStatus,
           name: typeof m?.name === 'string' ? m.name : null,
           email: typeof m?.email === 'string' ? m.email.trim() : null,
           role: 'member',
@@ -1819,7 +1828,16 @@ export class OpportunityApplicationsService {
 
     return {
       summary: {
-        registered_teams: data.length,
+        // Pending-application groups are not enrolments yet (no seat, nothing to merge / report on).
+        registered_teams: data.filter(
+          (g) =>
+            Array.isArray(g['members']) &&
+            (g['members'] as Array<Record<string, unknown>>).some(
+              (m) => m?.['member_source'] !== 'pending_application',
+            ),
+        ).length,
+        awaiting_approval_applications:
+          appsByStatus.pending_admin + appsByStatus.pending_partner,
         completed_reports: completedReports,
         reports_available: reportsAvailable,
         opportunity: opp
@@ -4213,6 +4231,96 @@ export class OpportunityApplicationsService {
     for (const app of approvedApps) {
       await this.provisionApprovedApplicationSeats(app);
     }
+  }
+
+  /**
+   * Report-start self-heal: the student's application (or the lead's team list) is APPROVED but the
+   * participation seat is missing (a failed/partial provisioning, or a seat that was removed).
+   * Re-creates exactly that seat so the student is not told to "wait for approval" for an
+   * application that already is approved. Returns true when a seat was (re)provisioned.
+   */
+  async ensureSeatsForApprovedStudent(
+    studentId: string,
+    opportunityId: string,
+  ): Promise<boolean> {
+    const sid = String(studentId || '').trim();
+    const oid = String(opportunityId || '').trim();
+    if (!sid || !oid) return false;
+
+    const student = await this.userRepo.findOne({ where: { id: sid } });
+    const email = this.normalizeEmail(student?.email ?? '');
+
+    const approved = await this.appRepo.find({
+      where: { opportunityId: oid, internalStatus: 'approved', withdrawnAt: IsNull() },
+      relations: ['studentUser'],
+    });
+    const relevant = approved.filter((a) => {
+      if (a.studentUserId === sid) return true;
+      if (!email) return false;
+      const members = Array.isArray(a.applyPayload?.['team_members'])
+        ? (a.applyPayload['team_members'] as Array<{ email?: string }>)
+        : [];
+      return members.some(
+        (m) => typeof m?.email === 'string' && this.normalizeEmail(m.email) === email,
+      );
+    });
+    if (!relevant.length) return false;
+
+    for (const app of relevant) {
+      await this.provisionApprovedApplicationSeats(app);
+    }
+    return true;
+  }
+
+  /**
+   * Admin one-click for a project's Teams & enrollments: approve + enrol every application still
+   * waiting on CIEL admin, then restore any approved-but-seatless members. Each application is
+   * handled on its own so one failure never blocks the rest.
+   */
+  async adminEnrollPendingApplications(
+    opportunityId: string,
+    adminUserId: string,
+  ) {
+    const opportunity = await this.opportunityRepo.findOne({
+      where: { id: opportunityId },
+    });
+    if (!opportunity) throw new NotFoundException('Opportunity not found');
+
+    const pending = await this.appRepo.find({
+      where: {
+        opportunityId,
+        withdrawnAt: IsNull(),
+        internalStatus: In(['pending_admin', 'pending_partner']),
+      },
+      order: { createdAt: 'ASC' },
+    });
+
+    let approved = 0;
+    const failures: Array<{ application_id: string; message: string }> = [];
+    for (const app of pending) {
+      try {
+        await this.adminApprove(app.id, adminUserId);
+        approved += 1;
+      } catch (err) {
+        failures.push({
+          application_id: app.id,
+          message: (err as Error)?.message || 'Could not approve',
+        });
+      }
+    }
+
+    await this.reconcileMissingTeamMemberSeatsForOpportunity(opportunityId);
+    const refreshed = await this.adminListOpportunityTeams(opportunityId);
+    return {
+      success: failures.length === 0,
+      message:
+        pending.length === 0
+          ? 'No applications were waiting for approval.'
+          : failures.length
+            ? `Approved and enrolled ${approved} of ${pending.length} application(s); ${failures.length} failed.`
+            : `Approved and enrolled ${approved} application(s).`,
+      data: { approved, failed: failures.length, failures, ...refreshed },
+    };
   }
 
   async adminApprove(id: string, adminUserId: string) {

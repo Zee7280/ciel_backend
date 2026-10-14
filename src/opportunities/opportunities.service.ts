@@ -4207,6 +4207,60 @@ export class OpportunitiesService {
     }
   }
 
+  /**
+   * Ids of every opportunity this partner LOGIN is linked to, using exactly the identity rules of
+   * `GET /opportunities?partner_id=me` (owned by the org, OR names the login email as partner /
+   * executing contact, OR names the organisation). Student-created listings usually name the
+   * partner by email/name and carry no `organizationId`, so scoping reports / impact by
+   * `organizationId` alone leaves those partners with empty dashboards.
+   */
+  async resolvePartnerLinkedOpportunityIds(userId: string): Promise<string[]> {
+    const org = await this.organizationsService.getMyOrganization(userId);
+    const me = await this.usersRepository.findOne({
+      where: { id: userId },
+      select: ['email'],
+    });
+    const email = (me?.email || '').trim().toLowerCase();
+    const orgNameNorm = org?.name
+      ? this.facultyUniversityScope.normalizeOrgName(org.name)
+      : '';
+    const matchNamedOrg = orgNameNorm.length >= 3;
+    if (!org?.id && !email && !matchNamedOrg) return [];
+
+    const contactEmailSql = [
+      `opportunity.external_partner_collaboration->>'official_email'`,
+      `opportunity.supervision->>'external_partner_email'`,
+      `opportunity.supervision->>'partner_email'`,
+      `opportunity.executing_context->'partner'->>'official_email'`,
+      `opportunity.partner_organization->>'official_email'`,
+      `opportunity.executing_organization->>'official_email'`,
+    ]
+      .map((expr) => `LOWER(TRIM(COALESCE(${expr}, ''))) = :pe`)
+      .join(' OR ');
+
+    const parts: string[] = [];
+    const params: Record<string, unknown> = {};
+    if (org?.id) {
+      parts.push(`opportunity."organizationId" = :orgId`);
+      params.orgId = org.id;
+    }
+    if (email) {
+      parts.push(`(${contactEmailSql})`);
+      params.pe = email;
+    }
+    if (matchNamedOrg) {
+      parts.push(this.partnerOrgNameMatchSql());
+      Object.assign(params, this.partnerOrgNameMatchParams(orgNameNorm));
+    }
+
+    const rows = await this.opportunitiesRepository
+      .createQueryBuilder('opportunity')
+      .select('opportunity.id', 'id')
+      .where(`(${parts.join(' OR ')})`, params)
+      .getRawMany<{ id: string }>();
+    return rows.map((r) => r.id);
+  }
+
   async findAll(userId: string, filters: any) {
     const org = await this.organizationsService.getMyOrganization(userId);
     const query =

@@ -196,7 +196,12 @@ export class PartnersController {
       .includes('university');
     const data = isUni
       ? await this.communityAward.listForUniversity(req.user.organizationId)
-      : await this.communityAward.listForPartnerOrg(req.user.organizationId);
+      : await this.communityAward.listForPartnerOrg(
+          req.user.organizationId,
+          await this.opportunitiesService.resolvePartnerLinkedOpportunityIds(
+            req.user.id,
+          ),
+        );
     const decorated = await this.npeRanking.decorateAwardCards(
       data,
       isUni
@@ -231,14 +236,18 @@ export class PartnersController {
     const pool = await this.communityAward.listForUniversity(
       req.user.organizationId,
     );
+    const published = await this.npeRanking.publishedStandings(
+      `university:${req.user.organizationId}`,
+    );
     const data = await this.communityAward.notifyFromPool(
       pool,
       {
         ...dto,
         kind: 'uni',
-        scopeLabel: dto.scopeLabel || org?.name,
+        scopeLabel: dto.scopeLabel || `${org?.name} University Cohort`.trim(),
       },
       req.user.name,
+      published?.standings ?? null,
     );
     return { success: true, data };
   }
@@ -559,16 +568,29 @@ export class PartnersController {
     );
     return this.studentReportsService.findAll(
       { ...query, organizationId: req.user.organizationId },
-      { partnerView: !isUniversity },
+      {
+        partnerView: !isUniversity,
+        linkedOpportunityIds: isUniversity
+          ? []
+          : await this.opportunitiesService.resolvePartnerLinkedOpportunityIds(
+              req.user.id,
+            ),
+      },
     );
   }
 
   @Get('student-reports/:id')
-  getStudentReportById(@Request() req, @Param('id') id: string) {
+  async getStudentReportById(@Request() req, @Param('id') id: string) {
     return this.studentReportsService.findOneForPartner(
       id,
       req.user.organizationId,
-      { viewerRole: req.user.role },
+      {
+        viewerRole: req.user.role,
+        partnerLinkedOpportunityIds:
+          await this.opportunitiesService.resolvePartnerLinkedOpportunityIds(
+            req.user.id,
+          ),
+      },
     );
   }
 
@@ -744,7 +766,13 @@ export class PartnerAliasController {
     }
     return this.studentReportsService.findAll(
       { ...query, organizationId: req.user.organizationId },
-      { partnerView: true },
+      {
+        partnerView: true,
+        linkedOpportunityIds:
+          await this.opportunitiesService.resolvePartnerLinkedOpportunityIds(
+            req.user.id,
+          ),
+      },
     );
   }
 
@@ -794,6 +822,7 @@ export class PartnerAliasController {
     // The university dashboard lists reports on every institution-linked opportunity (see
     // getReports above), so the same scope must be readable here — read-only, not reviewable.
     let universityScopeOpportunityIds: string[] = [];
+    let partnerLinkedOpportunityIds: string[] = [];
     if (req.user.organizationId) {
       const org = await this.organizationsService.getMyOrganization(
         req.user.id,
@@ -803,12 +832,21 @@ export class PartnerAliasController {
           await this.facultyUniversityScope.resolveOpportunityIdsForUniversityOrganization(
             org.id,
           );
+      } else {
+        partnerLinkedOpportunityIds =
+          await this.opportunitiesService.resolvePartnerLinkedOpportunityIds(
+            req.user.id,
+          );
       }
     }
     return this.studentReportsService.findOneForPartner(
       id,
       req.user.organizationId,
-      { universityScopeOpportunityIds, viewerRole: req.user.role },
+      {
+        universityScopeOpportunityIds,
+        partnerLinkedOpportunityIds,
+        viewerRole: req.user.role,
+      },
     );
   }
 

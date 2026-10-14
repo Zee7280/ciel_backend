@@ -24,6 +24,11 @@ export class NpeAnalyzeDto {
   @IsString()
   scope?: string;
 
+  /** Continue this draft run (reads only packages without an evaluation yet). */
+  @IsOptional()
+  @IsString()
+  runId?: string;
+
   @IsArray()
   @ArrayMaxSize(200)
   @ValidateNested({ each: true })

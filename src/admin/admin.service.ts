@@ -1795,6 +1795,13 @@ export class AdminService {
     );
   }
 
+  enrollPendingApplications(opportunityId: string, adminUserId: string) {
+    return this.opportunityApplicationsService.adminEnrollPendingApplications(
+      opportunityId,
+      adminUserId,
+    );
+  }
+
   healOpportunityTeamEnrollments(opportunityId: string) {
     return this.opportunityApplicationsService.adminHealOpportunityTeamEnrollments(
       opportunityId,

@@ -1,7 +1,9 @@
 import {
   BadRequestException,
   ForbiddenException,
+  HttpException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -9,6 +11,7 @@ import { In, Repository } from 'typeorm';
 import { AiService } from '../ai/ai.service';
 import { collectReportEvidenceFiles } from '../reports/collect-report-evidence.util';
 import { CommunityAwardService } from '../reports/community-award.service';
+import { isCiiFacultyLocked } from '../reports/community-award.util';
 import { StudentReport } from '../reports/entities/student-report.entity';
 import { IMPACT_PACKAGE_CONTENT_SOURCES } from '../reports/impact-package-packet.util';
 import {
@@ -40,6 +43,36 @@ export type NpeActor = {
   organizationName?: string | null;
 };
 
+/**
+ * One analyze call must finish inside the hosting function limit (300s) even when a single AI
+ * read takes minutes: stop STARTING new reads after this budget; the caller continues the same
+ * run (`runId`) until nothing is left.
+ */
+export const NPE_ANALYZE_BUDGET_MS = 90_000;
+/** Override in tests / ops (milliseconds). Never above the default in production. */
+function analyzeBudgetMs(): number {
+  const raw = Number(process.env.NPE_ANALYZE_BUDGET_MS);
+  return Number.isFinite(raw) && raw > 0
+    ? Math.min(raw, NPE_ANALYZE_BUDGET_MS)
+    : NPE_ANALYZE_BUDGET_MS;
+}
+export const NPE_ANALYZE_CONCURRENCY = 3;
+
+/** Human reason for a failed AI read. HttpException#message is just "Http Exception" — the real text is in its body. */
+export function describeAiFailure(err: unknown): string {
+  if (err instanceof HttpException) {
+    const body = err.getResponse();
+    if (typeof body === 'string' && body.trim()) return body.trim();
+    const rec = body && typeof body === 'object' ? (body as Record<string, unknown>) : null;
+    for (const key of ['error', 'message']) {
+      const value = rec?.[key];
+      if (typeof value === 'string' && value.trim()) return value.trim();
+      if (Array.isArray(value) && value.length) return value.map(String).join('; ');
+    }
+  }
+  return err instanceof Error && err.message ? err.message : 'Ranking AI call failed.';
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -62,6 +95,8 @@ function redactPerson(value: unknown): unknown {
 
 @Injectable()
 export class NpeRankingService {
+  private readonly logger = new Logger(NpeRankingService.name);
+
   constructor(
     @InjectRepository(StudentReport)
     private readonly reports: Repository<StudentReport>,
@@ -107,9 +142,22 @@ export class NpeRankingService {
     };
   }
 
+  /**
+   * Resumable, bounded analysis.
+   * - Without `runId`: starts a new draft run. Packages already read successfully in an earlier run
+   *   of this scope (same package version) are reused, so re-running never re-pays AI or reshuffles
+   *   marks for unchanged projects. Failed reads are retried.
+   * - With `runId`: continues that run, reading only packages that have no evaluation yet.
+   * Reads are done a few at a time and stop starting after NPE_ANALYZE_BUDGET_MS; `progress.remaining`
+   * tells the caller to call again.
+   */
   async analyze(
     actor: NpeActor,
-    body: { rubricVersion?: string; projects: Array<{ id: string; version: string }> },
+    body: {
+      rubricVersion?: string;
+      runId?: string;
+      projects: Array<{ id: string; version: string }>;
+    },
   ) {
     if (body.rubricVersion && body.rubricVersion !== NPE_RUBRIC_VERSION) {
       throw new BadRequestException('Unsupported ranking rubric version.');
@@ -124,7 +172,9 @@ export class NpeRankingService {
     for (const item of requested) {
       const report = byId.get(item.id);
       if (!report) {
-        throw new ForbiddenException(`Project ${item.id} is outside this ranking scope.`);
+        throw new ForbiddenException(
+          `Project ${item.id} is outside this ranking scope (only approved packages with a locked CII are ranked).`,
+        );
       }
       const pkg = buildNpePackageRecord(report);
       if (pkg.version !== item.version) {
@@ -137,53 +187,95 @@ export class NpeRankingService {
     }
 
     const scope = this.scopeFor(actor);
-    const run = this.runs.create({
-      rubricVersion: NPE_RUBRIC_VERSION,
-      scope,
-      role: actor.role,
-      status: 'draft',
-      createdByUserId: actor.userId,
-      packageVersions: Object.fromEntries(
-        eligible.map((row) => [row.report.id, row.pkg.version]),
-      ),
-      reviewClearances: {},
-      meta: { requested: eligible.length },
-    });
-    await this.runs.save(run);
-
-    const MAX_INLINE_AI = 8;
-    const toScore = eligible.slice(0, MAX_INLINE_AI);
-    const overflow = eligible.slice(MAX_INLINE_AI);
-    const results: NpeAiEvaluation[] = [];
-    for (const row of overflow) {
-      const evaluation = unreadNpeEvaluation(row.report.id, row.pkg.version, [
-        `Cohort larger than the inline AI limit (${MAX_INLINE_AI}). Filter the pool or re-run remaining projects.`,
-      ]);
-      results.push(evaluation);
-      await this.evaluations.save(
-        this.evaluations.create({
-          runId: run.id,
-          reportId: row.report.id,
-          packageVersion: row.pkg.version,
-          readComplete: false,
-          flags: evaluation.flags,
-          criteria: evaluation.criteria,
-          claims: evaluation.claims,
-          summary: evaluation.summary,
-          limitations: evaluation.limitations,
-          excellenceScore: null,
-          scoreBreakdown: null,
-          audit: { skipped: 'inline_limit' },
-        }),
-      );
+    const continuing = Boolean(body.runId);
+    let run: NpeRankingRun;
+    if (body.runId) {
+      run = await this.requireRun(body.runId, actor);
+      if (run.status === 'published') {
+        throw new BadRequestException('This ranking run is already published.');
+      }
+      run.packageVersions = {
+        ...(run.packageVersions || {}),
+        ...Object.fromEntries(eligible.map((row) => [row.report.id, row.pkg.version])),
+      };
+      await this.runs.save(run);
+    } else {
+      run = this.runs.create({
+        rubricVersion: NPE_RUBRIC_VERSION,
+        scope,
+        role: actor.role,
+        status: 'draft',
+        createdByUserId: actor.userId,
+        packageVersions: Object.fromEntries(
+          eligible.map((row) => [row.report.id, row.pkg.version]),
+        ),
+        reviewClearances: {},
+        meta: { requested: eligible.length },
+      });
+      await this.runs.save(run);
     }
-    for (const row of toScore) {
+
+    const existing = await this.evaluations.find({ where: { runId: run.id } });
+    const hasRow = new Set(existing.map((e) => e.reportId));
+    let pending = eligible.filter((row) => !hasRow.has(row.report.id));
+
+    // New run: reuse earlier successful reads of the same package version.
+    if (!continuing && pending.length) {
+      const reusable = await this.findReusableEvaluations(
+        pending.map((row) => ({ id: row.report.id, version: row.pkg.version })),
+      );
+      const stillPending: typeof pending = [];
+      for (const row of pending) {
+        const prior = reusable.get(row.report.id);
+        if (!prior) {
+          stillPending.push(row);
+          continue;
+        }
+        let score: ReturnType<typeof npeCalculate> | null = null;
+        try {
+          score = npeCalculate(
+            row.pkg.cii ?? 0,
+            prior.criteria as NpeAiEvaluation['criteria'],
+          );
+        } catch {
+          stillPending.push(row);
+          continue;
+        }
+        await this.evaluations.save(
+          this.evaluations.create({
+            runId: run.id,
+            reportId: row.report.id,
+            packageVersion: row.pkg.version,
+            readComplete: true,
+            flags: [],
+            criteria: prior.criteria,
+            claims: prior.claims,
+            summary: prior.summary,
+            limitations: prior.limitations,
+            excellenceScore: score.total,
+            scoreBreakdown: score,
+            audit: { model: 'npe_ranking_evaluation', reusedFromRun: prior.runId },
+          }),
+        );
+      }
+      pending = stillPending;
+    }
+
+    const started = Date.now();
+    let cursor = 0;
+    const readOne = async (row: { report: StudentReport; pkg: NpePackageRecord }) => {
       const evaluation = await this.evaluateOne(row.report, row.pkg);
-      results.push(evaluation);
       const score =
         evaluation.readComplete && !evaluation.flags.length
-          ? npeCalculate(row.pkg.cii ?? 0, evaluation.criteria)
+          ? (() => {
+              try {
+                return npeCalculate(row.pkg.cii ?? 0, evaluation.criteria);
+              } catch {
+                return null;
+              }
+            })()
           : null;
+      await this.evaluations.delete({ runId: run.id, reportId: row.report.id });
       await this.evaluations.save(
         this.evaluations.create({
           runId: run.id,
@@ -200,9 +292,49 @@ export class NpeRankingService {
           audit: { model: 'npe_ranking_evaluation' },
         }),
       );
-    }
+    };
+    const worker = async () => {
+      const budget = analyzeBudgetMs();
+      while (Date.now() - started < budget) {
+        const index = cursor++;
+        if (index >= pending.length) return;
+        await readOne(pending[index]);
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(NPE_ANALYZE_CONCURRENCY, pending.length) }, worker),
+    );
 
-    return this.serializeRun(run.id, actor, results);
+    return this.serializeRun(run.id, actor);
+  }
+
+  /**
+   * Latest clean (fully read, no flags) evaluation per report for this rubric + package version,
+   * from ANY scope: the AI read depends only on the package, so a project must get the same marks
+   * in its university cohort as in the national one (and is never paid for twice). Callers only
+   * pass reports already inside their own scope's pool.
+   */
+  private async findReusableEvaluations(
+    wanted: Array<{ id: string; version: string }>,
+  ): Promise<Map<string, NpeRankingEvaluation>> {
+    const out = new Map<string, NpeRankingEvaluation>();
+    if (!wanted.length) return out;
+    const versionById = new Map(wanted.map((w) => [w.id, w.version]));
+    const rows = await this.evaluations
+      .createQueryBuilder('e')
+      .innerJoin('e.run', 'r')
+      .where('r.rubricVersion = :rv', { rv: NPE_RUBRIC_VERSION })
+      .andWhere('e.reportId IN (:...ids)', { ids: wanted.map((w) => w.id) })
+      .andWhere('e.readComplete = true')
+      .orderBy('e.createdAt', 'DESC')
+      .getMany();
+    for (const row of rows) {
+      if (out.has(row.reportId)) continue;
+      if (row.packageVersion !== versionById.get(row.reportId)) continue;
+      if ((row.flags || []).length) continue;
+      out.set(row.reportId, row);
+    }
+    return out;
   }
 
   async clearReview(actor: NpeActor, runId: string, itemId: string) {
@@ -260,6 +392,23 @@ export class NpeRankingService {
     await this.snapshots.save(snapshot);
     run.status = 'published';
     await this.runs.save(run);
+    // Existing badges follow the ranking that was just published (never blocks the publish).
+    try {
+      const national = run.scope === 'national';
+      await this.communityAward.syncBadgesToPublishedRanking(
+        national ? 'ciel' : 'uni',
+        national
+          ? 'CIEL PK National Ranking (NPE-1.1)'
+          : `${actor.organizationName || 'University'} University Cohort`,
+        standings.map((row) => ({
+          reportId: row.reportId,
+          rank: row.rank,
+          score: row.excellenceScore,
+        })),
+      );
+    } catch (err) {
+      this.logger.warn(`Badge sync after publish failed: ${(err as Error).message}`);
+    }
     return { status: 'published', snapshotId: snapshot.id };
   }
 
@@ -297,6 +446,21 @@ export class NpeRankingService {
     });
   }
 
+  /** Latest published standings for a scope (`national` | `university:<orgId>`), or null. */
+  async publishedStandings(scope: string) {
+    const snap = await this.latestSnapshot(scope);
+    if (!snap?.standings?.length) return null;
+    return {
+      snapshotId: snap.id,
+      publishedAt: snap.publishedAt,
+      standings: snap.standings.map((s) => ({
+        reportId: s.reportId,
+        rank: s.rank,
+        score: s.excellenceScore,
+      })),
+    };
+  }
+
   private async latestSnapshot(scope: string) {
     return this.snapshots.findOne({
       where: { scope },
@@ -311,10 +475,13 @@ export class NpeRankingService {
         : await this.communityAward.listForUniversity(actor.organizationId || '');
     const ids = cards.map((c) => c.id);
     if (!ids.length) return [];
-    return this.reports.find({
+    const rows = await this.reports.find({
       where: { id: In(ids) },
       relations: ['student', 'opportunity', 'opportunity.organization'],
     });
+    // The ranking compares only projects whose CII has been approved AND locked. Unlocked packages
+    // would just sit in the review queue as noise and can never be ranked.
+    return rows.filter((r) => isCiiFacultyLocked(r.ciiV45Lock));
   }
 
   private async requireRun(runId: string, actor: NpeActor) {
@@ -393,9 +560,7 @@ export class NpeRankingService {
         flags: npeRanking.flags,
       };
     } catch (err) {
-      return unreadNpeEvaluation(report.id, pkg.version, [
-        err instanceof Error ? err.message : 'Ranking AI call failed.',
-      ]);
+      return unreadNpeEvaluation(report.id, pkg.version, [describeAiFailure(err)]);
     }
   }
 
@@ -500,8 +665,15 @@ export class NpeRankingService {
     const rankedRows = rows.filter((r) => r.status === 'Ranked' && r.rank != null);
     const reviewItems = this.reviewItems(rows, rankedRows, run.reviewClearances || {});
 
+    const progress = {
+      total: rows.filter((r) => r.status !== 'Excluded').length,
+      analyzed: rows.filter((r) => r.evaluation).length,
+      remaining: rows.filter((r) => r.status === 'Ready').length,
+    };
+
     return {
       runId: run.id,
+      progress,
       rubricVersion: run.rubricVersion,
       createdAt: run.createdAt.toISOString(),
       published: run.status === 'published',

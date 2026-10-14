@@ -19,6 +19,7 @@ import { ApplyOpportunityDto } from './dto/apply-opportunity.dto';
 
 import { Participation } from '../engagement/entities/participant.entity';
 import { Organization } from '../organizations/entities/organization.entity';
+import { NpeRankingSnapshot } from '../ranking/entities/npe-ranking-snapshot.entity';
 import { Otp } from './entities/otp.entity';
 import { UsersService } from '../users/users.service';
 import { MailService } from '../mail/mail.service';
@@ -68,7 +69,6 @@ import { isReportPartnerStepSatisfied } from '../reports/report-partner-approval
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 import { StudentReport } from '../reports/entities/student-report.entity';
 import {
-  readCii,
   isCommunityAwardMedalReport,
   resolveDisplayCii,
 } from '../reports/community-award.util';
@@ -107,7 +107,55 @@ export class StudentsService {
     private readonly reportPartnerApprovalSettings: ReportPartnerApprovalSettingsService,
     @Optional()
     private readonly studentApplyMaintenance?: StudentApplyMaintenanceService,
+    @Optional()
+    @InjectRepository(NpeRankingSnapshot)
+    private readonly npeSnapshots?: Repository<NpeRankingSnapshot>,
   ) {}
+
+  /**
+   * Official published NPE standings per report: the latest national snapshot and the latest
+   * snapshot of whichever university scope ranked it. Never throws (the live CII view must keep working).
+   */
+  private async loadOfficialStandings(reportIds: string[]): Promise<
+    Map<
+      string,
+      {
+        national: { rank: number; of: number; score: number; publishedAt: string } | null;
+        university: { rank: number; of: number; score: number; publishedAt: string } | null;
+      }
+    >
+  > {
+    const out = new Map<string, { national: any; university: any }>();
+    if (!this.npeSnapshots || !reportIds.length) return out;
+    try {
+      const latest: NpeRankingSnapshot[] = await this.npeSnapshots
+        .createQueryBuilder('s')
+        .distinctOn(['s.scope'])
+        .orderBy('s.scope')
+        .addOrderBy('s.publishedAt', 'DESC')
+        .getMany();
+      const wanted = new Set(reportIds);
+      for (const snap of latest) {
+        const isNational = snap.scope === 'national';
+        for (const row of snap.standings || []) {
+          if (!wanted.has(row.reportId)) continue;
+          const entry = out.get(row.reportId) ?? { national: null, university: null };
+          const band = {
+            rank: row.rank,
+            of: snap.standings.length,
+            score: row.excellenceScore,
+            publishedAt: snap.publishedAt.toISOString(),
+          };
+          if (isNational) entry.national = band;
+          else entry.university = band;
+          out.set(row.reportId, entry);
+        }
+      }
+    } catch {
+      return new Map();
+    }
+    return out;
+  }
 
   private async loadApplyMaintenanceState(): Promise<ApplyMaintenanceState | null> {
     if (!this.studentApplyMaintenance) return null;
@@ -3458,7 +3506,10 @@ export class StudentsService {
         })
       )
         continue;
-      const cii = readCii(r.section11 as Record<string, unknown> | null);
+      // Locked v4.5 CII first (same score the wall, flashcards and the NPE ranking use), then legacy section11.
+      const cii = resolveDisplayCii(
+        r as unknown as Parameters<typeof resolveDisplayCii>[0],
+      );
       if (cii == null) continue;
       eligible.push({
         id: r.id,
@@ -3484,6 +3535,8 @@ export class StudentsService {
       (r) => r.studentId === studentId && eligible.some((e) => e.id === r.id),
     );
 
+    const official = await this.loadOfficialStandings(mine.map((r) => r.id));
+
     return {
       success: true,
       data: mine.map((r) => {
@@ -3504,6 +3557,8 @@ export class StudentsService {
           networkRank: rankWithin(eligible, scored.cii),
           awardBadges: r.awardBadges ?? [],
           awardBadgeHistory: r.awardBadgeHistory ?? [],
+          // Published (official) NPE ranking — takes precedence over the live CII position above.
+          official: official.get(r.id) ?? { national: null, university: null },
         };
       }),
     };

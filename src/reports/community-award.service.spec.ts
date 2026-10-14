@@ -226,3 +226,95 @@ describe('CommunityAwardService.toCard — organization name', () => {
         expect(card.organization_name).toBe('Partner');
     });
 });
+
+describe('CommunityAwardService.listForPartnerOrg — partner linked by email/name', () => {
+    function serviceWithQb() {
+        const qb: any = {
+            leftJoinAndSelect: jest.fn().mockReturnThis(),
+            where: jest.fn().mockReturnThis(),
+            andWhere: jest.fn().mockReturnThis(),
+            orderBy: jest.fn().mockReturnThis(),
+            getMany: jest.fn().mockResolvedValue([]),
+        };
+        const service = new CommunityAwardService(
+            { createQueryBuilder: jest.fn().mockReturnValue(qb) } as any,
+            {} as any,
+            { createNotification: jest.fn() } as any,
+        );
+        return { service, qb };
+    }
+
+    it('includes opportunities that only name the partner when ids are given', async () => {
+        const { service, qb } = serviceWithQb();
+        await service.listForPartnerOrg('org-1', ['opp-a', 'opp-b']);
+        const [clause, params] = qb.where.mock.calls[0];
+        expect(clause).toContain('opportunity.id IN (:...linkedOppIds)');
+        expect(params).toEqual({ oid: 'org-1', linkedOppIds: ['opp-a', 'opp-b'] });
+    });
+
+    it('stays owned-only when no linked ids exist', async () => {
+        const { service, qb } = serviceWithQb();
+        await service.listForPartnerOrg('org-1');
+        expect(qb.where.mock.calls[0][0]).toBe('opportunity.organizationId = :oid');
+    });
+});
+
+describe('CommunityAwardService — badges follow a published ranking', () => {
+    function build(reportsById: Record<string, any>) {
+        const saved: any[] = [];
+        const notes: any[] = [];
+        const reports: any = {
+            findOne: jest.fn(async ({ where }: any) => reportsById[where.id] ?? null),
+            find: jest.fn(async ({ where }: any) => Object.values(reportsById).filter((r: any) => where.id.value?.includes(r.id) ?? true)),
+            save: jest.fn(async (r: any) => { saved.push(JSON.parse(JSON.stringify(r))); return r; }),
+        };
+        const svc = new CommunityAwardService(
+            reports, {} as any,
+            { createNotification: jest.fn(async (...a: any[]) => { notes.push(a); }) } as any,
+        );
+        return { svc, saved, notes };
+    }
+    const approved = (id: string, badges: any[] = []) => ({
+        id, studentId: `stu-${id}`, status: 'verified', faculty_status: 'approved', admin_status: 'approved',
+        awardBadges: badges, awardBadgeHistory: [], section1: { team_lead: { name: 'Sam' } }, opportunity: { title: `P ${id}` },
+    });
+
+    it('award-notify takes rank, cohort size and score from the published ranking and ignores unranked projects', async () => {
+        const r: any = { a: approved('a'), b: approved('b'), z: approved('z') };
+        const { svc, saved } = build(r);
+        const pool: any[] = [{ id: 'a', total: 10 }, { id: 'b', total: 99 }, { id: 'z', total: 80 }];
+        await svc.notifyFromPool(pool, { kind: 'ciel', reportIds: ['a', 'b', 'z'], scopeLabel: 'National' } as any, 'admin', [
+            { reportId: 'a', rank: 1, score: 88.5 }, { reportId: 'b', rank: 2, score: 70 },
+        ]);
+        const byId = Object.fromEntries(saved.map((s) => [s.id, s.awardBadges[0]]));
+        expect(byId.a).toMatchObject({ rank: 1, of: 2, score: 88.5 });
+        expect(byId.b).toMatchObject({ rank: 2, of: 2, score: 70 });
+        expect(byId.z).toBeUndefined();
+    });
+
+    it('sync rewrites an existing national medal, records history and notifies; unchanged ones are left alone', async () => {
+        const old = { kind: 'ciel', rank: 5, of: 6, score: 66, scope: 'CIEL PK Ranking', label: 'x', at: 't' };
+        const same = { kind: 'ciel', rank: 2, of: 2, score: 70, scope: 'National', label: 'x', at: 't' };
+        const r: any = { a: approved('a', [old]), b: approved('b', [same]) };
+        const { svc, saved, notes } = build(r);
+        (svc as any).reports.find = jest.fn(async () => Object.values(r));
+        const out = await svc.syncBadgesToPublishedRanking('ciel', 'National', [
+            { reportId: 'a', rank: 1, score: 88.5 }, { reportId: 'b', rank: 2, score: 70 },
+        ]);
+        expect(out.updated).toBe(1);
+        expect(saved).toHaveLength(1);
+        expect(saved[0].awardBadges[0]).toMatchObject({ rank: 1, of: 2, score: 88.5, scope: 'National' });
+        expect(saved[0].awardBadgeHistory).toHaveLength(1);
+        expect(notes).toHaveLength(1);
+    });
+
+    it('top-N honours are dropped (history kept) when the published rank is outside the top N', async () => {
+        const uni = { kind: 'uni', rank: 1, of: 6, score: 80, scope: 'X', label: 'x', at: 't' };
+        const r: any = { a: approved('a', [uni]) };
+        const { svc, saved } = build(r);
+        (svc as any).reports.find = jest.fn(async () => Object.values(r));
+        await svc.syncBadgesToPublishedRanking('uni', 'X', [{ reportId: 'a', rank: 5, score: 40 }]);
+        expect(saved[0].awardBadges.find((b: any) => b.kind === 'uni')).toBeUndefined();
+        expect(saved[0].awardBadgeHistory[0]).toMatchObject({ kind: 'uni', rank: 5 });
+    });
+});

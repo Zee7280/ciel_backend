@@ -12,6 +12,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, QueryFailedError, Repository } from 'typeorm';
 import { StudentReport } from './entities/student-report.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
+import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
 import {
   REPORTING_WINDOW_CLOSED_MESSAGE,
   canEditOrSubmitReport,
@@ -134,6 +135,8 @@ export class StudentReportsService {
     private readonly configService: ConfigService,
     private readonly reportPartnerApprovalSettings: ReportPartnerApprovalSettingsService,
     @Optional() private readonly notificationsService?: NotificationsService,
+    @Optional()
+    private readonly opportunityApplicationsService?: OpportunityApplicationsService,
   ) {}
 
   private hasMeaningfulObjectValue(value: any): boolean {
@@ -2610,6 +2613,25 @@ export class StudentReportsService {
     ].includes(String(status || '').toLowerCase());
   }
 
+  /** A repair problem must never break a read/write: failures are logged and treated as "no seat". */
+  private async healApprovedSeat(
+    studentId: string,
+    opportunityId: string,
+  ): Promise<boolean> {
+    if (!this.opportunityApplicationsService) return false;
+    try {
+      return await this.opportunityApplicationsService.ensureSeatsForApprovedStudent(
+        studentId,
+        opportunityId,
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Approved-seat self-heal failed for student ${studentId} on ${opportunityId}: ${(err as Error)?.message}`,
+      );
+      return false;
+    }
+  }
+
   /**
    * Student-created listing: the creator may start the report immediately once it is live.
    * Faculty / CLPK / NGO / partner listings require an approved enrollment first (Apply Now).
@@ -2620,10 +2642,18 @@ export class StudentReportsService {
   ): Promise<void> {
     if (!opp?.id) return;
     if (opp.isStudentCreated && opp.creatorId === studentId) return;
-    const mine = await this.participantRepository.findOne({
+    let mine = await this.participantRepository.findOne({
       where: { studentId, projectId: opp.id },
     });
     if (this.participationAllowsReportStart(mine?.status)) return;
+    // Approved application but the seat is missing/unusable: rebuild it instead of telling an
+    // approved student to "wait for approval".
+    if (await this.healApprovedSeat(studentId, opp.id)) {
+      mine = await this.participantRepository.findOne({
+        where: { studentId, projectId: opp.id },
+      });
+      if (this.participationAllowsReportStart(mine?.status)) return;
+    }
     throw new ForbiddenException(
       'Apply to this opportunity and wait for approval before starting a report.',
     );
@@ -3658,7 +3688,10 @@ export class StudentReportsService {
     };
   }
 
-  async findAll(query: any, options: { partnerView?: boolean } = {}) {
+  async findAll(
+    query: any,
+    options: { partnerView?: boolean; linkedOpportunityIds?: string[] } = {},
+  ) {
     const { status, organizationId, studentId, page = 1, limit = 10 } = query;
     const limitNum =
       typeof limit === 'number'
@@ -3702,9 +3735,16 @@ export class StudentReportsService {
       };
     }
 
-    const whereClause: any = {};
+    // Partner scope: owned by the org, plus opportunities that only name the partner (email/name).
+    const linkedIds = (options.linkedOpportunityIds ?? []).filter(Boolean);
+    let whereClause: any = {};
     if (organizationId) {
-      whereClause.opportunity = { organizationId };
+      whereClause = linkedIds.length
+        ? [
+            { opportunity: { organizationId } },
+            { opportunity: { id: In(linkedIds) } },
+          ]
+        : { opportunity: { organizationId } };
     }
 
     let reports = await this.studentReportsRepository.find({
@@ -3952,7 +3992,12 @@ export class StudentReportsService {
   async findOneForPartner(
     id: string,
     organizationId: string,
-    options?: { universityScopeOpportunityIds?: string[]; viewerRole?: string },
+    options?: {
+      universityScopeOpportunityIds?: string[];
+      /** Opportunities that name this partner by email/name (read-only, never review). */
+      partnerLinkedOpportunityIds?: string[];
+      viewerRole?: string;
+    },
   ) {
     const report = await this.studentReportsRepository.findOne({
       where: { id },
@@ -3968,7 +4013,9 @@ export class StudentReportsService {
     const oppId = report.opportunity?.id ?? report.opportunityId;
     const inUniversityScope =
       !!oppId && (options?.universityScopeOpportunityIds ?? []).includes(oppId);
-    if (!ownsOpportunity && !inUniversityScope) {
+    const linkedToPartner =
+      !!oppId && (options?.partnerLinkedOpportunityIds ?? []).includes(oppId);
+    if (!ownsOpportunity && !inUniversityScope && !linkedToPartner) {
       throw new ForbiddenException(
         'You can only access reports linked to your organization',
       );
@@ -4179,11 +4226,20 @@ export class StudentReportsService {
     }
 
     // If no report found, check for an application to pre-populate
-    const application = await findPreferredProjectEnrollment(
+    let application = await findPreferredProjectEnrollment(
       this.participantRepository,
       studentId,
       id,
     );
+    if (!application && this.looksLikeUuid(String(id).trim())) {
+      if (await this.healApprovedSeat(studentId, String(id).trim())) {
+        application = await findPreferredProjectEnrollment(
+          this.participantRepository,
+          studentId,
+          id,
+        );
+      }
+    }
 
     if (application) {
       const studentProfile = await this.usersRepository.findOne({

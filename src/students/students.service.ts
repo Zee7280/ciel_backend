@@ -9,7 +9,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, In, Repository } from 'typeorm';
+import { Brackets, In, IsNull, Repository } from 'typeorm';
 import { User } from '../users/entities/user.entity';
 import { UserRole } from '../users/enums/user-role.enum';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
@@ -65,6 +65,10 @@ import { purifyStudentOpportunityContent } from '../opportunities/opportunity-co
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
 import { applyCanonicalPrivateCandidatePhone, isPrivateCandidateDto, isPrivateCandidateOpportunity } from '../opportunities/private-candidate.util';
 import { isTeamApplyFromParticipationAndMembers } from '../opportunities/apply-team-payload.util';
+import {
+  universityNamesMatch,
+  universityScopeError,
+} from '../opportunities/university-scope.util';
 import { isReportPartnerStepSatisfied } from '../reports/report-partner-approval.util';
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 import { StudentReport } from '../reports/entities/student-report.entity';
@@ -693,8 +697,7 @@ export class StudentsService {
 
     // Backward compatibility: restricted_universities
     if (opp.restricted_universities && opp.restricted_universities.length > 0) {
-      const allowed = opp.restricted_universities.map(this.normalize);
-      if (!allowed.includes(userUniversity)) {
+      if (!opp.restricted_universities.some((u) => universityNamesMatch(u, userUniversity))) {
         if (!userUniversity) {
           return {
             eligible: false,
@@ -716,11 +719,11 @@ export class StudentsService {
     const departments: string[] =
       scope.department_restriction?.departments || [];
 
-    const uniSet = uniNames.map(this.normalize);
-    const creatorNorm = this.normalize(creatorUni);
     const deptSet = departments.map(this.normalize);
 
-    const uniMatch = (names: string[]) => names.includes(userUniversity);
+    // Spelling-tolerant: "BNU" on a profile must still match "Beaconhouse National University (BNU)".
+    const uniMatch = (names: string[]) => names.some((n) => universityNamesMatch(n, userUniversity));
+    const isCreatorUni = universityNamesMatch(creatorUni, userUniversity);
     const deptMatch =
       deptScope === 'all' || (!!userDept && deptSet.includes(userDept));
 
@@ -772,18 +775,16 @@ export class StudentsService {
       case 'open_all_universities':
         return deptMatch ? { eligible: true } : deptFail();
       case 'restricted_specific_universities':
-        if (!uniMatch(uniSet)) return uniNotInList();
+        if (!uniMatch(uniNames)) return uniNotInList();
         return deptMatch ? { eligible: true } : deptFail();
       case 'own_university_only':
-        if (!userUniversity || userUniversity !== creatorNorm)
-          return ownUniFail();
+        if (!userUniversity || !isCreatorUni) return ownUniFail();
         return deptMatch ? { eligible: true } : deptFail();
       case 'departments_across_universities':
-        if (!uniMatch(uniSet)) return uniNotInList();
+        if (!uniMatch(uniNames)) return uniNotInList();
         return deptMatch ? { eligible: true } : deptFail();
       case 'own_university_departments':
-        if (!userUniversity || userUniversity !== creatorNorm)
-          return ownUniFail();
+        if (!userUniversity || !isCreatorUni) return ownUniFail();
         return deptMatch ? { eligible: true } : deptFail();
       default:
         return { eligible: true };
@@ -840,7 +841,8 @@ export class StudentsService {
 
     try {
       const existing = await this.otpRepository.findOne({
-        where: { email: emailNorm },
+        where: { email: emailNorm, projectId: projectKey || IsNull() },
+        order: { verifiedAt: 'DESC' },
       });
       if (existing && existing.expiresAt > new Date()) {
         const lastSentAt = existing.expiresAt.getTime() - OTP_TTL_MS;
@@ -851,6 +853,9 @@ export class StudentsService {
 
       otp = Math.floor(100000 + Math.random() * 900000).toString();
       const expiresAt = new Date(Date.now() + OTP_TTL_MS);
+      // A resend issues a new code but does not revoke an earlier confirmation for this project —
+      // otherwise a second request (student self-verifying, lead resending) would silently break a
+      // teammate the lead already verified in an open dialog.
       if (existing) {
         existing.otp = otp;
         existing.expiresAt = expiresAt;
@@ -861,6 +866,7 @@ export class StudentsService {
             email: emailNorm,
             otp,
             expiresAt,
+            projectId: projectKey || null,
           }),
         );
       }
@@ -898,6 +904,7 @@ export class StudentsService {
     try {
       record = await this.otpRepository.findOne({
         where: { email: emailNorm, otp },
+        order: { expiresAt: 'DESC' },
       });
     } catch (err) {
       this.logger.error(
@@ -916,17 +923,48 @@ export class StudentsService {
       throw new BadRequestException('OTP has expired');
     }
 
-    // Success! We can delete the OTP record now to prevent reuse. Verification itself has
-    // already succeeded at this point, so a cleanup failure here must not fail the request.
+    // Success. Burn the code so it cannot be replayed, but keep the row as proof of verification —
+    // apply and seat registration refuse a teammate email that has no recent verifiedAt.
     try {
-      await this.otpRepository.remove(record);
+      record.otp = '';
+      record.expiresAt = new Date();
+      record.verifiedAt = new Date();
+      await this.otpRepository.save(record);
     } catch (err) {
-      this.logger.warn(
-        `Verified OTP for ${emailNorm} but failed to delete the record: ${(err as Error)?.message || err}`,
+      this.logger.error(
+        `Verified OTP for ${emailNorm} but failed to record it: ${(err as Error)?.message || err}`,
+      );
+      throw new BadRequestException(
+        'Could not record the verification right now. Please try again.',
       );
     }
 
     return { success: true, message: 'Email verified' };
+  }
+
+  /** How long a confirmed teammate OTP stays usable for apply / seat registration. */
+  static readonly TEAM_MEMBER_OTP_VALID_MS = 24 * 60 * 60 * 1000;
+
+  /** Every teammate on a team apply must have confirmed the OTP sent to their email (the dialog
+   * enforces it, but the API is what actually hands out seats). */
+  private async assertTeamMemberEmailsOtpVerified(emails: string[], projectId: string) {
+    const unique = [...new Set(emails.map((e) => e.trim().toLowerCase()).filter(Boolean))];
+    if (!unique.length) return;
+    const rows = await this.otpRepository.find({
+      where: { email: In(unique), projectId },
+    });
+    const cutoff = Date.now() - StudentsService.TEAM_MEMBER_OTP_VALID_MS;
+    const verified = new Set(
+      rows
+        .filter((r) => r.verifiedAt && new Date(r.verifiedAt).getTime() >= cutoff)
+        .map((r) => r.email.trim().toLowerCase()),
+    );
+    const missing = unique.filter((e) => !verified.has(e));
+    if (missing.length) {
+      throw new BadRequestException(
+        `${missing.join(', ')} ${missing.length === 1 ? 'has' : 'have'} not confirmed the email OTP yet. Send the code and confirm it before submitting.`,
+      );
+    }
   }
 
   async sendTeamMemberVerification(email: string) {
@@ -2489,8 +2527,29 @@ export class StudentsService {
     ) {
       const leadNorm = (user.email ?? '').trim().toLowerCase();
       const seenEmails = new Set<string>();
+      const seenCnics = new Map<string, string>();
       const sanitized: NonNullable<ApplyOpportunityDto['team_members']> = [];
+      let rowNo = 0;
       for (const member of dto.team_members) {
+        rowNo += 1;
+        const label =
+          typeof member?.name === 'string' && member.name.trim()
+            ? member.name.trim()
+            : `Team member ${rowNo}`;
+        // One CNIC per person across the whole roster — the lead's own row (sent as row 1) included.
+        const cnicDigits = String(member?.cnic ?? '').replace(/\D/g, '');
+        if (cnicDigits) {
+          if (cnicDigits.length !== 13) {
+            throw new BadRequestException(`${label}: CNIC must be exactly 13 digits.`);
+          }
+          const prior = seenCnics.get(cnicDigits);
+          if (prior) {
+            throw new BadRequestException(
+              `${label} and ${prior} have the same CNIC. Each student must use their own CNIC.`,
+            );
+          }
+          seenCnics.set(cnicDigits, label);
+        }
         const em =
           typeof member?.email === 'string'
             ? member.email.trim().toLowerCase()
@@ -2517,6 +2576,10 @@ export class StudentsService {
             throw new BadRequestException(parsedMemberPhone.error);
           }
           member.mobile = parsedMemberPhone.e164;
+          // The university each member is declared at must be inside the listing's scope. The
+          // account-based check further down only covers members who already have an account.
+          const scopeErr = universityScopeError(member.university, opportunity, label);
+          if (scopeErr) throw new BadRequestException(scopeErr);
         }
         sanitized.push(member);
       }
@@ -2524,6 +2587,19 @@ export class StudentsService {
       const seatCap = resolveTeamSeatCap(opportunity.timeline?.volunteers_required);
       const capError = teamCapacityError(sanitized.length, seatCap);
       if (capError) throw new BadRequestException(capError);
+    }
+
+    if (isTeamApply) {
+      // A "team" of one is an individual application that would later block real teammates.
+      if (!Array.isArray(teamMembersPayload) || teamMembersPayload.length === 0) {
+        throw new BadRequestException(
+          'A team application needs at least one teammate besides you. Add a verified member, or apply as an individual.',
+        );
+      }
+      await this.assertTeamMemberEmailsOtpVerified(
+        teamMembersPayload.map((m) => (typeof m?.email === 'string' ? m.email : '')),
+        dto.opportunityId,
+      );
     }
 
     let resolvedTeamId = (dto.team_id || '').trim();

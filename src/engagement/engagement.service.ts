@@ -42,6 +42,8 @@ import {
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 import { User } from '../users/entities/user.entity';
 import { UserRole } from '../users/enums/user-role.enum';
+import { Otp } from '../students/entities/otp.entity';
+import { universityScopeError } from '../opportunities/university-scope.util';
 import {
   attendanceCountsTowardProgress,
   canUserActOnAttendanceQueue,
@@ -96,6 +98,8 @@ export class EngagementService {
     private opportunityApplicationRepository: Repository<OpportunityApplication>,
     @InjectRepository(User)
     private userRepository: Repository<User>,
+    @InjectRepository(Otp)
+    private otpRepository: Repository<Otp>,
     private configService: ConfigService,
     private s3Service: S3Service,
     private mailService: MailService,
@@ -113,6 +117,28 @@ export class EngagementService {
       current: configuredKey,
       previous: this.configService.get<string>('ENCRYPTION_KEY_PREVIOUS'),
     });
+  }
+
+  /** Same window as StudentsService.TEAM_MEMBER_OTP_VALID_MS. */
+  private static readonly TEAMMATE_OTP_VALID_MS = 24 * 60 * 60 * 1000;
+
+  private async assertTeammateEmailOtpVerified(
+    emailNorm: string,
+    projectId: string,
+  ) {
+    const row = await this.otpRepository.findOne({
+      where: { email: emailNorm, projectId },
+      order: { verifiedAt: 'DESC' },
+    });
+    const verifiedAt = row?.verifiedAt ? new Date(row.verifiedAt).getTime() : 0;
+    if (
+      !verifiedAt ||
+      verifiedAt < Date.now() - EngagementService.TEAMMATE_OTP_VALID_MS
+    ) {
+      throw new BadRequestException(
+        `${emailNorm} has not confirmed the email OTP yet. Send the code and confirm it before adding this teammate.`,
+      );
+    }
   }
 
   /** Match participation rows regardless of stored email casing/whitespace. */
@@ -647,6 +673,29 @@ export class EngagementService {
             throw new BadRequestException(
               'This team already has a team lead on this project. Register as a team member instead.',
             );
+          }
+        }
+
+        // A NEW seat can only be opened at a university the listing is open to. Seats that already
+        // exist (approved / provisioned) stay editable even if the scope was narrowed later; admin
+        // repairs (merge / heal) are exempt.
+        if (!participation.id && callerRole !== UserRole.SUPER_ADMIN) {
+          const scopeErr = universityScopeError(
+            dto.universityName,
+            opportunity,
+            (dto.fullName || '').trim() || 'This student',
+          );
+          if (scopeErr) throw new BadRequestException(scopeErr);
+        }
+
+        // A brand-new teammate seat needs that teammate's email confirmed by OTP for this project
+        // (the report UI asks for it; this is what makes it binding). Existing seats, the caller's
+        // own email and admin repairs are exempt.
+        if (isTeamMemberRegistration && !participation.id && callerRole !== UserRole.SUPER_ADMIN && dtoEmailNorm) {
+          const caller = await this.userRepository.findOne({ where: { id: studentId } });
+          const callerEmail = this.normalizeParticipantEmail(caller?.email);
+          if (callerEmail !== dtoEmailNorm) {
+            await this.assertTeammateEmailOtpVerified(dtoEmailNorm, opportunity.id);
           }
         }
 

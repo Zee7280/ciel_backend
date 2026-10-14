@@ -7,6 +7,7 @@ import { AttendanceLog } from './entities/attendance-log.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 import { User } from '../users/entities/user.entity';
+import { Otp } from '../students/entities/otp.entity';
 // import { OpportunityTeamMember } from '../opportunities/entities/opportunity-team-member.entity';
 import { ConfigService } from '@nestjs/config';
 import { S3Service } from '../common/s3.service';
@@ -56,6 +57,11 @@ describe('EngagementService', () => {
     createQueryBuilder: jest.fn(),
   };
 
+  /** Default: every teammate email counts as OTP-confirmed; tests override to null to assert the guard. */
+  const mockOtpRepository = {
+    findOne: jest.fn(),
+  };
+
   // const mockTeamMemberRepository = {
   //     findOne: jest.fn(),
   // };
@@ -92,6 +98,13 @@ describe('EngagementService', () => {
   });
 
   beforeEach(async () => {
+    mockOtpRepository.findOne.mockReset();
+    mockOtpRepository.findOne.mockResolvedValue({
+      email: 'x',
+      otp: '',
+      expiresAt: new Date(),
+      verifiedAt: new Date(),
+    });
     mockOpportunityApplicationRepository.findOne.mockResolvedValue(null);
     mockOpportunityApplicationRepository.find.mockResolvedValue([]);
     mockMailService.sendAttendancePendingReview.mockClear();
@@ -121,6 +134,10 @@ describe('EngagementService', () => {
         {
           provide: getRepositoryToken(User),
           useValue: mockUserRepository,
+        },
+        {
+          provide: getRepositoryToken(Otp),
+          useValue: mockOtpRepository,
         },
         // {
         //     provide: getRepositoryToken(OpportunityTeamMember),
@@ -1335,6 +1352,89 @@ describe('EngagementService', () => {
   });
 
   describe('registerParticipant', () => {
+    const scopedOpportunity = (projectId: string, title: string) => ({
+      id: projectId,
+      title,
+      status: 'active',
+      admin_approved: true,
+      participation_scope: {
+        rule: 'own_university_only',
+        creator_university_name: 'Beaconhouse National University (BNU)',
+      },
+    });
+
+    it('refuses a seat at a university the listing is not open to', async () => {
+      const t = fx('register-scope');
+      const dto = {
+        projectId: t.id.project,
+        participationMode: 'team',
+        isTeamLead: false,
+        email: t.email.newParticipant,
+        fullName: 'Ayesha',
+        cnic: '1234567890123',
+        mobile: '03001234567',
+        universityName: 'LUMS',
+      } as any;
+      const mockManager = {
+        findOne: jest
+          .fn()
+          .mockResolvedValueOnce(scopedOpportunity(t.id.project, t.title)) // Opportunity
+          .mockResolvedValueOnce(null), // existingByCnic → brand-new seat
+        createQueryBuilder: jest
+          .fn()
+          .mockReturnValueOnce(mockUserQueryBuilder(null))
+          .mockReturnValue(mockParticipationQueryBuilder(null)),
+        create: jest.fn().mockReturnValue({}),
+        save: jest.fn(),
+        remove: jest.fn(),
+        count: jest.fn().mockResolvedValue(0),
+      };
+      (mockParticipationRepository as any).manager = {
+        transaction: jest.fn().mockImplementation((cb) => cb(mockManager)),
+      };
+      await expect(service.registerParticipant(t.id.u1, dto)).rejects.toThrow(
+        /Ayesha is at LUMS, but this opportunity is open to Beaconhouse National University \(BNU\) students only/,
+      );
+      expect(mockManager.save).not.toHaveBeenCalled();
+    });
+
+    it('refuses a brand-new teammate seat whose email never confirmed the OTP', async () => {
+      const t = fx('register-otp');
+      mockOtpRepository.findOne.mockResolvedValue(null);
+      mockUserRepository.findOne.mockResolvedValueOnce({ id: t.id.u1, email: t.email.existing });
+      const dto = {
+        projectId: t.id.project,
+        participationMode: 'team',
+        isTeamLead: false,
+        teamId: t.id.teamId,
+        email: t.email.newParticipant,
+        fullName: t.name.teamMember,
+        cnic: '1234567890123',
+        mobile: '03001234567',
+        universityName: 'BNU',
+      } as any;
+      const mockManager = {
+        findOne: jest
+          .fn()
+          .mockResolvedValueOnce(scopedOpportunity(t.id.project, t.title)) // Opportunity
+          .mockResolvedValueOnce(null), // existingByCnic
+        createQueryBuilder: jest
+          .fn()
+          .mockReturnValueOnce(mockUserQueryBuilder(null))
+          .mockReturnValueOnce(mockParticipationQueryBuilder(null))
+          .mockReturnValue(mockParticipationQueryBuilder(null)),
+        create: jest.fn().mockReturnValue({}),
+        save: jest.fn(),
+        remove: jest.fn(),
+        count: jest.fn().mockResolvedValue(0),
+      };
+      (mockParticipationRepository as any).manager = {
+        transaction: jest.fn().mockImplementation((cb) => cb(mockManager)),
+      };
+      await expect(service.registerParticipant(t.id.u1, dto)).rejects.toThrow(/has not confirmed the email OTP yet/);
+      expect(mockManager.save).not.toHaveBeenCalled();
+    });
+
     it('reuses the existing seat when the same student registers with a different email', async () => {
       const t = fx('register-new-email');
       const studentId = t.id.u1;

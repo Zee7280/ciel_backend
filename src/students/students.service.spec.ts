@@ -749,9 +749,9 @@ describe('StudentsService.confirmTeamMemberOtp', () => {
     await expect(
       service.confirmTeamMemberOtp(' New@Test.EDU ', '123456'),
     ).rejects.toThrow(/Invalid OTP/);
-    expect(findOne).toHaveBeenCalledWith({
-      where: { email: 'new@test.edu', otp: '123456' },
-    });
+    expect(findOne).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { email: 'new@test.edu', otp: '123456' } }),
+    );
   });
 
   it('turns an OTP lookup failure into a clean message instead of an unhandled 500', async () => {
@@ -765,16 +765,25 @@ describe('StudentsService.confirmTeamMemberOtp', () => {
     ).rejects.toThrow(/Could not verify the code right now/);
   });
 
-  it('still reports success when verification passed but the cleanup delete fails', async () => {
+  it('keeps the row as proof of verification (verifiedAt set, code burned) instead of deleting it', async () => {
+    const record: any = { email: 'new@test.edu', otp: '123456', expiresAt: new Date(Date.now() + 60000), verifiedAt: null };
+    const save = jest.fn().mockImplementation(async (r) => r);
+    const service = makeService({ otpRepository: { findOne: jest.fn().mockResolvedValue(record), save } });
+    const result = await service.confirmTeamMemberOtp('new@test.edu', '123456');
+    expect(result).toEqual({ success: true, message: 'Email verified' });
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ otp: '', verifiedAt: expect.any(Date) }));
+    expect(record.expiresAt.getTime()).toBeLessThanOrEqual(Date.now());
+  });
+
+  it('fails clearly when the verification cannot be recorded (apply would otherwise refuse the member)', async () => {
     const record = { email: 'new@test.edu', otp: '123456', expiresAt: new Date(Date.now() + 60000) };
     const service = makeService({
       otpRepository: {
         findOne: jest.fn().mockResolvedValue(record),
-        remove: jest.fn().mockRejectedValue(new Error('row locked')),
+        save: jest.fn().mockRejectedValue(new Error('row locked')),
       },
     });
-    const result = await service.confirmTeamMemberOtp('new@test.edu', '123456');
-    expect(result).toEqual({ success: true, message: 'Email verified' });
+    await expect(service.confirmTeamMemberOtp('new@test.edu', '123456')).rejects.toThrow(/Could not record the verification/);
   });
 });
 
@@ -873,6 +882,8 @@ describe('StudentsService.applyToOpportunity — dates, seats and team eligibili
     occupied?: number;
     scope?: Record<string, unknown>;
     memberUsers?: Array<Record<string, unknown>>;
+    /** Teammate emails with a recent confirmed OTP row. Defaults to every address the tests use. */
+    verifiedEmails?: string[];
   }) => {
     const opportunity: any = {
       id: '11111111-1111-4111-8111-111111111111',
@@ -924,6 +935,17 @@ describe('StudentsService.applyToOpportunity — dates, seats and team eligibili
         createQueryBuilder: jest.fn(() => chain),
       },
       opportunityApplicationsService: apps,
+      otpRepository: {
+        find: jest.fn().mockResolvedValue(
+          (opts.verifiedEmails ?? ['a@uni.edu', 'b@uni.edu', 'a@other.edu']).map((email) => ({
+            email,
+            otp: '',
+            expiresAt: new Date(),
+            verifiedAt: new Date(),
+            projectId: '11111111-1111-4111-8111-111111111111',
+          })),
+        ),
+      },
       mailService: {
         sendFacultyApprovalRequest: jest.fn(),
         sendFacultyCollaboratorNotice: jest.fn(),
@@ -988,10 +1010,89 @@ describe('StudentsService.applyToOpportunity — dates, seats and team eligibili
         'lead',
         dto({
           participation_type: 'team',
-          team_members: [{ email: 'a@other.edu', name: 'A', mobile: '03001111111' }],
+          team_members: [{ email: 'a@other.edu', name: 'A', mobile: '03001111111', university: 'BNU' }],
         }),
       ),
     ).rejects.toThrow(/a@other.edu cannot join/);
+    expect(createApplication).not.toHaveBeenCalled();
+  });
+
+  it('refuses a teammate declared at a university outside the listing scope, account or not', async () => {
+    const { service, createApplication } = build({
+      scope: { rule: 'own_university_only', creator_university_name: 'Beaconhouse National University (BNU)' },
+    });
+    await expect(
+      service.applyToOpportunity(
+        'lead',
+        dto({
+          participation_type: 'team',
+          team_members: [{ email: 'a@uni.edu', name: 'Ayesha', mobile: '03001111111', university: 'LUMS' }],
+        }),
+      ),
+    ).rejects.toThrow(/Ayesha is at LUMS, but this opportunity is open to Beaconhouse National University \(BNU\) students only/);
+    expect(createApplication).not.toHaveBeenCalled();
+  });
+
+  it('accepts the short profile spelling of the host university ("BNU") for lead and teammates', async () => {
+    const { service, createApplication } = build({
+      scope: { rule: 'own_university_only', creator_university_name: 'Beaconhouse National University (BNU)' },
+    });
+    await expect(
+      service.applyToOpportunity(
+        'lead',
+        dto({
+          participation_type: 'team',
+          team_members: [{ email: 'a@uni.edu', name: 'A', mobile: '03001111111', university: 'BNU' }],
+        }),
+      ),
+    ).resolves.toMatchObject({ success: true });
+    expect(createApplication).toHaveBeenCalled();
+  });
+
+  it('refuses a "team" with nobody besides the lead', async () => {
+    const { service, createApplication } = build({});
+    await expect(
+      service.applyToOpportunity('lead', dto({ participation_type: 'team', team_members: [] })),
+    ).rejects.toThrow(/at least one teammate/);
+    await expect(
+      service.applyToOpportunity(
+        'lead',
+        dto({ participation_type: 'team', team_members: [{ email: 'lead@uni.edu', name: 'Lead', mobile: '03001111111' }] }),
+      ),
+    ).rejects.toThrow(/at least one teammate/);
+    expect(createApplication).not.toHaveBeenCalled();
+  });
+
+  it('refuses two roster rows (lead row included) sharing one CNIC', async () => {
+    const { service } = build({});
+    await expect(
+      service.applyToOpportunity(
+        'lead',
+        dto({
+          participation_type: 'team',
+          team_members: [
+            { email: 'lead@uni.edu', name: 'Lead', mobile: '03001111111', cnic: '35202-1234567-1', role: 'Lead' },
+            { email: 'a@uni.edu', name: 'A', mobile: '03002222222', cnic: '3520212345671' },
+          ],
+        }),
+      ),
+    ).rejects.toThrow(/A and Lead have the same CNIC/);
+  });
+
+  it('refuses a teammate whose email has no confirmed OTP', async () => {
+    const { service, createApplication } = build({ verifiedEmails: ['b@uni.edu'] });
+    await expect(
+      service.applyToOpportunity(
+        'lead',
+        dto({
+          participation_type: 'team',
+          team_members: [
+            { email: 'a@uni.edu', name: 'A', mobile: '03001111111' },
+            { email: 'b@uni.edu', name: 'B', mobile: '03002222222' },
+          ],
+        }),
+      ),
+    ).rejects.toThrow(/a@uni.edu has not confirmed the email OTP yet/);
     expect(createApplication).not.toHaveBeenCalled();
   });
 });

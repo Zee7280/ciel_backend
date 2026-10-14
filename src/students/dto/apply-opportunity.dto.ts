@@ -1,4 +1,5 @@
 import { IsString, IsUUID, IsOptional, IsEmail, IsIn, IsArray, ArrayMaxSize } from 'class-validator';
+import { OmitType } from '@nestjs/mapped-types';
 
 export class ApplyOpportunityDto {
     @IsUUID()
@@ -24,10 +25,11 @@ export class ApplyOpportunityDto {
     @IsString()
     team_id?: string;
 
-    /** Team lead + members may not exceed 20 (the lead is not part of this list → at most 19). */
+    /** Team lead + members may not exceed 20. The dialog sends the lead's own row in this list too
+     * (the service drops it), so 20 rows are allowed here; the seat cap is enforced in the service. */
     @IsOptional()
     @IsArray()
-    @ArrayMaxSize(19, { message: 'A team can have at most 20 members including the team lead.' })
+    @ArrayMaxSize(20, { message: 'A team can have at most 20 members including the team lead.' })
     team_members?: any[];
 
     @IsOptional()
@@ -38,3 +40,6 @@ export class ApplyOpportunityDto {
     @IsIn(['partner', 'faculty'])
     attendance_approver_type?: 'partner' | 'faculty';
 }
+
+/** Body of POST /students/opportunities/:id/apply — the opportunity comes from the URL. */
+export class ApplyOpportunityByIdDto extends OmitType(ApplyOpportunityDto, ['opportunityId'] as const) {}

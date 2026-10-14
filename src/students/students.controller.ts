@@ -19,7 +19,7 @@ import { Roles } from '../auth/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
 import { StudentsService } from './students.service';
 import { RedactOpportunityBrowseInterceptor } from '../opportunities/redact-opportunity-secrets.interceptor';
-import { ApplyOpportunityDto } from './dto/apply-opportunity.dto';
+import { ApplyOpportunityByIdDto, ApplyOpportunityDto } from './dto/apply-opportunity.dto';
 
 @Controller('students')
 @UseGuards(JwtAuthGuard, RolesGuard, SubscriptionActiveGuard)
@@ -102,7 +102,7 @@ export class StudentsController {
     }
 
     @Post('opportunities/:id/apply')
-    applyToOpportunityById(@Request() req, @Param('id', new ParseUUIDPipe()) id: string, @Body() body: any) {
+    applyToOpportunityById(@Request() req, @Param('id', new ParseUUIDPipe()) id: string, @Body() body: ApplyOpportunityByIdDto) {
         return this.studentsService.applyToOpportunity(req.user.id, { ...body, opportunityId: id });
     }
 

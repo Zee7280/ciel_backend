@@ -216,7 +216,8 @@ function normalizeClaimAndEvidenceArrays(payload: CiiV45EvaluatorPayload): void 
   const evidenceIds = payload.evidenceAudit.map((e) => e.evidenceId);
 
   const usedClaims = new Set<string>();
-  payload.claimInventory = (Array.isArray(payload.claimInventory) ? payload.claimInventory : []).map(
+  // The model may return bare strings here; widen to unknown so the string branch below type-checks.
+  payload.claimInventory = (Array.isArray(payload.claimInventory) ? (payload.claimInventory as unknown[]) : []).map(
     (raw, i) => {
       if (typeof raw === 'string') {
         return {

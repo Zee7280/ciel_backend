@@ -5,6 +5,7 @@ import { IsAcceptablePassword } from '../../auth/password-policy.util';
 /** Trim surrounding whitespace so "  " can never satisfy a required text field. */
 const trimString = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
 import { UserRole } from '../enums/user-role.enum';
+import { normalizeUserRoleInput } from '../user-role-input.util';
 
 /** Mandate / KYC extras for Investor / VC signup — stored on `users.settings.investor`. */
 export class InvestorSignupProfileDto {
@@ -139,6 +140,7 @@ export class CreateUserDto {
     @Type(() => InvestorSignupProfileDto)
     investorProfile?: InvestorSignupProfileDto;
 
+    @Transform(({ value }) => normalizeUserRoleInput(value))
     @IsEnum(UserRole)
     role: UserRole;
 

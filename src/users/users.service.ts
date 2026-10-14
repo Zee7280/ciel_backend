@@ -10,6 +10,7 @@ import { Repository } from 'typeorm';
 import { User } from './entities/user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UserRole } from './enums/user-role.enum';
+import { normalizeUserRoleInput } from './user-role-input.util';
 import * as bcrypt from 'bcrypt';
 import { createHash } from 'crypto';
 
@@ -444,7 +445,7 @@ export class UsersService {
     const page = Math.max(1, Math.floor(options.page ?? 1));
     const limit = Math.min(100, Math.max(1, Math.floor(options.limit ?? 20)));
     const search = options.search?.trim();
-    const role = options.role?.trim();
+    const role = normalizeUserRoleInput(options.role?.trim());
     const status = options.status?.trim();
     const profile = String(options.profile || '')
       .trim()

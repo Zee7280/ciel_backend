@@ -1,4 +1,6 @@
+import { Transform } from 'class-transformer';
 import { IsString, IsEmail, IsOptional, IsEnum, MinLength } from 'class-validator';
+import { normalizeUserRoleInput } from '../user-role-input.util';
 import { UserRole } from '../enums/user-role.enum';
 import { IsAcceptablePassword } from '../../auth/password-policy.util';
 
@@ -19,6 +21,7 @@ export class AdminCreateUserDto {
     @IsAcceptablePassword()
     password: string;
 
+    @Transform(({ value }) => normalizeUserRoleInput(value))
     @IsEnum(UserRole)
     role: UserRole;
 

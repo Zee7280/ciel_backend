@@ -202,10 +202,19 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
 
+    // A student picks university + programme once (signup or, if missing, the profile page);
+    // after that only an admin may change them. Non-students and admins are unaffected.
+    const studentIdentityLocked = (current: string | null | undefined) =>
+      !isAdminCaller &&
+      user.role === UserRole.STUDENT &&
+      !!String(current ?? '').trim();
+
     // Filter and map fields
     if (dto.name) user.name = dto.name;
-    if (dto.institution) user.institution = dto.institution;
-    if (dto.university) user.university = dto.university;
+    if (dto.institution && !studentIdentityLocked(user.institution))
+      user.institution = dto.institution;
+    if (dto.university && !studentIdentityLocked(user.university))
+      user.university = dto.university;
     if (dto.city) user.city = dto.city;
     if (dto.phone) {
       const parsed = canonicalizePhoneInput(dto.phone, {
@@ -217,8 +226,9 @@ export class UsersService {
     }
     if (dto.avatar) user.avatar = dto.avatar;
     if (dto.bio) user.bio = dto.bio;
-    if (dto.department) user.department = dto.department;
-    if (dto.faculty_department)
+    if (dto.department && !studentIdentityLocked(user.department))
+      user.department = dto.department;
+    if (dto.faculty_department && !studentIdentityLocked(user.faculty_department))
       user.faculty_department = dto.faculty_department;
     if (dto.orgName) user.orgName = dto.orgName;
     if (dto.contactPerson) user.contactPerson = dto.contactPerson;

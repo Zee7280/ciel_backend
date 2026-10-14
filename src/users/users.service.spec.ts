@@ -150,3 +150,35 @@ describe('UsersService — admin list filters', () => {
   });
 });
 
+
+describe('UsersService — student institution/programme set once', () => {
+  const setup = (user: any) => {
+    const repo = repoMock();
+    repo.findOne.mockResolvedValue(user);
+    repo.save.mockImplementation(async (x: any) => x);
+    const svc = build(repo) as any;
+    svc.formatUserResponse = jest.fn().mockResolvedValue({});
+    return { repo, svc };
+  };
+
+  it('lets a student with no university/programme set them', async () => {
+    const user: any = { id: 's', role: 'student', institution: '', university: null, department: '' };
+    const { svc } = setup(user);
+    await svc.updateGenericProfile('s', { institution: 'BNU', university: 'BNU', department: 'BS CS' });
+    expect([user.institution, user.university, user.department]).toEqual(['BNU', 'BNU', 'BS CS']);
+  });
+
+  it('ignores changes once a student already has them', async () => {
+    const user: any = { id: 's', role: 'student', institution: 'BNU', university: 'BNU', department: 'BS CS', faculty_department: 'BS CS' };
+    const { svc } = setup(user);
+    await svc.updateGenericProfile('s', { institution: 'LUMS', university: 'LUMS', department: 'BBA', faculty_department: 'BBA' });
+    expect([user.institution, user.university, user.department, user.faculty_department]).toEqual(['BNU', 'BNU', 'BS CS', 'BS CS']);
+  });
+
+  it('still lets an admin change them', async () => {
+    const user: any = { id: 's', role: 'student', institution: 'BNU', department: 'BS CS' };
+    const { svc } = setup(user);
+    await svc.updateGenericProfile('s', { institution: 'LUMS', department: 'BBA' }, { isAdminCaller: true });
+    expect([user.institution, user.department]).toEqual(['LUMS', 'BBA']);
+  });
+});

@@ -617,8 +617,11 @@ export class AdminController {
   }
 
   @Get('users/:id')
-  findOne(@Param('id') id: string) {
-    return this.usersService.findOne(id);
+  async findOne(@Param('id') id: string) {
+    // findOne() loads the raw entity (login hash, reset token) — never let that reach a client.
+    const user = await this.usersService.findOne(id);
+    if (!user) throw new NotFoundException('User not found');
+    return stripUserSecrets(user);
   }
 
   @Post('users/:id') // Spec says POST for update

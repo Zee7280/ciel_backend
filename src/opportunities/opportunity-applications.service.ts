@@ -3563,7 +3563,20 @@ export class OpportunityApplicationsService {
     return this.appRepo.save(saved);
   }
 
-  /** Primary or secondary supervisor on the application, or official email on the opportunity listing. */
+  /** Secondary supervisor named on the application — may view it, never decide on it. */
+  private facultyEmailIsSecondaryOnApplication(
+    facultyEmail: string,
+    app: OpportunityApplication,
+  ): boolean {
+    const email = this.normalizeEmail(facultyEmail);
+    return !!email && this.normalizeEmail(app.secondaryFacultyEmail) === email;
+  }
+
+  /**
+   * Decision gate: PRIMARY supervisor on the application, or official email on the opportunity
+   * listing. The secondary supervisor is visibility-only — they stay in the faculty list
+   * (`facultyList`) but approve / reject are refused for them.
+   */
   private facultyEmailMatchesApplicationGate(
     facultyEmail: string,
     app: OpportunityApplication,
@@ -3573,11 +3586,6 @@ export class OpportunityApplicationsService {
       return false;
     }
     if (this.normalizeEmail(app.primaryFacultyEmail) === email) {
-      return true;
-    }
-    // The secondary faculty named on the application is a reviewer too (faculty/mine, the
-    // opportunity detail read and the join queue all treat them as one).
-    if (this.normalizeEmail(app.secondaryFacultyEmail) === email) {
       return true;
     }
     const opp = app.opportunity;
@@ -3723,11 +3731,25 @@ export class OpportunityApplicationsService {
 
     qb.orderBy('a.createdAt', 'DESC');
     const rows = await qb.getMany();
-    return {
-      success: true,
-      data: rows.map((a) => {
+    const data = await Promise.all(
+      rows.map(async (a) => {
         const { participation_type, team_members } =
           this.facultyJoinApplicationTeamMembersForDisplay(a);
+        // Same rule facultyApprove / facultyReject enforce, so the UI can hide the buttons
+        // for a secondary (visibility-only) supervisor instead of showing them a 403.
+        const isPrimaryOrListing = this.facultyEmailMatchesApplicationGate(
+          facultyEmail,
+          a,
+        );
+        const isSecondary =
+          !isPrimaryOrListing &&
+          this.facultyEmailIsSecondaryOnApplication(facultyEmail, a);
+        const canDecide =
+          isPrimaryOrListing ||
+          (await this.facultyUniversityScopeService.canFacultyReviewApplicationAsUniversityDelegate(
+            facultyUserId,
+            a.studentUser,
+          ));
         return {
           id: a.id,
           opportunity_id: a.opportunityId,
@@ -3740,9 +3762,18 @@ export class OpportunityApplicationsService {
           application_status: this.toPublicApplicationStatus(a.internalStatus),
           application_stage: this.applicationStage(a.internalStatus),
           created_at: a.createdAt,
+          can_decide: canDecide,
+          viewer_supervisor_role: isPrimaryOrListing
+            ? 'primary'
+            : isSecondary
+              ? 'secondary'
+              : canDecide
+                ? 'delegate'
+                : null,
         };
       }),
-    };
+    );
+    return { success: true, data };
   }
 
   async facultyApprove(
@@ -3764,7 +3795,11 @@ export class OpportunityApplicationsService {
         app.studentUser,
       ));
     if (!okDelegated) {
-      throw new ForbiddenException('Not authorized to act on this application');
+      throw new ForbiddenException(
+        this.facultyEmailIsSecondaryOnApplication(facultyEmail, app)
+          ? 'Only the primary faculty supervisor can decide on this application. You are listed as the secondary (visibility-only) supervisor.'
+          : 'Not authorized to act on this application',
+      );
     }
     if (app.internalStatus !== 'pending_faculty') {
       throw new BadRequestException(
@@ -3803,7 +3838,11 @@ export class OpportunityApplicationsService {
         app.studentUser,
       ));
     if (!okDelegated) {
-      throw new ForbiddenException('Not authorized to act on this application');
+      throw new ForbiddenException(
+        this.facultyEmailIsSecondaryOnApplication(facultyEmail, app)
+          ? 'Only the primary faculty supervisor can decide on this application. You are listed as the secondary (visibility-only) supervisor.'
+          : 'Not authorized to act on this application',
+      );
     }
     if (app.internalStatus !== 'pending_faculty') {
       throw new BadRequestException(

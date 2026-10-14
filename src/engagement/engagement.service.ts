@@ -46,6 +46,7 @@ import {
   attendanceCountsTowardProgress,
   canUserActOnAttendanceQueue,
   extractPartnerContactEmailsForAttendance,
+  getParticipantApprovingFacultyEmails,
   getParticipantFacultyEmails,
   opportunityHasActionablePartnerForAttendance,
   resolveAttendanceApproverRouting,
@@ -1046,8 +1047,11 @@ export class EngagementService {
     } else if (fallbackEmails.length) {
       facultyEmails = fallbackEmails;
     } else {
+      const fromApplication =
+        await this.resolveApplicationFacultyEmails(participation);
       facultyEmails = [
-        ...(await this.resolveApplicationFacultyEmails(participation)),
+        ...fromApplication.primary,
+        ...fromApplication.secondary,
         ...fallbackEmails,
       ];
     }
@@ -1895,7 +1899,7 @@ export class EngagementService {
       );
       if (!facultyEmails.length) {
         const facultyMsg =
-          'Attendance approval needs a supervising faculty: add primary or secondary faculty email on registration, or ensure the project has faculty (linked faculty account or supervision contact matching a faculty user).';
+          'Attendance approval needs a supervising faculty: add the primary faculty email on registration, or ensure the project has faculty (linked faculty account or supervision contact matching a faculty user). A secondary supervisor is visibility-only and cannot approve.';
         this.recordAttendanceFailure(
           'faculty_routing_missing',
           facultyMsg,
@@ -2002,11 +2006,11 @@ export class EngagementService {
             where: { id: routing.assignedApproverUserId },
           })
         : null;
+      // Approval requests go to the primary supervisor only; the secondary is visibility-only.
       const recipientEmail =
         approver?.email ||
         participation.primaryFacultyEmail ||
-        participation.facultySupervisorEmail ||
-        participation.secondaryFacultyEmail;
+        participation.facultySupervisorEmail;
       const normalizedRecipient = (recipientEmail || '').trim().toLowerCase();
       if (normalizedRecipient && normalizedRecipient !== studentEmail) {
         await this.mailService.sendAttendancePendingReview(
@@ -2518,7 +2522,7 @@ export class EngagementService {
         actorRole,
         actor?.email || null,
         log,
-        getParticipantFacultyEmails(log.participant || {}),
+        getParticipantApprovingFacultyEmails(log.participant || {}),
         opportunityCreatorFallback,
         partnerOrgHostsOpportunity,
       );
@@ -2987,10 +2991,18 @@ export class EngagementService {
     const allowed =
       actorRole === UserRole.SUPER_ADMIN ||
       (actorRole === UserRole.FACULTY &&
-        getParticipantFacultyEmails(participation).includes(actorEmail));
+        getParticipantApprovingFacultyEmails(participation).includes(
+          actorEmail,
+        ));
     if (!allowed) {
+      const isSecondary =
+        actorRole === UserRole.FACULTY &&
+        !!actorEmail &&
+        getParticipantFacultyEmails(participation).includes(actorEmail);
       throw new ForbiddenException(
-        'You cannot approve this participation. Sign in as the faculty member listed as its supervisor.',
+        isSecondary
+          ? 'Only the primary faculty supervisor can approve this participation. You are listed as the secondary (visibility-only) supervisor.'
+          : 'You cannot approve this participation. Sign in as the faculty member listed as its primary supervisor.',
       );
     }
 
@@ -3122,27 +3134,35 @@ export class EngagementService {
     participation: Participation,
     opportunity: Opportunity,
   ): Promise<string[]> {
-    const fromParticipant = getParticipantFacultyEmails(participation);
+    // Primary supervisor only: the secondary is visibility-only and must never become the
+    // assigned approver or receive approval requests, even when the primary has no account yet.
+    const fromParticipant = getParticipantApprovingFacultyEmails(participation);
     if (fromParticipant.length) {
       return fromParticipant;
     }
 
     const fromApplication =
       await this.resolveApplicationFacultyEmails(participation);
-    if (fromApplication.length) {
+    if (fromApplication.primary.length || fromApplication.secondary.length) {
       let changed = false;
-      if (!participation.primaryFacultyEmail) {
-        participation.primaryFacultyEmail = fromApplication[0];
+      if (!participation.primaryFacultyEmail && fromApplication.primary[0]) {
+        participation.primaryFacultyEmail = fromApplication.primary[0];
         changed = true;
       }
-      if (!participation.secondaryFacultyEmail && fromApplication[1]) {
-        participation.secondaryFacultyEmail = fromApplication[1];
+      if (
+        !participation.secondaryFacultyEmail &&
+        fromApplication.secondary[0]
+      ) {
+        participation.secondaryFacultyEmail = fromApplication.secondary[0];
         changed = true;
       }
       if (changed) {
         await this.participantRepository.save(participation);
       }
-      return getParticipantFacultyEmails(participation);
+      const approving = getParticipantApprovingFacultyEmails(participation);
+      if (approving.length) {
+        return approving;
+      }
     }
 
     if (opportunity.facultyId) {
@@ -3449,7 +3469,7 @@ export class EngagementService {
 
   private async resolveApplicationFacultyEmails(
     participation: Participation,
-  ): Promise<string[]> {
+  ): Promise<{ primary: string[]; secondary: string[] }> {
     let app: OpportunityApplication | null = null;
 
     if (participation.applicationId) {
@@ -3475,20 +3495,23 @@ export class EngagementService {
     }
 
     if (!app) {
-      return [];
+      return { primary: [], secondary: [] };
     }
 
     const payload = app.applyPayload || {};
-    return this.normalizeEmailList([
+    const primary = this.normalizeEmailList([
       app.primaryFacultyEmail,
-      app.secondaryFacultyEmail,
       typeof payload.primary_faculty_email === 'string'
         ? payload.primary_faculty_email
         : null,
+    ]);
+    const secondary = this.normalizeEmailList([
+      app.secondaryFacultyEmail,
       typeof payload.secondary_faculty_email === 'string'
         ? payload.secondary_faculty_email
         : null,
-    ]);
+    ]).filter((e) => !primary.includes(e));
+    return { primary, secondary };
   }
 
   /**

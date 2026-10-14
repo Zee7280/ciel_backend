@@ -41,13 +41,28 @@ describe('OrganizationsService admin flows', () => {
     };
     const repo: any = { manager: { transaction: (fn: any) => fn(manager) } };
     const svc = build(repo, usersRepo);
-    await expect(svc.createForAdmin({ email: 'a@b.c', password: 'short' }, 'adm')).rejects.toThrow(BadRequestException);
+    await expect(svc.createForAdmin({ name: 'N', type: 'ngo', email: 'a@b.c', password: 'short' }, 'adm')).rejects.toThrow(BadRequestException);
+    await expect(svc.createForAdmin({ name: 'N', type: 'ngo', email: 'a@b.c', password: '12345678' }, 'adm')).rejects.toThrow(BadRequestException);
+    await expect(svc.createForAdmin({ name: 'N', type: 'school', email: 'a@b.c', password: 'longenough' }, 'adm')).rejects.toThrow(BadRequestException);
+    await expect(svc.createForAdmin({ type: 'ngo', email: 'a@b.c', password: 'longenough' }, 'adm')).rejects.toThrow(BadRequestException);
     await svc.createForAdmin({ name: 'N', type: 'NGO', email: 'A@B.C', password: 'longenough', contact: 'Jane' }, 'adm');
     const orgArg = manager.create.mock.calls[0][1];
     expect(orgArg.contactName).toBe('Jane');
+    expect(orgArg.orgType).toBe('ngo');
     expect(orgArg.contactPhone).toBeUndefined();
+    const userArg = manager.create.mock.calls[1][1];
+    expect(userArg.name).toBe('Jane');
+    expect(userArg.email).toBe('a@b.c');
     usersRepo.findOne.mockResolvedValue({ id: 'x' });
-    await expect(svc.createForAdmin({ email: 'a@b.c', password: 'longenough' }, 'adm')).rejects.toThrow(ConflictException);
+    await expect(svc.createForAdmin({ name: 'N', type: 'ngo', email: 'a@b.c', password: 'longenough' }, 'adm')).rejects.toThrow(ConflictException);
+  });
+
+  it('delete turns a foreign-key violation into 409', async () => {
+    const repo = {
+      findOne: jest.fn().mockResolvedValue({ id: 'o' }),
+      remove: jest.fn().mockRejectedValue(Object.assign(new Error('fk'), { code: '23503' })),
+    };
+    await expect(build(repo, {}).remove('o')).rejects.toThrow(ConflictException);
   });
 
   it('approve and reject email the organization contacts without failing the decision', async () => {

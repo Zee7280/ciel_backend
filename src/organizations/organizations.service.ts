@@ -28,6 +28,10 @@ import { Report } from '../reports/entities/report.entity';
 import { Participation } from '../engagement/entities/participant.entity';
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
 import { canonicalizePhoneInput } from '../common/phone-e164.util';
+import { passwordPolicyError } from '../auth/password-policy.util';
+
+/** Role buckets an admin may onboard — mirrors `orgType = role` from public signup. */
+const ADMIN_ONBOARD_ORG_TYPES = new Set(['ngo', 'corporate', 'university']);
 
 const UNIVERSITY_SCOPED_PARTICIPATION_STATUSES = [
   'pending',
@@ -630,15 +634,36 @@ export class OrganizationsService {
           .where('opp.organizationId = org.id')
           .andWhere('opp.status = :status', { status: 'active' });
       }, 'active_projects_count')
+      .addSelect((subQuery) => {
+        return subQuery
+          .select('COUNT(opp_all.id)', 'count')
+          .from('opportunities', 'opp_all')
+          .where('opp_all.organizationId = org.id');
+      }, 'opportunities_count')
+      .addSelect((subQuery) => {
+        return subQuery
+          .select('COUNT(member.id)', 'count')
+          .from('users', 'member')
+          .where('member.organizationId = org.id');
+      }, 'members_count')
+      .orderBy('org.createdAt', 'DESC')
       .getRawAndEntities();
 
-    const countByOrgId = new Map<string, string | number>();
+    const countsByOrgId = new Map<
+      string,
+      { active: unknown; all: unknown; members: unknown }
+    >();
     for (const r of orgs.raw) {
-      countByOrgId.set(r.org_id, r.active_projects_count);
+      countsByOrgId.set(r.org_id, {
+        active: r.active_projects_count,
+        all: r.opportunities_count,
+        members: r.members_count,
+      });
     }
+    const toInt = (v: unknown) => parseInt(String(v ?? 0), 10) || 0;
 
     return orgs.entities.map((org) => {
-      const count = countByOrgId.get(org.id) || 0;
+      const counts = countsByOrgId.get(org.id);
 
       let status = org.verificationStatus.toLowerCase();
       if (org.isBlocked) {
@@ -656,7 +681,10 @@ export class OrganizationsService {
         contact_person: org.contactName || 'N/A',
         contact_number: org.contactPhone || 'N/A',
         status: status,
-        active_projects_count: parseInt(count as string) || 0,
+        active_projects_count: toInt(counts?.active),
+        opportunities_count: toInt(counts?.all),
+        members_count: toInt(counts?.members),
+        created_at: org.createdAt,
       };
     });
   }
@@ -664,12 +692,26 @@ export class OrganizationsService {
   async getAdminOrganizationDetails(id: string) {
     const org = await this.findOne(id);
 
-    const activeProjectsCount = await this.opportunitiesRepository.count({
-      where: {
-        organizationId: org.id,
-        status: 'active',
-      },
-    });
+    const [activeProjectsCount, opportunitiesCount, members, verifier] =
+      await Promise.all([
+        this.opportunitiesRepository.count({
+          where: { organizationId: org.id, status: 'active' },
+        }),
+        this.opportunitiesRepository.count({
+          where: { organizationId: org.id },
+        }),
+        this.usersRepository.find({
+          where: { organization: { id: org.id } },
+          select: ['id', 'name', 'email', 'role', 'status', 'createdAt'],
+          order: { createdAt: 'ASC' },
+        }),
+        org.verifiedBy
+          ? this.usersRepository.findOne({
+              where: { id: org.verifiedBy },
+              select: ['id', 'name', 'email'],
+            })
+          : Promise.resolve(null),
+      ]);
 
     const normalizedStatus = org.isBlocked
       ? 'suspended'
@@ -677,6 +719,8 @@ export class OrganizationsService {
         ? 'verified'
         : (org.verificationStatus || 'PENDING').toLowerCase();
 
+    // Only fields the Organization entity actually has — the old payload advertised
+    // postal_code / registration_number / tax_number that were always null.
     return {
       id: org.id,
       name: org.name,
@@ -685,23 +729,45 @@ export class OrganizationsService {
       contact: org.contactName,
       organization_type: org.orgType,
       type: org.orgType,
+      organization_category: org.organizationCategory,
+      legal_registration_type: org.legalRegistrationType,
+      description: org.description,
       status: normalizedStatus,
       verification_status: org.verificationStatus,
+      verification_scope: org.verificationScope,
+      verification_notes: org.verificationNotes,
+      is_blocked: org.isBlocked === true,
       active_projects_count: activeProjectsCount,
+      opportunities_count: opportunitiesCount,
       projects: activeProjectsCount,
+      members_count: members.length,
+      members: members.map((m) => ({
+        id: m.id,
+        name: m.name,
+        email: m.email,
+        role: m.role,
+        status: m.status,
+        created_at: m.createdAt,
+      })),
       phone: org.contactPhone,
       website: org.websiteUrl,
+      logo_url: org.logoUrl,
       address: org.address,
       city: org.city,
       state: org.region,
       province: org.region,
       country: org.country,
-      postal_code: null,
-      registration_number: null,
-      tax_number: null,
+      works_with_minors: org.worksWithMinors === true,
+      safeguarding_acknowledged: org.safeguardingAcknowledged === true,
+      data_policy_acknowledged: org.dataPolicyAcknowledged === true,
       created_at: org.createdAt,
       updated_at: org.updatedAt,
       verified_at: org.verifiedAt,
+      verified_by: verifier
+        ? { id: verifier.id, name: verifier.name, email: verifier.email }
+        : org.verifiedBy
+          ? { id: org.verifiedBy, name: null, email: null }
+          : null,
     };
   }
 
@@ -803,11 +869,23 @@ export class OrganizationsService {
       .trim()
       .toLowerCase();
     const password = String(data?.password ?? '');
+    const name = String(data?.name ?? '').trim();
+    const contact = String(data?.contact ?? '').trim();
+    // Signup stores the role bucket lowercase (`orgType = role`), and stats/role gates compare
+    // against 'ngo' | 'corporate' | 'university' — an admin-onboarded org must match that.
+    const type = String(data?.type ?? '')
+      .trim()
+      .toLowerCase();
     if (!email) throw new BadRequestException('Email is required');
-    if (password.length < 8) {
+    if (!name) throw new BadRequestException('Organization name is required');
+    if (!ADMIN_ONBOARD_ORG_TYPES.has(type)) {
       throw new BadRequestException(
-        'Password must be at least 8 characters long.',
+        `Organization type must be one of: ${[...ADMIN_ONBOARD_ORG_TYPES].join(', ')}`,
       );
+    }
+    const passwordError = passwordPolicyError(password);
+    if (passwordError) {
+      throw new BadRequestException(passwordError);
     }
     if (await this.usersRepository.findOne({ where: { email } })) {
       throw new ConflictException('Email already exists');
@@ -820,12 +898,12 @@ export class OrganizationsService {
       .transaction(async (manager) => {
         const org = await manager.save(
           manager.create(Organization, {
-            name: data.name,
-            orgType: data.type,
+            name,
+            orgType: type,
             contactEmail: email,
             // `contact` is the contact person; phone (if supplied) is stored separately.
-            contactName: data.contact,
-            ...(data.phone ? { contactPhone: data.phone } : {}),
+            ...(contact ? { contactName: contact } : {}),
+            ...(data.phone ? { contactPhone: String(data.phone).trim() } : {}),
             verificationStatus: 'APPROVED',
             verifiedBy: adminId,
             verifiedAt: new Date(),
@@ -834,9 +912,11 @@ export class OrganizationsService {
             countryCode: 'PK',
           }),
         );
+        // The login belongs to a person: public org signup stores the contact's name on the user
+        // and the org name on `orgName`, so the dashboard greets "Jane", not "Helping Hands".
         const user = await manager.save(
           manager.create(User, {
-            name: data.name,
+            name: contact || name,
             email,
             password: hashedPassword,
             role: UserRole.ORGANIZATION_ADMIN,
@@ -1552,6 +1632,17 @@ export class OrganizationsService {
 
   async remove(id: string) {
     const org = await this.findOne(id);
-    return this.organizationsRepository.remove(org);
+    try {
+      return await this.organizationsRepository.remove(org);
+    } catch (err) {
+      // Users and opportunities cascade at the DB level, but their downstream records
+      // (participations, reports, payments…) may not — surface that as 409, not a 500.
+      if ((err as { code?: string })?.code === '23503') {
+        throw new ConflictException(
+          'This organization has linked records (participations, reports, payments, etc.) and cannot be deleted. Suspend it instead.',
+        );
+      }
+      throw err;
+    }
   }
 }

@@ -1,5 +1,6 @@
 import { IsString, IsEmail, IsOptional, IsEnum, MinLength } from 'class-validator';
 import { UserRole } from '../enums/user-role.enum';
+import { IsAcceptablePassword } from '../../auth/password-policy.util';
 
 /**
  * Relaxed DTO for POST admin/users. Unlike CreateUserDto (public signup) it does not
@@ -13,8 +14,9 @@ export class AdminCreateUserDto {
     @IsEmail()
     email: string;
 
+    /** Same policy as public signup and admin edit (PATCH shares CreateUserDto) — "12345678" must not pass here either. */
     @IsString()
-    @MinLength(8, { message: 'Password must be at least 8 characters long.' })
+    @IsAcceptablePassword()
     password: string;
 
     @IsEnum(UserRole)

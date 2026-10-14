@@ -1,6 +1,8 @@
 import {
   attendanceCountsTowardProgress,
   canUserActOnAttendanceQueue,
+  getParticipantApprovingFacultyEmails,
+  getParticipantFacultyEmails,
   extractPartnerContactEmailsForAttendance,
   opportunityHasActionablePartnerForAttendance,
   resolveEffectiveAttendanceApproverType,
@@ -173,6 +175,37 @@ describe('canUserActOnAttendanceQueue', () => {
         ['faculty@example.com'],
         null,
       ),
+    ).toBe(true);
+  });
+});
+
+describe('supervisor approval scope', () => {
+  const seat = {
+    facultySupervisorEmail: ' Lead@Uni.edu ',
+    primaryFacultyEmail: 'lead@uni.edu',
+    secondaryFacultyEmail: 'co@uni.edu',
+  };
+
+  it('only the primary supervisor may approve', () => {
+    expect(getParticipantApprovingFacultyEmails(seat)).toEqual(['lead@uni.edu']);
+  });
+
+  it('the secondary supervisor stays in the visibility scope', () => {
+    expect(getParticipantFacultyEmails(seat)).toEqual(['lead@uni.edu', 'co@uni.edu']);
+  });
+
+  it('secondary cannot act on an unassigned faculty attendance log', () => {
+    const log = {
+      assignedApproverType: 'faculty',
+      assignedApproverUserId: null,
+      approvalStatus: 'pending',
+    };
+    const approving = getParticipantApprovingFacultyEmails(seat);
+    expect(
+      canUserActOnAttendanceQueue('u1', UserRole.FACULTY, 'co@uni.edu', log, approving),
+    ).toBe(false);
+    expect(
+      canUserActOnAttendanceQueue('u1', UserRole.FACULTY, 'lead@uni.edu', log, approving),
     ).toBe(true);
   });
 });

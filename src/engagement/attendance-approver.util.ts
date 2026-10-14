@@ -243,6 +243,22 @@ export function effectiveAssignedApproverTypeForLog(
   return normalized;
 }
 
+/**
+ * Faculty who may ACT on attendance / participation approvals for this seat: the primary
+ * supervisor only. The secondary supervisor is "visibility only" (see
+ * {@link getParticipantFacultyEmails} for the read scope).
+ */
+export function getParticipantApprovingFacultyEmails(participant: {
+  facultySupervisorEmail?: string | null;
+  primaryFacultyEmail?: string | null;
+}): string[] {
+  const raw = [participant.facultySupervisorEmail, participant.primaryFacultyEmail];
+  return Array.from(
+    new Set(raw.map((v) => (v || '').trim().toLowerCase()).filter(Boolean)),
+  );
+}
+
+/** Every faculty email on the seat (primary + secondary) — read / visibility scope. */
 export function getParticipantFacultyEmails(participant: {
   facultySupervisorEmail?: string | null;
   primaryFacultyEmail?: string | null;

@@ -6257,10 +6257,12 @@ export class OpportunitiesService {
     const token = folded.length >= 4;
     return {
       orgName: folded,
-      // Length under 4 stays exact-only: the LIKE patterns cannot match.
-      orgNamePrefix: token ? `${folded} %` : '\u0000',
-      orgNameSuffix: token ? `% ${folded}` : '\u0000',
-      orgNameMiddle: token ? `% ${folded} %` : '\u0000',
+      // Length under 4 stays exact-only: the LIKE patterns must not match anything. Folded text only
+      // ever contains [a-z0-9 ], so '#' can never match. (A NUL byte here is rejected by Postgres
+      // outright — "invalid byte sequence 0x00" — and broke every query for orgs named e.g. "NGO".)
+      orgNamePrefix: token ? `${folded} %` : '#',
+      orgNameSuffix: token ? `% ${folded}` : '#',
+      orgNameMiddle: token ? `% ${folded} %` : '#',
     };
   }
 

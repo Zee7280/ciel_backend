@@ -10,6 +10,7 @@ import {
     UseGuards,
     BadRequestException,
     MethodNotAllowedException,
+    ParseUUIDPipe,
     UseInterceptors,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -39,7 +40,7 @@ export class AdminPaymentsController {
     }
 
     @Get(':paymentId/submissions')
-    async getPaymentSubmissions(@Param('paymentId') paymentId: string) {
+    async getPaymentSubmissions(@Param('paymentId', new ParseUUIDPipe()) paymentId: string) {
         return {
             success: true,
             data: await this.paymentsService.getSubmissionHistoryByPaymentId(paymentId),
@@ -78,7 +79,7 @@ export class AdminPaymentsController {
     @Post(':paymentId/verify')
     async verifyPayment(
         @Request() req: { user: { id: string; email?: string } },
-        @Param('paymentId') paymentId: string,
+        @Param('paymentId', new ParseUUIDPipe()) paymentId: string,
         @Body() body: { status: PaymentStatus; feedback?: string },
     ) {
         const allowed = [PaymentStatus.APPROVED, PaymentStatus.REJECTED];
@@ -107,7 +108,7 @@ export class AdminPaymentsController {
     @Post(':paymentId/revert')
     async revertPayment(
         @Request() req: { user: { id: string; email?: string } },
-        @Param('paymentId') paymentId: string,
+        @Param('paymentId', new ParseUUIDPipe()) paymentId: string,
         @Body() body: { reason?: string },
     ) {
         return await this.paymentsService.revertManualPaymentApproval(

@@ -24,6 +24,7 @@ import { UsersService } from '../users/users.service';
 import { OpportunityApplicationsService } from './opportunity-applications.service';
 
 import { AdminMutationAuditInterceptor } from '../audit-logs/admin-mutation-audit.interceptor';
+import { FacultyDepartmentAlignInterceptor } from './redact-opportunity-secrets.interceptor';
 import { AdminPatchTeamMemberDto } from './dto/admin-patch-team-member.dto';
 import { AdminMergeTeamMembersDto } from './dto/admin-merge-team-members.dto';
 import { SetAttendanceRoutingDto } from './dto/set-attendance-routing.dto';
@@ -32,7 +33,7 @@ import { AdminDirectoryControlDto } from './dto/admin-directory-control.dto';
 
 @Controller('admin/opportunities')
 @UseGuards(JwtAuthGuard)
-@UseInterceptors(AdminMutationAuditInterceptor)
+@UseInterceptors(AdminMutationAuditInterceptor, FacultyDepartmentAlignInterceptor)
 export class AdminOpportunitiesController {
   constructor(
     private readonly opportunitiesService: OpportunitiesService,

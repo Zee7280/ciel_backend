@@ -66,6 +66,7 @@ import { OpportunityApplicationsService } from '../opportunities/opportunity-app
 import { applyCanonicalPrivateCandidatePhone, isPrivateCandidateDto, isPrivateCandidateOpportunity } from '../opportunities/private-candidate.util';
 import { isTeamApplyFromParticipationAndMembers } from '../opportunities/apply-team-payload.util';
 import {
+  collectOpportunityUniversityAllowlist,
   universityNamesMatch,
   universityScopeError,
 } from '../opportunities/university-scope.util';
@@ -835,6 +836,42 @@ export class StudentsService {
       }
     }
 
+    // Teammate-add on a university-restricted listing: the person must already have a CIEL account
+    // whose profile university is inside the scope. Declared text alone is not trusted, and no code
+    // is sent to an address that could never be seated. Fails here, before the student types
+    // anything further.
+    if (
+      projectKey &&
+      blockIfOnRoster &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        projectKey,
+      )
+    ) {
+      try {
+        const scopedOpp = await this.opportunitiesRepository.findOne({
+          where: { id: projectKey },
+        });
+        if (
+          scopedOpp &&
+          collectOpportunityUniversityAllowlist(scopedOpp).length > 0
+        ) {
+          const teammate = await this.usersRepository
+            .createQueryBuilder('u')
+            .where('LOWER(TRIM(u.email)) = :emailNorm', { emailNorm })
+            .getOne();
+          const reason = this.teammateScopeProblem(teammate, scopedOpp, emailNorm);
+          if (reason) throw new BadRequestException(reason);
+        }
+      } catch (err) {
+        // A real "cannot join" answer must reach the student; an infrastructure hiccup must not turn a
+        // routine OTP send into a 500 (the apply step re-checks the same rule).
+        if (err instanceof BadRequestException) throw err;
+        this.logger.warn(
+          `Teammate scope pre-check failed for project ${projectKey}: ${(err as Error)?.message || err}`,
+        );
+      }
+    }
+
     const OTP_TTL_MS = 600_000;
     const OTP_RESEND_COOLDOWN_MS = 120_000;
     let otp = '';
@@ -890,6 +927,25 @@ export class StudentsService {
     }
 
     return { success: true, message: 'OTP sent successfully' };
+  }
+
+  /**
+   * Why a teammate cannot join a university-restricted listing, or null when they can. The check
+   * uses the account's own profile university (not what the applicant typed for them).
+   */
+  private teammateScopeProblem(
+    teammate: User | null | undefined,
+    opportunity: Opportunity,
+    emailNorm: string,
+  ): string | null {
+    if (!teammate) {
+      return `${emailNorm} has no CIEL student account. This opportunity is limited to selected universities, so every teammate must register on CIEL first.`;
+    }
+    return universityScopeError(
+      teammate.university || teammate.institution,
+      opportunity,
+      teammate.name || emailNorm,
+    );
   }
 
   async confirmTeamMemberOtp(email: string, otp: string) {
@@ -2681,6 +2737,21 @@ export class StudentsService {
           .createQueryBuilder('u')
           .where('LOWER(TRIM(u.email)) IN (:...memberEmails)', { memberEmails })
           .getMany();
+        if (collectOpportunityUniversityAllowlist(opportunity).length > 0) {
+          const known = new Set(
+            memberUsers.map((u) => (u.email || '').trim().toLowerCase()),
+          );
+          const unknown = memberEmails.filter((e) => !known.has(e));
+          if (unknown.length) {
+            throw new BadRequestException(
+              `${unknown.join(', ')} ${unknown.length === 1 ? 'has' : 'have'} no CIEL student account. This opportunity is limited to selected universities, so every teammate must register on CIEL first.`,
+            );
+          }
+          for (const u of memberUsers) {
+            const problem = this.teammateScopeProblem(u, opportunity, (u.email || '').toLowerCase());
+            if (problem) throw new BadRequestException(problem);
+          }
+        }
         for (const memberUser of memberUsers) {
           const memberElig = this.getOpportunityEligibility(memberUser, opportunity);
           if (!memberElig.eligible) {

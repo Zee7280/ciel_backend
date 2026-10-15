@@ -1417,10 +1417,13 @@ describe('EngagementService', () => {
         findOne: jest
           .fn()
           .mockResolvedValueOnce(scopedOpportunity(t.id.project, t.title)) // Opportunity
-          .mockResolvedValueOnce(null), // existingByCnic
+          .mockResolvedValueOnce(null) // existingByCnic
+          .mockResolvedValueOnce(null) // existingByStudent
+          .mockResolvedValueOnce(null) // existingStudentSeat
+          .mockResolvedValueOnce({ id: 'acct-1', name: 'Ayesha', university: 'BNU' }), // teammate account
         createQueryBuilder: jest
           .fn()
-          .mockReturnValueOnce(mockUserQueryBuilder(null))
+          .mockReturnValueOnce(mockUserQueryBuilder({ id: 'acct-1' }))
           .mockReturnValueOnce(mockParticipationQueryBuilder(null))
           .mockReturnValue(mockParticipationQueryBuilder(null)),
         create: jest.fn().mockReturnValue({}),

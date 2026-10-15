@@ -382,19 +382,63 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
       expect(res.status).toBe(403);
     });
 
-    it('teammate declared outside the scope is refused even with OTP; the short spelling "BNU" passes for lead and member', async () => {
+    const sendOtp = (lead: E2eUser, email: string, projectId: string) =>
+      h.as(lead).post('/student/verify-team-member/send').send({ email, projectId, blockIfOnRoster: true });
+
+    it('OTP is refused for a teammate at another university or with no CIEL account', async () => {
       const opp = await scoped();
       const lead = await student('BNU');
-      const bad = member({ university: 'LUMS' });
-      await otpVerify(lead, bad.email, opp.id);
-      const refused = await h.as(lead).post(`/students/opportunities/${opp.id}/apply`).send(applyBody({ participation_type: 'team', team_members: [bad] }));
-      expect(refused.status).toBe(400);
-      expect(refused.body.message).toMatch(/Ayesha Member is at LUMS, but this opportunity is open to .*BNU.* students only/);
+      const lums = await student('LUMS');
+      const wrongUni = await sendOtp(lead, lums.email, opp.id);
+      expect(wrongUni.status).toBe(400);
+      expect(wrongUni.body.message).toMatch(/is at LUMS, but this opportunity is open to .*BNU.* students only/);
 
-      const good = member({ university: 'BNU', cnic: '3520200000001' });
-      await otpVerify(lead, good.email, opp.id);
-      const ok = await h.as(lead).post(`/students/opportunities/${opp.id}/apply`).send(applyBody({ participation_type: 'team', team_members: [good] }));
+      const stranger = await sendOtp(lead, `nobody.${Date.now()}@e2e.test`, opp.id);
+      expect(stranger.status).toBe(400);
+      expect(stranger.body.message).toMatch(/has no CIEL student account/);
+      expect(await h.ds.getRepository(Otp).count({ where: { email: lums.email.toLowerCase() } })).toBe(0);
+    });
+
+    it('apply refuses an unregistered teammate even if an OTP row exists, and a declared out-of-scope university', async () => {
+      const opp = await scoped();
+      const lead = await student('BNU');
+      const ghostEmail = `ghost.${Date.now()}@e2e.test`;
+      await h.ds.getRepository(Otp).save(
+        h.ds.getRepository(Otp).create({ email: ghostEmail, otp: '', expiresAt: new Date(), verifiedAt: new Date(), projectId: opp.id } as any),
+      );
+      const ghost = await h.as(lead).post(`/students/opportunities/${opp.id}/apply`).send(
+        applyBody({ participation_type: 'team', team_members: [member({ email: ghostEmail, university: 'BNU' })] }),
+      );
+      expect(ghost.status).toBe(400);
+      expect(ghost.body.message).toMatch(/has no CIEL student account/);
+
+      const real = await student('BNU');
+      await otpVerify(lead, real.email, opp.id);
+      const declaredWrong = await h.as(lead).post(`/students/opportunities/${opp.id}/apply`).send(
+        applyBody({ participation_type: 'team', team_members: [member({ email: real.email, university: 'LUMS' })] }),
+      );
+      expect(declaredWrong.status).toBe(400);
+      expect(declaredWrong.body.message).toMatch(/is at LUMS, but this opportunity is open to/);
+    });
+
+    it('registered BNU teammate with the short spelling "BNU" is accepted end to end', async () => {
+      const opp = await scoped();
+      const lead = await student('BNU');
+      const mate = await student('Beaconhouse National University (BNU)');
+      await otpVerify(lead, mate.email, opp.id);
+      const ok = await h.as(lead).post(`/students/opportunities/${opp.id}/apply`).send(
+        applyBody({ participation_type: 'team', team_members: [member({ email: mate.email, university: 'BNU', cnic: '3520200000001' })] }),
+      );
       expect(ok.status).toBe(201);
+    });
+
+    it('a listing that is "open to all" in its scope but still carries restricted_universities is enforced (legacy shape)', async () => {
+      const opp = await liveOpp({ participation_scope: { rule: 'open_all_universities' }, restricted_universities: [BNU] });
+      const lead = await student('BNU');
+      const lums = await student('LUMS');
+      expect((await sendOtp(lead, lums.email, opp.id)).status).toBe(400);
+      const outsiderLead = await h.as(lums).post(`/students/opportunities/${opp.id}/apply`).send(applyBody());
+      expect(outsiderLead.status).toBe(403);
     });
   });
 
@@ -453,7 +497,7 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
       return { lead, teamId };
     };
 
-    it('refuses a seat outside the university scope, refuses an unverified email, then seats the verified teammate', async () => {
+    it('refuses a seat outside the scope or without a CIEL account, refuses an unverified email, then seats the verified BNU teammate', async () => {
       const opp = await liveOpp({ participation_scope: { rule: 'own_university_only', creator_university_name: BNU, university_names: [BNU] } });
       const { lead, teamId } = await leadWithSeat(opp);
 
@@ -461,7 +505,17 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
       expect(outOfScope.status).toBe(400);
       expect(outOfScope.body.message).toMatch(/is at LUMS, but this opportunity is open to/);
 
-      const body = registerBody(opp.id, teamId);
+      const ghost = await h.as(lead).post('/engagement/register').send(registerBody(opp.id, teamId));
+      expect(ghost.status).toBe(400);
+      expect(ghost.body.message).toMatch(/has no CIEL student account/);
+
+      const lums = await student('LUMS');
+      const lumsSeat = await h.as(lead).post('/engagement/register').send(registerBody(opp.id, teamId, { email: lums.email, universityName: BNU }));
+      expect(lumsSeat.status).toBe(400);
+      expect(lumsSeat.body.message).toMatch(/is at LUMS, but this opportunity is open to/);
+
+      const mate = await student('BNU');
+      const body = registerBody(opp.id, teamId, { email: mate.email });
       const noOtp = await h.as(lead).post('/engagement/register').send(body);
       expect(noOtp.status).toBe(400);
       expect(noOtp.body.message).toMatch(/has not confirmed the email OTP/);

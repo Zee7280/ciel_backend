@@ -59,6 +59,12 @@ async function freshScratchDb() {
   const scopedId = await liveOpp('Browser Scoped (BNU only)', { rule: 'own_university_only', creator_university_name: BNU, university_names: [BNU] });
   const openId = await liveOpp('Browser Open', { rule: 'open_all_universities' });
 
+  // Legacy-shaped listing: scope says "open to all" but restricted_universities names BNU.
+  const legacyId = await liveOpp('Browser Legacy (BNU restricted)', { rule: 'open_all_universities' });
+  await h.opps.update(legacyId, { restricted_universities: [BNU] } as any);
+  const lumsStudent = await h.makeUser(UserRole.STUDENT, { overrides: { name: 'Lums Student', university: 'LUMS' } as any });
+  const bnuMate = await h.makeUser(UserRole.STUDENT, { overrides: { name: 'Bnu Mate', university: 'BNU' } as any });
+
   const lead = await h.makeUser(UserRole.STUDENT, {
     overrides: { name: 'Zubair Student', university: 'BNU', phone: '+923038444425', cnic: null } as any,
   });
@@ -144,6 +150,9 @@ async function freshScratchDb() {
         reportLead: { token: reportLead.token, user: userJson(reportLead, 'Report Lead', '+923031111111'), teamId },
         admin: { token: adminUser.token, user: { id: adminUser.id, userId: adminUser.id, name: 'Browser Admin', email: adminUser.email, role: 'admin', status: 'active' } },
         adminTeamId,
+        legacyId,
+        lumsEmail: lumsStudent.email,
+        bnuMateEmail: bnuMate.email,
         scopedId,
         openId,
       },

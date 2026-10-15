@@ -1013,7 +1013,7 @@ describe('StudentsService.applyToOpportunity — dates, seats and team eligibili
           team_members: [{ email: 'a@other.edu', name: 'A', mobile: '03001111111', university: 'BNU' }],
         }),
       ),
-    ).rejects.toThrow(/a@other.edu cannot join/);
+    ).rejects.toThrow(/a@other.edu is at LUMS, but this opportunity is open to/);
     expect(createApplication).not.toHaveBeenCalled();
   });
 
@@ -1036,6 +1036,7 @@ describe('StudentsService.applyToOpportunity — dates, seats and team eligibili
   it('accepts the short profile spelling of the host university ("BNU") for lead and teammates', async () => {
     const { service, createApplication } = build({
       scope: { rule: 'own_university_only', creator_university_name: 'Beaconhouse National University (BNU)' },
+      memberUsers: [{ id: 'm1', email: 'a@uni.edu', university: 'BNU', department: 'CS' }],
     });
     await expect(
       service.applyToOpportunity(
@@ -1047,6 +1048,22 @@ describe('StudentsService.applyToOpportunity — dates, seats and team eligibili
       ),
     ).resolves.toMatchObject({ success: true });
     expect(createApplication).toHaveBeenCalled();
+  });
+
+  it('refuses a teammate with no CIEL account on a university-restricted listing (declared university is not trusted)', async () => {
+    const { service, createApplication } = build({
+      scope: { rule: 'own_university_only', creator_university_name: 'Beaconhouse National University (BNU)' },
+    });
+    await expect(
+      service.applyToOpportunity(
+        'lead',
+        dto({
+          participation_type: 'team',
+          team_members: [{ email: 'a@uni.edu', name: 'A', mobile: '03001111111', university: 'BNU' }],
+        }),
+      ),
+    ).rejects.toThrow(/a@uni.edu has no CIEL student account/);
+    expect(createApplication).not.toHaveBeenCalled();
   });
 
   it('refuses a "team" with nobody besides the lead', async () => {

@@ -43,7 +43,10 @@ import { OpportunityApplication } from '../opportunities/entities/opportunity-ap
 import { User } from '../users/entities/user.entity';
 import { UserRole } from '../users/enums/user-role.enum';
 import { Otp } from '../students/entities/otp.entity';
-import { universityScopeError } from '../opportunities/university-scope.util';
+import {
+  collectOpportunityUniversityAllowlist,
+  universityScopeError,
+} from '../opportunities/university-scope.util';
 import {
   attendanceCountsTowardProgress,
   canUserActOnAttendanceQueue,
@@ -686,6 +689,30 @@ export class EngagementService {
             (dto.fullName || '').trim() || 'This student',
           );
           if (scopeErr) throw new BadRequestException(scopeErr);
+        }
+
+        // On a university-restricted listing a NEW teammate seat must belong to a registered account
+        // whose profile university is inside the scope; what the lead typed for them is not enough.
+        if (
+          isTeamMemberRegistration &&
+          !participation.id &&
+          callerRole !== UserRole.SUPER_ADMIN &&
+          collectOpportunityUniversityAllowlist(opportunity).length > 0
+        ) {
+          const account = targetStudentId
+            ? await manager.findOne(User, { where: { id: targetStudentId } })
+            : null;
+          if (!account) {
+            throw new BadRequestException(
+              `${dtoEmailNorm || 'This teammate'} has no CIEL student account. This opportunity is limited to selected universities, so every teammate must register on CIEL first.`,
+            );
+          }
+          const accountScopeErr = universityScopeError(
+            account.university || account.institution,
+            opportunity,
+            account.name || dtoEmailNorm,
+          );
+          if (accountScopeErr) throw new BadRequestException(accountScopeErr);
         }
 
         // A brand-new teammate seat needs that teammate's email confirmed by OTP for this project

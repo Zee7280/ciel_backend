@@ -17,6 +17,7 @@ import { EngagementModule } from '../engagement/engagement.module';
 import { User } from '../users/entities/user.entity';
 import { MailModule } from '../mail/mail.module';
 import { StudentReport } from '../reports/entities/student-report.entity';
+import { AdminTeamSnapshot } from './entities/admin-team-snapshot.entity';
 import { StudentOpportunitiesController, StudentOpportunitySingularController } from './student-opportunities.controller';
 import { OpportunityTokenExpirySubscriber } from './opportunity-token-expiry.subscriber';
 import { OpportunityWorkflowService } from './opportunity-workflow.service';
@@ -38,6 +39,7 @@ import { StudentApplyMaintenanceService } from './student-apply-maintenance.serv
             StudentReport,
             AttendanceLog,
             Setting,
+            AdminTeamSnapshot,
         ]),
         OrganizationsModule,
         UsersModule,

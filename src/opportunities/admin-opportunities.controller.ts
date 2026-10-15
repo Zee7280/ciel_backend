@@ -242,27 +242,99 @@ export class AdminOpportunitiesController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
   async mergeTeams(
+    @Request() req,
     @Param('id') opportunityId: string,
     @Body() dto: AdminMergeTeamMembersDto,
   ) {
     return this.opportunityApplicationsService.adminMergeOpportunityTeamMembers(
       opportunityId,
       dto,
+      { id: req.user?.id, email: req.user?.email },
+    );
+  }
+
+  @Post(':id/teams/merge-preview')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  async previewMergeTeams(
+    @Param('id') opportunityId: string,
+    @Body() dto: AdminMergeTeamMembersDto,
+  ) {
+    return this.opportunityApplicationsService.adminPreviewMergeTeamMembers(
+      opportunityId,
+      dto,
+    );
+  }
+
+  @Get(':id/team-snapshots')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  async listTeamSnapshots(@Param('id') opportunityId: string) {
+    return this.opportunityApplicationsService.adminListTeamSnapshots(
+      opportunityId,
+    );
+  }
+
+  @Post(':id/team-snapshots/:snapshotId/restore')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  async restoreTeamSnapshot(
+    @Request() req,
+    @Param('id') opportunityId: string,
+    @Param('snapshotId', new ParseUUIDPipe()) snapshotId: string,
+  ) {
+    return this.opportunityApplicationsService.adminRestoreTeamSnapshot(
+      opportunityId,
+      snapshotId,
+      { id: req.user?.id, email: req.user?.email },
+    );
+  }
+
+  @Get(':id/teams/:teamId/delete-preview')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  async previewDeleteTeam(
+    @Param('id') opportunityId: string,
+    @Param('teamId') teamId: string,
+  ) {
+    return this.opportunityApplicationsService.adminPreviewDeleteTeam(
+      opportunityId,
+      teamId,
+    );
+  }
+
+  @Get(':id/teams/:teamId/members/:memberId/delete-preview')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  async previewDeleteTeamMember(
+    @Param('id') opportunityId: string,
+    @Param('teamId') teamId: string,
+    @Param('memberId') memberId: string,
+  ) {
+    return this.opportunityApplicationsService.adminPreviewDeleteTeamMember(
+      opportunityId,
+      teamId,
+      memberId,
     );
   }
 
   @Delete(':id/teams/:teamId')
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
-  @HttpCode(HttpStatus.NO_CONTENT)
   async deleteTeam(
+    @Request() req,
     @Param('id') opportunityId: string,
     @Param('teamId') teamId: string,
   ) {
-    await this.opportunityApplicationsService.adminDeleteOpportunityTeam(
-      opportunityId,
-      teamId,
-    );
+    const { snapshot_id } =
+      await this.opportunityApplicationsService.adminDeleteOpportunityTeam(
+        opportunityId,
+        teamId,
+        { id: req.user?.id, email: req.user?.email },
+      );
+    return { success: true, snapshot_id };
   }
 
   @Patch(':id/teams/:teamId/members/:memberId')
@@ -285,16 +357,19 @@ export class AdminOpportunitiesController {
   @Delete(':id/teams/:teamId/members/:memberId')
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
-  @HttpCode(HttpStatus.NO_CONTENT)
   async deleteTeamMember(
+    @Request() req,
     @Param('id') opportunityId: string,
     @Param('teamId') teamId: string,
     @Param('memberId') memberId: string,
   ) {
-    await this.opportunityApplicationsService.adminDeleteOpportunityTeamMember(
-      opportunityId,
-      teamId,
-      memberId,
-    );
+    const { snapshot_id } =
+      await this.opportunityApplicationsService.adminDeleteOpportunityTeamMember(
+        opportunityId,
+        teamId,
+        memberId,
+        { id: req.user?.id, email: req.user?.email },
+      );
+    return { success: true, snapshot_id };
   }
 }

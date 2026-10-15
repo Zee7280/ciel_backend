@@ -8,6 +8,7 @@ import { randomUUID } from 'crypto';
 import { UserRole } from '../src/users/enums/user-role.enum';
 import { Otp } from '../src/students/entities/otp.entity';
 import { Participation } from '../src/engagement/entities/participant.entity';
+import { StudentReport } from '../src/reports/entities/student-report.entity';
 
 const BNU = 'Beaconhouse National University (BNU)';
 const day = (d: number) => new Date(Date.now() + d * 86400000).toISOString().slice(0, 10);
@@ -155,6 +156,156 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
       expect(res.body.message).toMatch(/applied but is not enrolled yet. Use "Approve & enroll" first/);
       expect(res.body.message).toMatch(/1 selected enrollment was not found/);
       expect(res.body.message).not.toContain(appId);
+    });
+  });
+
+  describe('admin Teams & enrollments: preview, snapshot and undo', () => {
+    const seat = async (opp: { id: string }, who: E2eUser, over: Record<string, any> = {}) => {
+      const parts = h.ds.getRepository(Participation);
+      return parts.save(
+        parts.create({
+          email: who.email,
+          mobile: '+923005550000',
+          cnic: 'enc',
+          cnicHash: `hash-${who.email}`,
+          cnicLast4: '0000',
+          universityId: 'uni',
+          universityName: 'E2E University',
+          academicProgram: 'BS CS',
+          yearOfStudy: '3rd Year',
+          department: 'Computer Science',
+          academicIntegrationType: 'Voluntary',
+          emailVerified: true,
+          mobileVerified: true,
+          status: 'approved',
+          projectId: opp.id,
+          studentId: who.id,
+          fullName: who.email.split('@')[0],
+          participationMode: 'individual',
+          isTeamLead: false,
+          ...over,
+        } as any) as unknown as Participation,
+      );
+    };
+    const draft = async (opp: { id: string }, who: E2eUser, status = 'draft') => {
+      const reports = h.ds.getRepository(StudentReport);
+      return reports.save(
+        reports.create({ studentId: who.id, opportunityId: opp.id, project_id: opp.id, status } as any) as unknown as StudentReport,
+      );
+    };
+    const reportCount = (oppId: string, studentId: string) =>
+      h.ds.getRepository(StudentReport).count({ where: { studentId, opportunityId: oppId } });
+    const seatCount = (oppId: string) => h.ds.getRepository(Participation).count({ where: { projectId: oppId } });
+
+    it('delete team: preview lists the impact, delete returns a snapshot, undo restores seats + report, second undo is refused', async () => {
+      const opp = await liveOpp();
+      const a = await student('E2E University');
+      const b = await student('E2E University');
+      const teamId = 'TM-2026-SNAP-TEAM';
+      await seat(opp, a, { teamId, participationMode: 'team', isTeamLead: true });
+      await seat(opp, b, { teamId, participationMode: 'team' });
+      await draft(opp, b);
+
+      const preview = await h.as(admin).get(`/admin/opportunities/${opp.id}/teams/${teamId}/delete-preview`);
+      expect(preview.status).toBe(200);
+      expect(preview.body.data.members).toHaveLength(2);
+      expect(preview.body.data.reports).toHaveLength(1);
+      expect(await seatCount(opp.id)).toBe(2);
+
+      const del = await h.as(admin).del(`/admin/opportunities/${opp.id}/teams/${teamId}`);
+      expect(del.status).toBe(200);
+      const snapshotId = del.body.snapshot_id as string;
+      expect(snapshotId).toBeTruthy();
+      expect(await seatCount(opp.id)).toBe(0);
+      expect(await reportCount(opp.id, b.id)).toBe(0);
+
+      const list = await h.as(admin).get(`/admin/opportunities/${opp.id}/team-snapshots`);
+      expect(list.status).toBe(200);
+      expect(list.body.data[0]).toMatchObject({ id: snapshotId, kind: 'delete_team', summary: { participations: 2, reports: 1 } });
+      expect(list.body.data[0].restored_at).toBeNull();
+
+      const undo = await h.as(admin).post(`/admin/opportunities/${opp.id}/team-snapshots/${snapshotId}/restore`).send({});
+      expect(undo.status).toBe(200);
+      expect(await seatCount(opp.id)).toBe(2);
+      expect(await reportCount(opp.id, b.id)).toBe(1);
+      const lead = await h.ds.getRepository(Participation).findOne({ where: { projectId: opp.id, studentId: a.id } });
+      expect(lead).toMatchObject({ teamId, isTeamLead: true });
+
+      const again = await h.as(admin).post(`/admin/opportunities/${opp.id}/team-snapshots/${snapshotId}/restore`).send({});
+      expect(again.status).toBe(400);
+      expect(again.body.message).toMatch(/already undone/);
+    });
+
+    it('delete lead member promotes the next seat; undo hands the lead role back; undo is refused if the student re-enrolled', async () => {
+      const opp = await liveOpp();
+      const a = await student('E2E University');
+      const b = await student('E2E University');
+      const teamId = 'TM-2026-SNAP-LEAD';
+      const lead = await seat(opp, a, { teamId, participationMode: 'team', isTeamLead: true });
+      await seat(opp, b, { teamId, participationMode: 'team' });
+
+      const prev = await h.as(admin).get(`/admin/opportunities/${opp.id}/teams/${teamId}/members/${lead.id}/delete-preview`);
+      expect(prev.status).toBe(200);
+      expect(prev.body.warnings.join(' ')).toMatch(/will become the team lead/);
+
+      const del = await h.as(admin).del(`/admin/opportunities/${opp.id}/teams/${teamId}/members/${lead.id}`);
+      expect(del.status).toBe(200);
+      const promoted = await h.ds.getRepository(Participation).findOne({ where: { projectId: opp.id, studentId: b.id } });
+      expect(promoted!.isTeamLead).toBe(true);
+
+      const undo = await h.as(admin).post(`/admin/opportunities/${opp.id}/team-snapshots/${del.body.snapshot_id}/restore`).send({});
+      expect(undo.status).toBe(200);
+      const roles = await h.ds.getRepository(Participation).find({ where: { projectId: opp.id } });
+      expect(roles.filter((r) => r.isTeamLead).map((r) => r.studentId)).toEqual([a.id]);
+
+      // delete again, student re-enrols, then undo of the first deletion must not duplicate seats
+      const del2 = await h.as(admin).del(`/admin/opportunities/${opp.id}/teams/${teamId}/members/${lead.id}`);
+      await seat(opp, a, { cnicHash: 'hash-new-a' });
+      const clash = await h.as(admin).post(`/admin/opportunities/${opp.id}/team-snapshots/${del2.body.snapshot_id}/restore`).send({});
+      expect(clash.status).toBe(400);
+      expect(clash.body.message).toMatch(/already has a new enrollment/);
+      expect(await h.ds.getRepository(Participation).count({ where: { projectId: opp.id, studentId: a.id } })).toBe(1);
+    });
+
+    it('merge: preview flags blockers, merge removes the non-lead draft, undo puts teams, leads and the draft back', async () => {
+      const opp = await liveOpp();
+      const a = await student('E2E University');
+      const b = await student('E2E University');
+      const sa = await seat(opp, a);
+      const sb = await seat(opp, b);
+      await draft(opp, b);
+
+      const ok = await h.as(admin).post(`/admin/opportunities/${opp.id}/teams/merge-preview`).send({ member_participation_ids: [sa.id, sb.id], lead_participation_id: sa.id });
+      expect(ok.status).toBe(200);
+      expect(ok.body.data.can_merge).toBe(true);
+      expect(ok.body.data.draft_reports_to_remove).toBe(1);
+
+      const merged = await h.as(admin).post(`/admin/opportunities/${opp.id}/teams/merge`).send({ member_participation_ids: [sa.id, sb.id], lead_participation_id: sa.id });
+      expect(merged.status).toBe(201);
+      expect(merged.body.snapshot_id).toBeTruthy();
+      expect(await reportCount(opp.id, b.id)).toBe(0);
+      const rows = await h.ds.getRepository(Participation).find({ where: { projectId: opp.id } });
+      expect(new Set(rows.map((r) => r.teamId)).size).toBe(1);
+
+      const undo = await h.as(admin).post(`/admin/opportunities/${opp.id}/team-snapshots/${merged.body.snapshot_id}/restore`).send({});
+      expect(undo.status).toBe(200);
+      const after = await h.ds.getRepository(Participation).find({ where: { projectId: opp.id } });
+      expect(after.every((r) => !r.teamId && r.participationMode === 'individual' && !r.isTeamLead)).toBe(true);
+      expect(await reportCount(opp.id, b.id)).toBe(1);
+    });
+
+    it('merge preview blocks (and merge refuses) when a non-lead already submitted a report', async () => {
+      const opp = await liveOpp();
+      const a = await student('E2E University');
+      const b = await student('E2E University');
+      const sa = await seat(opp, a);
+      const sb = await seat(opp, b);
+      await draft(opp, b, 'submitted');
+      const body = { member_participation_ids: [sa.id, sb.id], lead_participation_id: sa.id };
+      const pv = await h.as(admin).post(`/admin/opportunities/${opp.id}/teams/merge-preview`).send(body);
+      expect(pv.body.data.can_merge).toBe(false);
+      expect(pv.body.blockers.join(' ')).toMatch(/submitted or verified report/);
+      expect((await h.as(admin).post(`/admin/opportunities/${opp.id}/teams/merge`).send(body)).status).toBe(400);
     });
   });
 

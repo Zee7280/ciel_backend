@@ -10,6 +10,7 @@ import { adminApprove } from './helpers';
 import { UserRole } from '../../src/users/enums/user-role.enum';
 import { Otp } from '../../src/students/entities/otp.entity';
 import { Participation } from '../../src/engagement/entities/participant.entity';
+import { StudentReport } from '../../src/reports/entities/student-report.entity';
 import { Client } from 'pg';
 
 const OUT = process.env.OUT || '/tmp/serve-for-browser.json';
@@ -92,6 +93,32 @@ async function freshScratchDb() {
     } as any),
   );
 
+  // Admin + an enrolled team with a draft report, for the Teams & enrollments browser checks.
+  const adminUser = await h.makeUser(UserRole.SUPER_ADMIN, { overrides: { name: 'Browser Admin' } as any });
+  const seatCols = (email: string) => ({
+    email,
+    mobile: '+923005550000',
+    cnic: 'enc',
+    cnicHash: `hash-${email}`,
+    cnicLast4: '0000',
+    universityId: 'bnu',
+    universityName: BNU,
+    academicProgram: 'BS CS',
+    yearOfStudy: '3rd Year',
+    department: 'Computer Science',
+    academicIntegrationType: 'Voluntary',
+    emailVerified: true,
+    mobileVerified: true,
+    status: 'approved',
+  });
+  const teamA = await h.makeUser(UserRole.STUDENT, { overrides: { name: 'Alpha Lead', university: 'BNU' } as any });
+  const teamB = await h.makeUser(UserRole.STUDENT, { overrides: { name: 'Beta Member', university: 'BNU' } as any });
+  const adminTeamId = 'TM-2026-ADMIN-DEMO';
+  await parts.save(parts.create({ ...seatCols(teamA.email), projectId: openId, studentId: teamA.id, fullName: 'Alpha Lead', participationMode: 'team', isTeamLead: true, teamId: adminTeamId } as any));
+  await parts.save(parts.create({ ...seatCols(teamB.email), projectId: openId, studentId: teamB.id, fullName: 'Beta Member', participationMode: 'team', isTeamLead: false, teamId: adminTeamId } as any));
+  const reports = h.ds.getRepository(StudentReport);
+  await reports.save(reports.create({ studentId: teamB.id, opportunityId: openId, project_id: openId, status: 'draft' } as any) as any);
+
   const userJson = (u: { id: string; email: string }, name: string, phone: string) => ({
     id: u.id,
     userId: u.id,
@@ -111,6 +138,8 @@ async function freshScratchDb() {
       {
         lead: { token: lead.token, user: userJson(lead, 'Zubair Student', '+923038444425') },
         reportLead: { token: reportLead.token, user: userJson(reportLead, 'Report Lead', '+923031111111'), teamId },
+        admin: { token: adminUser.token, user: { id: adminUser.id, userId: adminUser.id, name: 'Browser Admin', email: adminUser.email, role: 'admin', status: 'active' } },
+        adminTeamId,
         scopedId,
         openId,
       },

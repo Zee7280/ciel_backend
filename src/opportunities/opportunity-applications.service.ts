@@ -4356,6 +4356,15 @@ export class OpportunityApplicationsService {
         existingLead.teamId = teamId;
         changed = true;
       }
+      // Heal a lead seat that was provisioned before the profile had a CNIC (identity card showed "—").
+      const profileCnic = String(user.cnic ?? '').replace(/\D/g, '');
+      if (!existingLead.cnicLast4 && profileCnic.length === 13) {
+        this.engagementService.applyNormalizedCnicToParticipation(
+          existingLead,
+          profileCnic,
+        );
+        changed = true;
+      }
       if (changed) {
         await this.participationRepo.save(existingLead);
       }

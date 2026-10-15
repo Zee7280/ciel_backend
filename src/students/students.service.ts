@@ -2584,6 +2584,7 @@ export class StudentsService {
       const leadNorm = (user.email ?? '').trim().toLowerCase();
       const seenEmails = new Set<string>();
       const seenCnics = new Map<string, string>();
+      let leadCnicFromApply = '';
       const sanitized: NonNullable<ApplyOpportunityDto['team_members']> = [];
       let rowNo = 0;
       for (const member of dto.team_members) {
@@ -2612,6 +2613,9 @@ export class StudentsService {
             : '';
         if (!em) continue;
         if (em === leadNorm) {
+          // The dialog sends the lead's own CNIC as row 1. Keep it: it was validated above and the
+          // approved seat / report identity card read it from the lead's profile.
+          if (cnicDigits.length === 13) leadCnicFromApply = cnicDigits;
           continue;
         }
         if (seenEmails.has(em)) {
@@ -2640,6 +2644,11 @@ export class StudentsService {
         sanitized.push(member);
       }
       teamMembersPayload = sanitized;
+      const profileCnicDigits = String(user.cnic ?? '').replace(/\D/g, '');
+      if (leadCnicFromApply && profileCnicDigits.length !== 13) {
+        await this.usersService.update(user.id, { cnic: leadCnicFromApply });
+        user.cnic = leadCnicFromApply;
+      }
       const seatCap = resolveTeamSeatCap(opportunity.timeline?.volunteers_required);
       const capError = teamCapacityError(sanitized.length, seatCap);
       if (capError) throw new BadRequestException(capError);

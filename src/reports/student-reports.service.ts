@@ -37,6 +37,7 @@ import {
   findCanonicalTeamLeadParticipation,
   findCanonicalTeamLeadStudentId,
   findPreferredProjectEnrollment,
+  groupSiblingSeats,
   loadSameTeamParticipations,
   resolveCanonicalLeadStudentIdForViewer,
 } from '../engagement/team-lead-canonical.util';
@@ -369,11 +370,16 @@ export class StudentReportsService {
       }),
     ]);
     const activeRoster = roster.filter((p) => p.status !== 'rejected');
+    // Hours belong to the person: a duplicate / leftover seat of the same student on the same team is
+    // folded into their canonical seat, so a ghost seat never reads as "0 hours".
+    const seatGroups = groupSiblingSeats(activeRoster);
+    const canonicalSeatId = (seatId: string) =>
+      seatGroups.get(seatId)?.canonical.id ?? seatId;
     const rosterById = new Set(activeRoster.map((p) => p.id));
     const rosterIdByStudentId = new Map(
       activeRoster
         .filter((p) => p.studentId)
-        .map((p) => [p.studentId, p.id] as const),
+        .map((p) => [p.studentId, canonicalSeatId(p.id)] as const),
     );
     const hoursByParticipationId = new Map<string, number>();
     let totalVerifiedHours = 0;
@@ -383,7 +389,7 @@ export class StudentReportsService {
       if (!(hours > 0)) continue;
       const rawOwner = String(log.participantId || '');
       const ownerId = rosterById.has(rawOwner)
-        ? rawOwner
+        ? canonicalSeatId(rawOwner)
         : rosterIdByStudentId.get(rawOwner) || rawOwner;
       hoursByParticipationId.set(
         ownerId,
@@ -408,9 +414,14 @@ export class StudentReportsService {
     if (!(requiredHoursPerStudent > 0)) return;
     const { hoursByParticipationId, activeRoster: wholeRoster } =
       await this.computeServerVerifiedHours(projectId, extraProjectIds);
-    const activeRoster = this.scopeRosterToSubmittingTeam(
+    const scopedRoster = this.scopeRosterToSubmittingTeam(
       wholeRoster,
       submitterStudentId,
+    );
+    // One check per person: sibling seats were folded into the canonical seat above.
+    const groups = groupSiblingSeats(wholeRoster);
+    const activeRoster = scopedRoster.filter(
+      (p) => (groups.get(p.id)?.canonical.id ?? p.id) === p.id,
     );
     if (activeRoster.length === 0) return;
     const shortfalls = activeRoster.filter(
@@ -1041,6 +1052,7 @@ export class StudentReportsService {
   ): T {
     if (!response?.data) return response;
     const redacted = StudentReportsService.redactCiiV45ForExternalViewer(response);
+    if (!redacted.data) return redacted;
     return {
       ...redacted,
       data: StudentReportsService.withholdAnalysisUntilAdminApproved(redacted.data),
@@ -2870,8 +2882,8 @@ export class StudentReportsService {
     const pack = buildReportReviewPackage(full, frontendBase);
     try {
       await this.studentReportsRepository.update(full.id, {
-        review_package: pack as unknown as StudentReport['review_package'],
-      });
+        review_package: pack,
+      } as unknown as import('typeorm').QueryDeepPartialEntity<StudentReport>);
     } catch (error) {
       this.logger.warn(
         `Could not persist published review package for report ${full.id}: ${(error as Error)?.message}`,

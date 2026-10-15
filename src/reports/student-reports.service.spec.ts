@@ -194,6 +194,7 @@ describe('StudentReportsService', () => {
       .fn()
       .mockResolvedValue(undefined),
     sendReportPackagePublished: jest.fn().mockResolvedValue(undefined),
+    sendStudentReportAdminDecision: jest.fn().mockResolvedValue(undefined),
     getAdminReviewEmails: jest.fn().mockReturnValue(['admin@cielpk.com']),
   };
   const mockConfigService = {
@@ -3502,6 +3503,32 @@ describe('StudentReportsService', () => {
         run(
           [row('a1', 'student-1', { teamId: 'T1' }), row('p1', 'student-3', { teamId: 'T1', status: 'pending' })],
           [hrs('a1', 16)],
+        ),
+      ).resolves.toBeUndefined();
+    });
+
+    it('a ghost duplicate seat of the same student on the same team does not block submission (hours follow the person)', async () => {
+      await expect(
+        run(
+          [
+            row('a1', 'student-1', { teamId: 'T1', isTeamLead: true, participationMode: 'team' }),
+            row('a2', 'student-2', { teamId: 'T1', participationMode: 'team' }),
+            row('a2-dup', 'student-2', { teamId: 'T1', participationMode: 'team' }),
+          ],
+          [hrs('a1', 16), hrs('a2', 10), hrs('a2-dup', 6)], // student-2's 16h are split across two seats
+        ),
+      ).resolves.toBeUndefined();
+    });
+
+    it('a leftover individual seat with 0 hours does not block when the real team seat met the bar', async () => {
+      await expect(
+        run(
+          [
+            row('a1', 'student-1', { teamId: 'T1', isTeamLead: true, participationMode: 'team' }),
+            row('old', 'student-2', { participationMode: 'individual' }),
+            row('a2', 'student-2', { teamId: 'T1', participationMode: 'team' }),
+          ],
+          [hrs('a1', 16), hrs('a2', 16)],
         ),
       ).resolves.toBeUndefined();
     });

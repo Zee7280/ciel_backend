@@ -248,3 +248,87 @@ export function pickCanonicalTeamLeadFromMembers(
       a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id),
   )[0];
 }
+
+/**
+ * A student can end up with several seats on one project (an individual leftover, a re-registered
+ * teammate seat, an email-only seat later linked to their account). Hours must follow the PERSON, not
+ * whichever seat id a screen happened to hold, or the lead sees an entry the member never does.
+ *
+ * Seats are grouped per account (`studentId`, or email for seats not linked yet) and then per TEAM:
+ * seats sharing a `teamId` / `applicationId` form one group; loose seats (no team / application link)
+ * join the person's preferred group. One person on two different teams keeps two separate groups, so
+ * hours never cross a team boundary. Each seat maps to its group's canonical seat (what the member's own
+ * dashboard resolves via `pickPreferredProjectEnrollment`) plus every sibling seat in the group.
+ */
+export function groupSiblingSeats(
+  rows: Participation[],
+): Map<string, { canonical: Participation; siblings: Participation[] }> {
+  rows = Array.isArray(rows) ? rows : [];
+  const norm = (v?: string | null) => (v || '').trim().toLowerCase();
+  const studentByEmail = new Map<string, string>();
+  for (const r of rows) {
+    if (r.studentId && norm(r.email)) studentByEmail.set(norm(r.email), r.studentId);
+  }
+  const byPerson = new Map<string, Participation[]>();
+  for (const r of rows) {
+    const key =
+      r.studentId ||
+      (norm(r.email) ? studentByEmail.get(norm(r.email)) : undefined) ||
+      (norm(r.email) ? `email:${norm(r.email)}` : `seat:${r.id}`);
+    byPerson.set(key, [...(byPerson.get(key) ?? []), r]);
+  }
+
+  const out = new Map<string, { canonical: Participation; siblings: Participation[] }>();
+  for (const seats of byPerson.values()) {
+    // union-find over team / application links
+    const parent = new Map<string, string>();
+    const find = (id: string): string => {
+      const p = parent.get(id) ?? id;
+      if (p === id) return id;
+      const root = find(p);
+      parent.set(id, root);
+      return root;
+    };
+    const union = (a: string, b: string) => parent.set(find(a), find(b));
+    const byTeam = new Map<string, string>();
+    const byApp = new Map<string, string>();
+    const loose: Participation[] = [];
+    for (const r of seats) {
+      const t = (r.teamId || '').trim();
+      const ap = (r.applicationId || '').trim();
+      if (!t && !ap) {
+        loose.push(r);
+        continue;
+      }
+      if (t) {
+        if (byTeam.has(t)) union(r.id, byTeam.get(t)!);
+        else byTeam.set(t, r.id);
+      }
+      if (ap) {
+        if (byApp.has(ap)) union(r.id, byApp.get(ap)!);
+        else byApp.set(ap, r.id);
+      }
+    }
+    const clusters = new Map<string, Participation[]>();
+    for (const r of seats) {
+      if (!(r.teamId || '').trim() && !(r.applicationId || '').trim()) continue;
+      const root = find(r.id);
+      clusters.set(root, [...(clusters.get(root) ?? []), r]);
+    }
+    if (clusters.size === 0) {
+      clusters.set('loose', loose);
+    } else if (loose.length) {
+      // loose leftovers follow the person's preferred seat
+      const preferred = pickPreferredProjectEnrollment(seats) ?? seats[0];
+      const target =
+        [...clusters.entries()].find(([, list]) => list.some((x) => x.id === preferred.id))?.[0] ??
+        [...clusters.keys()][0];
+      clusters.set(target, [...clusters.get(target)!, ...loose]);
+    }
+    for (const list of clusters.values()) {
+      const canonical = pickPreferredProjectEnrollment(list) ?? list[0];
+      for (const r of list) out.set(r.id, { canonical, siblings: list });
+    }
+  }
+  return out;
+}

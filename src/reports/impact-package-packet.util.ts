@@ -91,7 +91,7 @@ export function validateImpactPackagePacket(
     }
     for (const key of src.keys) fields += countOwnKeys(row[key]);
   }
-  const files = collectReportEvidenceFiles(row as StudentReport);
+  const files = collectReportEvidenceFiles(row as unknown as StudentReport);
   return {
     ok: issues.length === 0,
     issues,

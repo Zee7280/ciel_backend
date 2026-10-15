@@ -116,12 +116,17 @@ async function freshScratchDb() {
     emailVerified: true,
     mobileVerified: true,
     status: 'approved',
+    primaryFacultyEmail: 'faculty@e2e.test',
+    attendanceApproverType: 'partner',
   });
   const teamA = await h.makeUser(UserRole.STUDENT, { overrides: { name: 'Alpha Lead', university: 'BNU' } as any });
   const teamB = await h.makeUser(UserRole.STUDENT, { overrides: { name: 'Beta Member', university: 'BNU' } as any });
   const adminTeamId = 'TM-2026-ADMIN-DEMO';
   await parts.save(parts.create({ ...seatCols(teamA.email), projectId: openId, studentId: teamA.id, fullName: 'Alpha Lead', participationMode: 'team', isTeamLead: true, teamId: adminTeamId } as any));
   await parts.save(parts.create({ ...seatCols(teamB.email), projectId: openId, studentId: teamB.id, fullName: 'Beta Member', participationMode: 'team', isTeamLead: false, teamId: adminTeamId } as any));
+  // Third seat on the same team: lets a browser run check lead→member attendance across two members.
+  const teamZ = await h.makeUser(UserRole.STUDENT, { overrides: { name: 'Zubair Member', university: 'BNU' } as any });
+  await parts.save(parts.create({ ...seatCols(teamZ.email), projectId: openId, studentId: teamZ.id, fullName: 'Zubair Member', participationMode: 'team', isTeamLead: false, teamId: adminTeamId } as any));
   const teamC = await h.makeUser(UserRole.STUDENT, { overrides: { name: 'Gamma Lead', university: 'BNU' } as any });
   const teamD = await h.makeUser(UserRole.STUDENT, { overrides: { name: 'Delta Member', university: 'BNU' } as any });
   await parts.save(parts.create({ ...seatCols(teamC.email), projectId: openId, studentId: teamC.id, fullName: 'Gamma Lead', participationMode: 'team', isTeamLead: true, teamId: 'TM-2026-ADMIN-GAMMA' } as any));
@@ -150,6 +155,9 @@ async function freshScratchDb() {
         reportLead: { token: reportLead.token, user: userJson(reportLead, 'Report Lead', '+923031111111'), teamId },
         admin: { token: adminUser.token, user: { id: adminUser.id, userId: adminUser.id, name: 'Browser Admin', email: adminUser.email, role: 'admin', status: 'active' } },
         adminTeamId,
+        alphaLead: { token: teamA.token, user: userJson(teamA, 'Alpha Lead', '+923005550000') },
+        betaMember: { token: teamB.token, user: userJson(teamB, 'Beta Member', '+923005550000') },
+        zubairMember: { token: teamZ.token, user: userJson(teamZ, 'Zubair Member', '+923005550000') },
         legacyId,
         lumsEmail: lumsStudent.email,
         bnuMateEmail: bnuMate.email,

@@ -347,7 +347,7 @@ describe('EngagementService', () => {
         '11111111-2222-4333-8444-555555555555',
       );
       expect(result.pending).toHaveLength(0);
-      expect(result.count).toBe(0);
+      expect((result as { count?: number }).count).toBe(0);
       expect(mockAttendanceLogRepository.createQueryBuilder).not.toHaveBeenCalled();
     });
   });
@@ -477,6 +477,90 @@ describe('EngagementService', () => {
 
       expect(result).toBeDefined();
       expect(mockAttendanceLogRepository.save).toHaveBeenCalled();
+    });
+
+    describe('team lead logging for a teammate', () => {
+      const MATE_SEAT_ID = '11111111-2222-4333-8444-555555555555';
+      const setupProxy = (t: ReturnType<typeof fx>, teammateEmail = 'mate@x.pk') => {
+        const teammate = {
+          id: MATE_SEAT_ID,
+          studentId: 'mate-user',
+          email: teammateEmail,
+          projectId: t.id.project,
+          applicationId: t.id.app,
+          participationMode: 'team',
+          isTeamLead: false,
+          status: 'approved',
+        };
+        mockParticipationRepository.findOne.mockImplementation(
+          async ({ where }: any) => {
+            if (where?.id === teammate.id) return teammate;
+            if (where?.isTeamLead && where?.studentId === 'lead-user')
+              return { id: 'lead-row', studentId: 'lead-user', isTeamLead: true };
+            return null;
+          },
+        );
+        mockParticipationRepository.find.mockResolvedValue([]);
+        mockOpportunityRepository.findOne.mockResolvedValue({
+          id: t.id.project,
+          title: t.title,
+          facultyId: t.id.linkedFaculty,
+          creatorId: t.id.u1,
+          organization: null,
+        });
+        mockUserRepository.findOne.mockResolvedValue({
+          id: t.id.linkedFaculty,
+          email: t.email.linkedFaculty,
+          role: UserRole.FACULTY,
+          name: t.name.faculty,
+        });
+        mockAttendanceLogRepository.create.mockImplementation((x: any) => x);
+        mockAttendanceLogRepository.save.mockImplementation(async (x: any) => x);
+        return teammate;
+      };
+
+      it("saves the entry on the teammate's seat and records the lead as author", async () => {
+        const t = fx('proxy-lead-logs');
+        const teammate = setupProxy(t);
+        const saved: any = await service.addAttendanceLog(
+          'lead-user',
+          MATE_SEAT_ID,
+          { ...standardAttendanceDto } as any,
+        );
+        expect(saved.participantId).toBe(teammate.id);
+        expect(saved.loggedByUserId).toBe('lead-user');
+        expect(saved.loggedByRole).toBe('team_lead');
+        expect(teammate.studentId).toBe('mate-user');
+      });
+
+      it("never moves an already-linked teammate seat to the lead's login", async () => {
+        const t = fx('proxy-no-hijack');
+        const teammate = setupProxy(t, 'lead@x.pk');
+        // Lead's own email matches the teammate seat's email — must NOT re-link the seat.
+        mockUserRepository.findOne.mockResolvedValue({ id: 'lead-user', email: 'lead@x.pk' });
+        mockParticipationRepository.find.mockResolvedValue([]);
+        const saved: any = await service.addAttendanceLog(
+          'lead-user',
+          MATE_SEAT_ID,
+          { ...standardAttendanceDto } as any,
+        );
+        expect(teammate.studentId).toBe('mate-user');
+        expect(saved.participantId).toBe(teammate.id);
+        const savedRows = mockParticipationRepository.save.mock.calls.map((c: any[]) => c[0]);
+        expect(savedRows.some((r: any) => r?.studentId === 'lead-user')).toBe(false);
+      });
+
+      it('marks a seat owner’s own entry as self-logged', async () => {
+        const t = fx('proxy-self');
+        setupProxy(t);
+        const saved: any = await service.addAttendanceLog(
+          'mate-user',
+          MATE_SEAT_ID,
+          { ...standardAttendanceDto } as any,
+        );
+        expect(saved.loggedByRole).toBe('self');
+        expect(saved.loggedByUserId).toBe('mate-user');
+      });
     });
 
     it('does not treat leftover attendanceLocked as a logging block — hours are confirmed on the flash card', async () => {
@@ -1183,6 +1267,28 @@ describe('EngagementService', () => {
       );
 
       expect(result).toEqual({ deleted: true });
+    });
+
+    it('lets the team lead delete a proxy entry they logged, but not other people’s', async () => {
+      const t = fx('delete-proxy');
+      mockParticipationRepository.findOne.mockResolvedValue({
+        id: t.id.participation,
+        studentId: 'mate-user',
+      });
+      mockAttendanceLogRepository.findOne.mockResolvedValue({
+        id: 'log-1',
+        participantId: t.id.participation,
+        approvalStatus: 'pending',
+        entryStatus: 'pending',
+        loggedByRole: 'team_lead',
+        loggedByUserId: 'lead-user',
+      });
+      await expect(
+        service.deleteAttendanceLog('lead-user', t.id.participation, 'log-1'),
+      ).resolves.toEqual({ deleted: true });
+      await expect(
+        service.deleteAttendanceLog('other-user', t.id.participation, 'log-1'),
+      ).rejects.toThrow('only delete your own');
     });
 
     it('refuses to delete an individually-verified entry even if the participant is not yet fully locked', async () => {

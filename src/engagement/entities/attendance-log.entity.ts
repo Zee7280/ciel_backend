@@ -68,6 +68,14 @@ export class AttendanceLog {
   @Column({ default: false })
   teammateOtpVerified: boolean;
 
+  /** User who actually typed this entry (the seat owner, or the Team Lead logging for them). */
+  @Column({ type: 'uuid', nullable: true })
+  loggedByUserId: string | null;
+
+  /** 'self' = seat owner logged it; 'team_lead' = proxy entry by the Team Lead. Null = legacy row. */
+  @Column({ type: 'varchar', length: 16, nullable: true })
+  loggedByRole: string | null;
+
   @Column({ type: 'timestamp', nullable: true })
   teammateOtpVerifiedAt: Date | null;
 

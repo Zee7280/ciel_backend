@@ -2394,7 +2394,6 @@ export class OpportunitiesService {
       createOpportunityDto.location,
     );
     this.validateTimeline(createOpportunityDto.timeline, { requireDates: true });
-    await this.assertNoOwnDuplicateTitle(user.id, createOpportunityDto.title);
 
     const isFaculty = user.role === UserRole.FACULTY;
     const isCielAdmin = user.role === UserRole.SUPER_ADMIN;
@@ -2437,6 +2436,9 @@ export class OpportunitiesService {
           .orderBy('o.createdAt', 'DESC')
           .getOne();
         if (recent) return recent;
+        // Only a genuinely different submission with a reused title is a duplicate; an identical
+        // retry / double-click is answered by the fingerprint short-circuit above.
+        await this.assertNoOwnDuplicateTitle(user.id, createOpportunityDto.title);
         return await this.finishCreatingCreatorOpportunity(
           user,
           org,

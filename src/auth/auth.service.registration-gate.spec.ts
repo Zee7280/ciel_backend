@@ -63,7 +63,7 @@ describe('AuthService — login does not leak account status before the password
       { role: 'ngo', status: 'active', organization: { verificationStatus: 'PENDING' } },
       { role: 'ngo', status: 'active', organization: { verificationStatus: 'REJECTED' } },
     ]) {
-      const { svc } = await build2({ id: 'u', email: 'a@b.c', role: 'student', status: 'active', ...patch });
+      const { svc } = await build2(Object.assign({ id: 'u', email: 'a@b.c', role: 'student', status: 'active' }, patch));
       await expect(svc.login({ email: 'a@b.c', password: 'wrong-pass' } as any)).rejects.toThrow('Invalid credentials');
     }
   });

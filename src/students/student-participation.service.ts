@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { Participation } from '../engagement/entities/participant.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { StudentReport } from '../reports/entities/student-report.entity';
@@ -356,8 +356,13 @@ export class StudentParticipationService {
     const isLead = mine.isTeamLead === true;
     const isMember = enrollmentLooksLikeTeam(mine) && !isLead;
 
+    // All of this student's seats on the project share one set of hours (lead may have logged on a sibling seat).
+    const mySeats = await this.participationRepo.find({
+      where: { studentId: studentUserId, projectId },
+    });
+    const seatIds = Array.from(new Set([mine.id, ...mySeats.map((x) => x.id)]));
     const logs = await this.attendanceLogRepo.find({
-      where: { participantId: mine.id },
+      where: { participantId: In(seatIds) },
       order: { dateOfEngagement: 'DESC' },
     });
     const approvedHours = logs

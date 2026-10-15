@@ -183,7 +183,7 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
       expect((await h.as(primary).post(`/faculty/applications/${appRow.id}/approve`).send({})).status).toBe(201);
     });
 
-    it('secondary faculty on the join-applications queue: listed, approve / reject work; unrelated faculty neither see nor act', async () => {
+    it('secondary faculty on the join-applications queue: listed but visibility-only (403 on decide); primary decides; unrelated faculty neither see nor act', async () => {
       const { user: ngo } = await ngoWithOrg();
       const s1 = await h.makeUser(UserRole.STUDENT);
       const s2 = await h.makeUser(UserRole.STUDENT);
@@ -214,9 +214,14 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
       // negative controls
       expect((await h.as(stranger).post(`/faculty/applications/${a1.id}/approve`).send({})).status).toBe(403);
       expect((await h.as(stranger).post(`/faculty/applications/${a1.id}/reject`).send({ reason: 'nope nope' })).status).toBe(403);
-      // secondary acts on what the queue shows
-      expect((await h.as(secondary).post(`/faculty/applications/${a1.id}/approve`).send({})).status).toBe(201);
-      expect((await h.as(secondary).post(`/faculty/applications/${a2.id}/reject`).send({ reason: 'not a fit for this' })).status).toBe(201);
+      // secondary sees the queue but only the primary supervisor may decide (visibility-only rule)
+      const secApprove = await h.as(secondary).post(`/faculty/applications/${a1.id}/approve`).send({});
+      expect(secApprove.status).toBe(403);
+      expect(secApprove.body.message).toMatch(/secondary \(visibility-only\)/);
+      expect((await h.as(secondary).post(`/faculty/applications/${a2.id}/reject`).send({ reason: 'not a fit for this' })).status).toBe(403);
+      expect((await apps.findOneByOrFail({ id: a1.id })).internalStatus).toBe('pending_faculty');
+      expect((await h.as(primary).post(`/faculty/applications/${a1.id}/approve`).send({})).status).toBe(201);
+      expect((await h.as(primary).post(`/faculty/applications/${a2.id}/reject`).send({ reason: 'not a fit for this' })).status).toBe(201);
       expect((await apps.findOneByOrFail({ id: a1.id })).internalStatus).toBe('pending_admin');
       expect((await apps.findOneByOrFail({ id: a2.id })).internalStatus).toBe('faculty_rejected');
       expect(await queueIds(secondary)).not.toContain(a1.id);
@@ -490,8 +495,12 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
       expect(open.status).toBe(200);
       expect(open.body.data.viewer_can_review).toBe(false);
       expect((await h.as(uniUser).patch(`/partner/reports/${rep.id}/verify`).send({ action: 'approve' })).status).toBe(403);
-      // negatives: another university / the host NGO's own view is a review view
+      // negatives: another university is refused; the host NGO opens its review view only once CIEL PK Admin accepted the report
       expect((await h.as(otherUni).get(`/partner/reports/${rep.id}`)).status).toBe(403);
+      const early = await h.as(hostNgo).get(`/partner/reports/${rep.id}`);
+      expect(early.status).toBe(403);
+      expect(early.body.message).toMatch(/after CIEL PK Admin has accepted/);
+      await reports.update(rep.id, { admin_status: 'approved' } as any);
       const host = await h.as(hostNgo).get(`/partner/reports/${rep.id}`);
       expect(host.status).toBe(200);
       expect(host.body.data.viewer_can_review).toBe(true);
@@ -626,6 +635,9 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
       expect(uni.status).toBe(200);
       expect(uni.body.data.viewer_can_review).toBe(false);
       expect((await h.as(otherUni).get(`/students/reports/${rep.id}`)).status).toBe(403);
+      // host NGO: read-for-review opens only after CIEL PK Admin accepted the report
+      expect((await h.as(hostNgo).get(`/students/reports/${rep.id}`)).status).toBe(403);
+      await reports.update(rep.id, { admin_status: 'approved' } as any);
       const host = await h.as(hostNgo).get(`/students/reports/${rep.id}`);
       expect(host.status).toBe(200);
       expect(host.body.data.viewer_can_review).toBe(true);

@@ -1134,13 +1134,15 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
       expect(await h.opps.count({ where: { creatorId: admin.id, title: abody.title } })).toBe(1);
     });
 
-    it('a different payload (same title), a different creator, or an old row still creates normally', async () => {
+    it('a different payload with a reused title is a 409 duplicate; a different creator or an old row still creates normally', async () => {
       const { user: ngo, org } = await ngoWithOrg();
       const title = `Same title ${uniq()}`;
       const a = await h.as(ngo).post('/opportunities').send(oppPayload({ title }));
       const b = await h.as(ngo).post('/opportunities').send(oppPayload({ title, mode: 'Remote', objectives: { description: 'different' } }));
-      expect([a.status, b.status]).toEqual([201, 201]);
-      expect(b.body.id).not.toBe(a.body.id);
+      expect([a.status, b.status]).toEqual([201, 409]);
+      expect(b.body.code).toBe('DUPLICATE_OPPORTUNITY_TITLE');
+      expect(b.body.existingOpportunityId).toBe(a.body.id);
+      expect(await h.opps.count({ where: { creatorId: ngo.id, title } })).toBe(1);
 
       // colleague in the same org with the identical payload is a different creator
       const colleague = await h.makeUser(UserRole.NGO, { org });
@@ -1673,6 +1675,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
         title: `Private ${uniq()} candidate project`,
         executing_context: { type: 'independent', student_pathway: 'private' },
         participation_scope: { rule: 'own_university_only' },
+        student_contact: '+923001234567', // private candidates must give a mobile for CIEL PK verification
       });
       const r = await h.as(s).post('/student/opportunity').send(body);
       if (r.status !== 201) {

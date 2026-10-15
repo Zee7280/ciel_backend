@@ -22,7 +22,10 @@ import { S3Service } from '../common/s3.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, EntityManager, In, IsNull, Repository } from 'typeorm';
 import { Participation } from './entities/participant.entity';
-import { demoteExtraTeamLeadsInScope } from './team-lead-canonical.util';
+import {
+  demoteExtraTeamLeadsInScope,
+  groupSiblingSeats,
+} from './team-lead-canonical.util';
 import { AttendanceLog } from './entities/attendance-log.entity';
 import { RegisterParticipantDto } from './dto/register-participant.dto';
 import { CreateAttendanceLogDto } from './dto/create-attendance-log.dto';
@@ -858,6 +861,36 @@ export class EngagementService {
       where: { studentId },
       relations: ['attendanceLogs'],
     });
+    // A student's several seats on one project share one set of hours: every sibling seat carries the
+    // full merged log set, so whichever seat id a screen resolves shows the same entries. Nothing sums
+    // attendanceLogs across rows of one project (each screen picks one seat), so this never double-counts.
+    const groups = groupSiblingSeats(result);
+    const merged = new Map<string, AttendanceLog[]>();
+    for (const row of result) {
+      const hit = groups.get(row.id);
+      if (!hit || hit.siblings.length < 2) continue;
+      if (!merged.has(hit.canonical.id)) {
+        const all = new Map<string, AttendanceLog>();
+        for (const sib of hit.siblings) for (const l of sib.attendanceLogs ?? []) all.set(l.id, l);
+        merged.set(hit.canonical.id, Array.from(all.values()));
+      }
+      row.attendanceLogs = merged.get(hit.canonical.id)!;
+    }
+    // Canonical seat first within its group (consumers that take the first row for a project get the
+    // same seat the report page picks); everything else keeps its order.
+    const emitted = new Set<string>();
+    const ordered: Participation[] = [];
+    for (const row of result) {
+      if (emitted.has(row.id)) continue;
+      const hit = groups.get(row.id);
+      const group = hit && hit.siblings.length > 1 ? [hit.canonical, ...hit.siblings.filter((x) => x.id !== hit.canonical.id)] : [row];
+      for (const r of group) {
+        if (emitted.has(r.id)) continue;
+        emitted.add(r.id);
+        ordered.push(r);
+      }
+    }
+    result.splice(0, result.length, ...ordered);
     const projectIds = Array.from(
       new Set(result.map((p) => p.projectId).filter(Boolean)),
     );
@@ -960,6 +993,25 @@ export class EngagementService {
   /**
    * Report verify / dossier roster: one participations query, no per-member application lookups.
    */
+  /**
+   * Roster rows are one card per PERSON: drop a student's duplicate seats on the same team so the id the
+   * Team Lead's card uses is the canonical seat — the same one project logs and the member's own page use.
+   */
+  private dropNonCanonicalSiblingSeats(participants: Participation[]): Participation[] {
+    const groups = groupSiblingSeats(participants);
+    return participants.filter((p) => {
+      const hit = groups.get(p.id);
+      if (!hit || hit.canonical.id === p.id || hit.siblings.length < 2) return true;
+      const c = hit.canonical;
+      const sameTeam =
+        !p.teamId ||
+        !c.teamId ||
+        p.teamId === c.teamId ||
+        (Boolean(p.applicationId) && p.applicationId === c.applicationId);
+      return !sameTeam;
+    });
+  }
+
   async getProjectTeamForReportDossier(projectId: string) {
     const participants = await this.participantRepository.find({
       where: {
@@ -969,7 +1021,7 @@ export class EngagementService {
       relations: ['student'],
       order: { createdAt: 'ASC' },
     });
-    const mapped = participants.map((p) => {
+    const mapped = this.dropNonCanonicalSiblingSeats(participants).map((p) => {
       const decrypted = this.decryptParticipation(p);
       const enriched = this.enrichParticipationForReportDossier(
         decrypted,
@@ -991,7 +1043,7 @@ export class EngagementService {
       order: { createdAt: 'ASC' },
     });
     const mapped = await Promise.all(
-      participants.map(async (p) => {
+      this.dropNonCanonicalSiblingSeats(participants).map(async (p) => {
         const decrypted = this.decryptParticipation(p);
         const enriched = await this.enrichParticipationForTeamResponse(
           decrypted,
@@ -1448,6 +1500,31 @@ export class EngagementService {
     })();
   }
 
+  /** Canonical seat + all sibling seats of the same person on this participation's project. */
+  private async resolveSiblingSeats(participation: Participation): Promise<{
+    canonical: Participation;
+    siblings: Participation[];
+  }> {
+    if (!participation.projectId) {
+      return { canonical: participation, siblings: [participation] };
+    }
+    const rows = await this.participantRepository.find({
+      where: { projectId: participation.projectId },
+    });
+    const hit = groupSiblingSeats(rows).get(participation.id);
+    return hit ?? { canonical: participation, siblings: [participation] };
+  }
+
+  /** Every attendance log across a set of seats, newest session first, deduped by id. */
+  private async attendanceLogsForSeats(seatIds: string[]): Promise<AttendanceLog[]> {
+    if (!seatIds.length) return [];
+    const logs = await this.attendanceLogRepository.find({
+      where: { participantId: In(seatIds) },
+      order: { dateOfEngagement: 'DESC' },
+    });
+    return Array.from(new Map(logs.map((l) => [l.id, l])).values());
+  }
+
   async addAttendanceLog(
     studentId: string,
     participantId: string,
@@ -1456,13 +1533,14 @@ export class EngagementService {
   ) {
     const hasEvidence =
       Boolean(file) || String(dto.evidenceUploaded) === 'true';
-    const participation = await this.findParticipationByIdentifier(
+    let participation = await this.findParticipationByIdentifier(
       participantId,
       ['attendanceLogs'],
     );
     if (!participation)
       throw new NotFoundException('Participation record not found');
 
+    let loggedByRole: 'self' | 'team_lead' = 'self';
     if (participation.studentId !== studentId) {
       const user = await this.userRepository.findOne({
         where: { id: studentId },
@@ -1494,7 +1572,10 @@ export class EngagementService {
         `Authorization check: Requester ${studentId} (email: ${uEmail}) vs Participation ${participation.id} (owner: ${participation.studentId}, email: ${pEmail})`,
       );
 
-      if (isEmailMatch || isCnicMatch) {
+      // Only an UNLINKED seat may be auto-claimed. A seat already linked to another account (e.g. a
+      // teammate's) must never move to the requester's login, or the teammate loses their records.
+      const seatIsUnlinked = !participation.studentId;
+      if ((isEmailMatch || isCnicMatch) && seatIsUnlinked) {
         const matchType = isEmailMatch ? 'email' : 'CNIC';
         this.logger.log(
           `Auto-claiming participation ${participation.id} for user ${studentId} via transitive ${matchType} match.`,
@@ -1582,6 +1663,31 @@ export class EngagementService {
           }
         }
 
+        // The roster can offer a leftover seat of a teammate whose real team seat is a sibling row. If any
+        // sibling seat of this person belongs to MY team, the lead may log for them (entry is redirected
+        // to their canonical seat below).
+        if (!isAuthorizedAsLead && participation.studentId) {
+          const { siblings } = await this.resolveSiblingSeats(participation);
+          const myLeadRows = await this.participantRepository.find({
+            where: {
+              projectId: participation.projectId,
+              isTeamLead: true,
+              studentId,
+            },
+          });
+          isAuthorizedAsLead = siblings.some(
+            (sib) =>
+              sib.id !== participation.id &&
+              !sib.isTeamLead &&
+              myLeadRows.some(
+                (l) =>
+                  (Boolean(l.teamId) && l.teamId === sib.teamId) ||
+                  (Boolean(l.applicationId) &&
+                    l.applicationId === sib.applicationId),
+              ),
+          );
+        }
+        if (isAuthorizedAsLead) loggedByRole = 'team_lead';
         if (!isAuthorizedAsLead) {
           this.logger.error(
             `Not authorized: User ${studentId} (email: ${user?.email}, cnicHash: ${userCnicHash?.slice(-6)}) tried logging attendance for record ${participation.id} (owner: ${participation.studentId}, email: ${participation.email}, cnicHash: ${participation.cnicHash?.slice(-6)})`,
@@ -1600,6 +1706,35 @@ export class EngagementService {
           );
           throw new BadRequestException('Not authorized');
         }
+      }
+    }
+
+    // Hours belong to the PERSON. If this student has several seats on the project, store the entry on
+    // the canonical one (what their own dashboard reads) and run overlap / daily-cap checks against the
+    // logs of ALL their seats — never let a stray duplicate seat swallow or double-book hours.
+    if (participation.studentId && participation.projectId) {
+      const { canonical, siblings } =
+        await this.resolveSiblingSeats(participation);
+      const sameGroup =
+        canonical.id === participation.id ||
+        canonical.studentId === participation.studentId;
+      const authorizedForCanonical =
+        participation.studentId === studentId ||
+        loggedByRole === 'team_lead' ||
+        canonical.id === participation.id;
+      if (siblings.length > 1 && sameGroup && authorizedForCanonical) {
+        const allLogs = await this.attendanceLogsForSeats(
+          siblings.map((x) => x.id),
+        );
+        if (canonical.id !== participation.id) {
+          this.logger.log(
+            `Attendance for seat ${participation.id} redirected to canonical seat ${canonical.id} (student ${participation.studentId} has ${siblings.length} seats on project ${participation.projectId})`,
+          );
+          participation = await this.participantRepository.findOneOrFail({
+            where: { id: canonical.id },
+          });
+        }
+        participation.attendanceLogs = allLogs;
       }
     }
 
@@ -2048,6 +2183,11 @@ export class EngagementService {
       opportunityCreatorKind: routing.opportunityCreatorKind,
       teammateOtpVerified: false,
       teammateOtpVerifiedAt: null,
+      loggedByUserId: studentId,
+      loggedByRole:
+        loggedByRole === 'team_lead' && participation.studentId !== studentId
+          ? 'team_lead'
+          : 'self',
     });
 
     const saved = await this.attendanceLogRepository.save(log);
@@ -2847,16 +2987,26 @@ export class EngagementService {
       await this.findParticipationByIdentifier(participantId);
     if (!participation)
       throw new NotFoundException('Participation record not found');
-    if (participation.studentId !== studentId) {
+    // Project logs list every entry under the student's canonical seat, so the entry may physically sit
+    // on a sibling seat of the same person.
+    const { siblings } = await this.resolveSiblingSeats(participation);
+    const seatIds = Array.from(
+      new Set([participation.id, ...siblings.map((x) => x.id)]),
+    );
+    const log = await this.attendanceLogRepository.findOne({
+      where: { id: logId, participantId: In(seatIds) },
+    });
+    if (!log) throw new NotFoundException('Attendance log not found');
+    // The seat owner may delete their own entries; a Team Lead may delete a proxy entry they
+    // themselves logged for a teammate (so a typo isn't stuck on the teammate's record).
+    const isSeatOwner = participation.studentId === studentId;
+    const isProxyAuthor =
+      log.loggedByRole === 'team_lead' && log.loggedByUserId === studentId;
+    if (!isSeatOwner && !isProxyAuthor) {
       throw new ForbiddenException(
         'You can only delete your own attendance entries',
       );
     }
-
-    const log = await this.attendanceLogRepository.findOne({
-      where: { id: logId, participantId: participation.id },
-    });
-    if (!log) throw new NotFoundException('Attendance log not found');
 
     if (
       log.approvalStatus === 'approved' ||
@@ -3017,7 +3167,11 @@ export class EngagementService {
       ['attendanceLogs'],
     );
     if (!participation) throw new NotFoundException('Participation not found');
-    const logs = participation.attendanceLogs ?? [];
+    const { siblings } = await this.resolveSiblingSeats(participation);
+    const logs =
+      siblings.length > 1
+        ? await this.attendanceLogsForSeats(siblings.map((x) => x.id))
+        : (participation.attendanceLogs ?? []);
     if (this.mayViewAttendanceEvidenceLinks(viewerRole)) return logs;
     return logs.map((log) => ({ ...log, evidenceUrl: null }));
   }
@@ -3029,20 +3183,30 @@ export class EngagementService {
       order: { dateOfEngagement: 'DESC' },
     });
     const showEvidence = this.mayViewAttendanceEvidenceLinks(viewerRole);
+    const seatGroups = groupSiblingSeats(
+      await this.participantRepository.find({ where: { projectId } }),
+    );
+    // Report every log under the student's canonical seat so a duplicate seat id never hides an entry.
+    const canonicalOf = (seatId: string) =>
+      seatGroups.get(seatId)?.canonical ?? null;
     // Never return the whole Participation row: it carries the CNIC hash / ciphertext, mobile and
     // email of every teammate. The report UI only needs the participant's id and display name.
-    return logs.map((log) => ({
-      ...log,
-      evidenceUrl: showEvidence ? log.evidenceUrl : null,
-      participant: log.participant
-        ? {
-            id: log.participant.id,
-            fullName: log.participant.fullName,
-            studentId: log.participant.studentId,
-            isTeamLead: log.participant.isTeamLead,
-          }
-        : undefined,
-    }));
+    return logs.map((log) => {
+      const seat = canonicalOf(log.participantId) ?? log.participant;
+      return {
+        ...log,
+        participantId: seat?.id ?? log.participantId,
+        evidenceUrl: showEvidence ? log.evidenceUrl : null,
+        participant: seat
+          ? {
+              id: seat.id,
+              fullName: seat.fullName,
+              studentId: seat.studentId,
+              isTeamLead: seat.isTeamLead,
+            }
+          : undefined,
+      };
+    });
   }
 
   async facultyApprove(

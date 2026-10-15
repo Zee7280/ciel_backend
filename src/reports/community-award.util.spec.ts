@@ -303,7 +303,7 @@ describe('resolveDisplayCii', () => {
                     aiReportScore: 57.9,
                     knownBasePoints: 57.9,
                     adminEvidenceAssessment: { status: 'PENDING' },
-                },
+                } as Record<string, unknown>,
                 ciiV45Lock: { locked: false },
             }),
         ).toBe(58);

@@ -60,6 +60,7 @@ import { composeFacultyReportRemarks } from './faculty-report-remarks.util';
 import { trackingOrganizationName } from './tracking-org-name.util';
 import { isReportPartnerStepSatisfied } from './report-partner-approval.util';
 import { assertPacketReadyForAnalysis } from './impact-package-packet.util';
+import { groupSiblingSeats } from '../engagement/team-lead-canonical.util';
 
 /** List-card CII fields only — never mutates scores or lock state. */
 export function mapFacultyListCii(report: {
@@ -107,7 +108,7 @@ function lockedAdminEvidenceCriteria(locked: CiiV45Result | null): {
     assessed?.status === 'ASSESSED' &&
     Array.isArray(assessed.criteria) &&
     assessed.criteria.length === CII_V45_EVIDENCE_DIMENSION.criteria.length &&
-    assessed.criteria.every((c) => c && c.anchor !== 'P' && typeof c.reasoningSummary === 'string')
+    assessed.criteria.every((c) => c && String(c.anchor) !== 'P' && typeof c.reasoningSummary === 'string')
   ) {
     return {
       assessorId: assessed.assessorId || 'locked-admin',
@@ -553,9 +554,14 @@ export class FacultyReportsService {
     const usedReportIds = new Set<string>();
     const data: Record<string, unknown>[] = [];
 
+    // One tracking row per person per project: a student's duplicate seats are folded into the
+    // canonical seat and their logs merged, so hours never show split across ghost rows.
+    const seatGroups = groupSiblingSeats(participants);
     for (const seat of participants) {
       const opp = oppById.get(seat.projectId);
       if (!opp) continue;
+      const group = seatGroups.get(seat.id);
+      if (group && group.siblings.length > 1 && group.canonical.id !== seat.id) continue;
       const email = pickListString(seat.student?.email, seat.email);
       const report = matchReport(
         seat.projectId,
@@ -563,7 +569,13 @@ export class FacultyReportsService {
         email,
       );
       if (report?.id) usedReportIds.add(report.id);
-      const seatLogs = logsByParticipant.get(seat.id) ?? [];
+      const seatLogs = Array.from(
+        new Map(
+          (group?.siblings ?? [seat])
+            .flatMap((sib) => logsByParticipant.get(sib.id) ?? [])
+            .map((l) => [l.id, l] as const),
+        ).values(),
+      );
       const liveHours = this.loggedHoursForProject(seatLogs);
       const required = requiredHoursPerStudentFromOpportunity(opp);
       const progress = report ? computeReportProgress(report) : null;

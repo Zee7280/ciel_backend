@@ -298,6 +298,25 @@ export class AdminService {
   private readonly logger = new Logger(AdminService.name);
 
   /** Repository for entities that aren't constructor-injected (keeps the constructor stable). */
+  /** Non-rejected attendance hours per opportunity (what students have logged, verified or not). */
+  private async computeLoggedHoursByOpportunity(
+    opportunityIds: string[],
+  ): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    const attendanceRepo = this.repoOf(AttendanceLog);
+    if (!attendanceRepo || !opportunityIds.length) return out;
+    const rows = await attendanceRepo
+      .createQueryBuilder('a')
+      .select('a.projectId', 'opportunityId')
+      .addSelect('COALESCE(SUM(a.sessionHours), 0)', 'hours')
+      .where('a.projectId IN (:...ids)', { ids: opportunityIds })
+      .andWhere("COALESCE(a.approvalStatus, '') NOT IN ('rejected', 'flagged')")
+      .groupBy('a.projectId')
+      .getRawMany<{ opportunityId: string; hours: string | number }>();
+    for (const r of rows) out.set(r.opportunityId, Number(r.hours) || 0);
+    return out;
+  }
+
   private repoOf<T extends object>(
     entity: new () => T,
   ): Repository<T> | undefined {
@@ -1872,12 +1891,14 @@ export class AdminService {
     const [
       enrollmentsByProject,
       verified,
+      loggedByOpp,
       participationSeatRows,
       pipelineApps,
       creatorUsers,
     ] = await Promise.all([
       this.loadOccupiedEnrollmentsByProject(oppIds),
       this.computeVerifiedHours({ opportunityIds: oppIds }),
+      this.computeLoggedHoursByOpportunity(oppIds),
       oppIds.length
         ? this.participationRepository
             .createQueryBuilder('p')
@@ -1935,6 +1956,7 @@ export class AdminService {
 
     const projects = opportunities.map((opp) => {
       const hours = verified.byOpportunity.get(opp.id) ?? 0;
+      const loggedHours = loggedByOpp.get(opp.id) ?? 0;
       const occupiedSeats =
         (participationSeatsByOpp.get(opp.id) ?? 0) +
         (pipelineSeatsByOpp.get(opp.id) ?? 0);
@@ -1987,6 +2009,9 @@ export class AdminService {
         volunteers: occupiedSeats,
         volunteers_required: volunteersRequired,
         hours,
+        // Every non-rejected session students have logged so far (hours are only "verified" once
+        // the report's flash card is locked, so `hours` reads 0 on in-progress projects).
+        logged_hours: Math.round(loggedHours * 100) / 100,
         remaining_hours: remainingHours,
         remaining_seats: remainingSeats,
         remaining_members: remainingSeats,

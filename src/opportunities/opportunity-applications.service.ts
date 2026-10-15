@@ -27,6 +27,12 @@ import { canonicalizePhoneInput } from '../common/phone-e164.util';
 import { StudentReport } from '../reports/entities/student-report.entity';
 import { Payment } from '../payments/entities/payment.entity';
 import { AdminTeamSnapshot } from './entities/admin-team-snapshot.entity';
+import { AdminTeamOpDto } from './dto/admin-team-op.dto';
+import { universityScopeError } from './university-scope.util';
+import {
+  resolveTeamSeatCap,
+  teamCapacityError,
+} from '../engagement/team-capacity.util';
 import {
   plain,
   restoreSnapshot,
@@ -1303,6 +1309,223 @@ export class OpportunityApplicationsService {
       message: `Merged ${memberIds.length} enrollments into team ${targetTeamId}.`,
       team_id: targetTeamId,
       lead_participation_id: leadId,
+      ...refreshed,
+    };
+  }
+
+  /**
+   * Roster corrections on one enrolled seat: move to another team, make individual, make lead.
+   * `dryRun` returns blockers/warnings and writes nothing; a real run saves an undo snapshot first.
+   */
+  async adminTeamOp(
+    opportunityId: string,
+    dto: AdminTeamOpDto,
+    actor: SnapshotActor | undefined,
+    dryRun: boolean,
+  ) {
+    const opportunity = await this.opportunityRepo.findOne({
+      where: { id: opportunityId },
+    });
+    if (!opportunity) throw new NotFoundException('Opportunity not found');
+
+    const member = await this.participationRepo.findOne({
+      where: {
+        id: dto.member_participation_id,
+        projectId: opportunityId,
+        status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
+      },
+    });
+    if (!member) {
+      throw new BadRequestException(
+        await this.describeMissingMergeEnrollments(opportunityId, [
+          dto.member_participation_id,
+        ]),
+      );
+    }
+
+    const blockers: string[] = [];
+    const warnings: string[] = [];
+    const who = member.fullName || member.email || 'This member';
+    const sourceTeamId = (member.teamId || '').trim();
+    const sourceMates = sourceTeamId
+      ? await this.participationRepo.find({
+          where: {
+            projectId: opportunityId,
+            teamId: sourceTeamId,
+            status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
+          },
+          order: { createdAt: 'ASC' },
+        })
+      : [];
+    const successor = sourceMates.find((m) => m.id !== member.id) ?? null;
+    const leavingLead = member.isTeamLead === true && !!successor;
+
+    let targetTeamId = '';
+    let targetMembers: Participation[] = [];
+    let draftsToRemove: StudentReport[] = [];
+
+    if (dto.op === 'split') {
+      if (!sourceTeamId) blockers.push(`${who} is already an individual enrollment.`);
+    } else if (dto.op === 'set_lead') {
+      if (!sourceTeamId) blockers.push(`${who} is not on a team.`);
+      else if (member.isTeamLead) blockers.push(`${who} is already the team lead.`);
+    } else {
+      targetTeamId = (dto.target_team_id || '').trim();
+      if (!targetTeamId) blockers.push('Choose the team to move this member into.');
+      else if (targetTeamId === sourceTeamId) blockers.push(`${who} is already on that team.`);
+      else {
+        targetMembers = await this.participationRepo.find({
+          where: {
+            projectId: opportunityId,
+            teamId: targetTeamId,
+            status: In([...TEAM_ACTIVE_PARTICIPATION_STATUSES]),
+          },
+          order: { createdAt: 'ASC' },
+        });
+        if (!targetMembers.length) blockers.push('That team was not found on this project. Reload and try again.');
+        else {
+          const capError = teamCapacityError(
+            targetMembers.length,
+            resolveTeamSeatCap(opportunity.timeline?.volunteers_required),
+          );
+          if (capError) blockers.push(capError);
+        }
+      }
+      if (member.studentId) {
+        const reports = await this.findReportsForOpportunityStudents(opportunityId, [member.studentId]);
+        if (reports.some((r) => this.isBlockingReportStatusForTeamMerge(r.status))) {
+          blockers.push(`${who} already has a submitted or verified report. Resolve it manually first.`);
+        }
+        draftsToRemove = reports.filter((r) => this.isLowProgressReportStatus(r.status));
+        if (draftsToRemove.length) {
+          warnings.push(`${draftsToRemove.length} draft report(s) of ${who} will be removed (restorable with Undo); the team lead's report is used instead.`);
+        }
+      }
+    }
+    if (leavingLead && successor && dto.op !== 'set_lead') {
+      warnings.push(`${successor.fullName || 'Another member'} becomes lead of the team ${who} leaves.`);
+    }
+    if (dto.op === 'split' && sourceTeamId && member.studentId) {
+      warnings.push('The team report stays with the team lead; this member will need their own report.');
+    }
+
+    const preview = {
+      success: true,
+      data: {
+        can_apply: blockers.length === 0,
+        op: dto.op,
+        member: { id: member.id, name: member.fullName ?? null, email: member.email ?? null },
+        from_team_id: sourceTeamId || null,
+        to_team_id: dto.op === 'move' ? targetTeamId : null,
+        undoable: true,
+      },
+      blockers,
+      warnings,
+    };
+    if (dryRun || blockers.length) {
+      if (!dryRun) throw new BadRequestException(blockers.join(' '));
+      return preview;
+    }
+
+    let snapshotId = '';
+    await this.participationRepo.manager.transaction(async (em) => {
+      const repo = em.getRepository(Participation);
+      const changed = new Map<string, Participation>();
+      const track = (row: Participation) => changed.set(row.id, row);
+      const before = new Map<string, Record<string, unknown>>();
+      const remember = (row: Participation) => {
+        if (before.has(row.id)) return;
+        before.set(row.id, {
+          id: row.id,
+          teamId: row.teamId ?? null,
+          participationMode: row.participationMode ?? null,
+          isTeamLead: row.isTeamLead === true,
+          teamDisplayName: row.teamDisplayName ?? null,
+          formationSource: row.formationSource ?? null,
+          applicationId: row.applicationId ?? null,
+        });
+      };
+
+      remember(member);
+      if (dto.op === 'set_lead') {
+        for (const m of sourceMates) {
+          remember(m);
+          m.isTeamLead = m.id === member.id;
+          track(m);
+        }
+      } else {
+        if (leavingLead && successor) {
+          remember(successor);
+          successor.isTeamLead = true;
+          track(successor);
+        }
+        if (dto.op === 'split') {
+          member.teamId = null as never;
+          member.participationMode = 'individual';
+          member.isTeamLead = false;
+          member.teamDisplayName = null as never;
+        } else {
+          const targetLead =
+            targetMembers.find((m) => m.isTeamLead) ?? targetMembers[0];
+          member.teamId = targetTeamId;
+          member.participationMode = 'team';
+          member.isTeamLead = false;
+          member.teamDisplayName =
+            targetLead.teamDisplayName ||
+            buildTeamDisplayName(opportunity, targetLead);
+          member.formationSource = member.formationSource || 'admin_merge';
+          if (targetLead.applicationId) {
+            member.applicationId = targetLead.applicationId;
+          }
+        }
+        track(member);
+      }
+      if (!changed.has(member.id)) track(member);
+      await repo.save([...changed.values()]);
+
+      let deletedReports: StudentReport[] = [];
+      if (dto.op === 'move' && draftsToRemove.length) {
+        const reportRepo = em.getRepository(StudentReport);
+        deletedReports = plain(draftsToRemove);
+        await reportRepo.remove(draftsToRemove);
+      }
+
+      const snapshot = await saveSnapshot(em, {
+        opportunityId,
+        kind: dto.op === 'move' ? 'move_member' : dto.op === 'split' ? 'split_member' : 'set_lead',
+        label:
+          dto.op === 'move'
+            ? `${who} → team ${targetTeamId}`
+            : dto.op === 'split'
+              ? `${who} made individual`
+              : `${who} made lead of team ${sourceTeamId}`,
+        actor,
+        summary: {
+          participations: before.size,
+          reports: deletedReports.length,
+          payments: 0,
+          applications: 0,
+        },
+        payload: {
+          before: [...before.values()],
+          demotedLeadIds: [],
+          deletedReports,
+          reassigned: null,
+        },
+      });
+      snapshotId = snapshot.id;
+    });
+
+    const refreshed = await this.adminListOpportunityTeams(opportunityId);
+    return {
+      success: true,
+      snapshot_id: snapshotId,
+      message:
+        dto.op === 'move'
+          ? `${who} moved to team ${targetTeamId}.`
+          : dto.op === 'split'
+            ? `${who} is now an individual enrollment.`
+            : `${who} is now the team lead.`,
       ...refreshed,
     };
   }
@@ -3464,9 +3687,25 @@ export class OpportunityApplicationsService {
       ...this.academicSnapshot(p),
     };
 
+    // Admin may correct a university outside the listing's scope (e.g. a data-entry fix), but must
+    // see that the seat no longer matches who the listing is open to.
+    const warnings: string[] = [];
+    if (dto.university_name?.trim()) {
+      const opp = await this.opportunityRepo.findOne({
+        where: { id: opportunityId },
+      });
+      const scopeWarning = universityScopeError(
+        p.universityName,
+        opp,
+        p.fullName || 'This member',
+      );
+      if (scopeWarning) warnings.push(scopeWarning);
+    }
+
     return {
       success: true,
       data: { member: memberPayload },
+      ...(warnings.length ? { warnings } : {}),
     };
   }
 

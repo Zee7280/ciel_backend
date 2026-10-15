@@ -116,6 +116,10 @@ async function freshScratchDb() {
   const adminTeamId = 'TM-2026-ADMIN-DEMO';
   await parts.save(parts.create({ ...seatCols(teamA.email), projectId: openId, studentId: teamA.id, fullName: 'Alpha Lead', participationMode: 'team', isTeamLead: true, teamId: adminTeamId } as any));
   await parts.save(parts.create({ ...seatCols(teamB.email), projectId: openId, studentId: teamB.id, fullName: 'Beta Member', participationMode: 'team', isTeamLead: false, teamId: adminTeamId } as any));
+  const teamC = await h.makeUser(UserRole.STUDENT, { overrides: { name: 'Gamma Lead', university: 'BNU' } as any });
+  const teamD = await h.makeUser(UserRole.STUDENT, { overrides: { name: 'Delta Member', university: 'BNU' } as any });
+  await parts.save(parts.create({ ...seatCols(teamC.email), projectId: openId, studentId: teamC.id, fullName: 'Gamma Lead', participationMode: 'team', isTeamLead: true, teamId: 'TM-2026-ADMIN-GAMMA' } as any));
+  await parts.save(parts.create({ ...seatCols(teamD.email), projectId: openId, studentId: teamD.id, fullName: 'Delta Member', participationMode: 'team', isTeamLead: false, teamId: 'TM-2026-ADMIN-GAMMA' } as any));
   const reports = h.ds.getRepository(StudentReport);
   await reports.save(reports.create({ studentId: teamB.id, opportunityId: openId, project_id: openId, status: 'draft' } as any) as any);
 

@@ -15,7 +15,13 @@ export class AdminTeamSnapshot {
   opportunityId: string;
 
   @Column({ type: 'varchar', length: 32 })
-  kind: 'delete_team' | 'delete_member' | 'merge';
+  kind:
+    | 'delete_team'
+    | 'delete_member'
+    | 'merge'
+    | 'move_member'
+    | 'split_member'
+    | 'set_lead';
 
   /** Human label shown in the Undo list, e.g. "Team TM-2026-… (3 members)". */
   @Column({ type: 'varchar', length: 300 })

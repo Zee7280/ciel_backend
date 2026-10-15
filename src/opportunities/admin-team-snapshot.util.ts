@@ -156,7 +156,12 @@ export async function restoreSnapshot(
         await partRepo.update(p.promotedParticipationId, { isTeamLead: false });
       }
     }
-  } else if (snap.kind === 'merge') {
+  } else if (
+    snap.kind === 'merge' ||
+    snap.kind === 'move_member' ||
+    snap.kind === 'split_member' ||
+    snap.kind === 'set_lead'
+  ) {
     const p = snap.payload as unknown as MergePayload;
     const partRepo = em.getRepository(Participation);
     for (const b of p.before) {

@@ -294,6 +294,68 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
       expect(await reportCount(opp.id, b.id)).toBe(1);
     });
 
+    it('roster ops: move a seat into another team, make lead, split to individual, each undoable', async () => {
+      const opp = await liveOpp();
+      const [a, b, c, d] = await Promise.all([1, 2, 3, 4].map(() => student('E2E University')));
+      const t1 = 'TM-2026-OPS-ONE';
+      const t2 = 'TM-2026-OPS-TWO';
+      const sa = await seat(opp, a, { teamId: t1, participationMode: 'team', isTeamLead: true, teamDisplayName: 'Team One' });
+      const sb = await seat(opp, b, { teamId: t1, participationMode: 'team' });
+      const sc = await seat(opp, c, { teamId: t2, participationMode: 'team', isTeamLead: true, teamDisplayName: 'Team Two' });
+      await seat(opp, d);
+      await draft(opp, b);
+      const get = (id: string) => h.ds.getRepository(Participation).findOneOrFail({ where: { id } });
+      const url = `/admin/opportunities/${opp.id}/team-ops`;
+
+      // blockers
+      expect((await h.as(admin).post(`${url}/preview`).send({ op: 'move', member_participation_id: sb.id, target_team_id: t1 })).body.blockers.join(' ')).toMatch(/already on that team/);
+      expect((await h.as(admin).post(`${url}/preview`).send({ op: 'set_lead', member_participation_id: sa.id })).body.blockers.join(' ')).toMatch(/already the team lead/);
+      expect((await h.as(admin).post(`${url}/preview`).send({ op: 'split', member_participation_id: sc.id })).body.data.can_apply).toBe(true);
+      expect((await h.as(admin).post(`${url}/apply`).send({ op: 'move', member_participation_id: sb.id, target_team_id: 'no-such-team' })).status).toBe(400);
+
+      // move b (with a draft) into team two
+      const pv = await h.as(admin).post(`${url}/preview`).send({ op: 'move', member_participation_id: sb.id, target_team_id: t2 });
+      expect(pv.body.data.can_apply).toBe(true);
+      expect(pv.body.warnings.join(' ')).toMatch(/1 draft report/);
+      const mv = await h.as(admin).post(`${url}/apply`).send({ op: 'move', member_participation_id: sb.id, target_team_id: t2 });
+      expect(mv.status).toBe(200);
+      expect(await get(sb.id)).toMatchObject({ teamId: t2, isTeamLead: false, participationMode: 'team' });
+      expect(await reportCount(opp.id, b.id)).toBe(0);
+      const undoMove = await h.as(admin).post(`/admin/opportunities/${opp.id}/team-snapshots/${mv.body.snapshot_id}/restore`).send({});
+      expect(undoMove.status).toBe(200);
+      expect(await get(sb.id)).toMatchObject({ teamId: t1 });
+      expect(await reportCount(opp.id, b.id)).toBe(1);
+
+      // make b lead of team one
+      const lead = await h.as(admin).post(`${url}/apply`).send({ op: 'set_lead', member_participation_id: sb.id });
+      expect(lead.status).toBe(200);
+      expect((await get(sb.id)).isTeamLead).toBe(true);
+      expect((await get(sa.id)).isTeamLead).toBe(false);
+
+      // split the new lead: a is promoted, b becomes individual; undo restores both roles
+      const split = await h.as(admin).post(`${url}/apply`).send({ op: 'split', member_participation_id: sb.id });
+      expect(split.status).toBe(200);
+      expect(await get(sb.id)).toMatchObject({ teamId: null, participationMode: 'individual', isTeamLead: false });
+      expect((await get(sa.id)).isTeamLead).toBe(true);
+      await h.as(admin).post(`/admin/opportunities/${opp.id}/team-snapshots/${split.body.snapshot_id}/restore`).send({});
+      expect(await get(sb.id)).toMatchObject({ teamId: t1, isTeamLead: true });
+      expect((await get(sa.id)).isTeamLead).toBe(false);
+    });
+
+    it('admin patch can still correct a seat but warns when the university is outside the listing scope', async () => {
+      const opp = await liveOpp({ participation_scope: { rule: 'own_university_only', creator_university_name: BNU, university_names: [BNU] } });
+      const a = await student('BNU');
+      const teamId = 'TM-2026-PATCH-WARN';
+      const sa = await seat(opp, a, { teamId, participationMode: 'team', isTeamLead: true, universityName: BNU });
+      const base = `/admin/opportunities/${opp.id}/teams/${teamId}/members/${sa.id}`;
+      const bad = await h.as(admin).patch(base).send({ university_name: 'LUMS' });
+      expect(bad.status).toBe(200);
+      expect(bad.body.warnings.join(' ')).toMatch(/is at LUMS, but this opportunity is open to/);
+      const ok = await h.as(admin).patch(base).send({ university_name: 'BNU' });
+      expect(ok.status).toBe(200);
+      expect(ok.body.warnings).toBeUndefined();
+    });
+
     it('merge preview blocks (and merge refuses) when a non-lead already submitted a report', async () => {
       const opp = await liveOpp();
       const a = await student('E2E University');

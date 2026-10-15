@@ -27,6 +27,7 @@ import { AdminMutationAuditInterceptor } from '../audit-logs/admin-mutation-audi
 import { FacultyDepartmentAlignInterceptor } from './redact-opportunity-secrets.interceptor';
 import { AdminPatchTeamMemberDto } from './dto/admin-patch-team-member.dto';
 import { AdminMergeTeamMembersDto } from './dto/admin-merge-team-members.dto';
+import { AdminTeamOpDto } from './dto/admin-team-op.dto';
 import { SetAttendanceRoutingDto } from './dto/set-attendance-routing.dto';
 import { AdminSetOpportunityContactsDto } from './dto/admin-set-opportunity-contacts.dto';
 import { AdminDirectoryControlDto } from './dto/admin-directory-control.dto';
@@ -264,6 +265,39 @@ export class AdminOpportunitiesController {
     return this.opportunityApplicationsService.adminPreviewMergeTeamMembers(
       opportunityId,
       dto,
+    );
+  }
+
+  @Post(':id/team-ops/preview')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  async previewTeamOp(
+    @Param('id') opportunityId: string,
+    @Body() dto: AdminTeamOpDto,
+  ) {
+    return this.opportunityApplicationsService.adminTeamOp(
+      opportunityId,
+      dto,
+      undefined,
+      true,
+    );
+  }
+
+  @Post(':id/team-ops/apply')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  async applyTeamOp(
+    @Request() req,
+    @Param('id') opportunityId: string,
+    @Body() dto: AdminTeamOpDto,
+  ) {
+    return this.opportunityApplicationsService.adminTeamOp(
+      opportunityId,
+      dto,
+      { id: req.user?.id, email: req.user?.email },
+      false,
     );
   }
 

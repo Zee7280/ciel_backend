@@ -4,6 +4,7 @@
  */
 import { bootHarness, Harness, E2eUser, oppPayload } from './e2e/harness';
 import { adminApprove } from './e2e/helpers';
+import { randomUUID } from 'crypto';
 import { UserRole } from '../src/users/enums/user-role.enum';
 import { Otp } from '../src/students/entities/otp.entity';
 import { Participation } from '../src/engagement/entities/participant.entity';
@@ -135,6 +136,25 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
       );
       expect(ok.status).toBe(201);
       expect(ok.body.success).toBe(true);
+    });
+  });
+
+  describe('admin Teams & enrollments merge', () => {
+    it('explains that a pending applicant (application id) is not enrolled instead of echoing raw ids', async () => {
+      const opp = await liveOpp();
+      const lead = await student('E2E University');
+      const applied = await h.as(lead).post(`/students/opportunities/${opp.id}/apply`).send(applyBody());
+      expect(applied.status).toBe(201);
+      const appId = applied.body.data.application_id as string;
+
+      const res = await h.as(admin).post(`/admin/opportunities/${opp.id}/teams/merge`).send({
+        member_participation_ids: [appId, randomUUID()],
+        lead_participation_id: appId,
+      });
+      expect(res.status).toBe(400);
+      expect(res.body.message).toMatch(/applied but is not enrolled yet. Use "Approve & enroll" first/);
+      expect(res.body.message).toMatch(/1 selected enrollment was not found/);
+      expect(res.body.message).not.toContain(appId);
     });
   });
 

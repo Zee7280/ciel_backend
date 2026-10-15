@@ -1044,6 +1044,46 @@ export class OpportunityApplicationsService {
   }
 
   /**
+   * Why merge ids did not resolve to enrolled seats. A pending team's lead is listed with the
+   * APPLICATION id, so an admin selecting it gets "not found" — say who it is and what to do instead
+   * of echoing raw UUIDs.
+   */
+  private async describeMissingMergeEnrollments(
+    opportunityId: string,
+    missingIds: string[],
+  ): Promise<string> {
+    const uuids = missingIds.filter((id) => this.looksLikeUuidParam(id));
+    const pendingApps = uuids.length
+      ? await this.appRepo.find({
+          where: {
+            id: In(uuids),
+            opportunityId,
+            withdrawnAt: IsNull(),
+            internalStatus: In(PENDING_PIPELINE),
+          },
+          relations: ['studentUser'],
+        })
+      : [];
+    const pendingIds = new Set(pendingApps.map((a) => a.id));
+    const pendingNames = pendingApps.map(
+      (a) => a.studentUser?.name || a.studentUser?.email || 'a pending applicant',
+    );
+    const unknown = missingIds.filter((id) => !pendingIds.has(id));
+    const parts: string[] = [];
+    if (pendingNames.length) {
+      parts.push(
+        `${pendingNames.join(', ')} ${pendingNames.length === 1 ? 'has' : 'have'} applied but ${pendingNames.length === 1 ? 'is' : 'are'} not enrolled yet. Use "Approve & enroll" first, then merge.`,
+      );
+    }
+    if (unknown.length) {
+      parts.push(
+        `${unknown.length} selected enrollment${unknown.length === 1 ? ' was' : 's were'} not found on this project (removed or changed since the roster loaded). Reload Teams & enrollments and select again.`,
+      );
+    }
+    return parts.join(' ');
+  }
+
+  /**
    * Admin Teams & enrollments: merge individual + team buckets into one persisted teamId.
    */
   async adminMergeOpportunityTeamMembers(
@@ -1090,7 +1130,7 @@ export class OpportunityApplicationsService {
       const found = new Set(members.map((m) => m.id));
       const missing = memberIds.filter((id) => !found.has(id));
       throw new BadRequestException(
-        `Enrollment not found on this project: ${missing.join(', ')}`,
+        await this.describeMissingMergeEnrollments(opportunityId, missing),
       );
     }
 

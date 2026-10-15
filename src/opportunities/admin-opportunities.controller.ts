@@ -22,6 +22,7 @@ import { Roles } from '../auth/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
 import { UsersService } from '../users/users.service';
 import { OpportunityApplicationsService } from './opportunity-applications.service';
+import { AdminTeamSafetyService } from './admin-team-safety.service';
 
 import { AdminMutationAuditInterceptor } from '../audit-logs/admin-mutation-audit.interceptor';
 import { FacultyDepartmentAlignInterceptor } from './redact-opportunity-secrets.interceptor';
@@ -40,6 +41,7 @@ export class AdminOpportunitiesController {
     private readonly opportunitiesService: OpportunitiesService,
     private readonly usersService: UsersService,
     private readonly opportunityApplicationsService: OpportunityApplicationsService,
+    private readonly adminTeamSafety: AdminTeamSafetyService,
   ) {}
 
   private async enrichAdminQueueRows(
@@ -262,7 +264,7 @@ export class AdminOpportunitiesController {
     @Param('id') opportunityId: string,
     @Body() dto: AdminMergeTeamMembersDto,
   ) {
-    return this.opportunityApplicationsService.adminPreviewMergeTeamMembers(
+    return this.adminTeamSafety.adminPreviewMergeTeamMembers(
       opportunityId,
       dto,
     );
@@ -276,7 +278,7 @@ export class AdminOpportunitiesController {
     @Param('id') opportunityId: string,
     @Body() dto: AdminTeamOpDto,
   ) {
-    return this.opportunityApplicationsService.adminTeamOp(
+    return this.adminTeamSafety.adminTeamOp(
       opportunityId,
       dto,
       undefined,
@@ -293,7 +295,7 @@ export class AdminOpportunitiesController {
     @Param('id') opportunityId: string,
     @Body() dto: AdminTeamOpDto,
   ) {
-    return this.opportunityApplicationsService.adminTeamOp(
+    return this.adminTeamSafety.adminTeamOp(
       opportunityId,
       dto,
       { id: req.user?.id, email: req.user?.email },
@@ -305,7 +307,7 @@ export class AdminOpportunitiesController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
   async listTeamSnapshots(@Param('id') opportunityId: string) {
-    return this.opportunityApplicationsService.adminListTeamSnapshots(
+    return this.adminTeamSafety.adminListTeamSnapshots(
       opportunityId,
     );
   }
@@ -319,7 +321,7 @@ export class AdminOpportunitiesController {
     @Param('id') opportunityId: string,
     @Param('snapshotId', new ParseUUIDPipe()) snapshotId: string,
   ) {
-    return this.opportunityApplicationsService.adminRestoreTeamSnapshot(
+    return this.adminTeamSafety.adminRestoreTeamSnapshot(
       opportunityId,
       snapshotId,
       { id: req.user?.id, email: req.user?.email },
@@ -333,7 +335,7 @@ export class AdminOpportunitiesController {
     @Param('id') opportunityId: string,
     @Param('teamId') teamId: string,
   ) {
-    return this.opportunityApplicationsService.adminPreviewDeleteTeam(
+    return this.adminTeamSafety.adminPreviewDeleteTeam(
       opportunityId,
       teamId,
     );
@@ -347,7 +349,7 @@ export class AdminOpportunitiesController {
     @Param('teamId') teamId: string,
     @Param('memberId') memberId: string,
   ) {
-    return this.opportunityApplicationsService.adminPreviewDeleteTeamMember(
+    return this.adminTeamSafety.adminPreviewDeleteTeamMember(
       opportunityId,
       teamId,
       memberId,

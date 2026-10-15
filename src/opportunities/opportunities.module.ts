@@ -8,6 +8,7 @@ import { ParticipantsController } from './participants.controller';
 import { Opportunity } from './entities/opportunity.entity';
 import { OpportunityApplication } from './entities/opportunity-application.entity';
 import { OpportunityApplicationsService } from './opportunity-applications.service';
+import { AdminTeamSafetyService } from './admin-team-safety.service';
 import { Organization } from '../organizations/entities/organization.entity';
 import { Participation } from '../engagement/entities/participant.entity';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
@@ -50,7 +51,7 @@ import { StudentApplyMaintenanceService } from './student-apply-maintenance.serv
         FacultyUniversityScopeModule,
     ],
     controllers: [OpportunitiesController, AdminOpportunitiesController, PublicOpportunitiesController, ParticipantsController, StudentOpportunitiesController, StudentOpportunitySingularController],
-    providers: [OpportunitiesService, OpportunityWorkflowService, OpportunityApplicationsService, VerificationVerifyAuthGuard, OpportunityTokenExpirySubscriber, StudentApplyMaintenanceService],
+    providers: [OpportunitiesService, OpportunityWorkflowService, OpportunityApplicationsService, AdminTeamSafetyService, VerificationVerifyAuthGuard, OpportunityTokenExpirySubscriber, StudentApplyMaintenanceService],
     exports: [OpportunitiesService, OpportunityWorkflowService, OpportunityApplicationsService, StudentApplyMaintenanceService],
 })
 export class OpportunitiesModule { }

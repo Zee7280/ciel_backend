@@ -1,4 +1,5 @@
 import {
+  Optional,
   BadRequestException,
   ForbiddenException,
   HttpException,
@@ -7,7 +8,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, Not, Repository } from 'typeorm';
+import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
+import { Participation } from '../engagement/entities/participant.entity';
+import { groupSiblingSeats } from '../engagement/team-lead-canonical.util';
 import { AiService } from '../ai/ai.service';
 import { collectReportEvidenceFiles } from '../reports/collect-report-evidence.util';
 import { CommunityAwardService } from '../reports/community-award.service';
@@ -108,6 +112,12 @@ export class NpeRankingService {
     private readonly snapshots: Repository<NpeRankingSnapshot>,
     private readonly communityAward: CommunityAwardService,
     private readonly ai: AiService,
+    @Optional()
+    @InjectRepository(AttendanceLog)
+    private readonly attendanceLogs?: Repository<AttendanceLog>,
+    @Optional()
+    @InjectRepository(Participation)
+    private readonly participations?: Repository<Participation>,
   ) {}
 
   scopeFor(actor: NpeActor): string {
@@ -481,7 +491,109 @@ export class NpeRankingService {
     });
     // The ranking compares only projects whose CII has been approved AND locked. Unlocked packages
     // would just sit in the review queue as noise and can never be ranked.
-    return rows.filter((r) => isCiiFacultyLocked(r.ciiV45Lock));
+    const locked = rows.filter((r) => isCiiFacultyLocked(r.ciiV45Lock));
+    await this.hydrateLiveHours(locked);
+    return locked;
+  }
+
+  /**
+   * The "required individual hours" gate reads `section1` — but the stored report JSON is whatever
+   * the student's browser last saved, and teammates' hours live in the attendance_logs table (the
+   * same source the submit gate checks). Without this, an approved package whose stored JSON lacks
+   * per-member hours is held as "Required individual hours not verified" forever and never ranked.
+   * Overlays the live roster (one canonical seat per person) and live logs onto an in-memory copy of
+   * section1; nothing is written back to the report.
+   */
+  async hydrateLiveHours(reports: StudentReport[]): Promise<void> {
+    if (!this.attendanceLogs || !this.participations || !reports.length) return;
+    const projectIds = [
+      ...new Set(
+        reports
+          .map((r) => String(r.opportunityId || r.project_id || '').trim())
+          .filter((id) => /^[0-9a-f-]{36}$/i.test(id)),
+      ),
+    ];
+    if (!projectIds.length) return;
+    const [seats, logs] = await Promise.all([
+      this.participations.find({
+        where: { projectId: In(projectIds), status: Not('rejected') },
+      }),
+      this.attendanceLogs.find({ where: { projectId: In(projectIds) } }),
+    ]);
+    const seatsByProject = new Map<string, Participation[]>();
+    for (const seat of seats) {
+      seatsByProject.set(seat.projectId, [...(seatsByProject.get(seat.projectId) ?? []), seat]);
+    }
+    const logsByProject = new Map<string, AttendanceLog[]>();
+    for (const log of logs) {
+      logsByProject.set(log.projectId, [...(logsByProject.get(log.projectId) ?? []), log]);
+    }
+
+    for (const report of reports) {
+      const projectId = String(report.opportunityId || report.project_id || '').trim();
+      const projectSeats = seatsByProject.get(projectId) ?? [];
+      if (!projectSeats.length) continue;
+      const groups = groupSiblingSeats(projectSeats);
+      const canonicalOf = (seatId: string) => groups.get(seatId)?.canonical ?? null;
+      const mine =
+        projectSeats.find((p) => p.studentId === report.studentId) ?? null;
+      // Scope to the author's team (same rule as the report dossier); a solo author is judged alone.
+      let scoped = projectSeats;
+      if (mine?.teamId) scoped = projectSeats.filter((p) => p.teamId === mine.teamId);
+      else if (mine?.applicationId) scoped = projectSeats.filter((p) => p.applicationId === mine.applicationId);
+      else if (mine) scoped = [mine];
+      const canonicalSeats = scoped.filter((p) => canonicalOf(p.id)?.id === p.id);
+      if (!canonicalSeats.length) continue;
+      const seatIds = new Set(scoped.map((p) => p.id));
+
+      const liveLogs = (logsByProject.get(projectId) ?? [])
+        .filter((l) => seatIds.has(l.participantId))
+        .map((l) => {
+          const seat = canonicalOf(l.participantId);
+          return {
+            id: l.id,
+            participantId: seat?.id ?? l.participantId,
+            studentId: seat?.studentId ?? null,
+            date: l.dateOfEngagement,
+            hours: Number(l.sessionHours) || 0,
+            approval_status: l.approvalStatus ?? null,
+            entryStatus: l.entryStatus ?? null,
+          };
+        });
+      const hoursFor = (seatId: string) =>
+        liveLogs
+          .filter((l) => l.participantId === seatId && String(l.approval_status || '').toLowerCase() !== 'rejected')
+          .reduce((sum, l) => sum + l.hours, 0);
+      const toPerson = (p: Participation) => ({
+        id: p.id,
+        participantId: p.id,
+        studentId: p.studentId ?? null,
+        fullName: p.fullName ?? null,
+        email: p.email ?? null,
+        hours: hoursFor(p.id),
+      });
+
+      const leadSeat =
+        canonicalSeats.find((p) => p.isTeamLead) ??
+        canonicalSeats.find((p) => p.studentId === report.studentId) ??
+        canonicalSeats[0];
+      const members = canonicalSeats.filter((p) => p.id !== leadSeat.id);
+      const stored =
+        report.section1 && typeof report.section1 === 'object' && !Array.isArray(report.section1)
+          ? (report.section1 as Record<string, unknown>)
+          : {};
+      const storedLead =
+        stored.team_lead && typeof stored.team_lead === 'object' && !Array.isArray(stored.team_lead)
+          ? (stored.team_lead as Record<string, unknown>)
+          : {};
+      report.section1 = {
+        ...stored,
+        participation_type: members.length ? 'team' : stored.participation_type || 'individual',
+        team_lead: { ...storedLead, ...toPerson(leadSeat) },
+        team_members: members.map(toPerson),
+        attendance_logs: liveLogs,
+      } as unknown as StudentReport['section1'];
+    }
   }
 
   private async requireRun(runId: string, actor: NpeActor) {

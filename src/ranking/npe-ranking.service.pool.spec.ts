@@ -1,7 +1,7 @@
 import { HttpException } from '@nestjs/common';
 import { NpeRankingService, NPE_ANALYZE_BUDGET_MS, describeAiFailure } from './npe-ranking.service';
 
-function build(over: { reports?: any; evaluations?: any; cards?: any[] } = {}) {
+function build(over: { reports?: any; evaluations?: any; cards?: any[]; attendanceLogs?: any; participations?: any } = {}) {
   const communityAward = {
     listForAdmin: jest.fn().mockResolvedValue(over.cards ?? []),
     listForUniversity: jest.fn().mockResolvedValue(over.cards ?? []),
@@ -13,6 +13,8 @@ function build(over: { reports?: any; evaluations?: any; cards?: any[] } = {}) {
     {} as any,
     communityAward as any,
     {} as any,
+    over.attendanceLogs,
+    over.participations,
   ) as any;
   return svc;
 }
@@ -31,6 +33,51 @@ describe('NPE ranking pool', () => {
     });
     const pool = await svc.poolReports({ userId: 'a', role: 'ciel_admin' });
     expect(pool.map((r: any) => r.id)).toEqual(['locked', 'string-locked']);
+  });
+
+  it('judges the hours gate on LIVE attendance logs, not the stored section1 snapshot', async () => {
+    const PROJECT = '11111111-2222-4333-8444-555555555555';
+    const report: any = {
+      id: 'rep',
+      studentId: 'lead-user',
+      opportunityId: PROJECT,
+      status: 'verified',
+      faculty_status: 'approved',
+      admin_status: 'approved',
+      ciiV45Lock: { locked: true },
+      updatedAt: new Date('2026-10-01T00:00:00Z'),
+      opportunity: { title: 'T', timeline: { expected_hours: 20 } },
+      // stored snapshot: lead has hours, the teammate's hours were never written into the JSON
+      section1: { participation_type: 'team', team_lead: { id: 'seat-lead', hours: 20 }, team_members: [{ id: 'seat-mate', fullName: 'Mate' }], attendance_logs: [] },
+    };
+    const seats = [
+      { id: 'seat-lead', projectId: PROJECT, studentId: 'lead-user', fullName: 'Lead', isTeamLead: true, teamId: 'T1', participationMode: 'team', status: 'approved' },
+      { id: 'seat-mate', projectId: PROJECT, studentId: 'mate-user', fullName: 'Mate', isTeamLead: false, teamId: 'T1', participationMode: 'team', status: 'approved' },
+      { id: 'seat-mate-dup', projectId: PROJECT, studentId: 'mate-user', fullName: 'Mate', isTeamLead: false, teamId: 'T1', participationMode: 'team', status: 'approved' },
+      { id: 'seat-other-team', projectId: PROJECT, studentId: 'other', fullName: 'Other', isTeamLead: true, teamId: 'T2', participationMode: 'team', status: 'approved' },
+    ];
+    const logs = [
+      { id: 'l1', projectId: PROJECT, participantId: 'seat-lead', sessionHours: '20', approvalStatus: 'pending' },
+      { id: 'l2', projectId: PROJECT, participantId: 'seat-mate', sessionHours: '12', approvalStatus: 'pending' },
+      { id: 'l3', projectId: PROJECT, participantId: 'seat-mate-dup', sessionHours: '8', approvalStatus: 'pending' }, // ghost seat holds the rest
+      { id: 'l4', projectId: PROJECT, participantId: 'seat-mate', sessionHours: '5', approvalStatus: 'rejected' },
+    ];
+    const svc = build({
+      cards: [{ id: 'rep' }],
+      reports: { find: jest.fn().mockResolvedValue([report]) },
+      attendanceLogs: { find: jest.fn().mockResolvedValue(logs) },
+      participations: { find: jest.fn().mockResolvedValue(seats) },
+    });
+    const { buildNpePackageRecord, gateNpePackage } = require('./npe-ranking-eligibility');
+    expect(buildNpePackageRecord(report).hoursMet).toBe(false); // stored JSON alone would hold it
+    const pool = await svc.poolReports({ userId: 'a', role: 'ciel_admin' });
+    const pkg = buildNpePackageRecord(pool[0]);
+    expect(pkg.hoursMet).toBe(true);
+    expect(gateNpePackage(pkg).reason).not.toMatch(/hours/);
+    const s1 = pool[0].section1 as any;
+    expect(s1.team_members).toHaveLength(1); // ghost duplicate folded, other team excluded
+    expect(s1.team_members[0].hours).toBe(20); // 12 + 8 on the canonical seat, rejected 5 ignored
+    expect(s1.team_lead.hours).toBe(20);
   });
 
   it('keeps one analyze call well inside the 300s function limit', () => {

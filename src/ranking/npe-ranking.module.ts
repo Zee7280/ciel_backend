@@ -3,6 +3,8 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AiModule } from '../ai/ai.module';
 import { CommunityAwardModule } from '../reports/community-award.module';
 import { StudentReport } from '../reports/entities/student-report.entity';
+import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
+import { Participation } from '../engagement/entities/participant.entity';
 import { NpeRankingEvaluation } from './entities/npe-ranking-evaluation.entity';
 import { NpeRankingRun } from './entities/npe-ranking-run.entity';
 import { NpeRankingSnapshot } from './entities/npe-ranking-snapshot.entity';
@@ -15,6 +17,8 @@ import { NpeRankingService } from './npe-ranking.service';
       NpeRankingRun,
       NpeRankingEvaluation,
       NpeRankingSnapshot,
+      AttendanceLog,
+      Participation,
     ]),
     CommunityAwardModule,
     AiModule,

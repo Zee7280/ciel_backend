@@ -147,10 +147,26 @@ async function freshScratchDb() {
     status: 'active',
   });
 
+  // Partner / faculty logins with complete profiles, for the "Duplicate opportunity" click-through.
+  await h.orgs.update(org.id, {
+    description: 'Browser NGO working on clean water',
+    city: 'Lahore',
+    region: 'Punjab',
+    contactName: 'NGO Contact',
+    contactEmail: ngo.email,
+    contactPhone: '+923001112233',
+    websiteUrl: 'https://browser-ngo.example.org',
+  } as any);
+  const facultyUser = await h.makeUser(UserRole.FACULTY, { overrides: { name: 'Browser Faculty', university: 'BNU', institution: 'BNU', city: 'Lahore', department: 'Computer Science', designation: 'Professor' } as any });
+  const facSrc = await h.as(facultyUser).post('/opportunities').send(oppPayload({ title: 'Faculty Source Opportunity', supervision: { contact: facultyUser.email, supervisor_name: 'Browser Faculty' } }));
+  if (facSrc.status !== 201) throw new Error(`faculty source failed ${facSrc.status} ${JSON.stringify(facSrc.body)}`);
+
   writeFileSync(
     OUT,
     JSON.stringify(
       {
+        ngo: { token: ngo.token, user: { id: ngo.id, userId: ngo.id, name: 'NGO Contact', email: ngo.email, role: 'ngo', status: 'active', organizationId: org.id, phone: '+923001112233', city: 'Lahore' }, orgId: org.id },
+        faculty: { token: facultyUser.token, user: { id: facultyUser.id, userId: facultyUser.id, name: 'Browser Faculty', email: facultyUser.email, role: 'faculty', status: 'active', university: 'BNU', institution: 'BNU', city: 'Lahore', department: 'Computer Science', designation: 'Professor', phone: '+923001234567', contact: '+923001234567' }, sourceId: facSrc.body.id },
         lead: { token: lead.token, user: userJson(lead, 'Zubair Student', '+923038444425') },
         reportLead: { token: reportLead.token, user: userJson(reportLead, 'Report Lead', '+923031111111'), teamId },
         admin: { token: adminUser.token, user: { id: adminUser.id, userId: adminUser.id, name: 'Browser Admin', email: adminUser.email, role: 'admin', status: 'active' } },

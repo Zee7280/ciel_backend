@@ -1038,6 +1038,20 @@ export class FacultyReportsService {
     }>,
     exceptionalFeatureAdminVerified?: boolean,
   ) {
+    // Confirming the CII publishes the report (status -> verified), so it must follow the same
+    // gate as the plain Approve action: never publish a draft, or a report that was just sent back
+    // for revision and has not been resubmitted yet.
+    const currentStatus = String(report.status || '').trim().toLowerCase();
+    if (['draft', 'continue', ''].includes(currentStatus)) {
+      throw new BadRequestException(
+        'This report has not been submitted yet and cannot be approved.',
+      );
+    }
+    if (['revision', 'rejected'].includes(currentStatus)) {
+      throw new BadRequestException(
+        'This report was sent back for revision. It can be accepted only after the student resubmits it.',
+      );
+    }
     const storedRaw = report.ciiV45 as unknown as CiiV45Result | null | undefined;
 
     if (!storedRaw) {

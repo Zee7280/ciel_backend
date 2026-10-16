@@ -3114,6 +3114,9 @@ export class StudentReportsService {
       opportunityForPolicy = await this.opportunitiesRepository.findOne({
         where: { id: opportunityIdFromDto },
       });
+      if (!opportunityForPolicy) {
+        throw new NotFoundException('Opportunity not found');
+      }
       this.assertStudentOpportunityReportableForWrite(opportunityForPolicy);
       this.assertReportingWindowOpen(opportunityForPolicy);
       await this.assertStudentEnrolledToStartReport(
@@ -3543,6 +3546,9 @@ export class StudentReportsService {
       const opp = await this.opportunitiesRepository.findOne({
         where: { id: opportunityId },
       });
+      if (!opp) {
+        throw new NotFoundException('Opportunity not found');
+      }
       this.assertStudentOpportunityReportableForWrite(opp);
       this.assertReportingWindowOpen(opp);
       await this.assertStudentEnrolledToStartReport(studentId, opp);
@@ -3627,11 +3633,13 @@ export class StudentReportsService {
       delete (report.section1 as any).team_members;
     }
 
-    // Handle Faculty Assignment if faculty email is provided in Section 1
+    // Handle Faculty Assignment if faculty email is provided in Section 1.
+    // Link only: the invite email goes out on a successful submit, never on every autosave.
     if (report.section1?.faculty_supervisor_email) {
       await this.handleFacultyAssignment(
         report,
         report.section1.faculty_supervisor_email,
+        false,
       );
     }
 

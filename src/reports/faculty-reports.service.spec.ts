@@ -98,6 +98,7 @@ async function fingerprintForReport(report: Record<string, unknown>): Promise<st
 function analysableReport(id = 'report-1'): Record<string, unknown> {
   return {
     id,
+    status: 'submitted',
     section1: { team_lead: { hours: 20 } },
     section2: {},
     section3: {},
@@ -390,6 +391,7 @@ describe('FacultyReportsService — approveCiiV45ForAdmin', () => {
   it('refuses to re-approve an already-locked report', async () => {
     const { service } = makeService({
       id: 'report-1',
+      status: 'submitted',
       ciiV45: { scoreStatus: 'FINAL' },
       ciiV45Lock: {
         locked: true,
@@ -409,6 +411,7 @@ describe('FacultyReportsService — approveCiiV45ForAdmin', () => {
   it('lets admin publish when analysis flagged RESUBMISSION_REQUIRED', async () => {
     const report: any = {
       id: 'report-1',
+      status: 'submitted',
       section1: { team_lead: { hours: 20 } },
       ciiV45: {
         scoreStatus: 'RESUBMISSION_REQUIRED',
@@ -431,6 +434,7 @@ describe('FacultyReportsService — approveCiiV45ForAdmin', () => {
   it('lets admin publish when analysis is still ADMIN_REVIEW_REQUIRED', async () => {
     const report: any = {
       id: 'report-1',
+      status: 'submitted',
       section1: { team_lead: { hours: 20 } },
       ciiV45: {
         scoreStatus: 'ADMIN_REVIEW_REQUIRED',
@@ -451,6 +455,7 @@ describe('FacultyReportsService — approveCiiV45ForAdmin', () => {
   it('refuses to publish when the report changed since the analysis ran (fingerprint mismatch)', async () => {
     const { service } = makeService({
       id: 'report-1',
+      status: 'submitted',
       ciiV45: {
         scoreStatus: 'FINAL',
         diagnosticCII: 80,
@@ -469,6 +474,7 @@ describe('FacultyReportsService — approveCiiV45ForAdmin', () => {
   it('refuses when a concurrent request wins the lock first (atomic compare-and-swap affects 0 rows)', async () => {
     const report: any = {
       id: 'report-1',
+      status: 'submitted',
       section1: { team_lead: { hours: 20 } },
       ciiV45: {
         scoreStatus: 'FINAL',
@@ -490,6 +496,7 @@ describe('FacultyReportsService — approveCiiV45ForAdmin', () => {
   it('approves the student pending attendance logs when the CII v4.5 score is locked', async () => {
     const report: any = {
       id: 'report-1',
+      status: 'submitted',
       studentId: 'stu-1',
       opportunityId: 'opp-1',
       section1: { team_lead: { hours: 20 } },
@@ -534,6 +541,7 @@ describe('FacultyReportsService — approveCiiV45ForAdmin', () => {
       const baseReport = async () => {
         const report: any = {
           id: 'report-1',
+          status: 'submitted',
           section1: { team_lead: { hours: 20 } },
           section8: { evidence_files: ['https://example.com/evidence.jpg'] },
           ciiV45: {
@@ -565,6 +573,7 @@ describe('FacultyReportsService — approveCiiV45ForAdmin', () => {
   it('ignores a manual final-score override — Confirm publishes the generated Composite CII', async () => {
     const report: any = {
       id: 'report-1',
+      status: 'submitted',
       ciiV45: {
         scoreStatus: 'FINAL',
         diagnosticCII: 80,
@@ -591,6 +600,7 @@ describe('FacultyReportsService — approveCiiV45ForAdmin', () => {
 describe('FacultyReportsService — runIndependentAiAnalysis (multi-stakeholder Phase 4)', () => {
   const lockedReport = () => ({
     id: 'report-1',
+    status: 'submitted',
     student: { id: 'student-1', role: 'student', university: 'Acme University' },
     ciiV45Lock: {
       locked: true,
@@ -720,6 +730,7 @@ describe('FacultyReportsService — runIndependentAiAnalysis (multi-stakeholder 
 describe('FacultyReportsService — runIndependentAiAnalysisBatch', () => {
   const lockedReport = () => ({
     id: 'report-1',
+    status: 'submitted',
     student: { id: 'student-1', role: 'student', university: 'Acme University' },
     ciiV45Lock: {
       locked: true,
@@ -1207,6 +1218,7 @@ describe('FacultyReportsService — AI analysis run safety (lock, history, incom
   it('an incomplete run with no numeric score still cannot be locked', async () => {
     const { service } = makeService({
       id: 'report-inc',
+      status: 'submitted',
       ciiV45: { scoreStatus: 'ADMIN_REVIEW_REQUIRED', adminReviewReasons: ['Model skipped rubric parts.'] },
       ciiV45Lock: null,
     });

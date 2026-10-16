@@ -96,6 +96,43 @@ describe('Duplicate opportunity: source payload is complete, safe and scoped (re
     expect([403, 404]).toContain((await open(stranger, id, 'student_stranger')).status);
   });
 
+
+  it('every row on the faculty "mine" list (pending, live, rejected, revision, student-created) opens through detail, so Duplicate never lands on an empty form', async () => {
+    const fac = await h.makeUser(UserRole.FACULTY);
+    const org = await h.makeOrg();
+    const ngo = await h.makeUser(UserRole.NGO, { org });
+    const s = await h.makeUser(UserRole.STUDENT);
+    const ids: string[] = [];
+    // own, pending admin
+    ids.push((await h.as(fac).post('/opportunities').send(full({ title: `Mine pending ${uniq()}`, supervision: { contact: fac.email } }))).body.id);
+    // own, live
+    const live = (await h.as(fac).post('/opportunities').send(full({ title: `Mine live ${uniq()}`, supervision: { contact: fac.email } }))).body.id;
+    await adminApprove(h, admin, live);
+    ids.push(live);
+    // own, rejected
+    const rej = (await h.as(fac).post('/opportunities').send(full({ title: `Mine rejected ${uniq()}`, supervision: { contact: fac.email } }))).body.id;
+    await h.as(admin).post(`/admin/opportunities/${rej}/reject`).send({ reason: 'Not suitable' });
+    ids.push(rej);
+    // NGO row naming this faculty (waiting on the faculty)
+    ids.push((await h.as(ngo).post('/opportunities').send(full({ title: `Linked ${uniq()}`, supervision: { contact: fac.email, supervisor_name: 'Dr' } }))).body.id);
+    // student-created row supervised by this faculty
+    const stu = await h.as(s).post('/student/opportunity').send(studentPayload(fac.email, { title: `Student ${uniq()} sanitation drive` }));
+    ids.push(stu.body.data?.id ?? stu.body.id);
+
+    const mine = await h.as(fac).get('/opportunities/faculty/mine');
+    expect(mine.status).toBe(200);
+    const listed = (mine.body.data as any[]).map((r) => r.id);
+    for (const id of ids) {
+      expect({ id, listed: listed.includes(id) }).toEqual({ id, listed: true });
+      expectCopyable(await detail(h, fac, id));
+    }
+    // and nothing else on the list is unopenable
+    for (const id of listed) {
+      const r = await detail(h, fac, id);
+      expect({ id, status: r.status < 300 }).toEqual({ id, status: true });
+    }
+  });
+
   it('admin-created: the admin can copy it', async () => {
     const create = await h.as(admin).post('/opportunities').send(full());
     expect(create.status).toBe(201);

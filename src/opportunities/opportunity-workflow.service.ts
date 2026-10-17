@@ -422,6 +422,9 @@ export class OpportunityWorkflowService {
     opp.adminApprovalStatus = LINE_STATUS.REJECTED;
     opp.workflowStage = WORKFLOW_STAGE.REJECTED;
     opp.status = 'rejected';
+    // A rejected listing is not approved: leaving the legacy flag true made the tracker show the
+    // admin step as done and sent the student edit path to "approved listings cannot be updated".
+    opp.admin_approved = false;
     if (reason) {
       opp.rejectionReason = reason;
     }

@@ -18,17 +18,24 @@ export function stampVerificationTokenExpiry(
   now = Date.now(),
 ): void {
   const expiresAt = () => new Date(now + verificationTokenTtlMs());
-  if (!next.partnerToken) {
-    next.partnerTokenExpiresAt = null;
-  } else if (next.partnerToken !== (previous?.partnerToken ?? null)) {
-    next.partnerTokenExpiresAt = expiresAt();
+  // Only act on a token the write actually carries. A partial `update(id, {…})` hands this hook just
+  // the columns being set: reading a missing token as "revoked" nulled the expiry of every pending
+  // reviewer link on unrelated updates, turning expiring links into permanent ones.
+  if (next.partnerToken !== undefined) {
+    if (!next.partnerToken) {
+      next.partnerTokenExpiresAt = null;
+    } else if (next.partnerToken !== (previous?.partnerToken ?? null)) {
+      next.partnerTokenExpiresAt = expiresAt();
+    }
   }
-  if (!next.faculty_verification_token) {
-    next.facultyTokenExpiresAt = null;
-  } else if (
-    next.faculty_verification_token !== (previous?.faculty_verification_token ?? null)
-  ) {
-    next.facultyTokenExpiresAt = expiresAt();
+  if (next.faculty_verification_token !== undefined) {
+    if (!next.faculty_verification_token) {
+      next.facultyTokenExpiresAt = null;
+    } else if (
+      next.faculty_verification_token !== (previous?.faculty_verification_token ?? null)
+    ) {
+      next.facultyTokenExpiresAt = expiresAt();
+    }
   }
 }
 

@@ -8,7 +8,9 @@ import { Participation } from '../engagement/entities/participant.entity';
 import { NpeRankingEvaluation } from './entities/npe-ranking-evaluation.entity';
 import { NpeRankingRun } from './entities/npe-ranking-run.entity';
 import { NpeRankingSnapshot } from './entities/npe-ranking-snapshot.entity';
+import { NpeStudioPublication } from './entities/npe-studio-publication.entity';
 import { NpeRankingService } from './npe-ranking.service';
+import { NpeStudioService } from './npe-studio.service';
 
 @Module({
   imports: [
@@ -17,13 +19,14 @@ import { NpeRankingService } from './npe-ranking.service';
       NpeRankingRun,
       NpeRankingEvaluation,
       NpeRankingSnapshot,
+      NpeStudioPublication,
       AttendanceLog,
       Participation,
     ]),
     CommunityAwardModule,
     AiModule,
   ],
-  providers: [NpeRankingService],
-  exports: [NpeRankingService],
+  providers: [NpeRankingService, NpeStudioService],
+  exports: [NpeRankingService, NpeStudioService],
 })
 export class NpeRankingModule {}

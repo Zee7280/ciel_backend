@@ -43,10 +43,12 @@ import { FacultyReportsService } from '../reports/faculty-reports.service';
 import { RunIndependentAnalysisDto } from '../faculty/dto/run-independent-analysis.dto';
 import { RunIndependentAnalysisBatchDto } from '../faculty/dto/run-independent-analysis-batch.dto';
 import { NpeRankingService } from '../ranking/npe-ranking.service';
+import { NpeStudioService } from '../ranking/npe-studio.service';
 import {
   NpeAnalyzeDto,
   NpeClearReviewDto,
   NpePublishDto,
+  NpeStudioDto,
 } from '../ranking/dto/npe-ranking.dto';
 
 /** The AI analyzer feeds scores and rankings, so only CIEL PK Admin may run it. */
@@ -71,6 +73,7 @@ export class PartnersController {
     private readonly opportunityApplicationsService: OpportunityApplicationsService,
     private readonly communityAward: CommunityAwardService,
     private readonly npeRanking: NpeRankingService,
+    private readonly npeStudio: NpeStudioService,
     private readonly facultyUniversityScope: FacultyUniversityScopeService,
     private readonly facultyReportsService: FacultyReportsService,
   ) {}
@@ -271,6 +274,36 @@ export class PartnersController {
     const actor = await this.assertUniversityRankingActor(req);
     const data = await this.npeRanking.clearReview(actor, dto.runId, dto.itemId);
     return { success: true, data };
+  }
+
+  @Post('community-service/ranking/studio/preview')
+  async npeStudioPreview(@Request() req, @Body() dto: NpeStudioDto) {
+    const actor = await this.assertUniversityRankingActor(req);
+    return { success: true, data: await this.npeStudio.preview(actor, dto) };
+  }
+
+  @Post('community-service/ranking/studio/publish')
+  async npeStudioPublish(@Request() req, @Body() dto: NpeStudioDto) {
+    const actor = await this.assertUniversityRankingActor(req);
+    return { success: true, data: await this.npeStudio.publish(actor, dto) };
+  }
+
+  @Get('community-service/ranking/studio/history')
+  async npeStudioHistory(@Request() req) {
+    const actor = await this.assertUniversityRankingActor(req);
+    return { success: true, data: await this.npeStudio.history(actor) };
+  }
+
+  @Get('community-service/ranking/studio/publications/:id')
+  async npeStudioPublication(@Request() req, @Param('id', new ParseUUIDPipe()) id: string) {
+    const actor = await this.assertUniversityRankingActor(req);
+    return { success: true, data: await this.npeStudio.getPublication(actor, id) };
+  }
+
+  @Get('community-service/ranking/studio/project/:reportId')
+  async npeStudioProject(@Request() req, @Param('reportId', new ParseUUIDPipe()) reportId: string) {
+    const actor = await this.assertUniversityRankingActor(req);
+    return { success: true, data: await this.npeStudio.rankingsForProject(actor, reportId) };
   }
 
   @Post('community-service/ranking/publish')

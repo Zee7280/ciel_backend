@@ -3005,7 +3005,23 @@ export class StudentReportsService {
     const facultyEmail = this.resolveReportFacultyEmail(report, report.opportunity);
     const partnerEmail = this.resolveReportPartnerEmail(report.opportunity);
     const isLead = report.studentId === userId;
-    const isTeammate = Boolean(enrollment);
+    // A teammate is someone on the SAME team (or application) as the report owner. Any other
+    // student enrolled on the project must not be able to mail reviewers about this report, nor see
+    // the lead's e-mail in the reminder reply.
+    let isTeammate = false;
+    if (enrollment && !isLead && this.looksLikeUuid(projectKey)) {
+      const ownerSeat = await findPreferredProjectEnrollment(
+        this.participantRepository,
+        report.studentId,
+        projectKey,
+      );
+      const myTeam = String(enrollment.teamId || '').trim();
+      const ownerTeam = String(ownerSeat?.teamId || '').trim();
+      const myApp = String(enrollment.applicationId || '').trim();
+      const ownerApp = String(ownerSeat?.applicationId || '').trim();
+      isTeammate =
+        (!!myTeam && myTeam === ownerTeam) || (!!myApp && myApp === ownerApp);
+    }
     const isNamedFaculty = !!facultyEmail && facultyEmail === callerEmail;
     const isNamedPartner = !!partnerEmail && partnerEmail === callerEmail;
     const isAdmin = user.role === UserRole.SUPER_ADMIN;

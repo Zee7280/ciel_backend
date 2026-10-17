@@ -19,6 +19,7 @@ import {
   parseNpeRankingResponse,
   type NpeAiEvaluation,
 } from '../ranking/parse-npe-ranking.util';
+import { scrubPersonalText } from '../common/scrub-personal-text.util';
 import { ciiEvidenceInspectCache } from '../reports/build-ciel-pk-ai-evaluation-payload.util';
 
 /** Shared rules for the executive flashcard section summaries (V12). Scoring prompts do not use this. */
@@ -81,6 +82,13 @@ const OPENAI_MAX_ATTEMPTS = 2;
 const EVIDENCE_MAX_IMAGES = 4;
 const EVIDENCE_MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 const EVIDENCE_IMAGE_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif']);
+/** PDF originals (receipts, registers, letters) are read as text, within a fixed budget. */
+const EVIDENCE_MAX_PDFS = 3;
+const EVIDENCE_MAX_PDF_BYTES = 8 * 1024 * 1024;
+const EVIDENCE_PDF_MAX_PAGES = 12;
+const EVIDENCE_PDF_CHARS_PER_FILE = 5_000;
+const EVIDENCE_PDF_CHARS_TOTAL = 14_000;
+const EVIDENCE_PDF_PARSE_TIMEOUT_MS = 15_000;
 
 export interface AiSummarizeResult {
   summary: string;
@@ -234,42 +242,64 @@ export class AiService {
     const files = Array.isArray((data as { uploaded_evidence_files?: unknown })?.uploaded_evidence_files)
       ? ((data as { uploaded_evidence_files: Array<Record<string, unknown>> }).uploaded_evidence_files)
       : [];
+    const fileId = (f: Record<string, unknown>) => String(f?.file_id ?? '');
+    const fileName = (f: Record<string, unknown>) => String(f?.file_name ?? f?.url ?? 'file');
     const imageCandidates: Array<Record<string, unknown>> = [];
+    const pdfCandidates: Array<Record<string, unknown>> = [];
     for (const f of files) {
-      const id = String(f?.file_id ?? '');
-      const name = String(f?.file_name ?? f?.url ?? 'file');
       const url = typeof f?.url === 'string' ? f.url : '';
       const type = String(f?.file_type ?? '').toLowerCase();
       const looksImage = /^(jpe?g|png|webp|gif)$/.test(type) || /\.(jpe?g|png|webp|gif)(\?|$)/i.test(url);
-      if (!looksImage) {
-        inspection.notInspected.push({ id, name, reason: 'not an image (documents / video are not shown to the model)' });
-        continue;
+      const looksPdf = type === 'pdf' || /\.pdf(\?|$)/i.test(url);
+      if (looksImage) imageCandidates.push(f);
+      else if (looksPdf) pdfCandidates.push(f);
+      else {
+        inspection.notInspected.push({
+          id: fileId(f),
+          name: fileName(f),
+          reason: 'file type cannot be read by the analyzer (video / office document / other)',
+        });
       }
-      imageCandidates.push(f);
     }
-    const toLoad = imageCandidates.slice(0, EVIDENCE_MAX_IMAGES);
-    for (const f of imageCandidates.slice(EVIDENCE_MAX_IMAGES)) {
+
+    // Images: spread the (few) slots across the report's sections instead of taking the first
+    // four in order, so every part of the package is represented before any part gets two.
+    const bySource = new Map<string, Array<Record<string, unknown>>>();
+    for (const f of imageCandidates) {
+      const key = String(f?.source ?? 'other').split('.')[0];
+      bySource.set(key, [...(bySource.get(key) ?? []), f]);
+    }
+    const toLoad: Array<Record<string, unknown>> = [];
+    while (toLoad.length < EVIDENCE_MAX_IMAGES && [...bySource.values()].some((g) => g.length)) {
+      for (const group of bySource.values()) {
+        if (toLoad.length >= EVIDENCE_MAX_IMAGES) break;
+        const next = group.shift();
+        if (next) toLoad.push(next);
+      }
+    }
+    const chosen = new Set(toLoad);
+    for (const f of imageCandidates) {
+      if (chosen.has(f)) continue;
       inspection.notInspected.push({
-        id: String(f?.file_id ?? ''),
-        name: String(f?.file_name ?? f?.url ?? 'file'),
-        reason: `only the first ${EVIDENCE_MAX_IMAGES} images are inspected`,
+        id: fileId(f),
+        name: fileName(f),
+        reason: `only ${EVIDENCE_MAX_IMAGES} images per package are shown to the analyzer (spread across sections)`,
       });
     }
 
     const inspectCache = ciiEvidenceInspectCache(data);
-    const loadedRows = await Promise.all(
-      toLoad.map(async (f) => {
-        const url = typeof f?.url === 'string' ? f.url : '';
-        const cached = url ? inspectCache?.get(url) : undefined;
-        if (cached) return { f, loaded: cached };
-        const loaded = this.s3Service ? await this.s3Service.getObjectBufferByPublicUrl(url) : null;
-        return { f, loaded };
-      }),
-    );
+    const loadOne = async (f: Record<string, unknown>) => {
+      const url = typeof f?.url === 'string' ? f.url : '';
+      const cached = url ? inspectCache?.get(url) : undefined;
+      if (cached) return { f, loaded: cached };
+      const loaded = this.s3Service ? await this.s3Service.getObjectBufferByPublicUrl(url) : null;
+      return { f, loaded };
+    };
+    const loadedRows = await Promise.all(toLoad.map(loadOne));
 
     for (const { f, loaded } of loadedRows) {
-      const id = String(f?.file_id ?? '');
-      const name = String(f?.file_name ?? f?.url ?? 'file');
+      const id = fileId(f);
+      const name = fileName(f);
       const contentType = String(loaded?.contentType ?? '').toLowerCase().split(';')[0];
       if (!loaded || !loaded.buffer?.length) {
         inspection.notInspected.push({ id, name, reason: 'could not be loaded from storage' });
@@ -286,7 +316,85 @@ export class AiService {
         image_url: { url: `data:${contentType};base64,${loaded.buffer.toString('base64')}`, detail: 'low' },
       });
     }
+
+    // PDFs: extracted text, bounded per file and in total.
+    const pdfsToRead = pdfCandidates.slice(0, EVIDENCE_MAX_PDFS);
+    for (const f of pdfCandidates.slice(EVIDENCE_MAX_PDFS)) {
+      inspection.notInspected.push({
+        id: fileId(f),
+        name: fileName(f),
+        reason: `only ${EVIDENCE_MAX_PDFS} PDF documents per package are read by the analyzer`,
+      });
+    }
+    let pdfCharsLeft = EVIDENCE_PDF_CHARS_TOTAL;
+    const pdfRows = await Promise.all(pdfsToRead.map(loadOne));
+    for (const { f, loaded } of pdfRows) {
+      const id = fileId(f);
+      const name = fileName(f);
+      if (!loaded || !loaded.buffer?.length) {
+        inspection.notInspected.push({ id, name, reason: 'could not be loaded from storage' });
+        continue;
+      }
+      if (loaded.buffer.length > EVIDENCE_MAX_PDF_BYTES) {
+        inspection.notInspected.push({ id, name, reason: 'too large to read (PDF over 8 MB)' });
+        continue;
+      }
+      let extracted = '';
+      try {
+        extracted = await this.extractPdfText(loaded.buffer);
+      } catch {
+        extracted = '';
+      }
+      if (!extracted) {
+        inspection.notInspected.push({
+          id,
+          name,
+          reason: 'PDF could not be read as text (scanned image, protected or unsupported structure); its content was not read',
+        });
+        continue;
+      }
+      const budget = Math.min(EVIDENCE_PDF_CHARS_PER_FILE, pdfCharsLeft);
+      if (budget <= 0) {
+        inspection.notInspected.push({ id, name, reason: 'PDF text budget for this package was used by earlier documents' });
+        continue;
+      }
+      const clipped = scrubPersonalText(extracted.slice(0, budget));
+      pdfCharsLeft -= clipped.length;
+      inspection.inspected.push({ id, name });
+      parts.push({
+        type: 'text',
+        text: `Evidence document ${id} — PDF "${name}" (extracted text${extracted.length > budget ? ', truncated' : ''}; claims it is linked to: ${JSON.stringify(f?.linked_claims ?? [])}):\n${clipped}`,
+      });
+    }
+
+    // Tell the model exactly what it was and was not given, so it cannot credit a file it never saw.
+    const shown = inspection.inspected.map((i) => `${i.id} "${i.name}"`).join('; ') || 'none';
+    const notShown = inspection.notInspected.map((i) => `${i.id} "${i.name}" — ${i.reason}`).join('\n') || 'none';
+    parts.unshift({
+      type: 'text',
+      text: `EVIDENCE READ STATUS (authoritative — generated by the platform, not by the student)
+Files attached for you to read (images and PDF text): ${shown}
+Files NOT shown to you:
+${notShown}
+Rules: a file under "NOT shown to you" was not read — do not describe its content and do not credit any claim that rests only on it (give such a claim "low" or "unsupported" support). That alone is not a reason to set readComplete=false; use readComplete=false only for a file the platform says could not be loaded, or when material you ARE given is unreadable.`,
+    });
     return { parts, inspection };
+  }
+
+  private async extractPdfText(buffer: Buffer): Promise<string> {
+    // The package's index.js runs a self-test on import; the lib entry point does not.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const pdfParse = require('pdf-parse/lib/pdf-parse.js') as (
+      data: Buffer,
+      opts?: { max?: number },
+    ) => Promise<{ text?: string }>;
+    const out = await Promise.race([
+      pdfParse(buffer, { max: EVIDENCE_PDF_MAX_PAGES }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('PDF parse timeout')), EVIDENCE_PDF_PARSE_TIMEOUT_MS),
+      ),
+    ]);
+    return String(out?.text ?? '').replace(/\s+/g, ' ').trim();
   }
 
   private async generateSummaryWithOpenAI(

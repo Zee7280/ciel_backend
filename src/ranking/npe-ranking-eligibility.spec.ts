@@ -73,3 +73,21 @@ describe('buildNpePackageRecord parts', () => {
     ]);
   });
 });
+
+describe('required hours: the ranking gate uses the same bar as the submit gate', () => {
+  const { reportIndividualHoursMet } = require('../reports/build-ciel-pk-ai-evaluation-payload.util');
+  const solo = (hours: number, opportunity: Record<string, unknown>) =>
+    ({ id: 'r', opportunity, section1: { participation_type: 'individual', team_lead: { hours }, metrics: { total_verified_hours: hours } } }) as never;
+
+  it('uses the opportunity required-hours column when the timeline has none (previously fell back to 16)', () => {
+    expect(reportIndividualHoursMet(solo(10, { requiredHours: 8 }))).toBe(true);   // submit passed at 10h >= 8
+    expect(reportIndividualHoursMet(solo(20, { requiredHours: 40 }))).toBe(false); // 16h would have passed it wrongly
+  });
+
+  it('timeline hours still win, then timeline required_hours, then the default of 16', () => {
+    expect(reportIndividualHoursMet(solo(5, { timeline: { expected_hours: 5 }, requiredHours: 40 }))).toBe(true);
+    expect(reportIndividualHoursMet(solo(12, { timeline: { required_hours: 12 } }))).toBe(true);
+    expect(reportIndividualHoursMet(solo(15, {}))).toBe(false);
+    expect(reportIndividualHoursMet(solo(16, {}))).toBe(true);
+  });
+});

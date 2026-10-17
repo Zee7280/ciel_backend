@@ -603,6 +603,34 @@ describe('Impact Report lifecycle (real app + real Postgres)', () => {
     });
   });
 
+
+    it('reminding the reviewer: the owner and their teammates may; another team or a solo student on the same project may not', async () => {
+      const { opp } = await liveOpp();
+      const lead = await student();
+      const mate = await student();
+      const teamId = `TM-${uniq().toUpperCase()}`;
+      const leadSeat = await seat(opp.id, lead, { lead: true, teamId });
+      const mateSeat = await seat(opp.id, mate, { teamId });
+      for (const [u, st] of [[lead, leadSeat], [mate, mateSeat]] as const) {
+        await logHours(u, st.id, '09:00', '12:00', 3);
+        await logHours(u, st.id, '09:00', '12:00', 2);
+      }
+      const rid = (await submit(lead, opp.id, fullSections())).body.data.report_id;
+      const otherTeamMember = await student();
+      await seat(opp.id, otherTeamMember, { lead: true, teamId: `TM-${uniq().toUpperCase()}` });
+      const solo = await student();
+      await seat(opp.id, solo);
+
+      const remind = (u: E2eUser) => h.as(u).post(`/student/reports/${rid}/remind-reviewer`).send({});
+      expect((await remind(lead)).status).toBe(201);
+      expect((await remind(mate)).status).toBe(201);
+      for (const outsider of [otherTeamMember, solo]) {
+        const r = await remind(outsider);
+        expect(r.status).toBe(403);
+        expect(JSON.stringify(r.body)).not.toContain(lead.email); // the lead's e-mail is never disclosed
+      }
+    });
+
   // ------------------------------------------------------------------ robustness
   describe('R7 malformed ids and listings', () => {
     it('garbage / unknown ids are 4xx, never 500, on every report endpoint', async () => {

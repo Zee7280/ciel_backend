@@ -42,6 +42,7 @@ import {
   MailService,
   OpportunityVerificationEmailDetails,
 } from '../mail/mail.service';
+import { isUUID } from 'class-validator';
 import { randomUUID } from 'crypto';
 import { applyCanonicalPrivateCandidatePhone, isPrivateCandidateDto } from './private-candidate.util';
 import { isPubliclyVisibleOpportunity as isPubliclyVisibleOpportunityUtil } from './opportunity-visibility.util';
@@ -1078,21 +1079,27 @@ export class OpportunitiesService {
     const requiresPartnerChanged =
       before.requiresPartner !== requiresPartnerNow;
     const partnerNowRequired = requiresPartnerNow && !!partnerEmailNow;
+    // The partner gate follows the same rule as the line statuses set below: a partner step with
+    // nobody to ask is not a step. Leaving `requiresPartnerApproval` true while the line is marked
+    // not-applicable made the row jump to a partner stage with no reviewer after the faculty
+    // approved, where it stuck for everyone.
+    opp.requiresPartnerApproval = partnerNowRequired;
 
-    if (partnerNowRequired && !partnerEmailNow) {
-      throw new BadRequestException(
-        'Partner approval is required for this submission but no valid partner email was found.',
-      );
-    }
-
+    // A posting whose canonical faculty line is "not applicable" and that names no faculty has no
+    // faculty step to re-open (NGO / partner listings without an academic link). The legacy mirror
+    // on such rows still reads `pending_faculty` / unverified, which used to force them into a faculty
+    // stage with nobody to review it.
+    const noFacultyLine =
+      opp.facultyApprovalStatus === LINE_STATUS.NOT_APPLICABLE && !facultyEmailNow;
     const facultyLineNeedsReview =
-      facultyEmailChanged ||
+      !noFacultyLine &&
+      (facultyEmailChanged ||
       opp.facultyApprovalStatus === LINE_STATUS.REJECTED ||
       opp.facultyApprovalStatus === LINE_STATUS.REVISION_REQUESTED ||
       opp.faculty_verification_status === 'rejected' ||
       !opp.faculty_verified ||
       opp.facultyApprovalStatus === LINE_STATUS.PENDING ||
-      opp.faculty_verification_status === WORKFLOW_STAGE.PENDING_FACULTY;
+      opp.faculty_verification_status === WORKFLOW_STAGE.PENDING_FACULTY);
 
     if (facultyLineNeedsReview) {
       opp.workflowStage = WORKFLOW_STAGE.PENDING_FACULTY;
@@ -1185,10 +1192,7 @@ export class OpportunitiesService {
     const tracker = buildOpportunityApprovalTracker(opp);
 
     if (this.isAwaitingFacultyDashboardReview(opp)) {
-      if (!opp.faculty_verification_token) {
-        opp.faculty_verification_token = randomUUID();
-        await this.opportunitiesRepository.save(opp);
-      }
+      await this.ensureUsableReviewerToken(opp, 'faculty');
       const facultyTo = this.getFacultyEmailFromOpportunity(opp);
       if (!facultyTo) {
         throw new BadRequestException(
@@ -1217,10 +1221,7 @@ export class OpportunitiesService {
       (opp.workflowStage === WORKFLOW_STAGE.PENDING_PARTNER ||
         opp.status === 'pending_partner');
     if (awaitingPartner) {
-      if (!opp.partnerToken) {
-        opp.partnerToken = randomUUID();
-        await this.opportunitiesRepository.save(opp);
-      }
+      await this.ensureUsableReviewerToken(opp, 'partner');
       const partnerTo = this.resolvePartnerEmailFromOpportunity(opp);
       if (!partnerTo) {
         throw new BadRequestException(
@@ -1263,11 +1264,36 @@ export class OpportunitiesService {
   }
 
   /** Faculty verification email after student resubmit reaches `pending_faculty`. */
+  /**
+   * A reviewer's magic link is only worth emailing while it still works. Links expire after the
+   * configured TTL, and every resend path used to re-send the SAME token — so a reminder (or the
+   * partner mail after a late faculty approval) could deliver a link that was already dead on
+   * arrival. An expired or missing link is replaced; the subscriber stamps the new expiry on save.
+   */
+  private async ensureUsableReviewerToken(
+    opp: Opportunity,
+    which: 'faculty' | 'partner',
+  ): Promise<void> {
+    const now = Date.now();
+    const expired = (at: Date | string | null | undefined) =>
+      !!at && new Date(at).getTime() <= now;
+    if (which === 'faculty') {
+      if (!opp.faculty_verification_token || expired(opp.facultyTokenExpiresAt)) {
+        opp.faculty_verification_token = randomUUID();
+        await this.opportunitiesRepository.save(opp);
+      }
+    } else if (!opp.partnerToken || expired(opp.partnerTokenExpiresAt)) {
+      opp.partnerToken = randomUUID();
+      await this.opportunitiesRepository.save(opp);
+    }
+  }
+
   async notifyFacultyForStudentOpportunityVerification(
     opportunity: Opportunity,
   ): Promise<boolean> {
     const facultyTo = this.getFacultyEmailFromOpportunity(opportunity);
     if (!facultyTo || !opportunity.faculty_verification_token) return false;
+    await this.ensureUsableReviewerToken(opportunity, 'faculty');
 
     const creator = await this.getOpportunityCreatorContact(opportunity);
     const studentVerifyDetails = this.buildOpportunityVerificationEmailDetails(
@@ -2065,10 +2091,7 @@ export class OpportunitiesService {
       );
       return false;
     }
-    if (!opportunity.partnerToken) {
-      opportunity.partnerToken = randomUUID();
-      await this.opportunitiesRepository.save(opportunity);
-    }
+    await this.ensureUsableReviewerToken(opportunity, 'partner');
 
     const creator = await this.getOpportunityCreatorContact(opportunity);
     const details = this.buildOpportunityVerificationEmailDetails(opportunity, {
@@ -4322,6 +4345,10 @@ export class OpportunitiesService {
       const candidate = (meUser?.email || '').trim().toLowerCase();
       filterPartnerEmail = candidate || null;
     } else if (filters.partner_id && filters.partner_id !== 'me') {
+      if (!isUUID(String(filters.partner_id))) {
+        // not an organisation or user id: a clean 404, not a database "invalid uuid" error
+        throw new NotFoundException('Organisation not found for the given partner_id');
+      }
       let resolvedOrgId: string | null = null;
       // Check if it's already an org ID
       try {
@@ -4538,6 +4565,10 @@ export class OpportunitiesService {
     // executing org verifies — same rows already surface as live in authenticated APIs).
     const orgFilter: { organizationId?: string } = {};
     if (filters.partner_id) {
+      if (!isUUID(String(filters.partner_id))) {
+        // nothing can belong to an organisation that is not a valid id: empty directory, not a 500
+        return [];
+      }
       let filterOrgId = filters.partner_id;
       const checkUserOrg = await this.organizationsService.getMyOrganization(
         filters.partner_id,
@@ -6467,6 +6498,9 @@ export class OpportunitiesService {
     ) {
       return false;
     }
+    // The canonical line says there is no faculty gate on this posting (an NGO / partner listing
+    // with no academic link): the legacy `pending_faculty` default must not make it look like one.
+    if (opp.facultyApprovalStatus === LINE_STATUS.NOT_APPLICABLE) return false;
     return (
       opp.workflowStage === WORKFLOW_STAGE.PENDING_FACULTY ||
       opp.status === 'pending_faculty' ||
@@ -6865,11 +6899,23 @@ export class OpportunitiesService {
       await this.syncOpportunityFacultyIdToSupervisionEmail(opp);
     }
 
+    let notifyPlan = { notifyFaculty: false, notifyPartner: false };
     if (!opp.admin_approved) {
-      await this.applyStudentCreatedOpportunityResubmit(opp, before);
+      notifyPlan = await this.applyStudentCreatedOpportunityResubmit(opp, before);
     }
 
     await this.opportunitiesRepository.save(opp);
+
+    // The planner rotates the reviewer's link (the old emailed one stops working). Tell the
+    // reviewer who now holds the stage, exactly as an owner edit does — otherwise correcting a
+    // contact leaves the new reviewer with nothing and the old one with a dead link.
+    // Best effort: a mail failure must never undo the contact change.
+    if (notifyPlan.notifyFaculty) {
+      void this.notifyFacultyForStudentOpportunityVerification(opp).catch(() => undefined);
+    }
+    if (notifyPlan.notifyPartner) {
+      void this.sendPartnerApprovalEmail(opp).catch(() => undefined);
+    }
 
     const refreshed = await this.opportunitiesRepository.findOne({
       where: { id: opportunityId },
@@ -7083,8 +7129,11 @@ export class OpportunitiesService {
     const reports = await reportRepo
       .createQueryBuilder('report')
       .where('report.opportunityId = :opportunityId', { opportunityId })
-      .orWhere("TRIM(COALESCE(report.project_id, '')) = :opportunityId", {
-        opportunityId,
+      // a separate parameter for the text comparison: reusing one placeholder for a uuid column AND
+      // a text expression makes Postgres reject the statement ("text = uuid"), which made every
+      // admin faculty-contact change fail with a 500 after the row had already been saved
+      .orWhere("TRIM(COALESCE(report.project_id, '')) = :opportunityIdText", {
+        opportunityIdText: opportunityId,
       })
       .getMany();
 

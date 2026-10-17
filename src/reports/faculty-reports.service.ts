@@ -867,8 +867,19 @@ export class FacultyReportsService {
    * (there is no faculty entrypoint, matching the live product: faculty report review is
    * read-only everywhere else). This method only ever writes `ciiV45`/`ciiV45Lock`.
    */
-  async runCiiV45AnalysisForAdmin(id: string) {
+  async runCiiV45AnalysisForAdmin(id: string, opts: { force?: boolean } = {}) {
     const report = await this.findReportForAdminCii(id);
+    // Re-analysing clears the approved lock. For a report that is already PUBLISHED (verified / paid
+    // or carrying award badges) that silently strips the score its certificate and rankings rest on,
+    // so it needs the same explicit confirmation as sending a published report back for changes.
+    const published =
+      ['verified', 'paid'].includes(String(report.status || '').toLowerCase()) ||
+      (Array.isArray(report.awardBadges) && report.awardBadges.length > 0);
+    if (report.ciiV45Lock?.locked && published && opts.force !== true) {
+      throw new BadRequestException(
+        'This report is already published. Re-running the analysis clears its approved CII lock until you approve the new score; confirm to continue (force=true).',
+      );
+    }
     return this.persistCiiV45Analysis(report, { adminRescore: true });
   }
 
@@ -947,8 +958,19 @@ export class FacultyReportsService {
 
     const { result, evidenceInspection, model } = await this.evaluateCiiV45(payload, report.id);
 
+    // A rescore clears the lock; keep the superseded lock on the record instead of losing it.
+    const priorLock = report.ciiV45Lock?.locked ? report.ciiV45Lock : null;
+    const priorLocks = ((report.ciiV45 as Record<string, unknown> | null)?.previousLocks as unknown[]) ?? [];
     const nextCiiV45 = {
       ...result,
+      ...(opts.adminRescore && (priorLock || priorLocks.length)
+        ? {
+            previousLocks: [
+              ...priorLocks,
+              ...(priorLock ? [{ ...priorLock, supersededAt: new Date().toISOString(), reason: 'admin_rescore' }] : []),
+            ],
+          }
+        : {}),
       evidenceInspection,
       computedAt: new Date().toISOString(),
       runHistory: [

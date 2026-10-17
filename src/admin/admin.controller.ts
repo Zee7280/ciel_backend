@@ -52,10 +52,12 @@ import { RunIndependentAnalysisDto } from '../faculty/dto/run-independent-analys
 import { RunIndependentAnalysisBatchDto } from '../faculty/dto/run-independent-analysis-batch.dto';
 import { ApproveCiiV45Dto } from '../faculty/dto/approve-cii-v4-5.dto';
 import { NpeRankingService } from '../ranking/npe-ranking.service';
+import { NpeStudioService } from '../ranking/npe-studio.service';
 import {
   NpeAnalyzeDto,
   NpeClearReviewDto,
   NpePublishDto,
+  NpeStudioDto,
 } from '../ranking/dto/npe-ranking.dto';
 
 /** Never echo credential material (password hash / deprecated password record) back to the browser. */
@@ -83,6 +85,7 @@ export class AdminController {
     private readonly studentReportsService: StudentReportsService,
     private readonly communityAward: CommunityAwardService,
     private readonly npeRanking: NpeRankingService,
+    private readonly npeStudio: NpeStudioService,
     private readonly opportunityApplicationsService: OpportunityApplicationsService,
     private readonly issueLogsService: IssueLogsService,
     private readonly adminProjectEvidenceService: AdminProjectEvidenceService,
@@ -390,6 +393,39 @@ export class AdminController {
     return { success: true, data };
   }
 
+  /** Ranking Studio: standings for any angle (lens × comparison × filters). Writes nothing. */
+  @Post('community-service/ranking/studio/preview')
+  async npeStudioPreview(@Request() req, @Body() dto: NpeStudioDto) {
+    const data = await this.npeStudio.preview({ userId: req.user.id, role: 'ciel_admin' }, dto);
+    return { success: true, data };
+  }
+
+  /** Publishes the studio ranking exactly as the server recomputes it (never the client's rows). */
+  @Post('community-service/ranking/studio/publish')
+  async npeStudioPublish(@Request() req, @Body() dto: NpeStudioDto) {
+    const data = await this.npeStudio.publish({ userId: req.user.id, role: 'ciel_admin' }, dto);
+    return { success: true, data };
+  }
+
+  @Get('community-service/ranking/studio/history')
+  async npeStudioHistory(@Request() req) {
+    const data = await this.npeStudio.history({ userId: req.user.id, role: 'ciel_admin' });
+    return { success: true, data };
+  }
+
+  @Get('community-service/ranking/studio/publications/:id')
+  async npeStudioPublication(@Request() req, @Param('id', new ParseUUIDPipe()) id: string) {
+    const data = await this.npeStudio.getPublication({ userId: req.user.id, role: 'ciel_admin' }, id);
+    return { success: true, data };
+  }
+
+  /** Published rankings that include one project (Impact Wall preview). */
+  @Get('community-service/ranking/studio/project/:reportId')
+  async npeStudioProject(@Request() req, @Param('reportId', new ParseUUIDPipe()) reportId: string) {
+    const data = await this.npeStudio.rankingsForProject({ userId: req.user.id, role: 'ciel_admin' }, reportId);
+    return { success: true, data };
+  }
+
   @Post('community-service/ranking/publish')
   async npeRankingPublish(@Request() req, @Body() dto: NpePublishDto) {
     const data = await this.npeRanking.publish(
@@ -427,8 +463,13 @@ export class AdminController {
   @Post('community-service/reports/:id/cii-v4-5/analyse')
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
-  async communityServiceCiiV45Analyse(@Param('id') id: string) {
-    return await this.facultyReportsService.runCiiV45AnalysisForAdmin(id);
+  async communityServiceCiiV45Analyse(
+    @Param('id') id: string,
+    @Body() body?: { force?: boolean },
+  ) {
+    return await this.facultyReportsService.runCiiV45AnalysisForAdmin(id, {
+      force: body?.force === true,
+    });
   }
 
   @Post('community-service/reports/:id/cii-v4-5/approve')

@@ -7,6 +7,7 @@ import request from 'supertest';
 import { DataSource, Repository } from 'typeorm';
 import { AppModule } from '../../src/app.module';
 import { MailService } from '../../src/mail/mail.service';
+import { AiService } from '../../src/ai/ai.service';
 import { User } from '../../src/users/entities/user.entity';
 import { Organization } from '../../src/organizations/entities/organization.entity';
 import { Opportunity } from '../../src/opportunities/entities/opportunity.entity';
@@ -80,12 +81,18 @@ export type Api = {
 
 export const uniq = () => randomUUID().slice(0, 8);
 
-export async function bootHarness(): Promise<Harness> {
+export type HarnessOptions = {
+  /** Replace the OpenAI-backed AiService (e2e must never reach the real API). */
+  ai?: Pick<AiService, 'summarize'>;
+};
+
+export async function bootHarness(opts: HarnessOptions = {}): Promise<Harness> {
   const mail = new MailCapture();
-  const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+  let builder = Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(MailService)
-    .useValue(makeMailMock(mail))
-    .compile();
+    .useValue(makeMailMock(mail));
+  if (opts.ai) builder = builder.overrideProvider(AiService).useValue(opts.ai);
+  const moduleRef = await builder.compile();
   const app = moduleRef.createNestApplication();
   // Same wiring as src/main.ts
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));

@@ -1,9 +1,18 @@
 import {
   NPE_CRITERIA,
   NPE_EVIDENCE_FACTORS,
+  NPE_RUBRIC_VERSION,
+  NPE_WEIGHT_PROFILES,
+  isSupportedNpeRubricVersion,
   type NpeCriterionKey,
   type NpeEvidenceConfidence,
 } from './npe-ranking.constants';
+
+function profileFor(version?: string) {
+  return isSupportedNpeRubricVersion(version)
+    ? NPE_WEIGHT_PROFILES[version]
+    : NPE_WEIGHT_PROFILES[NPE_RUBRIC_VERSION];
+}
 
 export type NpeCriterionJudgment = {
   anchor: number;
@@ -18,16 +27,18 @@ export type NpeScoreBreakdown = {
   total: number;
 };
 
-export function npeCiiAnchor(lockedCii: number): number {
+export function npeCiiAnchor(lockedCii: number, version?: string): number {
   if (!Number.isFinite(lockedCii)) return 0;
-  return Math.min(100, lockedCii) * 0.15;
+  return (Math.min(100, lockedCii) * profileFor(version).ciiWeight) / 100;
 }
 
 export function npeCalculate(
   lockedCii: number,
   criteria: Record<NpeCriterionKey, NpeCriterionJudgment>,
+  version?: string,
 ): NpeScoreBreakdown {
-  const cii = npeCiiAnchor(lockedCii);
+  const profile = profileFor(version);
+  const cii = npeCiiAnchor(lockedCii, version);
   const scores = {} as Record<NpeCriterionKey, number>;
   for (const row of NPE_CRITERIA) {
     const judgment = criteria[row.key];
@@ -39,7 +50,7 @@ export function npeCalculate(
       throw new Error(`NPE judgment missing or invalid for ${row.key}`);
     }
     const factor = NPE_EVIDENCE_FACTORS[judgment.confidence];
-    scores[row.key] = row.weight * (judgment.anchor / 5) * factor;
+    scores[row.key] = profile.criteria[row.key] * (judgment.anchor / 5) * factor;
   }
   const total =
     Math.round(

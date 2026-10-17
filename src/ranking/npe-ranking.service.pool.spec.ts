@@ -93,10 +93,12 @@ describe('NPE reusable evaluations', () => {
       andWhere: jest.fn().mockReturnThis(),
       orderBy: jest.fn().mockReturnThis(),
       getMany: jest.fn().mockResolvedValue([
-        { reportId: 'a', packageVersion: 'v2', flags: [], runId: 'r3' },
-        { reportId: 'a', packageVersion: 'v1', flags: [], runId: 'r2' },
-        { reportId: 'b', packageVersion: 'v1', flags: ['could not read'], runId: 'r3' },
-        { reportId: 'c', packageVersion: 'old', flags: [], runId: 'r1' },
+        { reportId: 'a', packageVersion: 'v2', flags: [], runId: 'r3', audit: { payloadVersion: 2 } },
+        { reportId: 'a', packageVersion: 'v1', flags: [], runId: 'r2', audit: { payloadVersion: 2 } },
+        { reportId: 'a', packageVersion: 'v1', flags: [], runId: 'r0', audit: null }, // thinner (old) package: never trusted
+        { reportId: 'b', packageVersion: 'v1', flags: ['could not read'], runId: 'r3', audit: { payloadVersion: 2 } },
+        { reportId: 'c', packageVersion: 'old', flags: [], runId: 'r1', audit: { payloadVersion: 2 } },
+        { reportId: 'd', packageVersion: 'v1', flags: [], runId: 'r1', audit: { model: 'x' } }, // marker missing
       ]),
     };
     const svc = build({ evaluations: { createQueryBuilder: jest.fn().mockReturnValue(qb) } });
@@ -104,6 +106,7 @@ describe('NPE reusable evaluations', () => {
       { id: 'a', version: 'v1' },
       { id: 'b', version: 'v1' },
       { id: 'c', version: 'new' },
+      { id: 'd', version: 'v1' },
     ]);
     expect([...out.keys()]).toEqual(['a']);
     expect(out.get('a').runId).toBe('r2');

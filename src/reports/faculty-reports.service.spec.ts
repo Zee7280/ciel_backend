@@ -189,6 +189,41 @@ describe('FacultyReportsService — runCiiV45AnalysisForAdmin', () => {
     expect(studentReportsRepository.save).not.toHaveBeenCalled();
   });
 
+
+  describe('re-analysing a report that is already locked', () => {
+    const lockedReport = (status: string, extra: Record<string, unknown> = {}) => ({
+      ...analysableReport(),
+      status,
+      ciiV45Lock: { locked: true, hash: 'h1', adminApprovedScore: 90 },
+      ...extra,
+    });
+    const ai = () => ({ summarize: jest.fn().mockResolvedValue({ ciiV45: CII_V45_AI_RESPONSE }) });
+
+    it('a PUBLISHED report is not re-analysed (its approved lock is not cleared) without explicit confirmation', async () => {
+      for (const published of [lockedReport('verified'), lockedReport('paid'), lockedReport('submitted', { awardBadges: [{ kind: 'ciel' }] })]) {
+        const { service, aiService, qb } = makeService(published, ai());
+        await expect(service.runCiiV45AnalysisForAdmin('report-1')).rejects.toThrow(/already published/);
+        expect(aiService.summarize).not.toHaveBeenCalled();
+        expect(qb.execute).not.toHaveBeenCalled();
+      }
+    });
+
+    it('with force it re-analyses, clears the lock and keeps the superseded lock on the record', async () => {
+      const { service, qb } = makeService(lockedReport('verified'), ai());
+      const out = await service.runCiiV45AnalysisForAdmin('report-1', { force: true });
+      expect(out.success).toBe(true);
+      const set = qb.set.mock.calls[0][0];
+      expect(set.ciiV45Lock()).toBe('NULL');
+      expect(set.ciiV45.previousLocks).toEqual([expect.objectContaining({ hash: 'h1', reason: 'admin_rescore', supersededAt: expect.any(String) })]);
+    });
+
+    it('a locked report that is NOT published yet can still be re-run without force (existing behaviour)', async () => {
+      const { service, aiService } = makeService(lockedReport('submitted'), ai());
+      await expect(service.runCiiV45AnalysisForAdmin('report-1')).resolves.toMatchObject({ success: true });
+      expect(aiService.summarize).toHaveBeenCalled();
+    });
+  });
+
   it('refuses to run the Analyser when the locked student packet is incomplete', async () => {
     const incomplete = analysableReport();
     delete incomplete.section3;

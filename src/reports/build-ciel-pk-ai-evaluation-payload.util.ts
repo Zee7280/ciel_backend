@@ -316,9 +316,14 @@ function buildEvidenceRegistry(report: StudentReport): {
     return { files, urlToFileId };
 }
 
+/** Same order as the submit gate (`requiredHoursPerStudentFromOpportunity`): timeline hours, then the
+ * opportunity's required-hours column; only then the report's own metrics, then the product default. */
 function resolveRequiredHours(report: StudentReport): number {
-    const fromTimeline = pickNumber(report.opportunity?.timeline?.expected_hours);
+    const timeline = report.opportunity?.timeline as { expected_hours?: unknown; required_hours?: unknown } | undefined;
+    const fromTimeline = pickNumber(timeline?.expected_hours ?? timeline?.required_hours);
     if (fromTimeline && fromTimeline > 0) return fromTimeline;
+    const fromColumn = pickNumber((report.opportunity as { requiredHours?: unknown } | undefined)?.requiredHours);
+    if (fromColumn && fromColumn > 0) return fromColumn;
     const section1 = asRecord(report.section1);
     const metrics = asRecord(section1.metrics);
     const fromMetrics = pickNumber(metrics.minimum_required_hours_per_student);

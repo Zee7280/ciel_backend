@@ -39,7 +39,7 @@ export function redactOpportunitySecrets<T>(value: T, depth = 0): T {
 }
 
 const CONTACT_KEY_RE =
-  /^(email|official_email|officialEmail|partner_email|external_partner_email|contact_email|contactEmail|contact_phone|contactPhone|whatsapp|whatsapp_e164|phone|mobile|student_contact|creator_email)$/i;
+  /^(email|official_email|officialEmail|partner_email|external_partner_email|contact_email|contactEmail|contact_phone|contactPhone|whatsapp|whatsapp_e164|phone|mobile|student_contact|creator_email|(?:[a-z_]*_)?(?:whatsapp|phone|mobile)(?:_[a-z0-9]+)?)$/i;
 
 /**
  * Third-party contact details (faculty supervisor, partner / executing-organization contacts,

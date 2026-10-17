@@ -26,6 +26,11 @@ export type NpeAiEvaluation = {
   limitations: string;
   criteria: Record<NpeCriterionKey, NpeCriterionJudgment>;
   claims: NpeClaim[];
+  /** What the analyzer was and was not able to show the model (set by the service, never by the AI). */
+  evidenceRead?: {
+    inspected: Array<{ id: string; name: string }>;
+    notInspected: Array<{ id: string; name: string; reason: string }>;
+  } | null;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {

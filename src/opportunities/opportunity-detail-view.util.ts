@@ -55,6 +55,7 @@ export type OpportunityDetailView = {
       organization: string | null;
       contact_person: string | null;
       email: string | null;
+      phone: string | null;
     };
     declarations: {
       safe_environment: boolean;
@@ -175,6 +176,21 @@ export function buildOpportunityDetailView(
       )?.official_email,
     );
 
+  const partnerPhone =
+    pickStr(sup.partner_phone) ||
+    pickStr(sup.external_partner_phone) ||
+    pickStr(
+      (opp.partner_organization as Record<string, unknown> | undefined)
+        ?.contact_phone,
+    ) ||
+    pickStr(
+      (
+        opp.external_partner_collaboration as
+          | Record<string, unknown>
+          | undefined
+      )?.contact_phone,
+    );
+
   const partnerPerson =
     pickStr(sup.partner_contact_person) ||
     pickStr(sup.external_partner_contact_person) ||
@@ -257,6 +273,7 @@ export function buildOpportunityDetailView(
         organization: partnerOrg || null,
         contact_person: partnerPerson || null,
         email: partnerEmail || null,
+        phone: partnerPhone || null,
       },
       declarations: {
         safe_environment: sup.safe_environment === true,

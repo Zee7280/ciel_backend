@@ -105,6 +105,17 @@ export class SupervisionDto {
   @IsOptional()
   external_partner_email?: string;
 
+  /** Partner contact phone / WhatsApp (E.164, e.g. +923001234567). Private: redacted from public views. */
+  @IsString()
+  @IsOptional()
+  @MaxLength(32)
+  partner_phone?: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(32)
+  external_partner_phone?: string;
+
   @IsBoolean()
   @IsOptional()
   information_accurate?: boolean;

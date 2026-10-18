@@ -1528,6 +1528,7 @@ export class OpportunitiesService {
       'partner_whatsapp_e164',
       'faculty_whatsapp',
       'partner_phone',
+      'external_partner_phone',
     ] as const) {
       const raw = supervision[key];
       if (typeof raw !== 'string' || !raw.trim()) continue;
@@ -4075,7 +4076,9 @@ export class OpportunitiesService {
           const b = sup?.partner_phone;
           const c = po?.whatsapp;
           const d = po?.phone;
-          for (const v of [a, b, c, d]) {
+          const e = sup?.external_partner_phone;
+          const f = po?.contact_phone;
+          for (const v of [a, b, e, c, d, f]) {
             if (typeof v === 'string' && v.trim()) return v.trim();
           }
           return null;

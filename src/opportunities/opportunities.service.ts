@@ -13,6 +13,7 @@ import {
   DeepPartial,
   Brackets,
   EntityManager,
+  FindOptionsWhere,
   ObjectLiteral,
   QueryFailedError,
   IsNull,

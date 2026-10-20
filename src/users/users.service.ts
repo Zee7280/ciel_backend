@@ -255,7 +255,7 @@ export class UsersService {
       requires_profile_verification: user.requires_profile_verification,
       profile_verified: user.profile_verified,
       identity_verified: user.identity_verified,
-      investor: user.settings?.investor ?? null,
+      investor: (user.settings as LooseObject | null | undefined)?.investor ?? null,
       ...membershipFlags,
       ...subscriptionFlags,
     };
@@ -263,7 +263,7 @@ export class UsersService {
 
   async updateGenericProfile(
     userId: string,
-    dto: any,
+    dto: GenericProfileUpdateInput,
     options: { isAdminCaller?: boolean } = {},
   ) {
     // Verification/gating flags are admin-controlled — a self-service profile update must never

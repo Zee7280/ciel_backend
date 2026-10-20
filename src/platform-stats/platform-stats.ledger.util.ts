@@ -317,20 +317,27 @@ export function parseSdgGoalNumber(raw: unknown): number | null {
   return null;
 }
 
+/** Scalar-safe text: strings as-is, numbers/booleans/bigints stringified, anything else ''. */
+function scalarText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (
+    typeof value === 'number' ||
+    typeof value === 'boolean' ||
+    typeof value === 'bigint'
+  ) {
+    return String(value);
+  }
+  return '';
+}
+
 function isRejectedSdgStatus(status: unknown): boolean {
-  return (
-    String(status ?? '')
-      .trim()
-      .toLowerCase() === 'rejected'
-  );
+  return scalarText(status).trim().toLowerCase() === 'rejected';
 }
 
 function secondarySdgHasEvidence(row: Record<string, unknown>): boolean {
-  const status = String(row.status ?? '')
-    .trim()
-    .toLowerCase();
+  const status = scalarText(row.status).trim().toLowerCase();
   if (status === 'validated') return true;
-  const justification = String(
+  const justification = scalarText(
     row.justification_text ?? row.justification ?? '',
   ).trim();
   return justification.length >= 30;

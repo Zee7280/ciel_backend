@@ -294,7 +294,7 @@ export class AdminProjectEvidenceService {
     await new Promise<void>((resolve, reject) => {
       archive.once('end', () => resolve());
       archive.once('error', (err) => reject(err));
-      archive.finalize();
+      void archive.finalize();
     });
   }
 

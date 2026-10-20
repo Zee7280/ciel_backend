@@ -107,7 +107,8 @@ export class VerificationsService {
 
   async approve(id: string, feedback?: string, actor?: VerificationActor) {
     let type = 'Timesheet';
-    let entity: any = await this.timesheetsRepository.findOne({
+    let entity: Timesheet | Report | null =
+      await this.timesheetsRepository.findOne({
       where: { id },
       relations: ['opportunity'],
     });
@@ -133,7 +134,8 @@ export class VerificationsService {
 
   async reject(id: string, reason: string, actor?: VerificationActor) {
     let type = 'Timesheet';
-    let entity: any = await this.timesheetsRepository.findOne({
+    let entity: Timesheet | Report | null =
+      await this.timesheetsRepository.findOne({
       where: { id },
       relations: ['opportunity'],
     });

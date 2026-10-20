@@ -8,7 +8,7 @@ export class SetSettingDto {
   key: string;
 
   /** Booleans / numbers from JSON clients are coerced to strings; the registry validates per key. */
-  @Transform(({ value }) =>
+  @Transform(({ value }: { value: unknown }) =>
     typeof value === 'boolean' || typeof value === 'number'
       ? String(value)
       : value,

@@ -54,7 +54,7 @@ function parseAdminDateBoundary(
   return d;
 }
 
-function normalizeEmail(email: unknown): string {
+function normalizeEmail(email: string | null | undefined): string {
   return String(email ?? '')
     .trim()
     .toLowerCase();
@@ -63,6 +63,76 @@ function normalizeEmail(email: unknown): string {
 function digitsOnly(s: string): string {
   return s.replace(/\D/g, '');
 }
+
+/** Plain-object view of a loosely typed JSON value (`{}` when it is not an object). */
+type LooseObject = Record<string, unknown>;
+
+function isLooseObject(value: unknown): value is LooseObject {
+  return !!value && typeof value === 'object';
+}
+
+/** Shallow copy of `raw` when it is an object, otherwise an empty object. */
+function cloneLooseObject(raw: unknown): LooseObject {
+  return isLooseObject(raw) ? { ...raw } : {};
+}
+
+/** Same coercion as `String(value)`, spelled out so the type-checker can see each branch. */
+function coerceToString(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (
+    typeof value === 'number' ||
+    typeof value === 'boolean' ||
+    typeof value === 'bigint' ||
+    typeof value === 'symbol' ||
+    value === null ||
+    value === undefined
+  ) {
+    return String(value);
+  }
+  return String(value as { toString(): string });
+}
+
+/** Copy of `obj` without `keys` — same result as object-rest destructuring. */
+function omitKeys<T extends object, K extends keyof T>(
+  obj: T,
+  keys: readonly K[],
+): Omit<T, K> {
+  const copy: T = { ...obj };
+  for (const key of keys) delete copy[key];
+  return copy;
+}
+
+/** Fields a self-service / admin profile update may carry (extra keys are ignored). */
+export interface GenericProfileUpdateInput {
+  name?: string;
+  institution?: string;
+  university?: string;
+  city?: string;
+  phone?: string;
+  avatar?: string;
+  bio?: string;
+  department?: string;
+  faculty_department?: string;
+  orgName?: string;
+  contactPerson?: string;
+  investorHub?: unknown;
+  investorMandate?: unknown;
+  requires_cnic?: boolean;
+  requires_profile_verification?: boolean;
+  profile_verified?: boolean;
+  identity_verified?: boolean;
+}
+
+export interface ChangePasswordInput {
+  currentPassword: string;
+  newPassword: string;
+}
+
+/** Loosely typed admin/user patch accepted by `update()` (callers pass partial user rows). */
+type UserUpdatePatch = Partial<Omit<User, 'settings'>> & {
+  settings?: LooseObject | null;
+  passwordRecord?: string | null;
+};
 
 /**
  * Build a single international string for clients that read `contact` (e.g. student profile).

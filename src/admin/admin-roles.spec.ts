@@ -6,10 +6,9 @@ import { AdminController } from './admin.controller';
 /** Regression guard: every /admin route must stay locked to SUPER_ADMIN. */
 describe('AdminController role protection', () => {
   const proto = AdminController.prototype as unknown as Record<string, unknown>;
-  const classRoles: string[] | undefined = Reflect.getMetadata(
-    ROLES_KEY,
-    AdminController,
-  );
+  const classRoles = Reflect.getMetadata(ROLES_KEY, AdminController) as
+    | string[]
+    | undefined;
 
   it('is restricted to SUPER_ADMIN at class level', () => {
     expect(classRoles).toEqual([UserRole.SUPER_ADMIN]);
@@ -21,10 +20,10 @@ describe('AdminController role protection', () => {
     );
     expect(handlers.length).toBeGreaterThan(20);
     for (const name of handlers) {
-      const handlerRoles: string[] | undefined = Reflect.getMetadata(
+      const handlerRoles = Reflect.getMetadata(
         ROLES_KEY,
         proto[name] as object,
-      );
+      ) as string[] | undefined;
       const effective = handlerRoles ?? classRoles;
       expect({ name, roles: effective }).toEqual({
         name,

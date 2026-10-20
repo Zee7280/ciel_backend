@@ -37,6 +37,15 @@ const VERIFICATION_ACTOR_ROLES = [
   UserRole.ORGANIZATION_ADMIN,
 ];
 
+type AuthenticatedRequest = { user: { id: string } };
+/** Routes where the guard may or may not have attached a user (token is the credential). */
+type MaybeAuthenticatedRequest = {
+  user?: { id?: string; email?: string; role?: string };
+};
+
+/** Shape of a Nest HttpException response body that carries a message. */
+type HttpErrorBody = { message?: string | string[] };
+
 @Controller()
 export class VerificationsController {
   constructor(
@@ -51,7 +60,7 @@ export class VerificationsController {
     try {
       return await this.opportunitiesService.verifyOpportunityToken(
         token,
-        user as any,
+        user as { id: string; email: string; role: string } | undefined,
       );
     } catch (error) {
       if (
@@ -64,7 +73,7 @@ export class VerificationsController {
         const message =
           typeof response === 'string'
             ? response
-            : (response as any)?.message || error.message;
+            : (response as HttpErrorBody)?.message || error.message;
         throw new HttpException(
           {
             success: false,
@@ -80,7 +89,7 @@ export class VerificationsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(...VERIFICATION_ACTOR_ROLES)
   @Get('partners/verifications')
-  async findAll(@Request() req, @Query('status') status) {
+  async findAll(@Request() req: AuthenticatedRequest) {
     // ignoring status param for now as service defaults to pending or I can pass it
     const data = await this.verificationsService.findAllPending(req.user.id);
     return { success: true, data };
@@ -161,7 +170,7 @@ export class VerificationsController {
   @Header('Cache-Control', 'no-store, no-cache, must-revalidate, private')
   @Header('Pragma', 'no-cache')
   async verifyOpportunityPost(
-    @Request() req,
+    @Request() req: MaybeAuthenticatedRequest,
     @Body() body: { token?: string },
   ) {
     const t = typeof body?.token === 'string' ? body.token.trim() : '';
@@ -217,7 +226,7 @@ export class VerificationsController {
         const message =
           typeof response === 'string'
             ? response
-            : (response as any)?.message || error.message;
+            : (response as HttpErrorBody)?.message || error.message;
         throw new HttpException(
           {
             success: false,
@@ -298,7 +307,7 @@ export class VerificationsController {
         const message =
           typeof response === 'string'
             ? response
-            : (response as any)?.message || error.message;
+            : (response as HttpErrorBody)?.message || error.message;
         throw new HttpException(
           {
             success: false,
@@ -321,7 +330,7 @@ export class VerificationsController {
   @Roles(...VERIFICATION_ACTOR_ROLES)
   @Post('verifications/:id/approve')
   async approve(
-    @Request() req,
+    @Request() req: MaybeAuthenticatedRequest,
     @Param('id') id: string,
     @Body() body: { feedback?: string },
   ) {
@@ -336,7 +345,7 @@ export class VerificationsController {
   @Roles(...VERIFICATION_ACTOR_ROLES)
   @Post('verifications/:id/reject')
   async reject(
-    @Request() req,
+    @Request() req: MaybeAuthenticatedRequest,
     @Param('id') id: string,
     @Body() body: { reason: string },
   ) {

@@ -29,7 +29,9 @@ describe('VerificationsController — legacy GET verify never mutates and never 
       } catch (e) {
         expect(e).toBeInstanceOf(HttpException);
         expect((e as HttpException).getStatus()).toBe(405);
-        expect(((e as HttpException).getResponse() as any).success).toBe(false);
+        expect(
+          ((e as HttpException).getResponse() as { success?: boolean }).success,
+        ).toBe(false);
       }
       expect(r.redirect).not.toHaveBeenCalled();
     },

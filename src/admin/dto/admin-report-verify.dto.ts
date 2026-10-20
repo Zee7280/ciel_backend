@@ -14,13 +14,17 @@ export class AdminReportVerifyDto {
   @IsOptional()
   @IsString()
   @MaxLength(2000)
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
   reason?: string;
 
   @IsOptional()
   @IsString()
   @MaxLength(2000)
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
   feedback?: string;
 
   @IsOptional()

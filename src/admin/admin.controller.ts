@@ -139,13 +139,13 @@ export class AdminController {
   }
 
   @Post('applications/:id/approve')
-  approveOpportunityApplication(@Request() req, @Param('id') id: string) {
+  approveOpportunityApplication(@Request() req: AdminRequest, @Param('id') id: string) {
     return this.opportunityApplicationsService.adminApprove(id, req.user.id);
   }
 
   @Post('applications/:id/reject')
   rejectOpportunityApplication(
-    @Request() req,
+    @Request() req: AdminRequest,
     @Param('id') id: string,
     @Body() body: AdminReasonDto,
   ) {
@@ -162,13 +162,13 @@ export class AdminController {
   }
 
   @Post('users/:id/approve')
-  approveApplication(@Request() req, @Param('id') id: string) {
+  approveApplication(@Request() req: AdminRequest, @Param('id') id: string) {
     return this.adminService.approveApplication(id, req.user.id);
   }
 
   @Post('users/:id/reject')
   rejectApplication(
-    @Request() req,
+    @Request() req: AdminRequest,
     @Param('id') id: string,
     @Body() body: AdminReasonDto,
   ) {
@@ -184,7 +184,7 @@ export class AdminController {
 
   @Delete('opportunities/:id')
   removeOpportunity(
-    @Request() req,
+    @Request() req: AdminRequest,
     @Param('id', new ParseUUIDPipe()) id: string,
   ) {
     return this.opportunitiesService.remove(id, req.user.id);
@@ -255,7 +255,7 @@ export class AdminController {
   /** One click: approve + enrol every application still waiting on CIEL admin for this project. */
   @Post('projects/:opportunityId/enroll-pending')
   enrollPendingApplications(
-    @Request() req,
+    @Request() req: AdminRequest,
     @Param('opportunityId') opportunityId: string,
   ) {
     return this.adminService.enrollPendingApplications(
@@ -335,7 +335,7 @@ export class AdminController {
   }
 
   @Post('issue-logs/resolve')
-  resolveIssueLogs(@Request() req, @Body() body: { ids?: string[] }) {
+  resolveIssueLogs(@Request() req: AdminRequest, @Body() body: { ids?: string[] }) {
     return this.issueLogsService
       .resolve(Array.isArray(body?.ids) ? body.ids : [], req.user?.id ?? null)
       .then((r) => ({ success: true, ...r }));
@@ -352,7 +352,7 @@ export class AdminController {
   }
 
   @Post('settings')
-  updateSetting(@Request() req, @Body() body: SetSettingDto) {
+  updateSetting(@Request() req: AdminRequest, @Body() body: SetSettingDto) {
     return this.adminService.updateSetting(body.key, body.value, {
       id: req.user?.id,
       email: req.user?.email,
@@ -374,7 +374,7 @@ export class AdminController {
   }
 
   @Get('community-service/ranking/packages')
-  async npeRankingPackages(@Request() req) {
+  async npeRankingPackages(@Request() req: AdminRequest) {
     const data = await this.npeRanking.listPackages({
       userId: req.user.id,
       role: 'ciel_admin',
@@ -383,7 +383,7 @@ export class AdminController {
   }
 
   @Post('community-service/ranking/analyze')
-  async npeRankingAnalyze(@Request() req, @Body() dto: NpeAnalyzeDto) {
+  async npeRankingAnalyze(@Request() req: AdminRequest, @Body() dto: NpeAnalyzeDto) {
     const data = await this.npeRanking.analyze(
       { userId: req.user.id, role: 'ciel_admin' },
       dto,
@@ -392,7 +392,7 @@ export class AdminController {
   }
 
   @Post('community-service/ranking/reviews')
-  async npeRankingClearReview(@Request() req, @Body() dto: NpeClearReviewDto) {
+  async npeRankingClearReview(@Request() req: AdminRequest, @Body() dto: NpeClearReviewDto) {
     const data = await this.npeRanking.clearReview(
       { userId: req.user.id, role: 'ciel_admin' },
       dto.runId,
@@ -403,7 +403,7 @@ export class AdminController {
 
   /** Ranking Studio: standings for any angle (lens × comparison × filters). Writes nothing. */
   @Post('community-service/ranking/studio/preview')
-  async npeStudioPreview(@Request() req, @Body() dto: NpeStudioDto) {
+  async npeStudioPreview(@Request() req: AdminRequest, @Body() dto: NpeStudioDto) {
     const data = await this.npeStudio.preview(
       { userId: req.user.id, role: 'ciel_admin' },
       dto,
@@ -413,7 +413,7 @@ export class AdminController {
 
   /** Publishes the studio ranking exactly as the server recomputes it (never the client's rows). */
   @Post('community-service/ranking/studio/publish')
-  async npeStudioPublish(@Request() req, @Body() dto: NpeStudioDto) {
+  async npeStudioPublish(@Request() req: AdminRequest, @Body() dto: NpeStudioDto) {
     const data = await this.npeStudio.publish(
       { userId: req.user.id, role: 'ciel_admin' },
       dto,
@@ -422,7 +422,7 @@ export class AdminController {
   }
 
   @Get('community-service/ranking/studio/history')
-  async npeStudioHistory(@Request() req) {
+  async npeStudioHistory(@Request() req: AdminRequest) {
     const data = await this.npeStudio.history({
       userId: req.user.id,
       role: 'ciel_admin',
@@ -432,7 +432,7 @@ export class AdminController {
 
   @Get('community-service/ranking/studio/publications/:id')
   async npeStudioPublication(
-    @Request() req,
+    @Request() req: AdminRequest,
     @Param('id', new ParseUUIDPipe()) id: string,
   ) {
     const data = await this.npeStudio.getPublication(
@@ -445,7 +445,7 @@ export class AdminController {
   /** Published rankings that include one project (Impact Wall preview). */
   @Get('community-service/ranking/studio/project/:reportId')
   async npeStudioProject(
-    @Request() req,
+    @Request() req: AdminRequest,
     @Param('reportId', new ParseUUIDPipe()) reportId: string,
   ) {
     const data = await this.npeStudio.rankingsForProject(
@@ -456,7 +456,7 @@ export class AdminController {
   }
 
   @Post('community-service/ranking/publish')
-  async npeRankingPublish(@Request() req, @Body() dto: NpePublishDto) {
+  async npeRankingPublish(@Request() req: AdminRequest, @Body() dto: NpePublishDto) {
     const data = await this.npeRanking.publish(
       { userId: req.user.id, role: 'ciel_admin' },
       dto.runId,
@@ -468,7 +468,7 @@ export class AdminController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
   async communityAwardNotify(
-    @Request() req,
+    @Request() req: AdminRequest,
     @Body() dto: NotifyCommunityAwardDto,
   ) {
     const pool = await this.communityAward.listForAdmin();
@@ -505,7 +505,7 @@ export class AdminController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
   async communityServiceCiiV45Approve(
-    @Request() req,
+    @Request() req: AdminRequest,
     @Param('id') id: string,
     @Body() body: ApproveCiiV45Dto,
   ) {
@@ -527,7 +527,7 @@ export class AdminController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
   async communityServiceIndependentAnalysis(
-    @Request() req,
+    @Request() req: AdminRequest,
     @Param('id') id: string,
     @Body() body: RunIndependentAnalysisDto,
   ) {
@@ -547,7 +547,7 @@ export class AdminController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
   async communityServiceIndependentAnalysisBatch(
-    @Request() req,
+    @Request() req: AdminRequest,
     @Body() body: RunIndependentAnalysisBatchDto,
   ) {
     return await this.facultyReportsService.runIndependentAiAnalysisBatch(
@@ -623,7 +623,7 @@ export class AdminController {
 
   @Patch('reports/:id/verify')
   verifyReport(
-    @Request() req,
+    @Request() req: AdminRequest,
     @Param('id') id: string,
     @Body() body: AdminReportVerifyDto,
   ) {
@@ -667,7 +667,7 @@ export class AdminController {
 
   @Get('users')
   async findAll(
-    @Request() req,
+    @Request() req: AdminRequest,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('search') search?: string,
@@ -713,7 +713,7 @@ export class AdminController {
 
   @Post('users/:id') // Spec says POST for update
   async update(
-    @Request() req,
+    @Request() req: AdminRequest,
     @Param('id') id: string,
     @Body() updateUserDto: UpdateUserDto,
   ) {
@@ -723,7 +723,7 @@ export class AdminController {
   }
 
   @Delete('users/:id')
-  remove(@Request() req, @Param('id') id: string) {
+  remove(@Request() req: AdminRequest, @Param('id') id: string) {
     return this.usersService.remove(id, req.user.id);
   }
 
@@ -748,7 +748,7 @@ export class AdminController {
 
   @Patch('student-reports/:id/verify')
   verifyStudentReport(
-    @Request() req,
+    @Request() req: AdminRequest,
     @Param('id') id: string,
     @Body() body: AdminReportVerifyDto,
   ) {

@@ -32,7 +32,10 @@ describe('IssueLogsService', () => {
   it('does not log expected maintenance-mode rejections', async () => {
     const repository = makeRepository();
     const service = new IssueLogsService(repository as any);
-    await service.logException(new MaintenanceException(), makeHost({ method: 'GET', url: '/api/v1/x', headers: {} }));
+    await service.logException(
+      new MaintenanceException(),
+      makeHost({ method: 'GET', url: '/api/v1/x', headers: {} }),
+    );
     expect(repository.save).not.toHaveBeenCalled();
   });
 
@@ -46,12 +49,25 @@ describe('IssueLogsService', () => {
   });
 
   it('resolve is idempotent and ignores blank ids', async () => {
-    const update: any = { update: jest.fn().mockReturnThis(), set: jest.fn().mockReturnThis(), where: jest.fn().mockReturnThis(), andWhere: jest.fn().mockReturnThis(), execute: jest.fn().mockResolvedValue({ affected: 2 }) };
-    const repository: any = { ...makeRepository(), createQueryBuilder: jest.fn().mockReturnValue(update) };
+    const update: any = {
+      update: jest.fn().mockReturnThis(),
+      set: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      execute: jest.fn().mockResolvedValue({ affected: 2 }),
+    };
+    const repository: any = {
+      ...makeRepository(),
+      createQueryBuilder: jest.fn().mockReturnValue(update),
+    };
     const service = new IssueLogsService(repository);
     expect(await service.resolve([' ', ''], 'adm')).toEqual({ resolved: 0 });
-    expect(await service.resolve(['a', 'a', 'b'], 'adm')).toEqual({ resolved: 2 });
-    expect(update.where).toHaveBeenCalledWith('id IN (:...ids)', { ids: ['a', 'b'] });
+    expect(await service.resolve(['a', 'a', 'b'], 'adm')).toEqual({
+      resolved: 2,
+    });
+    expect(update.where).toHaveBeenCalledWith('id IN (:...ids)', {
+      ids: ['a', 'b'],
+    });
   });
 
   it('logs user-facing report errors with safe metadata', async () => {
@@ -59,8 +75,7 @@ describe('IssueLogsService', () => {
     const service = new IssueLogsService(repository as any);
 
     const method = 'POST';
-    const requestUrl =
-      '/api/v1/student/reports/project-1/submit';
+    const requestUrl = '/api/v1/student/reports/project-1/submit';
     const acceptHeaderValue = 'application/json';
     const exception = new BadRequestException('Report validation failed');
 
@@ -178,7 +193,10 @@ describe('IssueLogsService', () => {
       }),
     );
     expect(repository.save.mock.calls[0][0].metadata).toEqual(
-      expect.objectContaining({ reasonCode: 'not_authorized', hasEvidence: true }),
+      expect.objectContaining({
+        reasonCode: 'not_authorized',
+        hasEvidence: true,
+      }),
     );
   });
 

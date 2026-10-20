@@ -6,11 +6,14 @@ import { TutorialsService } from './tutorials.service';
  */
 @Controller('public/tutorials')
 export class PublicPlatformTutorialsController {
-    constructor(private readonly tutorialsService: TutorialsService) {}
+  constructor(private readonly tutorialsService: TutorialsService) {}
 
-    @Get()
-    @Header('Cache-Control', 'public, max-age=60, s-maxage=120, stale-while-revalidate=300')
-    list() {
-        return this.tutorialsService.listForStudents();
-    }
+  @Get()
+  @Header(
+    'Cache-Control',
+    'public, max-age=60, s-maxage=120, stale-while-revalidate=300',
+  )
+  list() {
+    return this.tutorialsService.listForStudents();
+  }
 }

@@ -1,4 +1,8 @@
-import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { OpportunitiesService } from './opportunities.service';
 import { OpportunityWorkflowService } from './opportunity-workflow.service';
 import { Opportunity } from './entities/opportunity.entity';
@@ -7,3842 +11,4845 @@ import { Opportunity } from './entities/opportunity.entity';
 // out so these tests can focus on the approval-status decision without building a fully valid
 // user profile.
 jest.mock('../users/profile-completion.util', () => ({
-    ...jest.requireActual('../users/profile-completion.util'),
-    getProfileCompletionStatus: () => ({ profile_complete: true, profile_missing_fields: [] }),
+  ...jest.requireActual('../users/profile-completion.util'),
+  getProfileCompletionStatus: () => ({
+    profile_complete: true,
+    profile_missing_fields: [],
+  }),
 }));
 
 /** Fake EntityManager whose `connection.createQueryRunner()` hands out ONE pinned runner. */
 function lockManager(query: jest.Mock) {
-    const runner = { connect: jest.fn(), query, release: jest.fn() };
-    return { query: jest.fn(), connection: { createQueryRunner: () => runner }, runner };
+  const runner = { connect: jest.fn(), query, release: jest.fn() };
+  return {
+    query: jest.fn(),
+    connection: { createQueryRunner: () => runner },
+    runner,
+  };
 }
 
 /** Repo bits POST /opportunities' idempotency guard needs: pinned lock runner + recent-row query. */
 function createDedupeStubs(recent: unknown = null) {
-    const lockQuery = jest.fn().mockResolvedValue(undefined);
-    const dedupeGetOne = jest.fn().mockResolvedValue(recent);
-    const dedupeQb: any = {};
-    for (const m of ['where', 'andWhere', 'orderBy']) dedupeQb[m] = jest.fn(() => dedupeQb);
-    dedupeQb.getOne = dedupeGetOne;
-    return {
-        stubs: { manager: lockManager(lockQuery), createQueryBuilder: jest.fn(() => dedupeQb) },
-        lockQuery,
-        dedupeGetOne,
-        dedupeQb,
-    };
+  const lockQuery = jest.fn().mockResolvedValue(undefined);
+  const dedupeGetOne = jest.fn().mockResolvedValue(recent);
+  const dedupeQb: any = {};
+  for (const m of ['where', 'andWhere', 'orderBy'])
+    dedupeQb[m] = jest.fn(() => dedupeQb);
+  dedupeQb.getOne = dedupeGetOne;
+  return {
+    stubs: {
+      manager: lockManager(lockQuery),
+      createQueryBuilder: jest.fn(() => dedupeQb),
+    },
+    lockQuery,
+    dedupeGetOne,
+    dedupeQb,
+  };
 }
 
 function makeService(opportunitiesRepo: Record<string, unknown>) {
-    const noop = {} as any;
-    return new OpportunitiesService(
-        opportunitiesRepo as any,
-        noop, // participationRepository
-        noop, // usersRepository
-        noop, // organizationsRepository
-        noop, // organizationsService
-        noop, // engagementService
-        noop, // mailService
-        noop, // notificationsService
-        noop, // opportunityWorkflow
-        noop, // opportunityApplicationsService
-        noop, // facultyUniversityScope
-    );
+  const noop = {} as any;
+  return new OpportunitiesService(
+    opportunitiesRepo as any,
+    noop, // participationRepository
+    noop, // usersRepository
+    noop, // organizationsRepository
+    noop, // organizationsService
+    noop, // engagementService
+    noop, // mailService
+    noop, // notificationsService
+    noop, // opportunityWorkflow
+    noop, // opportunityApplicationsService
+    noop, // facultyUniversityScope
+  );
 }
 
 describe('OpportunitiesService — public partner verification', () => {
-    const ORIGINAL_ENV = { ...process.env };
+  const ORIGINAL_ENV = { ...process.env };
 
-    afterEach(() => {
-        process.env = { ...ORIGINAL_ENV };
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+  });
+
+  describe('getPublicPartnerVerificationPreview', () => {
+    it('returns a safe summary keyed strictly by partnerToken, never faculty/liaison tokens', async () => {
+      const opp = {
+        id: 'opp-1',
+        title: 'Community clean-up',
+        partnerToken: 'secret-token',
+        partnerVerified: false,
+        supervision: { supervisor_name: 'Dr Khan', contact: 'khan@uni.edu' },
+      } as unknown as Opportunity;
+      const findOne = jest.fn().mockResolvedValue(opp);
+      const service = makeService({ findOne });
+
+      const preview =
+        await service.getPublicPartnerVerificationPreview('secret-token');
+
+      expect(findOne).toHaveBeenCalledWith({
+        where: { partnerToken: 'secret-token' },
+      });
+      expect(preview.title).toBe('Community clean-up');
+      expect(preview.alreadyVerified).toBe(false);
+      expect(preview.detail.supervision.faculty.name).toBe('Dr Khan');
+      expect(preview.record).not.toHaveProperty('partnerToken');
+      expect(preview.record.supervision).toEqual({
+        supervisor_name: 'Dr Khan',
+        contact: 'khan@uni.edu',
+      });
     });
 
-    describe('getPublicPartnerVerificationPreview', () => {
-        it('returns a safe summary keyed strictly by partnerToken, never faculty/liaison tokens', async () => {
-            const opp = {
-                id: 'opp-1',
-                title: 'Community clean-up',
-                partnerToken: 'secret-token',
-                partnerVerified: false,
-                supervision: { supervisor_name: 'Dr Khan', contact: 'khan@uni.edu' },
-            } as unknown as Opportunity;
-            const findOne = jest.fn().mockResolvedValue(opp);
-            const service = makeService({ findOne });
-
-            const preview = await service.getPublicPartnerVerificationPreview('secret-token');
-
-            expect(findOne).toHaveBeenCalledWith({ where: { partnerToken: 'secret-token' } });
-            expect(preview.title).toBe('Community clean-up');
-            expect(preview.alreadyVerified).toBe(false);
-            expect(preview.detail.supervision.faculty.name).toBe('Dr Khan');
-            expect(preview.record).not.toHaveProperty('partnerToken');
-            expect(preview.record.supervision).toEqual({ supervisor_name: 'Dr Khan', contact: 'khan@uni.edu' });
-        });
-
-        it('reflects an already-verified opportunity', async () => {
-            const opp = { id: 'opp-1', title: 'X', partnerToken: 't', partnerVerified: true } as unknown as Opportunity;
-            const service = makeService({ findOne: jest.fn().mockResolvedValue(opp) });
-            const preview = await service.getPublicPartnerVerificationPreview('t');
-            expect(preview.alreadyVerified).toBe(true);
-        });
-
-        it('throws NotFoundException for an unknown or expired token', async () => {
-            const service = makeService({ findOne: jest.fn().mockResolvedValue(null) });
-            await expect(service.getPublicPartnerVerificationPreview('bad-token')).rejects.toThrow(NotFoundException);
-        });
+    it('reflects an already-verified opportunity', async () => {
+      const opp = {
+        id: 'opp-1',
+        title: 'X',
+        partnerToken: 't',
+        partnerVerified: true,
+      } as unknown as Opportunity;
+      const service = makeService({
+        findOne: jest.fn().mockResolvedValue(opp),
+      });
+      const preview = await service.getPublicPartnerVerificationPreview('t');
+      expect(preview.alreadyVerified).toBe(true);
     });
 
-    describe('verifyOpportunityToken — identity gate', () => {
-        it('allows anonymous partner-token verification even when VERIFICATION_REQUIRE_AUTH is on', async () => {
-            process.env.VERIFICATION_REQUIRE_AUTH = 'true';
-            const opp = {
-                id: 'opp-1',
-                partnerToken: 'partner-tok',
-                partnerVerified: true, // already-verified short-circuit — no side effects to mock
-                isStudentCreated: false,
-                title: 'Community clean-up',
-            } as unknown as Opportunity;
-            const service = makeService({ findOne: jest.fn().mockResolvedValue(opp) });
-
-            const result = await service.verifyOpportunityToken('partner-tok', undefined);
-            expect(result.success).toBe(true);
-        });
-
-        it('allows anonymous faculty-token verification even when VERIFICATION_REQUIRE_AUTH is on', async () => {
-            process.env.VERIFICATION_REQUIRE_AUTH = 'true';
-            const opp = {
-                id: 'opp-1',
-                faculty_verification_token: 'faculty-tok',
-                isStudentCreated: true,
-                faculty_verified: true,
-                title: 'Community clean-up',
-            } as unknown as Opportunity;
-            const service = makeService({ findOne: jest.fn().mockResolvedValue(opp) });
-
-            const result = await service.verifyOpportunityToken('faculty-tok', undefined);
-            expect(result.success).toBe(true);
-        });
-
-        it('refuses a faculty token that is not awaiting review, without asking for login', async () => {
-            process.env.VERIFICATION_REQUIRE_AUTH = 'true';
-            const opp = {
-                id: 'opp-1',
-                faculty_verification_token: 'faculty-tok',
-                isStudentCreated: true,
-                faculty_verified: false,
-                admin_approved: true,
-                creatorId: 'student-1',
-                workflowStage: 'live',
-                status: 'active',
-                title: 'Community clean-up',
-            } as unknown as Opportunity;
-            const service = makeService({ findOne: jest.fn().mockResolvedValue(opp) });
-
-            await expect(service.verifyOpportunityToken('faculty-tok', undefined)).rejects.toThrow(BadRequestException);
-        });
-
-        it('allows anonymous faculty-token verification when VERIFICATION_REQUIRE_AUTH is off (dev default)', async () => {
-            process.env.VERIFICATION_REQUIRE_AUTH = 'false';
-            const opp = {
-                id: 'opp-1',
-                faculty_verification_token: 'faculty-tok',
-                isStudentCreated: true,
-                faculty_verified: true, // already-verified short-circuit — no side effects to mock
-                title: 'Community clean-up',
-            } as unknown as Opportunity;
-            const service = makeService({ findOne: jest.fn().mockResolvedValue(opp) });
-
-            const result = await service.verifyOpportunityToken('faculty-tok', undefined);
-            expect(result.success).toBe(true);
-        });
+    it('throws NotFoundException for an unknown or expired token', async () => {
+      const service = makeService({
+        findOne: jest.fn().mockResolvedValue(null),
+      });
+      await expect(
+        service.getPublicPartnerVerificationPreview('bad-token'),
+      ).rejects.toThrow(NotFoundException);
     });
+  });
+
+  describe('verifyOpportunityToken — identity gate', () => {
+    it('allows anonymous partner-token verification even when VERIFICATION_REQUIRE_AUTH is on', async () => {
+      process.env.VERIFICATION_REQUIRE_AUTH = 'true';
+      const opp = {
+        id: 'opp-1',
+        partnerToken: 'partner-tok',
+        partnerVerified: true, // already-verified short-circuit — no side effects to mock
+        isStudentCreated: false,
+        title: 'Community clean-up',
+      } as unknown as Opportunity;
+      const service = makeService({
+        findOne: jest.fn().mockResolvedValue(opp),
+      });
+
+      const result = await service.verifyOpportunityToken(
+        'partner-tok',
+        undefined,
+      );
+      expect(result.success).toBe(true);
+    });
+
+    it('allows anonymous faculty-token verification even when VERIFICATION_REQUIRE_AUTH is on', async () => {
+      process.env.VERIFICATION_REQUIRE_AUTH = 'true';
+      const opp = {
+        id: 'opp-1',
+        faculty_verification_token: 'faculty-tok',
+        isStudentCreated: true,
+        faculty_verified: true,
+        title: 'Community clean-up',
+      } as unknown as Opportunity;
+      const service = makeService({
+        findOne: jest.fn().mockResolvedValue(opp),
+      });
+
+      const result = await service.verifyOpportunityToken(
+        'faculty-tok',
+        undefined,
+      );
+      expect(result.success).toBe(true);
+    });
+
+    it('refuses a faculty token that is not awaiting review, without asking for login', async () => {
+      process.env.VERIFICATION_REQUIRE_AUTH = 'true';
+      const opp = {
+        id: 'opp-1',
+        faculty_verification_token: 'faculty-tok',
+        isStudentCreated: true,
+        faculty_verified: false,
+        admin_approved: true,
+        creatorId: 'student-1',
+        workflowStage: 'live',
+        status: 'active',
+        title: 'Community clean-up',
+      } as unknown as Opportunity;
+      const service = makeService({
+        findOne: jest.fn().mockResolvedValue(opp),
+      });
+
+      await expect(
+        service.verifyOpportunityToken('faculty-tok', undefined),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('allows anonymous faculty-token verification when VERIFICATION_REQUIRE_AUTH is off (dev default)', async () => {
+      process.env.VERIFICATION_REQUIRE_AUTH = 'false';
+      const opp = {
+        id: 'opp-1',
+        faculty_verification_token: 'faculty-tok',
+        isStudentCreated: true,
+        faculty_verified: true, // already-verified short-circuit — no side effects to mock
+        title: 'Community clean-up',
+      } as unknown as Opportunity;
+      const service = makeService({
+        findOne: jest.fn().mockResolvedValue(opp),
+      });
+
+      const result = await service.verifyOpportunityToken(
+        'faculty-tok',
+        undefined,
+      );
+      expect(result.success).toBe(true);
+    });
+  });
 });
 
 describe('OpportunitiesService — public faculty verification', () => {
-    it('previews by faculty token and omits the token from the flashcard record', async () => {
-        const opp = {
-            id: 'opp-1',
-            title: 'Food rescue',
-            faculty_verification_token: 'faculty-secret',
-            partnerToken: 'partner-secret',
-            isStudentCreated: true,
-            faculty_verified: false,
-            admin_approved: false,
-            creatorId: 'student-1',
-            status: 'pending_faculty',
-            workflowStage: 'pending_faculty',
-            types: ['Community Service'],
-            mode: 'On-site',
-        } as unknown as Opportunity;
-        const service = makeService({ findOne: jest.fn().mockResolvedValue(opp) });
-        const preview = await service.getPublicFacultyVerificationPreview('faculty-secret');
-        expect(preview.title).toBe('Food rescue');
-        expect(preview.canDecide).toBe(true);
-        expect(preview.record).not.toHaveProperty('faculty_verification_token');
-        expect(preview.record).not.toHaveProperty('partnerToken');
-        expect(JSON.stringify(preview)).not.toContain('faculty-secret');
-    });
+  it('previews by faculty token and omits the token from the flashcard record', async () => {
+    const opp = {
+      id: 'opp-1',
+      title: 'Food rescue',
+      faculty_verification_token: 'faculty-secret',
+      partnerToken: 'partner-secret',
+      isStudentCreated: true,
+      faculty_verified: false,
+      admin_approved: false,
+      creatorId: 'student-1',
+      status: 'pending_faculty',
+      workflowStage: 'pending_faculty',
+      types: ['Community Service'],
+      mode: 'On-site',
+    } as unknown as Opportunity;
+    const service = makeService({ findOne: jest.fn().mockResolvedValue(opp) });
+    const preview =
+      await service.getPublicFacultyVerificationPreview('faculty-secret');
+    expect(preview.title).toBe('Food rescue');
+    expect(preview.canDecide).toBe(true);
+    expect(preview.record).not.toHaveProperty('faculty_verification_token');
+    expect(preview.record).not.toHaveProperty('partnerToken');
+    expect(JSON.stringify(preview)).not.toContain('faculty-secret');
+  });
 
-    it('rejects via the faculty token without a login', async () => {
-        const opp = {
-            id: 'opp-f',
-            faculty_verification_token: 'ftok',
-            isStudentCreated: false,
-            faculty_verified: false,
-            facultyApprovalStatus: 'pending',
-            admin_approved: false,
-            creatorId: 'ngo-1',
-            status: 'pending_faculty',
-            workflowStage: 'pending_faculty',
-            title: 'Campus drive',
-        };
-        const findOne = jest.fn().mockResolvedValue(opp);
-        const save = jest.fn(async (row: any) => row);
-        const service = makeService({ findOne, save });
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+  it('rejects via the faculty token without a login', async () => {
+    const opp = {
+      id: 'opp-f',
+      faculty_verification_token: 'ftok',
+      isStudentCreated: false,
+      faculty_verified: false,
+      facultyApprovalStatus: 'pending',
+      admin_approved: false,
+      creatorId: 'ngo-1',
+      status: 'pending_faculty',
+      workflowStage: 'pending_faculty',
+      title: 'Campus drive',
+    };
+    const findOne = jest.fn().mockResolvedValue(opp);
+    const save = jest.fn(async (row: any) => row);
+    const service = makeService({ findOne, save });
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
 
-        const result = await service.decideOpportunityViaFacultyToken('ftok', 'reject', 'Not a fit');
+    const result = await service.decideOpportunityViaFacultyToken(
+      'ftok',
+      'reject',
+      'Not a fit',
+    );
 
-        expect(save).toHaveBeenCalled();
-        expect((opp as any).status).toBe('rejected');
-        expect((opp as any).rejectionReason).toBe('Not a fit');
-        expect(result.success).toBe(true);
-    });
+    expect(save).toHaveBeenCalled();
+    expect((opp as any).status).toBe('rejected');
+    expect((opp as any).rejectionReason).toBe('Not a fit');
+    expect(result.success).toBe(true);
+  });
 });
 
 describe('OpportunitiesService — public directory visibility (isPubliclyVisibleOpportunity)', () => {
-    const service = makeService({});
-    const isVisible = (opp: Partial<Opportunity>) =>
-        (service as any).isPubliclyVisibleOpportunity(opp as Opportunity);
+  const service = makeService({});
+  const isVisible = (opp: Partial<Opportunity>) =>
+    (service as any).isPubliclyVisibleOpportunity(opp as Opportunity);
 
-    it('shows a scoped faculty/partner opportunity publicly when a real participation_scope backs it (card public, Apply Now gated)', () => {
-        expect(
-            isVisible({
-                isStudentCreated: false,
-                visibility_and_academic_linkage: { visibility_type: 'own_university_only' },
-                participation_scope: { rule: 'own_university_only', university_names: ['University A'] },
-            }),
-        ).toBe(true);
-    });
+  it('shows a scoped faculty/partner opportunity publicly when a real participation_scope backs it (card public, Apply Now gated)', () => {
+    expect(
+      isVisible({
+        isStudentCreated: false,
+        visibility_and_academic_linkage: {
+          visibility_type: 'own_university_only',
+        },
+        participation_scope: {
+          rule: 'own_university_only',
+          university_names: ['University A'],
+        },
+      }),
+    ).toBe(true);
+  });
 
-    it('hides a restrictive faculty/partner opportunity with no participation_scope to gate Apply Now with', () => {
-        expect(
-            isVisible({
-                isStudentCreated: false,
-                visibility_and_academic_linkage: { visibility_type: 'restricted_specific_universities' },
-                participation_scope: null,
-            }),
-        ).toBe(false);
-    });
+  it('hides a restrictive faculty/partner opportunity with no participation_scope to gate Apply Now with', () => {
+    expect(
+      isVisible({
+        isStudentCreated: false,
+        visibility_and_academic_linkage: {
+          visibility_type: 'restricted_specific_universities',
+        },
+        participation_scope: null,
+      }),
+    ).toBe(false);
+  });
 
-    it('always shows an "open to all" opportunity', () => {
-        expect(
-            isVisible({
-                isStudentCreated: false,
-                visibility_and_academic_linkage: { visibility_type: 'open_all_universities' },
-            }),
-        ).toBe(true);
-    });
+  it('always shows an "open to all" opportunity', () => {
+    expect(
+      isVisible({
+        isStudentCreated: false,
+        visibility_and_academic_linkage: {
+          visibility_type: 'open_all_universities',
+        },
+      }),
+    ).toBe(true);
+  });
 
-    it('still respects the legacy visibility fallback when no explicit linkage type is set', () => {
-        expect(isVisible({ isStudentCreated: false, visibility: 'restricted', participation_scope: null })).toBe(false);
-        expect(
-            isVisible({
-                isStudentCreated: false,
-                visibility: 'restricted',
-                participation_scope: { rule: 'own_university_only' },
-            }),
-        ).toBe(true);
-    });
+  it('still respects the legacy visibility fallback when no explicit linkage type is set', () => {
+    expect(
+      isVisible({
+        isStudentCreated: false,
+        visibility: 'restricted',
+        participation_scope: null,
+      }),
+    ).toBe(false);
+    expect(
+      isVisible({
+        isStudentCreated: false,
+        visibility: 'restricted',
+        participation_scope: { rule: 'own_university_only' },
+      }),
+    ).toBe(true);
+  });
 
-    it('hides a student-created opportunity until CIEL approval, then lists it even when visibility is restricted', () => {
-        expect(
-            isVisible({
-                isStudentCreated: true,
-                visibility: 'restricted',
-                participation_scope: { rule: 'own_university_only' },
-            }),
-        ).toBe(false);
-        expect(
-            isVisible({
-                isStudentCreated: true,
-                admin_approved: true,
-                workflowStage: 'pending_admin',
-                status: 'pending_admin',
-                visibility_and_academic_linkage: { visibility_type: 'open_all_universities' },
-            }),
-        ).toBe(false);
-        expect(
-            isVisible({
-                isStudentCreated: true,
-                admin_approved: true,
-                workflowStage: 'live',
-                status: 'active',
-                visibility: 'restricted',
-            }),
-        ).toBe(true);
-    });
+  it('hides a student-created opportunity until CIEL approval, then lists it even when visibility is restricted', () => {
+    expect(
+      isVisible({
+        isStudentCreated: true,
+        visibility: 'restricted',
+        participation_scope: { rule: 'own_university_only' },
+      }),
+    ).toBe(false);
+    expect(
+      isVisible({
+        isStudentCreated: true,
+        admin_approved: true,
+        workflowStage: 'pending_admin',
+        status: 'pending_admin',
+        visibility_and_academic_linkage: {
+          visibility_type: 'open_all_universities',
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isVisible({
+        isStudentCreated: true,
+        admin_approved: true,
+        workflowStage: 'live',
+        status: 'active',
+        visibility: 'restricted',
+      }),
+    ).toBe(true);
+  });
 
-    it('drops a live listing from the public directory when Super Admin hides it', () => {
-        expect(
-            isVisible({
-                isStudentCreated: false,
-                admin_hidden: true,
-                visibility_and_academic_linkage: { visibility_type: 'open_all_universities' },
-            }),
-        ).toBe(false);
-    });
+  it('drops a live listing from the public directory when Super Admin hides it', () => {
+    expect(
+      isVisible({
+        isStudentCreated: false,
+        admin_hidden: true,
+        visibility_and_academic_linkage: {
+          visibility_type: 'open_all_universities',
+        },
+      }),
+    ).toBe(false);
+  });
 
-    it('keeps an expired listing in the public directory (apply is gated separately)', () => {
-        expect(
-            isVisible({
-                isStudentCreated: false,
-                admin_expired: true,
-                visibility_and_academic_linkage: { visibility_type: 'open_all_universities' },
-            }),
-        ).toBe(true);
-    });
+  it('keeps an expired listing in the public directory (apply is gated separately)', () => {
+    expect(
+      isVisible({
+        isStudentCreated: false,
+        admin_expired: true,
+        visibility_and_academic_linkage: {
+          visibility_type: 'open_all_universities',
+        },
+      }),
+    ).toBe(true);
+  });
 });
 
 describe('OpportunitiesService — student create-opportunity is locked to their own university', () => {
-    const baseDto = () => ({
-        title: 'Beach clean-up',
-        mode: 'Remote', // keep location.pin out of the way — these tests are about university scoping
-        supervision: { contact: 'teacher@uni.edu', faculty_department: 'CS' },
-        executing_context: {
-            type: 'independent',
-            independent_community_activity: { activity_site_description: 'Local park' },
+  const baseDto = () => ({
+    title: 'Beach clean-up',
+    mode: 'Remote', // keep location.pin out of the way — these tests are about university scoping
+    supervision: { contact: 'teacher@uni.edu', faculty_department: 'CS' },
+    executing_context: {
+      type: 'independent',
+      independent_community_activity: {
+        activity_site_description: 'Local park',
+      },
+    },
+    safety_declaration: {
+      environment_safe_and_appropriate: true,
+      students_guided_and_supervised: true,
+      lawful_ethical_and_non_hazardous: true,
+      precautions_and_basic_safety: true,
+    },
+    submission_confirmations: {
+      academically_valid_and_accurately_described: true,
+      activity_properly_supervised: true,
+      environment_safe_and_appropriate: true,
+      information_correct_and_verifiable: true,
+    },
+  });
+
+  it('rejects a student trying to scope their own opportunity to "open to all universities"', async () => {
+    const service = makeService({});
+    (service as any).usersRepository = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'student-1',
+        role: 'student',
+        name: 'Ali',
+        phone: '0300',
+        email: 'ali@uni.edu',
+        city: 'Lahore',
+        university: 'University A',
+        department: 'CS',
+      }),
+    };
+
+    await expect(
+      service.createStudentOpportunity('student-1', {
+        ...baseDto(),
+        participation_scope: { rule: 'open_all_universities' },
+      } as any),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('rejects a student trying to restrict/target a university other than their own', async () => {
+    const service = makeService({});
+    (service as any).usersRepository = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'student-1',
+        role: 'student',
+        name: 'Ali',
+        phone: '0300',
+        email: 'ali@uni.edu',
+        city: 'Lahore',
+        university: 'University A',
+        department: 'CS',
+      }),
+    };
+
+    await expect(
+      service.createStudentOpportunity('student-1', {
+        ...baseDto(),
+        participation_scope: {
+          rule: 'restricted_specific_universities',
+          university_names: ['University B'],
         },
-        safety_declaration: {
-            environment_safe_and_appropriate: true,
-            students_guided_and_supervised: true,
-            lawful_ethical_and_non_hazardous: true,
-            precautions_and_basic_safety: true,
-        },
-        submission_confirmations: {
-            academically_valid_and_accurately_described: true,
-            activity_properly_supervised: true,
-            environment_safe_and_appropriate: true,
-            information_correct_and_verifiable: true,
-        },
-    });
-
-    it('rejects a student trying to scope their own opportunity to "open to all universities"', async () => {
-        const service = makeService({});
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({
-                id: 'student-1',
-                role: 'student',
-                name: 'Ali',
-                phone: '0300',
-                email: 'ali@uni.edu',
-                city: 'Lahore',
-                university: 'University A',
-                department: 'CS',
-            }),
-        };
-
-        await expect(
-            service.createStudentOpportunity('student-1', {
-                ...baseDto(),
-                participation_scope: { rule: 'open_all_universities' },
-            } as any),
-        ).rejects.toBeInstanceOf(BadRequestException);
-    });
-
-    it('rejects a student trying to restrict/target a university other than their own', async () => {
-        const service = makeService({});
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({
-                id: 'student-1',
-                role: 'student',
-                name: 'Ali',
-                phone: '0300',
-                email: 'ali@uni.edu',
-                city: 'Lahore',
-                university: 'University A',
-                department: 'CS',
-            }),
-        };
-
-        await expect(
-            service.createStudentOpportunity('student-1', {
-                ...baseDto(),
-                participation_scope: {
-                    rule: 'restricted_specific_universities',
-                    university_names: ['University B'],
-                },
-            } as any),
-        ).rejects.toBeInstanceOf(BadRequestException);
-    });
+      } as any),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
 });
 
 describe('OpportunitiesService — createStudentOpportunity advisory lock', () => {
-    it('acquires and releases the per-student advisory lock around the duplicate-title check and create, even on the happy path', async () => {
-        const managerQuery = jest.fn().mockResolvedValue(undefined);
-        const opportunitiesRepo = {
-            manager: lockManager(managerQuery),
-            create: jest.fn((payload: any) => payload),
-            save: jest.fn(async (row: any) => ({ ...row, id: 'opp-new' })),
-        };
-        const service = makeService(opportunitiesRepo);
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({
-                id: 'student-1',
-                role: 'student',
-                name: 'Ali',
-                phone: '0300',
-                email: 'ali@uni.edu',
-                city: 'Lahore',
-                university: 'University A',
-                department: 'CS',
-            }),
-        };
-        (service as any).organizationsRepository = {
-            create: jest.fn((row: any) => row),
-            save: jest.fn(async (row: any) => ({ ...row, id: 'org-1' })),
-        };
-        (service as any).opportunityWorkflow = { initStudentCreated: jest.fn() };
-        (service as any).mailService = {
-            sendFacultyStudentOpportunityVerification: jest.fn().mockResolvedValue(undefined),
-        };
+  it('acquires and releases the per-student advisory lock around the duplicate-title check and create, even on the happy path', async () => {
+    const managerQuery = jest.fn().mockResolvedValue(undefined);
+    const opportunitiesRepo = {
+      manager: lockManager(managerQuery),
+      create: jest.fn((payload: any) => payload),
+      save: jest.fn(async (row: any) => ({ ...row, id: 'opp-new' })),
+    };
+    const service = makeService(opportunitiesRepo);
+    (service as any).usersRepository = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'student-1',
+        role: 'student',
+        name: 'Ali',
+        phone: '0300',
+        email: 'ali@uni.edu',
+        city: 'Lahore',
+        university: 'University A',
+        department: 'CS',
+      }),
+    };
+    (service as any).organizationsRepository = {
+      create: jest.fn((row: any) => row),
+      save: jest.fn(async (row: any) => ({ ...row, id: 'org-1' })),
+    };
+    (service as any).opportunityWorkflow = { initStudentCreated: jest.fn() };
+    (service as any).mailService = {
+      sendFacultyStudentOpportunityVerification: jest
+        .fn()
+        .mockResolvedValue(undefined),
+    };
 
-        const result = await service.createStudentOpportunity('student-1', {
-            title: 'CS', // < 6 chars — findSimilarStudentCreatedOpportunities short-circuits, no queryBuilder needed
-            mode: 'Remote', // location.pin isn't relevant to this test — keep it out of the way
-            objectives: { description: 'Help clean the local park and raise awareness.' },
-            timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
-            supervision: { contact: 'teacher@uni.edu', faculty_department: 'CS' },
-            executing_context: {
-                type: 'independent',
-                independent_community_activity: { activity_site_description: 'Local park' },
-            },
-            safety_declaration: {
-                environment_safe_and_appropriate: true,
-                students_guided_and_supervised: true,
-                lawful_ethical_and_non_hazardous: true,
-                precautions_and_basic_safety: true,
-            },
-            submission_confirmations: {
-                academically_valid_and_accurately_described: true,
-                activity_properly_supervised: true,
-                environment_safe_and_appropriate: true,
-                information_correct_and_verifiable: true,
-            },
-        } as any);
+    const result = await service.createStudentOpportunity('student-1', {
+      title: 'CS', // < 6 chars — findSimilarStudentCreatedOpportunities short-circuits, no queryBuilder needed
+      mode: 'Remote', // location.pin isn't relevant to this test — keep it out of the way
+      objectives: {
+        description: 'Help clean the local park and raise awareness.',
+      },
+      timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
+      supervision: { contact: 'teacher@uni.edu', faculty_department: 'CS' },
+      executing_context: {
+        type: 'independent',
+        independent_community_activity: {
+          activity_site_description: 'Local park',
+        },
+      },
+      safety_declaration: {
+        environment_safe_and_appropriate: true,
+        students_guided_and_supervised: true,
+        lawful_ethical_and_non_hazardous: true,
+        precautions_and_basic_safety: true,
+      },
+      submission_confirmations: {
+        academically_valid_and_accurately_described: true,
+        activity_properly_supervised: true,
+        environment_safe_and_appropriate: true,
+        information_correct_and_verifiable: true,
+      },
+    } as any);
 
-        expect(result).toEqual(expect.objectContaining({ success: true }));
-        expect(managerQuery.mock.calls[0][0]).toContain('pg_advisory_lock');
-        expect(managerQuery.mock.calls[0][1]).toEqual(['create_student_opportunity:student-1']);
-        expect(managerQuery.mock.calls[1][0]).toContain('pg_advisory_unlock');
-        expect(managerQuery.mock.calls[1][1]).toEqual(['create_student_opportunity:student-1']);
-        // lock + unlock go through the ONE pinned query runner (same DB session), which is then
-        // released back to the pool — never through pooled `manager.query` (two arbitrary sessions).
-        expect(opportunitiesRepo.manager.query).not.toHaveBeenCalled();
-        expect(opportunitiesRepo.manager.runner.connect).toHaveBeenCalledTimes(1);
-        expect(opportunitiesRepo.manager.runner.release).toHaveBeenCalledTimes(1);
-    });
+    expect(result).toEqual(expect.objectContaining({ success: true }));
+    expect(managerQuery.mock.calls[0][0]).toContain('pg_advisory_lock');
+    expect(managerQuery.mock.calls[0][1]).toEqual([
+      'create_student_opportunity:student-1',
+    ]);
+    expect(managerQuery.mock.calls[1][0]).toContain('pg_advisory_unlock');
+    expect(managerQuery.mock.calls[1][1]).toEqual([
+      'create_student_opportunity:student-1',
+    ]);
+    // lock + unlock go through the ONE pinned query runner (same DB session), which is then
+    // released back to the pool — never through pooled `manager.query` (two arbitrary sessions).
+    expect(opportunitiesRepo.manager.query).not.toHaveBeenCalled();
+    expect(opportunitiesRepo.manager.runner.connect).toHaveBeenCalledTimes(1);
+    expect(opportunitiesRepo.manager.runner.release).toHaveBeenCalledTimes(1);
+  });
 
-    it('still releases the lock when the duplicate-title check throws', async () => {
-        const managerQuery = jest.fn().mockResolvedValue(undefined);
-        const opportunitiesRepo = { manager: lockManager(managerQuery) };
-        const releaseMock = opportunitiesRepo.manager.runner.release;
-        const service = makeService(opportunitiesRepo);
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({
-                id: 'student-1',
-                role: 'student',
-                name: 'Ali',
-                phone: '0300',
-                email: 'ali@uni.edu',
-                city: 'Lahore',
-                university: 'University A',
-                department: 'CS',
-            }),
-        };
-        jest.spyOn(service, 'findSimilarStudentCreatedOpportunities').mockResolvedValue([
-            { id: 'existing-1', title: 'Beach clean-up drive' } as any,
-        ]);
+  it('still releases the lock when the duplicate-title check throws', async () => {
+    const managerQuery = jest.fn().mockResolvedValue(undefined);
+    const opportunitiesRepo = { manager: lockManager(managerQuery) };
+    const releaseMock = opportunitiesRepo.manager.runner.release;
+    const service = makeService(opportunitiesRepo);
+    (service as any).usersRepository = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'student-1',
+        role: 'student',
+        name: 'Ali',
+        phone: '0300',
+        email: 'ali@uni.edu',
+        city: 'Lahore',
+        university: 'University A',
+        department: 'CS',
+      }),
+    };
+    jest
+      .spyOn(service, 'findSimilarStudentCreatedOpportunities')
+      .mockResolvedValue([
+        { id: 'existing-1', title: 'Beach clean-up drive' } as any,
+      ]);
 
-        await expect(
-            service.createStudentOpportunity('student-1', {
-                title: 'Beach clean-up drive', // >= 6 chars — reaches the real duplicate check
-                mode: 'Remote', // location.pin isn't relevant to this test — keep it out of the way
-                objectives: { description: 'Help clean the local park and raise awareness.' },
-                timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
-                supervision: { contact: 'teacher@uni.edu', faculty_department: 'CS' },
-                executing_context: {
-                    type: 'independent',
-                    independent_community_activity: { activity_site_description: 'Local park' },
-                },
-                safety_declaration: {
-                    environment_safe_and_appropriate: true,
-                    students_guided_and_supervised: true,
-                    lawful_ethical_and_non_hazardous: true,
-                    precautions_and_basic_safety: true,
-                },
-                submission_confirmations: {
-                    academically_valid_and_accurately_described: true,
-                    activity_properly_supervised: true,
-                    environment_safe_and_appropriate: true,
-                    information_correct_and_verifiable: true,
-                },
-            } as any),
-        ).rejects.toThrow('similar title');
-        expect(managerQuery).toHaveBeenCalledTimes(2);
-        expect(managerQuery.mock.calls[1][0]).toContain('pg_advisory_unlock');
-        expect(releaseMock).toHaveBeenCalledTimes(1);
-    });
+    await expect(
+      service.createStudentOpportunity('student-1', {
+        title: 'Beach clean-up drive', // >= 6 chars — reaches the real duplicate check
+        mode: 'Remote', // location.pin isn't relevant to this test — keep it out of the way
+        objectives: {
+          description: 'Help clean the local park and raise awareness.',
+        },
+        timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
+        supervision: { contact: 'teacher@uni.edu', faculty_department: 'CS' },
+        executing_context: {
+          type: 'independent',
+          independent_community_activity: {
+            activity_site_description: 'Local park',
+          },
+        },
+        safety_declaration: {
+          environment_safe_and_appropriate: true,
+          students_guided_and_supervised: true,
+          lawful_ethical_and_non_hazardous: true,
+          precautions_and_basic_safety: true,
+        },
+        submission_confirmations: {
+          academically_valid_and_accurately_described: true,
+          activity_properly_supervised: true,
+          environment_safe_and_appropriate: true,
+          information_correct_and_verifiable: true,
+        },
+      } as any),
+    ).rejects.toThrow('similar title');
+    expect(managerQuery).toHaveBeenCalledTimes(2);
+    expect(managerQuery.mock.calls[1][0]).toContain('pg_advisory_unlock');
+    expect(releaseMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('OpportunitiesService — student edit/resubmit after faculty revision', () => {
-    it('re-enters pending_faculty (not stuck in "revision") when the student saves an edit', async () => {
-        const opp = {
-            id: 'opp-1',
-            creatorId: 'student-1',
-            isStudentCreated: true,
-            status: 'revision',
-            workflowStage: 'revision',
-            facultyApprovalStatus: 'revision_requested',
-            partnerApprovalStatus: 'not_applicable',
-            adminApprovalStatus: 'pending',
-            faculty_verified: false,
-            faculty_verification_status: 'pending_faculty',
-            partnerVerified: true,
-            requiresPartnerApproval: false,
-            supervision: { contact: 'teacher@uni.edu' },
-        } as unknown as Opportunity;
-        const findOne = jest.fn().mockResolvedValue(opp);
-        const save = jest.fn(async (row: Opportunity) => row);
-        const service = makeService({ findOne, save });
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({ id: 'student-1', role: 'student' }),
-        };
-        (service as any).organizationsService = {
-            getMyOrganization: jest.fn().mockResolvedValue(null),
-        };
+  it('re-enters pending_faculty (not stuck in "revision") when the student saves an edit', async () => {
+    const opp = {
+      id: 'opp-1',
+      creatorId: 'student-1',
+      isStudentCreated: true,
+      status: 'revision',
+      workflowStage: 'revision',
+      facultyApprovalStatus: 'revision_requested',
+      partnerApprovalStatus: 'not_applicable',
+      adminApprovalStatus: 'pending',
+      faculty_verified: false,
+      faculty_verification_status: 'pending_faculty',
+      partnerVerified: true,
+      requiresPartnerApproval: false,
+      supervision: { contact: 'teacher@uni.edu' },
+    } as unknown as Opportunity;
+    const findOne = jest.fn().mockResolvedValue(opp);
+    const save = jest.fn(async (row: Opportunity) => row);
+    const service = makeService({ findOne, save });
+    (service as any).usersRepository = {
+      findOne: jest
+        .fn()
+        .mockResolvedValue({ id: 'student-1', role: 'student' }),
+    };
+    (service as any).organizationsService = {
+      getMyOrganization: jest.fn().mockResolvedValue(null),
+    };
 
-        const saved = await service.update('student-1', {
-            id: 'opp-1',
-            title: 'Updated title after fixing supervision details',
-        } as any);
+    const saved = await service.update('student-1', {
+      id: 'opp-1',
+      title: 'Updated title after fixing supervision details',
+    } as any);
 
-        expect((saved as any).workflowStage).toBe('pending_faculty');
-        expect((saved as any).status).toBe('pending_faculty');
-        expect((saved as any).facultyApprovalStatus).toBe('pending');
-        expect((saved as any).faculty_verification_token).toBeTruthy();
-    });
+    expect((saved as any).workflowStage).toBe('pending_faculty');
+    expect((saved as any).status).toBe('pending_faculty');
+    expect((saved as any).facultyApprovalStatus).toBe('pending');
+    expect((saved as any).faculty_verification_token).toBeTruthy();
+  });
 
-    it('does not force a private-candidate (no faculty line) resubmit back into pending_faculty', async () => {
-        const opp = {
-            id: 'opp-2',
-            creatorId: 'student-2',
-            isStudentCreated: true,
-            status: 'rejected',
-            workflowStage: 'rejected',
-            facultyApprovalStatus: 'not_applicable',
-            partnerApprovalStatus: 'rejected',
-            adminApprovalStatus: 'pending',
-            faculty_verified: true,
-            faculty_verification_status: 'not_required',
-            partnerVerified: false,
-            requiresPartnerApproval: true,
-            partner_organization: { official_email: 'partner@org.com' },
-        } as unknown as Opportunity;
-        const findOne = jest.fn().mockResolvedValue(opp);
-        const save = jest.fn(async (row: Opportunity) => row);
-        const service = makeService({ findOne, save });
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({ id: 'student-2', role: 'student' }),
-        };
-        (service as any).organizationsService = {
-            getMyOrganization: jest.fn().mockResolvedValue(null),
-        };
+  it('does not force a private-candidate (no faculty line) resubmit back into pending_faculty', async () => {
+    const opp = {
+      id: 'opp-2',
+      creatorId: 'student-2',
+      isStudentCreated: true,
+      status: 'rejected',
+      workflowStage: 'rejected',
+      facultyApprovalStatus: 'not_applicable',
+      partnerApprovalStatus: 'rejected',
+      adminApprovalStatus: 'pending',
+      faculty_verified: true,
+      faculty_verification_status: 'not_required',
+      partnerVerified: false,
+      requiresPartnerApproval: true,
+      partner_organization: { official_email: 'partner@org.com' },
+    } as unknown as Opportunity;
+    const findOne = jest.fn().mockResolvedValue(opp);
+    const save = jest.fn(async (row: Opportunity) => row);
+    const service = makeService({ findOne, save });
+    (service as any).usersRepository = {
+      findOne: jest
+        .fn()
+        .mockResolvedValue({ id: 'student-2', role: 'student' }),
+    };
+    (service as any).organizationsService = {
+      getMyOrganization: jest.fn().mockResolvedValue(null),
+    };
 
-        const saved = await service.update('student-2', {
-            id: 'opp-2',
-            title: 'Fixed after partner rejection',
-        } as any);
+    const saved = await service.update('student-2', {
+      id: 'opp-2',
+      title: 'Fixed after partner rejection',
+    } as any);
 
-        expect((saved as any).workflowStage).toBe('pending_partner');
-        expect((saved as any).facultyApprovalStatus).toBe('not_applicable');
-    });
+    expect((saved as any).workflowStage).toBe('pending_partner');
+    expect((saved as any).facultyApprovalStatus).toBe('not_applicable');
+  });
 });
 
 describe('OpportunitiesService — partnerDashboardApprove ownership guard', () => {
-    const makeApprovedOpp = () => ({
-        id: 'opp-partner-1',
-        isStudentCreated: false,
-        organizationId: 'org-A',
-        partnerApprovalStatus: 'approved',
-        workflowStage: 'pending_admin',
-        partner_organization: { official_email: 'realpartner@org.com' },
+  const makeApprovedOpp = () => ({
+    id: 'opp-partner-1',
+    isStudentCreated: false,
+    organizationId: 'org-A',
+    partnerApprovalStatus: 'approved',
+    workflowStage: 'pending_admin',
+    partner_organization: { official_email: 'realpartner@org.com' },
+  });
+
+  it('refuses a partner who is not the assigned reviewer, even for an already-approved opportunity', async () => {
+    const opp = makeApprovedOpp();
+    const findOne = jest.fn().mockResolvedValue(opp);
+    const save = jest.fn(async (row: any) => row);
+    const service = makeService({ findOne, save });
+
+    await expect(
+      service.partnerDashboardApprove('opp-partner-1', {
+        email: 'someoneelse@org.com',
+        organizationId: 'org-B',
+      }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('lets the logged-in organisation approve when only the contact person name contains the org name', async () => {
+    const opp = {
+      id: 'opp-contact-name',
+      isStudentCreated: true,
+      organizationId: 'student-placeholder',
+      faculty_verified: true,
+      partnerVerified: false,
+      requiresPartnerApproval: true,
+      partnerApprovalStatus: 'pending',
+      workflowStage: 'pending_partner',
+      status: 'pending_partner',
+      supervision: { partner_contact_person: 'Fellah Khalid' },
+      partner_organization: { official_email: 'fellah.khalid@example.com' },
+    };
+    const findOne = jest.fn().mockResolvedValue(opp);
+    const save = jest.fn(async (row: any) => row);
+    const service = makeService({ findOne, save });
+    (service as any).organizationsService = {
+      findOne: jest.fn().mockRejectedValue(new Error('stale org id')),
+      getMyOrganization: jest
+        .fn()
+        .mockResolvedValue({ id: 'org-fellah', name: 'FELLAH' }),
+    };
+    (service as any).facultyUniversityScope = {
+      normalizeOrgName: (name: string) => (name || '').trim().toLowerCase(),
+    };
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    jest
+      .spyOn(service as any, 'handlePartnerApprovedSideEffects')
+      .mockResolvedValue(undefined);
+
+    const result = await service.partnerDashboardApprove('opp-contact-name', {
+      email: 'fatima@fellah.org',
+      organizationId: 'stale-org-id',
+      id: 'user-fatima',
+      name: 'Fatima Khalid',
     });
 
-    it('refuses a partner who is not the assigned reviewer, even for an already-approved opportunity', async () => {
-        const opp = makeApprovedOpp();
-        const findOne = jest.fn().mockResolvedValue(opp);
-        const save = jest.fn(async (row: any) => row);
-        const service = makeService({ findOne, save });
+    expect(result).toBe(opp);
+    expect(save).toHaveBeenCalled();
+  });
 
-        await expect(
-            service.partnerDashboardApprove('opp-partner-1', {
-                email: 'someoneelse@org.com',
-                organizationId: 'org-B',
-            }),
-        ).rejects.toBeInstanceOf(ForbiddenException);
+  it('lets the organisation named on a student opportunity approve when the contact email is someone else', async () => {
+    const opp = {
+      id: 'opp-named-org',
+      isStudentCreated: true,
+      organizationId: 'student-placeholder',
+      faculty_verified: true,
+      partnerVerified: false,
+      requiresPartnerApproval: true,
+      partnerApprovalStatus: 'pending',
+      workflowStage: 'pending_partner',
+      status: 'pending_partner',
+      supervision: { partner_org_name: 'Fellah Khalid' },
+      partner_organization: {
+        organization_name: 'FELLAH',
+        official_email: 'fellah.khalid@example.com',
+      },
+    };
+    const findOne = jest.fn().mockResolvedValue(opp);
+    const save = jest.fn(async (row: any) => row);
+    const service = makeService({ findOne, save });
+    (service as any).organizationsService = {
+      findOne: jest
+        .fn()
+        .mockResolvedValue({ id: 'org-fellah', name: 'FELLAH' }),
+    };
+    (service as any).facultyUniversityScope = {
+      normalizeOrgName: (name: string) => (name || '').trim().toLowerCase(),
+    };
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    jest
+      .spyOn(service as any, 'handlePartnerApprovedSideEffects')
+      .mockResolvedValue(undefined);
+
+    const result = await service.partnerDashboardApprove('opp-named-org', {
+      email: 'fatima@fellah.org',
+      organizationId: 'org-fellah',
+      id: 'user-fatima',
+      name: 'Fatima Khalid',
     });
 
-    it('lets the logged-in organisation approve when only the contact person name contains the org name', async () => {
-        const opp = {
-            id: 'opp-contact-name',
-            isStudentCreated: true,
-            organizationId: 'student-placeholder',
-            faculty_verified: true,
-            partnerVerified: false,
-            requiresPartnerApproval: true,
-            partnerApprovalStatus: 'pending',
-            workflowStage: 'pending_partner',
-            status: 'pending_partner',
-            supervision: { partner_contact_person: 'Fellah Khalid' },
-            partner_organization: { official_email: 'fellah.khalid@example.com' },
-        };
-        const findOne = jest.fn().mockResolvedValue(opp);
-        const save = jest.fn(async (row: any) => row);
-        const service = makeService({ findOne, save });
-        (service as any).organizationsService = {
-            findOne: jest.fn().mockRejectedValue(new Error('stale org id')),
-            getMyOrganization: jest.fn().mockResolvedValue({ id: 'org-fellah', name: 'FELLAH' }),
-        };
-        (service as any).facultyUniversityScope = {
-            normalizeOrgName: (name: string) => (name || '').trim().toLowerCase(),
-        };
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-        jest.spyOn(service as any, 'handlePartnerApprovedSideEffects').mockResolvedValue(undefined);
+    expect(result).toBe(opp);
+    expect(save).toHaveBeenCalled();
+  });
 
-        const result = await service.partnerDashboardApprove('opp-contact-name', {
-            email: 'fatima@fellah.org',
-            organizationId: 'stale-org-id',
-            id: 'user-fatima',
-            name: 'Fatima Khalid',
-        });
+  it('lets the correct partner double-click approve on an already-approved opportunity without erroring', async () => {
+    const opp = makeApprovedOpp();
+    const findOne = jest.fn().mockResolvedValue(opp);
+    const save = jest.fn(async (row: any) => row);
+    const service = makeService({ findOne, save });
 
-        expect(result).toBe(opp);
-        expect(save).toHaveBeenCalled();
+    const result = await service.partnerDashboardApprove('opp-partner-1', {
+      email: 'realpartner@org.com',
+      organizationId: 'org-A',
     });
 
-    it('lets the organisation named on a student opportunity approve when the contact email is someone else', async () => {
-        const opp = {
-            id: 'opp-named-org',
-            isStudentCreated: true,
-            organizationId: 'student-placeholder',
-            faculty_verified: true,
-            partnerVerified: false,
-            requiresPartnerApproval: true,
-            partnerApprovalStatus: 'pending',
-            workflowStage: 'pending_partner',
-            status: 'pending_partner',
-            supervision: { partner_org_name: 'Fellah Khalid' },
-            partner_organization: {
-                organization_name: 'FELLAH',
-                official_email: 'fellah.khalid@example.com',
-            },
-        };
-        const findOne = jest.fn().mockResolvedValue(opp);
-        const save = jest.fn(async (row: any) => row);
-        const service = makeService({ findOne, save });
-        (service as any).organizationsService = {
-            findOne: jest.fn().mockResolvedValue({ id: 'org-fellah', name: 'FELLAH' }),
-        };
-        (service as any).facultyUniversityScope = {
-            normalizeOrgName: (name: string) => (name || '').trim().toLowerCase(),
-        };
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-        jest.spyOn(service as any, 'handlePartnerApprovedSideEffects').mockResolvedValue(undefined);
+    expect(result).toBe(opp);
+    expect(save).not.toHaveBeenCalled();
+  });
 
-        const result = await service.partnerDashboardApprove('opp-named-org', {
-            email: 'fatima@fellah.org',
-            organizationId: 'org-fellah',
-            id: 'user-fatima',
-            name: 'Fatima Khalid',
-        });
+  it('allows the assigned partner to request revision on a non-student-created (faculty/NGO) opportunity', async () => {
+    const opp = {
+      ...makeApprovedOpp(),
+      partnerApprovalStatus: 'pending',
+      partnerVerified: false,
+      requiresPartnerApproval: true,
+      workflowStage: 'pending_partner',
+      status: 'pending_partner',
+    };
+    const findOne = jest.fn().mockResolvedValue(opp);
+    const save = jest.fn(async (row: any) => row);
+    const service = makeService({ findOne, save });
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    const notifySpy = jest
+      .spyOn(service as any, 'notifyStudentOpportunityUpdate')
+      .mockResolvedValue(undefined);
 
-        expect(result).toBe(opp);
-        expect(save).toHaveBeenCalled();
-    });
+    const saved = await service.partnerDashboardRevise(
+      'opp-partner-1',
+      { email: 'realpartner@org.com', organizationId: 'org-A' },
+      'Please confirm the exact venue address',
+    );
 
-    it('lets the correct partner double-click approve on an already-approved opportunity without erroring', async () => {
-        const opp = makeApprovedOpp();
-        const findOne = jest.fn().mockResolvedValue(opp);
-        const save = jest.fn(async (row: any) => row);
-        const service = makeService({ findOne, save });
-
-        const result = await service.partnerDashboardApprove('opp-partner-1', {
-            email: 'realpartner@org.com',
-            organizationId: 'org-A',
-        });
-
-        expect(result).toBe(opp);
-        expect(save).not.toHaveBeenCalled();
-    });
-
-    it('allows the assigned partner to request revision on a non-student-created (faculty/NGO) opportunity', async () => {
-        const opp = {
-            ...makeApprovedOpp(),
-            partnerApprovalStatus: 'pending',
-            partnerVerified: false,
-            requiresPartnerApproval: true,
-            workflowStage: 'pending_partner',
-            status: 'pending_partner',
-        };
-        const findOne = jest.fn().mockResolvedValue(opp);
-        const save = jest.fn(async (row: any) => row);
-        const service = makeService({ findOne, save });
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-        const notifySpy = jest
-            .spyOn(service as any, 'notifyStudentOpportunityUpdate')
-            .mockResolvedValue(undefined);
-
-        const saved = await service.partnerDashboardRevise(
-            'opp-partner-1',
-            { email: 'realpartner@org.com', organizationId: 'org-A' },
-            'Please confirm the exact venue address',
-        );
-
-        expect((saved as any).partnerApprovalStatus).toBe('revision_requested');
-        expect((saved as any).status).toBe('revision');
-        expect(notifySpy).toHaveBeenCalled();
-    });
+    expect((saved as any).partnerApprovalStatus).toBe('revision_requested');
+    expect((saved as any).status).toBe('revision');
+    expect(notifySpy).toHaveBeenCalled();
+  });
 });
 
 describe('OpportunitiesService — decideOpportunityViaPartnerToken (public flashcard reject/revision)', () => {
-    it('rejects a student-created opportunity by token and notifies the student', async () => {
-        const opp = {
-            id: 'opp-tok-1',
-            partnerToken: 'tok-1',
-            partnerVerified: false,
-            isStudentCreated: true,
-            title: 'Beach clean-up',
-        };
-        const findOne = jest.fn().mockResolvedValue(opp);
-        const save = jest.fn(async (row: any) => row);
-        const service = makeService({ findOne, save });
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-        const notifySpy = jest
-            .spyOn(service as any, 'notifyStudentOpportunityUpdate')
-            .mockResolvedValue(undefined);
+  it('rejects a student-created opportunity by token and notifies the student', async () => {
+    const opp = {
+      id: 'opp-tok-1',
+      partnerToken: 'tok-1',
+      partnerVerified: false,
+      isStudentCreated: true,
+      title: 'Beach clean-up',
+    };
+    const findOne = jest.fn().mockResolvedValue(opp);
+    const save = jest.fn(async (row: any) => row);
+    const service = makeService({ findOne, save });
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    const notifySpy = jest
+      .spyOn(service as any, 'notifyStudentOpportunityUpdate')
+      .mockResolvedValue(undefined);
 
-        const result = await service.decideOpportunityViaPartnerToken('tok-1', 'reject', 'Not a fit');
+    const result = await service.decideOpportunityViaPartnerToken(
+      'tok-1',
+      'reject',
+      'Not a fit',
+    );
 
-        expect(save).toHaveBeenCalled();
-        expect((opp as any).status).toBe('rejected');
-        expect((opp as any).rejectionReason).toBe('Not a fit');
-        expect(notifySpy).toHaveBeenCalled();
-        expect(result.success).toBe(true);
-    });
+    expect(save).toHaveBeenCalled();
+    expect((opp as any).status).toBe('rejected');
+    expect((opp as any).rejectionReason).toBe('Not a fit');
+    expect(notifySpy).toHaveBeenCalled();
+    expect(result.success).toBe(true);
+  });
 
-    it('allows a revision request for a non-student-created (faculty/NGO) opportunity too — creator still gets notified', async () => {
-        const opp = {
-            id: 'opp-tok-2',
-            partnerToken: 'tok-2',
-            partnerVerified: false,
-            isStudentCreated: false,
-            creatorId: undefined,
-        };
-        const findOne = jest.fn().mockResolvedValue(opp);
-        const save = jest.fn(async (row: any) => row);
-        const service = makeService({ findOne, save });
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-        const notifySpy = jest
-            .spyOn(service as any, 'notifyStudentOpportunityUpdate')
-            .mockResolvedValue(undefined);
+  it('allows a revision request for a non-student-created (faculty/NGO) opportunity too — creator still gets notified', async () => {
+    const opp = {
+      id: 'opp-tok-2',
+      partnerToken: 'tok-2',
+      partnerVerified: false,
+      isStudentCreated: false,
+      creatorId: undefined,
+    };
+    const findOne = jest.fn().mockResolvedValue(opp);
+    const save = jest.fn(async (row: any) => row);
+    const service = makeService({ findOne, save });
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    const notifySpy = jest
+      .spyOn(service as any, 'notifyStudentOpportunityUpdate')
+      .mockResolvedValue(undefined);
 
-        const result = await service.decideOpportunityViaPartnerToken('tok-2', 'revision', 'Please add exact venue');
+    const result = await service.decideOpportunityViaPartnerToken(
+      'tok-2',
+      'revision',
+      'Please add exact venue',
+    );
 
-        expect(save).toHaveBeenCalled();
-        expect((opp as any).partnerApprovalStatus).toBe('revision_requested');
-        expect((opp as any).status).toBe('revision');
-        expect(notifySpy).toHaveBeenCalled();
-        expect(result.success).toBe(true);
-    });
+    expect(save).toHaveBeenCalled();
+    expect((opp as any).partnerApprovalStatus).toBe('revision_requested');
+    expect((opp as any).status).toBe('revision');
+    expect(notifySpy).toHaveBeenCalled();
+    expect(result.success).toBe(true);
+  });
 
-    it('refuses to decide an opportunity that was already verified through this link', async () => {
-        const opp = {
-            id: 'opp-tok-3',
-            partnerToken: 'tok-3',
-            partnerVerified: true,
-            isStudentCreated: true,
-        };
-        const findOne = jest.fn().mockResolvedValue(opp);
-        const service = makeService({ findOne, save: jest.fn() });
+  it('refuses to decide an opportunity that was already verified through this link', async () => {
+    const opp = {
+      id: 'opp-tok-3',
+      partnerToken: 'tok-3',
+      partnerVerified: true,
+      isStudentCreated: true,
+    };
+    const findOne = jest.fn().mockResolvedValue(opp);
+    const service = makeService({ findOne, save: jest.fn() });
 
-        await expect(
-            service.decideOpportunityViaPartnerToken('tok-3', 'reject'),
-        ).rejects.toBeInstanceOf(BadRequestException);
-    });
+    await expect(
+      service.decideOpportunityViaPartnerToken('tok-3', 'reject'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
 
-    it('throws NotFoundException for an unknown token', async () => {
-        const findOne = jest.fn().mockResolvedValue(null);
-        const service = makeService({ findOne });
+  it('throws NotFoundException for an unknown token', async () => {
+    const findOne = jest.fn().mockResolvedValue(null);
+    const service = makeService({ findOne });
 
-        await expect(
-            service.decideOpportunityViaPartnerToken('missing-token', 'reject'),
-        ).rejects.toBeInstanceOf(NotFoundException);
-    });
+    await expect(
+      service.decideOpportunityViaPartnerToken('missing-token', 'reject'),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
 
-    it('refuses to replay a stale link to revive an already-rejected opportunity (partnerVerified stays false on reject, so that guard alone would not catch this)', async () => {
-        const opp = {
-            id: 'opp-tok-4',
-            partnerToken: 'tok-4',
-            partnerVerified: false,
-            workflowStage: 'rejected',
-            status: 'rejected',
-            isStudentCreated: false,
-        };
-        const findOne = jest.fn().mockResolvedValue(opp);
-        const save = jest.fn(async (row: any) => row);
-        const service = makeService({ findOne, save });
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+  it('refuses to replay a stale link to revive an already-rejected opportunity (partnerVerified stays false on reject, so that guard alone would not catch this)', async () => {
+    const opp = {
+      id: 'opp-tok-4',
+      partnerToken: 'tok-4',
+      partnerVerified: false,
+      workflowStage: 'rejected',
+      status: 'rejected',
+      isStudentCreated: false,
+    };
+    const findOne = jest.fn().mockResolvedValue(opp);
+    const save = jest.fn(async (row: any) => row);
+    const service = makeService({ findOne, save });
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
 
-        await expect(
-            service.decideOpportunityViaPartnerToken('tok-4', 'revision', 'trying to resurrect it'),
-        ).rejects.toBeInstanceOf(BadRequestException);
-        expect(save).not.toHaveBeenCalled();
-    });
+    await expect(
+      service.decideOpportunityViaPartnerToken(
+        'tok-4',
+        'revision',
+        'trying to resurrect it',
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(save).not.toHaveBeenCalled();
+  });
 });
 
 describe('OpportunitiesService — validateLocation (accurate-pin gate)', () => {
-    const service = makeService({});
+  const service = makeService({});
 
-    it('requires a non-empty location.pin for a non-Remote opportunity', () => {
-        expect(() => service.validateLocation('On site', { city: 'Lahore', venue: 'Park', pin: '' })).toThrow(
-            BadRequestException,
-        );
-        expect(() => service.validateLocation('On site', undefined)).toThrow(BadRequestException);
-        expect(() => service.validateLocation('Hybrid', { city: 'Lahore' })).toThrow(BadRequestException);
-    });
+  it('requires a non-empty location.pin for a non-Remote opportunity', () => {
+    expect(() =>
+      service.validateLocation('On site', {
+        city: 'Lahore',
+        venue: 'Park',
+        pin: '',
+      }),
+    ).toThrow(BadRequestException);
+    expect(() => service.validateLocation('On site', undefined)).toThrow(
+      BadRequestException,
+    );
+    expect(() =>
+      service.validateLocation('Hybrid', { city: 'Lahore' }),
+    ).toThrow(BadRequestException);
+  });
 
-    it('allows a Remote opportunity with no pin at all', () => {
-        expect(() => service.validateLocation('Remote', undefined)).not.toThrow();
-        expect(() => service.validateLocation('Remote', { city: '' })).not.toThrow();
-    });
+  it('allows a Remote opportunity with no pin at all', () => {
+    expect(() => service.validateLocation('Remote', undefined)).not.toThrow();
+    expect(() =>
+      service.validateLocation('Remote', { city: '' }),
+    ).not.toThrow();
+  });
 
-    it('allows a non-Remote opportunity once a real pin is set', () => {
-        expect(() =>
-            service.validateLocation('On site', { city: 'Lahore', venue: 'Park', pin: '31.5204,74.3587' }),
-        ).not.toThrow();
-    });
+  it('allows a non-Remote opportunity once a real pin is set', () => {
+    expect(() =>
+      service.validateLocation('On site', {
+        city: 'Lahore',
+        venue: 'Park',
+        pin: '31.5204,74.3587',
+      }),
+    ).not.toThrow();
+  });
 });
 
 describe('OpportunitiesService — saveStudentOpportunityDraft (first-save regression)', () => {
-    it('always fills the required sdg column on a brand-new draft, even before the student has picked an SDG', async () => {
-        const create = jest.fn((payload) => payload);
-        const save = jest.fn((payload) => Promise.resolve({ id: 'new-draft-id', ...payload }));
-        const service = makeService({ create, save });
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({ id: 'student-1' }),
-        };
+  it('always fills the required sdg column on a brand-new draft, even before the student has picked an SDG', async () => {
+    const create = jest.fn((payload) => payload);
+    const save = jest.fn((payload) =>
+      Promise.resolve({ id: 'new-draft-id', ...payload }),
+    );
+    const service = makeService({ create, save });
+    (service as any).usersRepository = {
+      findOne: jest.fn().mockResolvedValue({ id: 'student-1' }),
+    };
 
-        // Mirrors exactly what the wizard sends on an early "Save Draft" click: only a title, no
-        // sdg_info yet — the wizard nests any SDG pick under sdg_info.sdg_id, never a bare `sdg`
-        // field, but the Opportunity entity's `sdg` column is NOT NULL with no default.
-        await service.saveStudentOpportunityDraft('student-1', null, {
-            draft: true,
-            title: 'Untitled draft',
-        });
-
-        expect(create).toHaveBeenCalledWith(expect.objectContaining({ sdg: expect.any(String) }));
-        expect(create.mock.calls[0][0].sdg).toBeTruthy();
+    // Mirrors exactly what the wizard sends on an early "Save Draft" click: only a title, no
+    // sdg_info yet — the wizard nests any SDG pick under sdg_info.sdg_id, never a bare `sdg`
+    // field, but the Opportunity entity's `sdg` column is NOT NULL with no default.
+    await service.saveStudentOpportunityDraft('student-1', null, {
+      draft: true,
+      title: 'Untitled draft',
     });
 
-    it('uses the picked SDG once sdg_info is present', async () => {
-        const create = jest.fn((payload) => payload);
-        const save = jest.fn((payload) => Promise.resolve({ id: 'new-draft-id', ...payload }));
-        const service = makeService({ create, save });
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({ id: 'student-1' }),
-        };
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ sdg: expect.any(String) }),
+    );
+    expect(create.mock.calls[0][0].sdg).toBeTruthy();
+  });
 
-        await service.saveStudentOpportunityDraft('student-1', null, {
-            draft: true,
-            title: 'Digital Skills for Young Learners',
-            sdg_info: { sdg_id: '4', target_id: '4.1', indicator_id: '', why_relevant: '' },
-        });
+  it('uses the picked SDG once sdg_info is present', async () => {
+    const create = jest.fn((payload) => payload);
+    const save = jest.fn((payload) =>
+      Promise.resolve({ id: 'new-draft-id', ...payload }),
+    );
+    const service = makeService({ create, save });
+    (service as any).usersRepository = {
+      findOne: jest.fn().mockResolvedValue({ id: 'student-1' }),
+    };
 
-        expect(create.mock.calls[0][0].sdg).toBe('4');
+    await service.saveStudentOpportunityDraft('student-1', null, {
+      draft: true,
+      title: 'Digital Skills for Young Learners',
+      sdg_info: {
+        sdg_id: '4',
+        target_id: '4.1',
+        indicator_id: '',
+        why_relevant: '',
+      },
     });
 
-    it('does not write draft/id/approval columns, and stores a blank mode as null', async () => {
-        const create = jest.fn((payload) => payload);
-        const save = jest.fn((payload) => Promise.resolve({ id: 'new-draft-id', ...payload }));
-        const service = makeService({ create, save });
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({ id: 'student-1' }),
-        };
+    expect(create.mock.calls[0][0].sdg).toBe('4');
+  });
 
-        await service.saveStudentOpportunityDraft('student-1', null, {
-            draft: true,
-            id: 'should-not-land',
-            title: 'Untitled opportunity',
-            mode: '',
-            types: [],
-            verification_method: [],
-            admin_approved: true,
-            creatorId: 'attacker',
-            status: 'active',
-        });
+  it('does not write draft/id/approval columns, and stores a blank mode as null', async () => {
+    const create = jest.fn((payload) => payload);
+    const save = jest.fn((payload) =>
+      Promise.resolve({ id: 'new-draft-id', ...payload }),
+    );
+    const service = makeService({ create, save });
+    (service as any).usersRepository = {
+      findOne: jest.fn().mockResolvedValue({ id: 'student-1' }),
+    };
 
-        const payload = create.mock.calls[0][0] as Record<string, unknown>;
-        expect(payload.draft).toBeUndefined();
-        expect(payload.id).toBeUndefined();
-        expect(payload.admin_approved).toBeUndefined();
-        expect(payload.creatorId).toBe('student-1');
-        expect(payload.status).toBe('draft');
-        expect(payload.mode).toBeNull();
-        expect(payload.types).toEqual([]);
+    await service.saveStudentOpportunityDraft('student-1', null, {
+      draft: true,
+      id: 'should-not-land',
+      title: 'Untitled opportunity',
+      mode: '',
+      types: [],
+      verification_method: [],
+      admin_approved: true,
+      creatorId: 'attacker',
+      status: 'active',
     });
 
-    it('stores the wizard resume step from wizard_progress, with a server timestamp and only a known step key', async () => {
-        const create = jest.fn((payload) => payload);
-        const save = jest.fn((payload) => Promise.resolve({ id: 'new-draft-id', ...payload }));
-        const service = makeService({ create, save });
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({ id: 'student-1' }),
-        };
+    const payload = create.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.draft).toBeUndefined();
+    expect(payload.id).toBeUndefined();
+    expect(payload.admin_approved).toBeUndefined();
+    expect(payload.creatorId).toBe('student-1');
+    expect(payload.status).toBe('draft');
+    expect(payload.mode).toBeNull();
+    expect(payload.types).toEqual([]);
+  });
 
-        await service.saveStudentOpportunityDraft('student-1', null, {
-            draft: true,
-            title: 'Untitled opportunity',
-            wizard_progress: { resume_step: 'C', updated_at: 'client-clock', extra: 'dropped' },
-        });
+  it('stores the wizard resume step from wizard_progress, with a server timestamp and only a known step key', async () => {
+    const create = jest.fn((payload) => payload);
+    const save = jest.fn((payload) =>
+      Promise.resolve({ id: 'new-draft-id', ...payload }),
+    );
+    const service = makeService({ create, save });
+    (service as any).usersRepository = {
+      findOne: jest.fn().mockResolvedValue({ id: 'student-1' }),
+    };
 
-        const payload = create.mock.calls[0][0] as Record<string, unknown>;
-        expect(payload.wizard_progress).toEqual({
-            resume_step: 'C',
-            updated_at: expect.any(String),
-        });
-        expect((payload.wizard_progress as { updated_at: string }).updated_at).not.toBe('client-clock');
+    await service.saveStudentOpportunityDraft('student-1', null, {
+      draft: true,
+      title: 'Untitled opportunity',
+      wizard_progress: {
+        resume_step: 'C',
+        updated_at: 'client-clock',
+        extra: 'dropped',
+      },
     });
 
-    it('drops an unknown or malformed wizard_progress instead of persisting it', async () => {
-        const create = jest.fn((payload) => payload);
-        const save = jest.fn((payload) => Promise.resolve({ id: 'new-draft-id', ...payload }));
-        const service = makeService({ create, save });
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({ id: 'student-1' }),
-        };
-
-        await service.saveStudentOpportunityDraft('student-1', null, {
-            draft: true,
-            title: 'Untitled opportunity',
-            wizard_progress: { resume_step: 'NOT_A_STEP' },
-        });
-        await service.saveStudentOpportunityDraft('student-1', null, {
-            draft: true,
-            title: 'Untitled opportunity',
-            wizard_progress: 'C',
-        });
-
-        expect((create.mock.calls[0][0] as Record<string, unknown>).wizard_progress).toBeUndefined();
-        expect((create.mock.calls[1][0] as Record<string, unknown>).wizard_progress).toBeUndefined();
+    const payload = create.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.wizard_progress).toEqual({
+      resume_step: 'C',
+      updated_at: expect.any(String),
     });
+    expect(
+      (payload.wizard_progress as { updated_at: string }).updated_at,
+    ).not.toBe('client-clock');
+  });
+
+  it('drops an unknown or malformed wizard_progress instead of persisting it', async () => {
+    const create = jest.fn((payload) => payload);
+    const save = jest.fn((payload) =>
+      Promise.resolve({ id: 'new-draft-id', ...payload }),
+    );
+    const service = makeService({ create, save });
+    (service as any).usersRepository = {
+      findOne: jest.fn().mockResolvedValue({ id: 'student-1' }),
+    };
+
+    await service.saveStudentOpportunityDraft('student-1', null, {
+      draft: true,
+      title: 'Untitled opportunity',
+      wizard_progress: { resume_step: 'NOT_A_STEP' },
+    });
+    await service.saveStudentOpportunityDraft('student-1', null, {
+      draft: true,
+      title: 'Untitled opportunity',
+      wizard_progress: 'C',
+    });
+
+    expect(
+      (create.mock.calls[0][0] as Record<string, unknown>).wizard_progress,
+    ).toBeUndefined();
+    expect(
+      (create.mock.calls[1][0] as Record<string, unknown>).wizard_progress,
+    ).toBeUndefined();
+  });
 });
 
 describe('OpportunitiesService — create() CIEL PK review requirement is server-computed, not client-trusted', () => {
-    function minimalOrgCreatorDto(overrides: Record<string, unknown> = {}) {
-        return {
-            title: 'Beach cleanup drive',
-            mode: 'Remote', // sidesteps the location.pin requirement — not the concern of this test
-            objectives: { description: 'Clean the beach and raise awareness.' },
-            timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
-            safety_declaration: {
-                environment_safe_and_appropriate: true,
-                students_guided_and_supervised: true,
-                lawful_ethical_and_non_hazardous: true,
-                precautions_and_basic_safety: true,
-            },
-            submission_confirmations: {
-                academically_valid_and_accurately_described: true,
-                activity_properly_supervised: true,
-                environment_safe_and_appropriate: true,
-                information_correct_and_verifiable: true,
-            },
-            sdg_info: { sdg_id: '14' },
-            ...overrides,
-        } as any;
-    }
+  function minimalOrgCreatorDto(overrides: Record<string, unknown> = {}) {
+    return {
+      title: 'Beach cleanup drive',
+      mode: 'Remote', // sidesteps the location.pin requirement — not the concern of this test
+      objectives: { description: 'Clean the beach and raise awareness.' },
+      timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
+      safety_declaration: {
+        environment_safe_and_appropriate: true,
+        students_guided_and_supervised: true,
+        lawful_ethical_and_non_hazardous: true,
+        precautions_and_basic_safety: true,
+      },
+      submission_confirmations: {
+        academically_valid_and_accurately_described: true,
+        activity_properly_supervised: true,
+        environment_safe_and_appropriate: true,
+        information_correct_and_verifiable: true,
+      },
+      sdg_info: { sdg_id: '14' },
+      ...overrides,
+    } as any;
+  }
 
-    function makeOrgCreatorService() {
-        const create = jest.fn((payload) => payload);
-        const save = jest.fn((payload) => Promise.resolve({ id: 'new-opp-id', ...payload }));
-        const { stubs, lockQuery, dedupeGetOne, dedupeQb } = createDedupeStubs();
-        const service = makeService({
-            create,
-            save,
-            findOne: jest.fn(),
-            find: jest.fn().mockResolvedValue([]),
-            ...stubs,
-        });
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({ id: 'ngo-user-1', role: 'ngo', email: 'contact@ngo.org' }),
-        };
-        (service as any).organizationsService = {
-            getMyOrganization: jest.fn().mockResolvedValue({ id: 'org-1' }),
-        };
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-        (service as any).mailService = { sendAdminOpportunityReviewNeeded: jest.fn() };
-        return { service, save, lockQuery, dedupeGetOne, dedupeQb };
-    }
-
-    it.each(['student', 'investor'])('rejects %s accounts on the generic create endpoint (403)', async (role) => {
-        const { service, save } = makeOrgCreatorService();
-        (service as any).usersRepository.findOne = jest
-            .fn()
-            .mockResolvedValue({ id: 'u-1', role, email: 'u@x.org' });
-        await expect(service.create('u-1', minimalOrgCreatorDto())).rejects.toThrow(/not allowed/i);
-        expect(save).not.toHaveBeenCalled();
+  function makeOrgCreatorService() {
+    const create = jest.fn((payload) => payload);
+    const save = jest.fn((payload) =>
+      Promise.resolve({ id: 'new-opp-id', ...payload }),
+    );
+    const { stubs, lockQuery, dedupeGetOne, dedupeQb } = createDedupeStubs();
+    const service = makeService({
+      create,
+      save,
+      findOne: jest.fn(),
+      find: jest.fn().mockResolvedValue([]),
+      ...stubs,
     });
+    (service as any).usersRepository = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'ngo-user-1',
+        role: 'ngo',
+        email: 'contact@ngo.org',
+      }),
+    };
+    (service as any).organizationsService = {
+      getMyOrganization: jest.fn().mockResolvedValue({ id: 'org-1' }),
+    };
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    (service as any).mailService = {
+      sendAdminOpportunityReviewNeeded: jest.fn(),
+    };
+    return { service, save, lockQuery, dedupeGetOne, dedupeQb };
+  }
 
-    it('rejects a whitespace-only title and persists nothing', async () => {
-        const { service, save } = makeOrgCreatorService();
-        await expect(service.create('ngo-user-1', minimalOrgCreatorDto({ title: '   ' }))).rejects.toThrow(/title/i);
-        expect(save).not.toHaveBeenCalled();
-    });
+  it.each(['student', 'investor'])(
+    'rejects %s accounts on the generic create endpoint (403)',
+    async (role) => {
+      const { service, save } = makeOrgCreatorService();
+      (service as any).usersRepository.findOne = jest
+        .fn()
+        .mockResolvedValue({ id: 'u-1', role, email: 'u@x.org' });
+      await expect(
+        service.create('u-1', minimalOrgCreatorDto()),
+      ).rejects.toThrow(/not allowed/i);
+      expect(save).not.toHaveBeenCalled();
+    },
+  );
 
-    it('rejects a missing/blank objectives.description and persists nothing', async () => {
-        const { service, save } = makeOrgCreatorService();
-        await expect(
-            service.create('ngo-user-1', minimalOrgCreatorDto({ objectives: { description: '   ' } })),
-        ).rejects.toThrow(/objectives\.description/i);
-        await expect(
-            service.create('ngo-user-1', minimalOrgCreatorDto({ objectives: undefined })),
-        ).rejects.toThrow(/objectives\.description/i);
-        expect(save).not.toHaveBeenCalled();
-    });
+  it('rejects a whitespace-only title and persists nothing', async () => {
+    const { service, save } = makeOrgCreatorService();
+    await expect(
+      service.create('ngo-user-1', minimalOrgCreatorDto({ title: '   ' })),
+    ).rejects.toThrow(/title/i);
+    expect(save).not.toHaveBeenCalled();
+  });
 
-    it('rejects a malformed executing/partner organization email', async () => {
-        const { service, save } = makeOrgCreatorService();
-        await expect(
-            service.create('ngo-user-1', minimalOrgCreatorDto({ executing_organization: { official_email: 'not-an-email' } })),
-        ).rejects.toThrow(/official_email/);
-        await expect(
-            service.create('ngo-user-1', minimalOrgCreatorDto({ partner_organization: { official_email: 'a@b' } })),
-        ).rejects.toThrow(/official_email/);
-        expect(save).not.toHaveBeenCalled();
-    });
+  it('rejects a missing/blank objectives.description and persists nothing', async () => {
+    const { service, save } = makeOrgCreatorService();
+    await expect(
+      service.create(
+        'ngo-user-1',
+        minimalOrgCreatorDto({ objectives: { description: '   ' } }),
+      ),
+    ).rejects.toThrow(/objectives\.description/i);
+    await expect(
+      service.create(
+        'ngo-user-1',
+        minimalOrgCreatorDto({ objectives: undefined }),
+      ),
+    ).rejects.toThrow(/objectives\.description/i);
+    expect(save).not.toHaveBeenCalled();
+  });
 
-    it('rejects a malformed supervision WhatsApp number', async () => {
-        const { service } = makeOrgCreatorService();
-        await expect(
-            service.create('ngo-user-1', minimalOrgCreatorDto({ supervision: { whatsapp_e164: '0300-1234567' } })),
-        ).rejects.toThrow(/whatsapp/i);
-    });
+  it('rejects a malformed executing/partner organization email', async () => {
+    const { service, save } = makeOrgCreatorService();
+    await expect(
+      service.create(
+        'ngo-user-1',
+        minimalOrgCreatorDto({
+          executing_organization: { official_email: 'not-an-email' },
+        }),
+      ),
+    ).rejects.toThrow(/official_email/);
+    await expect(
+      service.create(
+        'ngo-user-1',
+        minimalOrgCreatorDto({
+          partner_organization: { official_email: 'a@b' },
+        }),
+      ),
+    ).rejects.toThrow(/official_email/);
+    expect(save).not.toHaveBeenCalled();
+  });
 
-    it('routes to pending_approval even when the client omits admin_approval_required', async () => {
-        const { service, save } = makeOrgCreatorService();
+  it('rejects a malformed supervision WhatsApp number', async () => {
+    const { service } = makeOrgCreatorService();
+    await expect(
+      service.create(
+        'ngo-user-1',
+        minimalOrgCreatorDto({
+          supervision: { whatsapp_e164: '0300-1234567' },
+        }),
+      ),
+    ).rejects.toThrow(/whatsapp/i);
+  });
 
-        const saved: any = await service.create('ngo-user-1', minimalOrgCreatorDto());
+  it('routes to pending_approval even when the client omits admin_approval_required', async () => {
+    const { service, save } = makeOrgCreatorService();
 
-        expect(saved.status).toBe('pending_approval');
-        expect(save).toHaveBeenCalled();
-        expect((service as any).mailService.sendAdminOpportunityReviewNeeded).toHaveBeenCalledWith(
-            'Beach cleanup drive',
-            'new-opp-id',
-            'new submission',
-            expect.any(String),
-        );
-    });
+    const saved: any = await service.create(
+      'ngo-user-1',
+      minimalOrgCreatorDto(),
+    );
 
-    it('routes to pending_approval even when the client explicitly sends admin_approval_required: false', async () => {
-        const { service } = makeOrgCreatorService();
+    expect(saved.status).toBe('pending_approval');
+    expect(save).toHaveBeenCalled();
+    expect(
+      (service as any).mailService.sendAdminOpportunityReviewNeeded,
+    ).toHaveBeenCalledWith(
+      'Beach cleanup drive',
+      'new-opp-id',
+      'new submission',
+      expect.any(String),
+    );
+  });
 
-        const saved: any = await service.create(
-            'ngo-user-1',
-            minimalOrgCreatorDto({ admin_approval_required: false }),
-        );
+  it('routes to pending_approval even when the client explicitly sends admin_approval_required: false', async () => {
+    const { service } = makeOrgCreatorService();
 
-        // Before the fix this fell through to `pending_execution` — a status with no further
-        // stage, so the row could never be approved (`approve()` explicitly refuses it) and
-        // never reached CIEL PK either. It must never depend on a client-supplied flag.
-        expect(saved.status).toBe('pending_approval');
-    });
+    const saved: any = await service.create(
+      'ngo-user-1',
+      minimalOrgCreatorDto({ admin_approval_required: false }),
+    );
 
-    it('gates on a linked faculty (NGO/Partner Org "Academic / faculty link" section) before CIEL PK ever sees it', async () => {
-        const { service, save } = makeOrgCreatorService();
-        (service as any).mailService.sendFacultyStudentOpportunityVerification = jest.fn();
+    // Before the fix this fell through to `pending_execution` — a status with no further
+    // stage, so the row could never be approved (`approve()` explicitly refuses it) and
+    // never reached CIEL PK either. It must never depend on a client-supplied flag.
+    expect(saved.status).toBe('pending_approval');
+  });
 
-        const saved: any = await service.create(
-            'ngo-user-1',
-            minimalOrgCreatorDto({
-                visibility_and_academic_linkage: {
-                    faculty_institutional_representative: {
-                        name: 'Dr. Hina Malik',
-                        official_email: 'hina.malik@bnu.edu.pk',
-                    },
-                },
-            }),
-        );
+  it('gates on a linked faculty (NGO/Partner Org "Academic / faculty link" section) before CIEL PK ever sees it', async () => {
+    const { service, save } = makeOrgCreatorService();
+    (service as any).mailService.sendFacultyStudentOpportunityVerification =
+      jest.fn();
 
-        expect(saved.status).toBe('pending_faculty');
-        expect(saved.facultyApprovalStatus).toBe('pending');
-        expect(saved.faculty_verification_token).toBeTruthy();
-        expect(save).toHaveBeenCalled();
-        expect((service as any).mailService.sendFacultyStudentOpportunityVerification).toHaveBeenCalled();
-    });
+    const saved: any = await service.create(
+      'ngo-user-1',
+      minimalOrgCreatorDto({
+        visibility_and_academic_linkage: {
+          faculty_institutional_representative: {
+            name: 'Dr. Hina Malik',
+            official_email: 'hina.malik@bnu.edu.pk',
+          },
+        },
+      }),
+    );
 
-    it('marks the faculty line not_applicable (never blocks CIEL PK) when no faculty is linked', async () => {
-        const { service } = makeOrgCreatorService();
+    expect(saved.status).toBe('pending_faculty');
+    expect(saved.facultyApprovalStatus).toBe('pending');
+    expect(saved.faculty_verification_token).toBeTruthy();
+    expect(save).toHaveBeenCalled();
+    expect(
+      (service as any).mailService.sendFacultyStudentOpportunityVerification,
+    ).toHaveBeenCalled();
+  });
 
-        const saved: any = await service.create('ngo-user-1', minimalOrgCreatorDto());
+  it('marks the faculty line not_applicable (never blocks CIEL PK) when no faculty is linked', async () => {
+    const { service } = makeOrgCreatorService();
 
-        expect(saved.facultyApprovalStatus).toBe('not_applicable');
-        expect(saved.status).toBe('pending_approval');
-        expect(saved.workflowStage).toBe('pending_admin');
-        expect(saved.admin_approved).toBe(false);
-        expect(saved.adminApprovalStatus).toBe('pending');
-    });
+    const saved: any = await service.create(
+      'ngo-user-1',
+      minimalOrgCreatorDto(),
+    );
 
-    it('ignores a crafted admin_approved:true from the client payload', async () => {
-        const { service } = makeOrgCreatorService();
+    expect(saved.facultyApprovalStatus).toBe('not_applicable');
+    expect(saved.status).toBe('pending_approval');
+    expect(saved.workflowStage).toBe('pending_admin');
+    expect(saved.admin_approved).toBe(false);
+    expect(saved.adminApprovalStatus).toBe('pending');
+  });
 
-        const saved: any = await service.create(
-            'ngo-user-1',
-            minimalOrgCreatorDto({ admin_approved: true, status: 'active' }),
-        );
+  it('ignores a crafted admin_approved:true from the client payload', async () => {
+    const { service } = makeOrgCreatorService();
 
-        expect(saved.admin_approved).toBe(false);
-        expect(saved.status).toBe('pending_approval');
-        expect(saved.workflowStage).toBe('pending_admin');
-    });
+    const saved: any = await service.create(
+      'ngo-user-1',
+      minimalOrgCreatorDto({ admin_approved: true, status: 'active' }),
+    );
 
-    it('routes partner-organization ack to pending_partner (not premature CIEL PK email)', async () => {
-        const { service } = makeOrgCreatorService();
-        (service as any).mailService.sendPartnerVerification = jest.fn();
+    expect(saved.admin_approved).toBe(false);
+    expect(saved.status).toBe('pending_approval');
+    expect(saved.workflowStage).toBe('pending_admin');
+  });
 
-        const saved: any = await service.create(
-            'ngo-user-1',
-            minimalOrgCreatorDto({
-                partner_organization: {
-                    name: 'City Parks Trust',
-                    official_email: 'parks@city.org',
-                },
-            }),
-        );
+  it('routes partner-organization ack to pending_partner (not premature CIEL PK email)', async () => {
+    const { service } = makeOrgCreatorService();
+    (service as any).mailService.sendPartnerVerification = jest.fn();
 
-        // When a distinct partner org must ack, CIEL PK must wait — do not email admin yet.
-        expect(saved.requiresPartnerApproval).toBe(true);
-        expect(saved.partnerToken).toBeTruthy();
-        expect(saved.status).toBe('pending_partner');
-        expect(saved.workflowStage).toBe('pending_partner');
-        expect((service as any).mailService.sendAdminOpportunityReviewNeeded).not.toHaveBeenCalled();
-    });
+    const saved: any = await service.create(
+      'ngo-user-1',
+      minimalOrgCreatorDto({
+        partner_organization: {
+          name: 'City Parks Trust',
+          official_email: 'parks@city.org',
+        },
+      }),
+    );
 
-    it('keeps faculty link gate when executing-org portal confirm is also required', async () => {
-        const { service } = makeOrgCreatorService();
-        (service as any).mailService.sendFacultyStudentOpportunityVerification = jest.fn();
-        (service as any).mailService.sendExecutingOrganizationVerificationEmail = jest.fn();
+    // When a distinct partner org must ack, CIEL PK must wait — do not email admin yet.
+    expect(saved.requiresPartnerApproval).toBe(true);
+    expect(saved.partnerToken).toBeTruthy();
+    expect(saved.status).toBe('pending_partner');
+    expect(saved.workflowStage).toBe('pending_partner');
+    expect(
+      (service as any).mailService.sendAdminOpportunityReviewNeeded,
+    ).not.toHaveBeenCalled();
+  });
 
-        const saved: any = await service.create(
-            'ngo-user-1',
-            minimalOrgCreatorDto({
-                partner_organization: {
-                    organization_name: 'City Parks Trust',
-                    official_email: 'parks@city.org',
-                },
-                executing_organization: {
-                    official_email: 'host@exec.org',
-                    name: 'Exec Host',
-                },
-                visibility_and_academic_linkage: {
-                    faculty_institutional_representative: {
-                        name: 'Dr. Hina Malik',
-                        official_email: 'hina.malik@bnu.edu.pk',
-                    },
-                },
-            }),
-        );
+  it('keeps faculty link gate when executing-org portal confirm is also required', async () => {
+    const { service } = makeOrgCreatorService();
+    (service as any).mailService.sendFacultyStudentOpportunityVerification =
+      jest.fn();
+    (service as any).mailService.sendExecutingOrganizationVerificationEmail =
+      jest.fn();
 
-        expect(saved.status).toBe('pending_execution');
-        expect(saved.execution_verification_token).toBeTruthy();
-        expect(saved.execution_verified).toBe(false);
-        expect(saved.faculty_verification_token).toBeTruthy();
-        expect(saved.facultyApprovalStatus).toBe('pending');
-        expect(saved.admin_approved).toBe(false);
-        expect(saved.adminApprovalStatus).toBe('pending');
-        // Faculty email waits until executing-org confirms (verifyExecutingOrganizationForUser).
-        expect((service as any).mailService.sendFacultyStudentOpportunityVerification).not.toHaveBeenCalled();
-        expect((service as any).mailService.sendAdminOpportunityReviewNeeded).not.toHaveBeenCalled();
-    });
+    const saved: any = await service.create(
+      'ngo-user-1',
+      minimalOrgCreatorDto({
+        partner_organization: {
+          organization_name: 'City Parks Trust',
+          official_email: 'parks@city.org',
+        },
+        executing_organization: {
+          official_email: 'host@exec.org',
+          name: 'Exec Host',
+        },
+        visibility_and_academic_linkage: {
+          faculty_institutional_representative: {
+            name: 'Dr. Hina Malik',
+            official_email: 'hina.malik@bnu.edu.pk',
+          },
+        },
+      }),
+    );
+
+    expect(saved.status).toBe('pending_execution');
+    expect(saved.execution_verification_token).toBeTruthy();
+    expect(saved.execution_verified).toBe(false);
+    expect(saved.faculty_verification_token).toBeTruthy();
+    expect(saved.facultyApprovalStatus).toBe('pending');
+    expect(saved.admin_approved).toBe(false);
+    expect(saved.adminApprovalStatus).toBe('pending');
+    // Faculty email waits until executing-org confirms (verifyExecutingOrganizationForUser).
+    expect(
+      (service as any).mailService.sendFacultyStudentOpportunityVerification,
+    ).not.toHaveBeenCalled();
+    expect(
+      (service as any).mailService.sendAdminOpportunityReviewNeeded,
+    ).not.toHaveBeenCalled();
+  });
 });
 
 describe('OpportunitiesService — Super Admin create skips a second CIEL gate unless a stakeholder is named', () => {
-    function makeCielAdminService() {
-        const create = jest.fn((payload) => payload);
-        const save = jest.fn((payload) => Promise.resolve({ id: 'ciel-opp-id', ...payload }));
-        const service = makeService({
-            create,
-            save,
-            findOne: jest.fn(),
-            find: jest.fn().mockResolvedValue([]),
-            ...createDedupeStubs().stubs,
-        });
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({
-                id: 'admin-1',
-                role: 'admin',
-                email: 'admin@ciel.pk',
-            }),
-        };
-        (service as any).organizationsService = {
-            getMyOrganization: jest.fn().mockResolvedValue(null),
-        };
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-        (service as any).mailService = {
-            sendAdminOpportunityReviewNeeded: jest.fn(),
-            sendFacultyStudentOpportunityVerification: jest.fn(),
-            sendPartnerVerification: jest.fn(),
-            sendPartnerOpportunityNotice: jest.fn(),
-        };
-        return { service, save };
-    }
-
-    function minimalAdminDto(overrides: Record<string, unknown> = {}) {
-        return {
-            title: 'National tree plantation',
-            mode: 'Remote',
-            objectives: { description: 'Plant trees across campus and raise awareness.' },
-            timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
-            safety_declaration: {
-                environment_safe_and_appropriate: true,
-                students_guided_and_supervised: true,
-                lawful_ethical_and_non_hazardous: true,
-                precautions_and_basic_safety: true,
-            },
-            submission_confirmations: {
-                academically_valid_and_accurately_described: true,
-                activity_properly_supervised: true,
-                environment_safe_and_appropriate: true,
-                information_correct_and_verifiable: true,
-            },
-            sdg_info: { sdg_id: '15' },
-            ...overrides,
-        } as any;
-    }
-
-    it('publishes immediately when CIEL Admin names neither a partner nor a faculty stakeholder', async () => {
-        const { service } = makeCielAdminService();
-        const saved: any = await service.create('admin-1', minimalAdminDto());
-        expect(saved.status).toBe('active');
-        expect(saved.adminApprovalStatus).toBe('approved');
-        expect(saved.admin_approved).toBe(true);
-        expect((service as any).mailService.sendAdminOpportunityReviewNeeded).not.toHaveBeenCalled();
+  function makeCielAdminService() {
+    const create = jest.fn((payload) => payload);
+    const save = jest.fn((payload) =>
+      Promise.resolve({ id: 'ciel-opp-id', ...payload }),
+    );
+    const service = makeService({
+      create,
+      save,
+      findOne: jest.fn(),
+      find: jest.fn().mockResolvedValue([]),
+      ...createDedupeStubs().stubs,
     });
+    (service as any).usersRepository = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'admin-1',
+        role: 'admin',
+        email: 'admin@ciel.pk',
+      }),
+    };
+    (service as any).organizationsService = {
+      getMyOrganization: jest.fn().mockResolvedValue(null),
+    };
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    (service as any).mailService = {
+      sendAdminOpportunityReviewNeeded: jest.fn(),
+      sendFacultyStudentOpportunityVerification: jest.fn(),
+      sendPartnerVerification: jest.fn(),
+      sendPartnerOpportunityNotice: jest.fn(),
+    };
+    return { service, save };
+  }
 
-    it('does not treat the Super Admin creator email as a faculty stakeholder', async () => {
-        const { service } = makeCielAdminService();
-        const saved: any = await service.create(
-            'admin-1',
-            minimalAdminDto({
-                supervision: { contact: 'admin@ciel.pk', supervisor_name: 'CIEL PK Admin' },
-            }),
-        );
-        expect(saved.status).toBe('active');
-        expect(saved.facultyApprovalStatus).toBe('not_applicable');
-        expect(saved.faculty_verification_token).toBeFalsy();
-    });
+  function minimalAdminDto(overrides: Record<string, unknown> = {}) {
+    return {
+      title: 'National tree plantation',
+      mode: 'Remote',
+      objectives: {
+        description: 'Plant trees across campus and raise awareness.',
+      },
+      timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
+      safety_declaration: {
+        environment_safe_and_appropriate: true,
+        students_guided_and_supervised: true,
+        lawful_ethical_and_non_hazardous: true,
+        precautions_and_basic_safety: true,
+      },
+      submission_confirmations: {
+        academically_valid_and_accurately_described: true,
+        activity_properly_supervised: true,
+        environment_safe_and_appropriate: true,
+        information_correct_and_verifiable: true,
+      },
+      sdg_info: { sdg_id: '15' },
+      ...overrides,
+    } as any;
+  }
 
-    it('waits on a named faculty (not CIEL) without a second admin queue', async () => {
-        const { service } = makeCielAdminService();
-        const saved: any = await service.create(
-            'admin-1',
-            minimalAdminDto({
-                supervision: { contact: 'hina.malik@bnu.edu.pk', supervisor_name: 'Dr. Hina Malik' },
-            }),
-        );
-        expect(saved.status).toBe('pending_faculty');
-        expect(saved.facultyApprovalStatus).toBe('pending');
-        expect(saved.adminApprovalStatus).toBe('approved');
-        expect(saved.admin_approved).toBe(false);
-        expect(saved.faculty_verification_token).toBeTruthy();
-        expect((service as any).mailService.sendFacultyStudentOpportunityVerification).toHaveBeenCalled();
-        expect((service as any).mailService.sendAdminOpportunityReviewNeeded).not.toHaveBeenCalled();
-    });
+  it('publishes immediately when CIEL Admin names neither a partner nor a faculty stakeholder', async () => {
+    const { service } = makeCielAdminService();
+    const saved: any = await service.create('admin-1', minimalAdminDto());
+    expect(saved.status).toBe('active');
+    expect(saved.adminApprovalStatus).toBe('approved');
+    expect(saved.admin_approved).toBe(true);
+    expect(
+      (service as any).mailService.sendAdminOpportunityReviewNeeded,
+    ).not.toHaveBeenCalled();
+  });
 
-    it('waits on a named partner from the faculty-form collaboration payload without a second admin queue', async () => {
-        const { service } = makeCielAdminService();
-        const saved: any = await service.create(
-            'admin-1',
-            minimalAdminDto({
-                external_partner_collaboration: {
-                    organization_name: 'Abroo',
-                    contact_person: 'Host',
-                    official_email: 'host@abroo.org',
-                },
-                supervision: {
-                    contact: 'admin@ciel.pk',
-                    supervisor_name: 'CIEL PK Admin',
-                    external_partner_email: 'host@abroo.org',
-                },
-            }),
-        );
-        expect(saved.status).toBe('pending_partner');
-        expect(saved.partnerApprovalStatus).toBe('pending');
-        expect(saved.adminApprovalStatus).toBe('approved');
-        expect(saved.admin_approved).toBe(false);
-        expect(saved.partnerToken).toBeTruthy();
-        expect((service as any).mailService.sendPartnerVerification).toHaveBeenCalled();
-        expect((service as any).mailService.sendAdminOpportunityReviewNeeded).not.toHaveBeenCalled();
-    });
+  it('does not treat the Super Admin creator email as a faculty stakeholder', async () => {
+    const { service } = makeCielAdminService();
+    const saved: any = await service.create(
+      'admin-1',
+      minimalAdminDto({
+        supervision: {
+          contact: 'admin@ciel.pk',
+          supervisor_name: 'CIEL PK Admin',
+        },
+      }),
+    );
+    expect(saved.status).toBe('active');
+    expect(saved.facultyApprovalStatus).toBe('not_applicable');
+    expect(saved.faculty_verification_token).toBeFalsy();
+  });
 
-    it('does not email the partner until faculty has approved when both stakeholders are named', async () => {
-        const { service } = makeCielAdminService();
-        const saved: any = await service.create(
-            'admin-1',
-            minimalAdminDto({
-                external_partner_collaboration: {
-                    organization_name: 'Abroo',
-                    contact_person: 'Host',
-                    official_email: 'host@abroo.org',
-                },
-                supervision: {
-                    contact: 'hina.malik@bnu.edu.pk',
-                    supervisor_name: 'Dr. Hina Malik',
-                    external_partner_email: 'host@abroo.org',
-                },
-            }),
-        );
-        expect(saved.status).toBe('pending_faculty');
-        expect(saved.partnerToken).toBeTruthy();
-        expect((service as any).mailService.sendFacultyStudentOpportunityVerification).toHaveBeenCalled();
-        expect((service as any).mailService.sendPartnerVerification).not.toHaveBeenCalled();
-    });
+  it('waits on a named faculty (not CIEL) without a second admin queue', async () => {
+    const { service } = makeCielAdminService();
+    const saved: any = await service.create(
+      'admin-1',
+      minimalAdminDto({
+        supervision: {
+          contact: 'hina.malik@bnu.edu.pk',
+          supervisor_name: 'Dr. Hina Malik',
+        },
+      }),
+    );
+    expect(saved.status).toBe('pending_faculty');
+    expect(saved.facultyApprovalStatus).toBe('pending');
+    expect(saved.adminApprovalStatus).toBe('approved');
+    expect(saved.admin_approved).toBe(false);
+    expect(saved.faculty_verification_token).toBeTruthy();
+    expect(
+      (service as any).mailService.sendFacultyStudentOpportunityVerification,
+    ).toHaveBeenCalled();
+    expect(
+      (service as any).mailService.sendAdminOpportunityReviewNeeded,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('waits on a named partner from the faculty-form collaboration payload without a second admin queue', async () => {
+    const { service } = makeCielAdminService();
+    const saved: any = await service.create(
+      'admin-1',
+      minimalAdminDto({
+        external_partner_collaboration: {
+          organization_name: 'Abroo',
+          contact_person: 'Host',
+          official_email: 'host@abroo.org',
+        },
+        supervision: {
+          contact: 'admin@ciel.pk',
+          supervisor_name: 'CIEL PK Admin',
+          external_partner_email: 'host@abroo.org',
+        },
+      }),
+    );
+    expect(saved.status).toBe('pending_partner');
+    expect(saved.partnerApprovalStatus).toBe('pending');
+    expect(saved.adminApprovalStatus).toBe('approved');
+    expect(saved.admin_approved).toBe(false);
+    expect(saved.partnerToken).toBeTruthy();
+    expect(
+      (service as any).mailService.sendPartnerVerification,
+    ).toHaveBeenCalled();
+    expect(
+      (service as any).mailService.sendAdminOpportunityReviewNeeded,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('does not email the partner until faculty has approved when both stakeholders are named', async () => {
+    const { service } = makeCielAdminService();
+    const saved: any = await service.create(
+      'admin-1',
+      minimalAdminDto({
+        external_partner_collaboration: {
+          organization_name: 'Abroo',
+          contact_person: 'Host',
+          official_email: 'host@abroo.org',
+        },
+        supervision: {
+          contact: 'hina.malik@bnu.edu.pk',
+          supervisor_name: 'Dr. Hina Malik',
+          external_partner_email: 'host@abroo.org',
+        },
+      }),
+    );
+    expect(saved.status).toBe('pending_faculty');
+    expect(saved.partnerToken).toBeTruthy();
+    expect(
+      (service as any).mailService.sendFacultyStudentOpportunityVerification,
+    ).toHaveBeenCalled();
+    expect(
+      (service as any).mailService.sendPartnerVerification,
+    ).not.toHaveBeenCalled();
+  });
 });
 
 describe('OpportunitiesService — afterFacultyVerified now also completes an NGO/Partner-linked faculty gate', () => {
-    it('approving via the faculty token link moves a non-student, non-faculty-created opportunity on to pending_approval (no partner required)', () => {
-        const workflow = new OpportunityWorkflowService();
-        const opp = {
-            isStudentCreated: false,
-            status: 'pending_faculty',
-            workflowStage: null,
-            facultyApprovalStatus: 'pending',
-            requiresPartnerApproval: false,
-            partnerApprovalStatus: 'not_applicable',
-        } as unknown as Opportunity;
+  it('approving via the faculty token link moves a non-student, non-faculty-created opportunity on to pending_approval (no partner required)', () => {
+    const workflow = new OpportunityWorkflowService();
+    const opp = {
+      isStudentCreated: false,
+      status: 'pending_faculty',
+      workflowStage: null,
+      facultyApprovalStatus: 'pending',
+      requiresPartnerApproval: false,
+      partnerApprovalStatus: 'not_applicable',
+    } as unknown as Opportunity;
 
-        workflow.afterFacultyVerified(opp);
+    workflow.afterFacultyVerified(opp);
 
-        expect(opp.facultyApprovalStatus).toBe('approved');
-        expect(opp.faculty_verified).toBe(true);
-        expect(opp.status).toBe('pending_approval');
-        expect(opp.workflowStage).toBe('pending_admin');
-    });
+    expect(opp.facultyApprovalStatus).toBe('approved');
+    expect(opp.faculty_verified).toBe(true);
+    expect(opp.status).toBe('pending_approval');
+    expect(opp.workflowStage).toBe('pending_admin');
+  });
 
-    it('routes to pending_partner instead when a partner/co-host is also required', () => {
-        const workflow = new OpportunityWorkflowService();
-        const opp = {
-            isStudentCreated: false,
-            status: 'pending_faculty',
-            workflowStage: null,
-            facultyApprovalStatus: 'pending',
-            requiresPartnerApproval: true,
-            partnerApprovalStatus: 'pending',
-        } as unknown as Opportunity;
+  it('routes to pending_partner instead when a partner/co-host is also required', () => {
+    const workflow = new OpportunityWorkflowService();
+    const opp = {
+      isStudentCreated: false,
+      status: 'pending_faculty',
+      workflowStage: null,
+      facultyApprovalStatus: 'pending',
+      requiresPartnerApproval: true,
+      partnerApprovalStatus: 'pending',
+    } as unknown as Opportunity;
 
-        workflow.afterFacultyVerified(opp);
+    workflow.afterFacultyVerified(opp);
 
-        expect(opp.facultyApprovalStatus).toBe('approved');
-        expect(opp.status).toBe('pending_partner');
-        expect(opp.workflowStage).toBe('pending_partner');
-    });
+    expect(opp.facultyApprovalStatus).toBe('approved');
+    expect(opp.status).toBe('pending_partner');
+    expect(opp.workflowStage).toBe('pending_partner');
+  });
 });
 
 describe('OpportunitiesService — faculty approve then emails partner', () => {
-    it('sends the partner verify link only after faculty magic-link approval', async () => {
-        const opp = {
-            id: 'opp-1',
-            title: 'Community garden',
-            isStudentCreated: true,
-            creatorId: 'student-1',
-            facultyId: 'faculty-1',
-            faculty_verification_token: 'ftok',
-            faculty_verified: false,
-            facultyApprovalStatus: 'pending',
-            faculty_verification_status: 'pending_faculty',
-            workflowStage: 'pending_faculty',
-            status: 'pending_faculty',
-            requiresPartnerApproval: true,
-            partnerToken: 'ptok',
-            partnerVerified: false,
-            partnerApprovalStatus: 'pending',
-            partner_organization: { official_email: 'host@ngo.org' },
-            admin_approved: false,
-            adminApprovalStatus: 'pending',
-        } as unknown as Opportunity;
-        const save = jest.fn(async (row: Opportunity) => row);
-        const service = makeService({
-            findOne: jest.fn().mockResolvedValue(opp),
-            save,
-        });
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-        (service as any).mailService = {
-            sendPartnerVerification: jest.fn().mockResolvedValue(undefined),
-            sendStudentOpportunityStatusUpdate: jest.fn().mockResolvedValue(undefined),
-        };
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({
-                id: 'student-1',
-                email: 'ali@uni.edu',
-                name: 'Ali',
-            }),
-        };
-        (service as any).notificationsService = {
-            createApprovalNotification: jest.fn().mockResolvedValue(undefined),
-        };
-
-        await service.verifyFaculty('ftok');
-
-        expect(opp.status).toBe('pending_partner');
-        expect((service as any).mailService.sendPartnerVerification).toHaveBeenCalledWith(
-            'host@ngo.org',
-            'Community garden',
-            'ptok',
-            expect.anything(),
-            expect.objectContaining({ path: '/verify/partner' }),
-        );
+  it('sends the partner verify link only after faculty magic-link approval', async () => {
+    const opp = {
+      id: 'opp-1',
+      title: 'Community garden',
+      isStudentCreated: true,
+      creatorId: 'student-1',
+      facultyId: 'faculty-1',
+      faculty_verification_token: 'ftok',
+      faculty_verified: false,
+      facultyApprovalStatus: 'pending',
+      faculty_verification_status: 'pending_faculty',
+      workflowStage: 'pending_faculty',
+      status: 'pending_faculty',
+      requiresPartnerApproval: true,
+      partnerToken: 'ptok',
+      partnerVerified: false,
+      partnerApprovalStatus: 'pending',
+      partner_organization: { official_email: 'host@ngo.org' },
+      admin_approved: false,
+      adminApprovalStatus: 'pending',
+    } as unknown as Opportunity;
+    const save = jest.fn(async (row: Opportunity) => row);
+    const service = makeService({
+      findOne: jest.fn().mockResolvedValue(opp),
+      save,
     });
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    (service as any).mailService = {
+      sendPartnerVerification: jest.fn().mockResolvedValue(undefined),
+      sendStudentOpportunityStatusUpdate: jest
+        .fn()
+        .mockResolvedValue(undefined),
+    };
+    (service as any).usersRepository = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'student-1',
+        email: 'ali@uni.edu',
+        name: 'Ali',
+      }),
+    };
+    (service as any).notificationsService = {
+      createApprovalNotification: jest.fn().mockResolvedValue(undefined),
+    };
 
-    it('faculty dashboard approve also emails the partner (same loop as the magic link)', async () => {
-        const opp = {
-            id: 'opp-1',
-            title: 'Community garden',
-            isStudentCreated: true,
-            creatorId: 'student-1',
-            facultyId: 'faculty-1',
-            faculty_verified: false,
-            facultyApprovalStatus: 'pending',
-            faculty_verification_status: 'pending_faculty',
-            workflowStage: 'pending_faculty',
-            status: 'pending_faculty',
-            requiresPartnerApproval: true,
-            partnerToken: 'ptok',
-            partnerVerified: false,
-            partnerApprovalStatus: 'pending',
-            partner_organization: { official_email: 'host@ngo.org' },
-            admin_approved: false,
-            adminApprovalStatus: 'pending',
-            supervision: { contact: 'teacher@uni.edu' },
-        } as unknown as Opportunity;
-        const save = jest.fn(async (row: Opportunity) => row);
-        const service = makeService({
-            findOne: jest.fn().mockResolvedValue(opp),
-            save,
-        });
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-        (service as any).mailService = {
-            sendPartnerVerification: jest.fn().mockResolvedValue(undefined),
-            sendStudentOpportunityStatusUpdate: jest.fn().mockResolvedValue(undefined),
-        };
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({
-                id: 'student-1',
-                email: 'ali@uni.edu',
-                name: 'Ali',
-            }),
-        };
-        (service as any).notificationsService = {
-            createApprovalNotification: jest.fn().mockResolvedValue(undefined),
-        };
-        (service as any).opportunityApplicationsService = {
-            findActionablePendingFacultyApplicationForDashboard: jest
-                .fn()
-                .mockResolvedValue(null),
-        };
+    await service.verifyFaculty('ftok');
 
-        await service.facultyDashboardApprove(
-            'opp-1',
-            'faculty-1',
-            'teacher@uni.edu',
-            'Dr Khan',
-        );
+    expect(opp.status).toBe('pending_partner');
+    expect(
+      (service as any).mailService.sendPartnerVerification,
+    ).toHaveBeenCalledWith(
+      'host@ngo.org',
+      'Community garden',
+      'ptok',
+      expect.anything(),
+      expect.objectContaining({ path: '/verify/partner' }),
+    );
+  });
 
-        expect(opp.status).toBe('pending_partner');
-        expect((service as any).mailService.sendPartnerVerification).toHaveBeenCalled();
+  it('faculty dashboard approve also emails the partner (same loop as the magic link)', async () => {
+    const opp = {
+      id: 'opp-1',
+      title: 'Community garden',
+      isStudentCreated: true,
+      creatorId: 'student-1',
+      facultyId: 'faculty-1',
+      faculty_verified: false,
+      facultyApprovalStatus: 'pending',
+      faculty_verification_status: 'pending_faculty',
+      workflowStage: 'pending_faculty',
+      status: 'pending_faculty',
+      requiresPartnerApproval: true,
+      partnerToken: 'ptok',
+      partnerVerified: false,
+      partnerApprovalStatus: 'pending',
+      partner_organization: { official_email: 'host@ngo.org' },
+      admin_approved: false,
+      adminApprovalStatus: 'pending',
+      supervision: { contact: 'teacher@uni.edu' },
+    } as unknown as Opportunity;
+    const save = jest.fn(async (row: Opportunity) => row);
+    const service = makeService({
+      findOne: jest.fn().mockResolvedValue(opp),
+      save,
     });
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    (service as any).mailService = {
+      sendPartnerVerification: jest.fn().mockResolvedValue(undefined),
+      sendStudentOpportunityStatusUpdate: jest
+        .fn()
+        .mockResolvedValue(undefined),
+    };
+    (service as any).usersRepository = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'student-1',
+        email: 'ali@uni.edu',
+        name: 'Ali',
+      }),
+    };
+    (service as any).notificationsService = {
+      createApprovalNotification: jest.fn().mockResolvedValue(undefined),
+    };
+    (service as any).opportunityApplicationsService = {
+      findActionablePendingFacultyApplicationForDashboard: jest
+        .fn()
+        .mockResolvedValue(null),
+    };
 
-    it('mints a partner token if faculty approved but the token was missing', async () => {
-        const opp = {
-            id: 'opp-1',
-            title: 'Community garden',
-            isStudentCreated: true,
-            creatorId: 'student-1',
-            facultyId: 'faculty-1',
-            faculty_verification_token: 'ftok',
-            faculty_verified: false,
-            facultyApprovalStatus: 'pending',
-            faculty_verification_status: 'pending_faculty',
-            workflowStage: 'pending_faculty',
-            status: 'pending_faculty',
-            requiresPartnerApproval: true,
-            partnerToken: undefined,
-            partnerVerified: false,
-            partnerApprovalStatus: 'pending',
-            partner_organization: { official_email: 'host@ngo.org' },
-            admin_approved: false,
-            adminApprovalStatus: 'pending',
-        } as unknown as Opportunity;
-        const save = jest.fn(async (row: Opportunity) => row);
-        const service = makeService({
-            findOne: jest.fn().mockResolvedValue(opp),
-            save,
-        });
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-        (service as any).mailService = {
-            sendPartnerVerification: jest.fn().mockResolvedValue(undefined),
-            sendStudentOpportunityStatusUpdate: jest.fn().mockResolvedValue(undefined),
-        };
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({
-                id: 'student-1',
-                email: 'ali@uni.edu',
-                name: 'Ali',
-            }),
-        };
-        (service as any).notificationsService = {
-            createApprovalNotification: jest.fn().mockResolvedValue(undefined),
-        };
+    await service.facultyDashboardApprove(
+      'opp-1',
+      'faculty-1',
+      'teacher@uni.edu',
+      'Dr Khan',
+    );
 
-        await service.verifyFaculty('ftok');
+    expect(opp.status).toBe('pending_partner');
+    expect(
+      (service as any).mailService.sendPartnerVerification,
+    ).toHaveBeenCalled();
+  });
 
-        expect(opp.partnerToken).toBeTruthy();
-        expect((service as any).mailService.sendPartnerVerification).toHaveBeenCalledWith(
-            'host@ngo.org',
-            'Community garden',
-            opp.partnerToken,
-            expect.anything(),
-            expect.anything(),
-        );
+  it('mints a partner token if faculty approved but the token was missing', async () => {
+    const opp = {
+      id: 'opp-1',
+      title: 'Community garden',
+      isStudentCreated: true,
+      creatorId: 'student-1',
+      facultyId: 'faculty-1',
+      faculty_verification_token: 'ftok',
+      faculty_verified: false,
+      facultyApprovalStatus: 'pending',
+      faculty_verification_status: 'pending_faculty',
+      workflowStage: 'pending_faculty',
+      status: 'pending_faculty',
+      requiresPartnerApproval: true,
+      partnerToken: undefined,
+      partnerVerified: false,
+      partnerApprovalStatus: 'pending',
+      partner_organization: { official_email: 'host@ngo.org' },
+      admin_approved: false,
+      adminApprovalStatus: 'pending',
+    } as unknown as Opportunity;
+    const save = jest.fn(async (row: Opportunity) => row);
+    const service = makeService({
+      findOne: jest.fn().mockResolvedValue(opp),
+      save,
     });
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    (service as any).mailService = {
+      sendPartnerVerification: jest.fn().mockResolvedValue(undefined),
+      sendStudentOpportunityStatusUpdate: jest
+        .fn()
+        .mockResolvedValue(undefined),
+    };
+    (service as any).usersRepository = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'student-1',
+        email: 'ali@uni.edu',
+        name: 'Ali',
+      }),
+    };
+    (service as any).notificationsService = {
+      createApprovalNotification: jest.fn().mockResolvedValue(undefined),
+    };
 
-    it('after partner magic-link approve, emails CIEL PK for final review', async () => {
-        const opp = {
-            id: 'opp-1',
-            title: 'Community garden',
-            isStudentCreated: true,
-            faculty_verified: true,
-            facultyApprovalStatus: 'approved',
-            partnerToken: 'ptok',
-            partnerVerified: false,
-            requiresPartnerApproval: true,
-            partnerApprovalStatus: 'pending',
-            workflowStage: 'pending_partner',
-            status: 'pending_partner',
-            partner_organization: { official_email: 'host@ngo.org' },
-            creatorId: 'student-1',
-            facultyId: 'faculty-1',
-            admin_approved: false,
-            adminApprovalStatus: 'pending',
-            execution_verification_token: null,
-            execution_verified: true,
-        } as unknown as Opportunity;
-        const save = jest.fn(async (row: Opportunity) => row);
-        const service = makeService({
-            findOne: jest.fn().mockResolvedValue(opp),
-            save,
-        });
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-        (service as any).mailService = {
-            sendAdminOpportunityReviewNeeded: jest.fn().mockResolvedValue(undefined),
-            sendStudentOpportunityStatusUpdate: jest.fn().mockResolvedValue(undefined),
-        };
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({
-                id: 'student-1',
-                email: 'ali@uni.edu',
-                name: 'Ali',
-            }),
-        };
-        (service as any).notificationsService = {
-            createApprovalNotification: jest.fn().mockResolvedValue(undefined),
-        };
+    await service.verifyFaculty('ftok');
 
-        await (service as any).verifyOpportunityToken('ptok');
+    expect(opp.partnerToken).toBeTruthy();
+    expect(
+      (service as any).mailService.sendPartnerVerification,
+    ).toHaveBeenCalledWith(
+      'host@ngo.org',
+      'Community garden',
+      opp.partnerToken,
+      expect.anything(),
+      expect.anything(),
+    );
+  });
 
-        expect(opp.status).toBe('pending_approval');
-        expect(
-            (service as any).mailService.sendAdminOpportunityReviewNeeded,
-        ).toHaveBeenCalledWith('Community garden', 'opp-1', 'partner approval', expect.any(String));
+  it('after partner magic-link approve, emails CIEL PK for final review', async () => {
+    const opp = {
+      id: 'opp-1',
+      title: 'Community garden',
+      isStudentCreated: true,
+      faculty_verified: true,
+      facultyApprovalStatus: 'approved',
+      partnerToken: 'ptok',
+      partnerVerified: false,
+      requiresPartnerApproval: true,
+      partnerApprovalStatus: 'pending',
+      workflowStage: 'pending_partner',
+      status: 'pending_partner',
+      partner_organization: { official_email: 'host@ngo.org' },
+      creatorId: 'student-1',
+      facultyId: 'faculty-1',
+      admin_approved: false,
+      adminApprovalStatus: 'pending',
+      execution_verification_token: null,
+      execution_verified: true,
+    } as unknown as Opportunity;
+    const save = jest.fn(async (row: Opportunity) => row);
+    const service = makeService({
+      findOne: jest.fn().mockResolvedValue(opp),
+      save,
     });
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    (service as any).mailService = {
+      sendAdminOpportunityReviewNeeded: jest.fn().mockResolvedValue(undefined),
+      sendStudentOpportunityStatusUpdate: jest
+        .fn()
+        .mockResolvedValue(undefined),
+    };
+    (service as any).usersRepository = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'student-1',
+        email: 'ali@uni.edu',
+        name: 'Ali',
+      }),
+    };
+    (service as any).notificationsService = {
+      createApprovalNotification: jest.fn().mockResolvedValue(undefined),
+    };
 
-    it('remind-reviewer after faculty approval resends the partner link without changing stage', async () => {
-        const opp = {
-            id: 'opp-1',
-            title: 'Community garden',
-            creatorId: 'student-1',
-            requiresPartnerApproval: true,
-            partnerVerified: false,
-            partnerApprovalStatus: 'pending',
-            workflowStage: 'pending_partner',
-            status: 'pending_partner',
-            partnerToken: 'ptok',
-            partner_organization: { official_email: 'host@ngo.org' },
-            faculty_verified: true,
-            facultyApprovalStatus: 'approved',
-        } as unknown as Opportunity;
-        const save = jest.fn(async (row: Opportunity) => row);
-        const service = makeService({
-            findOne: jest.fn().mockResolvedValue(opp),
-            save,
-        });
-        (service as any).mailService = {
-            sendPartnerVerification: jest.fn().mockResolvedValue(undefined),
-        };
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({
-                id: 'student-1',
-                email: 'ali@uni.edu',
-                role: 'student',
-            }),
-        };
+    await (service as any).verifyOpportunityToken('ptok');
 
-        const result = await service.remindOpportunityReviewer('student-1', 'opp-1');
+    expect(opp.status).toBe('pending_approval');
+    expect(
+      (service as any).mailService.sendAdminOpportunityReviewNeeded,
+    ).toHaveBeenCalledWith(
+      'Community garden',
+      'opp-1',
+      'partner approval',
+      expect.any(String),
+    );
+  });
 
-        expect(result.sent_to).toBe('partner');
-        expect(opp.status).toBe('pending_partner');
-        expect((service as any).mailService.sendPartnerVerification).toHaveBeenCalled();
+  it('remind-reviewer after faculty approval resends the partner link without changing stage', async () => {
+    const opp = {
+      id: 'opp-1',
+      title: 'Community garden',
+      creatorId: 'student-1',
+      requiresPartnerApproval: true,
+      partnerVerified: false,
+      partnerApprovalStatus: 'pending',
+      workflowStage: 'pending_partner',
+      status: 'pending_partner',
+      partnerToken: 'ptok',
+      partner_organization: { official_email: 'host@ngo.org' },
+      faculty_verified: true,
+      facultyApprovalStatus: 'approved',
+    } as unknown as Opportunity;
+    const save = jest.fn(async (row: Opportunity) => row);
+    const service = makeService({
+      findOne: jest.fn().mockResolvedValue(opp),
+      save,
     });
+    (service as any).mailService = {
+      sendPartnerVerification: jest.fn().mockResolvedValue(undefined),
+    };
+    (service as any).usersRepository = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'student-1',
+        email: 'ali@uni.edu',
+        role: 'student',
+      }),
+    };
+
+    const result = await service.remindOpportunityReviewer(
+      'student-1',
+      'opp-1',
+    );
+
+    expect(result.sent_to).toBe('partner');
+    expect(opp.status).toBe('pending_partner');
+    expect(
+      (service as any).mailService.sendPartnerVerification,
+    ).toHaveBeenCalled();
+  });
 });
 
 describe('OpportunitiesService — Faculty / Partner / CIEL notify loop', () => {
-    function mailReadyService(opp: Opportunity) {
-        const save = jest.fn(async (row: Opportunity) => row);
-        const service = makeService({
-            findOne: jest.fn().mockResolvedValue(opp),
-            save,
-        });
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-        (service as any).mailService = {
-            sendPartnerVerification: jest.fn().mockResolvedValue(undefined),
-            sendAdminOpportunityReviewNeeded: jest.fn().mockResolvedValue(undefined),
-            sendStudentOpportunityStatusUpdate: jest.fn().mockResolvedValue(undefined),
-            sendOpportunityLiveStartReportEmail: jest.fn().mockResolvedValue(undefined),
-            sendAdminStudentMayStartReport: jest.fn().mockResolvedValue(undefined),
-            sendFacultyStudentOpportunityVerification: jest.fn().mockResolvedValue(undefined),
-            sendStudentOpportunityRejectedByFaculty: jest.fn().mockResolvedValue(undefined),
-        };
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({
-                id: 'student-1',
-                email: 'ali@uni.edu',
-                name: 'Ali',
-                role: 'student',
-            }),
-        };
-        (service as any).notificationsService = {
-            createApprovalNotification: jest.fn().mockResolvedValue(undefined),
-        };
-        (service as any).opportunityApplicationsService = {
-            findActionablePendingFacultyApplicationForDashboard: jest
-                .fn()
-                .mockResolvedValue(null),
-        };
-        return { service, save };
-    }
+  function mailReadyService(opp: Opportunity) {
+    const save = jest.fn(async (row: Opportunity) => row);
+    const service = makeService({
+      findOne: jest.fn().mockResolvedValue(opp),
+      save,
+    });
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    (service as any).mailService = {
+      sendPartnerVerification: jest.fn().mockResolvedValue(undefined),
+      sendAdminOpportunityReviewNeeded: jest.fn().mockResolvedValue(undefined),
+      sendStudentOpportunityStatusUpdate: jest
+        .fn()
+        .mockResolvedValue(undefined),
+      sendOpportunityLiveStartReportEmail: jest
+        .fn()
+        .mockResolvedValue(undefined),
+      sendAdminStudentMayStartReport: jest.fn().mockResolvedValue(undefined),
+      sendFacultyStudentOpportunityVerification: jest
+        .fn()
+        .mockResolvedValue(undefined),
+      sendStudentOpportunityRejectedByFaculty: jest
+        .fn()
+        .mockResolvedValue(undefined),
+    };
+    (service as any).usersRepository = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'student-1',
+        email: 'ali@uni.edu',
+        name: 'Ali',
+        role: 'student',
+      }),
+    };
+    (service as any).notificationsService = {
+      createApprovalNotification: jest.fn().mockResolvedValue(undefined),
+    };
+    (service as any).opportunityApplicationsService = {
+      findActionablePendingFacultyApplicationForDashboard: jest
+        .fn()
+        .mockResolvedValue(null),
+    };
+    return { service, save };
+  }
 
-    it('faculty approve with no partner emails CIEL PK next', async () => {
-        const opp = {
-            id: 'opp-1',
-            title: 'Campus garden',
-            isStudentCreated: true,
-            creatorId: 'student-1',
-            facultyId: 'faculty-1',
-            faculty_verification_token: 'ftok',
-            faculty_verified: false,
-            facultyApprovalStatus: 'pending',
-            faculty_verification_status: 'pending_faculty',
-            workflowStage: 'pending_faculty',
-            status: 'pending_faculty',
-            requiresPartnerApproval: false,
-            partnerVerified: true,
-            partnerApprovalStatus: 'not_applicable',
-            admin_approved: false,
-            adminApprovalStatus: 'pending',
-        } as unknown as Opportunity;
-        const { service } = mailReadyService(opp);
+  it('faculty approve with no partner emails CIEL PK next', async () => {
+    const opp = {
+      id: 'opp-1',
+      title: 'Campus garden',
+      isStudentCreated: true,
+      creatorId: 'student-1',
+      facultyId: 'faculty-1',
+      faculty_verification_token: 'ftok',
+      faculty_verified: false,
+      facultyApprovalStatus: 'pending',
+      faculty_verification_status: 'pending_faculty',
+      workflowStage: 'pending_faculty',
+      status: 'pending_faculty',
+      requiresPartnerApproval: false,
+      partnerVerified: true,
+      partnerApprovalStatus: 'not_applicable',
+      admin_approved: false,
+      adminApprovalStatus: 'pending',
+    } as unknown as Opportunity;
+    const { service } = mailReadyService(opp);
 
-        await service.verifyFaculty('ftok');
+    await service.verifyFaculty('ftok');
 
-        expect(opp.status).toBe('pending_approval');
-        expect(opp.workflowStage).toBe('pending_admin');
-        expect((service as any).mailService.sendPartnerVerification).not.toHaveBeenCalled();
-        expect((service as any).mailService.sendAdminOpportunityReviewNeeded).toHaveBeenCalledWith(
-            'Campus garden',
-            'opp-1',
-            'faculty approval',
-            expect.any(String),
-        );
+    expect(opp.status).toBe('pending_approval');
+    expect(opp.workflowStage).toBe('pending_admin');
+    expect(
+      (service as any).mailService.sendPartnerVerification,
+    ).not.toHaveBeenCalled();
+    expect(
+      (service as any).mailService.sendAdminOpportunityReviewNeeded,
+    ).toHaveBeenCalledWith(
+      'Campus garden',
+      'opp-1',
+      'faculty approval',
+      expect.any(String),
+    );
+  });
+
+  it('refuses CIEL final approve while still waiting on faculty or partner', async () => {
+    const facultyHold = {
+      id: 'opp-1',
+      isStudentCreated: true,
+      workflowStage: 'pending_faculty',
+      status: 'pending_faculty',
+      admin_approved: false,
+    } as unknown as Opportunity;
+    const { service: facultyService } = mailReadyService(facultyHold);
+    await expect(facultyService.approve('opp-1')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+
+    const partnerHold = {
+      id: 'opp-2',
+      isStudentCreated: true,
+      workflowStage: 'pending_partner',
+      status: 'pending_partner',
+      admin_approved: false,
+    } as unknown as Opportunity;
+    const { service: partnerService } = mailReadyService(partnerHold);
+    await expect(partnerService.approve('opp-2')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+  });
+
+  it('CIEL approve goes live and emails the creator plus the admin start-report notice', async () => {
+    const opp = {
+      id: 'opp-1',
+      title: 'Campus garden',
+      isStudentCreated: true,
+      creatorId: 'student-1',
+      workflowStage: 'pending_admin',
+      status: 'pending_approval',
+      admin_approved: false,
+      adminApprovalStatus: 'pending',
+      faculty_verified: true,
+      facultyApprovalStatus: 'approved',
+      requiresPartnerApproval: false,
+      partnerVerified: true,
+      partnerApprovalStatus: 'not_applicable',
+      timeline: { expected_hours: 16 },
+    } as unknown as Opportunity;
+    const { service } = mailReadyService(opp);
+
+    const saved = await service.approve('opp-1', {
+      id: 'admin-1',
+      name: 'CIEL PK',
     });
 
-    it('refuses CIEL final approve while still waiting on faculty or partner', async () => {
-        const facultyHold = {
-            id: 'opp-1',
-            isStudentCreated: true,
-            workflowStage: 'pending_faculty',
-            status: 'pending_faculty',
-            admin_approved: false,
-        } as unknown as Opportunity;
-        const { service: facultyService } = mailReadyService(facultyHold);
-        await expect(facultyService.approve('opp-1')).rejects.toBeInstanceOf(
-            BadRequestException,
-        );
+    expect(saved.status).toBe('active');
+    expect(saved.workflowStage).toBe('live');
+    expect(saved.admin_approved).toBe(true);
+    expect(
+      (service as any).mailService.sendOpportunityLiveStartReportEmail,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: 'ali@uni.edu',
+        projectTitle: 'Campus garden',
+      }),
+    );
+    expect(
+      (service as any).mailService.sendAdminStudentMayStartReport,
+    ).toHaveBeenCalledWith('Campus garden', 'opp-1', 'Ali');
+  });
 
-        const partnerHold = {
-            id: 'opp-2',
-            isStudentCreated: true,
-            workflowStage: 'pending_partner',
-            status: 'pending_partner',
-            admin_approved: false,
-        } as unknown as Opportunity;
-        const { service: partnerService } = mailReadyService(partnerHold);
-        await expect(partnerService.approve('opp-2')).rejects.toBeInstanceOf(
-            BadRequestException,
-        );
+  it('remind-reviewer on the CIEL queue emails admin without changing stage', async () => {
+    const opp = {
+      id: 'opp-1',
+      title: 'Campus garden',
+      creatorId: 'student-1',
+      workflowStage: 'pending_admin',
+      status: 'pending_approval',
+      admin_approved: false,
+      faculty_verified: true,
+    } as unknown as Opportunity;
+    const { service } = mailReadyService(opp);
+
+    const result = await service.remindOpportunityReviewer(
+      'student-1',
+      'opp-1',
+    );
+
+    expect(result.sent_to).toBe('admin');
+    expect(opp.status).toBe('pending_approval');
+    expect(
+      (service as any).mailService.sendAdminOpportunityReviewNeeded,
+    ).toHaveBeenCalledWith(
+      'Campus garden',
+      'opp-1',
+      'CIEL PK final approval',
+      expect.any(String),
+    );
+  });
+
+  it('partner dashboard approve emails CIEL PK for final review', async () => {
+    const opp = {
+      id: 'opp-1',
+      title: 'Campus garden',
+      isStudentCreated: true,
+      creatorId: 'student-1',
+      facultyId: 'faculty-1',
+      faculty_verified: true,
+      facultyApprovalStatus: 'approved',
+      requiresPartnerApproval: true,
+      partnerVerified: false,
+      partnerApprovalStatus: 'pending',
+      workflowStage: 'pending_partner',
+      status: 'pending_partner',
+      partner_organization: { official_email: 'host@ngo.org' },
+      admin_approved: false,
+      adminApprovalStatus: 'pending',
+      execution_verification_token: null,
+      execution_verified: true,
+    } as unknown as Opportunity;
+    const { service } = mailReadyService(opp);
+    (service as any).organizationsService = {
+      findOne: jest.fn().mockResolvedValue({ id: 'org-1', name: 'Host NGO' }),
+      getMyOrganization: jest
+        .fn()
+        .mockResolvedValue({ id: 'org-1', name: 'Host NGO' }),
+    };
+    (service as any).facultyUniversityScope = {
+      normalizeOrgName: (name: string) => (name || '').trim().toLowerCase(),
+    };
+
+    await service.partnerDashboardApprove('opp-1', {
+      email: 'host@ngo.org',
+      organizationId: 'org-1',
+      id: 'partner-1',
+      name: 'Host NGO',
     });
 
-    it('CIEL approve goes live and emails the creator plus the admin start-report notice', async () => {
-        const opp = {
-            id: 'opp-1',
-            title: 'Campus garden',
-            isStudentCreated: true,
-            creatorId: 'student-1',
-            workflowStage: 'pending_admin',
-            status: 'pending_approval',
-            admin_approved: false,
-            adminApprovalStatus: 'pending',
-            faculty_verified: true,
-            facultyApprovalStatus: 'approved',
-            requiresPartnerApproval: false,
-            partnerVerified: true,
-            partnerApprovalStatus: 'not_applicable',
-            timeline: { expected_hours: 16 },
-        } as unknown as Opportunity;
-        const { service } = mailReadyService(opp);
+    expect(opp.status).toBe('pending_approval');
+    expect(
+      (service as any).mailService.sendAdminOpportunityReviewNeeded,
+    ).toHaveBeenCalledWith(
+      'Campus garden',
+      'opp-1',
+      'partner approval',
+      expect.any(String),
+    );
+  });
 
-        const saved = await service.approve('opp-1', {
-            id: 'admin-1',
-            name: 'CIEL PK',
-        });
+  it('faculty reject emails the student and closes the listing', async () => {
+    const opp = {
+      id: 'opp-1',
+      title: 'Campus garden',
+      isStudentCreated: true,
+      creatorId: 'student-1',
+      facultyId: 'faculty-1',
+      faculty_verified: false,
+      facultyApprovalStatus: 'pending',
+      faculty_verification_status: 'pending_faculty',
+      workflowStage: 'pending_faculty',
+      status: 'pending_faculty',
+      admin_approved: false,
+      supervision: { contact: 'teacher@uni.edu' },
+    } as unknown as Opportunity;
+    const { service } = mailReadyService(opp);
 
-        expect(saved.status).toBe('active');
-        expect(saved.workflowStage).toBe('live');
-        expect(saved.admin_approved).toBe(true);
-        expect(
-            (service as any).mailService.sendOpportunityLiveStartReportEmail,
-        ).toHaveBeenCalledWith(
-            expect.objectContaining({
-                to: 'ali@uni.edu',
-                projectTitle: 'Campus garden',
-            }),
-        );
-        expect(
-            (service as any).mailService.sendAdminStudentMayStartReport,
-        ).toHaveBeenCalledWith('Campus garden', 'opp-1', 'Ali');
+    await service.facultyDashboardReject(
+      'opp-1',
+      'faculty-1',
+      'teacher@uni.edu',
+      'Unsafe site',
+      'Dr Khan',
+    );
+
+    expect(opp.status).toBe('rejected');
+    expect(
+      (service as any).mailService.sendStudentOpportunityRejectedByFaculty,
+    ).toHaveBeenCalledWith('ali@uni.edu', 'Campus garden', 'Unsafe site');
+  });
+
+  it('executing-org confirm emails the partner when that is the next gate', async () => {
+    const opp = {
+      id: 'opp-1',
+      title: 'Campus garden',
+      isStudentCreated: false,
+      creatorId: 'faculty-1',
+      facultyId: 'faculty-1',
+      faculty_verified: true,
+      facultyApprovalStatus: 'approved',
+      execution_verification_token: 'etok',
+      execution_verified: false,
+      executing_organization: { official_email: 'host@ngo.org' },
+      requiresPartnerApproval: true,
+      partnerVerified: false,
+      partnerApprovalStatus: 'pending',
+      partnerToken: 'ptok',
+      partner_organization: { official_email: 'ack@ngo.org' },
+      admin_approved: false,
+      adminApprovalStatus: 'pending',
+      status: 'pending_execution',
+      workflowStage: null,
+    } as unknown as Opportunity;
+    const { service } = mailReadyService(opp);
+    (service as any).usersRepository.findOne = jest.fn().mockResolvedValue({
+      id: 'partner-user',
+      email: 'host@ngo.org',
     });
 
-    it('remind-reviewer on the CIEL queue emails admin without changing stage', async () => {
-        const opp = {
-            id: 'opp-1',
-            title: 'Campus garden',
-            creatorId: 'student-1',
-            workflowStage: 'pending_admin',
-            status: 'pending_approval',
-            admin_approved: false,
-            faculty_verified: true,
-        } as unknown as Opportunity;
-        const { service } = mailReadyService(opp);
+    await service.verifyExecutingOrganizationForUser(
+      'partner-user',
+      'host@ngo.org',
+      'opp-1',
+    );
 
-        const result = await service.remindOpportunityReviewer('student-1', 'opp-1');
-
-        expect(result.sent_to).toBe('admin');
-        expect(opp.status).toBe('pending_approval');
-        expect((service as any).mailService.sendAdminOpportunityReviewNeeded).toHaveBeenCalledWith(
-            'Campus garden',
-            'opp-1',
-            'CIEL PK final approval',
-            expect.any(String),
-        );
-    });
-
-    it('partner dashboard approve emails CIEL PK for final review', async () => {
-        const opp = {
-            id: 'opp-1',
-            title: 'Campus garden',
-            isStudentCreated: true,
-            creatorId: 'student-1',
-            facultyId: 'faculty-1',
-            faculty_verified: true,
-            facultyApprovalStatus: 'approved',
-            requiresPartnerApproval: true,
-            partnerVerified: false,
-            partnerApprovalStatus: 'pending',
-            workflowStage: 'pending_partner',
-            status: 'pending_partner',
-            partner_organization: { official_email: 'host@ngo.org' },
-            admin_approved: false,
-            adminApprovalStatus: 'pending',
-            execution_verification_token: null,
-            execution_verified: true,
-        } as unknown as Opportunity;
-        const { service } = mailReadyService(opp);
-        (service as any).organizationsService = {
-            findOne: jest.fn().mockResolvedValue({ id: 'org-1', name: 'Host NGO' }),
-            getMyOrganization: jest.fn().mockResolvedValue({ id: 'org-1', name: 'Host NGO' }),
-        };
-        (service as any).facultyUniversityScope = {
-            normalizeOrgName: (name: string) => (name || '').trim().toLowerCase(),
-        };
-
-        await service.partnerDashboardApprove('opp-1', {
-            email: 'host@ngo.org',
-            organizationId: 'org-1',
-            id: 'partner-1',
-            name: 'Host NGO',
-        });
-
-        expect(opp.status).toBe('pending_approval');
-        expect((service as any).mailService.sendAdminOpportunityReviewNeeded).toHaveBeenCalledWith(
-            'Campus garden',
-            'opp-1',
-            'partner approval',
-            expect.any(String),
-        );
-    });
-
-    it('faculty reject emails the student and closes the listing', async () => {
-        const opp = {
-            id: 'opp-1',
-            title: 'Campus garden',
-            isStudentCreated: true,
-            creatorId: 'student-1',
-            facultyId: 'faculty-1',
-            faculty_verified: false,
-            facultyApprovalStatus: 'pending',
-            faculty_verification_status: 'pending_faculty',
-            workflowStage: 'pending_faculty',
-            status: 'pending_faculty',
-            admin_approved: false,
-            supervision: { contact: 'teacher@uni.edu' },
-        } as unknown as Opportunity;
-        const { service } = mailReadyService(opp);
-
-        await service.facultyDashboardReject(
-            'opp-1',
-            'faculty-1',
-            'teacher@uni.edu',
-            'Unsafe site',
-            'Dr Khan',
-        );
-
-        expect(opp.status).toBe('rejected');
-        expect(
-            (service as any).mailService.sendStudentOpportunityRejectedByFaculty,
-        ).toHaveBeenCalledWith('ali@uni.edu', 'Campus garden', 'Unsafe site');
-    });
-
-    it('executing-org confirm emails the partner when that is the next gate', async () => {
-        const opp = {
-            id: 'opp-1',
-            title: 'Campus garden',
-            isStudentCreated: false,
-            creatorId: 'faculty-1',
-            facultyId: 'faculty-1',
-            faculty_verified: true,
-            facultyApprovalStatus: 'approved',
-            execution_verification_token: 'etok',
-            execution_verified: false,
-            executing_organization: { official_email: 'host@ngo.org' },
-            requiresPartnerApproval: true,
-            partnerVerified: false,
-            partnerApprovalStatus: 'pending',
-            partnerToken: 'ptok',
-            partner_organization: { official_email: 'ack@ngo.org' },
-            admin_approved: false,
-            adminApprovalStatus: 'pending',
-            status: 'pending_execution',
-            workflowStage: null,
-        } as unknown as Opportunity;
-        const { service } = mailReadyService(opp);
-        (service as any).usersRepository.findOne = jest.fn().mockResolvedValue({
-            id: 'partner-user',
-            email: 'host@ngo.org',
-        });
-
-        await service.verifyExecutingOrganizationForUser(
-            'partner-user',
-            'host@ngo.org',
-            'opp-1',
-        );
-
-        expect(opp.status).toBe('pending_partner');
-        expect((service as any).mailService.sendPartnerVerification).toHaveBeenCalled();
-        expect((service as any).mailService.sendAdminOpportunityReviewNeeded).not.toHaveBeenCalled();
-    });
+    expect(opp.status).toBe('pending_partner');
+    expect(
+      (service as any).mailService.sendPartnerVerification,
+    ).toHaveBeenCalled();
+    expect(
+      (service as any).mailService.sendAdminOpportunityReviewNeeded,
+    ).not.toHaveBeenCalled();
+  });
 });
 
 describe('OpportunitiesService — update() faculty-owned opportunity resubmit scoping', () => {
-    function makeFacultyOpp(overrides: Record<string, unknown> = {}) {
-        return {
-            id: 'fac-opp-1',
-            creatorId: 'faculty-1',
-            facultyId: 'faculty-1',
-            isStudentCreated: false,
-            organizationId: null,
-            status: 'active',
-            workflowStage: 'live',
-            admin_approved: true,
-            adminApprovalStatus: 'approved',
-            requiresPartnerApproval: true,
-            partnerApprovalStatus: 'approved',
-            partnerVerified: true,
-            partnerToken: 'existing-partner-token',
-            partner_organization: { official_email: 'partner@org.com' },
-            execution_verification_token: null,
-            execution_verified: true,
-            ...overrides,
-        } as unknown as Opportunity;
-    }
+  function makeFacultyOpp(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'fac-opp-1',
+      creatorId: 'faculty-1',
+      facultyId: 'faculty-1',
+      isStudentCreated: false,
+      organizationId: null,
+      status: 'active',
+      workflowStage: 'live',
+      admin_approved: true,
+      adminApprovalStatus: 'approved',
+      requiresPartnerApproval: true,
+      partnerApprovalStatus: 'approved',
+      partnerVerified: true,
+      partnerToken: 'existing-partner-token',
+      partner_organization: { official_email: 'partner@org.com' },
+      execution_verification_token: null,
+      execution_verified: true,
+      ...overrides,
+    } as unknown as Opportunity;
+  }
 
-    function makeFacultyService(opp: Opportunity) {
-        const findOne = jest.fn().mockResolvedValue(opp);
-        const save = jest.fn(async (row: Opportunity) => row);
-        const service = makeService({ findOne, save });
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({ id: 'faculty-1', role: 'faculty' }),
-        };
-        (service as any).organizationsService = {
-            getMyOrganization: jest.fn().mockResolvedValue(null),
-        };
-        return service;
-    }
+  function makeFacultyService(opp: Opportunity) {
+    const findOne = jest.fn().mockResolvedValue(opp);
+    const save = jest.fn(async (row: Opportunity) => row);
+    const service = makeService({ findOne, save });
+    (service as any).usersRepository = {
+      findOne: jest
+        .fn()
+        .mockResolvedValue({ id: 'faculty-1', role: 'faculty' }),
+    };
+    (service as any).organizationsService = {
+      getMyOrganization: jest.fn().mockResolvedValue(null),
+    };
+    return service;
+  }
 
-    it('leaves a live, fully-approved opportunity untouched on a routine edit (no reset, stays published)', async () => {
-        const opp = makeFacultyOpp();
-        const service = makeFacultyService(opp);
+  it('leaves a live, fully-approved opportunity untouched on a routine edit (no reset, stays published)', async () => {
+    const opp = makeFacultyOpp();
+    const service = makeFacultyService(opp);
 
-        const saved = await service.update('faculty-1', {
-            id: 'fac-opp-1',
-            title: 'Fixed a typo in the title',
-        } as any);
+    const saved = await service.update('faculty-1', {
+      id: 'fac-opp-1',
+      title: 'Fixed a typo in the title',
+    } as any);
 
-        expect((saved as any).status).toBe('active');
-        expect((saved as any).workflowStage).toBe('live');
-        expect((saved as any).admin_approved).toBe(true);
-        expect((saved as any).partnerApprovalStatus).toBe('approved');
-        expect((saved as any).adminApprovalStatus).toBe('approved');
+    expect((saved as any).status).toBe('active');
+    expect((saved as any).workflowStage).toBe('live');
+    expect((saved as any).admin_approved).toBe(true);
+    expect((saved as any).partnerApprovalStatus).toBe('approved');
+    expect((saved as any).adminApprovalStatus).toBe('approved');
+  });
+
+  it('after CIEL PK requests revision mid-chain, resubmitting only rewinds the admin line — the already-approved partner line is untouched', async () => {
+    const opp = makeFacultyOpp({
+      status: 'revision',
+      workflowStage: 'revision',
+      admin_approved: false,
+      adminApprovalStatus: 'revision_requested',
+      // Partner already approved before CIEL PK's own (revision-requesting) review.
+      partnerApprovalStatus: 'approved',
+      partnerVerified: true,
     });
+    const service = makeFacultyService(opp);
 
-    it('after CIEL PK requests revision mid-chain, resubmitting only rewinds the admin line — the already-approved partner line is untouched', async () => {
-        const opp = makeFacultyOpp({
-            status: 'revision',
-            workflowStage: 'revision',
-            admin_approved: false,
-            adminApprovalStatus: 'revision_requested',
-            // Partner already approved before CIEL PK's own (revision-requesting) review.
-            partnerApprovalStatus: 'approved',
-            partnerVerified: true,
-        });
-        const service = makeFacultyService(opp);
+    const saved = await service.update('faculty-1', {
+      id: 'fac-opp-1',
+      title: 'Addressed CIEL PK feedback',
+    } as any);
 
-        const saved = await service.update('faculty-1', {
-            id: 'fac-opp-1',
-            title: 'Addressed CIEL PK feedback',
-        } as any);
+    expect((saved as any).partnerApprovalStatus).toBe('approved');
+    expect((saved as any).partnerVerified).toBe(true);
+    expect((saved as any).adminApprovalStatus).toBe('pending');
+    expect((saved as any).status).toBe('pending_approval');
+    expect((saved as any).workflowStage).toBe('pending_admin');
+  });
 
-        expect((saved as any).partnerApprovalStatus).toBe('approved');
-        expect((saved as any).partnerVerified).toBe(true);
-        expect((saved as any).adminApprovalStatus).toBe('pending');
-        expect((saved as any).status).toBe('pending_approval');
-        expect((saved as any).workflowStage).toBe('pending_admin');
+  it('(scoped-reset branch) if the partner line is flagged after the opportunity had already gone live, resubmitting rewinds both the partner and admin lines back to pending', async () => {
+    // Deliberately atypical combination (partner rejected while workflowStage is still 'live')
+    // to isolate and exercise `partnerLineFlagged` inside the scoped-reset branch specifically —
+    // see the next test for the realistic "rejected before admin ever decided" full-reset case.
+    const opp = makeFacultyOpp({
+      status: 'active', // stale mirror from before the rejection was recorded
+      workflowStage: 'live',
+      admin_approved: true,
+      adminApprovalStatus: 'approved',
+      partnerApprovalStatus: 'rejected',
+      partnerVerified: false,
     });
+    const service = makeFacultyService(opp);
 
-    it('(scoped-reset branch) if the partner line is flagged after the opportunity had already gone live, resubmitting rewinds both the partner and admin lines back to pending', async () => {
-        // Deliberately atypical combination (partner rejected while workflowStage is still 'live')
-        // to isolate and exercise `partnerLineFlagged` inside the scoped-reset branch specifically —
-        // see the next test for the realistic "rejected before admin ever decided" full-reset case.
-        const opp = makeFacultyOpp({
-            status: 'active', // stale mirror from before the rejection was recorded
-            workflowStage: 'live',
-            admin_approved: true,
-            adminApprovalStatus: 'approved',
-            partnerApprovalStatus: 'rejected',
-            partnerVerified: false,
-        });
-        const service = makeFacultyService(opp);
+    const saved = await service.update('faculty-1', {
+      id: 'fac-opp-1',
+      title: 'Addressed partner feedback',
+    } as any);
 
-        const saved = await service.update('faculty-1', {
-            id: 'fac-opp-1',
-            title: 'Addressed partner feedback',
-        } as any);
+    expect((saved as any).partnerApprovalStatus).toBe('pending');
+    expect((saved as any).partnerVerified).toBe(false);
+    expect((saved as any).adminApprovalStatus).toBe('pending');
+    expect((saved as any).status).toBe('pending_partner');
+    expect((saved as any).workflowStage).toBe('pending_partner');
+  });
 
-        expect((saved as any).partnerApprovalStatus).toBe('pending');
-        expect((saved as any).partnerVerified).toBe(false);
-        expect((saved as any).adminApprovalStatus).toBe('pending');
-        expect((saved as any).status).toBe('pending_partner');
-        expect((saved as any).workflowStage).toBe('pending_partner');
+  it('(full-reset branch) partner rejected before admin ever reviewed — resubmitting recomputes the pipeline and lands back in pending_partner', async () => {
+    const opp = makeFacultyOpp({
+      status: 'rejected',
+      workflowStage: 'rejected',
+      admin_approved: false,
+      adminApprovalStatus: 'pending', // admin never got a chance to decide
+      partnerApprovalStatus: 'rejected',
+      partnerVerified: false,
     });
+    const service = makeFacultyService(opp);
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
 
-    it('(full-reset branch) partner rejected before admin ever reviewed — resubmitting recomputes the pipeline and lands back in pending_partner', async () => {
-        const opp = makeFacultyOpp({
-            status: 'rejected',
-            workflowStage: 'rejected',
-            admin_approved: false,
-            adminApprovalStatus: 'pending', // admin never got a chance to decide
-            partnerApprovalStatus: 'rejected',
-            partnerVerified: false,
-        });
-        const service = makeFacultyService(opp);
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    const saved = await service.update('faculty-1', {
+      id: 'fac-opp-1',
+      title: 'Addressed partner feedback',
+    } as any);
 
-        const saved = await service.update('faculty-1', {
-            id: 'fac-opp-1',
-            title: 'Addressed partner feedback',
-        } as any);
+    expect((saved as any).partnerApprovalStatus).toBe('pending');
+    expect((saved as any).partnerVerified).toBe(false);
+    expect((saved as any).adminApprovalStatus).toBe('pending');
+    expect((saved as any).status).toBe('pending_partner');
+    expect((saved as any).workflowStage).toBe('pending_partner');
+  });
 
-        expect((saved as any).partnerApprovalStatus).toBe('pending');
-        expect((saved as any).partnerVerified).toBe(false);
-        expect((saved as any).adminApprovalStatus).toBe('pending');
-        expect((saved as any).status).toBe('pending_partner');
-        expect((saved as any).workflowStage).toBe('pending_partner');
+  it('resubmit into pending_partner issues a fresh partner token and re-emails the partner; a mail failure does not fail the save', async () => {
+    const opp = makeFacultyOpp({
+      status: 'revision',
+      workflowStage: 'revision',
+      admin_approved: false,
+      adminApprovalStatus: 'pending',
+      partnerApprovalStatus: 'revision_requested',
+      partnerVerified: false,
     });
+    const service = makeFacultyService(opp);
+    const sendPartnerVerification = jest
+      .fn()
+      .mockRejectedValue(new Error('smtp down'));
+    (service as any).mailService = { sendPartnerVerification };
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
 
-    it('resubmit into pending_partner issues a fresh partner token and re-emails the partner; a mail failure does not fail the save', async () => {
-        const opp = makeFacultyOpp({
-            status: 'revision',
-            workflowStage: 'revision',
-            admin_approved: false,
-            adminApprovalStatus: 'pending',
-            partnerApprovalStatus: 'revision_requested',
-            partnerVerified: false,
-        });
-        const service = makeFacultyService(opp);
-        const sendPartnerVerification = jest.fn().mockRejectedValue(new Error('smtp down'));
-        (service as any).mailService = { sendPartnerVerification };
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    const saved = await service.update('faculty-1', {
+      id: 'fac-opp-1',
+      title: 'Addressed partner feedback',
+    } as any);
 
-        const saved = await service.update('faculty-1', { id: 'fac-opp-1', title: 'Addressed partner feedback' } as any);
-
-        expect((saved as any).status).toBe('pending_partner');
-        expect((saved as any).partnerToken).toBeTruthy();
-        expect((saved as any).partnerToken).not.toBe('existing-partner-token');
-        expect(sendPartnerVerification).toHaveBeenCalledTimes(1);
-        expect(sendPartnerVerification.mock.calls[0][0]).toBe('partner@org.com');
-        expect(sendPartnerVerification.mock.calls[0][2]).toBe((saved as any).partnerToken);
-    });
+    expect((saved as any).status).toBe('pending_partner');
+    expect((saved as any).partnerToken).toBeTruthy();
+    expect((saved as any).partnerToken).not.toBe('existing-partner-token');
+    expect(sendPartnerVerification).toHaveBeenCalledTimes(1);
+    expect(sendPartnerVerification.mock.calls[0][0]).toBe('partner@org.com');
+    expect(sendPartnerVerification.mock.calls[0][2]).toBe(
+      (saved as any).partnerToken,
+    );
+  });
 });
 
 describe('OpportunitiesService — update() partner token rotation (scoped-reset branch)', () => {
-    it('a live row whose partner line was flagged gets a fresh token and a new partner email on resubmit', async () => {
-        const opp = {
-            id: 'fac-opp-9',
-            title: 'T',
-            creatorId: 'faculty-1',
-            facultyId: 'faculty-1',
-            isStudentCreated: false,
-            status: 'active',
-            workflowStage: 'live',
-            admin_approved: true,
-            adminApprovalStatus: 'approved',
-            facultyApprovalStatus: 'approved',
-            faculty_verified: true,
-            requiresPartnerApproval: true,
-            partnerApprovalStatus: 'rejected',
-            partnerVerified: false,
-            partnerToken: 'old-token',
-            partner_organization: { official_email: 'partner@org.com' },
-            execution_verification_token: null,
-            execution_verified: true,
-        } as unknown as Opportunity;
-        const service = makeService({
-            findOne: jest.fn().mockResolvedValue(opp),
-            save: jest.fn(async (row: Opportunity) => row),
-        });
-        (service as any).usersRepository = { findOne: jest.fn().mockResolvedValue({ id: 'faculty-1', role: 'faculty' }) };
-        (service as any).organizationsService = { getMyOrganization: jest.fn().mockResolvedValue(null) };
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-        const sendPartnerVerification = jest.fn().mockResolvedValue(true);
-        (service as any).mailService = { sendPartnerVerification };
-
-        const saved: any = await service.update('faculty-1', { id: 'fac-opp-9', title: 'T2' } as any);
-
-        expect(saved.status).toBe('pending_partner');
-        expect(saved.partnerToken).not.toBe('old-token');
-        expect(sendPartnerVerification).toHaveBeenCalledTimes(1);
-        expect(sendPartnerVerification.mock.calls[0][2]).toBe(saved.partnerToken);
+  it('a live row whose partner line was flagged gets a fresh token and a new partner email on resubmit', async () => {
+    const opp = {
+      id: 'fac-opp-9',
+      title: 'T',
+      creatorId: 'faculty-1',
+      facultyId: 'faculty-1',
+      isStudentCreated: false,
+      status: 'active',
+      workflowStage: 'live',
+      admin_approved: true,
+      adminApprovalStatus: 'approved',
+      facultyApprovalStatus: 'approved',
+      faculty_verified: true,
+      requiresPartnerApproval: true,
+      partnerApprovalStatus: 'rejected',
+      partnerVerified: false,
+      partnerToken: 'old-token',
+      partner_organization: { official_email: 'partner@org.com' },
+      execution_verification_token: null,
+      execution_verified: true,
+    } as unknown as Opportunity;
+    const service = makeService({
+      findOne: jest.fn().mockResolvedValue(opp),
+      save: jest.fn(async (row: Opportunity) => row),
     });
+    (service as any).usersRepository = {
+      findOne: jest
+        .fn()
+        .mockResolvedValue({ id: 'faculty-1', role: 'faculty' }),
+    };
+    (service as any).organizationsService = {
+      getMyOrganization: jest.fn().mockResolvedValue(null),
+    };
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    const sendPartnerVerification = jest.fn().mockResolvedValue(true);
+    (service as any).mailService = { sendPartnerVerification };
+
+    const saved: any = await service.update('faculty-1', {
+      id: 'fac-opp-9',
+      title: 'T2',
+    } as any);
+
+    expect(saved.status).toBe('pending_partner');
+    expect(saved.partnerToken).not.toBe('old-token');
+    expect(sendPartnerVerification).toHaveBeenCalledTimes(1);
+    expect(sendPartnerVerification.mock.calls[0][2]).toBe(saved.partnerToken);
+  });
 });
 
 describe('OpportunitiesService — revise() now supports non-student-created opportunities before first admin approval', () => {
-    it('no longer throws for a faculty-created opportunity awaiting its first CIEL PK decision', async () => {
-        const opp = {
-            id: 'fac-opp-2',
-            isStudentCreated: false,
-            admin_approved: false, // never approved yet — this used to be rejected outright
-            status: 'pending_approval',
-            workflowStage: 'pending_admin',
-            adminApprovalStatus: 'pending',
-        } as unknown as Opportunity;
-        const findOne = jest.fn().mockResolvedValue(opp);
-        const save = jest.fn(async (row: Opportunity) => row);
-        const service = makeService({ findOne, save });
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+  it('no longer throws for a faculty-created opportunity awaiting its first CIEL PK decision', async () => {
+    const opp = {
+      id: 'fac-opp-2',
+      isStudentCreated: false,
+      admin_approved: false, // never approved yet — this used to be rejected outright
+      status: 'pending_approval',
+      workflowStage: 'pending_admin',
+      adminApprovalStatus: 'pending',
+    } as unknown as Opportunity;
+    const findOne = jest.fn().mockResolvedValue(opp);
+    const save = jest.fn(async (row: Opportunity) => row);
+    const service = makeService({ findOne, save });
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
 
-        const saved = await service.revise(
-            'fac-opp-2',
-            'Please add a specific location.',
-            { id: 'admin-1', name: 'Ayesha (CIEL PK)' },
-        );
+    const saved = await service.revise(
+      'fac-opp-2',
+      'Please add a specific location.',
+      { id: 'admin-1', name: 'Ayesha (CIEL PK)' },
+    );
 
-        expect((saved as any).status).toBe('revision');
-        expect((saved as any).adminApprovalStatus).toBe('revision_requested');
-        expect((saved as any).rejectionReason).toBe('Please add a specific location.');
-    });
+    expect((saved as any).status).toBe('revision');
+    expect((saved as any).adminApprovalStatus).toBe('revision_requested');
+    expect((saved as any).rejectionReason).toBe(
+      'Please add a specific location.',
+    );
+  });
 });
 
 describe('OpportunitiesService — approval actions record actor + timestamp + version (audit trail)', () => {
-    it('approve() refuses pending_execution even when admin_approval_required is true', async () => {
-        const opp = {
-            id: 'opp-exec-1',
-            isStudentCreated: false,
-            status: 'pending_execution',
-            workflowStage: null,
-            admin_approval_required: true,
-            admin_approved: false,
-            adminApprovalStatus: 'pending',
-            facultyApprovalStatus: 'not_applicable',
-            execution_verification_token: 'etok',
-            execution_verified: false,
-            requiresPartnerApproval: false,
-        } as unknown as Opportunity;
-        const service = makeService({
-            findOne: jest.fn().mockResolvedValue(opp),
-            save: jest.fn(async (row: Opportunity) => row),
-        });
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+  it('approve() refuses pending_execution even when admin_approval_required is true', async () => {
+    const opp = {
+      id: 'opp-exec-1',
+      isStudentCreated: false,
+      status: 'pending_execution',
+      workflowStage: null,
+      admin_approval_required: true,
+      admin_approved: false,
+      adminApprovalStatus: 'pending',
+      facultyApprovalStatus: 'not_applicable',
+      execution_verification_token: 'etok',
+      execution_verified: false,
+      requiresPartnerApproval: false,
+    } as unknown as Opportunity;
+    const service = makeService({
+      findOne: jest.fn().mockResolvedValue(opp),
+      save: jest.fn(async (row: Opportunity) => row),
+    });
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
 
-        await expect(service.approve('opp-exec-1')).rejects.toBeInstanceOf(
-            BadRequestException,
-        );
-        expect(opp.admin_approved).toBe(false);
-        expect(opp.status).toBe('pending_execution');
+    await expect(service.approve('opp-exec-1')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(opp.admin_approved).toBe(false);
+    expect(opp.status).toBe('pending_execution');
+  });
+
+  it('approve() appends an actor-stamped, versioned entry to approvalHistory', async () => {
+    const opp = {
+      id: 'opp-audit-1',
+      isStudentCreated: true,
+      workflowStage: 'pending_admin',
+      status: 'pending_approval',
+      version: 3,
+      approvalHistory: [],
+    } as unknown as Opportunity;
+    const findOne = jest.fn().mockResolvedValue(opp);
+    const save = jest.fn(async (row: Opportunity) => row);
+    const service = makeService({ findOne, save });
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    (service as any).mailService = {
+      sendAdminOpportunityReviewNeeded: jest.fn(),
+    };
+
+    const before = Date.now();
+    const saved = await service.approve('opp-audit-1', {
+      id: 'admin-1',
+      name: 'Ayesha (CIEL PK)',
+    });
+    const after = Date.now();
+
+    const history = (saved as any).approvalHistory;
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({
+      line: 'admin',
+      action: 'approved',
+      actorId: 'admin-1',
+      actorName: 'Ayesha (CIEL PK)',
+      version: 3,
+    });
+    const stampedAt = new Date(history[0].at).getTime();
+    expect(stampedAt).toBeGreaterThanOrEqual(before);
+    expect(stampedAt).toBeLessThanOrEqual(after);
+  });
+
+  it('reject() and revise() also stamp their own line, action and actor — never mutating earlier entries', async () => {
+    const opp = {
+      id: 'opp-audit-2',
+      isStudentCreated: false,
+      admin_approved: false,
+      status: 'pending_approval',
+      workflowStage: 'pending_admin',
+      adminApprovalStatus: 'pending',
+      version: 1,
+      approvalHistory: [
+        {
+          line: 'faculty',
+          action: 'approved',
+          actorId: 'fac-1',
+          actorName: 'Dr. Hina Malik',
+          at: '2026-01-01T00:00:00.000Z',
+          version: 1,
+        },
+      ],
+    } as unknown as Opportunity;
+    const findOne = jest.fn().mockResolvedValue(opp);
+    const save = jest.fn(async (row: Opportunity) => row);
+    const service = makeService({ findOne, save });
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+
+    const saved = await service.revise(
+      'opp-audit-2',
+      'Please clarify the timeline',
+      {
+        id: 'admin-1',
+        name: 'Ayesha (CIEL PK)',
+      },
+    );
+
+    const history = (saved as any).approvalHistory;
+    expect(history).toHaveLength(2);
+    // The pre-existing faculty entry must survive untouched.
+    expect(history[0]).toMatchObject({
+      line: 'faculty',
+      action: 'approved',
+      actorId: 'fac-1',
+    });
+    expect(history[1]).toMatchObject({
+      line: 'admin',
+      action: 'revision_requested',
+      actorId: 'admin-1',
+      actorName: 'Ayesha (CIEL PK)',
+      reason: 'Please clarify the timeline',
+    });
+  });
+  it('reject() is idempotent, requires a reason, and approve() refuses rejected/revision rows', async () => {
+    const opp = {
+      id: 'opp-rej-1',
+      isStudentCreated: false,
+      admin_approved: false,
+      status: 'pending_approval',
+      workflowStage: 'pending_admin',
+      adminApprovalStatus: 'pending',
+      version: 1,
+      approvalHistory: [],
+    } as unknown as Opportunity;
+    const save = jest.fn(async (row: Opportunity) => row);
+    const service = makeService({
+      findOne: jest.fn().mockResolvedValue(opp),
+      save,
+    });
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+
+    await expect(service.reject('opp-rej-1', '  ')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    await service.reject('opp-rej-1', 'Not suitable', { id: 'a1', name: 'A' });
+    await service.reject('opp-rej-1', 'Not suitable', { id: 'a1', name: 'A' });
+    expect((opp as any).approvalHistory).toHaveLength(1);
+    expect(save).toHaveBeenCalledTimes(1);
+    await expect(service.revise('opp-rej-1', 'again')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    await expect(service.approve('opp-rej-1')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+  });
+
+  it('setStatus() allows closed/draft, and active only as reopen/republish of an approved listing', async () => {
+    const opp = {
+      id: 'o',
+      status: 'active',
+      admin_approved: true,
+      workflowStage: 'live',
+    } as unknown as Opportunity;
+    const save = jest.fn(async (row: Opportunity) => row);
+    const service = makeService({
+      findOne: jest.fn().mockResolvedValue(opp),
+      save,
+    });
+    const same = await service.setStatus('o', 'active');
+    expect(same.status).toBe('active');
+    expect(save).not.toHaveBeenCalled();
+    await expect(service.setStatus('o', 'rejected')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    const closed = await service.setStatus('o', 'closed');
+    expect(closed.status).toBe('closed');
+    expect(opp.admin_approved).toBe(true);
+    expect((opp as any).workflowStage).toBe('live');
+    const reopened = await service.setStatus('o', 'active');
+    expect(reopened.status).toBe('active');
+    expect(opp.admin_approved).toBe(true);
+    expect((opp as any).workflowStage).toBe('live');
+  });
+
+  it('setStatus(active) republishes an approved draft without re-approval', async () => {
+    const opp = {
+      id: 'o',
+      status: 'draft',
+      admin_approved: true,
+      workflowStage: 'live',
+    } as unknown as Opportunity;
+    const save = jest.fn(async (row: Opportunity) => row);
+    const service = makeService({
+      findOne: jest.fn().mockResolvedValue(opp),
+      save,
+    });
+    const saved = await service.setStatus('o', 'active');
+    expect(saved.status).toBe('active');
+    expect(opp.admin_approved).toBe(true);
+    expect((opp as any).workflowStage).toBe('live');
+  });
+
+  it('setStatus(active) refuses unapproved, rejected, or in-revision listings', async () => {
+    const save = jest.fn(async (row: Opportunity) => row);
+    const unapproved = {
+      id: 'o',
+      status: 'draft',
+      admin_approved: false,
+      workflowStage: 'pending_admin',
+    } as unknown as Opportunity;
+    const unapprovedService = makeService({
+      findOne: jest.fn().mockResolvedValue(unapproved),
+      save,
+    });
+    await expect(
+      unapprovedService.setStatus('o', 'active'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    const rejected = {
+      id: 'o',
+      status: 'closed',
+      admin_approved: true,
+      workflowStage: 'rejected',
+    } as unknown as Opportunity;
+    const rejectedService = makeService({
+      findOne: jest.fn().mockResolvedValue(rejected),
+      save,
+    });
+    await expect(
+      rejectedService.setStatus('o', 'active'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    const revision = {
+      id: 'o',
+      status: 'draft',
+      admin_approved: true,
+      workflowStage: 'revision',
+    } as unknown as Opportunity;
+    const revisionService = makeService({
+      findOne: jest.fn().mockResolvedValue(revision),
+      save,
+    });
+    await expect(
+      revisionService.setStatus('o', 'active'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('setDirectoryControl() toggles hide/expire without changing status', async () => {
+    const opp = {
+      id: 'o',
+      status: 'active',
+      admin_hidden: false,
+      admin_expired: false,
+      isStudentCreated: false,
+      visibility_and_academic_linkage: {
+        visibility_type: 'open_all_universities',
+      },
+    } as unknown as Opportunity;
+    const save = jest.fn(async (row: Opportunity) => row);
+    const service = makeService({
+      findOne: jest.fn().mockResolvedValue(opp),
+      save,
     });
 
-    it('approve() appends an actor-stamped, versioned entry to approvalHistory', async () => {
-        const opp = {
-            id: 'opp-audit-1',
-            isStudentCreated: true,
-            workflowStage: 'pending_admin',
-            status: 'pending_approval',
-            version: 3,
-            approvalHistory: [],
-        } as unknown as Opportunity;
-        const findOne = jest.fn().mockResolvedValue(opp);
-        const save = jest.fn(async (row: Opportunity) => row);
-        const service = makeService({ findOne, save });
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-        (service as any).mailService = { sendAdminOpportunityReviewNeeded: jest.fn() };
+    await expect(service.setDirectoryControl('o', {})).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
 
-        const before = Date.now();
-        const saved = await service.approve('opp-audit-1', { id: 'admin-1', name: 'Ayesha (CIEL PK)' });
-        const after = Date.now();
+    const hidden = await service.setDirectoryControl('o', { hidden: true });
+    expect(hidden.data.admin_hidden).toBe(true);
+    expect(hidden.data.directory_visible).toBe(false);
+    expect(opp.status).toBe('active');
 
-        const history = (saved as any).approvalHistory;
-        expect(history).toHaveLength(1);
-        expect(history[0]).toMatchObject({
-            line: 'admin',
-            action: 'approved',
-            actorId: 'admin-1',
-            actorName: 'Ayesha (CIEL PK)',
-            version: 3,
-        });
-        const stampedAt = new Date(history[0].at).getTime();
-        expect(stampedAt).toBeGreaterThanOrEqual(before);
-        expect(stampedAt).toBeLessThanOrEqual(after);
+    const expired = await service.setDirectoryControl('o', {
+      expired: true,
+      hidden: false,
+    });
+    expect(expired.data.admin_hidden).toBe(false);
+    expect(expired.data.admin_expired).toBe(true);
+    expect(expired.data.directory_visible).toBe(true);
+    expect(opp.status).toBe('active');
+  });
+
+  it('setDirectoryControl() allows hidden+expired together, hidden wins for directory_visible', async () => {
+    const opp = {
+      id: 'o',
+      status: 'active',
+      admin_hidden: false,
+      admin_expired: false,
+      isStudentCreated: false,
+      visibility_and_academic_linkage: {
+        visibility_type: 'open_all_universities',
+      },
+    } as unknown as Opportunity;
+    const save = jest.fn(async (row: Opportunity) => row);
+    const service = makeService({
+      findOne: jest.fn().mockResolvedValue(opp),
+      save,
     });
 
-    it('reject() and revise() also stamp their own line, action and actor — never mutating earlier entries', async () => {
-        const opp = {
-            id: 'opp-audit-2',
-            isStudentCreated: false,
-            admin_approved: false,
-            status: 'pending_approval',
-            workflowStage: 'pending_admin',
-            adminApprovalStatus: 'pending',
-            version: 1,
-            approvalHistory: [
-                { line: 'faculty', action: 'approved', actorId: 'fac-1', actorName: 'Dr. Hina Malik', at: '2026-01-01T00:00:00.000Z', version: 1 },
-            ],
-        } as unknown as Opportunity;
-        const findOne = jest.fn().mockResolvedValue(opp);
-        const save = jest.fn(async (row: Opportunity) => row);
-        const service = makeService({ findOne, save });
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-
-        const saved = await service.revise('opp-audit-2', 'Please clarify the timeline', {
-            id: 'admin-1',
-            name: 'Ayesha (CIEL PK)',
-        });
-
-        const history = (saved as any).approvalHistory;
-        expect(history).toHaveLength(2);
-        // The pre-existing faculty entry must survive untouched.
-        expect(history[0]).toMatchObject({ line: 'faculty', action: 'approved', actorId: 'fac-1' });
-        expect(history[1]).toMatchObject({
-            line: 'admin',
-            action: 'revision_requested',
-            actorId: 'admin-1',
-            actorName: 'Ayesha (CIEL PK)',
-            reason: 'Please clarify the timeline',
-        });
+    const both = await service.setDirectoryControl('o', {
+      hidden: true,
+      expired: true,
     });
-    it('reject() is idempotent, requires a reason, and approve() refuses rejected/revision rows', async () => {
-        const opp = {
-            id: 'opp-rej-1',
-            isStudentCreated: false,
-            admin_approved: false,
-            status: 'pending_approval',
-            workflowStage: 'pending_admin',
-            adminApprovalStatus: 'pending',
-            version: 1,
-            approvalHistory: [],
-        } as unknown as Opportunity;
-        const save = jest.fn(async (row: Opportunity) => row);
-        const service = makeService({ findOne: jest.fn().mockResolvedValue(opp), save });
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    expect(both.data.admin_hidden).toBe(true);
+    expect(both.data.admin_expired).toBe(true);
+    expect(both.data.directory_visible).toBe(false);
+  });
 
-        await expect(service.reject('opp-rej-1', '  ')).rejects.toBeInstanceOf(BadRequestException);
-        await service.reject('opp-rej-1', 'Not suitable', { id: 'a1', name: 'A' });
-        await service.reject('opp-rej-1', 'Not suitable', { id: 'a1', name: 'A' });
-        expect((opp as any).approvalHistory).toHaveLength(1);
-        expect(save).toHaveBeenCalledTimes(1);
-        await expect(service.revise('opp-rej-1', 'again')).rejects.toBeInstanceOf(BadRequestException);
-        await expect(service.approve('opp-rej-1')).rejects.toBeInstanceOf(BadRequestException);
+  it('setDirectoryControl() is stage-agnostic: hide/expire works on rejected, revision, and draft listings', async () => {
+    const save = jest.fn(async (row: Opportunity) => row);
+
+    const rejected = {
+      id: 'o',
+      status: 'closed',
+      workflowStage: 'rejected',
+      admin_approved: false,
+      admin_hidden: false,
+      admin_expired: false,
+    } as unknown as Opportunity;
+    const rejectedService = makeService({
+      findOne: jest.fn().mockResolvedValue(rejected),
+      save,
     });
-
-    it('setStatus() allows closed/draft, and active only as reopen/republish of an approved listing', async () => {
-        const opp = {
-            id: 'o',
-            status: 'active',
-            admin_approved: true,
-            workflowStage: 'live',
-        } as unknown as Opportunity;
-        const save = jest.fn(async (row: Opportunity) => row);
-        const service = makeService({ findOne: jest.fn().mockResolvedValue(opp), save });
-        const same = await service.setStatus('o', 'active');
-        expect(same.status).toBe('active');
-        expect(save).not.toHaveBeenCalled();
-        await expect(service.setStatus('o', 'rejected')).rejects.toBeInstanceOf(BadRequestException);
-        const closed = await service.setStatus('o', 'closed');
-        expect(closed.status).toBe('closed');
-        expect(opp.admin_approved).toBe(true);
-        expect((opp as any).workflowStage).toBe('live');
-        const reopened = await service.setStatus('o', 'active');
-        expect(reopened.status).toBe('active');
-        expect(opp.admin_approved).toBe(true);
-        expect((opp as any).workflowStage).toBe('live');
+    const rejectedResult = await rejectedService.setDirectoryControl('o', {
+      hidden: true,
     });
+    expect(rejectedResult.data.admin_hidden).toBe(true);
+    expect(rejected.status).toBe('closed');
 
-    it('setStatus(active) republishes an approved draft without re-approval', async () => {
-        const opp = {
-            id: 'o',
-            status: 'draft',
-            admin_approved: true,
-            workflowStage: 'live',
-        } as unknown as Opportunity;
-        const save = jest.fn(async (row: Opportunity) => row);
-        const service = makeService({ findOne: jest.fn().mockResolvedValue(opp), save });
-        const saved = await service.setStatus('o', 'active');
-        expect(saved.status).toBe('active');
-        expect(opp.admin_approved).toBe(true);
-        expect((opp as any).workflowStage).toBe('live');
+    const revision = {
+      id: 'o',
+      status: 'draft',
+      workflowStage: 'revision',
+      admin_approved: true,
+      admin_hidden: false,
+      admin_expired: false,
+    } as unknown as Opportunity;
+    const revisionService = makeService({
+      findOne: jest.fn().mockResolvedValue(revision),
+      save,
     });
-
-    it('setStatus(active) refuses unapproved, rejected, or in-revision listings', async () => {
-        const save = jest.fn(async (row: Opportunity) => row);
-        const unapproved = {
-            id: 'o',
-            status: 'draft',
-            admin_approved: false,
-            workflowStage: 'pending_admin',
-        } as unknown as Opportunity;
-        const unapprovedService = makeService({
-            findOne: jest.fn().mockResolvedValue(unapproved),
-            save,
-        });
-        await expect(unapprovedService.setStatus('o', 'active')).rejects.toBeInstanceOf(
-            BadRequestException,
-        );
-
-        const rejected = {
-            id: 'o',
-            status: 'closed',
-            admin_approved: true,
-            workflowStage: 'rejected',
-        } as unknown as Opportunity;
-        const rejectedService = makeService({
-            findOne: jest.fn().mockResolvedValue(rejected),
-            save,
-        });
-        await expect(rejectedService.setStatus('o', 'active')).rejects.toBeInstanceOf(
-            BadRequestException,
-        );
-
-        const revision = {
-            id: 'o',
-            status: 'draft',
-            admin_approved: true,
-            workflowStage: 'revision',
-        } as unknown as Opportunity;
-        const revisionService = makeService({
-            findOne: jest.fn().mockResolvedValue(revision),
-            save,
-        });
-        await expect(revisionService.setStatus('o', 'active')).rejects.toBeInstanceOf(
-            BadRequestException,
-        );
-        expect(save).not.toHaveBeenCalled();
+    const revisionResult = await revisionService.setDirectoryControl('o', {
+      expired: true,
     });
-
-    it('setDirectoryControl() toggles hide/expire without changing status', async () => {
-        const opp = {
-            id: 'o',
-            status: 'active',
-            admin_hidden: false,
-            admin_expired: false,
-            isStudentCreated: false,
-            visibility_and_academic_linkage: { visibility_type: 'open_all_universities' },
-        } as unknown as Opportunity;
-        const save = jest.fn(async (row: Opportunity) => row);
-        const service = makeService({ findOne: jest.fn().mockResolvedValue(opp), save });
-
-        await expect(service.setDirectoryControl('o', {})).rejects.toBeInstanceOf(BadRequestException);
-
-        const hidden = await service.setDirectoryControl('o', { hidden: true });
-        expect(hidden.data.admin_hidden).toBe(true);
-        expect(hidden.data.directory_visible).toBe(false);
-        expect(opp.status).toBe('active');
-
-        const expired = await service.setDirectoryControl('o', { expired: true, hidden: false });
-        expect(expired.data.admin_hidden).toBe(false);
-        expect(expired.data.admin_expired).toBe(true);
-        expect(expired.data.directory_visible).toBe(true);
-        expect(opp.status).toBe('active');
-    });
-
-    it('setDirectoryControl() allows hidden+expired together, hidden wins for directory_visible', async () => {
-        const opp = {
-            id: 'o',
-            status: 'active',
-            admin_hidden: false,
-            admin_expired: false,
-            isStudentCreated: false,
-            visibility_and_academic_linkage: { visibility_type: 'open_all_universities' },
-        } as unknown as Opportunity;
-        const save = jest.fn(async (row: Opportunity) => row);
-        const service = makeService({ findOne: jest.fn().mockResolvedValue(opp), save });
-
-        const both = await service.setDirectoryControl('o', { hidden: true, expired: true });
-        expect(both.data.admin_hidden).toBe(true);
-        expect(both.data.admin_expired).toBe(true);
-        expect(both.data.directory_visible).toBe(false);
-    });
-
-    it('setDirectoryControl() is stage-agnostic: hide/expire works on rejected, revision, and draft listings', async () => {
-        const save = jest.fn(async (row: Opportunity) => row);
-
-        const rejected = {
-            id: 'o',
-            status: 'closed',
-            workflowStage: 'rejected',
-            admin_approved: false,
-            admin_hidden: false,
-            admin_expired: false,
-        } as unknown as Opportunity;
-        const rejectedService = makeService({
-            findOne: jest.fn().mockResolvedValue(rejected),
-            save,
-        });
-        const rejectedResult = await rejectedService.setDirectoryControl('o', { hidden: true });
-        expect(rejectedResult.data.admin_hidden).toBe(true);
-        expect(rejected.status).toBe('closed');
-
-        const revision = {
-            id: 'o',
-            status: 'draft',
-            workflowStage: 'revision',
-            admin_approved: true,
-            admin_hidden: false,
-            admin_expired: false,
-        } as unknown as Opportunity;
-        const revisionService = makeService({
-            findOne: jest.fn().mockResolvedValue(revision),
-            save,
-        });
-        const revisionResult = await revisionService.setDirectoryControl('o', { expired: true });
-        expect(revisionResult.data.admin_expired).toBe(true);
-        expect(revision.status).toBe('draft');
-    });
+    expect(revisionResult.data.admin_expired).toBe(true);
+    expect(revision.status).toBe('draft');
+  });
 });
 
 describe('OpportunitiesService — update() strips server-controlled fields (mass-assignment guard)', () => {
-    const forged = {
-        status: 'active',
-        admin_approved: true,
-        workflowStage: 'live',
-        adminApprovalStatus: 'approved',
-        facultyApprovalStatus: 'approved',
-        partnerApprovalStatus: 'approved',
-        partnerVerified: true,
-        execution_verified: true,
-        creatorId: 'attacker',
-        organizationId: 'other-org',
-        isStudentCreated: true,
-        rejectionReason: 'x',
-        version: 99,
-        approvalHistory: [{ forged: true }],
-        partnerToken: 'known-token',
-        faculty_verification_token: 'known-token',
+  const forged = {
+    status: 'active',
+    admin_approved: true,
+    workflowStage: 'live',
+    adminApprovalStatus: 'approved',
+    facultyApprovalStatus: 'approved',
+    partnerApprovalStatus: 'approved',
+    partnerVerified: true,
+    execution_verified: true,
+    creatorId: 'attacker',
+    organizationId: 'other-org',
+    isStudentCreated: true,
+    rejectionReason: 'x',
+    version: 99,
+    approvalHistory: [{ forged: true }],
+    partnerToken: 'known-token',
+    faculty_verification_token: 'known-token',
+  };
+
+  function makeOrgService() {
+    const opp = {
+      id: 'org-opp-1',
+      creatorId: 'ngo-1',
+      organizationId: 'org-1',
+      isStudentCreated: false,
+      status: 'pending_approval',
+      workflowStage: 'pending_admin',
+      admin_approved: false,
+      adminApprovalStatus: 'pending',
+      version: 1,
+      approvalHistory: [],
+      title: 'Old title',
+    } as unknown as Opportunity;
+    const findOne = jest.fn().mockResolvedValue(opp);
+    const save = jest.fn(async (row: Opportunity) => row);
+    const service = makeService({ findOne, save });
+    (service as any).usersRepository = {
+      findOne: jest.fn().mockResolvedValue({ id: 'ngo-1', role: 'ngo' }),
     };
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    return { service, opp, save };
+  }
 
-    function makeOrgService() {
-        const opp = {
-            id: 'org-opp-1',
-            creatorId: 'ngo-1',
-            organizationId: 'org-1',
-            isStudentCreated: false,
-            status: 'pending_approval',
-            workflowStage: 'pending_admin',
-            admin_approved: false,
-            adminApprovalStatus: 'pending',
-            version: 1,
-            approvalHistory: [],
-            title: 'Old title',
-        } as unknown as Opportunity;
-        const findOne = jest.fn().mockResolvedValue(opp);
-        const save = jest.fn(async (row: Opportunity) => row);
-        const service = makeService({ findOne, save });
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({ id: 'ngo-1', role: 'ngo' }),
-        };
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-        return { service, opp, save };
-    }
+  it('keeps legitimate edits but ignores forged approval/ownership fields', async () => {
+    const { service, opp } = makeOrgService();
+    await service.update(
+      'ngo-1',
+      { id: 'org-opp-1', title: 'New title', ...forged } as any,
+      'org-1',
+    );
+    expect(opp.title).toBe('New title');
+    expect(opp.status).toBe('pending_approval');
+    expect(opp.admin_approved).toBe(false);
+    expect(opp.workflowStage).toBe('pending_admin');
+    expect(opp.adminApprovalStatus).toBe('pending');
+    expect(opp.creatorId).toBe('ngo-1');
+    expect(opp.organizationId).toBe('org-1');
+    expect(opp.isStudentCreated).toBe(false);
+    expect(opp.version).toBe(1);
+    expect(opp.approvalHistory).toEqual([]);
+    expect((opp as any).partnerToken).toBeUndefined();
+  });
 
-    it('keeps legitimate edits but ignores forged approval/ownership fields', async () => {
-        const { service, opp } = makeOrgService();
-        await service.update('ngo-1', { id: 'org-opp-1', title: 'New title', ...forged } as any, 'org-1');
-        expect(opp.title).toBe('New title');
-        expect(opp.status).toBe('pending_approval');
-        expect(opp.admin_approved).toBe(false);
-        expect(opp.workflowStage).toBe('pending_admin');
-        expect(opp.adminApprovalStatus).toBe('pending');
-        expect(opp.creatorId).toBe('ngo-1');
-        expect(opp.organizationId).toBe('org-1');
-        expect(opp.isStudentCreated).toBe(false);
-        expect(opp.version).toBe(1);
-        expect(opp.approvalHistory).toEqual([]);
-        expect((opp as any).partnerToken).toBeUndefined();
-    });
-
-    it('rejects a user from another organization with 403', async () => {
-        const { service } = makeOrgService();
-        await expect(
-            service.update('ngo-1', { id: 'org-opp-1', title: 'Hijack' } as any, 'someone-elses-org'),
-        ).rejects.toThrow(/access/i);
-    });
+  it('rejects a user from another organization with 403', async () => {
+    const { service } = makeOrgService();
+    await expect(
+      service.update(
+        'ngo-1',
+        { id: 'org-opp-1', title: 'Hijack' } as any,
+        'someone-elses-org',
+      ),
+    ).rejects.toThrow(/access/i);
+  });
 });
 
 describe('OpportunitiesService — public token hardening', () => {
-    const past = new Date(Date.now() - 60_000);
-    const build = (opp: Partial<Opportunity> | null) => {
-        const findOne = jest.fn().mockResolvedValue(opp);
-        const save = jest.fn(async (o: Opportunity) => o);
-        const service = makeService({ findOne, save });
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-        return { service, findOne, save };
-    };
+  const past = new Date(Date.now() - 60_000);
+  const build = (opp: Partial<Opportunity> | null) => {
+    const findOne = jest.fn().mockResolvedValue(opp);
+    const save = jest.fn(async (o: Opportunity) => o);
+    const service = makeService({ findOne, save });
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    return { service, findOne, save };
+  };
 
-    it.each([undefined, null, '', '   ', 'a'.repeat(200), 'tok en', "x' OR 1=1", ['a'] as any, { a: 1 } as any])(
-        'malformed token %p gets the generic 404 without querying the DB',
-        async (bad) => {
-            const { service, findOne } = build(null);
-            await expect(service.verifyFaculty(bad as any)).rejects.toThrow(NotFoundException);
-            await expect(service.verifyOpportunityToken(bad as any)).rejects.toThrow(NotFoundException);
-            await expect(service.getPublicPartnerVerificationPreview(bad as any)).rejects.toThrow(NotFoundException);
-            await expect(service.getPublicFacultyVerificationPreview(bad as any)).rejects.toThrow(NotFoundException);
-            await expect(service.decideOpportunityViaPartnerToken(bad as any, 'reject')).rejects.toThrow(NotFoundException);
-            await expect(service.decideOpportunityViaFacultyToken(bad as any, 'reject')).rejects.toThrow(NotFoundException);
-            expect(findOne).not.toHaveBeenCalled();
-        },
+  it.each([
+    undefined,
+    null,
+    '',
+    '   ',
+    'a'.repeat(200),
+    'tok en',
+    "x' OR 1=1",
+    ['a'] as any,
+    { a: 1 } as any,
+  ])(
+    'malformed token %p gets the generic 404 without querying the DB',
+    async (bad) => {
+      const { service, findOne } = build(null);
+      await expect(service.verifyFaculty(bad)).rejects.toThrow(
+        NotFoundException,
+      );
+      await expect(service.verifyOpportunityToken(bad)).rejects.toThrow(
+        NotFoundException,
+      );
+      await expect(
+        service.getPublicPartnerVerificationPreview(bad),
+      ).rejects.toThrow(NotFoundException);
+      await expect(
+        service.getPublicFacultyVerificationPreview(bad),
+      ).rejects.toThrow(NotFoundException);
+      await expect(
+        service.decideOpportunityViaPartnerToken(bad, 'reject'),
+      ).rejects.toThrow(NotFoundException);
+      await expect(
+        service.decideOpportunityViaFacultyToken(bad, 'reject'),
+      ).rejects.toThrow(NotFoundException);
+      expect(findOne).not.toHaveBeenCalled();
+    },
+  );
+
+  it('expired partner token is rejected on preview, decision and verify with the same 404', async () => {
+    const opp = {
+      id: 'o',
+      partnerToken: 'ptok',
+      partnerVerified: false,
+      partnerTokenExpiresAt: past,
+      status: 'pending_partner',
+    } as any;
+    const { service, save } = build(opp);
+    await expect(
+      service.getPublicPartnerVerificationPreview('ptok'),
+    ).rejects.toThrow(NotFoundException);
+    await expect(
+      service.decideOpportunityViaPartnerToken('ptok', 'reject'),
+    ).rejects.toThrow(NotFoundException);
+    await expect(service.verifyOpportunityToken('ptok')).rejects.toThrow(
+      NotFoundException,
     );
+    expect(save).not.toHaveBeenCalled();
+  });
 
-    it('expired partner token is rejected on preview, decision and verify with the same 404', async () => {
-        const opp = { id: 'o', partnerToken: 'ptok', partnerVerified: false, partnerTokenExpiresAt: past, status: 'pending_partner' } as any;
-        const { service, save } = build(opp);
-        await expect(service.getPublicPartnerVerificationPreview('ptok')).rejects.toThrow(NotFoundException);
-        await expect(service.decideOpportunityViaPartnerToken('ptok', 'reject')).rejects.toThrow(NotFoundException);
-        await expect(service.verifyOpportunityToken('ptok')).rejects.toThrow(NotFoundException);
-        expect(save).not.toHaveBeenCalled();
+  it('expired faculty token is rejected everywhere and does not mutate', async () => {
+    const opp = {
+      id: 'o',
+      faculty_verification_token: 'ftok',
+      facultyTokenExpiresAt: past,
+      creatorId: 'c',
+      status: 'pending_faculty',
+      workflowStage: 'pending_faculty',
+    } as any;
+    const { service, save } = build(opp);
+    await expect(
+      service.getPublicFacultyVerificationPreview('ftok'),
+    ).rejects.toThrow(NotFoundException);
+    await expect(
+      service.decideOpportunityViaFacultyToken('ftok', 'reject'),
+    ).rejects.toThrow(NotFoundException);
+    await expect(service.verifyFaculty('ftok')).rejects.toThrow(
+      NotFoundException,
+    );
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('rejects over-long or non-string decision reasons without state change', async () => {
+    const opp = {
+      id: 'o',
+      partnerToken: 'ptok',
+      faculty_verification_token: 'ftok',
+      partnerVerified: false,
+      isStudentCreated: true,
+      creatorId: 'c',
+      status: 'pending_partner',
+      workflowStage: 'pending_partner',
+      approvalHistory: [],
+    } as any;
+    const { service, save } = build(opp);
+    await expect(
+      service.decideOpportunityViaPartnerToken(
+        'ptok',
+        'reject',
+        'x'.repeat(2001),
+      ),
+    ).rejects.toThrow(BadRequestException);
+    await expect(
+      service.decideOpportunityViaFacultyToken('ftok', 'reject', 123 as any),
+    ).rejects.toThrow(BadRequestException);
+    expect(save).not.toHaveBeenCalled();
+    expect(opp.approvalHistory).toHaveLength(0);
+  });
+
+  it('faculty token cannot approve after a partner rejected the opportunity (stale facultyApprovalStatus)', async () => {
+    const opp = {
+      id: 'o',
+      faculty_verification_token: 'ftok',
+      isStudentCreated: true,
+      faculty_verified: false,
+      creatorId: 'c',
+      facultyApprovalStatus: 'pending',
+      workflowStage: 'rejected',
+      status: 'rejected',
+      approvalHistory: [],
+    } as any;
+    const { service, save } = build(opp);
+    await expect(service.verifyFaculty('ftok')).rejects.toThrow(
+      BadRequestException,
+    );
+    await expect(service.verifyOpportunityToken('ftok')).rejects.toThrow(
+      BadRequestException,
+    );
+    expect(save).not.toHaveBeenCalled();
+    expect(opp.approvalHistory).toHaveLength(0);
+  });
+
+  it('faculty token cannot approve or decide while the opportunity is in revision', async () => {
+    const opp = {
+      id: 'o',
+      faculty_verification_token: 'ftok',
+      isStudentCreated: true,
+      faculty_verified: false,
+      creatorId: 'c',
+      faculty_verification_status: 'pending_faculty',
+      facultyApprovalStatus: 'revision_requested',
+      workflowStage: 'revision',
+      status: 'revision',
+      approvalHistory: [],
+    } as any;
+    const { service, save } = build(opp);
+    await expect(service.verifyFaculty('ftok')).rejects.toThrow(
+      BadRequestException,
+    );
+    await expect(
+      service.decideOpportunityViaFacultyToken('ftok', 'revision', 'again'),
+    ).rejects.toThrow(BadRequestException);
+    expect(save).not.toHaveBeenCalled();
+    expect(opp.approvalHistory).toHaveLength(0);
+  });
+
+  it('partner token cannot request revision twice or act on a live opportunity', async () => {
+    const inRevision = {
+      id: 'o',
+      partnerToken: 'ptok',
+      partnerVerified: false,
+      isStudentCreated: true,
+      workflowStage: 'revision',
+      status: 'revision',
+      approvalHistory: [],
+    } as any;
+    const a = build(inRevision);
+    await expect(
+      a.service.decideOpportunityViaPartnerToken('ptok', 'revision', 'r'),
+    ).rejects.toThrow(BadRequestException);
+    expect(a.save).not.toHaveBeenCalled();
+    expect(inRevision.approvalHistory).toHaveLength(0);
+
+    const live = {
+      id: 'o',
+      partnerToken: 'ptok',
+      partnerVerified: false,
+      isStudentCreated: true,
+      workflowStage: 'live',
+      status: 'active',
+      approvalHistory: [],
+    } as any;
+    const b = build(live);
+    await expect(
+      b.service.decideOpportunityViaPartnerToken('ptok', 'reject'),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('legacy partner token cannot approve a rejected, draft, revision or live opportunity', async () => {
+    for (const [status, workflowStage] of [
+      ['rejected', 'rejected'],
+      ['draft', null],
+      ['revision', 'revision'],
+      ['active', 'live'],
+    ] as const) {
+      const opp = {
+        id: 'o',
+        partnerToken: 'ptok',
+        partnerVerified: false,
+        isStudentCreated: false,
+        status,
+        workflowStage,
+        approvalHistory: [],
+      } as any;
+      const { service, save } = build(opp);
+      await expect(service.verifyOpportunityToken('ptok')).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(save).not.toHaveBeenCalled();
+      expect(opp.partnerVerified).toBe(false);
+      expect(opp.approvalHistory).toHaveLength(0);
+    }
+  });
+
+  it('student partner token cannot approve a rejected opportunity even if faculty_verified/status are stale', async () => {
+    const opp = {
+      id: 'o',
+      partnerToken: 'ptok',
+      partnerVerified: false,
+      isStudentCreated: true,
+      faculty_verified: true,
+      status: 'rejected',
+      workflowStage: 'rejected',
+      approvalHistory: [],
+    } as any;
+    const { service, save } = build(opp);
+    await expect(service.verifyOpportunityToken('ptok')).rejects.toThrow(
+      BadRequestException,
+    );
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('liaison token cannot flip a rejected opportunity or activate outside pending_verification', async () => {
+    const rejected = {
+      id: 'o',
+      liaisonToken: 'ltok',
+      liaisonVerified: false,
+      status: 'rejected',
+      workflowStage: 'rejected',
+    } as any;
+    const a = build(rejected);
+    await expect(a.service.verifyOpportunityToken('ltok')).rejects.toThrow(
+      BadRequestException,
+    );
+    expect(rejected.liaisonVerified).toBe(false);
+
+    const pending = {
+      id: 'o',
+      title: 'T',
+      liaisonToken: 'ltok',
+      liaisonVerified: false,
+      partnerVerified: true,
+      status: 'pending_approval',
+      workflowStage: 'pending_admin',
+      facultyId: 'f',
+    } as any;
+    const b = build(pending);
+    (b.service as any).assignFacultyIdFromSupervisionIfMissing = jest.fn();
+    await b.service.verifyOpportunityToken('ltok');
+    expect(pending.status).toBe('pending_approval');
+  });
+
+  it('executing-org confirm is refused for a rejected or live opportunity', async () => {
+    const opp = {
+      id: 'o',
+      execution_verification_token: 'x',
+      execution_verified: false,
+      status: 'rejected',
+      workflowStage: 'rejected',
+    } as any;
+    const service = makeService({
+      findOne: jest.fn().mockResolvedValue(opp),
+      save: jest.fn(),
     });
+    (service as any).usersRepository = {
+      findOne: jest.fn().mockResolvedValue({ id: 'u', email: 'a@b.org' }),
+    };
+    (service as any).findOne = jest.fn().mockResolvedValue(opp);
+    await expect(
+      service.verifyExecutingOrganizationForUser('u', 'a@b.org', 'o'),
+    ).rejects.toThrow(BadRequestException);
+  });
 
-    it('expired faculty token is rejected everywhere and does not mutate', async () => {
-        const opp = { id: 'o', faculty_verification_token: 'ftok', facultyTokenExpiresAt: past, creatorId: 'c', status: 'pending_faculty', workflowStage: 'pending_faculty' } as any;
-        const { service, save } = build(opp);
-        await expect(service.getPublicFacultyVerificationPreview('ftok')).rejects.toThrow(NotFoundException);
-        await expect(service.decideOpportunityViaFacultyToken('ftok', 'reject')).rejects.toThrow(NotFoundException);
-        await expect(service.verifyFaculty('ftok')).rejects.toThrow(NotFoundException);
-        expect(save).not.toHaveBeenCalled();
+  it('a valid partner-token approval records actor+version and is not repeatable', async () => {
+    const opp = {
+      id: 'o',
+      title: 'T',
+      partnerToken: 'ptok',
+      partnerVerified: false,
+      isStudentCreated: true,
+      faculty_verified: true,
+      status: 'pending_partner',
+      workflowStage: 'pending_partner',
+      version: 3,
+      approvalHistory: [],
+    } as any;
+    const { service, save } = build(opp);
+    (service as any).assignFacultyIdFromSupervisionIfMissing = jest.fn();
+    (service as any).handlePartnerApprovedSideEffects = jest.fn();
+    await service.verifyOpportunityToken('ptok');
+    expect(opp.status).toBe('pending_approval');
+    expect(opp.workflowStage).toBe('pending_admin');
+    expect(opp.approvalHistory).toHaveLength(1);
+    expect(opp.approvalHistory[0]).toMatchObject({
+      line: 'partner',
+      action: 'approved',
+      version: 3,
     });
-
-    it('rejects over-long or non-string decision reasons without state change', async () => {
-        const opp = { id: 'o', partnerToken: 'ptok', faculty_verification_token: 'ftok', partnerVerified: false, isStudentCreated: true, creatorId: 'c', status: 'pending_partner', workflowStage: 'pending_partner', approvalHistory: [] } as any;
-        const { service, save } = build(opp);
-        await expect(service.decideOpportunityViaPartnerToken('ptok', 'reject', 'x'.repeat(2001))).rejects.toThrow(BadRequestException);
-        await expect(service.decideOpportunityViaFacultyToken('ftok', 'reject', 123 as any)).rejects.toThrow(BadRequestException);
-        expect(save).not.toHaveBeenCalled();
-        expect(opp.approvalHistory).toHaveLength(0);
-    });
-
-    it('faculty token cannot approve after a partner rejected the opportunity (stale facultyApprovalStatus)', async () => {
-        const opp = { id: 'o', faculty_verification_token: 'ftok', isStudentCreated: true, faculty_verified: false, creatorId: 'c', facultyApprovalStatus: 'pending', workflowStage: 'rejected', status: 'rejected', approvalHistory: [] } as any;
-        const { service, save } = build(opp);
-        await expect(service.verifyFaculty('ftok')).rejects.toThrow(BadRequestException);
-        await expect(service.verifyOpportunityToken('ftok')).rejects.toThrow(BadRequestException);
-        expect(save).not.toHaveBeenCalled();
-        expect(opp.approvalHistory).toHaveLength(0);
-    });
-
-    it('faculty token cannot approve or decide while the opportunity is in revision', async () => {
-        const opp = { id: 'o', faculty_verification_token: 'ftok', isStudentCreated: true, faculty_verified: false, creatorId: 'c', faculty_verification_status: 'pending_faculty', facultyApprovalStatus: 'revision_requested', workflowStage: 'revision', status: 'revision', approvalHistory: [] } as any;
-        const { service, save } = build(opp);
-        await expect(service.verifyFaculty('ftok')).rejects.toThrow(BadRequestException);
-        await expect(service.decideOpportunityViaFacultyToken('ftok', 'revision', 'again')).rejects.toThrow(BadRequestException);
-        expect(save).not.toHaveBeenCalled();
-        expect(opp.approvalHistory).toHaveLength(0);
-    });
-
-    it('partner token cannot request revision twice or act on a live opportunity', async () => {
-        const inRevision = { id: 'o', partnerToken: 'ptok', partnerVerified: false, isStudentCreated: true, workflowStage: 'revision', status: 'revision', approvalHistory: [] } as any;
-        const a = build(inRevision);
-        await expect(a.service.decideOpportunityViaPartnerToken('ptok', 'revision', 'r')).rejects.toThrow(BadRequestException);
-        expect(a.save).not.toHaveBeenCalled();
-        expect(inRevision.approvalHistory).toHaveLength(0);
-
-        const live = { id: 'o', partnerToken: 'ptok', partnerVerified: false, isStudentCreated: true, workflowStage: 'live', status: 'active', approvalHistory: [] } as any;
-        const b = build(live);
-        await expect(b.service.decideOpportunityViaPartnerToken('ptok', 'reject')).rejects.toThrow(BadRequestException);
-
-    });
-
-    it('legacy partner token cannot approve a rejected, draft, revision or live opportunity', async () => {
-        for (const [status, workflowStage] of [['rejected', 'rejected'], ['draft', null], ['revision', 'revision'], ['active', 'live']] as const) {
-            const opp = { id: 'o', partnerToken: 'ptok', partnerVerified: false, isStudentCreated: false, status, workflowStage, approvalHistory: [] } as any;
-            const { service, save } = build(opp);
-            await expect(service.verifyOpportunityToken('ptok')).rejects.toThrow(BadRequestException);
-            expect(save).not.toHaveBeenCalled();
-            expect(opp.partnerVerified).toBe(false);
-            expect(opp.approvalHistory).toHaveLength(0);
-        }
-    });
-
-    it('student partner token cannot approve a rejected opportunity even if faculty_verified/status are stale', async () => {
-        const opp = { id: 'o', partnerToken: 'ptok', partnerVerified: false, isStudentCreated: true, faculty_verified: true, status: 'rejected', workflowStage: 'rejected', approvalHistory: [] } as any;
-        const { service, save } = build(opp);
-        await expect(service.verifyOpportunityToken('ptok')).rejects.toThrow(BadRequestException);
-        expect(save).not.toHaveBeenCalled();
-    });
-
-    it('liaison token cannot flip a rejected opportunity or activate outside pending_verification', async () => {
-        const rejected = { id: 'o', liaisonToken: 'ltok', liaisonVerified: false, status: 'rejected', workflowStage: 'rejected' } as any;
-        const a = build(rejected);
-        await expect(a.service.verifyOpportunityToken('ltok')).rejects.toThrow(BadRequestException);
-        expect(rejected.liaisonVerified).toBe(false);
-
-        const pending = { id: 'o', title: 'T', liaisonToken: 'ltok', liaisonVerified: false, partnerVerified: true, status: 'pending_approval', workflowStage: 'pending_admin', facultyId: 'f' } as any;
-        const b = build(pending);
-        (b.service as any).assignFacultyIdFromSupervisionIfMissing = jest.fn();
-        await b.service.verifyOpportunityToken('ltok');
-        expect(pending.status).toBe('pending_approval');
-    });
-
-    it('executing-org confirm is refused for a rejected or live opportunity', async () => {
-        const opp = { id: 'o', execution_verification_token: 'x', execution_verified: false, status: 'rejected', workflowStage: 'rejected' } as any;
-        const service = makeService({ findOne: jest.fn().mockResolvedValue(opp), save: jest.fn() });
-        (service as any).usersRepository = { findOne: jest.fn().mockResolvedValue({ id: 'u', email: 'a@b.org' }) };
-        (service as any).findOne = jest.fn().mockResolvedValue(opp);
-        await expect(service.verifyExecutingOrganizationForUser('u', 'a@b.org', 'o')).rejects.toThrow(BadRequestException);
-    });
-
-    it('a valid partner-token approval records actor+version and is not repeatable', async () => {
-        const opp = { id: 'o', title: 'T', partnerToken: 'ptok', partnerVerified: false, isStudentCreated: true, faculty_verified: true, status: 'pending_partner', workflowStage: 'pending_partner', version: 3, approvalHistory: [] } as any;
-        const { service, save } = build(opp);
-        (service as any).assignFacultyIdFromSupervisionIfMissing = jest.fn();
-        (service as any).handlePartnerApprovedSideEffects = jest.fn();
-        await service.verifyOpportunityToken('ptok');
-        expect(opp.status).toBe('pending_approval');
-        expect(opp.workflowStage).toBe('pending_admin');
-        expect(opp.approvalHistory).toHaveLength(1);
-        expect(opp.approvalHistory[0]).toMatchObject({ line: 'partner', action: 'approved', version: 3 });
-        expect(opp.approvalHistory[0].at).toBeTruthy();
-        await service.verifyOpportunityToken('ptok'); // replay: idempotent, no new entry / save
-        expect(opp.approvalHistory).toHaveLength(1);
-        expect(save).toHaveBeenCalledTimes(1);
-    });
+    expect(opp.approvalHistory[0].at).toBeTruthy();
+    await service.verifyOpportunityToken('ptok'); // replay: idempotent, no new entry / save
+    expect(opp.approvalHistory).toHaveLength(1);
+    expect(save).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('OpportunitiesService — e2e-found regressions', () => {
-    const baseOrgRow = (over: Record<string, unknown>) =>
-        ({
-            id: 'opp-r',
-            isStudentCreated: false,
-            admin_approved: false,
-            adminApprovalStatus: 'pending',
-            facultyApprovalStatus: 'not_applicable',
-            partnerApprovalStatus: 'not_applicable',
-            requiresPartnerApproval: false,
-            execution_verified: true,
-            ...over,
-        }) as unknown as Opportunity;
+  const baseOrgRow = (over: Record<string, unknown>) =>
+    ({
+      id: 'opp-r',
+      isStudentCreated: false,
+      admin_approved: false,
+      adminApprovalStatus: 'pending',
+      facultyApprovalStatus: 'not_applicable',
+      partnerApprovalStatus: 'not_applicable',
+      requiresPartnerApproval: false,
+      execution_verified: true,
+      ...over,
+    }) as unknown as Opportunity;
 
-    it.each([
-        ['rejected', { status: 'rejected', workflowStage: 'rejected' }],
-        ['revision', { status: 'revision', workflowStage: 'revision' }],
-    ])('CIEL approve refuses an org/faculty row that is %s (must be resubmitted first)', async (_l, over) => {
-        const opp = baseOrgRow(over);
-        const service = makeService({
-            findOne: jest.fn().mockResolvedValue(opp),
-            save: jest.fn(async (row: Opportunity) => row),
-        });
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-        await expect(service.approve('opp-r', { id: 'a1' })).rejects.toBeInstanceOf(BadRequestException);
-        expect(opp.admin_approved).toBe(false);
-    });
+  it.each([
+    ['rejected', { status: 'rejected', workflowStage: 'rejected' }],
+    ['revision', { status: 'revision', workflowStage: 'revision' }],
+  ])(
+    'CIEL approve refuses an org/faculty row that is %s (must be resubmitted first)',
+    async (_l, over) => {
+      const opp = baseOrgRow(over);
+      const service = makeService({
+        findOne: jest.fn().mockResolvedValue(opp),
+        save: jest.fn(async (row: Opportunity) => row),
+      });
+      (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+      await expect(
+        service.approve('opp-r', { id: 'a1' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(opp.admin_approved).toBe(false);
+    },
+  );
 
-    it('org member edit after a CIEL PK revision request re-enters the admin queue (was stuck in revision)', async () => {
-        const opp = baseOrgRow({
-            creatorId: 'ngo-1',
-            organizationId: 'org-1',
-            status: 'revision',
-            workflowStage: 'revision',
-            adminApprovalStatus: 'revision_requested',
-            rejectionReason: 'Add detail',
-        });
-        const service = makeService({
-            findOne: jest.fn().mockResolvedValue(opp),
-            save: jest.fn(async (row: Opportunity) => row),
-        });
-        (service as any).usersRepository = { findOne: jest.fn().mockResolvedValue({ id: 'ngo-1', role: 'ngo' }) };
-        (service as any).mailService = { sendAdminOpportunityReviewNeeded: jest.fn() };
-        const saved: any = await service.update('ngo-1', { id: 'opp-r', title: 'Better' } as any, 'org-1');
-        expect(saved.status).toBe('pending_approval');
-        expect(saved.workflowStage).toBe('pending_admin');
-        expect(saved.adminApprovalStatus).toBe('pending');
-        expect(saved.version).toBe(2);
-        expect(saved.rejectionReason).toBeNull();
+  it('org member edit after a CIEL PK revision request re-enters the admin queue (was stuck in revision)', async () => {
+    const opp = baseOrgRow({
+      creatorId: 'ngo-1',
+      organizationId: 'org-1',
+      status: 'revision',
+      workflowStage: 'revision',
+      adminApprovalStatus: 'revision_requested',
+      rejectionReason: 'Add detail',
     });
+    const service = makeService({
+      findOne: jest.fn().mockResolvedValue(opp),
+      save: jest.fn(async (row: Opportunity) => row),
+    });
+    (service as any).usersRepository = {
+      findOne: jest.fn().mockResolvedValue({ id: 'ngo-1', role: 'ngo' }),
+    };
+    (service as any).mailService = {
+      sendAdminOpportunityReviewNeeded: jest.fn(),
+    };
+    const saved: any = await service.update(
+      'ngo-1',
+      { id: 'opp-r', title: 'Better' } as any,
+      'org-1',
+    );
+    expect(saved.status).toBe('pending_approval');
+    expect(saved.workflowStage).toBe('pending_admin');
+    expect(saved.adminApprovalStatus).toBe('pending');
+    expect(saved.version).toBe(2);
+    expect(saved.rejectionReason).toBeNull();
+  });
 
-    it('a partial edit (validation-pipe leaves un-sent DTO fields undefined) never wipes stored JSON blocks', async () => {
-        const supervision = { contact: 'fac@uni.edu' };
-        const opp = baseOrgRow({
-            creatorId: 'ngo-1',
-            organizationId: 'org-1',
-            status: 'pending_approval',
-            workflowStage: 'pending_admin',
-            supervision,
-        });
-        const service = makeService({
-            findOne: jest.fn().mockResolvedValue(opp),
-            save: jest.fn(async (row: Opportunity) => row),
-        });
-        (service as any).usersRepository = { findOne: jest.fn().mockResolvedValue({ id: 'ngo-1', role: 'ngo' }) };
-        const saved: any = await service.update(
-            'ngo-1',
-            { id: 'opp-r', title: 'Only a title', supervision: undefined, partner_organization: undefined } as any,
-            'org-1',
-        );
-        expect(saved.title).toBe('Only a title');
-        expect(saved.supervision).toBe(supervision);
+  it('a partial edit (validation-pipe leaves un-sent DTO fields undefined) never wipes stored JSON blocks', async () => {
+    const supervision = { contact: 'fac@uni.edu' };
+    const opp = baseOrgRow({
+      creatorId: 'ngo-1',
+      organizationId: 'org-1',
+      status: 'pending_approval',
+      workflowStage: 'pending_admin',
+      supervision,
     });
+    const service = makeService({
+      findOne: jest.fn().mockResolvedValue(opp),
+      save: jest.fn(async (row: Opportunity) => row),
+    });
+    (service as any).usersRepository = {
+      findOne: jest.fn().mockResolvedValue({ id: 'ngo-1', role: 'ngo' }),
+    };
+    const saved: any = await service.update(
+      'ngo-1',
+      {
+        id: 'opp-r',
+        title: 'Only a title',
+        supervision: undefined,
+        partner_organization: undefined,
+      } as any,
+      'org-1',
+    );
+    expect(saved.title).toBe('Only a title');
+    expect(saved.supervision).toBe(supervision);
+  });
 
-    it('a student cannot edit their own LIVE or CIEL-rejected opportunity through the generic update endpoint', async () => {
-        for (const over of [
-            { status: 'active', workflowStage: 'live', admin_approved: true },
-            { status: 'rejected', workflowStage: 'rejected', adminApprovalStatus: 'rejected' },
-        ]) {
-            const opp = baseOrgRow({ creatorId: 's1', isStudentCreated: true, ...over });
-            const service = makeService({
-                findOne: jest.fn().mockResolvedValue(opp),
-                save: jest.fn(async (row: Opportunity) => row),
-            });
-            (service as any).usersRepository = { findOne: jest.fn().mockResolvedValue({ id: 's1', role: 'student' }) };
-            await expect(service.update('s1', { id: 'opp-r', title: 'sneaky' } as any)).rejects.toBeInstanceOf(
-                BadRequestException,
-            );
-            expect(opp.title).toBeUndefined();
-        }
-    });
+  it('a student cannot edit their own LIVE or CIEL-rejected opportunity through the generic update endpoint', async () => {
+    for (const over of [
+      { status: 'active', workflowStage: 'live', admin_approved: true },
+      {
+        status: 'rejected',
+        workflowStage: 'rejected',
+        adminApprovalStatus: 'rejected',
+      },
+    ]) {
+      const opp = baseOrgRow({
+        creatorId: 's1',
+        isStudentCreated: true,
+        ...over,
+      });
+      const service = makeService({
+        findOne: jest.fn().mockResolvedValue(opp),
+        save: jest.fn(async (row: Opportunity) => row),
+      });
+      (service as any).usersRepository = {
+        findOne: jest.fn().mockResolvedValue({ id: 's1', role: 'student' }),
+      };
+      await expect(
+        service.update('s1', { id: 'opp-r', title: 'sneaky' } as any),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(opp.title).toBeUndefined();
+    }
+  });
 });
 
-
 describe('OpportunitiesService — admin reject / revise require a reason', () => {
-    function setup() {
-        const opp = {
-            id: 'opp-r-1',
-            isStudentCreated: false,
-            status: 'pending_approval',
-            workflowStage: 'pending_admin',
-            adminApprovalStatus: 'pending',
-            admin_approved: false,
-        } as unknown as Opportunity;
-        const findOne = jest.fn().mockResolvedValue(opp);
-        const save = jest.fn(async (row: Opportunity) => row);
-        const service = makeService({ findOne, save });
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-        (service as any).notifyStudentOpportunityUpdate = jest.fn();
-        return { service, opp, save, findOne };
-    }
+  function setup() {
+    const opp = {
+      id: 'opp-r-1',
+      isStudentCreated: false,
+      status: 'pending_approval',
+      workflowStage: 'pending_admin',
+      adminApprovalStatus: 'pending',
+      admin_approved: false,
+    } as unknown as Opportunity;
+    const findOne = jest.fn().mockResolvedValue(opp);
+    const save = jest.fn(async (row: Opportunity) => row);
+    const service = makeService({ findOne, save });
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    (service as any).notifyStudentOpportunityUpdate = jest.fn();
+    return { service, opp, save, findOne };
+  }
 
-    it.each([
-        ['reject', undefined],
-        ['reject', ''],
-        ['reject', '   \n\t '],
-        ['reject', 42],
-        ['reject', 'x'.repeat(2001)],
-        ['revise', undefined],
-        ['revise', null],
-        ['revise', '   '],
-        ['revise', { a: 1 }],
-        ['revise', 'y'.repeat(2001)],
-    ])('%s with reason %p -> 400 and no state change', async (action, reason) => {
-        const { service, opp, save } = setup();
-        await expect((service as any)[action]('opp-r-1', reason, { id: 'a', name: 'A' })).rejects.toBeInstanceOf(
-            BadRequestException,
-        );
-        expect(save).not.toHaveBeenCalled();
-        expect(opp.status).toBe('pending_approval');
-        expect(opp.adminApprovalStatus).toBe('pending');
-    });
+  it.each([
+    ['reject', undefined],
+    ['reject', ''],
+    ['reject', '   \n\t '],
+    ['reject', 42],
+    ['reject', 'x'.repeat(2001)],
+    ['revise', undefined],
+    ['revise', null],
+    ['revise', '   '],
+    ['revise', { a: 1 }],
+    ['revise', 'y'.repeat(2001)],
+  ])('%s with reason %p -> 400 and no state change', async (action, reason) => {
+    const { service, opp, save } = setup();
+    await expect(
+      (service as any)[action]('opp-r-1', reason, { id: 'a', name: 'A' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(save).not.toHaveBeenCalled();
+    expect(opp.status).toBe('pending_approval');
+    expect(opp.adminApprovalStatus).toBe('pending');
+  });
 
-    it('stores the trimmed reason and accepts exactly 2000 chars', async () => {
-        const a = setup();
-        const r = await a.service.reject('opp-r-1', '  Not a fit.  ', { id: 'a', name: 'A' });
-        expect(r.status).toBe('rejected');
-        expect(r.rejectionReason).toBe('Not a fit.');
-        const b = setup();
-        const v = await b.service.revise('opp-r-1', 'z'.repeat(2000), { id: 'a', name: 'A' });
-        expect(v.status).toBe('revision');
-        expect(v.rejectionReason).toHaveLength(2000);
+  it('stores the trimmed reason and accepts exactly 2000 chars', async () => {
+    const a = setup();
+    const r = await a.service.reject('opp-r-1', '  Not a fit.  ', {
+      id: 'a',
+      name: 'A',
     });
+    expect(r.status).toBe('rejected');
+    expect(r.rejectionReason).toBe('Not a fit.');
+    const b = setup();
+    const v = await b.service.revise('opp-r-1', 'z'.repeat(2000), {
+      id: 'a',
+      name: 'A',
+    });
+    expect(v.status).toBe('revision');
+    expect(v.rejectionReason).toHaveLength(2000);
+  });
 });
 
 describe('OpportunitiesService — create() idempotency for org / faculty / admin creators', () => {
-    function setup(recent: unknown = null) {
-        const create = jest.fn((payload) => payload);
-        const save = jest.fn((payload) => Promise.resolve({ id: 'new-opp-id', ...payload }));
-        const d = createDedupeStubs(recent);
-        const service = makeService({
-            create,
-            save,
-            findOne: jest.fn(),
-            find: jest.fn().mockResolvedValue([]),
-            ...d.stubs,
-        });
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({ id: 'ngo-user-1', role: 'ngo', email: 'contact@ngo.org' }),
-        };
-        (service as any).organizationsService = { getMyOrganization: jest.fn().mockResolvedValue({ id: 'org-1' }) };
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-        const mailService = { sendAdminOpportunityReviewNeeded: jest.fn() };
-        (service as any).mailService = mailService;
-        return { service, save, mailService, ...d };
-    }
-    const dto = (over: Record<string, unknown> = {}) => ({
-        title: 'Beach cleanup drive',
-        mode: 'Remote',
-        objectives: { description: 'Clean the beach and raise awareness.' },
-        timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
-        safety_declaration: {
-            environment_safe_and_appropriate: true,
-            students_guided_and_supervised: true,
-            lawful_ethical_and_non_hazardous: true,
-            precautions_and_basic_safety: true,
-        },
-        submission_confirmations: {
-            academically_valid_and_accurately_described: true,
-            activity_properly_supervised: true,
-            environment_safe_and_appropriate: true,
-            information_correct_and_verifiable: true,
-        },
-        ...over,
+  function setup(recent: unknown = null) {
+    const create = jest.fn((payload) => payload);
+    const save = jest.fn((payload) =>
+      Promise.resolve({ id: 'new-opp-id', ...payload }),
+    );
+    const d = createDedupeStubs(recent);
+    const service = makeService({
+      create,
+      save,
+      findOne: jest.fn(),
+      find: jest.fn().mockResolvedValue([]),
+      ...d.stubs,
     });
+    (service as any).usersRepository = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'ngo-user-1',
+        role: 'ngo',
+        email: 'contact@ngo.org',
+      }),
+    };
+    (service as any).organizationsService = {
+      getMyOrganization: jest.fn().mockResolvedValue({ id: 'org-1' }),
+    };
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    const mailService = { sendAdminOpportunityReviewNeeded: jest.fn() };
+    (service as any).mailService = mailService;
+    return { service, save, mailService, ...d };
+  }
+  const dto = (over: Record<string, unknown> = {}) => ({
+    title: 'Beach cleanup drive',
+    mode: 'Remote',
+    objectives: { description: 'Clean the beach and raise awareness.' },
+    timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
+    safety_declaration: {
+      environment_safe_and_appropriate: true,
+      students_guided_and_supervised: true,
+      lawful_ethical_and_non_hazardous: true,
+      precautions_and_basic_safety: true,
+    },
+    submission_confirmations: {
+      academically_valid_and_accurately_described: true,
+      activity_properly_supervised: true,
+      environment_safe_and_appropriate: true,
+      information_correct_and_verifiable: true,
+    },
+    ...over,
+  });
 
-    it('returns the recently created identical row: no save, no mail, lock taken and released', async () => {
-        const existing = { id: 'existing-opp', title: 'Beach cleanup drive' };
-        const { service, save, mailService, lockQuery, dedupeQb } = setup(existing);
-        const out = await service.create('ngo-user-1', dto() as any);
-        expect(out).toBe(existing);
-        expect(save).not.toHaveBeenCalled();
-        expect(mailService.sendAdminOpportunityReviewNeeded).not.toHaveBeenCalled();
-        expect(lockQuery.mock.calls[0][0]).toContain('pg_advisory_lock');
-        expect(lockQuery.mock.calls[0][1]).toEqual(['create_creator_opportunity:ngo-user-1']);
-        expect(lockQuery.mock.calls[1][0]).toContain('pg_advisory_unlock');
-        // rejected / deleted rows are excluded from the lookup
-        const ignored = dedupeQb.andWhere.mock.calls.find((c: any[]) => c[1]?.ignored)?.[1].ignored;
-        expect(ignored).toEqual(expect.arrayContaining(['rejected', 'deleted']));
-    });
+  it('returns the recently created identical row: no save, no mail, lock taken and released', async () => {
+    const existing = { id: 'existing-opp', title: 'Beach cleanup drive' };
+    const { service, save, mailService, lockQuery, dedupeQb } = setup(existing);
+    const out = await service.create('ngo-user-1', dto() as any);
+    expect(out).toBe(existing);
+    expect(save).not.toHaveBeenCalled();
+    expect(mailService.sendAdminOpportunityReviewNeeded).not.toHaveBeenCalled();
+    expect(lockQuery.mock.calls[0][0]).toContain('pg_advisory_lock');
+    expect(lockQuery.mock.calls[0][1]).toEqual([
+      'create_creator_opportunity:ngo-user-1',
+    ]);
+    expect(lockQuery.mock.calls[1][0]).toContain('pg_advisory_unlock');
+    // rejected / deleted rows are excluded from the lookup
+    const ignored = dedupeQb.andWhere.mock.calls.find(
+      (c: any[]) => c[1]?.ignored,
+    )?.[1].ignored;
+    expect(ignored).toEqual(expect.arrayContaining(['rejected', 'deleted']));
+  });
 
-    it('creates normally when nothing matches, stamps a fingerprint, and never returns it', async () => {
-        const { service, save } = setup(null);
-        const out: any = await service.create('ngo-user-1', dto() as any);
-        expect(save).toHaveBeenCalledTimes(1);
-        expect(save.mock.calls[0][0].createFingerprint).toMatch(/^[0-9a-f]{64}$/);
-        expect(out.createFingerprint).toBeUndefined();
-        expect(out.id).toBe('new-opp-id');
-    });
+  it('creates normally when nothing matches, stamps a fingerprint, and never returns it', async () => {
+    const { service, save } = setup(null);
+    const out: any = await service.create('ngo-user-1', dto() as any);
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save.mock.calls[0][0].createFingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(out.createFingerprint).toBeUndefined();
+    expect(out.id).toBe('new-opp-id');
+  });
 
-    it('releases the lock even when creation throws', async () => {
-        const { service, lockQuery } = setup(null);
-        await expect(service.create('ngo-user-1', dto({ mode: 'Onsite' }) as any)).rejects.toBeDefined();
-        // validation fails before the lock is needed OR the lock is released — never left held
-        const locks = lockQuery.mock.calls.filter((c) => String(c[0]).includes('pg_advisory_lock')).length;
-        const unlocks = lockQuery.mock.calls.filter((c) => String(c[0]).includes('pg_advisory_unlock')).length;
-        expect(locks).toBe(unlocks);
-    });
+  it('releases the lock even when creation throws', async () => {
+    const { service, lockQuery } = setup(null);
+    await expect(
+      service.create('ngo-user-1', dto({ mode: 'Onsite' }) as any),
+    ).rejects.toBeDefined();
+    // validation fails before the lock is needed OR the lock is released — never left held
+    const locks = lockQuery.mock.calls.filter((c) =>
+      String(c[0]).includes('pg_advisory_lock'),
+    ).length;
+    const unlocks = lockQuery.mock.calls.filter((c) =>
+      String(c[0]).includes('pg_advisory_unlock'),
+    ).length;
+    expect(locks).toBe(unlocks);
+  });
 });
 
 describe('OpportunitiesService — university-scope (delegated) faculty can open and act on rows they are listed', () => {
-    function makeDelegateService(delegatedIds: string[] | null) {
-        const opp = {
-            id: 'opp-scope-1',
-            creatorId: 'student-1',
-            facultyId: 'named-faculty',
-            isStudentCreated: true,
-            status: 'pending_faculty',
-            workflowStage: 'pending_faculty',
-            faculty_verification_status: 'pending_faculty',
-            facultyApprovalStatus: 'pending',
-            admin_approved: false,
-            supervision: { contact: 'named@uni.edu' },
-        } as unknown as Opportunity;
-        const service = makeService({
-            findOne: jest.fn().mockResolvedValue(opp),
-            save: jest.fn(async (row: Opportunity) => row),
-        });
-        (service as any).facultyUniversityScope = {
-            getDelegatedOrganizationId: jest.fn().mockResolvedValue(delegatedIds ? 'uni-org-1' : null),
-            resolveOpportunityIdsForUniversityOrganization: jest.fn().mockResolvedValue(delegatedIds ?? []),
-        };
-        (service as any).opportunityApplicationsService = {
-            findActionablePendingFacultyApplicationForDashboard: jest.fn().mockResolvedValue(null),
-        };
-        (service as any).participationRepository = { count: jest.fn().mockResolvedValue(0) };
-        (service as any).opportunitiesRepository.manager = {
-            getRepository: () => ({
-                count: async () => 0,
-                createQueryBuilder: () => ({
-                    where() { return this; },
-                    andWhere() { return this; },
-                    getCount: async () => 0,
-                }),
-            }),
-        };
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({ id: 'student-1', name: 'S', email: 's@uni.edu' }),
-        };
-        return { service, opp };
-    }
-
-    const delegate = { id: 'liaison-1', email: 'liaison@uni.edu', role: 'faculty', organizationId: null };
-
-    it('detail: a delegated faculty gets the record (not 404)', async () => {
-        const { service } = makeDelegateService(['opp-scope-1']);
-        const data: any = await service.findOneWithCreator('opp-scope-1', delegate as any);
-        expect(data.id).toBe('opp-scope-1');
+  function makeDelegateService(delegatedIds: string[] | null) {
+    const opp = {
+      id: 'opp-scope-1',
+      creatorId: 'student-1',
+      facultyId: 'named-faculty',
+      isStudentCreated: true,
+      status: 'pending_faculty',
+      workflowStage: 'pending_faculty',
+      faculty_verification_status: 'pending_faculty',
+      facultyApprovalStatus: 'pending',
+      admin_approved: false,
+      supervision: { contact: 'named@uni.edu' },
+    } as unknown as Opportunity;
+    const service = makeService({
+      findOne: jest.fn().mockResolvedValue(opp),
+      save: jest.fn(async (row: Opportunity) => row),
     });
+    (service as any).facultyUniversityScope = {
+      getDelegatedOrganizationId: jest
+        .fn()
+        .mockResolvedValue(delegatedIds ? 'uni-org-1' : null),
+      resolveOpportunityIdsForUniversityOrganization: jest
+        .fn()
+        .mockResolvedValue(delegatedIds ?? []),
+    };
+    (service as any).opportunityApplicationsService = {
+      findActionablePendingFacultyApplicationForDashboard: jest
+        .fn()
+        .mockResolvedValue(null),
+    };
+    (service as any).participationRepository = {
+      count: jest.fn().mockResolvedValue(0),
+    };
+    (service as any).opportunitiesRepository.manager = {
+      getRepository: () => ({
+        count: async () => 0,
+        createQueryBuilder: () => ({
+          where() {
+            return this;
+          },
+          andWhere() {
+            return this;
+          },
+          getCount: async () => 0,
+        }),
+      }),
+    };
+    (service as any).usersRepository = {
+      findOne: jest
+        .fn()
+        .mockResolvedValue({ id: 'student-1', name: 'S', email: 's@uni.edu' }),
+    };
+    return { service, opp };
+  }
 
-    it('detail: a faculty with no delegation for it still gets 404', async () => {
-        const { service } = makeDelegateService(['some-other-opp']);
-        await expect(service.findOneWithCreator('opp-scope-1', delegate as any)).rejects.toThrow(/not found/i);
-    });
+  const delegate = {
+    id: 'liaison-1',
+    email: 'liaison@uni.edu',
+    role: 'faculty',
+    organizationId: null,
+  };
 
-    it('detail: a faculty with no scope assignment at all still gets 404', async () => {
-        const { service } = makeDelegateService(null);
-        await expect(service.findOneWithCreator('opp-scope-1', delegate as any)).rejects.toThrow(/not found/i);
-    });
-
-    it('approve: delegated faculty passes the supervisor check (no 403)', async () => {
-        const { service } = makeDelegateService(['opp-scope-1']);
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-        (service as any).mailService = {
-            sendPartnerVerification: jest.fn(),
-            sendStudentOpportunityStatusUpdate: jest.fn(),
-        };
-        (service as any).notificationsService = { createApprovalNotification: jest.fn() };
-        await expect(
-            service.facultyDashboardApprove('opp-scope-1', delegate.id, delegate.email, 'Liaison'),
-        ).resolves.toBeDefined();
-    });
-
-    it.each(['facultyDashboardApprove', 'facultyDashboardReject', 'facultyDashboardRevise'])(
-        '%s: a faculty outside the delegation is still refused with 403',
-        async (method) => {
-            const { service } = makeDelegateService(['some-other-opp']);
-            await expect(
-                (service as any)[method]('opp-scope-1', delegate.id, delegate.email, 'A reason that is long enough'),
-            ).rejects.toThrow(/not the assigned faculty supervisor/i);
-        },
+  it('detail: a delegated faculty gets the record (not 404)', async () => {
+    const { service } = makeDelegateService(['opp-scope-1']);
+    const data: any = await service.findOneWithCreator(
+      'opp-scope-1',
+      delegate as any,
     );
+    expect(data.id).toBe('opp-scope-1');
+  });
+
+  it('detail: a faculty with no delegation for it still gets 404', async () => {
+    const { service } = makeDelegateService(['some-other-opp']);
+    await expect(
+      service.findOneWithCreator('opp-scope-1', delegate as any),
+    ).rejects.toThrow(/not found/i);
+  });
+
+  it('detail: a faculty with no scope assignment at all still gets 404', async () => {
+    const { service } = makeDelegateService(null);
+    await expect(
+      service.findOneWithCreator('opp-scope-1', delegate as any),
+    ).rejects.toThrow(/not found/i);
+  });
+
+  it('approve: delegated faculty passes the supervisor check (no 403)', async () => {
+    const { service } = makeDelegateService(['opp-scope-1']);
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    (service as any).mailService = {
+      sendPartnerVerification: jest.fn(),
+      sendStudentOpportunityStatusUpdate: jest.fn(),
+    };
+    (service as any).notificationsService = {
+      createApprovalNotification: jest.fn(),
+    };
+    await expect(
+      service.facultyDashboardApprove(
+        'opp-scope-1',
+        delegate.id,
+        delegate.email,
+        'Liaison',
+      ),
+    ).resolves.toBeDefined();
+  });
+
+  it.each([
+    'facultyDashboardApprove',
+    'facultyDashboardReject',
+    'facultyDashboardRevise',
+  ])(
+    '%s: a faculty outside the delegation is still refused with 403',
+    async (method) => {
+      const { service } = makeDelegateService(['some-other-opp']);
+      await expect(
+        (service as any)[method](
+          'opp-scope-1',
+          delegate.id,
+          delegate.email,
+          'A reason that is long enough',
+        ),
+      ).rejects.toThrow(/not the assigned faculty supervisor/i);
+    },
+  );
 });
 
 describe('OpportunitiesService — every list-visible reviewer identity can open and act (access consistency)', () => {
-    function makeAccessService(
-        oppOver: Record<string, unknown> = {},
-        opts: { uniOrg?: { id: string; orgType: string; name: string } | null; uniIds?: string[]; hasApplication?: boolean } = {},
-    ) {
-        const opp = {
-            id: 'opp-acc-1',
-            creatorId: 'creator-1',
-            facultyId: null,
-            organizationId: 'host-org',
-            isStudentCreated: false,
-            status: 'pending_faculty',
-            workflowStage: 'pending_faculty',
-            admin_approved: false,
-            supervision: {},
-            ...oppOver,
-        } as unknown as Opportunity;
-        const service = makeService({ findOne: jest.fn().mockResolvedValue(opp) });
-        (service as any).facultyUniversityScope = {
-            getDelegatedOrganizationId: jest.fn().mockResolvedValue(null),
-            resolveOpportunityIdsForUniversityOrganization: jest.fn().mockResolvedValue(opts.uniIds ?? []),
-            isUniversityOrganization: (o: { orgType?: string }) => String(o?.orgType || '').toLowerCase().includes('university'),
-            normalizeOrgName: (n: string) => (n || '').trim().toLowerCase(),
-        };
-        (service as any).participationRepository = { count: jest.fn().mockResolvedValue(0) };
-        (service as any).opportunitiesRepository.manager = {
-            getRepository: () => ({
-                count: async () => (opts.hasApplication ? 1 : 0),
-                createQueryBuilder: () => ({
-                    where() { return this; },
-                    andWhere() { return this; },
-                    getCount: async () => 0,
-                }),
-            }),
-        };
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({ id: 'creator-1', name: 'C', email: 'creator@x.org', phone: '123' }),
-        };
-        (service as any).organizationsService = {
-            findOne: jest.fn(async (id: string) => {
-                if (opts.uniOrg && id === opts.uniOrg.id) return opts.uniOrg;
-                throw new Error('not found');
-            }),
-            getMyOrganization: jest.fn().mockResolvedValue(null),
-        };
-        return { service, opp };
+  function makeAccessService(
+    oppOver: Record<string, unknown> = {},
+    opts: {
+      uniOrg?: { id: string; orgType: string; name: string } | null;
+      uniIds?: string[];
+      hasApplication?: boolean;
+    } = {},
+  ) {
+    const opp = {
+      id: 'opp-acc-1',
+      creatorId: 'creator-1',
+      facultyId: null,
+      organizationId: 'host-org',
+      isStudentCreated: false,
+      status: 'pending_faculty',
+      workflowStage: 'pending_faculty',
+      admin_approved: false,
+      supervision: {},
+      ...oppOver,
+    } as unknown as Opportunity;
+    const service = makeService({ findOne: jest.fn().mockResolvedValue(opp) });
+    (service as any).facultyUniversityScope = {
+      getDelegatedOrganizationId: jest.fn().mockResolvedValue(null),
+      resolveOpportunityIdsForUniversityOrganization: jest
+        .fn()
+        .mockResolvedValue(opts.uniIds ?? []),
+      isUniversityOrganization: (o: { orgType?: string }) =>
+        String(o?.orgType || '')
+          .toLowerCase()
+          .includes('university'),
+      normalizeOrgName: (n: string) => (n || '').trim().toLowerCase(),
+    };
+    (service as any).participationRepository = {
+      count: jest.fn().mockResolvedValue(0),
+    };
+    (service as any).opportunitiesRepository.manager = {
+      getRepository: () => ({
+        count: async () => (opts.hasApplication ? 1 : 0),
+        createQueryBuilder: () => ({
+          where() {
+            return this;
+          },
+          andWhere() {
+            return this;
+          },
+          getCount: async () => 0,
+        }),
+      }),
+    };
+    (service as any).usersRepository = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'creator-1',
+        name: 'C',
+        email: 'creator@x.org',
+        phone: '123',
+      }),
+    };
+    (service as any).organizationsService = {
+      findOne: jest.fn(async (id: string) => {
+        if (opts.uniOrg && id === opts.uniOrg.id) return opts.uniOrg;
+        throw new Error('not found');
+      }),
+      getMyOrganization: jest.fn().mockResolvedValue(null),
+    };
+    return { service, opp };
+  }
+
+  const viewer = (
+    email: string,
+    role = 'faculty',
+    organizationId: string | null = null,
+  ) => ({
+    id: `u-${email}`,
+    email,
+    role,
+    organizationId,
+  });
+
+  it('detail: the faculty named only as the NGO "faculty link" representative can open the record', async () => {
+    const { service } = makeAccessService({
+      visibility_and_academic_linkage: {
+        faculty_institutional_representative: { official_email: 'fir@uni.edu' },
+      },
+      supervision: { contact: 'someone.else@uni.edu' },
+    });
+    const data: any = await service.findOneWithCreator(
+      'opp-acc-1',
+      viewer('fir@uni.edu') as any,
+    );
+    expect(data.creator.email).toBe('creator@x.org'); // reviewer sees the contact
+  });
+
+  it('detail: every partner contact email works, not only the first non-empty source', async () => {
+    const { service } = makeAccessService({
+      external_partner_collaboration: { official_email: 'first@ngo.org' },
+      supervision: { external_partner_email: 'second@ngo.org' },
+      partner_organization: { official_email: 'third@ngo.org' },
+    });
+    for (const em of ['first@ngo.org', 'second@ngo.org', 'third@ngo.org']) {
+      const data: any = await service.findOneWithCreator(
+        'opp-acc-1',
+        viewer(em, 'ngo') as any,
+      );
+      expect(data.id).toBe('opp-acc-1');
     }
+  });
 
-    const viewer = (email: string, role = 'faculty', organizationId: string | null = null) => ({
-        id: `u-${email}`,
-        email,
-        role,
-        organizationId,
+  it('detail: the executing-organization contact can open the record they are asked to confirm', async () => {
+    const { service } = makeAccessService({
+      executing_organization: { official_email: 'exec@org.pk' },
     });
+    const data: any = await service.findOneWithCreator(
+      'opp-acc-1',
+      viewer('exec@org.pk', 'ngo') as any,
+    );
+    expect(data.id).toBe('opp-acc-1');
+  });
 
-    it('detail: the faculty named only as the NGO "faculty link" representative can open the record', async () => {
-        const { service } = makeAccessService({
-            visibility_and_academic_linkage: { faculty_institutional_representative: { official_email: 'fir@uni.edu' } },
-            supervision: { contact: 'someone.else@uni.edu' },
-        });
-        const data: any = await service.findOneWithCreator('opp-acc-1', viewer('fir@uni.edu') as any);
-        expect(data.creator.email).toBe('creator@x.org'); // reviewer sees the contact
+  it('detail: an unrelated login still gets 404', async () => {
+    const { service } = makeAccessService({
+      visibility_and_academic_linkage: {
+        faculty_institutional_representative: { official_email: 'fir@uni.edu' },
+      },
+      executing_organization: { official_email: 'exec@org.pk' },
     });
+    await expect(
+      service.findOneWithCreator(
+        'opp-acc-1',
+        viewer('stranger@x.org', 'ngo', 'other-org') as any,
+      ),
+    ).rejects.toThrow(/not found/i);
+  });
 
-    it('detail: every partner contact email works, not only the first non-empty source', async () => {
-        const { service } = makeAccessService({
-            external_partner_collaboration: { official_email: 'first@ngo.org' },
-            supervision: { external_partner_email: 'second@ngo.org' },
-            partner_organization: { official_email: 'third@ngo.org' },
-        });
-        for (const em of ['first@ngo.org', 'second@ngo.org', 'third@ngo.org']) {
-            const data: any = await service.findOneWithCreator('opp-acc-1', viewer(em, 'ngo') as any);
-            expect(data.id).toBe('opp-acc-1');
-        }
-    });
+  it('detail: a university dashboard can open a record in its scope, with contacts redacted and no edit right', async () => {
+    const uni = { id: 'uni-org', orgType: 'UNIVERSITY', name: 'Uni' };
+    const { service } = makeAccessService(
+      {},
+      { uniOrg: uni, uniIds: ['opp-acc-1'] },
+    );
+    const data: any = await service.findOneWithCreator(
+      'opp-acc-1',
+      viewer('reg@uni.edu', 'university', 'uni-org') as any,
+    );
+    expect(data.id).toBe('opp-acc-1');
+    expect(data.creator.email).toBeUndefined(); // contact keys stripped for non-reviewers
+    expect(data.viewer_access.can_edit).toBe(false);
+  });
 
-    it('detail: the executing-organization contact can open the record they are asked to confirm', async () => {
-        const { service } = makeAccessService({ executing_organization: { official_email: 'exec@org.pk' } });
-        const data: any = await service.findOneWithCreator('opp-acc-1', viewer('exec@org.pk', 'ngo') as any);
-        expect(data.id).toBe('opp-acc-1');
-    });
+  it('detail: a university whose scope does not contain the record, or a non-university org, still gets 404', async () => {
+    const uni = { id: 'uni-org', orgType: 'UNIVERSITY', name: 'Uni' };
+    const a = makeAccessService({}, { uniOrg: uni, uniIds: ['other-opp'] });
+    await expect(
+      a.service.findOneWithCreator(
+        'opp-acc-1',
+        viewer('reg@uni.edu', 'university', 'uni-org') as any,
+      ),
+    ).rejects.toThrow(/not found/i);
+    const ngo = { id: 'ngo-org', orgType: 'NGO', name: 'Ngo' };
+    const b = makeAccessService({}, { uniOrg: ngo, uniIds: ['opp-acc-1'] });
+    await expect(
+      b.service.findOneWithCreator(
+        'opp-acc-1',
+        viewer('x@ngo.org', 'ngo', 'ngo-org') as any,
+      ),
+    ).rejects.toThrow(/not found/i);
+  });
 
-    it('detail: an unrelated login still gets 404', async () => {
-        const { service } = makeAccessService({
-            visibility_and_academic_linkage: { faculty_institutional_representative: { official_email: 'fir@uni.edu' } },
-            executing_organization: { official_email: 'exec@org.pk' },
-        });
-        await expect(service.findOneWithCreator('opp-acc-1', viewer('stranger@x.org', 'ngo', 'other-org') as any)).rejects.toThrow(/not found/i);
-    });
+  it('detail: a student with their own pending join request can still open a non-public listing', async () => {
+    const { service } = makeAccessService({}, { hasApplication: true });
+    const data: any = await service.findOneWithCreator(
+      'opp-acc-1',
+      viewer('stu@uni.edu', 'student') as any,
+    );
+    expect(data.id).toBe('opp-acc-1');
+    expect(data.creator.email).toBeUndefined();
+  });
 
-    it('detail: a university dashboard can open a record in its scope, with contacts redacted and no edit right', async () => {
-        const uni = { id: 'uni-org', orgType: 'UNIVERSITY', name: 'Uni' };
-        const { service } = makeAccessService({}, { uniOrg: uni, uniIds: ['opp-acc-1'] });
-        const data: any = await service.findOneWithCreator('opp-acc-1', viewer('reg@uni.edu', 'university', 'uni-org') as any);
-        expect(data.id).toBe('opp-acc-1');
-        expect(data.creator.email).toBeUndefined(); // contact keys stripped for non-reviewers
-        expect(data.viewer_access.can_edit).toBe(false);
+  it('viewer_access.can_edit: creator org / owner yes; named partner, exec contact, university no', async () => {
+    const { service, opp } = makeAccessService({
+      organizationId: 'host-org',
+      partner_organization: { official_email: 'p@ngo.org' },
     });
+    const edit = (v: any) => (service as any).viewerMayEditOpportunity(opp, v);
+    expect(
+      edit({ id: 'colleague', role: 'ngo', organizationId: 'host-org' }),
+    ).toBe(true);
+    expect(
+      edit({
+        id: 'p',
+        email: 'p@ngo.org',
+        role: 'ngo',
+        organizationId: 'partner-org',
+      }),
+    ).toBe(false);
+    expect(
+      edit({ id: 'creator-1', role: 'faculty', organizationId: null }),
+    ).toBe(true); // faculty creator (facultyId unset)
+    (opp as any).facultyId = 'another-faculty';
+    expect(
+      edit({ id: 'creator-1', role: 'faculty', organizationId: null }),
+    ).toBe(false); // update() would 403 here too
+    expect(edit({ role: 'ngo', organizationId: 'host-org' })).toBe(false);
+  });
 
-    it('detail: a university whose scope does not contain the record, or a non-university org, still gets 404', async () => {
-        const uni = { id: 'uni-org', orgType: 'UNIVERSITY', name: 'Uni' };
-        const a = makeAccessService({}, { uniOrg: uni, uniIds: ['other-opp'] });
-        await expect(a.service.findOneWithCreator('opp-acc-1', viewer('reg@uni.edu', 'university', 'uni-org') as any)).rejects.toThrow(/not found/i);
-        const ngo = { id: 'ngo-org', orgType: 'NGO', name: 'Ngo' };
-        const b = makeAccessService({}, { uniOrg: ngo, uniIds: ['opp-acc-1'] });
-        await expect(b.service.findOneWithCreator('opp-acc-1', viewer('x@ngo.org', 'ngo', 'ngo-org') as any)).rejects.toThrow(/not found/i);
+  it('faculty action: FIR-listed faculty passes the supervisor gate even when supervision.contact names someone else', async () => {
+    const { service, opp } = makeAccessService({
+      visibility_and_academic_linkage: {
+        faculty_institutional_representative: { official_email: 'fir@uni.edu' },
+      },
+      supervision: { contact: 'someone.else@uni.edu' },
     });
+    await expect(
+      (service as any).assertFacultySupervisorForStudentOpportunity(
+        opp,
+        'fac-1',
+        'fir@uni.edu',
+      ),
+    ).resolves.toBeUndefined();
+    await expect(
+      (service as any).assertFacultySupervisorForStudentOpportunity(
+        opp,
+        'fac-2',
+        'nobody@uni.edu',
+      ),
+    ).rejects.toThrow(/not the assigned faculty supervisor/i);
+  });
 
-    it('detail: a student with their own pending join request can still open a non-public listing', async () => {
-        const { service } = makeAccessService({}, { hasApplication: true });
-        const data: any = await service.findOneWithCreator('opp-acc-1', viewer('stu@uni.edu', 'student') as any);
-        expect(data.id).toBe('opp-acc-1');
-        expect(data.creator.email).toBeUndefined();
+  it('partner action: a partner named in a later contact field passes the ownership gate; a stranger does not', async () => {
+    const { service, opp } = makeAccessService({
+      isStudentCreated: true,
+      organizationId: null,
+      external_partner_collaboration: { official_email: 'first@ngo.org' },
+      executing_context: { partner: { official_email: 'ctx@ngo.org' } },
     });
+    await expect(
+      (service as any).assertPartnerOwnsOpportunity(
+        opp,
+        'ctx@ngo.org',
+        null,
+        null,
+      ),
+    ).resolves.toBeUndefined();
+    await expect(
+      (service as any).assertPartnerOwnsOpportunity(
+        opp,
+        'stranger@ngo.org',
+        null,
+        null,
+      ),
+    ).rejects.toThrow(/not the assigned partner reviewer/i);
+  });
 
-    it('viewer_access.can_edit: creator org / owner yes; named partner, exec contact, university no', async () => {
-        const { service, opp } = makeAccessService({ organizationId: 'host-org', partner_organization: { official_email: 'p@ngo.org' } });
-        const edit = (v: any) => (service as any).viewerMayEditOpportunity(opp, v);
-        expect(edit({ id: 'colleague', role: 'ngo', organizationId: 'host-org' })).toBe(true);
-        expect(edit({ id: 'p', email: 'p@ngo.org', role: 'ngo', organizationId: 'partner-org' })).toBe(false);
-        expect(edit({ id: 'creator-1', role: 'faculty', organizationId: null })).toBe(true); // faculty creator (facultyId unset)
-        (opp as any).facultyId = 'another-faculty';
-        expect(edit({ id: 'creator-1', role: 'faculty', organizationId: null })).toBe(false); // update() would 403 here too
-        expect(edit({ role: 'ngo', organizationId: 'host-org' })).toBe(false);
+  it('org-created row: a same-org colleague is NOT a partner reviewer (gate unchanged)', async () => {
+    const { service, opp } = makeAccessService({
+      isStudentCreated: false,
+      organizationId: 'host-org',
     });
-
-    it('faculty action: FIR-listed faculty passes the supervisor gate even when supervision.contact names someone else', async () => {
-        const { service, opp } = makeAccessService({
-            visibility_and_academic_linkage: { faculty_institutional_representative: { official_email: 'fir@uni.edu' } },
-            supervision: { contact: 'someone.else@uni.edu' },
-        });
-        await expect(
-            (service as any).assertFacultySupervisorForStudentOpportunity(opp, 'fac-1', 'fir@uni.edu'),
-        ).resolves.toBeUndefined();
-        await expect(
-            (service as any).assertFacultySupervisorForStudentOpportunity(opp, 'fac-2', 'nobody@uni.edu'),
-        ).rejects.toThrow(/not the assigned faculty supervisor/i);
-    });
-
-    it('partner action: a partner named in a later contact field passes the ownership gate; a stranger does not', async () => {
-        const { service, opp } = makeAccessService({
-            isStudentCreated: true,
-            organizationId: null,
-            external_partner_collaboration: { official_email: 'first@ngo.org' },
-            executing_context: { partner: { official_email: 'ctx@ngo.org' } },
-        });
-        await expect(
-            (service as any).assertPartnerOwnsOpportunity(opp, 'ctx@ngo.org', null, null),
-        ).resolves.toBeUndefined();
-        await expect(
-            (service as any).assertPartnerOwnsOpportunity(opp, 'stranger@ngo.org', null, null),
-        ).rejects.toThrow(/not the assigned partner reviewer/i);
-    });
-
-    it('org-created row: a same-org colleague is NOT a partner reviewer (gate unchanged)', async () => {
-        const { service, opp } = makeAccessService({ isStudentCreated: false, organizationId: 'host-org' });
-        await expect(
-            (service as any).partnerReviewIdentityMatches(opp, 'colleague@ngo.org', 'host-org', 'col-1', ['Host Org']),
-        ).resolves.toBe(false);
-    });
+    await expect(
+      (service as any).partnerReviewIdentityMatches(
+        opp,
+        'colleague@ngo.org',
+        'host-org',
+        'col-1',
+        ['Host Org'],
+      ),
+    ).resolves.toBe(false);
+  });
 });
 
 describe('OpportunitiesService — update() mass-assignment hardening', () => {
-    const baseOpp = () =>
-        ({
-            id: 'opp-ma',
-            creatorId: 'fac-1',
-            facultyId: 'fac-1',
-            organizationId: 'org-1',
-            isStudentCreated: false,
-            title: 'Original',
-            status: 'pending_admin',
-            workflowStage: 'pending_admin',
-            admin_approved: false,
-            adminApprovalStatus: 'pending',
-            facultyApprovalStatus: 'approved',
-            partnerApprovalStatus: 'not_applicable',
-            partnerToken: 'tok-secret',
-        }) as unknown as Opportunity;
+  const baseOpp = () =>
+    ({
+      id: 'opp-ma',
+      creatorId: 'fac-1',
+      facultyId: 'fac-1',
+      organizationId: 'org-1',
+      isStudentCreated: false,
+      title: 'Original',
+      status: 'pending_admin',
+      workflowStage: 'pending_admin',
+      admin_approved: false,
+      adminApprovalStatus: 'pending',
+      facultyApprovalStatus: 'approved',
+      partnerApprovalStatus: 'not_applicable',
+      partnerToken: 'tok-secret',
+    }) as unknown as Opportunity;
 
-    function setup(opp: Opportunity, role: string, userId: string) {
-        const save = jest.fn(async (row: Opportunity) => row);
-        const service = makeService({ findOne: jest.fn().mockResolvedValue(opp), save });
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({ id: userId, role }),
-        };
-        (service as any).organizationsService = {
-            getMyOrganization: jest.fn().mockResolvedValue({ id: 'org-1' }),
-        };
-        (service as any).opportunityWorkflow = { initFacultyCreated: jest.fn() };
-        return service;
-    }
-
-    it('ignores workflow / ownership / token keys sent through the untyped PATCH body', async () => {
-        const opp = baseOpp();
-        const service = setup(opp, 'faculty', 'fac-1');
-        const saved = (await service.update('fac-1', {
-            id: 'opp-ma',
-            title: 'Edited title',
-            admin_approved: true,
-            status: 'active',
-            workflowStage: 'live',
-            adminApprovalStatus: 'approved',
-            creatorId: 'attacker',
-            organizationId: 'org-evil',
-            partnerToken: 'forged',
-            requiredHours: 1,
-            sdg: 'forged-sdg',
-        } as any)) as any;
-        const row = saved.data ?? saved;
-        expect(row.title).toBe('Edited title');
-        expect(row.admin_approved).not.toBe(true);
-        expect(row.status).not.toBe('active');
-        expect(row.workflowStage).not.toBe('live');
-        expect(row.adminApprovalStatus).not.toBe('approved');
-        expect(row.creatorId).toBe('fac-1');
-        expect(row.organizationId).toBe('org-1');
-        expect(row.partnerToken).toBe('tok-secret');
-        expect(row.sdg).not.toBe('forged-sdg');
+  function setup(opp: Opportunity, role: string, userId: string) {
+    const save = jest.fn(async (row: Opportunity) => row);
+    const service = makeService({
+      findOne: jest.fn().mockResolvedValue(opp),
+      save,
     });
+    (service as any).usersRepository = {
+      findOne: jest.fn().mockResolvedValue({ id: userId, role }),
+    };
+    (service as any).organizationsService = {
+      getMyOrganization: jest.fn().mockResolvedValue({ id: 'org-1' }),
+    };
+    (service as any).opportunityWorkflow = { initFacultyCreated: jest.fn() };
+    return service;
+  }
 
-    it('does not let a student edit an approved/live opportunity through update()', async () => {
-        const opp = {
-            ...baseOpp(),
-            creatorId: 'stu-1',
-            facultyId: null,
-            isStudentCreated: true,
-            admin_approved: true,
-            status: 'active',
-            workflowStage: 'live',
-        } as unknown as Opportunity;
-        const service = setup(opp, 'student', 'stu-1');
-        await expect(
-            service.update('stu-1', {
-                id: 'opp-ma',
-                title: 'Rewrite live listing',
-                participation_scope: { rule: 'open_all_universities' },
-            } as any),
-        ).rejects.toBeInstanceOf(BadRequestException);
-    });
+  it('ignores workflow / ownership / token keys sent through the untyped PATCH body', async () => {
+    const opp = baseOpp();
+    const service = setup(opp, 'faculty', 'fac-1');
+    const saved = (await service.update('fac-1', {
+      id: 'opp-ma',
+      title: 'Edited title',
+      admin_approved: true,
+      status: 'active',
+      workflowStage: 'live',
+      adminApprovalStatus: 'approved',
+      creatorId: 'attacker',
+      organizationId: 'org-evil',
+      partnerToken: 'forged',
+      requiredHours: 1,
+      sdg: 'forged-sdg',
+    } as any)) as any;
+    const row = saved.data ?? saved;
+    expect(row.title).toBe('Edited title');
+    expect(row.admin_approved).not.toBe(true);
+    expect(row.status).not.toBe('active');
+    expect(row.workflowStage).not.toBe('live');
+    expect(row.adminApprovalStatus).not.toBe('approved');
+    expect(row.creatorId).toBe('fac-1');
+    expect(row.organizationId).toBe('org-1');
+    expect(row.partnerToken).toBe('tok-secret');
+    expect(row.sdg).not.toBe('forged-sdg');
+  });
 
-    it('a student editing their own unapproved listing cannot widen its scope', async () => {
-        const opp = {
-            ...baseOpp(),
-            creatorId: 'stu-2',
-            facultyId: null,
-            isStudentCreated: true,
-            status: 'pending_faculty',
-            workflowStage: 'pending_faculty',
-            participation_scope: { rule: 'own_university_only' },
-            restricted_universities: ['BNU'],
-        } as unknown as Opportunity;
-        const service = setup(opp, 'student', 'stu-2');
-        const saved = (await service.update('stu-2', {
-            id: 'opp-ma',
-            title: 'New title',
-            participation_scope: { rule: 'open_all_universities' },
-            restricted_universities: [],
-        } as any)) as any;
-        const row = saved.data ?? saved;
-        expect(row.participation_scope).toEqual({ rule: 'own_university_only' });
-        expect(row.restricted_universities).toEqual(['BNU']);
-    });
+  it('does not let a student edit an approved/live opportunity through update()', async () => {
+    const opp = {
+      ...baseOpp(),
+      creatorId: 'stu-1',
+      facultyId: null,
+      isStudentCreated: true,
+      admin_approved: true,
+      status: 'active',
+      workflowStage: 'live',
+    } as unknown as Opportunity;
+    const service = setup(opp, 'student', 'stu-1');
+    await expect(
+      service.update('stu-1', {
+        id: 'opp-ma',
+        title: 'Rewrite live listing',
+        participation_scope: { rule: 'open_all_universities' },
+      } as any),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('a student editing their own unapproved listing cannot widen its scope', async () => {
+    const opp = {
+      ...baseOpp(),
+      creatorId: 'stu-2',
+      facultyId: null,
+      isStudentCreated: true,
+      status: 'pending_faculty',
+      workflowStage: 'pending_faculty',
+      participation_scope: { rule: 'own_university_only' },
+      restricted_universities: ['BNU'],
+    } as unknown as Opportunity;
+    const service = setup(opp, 'student', 'stu-2');
+    const saved = (await service.update('stu-2', {
+      id: 'opp-ma',
+      title: 'New title',
+      participation_scope: { rule: 'open_all_universities' },
+      restricted_universities: [],
+    } as any)) as any;
+    const row = saved.data ?? saved;
+    expect(row.participation_scope).toEqual({ rule: 'own_university_only' });
+    expect(row.restricted_universities).toEqual(['BNU']);
+  });
 });
 
 describe('OpportunitiesService — nested contact email validation', () => {
-    const service = makeService({});
-    const call = (patch: any) => (service as any).validateEditPatch(patch);
+  const service = makeService({});
+  const call = (patch: any) => (service as any).validateEditPatch(patch);
 
-    it('rejects malformed executing / partner / faculty-rep emails', () => {
-        expect(() => call({ executing_organization: { official_email: 'not-an-email' } })).toThrow(BadRequestException);
-        expect(() => call({ partner_organization: { official_email: 'x@' } })).toThrow(BadRequestException);
-        expect(() =>
-            call({
-                visibility_and_academic_linkage: {
-                    faculty_institutional_representative: { official_email: 'nope' },
-                },
-            }),
-        ).toThrow(BadRequestException);
-    });
+  it('rejects malformed executing / partner / faculty-rep emails', () => {
+    expect(() =>
+      call({ executing_organization: { official_email: 'not-an-email' } }),
+    ).toThrow(BadRequestException);
+    expect(() =>
+      call({ partner_organization: { official_email: 'x@' } }),
+    ).toThrow(BadRequestException);
+    expect(() =>
+      call({
+        visibility_and_academic_linkage: {
+          faculty_institutional_representative: { official_email: 'nope' },
+        },
+      }),
+    ).toThrow(BadRequestException);
+  });
 
-    it('accepts valid or empty emails', () => {
-        expect(() => call({ executing_organization: { official_email: 'ok@org.com' } })).not.toThrow();
-        expect(() => call({ executing_organization: { official_email: '' } })).not.toThrow();
-        expect(() => call({})).not.toThrow();
-    });
+  it('accepts valid or empty emails', () => {
+    expect(() =>
+      call({ executing_organization: { official_email: 'ok@org.com' } }),
+    ).not.toThrow();
+    expect(() =>
+      call({ executing_organization: { official_email: '' } }),
+    ).not.toThrow();
+    expect(() => call({})).not.toThrow();
+  });
 
-    it('edit keeps the create-time all-true safety / confirmation rules', () => {
-        expect(() => call({ safety_declaration: { environment_safe_and_appropriate: false } })).toThrow(BadRequestException);
-        expect(() => call({ submission_confirmations: {} })).toThrow(BadRequestException);
-        expect(() => call({ supervision: { contact: 'not-an-email' } })).toThrow(BadRequestException);
-    });
+  it('edit keeps the create-time all-true safety / confirmation rules', () => {
+    expect(() =>
+      call({ safety_declaration: { environment_safe_and_appropriate: false } }),
+    ).toThrow(BadRequestException);
+    expect(() => call({ submission_confirmations: {} })).toThrow(
+      BadRequestException,
+    );
+    expect(() => call({ supervision: { contact: 'not-an-email' } })).toThrow(
+      BadRequestException,
+    );
+  });
 });
 
 describe('OpportunitiesService — org-created routing, live-edit re-review, admin re-gating', () => {
-    const exec = {
-        supervisor_name: 'Org Contact',
-        role: 'Executing organization — official contact',
-        contact: 'contact@ngo.org',
-        safe_environment: true,
-        supervised: true,
+  const exec = {
+    supervisor_name: 'Org Contact',
+    role: 'Executing organization — official contact',
+    contact: 'contact@ngo.org',
+    safe_environment: true,
+    supervised: true,
+  };
+  const orgDto = (over: Record<string, unknown> = {}) =>
+    ({
+      title: 'Beach cleanup drive',
+      mode: 'Remote',
+      objectives: { description: 'Clean the beach and raise awareness.' },
+      timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
+      supervision: exec,
+      safety_declaration: {
+        environment_safe_and_appropriate: true,
+        students_guided_and_supervised: true,
+        lawful_ethical_and_non_hazardous: true,
+        precautions_and_basic_safety: true,
+      },
+      submission_confirmations: {
+        academically_valid_and_accurately_described: true,
+        activity_properly_supervised: true,
+        environment_safe_and_appropriate: true,
+        information_correct_and_verifiable: true,
+      },
+      sdg_info: { sdg_id: '14' },
+      ...over,
+    }) as any;
+
+  function orgCreate() {
+    const save = jest.fn((payload) =>
+      Promise.resolve({ id: 'new-opp', ...payload }),
+    );
+    const service = makeService({
+      create: jest.fn((p) => p),
+      save,
+      findOne: jest.fn(),
+      find: jest.fn().mockResolvedValue([]),
+      ...createDedupeStubs().stubs,
+    });
+    (service as any).usersRepository = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'ngo-1',
+        role: 'ngo',
+        email: 'creator@ngo.org',
+      }),
     };
-    const orgDto = (over: Record<string, unknown> = {}) =>
-        ({
-            title: 'Beach cleanup drive',
-            mode: 'Remote',
-            objectives: { description: 'Clean the beach and raise awareness.' },
-            timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
-            supervision: exec,
-            safety_declaration: {
-                environment_safe_and_appropriate: true,
-                students_guided_and_supervised: true,
-                lawful_ethical_and_non_hazardous: true,
-                precautions_and_basic_safety: true,
-            },
-            submission_confirmations: {
-                academically_valid_and_accurately_described: true,
-                activity_properly_supervised: true,
-                environment_safe_and_appropriate: true,
-                information_correct_and_verifiable: true,
-            },
-            sdg_info: { sdg_id: '14' },
-            ...over,
-        }) as any;
+    (service as any).organizationsService = {
+      getMyOrganization: jest.fn().mockResolvedValue({ id: 'org-1' }),
+    };
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    (service as any).mailService = {
+      sendAdminOpportunityReviewNeeded: jest.fn(),
+      sendFacultyStudentOpportunityVerification: jest.fn(),
+    };
+    return service;
+  }
 
-    function orgCreate() {
-        const save = jest.fn((payload) => Promise.resolve({ id: 'new-opp', ...payload }));
-        const service = makeService({
-            create: jest.fn((p) => p),
-            save,
-            findOne: jest.fn(),
-            find: jest.fn().mockResolvedValue([]),
-            ...createDedupeStubs().stubs,
-        });
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({ id: 'ngo-1', role: 'ngo', email: 'creator@ngo.org' }),
-        };
-        (service as any).organizationsService = { getMyOrganization: jest.fn().mockResolvedValue({ id: 'org-1' }) };
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-        (service as any).mailService = {
-            sendAdminOpportunityReviewNeeded: jest.fn(),
-            sendFacultyStudentOpportunityVerification: jest.fn(),
-        };
-        return service;
-    }
+  it('the executing-org contact mirrored into supervision.contact is NOT treated as a faculty (faculty stays optional)', async () => {
+    const service = orgCreate();
+    const saved = (await service.create('ngo-1', orgDto())) as any;
+    expect(saved.status).toBe('pending_approval');
+    expect(saved.faculty_verification_token ?? null).toBeNull();
+    expect(saved.facultyApprovalStatus).toBe('not_applicable');
+  });
 
-    it('the executing-org contact mirrored into supervision.contact is NOT treated as a faculty (faculty stays optional)', async () => {
-        const service = orgCreate();
-        const saved = (await service.create('ngo-1', orgDto())) as any;
-        expect(saved.status).toBe('pending_approval');
-        expect(saved.faculty_verification_token ?? null).toBeNull();
-        expect(saved.facultyApprovalStatus).toBe('not_applicable');
+  it('a real faculty representative still gates the listing, and the executing-org contact does not replace them', async () => {
+    const service = orgCreate();
+    const saved = (await service.create(
+      'ngo-1',
+      orgDto({
+        visibility_and_academic_linkage: {
+          faculty_institutional_representative: {
+            official_email: 'prof@uni.edu',
+          },
+        },
+      }),
+    )) as any;
+    expect(saved.status).toBe('pending_faculty');
+    expect(saved.faculty_verification_token).toBeTruthy();
+    expect((service as any).resolveFacultyEmail(saved)).toBe('prof@uni.edu');
+  });
+
+  // ---------- update(): live material edits ----------
+  const liveOpp = (over: Record<string, unknown> = {}) =>
+    ({
+      id: 'opp-live',
+      title: 'Live listing',
+      creatorId: 'fac-1',
+      facultyId: 'fac-1',
+      organizationId: 'org-1',
+      isStudentCreated: false,
+      status: 'active',
+      workflowStage: 'live',
+      admin_approved: true,
+      adminApprovalStatus: 'approved',
+      facultyApprovalStatus: 'approved',
+      partnerApprovalStatus: 'not_applicable',
+      partnerVerified: true,
+      requiresPartnerApproval: false,
+      participation_scope: { rule: 'open_all_universities' },
+      restricted_universities: [],
+      mode: 'Remote',
+      location: null,
+      sdg_info: { sdg_id: '4' },
+      supervision: { contact: 'prof@uni.edu' },
+      ...over,
+    }) as unknown as Opportunity;
+
+  function updater(
+    opp: Opportunity,
+    role: string,
+    userId: string,
+    email = 'x@y.z',
+  ) {
+    const save = jest.fn(async (row: Opportunity) => row);
+    const service = makeService({
+      findOne: jest.fn().mockResolvedValue(opp),
+      save,
     });
+    (service as any).usersRepository = {
+      findOne: jest.fn().mockResolvedValue({ id: userId, role, email }),
+    };
+    (service as any).organizationsService = {
+      getMyOrganization: jest.fn().mockResolvedValue({ id: 'org-1' }),
+    };
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    (service as any).mailService = {
+      sendAdminOpportunityReviewNeeded: jest.fn(),
+      sendPartnerVerification: jest.fn().mockResolvedValue(undefined),
+      sendFacultyStudentOpportunityVerification: jest
+        .fn()
+        .mockResolvedValue(undefined),
+    };
+    return { service, save };
+  }
 
-    it('a real faculty representative still gates the listing, and the executing-org contact does not replace them', async () => {
-        const service = orgCreate();
-        const saved = (await service.create(
-            'ngo-1',
-            orgDto({
-                visibility_and_academic_linkage: {
-                    faculty_institutional_representative: { official_email: 'prof@uni.edu' },
-                },
-            }),
-        )) as any;
-        expect(saved.status).toBe('pending_faculty');
-        expect(saved.faculty_verification_token).toBeTruthy();
-        expect((service as any).resolveFacultyEmail(saved)).toBe('prof@uni.edu');
+  it('faculty: a typo fix keeps a LIVE listing live', async () => {
+    const { service } = updater(liveOpp(), 'faculty', 'fac-1');
+    const saved = (await service.update('fac-1', {
+      id: 'opp-live',
+      title: 'Live listing (fixed typo)',
+    } as any)) as any;
+    expect(saved.admin_approved).toBe(true);
+    expect(saved.workflowStage).toBe('live');
+    expect(saved.status).toBe('active');
+  });
+
+  it('faculty: widening the audience of a LIVE listing sends it back through CIEL PK review', async () => {
+    const { service } = updater(
+      liveOpp({ participation_scope: { rule: 'own_university_only' } }),
+      'faculty',
+      'fac-1',
+    );
+    const saved = (await service.update('fac-1', {
+      id: 'opp-live',
+      participation_scope: { rule: 'open_all_universities' },
+    } as any)) as any;
+    expect(saved.admin_approved).toBe(false);
+    expect(saved.workflowStage).toBe('pending_admin');
+    expect(saved.adminApprovalStatus).toBe('pending');
+  });
+
+  it('org member: a material edit of a LIVE listing is re-reviewed; a cosmetic edit is not', async () => {
+    const cosmetic = updater(
+      liveOpp({ creatorId: 'ngo-1', facultyId: null }),
+      'ngo',
+      'ngo-1',
+    );
+    const a = (await cosmetic.service.update(
+      'ngo-1',
+      { id: 'opp-live', title: 'Renamed' } as any,
+      'org-1',
+    )) as any;
+    expect(a.admin_approved).toBe(true);
+    expect(a.workflowStage).toBe('live');
+
+    const material = updater(
+      liveOpp({ creatorId: 'ngo-1', facultyId: null }),
+      'ngo',
+      'ngo-1',
+    );
+    const b = (await material.service.update(
+      'ngo-1',
+      { id: 'opp-live', restricted_universities: ['LUMS'] } as any,
+      'org-1',
+    )) as any;
+    expect(b.admin_approved).toBe(false);
+    expect(b.workflowStage).toBe('pending_admin');
+    expect(b.status).toBe('pending_approval');
+  });
+
+  it('org member: saving after a revision request resubmits into review instead of getting stuck', async () => {
+    const opp = liveOpp({
+      creatorId: 'ngo-1',
+      facultyId: null,
+      status: 'revision',
+      workflowStage: 'revision',
+      admin_approved: false,
+      adminApprovalStatus: 'revision_requested',
     });
+    const { service } = updater(opp, 'ngo', 'ngo-1');
+    const saved = (await service.update(
+      'ngo-1',
+      { id: 'opp-live', title: 'Fixed per feedback' } as any,
+      'org-1',
+    )) as any;
+    expect(saved.workflowStage).toBe('pending_admin');
+    expect(saved.status).toBe('pending_approval');
+    expect(saved.adminApprovalStatus).toBe('pending');
+  });
 
-    // ---------- update(): live material edits ----------
-    const liveOpp = (over: Record<string, unknown> = {}) =>
-        ({
-            id: 'opp-live',
-            title: 'Live listing',
-            creatorId: 'fac-1',
-            facultyId: 'fac-1',
-            organizationId: 'org-1',
-            isStudentCreated: false,
-            status: 'active',
-            workflowStage: 'live',
-            admin_approved: true,
-            adminApprovalStatus: 'approved',
-            facultyApprovalStatus: 'approved',
-            partnerApprovalStatus: 'not_applicable',
-            partnerVerified: true,
-            requiresPartnerApproval: false,
-            participation_scope: { rule: 'open_all_universities' },
-            restricted_universities: [],
-            mode: 'Remote',
-            location: null,
-            sdg_info: { sdg_id: '4' },
-            supervision: { contact: 'prof@uni.edu' },
-            ...over,
-        }) as unknown as Opportunity;
-
-    function updater(opp: Opportunity, role: string, userId: string, email = 'x@y.z') {
-        const save = jest.fn(async (row: Opportunity) => row);
-        const service = makeService({ findOne: jest.fn().mockResolvedValue(opp), save });
-        (service as any).usersRepository = { findOne: jest.fn().mockResolvedValue({ id: userId, role, email }) };
-        (service as any).organizationsService = { getMyOrganization: jest.fn().mockResolvedValue({ id: 'org-1' }) };
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-        (service as any).mailService = {
-            sendAdminOpportunityReviewNeeded: jest.fn(),
-            sendPartnerVerification: jest.fn().mockResolvedValue(undefined),
-            sendFacultyStudentOpportunityVerification: jest.fn().mockResolvedValue(undefined),
-        };
-        return { service, save };
-    }
-
-    it('faculty: a typo fix keeps a LIVE listing live', async () => {
-        const { service } = updater(liveOpp(), 'faculty', 'fac-1');
-        const saved = (await service.update('fac-1', { id: 'opp-live', title: 'Live listing (fixed typo)' } as any)) as any;
-        expect(saved.admin_approved).toBe(true);
-        expect(saved.workflowStage).toBe('live');
-        expect(saved.status).toBe('active');
+  it('admin: adding a partner contact while editing opens the partner gate (token + email)', async () => {
+    const opp = liveOpp({
+      creatorId: 'admin-1',
+      facultyId: null,
+      supervision: {},
     });
-
-    it('faculty: widening the audience of a LIVE listing sends it back through CIEL PK review', async () => {
-        const { service } = updater(liveOpp({ participation_scope: { rule: 'own_university_only' } }), 'faculty', 'fac-1');
-        const saved = (await service.update('fac-1', {
-            id: 'opp-live',
-            participation_scope: { rule: 'open_all_universities' },
-        } as any)) as any;
-        expect(saved.admin_approved).toBe(false);
-        expect(saved.workflowStage).toBe('pending_admin');
-        expect(saved.adminApprovalStatus).toBe('pending');
-    });
-
-    it('org member: a material edit of a LIVE listing is re-reviewed; a cosmetic edit is not', async () => {
-        const cosmetic = updater(liveOpp({ creatorId: 'ngo-1', facultyId: null }), 'ngo', 'ngo-1');
-        const a = (await cosmetic.service.update('ngo-1', { id: 'opp-live', title: 'Renamed' } as any, 'org-1')) as any;
-        expect(a.admin_approved).toBe(true);
-        expect(a.workflowStage).toBe('live');
-
-        const material = updater(liveOpp({ creatorId: 'ngo-1', facultyId: null }), 'ngo', 'ngo-1');
-        const b = (await material.service.update(
-            'ngo-1',
-            { id: 'opp-live', restricted_universities: ['LUMS'] } as any,
-            'org-1',
-        )) as any;
-        expect(b.admin_approved).toBe(false);
-        expect(b.workflowStage).toBe('pending_admin');
-        expect(b.status).toBe('pending_approval');
-    });
-
-    it('org member: saving after a revision request resubmits into review instead of getting stuck', async () => {
-        const opp = liveOpp({
-            creatorId: 'ngo-1',
-            facultyId: null,
-            status: 'revision',
-            workflowStage: 'revision',
-            admin_approved: false,
-            adminApprovalStatus: 'revision_requested',
-        });
-        const { service } = updater(opp, 'ngo', 'ngo-1');
-        const saved = (await service.update('ngo-1', { id: 'opp-live', title: 'Fixed per feedback' } as any, 'org-1')) as any;
-        expect(saved.workflowStage).toBe('pending_admin');
-        expect(saved.status).toBe('pending_approval');
-        expect(saved.adminApprovalStatus).toBe('pending');
-    });
-
-    it('admin: adding a partner contact while editing opens the partner gate (token + email)', async () => {
-        const opp = liveOpp({ creatorId: 'admin-1', facultyId: null, supervision: {} });
-        const { service } = updater(opp, 'admin', 'admin-1', 'admin@cielpk.com');
-        const saved = (await service.update('admin-1', {
-            id: 'opp-live',
-            partner_organization: { organization_name: 'Partner', official_email: 'partner@org.com' },
-            external_partner_collaboration: {
-                organization_name: 'Partner',
-                contact_person: 'P',
-                official_email: 'partner@org.com',
-            },
-        } as any)) as any;
-        expect(saved.partnerToken).toBeTruthy();
-        expect(saved.status).toBe('pending_partner');
-        expect(saved.admin_approved).toBe(false);
-        expect((service as any).mailService.sendPartnerVerification).toHaveBeenCalled();
-    });
+    const { service } = updater(opp, 'admin', 'admin-1', 'admin@cielpk.com');
+    const saved = (await service.update('admin-1', {
+      id: 'opp-live',
+      partner_organization: {
+        organization_name: 'Partner',
+        official_email: 'partner@org.com',
+      },
+      external_partner_collaboration: {
+        organization_name: 'Partner',
+        contact_person: 'P',
+        official_email: 'partner@org.com',
+      },
+    } as any)) as any;
+    expect(saved.partnerToken).toBeTruthy();
+    expect(saved.status).toBe('pending_partner');
+    expect(saved.admin_approved).toBe(false);
+    expect(
+      (service as any).mailService.sendPartnerVerification,
+    ).toHaveBeenCalled();
+  });
 });
 
 describe('OpportunitiesService — student create does not leave orphan placeholder organizations', () => {
-    const user = { id: 'stu-1', name: 'Ali', email: 'ali@uni.edu', university: 'BNU' } as any;
-    const dto = {
-        title: 'Reading circles',
-        mode: 'Remote',
-        timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
-        supervision: { contact: 'teacher@uni.edu', faculty_department: 'CS' },
-        sdg_info: { sdg_id: '4' },
-    } as any;
+  const user = {
+    id: 'stu-1',
+    name: 'Ali',
+    email: 'ali@uni.edu',
+    university: 'BNU',
+  } as any;
+  const dto = {
+    title: 'Reading circles',
+    mode: 'Remote',
+    timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
+    supervision: { contact: 'teacher@uni.edu', faculty_department: 'CS' },
+    sdg_info: { sdg_id: '4' },
+  } as any;
 
-    function build(opportunitySave: jest.Mock) {
-        const orgDelete = jest.fn().mockResolvedValue(undefined);
-        const service = makeService({
-            create: jest.fn((p) => p),
-            save: opportunitySave,
-        });
-        (service as any).organizationsRepository = {
-            create: jest.fn((r) => r),
-            save: jest.fn(async (r) => ({ ...r, id: 'org-placeholder' })),
-            delete: orgDelete,
-        };
-        (service as any).usersRepository = { findOne: jest.fn().mockResolvedValue(null) };
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-        (service as any).mailService = { sendFacultyStudentOpportunityVerification: jest.fn().mockResolvedValue(undefined) };
-        return { service, orgDelete };
-    }
-
-    it('removes the placeholder organization when the opportunity INSERT fails', async () => {
-        const { service, orgDelete } = build(jest.fn().mockRejectedValue(new Error('db down')));
-        await expect(
-            (service as any).finishCreatingStudentOpportunity(dto, user, false, false, null, ['BNU'], false),
-        ).rejects.toThrow('db down');
-        expect(orgDelete).toHaveBeenCalledWith('org-placeholder');
+  function build(opportunitySave: jest.Mock) {
+    const orgDelete = jest.fn().mockResolvedValue(undefined);
+    const service = makeService({
+      create: jest.fn((p) => p),
+      save: opportunitySave,
     });
+    (service as any).organizationsRepository = {
+      create: jest.fn((r) => r),
+      save: jest.fn(async (r) => ({ ...r, id: 'org-placeholder' })),
+      delete: orgDelete,
+    };
+    (service as any).usersRepository = {
+      findOne: jest.fn().mockResolvedValue(null),
+    };
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    (service as any).mailService = {
+      sendFacultyStudentOpportunityVerification: jest
+        .fn()
+        .mockResolvedValue(undefined),
+    };
+    return { service, orgDelete };
+  }
 
-    it('keeps the organization on success', async () => {
-        const { service, orgDelete } = build(jest.fn(async (row) => ({ id: 'opp-1', ...row })));
-        const res = await (service as any).finishCreatingStudentOpportunity(dto, user, false, false, null, ['BNU'], false);
-        expect(res).toEqual(expect.objectContaining({ success: true }));
-        expect(orgDelete).not.toHaveBeenCalled();
-    });
+  it('removes the placeholder organization when the opportunity INSERT fails', async () => {
+    const { service, orgDelete } = build(
+      jest.fn().mockRejectedValue(new Error('db down')),
+    );
+    await expect(
+      (service as any).finishCreatingStudentOpportunity(
+        dto,
+        user,
+        false,
+        false,
+        null,
+        ['BNU'],
+        false,
+      ),
+    ).rejects.toThrow('db down');
+    expect(orgDelete).toHaveBeenCalledWith('org-placeholder');
+  });
+
+  it('keeps the organization on success', async () => {
+    const { service, orgDelete } = build(
+      jest.fn(async (row) => ({ id: 'opp-1', ...row })),
+    );
+    const res = await (service as any).finishCreatingStudentOpportunity(
+      dto,
+      user,
+      false,
+      false,
+      null,
+      ['BNU'],
+      false,
+    );
+    expect(res).toEqual(expect.objectContaining({ success: true }));
+    expect(orgDelete).not.toHaveBeenCalled();
+  });
 });
 
 describe('OpportunitiesService — content hygiene applies to every creator type', () => {
-    const svc = () => makeService({}) as any;
+  const svc = () => makeService({}) as any;
 
-    it('strips control characters and collapses the title whitespace', () => {
-        const dto: any = {
-            title: '  Beach \n  clean\u0007up ',
-            objectives: { description: 'Line1\u0000\u0008 text\r\n\r\n\r\n\r\n\r\nEnd' },
-            activity_details: { student_responsibilities: 'a\u0001b', skills_gained: [' Teaching ', ''] },
-        };
-        svc().sanitizeAndBoundContent(dto);
-        expect(dto.title).toBe('Beach clean up');
-        expect(dto.objectives.description).not.toMatch(/[\u0000-\u0008]/);
-        expect(dto.activity_details.student_responsibilities).toBe('ab');
-        expect(dto.activity_details.skills_gained).toEqual(['Teaching']);
-    });
+  it('strips control characters and collapses the title whitespace', () => {
+    const dto: any = {
+      title: '  Beach \n  clean\u0007up ',
+      objectives: {
+        description: 'Line1\u0000\u0008 text\r\n\r\n\r\n\r\n\r\nEnd',
+      },
+      activity_details: {
+        student_responsibilities: 'a\u0001b',
+        skills_gained: [' Teaching ', ''],
+      },
+    };
+    svc().sanitizeAndBoundContent(dto);
+    expect(dto.title).toBe('Beach clean up');
+    expect(dto.objectives.description).not.toMatch(/[\u0000-\u0008]/);
+    expect(dto.activity_details.student_responsibilities).toBe('ab');
+    expect(dto.activity_details.skills_gained).toEqual(['Teaching']);
+  });
 
-    it('rejects an unbounded description or responsibilities field', () => {
-        expect(() =>
-            svc().sanitizeAndBoundContent({ objectives: { description: 'x'.repeat(12001) } }),
-        ).toThrow(BadRequestException);
-        expect(() =>
-            svc().sanitizeAndBoundContent({ activity_details: { student_responsibilities: 'x'.repeat(12001) } }),
-        ).toThrow(BadRequestException);
-        expect(() =>
-            svc().sanitizeAndBoundContent({ objectives: { description: 'x'.repeat(12000) } }),
-        ).not.toThrow();
-    });
+  it('rejects an unbounded description or responsibilities field', () => {
+    expect(() =>
+      svc().sanitizeAndBoundContent({
+        objectives: { description: 'x'.repeat(12001) },
+      }),
+    ).toThrow(BadRequestException);
+    expect(() =>
+      svc().sanitizeAndBoundContent({
+        activity_details: { student_responsibilities: 'x'.repeat(12001) },
+      }),
+    ).toThrow(BadRequestException);
+    expect(() =>
+      svc().sanitizeAndBoundContent({
+        objectives: { description: 'x'.repeat(12000) },
+      }),
+    ).not.toThrow();
+  });
 });
 
 describe('OpportunitiesService — non-student creators cannot double-submit the same title', () => {
-    const dto = () =>
-        ({
-            title: 'Beach cleanup drive',
-            mode: 'Remote',
-            objectives: { description: 'Clean the beach and raise awareness.' },
-            timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
-            safety_declaration: {
-                environment_safe_and_appropriate: true,
-                students_guided_and_supervised: true,
-                lawful_ethical_and_non_hazardous: true,
-                precautions_and_basic_safety: true,
-            },
-            submission_confirmations: {
-                academically_valid_and_accurately_described: true,
-                activity_properly_supervised: true,
-                environment_safe_and_appropriate: true,
-                information_correct_and_verifiable: true,
-            },
-            sdg_info: { sdg_id: '14' },
-        }) as any;
+  const dto = () =>
+    ({
+      title: 'Beach cleanup drive',
+      mode: 'Remote',
+      objectives: { description: 'Clean the beach and raise awareness.' },
+      timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
+      safety_declaration: {
+        environment_safe_and_appropriate: true,
+        students_guided_and_supervised: true,
+        lawful_ethical_and_non_hazardous: true,
+        precautions_and_basic_safety: true,
+      },
+      submission_confirmations: {
+        academically_valid_and_accurately_described: true,
+        activity_properly_supervised: true,
+        environment_safe_and_appropriate: true,
+        information_correct_and_verifiable: true,
+      },
+      sdg_info: { sdg_id: '14' },
+    }) as any;
 
-    const build = (existing: Array<Record<string, unknown>>) => {
-        const save = jest.fn((p) => Promise.resolve({ id: 'new-opp', ...p }));
-        const service = makeService({
-            create: jest.fn((p) => p),
-            save,
-            findOne: jest.fn(),
-            find: jest.fn().mockResolvedValue(existing),
-            ...createDedupeStubs().stubs,
-        });
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({ id: 'ngo-1', role: 'ngo', email: 'c@ngo.org' }),
-        };
-        (service as any).organizationsService = { getMyOrganization: jest.fn().mockResolvedValue({ id: 'org-1' }) };
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-        (service as any).mailService = { sendAdminOpportunityReviewNeeded: jest.fn() };
-        return { service, save };
+  const build = (existing: Array<Record<string, unknown>>) => {
+    const save = jest.fn((p) => Promise.resolve({ id: 'new-opp', ...p }));
+    const service = makeService({
+      create: jest.fn((p) => p),
+      save,
+      findOne: jest.fn(),
+      find: jest.fn().mockResolvedValue(existing),
+      ...createDedupeStubs().stubs,
+    });
+    (service as any).usersRepository = {
+      findOne: jest
+        .fn()
+        .mockResolvedValue({ id: 'ngo-1', role: 'ngo', email: 'c@ngo.org' }),
     };
+    (service as any).organizationsService = {
+      getMyOrganization: jest.fn().mockResolvedValue({ id: 'org-1' }),
+    };
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    (service as any).mailService = {
+      sendAdminOpportunityReviewNeeded: jest.fn(),
+    };
+    return { service, save };
+  };
 
-    it('rejects a second live/pending listing with the same (normalised) title', async () => {
-        const { service, save } = build([
-            { id: 'old-1', title: 'beach  CLEANUP drive!', status: 'pending_approval', workflowStage: 'pending_admin' },
-        ]);
-        await expect(service.create('ngo-1', dto())).rejects.toMatchObject({
-            response: expect.objectContaining({ code: 'DUPLICATE_OPPORTUNITY_TITLE', existingOpportunityId: 'old-1' }),
-        });
-        expect(save).not.toHaveBeenCalled();
+  it('rejects a second live/pending listing with the same (normalised) title', async () => {
+    const { service, save } = build([
+      {
+        id: 'old-1',
+        title: 'beach  CLEANUP drive!',
+        status: 'pending_approval',
+        workflowStage: 'pending_admin',
+      },
+    ]);
+    await expect(service.create('ngo-1', dto())).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: 'DUPLICATE_OPPORTUNITY_TITLE',
+        existingOpportunityId: 'old-1',
+      }),
     });
+    expect(save).not.toHaveBeenCalled();
+  });
 
-    it('ignores drafts, rejected and closed listings, and different titles', async () => {
-        const { service } = build([
-            { id: 'a', title: 'Beach cleanup drive', status: 'draft' },
-            { id: 'b', title: 'Beach cleanup drive', status: 'rejected' },
-            { id: 'c', title: 'Beach cleanup drive', status: 'closed' },
-            { id: 'd', title: 'Beach cleanup drive', status: 'pending_approval', workflowStage: 'rejected' },
-            { id: 'e', title: 'Tree plantation', status: 'active' },
-        ]);
-        await expect(service.create('ngo-1', dto())).resolves.toBeTruthy();
-    });
+  it('ignores drafts, rejected and closed listings, and different titles', async () => {
+    const { service } = build([
+      { id: 'a', title: 'Beach cleanup drive', status: 'draft' },
+      { id: 'b', title: 'Beach cleanup drive', status: 'rejected' },
+      { id: 'c', title: 'Beach cleanup drive', status: 'closed' },
+      {
+        id: 'd',
+        title: 'Beach cleanup drive',
+        status: 'pending_approval',
+        workflowStage: 'rejected',
+      },
+      { id: 'e', title: 'Tree plantation', status: 'active' },
+    ]);
+    await expect(service.create('ngo-1', dto())).resolves.toBeTruthy();
+  });
 });
 
 describe('OpportunitiesService.decideOpportunityViaPartnerToken — a stale link cannot reopen a live opportunity', () => {
-    const run = async (opp: Record<string, unknown>, action: 'reject' | 'revision') => {
-        const save = jest.fn(async (row) => row);
-        const service = makeService({ findOne: jest.fn().mockResolvedValue(opp), save });
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-        (service as any).notifyStudentOpportunityUpdate = jest.fn();
-        return { promise: service.decideOpportunityViaPartnerToken('tok', action, 'reason'), save };
+  const run = async (
+    opp: Record<string, unknown>,
+    action: 'reject' | 'revision',
+  ) => {
+    const save = jest.fn(async (row) => row);
+    const service = makeService({
+      findOne: jest.fn().mockResolvedValue(opp),
+      save,
+    });
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    (service as any).notifyStudentOpportunityUpdate = jest.fn();
+    return {
+      promise: service.decideOpportunityViaPartnerToken(
+        'tok',
+        action,
+        'reason',
+      ),
+      save,
     };
+  };
 
-    it.each([
-        ['live + admin approved', { workflowStage: 'live', admin_approved: true, status: 'active', partnerVerified: false }],
-        ['admin approved only', { admin_approved: true, partnerVerified: false }],
-        ['partner line already approved', { partnerApprovalStatus: 'approved', partnerVerified: false }],
-    ])('refuses reject/revision on %s', async (_label, opp) => {
-        for (const action of ['reject', 'revision'] as const) {
-            const { promise, save } = await run({ id: 'o1', title: 'T', ...opp }, action);
-            await expect(promise).rejects.toThrow(/already approved/);
-            expect(save).not.toHaveBeenCalled();
-        }
-    });
+  it.each([
+    [
+      'live + admin approved',
+      {
+        workflowStage: 'live',
+        admin_approved: true,
+        status: 'active',
+        partnerVerified: false,
+      },
+    ],
+    ['admin approved only', { admin_approved: true, partnerVerified: false }],
+    [
+      'partner line already approved',
+      { partnerApprovalStatus: 'approved', partnerVerified: false },
+    ],
+  ])('refuses reject/revision on %s', async (_label, opp) => {
+    for (const action of ['reject', 'revision'] as const) {
+      const { promise, save } = await run(
+        { id: 'o1', title: 'T', ...opp },
+        action,
+      );
+      await expect(promise).rejects.toThrow(/already approved/);
+      expect(save).not.toHaveBeenCalled();
+    }
+  });
 
-    it('still lets the partner reject while their line is open', async () => {
-        const { promise, save } = await run(
-            { id: 'o1', title: 'T', workflowStage: 'pending_partner', status: 'pending_partner', partnerApprovalStatus: 'pending', partnerVerified: false, admin_approved: false },
-            'reject',
-        );
-        await expect(promise).resolves.toMatchObject({ success: true });
-        expect(save).toHaveBeenCalled();
-    });
+  it('still lets the partner reject while their line is open', async () => {
+    const { promise, save } = await run(
+      {
+        id: 'o1',
+        title: 'T',
+        workflowStage: 'pending_partner',
+        status: 'pending_partner',
+        partnerApprovalStatus: 'pending',
+        partnerVerified: false,
+        admin_approved: false,
+      },
+      'reject',
+    );
+    await expect(promise).resolves.toMatchObject({ success: true });
+    expect(save).toHaveBeenCalled();
+  });
 });
 
 describe('OpportunitiesService — student resubmit after CIEL PK / partner revision (lines already cleared stay cleared)', () => {
-    const studentUser = () => ({
-        findOne: jest.fn().mockResolvedValue({ id: 'student-1', role: 'student' }),
+  const studentUser = () => ({
+    findOne: jest.fn().mockResolvedValue({ id: 'student-1', role: 'student' }),
+  });
+
+  it('after a CIEL PK revision request, saving goes straight back to the admin queue without re-asking faculty', async () => {
+    const opp = {
+      id: 'opp-1',
+      creatorId: 'student-1',
+      isStudentCreated: true,
+      status: 'revision',
+      workflowStage: 'revision',
+      facultyApprovalStatus: 'approved',
+      faculty_verified: true,
+      faculty_verification_status: 'faculty_verified',
+      faculty_verification_token: 'faculty-token-1',
+      partnerApprovalStatus: 'not_applicable',
+      partnerVerified: true,
+      requiresPartnerApproval: false,
+      adminApprovalStatus: 'revision_requested',
+      admin_approved: false,
+      rejectionReason: 'Please add the activity schedule.',
+      supervision: { contact: 'teacher@uni.edu' },
+    } as unknown as Opportunity;
+    const save = jest.fn(async (row: Opportunity) => row);
+    const service = makeService({
+      findOne: jest.fn().mockResolvedValue(opp),
+      save,
     });
+    (service as any).usersRepository = studentUser();
+    (service as any).organizationsService = {
+      getMyOrganization: jest.fn().mockResolvedValue(null),
+    };
 
-    it('after a CIEL PK revision request, saving goes straight back to the admin queue without re-asking faculty', async () => {
-        const opp = {
-            id: 'opp-1',
-            creatorId: 'student-1',
-            isStudentCreated: true,
-            status: 'revision',
-            workflowStage: 'revision',
-            facultyApprovalStatus: 'approved',
-            faculty_verified: true,
-            faculty_verification_status: 'faculty_verified',
-            faculty_verification_token: 'faculty-token-1',
-            partnerApprovalStatus: 'not_applicable',
-            partnerVerified: true,
-            requiresPartnerApproval: false,
-            adminApprovalStatus: 'revision_requested',
-            admin_approved: false,
-            rejectionReason: 'Please add the activity schedule.',
-            supervision: { contact: 'teacher@uni.edu' },
-        } as unknown as Opportunity;
-        const save = jest.fn(async (row: Opportunity) => row);
-        const service = makeService({ findOne: jest.fn().mockResolvedValue(opp), save });
-        (service as any).usersRepository = studentUser();
-        (service as any).organizationsService = { getMyOrganization: jest.fn().mockResolvedValue(null) };
+    const saved = (await service.update('student-1', {
+      id: 'opp-1',
+      title: 'Added the activity schedule as requested',
+    } as any)) as any;
 
-        const saved = (await service.update('student-1', {
-            id: 'opp-1',
-            title: 'Added the activity schedule as requested',
-        } as any)) as any;
+    expect(saved.workflowStage).toBe('pending_admin');
+    expect(saved.status).toBe('pending_approval');
+    expect(saved.adminApprovalStatus).toBe('pending');
+    expect(saved.facultyApprovalStatus).toBe('approved');
+    expect(saved.faculty_verified).toBe(true);
+    expect(saved.faculty_verification_token).toBe('faculty-token-1');
+    expect(save).toHaveBeenCalledTimes(1);
+  });
 
-        expect(saved.workflowStage).toBe('pending_admin');
-        expect(saved.status).toBe('pending_approval');
-        expect(saved.adminApprovalStatus).toBe('pending');
-        expect(saved.facultyApprovalStatus).toBe('approved');
-        expect(saved.faculty_verified).toBe(true);
-        expect(saved.faculty_verification_token).toBe('faculty-token-1');
-        expect(save).toHaveBeenCalledTimes(1);
+  it('after a partner revision request, saving re-opens only the partner line with a fresh token', async () => {
+    const opp = {
+      id: 'opp-2',
+      creatorId: 'student-1',
+      isStudentCreated: true,
+      status: 'revision',
+      workflowStage: 'revision',
+      facultyApprovalStatus: 'approved',
+      faculty_verified: true,
+      faculty_verification_status: 'faculty_verified',
+      faculty_verification_token: 'faculty-token-2',
+      partnerApprovalStatus: 'revision_requested',
+      partnerVerified: false,
+      partnerToken: 'old-partner-token',
+      requiresPartnerApproval: true,
+      adminApprovalStatus: 'pending',
+      admin_approved: false,
+      supervision: { contact: 'teacher@uni.edu' },
+      partner_organization: { official_email: 'partner@org.com' },
+    } as unknown as Opportunity;
+    const save = jest.fn(async (row: Opportunity) => row);
+    const service = makeService({
+      findOne: jest.fn().mockResolvedValue(opp),
+      save,
     });
+    (service as any).usersRepository = studentUser();
+    (service as any).organizationsService = {
+      getMyOrganization: jest.fn().mockResolvedValue(null),
+    };
 
-    it('after a partner revision request, saving re-opens only the partner line with a fresh token', async () => {
-        const opp = {
-            id: 'opp-2',
-            creatorId: 'student-1',
-            isStudentCreated: true,
-            status: 'revision',
-            workflowStage: 'revision',
-            facultyApprovalStatus: 'approved',
-            faculty_verified: true,
-            faculty_verification_status: 'faculty_verified',
-            faculty_verification_token: 'faculty-token-2',
-            partnerApprovalStatus: 'revision_requested',
-            partnerVerified: false,
-            partnerToken: 'old-partner-token',
-            requiresPartnerApproval: true,
-            adminApprovalStatus: 'pending',
-            admin_approved: false,
-            supervision: { contact: 'teacher@uni.edu' },
-            partner_organization: { official_email: 'partner@org.com' },
-        } as unknown as Opportunity;
-        const save = jest.fn(async (row: Opportunity) => row);
-        const service = makeService({ findOne: jest.fn().mockResolvedValue(opp), save });
-        (service as any).usersRepository = studentUser();
-        (service as any).organizationsService = { getMyOrganization: jest.fn().mockResolvedValue(null) };
+    const saved = (await service.update('student-1', {
+      id: 'opp-2',
+      title: 'Partner details corrected',
+    } as any)) as any;
 
-        const saved = (await service.update('student-1', {
-            id: 'opp-2',
-            title: 'Partner details corrected',
-        } as any)) as any;
-
-        expect(saved.workflowStage).toBe('pending_partner');
-        expect(saved.status).toBe('pending_partner');
-        expect(saved.partnerApprovalStatus).toBe('pending');
-        expect(saved.partnerToken).toBeTruthy();
-        expect(saved.partnerToken).not.toBe('old-partner-token');
-        expect(saved.facultyApprovalStatus).toBe('approved');
-        expect(saved.faculty_verification_token).toBe('faculty-token-2');
-    });
+    expect(saved.workflowStage).toBe('pending_partner');
+    expect(saved.status).toBe('pending_partner');
+    expect(saved.partnerApprovalStatus).toBe('pending');
+    expect(saved.partnerToken).toBeTruthy();
+    expect(saved.partnerToken).not.toBe('old-partner-token');
+    expect(saved.facultyApprovalStatus).toBe('approved');
+    expect(saved.faculty_verification_token).toBe('faculty-token-2');
+  });
 });
 
 describe('OpportunitiesService — draft save can never demote a submitted listing', () => {
-    it('refuses {draft:true} on a row that already left draft, and saves nothing', async () => {
-        const opp = {
-            id: 'opp-1',
-            creatorId: 'student-1',
-            isStudentCreated: true,
-            status: 'pending_faculty',
-            workflowStage: 'pending_faculty',
-            title: 'Submitted listing',
-        } as unknown as Opportunity;
-        const save = jest.fn();
-        const service = makeService({ findOne: jest.fn().mockResolvedValue(opp), save });
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({ id: 'student-1', role: 'student' }),
-        };
-
-        await expect(
-            service.saveStudentOpportunityDraft('student-1', 'opp-1', {
-                draft: true,
-                title: 'Sneaky demotion',
-            }),
-        ).rejects.toThrow(/already been submitted and can no longer be saved as a draft/);
-        expect(save).not.toHaveBeenCalled();
-        expect(opp.status).toBe('pending_faculty');
+  it('refuses {draft:true} on a row that already left draft, and saves nothing', async () => {
+    const opp = {
+      id: 'opp-1',
+      creatorId: 'student-1',
+      isStudentCreated: true,
+      status: 'pending_faculty',
+      workflowStage: 'pending_faculty',
+      title: 'Submitted listing',
+    } as unknown as Opportunity;
+    const save = jest.fn();
+    const service = makeService({
+      findOne: jest.fn().mockResolvedValue(opp),
+      save,
     });
+    (service as any).usersRepository = {
+      findOne: jest
+        .fn()
+        .mockResolvedValue({ id: 'student-1', role: 'student' }),
+    };
 
-    it('refuses a draft save on someone else\'s draft', async () => {
-        const opp = {
-            id: 'opp-1',
-            creatorId: 'student-1',
-            isStudentCreated: true,
-            status: 'draft',
-        } as unknown as Opportunity;
-        const save = jest.fn();
-        const service = makeService({ findOne: jest.fn().mockResolvedValue(opp), save });
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({ id: 'student-2', role: 'student' }),
-        };
+    await expect(
+      service.saveStudentOpportunityDraft('student-1', 'opp-1', {
+        draft: true,
+        title: 'Sneaky demotion',
+      }),
+    ).rejects.toThrow(
+      /already been submitted and can no longer be saved as a draft/,
+    );
+    expect(save).not.toHaveBeenCalled();
+    expect(opp.status).toBe('pending_faculty');
+  });
 
-        await expect(
-            service.saveStudentOpportunityDraft('student-2', 'opp-1', { draft: true, title: 'x' }),
-        ).rejects.toBeInstanceOf(ForbiddenException);
-        expect(save).not.toHaveBeenCalled();
+  it("refuses a draft save on someone else's draft", async () => {
+    const opp = {
+      id: 'opp-1',
+      creatorId: 'student-1',
+      isStudentCreated: true,
+      status: 'draft',
+    } as unknown as Opportunity;
+    const save = jest.fn();
+    const service = makeService({
+      findOne: jest.fn().mockResolvedValue(opp),
+      save,
     });
+    (service as any).usersRepository = {
+      findOne: jest
+        .fn()
+        .mockResolvedValue({ id: 'student-2', role: 'student' }),
+    };
+
+    await expect(
+      service.saveStudentOpportunityDraft('student-2', 'opp-1', {
+        draft: true,
+        title: 'x',
+      }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(save).not.toHaveBeenCalled();
+  });
 });
 
 describe('OpportunitiesService — remove() ownership and dependency guards', () => {
-    const buildRemoveHarness = (opts: {
-        requester: { id: string; role: string };
-        creatorId: string;
-        foreignParticipations?: number;
-    }) => {
-        const opp = { id: 'opp-1', creatorId: opts.creatorId } as unknown as Opportunity;
-        const transaction = jest.fn(async (cb: (m: unknown) => Promise<unknown>) =>
-            cb({ delete: jest.fn().mockResolvedValue({ affected: 1 }) }),
-        );
-        const otherRows = Array.from({ length: opts.foreignParticipations ?? 0 }, (_, i) => ({
-            studentId: `other-${i}`,
-        }));
-        const manager = {
-            transaction,
-            getRepository: jest.fn(() => ({ find: jest.fn().mockResolvedValue([]) })),
-        };
-        const service = makeService({
-            findOne: jest.fn().mockResolvedValue(opp),
-            manager,
-        });
-        (service as any).usersRepository = { findOne: jest.fn().mockResolvedValue(opts.requester) };
-        (service as any).participationRepository = {
-            find: jest.fn().mockResolvedValue([{ studentId: opts.creatorId }, ...otherRows]),
-        };
-        (service as any).deleteOpportunityChildren = jest.fn().mockResolvedValue({ participations: 1 });
-        return { service, transaction };
+  const buildRemoveHarness = (opts: {
+    requester: { id: string; role: string };
+    creatorId: string;
+    foreignParticipations?: number;
+  }) => {
+    const opp = {
+      id: 'opp-1',
+      creatorId: opts.creatorId,
+    } as unknown as Opportunity;
+    const transaction = jest.fn(async (cb: (m: unknown) => Promise<unknown>) =>
+      cb({ delete: jest.fn().mockResolvedValue({ affected: 1 }) }),
+    );
+    const otherRows = Array.from(
+      { length: opts.foreignParticipations ?? 0 },
+      (_, i) => ({
+        studentId: `other-${i}`,
+      }),
+    );
+    const manager = {
+      transaction,
+      getRepository: jest.fn(() => ({ find: jest.fn().mockResolvedValue([]) })),
     };
-
-    it('a student who did not create the listing cannot delete it', async () => {
-        const { service, transaction } = buildRemoveHarness({
-            requester: { id: 'student-2', role: 'student' },
-            creatorId: 'student-1',
-        });
-        await expect(service.remove('opp-1', 'student-2')).rejects.toBeInstanceOf(ForbiddenException);
-        expect(transaction).not.toHaveBeenCalled();
+    const service = makeService({
+      findOne: jest.fn().mockResolvedValue(opp),
+      manager,
     });
+    (service as any).usersRepository = {
+      findOne: jest.fn().mockResolvedValue(opts.requester),
+    };
+    (service as any).participationRepository = {
+      find: jest
+        .fn()
+        .mockResolvedValue([{ studentId: opts.creatorId }, ...otherRows]),
+    };
+    (service as any).deleteOpportunityChildren = jest
+      .fn()
+      .mockResolvedValue({ participations: 1 });
+    return { service, transaction };
+  };
 
-    it('the creator can delete their own listing while nobody else depends on it', async () => {
-        const { service, transaction } = buildRemoveHarness({
-            requester: { id: 'student-1', role: 'student' },
-            creatorId: 'student-1',
-        });
-        const res = await service.remove('opp-1', 'student-1');
-        expect(res.success).toBe(true);
-        expect(transaction).toHaveBeenCalledTimes(1);
+  it('a student who did not create the listing cannot delete it', async () => {
+    const { service, transaction } = buildRemoveHarness({
+      requester: { id: 'student-2', role: 'student' },
+      creatorId: 'student-1',
     });
+    await expect(service.remove('opp-1', 'student-2')).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    expect(transaction).not.toHaveBeenCalled();
+  });
 
-    it('the creator is blocked once other students have enrolled — only CIEL PK admin may force it', async () => {
-        const blocked = buildRemoveHarness({
-            requester: { id: 'student-1', role: 'student' },
-            creatorId: 'student-1',
-            foreignParticipations: 2,
-        });
-        await expect(blocked.service.remove('opp-1', 'student-1')).rejects.toThrow(
-            /can no longer be deleted/,
-        );
-        expect(blocked.transaction).not.toHaveBeenCalled();
-
-        const admin = buildRemoveHarness({
-            requester: { id: 'admin-1', role: 'admin' },
-            creatorId: 'student-1',
-            foreignParticipations: 2,
-        });
-        const res = await admin.service.remove('opp-1', 'admin-1');
-        expect(res.success).toBe(true);
-        expect(admin.transaction).toHaveBeenCalledTimes(1);
+  it('the creator can delete their own listing while nobody else depends on it', async () => {
+    const { service, transaction } = buildRemoveHarness({
+      requester: { id: 'student-1', role: 'student' },
+      creatorId: 'student-1',
     });
+    const res = await service.remove('opp-1', 'student-1');
+    expect(res.success).toBe(true);
+    expect(transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('the creator is blocked once other students have enrolled — only CIEL PK admin may force it', async () => {
+    const blocked = buildRemoveHarness({
+      requester: { id: 'student-1', role: 'student' },
+      creatorId: 'student-1',
+      foreignParticipations: 2,
+    });
+    await expect(blocked.service.remove('opp-1', 'student-1')).rejects.toThrow(
+      /can no longer be deleted/,
+    );
+    expect(blocked.transaction).not.toHaveBeenCalled();
+
+    const admin = buildRemoveHarness({
+      requester: { id: 'admin-1', role: 'admin' },
+      creatorId: 'student-1',
+      foreignParticipations: 2,
+    });
+    const res = await admin.service.remove('opp-1', 'admin-1');
+    expect(res.success).toBe(true);
+    expect(admin.transaction).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('OpportunitiesService — student submit tells the partner right away, approval link waits for faculty', () => {
-    const studentDto = (withPartner: boolean) => ({
-        title: 'CS',
-        mode: 'Remote',
-        objectives: { description: 'Teach basic Microsoft Office skills to learners at a community centre.' },
-        timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
-        supervision: {
-            contact: 'teacher@uni.edu',
-            faculty_department: 'CS',
-            ...(withPartner ? { partner_org_name: 'Door of Awareness', partner_email: 'host@door.org', external_partner_email: 'host@door.org' } : {}),
-        },
-        ...(withPartner
-            ? {
-                  external_partner_collaboration: { organization_name: 'Door of Awareness', contact_person: 'Computer Lab', official_email: 'host@door.org' },
-                  partner_organization: { organization_name: 'Door of Awareness', contact_person: 'Computer Lab', official_email: 'host@door.org' },
-              }
-            : {}),
-        executing_context: {
-            type: 'independent',
-            independent_community_activity: { activity_site_description: 'Community centre' },
-        },
-        safety_declaration: {
-            environment_safe_and_appropriate: true,
-            students_guided_and_supervised: true,
-            lawful_ethical_and_non_hazardous: true,
-            precautions_and_basic_safety: true,
-        },
-        submission_confirmations: {
-            academically_valid_and_accurately_described: true,
-            activity_properly_supervised: true,
-            environment_safe_and_appropriate: true,
-            information_correct_and_verifiable: true,
-        },
-    });
+  const studentDto = (withPartner: boolean) => ({
+    title: 'CS',
+    mode: 'Remote',
+    objectives: {
+      description:
+        'Teach basic Microsoft Office skills to learners at a community centre.',
+    },
+    timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
+    supervision: {
+      contact: 'teacher@uni.edu',
+      faculty_department: 'CS',
+      ...(withPartner
+        ? {
+            partner_org_name: 'Door of Awareness',
+            partner_email: 'host@door.org',
+            external_partner_email: 'host@door.org',
+          }
+        : {}),
+    },
+    ...(withPartner
+      ? {
+          external_partner_collaboration: {
+            organization_name: 'Door of Awareness',
+            contact_person: 'Computer Lab',
+            official_email: 'host@door.org',
+          },
+          partner_organization: {
+            organization_name: 'Door of Awareness',
+            contact_person: 'Computer Lab',
+            official_email: 'host@door.org',
+          },
+        }
+      : {}),
+    executing_context: {
+      type: 'independent',
+      independent_community_activity: {
+        activity_site_description: 'Community centre',
+      },
+    },
+    safety_declaration: {
+      environment_safe_and_appropriate: true,
+      students_guided_and_supervised: true,
+      lawful_ethical_and_non_hazardous: true,
+      precautions_and_basic_safety: true,
+    },
+    submission_confirmations: {
+      academically_valid_and_accurately_described: true,
+      activity_properly_supervised: true,
+      environment_safe_and_appropriate: true,
+      information_correct_and_verifiable: true,
+    },
+  });
 
-    const build = () => {
-        const opportunitiesRepo = {
-            manager: lockManager(jest.fn().mockResolvedValue(undefined)),
-            create: jest.fn((payload: any) => payload),
-            save: jest.fn(async (row: any) => ({ ...row, id: row.id ?? 'opp-new' })),
-        };
-        const service = makeService(opportunitiesRepo);
-        (service as any).usersRepository = {
-            findOne: jest.fn().mockResolvedValue({
-                id: 'student-1',
-                role: 'student',
-                name: 'Ali Raza',
-                phone: '0300',
-                email: 'ali@uni.edu',
-                city: 'Lahore',
-                university: 'University A',
-                department: 'CS',
-            }),
-        };
-        (service as any).organizationsRepository = {
-            create: jest.fn((row: any) => row),
-            save: jest.fn(async (row: any) => ({ ...row, id: 'org-1' })),
-        };
-        (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-        const mailService = {
-            sendFacultyStudentOpportunityVerification: jest.fn().mockResolvedValue(undefined),
-            sendPartnerVerification: jest.fn().mockResolvedValue(undefined),
-            sendPartnerOpportunityNotice: jest.fn().mockResolvedValue(undefined),
-        };
-        (service as any).mailService = mailService;
-        return { service, mailService, opportunitiesRepo };
+  const build = () => {
+    const opportunitiesRepo = {
+      manager: lockManager(jest.fn().mockResolvedValue(undefined)),
+      create: jest.fn((payload: any) => payload),
+      save: jest.fn(async (row: any) => ({ ...row, id: row.id ?? 'opp-new' })),
     };
+    const service = makeService(opportunitiesRepo);
+    (service as any).usersRepository = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'student-1',
+        role: 'student',
+        name: 'Ali Raza',
+        phone: '0300',
+        email: 'ali@uni.edu',
+        city: 'Lahore',
+        university: 'University A',
+        department: 'CS',
+      }),
+    };
+    (service as any).organizationsRepository = {
+      create: jest.fn((row: any) => row),
+      save: jest.fn(async (row: any) => ({ ...row, id: 'org-1' })),
+    };
+    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    const mailService = {
+      sendFacultyStudentOpportunityVerification: jest
+        .fn()
+        .mockResolvedValue(undefined),
+      sendPartnerVerification: jest.fn().mockResolvedValue(undefined),
+      sendPartnerOpportunityNotice: jest.fn().mockResolvedValue(undefined),
+    };
+    (service as any).mailService = mailService;
+    return { service, mailService, opportunitiesRepo };
+  };
 
-    it('emails the faculty link and a partner heads-up notice at submit — never the partner approval link', async () => {
-        const { service, mailService } = build();
-        const result: any = await service.createStudentOpportunity('student-1', studentDto(true) as any);
+  it('emails the faculty link and a partner heads-up notice at submit — never the partner approval link', async () => {
+    const { service, mailService } = build();
+    const result: any = await service.createStudentOpportunity(
+      'student-1',
+      studentDto(true) as any,
+    );
 
-        expect(result.success).toBe(true);
-        expect(result.data.requiresPartnerApproval).toBe(true);
-        expect(result.data.workflowStage).toBe('pending_faculty');
-        expect(mailService.sendFacultyStudentOpportunityVerification).toHaveBeenCalledTimes(1);
-        expect(mailService.sendFacultyStudentOpportunityVerification.mock.calls[0][0]).toBe('teacher@uni.edu');
-        expect(mailService.sendPartnerOpportunityNotice).toHaveBeenCalledTimes(1);
-        const [to, title, opts] = mailService.sendPartnerOpportunityNotice.mock.calls[0];
-        expect(to).toBe('host@door.org');
-        expect(title).toBe('CS');
-        expect(opts.leadText).toContain('Ali Raza');
-        expect(opts.nextStepText).toMatch(/faculty supervisor reviews it first/i);
-        expect(mailService.sendPartnerVerification).not.toHaveBeenCalled();
-    });
+    expect(result.success).toBe(true);
+    expect(result.data.requiresPartnerApproval).toBe(true);
+    expect(result.data.workflowStage).toBe('pending_faculty');
+    expect(
+      mailService.sendFacultyStudentOpportunityVerification,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      mailService.sendFacultyStudentOpportunityVerification.mock.calls[0][0],
+    ).toBe('teacher@uni.edu');
+    expect(mailService.sendPartnerOpportunityNotice).toHaveBeenCalledTimes(1);
+    const [to, title, opts] =
+      mailService.sendPartnerOpportunityNotice.mock.calls[0];
+    expect(to).toBe('host@door.org');
+    expect(title).toBe('CS');
+    expect(opts.leadText).toContain('Ali Raza');
+    expect(opts.nextStepText).toMatch(/faculty supervisor reviews it first/i);
+    expect(mailService.sendPartnerVerification).not.toHaveBeenCalled();
+  });
 
-    it('sends no partner mail at all when the student added no partner', async () => {
-        const { service, mailService } = build();
-        await service.createStudentOpportunity('student-1', studentDto(false) as any);
-        expect(mailService.sendPartnerOpportunityNotice).not.toHaveBeenCalled();
-        expect(mailService.sendPartnerVerification).not.toHaveBeenCalled();
-    });
+  it('sends no partner mail at all when the student added no partner', async () => {
+    const { service, mailService } = build();
+    await service.createStudentOpportunity(
+      'student-1',
+      studentDto(false) as any,
+    );
+    expect(mailService.sendPartnerOpportunityNotice).not.toHaveBeenCalled();
+    expect(mailService.sendPartnerVerification).not.toHaveBeenCalled();
+  });
 
-    it('a failing heads-up notice never fails the student submit', async () => {
-        const { service, mailService } = build();
-        mailService.sendPartnerOpportunityNotice.mockRejectedValueOnce(new Error('smtp down'));
-        const result: any = await service.createStudentOpportunity('student-1', studentDto(true) as any);
-        expect(result.success).toBe(true);
-    });
+  it('a failing heads-up notice never fails the student submit', async () => {
+    const { service, mailService } = build();
+    mailService.sendPartnerOpportunityNotice.mockRejectedValueOnce(
+      new Error('smtp down'),
+    );
+    const result: any = await service.createStudentOpportunity(
+      'student-1',
+      studentDto(true) as any,
+    );
+    expect(result.success).toBe(true);
+  });
 });

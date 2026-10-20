@@ -22,21 +22,36 @@ import { StudentSubscriptionService } from './student-subscription.service';
 @Roles(UserRole.SUPER_ADMIN)
 @UseInterceptors(AdminMutationAuditInterceptor)
 export class AdminStudentSubscriptionController {
-  constructor(private readonly subscriptionService: StudentSubscriptionService) {}
+  constructor(
+    private readonly subscriptionService: StudentSubscriptionService,
+  ) {}
 
   @Get('pending')
   async listPending() {
-    return { success: true, data: await this.subscriptionService.listPendingReview() };
+    return {
+      success: true,
+      data: await this.subscriptionService.listPendingReview(),
+    };
   }
 
   @Get('history')
-  async listHistory(@Query('page') page?: string, @Query('limit') limit?: string) {
-    const result = await this.subscriptionService.listHistoryPaged({ page, limit });
+  async listHistory(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const result = await this.subscriptionService.listHistoryPaged({
+      page,
+      limit,
+    });
     return {
       success: true,
       data: result.rows,
       total: result.total,
-      pagination: { total: result.total, page: result.page, limit: result.limit },
+      pagination: {
+        total: result.total,
+        page: result.page,
+        limit: result.limit,
+      },
     };
   }
 
@@ -46,9 +61,13 @@ export class AdminStudentSubscriptionController {
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() body?: { allowAmountMismatch?: boolean },
   ) {
-    const row = await this.subscriptionService.approveSubmission(id, req.user.id, {
-      allowAmountMismatch: body?.allowAmountMismatch === true,
-    });
+    const row = await this.subscriptionService.approveSubmission(
+      id,
+      req.user.id,
+      {
+        allowAmountMismatch: body?.allowAmountMismatch === true,
+      },
+    );
     return {
       success: true,
       message: 'Subscription approved; student account activated',
@@ -62,7 +81,11 @@ export class AdminStudentSubscriptionController {
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() body: { feedback?: string },
   ) {
-    const row = await this.subscriptionService.rejectSubmission(id, req.user.id, body?.feedback);
+    const row = await this.subscriptionService.rejectSubmission(
+      id,
+      req.user.id,
+      body?.feedback,
+    );
     return {
       success: true,
       message: 'Submission rejected; student may submit again',

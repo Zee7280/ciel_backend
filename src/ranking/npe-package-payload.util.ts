@@ -26,10 +26,32 @@ const MAX_DEPTH = 14;
 
 /** Key names (case, `_` and `-` ignored) that identify a person or carry a credential. */
 const SENSITIVE_KEYS = new Set([
-  'cnic', 'cnicnumber', 'cnichash', 'cniclast4', 'nic', 'nationalid', 'idnumber',
-  'phone', 'phonenumber', 'mobile', 'mobilenumber', 'whatsapp', 'whatsappnumber', 'whatsappe164',
-  'contactphone', 'contactnumber', 'email', 'emailaddress', 'officialemail', 'contactemail',
-  'studentemail', 'password', 'passwordhash', 'token', 'accesstoken', 'otp',
+  'cnic',
+  'cnicnumber',
+  'cnichash',
+  'cniclast4',
+  'nic',
+  'nationalid',
+  'idnumber',
+  'phone',
+  'phonenumber',
+  'mobile',
+  'mobilenumber',
+  'whatsapp',
+  'whatsappnumber',
+  'whatsappe164',
+  'contactphone',
+  'contactnumber',
+  'email',
+  'emailaddress',
+  'officialemail',
+  'contactemail',
+  'studentemail',
+  'password',
+  'passwordhash',
+  'token',
+  'accesstoken',
+  'otp',
 ]);
 
 function normKey(key: string): string {
@@ -39,9 +61,11 @@ function normKey(key: string): string {
 /** Deep copy without identifying keys; strings are scrubbed. Never mutates the stored report. */
 export function redactSensitiveDeep(value: unknown, depth = 0): unknown {
   if (typeof value === 'string') return scrubPersonalText(value);
-  if (value === null || typeof value !== 'object' || depth > MAX_DEPTH) return value;
+  if (value === null || typeof value !== 'object' || depth > MAX_DEPTH)
+    return value;
   if (value instanceof Date) return value;
-  if (Array.isArray(value)) return value.map((v) => redactSensitiveDeep(v, depth + 1));
+  if (Array.isArray(value))
+    return value.map((v) => redactSensitiveDeep(v, depth + 1));
   const out: Record<string, unknown> = {};
   for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
     if (SENSITIVE_KEYS.has(normKey(key))) continue;
@@ -62,7 +86,10 @@ function list(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
-export function buildNpeSystemAnalysis(report: StudentReport, pkg: NpePackageRecord) {
+export function buildNpeSystemAnalysis(
+  report: StudentReport,
+  pkg: NpePackageRecord,
+) {
   const cii = rec(report.ciiV45);
   const lock = rec(report.ciiV45Lock);
   const badge = rec(lock.finalBadge ?? cii.finalBadge ?? cii.recommendedBadge);
@@ -75,12 +102,15 @@ export function buildNpeSystemAnalysis(report: StudentReport, pkg: NpePackageRec
     adminNote: text(lock.adminNote),
     summary: text(cii.analysisSummary),
     strengths: list(cii.strengths).map((s) => redactSensitiveDeep(s)),
-    developmentPriorities: list(cii.developmentPriorities).map((s) => redactSensitiveDeep(s)),
+    developmentPriorities: list(cii.developmentPriorities).map((s) =>
+      redactSensitiveDeep(s),
+    ),
     evidenceSummary: text(cii.evidenceSummary),
-    reviewReasons: list(cii.adminReviewReasons).map((s) => redactSensitiveDeep(s)),
+    reviewReasons: list(cii.adminReviewReasons).map((s) =>
+      redactSensitiveDeep(s),
+    ),
     qualityGates: cii.qualityGates ?? null,
-    note:
-      'This is the Admin-approved CII record. It is context only: it must not be recomputed or changed, and no total CII is to be returned.',
+    note: 'This is the Admin-approved CII record. It is context only: it must not be recomputed or changed, and no total CII is to be returned.',
   };
 }
 
@@ -105,7 +135,11 @@ export function buildNpeAiPayload(
       university: facets.university,
       department: facets.department,
       sdg: facets.sdg || null,
-      period: { date: facets.date || null, year: facets.year || null, semester: facets.semester || null },
+      period: {
+        date: facets.date || null,
+        year: facets.year || null,
+        semester: facets.semester || null,
+      },
       city: facets.city || null,
       partner: facets.partner || null,
       activity: facets.activity || null,
@@ -125,13 +159,19 @@ export function buildNpeAiPayload(
         {
           name: src.name,
           content: src.keys.map((key) =>
-            redactSensitiveDeep((report as unknown as Record<string, unknown>)[key]),
+            redactSensitiveDeep(
+              (report as unknown as Record<string, unknown>)[key],
+            ),
           ),
         },
       ]),
     ),
     // kept under its original name too, so older prompts / cached tooling still find it
-    priorCii: { locked: pkg.ciiLocked, score: pkg.cii, summary: system.summary },
+    priorCii: {
+      locked: pkg.ciiLocked,
+      score: pkg.cii,
+      summary: system.summary,
+    },
     systemAnalysis: system,
     uploaded_evidence_files: files.map((f, i) => ({
       file_id: `E${i + 1}`,

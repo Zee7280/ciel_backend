@@ -1,15 +1,36 @@
 import { BadRequestException } from '@nestjs/common';
-import { imageUploadOptions, proofUploadOptions, safeFileExtension, UNSAFE_UPLOAD_MIME } from './safe-upload';
+import {
+  imageUploadOptions,
+  proofUploadOptions,
+  safeFileExtension,
+  UNSAFE_UPLOAD_MIME,
+} from './safe-upload';
 
 const run = (opts: any, file: any) =>
   new Promise<{ err: Error | null; ok: boolean }>((resolve) =>
-    opts.fileFilter({}, file, (err: Error | null, ok: boolean) => resolve({ err, ok })),
+    opts.fileFilter({}, file, (err: Error | null, ok: boolean) =>
+      resolve({ err, ok }),
+    ),
   );
 
 describe('safe upload filters', () => {
   it('avatar / logo accepts real images only', async () => {
-    expect((await run(imageUploadOptions, { mimetype: 'image/png', originalname: 'a.png' })).ok).toBe(true);
-    expect((await run(imageUploadOptions, { mimetype: 'image/jpeg', originalname: 'a.JPG' })).ok).toBe(true);
+    expect(
+      (
+        await run(imageUploadOptions, {
+          mimetype: 'image/png',
+          originalname: 'a.png',
+        })
+      ).ok,
+    ).toBe(true);
+    expect(
+      (
+        await run(imageUploadOptions, {
+          mimetype: 'image/jpeg',
+          originalname: 'a.JPG',
+        })
+      ).ok,
+    ).toBe(true);
     for (const f of [
       { mimetype: 'text/html', originalname: 'x.html' },
       { mimetype: 'image/svg+xml', originalname: 'x.svg' },
@@ -23,10 +44,38 @@ describe('safe upload filters', () => {
   });
 
   it('proof accepts images and PDFs, nothing else', async () => {
-    expect((await run(proofUploadOptions, { mimetype: 'application/pdf', originalname: 'slip.pdf' })).ok).toBe(true);
-    expect((await run(proofUploadOptions, { mimetype: 'image/webp', originalname: 'slip.webp' })).ok).toBe(true);
-    expect((await run(proofUploadOptions, { mimetype: 'text/html', originalname: 'slip.html' })).ok).toBe(false);
-    expect((await run(proofUploadOptions, { mimetype: 'application/pdf', originalname: 'slip.exe' })).ok).toBe(false);
+    expect(
+      (
+        await run(proofUploadOptions, {
+          mimetype: 'application/pdf',
+          originalname: 'slip.pdf',
+        })
+      ).ok,
+    ).toBe(true);
+    expect(
+      (
+        await run(proofUploadOptions, {
+          mimetype: 'image/webp',
+          originalname: 'slip.webp',
+        })
+      ).ok,
+    ).toBe(true);
+    expect(
+      (
+        await run(proofUploadOptions, {
+          mimetype: 'text/html',
+          originalname: 'slip.html',
+        })
+      ).ok,
+    ).toBe(false);
+    expect(
+      (
+        await run(proofUploadOptions, {
+          mimetype: 'application/pdf',
+          originalname: 'slip.exe',
+        })
+      ).ok,
+    ).toBe(false);
   });
 
   it('declares hard size limits', () => {
@@ -43,9 +92,16 @@ describe('safe upload filters', () => {
   });
 
   it('flags script-capable MIME types', () => {
-    for (const m of ['text/html', 'text/html; charset=utf-8', 'image/svg+xml', 'application/xhtml+xml', 'application/javascript']) {
+    for (const m of [
+      'text/html',
+      'text/html; charset=utf-8',
+      'image/svg+xml',
+      'application/xhtml+xml',
+      'application/javascript',
+    ]) {
       expect(UNSAFE_UPLOAD_MIME.test(m)).toBe(true);
     }
-    for (const m of ['image/png', 'application/pdf', 'video/mp4']) expect(UNSAFE_UPLOAD_MIME.test(m)).toBe(false);
+    for (const m of ['image/png', 'application/pdf', 'video/mp4'])
+      expect(UNSAFE_UPLOAD_MIME.test(m)).toBe(false);
   });
 });

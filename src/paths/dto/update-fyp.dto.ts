@@ -78,7 +78,12 @@ export class FypProjectInfoDto {
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) degree?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) graduationYear?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) projectType?: string;
-  @IsOptional() @IsArray() @ArrayMaxSize(LIST_MAX) @IsString({ each: true }) @MaxLength(FREE_TEXT_MAX, { each: true }) projectTypes?: string[];
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(LIST_MAX)
+  @IsString({ each: true })
+  @MaxLength(FREE_TEXT_MAX, { each: true })
+  projectTypes?: string[];
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) leadRoute?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) academicAreaKey?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) academicArea?: string;
@@ -100,25 +105,53 @@ export class FypProjectInfoDto {
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) supervisorName?: string;
   /** Self-declared by the student, matched verbatim against the reviewing faculty's own login
    * email in supervisorReviewFyp — format-checked only, never verified against a roster. */
-  @IsOptional() @ValidateIf((o) => !!o.supervisorEmail) @IsEmail() @MaxLength(FREE_TEXT_MAX) supervisorEmail?: string;
+  @IsOptional()
+  @ValidateIf((o) => !!o.supervisorEmail)
+  @IsEmail()
+  @MaxLength(FREE_TEXT_MAX)
+  supervisorEmail?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) coSupervisorName?: string;
-  @IsOptional() @ValidateIf((o) => !!o.coSupervisorEmail) @IsEmail() @MaxLength(FREE_TEXT_MAX) coSupervisorEmail?: string;
+  @IsOptional()
+  @ValidateIf((o) => !!o.coSupervisorEmail)
+  @IsEmail()
+  @MaxLength(FREE_TEXT_MAX)
+  coSupervisorEmail?: string;
 }
 export class FypBackgroundInfoDto {
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) problem?: string;
-  @IsOptional() @IsArray() @ArrayMaxSize(LIST_MAX) @IsString({ each: true }) @MaxLength(FREE_TEXT_MAX, { each: true }) whyUrgent?: string[];
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(LIST_MAX)
+  @IsString({ each: true })
+  @MaxLength(FREE_TEXT_MAX, { each: true })
+  whyUrgent?: string[];
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) whyUrgentOther?: string;
-  @IsOptional() @IsArray() @ArrayMaxSize(LIST_MAX) @IsString({ each: true }) @MaxLength(FREE_TEXT_MAX, { each: true }) audience?: string[];
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(LIST_MAX)
+  @IsString({ each: true })
+  @MaxLength(FREE_TEXT_MAX, { each: true })
+  audience?: string[];
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) audienceOther?: string;
 }
 export class FypObjectivesInfoDto {
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) aim?: string;
-  @IsOptional() @IsArray() @ArrayMaxSize(LIST_MAX) @IsString({ each: true }) @MaxLength(FREE_TEXT_MAX, { each: true }) objectives?: string[];
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(LIST_MAX)
+  @IsString({ each: true })
+  @MaxLength(FREE_TEXT_MAX, { each: true })
+  objectives?: string[];
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) scope?: string;
 }
 export class FypLiteratureInfoDto {
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) sourcesReviewed?: string;
-  @IsOptional() @IsArray() @ArrayMaxSize(LIST_MAX) @IsString({ each: true }) @MaxLength(FREE_TEXT_MAX, { each: true }) sourceTypes?: string[];
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(LIST_MAX)
+  @IsString({ each: true })
+  @MaxLength(FREE_TEXT_MAX, { each: true })
+  sourceTypes?: string[];
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) sourceTypesOther?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) gap?: string;
 }
@@ -128,9 +161,19 @@ export class FypScaleEntryDto {
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) unitOther?: string;
 }
 export class FypMethodologyInfoDto {
-  @IsOptional() @IsArray() @ArrayMaxSize(LIST_MAX) @IsString({ each: true }) @MaxLength(FREE_TEXT_MAX, { each: true }) approaches?: string[];
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(LIST_MAX)
+  @IsString({ each: true })
+  @MaxLength(FREE_TEXT_MAX, { each: true })
+  approaches?: string[];
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) approachesOther?: string;
-  @IsOptional() @IsArray() @ArrayMaxSize(LIST_MAX) @IsString({ each: true }) @MaxLength(FREE_TEXT_MAX, { each: true }) methods?: string[];
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(LIST_MAX)
+  @IsString({ each: true })
+  @MaxLength(FREE_TEXT_MAX, { each: true })
+  methods?: string[];
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) methodsOther?: string;
   /** @deprecated see scaleEntries */
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) sampleScale?: string;
@@ -154,9 +197,19 @@ export class FypMetricDto {
   @IsOptional() @IsIn(['Measured', 'Estimated', 'Target']) status?: string;
 }
 export class FypFindingsInfoDto {
-  @IsOptional() @IsArray() @ArrayMaxSize(LIST_MAX) @IsString({ each: true }) @MaxLength(FREE_TEXT_MAX, { each: true }) outputs?: string[];
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(LIST_MAX)
+  @IsString({ each: true })
+  @MaxLength(FREE_TEXT_MAX, { each: true })
+  outputs?: string[];
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) outputsOther?: string;
-  @IsOptional() @IsArray() @ArrayMaxSize(LIST_MAX) @IsString({ each: true }) @MaxLength(FREE_TEXT_MAX, { each: true }) findings?: string[];
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(LIST_MAX)
+  @IsString({ each: true })
+  @MaxLength(FREE_TEXT_MAX, { each: true })
+  findings?: string[];
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) measurableImpact?: string;
   /** @deprecated see limitation */
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) limitationType?: string;
@@ -191,7 +244,10 @@ export class FypRouteDetailsDto {
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) runtimeFormat?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) clientOrg?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) engagementBasis?: string;
-  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) recommendationStatus?: string;
+  @IsOptional()
+  @IsString()
+  @MaxLength(FREE_TEXT_MAX)
+  recommendationStatus?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) discussion?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) conclusion?: string;
   @IsOptional() v9Pathway?: Record<string, unknown>;
@@ -199,7 +255,10 @@ export class FypRouteDetailsDto {
 }
 export class FypSdgEntryDto {
   @IsNumber() goalNumber: number;
-  @IsArray() @ArrayMaxSize(LIST_MAX) @IsString({ each: true }) targets: string[];
+  @IsArray()
+  @ArrayMaxSize(LIST_MAX)
+  @IsString({ each: true })
+  targets: string[];
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) how?: string;
 }
 export class FypSdgMappingDto {
@@ -217,8 +276,16 @@ export class FypReflectionInfoDto {
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) biggestLesson?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) hardestMoment?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) wrongAssumption?: string;
-  @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) sustainabilityShift?: string;
-  @IsOptional() @IsArray() @ArrayMaxSize(LIST_MAX) @IsString({ each: true }) @MaxLength(FREE_TEXT_MAX, { each: true }) skills?: string[];
+  @IsOptional()
+  @IsString()
+  @MaxLength(FREE_TEXT_MAX)
+  sustainabilityShift?: string;
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(LIST_MAX)
+  @IsString({ each: true })
+  @MaxLength(FREE_TEXT_MAX, { each: true })
+  skills?: string[];
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) whatsNext?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) adviceForNext?: string;
 }
@@ -231,7 +298,10 @@ export class FypSectionSummariesDto {
   @IsOptional() @IsString() @MaxLength(SECTION_SUMMARY_MAX) background?: string;
   @IsOptional() @IsString() @MaxLength(SECTION_SUMMARY_MAX) objectives?: string;
   @IsOptional() @IsString() @MaxLength(SECTION_SUMMARY_MAX) literature?: string;
-  @IsOptional() @IsString() @MaxLength(SECTION_SUMMARY_MAX) methodology?: string;
+  @IsOptional()
+  @IsString()
+  @MaxLength(SECTION_SUMMARY_MAX)
+  methodology?: string;
   @IsOptional() @IsString() @MaxLength(SECTION_SUMMARY_MAX) findings?: string;
   @IsOptional() @IsString() @MaxLength(SECTION_SUMMARY_MAX) sdg?: string;
   @IsOptional() @IsString() @MaxLength(SECTION_SUMMARY_MAX) reflection?: string;

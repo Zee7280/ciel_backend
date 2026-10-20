@@ -28,12 +28,16 @@ function isOtherChoice(value: unknown): boolean {
 }
 
 function isOtherMechanism(value: unknown): boolean {
-  const text = stringField(value).replace(/^✏️\s*/, '').trim();
+  const text = stringField(value)
+    .replace(/^✏️\s*/, '')
+    .trim();
   return /^other$/i.test(text);
 }
 
 function isOtherSkill(value: unknown): boolean {
-  const text = stringField(value).replace(/^✏️\s*/, '').trim();
+  const text = stringField(value)
+    .replace(/^✏️\s*/, '')
+    .trim();
   return /^other$/i.test(text);
 }
 
@@ -122,10 +126,15 @@ function activityHasOutputOrReach(block: Record<string, unknown>): boolean {
   const hasOutput = outputs.some((entry) => {
     if (typeof entry === 'string') return entry.trim().length > 0;
     const out = (entry || {}) as Record<string, unknown>;
-    return stringField(out.title).trim().length > 0 && String(out.quantity ?? '').trim().length > 0;
+    return (
+      stringField(out.title).trim().length > 0 &&
+      String(out.quantity ?? '').trim().length > 0
+    );
   });
   const gross = String(block.beneficiaries_reached ?? '').trim();
-  const unique = String(block.unique_beneficiaries ?? block.beneficiaries_reached ?? '').trim();
+  const unique = String(
+    block.unique_beneficiaries ?? block.beneficiaries_reached ?? '',
+  ).trim();
   return hasOutput || (gross.length > 0 && unique.length > 0);
 }
 
@@ -136,7 +145,10 @@ function activityHasOutputOrReach(block: Record<string, unknown>): boolean {
  */
 function hasChosenValue(value: unknown): boolean {
   if (Array.isArray(value)) return value.length > 0;
-  return stringField(value).trim().length > 0 || (typeof value === 'number' && Number.isFinite(value));
+  return (
+    stringField(value).trim().length > 0 ||
+    (typeof value === 'number' && Number.isFinite(value))
+  );
 }
 
 function validateCoreSectionsPresence(report: {
@@ -178,14 +190,30 @@ function validateCoreSectionsPresence(report: {
   }
   const section2 = report.section2 || {};
   if (!stringField(section2.problem_statement).trim()) {
-    issues.push({ section: 2, field: 'problem_statement', message: 'Problem statement is required' });
+    issues.push({
+      section: 2,
+      field: 'problem_statement',
+      message: 'Problem statement is required',
+    });
   } else {
-    checkWordRange(issues, 2, 'problem_statement', section2.problem_statement, 'Problem statement');
+    checkWordRange(
+      issues,
+      2,
+      'problem_statement',
+      section2.problem_statement,
+      'Problem statement',
+    );
   }
   if (!stringField(section2.affected_group).trim()) {
-    issues.push({ section: 2, field: 'affected_group', message: 'Who was affected is required' });
+    issues.push({
+      section: 2,
+      field: 'affected_group',
+      message: 'Who was affected is required',
+    });
   }
-  const affectedCount = Number(String(section2.affected_count ?? '').replace(/,/g, ''));
+  const affectedCount = Number(
+    String(section2.affected_count ?? '').replace(/,/g, ''),
+  );
   if (
     !stringField(section2.affected_count).trim() ||
     !Number.isFinite(affectedCount) ||
@@ -204,7 +232,9 @@ function validateCoreSectionsPresence(report: {
       message: 'Choose at least one thing that was missing',
     });
   } else if (
-    (section2.system_gaps as unknown[]).some((gap) => String(gap) === 'Other') &&
+    (section2.system_gaps as unknown[]).some(
+      (gap) => String(gap) === 'Other',
+    ) &&
     !stringField(section2.system_gaps_other).trim() &&
     !listHasItems(section2.system_gaps_other_entries)
   ) {
@@ -215,9 +245,20 @@ function validateCoreSectionsPresence(report: {
     });
   }
   if (!section2.discipline) {
-    issues.push({ section: 2, field: 'discipline', message: 'Academic discipline is required' });
-  } else if (section2.discipline === 'Other…' && !stringField(section2.discipline_other).trim()) {
-    issues.push({ section: 2, field: 'discipline_other', message: 'Please name your discipline' });
+    issues.push({
+      section: 2,
+      field: 'discipline',
+      message: 'Academic discipline is required',
+    });
+  } else if (
+    section2.discipline === 'Other…' &&
+    !stringField(section2.discipline_other).trim()
+  ) {
+    issues.push({
+      section: 2,
+      field: 'discipline_other',
+      message: 'Please name your discipline',
+    });
   }
   if (!stringField(section2.discipline_contribution).trim()) {
     issues.push({
@@ -226,86 +267,207 @@ function validateCoreSectionsPresence(report: {
       message: 'Discipline contribution explanation is required',
     });
   } else {
-    checkWordRange(issues, 2, 'discipline_contribution', section2.discipline_contribution, 'Discipline contribution explanation');
+    checkWordRange(
+      issues,
+      2,
+      'discipline_contribution',
+      section2.discipline_contribution,
+      'Discipline contribution explanation',
+    );
   }
 
   const section3 = report.section3 || {};
   if (!stringField(section3.contribution_intent_statement).trim()) {
-    issues.push({ section: 3, field: 'contribution_intent_statement', message: 'Contribution logic is required' });
+    issues.push({
+      section: 3,
+      field: 'contribution_intent_statement',
+      message: 'Contribution logic is required',
+    });
   } else {
-    checkWordRange(issues, 3, 'contribution_intent_statement', section3.contribution_intent_statement, 'Contribution logic');
+    checkWordRange(
+      issues,
+      3,
+      'contribution_intent_statement',
+      section3.contribution_intent_statement,
+      'Contribution logic',
+    );
   }
   // Mirrors frontend validateSection3's hasStudentMappingSelection: only required once the
   // student has actually picked their own SDG mapping (primary_sdg), not for every report.
-  const studentPrimarySdg = (section3.primary_sdg || {}) as Record<string, unknown>;
+  const studentPrimarySdg = (section3.primary_sdg || {}) as Record<
+    string,
+    unknown
+  >;
   const hasStudentMappingSelection = Boolean(
     studentPrimarySdg.goal_number ||
-      studentPrimarySdg.target_id ||
-      studentPrimarySdg.target_code ||
-      studentPrimarySdg.indicator_id ||
-      studentPrimarySdg.indicator_code,
+    studentPrimarySdg.target_id ||
+    studentPrimarySdg.target_code ||
+    studentPrimarySdg.indicator_id ||
+    studentPrimarySdg.indicator_code,
   );
   if (hasStudentMappingSelection) {
     if (!stringField(section3.student_contribution_intent_statement).trim()) {
-      issues.push({ section: 3, field: 'student_contribution_intent_statement', message: 'Student contribution logic is required' });
+      issues.push({
+        section: 3,
+        field: 'student_contribution_intent_statement',
+        message: 'Student contribution logic is required',
+      });
     } else {
-      checkWordRange(issues, 3, 'student_contribution_intent_statement', section3.student_contribution_intent_statement, 'Student contribution logic');
+      checkWordRange(
+        issues,
+        3,
+        'student_contribution_intent_statement',
+        section3.student_contribution_intent_statement,
+        'Student contribution logic',
+      );
     }
   }
-  const secondarySdgs = Array.isArray(section3.secondary_sdgs) ? section3.secondary_sdgs : [];
+  const secondarySdgs = Array.isArray(section3.secondary_sdgs)
+    ? section3.secondary_sdgs
+    : [];
   secondarySdgs.forEach((entry, index) => {
     const sdg = (entry || {}) as Record<string, unknown>;
     if (!stringField(sdg.justification_text).trim()) {
-      issues.push({ section: 3, field: `secondary_sdgs.${index}.justification_text`, message: `Secondary SDG ${index + 1}: justification is required` });
+      issues.push({
+        section: 3,
+        field: `secondary_sdgs.${index}.justification_text`,
+        message: `Secondary SDG ${index + 1}: justification is required`,
+      });
     } else {
-      checkWordRange(issues, 3, `secondary_sdgs.${index}.justification_text`, sdg.justification_text, `Secondary SDG ${index + 1} justification`, 'justification_text');
+      checkWordRange(
+        issues,
+        3,
+        `secondary_sdgs.${index}.justification_text`,
+        sdg.justification_text,
+        `Secondary SDG ${index + 1} justification`,
+        'justification_text',
+      );
     }
   });
-  if (!Array.isArray(section2.baseline_evidence) || !section2.baseline_evidence.length) {
-    issues.push({ section: 2, field: 'baseline_evidence', message: 'At least one baseline evidence type is required' });
+  if (
+    !Array.isArray(section2.baseline_evidence) ||
+    !section2.baseline_evidence.length
+  ) {
+    issues.push({
+      section: 2,
+      field: 'baseline_evidence',
+      message: 'At least one baseline evidence type is required',
+    });
   }
 
   const section4 = report.section4 || {};
-  const activityBlocks = Array.isArray(section4.activity_blocks) ? section4.activity_blocks : [];
+  const activityBlocks = Array.isArray(section4.activity_blocks)
+    ? section4.activity_blocks
+    : [];
   if (!activityBlocks.length) {
-    issues.push({ section: 4, field: 'activity_blocks', message: 'At least one activity block is required' });
+    issues.push({
+      section: 4,
+      field: 'activity_blocks',
+      message: 'At least one activity block is required',
+    });
   } else {
     activityBlocks.forEach((entry, index) => {
       const block = (entry || {}) as Record<string, unknown>;
       if (!stringField(block.title).trim()) {
-        issues.push({ section: 4, field: `activity_blocks.${index}.title`, message: `Activity ${index + 1}: title is required` });
+        issues.push({
+          section: 4,
+          field: `activity_blocks.${index}.title`,
+          message: `Activity ${index + 1}: title is required`,
+        });
       }
       if (!block.primary_category) {
-        issues.push({ section: 4, field: `activity_blocks.${index}.primary_category`, message: `Activity ${index + 1}: activity family is required` });
+        issues.push({
+          section: 4,
+          field: `activity_blocks.${index}.primary_category`,
+          message: `Activity ${index + 1}: activity family is required`,
+        });
       }
-      if (isOtherChoice(block.primary_category) && !stringField(block.other_category_text).trim()) {
-        issues.push({ section: 4, field: `activity_blocks.${index}.other_category_text`, message: `Activity ${index + 1}: custom activity family is required` });
+      if (
+        isOtherChoice(block.primary_category) &&
+        !stringField(block.other_category_text).trim()
+      ) {
+        issues.push({
+          section: 4,
+          field: `activity_blocks.${index}.other_category_text`,
+          message: `Activity ${index + 1}: custom activity family is required`,
+        });
       }
-      if (block.primary_category && !isOtherChoice(block.primary_category) && !block.sub_category) {
-        issues.push({ section: 4, field: `activity_blocks.${index}.sub_category`, message: `Activity ${index + 1}: sub-category is required` });
+      if (
+        block.primary_category &&
+        !isOtherChoice(block.primary_category) &&
+        !block.sub_category
+      ) {
+        issues.push({
+          section: 4,
+          field: `activity_blocks.${index}.sub_category`,
+          message: `Activity ${index + 1}: sub-category is required`,
+        });
       }
-      if (isOtherChoice(block.sub_category) && !stringField(block.other_sub_category_text).trim()) {
-        issues.push({ section: 4, field: `activity_blocks.${index}.other_sub_category_text`, message: `Activity ${index + 1}: custom sub-category is required` });
+      if (
+        isOtherChoice(block.sub_category) &&
+        !stringField(block.other_sub_category_text).trim()
+      ) {
+        issues.push({
+          section: 4,
+          field: `activity_blocks.${index}.other_sub_category_text`,
+          message: `Activity ${index + 1}: custom sub-category is required`,
+        });
       }
       if (!block.status) {
-        issues.push({ section: 4, field: `activity_blocks.${index}.status`, message: `Activity ${index + 1}: status is required` });
+        issues.push({
+          section: 4,
+          field: `activity_blocks.${index}.status`,
+          message: `Activity ${index + 1}: status is required`,
+        });
       }
       if (!stringField(block.description).trim()) {
-        issues.push({ section: 4, field: `activity_blocks.${index}.description`, message: `Activity ${index + 1}: what was done is required` });
+        issues.push({
+          section: 4,
+          field: `activity_blocks.${index}.description`,
+          message: `Activity ${index + 1}: what was done is required`,
+        });
       } else {
-        checkWordRange(issues, 4, `activity_blocks.${index}.description`, block.description, `Activity ${index + 1} description`, 'description');
+        checkWordRange(
+          issues,
+          4,
+          `activity_blocks.${index}.description`,
+          block.description,
+          `Activity ${index + 1} description`,
+          'description',
+        );
       }
       if (!activityHasOutputOrReach(block)) {
-        issues.push({ section: 4, field: `activity_blocks.${index}.outputs`, message: `Activity ${index + 1}: add a countable output or a beneficiary reach` });
+        issues.push({
+          section: 4,
+          field: `activity_blocks.${index}.outputs`,
+          message: `Activity ${index + 1}: add a countable output or a beneficiary reach`,
+        });
       }
       // Mirrors frontend step3Ok/stepNeedText: the overlap note is only required once the
       // activity serves beneficiaries and the student didn't say reach was "mostly unique".
-      const mostlyUnique = /mostly unique/i.test(stringField(block.overlap_status));
-      if (block.serves_beneficiaries !== false && stringField(block.overlap_status).trim() && !mostlyUnique) {
+      const mostlyUnique = /mostly unique/i.test(
+        stringField(block.overlap_status),
+      );
+      if (
+        block.serves_beneficiaries !== false &&
+        stringField(block.overlap_status).trim() &&
+        !mostlyUnique
+      ) {
         if (!stringField(block.overlap_note).trim()) {
-          issues.push({ section: 4, field: `activity_blocks.${index}.overlap_note`, message: `Activity ${index + 1}: overlap note is required` });
+          issues.push({
+            section: 4,
+            field: `activity_blocks.${index}.overlap_note`,
+            message: `Activity ${index + 1}: overlap note is required`,
+          });
         } else {
-          checkWordRange(issues, 4, `activity_blocks.${index}.overlap_note`, block.overlap_note, `Activity ${index + 1} overlap note`, 'overlap_note');
+          checkWordRange(
+            issues,
+            4,
+            `activity_blocks.${index}.overlap_note`,
+            block.overlap_note,
+            `Activity ${index + 1} overlap note`,
+            'overlap_note',
+          );
         }
       }
     });
@@ -313,27 +475,63 @@ function validateCoreSectionsPresence(report: {
 
   const section5 = report.section5 || {};
   if (!stringField(section5.observed_change).trim()) {
-    issues.push({ section: 5, field: 'observed_change', message: 'Observed change narrative is required' });
+    issues.push({
+      section: 5,
+      field: 'observed_change',
+      message: 'Observed change narrative is required',
+    });
   } else {
-    checkWordRange(issues, 5, 'observed_change', section5.observed_change, 'Observed change narrative');
+    checkWordRange(
+      issues,
+      5,
+      'observed_change',
+      section5.observed_change,
+      'Observed change narrative',
+    );
   }
-  const outcomes = Array.isArray(section5.measurable_outcomes) ? section5.measurable_outcomes : [];
+  const outcomes = Array.isArray(section5.measurable_outcomes)
+    ? section5.measurable_outcomes
+    : [];
   if (!outcomes.length) {
-    issues.push({ section: 5, field: 'measurable_outcomes', message: 'At least one measurable outcome is required' });
+    issues.push({
+      section: 5,
+      field: 'measurable_outcomes',
+      message: 'At least one measurable outcome is required',
+    });
   } else {
     outcomes.forEach((entry, index) => {
       const outcome = (entry || {}) as Record<string, unknown>;
       if (!outcome.outcome_area) {
-        issues.push({ section: 5, field: `measurable_outcomes.${index}.outcome_area`, message: 'Outcome category is required' });
+        issues.push({
+          section: 5,
+          field: `measurable_outcomes.${index}.outcome_area`,
+          message: 'Outcome category is required',
+        });
       }
-      if (outcome.outcome_area && outcome.outcome_area !== 'Other' && !outcome.outcome_sub_category) {
-        issues.push({ section: 5, field: `measurable_outcomes.${index}.outcome_sub_category`, message: 'Outcome sub-category is required' });
+      if (
+        outcome.outcome_area &&
+        outcome.outcome_area !== 'Other' &&
+        !outcome.outcome_sub_category
+      ) {
+        issues.push({
+          section: 5,
+          field: `measurable_outcomes.${index}.outcome_sub_category`,
+          message: 'Outcome sub-category is required',
+        });
       }
       if (!outcome.metric_category) {
-        issues.push({ section: 5, field: `measurable_outcomes.${index}.metric_category`, message: 'Metric category is required' });
+        issues.push({
+          section: 5,
+          field: `measurable_outcomes.${index}.metric_category`,
+          message: 'Metric category is required',
+        });
       }
       if (!outcome.metric) {
-        issues.push({ section: 5, field: `measurable_outcomes.${index}.metric`, message: 'Primary metric unit is required' });
+        issues.push({
+          section: 5,
+          field: `measurable_outcomes.${index}.metric`,
+          message: 'Primary metric unit is required',
+        });
       } else if (
         /^other$/i.test(stringField(outcome.metric).trim()) &&
         !stringField(outcome.metric_other).trim()
@@ -344,55 +542,132 @@ function validateCoreSectionsPresence(report: {
           message: 'Please specify the custom metric unit',
         });
       }
-      if (outcome.baseline === '' || outcome.baseline === undefined || outcome.baseline === null) {
-        issues.push({ section: 5, field: `measurable_outcomes.${index}.baseline`, message: 'Baseline value is required' });
+      if (
+        outcome.baseline === '' ||
+        outcome.baseline === undefined ||
+        outcome.baseline === null
+      ) {
+        issues.push({
+          section: 5,
+          field: `measurable_outcomes.${index}.baseline`,
+          message: 'Baseline value is required',
+        });
       }
-      if (outcome.endline === '' || outcome.endline === undefined || outcome.endline === null) {
-        issues.push({ section: 5, field: `measurable_outcomes.${index}.endline`, message: 'Endline value is required' });
+      if (
+        outcome.endline === '' ||
+        outcome.endline === undefined ||
+        outcome.endline === null
+      ) {
+        issues.push({
+          section: 5,
+          field: `measurable_outcomes.${index}.endline`,
+          message: 'Endline value is required',
+        });
       }
       if (!outcome.unit) {
-        issues.push({ section: 5, field: `measurable_outcomes.${index}.unit`, message: 'Unit of measurement is required' });
+        issues.push({
+          section: 5,
+          field: `measurable_outcomes.${index}.unit`,
+          message: 'Unit of measurement is required',
+        });
       }
       if (!hasChosenValue(outcome.confidence_level)) {
-        issues.push({ section: 5, field: `measurable_outcomes.${index}.confidence_level`, message: 'At least one confidence level is required' });
+        issues.push({
+          section: 5,
+          field: `measurable_outcomes.${index}.confidence_level`,
+          message: 'At least one confidence level is required',
+        });
       }
       if (!stringField(outcome.measurement_explanation).trim()) {
-        issues.push({ section: 5, field: `measurable_outcomes.${index}.measurement_explanation`, message: 'Measurement explanation is required' });
+        issues.push({
+          section: 5,
+          field: `measurable_outcomes.${index}.measurement_explanation`,
+          message: 'Measurement explanation is required',
+        });
       } else {
-        checkWordRange(issues, 5, `measurable_outcomes.${index}.measurement_explanation`, outcome.measurement_explanation, 'Measurement explanation', 'measurement_explanation');
+        checkWordRange(
+          issues,
+          5,
+          `measurable_outcomes.${index}.measurement_explanation`,
+          outcome.measurement_explanation,
+          'Measurement explanation',
+          'measurement_explanation',
+        );
       }
     });
   }
   if (!stringField(section5.challenges).trim()) {
-    issues.push({ section: 5, field: 'challenges', message: 'Challenges description is required' });
+    issues.push({
+      section: 5,
+      field: 'challenges',
+      message: 'Challenges description is required',
+    });
   } else {
-    checkWordRange(issues, 5, 'challenges', section5.challenges, 'Challenges description');
+    checkWordRange(
+      issues,
+      5,
+      'challenges',
+      section5.challenges,
+      'Challenges description',
+    );
   }
 
   const section7 = report.section7 || {};
   if (!section7.has_partners) {
-    issues.push({ section: 7, field: 'has_partners', message: 'Please confirm whether this project had active partners' });
+    issues.push({
+      section: 7,
+      field: 'has_partners',
+      message: 'Please confirm whether this project had active partners',
+    });
   } else if (section7.has_partners === 'yes') {
     const partners = Array.isArray(section7.partners) ? section7.partners : [];
     if (!partners.length) {
-      issues.push({ section: 7, field: 'partners', message: 'Please list your external partners' });
+      issues.push({
+        section: 7,
+        field: 'partners',
+        message: 'Please list your external partners',
+      });
     } else {
       partners.forEach((entry, index) => {
         const partner = (entry || {}) as Record<string, unknown>;
         if (!stringField(partner.name).trim()) {
-          issues.push({ section: 7, field: `partners.${index}.name`, message: `Partner ${index + 1}: organization name is required` });
+          issues.push({
+            section: 7,
+            field: `partners.${index}.name`,
+            message: `Partner ${index + 1}: organization name is required`,
+          });
         }
         if (!partner.type) {
-          issues.push({ section: 7, field: `partners.${index}.type`, message: `Partner ${index + 1}: partner type is required` });
+          issues.push({
+            section: 7,
+            field: `partners.${index}.type`,
+            message: `Partner ${index + 1}: partner type is required`,
+          });
         }
-        if ((partner.type === 'Others (please specify)' || partner.type === '✏️ Other') && !stringField(partner.type_other).trim()) {
-          issues.push({ section: 7, field: `partners.${index}.type_other`, message: `Partner ${index + 1}: specify the partner type` });
+        if (
+          (partner.type === 'Others (please specify)' ||
+            partner.type === '✏️ Other') &&
+          !stringField(partner.type_other).trim()
+        ) {
+          issues.push({
+            section: 7,
+            field: `partners.${index}.type_other`,
+            message: `Partner ${index + 1}: specify the partner type`,
+          });
         }
         if (!hasChosenValue(partner.role)) {
-          issues.push({ section: 7, field: `partners.${index}.role`, message: `Partner ${index + 1}: at least one role is required` });
+          issues.push({
+            section: 7,
+            field: `partners.${index}.role`,
+            message: `Partner ${index + 1}: at least one role is required`,
+          });
         }
         if (!hasChosenValue(partner.contribution)) {
-          issues.push({ section: 7, field: `partners.${index}.contribution`, message: `Partner ${index + 1}: at least one contribution is required` });
+          issues.push({
+            section: 7,
+            field: `partners.${index}.contribution`,
+            message: `Partner ${index + 1}: at least one contribution is required`,
+          });
         }
       });
     }
@@ -403,22 +678,39 @@ function validateCoreSectionsPresence(report: {
     issues.push({
       section: 9,
       field: 'academic_integration',
-      message: 'Tap an Academic integration option (Voluntary, course, credit, capstone, or research)',
+      message:
+        'Tap an Academic integration option (Voluntary, course, credit, capstone, or research)',
     });
   }
   if (!listHasItems(section9.skills_grown)) {
-    issues.push({ section: 9, field: 'skills_grown', message: 'Tap at least one skill you grew' });
+    issues.push({
+      section: 9,
+      field: 'skills_grown',
+      message: 'Tap at least one skill you grew',
+    });
   } else if (
     (section9.skills_grown as unknown[]).some((skill) => isOtherSkill(skill)) &&
     !stringField(section9.skills_grown_other).trim()
   ) {
-    issues.push({ section: 9, field: 'skills_grown_other', message: 'Name the other skill you grew' });
+    issues.push({
+      section: 9,
+      field: 'skills_grown_other',
+      message: 'Name the other skill you grew',
+    });
   }
   if (!stringField(section9.reflection_biggest_learning).trim()) {
-    issues.push({ section: 9, field: 'reflection_biggest_learning', message: 'Say the biggest thing you learned' });
+    issues.push({
+      section: 9,
+      field: 'reflection_biggest_learning',
+      message: 'Say the biggest thing you learned',
+    });
   }
   if (!stringField(section9.reflection_moment).trim()) {
-    issues.push({ section: 9, field: 'reflection_moment', message: 'Name a moment that changed how you see things' });
+    issues.push({
+      section: 9,
+      field: 'reflection_moment',
+      message: 'Name a moment that changed how you see things',
+    });
   }
   if (!stringField(section9.reflection_discipline_help).trim()) {
     issues.push({
@@ -428,17 +720,41 @@ function validateCoreSectionsPresence(report: {
     });
   }
   if (!stringField(section9.personal_learning).trim()) {
-    issues.push({ section: 9, field: 'personal_learning', message: 'Personal growth statement is required' });
+    issues.push({
+      section: 9,
+      field: 'personal_learning',
+      message: 'Personal growth statement is required',
+    });
   } else {
-    checkWordRange(issues, 9, 'personal_learning', section9.personal_learning, 'Personal growth statement');
+    checkWordRange(
+      issues,
+      9,
+      'personal_learning',
+      section9.personal_learning,
+      'Personal growth statement',
+    );
   }
   if (!stringField(section9.academic_application).trim()) {
-    issues.push({ section: 9, field: 'academic_application', message: 'Academic application explanation is required' });
+    issues.push({
+      section: 9,
+      field: 'academic_application',
+      message: 'Academic application explanation is required',
+    });
   } else {
-    checkWordRange(issues, 9, 'academic_application', section9.academic_application, 'Academic application explanation');
+    checkWordRange(
+      issues,
+      9,
+      'academic_application',
+      section9.academic_application,
+      'Academic application explanation',
+    );
   }
   if (!competencyScoresComplete(section9.competency_scores)) {
-    issues.push({ section: 9, field: 'competency_scores', message: 'Rate all 12 competencies' });
+    issues.push({
+      section: 9,
+      field: 'competency_scores',
+      message: 'Rate all 12 competencies',
+    });
   }
 
   const section11 = report.section11 || {};
@@ -479,7 +795,8 @@ export function validateReportSectionsForSubmit(report: {
   section11?: Record<string, unknown> | null;
   evidence_urls?: string[] | null;
 }): ReportSubmitValidationIssue[] {
-  const issues: ReportSubmitValidationIssue[] = validateCoreSectionsPresence(report);
+  const issues: ReportSubmitValidationIssue[] =
+    validateCoreSectionsPresence(report);
   const section6 = report.section6 || {};
   const section8 = report.section8 || {};
   const section10 = report.section10 || {};
@@ -513,15 +830,39 @@ export function validateReportSectionsForSubmit(report: {
             message: 'Say what this resource made possible',
           });
         }
-        if ((res.type === 'Other (Specify)' || res.type === 'Other / Custom') && !stringField(res.type_other).trim()) {
-          issues.push({ section: 6, field: `resources.${index}.type_other`, message: 'Please specify the resource type' });
+        if (
+          (res.type === 'Other (Specify)' || res.type === 'Other / Custom') &&
+          !stringField(res.type_other).trim()
+        ) {
+          issues.push({
+            section: 6,
+            field: `resources.${index}.type_other`,
+            message: 'Please specify the resource type',
+          });
         }
-        if ((res.unit === 'Other (Specify)' || res.unit === 'Other…') && !stringField(res.unit_other).trim()) {
-          issues.push({ section: 6, field: `resources.${index}.unit_other`, message: 'Please specify the unit' });
+        if (
+          (res.unit === 'Other (Specify)' || res.unit === 'Other…') &&
+          !stringField(res.unit_other).trim()
+        ) {
+          issues.push({
+            section: 6,
+            field: `resources.${index}.unit_other`,
+            message: 'Please specify the unit',
+          });
         }
         const sources = Array.isArray(res.sources) ? res.sources : [];
-        if (sources.some((item) => item === 'Other (Specify)' || item === 'Other / Custom Source') && !stringField(res.source_other).trim()) {
-          issues.push({ section: 6, field: `resources.${index}.source_other`, message: 'Please specify the source' });
+        if (
+          sources.some(
+            (item) =>
+              item === 'Other (Specify)' || item === 'Other / Custom Source',
+          ) &&
+          !stringField(res.source_other).trim()
+        ) {
+          issues.push({
+            section: 6,
+            field: `resources.${index}.source_other`,
+            message: 'Please specify the source',
+          });
         }
       });
     }
@@ -579,7 +920,14 @@ export function validateReportSectionsForSubmit(report: {
         message: 'What does your evidence show? is required',
       });
     } else {
-      checkWordRange(issues, 8, 'description', section8.description, 'What does your evidence show?', 'evidence_caption');
+      checkWordRange(
+        issues,
+        8,
+        'description',
+        section8.description,
+        'What does your evidence show?',
+        'evidence_caption',
+      );
     }
   }
 
@@ -605,7 +953,8 @@ export function validateReportSectionsForSubmit(report: {
     issues.push({
       section: 10,
       field: 'continuation_status',
-      message: 'Choose whether the impact will continue after you (Yes / Partial / No)',
+      message:
+        'Choose whether the impact will continue after you (Yes / Partial / No)',
     });
   }
 
@@ -619,7 +968,13 @@ export function validateReportSectionsForSubmit(report: {
       message: 'What continues, what stops? is required',
     });
   } else {
-    checkWordRange(issues, 10, 'continuation_details', continuationDetails, 'What continues, what stops?');
+    checkWordRange(
+      issues,
+      10,
+      'continuation_details',
+      continuationDetails,
+      'What continues, what stops?',
+    );
   }
   const mechanisms = Array.isArray(section10.mechanisms)
     ? section10.mechanisms

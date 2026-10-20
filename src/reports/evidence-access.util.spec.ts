@@ -13,7 +13,9 @@ describe('evidence access matrix', () => {
   it('defaults to restricted and demotes public without permission', () => {
     expect(effectiveEvidenceVisibility(undefined)).toBe('restricted');
     expect(effectiveEvidenceVisibility(publicNoConsent)).toBe('restricted');
-    expect(effectiveEvidenceVisibility({ media_visible: 'internal' })).toBe('private');
+    expect(effectiveEvidenceVisibility({ media_visible: 'internal' })).toBe(
+      'private',
+    );
     expect(effectiveEvidenceVisibility(publicOk)).toBe('public');
   });
 
@@ -42,10 +44,19 @@ describe('evidence access matrix', () => {
     const resp = {
       data: {
         admin_status: 'pending',
-        section8: { ...restricted, evidence_files: ['https://x/a.pdf'], description: 'd' },
-        section1: { attendance_logs: [{ evidence_url: 'https://x/b.jpg', hours: 2 }], media_urls: ['https://x/c.jpg'] },
+        section8: {
+          ...restricted,
+          evidence_files: ['https://x/a.pdf'],
+          description: 'd',
+        },
+        section1: {
+          attendance_logs: [{ evidence_url: 'https://x/b.jpg', hours: 2 }],
+          media_urls: ['https://x/c.jpg'],
+        },
         evidence_urls: ['https://x/a.pdf'],
-        review_package: { documents: { evidence: { count: 1, files: [{ url: 'u' }] } } },
+        review_package: {
+          documents: { evidence: { count: 1, files: [{ url: 'u' }] } },
+        },
       },
     };
     const out = applyEvidenceAccess(resp, 'partner').data as any;
@@ -58,8 +69,15 @@ describe('evidence access matrix', () => {
   });
 
   it('keeps URLs for admin and faculty on restricted (view only); partner stays locked', () => {
-    const resp = { data: { admin_status: 'pending', section8: { ...restricted, evidence_files: ['https://x/a'] } } };
-    expect((applyEvidenceAccess(resp, 'admin').data as any).section8.evidence_files).toHaveLength(1);
+    const resp = {
+      data: {
+        admin_status: 'pending',
+        section8: { ...restricted, evidence_files: ['https://x/a'] },
+      },
+    };
+    expect(
+      (applyEvidenceAccess(resp, 'admin').data as any).section8.evidence_files,
+    ).toHaveLength(1);
     const f = applyEvidenceAccess(resp, 'faculty').data as any;
     expect(f.section8.evidence_files).toHaveLength(1);
     expect(f.evidence_access.can_download).toBe(false);

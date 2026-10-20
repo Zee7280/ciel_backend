@@ -60,7 +60,12 @@ export type Harness = {
   opps: Repository<Opportunity>;
   makeUser: (role: UserRole, opts?: MakeUserOpts) => Promise<E2eUser>;
   makeOrg: (name?: string, orgType?: string) => Promise<Organization>;
-  sign: (u: { id: string; email: string; role: string; organizationId?: string | null }) => string;
+  sign: (u: {
+    id: string;
+    email: string;
+    role: string;
+    organizationId?: string | null;
+  }) => string;
   as: (u: E2eUser | null) => Api;
   reload: (id: string) => Promise<Opportunity>;
 };
@@ -102,12 +107,18 @@ export async function bootHarness(opts: HarnessOptions = {}): Promise<Harness> {
   const ds = app.get(DataSource);
   if (ds.options.database !== 'ciel_e2e_scratch') {
     await app.close();
-    throw new Error(`e2e attached to unexpected DB "${String(ds.options.database)}"`);
+    throw new Error(
+      `e2e attached to unexpected DB "${String(ds.options.database)}"`,
+    );
   }
   const jwt = app.get(JwtService);
   const users = app.get<Repository<User>>(getRepositoryToken(User));
-  const orgs = app.get<Repository<Organization>>(getRepositoryToken(Organization));
-  const opps = app.get<Repository<Opportunity>>(getRepositoryToken(Opportunity));
+  const orgs = app.get<Repository<Organization>>(
+    getRepositoryToken(Organization),
+  );
+  const opps = app.get<Repository<Opportunity>>(
+    getRepositoryToken(Opportunity),
+  );
 
   const sign: Harness['sign'] = (u) =>
     jwt.sign({
@@ -132,7 +143,11 @@ export async function bootHarness(opts: HarnessOptions = {}): Promise<Harness> {
   const makeUser: Harness['makeUser'] = async (role, opts = {}) => {
     const s = uniq();
     const email = (opts.email ?? `${role}.${s}@e2e.test`).toLowerCase();
-    const academic = [UserRole.STUDENT, UserRole.FACULTY, UserRole.UNIVERSITY].includes(role);
+    const academic = [
+      UserRole.STUDENT,
+      UserRole.FACULTY,
+      UserRole.UNIVERSITY,
+    ].includes(role);
     const u = await users.save(
       users.create({
         name: `${role} ${s}`,
@@ -144,7 +159,8 @@ export async function bootHarness(opts: HarnessOptions = {}): Promise<Harness> {
         city: academic ? 'Lahore' : undefined,
         university: academic ? 'E2E University' : undefined,
         department: role === UserRole.STUDENT ? 'Computer Science' : undefined,
-        faculty_department: role === UserRole.FACULTY ? 'Computer Science' : undefined,
+        faculty_department:
+          role === UserRole.FACULTY ? 'Computer Science' : undefined,
         organization: opts.org ?? undefined,
         ...(opts.overrides ?? {}),
       } as any) as unknown as User,
@@ -180,7 +196,19 @@ export async function bootHarness(opts: HarnessOptions = {}): Promise<Harness> {
     return o;
   };
 
-  return { app, ds, mail, users, orgs, opps, makeUser, makeOrg, sign, as, reload };
+  return {
+    app,
+    ds,
+    mail,
+    users,
+    orgs,
+    opps,
+    makeUser,
+    makeOrg,
+    sign,
+    as,
+    reload,
+  };
 }
 
 const ALL_TRUE_SAFETY = {
@@ -197,7 +225,9 @@ const ALL_TRUE_CONFIRM = {
 };
 
 /** A payload that passes every create() gate for org / faculty / admin creators. */
-export function oppPayload(over: Record<string, any> = {}): Record<string, any> {
+export function oppPayload(
+  over: Record<string, any> = {},
+): Record<string, any> {
   return {
     title: `E2E Opportunity ${uniq()}`,
     types: ['community_service'],
@@ -221,7 +251,10 @@ export function oppPayload(over: Record<string, any> = {}): Record<string, any> 
 }
 
 /** Student wizard payload (faculty email in supervision.contact, own-university scope). */
-export function studentPayload(facultyEmail: string, over: Record<string, any> = {}): Record<string, any> {
+export function studentPayload(
+  facultyEmail: string,
+  over: Record<string, any> = {},
+): Record<string, any> {
   return oppPayload({
     supervision: {
       contact: facultyEmail,
@@ -231,7 +264,9 @@ export function studentPayload(facultyEmail: string, over: Record<string, any> =
     },
     executing_context: {
       type: 'independent',
-      independent_community_activity: { activity_site_description: 'Neighbourhood cleanup' },
+      independent_community_activity: {
+        activity_site_description: 'Neighbourhood cleanup',
+      },
     },
     participation_scope: { rule: 'own_university_only' },
     ...over,

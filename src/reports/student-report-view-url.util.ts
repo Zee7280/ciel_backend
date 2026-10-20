@@ -11,17 +11,19 @@ export type StudentReportPageView =
   | 'analysis';
 
 /** `v17` is a legacy inbound alias for the detailed report. New URLs always emit `report`. */
-const CANONICAL_VIEW: Record<StudentReportPageView, Exclude<StudentReportPageView, 'v17'>> =
-  {
-    certificate: 'certificate',
-    print: 'print',
-    report: 'report',
-    v17: 'report',
-    evidence: 'evidence',
-    flash: 'flash',
-    package: 'package',
-    analysis: 'analysis',
-  };
+const CANONICAL_VIEW: Record<
+  StudentReportPageView,
+  Exclude<StudentReportPageView, 'v17'>
+> = {
+  certificate: 'certificate',
+  print: 'print',
+  report: 'report',
+  v17: 'report',
+  evidence: 'evidence',
+  flash: 'flash',
+  package: 'package',
+  analysis: 'analysis',
+};
 
 export function buildStudentReportPagePath(
   projectId: string,

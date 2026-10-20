@@ -9,17 +9,14 @@ import { PublicPlatformTutorialsController } from './public-platform-tutorials.c
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 
 @Module({
-    imports: [
-        TypeOrmModule.forFeature([PlatformTutorial]),
-        AuditLogsModule,
-    ],
-    controllers: [
-        AdminTutorialsController,
-        StudentTutorialsController,
-        PlatformTutorialsController,
-        PublicPlatformTutorialsController,
-    ],
-    providers: [TutorialsService],
-    exports: [TutorialsService],
+  imports: [TypeOrmModule.forFeature([PlatformTutorial]), AuditLogsModule],
+  controllers: [
+    AdminTutorialsController,
+    StudentTutorialsController,
+    PlatformTutorialsController,
+    PublicPlatformTutorialsController,
+  ],
+  providers: [TutorialsService],
+  exports: [TutorialsService],
 })
 export class TutorialsModule {}

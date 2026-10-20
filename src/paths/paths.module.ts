@@ -18,24 +18,28 @@ import { AiModule } from '../ai/ai.module';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 
 @Module({
-    imports: [
-        TypeOrmModule.forFeature([
-            CourseProjectEntry,
-            FypEntry,
-            VentureEntry,
-            TeamMemberInvite,
-            PathGraderRun,
-            User,
-            Organization,
-        ]),
-        StorageModule,
-        MailModule,
-        NotificationsModule,
-        AiModule,
-        AuditLogsModule,
-    ],
-    controllers: [PathsController, AdminPathsController, PublicCourseworkVerificationController],
-    providers: [PathsService],
-    exports: [TypeOrmModule],
+  imports: [
+    TypeOrmModule.forFeature([
+      CourseProjectEntry,
+      FypEntry,
+      VentureEntry,
+      TeamMemberInvite,
+      PathGraderRun,
+      User,
+      Organization,
+    ]),
+    StorageModule,
+    MailModule,
+    NotificationsModule,
+    AiModule,
+    AuditLogsModule,
+  ],
+  controllers: [
+    PathsController,
+    AdminPathsController,
+    PublicCourseworkVerificationController,
+  ],
+  providers: [PathsService],
+  exports: [TypeOrmModule],
 })
-export class PathsModule { }
+export class PathsModule {}

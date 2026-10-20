@@ -217,7 +217,10 @@ describe('OpportunityWorkflowService', () => {
 
   it('initCielAdminCreated publishes immediately when no partner or faculty is named', () => {
     const opp = {} as Opportunity;
-    service.initCielAdminCreated(opp, { requiresPartner: false, requiresFaculty: false });
+    service.initCielAdminCreated(opp, {
+      requiresPartner: false,
+      requiresFaculty: false,
+    });
     expect(opp.adminApprovalStatus).toBe(LINE_STATUS.APPROVED);
     expect(opp.facultyApprovalStatus).toBe(LINE_STATUS.NOT_APPLICABLE);
     expect(opp.partnerApprovalStatus).toBe(LINE_STATUS.NOT_APPLICABLE);
@@ -228,7 +231,10 @@ describe('OpportunityWorkflowService', () => {
 
   it('initCielAdminCreated waits on a named partner without a second CIEL admin gate', () => {
     const opp = {} as Opportunity;
-    service.initCielAdminCreated(opp, { requiresPartner: true, requiresFaculty: false });
+    service.initCielAdminCreated(opp, {
+      requiresPartner: true,
+      requiresFaculty: false,
+    });
     expect(opp.adminApprovalStatus).toBe(LINE_STATUS.APPROVED);
     expect(opp.workflowStage).toBe(WORKFLOW_STAGE.PENDING_PARTNER);
     expect(opp.status).toBe('pending_partner');
@@ -237,7 +243,10 @@ describe('OpportunityWorkflowService', () => {
 
   it('initCielAdminCreated waits on a named faculty without a second CIEL admin gate', () => {
     const opp = {} as Opportunity;
-    service.initCielAdminCreated(opp, { requiresPartner: false, requiresFaculty: true });
+    service.initCielAdminCreated(opp, {
+      requiresPartner: false,
+      requiresFaculty: true,
+    });
     expect(opp.adminApprovalStatus).toBe(LINE_STATUS.APPROVED);
     expect(opp.facultyApprovalStatus).toBe(LINE_STATUS.PENDING);
     expect(opp.workflowStage).toBe(WORKFLOW_STAGE.PENDING_FACULTY);
@@ -285,7 +294,10 @@ describe('OpportunityWorkflowService', () => {
       execution_verified: true,
       status: 'pending_partner',
     } as Opportunity;
-    service.afterFacultyCreatedPartnerVerified(opp, { id: null, name: 'p@x.org' });
+    service.afterFacultyCreatedPartnerVerified(opp, {
+      id: null,
+      name: 'p@x.org',
+    });
     expect(opp.status).toBe('pending_faculty');
     expect(opp.workflowStage).toBe(WORKFLOW_STAGE.PENDING_FACULTY);
     expect(opp.approvalHistory).toHaveLength(1);

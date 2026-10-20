@@ -9,12 +9,12 @@ import { OrganizationsModule } from '../organizations/organizations.module';
 import { OpportunitiesModule } from '../opportunities/opportunities.module';
 
 @Module({
-    imports: [
-        TypeOrmModule.forFeature([Timesheet, Report]),
-        OrganizationsModule,
-        forwardRef(() => OpportunitiesModule)
-    ],
-    controllers: [VerificationsController],
-    providers: [VerificationsService, VerificationVerifyAuthGuard],
+  imports: [
+    TypeOrmModule.forFeature([Timesheet, Report]),
+    OrganizationsModule,
+    forwardRef(() => OpportunitiesModule),
+  ],
+  controllers: [VerificationsController],
+  providers: [VerificationsService, VerificationVerifyAuthGuard],
 })
-export class VerificationsModule { }
+export class VerificationsModule {}

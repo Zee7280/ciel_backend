@@ -63,14 +63,22 @@ import {
 /** Never echo credential material (password hash / deprecated password record) back to the browser. */
 function stripUserSecrets<T>(user: T): T {
   if (!user || typeof user !== 'object') return user;
-  const {
-    password: _password,
-    passwordRecord: _record,
-    passwordResetToken: _token,
-    passwordResetExpiry: _expiry,
-    ...safe
-  } = user as Record<string, unknown>;
+  const safe: Record<string, unknown> = { ...(user as Record<string, unknown>) };
+  delete safe.password;
+  delete safe.passwordRecord;
+  delete safe.passwordResetToken;
+  delete safe.passwordResetExpiry;
   return safe as T;
+}
+
+/** Shape of `req.user` as returned by JwtStrategy.validate. */
+interface AdminRequest {
+  user: {
+    id: string;
+    email?: string;
+    name?: string;
+    role?: UserRole;
+  };
 }
 
 @Controller('admin')
@@ -396,33 +404,54 @@ export class AdminController {
   /** Ranking Studio: standings for any angle (lens × comparison × filters). Writes nothing. */
   @Post('community-service/ranking/studio/preview')
   async npeStudioPreview(@Request() req, @Body() dto: NpeStudioDto) {
-    const data = await this.npeStudio.preview({ userId: req.user.id, role: 'ciel_admin' }, dto);
+    const data = await this.npeStudio.preview(
+      { userId: req.user.id, role: 'ciel_admin' },
+      dto,
+    );
     return { success: true, data };
   }
 
   /** Publishes the studio ranking exactly as the server recomputes it (never the client's rows). */
   @Post('community-service/ranking/studio/publish')
   async npeStudioPublish(@Request() req, @Body() dto: NpeStudioDto) {
-    const data = await this.npeStudio.publish({ userId: req.user.id, role: 'ciel_admin' }, dto);
+    const data = await this.npeStudio.publish(
+      { userId: req.user.id, role: 'ciel_admin' },
+      dto,
+    );
     return { success: true, data };
   }
 
   @Get('community-service/ranking/studio/history')
   async npeStudioHistory(@Request() req) {
-    const data = await this.npeStudio.history({ userId: req.user.id, role: 'ciel_admin' });
+    const data = await this.npeStudio.history({
+      userId: req.user.id,
+      role: 'ciel_admin',
+    });
     return { success: true, data };
   }
 
   @Get('community-service/ranking/studio/publications/:id')
-  async npeStudioPublication(@Request() req, @Param('id', new ParseUUIDPipe()) id: string) {
-    const data = await this.npeStudio.getPublication({ userId: req.user.id, role: 'ciel_admin' }, id);
+  async npeStudioPublication(
+    @Request() req,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    const data = await this.npeStudio.getPublication(
+      { userId: req.user.id, role: 'ciel_admin' },
+      id,
+    );
     return { success: true, data };
   }
 
   /** Published rankings that include one project (Impact Wall preview). */
   @Get('community-service/ranking/studio/project/:reportId')
-  async npeStudioProject(@Request() req, @Param('reportId', new ParseUUIDPipe()) reportId: string) {
-    const data = await this.npeStudio.rankingsForProject({ userId: req.user.id, role: 'ciel_admin' }, reportId);
+  async npeStudioProject(
+    @Request() req,
+    @Param('reportId', new ParseUUIDPipe()) reportId: string,
+  ) {
+    const data = await this.npeStudio.rankingsForProject(
+      { userId: req.user.id, role: 'ciel_admin' },
+      reportId,
+    );
     return { success: true, data };
   }
 

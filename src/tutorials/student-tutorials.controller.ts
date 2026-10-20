@@ -9,10 +9,10 @@ import { TutorialsService } from './tutorials.service';
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.STUDENT)
 export class StudentTutorialsController {
-    constructor(private readonly tutorialsService: TutorialsService) {}
+  constructor(private readonly tutorialsService: TutorialsService) {}
 
-    @Get()
-    list() {
-        return this.tutorialsService.listForStudents();
-    }
+  @Get()
+  list() {
+    return this.tutorialsService.listForStudents();
+  }
 }

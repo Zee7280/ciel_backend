@@ -2,7 +2,11 @@
 
 function finiteCii(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string' && value.trim() && Number.isFinite(Number(value))) {
+  if (
+    typeof value === 'string' &&
+    value.trim() &&
+    Number.isFinite(Number(value))
+  ) {
     return Number(value);
   }
   return null;
@@ -49,7 +53,8 @@ export function pickCiiV45DisplayBadge(
   const read = (raw: unknown) => {
     const b = asRecord(raw);
     if (!b) return null;
-    const name = typeof b.name === 'string' && b.name.trim() ? b.name.trim() : null;
+    const name =
+      typeof b.name === 'string' && b.name.trim() ? b.name.trim() : null;
     const level = finiteCii(b.level);
     if (!name && level == null) return null;
     return { name, level };

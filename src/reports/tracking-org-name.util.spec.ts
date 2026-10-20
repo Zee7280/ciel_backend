@@ -5,9 +5,9 @@ import {
 
 describe('trackingOrganizationName', () => {
   it('keeps a real linked organization name', () => {
-    expect(
-      trackingOrganizationName({ organization: { name: 'NGO' } }),
-    ).toBe('NGO');
+    expect(trackingOrganizationName({ organization: { name: 'NGO' } })).toBe(
+      'NGO',
+    );
   });
 
   it('hides create-form helper copy and N/A', () => {

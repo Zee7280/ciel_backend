@@ -9,8 +9,14 @@ export class PublicConfigController {
   @Get()
   // Edge-cacheable for 60s (browser always revalidates): the site shell asks for this on every
   // public page, and admin flag changes still land within a minute.
-  @Header('Cache-Control', 'public, max-age=0, s-maxage=60, stale-while-revalidate=300')
+  @Header(
+    'Cache-Control',
+    'public, max-age=0, s-maxage=60, stale-while-revalidate=300',
+  )
   async getConfig() {
-    return { success: true, data: await this.platformSettings.getPublicConfig() };
+    return {
+      success: true,
+      data: await this.platformSettings.getPublicConfig(),
+    };
   }
 }

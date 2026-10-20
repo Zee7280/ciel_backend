@@ -25,7 +25,9 @@ export const NPE_CII_SCALE = 'base100_bonus110' as const;
 export const NPE_PAYLOAD_VERSION = 2 as const;
 
 export function isSupportedNpeRubricVersion(v: unknown): v is NpeRubricVersion {
-  return (NPE_SUPPORTED_RUBRIC_VERSIONS as readonly string[]).includes(String(v));
+  return (NPE_SUPPORTED_RUBRIC_VERSIONS as readonly string[]).includes(
+    String(v),
+  );
 }
 
 export const NPE_EVIDENCE_FACTORS = {

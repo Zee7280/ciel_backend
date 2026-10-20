@@ -390,11 +390,13 @@ export class AuthService implements OnApplicationBootstrap {
       // Students from a university that is not a CIEL member pay a one-time subscription fee first.
       const needsSubscriptionFee =
         !needsMembershipFee &&
-        (await this.studentSubscriptionService.studentNeedsSubscriptionAtSignup({
-          role: userCreateData.role,
-          institution: userCreateData.institution,
-          university: userCreateData.university,
-        }));
+        (await this.studentSubscriptionService.studentNeedsSubscriptionAtSignup(
+          {
+            role: userCreateData.role,
+            institution: userCreateData.institution,
+            university: userCreateData.university,
+          },
+        ));
 
       const user = await this.usersService.create({
         ...userCreateData,
@@ -404,7 +406,9 @@ export class AuthService implements OnApplicationBootstrap {
         organization,
         termsAcceptedAt: new Date(),
         ...(needsMembershipFee ? { status: 'pending_membership_payment' } : {}),
-        ...(needsSubscriptionFee ? { status: PENDING_SUBSCRIPTION_STATUS } : {}),
+        ...(needsSubscriptionFee
+          ? { status: PENDING_SUBSCRIPTION_STATUS }
+          : {}),
       });
 
       try {
@@ -437,8 +441,8 @@ export class AuthService implements OnApplicationBootstrap {
           : needsSubscriptionFee
             ? 'Account created. Pay the one-time subscription fee and submit proof to activate your student portal.'
             : user.role === UserRole.INVESTOR
-            ? 'Application received. CIEL PK verifies investor accounts within 3 working days.'
-            : 'User created successfully',
+              ? 'Application received. CIEL PK verifies investor accounts within 3 working days.'
+              : 'User created successfully',
         data: {
           user: await this.usersService.formatUserResponse(user),
         },
@@ -616,7 +620,11 @@ export class AuthService implements OnApplicationBootstrap {
     }
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
-    await this.usersService.updatePassword(user.id, hashedPassword, newPassword);
+    await this.usersService.updatePassword(
+      user.id,
+      hashedPassword,
+      newPassword,
+    );
 
     return { success: true, message: 'Password updated successfully!' };
   }

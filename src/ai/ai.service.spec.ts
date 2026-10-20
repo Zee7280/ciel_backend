@@ -1,7 +1,13 @@
 import { AiService } from './ai.service';
 
-const OK_BODY = JSON.stringify({ choices: [{ message: { content: 'Plain summary text' } }] });
-const res = (status: number, body: string) => ({ ok: status >= 200 && status < 300, status, text: async () => body });
+const OK_BODY = JSON.stringify({
+  choices: [{ message: { content: 'Plain summary text' } }],
+});
+const res = (status: number, body: string) => ({
+  ok: status >= 200 && status < 300,
+  status,
+  text: async () => body,
+});
 
 describe('AiService — OpenAI transport hardening', () => {
   const realFetch = global.fetch;
@@ -23,7 +29,8 @@ describe('AiService — OpenAI transport hardening', () => {
     jest.useRealTimers();
   });
 
-  const run = (svc: AiService) => svc.summarize('section2_context_unknown_section', { x: 1 });
+  const run = (svc: AiService) =>
+    svc.summarize('section2_context_unknown_section', { x: 1 });
 
   it('passes an abort-signal timeout to every request', async () => {
     const f = jest.fn().mockResolvedValue(res(200, OK_BODY));
@@ -38,7 +45,12 @@ describe('AiService — OpenAI transport hardening', () => {
 
   it('retries once on a 5xx and then succeeds', async () => {
     jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate'] });
-    const f = jest.fn().mockResolvedValueOnce(res(503, JSON.stringify({ error: { message: 'overloaded' } }))).mockResolvedValue(res(200, OK_BODY));
+    const f = jest
+      .fn()
+      .mockResolvedValueOnce(
+        res(503, JSON.stringify({ error: { message: 'overloaded' } })),
+      )
+      .mockResolvedValue(res(200, OK_BODY));
     global.fetch = f as never;
     const p = run(new AiService());
     await jest.advanceTimersByTimeAsync(2000);
@@ -47,7 +59,11 @@ describe('AiService — OpenAI transport hardening', () => {
   });
 
   it('does NOT retry a 400 and reports the provider message', async () => {
-    const f = jest.fn().mockResolvedValue(res(400, JSON.stringify({ error: { message: 'bad request' } })));
+    const f = jest
+      .fn()
+      .mockResolvedValue(
+        res(400, JSON.stringify({ error: { message: 'bad request' } })),
+      );
     global.fetch = f as never;
     await expect(run(new AiService())).rejects.toBeTruthy();
     expect(f).toHaveBeenCalledTimes(1);
@@ -66,7 +82,9 @@ describe('AiService — OpenAI transport hardening', () => {
 
   it('a timeout is retried once, then surfaces a clear "took too long" error', async () => {
     jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate'] });
-    const timeoutErr = Object.assign(new Error('timed out'), { name: 'TimeoutError' });
+    const timeoutErr = Object.assign(new Error('timed out'), {
+      name: 'TimeoutError',
+    });
     const f = jest.fn().mockRejectedValue(timeoutErr);
     global.fetch = f as never;
     const p = run(new AiService());
@@ -89,8 +107,15 @@ describe('AiService — CII v4.5 evaluation branch', () => {
   });
 
   const DIMENSIONS: Array<[string, number]> = [
-    ['1', 4], ['2', 5], ['3', 4], ['4A', 5], ['4B', 5],
-    ['5', 4], ['6', 4], ['8', 4], ['9', 4],
+    ['1', 4],
+    ['2', 5],
+    ['3', 4],
+    ['4A', 5],
+    ['4B', 5],
+    ['5', 4],
+    ['6', 4],
+    ['8', 4],
+    ['9', 4],
   ];
   const CII_V45_JSON = JSON.stringify({
     frameworkVersion: '5.0',
@@ -98,7 +123,15 @@ describe('AiService — CII v4.5 evaluation branch', () => {
     inputFingerprint: 'fp-1',
     inputCompleteness: {
       gaps: [],
-      individualHours: [{ studentId: 's1', hours: 20, requiredHours: 16, verified: true, recordComplete: true }],
+      individualHours: [
+        {
+          studentId: 's1',
+          hours: 20,
+          requiredHours: 16,
+          verified: true,
+          recordComplete: true,
+        },
+      ],
       mandatoryFieldsComplete: true,
     },
     claimInventory: [],
@@ -129,14 +162,26 @@ describe('AiService — CII v4.5 evaluation branch', () => {
   });
 
   it('sends the v5.0 prompt/model and parses the response into ciiV45', async () => {
-    const f = jest
-      .fn()
-      .mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ choices: [{ message: { content: CII_V45_JSON } }] }) });
+    const f = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({ choices: [{ message: { content: CII_V45_JSON } }] }),
+    });
     global.fetch = f as never;
 
     const out = await new AiService().summarize('cii_v4_5_evaluation', {
-      uploaded_evidence_files: [{ file_id: 'EV-001', file_name: 'a.jpg', file_type: 'jpg', url: 'https://bkt.s3.amazonaws.com/a.jpg' }],
-      system_validation: { scoring_rubric: { cii_v45_framework_version: '5.0', tables: ['bulky'] } },
+      uploaded_evidence_files: [
+        {
+          file_id: 'EV-001',
+          file_name: 'a.jpg',
+          file_type: 'jpg',
+          url: 'https://bkt.s3.amazonaws.com/a.jpg',
+        },
+      ],
+      system_validation: {
+        scoring_rubric: { cii_v45_framework_version: '5.0', tables: ['bulky'] },
+      },
     });
 
     const sent = JSON.parse(f.mock.calls[0][1].body);
@@ -145,7 +190,9 @@ describe('AiService — CII v4.5 evaluation branch', () => {
     expect(sent.max_completion_tokens).toBe(16000);
     expect(sent.response_format).toEqual({ type: 'json_object' });
     expect(sent.messages[0].content).toContain('CII AI ANALYSER v5.0');
-    expect(JSON.stringify(sent.messages)).not.toContain('uploaded_evidence_files');
+    expect(JSON.stringify(sent.messages)).not.toContain(
+      'uploaded_evidence_files',
+    );
     expect(JSON.stringify(sent.messages)).not.toContain('scoring_rubric');
     expect(out.ciiV45?.frameworkVersion).toBe('5.0');
     expect(out.ciiV45?.sectionScores).toHaveLength(10);
@@ -154,14 +201,26 @@ describe('AiService — CII v4.5 evaluation branch', () => {
 
   it('never fetches or attaches evidence originals on the report-quality call', async () => {
     const s3 = { getObjectBufferByPublicUrl: jest.fn() };
-    const f = jest
-      .fn()
-      .mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ choices: [{ message: { content: CII_V45_JSON } }] }) });
+    const f = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({ choices: [{ message: { content: CII_V45_JSON } }] }),
+    });
     global.fetch = f as never;
 
     const out = await new AiService(s3 as never).summarize(
       'cii_v4_5_evaluation',
-      { uploaded_evidence_files: [{ file_id: 'EV-001', file_name: 'a.jpg', file_type: 'jpg', url: 'https://bkt.s3.amazonaws.com/a.jpg' }] },
+      {
+        uploaded_evidence_files: [
+          {
+            file_id: 'EV-001',
+            file_name: 'a.jpg',
+            file_type: 'jpg',
+            url: 'https://bkt.s3.amazonaws.com/a.jpg',
+          },
+        ],
+      },
     );
 
     expect(s3.getObjectBufferByPublicUrl).not.toHaveBeenCalled();
@@ -173,27 +232,50 @@ describe('AiService — CII v4.5 evaluation branch', () => {
   });
 
   it('rejects with a 502 when the model returns an unparseable CII v4.5 response', async () => {
-    global.fetch = jest
-      .fn()
-      .mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ choices: [{ message: { content: '{not json' } }] }) }) as never;
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({ choices: [{ message: { content: '{not json' } }] }),
+    }) as never;
 
     await expect(
-      new AiService().summarize('cii_v4_5_evaluation', { uploaded_evidence_files: [] }),
+      new AiService().summarize('cii_v4_5_evaluation', {
+        uploaded_evidence_files: [],
+      }),
     ).rejects.toMatchObject({ status: 502 });
   });
 
   it('does not attach evidence images even when files are present on the payload', async () => {
     const bucketImg = 'https://bkt.s3.eu.amazonaws.com/evidence/a.jpg';
     const s3 = { getObjectBufferByPublicUrl: jest.fn() };
-    const f = jest.fn().mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ choices: [{ message: { content: CII_V45_JSON } }] }) });
+    const f = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({ choices: [{ message: { content: CII_V45_JSON } }] }),
+    });
     global.fetch = f as never;
 
-    const out = await new AiService(s3 as never).summarize('cii_v4_5_evaluation', {
-      uploaded_evidence_files: [
-        { file_id: 'E1', file_name: 'a.jpg', file_type: 'jpg', url: bucketImg },
-        { file_id: 'E2', file_name: 'register.pdf', file_type: 'pdf', url: 'https://bkt.s3.eu.amazonaws.com/evidence/r.pdf' },
-      ],
-    });
+    const out = await new AiService(s3 as never).summarize(
+      'cii_v4_5_evaluation',
+      {
+        uploaded_evidence_files: [
+          {
+            file_id: 'E1',
+            file_name: 'a.jpg',
+            file_type: 'jpg',
+            url: bucketImg,
+          },
+          {
+            file_id: 'E2',
+            file_name: 'register.pdf',
+            file_type: 'pdf',
+            url: 'https://bkt.s3.eu.amazonaws.com/evidence/r.pdf',
+          },
+        ],
+      },
+    );
 
     expect(s3.getObjectBufferByPublicUrl).not.toHaveBeenCalled();
     const userContent = JSON.parse(f.mock.calls[0][1].body).messages[1].content;
@@ -209,28 +291,50 @@ describe('AiService — CII v4.5 evaluation branch', () => {
       status: 200,
       text: async () =>
         JSON.stringify({
-          choices: [{ message: { content: [{ type: 'text', text: CII_V45_JSON }] } }],
+          choices: [
+            { message: { content: [{ type: 'text', text: CII_V45_JSON }] } },
+          ],
         }),
     }) as never;
-    const out = await new AiService().summarize('cii_v4_5_evaluation', { uploaded_evidence_files: [] });
+    const out = await new AiService().summarize('cii_v4_5_evaluation', {
+      uploaded_evidence_files: [],
+    });
     expect(out.ciiV45?.frameworkVersion).toBe('5.0');
   });
 
   it('retries empty length once without images and with a larger token budget', async () => {
     const bucketImg = 'https://bkt.s3.eu.amazonaws.com/evidence/a.jpg';
     const s3 = {
-      getObjectBufferByPublicUrl: jest.fn(async () => ({ buffer: Buffer.from('JPEGDATA'), contentType: 'image/jpeg' })),
+      getObjectBufferByPublicUrl: jest.fn(async () => ({
+        buffer: Buffer.from('JPEGDATA'),
+        contentType: 'image/jpeg',
+      })),
     };
     const empty = JSON.stringify({
       choices: [{ finish_reason: 'length', message: { content: '' } }],
     });
-    const ok = JSON.stringify({ choices: [{ message: { content: CII_V45_JSON } }] });
-    const f = jest.fn().mockResolvedValueOnce(res(200, empty)).mockResolvedValueOnce(res(200, ok));
+    const ok = JSON.stringify({
+      choices: [{ message: { content: CII_V45_JSON } }],
+    });
+    const f = jest
+      .fn()
+      .mockResolvedValueOnce(res(200, empty))
+      .mockResolvedValueOnce(res(200, ok));
     global.fetch = f as never;
 
-    const out = await new AiService(s3 as never).summarize('cii_v4_5_evaluation', {
-      uploaded_evidence_files: [{ file_id: 'E1', file_name: 'a.jpg', file_type: 'jpg', url: bucketImg }],
-    });
+    const out = await new AiService(s3 as never).summarize(
+      'cii_v4_5_evaluation',
+      {
+        uploaded_evidence_files: [
+          {
+            file_id: 'E1',
+            file_name: 'a.jpg',
+            file_type: 'jpg',
+            url: bucketImg,
+          },
+        ],
+      },
+    );
 
     expect(out.ciiV45?.frameworkVersion).toBe('5.0');
     expect(f).toHaveBeenCalledTimes(2);
@@ -272,7 +376,9 @@ describe('AiService — CII v4.5 evaluation branch', () => {
     });
     global.fetch = jest.fn().mockResolvedValue(res(200, empty)) as never;
     await expect(
-      new AiService().summarize('cii_v4_5_evaluation', { uploaded_evidence_files: [] }),
+      new AiService().summarize('cii_v4_5_evaluation', {
+        uploaded_evidence_files: [],
+      }),
     ).rejects.toMatchObject({
       status: 500,
       response: { error: expect.stringContaining('token budget') },

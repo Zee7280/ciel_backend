@@ -58,7 +58,9 @@ const DEFAULT_OPENAI_SUMMARY_MODEL = 'gpt-5.4';
 const DEFAULT_OPENAI_CII_MODEL = 'gpt-5.6-sol';
 
 function resolveOpenAiSummaryModel(): string {
-  return process.env.OPENAI_SUMMARY_MODEL?.trim() || DEFAULT_OPENAI_SUMMARY_MODEL;
+  return (
+    process.env.OPENAI_SUMMARY_MODEL?.trim() || DEFAULT_OPENAI_SUMMARY_MODEL
+  );
 }
 
 function resolveCiiAnalyzerModel(): string {
@@ -68,7 +70,10 @@ function resolveCiiAnalyzerModel(): string {
 /** One part of a multimodal chat message (text, or an inline image the model can actually see). */
 export type OpenAiContentPart =
   | { type: 'text'; text: string }
-  | { type: 'image_url'; image_url: { url: string; detail?: 'low' | 'high' | 'auto' } };
+  | {
+      type: 'image_url';
+      image_url: { url: string; detail?: 'low' | 'high' | 'auto' };
+    };
 
 /** What the evidence pass could and could not show the model — stored with the analysis. */
 export interface EvidenceInspection {
@@ -81,7 +86,13 @@ const OPENAI_MAX_ATTEMPTS = 2;
 /** High-reasoning + 8 photos made Analyze wait 2–3 minutes. Four low-detail images still verify claims. */
 const EVIDENCE_MAX_IMAGES = 4;
 const EVIDENCE_MAX_IMAGE_BYTES = 4 * 1024 * 1024;
-const EVIDENCE_IMAGE_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif']);
+const EVIDENCE_IMAGE_TYPES = new Set([
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+]);
 /** PDF originals (receipts, registers, letters) are read as text, within a fixed budget. */
 const EVIDENCE_MAX_PDFS = 3;
 const EVIDENCE_MAX_PDF_BYTES = 8 * 1024 * 1024;
@@ -145,7 +156,8 @@ function extractOpenAiMessageText(responseJson: OpenAiChatResponse): string {
     const joined = content
       .map((part) => {
         if (typeof part === 'string') return part;
-        if (part && typeof part === 'object' && typeof part.text === 'string') return part.text;
+        if (part && typeof part === 'object' && typeof part.text === 'string')
+          return part.text;
         return '';
       })
       .join('')
@@ -155,7 +167,9 @@ function extractOpenAiMessageText(responseJson: OpenAiChatResponse): string {
   return '';
 }
 
-function emptyOpenAiContentError(responseJson: OpenAiChatResponse): Error & { status: number } {
+function emptyOpenAiContentError(
+  responseJson: OpenAiChatResponse,
+): Error & { status: number } {
   const finish = responseJson.choices?.[0]?.finish_reason ?? '';
   const err = new Error(
     finish === 'length'
@@ -169,7 +183,9 @@ function emptyOpenAiContentError(responseJson: OpenAiChatResponse): Error & { st
 function textOnlyUserContent(content: string | OpenAiContentPart[]): string {
   if (typeof content === 'string') return content;
   return content
-    .filter((part): part is { type: 'text'; text: string } => part.type === 'text')
+    .filter(
+      (part): part is { type: 'text'; text: string } => part.type === 'text',
+    )
     .map((part) => part.text)
     .join('\n\n');
 }
@@ -188,7 +204,9 @@ function slimCiiPayloadForModel(data: unknown): unknown {
     ...rest
   } = rec;
   const section8 =
-    section8Raw && typeof section8Raw === 'object' && !Array.isArray(section8Raw)
+    section8Raw &&
+    typeof section8Raw === 'object' &&
+    !Array.isArray(section8Raw)
       ? (section8Raw as Record<string, unknown>)
       : {};
   const sys =
@@ -239,17 +257,23 @@ export class AiService {
   }> {
     const inspection: EvidenceInspection = { inspected: [], notInspected: [] };
     const parts: OpenAiContentPart[] = [];
-    const files = Array.isArray((data as { uploaded_evidence_files?: unknown })?.uploaded_evidence_files)
-      ? ((data as { uploaded_evidence_files: Array<Record<string, unknown>> }).uploaded_evidence_files)
+    const files = Array.isArray(
+      (data as { uploaded_evidence_files?: unknown })?.uploaded_evidence_files,
+    )
+      ? (data as { uploaded_evidence_files: Array<Record<string, unknown>> })
+          .uploaded_evidence_files
       : [];
     const fileId = (f: Record<string, unknown>) => String(f?.file_id ?? '');
-    const fileName = (f: Record<string, unknown>) => String(f?.file_name ?? f?.url ?? 'file');
+    const fileName = (f: Record<string, unknown>) =>
+      String(f?.file_name ?? f?.url ?? 'file');
     const imageCandidates: Array<Record<string, unknown>> = [];
     const pdfCandidates: Array<Record<string, unknown>> = [];
     for (const f of files) {
       const url = typeof f?.url === 'string' ? f.url : '';
       const type = String(f?.file_type ?? '').toLowerCase();
-      const looksImage = /^(jpe?g|png|webp|gif)$/.test(type) || /\.(jpe?g|png|webp|gif)(\?|$)/i.test(url);
+      const looksImage =
+        /^(jpe?g|png|webp|gif)$/.test(type) ||
+        /\.(jpe?g|png|webp|gif)(\?|$)/i.test(url);
       const looksPdf = type === 'pdf' || /\.pdf(\?|$)/i.test(url);
       if (looksImage) imageCandidates.push(f);
       else if (looksPdf) pdfCandidates.push(f);
@@ -257,7 +281,8 @@ export class AiService {
         inspection.notInspected.push({
           id: fileId(f),
           name: fileName(f),
-          reason: 'file type cannot be read by the analyzer (video / office document / other)',
+          reason:
+            'file type cannot be read by the analyzer (video / office document / other)',
         });
       }
     }
@@ -270,7 +295,10 @@ export class AiService {
       bySource.set(key, [...(bySource.get(key) ?? []), f]);
     }
     const toLoad: Array<Record<string, unknown>> = [];
-    while (toLoad.length < EVIDENCE_MAX_IMAGES && [...bySource.values()].some((g) => g.length)) {
+    while (
+      toLoad.length < EVIDENCE_MAX_IMAGES &&
+      [...bySource.values()].some((g) => g.length)
+    ) {
       for (const group of bySource.values()) {
         if (toLoad.length >= EVIDENCE_MAX_IMAGES) break;
         const next = group.shift();
@@ -292,7 +320,9 @@ export class AiService {
       const url = typeof f?.url === 'string' ? f.url : '';
       const cached = url ? inspectCache?.get(url) : undefined;
       if (cached) return { f, loaded: cached };
-      const loaded = this.s3Service ? await this.s3Service.getObjectBufferByPublicUrl(url) : null;
+      const loaded = this.s3Service
+        ? await this.s3Service.getObjectBufferByPublicUrl(url)
+        : null;
       return { f, loaded };
     };
     const loadedRows = await Promise.all(toLoad.map(loadOne));
@@ -300,20 +330,39 @@ export class AiService {
     for (const { f, loaded } of loadedRows) {
       const id = fileId(f);
       const name = fileName(f);
-      const contentType = String(loaded?.contentType ?? '').toLowerCase().split(';')[0];
+      const contentType = String(loaded?.contentType ?? '')
+        .toLowerCase()
+        .split(';')[0];
       if (!loaded || !loaded.buffer?.length) {
-        inspection.notInspected.push({ id, name, reason: 'could not be loaded from storage' });
+        inspection.notInspected.push({
+          id,
+          name,
+          reason: 'could not be loaded from storage',
+        });
         continue;
       }
-      if (loaded.buffer.length > EVIDENCE_MAX_IMAGE_BYTES || !EVIDENCE_IMAGE_TYPES.has(contentType)) {
-        inspection.notInspected.push({ id, name, reason: 'too large or unsupported image format' });
+      if (
+        loaded.buffer.length > EVIDENCE_MAX_IMAGE_BYTES ||
+        !EVIDENCE_IMAGE_TYPES.has(contentType)
+      ) {
+        inspection.notInspected.push({
+          id,
+          name,
+          reason: 'too large or unsupported image format',
+        });
         continue;
       }
       inspection.inspected.push({ id, name });
-      parts.push({ type: 'text', text: `Evidence image ${id} — file "${name}" (claims it is linked to: ${JSON.stringify(f?.linked_claims ?? [])}):` });
+      parts.push({
+        type: 'text',
+        text: `Evidence image ${id} — file "${name}" (claims it is linked to: ${JSON.stringify(f?.linked_claims ?? [])}):`,
+      });
       parts.push({
         type: 'image_url',
-        image_url: { url: `data:${contentType};base64,${loaded.buffer.toString('base64')}`, detail: 'low' },
+        image_url: {
+          url: `data:${contentType};base64,${loaded.buffer.toString('base64')}`,
+          detail: 'low',
+        },
       });
     }
 
@@ -332,11 +381,19 @@ export class AiService {
       const id = fileId(f);
       const name = fileName(f);
       if (!loaded || !loaded.buffer?.length) {
-        inspection.notInspected.push({ id, name, reason: 'could not be loaded from storage' });
+        inspection.notInspected.push({
+          id,
+          name,
+          reason: 'could not be loaded from storage',
+        });
         continue;
       }
       if (loaded.buffer.length > EVIDENCE_MAX_PDF_BYTES) {
-        inspection.notInspected.push({ id, name, reason: 'too large to read (PDF over 8 MB)' });
+        inspection.notInspected.push({
+          id,
+          name,
+          reason: 'too large to read (PDF over 8 MB)',
+        });
         continue;
       }
       let extracted = '';
@@ -349,13 +406,19 @@ export class AiService {
         inspection.notInspected.push({
           id,
           name,
-          reason: 'PDF could not be read as text (scanned image, protected or unsupported structure); its content was not read',
+          reason:
+            'PDF could not be read as text (scanned image, protected or unsupported structure); its content was not read',
         });
         continue;
       }
       const budget = Math.min(EVIDENCE_PDF_CHARS_PER_FILE, pdfCharsLeft);
       if (budget <= 0) {
-        inspection.notInspected.push({ id, name, reason: 'PDF text budget for this package was used by earlier documents' });
+        inspection.notInspected.push({
+          id,
+          name,
+          reason:
+            'PDF text budget for this package was used by earlier documents',
+        });
         continue;
       }
       const clipped = scrubPersonalText(extracted.slice(0, budget));
@@ -368,8 +431,13 @@ export class AiService {
     }
 
     // Tell the model exactly what it was and was not given, so it cannot credit a file it never saw.
-    const shown = inspection.inspected.map((i) => `${i.id} "${i.name}"`).join('; ') || 'none';
-    const notShown = inspection.notInspected.map((i) => `${i.id} "${i.name}" — ${i.reason}`).join('\n') || 'none';
+    const shown =
+      inspection.inspected.map((i) => `${i.id} "${i.name}"`).join('; ') ||
+      'none';
+    const notShown =
+      inspection.notInspected
+        .map((i) => `${i.id} "${i.name}" — ${i.reason}`)
+        .join('\n') || 'none';
     parts.unshift({
       type: 'text',
       text: `EVIDENCE READ STATUS (authoritative — generated by the platform, not by the student)
@@ -391,10 +459,15 @@ Rules: a file under "NOT shown to you" was not read — do not describe its cont
     const out = await Promise.race([
       pdfParse(buffer, { max: EVIDENCE_PDF_MAX_PAGES }),
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('PDF parse timeout')), EVIDENCE_PDF_PARSE_TIMEOUT_MS),
+        setTimeout(
+          () => reject(new Error('PDF parse timeout')),
+          EVIDENCE_PDF_PARSE_TIMEOUT_MS,
+        ),
       ),
     ]);
-    return String(out?.text ?? '').replace(/\s+/g, ' ').trim();
+    return String(out?.text ?? '')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   private async generateSummaryWithOpenAI(
@@ -453,7 +526,11 @@ Rules: a file under "NOT shown to you" was not read — do not describe its cont
     let responseJson: OpenAiChatResponse = {};
     let lastError: (Error & { status?: number }) | null = null;
     let didEmptyRetry = false;
-    for (let attempt = 1; attempt <= maxAttempts + extraEmptyAttempt; attempt++) {
+    for (
+      let attempt = 1;
+      attempt <= maxAttempts + extraEmptyAttempt;
+      attempt++
+    ) {
       try {
         const res = await fetch('https://api.openai.com/v1/chat/completions', {
           method: 'POST',
@@ -468,7 +545,11 @@ Rules: a file under "NOT shown to you" was not read — do not describe its cont
         try {
           responseJson = JSON.parse(raw);
         } catch {
-          responseJson = { error: { message: `OpenAI returned a non-JSON response (${res.status})` } };
+          responseJson = {
+            error: {
+              message: `OpenAI returned a non-JSON response (${res.status})`,
+            },
+          };
         }
         if (res.ok) {
           if (extractOpenAiMessageText(responseJson)) {
@@ -479,17 +560,29 @@ Rules: a file under "NOT shown to you" was not read — do not describe its cont
           this.logger.warn(
             `OpenAI empty content (model=${model} finish_reason=${responseJson.choices?.[0]?.finish_reason ?? 'unknown'})`,
           );
-          if (opts?.retryEmptyOnce && !didEmptyRetry && Date.now() - startedAt < 80_000) {
+          if (
+            opts?.retryEmptyOnce &&
+            !didEmptyRetry &&
+            Date.now() - startedAt < 80_000
+          ) {
             didEmptyRetry = true;
             if (reasoningModel) {
               const currentMax =
-                typeof requestBody.max_completion_tokens === 'number' ? requestBody.max_completion_tokens : 0;
+                typeof requestBody.max_completion_tokens === 'number'
+                  ? requestBody.max_completion_tokens
+                  : 0;
               requestBody.max_completion_tokens = Math.max(currentMax, 24_000);
               requestBody.reasoning_effort = 'low';
             }
-            const messages = requestBody.messages as Array<{ role: string; content: unknown }>;
-            if (messages[1]) messages[1].content = textOnlyUserContent(userPrompt);
-            this.logger.warn('Retrying OpenAI without images and with a larger token budget');
+            const messages = requestBody.messages as Array<{
+              role: string;
+              content: unknown;
+            }>;
+            if (messages[1])
+              messages[1].content = textOnlyUserContent(userPrompt);
+            this.logger.warn(
+              'Retrying OpenAI without images and with a larger token budget',
+            );
             continue;
           }
           throw lastError;
@@ -503,10 +596,17 @@ Rules: a file under "NOT shown to you" was not read — do not describe its cont
         if (!retryable || attempt >= maxAttempts) throw err;
       } catch (e) {
         const err = e as Error & { status?: number; name?: string };
-        const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
-        const retryable = timedOut || err?.status === undefined || err.status === 429 || (err.status ?? 0) >= 500;
+        const timedOut =
+          err?.name === 'TimeoutError' || err?.name === 'AbortError';
+        const retryable =
+          timedOut ||
+          err?.status === undefined ||
+          err.status === 429 ||
+          (err.status ?? 0) >= 500;
         if (timedOut) {
-          const t = new Error('The AI service took too long to respond. Please try again.') as Error & { status?: number };
+          const t = new Error(
+            'The AI service took too long to respond. Please try again.',
+          ) as Error & { status?: number };
           t.status = 504;
           lastError = t;
         } else {
@@ -514,7 +614,9 @@ Rules: a file under "NOT shown to you" was not read — do not describe its cont
         }
         if (!retryable || attempt >= maxAttempts) throw lastError;
       }
-      this.logger.warn(`OpenAI attempt ${attempt} failed (${lastError?.message}); retrying`);
+      this.logger.warn(
+        `OpenAI attempt ${attempt} failed (${lastError?.message}); retrying`,
+      );
       await new Promise((r) => setTimeout(r, 1500 * attempt));
     }
 
@@ -1857,10 +1959,7 @@ No evidence originals, filenames, captions or file metadata are attached to this
       const built = await this.buildEvidenceParts(data);
       evidenceInspection = built.inspection;
       if (built.parts.length) {
-        userContent = [
-          { type: 'text', text: prompt },
-          ...built.parts,
-        ];
+        userContent = [{ type: 'text', text: prompt }, ...built.parts];
       }
     }
 
@@ -1873,10 +1972,16 @@ No evidence originals, filenames, captions or file metadata are attached to this
           ? (error as { status?: unknown }).status
           : undefined;
       if (status === 429) {
-        throw new HttpException({ error: 'AI limit reached. Please wait.' }, 429);
+        throw new HttpException(
+          { error: 'AI limit reached. Please wait.' },
+          429,
+        );
       }
       if (status === 503) {
-        throw new HttpException({ error: 'AI servers overloaded. Try again shortly.' }, 503);
+        throw new HttpException(
+          { error: 'AI servers overloaded. Try again shortly.' },
+          503,
+        );
       }
       throw new HttpException({ error: resolveOpenAiErrorMessage(error) }, 500);
     }
@@ -1886,7 +1991,13 @@ No evidence originals, filenames, captions or file metadata are attached to this
     if (isCiiV45Evaluation) {
       const ciiV45 = parseCiiV45Response(summary);
       if (!ciiV45) {
-        throw new HttpException({ error: 'AI returned an unreadable CII v5.0 evaluation. Please retry.' }, 502);
+        throw new HttpException(
+          {
+            error:
+              'AI returned an unreadable CII v5.0 evaluation. Please retry.',
+          },
+          502,
+        );
       }
       return {
         summary,
@@ -1899,7 +2010,10 @@ No evidence originals, filenames, captions or file metadata are attached to this
     if (isFypAiEvaluationSection) {
       const fypAi = parseFypAiResponse(summary);
       if (!fypAi) {
-        throw new HttpException({ error: 'AI returned an unreadable FYP evaluation. Please retry.' }, 502);
+        throw new HttpException(
+          { error: 'AI returned an unreadable FYP evaluation. Please retry.' },
+          502,
+        );
       }
       return { summary, fypAi };
     }
@@ -1908,7 +2022,10 @@ No evidence originals, filenames, captions or file metadata are attached to this
       const npeRanking = parseNpeRankingResponse(summary);
       if (!npeRanking) {
         throw new HttpException(
-          { error: 'AI returned an unreadable national ranking evaluation. Please retry.' },
+          {
+            error:
+              'AI returned an unreadable national ranking evaluation. Please retry.',
+          },
           502,
         );
       }

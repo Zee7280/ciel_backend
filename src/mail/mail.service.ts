@@ -69,8 +69,7 @@ export class MailService {
       process.env.MAIL_SECURE ||
       ''
     ).toLowerCase();
-    const secure =
-      secureEnv === 'true' || secureEnv === '1' || port === 465;
+    const secure = secureEnv === 'true' || secureEnv === '1' || port === 465;
 
     this.logger.log(
       `MailService init. USER found: ${!!user}, PASS found: ${!!pass}, HOST: ${host}, PORT: ${port}, SECURE: ${secure}`,
@@ -364,7 +363,9 @@ export class MailService {
       this.htmlToText(sanitizedBody) ||
       ''
     ).trim();
-    const rawList = (opts.to || []).map((x) => String(x).trim()).filter(Boolean);
+    const rawList = (opts.to || [])
+      .map((x) => String(x).trim())
+      .filter(Boolean);
     // Validate + dedupe (case-insensitive) server-side; invalid addresses are reported as skipped.
     const seen = new Set<string>();
     const toList: string[] = [];
@@ -555,8 +556,13 @@ export class MailService {
     const from =
       this.configService.get<string>('MAIL_FROM') ||
       'CIEL <no-reply@cielpk.com>';
-    const orgEsc = this.escHtmlPlain(input.organizationName || 'your organization');
-    const copy: Record<typeof input.decision, { subject: string; headline: string; body: string; color: string }> = {
+    const orgEsc = this.escHtmlPlain(
+      input.organizationName || 'your organization',
+    );
+    const copy: Record<
+      typeof input.decision,
+      { subject: string; headline: string; body: string; color: string }
+    > = {
       approved: {
         subject: 'Your organization is approved on CIEL PK',
         headline: 'Organization approved',
@@ -601,7 +607,10 @@ export class MailService {
     try {
       await this.sendMailReliable({ from, to, subject: c.subject, html });
     } catch (error) {
-      this.logger.error(`Failed organization decision email to ${to}`, error.stack);
+      this.logger.error(
+        `Failed organization decision email to ${to}`,
+        error.stack,
+      );
     }
   }
 
@@ -1689,12 +1698,12 @@ export class MailService {
       this.configService.get<string>('MAIL_FROM') ||
       'CIEL <no-reply@cielpk.com>';
     const first =
-      (input.creatorName || '')
-        .trim()
-        .split(/\s+/)
-        .filter(Boolean)[0] || 'there';
+      (input.creatorName || '').trim().split(/\s+/).filter(Boolean)[0] ||
+      'there';
     const nameEsc = this.escHtmlPlain(first);
-    const titleEsc = this.escHtmlPlain(input.projectTitle || 'your opportunity');
+    const titleEsc = this.escHtmlPlain(
+      input.projectTitle || 'your opportunity',
+    );
     const partnerEsc = this.escHtmlPlain(input.partnerName || '—');
     const hoursEsc = this.escHtmlPlain(input.requiredHours || '—');
     const periodEsc = this.escHtmlPlain(input.projectPeriod || '—');
@@ -1756,7 +1765,9 @@ export class MailService {
         subject: `Approved — Start your report: ${input.projectTitle || 'Your opportunity'}`,
         html,
       });
-      this.logger.log(`Opportunity live start-report email sent to ${input.to}`);
+      this.logger.log(
+        `Opportunity live start-report email sent to ${input.to}`,
+      );
     } catch (error) {
       this.logger.error(
         `Failed to send opportunity live start-report email to ${input.to}`,
@@ -2374,7 +2385,10 @@ export class MailService {
     const titleEsc = this.escHtmlPlain(projectTitle);
     const waitingDays =
       submittedAt instanceof Date && !Number.isNaN(submittedAt.getTime())
-        ? Math.max(0, Math.floor((Date.now() - submittedAt.getTime()) / 86_400_000))
+        ? Math.max(
+            0,
+            Math.floor((Date.now() - submittedAt.getTime()) / 86_400_000),
+          )
         : null;
     const waitingLine =
       waitingDays === null
@@ -2936,10 +2950,7 @@ export class MailService {
         html,
       });
     } catch (error) {
-      this.logger.error(
-        `Failed published-package email to ${to}`,
-        error.stack,
-      );
+      this.logger.error(`Failed published-package email to ${to}`, error.stack);
     }
   }
 }

@@ -75,20 +75,21 @@ export class Section1AnalyticsService {
     role: string,
     orgType?: string | null,
   ): Section1AnalyticsStakeholder {
-    if (role === UserRole.SUPER_ADMIN) return 'ciel';
-    if (role === UserRole.STUDENT) return 'student';
-    if (role === UserRole.UNIVERSITY) return 'university';
+    const r = role as UserRole;
+    if (r === UserRole.SUPER_ADMIN) return 'ciel';
+    if (r === UserRole.STUDENT) return 'student';
+    if (r === UserRole.UNIVERSITY) return 'university';
     if (
-      role === UserRole.NGO ||
-      role === UserRole.CORPORATE ||
-      role === UserRole.ORGANIZATION_ADMIN ||
-      role === UserRole.PARTNER
+      r === UserRole.NGO ||
+      r === UserRole.CORPORATE ||
+      r === UserRole.ORGANIZATION_ADMIN ||
+      r === UserRole.PARTNER
     ) {
       const t = String(orgType || '').toLowerCase();
       if (t.includes('university')) return 'university';
       return 'partner';
     }
-    if (role === UserRole.FACULTY) return 'university';
+    if (r === UserRole.FACULTY) return 'university';
     return 'ciel';
   }
 
@@ -144,13 +145,14 @@ export class Section1AnalyticsService {
     });
 
     let facultyScopedProjectIds: string[] | undefined;
-    if (scope === 'aggregate' && requester.role === UserRole.FACULTY) {
+    if (scope === 'aggregate' && (requester.role as UserRole) === UserRole.FACULTY) {
       // Same personal + delegated opportunity scope Faculty → Reports/Dashboard/Impact use —
       // keeps "my students" consistent across every faculty screen.
-      facultyScopedProjectIds = await this.facultyService.getScopedOpportunityIds(
-        requester.id,
-        requester.email ?? '',
-      );
+      facultyScopedProjectIds =
+        await this.facultyService.getScopedOpportunityIds(
+          requester.id,
+          requester.email ?? '',
+        );
     }
 
     const rawValues =
@@ -232,7 +234,7 @@ export class Section1AnalyticsService {
     ctx: Section1AnalyticsRequestContext,
   ): Promise<void> {
     if (ctx.stakeholder === 'ciel') {
-      if (ctx.requesterRole !== UserRole.SUPER_ADMIN) {
+      if ((ctx.requesterRole as UserRole) !== UserRole.SUPER_ADMIN) {
         throw new ForbiddenException(
           'Admin access required for CIEL Section 1 analytics',
         );
@@ -249,7 +251,7 @@ export class Section1AnalyticsService {
       // Faculty are mapped to the 'university' stakeholder above but aren't linked to an
       // organizationId (that's an org-account concept) — they view cohort aggregates via
       // their own facultyId instead, so they're exempt from the org-membership requirement.
-      if (ctx.requesterRole === UserRole.FACULTY) {
+      if ((ctx.requesterRole as UserRole) === UserRole.FACULTY) {
         return;
       }
       if (ctx.stakeholder === 'partner' || ctx.stakeholder === 'university') {
@@ -672,8 +674,12 @@ export class Section1AnalyticsService {
             .leftJoinAndSelect('p.student', 'student')
             .leftJoinAndSelect('p.project', 'project')
             .where('p.student_id IS NOT NULL')
-            .andWhere('p.status IN (:...st)', { st: ACTIVE_PARTICIPATION_STATUSES })
-            .andWhere('p.project_id IN (:...pids)', { pids: facultyScopedProjectIds })
+            .andWhere('p.status IN (:...st)', {
+              st: ACTIVE_PARTICIPATION_STATUSES,
+            })
+            .andWhere('p.project_id IN (:...pids)', {
+              pids: facultyScopedProjectIds,
+            })
             .getMany()
         : [];
     } else {
@@ -802,7 +808,6 @@ export class Section1AnalyticsService {
       (p) => !p.attendanceLocked || p.attendanceVerificationRequested,
     ).length;
 
-    const total = participations.length || 1;
     const pct = (n: number, d: number) =>
       d === 0 ? 0 : Math.round((100 * n) / d);
     const teamGroups = this.groupTeams(participations);
@@ -1018,7 +1023,8 @@ export class Section1AnalyticsService {
 
   private resolveRequiredHours(project?: Opportunity | null): number {
     if (!project) return 0;
-    const fromTimeline = Number(project.timeline?.expected_hours);
+    const timeline = project.timeline as { expected_hours?: unknown } | null;
+    const fromTimeline = Number(timeline?.expected_hours);
     if (Number.isFinite(fromTimeline) && fromTimeline > 0) return fromTimeline;
     const rh = Number(project.requiredHours);
     return Number.isFinite(rh) ? rh : 0;
@@ -1236,7 +1242,7 @@ export class Section1AnalyticsService {
       .sort((a, b) => b.count - a.count);
   }
 
-  private async countDuplicateCnicHashes(
+  private countDuplicateCnicHashes(
     participations: Participation[],
   ): Promise<number> {
     const map = new Map<string, number>();
@@ -1244,7 +1250,7 @@ export class Section1AnalyticsService {
       if (!p.cnicHash) continue;
       map.set(p.cnicHash, (map.get(p.cnicHash) || 0) + 1);
     }
-    return [...map.values()].filter((c) => c > 1).length;
+    return Promise.resolve([...map.values()].filter((c) => c > 1).length);
   }
 
   private countDuplicateTeamMembers(members: Participation[]): number {

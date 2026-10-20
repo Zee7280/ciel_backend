@@ -19,7 +19,8 @@ export function normalizeE164Phone(raw: string, defaultDial = '+92'): string {
     if (n.startsWith('92')) {
       let national = n.slice(2);
       if (national.startsWith('0')) national = national.replace(/^0+/, '');
-      if (national.length === 10 && national.startsWith('3')) return `+92${national}`;
+      if (national.length === 10 && national.startsWith('3'))
+        return `+92${national}`;
     }
     return `+${n}`;
   }
@@ -49,9 +50,7 @@ export function validatePhoneE164(
   const trimmed = String(raw || '').trim();
   if (!trimmed) {
     if (opts?.required) {
-      return (
-        opts.requiredMessage || 'Enter a mobile / WhatsApp number.'
-      );
+      return opts.requiredMessage || 'Enter a mobile / WhatsApp number.';
     }
     return null;
   }

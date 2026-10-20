@@ -8,11 +8,11 @@ import { StudentReport } from '../reports/entities/student-report.entity';
 import { PathsModule } from '../paths/paths.module';
 
 @Module({
-    imports: [
-        TypeOrmModule.forFeature([AttendanceLog, Participation, StudentReport]),
-        PathsModule,
-    ],
-    controllers: [ImpactSummaryController],
-    providers: [ImpactSummaryService],
+  imports: [
+    TypeOrmModule.forFeature([AttendanceLog, Participation, StudentReport]),
+    PathsModule,
+  ],
+  controllers: [ImpactSummaryController],
+  providers: [ImpactSummaryService],
 })
-export class ImpactSummaryModule { }
+export class ImpactSummaryModule {}

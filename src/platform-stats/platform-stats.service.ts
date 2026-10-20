@@ -109,7 +109,10 @@ export type PlatformStatsPayload = {
 /** A record counts as verified only once CIEL PK Admin accepted it: 'paid' alone is just a cleared reporting fee. */
 const VERIFIED_RECORD_STATUSES = ['verified', 'paid'];
 const verifiedRecordWhere = () =>
-  VERIFIED_RECORD_STATUSES.map((status) => ({ status, admin_status: 'approved' }));
+  VERIFIED_RECORD_STATUSES.map((status) => ({
+    status,
+    admin_status: 'approved',
+  }));
 
 const PUBLIC_LIVE_STATUSES = ['active', 'live', 'open', 'recruiting'];
 

@@ -77,7 +77,8 @@ export async function restoreSnapshot(
   const snap = await em.getRepository(AdminTeamSnapshot).findOne({
     where: { id: snapshotId, opportunityId },
   });
-  if (!snap) throw new NotFoundException('Snapshot not found for this opportunity');
+  if (!snap)
+    throw new NotFoundException('Snapshot not found for this opportunity');
   if (snap.restoredAt) {
     throw new BadRequestException('This change was already undone.');
   }
@@ -123,7 +124,8 @@ export async function restoreSnapshot(
         ).map((r) => r.id),
       );
       const toInsert = p.reports.filter((r) => !existing.has(String(r.id)));
-      if (toInsert.length) await repRepo.save(repRepo.create(toInsert as never[]));
+      if (toInsert.length)
+        await repRepo.save(repRepo.create(toInsert as never[]));
       restored.reports = toInsert.length;
     }
     if (p.payments.length) {
@@ -137,7 +139,8 @@ export async function restoreSnapshot(
         ).map((r) => r.id),
       );
       const toInsert = p.payments.filter((r) => !existing.has(String(r.id)));
-      if (toInsert.length) await payRepo.save(payRepo.create(toInsert as never[]));
+      if (toInsert.length)
+        await payRepo.save(payRepo.create(toInsert as never[]));
       restored.payments = toInsert.length;
     }
     if (p.withdrawnApplicationIds.length) {
@@ -151,7 +154,9 @@ export async function restoreSnapshot(
       restored.applications = p.withdrawnApplicationIds.length;
     }
     if (p.promotedParticipationId) {
-      const restoredLeads = p.participations.filter((r) => r.isTeamLead === true);
+      const restoredLeads = p.participations.filter(
+        (r) => r.isTeamLead === true,
+      );
       if (restoredLeads.length) {
         await partRepo.update(p.promotedParticipationId, { isTeamLead: false });
       }
@@ -194,8 +199,11 @@ export async function restoreSnapshot(
           })
         ).map((r) => r.id),
       );
-      const toInsert = p.deletedReports.filter((r) => !existing.has(String(r.id)));
-      if (toInsert.length) await repRepo.save(repRepo.create(toInsert as never[]));
+      const toInsert = p.deletedReports.filter(
+        (r) => !existing.has(String(r.id)),
+      );
+      if (toInsert.length)
+        await repRepo.save(repRepo.create(toInsert as never[]));
       restored.reports = (restored.reports ?? 0) + toInsert.length;
     }
   } else {

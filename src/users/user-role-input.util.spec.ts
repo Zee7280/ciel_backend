@@ -14,13 +14,23 @@ describe('partner = NGO account type', () => {
   });
 
   it('admin create accepts role "partner" and stores it as ngo', async () => {
-    const dto = plainToInstance(AdminCreateUserDto, { name: 'N', email: 'n@x.pk', password: 'Str0ngPass!', role: 'partner' });
+    const dto = plainToInstance(AdminCreateUserDto, {
+      name: 'N',
+      email: 'n@x.pk',
+      password: 'Str0ngPass!',
+      role: 'partner',
+    });
     expect(await validate(dto)).toHaveLength(0);
     expect(dto.role).toBe('ngo');
   });
 
   it('still rejects unknown roles', async () => {
-    const dto = plainToInstance(AdminCreateUserDto, { name: 'N', email: 'n@x.pk', password: 'Str0ngPass!', role: 'banana' });
+    const dto = plainToInstance(AdminCreateUserDto, {
+      name: 'N',
+      email: 'n@x.pk',
+      password: 'Str0ngPass!',
+      role: 'banana',
+    });
     expect((await validate(dto)).length).toBeGreaterThan(0);
   });
 });

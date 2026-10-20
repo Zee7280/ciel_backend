@@ -280,10 +280,7 @@ export class FacultyService {
     const fir =
       val?.faculty_institutional_representative &&
       typeof val.faculty_institutional_representative === 'object'
-        ? (val.faculty_institutional_representative as Record<
-            string,
-            unknown
-          >)
+        ? (val.faculty_institutional_representative as Record<string, unknown>)
         : null;
     if (fir) {
       const fe2 =
@@ -587,7 +584,9 @@ export class FacultyService {
 
     if (status === 'linked_drafts') {
       query
-        .andWhere('opportunity.isStudentCreated = :iscDraft', { iscDraft: true })
+        .andWhere('opportunity.isStudentCreated = :iscDraft', {
+          iscDraft: true,
+        })
         .andWhere("LOWER(COALESCE(opportunity.status, '')) = :draftOnly", {
           draftOnly: 'draft',
         });
@@ -681,9 +680,12 @@ export class FacultyService {
                     // identities (or the delegated university liaison) — a row matched solely
                     // through a partner contact email is not offered here (it 403s on action).
                     new Brackets((facId) => {
-                      facId.where('"opportunity"."facultyId"::text = :facultyId', {
-                        facultyId,
-                      });
+                      facId.where(
+                        '"opportunity"."facultyId"::text = :facultyId',
+                        {
+                          facultyId,
+                        },
+                      );
                       if (fe) {
                         for (const expr of this.facultyIdentityEmailSql(
                           'opportunity',

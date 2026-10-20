@@ -80,7 +80,9 @@ export class OrganizationsService {
       });
       const emails = new Set<string>();
       for (const e of [org.contactEmail, ...users.map((u) => u.email)]) {
-        const v = String(e || '').trim().toLowerCase();
+        const v = String(e || '')
+          .trim()
+          .toLowerCase();
         if (v && v.includes('@')) emails.add(v);
         if (emails.size >= 5) break;
       }
@@ -509,7 +511,10 @@ export class OrganizationsService {
       updateData.dataPolicyAcknowledged = dataPolicyAcknowledged;
     }
 
-    if (typeof updateData.contactPhone === 'string' && updateData.contactPhone.trim()) {
+    if (
+      typeof updateData.contactPhone === 'string' &&
+      updateData.contactPhone.trim()
+    ) {
       const parsed = canonicalizePhoneInput(updateData.contactPhone, {
         required: true,
         requiredMessage: 'Enter a valid contact phone number.',
@@ -859,7 +864,11 @@ export class OrganizationsService {
     } else if (!wasApproved && saved.verificationStatus === 'APPROVED') {
       void this.notifyOrganizationDecision(saved, 'approved');
     } else if (normalized === 'rejected') {
-      void this.notifyOrganizationDecision(saved, 'rejected', saved.verificationNotes);
+      void this.notifyOrganizationDecision(
+        saved,
+        'rejected',
+        saved.verificationNotes,
+      );
     }
     return saved;
   }

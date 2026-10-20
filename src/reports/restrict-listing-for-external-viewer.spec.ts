@@ -1,6 +1,7 @@
 import { StudentReportsService } from './student-reports.service';
 
-const restrict = (StudentReportsService as any).restrictListingForExternalViewer;
+const restrict = (StudentReportsService as any)
+  .restrictListingForExternalViewer;
 
 describe('restrictListingForExternalViewer', () => {
   const lockedRow = {
@@ -8,13 +9,23 @@ describe('restrictListingForExternalViewer', () => {
     ciiV45: {
       finalCII: 70,
       sectionScores: [
-        { dimension: '1', name: 'Participation & Verified Effort', maximumPoints: 10, score: 7, criterionScores: [{ anchor: 3 }] },
+        {
+          dimension: '1',
+          name: 'Participation & Verified Effort',
+          maximumPoints: 10,
+          score: 7,
+          criterionScores: [{ anchor: 3 }],
+        },
       ],
       adminReviewReasons: ['x'],
       extraMileUplift: { total: 1 },
       integrityPenalty: { points: 0 },
     },
-    ciiV45Lock: { locked: true, hash: 'h', lockedAt: '2026-01-01T00:00:00.000Z' },
+    ciiV45Lock: {
+      locked: true,
+      hash: 'h',
+      lockedAt: '2026-01-01T00:00:00.000Z',
+    },
     independentAiAnalyses: [{ secret: true }],
     review_package: {
       documents: { evidence: { count: 2, files: [{ url: 'https://x/a' }] } },
@@ -33,8 +44,12 @@ describe('restrictListingForExternalViewer', () => {
   });
 
   it('hides ciiV45 only when there is no analysis payload', () => {
-    expect(restrict({ ...lockedRow, ciiV45Lock: null }).ciiV45.finalCII).toBe(70);
-    expect(restrict({ ...lockedRow, ciiV45: null, ciiV45Lock: null }).ciiV45).toBeNull();
+    expect(restrict({ ...lockedRow, ciiV45Lock: null }).ciiV45.finalCII).toBe(
+      70,
+    );
+    expect(
+      restrict({ ...lockedRow, ciiV45: null, ciiV45Lock: null }).ciiV45,
+    ).toBeNull();
   });
 
   it('reduces an unsubmitted draft to progress only', () => {
@@ -62,7 +77,10 @@ describe('stripAnalysisFromListingRow (partner / NGO)', () => {
       independentAiAnalyses: [{}],
       review_package: {
         analysis_attached: true,
-        documents: { flashcard: { title: 'Impact flashcard' }, analysis_report: { href: 'x' } },
+        documents: {
+          flashcard: { title: 'Impact flashcard' },
+          analysis_report: { href: 'x' },
+        },
       },
     });
     expect(out.ciiV45.finalCII).toBe(70);
@@ -70,7 +88,9 @@ describe('stripAnalysisFromListingRow (partner / NGO)', () => {
     expect(out.independentAiAnalyses).toBeNull();
     expect(out.review_package.analysis_attached).toBe(false);
     expect(out.review_package.documents.analysis_report).toBeNull();
-    expect(out.review_package.documents.flashcard.title).toBe('Impact flashcard');
+    expect(out.review_package.documents.flashcard.title).toBe(
+      'Impact flashcard',
+    );
   });
 });
 
@@ -81,8 +101,17 @@ describe('partner payload keeps CII score but drops analyser internals', () => {
       cii_score: 80,
       total: 70,
       level: 'L3',
-      section11: { cii_index: { totalScore: 80 }, summary_text: 'CII 80', ai_generated_impact_score: 80, keep: 1 },
-      review_package: { ai_analyser_href: 'x', analysis_hrefs: {}, documents: { flashcard: {} } },
+      section11: {
+        cii_index: { totalScore: 80 },
+        summary_text: 'CII 80',
+        ai_generated_impact_score: 80,
+        keep: 1,
+      },
+      review_package: {
+        ai_analyser_href: 'x',
+        analysis_hrefs: {},
+        documents: { flashcard: {} },
+      },
     });
     expect(out.cii_score).toBe(80);
     expect(out.total).toBe(70);
@@ -95,7 +124,11 @@ describe('partner payload keeps CII score but drops analyser internals', () => {
 describe('supersedeCiiLock', () => {
   it('resets faculty approval so a resubmitted report needs a fresh analysis', () => {
     const svc = Object.create(StudentReportsService.prototype);
-    const report: any = { faculty_status: 'approved', ciiV45: { finalCII: 70 }, ciiV45Lock: { locked: true } };
+    const report: any = {
+      faculty_status: 'approved',
+      ciiV45: { finalCII: 70 },
+      ciiV45Lock: { locked: true },
+    };
     svc.supersedeCiiLock(report, 'rejected');
     expect(report.faculty_status).toBe('pending');
     expect(report.ciiV45Lock).toBeNull();

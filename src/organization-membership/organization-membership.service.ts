@@ -381,7 +381,10 @@ export class OrganizationMembershipService {
   }> {
     const paged = opts?.page !== undefined || opts?.limit !== undefined;
     const limit = paged
-      ? Math.min(200, Math.max(1, parseInt(String(opts?.limit ?? 50), 10) || 50))
+      ? Math.min(
+          200,
+          Math.max(1, parseInt(String(opts?.limit ?? 50), 10) || 50),
+        )
       : 150;
     const page = paged
       ? Math.max(1, parseInt(String(opts?.page ?? 1), 10) || 1)

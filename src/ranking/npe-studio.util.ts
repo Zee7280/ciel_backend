@@ -44,11 +44,17 @@ export type StudioGroupBy =
 
 export const STUDIO_LENSES: Record<
   StudioLens,
-  { title: string; description: string; kind: 'points' | 'rubric' | 'hours' | 'people' | 'currency'; needsEvaluation: boolean }
+  {
+    title: string;
+    description: string;
+    kind: 'points' | 'rubric' | 'hours' | 'people' | 'currency';
+    needsEvaluation: boolean;
+  }
 > = {
   excellence: {
     title: 'Overall Project Excellence',
-    description: 'Independent evidence-based comparison (90%) plus approved CII (10%)',
+    description:
+      'Independent evidence-based comparison (90%) plus approved CII (10%)',
     kind: 'points',
     needsEvaluation: true,
   },
@@ -58,18 +64,78 @@ export const STUDIO_LENSES: Record<
     kind: 'points',
     needsEvaluation: false,
   },
-  impact: { title: 'Community Impact', description: 'Evidence-based assessment of changes in the community', kind: 'rubric', needsEvaluation: true },
-  sdg: { title: 'SDG Contribution', description: 'Evidence-based contribution to declared SDG', kind: 'rubric', needsEvaluation: true },
-  learning: { title: 'Student Skills & Learning', description: 'Documented competence and reflection', kind: 'rubric', needsEvaluation: true },
-  sustain: { title: 'Sustainability', description: 'Ownership and sustained-benefit rubric', kind: 'rubric', needsEvaluation: true },
-  partner: { title: 'Partner Collaboration', description: 'Quality of partner involvement', kind: 'rubric', needsEvaluation: true },
-  need: { title: 'Community Need & Relevance', description: 'Response to a documented local need', kind: 'rubric', needsEvaluation: true },
-  efficiency: { title: 'Resource Efficiency', description: 'Outcome quality relative to resources', kind: 'rubric', needsEvaluation: true },
-  scale: { title: 'Transferability', description: 'Replicable learning and practice', kind: 'rubric', needsEvaluation: true },
-  hours: { title: 'Verified Service Hours', description: 'Verified team service hours from the approved report', kind: 'hours', needsEvaluation: false },
-  reach: { title: 'Beneficiaries Reached', description: 'Documented beneficiary reach, not proof of change', kind: 'people', needsEvaluation: false },
-  funds: { title: 'Resources Mobilized (PKR)', description: 'Documented cash and in-kind value, not proof of impact', kind: 'currency', needsEvaluation: false },
-  custom: { title: 'Custom Weighted Excellence', description: 'Your selected weighting of eligible evidence-based measures', kind: 'points', needsEvaluation: true },
+  impact: {
+    title: 'Community Impact',
+    description: 'Evidence-based assessment of changes in the community',
+    kind: 'rubric',
+    needsEvaluation: true,
+  },
+  sdg: {
+    title: 'SDG Contribution',
+    description: 'Evidence-based contribution to declared SDG',
+    kind: 'rubric',
+    needsEvaluation: true,
+  },
+  learning: {
+    title: 'Student Skills & Learning',
+    description: 'Documented competence and reflection',
+    kind: 'rubric',
+    needsEvaluation: true,
+  },
+  sustain: {
+    title: 'Sustainability',
+    description: 'Ownership and sustained-benefit rubric',
+    kind: 'rubric',
+    needsEvaluation: true,
+  },
+  partner: {
+    title: 'Partner Collaboration',
+    description: 'Quality of partner involvement',
+    kind: 'rubric',
+    needsEvaluation: true,
+  },
+  need: {
+    title: 'Community Need & Relevance',
+    description: 'Response to a documented local need',
+    kind: 'rubric',
+    needsEvaluation: true,
+  },
+  efficiency: {
+    title: 'Resource Efficiency',
+    description: 'Outcome quality relative to resources',
+    kind: 'rubric',
+    needsEvaluation: true,
+  },
+  scale: {
+    title: 'Transferability',
+    description: 'Replicable learning and practice',
+    kind: 'rubric',
+    needsEvaluation: true,
+  },
+  hours: {
+    title: 'Verified Service Hours',
+    description: 'Verified team service hours from the approved report',
+    kind: 'hours',
+    needsEvaluation: false,
+  },
+  reach: {
+    title: 'Beneficiaries Reached',
+    description: 'Documented beneficiary reach, not proof of change',
+    kind: 'people',
+    needsEvaluation: false,
+  },
+  funds: {
+    title: 'Resources Mobilized (PKR)',
+    description: 'Documented cash and in-kind value, not proof of impact',
+    kind: 'currency',
+    needsEvaluation: false,
+  },
+  custom: {
+    title: 'Custom Weighted Excellence',
+    description: 'Your selected weighting of eligible evidence-based measures',
+    kind: 'points',
+    needsEvaluation: true,
+  },
 };
 
 export const STUDIO_GROUPS: Record<StudioGroupBy, string> = {
@@ -91,17 +157,38 @@ export function isStudioGroup(v: unknown): v is StudioGroupBy {
 }
 
 /** Custom weighting: the four measures the Studio lets the admin blend (normalized to 100%). */
-export type StudioCustomWeights = { impact: number; sustain: number; learning: number; cii: number };
-export const DEFAULT_CUSTOM_WEIGHTS: StudioCustomWeights = { impact: 35, sustain: 20, learning: 25, cii: 20 };
+export type StudioCustomWeights = {
+  impact: number;
+  sustain: number;
+  learning: number;
+  cii: number;
+};
+export const DEFAULT_CUSTOM_WEIGHTS: StudioCustomWeights = {
+  impact: 35,
+  sustain: 20,
+  learning: 25,
+  cii: 20,
+};
 
 export function normalizeCustomWeights(raw: unknown): StudioCustomWeights {
-  const src = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const src = (raw && typeof raw === 'object' ? raw : {}) as Record<
+    string,
+    unknown
+  >;
   const pick = (k: keyof StudioCustomWeights) => {
     const n = Number(src[k]);
-    return Number.isFinite(n) && n >= 0 ? Math.min(100, n) : DEFAULT_CUSTOM_WEIGHTS[k];
+    return Number.isFinite(n) && n >= 0
+      ? Math.min(100, n)
+      : DEFAULT_CUSTOM_WEIGHTS[k];
   };
-  const out = { impact: pick('impact'), sustain: pick('sustain'), learning: pick('learning'), cii: pick('cii') };
-  if (out.impact + out.sustain + out.learning + out.cii <= 0) return { ...DEFAULT_CUSTOM_WEIGHTS };
+  const out = {
+    impact: pick('impact'),
+    sustain: pick('sustain'),
+    learning: pick('learning'),
+    cii: pick('cii'),
+  };
+  if (out.impact + out.sustain + out.learning + out.cii <= 0)
+    return { ...DEFAULT_CUSTOM_WEIGHTS };
   return out;
 }
 
@@ -132,13 +219,29 @@ export type StudioFilters = {
 };
 
 const FILTER_TEXT_KEYS = [
-  'university', 'department', 'instructor', 'sdg', 'skills', 'year', 'month', 'semester',
-  'city', 'partner', 'activity', 'theme', 'ciiBadge', 'privacy', 'teamSize',
+  'university',
+  'department',
+  'instructor',
+  'sdg',
+  'skills',
+  'year',
+  'month',
+  'semester',
+  'city',
+  'partner',
+  'activity',
+  'theme',
+  'ciiBadge',
+  'privacy',
+  'teamSize',
 ] as const;
 
 /** Whitelists and trims untrusted filter input; unknown keys and empty values are dropped. */
 export function sanitizeStudioFilters(raw: unknown): StudioFilters {
-  const src = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const src = (raw && typeof raw === 'object' ? raw : {}) as Record<
+    string,
+    unknown
+  >;
   const out: Record<string, unknown> = {};
   for (const key of FILTER_TEXT_KEYS) {
     const v = src[key];
@@ -146,11 +249,17 @@ export function sanitizeStudioFilters(raw: unknown): StudioFilters {
   }
   for (const key of ['dateFrom', 'dateTo'] as const) {
     const v = src[key];
-    if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v.trim())) out[key] = v.trim();
+    if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v.trim()))
+      out[key] = v.trim();
   }
   for (const key of ['minHours', 'minCii'] as const) {
     const v = src[key];
-    const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() ? Number(v) : NaN;
+    const n =
+      typeof v === 'number'
+        ? v
+        : typeof v === 'string' && v.trim()
+          ? Number(v)
+          : NaN;
     if (Number.isFinite(n) && n >= 0) out[key] = n;
   }
   return out as StudioFilters;
@@ -192,13 +301,18 @@ function str(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 function num(value: unknown): number {
-  const n = typeof value === 'number' ? value : Number(String(value ?? '').replace(/,/g, ''));
+  const n =
+    typeof value === 'number'
+      ? value
+      : Number(String(value ?? '').replace(/,/g, ''));
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
 /** Strips the leading emoji / pictograph the wizard prefixes to skill names ("💬 Communication"). */
 export function cleanSkillName(value: unknown): string {
-  return str(value).replace(/^[^\p{L}\p{N}]+/u, '').trim();
+  return str(value)
+    .replace(/^[^\p{L}\p{N}]+/u, '')
+    .trim();
 }
 
 export function buildStudioFacets(report: StudentReport): StudioFacets {
@@ -212,20 +326,27 @@ export function buildStudioFacets(report: StudentReport): StudioFacets {
   const opp = rec(report.opportunity);
   const loc = rec(opp.location);
 
-  const stamp = report.reportSubmittedAt || report.submission_date || report.createdAt;
+  const stamp =
+    report.reportSubmittedAt || report.submission_date || report.createdAt;
   const dt = stamp ? new Date(stamp) : null;
   const valid = dt && !Number.isNaN(dt.getTime());
-  const date = valid ? dt!.toISOString().slice(0, 10) : '';
-  const monthIdx = valid ? dt!.getUTCMonth() : -1;
+  const date = valid ? dt.toISOString().slice(0, 10) : '';
+  const monthIdx = valid ? dt.getUTCMonth() : -1;
 
   const sdgNum =
     rec(s3.primary_sdg).goal_number ?? report.primary_sdg_goal ?? null;
   const skillsRaw = Array.isArray(s9.skills_grown) ? s9.skills_grown : [];
-  const skills = [...new Set(skillsRaw.map(cleanSkillName).filter((s) => s && !/^other$/i.test(s)))];
+  const skills = [
+    ...new Set(
+      skillsRaw.map(cleanSkillName).filter((s) => s && !/^other$/i.test(s)),
+    ),
+  ];
 
   const team = Array.isArray(s1.team_members) ? s1.team_members.length : 0;
   const metrics = rec(s1.metrics);
-  const verified = num(communityAwardInputsFromReport(report).hours) || num(metrics.total_verified_hours);
+  const verified =
+    num(communityAwardInputsFromReport(report).hours) ||
+    num(metrics.total_verified_hours);
 
   const summary = rec(s4.project_summary);
   const reach =
@@ -238,13 +359,19 @@ export function buildStudioFacets(report: StudentReport): StudioFacets {
     str(s6.use_resources).toLowerCase() === 'yes'
       ? resources.reduce((sum: number, r) => {
           const row = rec(r);
-          return /pkr|rs\.?|rupee/i.test(str(row.unit)) ? sum + num(row.amount) : sum;
+          return /pkr|rs\.?|rupee/i.test(str(row.unit))
+            ? sum + num(row.amount)
+            : sum;
         }, 0)
       : 0;
 
   const visibility = resolveMediaVisibility(s8.media_visible ?? s8.media_usage);
   const privacy =
-    visibility === 'public' ? 'Public' : visibility === 'restricted' ? 'Restricted' : 'Confidential';
+    visibility === 'public'
+      ? 'Public'
+      : visibility === 'restricted'
+        ? 'Restricted'
+        : 'Confidential';
 
   const types = Array.isArray(opp.types) ? (opp.types as unknown[]) : [];
   const activityRaw = str(types[0]).replace(/^Other:\s*/i, '');
@@ -253,20 +380,25 @@ export function buildStudioFacets(report: StudentReport): StudioFacets {
 
   return {
     university:
-      str(lead.university) || str(report.student?.university) || str(report.student?.institution) || '—',
+      str(lead.university) ||
+      str(report.student?.university) ||
+      str(report.student?.institution) ||
+      '—',
     department: str(lead.degree) || str(report.student?.department) || '—',
     instructor:
       str(s1.faculty_supervisor_name) || str(report.faculty?.name) || '',
     sdg: sdgNum ? `SDG ${sdgNum}` : '',
     skills,
     date,
-    year: valid ? String(dt!.getUTCFullYear()) : '',
+    year: valid ? String(dt.getUTCFullYear()) : '',
     month: valid ? String(monthIdx + 1).padStart(2, '0') : '',
     semester: valid ? (monthIdx < 6 ? 'Spring' : 'Fall') : '',
     city: str(loc.city),
     partner: str(trackingOrganizationName(report.opportunity as never)) || '',
     activity: activityRaw,
-    theme: str(report.problem_category) || str(rec(report.section2).problem_category),
+    theme:
+      str(report.problem_category) ||
+      str(rec(report.section2).problem_category),
     ciiBadge: str(lockedBadge.name) || str(storedBadge.name),
     privacy,
     teamSize: 1 + team,
@@ -290,13 +422,19 @@ export type StudioCandidate = {
   reason: string;
   cii: number | null;
   /** Per-criterion judgment from the stored evaluation (null until the package is read). */
-  criteria: Record<string, { anchor: number; confidence: NpeEvidenceConfidence }> | null;
+  criteria: Record<
+    string,
+    { anchor: number; confidence: NpeEvidenceConfidence }
+  > | null;
   /** Excellence score under the run's rubric (null until evaluated). */
   excellence: { total: number; criteria: Record<string, number> } | null;
   facets: StudioFacets;
 };
 
-export function matchesStudioFilters(c: StudioCandidate, f: StudioFilters): boolean {
+export function matchesStudioFilters(
+  c: StudioCandidate,
+  f: StudioFilters,
+): boolean {
   const x = c.facets;
   if (f.university && x.university !== f.university) return false;
   if (f.department && x.department !== f.department) return false;
@@ -357,11 +495,21 @@ export function studioMetric(
       const impact = criterionPercent(c, 'impact');
       const sustain = criterionPercent(c, 'sustain');
       const learning = criterionPercent(c, 'learning');
-      if (impact == null || sustain == null || learning == null || c.cii == null) return null;
-      const total = weights.impact + weights.sustain + weights.learning + weights.cii || 1;
+      if (
+        impact == null ||
+        sustain == null ||
+        learning == null ||
+        c.cii == null
+      )
+        return null;
+      const total =
+        weights.impact + weights.sustain + weights.learning + weights.cii || 1;
       const cii = Math.min(100, c.cii);
       return (
-        (weights.impact * impact + weights.sustain * sustain + weights.learning * learning + weights.cii * cii) /
+        (weights.impact * impact +
+          weights.sustain * sustain +
+          weights.learning * learning +
+          weights.cii * cii) /
         total
       );
     }
@@ -442,19 +590,50 @@ function groupKeys(c: StudioCandidate, groupBy: StudioGroupBy): string[] {
   }
 }
 
-const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const MONTH_NAMES = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
 
-export function prettyStudioFilter(key: string, value: string | number): string {
+export function prettyStudioFilter(
+  key: string,
+  value: string | number,
+): string {
   if (key === 'month') return MONTH_NAMES[Number(value) - 1] || String(value);
   return String(value);
 }
 
 /** "Top Universities · Community Impact — SDG 4 · Lahore · 2026" (same wording as the design). */
-export function studioRankingName(lens: StudioLens, groupBy: StudioGroupBy, f: StudioFilters): string {
+export function studioRankingName(
+  lens: StudioLens,
+  groupBy: StudioGroupBy,
+  f: StudioFilters,
+): string {
   const lensTitle = STUDIO_LENSES[lens].title;
   const core =
-    groupBy === 'project' ? lensTitle : `Top ${STUDIO_GROUPS[groupBy]} · ${lensTitle}`;
-  const keys = ['sdg', 'skills', 'city', 'university', 'department', 'instructor', 'year', 'month'] as const;
+    groupBy === 'project'
+      ? lensTitle
+      : `Top ${STUDIO_GROUPS[groupBy]} · ${lensTitle}`;
+  const keys = [
+    'sdg',
+    'skills',
+    'city',
+    'university',
+    'department',
+    'instructor',
+    'year',
+    'month',
+  ] as const;
   const facets = keys
     .filter((k) => f[k])
     .map((k) => prettyStudioFilter(k, f[k] as string));
@@ -493,12 +672,18 @@ export function computeStudioRanking(
   const eligible: Array<{ c: StudioCandidate; metric: number }> = [];
   const held: StudioCandidate[] = [];
   for (const c of population) {
-    const metric = c.gateOk && (!needsEvaluation || c.evaluated) ? studioMetric(c, lens, weights) : null;
+    const metric =
+      c.gateOk && (!needsEvaluation || c.evaluated)
+        ? studioMetric(c, lens, weights)
+        : null;
     if (metric == null || !Number.isFinite(metric)) held.push(c);
     else eligible.push({ c, metric });
   }
 
-  const groups = new Map<string, Array<{ c: StudioCandidate; metric: number }>>();
+  const groups = new Map<
+    string,
+    Array<{ c: StudioCandidate; metric: number }>
+  >();
   for (const row of eligible) {
     for (const key of groupKeys(row.c, groupBy)) {
       if (!groups.has(key)) groups.set(key, []);
@@ -506,7 +691,8 @@ export function computeStudioRanking(
     }
   }
 
-  const minGroup = groupBy === 'project' ? 1 : Math.max(1, input.minGroupSize ?? 1);
+  const minGroup =
+    groupBy === 'project' ? 1 : Math.max(1, input.minGroupSize ?? 1);
   const thinGroups: StudioResult['thinGroups'] = [];
   const draft = [...groups.entries()]
     .filter(([id, list]) => {
@@ -516,7 +702,9 @@ export function computeStudioRanking(
     })
     .map(([id, list]) => {
       const metric = list.reduce((sum, r) => sum + r.metric, 0) / list.length;
-      const ciis = list.map((r) => r.c.cii).filter((v): v is number => v != null);
+      const ciis = list
+        .map((r) => r.c.cii)
+        .filter((v): v is number => v != null);
       const first = list[0];
       return {
         id,
@@ -533,7 +721,8 @@ export function computeStudioRanking(
       };
     });
 
-  const tupleTies = groupBy === 'project' && (lens === 'excellence' || lens === 'custom');
+  const tupleTies =
+    groupBy === 'project' && (lens === 'excellence' || lens === 'custom');
   draft.sort((a, b) => {
     if (Math.abs(b.metric - a.metric) > EPS) return b.metric - a.metric;
     if (tupleTies) {
@@ -555,7 +744,11 @@ export function computeStudioRanking(
     const same =
       prev &&
       Math.abs(prev.metric - row.metric) <= EPS &&
-      (!tupleTies || [0, 1, 2].every((k) => Math.round(prev.tie[k] * 10000) === Math.round(row.tie[k] * 10000)));
+      (!tupleTies ||
+        [0, 1, 2].every(
+          (k) =>
+            Math.round(prev.tie[k] * 10000) === Math.round(row.tie[k] * 10000),
+        ));
     if (!same) rank = i + 1;
     return {
       rank,
@@ -576,11 +769,19 @@ export function computeStudioRanking(
     weights: usesWeights ? weights : null,
     rubricVersion,
     name: studioRankingName(lens, groupBy, filters),
-    signature: studioSignature(lens, groupBy, filters, usesWeights ? weights : null, rubricVersion),
+    signature: studioSignature(
+      lens,
+      groupBy,
+      filters,
+      usesWeights ? weights : null,
+      rubricVersion,
+    ),
     rows,
     eligibleIds: eligible.map((r) => r.c.id),
     heldIds: held.map((c) => c.id),
-    unreadIds: held.filter((c) => c.gateOk && needsEvaluation && !c.evaluated).map((c) => c.id),
+    unreadIds: held
+      .filter((c) => c.gateOk && needsEvaluation && !c.evaluated)
+      .map((c) => c.id),
     heldReasons: held.map((c) => ({
       id: c.id,
       title: c.title,
@@ -606,8 +807,11 @@ export function applyStudioMovement(
 ): { rows: StudioRow[]; cohortComparable: boolean } {
   const sameCohort =
     !!prior &&
-    JSON.stringify([...prior.eligibleReportIds].sort()) === JSON.stringify([...eligibleIds].sort());
-  const old = new Map((sameCohort ? prior!.rows : []).map((r) => [r.id, r.rank]));
+    JSON.stringify([...prior.eligibleReportIds].sort()) ===
+      JSON.stringify([...eligibleIds].sort());
+  const old = new Map(
+    (sameCohort ? prior.rows : []).map((r) => [r.id, r.rank]),
+  );
   return {
     cohortComparable: sameCohort,
     rows: rows.map((r) => {

@@ -114,7 +114,8 @@ describe('StudentController — student-created opportunity create/update', () =
       } as any,
     );
 
-    const passed = studentsService.createStudentOpportunity.mock.calls[0][1] as {
+    const passed = studentsService.createStudentOpportunity.mock
+      .calls[0][1] as {
       draft?: boolean;
       title?: string;
     };

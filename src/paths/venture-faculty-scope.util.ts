@@ -10,7 +10,10 @@ export function normalizePersonName(value?: string | null): string {
 }
 
 export function ventureMatchesFaculty(
-  setup: { supervisorEmail?: string; supervisorName?: string } | null | undefined,
+  setup:
+    | { supervisorEmail?: string; supervisorName?: string }
+    | null
+    | undefined,
   faculty: { email: string; name?: string | null },
 ): boolean {
   const email = (faculty.email || '').trim().toLowerCase();

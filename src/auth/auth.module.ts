@@ -19,24 +19,24 @@ import { User } from '../users/entities/user.entity';
 import { Organization } from '../organizations/entities/organization.entity';
 
 @Module({
-    imports: [
-        TypeOrmModule.forFeature([EmailOtp, Opportunity, User, Organization]),
-        UsersModule,
-        OrganizationsModule,
-        EngagementModule,
-        OrganizationMembershipModule,
-        StudentSubscriptionModule,
-        PassportModule,
-        JwtModule.registerAsync({
-            imports: [ConfigModule],
-            useFactory: async (configService: ConfigService) => ({
-                secret: resolveJwtSecret(configService.get<string>('JWT_SECRET')),
-                signOptions: { expiresIn: '10h' },
-            }),
-            inject: [ConfigService],
-        }),
-    ],
-    controllers: [AuthController],
-    providers: [AuthService, OtpService, JwtStrategy],
+  imports: [
+    TypeOrmModule.forFeature([EmailOtp, Opportunity, User, Organization]),
+    UsersModule,
+    OrganizationsModule,
+    EngagementModule,
+    OrganizationMembershipModule,
+    StudentSubscriptionModule,
+    PassportModule,
+    JwtModule.registerAsync({
+      imports: [ConfigModule],
+      useFactory: async (configService: ConfigService) => ({
+        secret: resolveJwtSecret(configService.get<string>('JWT_SECRET')),
+        signOptions: { expiresIn: '10h' },
+      }),
+      inject: [ConfigService],
+    }),
+  ],
+  controllers: [AuthController],
+  providers: [AuthService, OtpService, JwtStrategy],
 })
-export class AuthModule { }
+export class AuthModule {}

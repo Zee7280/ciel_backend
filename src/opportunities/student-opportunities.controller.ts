@@ -16,6 +16,8 @@ import { VerificationVerifyAuthGuard } from '../auth/verification-verify-auth.gu
 import { OpportunitiesService } from './opportunities.service';
 import { CreateOpportunityDto } from './dto/create-opportunity.dto';
 
+type AuthedRequest = { user: { id: string } };
+
 @Controller('student/opportunities')
 export class StudentOpportunitiesController {
   constructor(private readonly opportunitiesService: OpportunitiesService) {}
@@ -23,13 +25,16 @@ export class StudentOpportunitiesController {
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard, SubscriptionActiveGuard)
   @Roles(UserRole.STUDENT, UserRole.SUPER_ADMIN)
-  create(@Request() req, @Body() dto: CreateOpportunityDto) {
+  create(@Request() req: AuthedRequest, @Body() dto: CreateOpportunityDto) {
     return this.opportunitiesService.createStudentOpportunity(req.user.id, dto);
   }
 
   @UseGuards(VerificationVerifyAuthGuard)
   @Get('faculty/verify')
-  verify(@Request() req, @Query('token') token: string) {
+  verify(
+    @Request() req: { user?: { id: string; email: string; role: string } },
+    @Query('token') token: string,
+  ) {
     return this.opportunitiesService.verifyFaculty(token, req.user);
   }
 }
@@ -52,7 +57,7 @@ export class StudentOpportunitySingularController {
   @UseGuards(JwtAuthGuard, RolesGuard, SubscriptionActiveGuard)
   @Roles(UserRole.STUDENT, UserRole.SUPER_ADMIN)
   @Get('mine')
-  mine(@Request() req, @Query('status') status?: string) {
+  mine(@Request() req: AuthedRequest, @Query('status') status?: string) {
     return this.opportunitiesService.findMineForStudent(req.user.id, {
       status,
     });

@@ -1,12 +1,32 @@
-import { buildReportReviewPackage, classifyReviewPackageEvidenceKind } from './review-package.util';
+import {
+  buildReportReviewPackage,
+  classifyReviewPackageEvidenceKind,
+} from './review-package.util';
 import { StudentReport } from './entities/student-report.entity';
 
 describe('review-package.util', () => {
   it('classifies images, pdfs and other files', () => {
-    expect(classifyReviewPackageEvidenceKind('https://cdn.example/a.jpg', 'a.jpg')).toBe('image');
-    expect(classifyReviewPackageEvidenceKind('https://cdn.example/b.PDF', 'notes.pdf')).toBe('pdf');
-    expect(classifyReviewPackageEvidenceKind('https://cdn.example/c.mp4', 'clip.mp4')).toBe('video');
-    expect(classifyReviewPackageEvidenceKind('https://cdn.example/d.docx', 'letter.docx')).toBe('file');
+    expect(
+      classifyReviewPackageEvidenceKind('https://cdn.example/a.jpg', 'a.jpg'),
+    ).toBe('image');
+    expect(
+      classifyReviewPackageEvidenceKind(
+        'https://cdn.example/b.PDF',
+        'notes.pdf',
+      ),
+    ).toBe('pdf');
+    expect(
+      classifyReviewPackageEvidenceKind(
+        'https://cdn.example/c.mp4',
+        'clip.mp4',
+      ),
+    ).toBe('video');
+    expect(
+      classifyReviewPackageEvidenceKind(
+        'https://cdn.example/d.docx',
+        'letter.docx',
+      ),
+    ).toBe('file');
   });
 
   it('builds the 3-document Super Admin review package from stored evidence', () => {
@@ -42,19 +62,25 @@ describe('review-package.util', () => {
       name: 'classroom.png',
     });
     expect(pack.documents.evidence.files[1].kind).toBe('pdf');
-    expect(pack.admin_review_href).toContain('/dashboard/admin/reports/verify/rep-1');
+    expect(pack.admin_review_href).toContain(
+      '/dashboard/admin/reports/verify/rep-1',
+    );
     expect(pack.ai_analyser_href).toContain('view=cii-v4-5');
     expect(pack.documents.flashcard.href).toContain('view=flash');
     expect(pack.documents.flashcard.href).toContain('#flash');
     expect(pack.stakeholder_hrefs.faculty).toContain(
       '/dashboard/faculty/reports/rep-1?view=dossier',
     );
-    expect(pack.stakeholder_hrefs.partner).toContain('/dashboard/partner/verify/rep-1?package=1');
+    expect(pack.stakeholder_hrefs.partner).toContain(
+      '/dashboard/partner/verify/rep-1?package=1',
+    );
     expect(pack.stakeholder_hrefs.university).toContain(
       '/dashboard/partner/verify/rep-1?package=1',
     );
     expect(pack.admin_doc_hrefs.flashcard).toContain('package=1&doc=flashcard');
-    expect(pack.admin_doc_hrefs.detailed_report).toContain('package=1&doc=report');
+    expect(pack.admin_doc_hrefs.detailed_report).toContain(
+      'package=1&doc=report',
+    );
     expect(pack.admin_doc_hrefs.evidence).toContain('package=1&doc=evidence');
     expect(pack.admin_doc_hrefs.analysis_report).toContain('view=cii-v4-5');
     expect(pack.documents.analysis_report).toBeNull();
@@ -84,11 +110,17 @@ describe('review-package.util', () => {
     expect(pack.packet_integrity.ok).toBe(true);
     expect(pack.canonical_packet.detailed_report.sections).toHaveLength(9);
 
-    const { section3: _drop, ...broken } = report as unknown as Record<string, unknown>;
-    const held = buildReportReviewPackage(broken as unknown as StudentReport, '');
-    expect(held.packet_integrity.ok).toBe(false);
-    expect(held.packet_integrity.issues.some((issue) => /section 3/i.test(issue))).toBe(
-      true,
+    const { section3: _drop, ...broken } = report as unknown as Record<
+      string,
+      unknown
+    >;
+    const held = buildReportReviewPackage(
+      broken as unknown as StudentReport,
+      '',
     );
+    expect(held.packet_integrity.ok).toBe(false);
+    expect(
+      held.packet_integrity.issues.some((issue) => /section 3/i.test(issue)),
+    ).toBe(true);
   });
 });

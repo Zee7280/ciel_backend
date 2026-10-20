@@ -6,7 +6,10 @@
  * server-side in `computeCiiV45Result()`.
  */
 
-import { CII_V45_AI_DIMENSIONS, CII_V45_FRAMEWORK_VERSION } from '../../reports/cii-v4-5.constants';
+import {
+  CII_V45_AI_DIMENSIONS,
+  CII_V45_FRAMEWORK_VERSION,
+} from '../../reports/cii-v4-5.constants';
 
 export const CII_V4_5_FRAMEWORK_VERSION = CII_V45_FRAMEWORK_VERSION;
 

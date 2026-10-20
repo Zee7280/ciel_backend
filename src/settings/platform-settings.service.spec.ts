@@ -26,7 +26,9 @@ describe('PlatformSettingsService', () => {
   });
 
   it('never throws when the settings table is unreadable', async () => {
-    const svc = new PlatformSettingsService(makeRepo(new Error('db down')) as never);
+    const svc = new PlatformSettingsService(
+      makeRepo(new Error('db down')) as never,
+    );
     expect(await svc.isMaintenanceMode()).toBe(false);
   });
 });

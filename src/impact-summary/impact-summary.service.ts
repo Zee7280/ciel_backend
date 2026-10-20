@@ -219,14 +219,22 @@ export class ImpactSummaryService {
     venture: VentureEntry | null,
   ): PathStatusEntry {
     if (!venture) {
-      return { state: 'not_started', needsAction: false, progress: 0, detail: 'Not started' };
+      return {
+        state: 'not_started',
+        needsAction: false,
+        progress: 0,
+        detail: 'Not started',
+      };
     }
-    const usesWizard = venture.stepCompleted > 0 || venture.status === 'submitted';
+    const usesWizard =
+      venture.stepCompleted > 0 || venture.status === 'submitted';
     if (!usesWizard) {
       const ventureCompleteness = ventureCompletenessPercent(venture);
       return {
         state: venture.isVisible ? 'complete' : 'active',
-        needsAction: !venture.isVisible && ventureCompleteness >= VENTURE_VISIBILITY_THRESHOLD,
+        needsAction:
+          !venture.isVisible &&
+          ventureCompleteness >= VENTURE_VISIBILITY_THRESHOLD,
         progress: ventureCompleteness,
         detail: `${ventureCompleteness}% profile complete`,
       };
@@ -234,7 +242,9 @@ export class ImpactSummaryService {
     const gates = computeVentureGates(venture);
     return {
       state: gates.showcaseOk ? 'complete' : 'active',
-      needsAction: venture.status !== 'submitted' && venture.stepCompleted < VENTURE_TOTAL_STEPS,
+      needsAction:
+        venture.status !== 'submitted' &&
+        venture.stepCompleted < VENTURE_TOTAL_STEPS,
       progress: Math.round((venture.stepCompleted / VENTURE_TOTAL_STEPS) * 100),
       detail:
         venture.status === 'submitted'

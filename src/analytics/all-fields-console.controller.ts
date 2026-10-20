@@ -6,6 +6,15 @@ import { UserRole } from '../users/enums/user-role.enum';
 import { AllFieldsConsoleService } from './all-fields-console.service';
 import { AllFieldsConsoleViewAsQueryDto } from './dto/all-fields-console-query.dto';
 
+type AuthenticatedRequest = {
+  user: {
+    id: string;
+    role: string;
+    organizationId?: string | null;
+    orgType?: string | null;
+  };
+};
+
 /**
  * Super Admin All-Fields Analytics Console.
  * Additive endpoints — does not alter existing role analytics routes.
@@ -27,7 +36,7 @@ export class AllFieldsConsoleController {
    * role’s field lens (not a live impersonation session).
    */
   @Get('view-as')
-  getViewAs(@Request() req, @Query() query: AllFieldsConsoleViewAsQueryDto) {
+  getViewAs(@Request() req: AuthenticatedRequest, @Query() query: AllFieldsConsoleViewAsQueryDto) {
     return this.consoleService.getViewAs(req.user, query.role, query.section, {
       project_id: query.project_id,
       university: query.university,

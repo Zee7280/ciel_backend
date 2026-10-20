@@ -214,7 +214,7 @@ function collectSdgIds(opportunity: {
   const push = (value: unknown) => {
     const rec = asRecord(value);
     const raw = rec
-      ? rec.sdg_id ?? rec.id ?? rec.goal_number ?? rec.number
+      ? (rec.sdg_id ?? rec.id ?? rec.goal_number ?? rec.number)
       : value;
     const key = String(raw ?? '').trim();
     if (key && !ids.includes(key)) ids.push(key);
@@ -240,7 +240,9 @@ function isUrgentEndDate(endDate: string | null, now = new Date()): boolean {
   if (Number.isNaN(end.getTime())) return false;
   const inTwoWeeks = new Date(now);
   inTwoWeeks.setDate(inTwoWeeks.getDate() + 14);
-  return end.getTime() >= now.getTime() && end.getTime() <= inTwoWeeks.getTime();
+  return (
+    end.getTime() >= now.getTime() && end.getTime() <= inTwoWeeks.getTime()
+  );
 }
 
 export function buildStudentBrowseListingFields(
@@ -273,7 +275,8 @@ export function buildStudentBrowseListingFields(
   const end_date =
     str(timeline.end_date) || str(timeline.application_deadline) || null;
   const volunteersRequired = Number(timeline.volunteers_required);
-  const hasSeatCap = Number.isFinite(volunteersRequired) && volunteersRequired > 0;
+  const hasSeatCap =
+    Number.isFinite(volunteersRequired) && volunteersRequired > 0;
 
   return {
     path_key,

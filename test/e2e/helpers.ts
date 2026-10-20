@@ -8,15 +8,28 @@ export async function publicIds(h: Harness): Promise<string[]> {
 }
 
 /** ids on the student browse list (`GET /students/opportunities`) */
-export async function studentBrowseIds(h: Harness, student: E2eUser): Promise<string[]> {
+export async function studentBrowseIds(
+  h: Harness,
+  student: E2eUser,
+): Promise<string[]> {
   const res = await h.as(student).get('/students/opportunities?limit=200');
   expect(res.status).toBe(200);
-  const rows: any[] = res.body?.data?.opportunities ?? res.body?.data ?? res.body?.opportunities ?? [];
+  const rows: any[] =
+    res.body?.data?.opportunities ??
+    res.body?.data ??
+    res.body?.opportunities ??
+    [];
   return rows.map((o) => o.id);
 }
 
-export async function adminQueueIds(h: Harness, admin: E2eUser, queue = 'pending'): Promise<string[]> {
-  const res = await h.as(admin).get(`/admin/opportunities/approval-queue?queue=${queue}`);
+export async function adminQueueIds(
+  h: Harness,
+  admin: E2eUser,
+  queue = 'pending',
+): Promise<string[]> {
+  const res = await h
+    .as(admin)
+    .get(`/admin/opportunities/approval-queue?queue=${queue}`);
   expect(res.status).toBe(200);
   return (res.body.data as any[]).map((o) => o.id);
 }
@@ -37,12 +50,22 @@ const SECRET_KEYS = [
 ];
 
 /** Recursively collect any non-null verification/magic-link secret keys in a JSON body. */
-export function findSecrets(body: unknown, path = '$', out: string[] = []): string[] {
+export function findSecrets(
+  body: unknown,
+  path = '$',
+  out: string[] = [],
+): string[] {
   if (Array.isArray(body)) {
     body.forEach((b, i) => findSecrets(b, `${path}[${i}]`, out));
   } else if (body && typeof body === 'object') {
     for (const [k, v] of Object.entries(body as Record<string, unknown>)) {
-      if (SECRET_KEYS.includes(k) && typeof v === 'string' && v.length > 0 && v !== '[redacted]') out.push(`${path}.${k}`);
+      if (
+        SECRET_KEYS.includes(k) &&
+        typeof v === 'string' &&
+        v.length > 0 &&
+        v !== '[redacted]'
+      )
+        out.push(`${path}.${k}`);
       findSecrets(v, `${path}.${k}`, out);
     }
   }
@@ -51,7 +74,8 @@ export function findSecrets(body: unknown, path = '$', out: string[] = []): stri
 
 export function expectNoSecrets(res: { body: unknown }, label = '') {
   const found = findSecrets(res.body);
-  if (found.length) throw new Error(`secret token(s) leaked ${label}: ${found.join(', ')}`);
+  if (found.length)
+    throw new Error(`secret token(s) leaked ${label}: ${found.join(', ')}`);
 }
 
 export const tokens = (o: any) => ({
@@ -60,6 +84,10 @@ export const tokens = (o: any) => ({
   exec: o.execution_verification_token as string | null,
 });
 
-export async function verifyToken(h: Harness, token: string, user: E2eUser | null = null) {
+export async function verifyToken(
+  h: Harness,
+  token: string,
+  user: E2eUser | null = null,
+) {
   return h.as(user).post('/verifications/verify').send({ token });
 }

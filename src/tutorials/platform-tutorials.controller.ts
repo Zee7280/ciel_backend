@@ -12,18 +12,18 @@ import { TutorialsService } from './tutorials.service';
 @Controller('tutorials')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(
-    UserRole.STUDENT,
-    UserRole.FACULTY,
-    UserRole.NGO,
-    UserRole.UNIVERSITY,
-    UserRole.CORPORATE,
-    UserRole.ORGANIZATION_ADMIN,
+  UserRole.STUDENT,
+  UserRole.FACULTY,
+  UserRole.NGO,
+  UserRole.UNIVERSITY,
+  UserRole.CORPORATE,
+  UserRole.ORGANIZATION_ADMIN,
 )
 export class PlatformTutorialsController {
-    constructor(private readonly tutorialsService: TutorialsService) {}
+  constructor(private readonly tutorialsService: TutorialsService) {}
 
-    @Get()
-    list() {
-        return this.tutorialsService.listForStudents();
-    }
+  @Get()
+  list() {
+    return this.tutorialsService.listForStudents();
+  }
 }

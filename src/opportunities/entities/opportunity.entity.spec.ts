@@ -10,20 +10,34 @@ const blank = () => ({
 
 describe('verification token expiry stamping', () => {
   it('stamps a fresh expiry on insert for newly issued tokens', () => {
-    const o = { ...blank(), partnerToken: 'p-1', faculty_verification_token: 'f-1' };
+    const o = {
+      ...blank(),
+      partnerToken: 'p-1',
+      faculty_verification_token: 'f-1',
+    };
     stampVerificationTokenExpiry(o, null, 1000);
-    expect(o.partnerTokenExpiresAt!.getTime()).toBe(1000 + verificationTokenTtlMs());
-    expect(o.facultyTokenExpiresAt!.getTime()).toBe(1000 + verificationTokenTtlMs());
+    expect(o.partnerTokenExpiresAt!.getTime()).toBe(
+      1000 + verificationTokenTtlMs(),
+    );
+    expect(o.facultyTokenExpiresAt!.getTime()).toBe(
+      1000 + verificationTokenTtlMs(),
+    );
   });
 
   it('re-stamps only when the token was rotated; unchanged token keeps its expiry', () => {
     const keep = new Date('2030-01-01');
-    const same = { ...blank(), partnerToken: 'p-1', partnerTokenExpiresAt: keep };
+    const same = {
+      ...blank(),
+      partnerToken: 'p-1',
+      partnerTokenExpiresAt: keep,
+    };
     stampVerificationTokenExpiry(same, { partnerToken: 'p-1' }, 1000);
     expect(same.partnerTokenExpiresAt).toBe(keep);
     const rotated = { ...same };
     stampVerificationTokenExpiry(rotated, { partnerToken: 'old' }, 1000);
-    expect(rotated.partnerTokenExpiresAt!.getTime()).toBe(1000 + verificationTokenTtlMs());
+    expect(rotated.partnerTokenExpiresAt.getTime()).toBe(
+      1000 + verificationTokenTtlMs(),
+    );
   });
 
   it('does not retroactively expire legacy rows with an unchanged token', () => {

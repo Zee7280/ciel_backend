@@ -102,7 +102,8 @@ export class CommunityAwardService {
       student_name: report.student?.name || lead?.name || 'Student',
       project_title:
         report.opportunity?.title || report.project_id || 'Community service',
-      organization_name: trackingOrganizationName(report.opportunity) || 'Partner',
+      organization_name:
+        trackingOrganizationName(report.opportunity) || 'Partner',
       university:
         lead?.university ||
         report.student?.university ||
@@ -169,7 +170,12 @@ export class CommunityAwardService {
       .andWhere(
         `LOWER(TRIM(COALESCE(report.faculty_status, ''))) IN (:...liveFaculty)`,
         {
-          liveFaculty: ['approved', 'verified', 'not_applicable', 'not_required'],
+          liveFaculty: [
+            'approved',
+            'verified',
+            'not_applicable',
+            'not_required',
+          ],
         },
       )
       .andWhere(
@@ -332,7 +338,10 @@ export class CommunityAwardService {
     reportId: string,
     organizationId: string,
     isUni: boolean,
-  ): Promise<{ ciiV45: RedactedCiiV45; ciiV45Lock: RedactedCiiV45Lock } | null> {
+  ): Promise<{
+    ciiV45: RedactedCiiV45;
+    ciiV45Lock: RedactedCiiV45Lock;
+  } | null> {
     const report = await this.findScopedReport(reportId, organizationId, isUni);
     if (!report || !this.facultyApproved(report)) return null;
     const { ciiV45, ciiV45Lock } = redactCiiV45Fields(
@@ -344,9 +353,10 @@ export class CommunityAwardService {
   }
 
   /** Same as getCiiV45BreakdownForOrg but unrestricted (Super Admin — platform-wide). */
-  async getCiiV45BreakdownForAdmin(
-    reportId: string,
-  ): Promise<{ ciiV45: RedactedCiiV45; ciiV45Lock: RedactedCiiV45Lock } | null> {
+  async getCiiV45BreakdownForAdmin(reportId: string): Promise<{
+    ciiV45: RedactedCiiV45;
+    ciiV45Lock: RedactedCiiV45Lock;
+  } | null> {
     if (!reportId) return null;
     const report = await this.reports.findOne({ where: { id: reportId } });
     if (!report || !this.facultyApproved(report)) return null;
@@ -412,7 +422,9 @@ export class CommunityAwardService {
       updated += 1;
       try {
         const title =
-          report.opportunity?.title || report.project_id || 'your community service';
+          report.opportunity?.title ||
+          report.project_id ||
+          'your community service';
         await this.notifications.createNotification(report.studentId, {
           type: 'update',
           title: stillQualifies

@@ -1,221 +1,229 @@
-import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn } from 'typeorm';
+import {
+  Entity,
+  Column,
+  PrimaryGeneratedColumn,
+  CreateDateColumn,
+  UpdateDateColumn,
+  ManyToOne,
+  JoinColumn,
+} from 'typeorm';
 
 import { Organization } from '../../organizations/entities/organization.entity';
 
 /** Public verification links stay valid this long after (re)issue. Override with VERIFICATION_TOKEN_TTL_DAYS. */
 export function verificationTokenTtlMs(): number {
-    const days = Number(process.env.VERIFICATION_TOKEN_TTL_DAYS);
-    return (Number.isFinite(days) && days > 0 ? days : 30) * 24 * 60 * 60 * 1000;
+  const days = Number(process.env.VERIFICATION_TOKEN_TTL_DAYS);
+  return (Number.isFinite(days) && days > 0 ? days : 30) * 24 * 60 * 60 * 1000;
 }
 
 @Entity('opportunities')
 export class Opportunity {
-    @PrimaryGeneratedColumn('uuid')
-    id: string;
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
 
-    @Column()
-    title: string;
+  @Column()
+  title: string;
 
-    @Column("text", { array: true, nullable: true })
-    types: string[]; // "Training", "Community Service"
+  @Column('text', { array: true, nullable: true })
+  types: string[]; // "Training", "Community Service"
 
-    @Column({ nullable: true })
-    mode: string; // "On site", "Remote"
+  @Column({ nullable: true })
+  mode: string; // "On site", "Remote"
 
-    @Column({ type: 'jsonb', nullable: true })
-    location: any; // { city, venue, pin }
+  @Column({ type: 'jsonb', nullable: true })
+  location: any; // { city, venue, pin }
 
-    @Column({ type: 'jsonb', nullable: true })
-    timeline: any; // { type, start_date, end_date, from_time, to_time, expected_hours, volunteers_required }
+  @Column({ type: 'jsonb', nullable: true })
+  timeline: any; // { type, start_date, end_date, from_time, to_time, expected_hours, volunteers_required }
 
-    @Column({ type: 'jsonb', nullable: true })
-    sdg_info: any; // { sdg_id, target_id, indicator_id }
+  @Column({ type: 'jsonb', nullable: true })
+  sdg_info: any; // { sdg_id, target_id, indicator_id }
 
-    @Column({ type: 'jsonb', nullable: true })
-    secondary_sdgs: any[]; // Array of { sdg_id, target_id, indicator_id, justification }
+  @Column({ type: 'jsonb', nullable: true })
+  secondary_sdgs: any[]; // Array of { sdg_id, target_id, indicator_id, justification }
 
-    @Column({ type: 'jsonb', nullable: true })
-    objectives: any; // { description, beneficiaries_count, beneficiaries_type }
+  @Column({ type: 'jsonb', nullable: true })
+  objectives: any; // { description, beneficiaries_count, beneficiaries_type }
 
-    @Column({ type: 'jsonb', nullable: true })
-    activity_details: any; // { student_responsibilities, skills_gained }
+  @Column({ type: 'jsonb', nullable: true })
+  activity_details: any; // { student_responsibilities, skills_gained }
 
-    @Column({ type: 'jsonb', nullable: true })
-    supervision: any; // { supervisor_name, role, contact, safe_environment, supervised, partner_org_name, partner_contact_person, partner_email, information_accurate }
+  @Column({ type: 'jsonb', nullable: true })
+  supervision: any; // { supervisor_name, role, contact, safe_environment, supervised, partner_org_name, partner_contact_person, partner_email, information_accurate }
 
-    @Column("text", { array: true, nullable: true })
-    verification_method: string[];
+  @Column('text', { array: true, nullable: true })
+  verification_method: string[];
 
-    @Column("text", { array: true, nullable: true })
-    restricted_universities: string[];
+  @Column('text', { array: true, nullable: true })
+  restricted_universities: string[];
 
-    @Column({ type: 'jsonb', nullable: true })
-    executing_context: any; // { type: 'partner' | 'independent', ... }
+  @Column({ type: 'jsonb', nullable: true })
+  executing_context: any; // { type: 'partner' | 'independent', ... }
 
-    // Partner / faculty / student extended metadata
-    @Column({ type: 'jsonb', nullable: true })
-    executing_organization: any; // { name, contact_person_name, official_email }
+  // Partner / faculty / student extended metadata
+  @Column({ type: 'jsonb', nullable: true })
+  executing_organization: any; // { name, contact_person_name, official_email }
 
-    @Column({ type: 'jsonb', nullable: true })
-    partner_organization: any; // optional { organization_name, contact_person_name, official_email }
+  @Column({ type: 'jsonb', nullable: true })
+  partner_organization: any; // optional { organization_name, contact_person_name, official_email }
 
-    @Column({ type: 'jsonb', nullable: true })
-    safety_supervision_declaration: any; // partner F3: booleans
+  @Column({ type: 'jsonb', nullable: true })
+  safety_supervision_declaration: any; // partner F3: booleans
 
-    @Column({ type: 'jsonb', nullable: true })
-    safety_declaration: any;
+  @Column({ type: 'jsonb', nullable: true })
+  safety_declaration: any;
 
-    @Column({ type: 'jsonb', nullable: true })
-    submission_confirmations: any;
+  @Column({ type: 'jsonb', nullable: true })
+  submission_confirmations: any;
 
-    @Column({ type: 'jsonb', nullable: true })
-    participation_scope: any;
+  @Column({ type: 'jsonb', nullable: true })
+  participation_scope: any;
 
-    @Column({ type: 'jsonb', nullable: true })
-    visibility_and_academic_linkage: any; // { visibility_type, restricted_university_names, faculty_institutional_representative }
+  @Column({ type: 'jsonb', nullable: true })
+  visibility_and_academic_linkage: any; // { visibility_type, restricted_university_names, faculty_institutional_representative }
 
-    @Column({ default: false })
-    admin_approved: boolean;
+  @Column({ default: false })
+  admin_approved: boolean;
 
-    @Column({ default: false })
-    admin_approval_required: boolean;
+  @Column({ default: false })
+  admin_approval_required: boolean;
 
-    @Column({ type: 'jsonb', nullable: true })
-    external_partner_collaboration: any;
+  @Column({ type: 'jsonb', nullable: true })
+  external_partner_collaboration: any;
 
-    @Column({ type: 'jsonb', nullable: true })
-    academic_linkage: any;
+  @Column({ type: 'jsonb', nullable: true })
+  academic_linkage: any;
 
-    /** Student wizard resume marker for drafts: { resume_step: "A"|"B"|"SCHED"|..., updated_at }.
-     * Written on every mid-wizard draft save so "Continue Existing" reopens the step the student left. */
-    @Column({ type: 'jsonb', nullable: true })
-    wizard_progress: { resume_step?: string; updated_at?: string } | null;
+  /** Student wizard resume marker for drafts: { resume_step: "A"|"B"|"SCHED"|..., updated_at }.
+   * Written on every mid-wizard draft save so "Continue Existing" reopens the step the student left. */
+  @Column({ type: 'jsonb', nullable: true })
+  wizard_progress: { resume_step?: string; updated_at?: string } | null;
 
-    @Column({ nullable: true })
-    student_contact: string;
+  @Column({ nullable: true })
+  student_contact: string;
 
-    @Column({ nullable: true })
-    faculty_verification_token: string;
+  @Column({ nullable: true })
+  faculty_verification_token: string;
 
-    @Column({ default: 'pending_faculty' })
-    faculty_verification_status: string; // pending_faculty | faculty_verified | rejected
+  @Column({ default: 'pending_faculty' })
+  faculty_verification_status: string; // pending_faculty | faculty_verified | rejected
 
-    @Column({ default: false })
-    faculty_verified: boolean;
+  @Column({ default: false })
+  faculty_verified: boolean;
 
-    @Column({ type: 'uuid', nullable: true })
-    execution_verification_token: string | null;
+  @Column({ type: 'uuid', nullable: true })
+  execution_verification_token: string | null;
 
-    @Column({ default: false })
-    execution_verified: boolean;
+  @Column({ default: false })
+  execution_verified: boolean;
 
-    @Column({ default: 'pending_execution' })
-    execution_verification_status: string; // pending_execution | execution_verified | rejected
+  @Column({ default: 'pending_execution' })
+  execution_verification_status: string; // pending_execution | execution_verified | rejected
 
-    @Column({ default: 'public' })
-    visibility: string;
+  @Column({ default: 'public' })
+  visibility: string;
 
-    @Column({ default: 'pending_approval' })
-    status: string; // active, closed, draft, pending_approval, rejected
+  @Column({ default: 'pending_approval' })
+  status: string; // active, closed, draft, pending_approval, rejected
 
-    @ManyToOne(() => Organization, { nullable: true, onDelete: 'CASCADE' })
-    @JoinColumn({ name: 'organizationId' })
-    organization: Organization;
+  @ManyToOne(() => Organization, { nullable: true, onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'organizationId' })
+  organization: Organization;
 
-    @Column({ name: 'organizationId', type: 'uuid', nullable: true })
-    organizationId: string | null;
-    
-    @Column({ default: 16 })
-    requiredHours: number;
+  @Column({ name: 'organizationId', type: 'uuid', nullable: true })
+  organizationId: string | null;
 
-    @Column()
-    sdg: string; // Keeping for backward compatibility if needed, or remove? Spec says sdg_info. I'll keep it as optional or remove if unused. Let's keep it but maybe nullable.
+  @Column({ default: 16 })
+  requiredHours: number;
 
-    @Column({ nullable: true })
-    liaisonToken: string;
+  @Column()
+  sdg: string; // Keeping for backward compatibility if needed, or remove? Spec says sdg_info. I'll keep it as optional or remove if unused. Let's keep it but maybe nullable.
 
-    @Column({ default: false })
-    liaisonVerified: boolean;
+  @Column({ nullable: true })
+  liaisonToken: string;
 
-    @Column({ nullable: true })
-    partnerToken: string;
+  @Column({ default: false })
+  liaisonVerified: boolean;
 
-    @Column({ default: true })
-    partnerVerified: boolean;
+  @Column({ nullable: true })
+  partnerToken: string;
 
-    @Column({ type: 'timestamptz', nullable: true })
-    partnerTokenExpiresAt: Date | null;
+  @Column({ default: true })
+  partnerVerified: boolean;
 
-    /** sha256 of the creator + org + normalized create payload; only used to dedupe retried POST /opportunities. Never exposed. */
-    @Column({ type: 'varchar', length: 64, nullable: true, select: false })
-    createFingerprint?: string | null;
+  @Column({ type: 'timestamptz', nullable: true })
+  partnerTokenExpiresAt: Date | null;
 
-    @Column({ type: 'timestamptz', nullable: true })
-    facultyTokenExpiresAt: Date | null;
+  /** sha256 of the creator + org + normalized create payload; only used to dedupe retried POST /opportunities. Never exposed. */
+  @Column({ type: 'varchar', length: 64, nullable: true, select: false })
+  createFingerprint?: string | null;
 
-    @Column({ nullable: true })
-    creatorId: string;
+  @Column({ type: 'timestamptz', nullable: true })
+  facultyTokenExpiresAt: Date | null;
 
-    @Column({ type: 'uuid', nullable: true })
-    facultyId: string | null;
+  @Column({ nullable: true })
+  creatorId: string;
 
-    /** Student-submitted opportunity; drives multi-step faculty → partner → admin workflow. */
-    @Column({ default: false })
-    isStudentCreated: boolean;
+  @Column({ type: 'uuid', nullable: true })
+  facultyId: string | null;
 
-    @Column({ default: false })
-    requiresPartnerApproval: boolean;
+  /** Student-submitted opportunity; drives multi-step faculty → partner → admin workflow. */
+  @Column({ default: false })
+  isStudentCreated: boolean;
 
-    /** Canonical stage for API / frontend (`pending_faculty`, `pending_partner`, `pending_admin`, `live`, …). */
-    @Column({ type: 'varchar', length: 64, nullable: true })
-    workflowStage: string | null;
+  @Column({ default: false })
+  requiresPartnerApproval: boolean;
 
-    @Column({ type: 'varchar', length: 32, nullable: true })
-    facultyApprovalStatus: string | null;
+  /** Canonical stage for API / frontend (`pending_faculty`, `pending_partner`, `pending_admin`, `live`, …). */
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  workflowStage: string | null;
 
-    @Column({ type: 'varchar', length: 32, nullable: true })
-    partnerApprovalStatus: string | null;
+  @Column({ type: 'varchar', length: 32, nullable: true })
+  facultyApprovalStatus: string | null;
 
-    @Column({ type: 'varchar', length: 32, nullable: true })
-    adminApprovalStatus: string | null;
+  @Column({ type: 'varchar', length: 32, nullable: true })
+  partnerApprovalStatus: string | null;
 
-    @Column({ type: 'text', nullable: true })
-    rejectionReason: string | null;
+  @Column({ type: 'varchar', length: 32, nullable: true })
+  adminApprovalStatus: string | null;
 
-    /** Bumped on every meaningful edit/resubmission; stamped onto each `approvalHistory` entry so
-     * an approval can be tied back to the exact version of the opportunity it was made against. */
-    @Column({ type: 'int', default: 1 })
+  @Column({ type: 'text', nullable: true })
+  rejectionReason: string | null;
+
+  /** Bumped on every meaningful edit/resubmission; stamped onto each `approvalHistory` entry so
+   * an approval can be tied back to the exact version of the opportunity it was made against. */
+  @Column({ type: 'int', default: 1 })
+  version: number;
+
+  /** Append-only audit trail: who approved/rejected/requested revision on which line, and when —
+   * the "actor + timestamp + version" record the approval-loop spec requires. Never mutate past
+   * entries; only ever push new ones. */
+  @Column({ type: 'jsonb', default: () => "'[]'" })
+  approvalHistory: {
+    line: 'faculty' | 'partner' | 'ngo' | 'admin';
+    action: 'approved' | 'rejected' | 'revision_requested';
+    actorId?: string | null;
+    actorName?: string | null;
+    at: string;
     version: number;
+    reason?: string | null;
+  }[];
 
-    /** Append-only audit trail: who approved/rejected/requested revision on which line, and when —
-     * the "actor + timestamp + version" record the approval-loop spec requires. Never mutate past
-     * entries; only ever push new ones. */
-    @Column({ type: 'jsonb', default: () => "'[]'" })
-    approvalHistory: {
-        line: 'faculty' | 'partner' | 'ngo' | 'admin';
-        action: 'approved' | 'rejected' | 'revision_requested';
-        actorId?: string | null;
-        actorName?: string | null;
-        at: string;
-        version: number;
-        reason?: string | null;
-    }[];
+  /** Admin override for attendance approver routing (`auto` | `partner` | `faculty`). */
+  @Column({ type: 'varchar', length: 16, default: 'auto' })
+  attendanceRoutingOverride: 'auto' | 'partner' | 'faculty';
 
-    /** Admin override for attendance approver routing (`auto` | `partner` | `faculty`). */
-    @Column({ type: 'varchar', length: 16, default: 'auto' })
-    attendanceRoutingOverride: 'auto' | 'partner' | 'faculty';
+  /** Super Admin hide: drop from public Explore + student Browse. Enrolled reports stay. */
+  @Column({ default: false })
+  admin_hidden: boolean;
 
-    /** Super Admin hide: drop from public Explore + student Browse. Enrolled reports stay. */
-    @Column({ default: false })
-    admin_hidden: boolean;
+  /** Super Admin expire: listing stays visible, new applications close. Reports/attendance stay. */
+  @Column({ default: false })
+  admin_expired: boolean;
 
-    /** Super Admin expire: listing stays visible, new applications close. Reports/attendance stay. */
-    @Column({ default: false })
-    admin_expired: boolean;
+  @CreateDateColumn()
+  createdAt: Date;
 
-    @CreateDateColumn()
-    createdAt: Date;
-
-    @UpdateDateColumn()
-    updatedAt: Date;
+  @UpdateDateColumn()
+  updatedAt: Date;
 }

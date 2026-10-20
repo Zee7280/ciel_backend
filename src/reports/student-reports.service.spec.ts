@@ -120,7 +120,6 @@ const MIN_VALID_SUBMIT_SECTIONS = {
   },
 };
 
-
 // Fully approved + live listing: satisfies assertStudentOpportunityReportableForWrite
 // (faculty -> partner -> CIEL admin live) so tests reach the logic they actually exercise.
 const LIVE_OPP_GATES = {
@@ -974,7 +973,12 @@ describe('StudentReportsService', () => {
             gateCapped: false,
           },
           sectionScores: [
-            { dimension: '1', name: 'Participation & Verified Effort', maximumPoints: 10, score: 9 },
+            {
+              dimension: '1',
+              name: 'Participation & Verified Effort',
+              maximumPoints: 10,
+              score: 9,
+            },
           ],
           studentFeedback: 'Great work.',
         },
@@ -1010,31 +1014,36 @@ describe('StudentReportsService', () => {
 
   describe('withholdAnalysisForFacultyUntilApproved', () => {
     it('keeps display scores and strips criterion reasoning plus independent analyses until Admin accept', () => {
-      const result = StudentReportsService.withholdAnalysisForFacultyUntilApproved({
-        success: true,
-        data: {
-          id: 'r-fac',
-          admin_status: 'pending',
-          status: 'submitted',
-          ciiV45: {
-            diagnosticCII: 57.9,
-            finalCII: 57.9,
-            claimInventory: [{ text: 'private claim text' }],
-            sectionScores: [
-              {
-                dimension: '7',
-                score: 13,
-                criterionScores: [{ reasoningSummary: 'private faculty-facing rationale' }],
-              },
-            ],
+      const result =
+        StudentReportsService.withholdAnalysisForFacultyUntilApproved({
+          success: true,
+          data: {
+            id: 'r-fac',
+            admin_status: 'pending',
+            status: 'submitted',
+            ciiV45: {
+              diagnosticCII: 57.9,
+              finalCII: 57.9,
+              claimInventory: [{ text: 'private claim text' }],
+              sectionScores: [
+                {
+                  dimension: '7',
+                  score: 13,
+                  criterionScores: [
+                    { reasoningSummary: 'private faculty-facing rationale' },
+                  ],
+                },
+              ],
+            },
+            independentAiAnalyses: [{ id: 'run-1', score: 80 }],
           },
-          independentAiAnalyses: [{ id: 'run-1', score: 80 }],
-        },
-      });
+        });
       expect(result.data.ciiV45.diagnosticCII).toBe(57.9);
       expect(result.data.ciiV45.finalCII).toBe(57.9);
       expect(JSON.stringify(result.data)).not.toContain('private claim text');
-      expect(JSON.stringify(result.data)).not.toContain('private faculty-facing rationale');
+      expect(JSON.stringify(result.data)).not.toContain(
+        'private faculty-facing rationale',
+      );
       expect(result.data.independentAiAnalyses).toBeNull();
     });
   });
@@ -1433,10 +1442,7 @@ describe('StudentReportsService', () => {
             roster.filter((row) => {
               if (w.projectId && row.projectId !== w.projectId) return false;
               if (w.teamId && row.teamId !== w.teamId) return false;
-              if (
-                w.applicationId &&
-                row.applicationId !== w.applicationId
-              ) {
+              if (w.applicationId && row.applicationId !== w.applicationId) {
                 return false;
               }
               if (
@@ -1591,7 +1597,8 @@ describe('StudentReportsService', () => {
       mockParticipantRepository.findOne.mockImplementation(
         (opts: { where?: Record<string, unknown> }) => {
           const w = opts?.where ?? {};
-          if (w.studentId === 'member-2') return Promise.resolve(mistaggedMember);
+          if (w.studentId === 'member-2')
+            return Promise.resolve(mistaggedMember);
           if (w.studentId === 'team-lead-student') return Promise.resolve(lead);
           return Promise.resolve(null);
         },
@@ -1605,7 +1612,10 @@ describe('StudentReportsService', () => {
           return Promise.resolve(
             [lead, mistaggedMember].filter((row) => {
               if (w.projectId && row.projectId !== w.projectId) return false;
-              if (w.teamId && (row as { teamId?: string | null }).teamId !== w.teamId)
+              if (
+                w.teamId &&
+                (row as { teamId?: string | null }).teamId !== w.teamId
+              )
                 return false;
               if (
                 w.applicationId &&
@@ -1711,7 +1721,11 @@ describe('StudentReportsService', () => {
     });
 
     const result = await service.findOneByOpportunityOrId(opp, 'student-1');
-    const data = result.data as { status?: string; is_editable?: boolean; payment_verified?: boolean };
+    const data = result.data as {
+      status?: string;
+      is_editable?: boolean;
+      payment_verified?: boolean;
+    };
 
     expect(data.status).toBe('draft');
     expect(data.is_editable).toBe(true);
@@ -1802,9 +1816,12 @@ describe('StudentReportsService', () => {
     });
 
     const result = await service.findOneByOpportunityOrId(opp, 'student-1');
-    const section1 = (result.data as { section1: Record<string, unknown> }).section1;
+    const section1 = (result.data as { section1: Record<string, unknown> })
+      .section1;
 
-    expect(section1.team_lead).toEqual(expect.objectContaining({ name: '', email: '' }));
+    expect(section1.team_lead).toEqual(
+      expect.objectContaining({ name: '', email: '' }),
+    );
     expect(Array.isArray(section1.team_members)).toBe(true);
     expect(section1.team_members).toEqual([]);
     expect(section1.metrics).toEqual(
@@ -1869,9 +1886,9 @@ describe('StudentReportsService', () => {
     };
     mockStudentReportsRepository.findOne.mockResolvedValue(report);
 
-    await expect(service.verifyReport('report-1', 'approve', 'admin')).rejects.toThrow(
-      'Run and confirm the CII analysis',
-    );
+    await expect(
+      service.verifyReport('report-1', 'approve', 'admin'),
+    ).rejects.toThrow('Run and confirm the CII analysis');
   });
 
   it('lets CIEL PK publish a regular report after CII is locked, without prior Faculty action', async () => {
@@ -1929,21 +1946,23 @@ describe('StudentReportsService', () => {
       },
     };
     mockStudentReportsRepository.findOne.mockResolvedValue(report);
-    mockUsersRepository.find.mockImplementation(async (opts: { where?: { role?: string } }) => {
-      if (opts?.where?.role === 'university') {
-        return [
-          {
-            email: 'uni@campus.test',
-            university: 'LUMS',
-            institution: 'LUMS',
-          },
-        ];
-      }
-      if (opts?.where?.role === 'admin') {
-        return [{ email: 'super@cielpk.com' }];
-      }
-      return [];
-    });
+    mockUsersRepository.find.mockImplementation(
+      async (opts: { where?: { role?: string } }) => {
+        if (opts?.where?.role === 'university') {
+          return [
+            {
+              email: 'uni@campus.test',
+              university: 'LUMS',
+              institution: 'LUMS',
+            },
+          ];
+        }
+        if (opts?.where?.role === 'admin') {
+          return [{ email: 'super@cielpk.com' }];
+        }
+        return [];
+      },
+    );
 
     await service.verifyReport('report-1', 'approve', 'admin');
     await new Promise((resolve) => setTimeout(resolve, 40));
@@ -1975,7 +1994,9 @@ describe('StudentReportsService', () => {
       expect.objectContaining({
         to: 'faculty@uni.test',
         audience: 'faculty',
-        reviewHref: expect.stringContaining('/dashboard/faculty/reports/report-1?view=dossier'),
+        reviewHref: expect.stringContaining(
+          '/dashboard/faculty/reports/report-1?view=dossier',
+        ),
         flashHref: expect.stringContaining('doc=flashcard'),
         detailedHref: expect.stringContaining('doc=report'),
         includeAnalysis: true,
@@ -1985,7 +2006,9 @@ describe('StudentReportsService', () => {
       expect.objectContaining({
         to: 'uni@campus.test',
         audience: 'university',
-        reviewHref: expect.stringContaining('/dashboard/partner/verify/report-1?package=1'),
+        reviewHref: expect.stringContaining(
+          '/dashboard/partner/verify/report-1?package=1',
+        ),
         includeAnalysis: true,
       }),
     );
@@ -1993,7 +2016,9 @@ describe('StudentReportsService', () => {
       expect.objectContaining({
         to: 'ngo@partner.test',
         audience: 'partner',
-        reviewHref: expect.stringContaining('/dashboard/partner/verify/report-1?package=1'),
+        reviewHref: expect.stringContaining(
+          '/dashboard/partner/verify/report-1?package=1',
+        ),
         includeAnalysis: false,
       }),
     );
@@ -2037,9 +2062,9 @@ describe('StudentReportsService', () => {
     };
     mockStudentReportsRepository.findOne.mockResolvedValue(report);
 
-    await expect(service.verifyReport('report-pc', 'approve', 'admin')).rejects.toThrow(
-      'Run and confirm the CII analysis',
-    );
+    await expect(
+      service.verifyReport('report-pc', 'approve', 'admin'),
+    ).rejects.toThrow('Run and confirm the CII analysis');
   });
 
   it('blocks admin approve on a faculty-gated report until CII is locked (or legacy faculty approved)', async () => {
@@ -2055,9 +2080,9 @@ describe('StudentReportsService', () => {
     };
     mockStudentReportsRepository.findOne.mockResolvedValue(report);
 
-    await expect(service.verifyReport('report-1', 'approve', 'admin')).rejects.toThrow(
-      'Run and confirm the CII analysis',
-    );
+    await expect(
+      service.verifyReport('report-1', 'approve', 'admin'),
+    ).rejects.toThrow('Run and confirm the CII analysis');
   });
 
   it('lets CIEL PK publish a private-candidate report after CII is locked, without Faculty', async () => {
@@ -2098,9 +2123,9 @@ describe('StudentReportsService', () => {
     };
     mockStudentReportsRepository.findOne.mockResolvedValue(report);
 
-    await expect(service.verifyReport('report-pc', 'approve', 'admin')).rejects.toThrow(
-      'Run and confirm the CII analysis',
-    );
+    await expect(
+      service.verifyReport('report-pc', 'approve', 'admin'),
+    ).rejects.toThrow('Run and confirm the CII analysis');
   });
 
   it('blocks admin approve on a faculty-gated report until CII is locked (or legacy faculty approved)', async () => {
@@ -2116,9 +2141,9 @@ describe('StudentReportsService', () => {
     };
     mockStudentReportsRepository.findOne.mockResolvedValue(report);
 
-    await expect(service.verifyReport('report-1', 'approve', 'admin')).rejects.toThrow(
-      'Run and confirm the CII analysis',
-    );
+    await expect(
+      service.verifyReport('report-1', 'approve', 'admin'),
+    ).rejects.toThrow('Run and confirm the CII analysis');
   });
 
   it('lets CIEL PK publish a private-candidate report after CII is locked, without Faculty', async () => {
@@ -2159,9 +2184,9 @@ describe('StudentReportsService', () => {
     };
     mockStudentReportsRepository.findOne.mockResolvedValue(report);
 
-    await expect(service.verifyReport('report-pc', 'approve', 'admin')).rejects.toThrow(
-      'Run and confirm the CII analysis',
-    );
+    await expect(
+      service.verifyReport('report-pc', 'approve', 'admin'),
+    ).rejects.toThrow('Run and confirm the CII analysis');
   });
 
   it('refuses the decision when a concurrent reviewer already changed admin_status/partner_status (atomic compare-and-swap)', async () => {
@@ -2285,7 +2310,13 @@ describe('StudentReportsService', () => {
     ).rejects.toThrow('CIEL PK Admin only');
 
     await expect(
-      service.verifyReport('report-1', 'unlock', 'university', undefined, 'org-1'),
+      service.verifyReport(
+        'report-1',
+        'unlock',
+        'university',
+        undefined,
+        'org-1',
+      ),
     ).rejects.toThrow('CIEL PK Admin only');
 
     expect(report.status).toBe('submitted');
@@ -2603,7 +2634,9 @@ describe('StudentReportsService', () => {
 
     expect(result.success).toBe(true);
     expect(result.sent_to).toBe('admin');
-    expect(mockMailService.sendAdminStudentReportSubmitted).toHaveBeenCalledWith(
+    expect(
+      mockMailService.sendAdminStudentReportSubmitted,
+    ).toHaveBeenCalledWith(
       'Community garden',
       expect.any(String),
       'report-1',
@@ -2933,7 +2966,12 @@ describe('StudentReportsService', () => {
   });
 
   it('admin findAll returns per-queue counts and applies q/status filters before pagination', async () => {
-    const mk = (id: string, status: string, admin_status: string, name: string) => ({
+    const mk = (
+      id: string,
+      status: string,
+      admin_status: string,
+      name: string,
+    ) => ({
       id,
       studentId: `s-${id}`,
       opportunityId: 'plain',
@@ -2945,7 +2983,11 @@ describe('StudentReportsService', () => {
       reportSubmittedAt: new Date(),
       createdAt: new Date(),
       student: { name, email: `${id}@t.com` },
-      opportunity: { title: 'T', organizationId: 'org-1', organization: { name: 'Org' } },
+      opportunity: {
+        title: 'T',
+        organizationId: 'org-1',
+        organization: { name: 'Org' },
+      },
       section11: null,
     });
     mockStudentReportsRepository.find.mockResolvedValue([
@@ -3230,7 +3272,10 @@ describe('StudentReportsService', () => {
       admin_status: 'pending',
       faculty_status: 'pending',
       partner_status: 'pending',
-      section1: { team_lead: { fullName: 'Lead', email: 'l@t.com', cnic: '' }, team_members: [] },
+      section1: {
+        team_lead: { fullName: 'Lead', email: 'l@t.com', cnic: '' },
+        team_members: [],
+      },
       section2: { problem_statement: 'secret draft answer' },
       section3: {},
       section4: {},
@@ -3252,15 +3297,19 @@ describe('StudentReportsService', () => {
       mockParticipantRepository.findOne.mockResolvedValue(null);
       mockParticipantRepository.find.mockResolvedValue([]);
       mockStudentReportsRepository.find.mockResolvedValue([]);
-      mockUsersRepository.findOne.mockResolvedValue({ id: 'stu-1', name: 'Stu', email: 's@t.com' });
+      mockUsersRepository.findOne.mockResolvedValue({
+        id: 'stu-1',
+        name: 'Stu',
+        email: 's@t.com',
+      });
     });
 
     it('refuses a draft report to partner/university even for the owning org', async () => {
       for (const status of ['draft', 'continue', '']) {
         mockStudentReportsRepository.findOne.mockResolvedValueOnce(row(status));
-        await expect(service.findOneForPartner('r-1', ORG, { viewerRole: 'university' })).rejects.toBeInstanceOf(
-          ForbiddenException,
-        );
+        await expect(
+          service.findOneForPartner('r-1', ORG, { viewerRole: 'university' }),
+        ).rejects.toBeInstanceOf(ForbiddenException);
       }
     });
 
@@ -3269,7 +3318,9 @@ describe('StudentReportsService', () => {
         ...row('submitted'),
         admin_status: 'approved',
       });
-      const res = await service.findOneForPartner('r-1', ORG, { viewerRole: 'ngo' });
+      const res = await service.findOneForPartner('r-1', ORG, {
+        viewerRole: 'ngo',
+      });
       expect((res.data as { id: string }).id).toBe('r-1');
     });
 
@@ -3278,20 +3329,24 @@ describe('StudentReportsService', () => {
         ...row('submitted'),
         admin_status: 'pending',
       });
-      await expect(service.findOneForPartner('r-1', ORG, { viewerRole: 'ngo' })).rejects.toBeInstanceOf(
-        ForbiddenException,
-      );
+      await expect(
+        service.findOneForPartner('r-1', ORG, { viewerRole: 'ngo' }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
     });
 
     it('refuses another org with no university scope', async () => {
-      mockStudentReportsRepository.findOne.mockResolvedValueOnce(row('submitted'));
-      await expect(service.findOneForPartner('r-1', 'other-org', { viewerRole: 'ngo' })).rejects.toBeInstanceOf(
-        ForbiddenException,
+      mockStudentReportsRepository.findOne.mockResolvedValueOnce(
+        row('submitted'),
       );
+      await expect(
+        service.findOneForPartner('r-1', 'other-org', { viewerRole: 'ngo' }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
     });
 
     it('opens a submitted report on an opportunity inside the university scope', async () => {
-      mockStudentReportsRepository.findOne.mockResolvedValueOnce(row('submitted'));
+      mockStudentReportsRepository.findOne.mockResolvedValueOnce(
+        row('submitted'),
+      );
       const res = await service.findOneForPartner('r-1', 'uni-org', {
         viewerRole: 'university',
         universityScopeOpportunityIds: [OPP],
@@ -3300,7 +3355,9 @@ describe('StudentReportsService', () => {
     });
 
     it('still refuses a report outside the university scope', async () => {
-      mockStudentReportsRepository.findOne.mockResolvedValueOnce(row('submitted'));
+      mockStudentReportsRepository.findOne.mockResolvedValueOnce(
+        row('submitted'),
+      );
       await expect(
         service.findOneForPartner('r-1', 'uni-org', {
           viewerRole: 'university',
@@ -3346,7 +3403,10 @@ describe('StudentReportsService', () => {
 
       const res: any = await service.createReport(
         'student-1',
-        { opportunityId: 'opp-1', section2: { problem_statement: 'SNEAKY EDIT' } },
+        {
+          opportunityId: 'opp-1',
+          section2: { problem_statement: 'SNEAKY EDIT' },
+        },
         [],
         true,
       );
@@ -3362,7 +3422,12 @@ describe('StudentReportsService', () => {
       mockStudentReportsRepository.findOne.mockResolvedValue(null);
       mockStudentReportsRepository.save.mockClear();
       await expect(
-        service.createReport('student-1', { section2: { problem_statement: 'x' } }, [], true),
+        service.createReport(
+          'student-1',
+          { section2: { problem_statement: 'x' } },
+          [],
+          true,
+        ),
       ).rejects.toThrow(/not linked to a valid project/);
       expect(mockStudentReportsRepository.save).not.toHaveBeenCalled();
     });
@@ -3389,7 +3454,9 @@ describe('StudentReportsService', () => {
         partner_status: 'pending',
         opportunity: { requiresPartnerApproval: false },
       });
-      await expect(service.verifyReport('report-1', 'approve', 'admin')).rejects.toThrow(/sent back for revision/);
+      await expect(
+        service.verifyReport('report-1', 'approve', 'admin'),
+      ).rejects.toThrow(/sent back for revision/);
     });
 
     it('rejecting retires the CII lock (kept as history) and clears awards, so the score must be re-run', async () => {
@@ -3402,22 +3469,39 @@ describe('StudentReportsService', () => {
         ciiV45: { finalCII: 72, sectionScores: [] },
         ciiV45Lock: lockedCii(),
         awardBadges: [{ rank: 1 }],
-        opportunity: { title: 'Beach clean-up', requiresPartnerApproval: false },
+        opportunity: {
+          title: 'Beach clean-up',
+          requiresPartnerApproval: false,
+        },
         student: { id: 'student-1', name: 'Ali Khan', email: 'ali@uni.edu' },
       };
       mockStudentReportsRepository.findOne.mockResolvedValue(report);
-      mockMailService.sendStudentReportAdminDecision = jest.fn().mockResolvedValue(undefined);
+      mockMailService.sendStudentReportAdminDecision = jest
+        .fn()
+        .mockResolvedValue(undefined);
 
-      await service.verifyReport('report-1', 'reject', 'admin', 'Hours do not match the register.', undefined, true);
+      await service.verifyReport(
+        'report-1',
+        'reject',
+        'admin',
+        'Hours do not match the register.',
+        undefined,
+        true,
+      );
 
       expect(report.status).toBe('revision');
       expect(report.ciiV45Lock).toBeNull();
       expect(report.ciiV45.finalCII).toBe(72); // old score text kept for audit …
       expect(report.ciiV45.previousLocks).toHaveLength(1); // … but the lock is retired
-      expect(report.ciiV45.previousLocks[0]).toMatchObject({ locked: true, supersededBy: 'rejected' });
+      expect(report.ciiV45.previousLocks[0]).toMatchObject({
+        locked: true,
+        supersededBy: 'rejected',
+      });
       expect(report.awardBadges).toEqual([]);
       await new Promise((r) => setTimeout(r, 30));
-      expect(mockMailService.sendStudentReportAdminDecision).toHaveBeenCalledWith(
+      expect(
+        mockMailService.sendStudentReportAdminDecision,
+      ).toHaveBeenCalledWith(
         'ali@uni.edu',
         'Ali',
         'Beach clean-up',
@@ -3440,16 +3524,27 @@ describe('StudentReportsService', () => {
         student: { id: 'student-1', name: 'Ali', email: 'a@b.c' },
       };
       mockStudentReportsRepository.findOne.mockResolvedValue(report);
-      mockMailService.sendStudentReportAdminDecision = jest.fn().mockResolvedValue(undefined);
+      mockMailService.sendStudentReportAdminDecision = jest
+        .fn()
+        .mockResolvedValue(undefined);
 
-      await service.verifyReport('report-1', 'unlock', 'admin', 'Please add attendance proof.');
+      await service.verifyReport(
+        'report-1',
+        'unlock',
+        'admin',
+        'Please add attendance proof.',
+      );
 
       expect(report.status).toBe('draft');
       expect(report.reportSubmittedAt).toBeNull();
       expect(report.ciiV45Lock).toBeNull();
       // the compare-and-swap UPDATE must actually persist the cleared stamp
       expect(verifyReportQb.set).toHaveBeenCalledWith(
-        expect.objectContaining({ reportSubmittedAt: null, ciiV45Lock: null, status: 'draft' }),
+        expect.objectContaining({
+          reportSubmittedAt: null,
+          ciiV45Lock: null,
+          status: 'draft',
+        }),
       );
     });
 
@@ -3474,25 +3569,51 @@ describe('StudentReportsService', () => {
   describe('hours gate is scoped to the submitting team', () => {
     const run = (roster: any[], logs: any[], submitter = 'student-1') => {
       mockOpportunityRepository.findOne.mockResolvedValue({
-        id: 'opp-1', title: 'T', isStudentCreated: false, admin_approved: true,
-        workflowStage: 'live', status: 'active', timeline: { expected_hours: 16 },
+        id: 'opp-1',
+        title: 'T',
+        isStudentCreated: false,
+        admin_approved: true,
+        workflowStage: 'live',
+        status: 'active',
+        timeline: { expected_hours: 16 },
       });
       mockParticipantRepository.find.mockResolvedValue(roster);
       mockAttendanceLogsRepository.find.mockResolvedValue(logs);
       mockStudentReportsRepository.findOne.mockResolvedValue(null);
-      return (service as any).assertEveryTeamMemberMetRequiredHours('opp-1', 16, submitter);
+      return (service as any).assertEveryTeamMemberMetRequiredHours(
+        'opp-1',
+        16,
+        submitter,
+      );
     };
-    const row = (id: string, studentId: string, extra: Record<string, unknown> = {}) => ({
-      id, projectId: 'opp-1', studentId, status: 'accepted', fullName: id, ...extra,
+    const row = (
+      id: string,
+      studentId: string,
+      extra: Record<string, unknown> = {},
+    ) => ({
+      id,
+      projectId: 'opp-1',
+      studentId,
+      status: 'accepted',
+      fullName: id,
+      ...extra,
     });
     const hrs = (participantId: string, h: number) => ({
-      participantId, projectId: 'opp-1', sessionHours: h, approvalStatus: 'approved', entryStatus: 'verified',
+      participantId,
+      projectId: 'opp-1',
+      sessionHours: h,
+      approvalStatus: 'approved',
+      entryStatus: 'verified',
     });
 
     it("another team's short member does not block this team", async () => {
       await expect(
         run(
-          [row('a1', 'student-1', { teamId: 'T1' }), row('a2', 'student-2', { teamId: 'T1' }), row('b1', 'student-9', { teamId: 'T2' })],
+          [
+            row('a1', 'student-1', { teamId: 'T1' }),
+            row('a2', 'student-2', { teamId: 'T1' }),
+            row('b1', 'student-9', { teamId: 'T2' }),
+          ],
           [hrs('a1', 16), hrs('a2', 16)], // team T2's member logged nothing
         ),
       ).resolves.toBeUndefined();
@@ -3501,7 +3622,10 @@ describe('StudentReportsService', () => {
     it('a pending / withdrawn applicant does not block the team', async () => {
       await expect(
         run(
-          [row('a1', 'student-1', { teamId: 'T1' }), row('p1', 'student-3', { teamId: 'T1', status: 'pending' })],
+          [
+            row('a1', 'student-1', { teamId: 'T1' }),
+            row('p1', 'student-3', { teamId: 'T1', status: 'pending' }),
+          ],
           [hrs('a1', 16)],
         ),
       ).resolves.toBeUndefined();
@@ -3511,9 +3635,16 @@ describe('StudentReportsService', () => {
       await expect(
         run(
           [
-            row('a1', 'student-1', { teamId: 'T1', isTeamLead: true, participationMode: 'team' }),
+            row('a1', 'student-1', {
+              teamId: 'T1',
+              isTeamLead: true,
+              participationMode: 'team',
+            }),
             row('a2', 'student-2', { teamId: 'T1', participationMode: 'team' }),
-            row('a2-dup', 'student-2', { teamId: 'T1', participationMode: 'team' }),
+            row('a2-dup', 'student-2', {
+              teamId: 'T1',
+              participationMode: 'team',
+            }),
           ],
           [hrs('a1', 16), hrs('a2', 10), hrs('a2-dup', 6)], // student-2's 16h are split across two seats
         ),
@@ -3524,7 +3655,11 @@ describe('StudentReportsService', () => {
       await expect(
         run(
           [
-            row('a1', 'student-1', { teamId: 'T1', isTeamLead: true, participationMode: 'team' }),
+            row('a1', 'student-1', {
+              teamId: 'T1',
+              isTeamLead: true,
+              participationMode: 'team',
+            }),
             row('old', 'student-2', { participationMode: 'individual' }),
             row('a2', 'student-2', { teamId: 'T1', participationMode: 'team' }),
           ],
@@ -3536,7 +3671,10 @@ describe('StudentReportsService', () => {
     it("this team's own short member still blocks, even if the team total is high", async () => {
       await expect(
         run(
-          [row('a1', 'student-1', { teamId: 'T1' }), row('a2', 'student-2', { teamId: 'T1' })],
+          [
+            row('a1', 'student-1', { teamId: 'T1' }),
+            row('a2', 'student-2', { teamId: 'T1' }),
+          ],
           [hrs('a1', 40)],
         ),
       ).rejects.toThrow(/individually meet the required hours/);
@@ -3545,7 +3683,10 @@ describe('StudentReportsService', () => {
     it('a solo participant is judged alone', async () => {
       await expect(
         run(
-          [row('s1', 'student-1', { participationMode: 'individual' }), row('s2', 'student-2', { participationMode: 'individual' })],
+          [
+            row('s1', 'student-1', { participationMode: 'individual' }),
+            row('s2', 'student-2', { participationMode: 'individual' }),
+          ],
           [hrs('s1', 16)],
         ),
       ).resolves.toBeUndefined();
@@ -3554,14 +3695,59 @@ describe('StudentReportsService', () => {
     it('counts start/end clock hours when sessionHours is 0 — same as the student wizard', async () => {
       await expect(
         run(
-          [row('a1', 'student-1', { teamId: 'T1' }), row('a2', 'student-2', { teamId: 'T1' })],
           [
-            { participantId: 'a1', projectId: 'opp-1', sessionHours: 0, startTime: '09:00', endTime: '13:00', approvalStatus: 'pending' },
-            { participantId: 'a1', projectId: 'opp-1', sessionHours: 0, startTime: '09:00', endTime: '13:00', approvalStatus: null },
-            { participantId: 'a1', projectId: 'opp-1', sessionHours: 0, startTime: '08:00', endTime: '16:00', approvalStatus: 'pending' },
-            { participantId: 'a2', projectId: 'opp-1', sessionHours: 0, startTime: '09:00', endTime: '13:00', approvalStatus: 'pending' },
-            { participantId: 'a2', projectId: 'opp-1', sessionHours: 0, startTime: '09:00', endTime: '13:00', approvalStatus: null },
-            { participantId: 'a2', projectId: 'opp-1', sessionHours: 0, startTime: '08:00', endTime: '16:00', approvalStatus: 'pending' },
+            row('a1', 'student-1', { teamId: 'T1' }),
+            row('a2', 'student-2', { teamId: 'T1' }),
+          ],
+          [
+            {
+              participantId: 'a1',
+              projectId: 'opp-1',
+              sessionHours: 0,
+              startTime: '09:00',
+              endTime: '13:00',
+              approvalStatus: 'pending',
+            },
+            {
+              participantId: 'a1',
+              projectId: 'opp-1',
+              sessionHours: 0,
+              startTime: '09:00',
+              endTime: '13:00',
+              approvalStatus: null,
+            },
+            {
+              participantId: 'a1',
+              projectId: 'opp-1',
+              sessionHours: 0,
+              startTime: '08:00',
+              endTime: '16:00',
+              approvalStatus: 'pending',
+            },
+            {
+              participantId: 'a2',
+              projectId: 'opp-1',
+              sessionHours: 0,
+              startTime: '09:00',
+              endTime: '13:00',
+              approvalStatus: 'pending',
+            },
+            {
+              participantId: 'a2',
+              projectId: 'opp-1',
+              sessionHours: 0,
+              startTime: '09:00',
+              endTime: '13:00',
+              approvalStatus: null,
+            },
+            {
+              participantId: 'a2',
+              projectId: 'opp-1',
+              sessionHours: 0,
+              startTime: '08:00',
+              endTime: '16:00',
+              approvalStatus: 'pending',
+            },
           ],
         ),
       ).resolves.toBeUndefined();
@@ -3571,7 +3757,14 @@ describe('StudentReportsService', () => {
       await expect(
         run(
           [row('a1', 'student-1', { teamId: 'T1' })],
-          [{ participantId: 'student-1', projectId: 'opp-1', sessionHours: 16, approvalStatus: 'pending' }],
+          [
+            {
+              participantId: 'student-1',
+              projectId: 'opp-1',
+              sessionHours: 16,
+              approvalStatus: 'pending',
+            },
+          ],
         ),
       ).resolves.toBeUndefined();
     });
@@ -3597,10 +3790,25 @@ describe('StudentReportsService', () => {
     it('prefers stored sessionHours over a longer start/end window', async () => {
       await expect(
         run(
-          [row('a1', 'student-1', { teamId: 'T1' }), row('a2', 'student-2', { teamId: 'T1' })],
           [
-            { participantId: 'a1', projectId: 'opp-1', sessionHours: 4, startTime: '08:00', endTime: '17:00', approvalStatus: 'pending' },
-            { participantId: 'a2', projectId: 'opp-1', sessionHours: 16, approvalStatus: 'pending' },
+            row('a1', 'student-1', { teamId: 'T1' }),
+            row('a2', 'student-2', { teamId: 'T1' }),
+          ],
+          [
+            {
+              participantId: 'a1',
+              projectId: 'opp-1',
+              sessionHours: 4,
+              startTime: '08:00',
+              endTime: '17:00',
+              approvalStatus: 'pending',
+            },
+            {
+              participantId: 'a2',
+              projectId: 'opp-1',
+              sessionHours: 16,
+              approvalStatus: 'pending',
+            },
           ],
         ),
       ).rejects.toThrow(/individually meet the required hours/);
@@ -3623,7 +3831,10 @@ describe('StudentReportsService', () => {
       adminApprovedAt: new Date('2026-05-02T00:00:00.000Z'),
       partnerApprovedAt: null as Date | null,
       ciiV45: { displayScore: 81 } as Record<string, unknown>,
-      ciiV45Lock: { locked: true, hash: 'abc' } as Record<string, unknown> | null,
+      ciiV45Lock: { locked: true, hash: 'abc' } as Record<
+        string,
+        unknown
+      > | null,
       awardBadges: ['gold'] as string[],
       opportunity: { id: 'opp-1', ...LIVE_OPP_GATES, timeline: null },
     });
@@ -3656,7 +3867,9 @@ describe('StudentReportsService', () => {
       expect(report.status).toBe('submitted');
       expect(report.section2.problem_statement).toBe('original reviewed text');
       expect(mockStudentReportsRepository.save).not.toHaveBeenCalled();
-      expect(mockMailService.sendAdminStudentReportSubmitted).not.toHaveBeenCalled();
+      expect(
+        mockMailService.sendAdminStudentReportSubmitted,
+      ).not.toHaveBeenCalled();
     });
 
     it('student autosave during revision keeps status "revision" (never regresses to draft or re-stamps submit)', async () => {
@@ -3676,7 +3889,10 @@ describe('StudentReportsService', () => {
 
       const result = await service.saveDraft(
         'student-1',
-        { opportunityId: 'opp-1', section2: { problem_statement: 'edited after feedback' } },
+        {
+          opportunityId: 'opp-1',
+          section2: { problem_statement: 'edited after feedback' },
+        },
         [],
       );
 
@@ -3726,7 +3942,9 @@ describe('StudentReportsService', () => {
       expect(report.reportSubmittedAt.getTime()).toBeGreaterThan(
         new Date('2026-05-01T00:00:00.000Z').getTime(),
       );
-      expect(mockMailService.sendAdminStudentReportSubmitted).toHaveBeenCalledTimes(1);
+      expect(
+        mockMailService.sendAdminStudentReportSubmitted,
+      ).toHaveBeenCalledTimes(1);
     });
 
     it('reject on a published report needs force; forced reject retires the CII lock and award so re-publish needs a fresh analysis', async () => {
@@ -3734,7 +3952,12 @@ describe('StudentReportsService', () => {
       mockStudentReportsRepository.findOne.mockResolvedValue(report);
 
       await expect(
-        service.verifyReport('report-1', 'reject', 'admin', 'Evidence mismatch'),
+        service.verifyReport(
+          'report-1',
+          'reject',
+          'admin',
+          'Evidence mismatch',
+        ),
       ).rejects.toThrow(/undo a published decision/);
       expect(report.status).toBe('verified');
 
@@ -3754,10 +3977,16 @@ describe('StudentReportsService', () => {
       expect(report.adminApprovedAt).toBeNull();
       expect(report.ciiV45Lock).toBeNull();
       expect(report.awardBadges).toEqual([]);
-      const previousLocks = (report.ciiV45 as { previousLocks?: Array<Record<string, unknown>> }).previousLocks;
+      const previousLocks = (
+        report.ciiV45 as { previousLocks?: Array<Record<string, unknown>> }
+      ).previousLocks;
       expect(previousLocks).toHaveLength(1);
       expect(previousLocks?.[0]).toEqual(
-        expect.objectContaining({ locked: true, hash: 'abc', supersededBy: 'rejected' }),
+        expect.objectContaining({
+          locked: true,
+          hash: 'abc',
+          supersededBy: 'rejected',
+        }),
       );
       expect(verifyReportQb.__patch).toEqual(
         expect.objectContaining({
@@ -3802,7 +4031,14 @@ describe('StudentReportsService', () => {
         service.verifyReport('report-1', 'unlock', 'admin', 'Reopen'),
       ).rejects.toThrow(/undo a published decision/);
 
-      await service.verifyReport('report-1', 'unlock', 'admin', 'Reopen', undefined, true);
+      await service.verifyReport(
+        'report-1',
+        'unlock',
+        'admin',
+        'Reopen',
+        undefined,
+        true,
+      );
 
       expect(report.status).toBe('draft');
       expect(report.admin_status).toBe('pending');
@@ -3865,7 +4101,10 @@ describe('StudentReportsService', () => {
 
       const result = await service.saveDraft(
         'student-1',
-        { opportunityId: 'opp-1', section2: { problem_statement: 'post-close edit' } },
+        {
+          opportunityId: 'opp-1',
+          section2: { problem_statement: 'post-close edit' },
+        },
         [],
       );
       expect(result.message).toBe('Draft saved successfully.');
@@ -3903,7 +4142,9 @@ describe('StudentReportsService', () => {
       const status: any = await service.checkReportStatus('student-1', OPP);
       expect(status.data.is_editable).toBe(true);
       expect(status.data.status).toBe('revision');
-      expect(JSON.stringify(status.data)).toContain('Add signed attendance sheet.');
+      expect(JSON.stringify(status.data)).toContain(
+        'Add signed attendance sheet.',
+      );
     });
   });
 });

@@ -1,4 +1,9 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { NpeStudioDto } from './dto/npe-ranking.dto';
@@ -21,8 +26,18 @@ import {
 } from './npe-studio.util';
 
 const FILTER_OPTION_KEYS = [
-  'university', 'department', 'instructor', 'sdg', 'year', 'semester', 'city', 'partner',
-  'activity', 'theme', 'ciiBadge', 'privacy',
+  'university',
+  'department',
+  'instructor',
+  'sdg',
+  'year',
+  'semester',
+  'city',
+  'partner',
+  'activity',
+  'theme',
+  'ciiBadge',
+  'privacy',
 ] as const;
 
 /** Distinct, sorted values present in the pool for each filter dropdown. */
@@ -37,8 +52,12 @@ function buildOptions(candidates: StudioCandidate[]) {
       ),
     ].sort((a, b) => a.localeCompare(b));
   }
-  out.skills = [...new Set(candidates.flatMap((c) => c.facets.skills))].sort((a, b) => a.localeCompare(b));
-  out.month = [...new Set(candidates.map((c) => c.facets.month).filter(Boolean))].sort();
+  out.skills = [...new Set(candidates.flatMap((c) => c.facets.skills))].sort(
+    (a, b) => a.localeCompare(b),
+  );
+  out.month = [
+    ...new Set(candidates.map((c) => c.facets.month).filter(Boolean)),
+  ].sort();
   return out;
 }
 
@@ -51,17 +70,25 @@ export class NpeStudioService {
   ) {}
 
   private parse(dto: NpeStudioDto) {
-    const lens = (dto.lens || 'excellence') as string;
-    const groupBy = (dto.groupBy || 'project') as string;
-    if (!isStudioLens(lens)) throw new BadRequestException('Unknown ranking lens.');
-    if (!isStudioGroup(groupBy)) throw new BadRequestException('Unknown comparison.');
+    const lens = dto.lens || 'excellence';
+    const groupBy = dto.groupBy || 'project';
+    if (!isStudioLens(lens))
+      throw new BadRequestException('Unknown ranking lens.');
+    if (!isStudioGroup(groupBy))
+      throw new BadRequestException('Unknown comparison.');
     const filters = sanitizeStudioFilters(dto.filters);
-    if (filters.dateFrom && filters.dateTo && filters.dateFrom > filters.dateTo) {
-      throw new BadRequestException('The start date must be before the end date.');
+    if (
+      filters.dateFrom &&
+      filters.dateTo &&
+      filters.dateFrom > filters.dateTo
+    ) {
+      throw new BadRequestException(
+        'The start date must be before the end date.',
+      );
     }
     return {
-      lens: lens as StudioLens,
-      groupBy: groupBy as StudioGroupBy,
+      lens: lens,
+      groupBy: groupBy,
       filters,
       weights: normalizeCustomWeights(dto.weights),
     };
@@ -83,16 +110,22 @@ export class NpeStudioService {
     result: StudioResult,
   ): string[] {
     const out: string[] = [];
-    if (!result.rows.length) out.push('No eligible projects match this ranking yet.');
+    if (!result.rows.length)
+      out.push('No eligible projects match this ranking yet.');
     if (STUDIO_LENSES[lens].needsEvaluation) {
-      if (!pool.run) out.push('Run the AI analysis first: this angle uses the evidence-based evaluation.');
+      if (!pool.run)
+        out.push(
+          'Run the AI analysis first: this angle uses the evidence-based evaluation.',
+        );
       if (result.unreadIds.length > 0) {
         out.push(
           `${result.unreadIds.length} eligible project(s) in this selection have not been read yet. Run the Ranking Analyzer first, so the ranking includes every eligible project.`,
         );
       }
       if (pool.pendingReviews > 0) {
-        out.push(`${pool.pendingReviews} required review(s) are still open. Clear the review queue first.`);
+        out.push(
+          `${pool.pendingReviews} required review(s) are still open. Clear the review queue first.`,
+        );
       }
     }
     return out;
@@ -108,7 +141,10 @@ export class NpeStudioService {
       rubricVersion: pool.rubric,
       criteria: npeCriteriaFor(pool.rubric),
       lenses: Object.entries(STUDIO_LENSES).map(([key, v]) => ({ key, ...v })),
-      groups: Object.entries(STUDIO_GROUPS).map(([key, title]) => ({ key, title })),
+      groups: Object.entries(STUDIO_GROUPS).map(([key, title]) => ({
+        key,
+        title,
+      })),
       counts: {
         packages: pool.packageCount,
         eligible: pool.eligibleCount,
@@ -135,7 +171,11 @@ export class NpeStudioService {
       result,
       publishBlockers: this.blockers(lens, pool, result),
       lastPublication: latest
-        ? { id: latest.id, revision: latest.revision, publishedAt: latest.publishedAt.toISOString() }
+        ? {
+            id: latest.id,
+            revision: latest.revision,
+            publishedAt: latest.publishedAt.toISOString(),
+          }
         : null,
     };
   }
@@ -158,7 +198,8 @@ export class NpeStudioService {
       prior &&
       JSON.stringify(prior.rows.map((r) => [r.id, r.rank, r.metric])) ===
         JSON.stringify(result.rows.map((r) => [r.id, r.rank, r.metric])) &&
-      JSON.stringify([...prior.eligibleReportIds].sort()) === JSON.stringify([...result.eligibleIds].sort())
+      JSON.stringify([...prior.eligibleReportIds].sort()) ===
+        JSON.stringify([...result.eligibleIds].sort())
     ) {
       return { status: 'unchanged' as const, publication: this.summary(prior) };
     }
@@ -167,32 +208,36 @@ export class NpeStudioService {
     let saved: NpeStudioPublication;
     try {
       saved = await this.publications.save(
-      this.publications.create({
-        scope: pool.scope,
-        role: actor.role,
-        runId: pool.run?.id ?? null,
-        rubricVersion: pool.rubric,
-        name,
-        lens: result.lens,
-        groupBy: result.groupBy,
-        filters: result.filters as Record<string, unknown>,
-        weights: result.weights ? { ...result.weights } : null,
-        signature: result.signature,
-        revision: (prior?.revision ?? 0) + 1,
-        previousId: prior?.id ?? null,
-        cohortComparable: moved.cohortComparable,
-        eligibleReportIds: result.eligibleIds,
-        heldReportIds: result.heldIds,
-        rows: moved.rows,
-        publishedByUserId: actor.userId,
-      }),
-    );
+        this.publications.create({
+          scope: pool.scope,
+          role: actor.role,
+          runId: pool.run?.id ?? null,
+          rubricVersion: pool.rubric,
+          name,
+          lens: result.lens,
+          groupBy: result.groupBy,
+          filters: result.filters as Record<string, unknown>,
+          weights: result.weights ? { ...result.weights } : null,
+          signature: result.signature,
+          revision: (prior?.revision ?? 0) + 1,
+          previousId: prior?.id ?? null,
+          cohortComparable: moved.cohortComparable,
+          eligibleReportIds: result.eligibleIds,
+          heldReportIds: result.heldIds,
+          rows: moved.rows,
+          publishedByUserId: actor.userId,
+        }),
+      );
     } catch (err) {
       // Two simultaneous publishes of the same ranking: the second loses the revision race and
       // simply reports the one that won, instead of failing with a database error.
       if ((err as { code?: string })?.code === '23505') {
         const winner = await this.latestFor(pool.scope, result.signature);
-        if (winner) return { status: 'unchanged' as const, publication: this.summary(winner) };
+        if (winner)
+          return {
+            status: 'unchanged' as const,
+            publication: this.summary(winner),
+          };
       }
       throw err;
     }
@@ -223,7 +268,9 @@ export class NpeStudioService {
       heldCount: p.heldReportIds.length,
       rowCount: p.rows.length,
       publishedAt: p.publishedAt.toISOString(),
-      top: p.rows.slice(0, 3).map((r) => ({ rank: r.rank, label: r.label, metric: r.metric })),
+      top: p.rows
+        .slice(0, 3)
+        .map((r) => ({ rank: r.rank, label: r.label, metric: r.metric })),
       ...(withRows ? { rows: p.rows } : {}),
     };
   }
@@ -243,7 +290,8 @@ export class NpeStudioService {
     const scope = this.ranking.scopeFor(actor);
     const row = await this.publications.findOne({ where: { id } });
     if (!row) throw new NotFoundException('Published ranking not found.');
-    if (row.scope !== scope) throw new ForbiddenException('This ranking belongs to another scope.');
+    if (row.scope !== scope)
+      throw new ForbiddenException('This ranking belongs to another scope.');
     return this.summary(row, true);
   }
 

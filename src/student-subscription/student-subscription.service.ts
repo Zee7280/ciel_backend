@@ -24,7 +24,11 @@ import {
   STUDENT_SUBSCRIPTION_REQUIRED_KEY,
 } from './student-subscription.util';
 
-export type SubscriptionSubmissionUi = 'none' | 'pending_review' | 'approved' | 'rejected';
+export type SubscriptionSubmissionUi =
+  | 'none'
+  | 'pending_review'
+  | 'approved'
+  | 'rejected';
 
 export type StudentSubscriptionUiFlags = {
   requires_subscription_payment: boolean;
@@ -102,21 +106,29 @@ export class StudentSubscriptionService {
    * other, because university organizations are sometimes registered under a short name.
    * Students of member universities never pay the subscription fee.
    */
-  async isMemberUniversity(...names: Array<string | null | undefined>): Promise<boolean> {
+  async isMemberUniversity(
+    ...names: Array<string | null | undefined>
+  ): Promise<boolean> {
     const candidates = Array.from(
       new Set(names.map((n) => normalizeUniversityName(n)).filter(Boolean)),
     );
     if (candidates.length === 0) return false;
-    const orgs = await this.organizationRepo.find({ select: ['name', 'orgType', 'verificationStatus'] });
+    const orgs = await this.organizationRepo.find({
+      select: ['name', 'orgType', 'verificationStatus'],
+    });
     const memberNames = orgs
       .filter(
         (o) =>
-          String(o.orgType || '').toLowerCase().includes('university') &&
+          String(o.orgType || '')
+            .toLowerCase()
+            .includes('university') &&
           String(o.verificationStatus || '').toUpperCase() === 'APPROVED',
       )
       .map((o) => normalizeUniversityName(o.name))
       .filter(Boolean);
-    return candidates.some((c) => memberNames.some((m) => universityNamesMatch(c, m)));
+    return candidates.some((c) =>
+      memberNames.some((m) => universityNamesMatch(c, m)),
+    );
   }
 
   /**
@@ -128,9 +140,13 @@ export class StudentSubscriptionService {
     institution?: string | null;
     university?: string | null;
   }): Promise<boolean> {
-    if (String(input.role || '').toLowerCase() !== UserRole.STUDENT) return false;
+    if (String(input.role || '').toLowerCase() !== UserRole.STUDENT)
+      return false;
     if (!(await this.isRequired())) return false;
-    return !(await this.isMemberUniversity(input.institution, input.university));
+    return !(await this.isMemberUniversity(
+      input.institution,
+      input.university,
+    ));
   }
 
   /** Admin turned the switch off: every student still waiting on the fee gets full access. */
@@ -247,10 +263,14 @@ export class StudentSubscriptionService {
     const user = await this.userRepo.findOne({ where: { id: userId } });
     if (!user) throw new NotFoundException('User not found');
     if (user.role !== UserRole.STUDENT) {
-      throw new BadRequestException('The subscription fee only applies to student accounts');
+      throw new BadRequestException(
+        'The subscription fee only applies to student accounts',
+      );
     }
     if (user.status !== PENDING_SUBSCRIPTION_STATUS) {
-      throw new BadRequestException('No subscription payment is required for this account');
+      throw new BadRequestException(
+        'No subscription payment is required for this account',
+      );
     }
     const existingPending = await this.feeRepo.findOne({
       where: { userId, status: 'pending_review' },
@@ -269,7 +289,8 @@ export class StudentSubscriptionService {
     }
     const row = this.feeRepo.create({
       userId,
-      universityName: (user.university || user.institution || '').trim() || null,
+      universityName:
+        (user.university || user.institution || '').trim() || null,
       paidAmountPkr: paidAmount,
       expectedAmountPkr: expected,
       proofUrl,
@@ -278,7 +299,8 @@ export class StudentSubscriptionService {
     await this.feeRepo.save(row);
     return {
       success: true,
-      message: 'Payment proof submitted. An administrator will review it shortly.',
+      message:
+        'Payment proof submitted. An administrator will review it shortly.',
     };
   }
 
@@ -293,7 +315,8 @@ export class StudentSubscriptionService {
       universityName: row.universityName,
       paidAmountPkr: row.paidAmountPkr,
       expectedAmountPkr: expected,
-      amountMismatch: expected != null && expected > 0 && expected !== row.paidAmountPkr,
+      amountMismatch:
+        expected != null && expected > 0 && expected !== row.paidAmountPkr,
       proofUrl: row.proofUrl,
       status: row.status,
       adminFeedback: row.adminFeedback,
@@ -336,7 +359,9 @@ export class StudentSubscriptionService {
     const [rows, total] = await this.feeRepo
       .createQueryBuilder('fee')
       .leftJoinAndSelect('fee.user', 'user')
-      .where('fee.status IN (:...statuses)', { statuses: ['approved', 'rejected'] })
+      .where('fee.status IN (:...statuses)', {
+        statuses: ['approved', 'rejected'],
+      })
       .orderBy('fee.reviewedAt', 'DESC', 'NULLS LAST')
       .addOrderBy('fee.createdAt', 'DESC')
       .skip((page - 1) * limit)
@@ -350,7 +375,10 @@ export class StudentSubscriptionService {
     adminUserId: string,
     opts?: { allowAmountMismatch?: boolean },
   ): Promise<StudentSubscriptionFee> {
-    const row = await this.feeRepo.findOne({ where: { id }, relations: ['user'] });
+    const row = await this.feeRepo.findOne({
+      where: { id },
+      relations: ['user'],
+    });
     if (!row) throw new NotFoundException('Submission not found');
     if (row.status !== 'pending_review') {
       throw new BadRequestException('This submission is not pending review');
@@ -382,7 +410,10 @@ export class StudentSubscriptionService {
     adminUserId: string,
     feedback?: string,
   ): Promise<StudentSubscriptionFee> {
-    const row = await this.feeRepo.findOne({ where: { id }, relations: ['user'] });
+    const row = await this.feeRepo.findOne({
+      where: { id },
+      relations: ['user'],
+    });
     if (!row) throw new NotFoundException('Submission not found');
     if (row.status !== 'pending_review') {
       throw new BadRequestException('This submission is not pending review');
@@ -391,7 +422,12 @@ export class StudentSubscriptionService {
     const adminFeedback = feedback?.trim() || null;
     const result = await this.feeRepo.update(
       { id, status: 'pending_review' },
-      { status: 'rejected', adminFeedback, reviewedByUserId: adminUserId, reviewedAt },
+      {
+        status: 'rejected',
+        adminFeedback,
+        reviewedByUserId: adminUserId,
+        reviewedAt,
+      },
     );
     if (!result.affected) {
       throw new BadRequestException('This submission is not pending review');
@@ -400,7 +436,12 @@ export class StudentSubscriptionService {
     row.adminFeedback = adminFeedback;
     row.reviewedByUserId = adminUserId;
     row.reviewedAt = reviewedAt;
-    await this.notifyDecision(row.userId, row.user?.email, 'rejected', adminFeedback);
+    await this.notifyDecision(
+      row.userId,
+      row.user?.email,
+      'rejected',
+      adminFeedback,
+    );
     return row;
   }
 
@@ -412,13 +453,19 @@ export class StudentSubscriptionService {
     feedback?: string | null,
   ): Promise<void> {
     const title =
-      decision === 'approved' ? 'Subscription fee approved' : 'Subscription fee payment rejected';
+      decision === 'approved'
+        ? 'Subscription fee approved'
+        : 'Subscription fee payment rejected';
     const message =
       decision === 'approved'
         ? 'Your subscription fee payment was approved. Your student portal is now active.'
         : 'Your subscription fee payment proof was rejected. Please submit a new payment proof.';
     try {
-      await this.notificationsService?.createApprovalNotification(userId, title, message);
+      await this.notificationsService?.createApprovalNotification(
+        userId,
+        title,
+        message,
+      );
     } catch {
       /* ignore */
     }

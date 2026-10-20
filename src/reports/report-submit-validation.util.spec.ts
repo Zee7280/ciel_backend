@@ -53,7 +53,10 @@ const VALID_CORE_SECTIONS = {
         outputs: [{ title: 'Filters installed', quantity: '5' }],
       },
     ],
-    project_summary: { distinct_total_beneficiaries: 50, counting_method: 'Headcount' },
+    project_summary: {
+      distinct_total_beneficiaries: 50,
+      counting_method: 'Headcount',
+    },
   },
   section5: {
     observed_change:
@@ -225,12 +228,19 @@ describe('validateReportSectionsForSubmit', () => {
       ...VALID_CORE_SECTIONS,
       section10: {
         continuation_status: 'no',
-        continuation_details: 'Funding is exhausted; no further sessions planned.',
+        continuation_details:
+          'Funding is exhausted; no further sessions planned.',
       },
     });
-    expect(issues.some((i) => i.section === 10 && i.field === 'mechanisms')).toBe(true);
-    expect(issues.some((i) => i.section === 10 && i.field === 'scaling_potential')).toBe(true);
-    expect(issues.some((i) => i.section === 10 && i.field === 'policy_influence')).toBe(true);
+    expect(
+      issues.some((i) => i.section === 10 && i.field === 'mechanisms'),
+    ).toBe(true);
+    expect(
+      issues.some((i) => i.section === 10 && i.field === 'scaling_potential'),
+    ).toBe(true);
+    expect(
+      issues.some((i) => i.section === 10 && i.field === 'policy_influence'),
+    ).toBe(true);
   });
 
   it('accepts a fully valid live-form report with no issues', () => {
@@ -245,7 +255,11 @@ describe('validateReportSectionsForSubmit', () => {
       ...VALID_CORE_SECTIONS,
     });
     expect(
-      noMapping.some((i) => i.section === 3 && i.field === 'student_contribution_intent_statement'),
+      noMapping.some(
+        (i) =>
+          i.section === 3 &&
+          i.field === 'student_contribution_intent_statement',
+      ),
     ).toBe(false);
 
     const missing = validateReportSectionsForSubmit({
@@ -256,7 +270,11 @@ describe('validateReportSectionsForSubmit', () => {
       },
     });
     expect(
-      missing.some((i) => i.section === 3 && i.field === 'student_contribution_intent_statement'),
+      missing.some(
+        (i) =>
+          i.section === 3 &&
+          i.field === 'student_contribution_intent_statement',
+      ),
     ).toBe(true);
 
     const tooShort = validateReportSectionsForSubmit({
@@ -268,7 +286,11 @@ describe('validateReportSectionsForSubmit', () => {
       },
     });
     expect(
-      tooShort.some((i) => i.section === 3 && i.field === 'student_contribution_intent_statement'),
+      tooShort.some(
+        (i) =>
+          i.section === 3 &&
+          i.field === 'student_contribution_intent_statement',
+      ),
     ).toBe(true);
 
     const ok = validateReportSectionsForSubmit({
@@ -281,7 +303,11 @@ describe('validateReportSectionsForSubmit', () => {
       },
     });
     expect(
-      ok.some((i) => i.section === 3 && i.field === 'student_contribution_intent_statement'),
+      ok.some(
+        (i) =>
+          i.section === 3 &&
+          i.field === 'student_contribution_intent_statement',
+      ),
     ).toBe(false);
   });
 
@@ -294,18 +320,26 @@ describe('validateReportSectionsForSubmit', () => {
       },
     });
     expect(
-      missing.some((i) => i.section === 3 && i.field === 'secondary_sdgs.0.justification_text'),
+      missing.some(
+        (i) =>
+          i.section === 3 && i.field === 'secondary_sdgs.0.justification_text',
+      ),
     ).toBe(true);
 
     const tooShort = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,
       section3: {
         ...VALID_CORE_SECTIONS.section3,
-        secondary_sdgs: [{ sdg_id: '6', target_id: '6.1', justification_text: 'too short' }],
+        secondary_sdgs: [
+          { sdg_id: '6', target_id: '6.1', justification_text: 'too short' },
+        ],
       },
     });
     expect(
-      tooShort.some((i) => i.section === 3 && i.field === 'secondary_sdgs.0.justification_text'),
+      tooShort.some(
+        (i) =>
+          i.section === 3 && i.field === 'secondary_sdgs.0.justification_text',
+      ),
     ).toBe(true);
   });
 
@@ -316,11 +350,18 @@ describe('validateReportSectionsForSubmit', () => {
       ...VALID_CORE_SECTIONS,
       section4: {
         ...VALID_CORE_SECTIONS.section4,
-        activity_blocks: [{ ...baseActivity, overlap_status: 'Some overlap with another activity' }],
+        activity_blocks: [
+          {
+            ...baseActivity,
+            overlap_status: 'Some overlap with another activity',
+          },
+        ],
       },
     });
     expect(
-      missing.some((i) => i.section === 4 && i.field === 'activity_blocks.0.overlap_note'),
+      missing.some(
+        (i) => i.section === 4 && i.field === 'activity_blocks.0.overlap_note',
+      ),
     ).toBe(true);
 
     const notRequiredWhenMostlyUnique = validateReportSectionsForSubmit({
@@ -331,7 +372,9 @@ describe('validateReportSectionsForSubmit', () => {
       },
     });
     expect(
-      notRequiredWhenMostlyUnique.some((i) => i.section === 4 && i.field === 'activity_blocks.0.overlap_note'),
+      notRequiredWhenMostlyUnique.some(
+        (i) => i.section === 4 && i.field === 'activity_blocks.0.overlap_note',
+      ),
     ).toBe(false);
 
     const notRequiredWhenNoBeneficiaries = validateReportSectionsForSubmit({
@@ -342,7 +385,9 @@ describe('validateReportSectionsForSubmit', () => {
       },
     });
     expect(
-      notRequiredWhenNoBeneficiaries.some((i) => i.section === 4 && i.field === 'activity_blocks.0.overlap_note'),
+      notRequiredWhenNoBeneficiaries.some(
+        (i) => i.section === 4 && i.field === 'activity_blocks.0.overlap_note',
+      ),
     ).toBe(false);
 
     const ok = validateReportSectionsForSubmit({
@@ -360,7 +405,9 @@ describe('validateReportSectionsForSubmit', () => {
       },
     });
     expect(
-      ok.some((i) => i.section === 4 && i.field === 'activity_blocks.0.overlap_note'),
+      ok.some(
+        (i) => i.section === 4 && i.field === 'activity_blocks.0.overlap_note',
+      ),
     ).toBe(false);
   });
 
@@ -372,7 +419,8 @@ describe('validateReportSectionsForSubmit', () => {
           primary_category: '🩺 Health & Clinical Outreach',
           sub_category: 'Health Education',
           status: 'Ongoing',
-          description: 'Ran a hygiene session with the host clinic, demonstrating handwashing steps and distributing soap to every family that attended.',
+          description:
+            'Ran a hygiene session with the host clinic, demonstrating handwashing steps and distributing soap to every family that attended.',
           beneficiaries_reached: '180',
           unique_beneficiaries: '120',
         },
@@ -393,7 +441,8 @@ describe('validateReportSectionsForSubmit', () => {
           primary_category: '🩺 Health & Clinical Outreach',
           sub_category: 'Health Education',
           status: 'Ongoing',
-          description: 'Ran a hygiene session with the host clinic, demonstrating handwashing steps and distributing soap to every family that attended.',
+          description:
+            'Ran a hygiene session with the host clinic, demonstrating handwashing steps and distributing soap to every family that attended.',
           beneficiaries_reached: '40',
         },
       ],
@@ -407,7 +456,9 @@ describe('validateReportSectionsForSubmit', () => {
     const named = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,
       section4: {
-        activity_blocks: [{ ...unnamed.activity_blocks[0], title: 'Classroom hygiene session' }],
+        activity_blocks: [
+          { ...unnamed.activity_blocks[0], title: 'Classroom hygiene session' },
+        ],
       },
     });
     expect(named.filter((i) => i.section === 4)).toEqual([]);
@@ -421,7 +472,8 @@ describe('validateReportSectionsForSubmit', () => {
           primary_category: '🩺 Health & Clinical Outreach',
           sub_category: 'Health Education',
           status: 'Ongoing',
-          description: 'Ran a hygiene session with the host clinic, demonstrating handwashing steps and distributing soap to every family that attended.',
+          description:
+            'Ran a hygiene session with the host clinic, demonstrating handwashing steps and distributing soap to every family that attended.',
           outputs: [],
         },
       ],
@@ -430,7 +482,11 @@ describe('validateReportSectionsForSubmit', () => {
       ...VALID_CORE_SECTIONS,
       section4,
     });
-    expect(issues.some((i) => i.section === 4 && i.field === 'activity_blocks.0.outputs')).toBe(true);
+    expect(
+      issues.some(
+        (i) => i.section === 4 && i.field === 'activity_blocks.0.outputs',
+      ),
+    ).toBe(true);
   });
 
   it('keeps a named subcategory that contains the word Other', () => {
@@ -441,7 +497,8 @@ describe('validateReportSectionsForSubmit', () => {
           primary_category: 'Resource Distribution',
           sub_category: 'Other Essential Resource Support',
           status: 'Completed',
-          description: 'Distributed hygiene kits at the school gate, showing each family how to use every item safely and answering their questions.',
+          description:
+            'Distributed hygiene kits at the school gate, showing each family how to use every item safely and answering their questions.',
           outputs: [{ title: 'Hygiene kits', quantity: '40' }],
         },
       ],
@@ -459,7 +516,8 @@ describe('validateReportSectionsForSubmit', () => {
       section8: { has_evidence: 'no' },
       section10: {
         continuation_status: 'no',
-        continuation_details: 'Funding is exhausted; no further sessions planned.',
+        continuation_details:
+          'Funding is exhausted; no further sessions planned.',
       },
     });
     const sections = new Set(issues.map((i) => i.section));
@@ -477,24 +535,38 @@ describe('validateReportSectionsForSubmit', () => {
       ...VALID_CORE_SECTIONS,
       section7: { has_partners: 'yes', partners: [{}] },
     });
-    expect(issues.some((i) => i.section === 7 && i.field === 'partners.0.name')).toBe(true);
-    expect(issues.some((i) => i.section === 7 && i.field === 'partners.0.type')).toBe(true);
+    expect(
+      issues.some((i) => i.section === 7 && i.field === 'partners.0.name'),
+    ).toBe(true);
+    expect(
+      issues.some((i) => i.section === 7 && i.field === 'partners.0.type'),
+    ).toBe(true);
   });
 
   it('rejects submission when the final declaration is missing or incomplete', () => {
     const issues = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,
-      section11: { final_declaration: [true, true, false, true, true], signature_name: 'Jane Student' },
+      section11: {
+        final_declaration: [true, true, false, true, true],
+        signature_name: 'Jane Student',
+      },
     });
-    expect(issues.some((i) => i.section === 11 && i.field === 'final_declaration')).toBe(true);
+    expect(
+      issues.some((i) => i.section === 11 && i.field === 'final_declaration'),
+    ).toBe(true);
   });
 
   it('rejects submission when the electronic signature is missing', () => {
     const issues = validateReportSectionsForSubmit({
       ...VALID_CORE_SECTIONS,
-      section11: { final_declaration: [true, true, true, true, true], signature_name: '  ' },
+      section11: {
+        final_declaration: [true, true, true, true, true],
+        signature_name: '  ',
+      },
     });
-    expect(issues.some((i) => i.section === 11 && i.field === 'signature_name')).toBe(true);
+    expect(
+      issues.some((i) => i.section === 11 && i.field === 'signature_name'),
+    ).toBe(true);
   });
 
   it('requires all three Section 1 declaration checkboxes, not just consent', () => {
@@ -510,9 +582,9 @@ describe('validateReportSectionsForSubmit', () => {
       ...VALID_CORE_SECTIONS,
       section1: { privacy_consent: true },
     });
-    expect(issues.some((i) => i.section === 1 && i.field === 'review_checked')).toBe(
-      true,
-    );
+    expect(
+      issues.some((i) => i.section === 1 && i.field === 'review_checked'),
+    ).toBe(true);
   });
 
   it('requires Section 2 affected group, count, gaps, and discipline contribution', () => {
@@ -527,7 +599,9 @@ describe('validateReportSectionsForSubmit', () => {
     expect(issues.some((i) => i.field === 'affected_group')).toBe(true);
     expect(issues.some((i) => i.field === 'affected_count')).toBe(true);
     expect(issues.some((i) => i.field === 'system_gaps')).toBe(true);
-    expect(issues.some((i) => i.field === 'discipline_contribution')).toBe(true);
+    expect(issues.some((i) => i.field === 'discipline_contribution')).toBe(
+      true,
+    );
   });
 
   it('accepts a Step 8 Academic integration chip id', () => {
@@ -565,8 +639,11 @@ describe('validateReportSectionsForSubmit', () => {
       section8: {
         has_evidence: 'yes',
         evidence_types: ['Attendance sheet'],
-        evidence_files: [{ url: 'https://cdn.example/sheet.jpg', name: 'sheet.jpg' }],
-        description: 'the attendance sheet confirms 40 participants took part across three separate sessions this month',
+        evidence_files: [
+          { url: 'https://cdn.example/sheet.jpg', name: 'sheet.jpg' },
+        ],
+        description:
+          'the attendance sheet confirms 40 participants took part across three separate sessions this month',
         media_visible: 'internal',
         ethical_compliance: WIZARD_ETHICS,
       },
@@ -586,7 +663,9 @@ describe('validateReportSectionsForSubmit', () => {
         ethical_compliance: WIZARD_ETHICS,
       },
     });
-    expect(issues.some((i) => i.section === 8 && i.field === 'description')).toBe(true);
+    expect(
+      issues.some((i) => i.section === 8 && i.field === 'description'),
+    ).toBe(true);
   });
 
   it('accepts a V13 ladder activity plus a linked before/after outcome', () => {
@@ -602,7 +681,14 @@ describe('validateReportSectionsForSubmit', () => {
             status: 'Completed',
             description:
               'Sara ran four sessions, Ali built the slides, and the school arranged the computer lab and projector for every session.',
-            outputs: [{ title: 'Sessions Conducted', type: 'Sessions Conducted', quantity: '4', unit: 'Sessions' }],
+            outputs: [
+              {
+                title: 'Sessions Conducted',
+                type: 'Sessions Conducted',
+                quantity: '4',
+                unit: 'Sessions',
+              },
+            ],
             serves_beneficiaries: true,
             unique_beneficiaries: '86',
             beneficiaries_reached: '86',
@@ -638,6 +724,8 @@ describe('validateReportSectionsForSubmit', () => {
         ],
       },
     });
-    expect(issues.filter((i) => i.section === 4 || i.section === 5)).toEqual([]);
+    expect(issues.filter((i) => i.section === 4 || i.section === 5)).toEqual(
+      [],
+    );
   });
 });

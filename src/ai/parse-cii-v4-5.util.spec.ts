@@ -1,5 +1,8 @@
 import { parseCiiV45Response } from './parse-cii-v4-5.util';
-import { CII_V45_DIMENSIONS, computeCiiV45Result } from '../reports/cii-v4-5.constants';
+import {
+  CII_V45_DIMENSIONS,
+  computeCiiV45Result,
+} from '../reports/cii-v4-5.constants';
 
 function fullResponse() {
   return {
@@ -9,7 +12,13 @@ function fullResponse() {
     inputCompleteness: {
       gaps: [],
       individualHours: [
-        { studentId: 's1', hours: 20, requiredHours: 16, verified: true, recordComplete: true },
+        {
+          studentId: 's1',
+          hours: 20,
+          requiredHours: 16,
+          verified: true,
+          recordComplete: true,
+        },
       ],
       mandatoryFieldsComplete: true,
     },
@@ -48,9 +57,11 @@ describe('parseCiiV45Response', () => {
     expect(result!.frameworkVersion).toBe('5.0');
     expect(result!.reportId).toBe('report-1');
     expect(result!.sectionScores).toHaveLength(10);
-    expect(result!.sectionScores.find((s) => s.dimension === '7')?.criterionScores.every((c) => c.anchor === 'P')).toBe(
-      true,
-    );
+    expect(
+      result!.sectionScores
+        .find((s) => s.dimension === '7')
+        ?.criterionScores.every((c) => c.anchor === 'P'),
+    ).toBe(true);
     expect(result!.adminEvidenceAssessment).toEqual({ status: 'PENDING' });
     expect(result!.extraMileUplift.assessmentStatus).toBe('PENDING_ADMIN');
   });
@@ -101,7 +112,14 @@ describe('parseCiiV45Response', () => {
     const response: Record<string, unknown> = fullResponse();
     response.integrityPenalty = {
       points: 7,
-      issues: [{ origin: 'STUDENT', confirmed: true, reason: 'inflated hours', evidenceIds: [] }],
+      issues: [
+        {
+          origin: 'STUDENT',
+          confirmed: true,
+          reason: 'inflated hours',
+          evidenceIds: [],
+        },
+      ],
     };
     const result = parseCiiV45Response(JSON.stringify(response));
     expect(result!.integrityPenalty).toEqual({ points: 0, issues: [] });
@@ -168,7 +186,9 @@ describe('parseCiiV45Response', () => {
     response.sectionScores = response.sectionScores
       .filter((s) => s.dimension !== '7')
       .map((s) =>
-        s.dimension === '1' ? { ...s, criterionScores: s.criterionScores.slice(0, 3) } : s,
+        s.dimension === '1'
+          ? { ...s, criterionScores: s.criterionScores.slice(0, 3) }
+          : s,
       );
     const result = parseCiiV45Response(JSON.stringify(response));
     expect(result).not.toBeNull();
@@ -176,7 +196,9 @@ describe('parseCiiV45Response', () => {
     expect(dim1.criterionScores).toHaveLength(4);
     expect(dim1.criterionScores.some((c) => c.anchor === 'P')).toBe(true);
     expect(() => computeCiiV45Result(result!)).not.toThrow();
-    expect(computeCiiV45Result(result!).scoreStatus).toBe('ADMIN_REVIEW_REQUIRED');
+    expect(computeCiiV45Result(result!).scoreStatus).toBe(
+      'ADMIN_REVIEW_REQUIRED',
+    );
   });
 
   it('still parses when the model omits echo IDs and narrative arrays', () => {

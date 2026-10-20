@@ -25,7 +25,9 @@ describe('MailService — SMTP reliability', () => {
     jest.spyOn(service as any, 'sleep').mockResolvedValue(undefined);
     const sendMail = jest
       .fn()
-      .mockRejectedValueOnce(Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }))
+      .mockRejectedValueOnce(
+        Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }),
+      )
       .mockResolvedValueOnce({ messageId: 'ok-1' });
     (service as any).transporter = { sendMail, verify: jest.fn() };
     (service as any).fallbackTransporter = null;
@@ -45,7 +47,9 @@ describe('MailService — SMTP reliability', () => {
     jest.spyOn(service as any, 'sleep').mockResolvedValue(undefined);
     const primarySend = jest
       .fn()
-      .mockRejectedValue(Object.assign(new Error('conn reset'), { code: 'ECONNRESET' }));
+      .mockRejectedValue(
+        Object.assign(new Error('conn reset'), { code: 'ECONNRESET' }),
+      );
     const fallbackSend = jest.fn().mockResolvedValue({ messageId: 'fb-1' });
     (service as any).transporter = { sendMail: primarySend, verify: jest.fn() };
     (service as any).fallbackTransporter = {
@@ -109,7 +113,11 @@ describe('MailService — SMTP reliability', () => {
     const service = makeService();
     const to = Array.from({ length: 201 }, (_, i) => `u${i}@x.com`);
     await expect(
-      service.sendAdminComposedEmail({ to, subject: 'Hi', messageHtml: '<p>x</p>' }),
+      service.sendAdminComposedEmail({
+        to,
+        subject: 'Hi',
+        messageHtml: '<p>x</p>',
+      }),
     ).rejects.toThrow(/Too many recipients/);
   });
 });

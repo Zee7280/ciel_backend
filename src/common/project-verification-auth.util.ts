@@ -7,12 +7,14 @@
  *   non-production defaults to anonymous for local/dev.
  */
 export function isProjectVerificationAuthRequired(): boolean {
-    const raw = (process.env.VERIFICATION_REQUIRE_AUTH || '').trim().toLowerCase();
-    if (['0', 'false', 'no', 'off'].includes(raw)) {
-        return false;
-    }
-    if (['1', 'true', 'yes', 'on'].includes(raw)) {
-        return true;
-    }
-    return process.env.NODE_ENV === 'production';
+  const raw = (process.env.VERIFICATION_REQUIRE_AUTH || '')
+    .trim()
+    .toLowerCase();
+  if (['0', 'false', 'no', 'off'].includes(raw)) {
+    return false;
+  }
+  if (['1', 'true', 'yes', 'on'].includes(raw)) {
+    return true;
+  }
+  return process.env.NODE_ENV === 'production';
 }

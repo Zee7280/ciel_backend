@@ -1,4 +1,3 @@
-
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -8,41 +7,43 @@ import { CreateFundingApplicationDto } from './dto/create-application.dto';
 
 @Injectable()
 export class FundingService {
-    constructor(
-        @InjectRepository(FundingOpportunity)
-        private fundingOpportunityRepository: Repository<FundingOpportunity>,
-        @InjectRepository(FundingApplication)
-        private fundingApplicationRepository: Repository<FundingApplication>,
-    ) { }
+  constructor(
+    @InjectRepository(FundingOpportunity)
+    private fundingOpportunityRepository: Repository<FundingOpportunity>,
+    @InjectRepository(FundingApplication)
+    private fundingApplicationRepository: Repository<FundingApplication>,
+  ) {}
 
-    async findAllOpportunities() {
-        // Only show open opportunities, maybe sort by deadline?
-        return this.fundingOpportunityRepository.find({
-            where: { status: 'open' },
-            order: { deadline: 'ASC' },
-        });
+  async findAllOpportunities() {
+    // Only show open opportunities, maybe sort by deadline?
+    return this.fundingOpportunityRepository.find({
+      where: { status: 'open' },
+      order: { deadline: 'ASC' },
+    });
+  }
+
+  async createApplication(userId: string, dto: CreateFundingApplicationDto) {
+    const opportunity = await this.fundingOpportunityRepository.findOne({
+      where: { id: dto.fundingId },
+    });
+    if (!opportunity) {
+      throw new NotFoundException('Funding opportunity not found');
     }
 
-    async createApplication(userId: string, dto: CreateFundingApplicationDto) {
-        const opportunity = await this.fundingOpportunityRepository.findOne({ where: { id: dto.fundingId } });
-        if (!opportunity) {
-            throw new NotFoundException('Funding opportunity not found');
-        }
+    const application = this.fundingApplicationRepository.create({
+      ...dto,
+      organizationId: userId,
+      status: 'pending',
+    });
 
-        const application = this.fundingApplicationRepository.create({
-            ...dto,
-            organizationId: userId,
-            status: 'pending',
-        });
+    return this.fundingApplicationRepository.save(application);
+  }
 
-        return this.fundingApplicationRepository.save(application);
-    }
-
-    async getApplications(userId: string) {
-        return this.fundingApplicationRepository.find({
-            where: { organizationId: userId },
-            relations: ['fundingOpportunity'],
-            order: { createdAt: 'DESC' },
-        });
-    }
+  async getApplications(userId: string) {
+    return this.fundingApplicationRepository.find({
+      where: { organizationId: userId },
+      relations: ['fundingOpportunity'],
+      order: { createdAt: 'DESC' },
+    });
+  }
 }

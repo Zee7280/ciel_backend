@@ -1,8 +1,8 @@
 import { StudentReportsService } from './student-reports.service';
 
-const redact = (StudentReportsService as any).redactCiiV45ForExternalViewer.bind(
-  StudentReportsService,
-);
+const redact = (
+  StudentReportsService as any
+).redactCiiV45ForExternalViewer.bind(StudentReportsService);
 
 const UNLOCKED_RESPONSE = {
   success: true,
@@ -15,8 +15,20 @@ const UNLOCKED_RESPONSE = {
       aiReportScore: 76.5,
       adminEvidenceScore: 13,
       baseCII: 89.5,
-      finalBadge: { code: 'L6', name: 'Transformative Impact Contributor', level: 6, numericLevel: 6, gateCapped: false },
-      recommendedBadge: { code: 'L6', name: 'Transformative Impact Contributor', level: 6, numericLevel: 6, gateCapped: false },
+      finalBadge: {
+        code: 'L6',
+        name: 'Transformative Impact Contributor',
+        level: 6,
+        numericLevel: 6,
+        gateCapped: false,
+      },
+      recommendedBadge: {
+        code: 'L6',
+        name: 'Transformative Impact Contributor',
+        level: 6,
+        numericLevel: 6,
+        gateCapped: false,
+      },
       sectionScores: [
         {
           dimension: '7',
@@ -36,8 +48,26 @@ const UNLOCKED_RESPONSE = {
           ],
         },
       ],
-      claimInventory: [{ claimId: 'C1', text: 'private claim text', material: true, evidenceIds: ['E1'], supportStatus: 'SUPPORTED' }],
-      evidenceAudit: [{ evidenceId: 'E1', actualContentSummary: 'private visible-content audit', processingStatus: 'INSPECTED', material: true, privacy: 'RESTRICTED', claimIds: ['C1'], supportStatus: 'SUPPORTED' }],
+      claimInventory: [
+        {
+          claimId: 'C1',
+          text: 'private claim text',
+          material: true,
+          evidenceIds: ['E1'],
+          supportStatus: 'SUPPORTED',
+        },
+      ],
+      evidenceAudit: [
+        {
+          evidenceId: 'E1',
+          actualContentSummary: 'private visible-content audit',
+          processingStatus: 'INSPECTED',
+          material: true,
+          privacy: 'RESTRICTED',
+          claimIds: ['C1'],
+          supportStatus: 'SUPPORTED',
+        },
+      ],
       extraMileUplift: { total: 2.5 },
       integrityPenalty: { points: 0, issues: [] },
       adminReviewReasons: [],
@@ -60,7 +90,9 @@ describe('StudentReportsService.redactCiiV45ForExternalViewer', () => {
     expect(result.data.ciiV45Lock).toBeNull();
     expect(result.data.ciiV45).not.toHaveProperty('claimInventory');
     expect(result.data.ciiV45).not.toHaveProperty('evidenceAudit');
-    expect(result.data.ciiV45.sectionScores[0]).not.toHaveProperty('criterionScores');
+    expect(result.data.ciiV45.sectionScores[0]).not.toHaveProperty(
+      'criterionScores',
+    );
   });
 
   it('exposes only the curated outcome once locked — never per-criterion anchors/notes, claim text, evidence content summaries, or admin-review reasons', () => {
@@ -82,8 +114,20 @@ describe('StudentReportsService.redactCiiV45ForExternalViewer', () => {
     expect(result.data.ciiV45).toEqual({
       finalCII: 91.5,
       diagnosticCII: 91.5,
-      finalBadge: { code: 'L6', name: 'Transformative Impact Contributor', level: 6, numericLevel: 6, gateCapped: false },
-      recommendedBadge: { code: 'L6', name: 'Transformative Impact Contributor', level: 6, numericLevel: 6, gateCapped: false },
+      finalBadge: {
+        code: 'L6',
+        name: 'Transformative Impact Contributor',
+        level: 6,
+        numericLevel: 6,
+        gateCapped: false,
+      },
+      recommendedBadge: {
+        code: 'L6',
+        name: 'Transformative Impact Contributor',
+        level: 6,
+        numericLevel: 6,
+        gateCapped: false,
+      },
       diagnosticBadge: null,
       sectionScores: [
         {
@@ -108,7 +152,9 @@ describe('StudentReportsService.redactCiiV45ForExternalViewer', () => {
     expect(result.data.ciiV45).not.toHaveProperty('evidenceAudit');
     expect(result.data.ciiV45).not.toHaveProperty('adminReviewReasons');
     expect(result.data.ciiV45).not.toHaveProperty('analysisSummary');
-    expect(result.data.ciiV45.sectionScores[0]).not.toHaveProperty('criterionScores');
+    expect(result.data.ciiV45.sectionScores[0]).not.toHaveProperty(
+      'criterionScores',
+    );
     expect(result.data.ciiV45Lock).toEqual({
       locked: true,
       hash: 'abc123',

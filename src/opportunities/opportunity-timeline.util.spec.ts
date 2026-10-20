@@ -37,7 +37,9 @@ describe('opportunity-timeline.util', () => {
     // ... and close the day after the project end, regardless of any stored deadline
     const dayAfterEnd = addDaysToDateOnly(base.end_date, 1)!;
     expect(canJoinOrApply(t, dayAfterEnd)).toBe(false);
-    expect(resolveLifecyclePhase(t, dayAfterEnd)).toBe('service_ended_reporting_open');
+    expect(resolveLifecyclePhase(t, dayAfterEnd)).toBe(
+      'service_ended_reporting_open',
+    );
   });
 
   it('opens 60-day reporting window after project end', () => {
@@ -52,7 +54,10 @@ describe('opportunity-timeline.util', () => {
   });
 
   it('closes reporting after end+60 unless reopened', () => {
-    const closedDay = addDaysToDateOnly(base.end_date, REPORTING_WINDOW_DAYS + 1)!;
+    const closedDay = addDaysToDateOnly(
+      base.end_date,
+      REPORTING_WINDOW_DAYS + 1,
+    )!;
     expect(resolveLifecyclePhase(base, closedDay)).toBe('reporting_closed');
     expect(canEditOrSubmitReport(base, closedDay)).toBe(false);
 
@@ -72,11 +77,19 @@ describe('opportunity-timeline.util', () => {
   it('validates mandatory start/end; an application deadline is neither required nor validated', () => {
     expect(validateTimelineForPersist({})).toMatch(/start date/i);
     expect(validateTimelineForPersist(base)).toBeNull();
-    expect(validateTimelineForPersist({ start_date: base.start_date })).toMatch(/start date and a project end date/i);
-    expect(validateTimelineForPersist({ ...base, end_date: '2000-01-01' })).toMatch(/on or after/i);
+    expect(validateTimelineForPersist({ start_date: base.start_date })).toMatch(
+      /start date and a project end date/i,
+    );
+    expect(
+      validateTimelineForPersist({ ...base, end_date: '2000-01-01' }),
+    ).toMatch(/on or after/i);
     // legacy payloads that still carry the old fields are accepted as-is (and ignored)
     expect(
-      validateTimelineForPersist({ ...base, close_applications_early: true, application_deadline: '2026-10-31' }),
+      validateTimelineForPersist({
+        ...base,
+        close_applications_early: true,
+        application_deadline: '2026-10-31',
+      }),
     ).toBeNull();
     expect(
       validateTimelineForPersist({ ...base, close_applications_early: true }),
@@ -97,11 +110,33 @@ describe('validateTimelineForPersist — calendar and daily-window validity', ()
   });
 
   it('validates the daily window format and order', () => {
-    expect(validateTimelineForPersist({ ...ok, from_time: '9am', to_time: '13:00' })).toMatch(/HH:mm/);
-    expect(validateTimelineForPersist({ ...ok, from_time: '14:00', to_time: '13:00' })).toMatch(/after/);
-    expect(validateTimelineForPersist({ ...ok, from_time: '13:00', to_time: '13:00' })).toMatch(/after/);
-    expect(validateTimelineForPersist({ ...ok, from_time: '09:00', to_time: '13:00' })).toBeNull();
-    expect(validateTimelineForPersist({ ...ok, from_time: '', to_time: '' })).toBeNull();
+    expect(
+      validateTimelineForPersist({ ...ok, from_time: '9am', to_time: '13:00' }),
+    ).toMatch(/HH:mm/);
+    expect(
+      validateTimelineForPersist({
+        ...ok,
+        from_time: '14:00',
+        to_time: '13:00',
+      }),
+    ).toMatch(/after/);
+    expect(
+      validateTimelineForPersist({
+        ...ok,
+        from_time: '13:00',
+        to_time: '13:00',
+      }),
+    ).toMatch(/after/);
+    expect(
+      validateTimelineForPersist({
+        ...ok,
+        from_time: '09:00',
+        to_time: '13:00',
+      }),
+    ).toBeNull();
+    expect(
+      validateTimelineForPersist({ ...ok, from_time: '', to_time: '' }),
+    ).toBeNull();
   });
 });
 

@@ -178,7 +178,10 @@ export class EngagementController {
       req.user.role,
       id,
     );
-    const result = await this.engagementService.getAttendanceLogs(id, req.user.role);
+    const result = await this.engagementService.getAttendanceLogs(
+      id,
+      req.user.role,
+    );
     return {
       success: true,
       data: result,
@@ -290,8 +293,10 @@ export class EngagementController {
       req.user.role,
       projectId,
     );
-    const result =
-      await this.engagementService.getProjectAttendanceLogs(projectId, req.user.role);
+    const result = await this.engagementService.getProjectAttendanceLogs(
+      projectId,
+      req.user.role,
+    );
     return {
       success: true,
       data: result,
@@ -299,7 +304,10 @@ export class EngagementController {
   }
 
   @Delete(':id')
-  async deleteParticipant(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
+  async deleteParticipant(
+    @Request() req,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
     await this.engagementService.deleteParticipant(req.user.id, id);
     return {
       success: true,

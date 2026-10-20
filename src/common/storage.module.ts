@@ -4,8 +4,8 @@ import { S3Service } from './s3.service';
 
 @Global()
 @Module({
-    imports: [ConfigModule],
-    providers: [S3Service],
-    exports: [S3Service],
+  imports: [ConfigModule],
+  providers: [S3Service],
+  exports: [S3Service],
 })
-export class StorageModule { }
+export class StorageModule {}

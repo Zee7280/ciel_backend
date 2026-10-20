@@ -47,10 +47,22 @@ export type CiiV45SupportStatus =
 export type CiiV45Privacy = 'PUBLIC' | 'RESTRICTED' | 'PRIVATE';
 
 export type CiiV45Dimension =
-  | '1' | '2' | '3' | '4A' | '4B' | '5' | '6' | '7' | '8' | '9';
+  | '1'
+  | '2'
+  | '3'
+  | '4A'
+  | '4B'
+  | '5'
+  | '6'
+  | '7'
+  | '8'
+  | '9';
 
 export type CiiV45UpliftCategory =
-  | 'effort' | 'resources' | 'partnerships' | 'outcomes';
+  | 'effort'
+  | 'resources'
+  | 'partnerships'
+  | 'outcomes';
 
 export interface CiiV45CriterionScore {
   criterion: string;
@@ -232,8 +244,10 @@ export interface CiiV45SectionResult {
   knownPoints: number;
 }
 
-export interface CiiV45Result
-  extends Omit<CiiV45EvaluatorPayload, 'sectionScores' | 'extraMileUplift'> {
+export interface CiiV45Result extends Omit<
+  CiiV45EvaluatorPayload,
+  'sectionScores' | 'extraMileUplift'
+> {
   sectionScores: CiiV45SectionResult[];
   knownBasePoints: number;
   /** Weighted sum of the nine AI report-quality dimensions (max 85). */
@@ -390,23 +404,69 @@ export const CII_V45_DIMENSIONS: CiiV45DimensionDef[] = [
   },
 ];
 
-export const CII_V45_BASE_MAX = CII_V45_DIMENSIONS.reduce((sum, d) => sum + d.maxPoints, 0); // 100
+export const CII_V45_BASE_MAX = CII_V45_DIMENSIONS.reduce(
+  (sum, d) => sum + d.maxPoints,
+  0,
+); // 100
 export const CII_V45_BONUS_MAX = 5;
 export const CII_V45_MAX = 100;
 export const CII_V45_FRAMEWORK_VERSION = '5.0' as const;
-export const CII_V45_AI_DIMENSIONS = CII_V45_DIMENSIONS.filter((d) => d.id !== '7');
-export const CII_V45_EVIDENCE_DIMENSION = CII_V45_DIMENSIONS.find((d) => d.id === '7')!;
-export const CII_V45_AI_REPORT_MAX = CII_V45_AI_DIMENSIONS.reduce((sum, d) => sum + d.maxPoints, 0); // 85
+export const CII_V45_AI_DIMENSIONS = CII_V45_DIMENSIONS.filter(
+  (d) => d.id !== '7',
+);
+export const CII_V45_EVIDENCE_DIMENSION = CII_V45_DIMENSIONS.find(
+  (d) => d.id === '7',
+)!;
+export const CII_V45_AI_REPORT_MAX = CII_V45_AI_DIMENSIONS.reduce(
+  (sum, d) => sum + d.maxPoints,
+  0,
+); // 85
 export const CII_V45_ADMIN_EVIDENCE_MAX = CII_V45_EVIDENCE_DIMENSION.maxPoints; // 15
 
 /** Six contiguous locked bands (CIEL PK CII v5.0 badge manifest — same cut-points as v4.5). */
 export const CII_V45_BANDS: CiiV45Band[] = [
-  { level: 1, min: 0, max: 49, name: 'Participation Acknowledgement', assetKey: 'L1' },
-  { level: 2, min: 50, max: 59, name: 'Foundation Stage Contributor', assetKey: 'L2' },
-  { level: 3, min: 60, max: 69, name: 'Emerging Community Contributor', assetKey: 'L3' },
-  { level: 4, min: 70, max: 79, name: 'Developing Impact Contributor', assetKey: 'L4' },
-  { level: 5, min: 80, max: 89, name: 'Distinguished Impact Contributor', assetKey: 'L5' },
-  { level: 6, min: 90, max: 100, name: 'Transformative Impact Contributor', assetKey: 'L6' },
+  {
+    level: 1,
+    min: 0,
+    max: 49,
+    name: 'Participation Acknowledgement',
+    assetKey: 'L1',
+  },
+  {
+    level: 2,
+    min: 50,
+    max: 59,
+    name: 'Foundation Stage Contributor',
+    assetKey: 'L2',
+  },
+  {
+    level: 3,
+    min: 60,
+    max: 69,
+    name: 'Emerging Community Contributor',
+    assetKey: 'L3',
+  },
+  {
+    level: 4,
+    min: 70,
+    max: 79,
+    name: 'Developing Impact Contributor',
+    assetKey: 'L4',
+  },
+  {
+    level: 5,
+    min: 80,
+    max: 89,
+    name: 'Distinguished Impact Contributor',
+    assetKey: 'L5',
+  },
+  {
+    level: 6,
+    min: 90,
+    max: 100,
+    name: 'Transformative Impact Contributor',
+    assetKey: 'L6',
+  },
 ];
 
 /** Round to 1 decimal place (matches `cii-calculator.js`'s `round`). */
@@ -415,7 +475,12 @@ function round1(value: number): number {
 }
 
 function isValidAnchor(value: unknown): value is CiiV45Anchor {
-  return value === 'P' || (Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 4);
+  return (
+    value === 'P' ||
+    (Number.isInteger(value) &&
+      (value as number) >= 0 &&
+      (value as number) <= 4)
+  );
 }
 
 const VERIFICATION_STATUSES: CiiV45VerificationStatus[] = [
@@ -428,9 +493,20 @@ const VERIFICATION_STATUSES: CiiV45VerificationStatus[] = [
   'NOT_APPLICABLE',
   'CONTRADICTED',
 ];
-const UPLIFT_CATEGORIES: CiiV45UpliftCategory[] = ['effort', 'resources', 'partnerships', 'outcomes'];
+const UPLIFT_CATEGORIES: CiiV45UpliftCategory[] = [
+  'effort',
+  'resources',
+  'partnerships',
+  'outcomes',
+];
 
-const CII_V45_ANCHOR_NAMES = ['Missing', 'Basic', 'Sound', 'Strong', 'Exceptional'] as const;
+const CII_V45_ANCHOR_NAMES = [
+  'Missing',
+  'Basic',
+  'Sound',
+  'Strong',
+  'Exceptional',
+] as const;
 
 export function defaultAdminEvidenceRationale(
   criterion: string,
@@ -454,11 +530,15 @@ export function completeAdminEvidenceCriteria(
   reasoningSummary?: string;
   evidenceIds?: string[];
 }> {
-  const byKey = new Map((Array.isArray(raw) ? raw : []).map((row) => [row.criterion, row]));
+  const byKey = new Map(
+    (Array.isArray(raw) ? raw : []).map((row) => [row.criterion, row]),
+  );
   return CII_V45_EVIDENCE_DIMENSION.criteria.map(({ key }) => {
     const row = byKey.get(key);
     const anchor =
-      row && Number.isInteger(row.anchor) && row.anchor >= 0 && row.anchor <= 4 ? row.anchor : 2;
+      row && Number.isInteger(row.anchor) && row.anchor >= 0 && row.anchor <= 4
+        ? row.anchor
+        : 2;
     return {
       criterion: key,
       anchor,
@@ -470,7 +550,8 @@ export function completeAdminEvidenceCriteria(
 
 function aliasAiCriterionKey(key: string): string {
   const compact = key.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
-  if (compact === 'hoursconsistency' || compact === 'hourscompletion') return 'hoursCompletion';
+  if (compact === 'hoursconsistency' || compact === 'hourscompletion')
+    return 'hoursCompletion';
   return key;
 }
 
@@ -493,10 +574,17 @@ function aiCriterionRows(section: unknown): Record<string, unknown>[] {
 }
 
 function pickAiCriterionKey(row: Record<string, unknown>): string {
-  return aliasAiCriterionKey(String(row.criterion ?? row.key ?? row.id ?? row.criterionId ?? row.name ?? ''));
+  return aliasAiCriterionKey(
+    String(
+      row.criterion ?? row.key ?? row.id ?? row.criterionId ?? row.name ?? '',
+    ),
+  );
 }
 
-function pickAiAnchor(row: Record<string, unknown>, fallback?: CiiV45Anchor | null): CiiV45Anchor | null {
+function pickAiAnchor(
+  row: Record<string, unknown>,
+  fallback?: CiiV45Anchor | null,
+): CiiV45Anchor | null {
   return (
     coerceAiAnchor(row.anchor) ??
     coerceAiAnchor(row.qualityAnchor) ??
@@ -523,7 +611,8 @@ export function pendingDimension7Section(): CiiV45SectionScore {
 }
 
 function compactReasoning(value: unknown): string {
-  const text = typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
+  const text =
+    typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
   if (!text) return 'AI report-quality judgement.';
   return text.length > 180 ? `${text.slice(0, 177).trimEnd()}…` : text;
 }
@@ -536,7 +625,8 @@ function omittedAiCriterion(key: string): CiiV45CriterionScore {
     verificationStatus: 'PROCESSING_REQUIRED',
     sourceRefs: [],
     evidenceIds: [],
-    reasoningSummary: 'AI omitted this criterion; Admin should confirm from the saved report.',
+    reasoningSummary:
+      'AI omitted this criterion; Admin should confirm from the saved report.',
   };
 }
 
@@ -556,7 +646,9 @@ function coerceAiSectionScores(raw: CiiV45SectionScore[] | undefined): {
   const rows = Array.isArray(raw) ? raw : [];
   const omittedKeys: string[] = [];
   const sections = CII_V45_AI_DIMENSIONS.map((dim) => {
-    const section = rows.find((s) => normalizeAiDimensionId(s.dimension) === dim.id);
+    const section = rows.find(
+      (s) => normalizeAiDimensionId(s.dimension) === dim.id,
+    );
     const list = aiCriterionRows(section);
     const byKey = new Map<string, Record<string, unknown>>();
     for (const row of list) {
@@ -568,7 +660,9 @@ function coerceAiSectionScores(raw: CiiV45SectionScore[] | undefined): {
     return {
       dimension: dim.id,
       criterionScores: dim.criteria.map(({ key }, index) => {
-        const c = byKey.get(key) ?? (list.length === dim.criteria.length ? list[index] : undefined);
+        const c =
+          byKey.get(key) ??
+          (list.length === dim.criteria.length ? list[index] : undefined);
         if (!c) {
           omittedKeys.push(`${dim.id}.${key}`);
           return omittedAiCriterion(key);
@@ -584,9 +678,13 @@ function coerceAiSectionScores(raw: CiiV45SectionScore[] | undefined): {
           anchor,
           qualityAnchor: quality === 'P' ? anchor : quality,
           verificationStatus: status === 'VERIFIED' ? 'AI_REPORT' : status,
-          sourceRefs: Array.isArray(c.sourceRefs) ? (c.sourceRefs as string[]) : [],
+          sourceRefs: Array.isArray(c.sourceRefs)
+            ? (c.sourceRefs as string[])
+            : [],
           evidenceIds: [],
-          reasoningSummary: compactReasoning(c.reasoningSummary ?? c.reasoning ?? c.rationale),
+          reasoningSummary: compactReasoning(
+            c.reasoningSummary ?? c.reasoning ?? c.rationale,
+          ),
           deductionReason: (c.deductionReason as string | null) ?? null,
         };
       }),
@@ -596,11 +694,15 @@ function coerceAiSectionScores(raw: CiiV45SectionScore[] | undefined): {
 }
 
 /** Forces an AI evaluator payload onto the v5.0 hybrid contract (9 quality dims, D7 pending). */
-export function normalizeCiiV5AiPayload(raw: CiiV45EvaluatorPayload): CiiV45EvaluatorPayload {
+export function normalizeCiiV5AiPayload(
+  raw: CiiV45EvaluatorPayload,
+): CiiV45EvaluatorPayload {
   const extras = raw.extraMileUplift;
   const candidates = Array.isArray(extras?.items) ? extras.items : [];
   const { sections, omittedKeys } = coerceAiSectionScores(raw.sectionScores);
-  const reasons = Array.isArray(raw.adminReviewReasons) ? [...raw.adminReviewReasons] : [];
+  const reasons = Array.isArray(raw.adminReviewReasons)
+    ? [...raw.adminReviewReasons]
+    : [];
   if (omittedKeys.length) {
     const note = `AI omitted criteria: ${omittedKeys.join(', ')}. Confirm from the saved report.`;
     if (!reasons.includes(note)) reasons.push(note);
@@ -610,14 +712,18 @@ export function normalizeCiiV5AiPayload(raw: CiiV45EvaluatorPayload): CiiV45Eval
     frameworkVersion: CII_V45_FRAMEWORK_VERSION,
     claimInventory: Array.isArray(raw.claimInventory) ? raw.claimInventory : [],
     evidenceAudit: Array.isArray(raw.evidenceAudit) ? raw.evidenceAudit : [],
-    deductionLedger: Array.isArray(raw.deductionLedger) ? raw.deductionLedger : [],
+    deductionLedger: Array.isArray(raw.deductionLedger)
+      ? raw.deductionLedger
+      : [],
     adminReviewReasons: reasons,
     sectionScores: [...sections, pendingDimension7Section()],
     extraMileUplift: { assessmentStatus: 'PENDING_ADMIN', items: [] },
     extraMileCandidates: Array.isArray(raw.extraMileCandidates)
       ? raw.extraMileCandidates
       : candidates,
-    sectionAnalyses: Array.isArray(raw.sectionAnalyses) ? raw.sectionAnalyses : [],
+    sectionAnalyses: Array.isArray(raw.sectionAnalyses)
+      ? raw.sectionAnalyses
+      : [],
     integrityPenalty: { points: 0, issues: [] },
     exceptionalFeature: raw.exceptionalFeature
       ? { ...raw.exceptionalFeature, adminVerified: false }
@@ -641,7 +747,10 @@ export function applyAdminEvidenceAssessment(
     exceptionalFeature?: CiiV45ExceptionalFeature | null;
   },
 ): CiiV45EvaluatorPayload {
-  if (!Array.isArray(input.criteria) || input.criteria.length !== CII_V45_EVIDENCE_DIMENSION.criteria.length) {
+  if (
+    !Array.isArray(input.criteria) ||
+    input.criteria.length !== CII_V45_EVIDENCE_DIMENSION.criteria.length
+  ) {
     fail('Complete Admin evidence assessment required.');
   }
   const dim7Section: CiiV45SectionScore = {
@@ -674,10 +783,15 @@ export function applyAdminEvidenceAssessment(
   return {
     ...payload,
     frameworkVersion: CII_V45_FRAMEWORK_VERSION,
-    sectionScores: [...payload.sectionScores.filter((s) => s.dimension !== '7'), dim7Section],
+    sectionScores: [
+      ...payload.sectionScores.filter((s) => s.dimension !== '7'),
+      dim7Section,
+    ],
     extraMileUplift,
     exceptionalFeature:
-      input.exceptionalFeature !== undefined ? input.exceptionalFeature : payload.exceptionalFeature,
+      input.exceptionalFeature !== undefined
+        ? input.exceptionalFeature
+        : payload.exceptionalFeature,
     adminEvidenceAssessment: {
       status: 'ASSESSED',
       assessorId: input.assessorId,
@@ -707,10 +821,17 @@ export function resolveBadgeForScore(
   score: number | null,
   qualityGates: { L4: boolean; L5: boolean; L6: boolean } | undefined,
 ): CiiV45Badge | null {
-  const numeric = score === null ? null : [...CII_V45_BANDS].reverse().find((b) => score >= b.min) || null;
+  const numeric =
+    score === null
+      ? null
+      : [...CII_V45_BANDS].reverse().find((b) => score >= b.min) || null;
   let badge: CiiV45Band | null = numeric;
   const gates = qualityGates ?? { L4: false, L5: false, L6: false };
-  while (badge && badge.level >= 4 && !gates[`L${badge.level}` as 'L4' | 'L5' | 'L6']) {
+  while (
+    badge &&
+    badge.level >= 4 &&
+    !gates[`L${badge.level}` as 'L4' | 'L5' | 'L6']
+  ) {
     badge = CII_V45_BANDS.find((b) => b.level === badge!.level - 1) || null;
   }
   return badge
@@ -723,10 +844,13 @@ export function resolveBadgeForScore(
     : null;
 }
 
-export function computeCiiV45Result(payload: CiiV45EvaluatorPayload): CiiV45Result {
+export function computeCiiV45Result(
+  payload: CiiV45EvaluatorPayload,
+): CiiV45Result {
   const p = payload;
   if (p.frameworkVersion !== '5.0') fail('Expected frameworkVersion 5.0.');
-  if (!p.reportId || !p.inputFingerprint) fail('Report ID and input fingerprint required.');
+  if (!p.reportId || !p.inputFingerprint)
+    fail('Report ID and input fingerprint required.');
   if (!Array.isArray(p.sectionScores) || p.sectionScores.length !== 10) {
     fail('Exactly ten analytical dimensions required.');
   }
@@ -735,33 +859,43 @@ export function computeCiiV45Result(payload: CiiV45EvaluatorPayload): CiiV45Resu
     const matches = p.sectionScores.filter((s) => s.dimension === dim.id);
     if (matches.length !== 1) fail(`Missing/duplicate dimension ${dim.id}`);
     const s = matches[0];
-    if (!Array.isArray(s.criterionScores) || s.criterionScores.length !== dim.criteria.length) {
+    if (
+      !Array.isArray(s.criterionScores) ||
+      s.criterionScores.length !== dim.criteria.length
+    ) {
       fail(`Invalid criterion count ${dim.id}`);
     }
     let sum = 0;
     let pending = false;
-    const criterionResults: CiiV45CriterionResult[] = dim.criteria.map(({ key: cid, weight: w }) => {
-      const cMatches = s.criterionScores.filter((c) => c.criterion === cid);
-      if (cMatches.length !== 1) fail(`Missing/duplicate criterion ${dim.id}.${cid}`);
-      const c = cMatches[0];
-      if (!isValidAnchor(c.anchor)) fail(`Invalid anchor ${dim.id}.${cid}`);
-      if (!isValidAnchor(c.qualityAnchor)) fail(`Invalid quality anchor ${dim.id}.${cid}`);
-      if (
-        typeof c.reasoningSummary !== 'string' ||
-        !c.reasoningSummary.trim() ||
-        !Array.isArray(c.sourceRefs) ||
-        !Array.isArray(c.evidenceIds)
-      ) {
-        fail(`Auditable rationale / source / evidence arrays required ${dim.id}.${cid}`);
-      }
-      if (!VERIFICATION_STATUSES.includes(c.verificationStatus)) {
-        fail('Invalid verification status');
-      }
-      if (c.anchor === 'P') pending = true;
-      const score = c.anchor === 'P' ? null : w * CII_V45_ANCHOR_FACTORS[c.anchor as 0 | 1 | 2 | 3 | 4];
-      if (score !== null) sum = Math.round((sum + score) * 10000) / 10000;
-      return { ...c, maximumPoints: w, score };
-    });
+    const criterionResults: CiiV45CriterionResult[] = dim.criteria.map(
+      ({ key: cid, weight: w }) => {
+        const cMatches = s.criterionScores.filter((c) => c.criterion === cid);
+        if (cMatches.length !== 1)
+          fail(`Missing/duplicate criterion ${dim.id}.${cid}`);
+        const c = cMatches[0];
+        if (!isValidAnchor(c.anchor)) fail(`Invalid anchor ${dim.id}.${cid}`);
+        if (!isValidAnchor(c.qualityAnchor))
+          fail(`Invalid quality anchor ${dim.id}.${cid}`);
+        if (
+          typeof c.reasoningSummary !== 'string' ||
+          !c.reasoningSummary.trim() ||
+          !Array.isArray(c.sourceRefs) ||
+          !Array.isArray(c.evidenceIds)
+        ) {
+          fail(
+            `Auditable rationale / source / evidence arrays required ${dim.id}.${cid}`,
+          );
+        }
+        if (!VERIFICATION_STATUSES.includes(c.verificationStatus)) {
+          fail('Invalid verification status');
+        }
+        if (c.anchor === 'P') pending = true;
+        const score =
+          c.anchor === 'P' ? null : w * CII_V45_ANCHOR_FACTORS[c.anchor];
+        if (score !== null) sum = Math.round((sum + score) * 10000) / 10000;
+        return { ...c, maximumPoints: w, score };
+      },
+    );
     return {
       dimension: dim.id,
       name: dim.name,
@@ -781,18 +915,33 @@ export function computeCiiV45Result(payload: CiiV45EvaluatorPayload): CiiV45Resu
   ) {
     fail('Input audit and individual hours required.');
   }
-  const claimInventory = Array.isArray(p.claimInventory) ? p.claimInventory : [];
+  const claimInventory = Array.isArray(p.claimInventory)
+    ? p.claimInventory
+    : [];
   const evidenceAudit = Array.isArray(p.evidenceAudit) ? p.evidenceAudit : [];
-  const adminReviewReasons = Array.isArray(p.adminReviewReasons) ? p.adminReviewReasons : [];
+  const adminReviewReasons = Array.isArray(p.adminReviewReasons)
+    ? p.adminReviewReasons
+    : [];
 
-  const evidence = p.adminEvidenceAssessment || ({ status: 'PENDING' } as CiiV45AdminEvidenceAssessment);
-  if (!['PENDING', 'ASSESSED'].includes(evidence.status)) fail('Admin evidence assessment status required.');
+  const evidence =
+    p.adminEvidenceAssessment ||
+    ({ status: 'PENDING' } as CiiV45AdminEvidenceAssessment);
+  if (!['PENDING', 'ASSESSED'].includes(evidence.status))
+    fail('Admin evidence assessment status required.');
   const dimension7 = sections.find((s) => s.dimension === '7')!;
-  if (evidence.status === 'PENDING' && dimension7.criterionScores.some((c) => c.anchor !== 'P')) {
+  if (
+    evidence.status === 'PENDING' &&
+    dimension7.criterionScores.some((c) => c.anchor !== 'P')
+  ) {
     fail('Dimension 7 must remain pending until Admin evidence assessment.');
   }
   if (evidence.status === 'ASSESSED') {
-    if (!evidence.assessorId || !evidence.assessedAt || !Array.isArray(evidence.criteria) || evidence.criteria.length !== 7) {
+    if (
+      !evidence.assessorId ||
+      !evidence.assessedAt ||
+      !Array.isArray(evidence.criteria) ||
+      evidence.criteria.length !== 7
+    ) {
       fail('Complete Admin evidence assessment required.');
     }
     for (const c of dimension7.criterionScores) {
@@ -811,7 +960,11 @@ export function computeCiiV45Result(payload: CiiV45EvaluatorPayload): CiiV45Resu
   }
 
   const extras = p.extraMileUplift || ({} as CiiV45ExtraMileUplift);
-  if (!['ASSESSED', 'PROCESSING_REQUIRED', 'PENDING_ADMIN'].includes(extras.assessmentStatus)) {
+  if (
+    !['ASSESSED', 'PROCESSING_REQUIRED', 'PENDING_ADMIN'].includes(
+      extras.assessmentStatus,
+    )
+  ) {
     fail('Extra-mile assessment status required.');
   }
   if (!Array.isArray(extras.items) || extras.items.length > 4) {
@@ -840,7 +993,9 @@ export function computeCiiV45Result(payload: CiiV45EvaluatorPayload): CiiV45Resu
         !x.evidenceIds.length ||
         x.adminVerified !== true)
     ) {
-      fail('Uplift requires individual, beyond-base justification and inspected evidence');
+      fail(
+        'Uplift requires individual, beyond-base justification and inspected evidence',
+      );
     }
     uplift += x.points;
   }
@@ -850,7 +1005,13 @@ export function computeCiiV45Result(payload: CiiV45EvaluatorPayload): CiiV45Resu
 
   const integrity = p.integrityPenalty || ({} as CiiV45IntegrityPenalty);
   const penalty = integrity.points;
-  if (typeof penalty !== 'number' || !Number.isFinite(penalty) || penalty < 0 || penalty > 10 || !Array.isArray(integrity.issues)) {
+  if (
+    typeof penalty !== 'number' ||
+    !Number.isFinite(penalty) ||
+    penalty < 0 ||
+    penalty > 10 ||
+    !Array.isArray(integrity.issues)
+  ) {
     fail('Invalid integrity penalty');
   }
   if (
@@ -866,34 +1027,51 @@ export function computeCiiV45Result(payload: CiiV45EvaluatorPayload): CiiV45Resu
           !i.adminVerified,
       ))
   ) {
-    fail('Integrity penalty requires confirmed student-origin issue with inspected evidence.');
+    fail(
+      'Integrity penalty requires confirmed student-origin issue with inspected evidence.',
+    );
   }
 
   const hours = inputs.individualHours;
-  if (new Set(hours.map((h) => h.studentId)).size !== hours.length) fail('Duplicate student hour audit');
+  if (new Set(hours.map((h) => h.studentId)).size !== hours.length)
+    fail('Duplicate student hour audit');
   let hoursFail = false;
   let hoursPending = false;
   for (const h of hours) {
-    if (!h.studentId || typeof h.requiredHours !== 'number' || !Number.isFinite(h.requiredHours) || h.requiredHours <= 0) {
+    if (
+      !h.studentId ||
+      typeof h.requiredHours !== 'number' ||
+      !Number.isFinite(h.requiredHours) ||
+      h.requiredHours <= 0
+    ) {
       fail('Individual requirement required');
     }
     if (h.hours === null || h.recordComplete !== true) {
       hoursPending = true;
       continue;
     }
-    if (typeof h.hours !== 'number' || !Number.isFinite(h.hours) || h.hours < 0) fail('Invalid hours');
+    if (typeof h.hours !== 'number' || !Number.isFinite(h.hours) || h.hours < 0)
+      fail('Invalid hours');
     hoursFail ||= h.hours < h.requiredHours;
   }
 
   const studentGap = inputs.gaps.some(
-    (g) => g.material && ['STUDENT_NOT_PROVIDED', 'SIGNATURE_INVALID'].includes(g.type) && g.mandatory,
+    (g) =>
+      g.material &&
+      ['STUDENT_NOT_PROVIDED', 'SIGNATURE_INVALID'].includes(g.type) &&
+      g.mandatory,
   );
   // Advisory Admin review reasons do not suppress a valid score. Only unresolved source/system gaps do.
   const aiPending =
     sections.filter((s) => s.dimension !== '7').some((s) => s.score === null) ||
     hoursPending ||
-    inputs.gaps.some((g) => g.material && ['SYSTEM_DATA_GAP', 'PROCESSING_REQUIRED'].includes(g.type));
-  const evidencePending = evidence.status !== 'ASSESSED' || extras.assessmentStatus !== 'ASSESSED';
+    inputs.gaps.some(
+      (g) =>
+        g.material &&
+        ['SYSTEM_DATA_GAP', 'PROCESSING_REQUIRED'].includes(g.type),
+    );
+  const evidencePending =
+    evidence.status !== 'ASSESSED' || extras.assessmentStatus !== 'ASSESSED';
   const status: CiiV45ScoreStatus =
     hoursFail || studentGap || !inputs.mandatoryFieldsComplete
       ? 'RESUBMISSION_REQUIRED'
@@ -904,11 +1082,14 @@ export function computeCiiV45Result(payload: CiiV45EvaluatorPayload): CiiV45Resu
           : 'FINAL';
 
   const aiSections = sections.filter((s) => s.dimension !== '7');
-  const rawAi = aiSections.some((s) => s.score === null) ? null : aiSections.reduce((t, s) => t + (s.score as number), 0);
+  const rawAi = aiSections.some((s) => s.score === null)
+    ? null
+    : aiSections.reduce((t, s) => t + (s.score as number), 0);
   const rawEvidence = dimension7.score === null ? null : dimension7.score;
   const aiReportScore = rawAi === null ? null : round1(rawAi);
   const adminEvidenceScore = rawEvidence === null ? null : round1(rawEvidence);
-  const rawBase = rawAi === null || rawEvidence === null ? null : rawAi + rawEvidence;
+  const rawBase =
+    rawAi === null || rawEvidence === null ? null : rawAi + rawEvidence;
   const base = rawBase === null ? null : round1(rawBase);
   // Combine raw /85 + /15 then round once. Do not add separately rounded display values.
   const diag =
@@ -921,8 +1102,18 @@ export function computeCiiV45Result(payload: CiiV45EvaluatorPayload): CiiV45Resu
     return s.score === null ? null : s.score / s.maximumPoints;
   };
   const get = (id: CiiV45Dimension): number | null => scoreRatio(id);
-  const g4 = diag !== null && (get('4A') ?? 0) >= 0.65 && (get('4B') ?? 0) >= 0.55 && (get('7') ?? 0) >= 0.55 && penalty < 5;
-  const g5 = g4 && (get('4B') ?? 0) >= 0.7 && (get('7') ?? 0) >= 0.7 && (get('9') ?? 0) >= 0.55 && penalty < 3;
+  const g4 =
+    diag !== null &&
+    (get('4A') ?? 0) >= 0.65 &&
+    (get('4B') ?? 0) >= 0.55 &&
+    (get('7') ?? 0) >= 0.55 &&
+    penalty < 5;
+  const g5 =
+    g4 &&
+    (get('4B') ?? 0) >= 0.7 &&
+    (get('7') ?? 0) >= 0.7 &&
+    (get('9') ?? 0) >= 0.55 &&
+    penalty < 3;
   const feature = p.exceptionalFeature;
   const exceptional = !!(
     feature?.verified &&
@@ -931,9 +1122,17 @@ export function computeCiiV45Result(payload: CiiV45EvaluatorPayload): CiiV45Resu
     Array.isArray(feature.evidenceIds) &&
     feature.evidenceIds.length
   );
-  const g6 = g5 && (get('4B') ?? 0) >= 0.8 && (get('7') ?? 0) >= 0.85 && (get('9') ?? 0) >= 0.7 && penalty === 0 && exceptional;
+  const g6 =
+    g5 &&
+    (get('4B') ?? 0) >= 0.8 &&
+    (get('7') ?? 0) >= 0.85 &&
+    (get('9') ?? 0) >= 0.7 &&
+    penalty === 0 &&
+    exceptional;
   const qualityGates = { L4: g4, L5: g5, L6: g6 };
-  const knownBasePoints = round1(sections.reduce((t, s) => t + s.knownPoints, 0));
+  const knownBasePoints = round1(
+    sections.reduce((t, s) => t + s.knownPoints, 0),
+  );
   const badgeScore = diag ?? (knownBasePoints > 0 ? knownBasePoints : null);
   const finalBadgeShape = resolveBadgeForScore(badgeScore, qualityGates);
   const extrasPending = extras.assessmentStatus !== 'ASSESSED';

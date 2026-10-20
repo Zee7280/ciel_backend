@@ -7,7 +7,10 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { RateLimit, RateLimitGuard } from '../common/rate-limit/rate-limit.guard';
+import {
+  RateLimit,
+  RateLimitGuard,
+} from '../common/rate-limit/rate-limit.guard';
 import { UserRole } from '../users/enums/user-role.enum';
 import { AiService } from './ai.service';
 import { SummarizeAiDto } from './dto/summarize-ai.dto';
@@ -17,7 +20,10 @@ import { SummarizeAiDto } from './dto/summarize-ai.dto';
  * (the dedicated admin analyse routes already do, server-side, bound to a real report). Students,
  * faculty and org users must not be able to run the final analyzer with a self-written payload.
  */
-const ADMIN_ONLY_SECTIONS = new Set(['cii_v4_5_evaluation', 'fyp_ai_evaluation']);
+const ADMIN_ONLY_SECTIONS = new Set([
+  'cii_v4_5_evaluation',
+  'fyp_ai_evaluation',
+]);
 
 @Controller('ai')
 @UseGuards(JwtAuthGuard, RateLimitGuard)

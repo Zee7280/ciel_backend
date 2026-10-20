@@ -47,8 +47,9 @@ import { User } from '../users/entities/user.entity';
 import { UserRole } from '../users/enums/user-role.enum';
 import { Otp } from '../students/entities/otp.entity';
 import {
+  collectOpportunityDepartmentAllowlist,
   collectOpportunityUniversityAllowlist,
-  universityScopeError,
+  participationScopeError,
 } from '../opportunities/university-scope.util';
 import {
   attendanceCountsTowardProgress,
@@ -377,7 +378,9 @@ export class EngagementService {
   ): Promise<{ mayRegisterOthers: boolean }> {
     if (callerRole === UserRole.SUPER_ADMIN) return { mayRegisterOthers: true };
     if (callerRole !== UserRole.STUDENT) {
-      throw new ForbiddenException('Only students can register a project participation.');
+      throw new ForbiddenException(
+        'Only students can register a project participation.',
+      );
     }
     // The creator of a student-created opportunity registers their own seat on it without applying.
     const projectRow = await this.opportunityRepository.findOne({
@@ -400,7 +403,9 @@ export class EngagementService {
       }),
     ]);
     if (mine?.status === 'rejected' && !approvedApp) {
-      throw new ForbiddenException('Your application for this project was not approved.');
+      throw new ForbiddenException(
+        'Your application for this project was not approved.',
+      );
     }
     if (!mine && !approvedApp) {
       throw new ForbiddenException(
@@ -408,12 +413,10 @@ export class EngagementService {
       );
     }
     const mayRegisterOthers = mine?.isTeamLead === true || !!approvedApp;
-    if (
-      dto.studentId &&
-      dto.studentId !== callerId &&
-      !mayRegisterOthers
-    ) {
-      throw new ForbiddenException('You can only register your own participation.');
+    if (dto.studentId && dto.studentId !== callerId && !mayRegisterOthers) {
+      throw new ForbiddenException(
+        'You can only register your own participation.',
+      );
     }
     return { mayRegisterOthers };
   }
@@ -461,8 +464,14 @@ export class EngagementService {
         }
         // Registering a seat for ANOTHER student (resolved from dto.studentId or the email) is the
         // team lead's / admin's job only.
-        if (targetStudentId && targetStudentId !== studentId && !mayRegisterOthers) {
-          throw new ForbiddenException('You can only register your own participation.');
+        if (
+          targetStudentId &&
+          targetStudentId !== studentId &&
+          !mayRegisterOthers
+        ) {
+          throw new ForbiddenException(
+            'You can only register your own participation.',
+          );
         }
 
         const opportunity = await manager.findOne(Opportunity, {
@@ -686,10 +695,15 @@ export class EngagementService {
         // exist (approved / provisioned) stay editable even if the scope was narrowed later; admin
         // repairs (merge / heal) are exempt.
         if (!participation.id && callerRole !== UserRole.SUPER_ADMIN) {
-          const scopeErr = universityScopeError(
-            dto.universityName,
+          const scopeErr = participationScopeError(
+            {
+              university: dto.universityName,
+              department: registrationFields.department || dto.academicProgram,
+            },
             opportunity,
             (dto.fullName || '').trim() || 'This student',
+            // The typed row; the registered account is checked strictly right below.
+            { requireDepartment: false },
           );
           if (scopeErr) throw new BadRequestException(scopeErr);
         }
@@ -700,7 +714,8 @@ export class EngagementService {
           isTeamMemberRegistration &&
           !participation.id &&
           callerRole !== UserRole.SUPER_ADMIN &&
-          collectOpportunityUniversityAllowlist(opportunity).length > 0
+          (collectOpportunityUniversityAllowlist(opportunity).length > 0 ||
+            collectOpportunityDepartmentAllowlist(opportunity).length > 0)
         ) {
           const account = targetStudentId
             ? await manager.findOne(User, { where: { id: targetStudentId } })
@@ -710,8 +725,11 @@ export class EngagementService {
               `${dtoEmailNorm || 'This teammate'} has no CIEL student account. This opportunity is limited to selected universities, so every teammate must register on CIEL first.`,
             );
           }
-          const accountScopeErr = universityScopeError(
-            account.university || account.institution,
+          const accountScopeErr = participationScopeError(
+            {
+              university: account.university || account.institution,
+              department: account.department || account.major,
+            },
             opportunity,
             account.name || dtoEmailNorm,
           );
@@ -721,17 +739,29 @@ export class EngagementService {
         // A brand-new teammate seat needs that teammate's email confirmed by OTP for this project
         // (the report UI asks for it; this is what makes it binding). Existing seats, the caller's
         // own email and admin repairs are exempt.
-        if (isTeamMemberRegistration && !participation.id && callerRole !== UserRole.SUPER_ADMIN && dtoEmailNorm) {
-          const caller = await this.userRepository.findOne({ where: { id: studentId } });
+        if (
+          isTeamMemberRegistration &&
+          !participation.id &&
+          callerRole !== UserRole.SUPER_ADMIN &&
+          dtoEmailNorm
+        ) {
+          const caller = await this.userRepository.findOne({
+            where: { id: studentId },
+          });
           const callerEmail = this.normalizeParticipantEmail(caller?.email);
           if (callerEmail !== dtoEmailNorm) {
-            await this.assertTeammateEmailOtpVerified(dtoEmailNorm, opportunity.id);
+            await this.assertTeammateEmailOtpVerified(
+              dtoEmailNorm,
+              opportunity.id,
+            );
           }
         }
 
         // Team size cap: lead + members may not exceed the opportunity's seats (volunteers_required).
         if (isTeamMemberRegistration && !participation.id && effectiveTeamId) {
-          const cap = resolveTeamSeatCap(opportunity.timeline?.volunteers_required);
+          const cap = resolveTeamSeatCap(
+            opportunity.timeline?.volunteers_required,
+          );
           if (cap) {
             // Count teammates only (the lead is not a "team member" for this cap).
             const currentMembers = await manager.count(Participation, {
@@ -871,7 +901,8 @@ export class EngagementService {
       if (!hit || hit.siblings.length < 2) continue;
       if (!merged.has(hit.canonical.id)) {
         const all = new Map<string, AttendanceLog>();
-        for (const sib of hit.siblings) for (const l of sib.attendanceLogs ?? []) all.set(l.id, l);
+        for (const sib of hit.siblings)
+          for (const l of sib.attendanceLogs ?? []) all.set(l.id, l);
         merged.set(hit.canonical.id, Array.from(all.values()));
       }
       row.attendanceLogs = merged.get(hit.canonical.id)!;
@@ -883,7 +914,13 @@ export class EngagementService {
     for (const row of result) {
       if (emitted.has(row.id)) continue;
       const hit = groups.get(row.id);
-      const group = hit && hit.siblings.length > 1 ? [hit.canonical, ...hit.siblings.filter((x) => x.id !== hit.canonical.id)] : [row];
+      const group =
+        hit && hit.siblings.length > 1
+          ? [
+              hit.canonical,
+              ...hit.siblings.filter((x) => x.id !== hit.canonical.id),
+            ]
+          : [row];
       for (const r of group) {
         if (emitted.has(r.id)) continue;
         emitted.add(r.id);
@@ -997,11 +1034,14 @@ export class EngagementService {
    * Roster rows are one card per PERSON: drop a student's duplicate seats on the same team so the id the
    * Team Lead's card uses is the canonical seat — the same one project logs and the member's own page use.
    */
-  private dropNonCanonicalSiblingSeats(participants: Participation[]): Participation[] {
+  private dropNonCanonicalSiblingSeats(
+    participants: Participation[],
+  ): Participation[] {
     const groups = groupSiblingSeats(participants);
     return participants.filter((p) => {
       const hit = groups.get(p.id);
-      if (!hit || hit.canonical.id === p.id || hit.siblings.length < 2) return true;
+      if (!hit || hit.canonical.id === p.id || hit.siblings.length < 2)
+        return true;
       const c = hit.canonical;
       const sameTeam =
         !p.teamId ||
@@ -1516,7 +1556,9 @@ export class EngagementService {
   }
 
   /** Every attendance log across a set of seats, newest session first, deduped by id. */
-  private async attendanceLogsForSeats(seatIds: string[]): Promise<AttendanceLog[]> {
+  private async attendanceLogsForSeats(
+    seatIds: string[],
+  ): Promise<AttendanceLog[]> {
     if (!seatIds.length) return [];
     const logs = await this.attendanceLogRepository.find({
       where: { participantId: In(seatIds) },
@@ -1832,7 +1874,8 @@ export class EngagementService {
     if (projectStart && projectEnd) {
       if (!isServiceDateAllowed(dto.dateOfEngagement, opportunity?.timeline)) {
         const day =
-          toDateOnlyString(dto.dateOfEngagement) || String(dto.dateOfEngagement);
+          toDateOnlyString(dto.dateOfEngagement) ||
+          String(dto.dateOfEngagement);
         const windowMsg = `Attendance / service date must fall within the project period (${projectStart} to ${projectEnd}). Date entered: ${day}.`;
         this.recordAttendanceFailure(
           'outside_project_period',
@@ -2592,7 +2635,9 @@ export class EngagementService {
       return true;
     }
 
-    if (this.partnerActorHostsOpportunity(actorUserId, actor ?? null, opportunity)) {
+    if (
+      this.partnerActorHostsOpportunity(actorUserId, actor ?? null, opportunity)
+    ) {
       return true;
     }
 
@@ -3008,10 +3053,7 @@ export class EngagementService {
       );
     }
 
-    if (
-      log.approvalStatus === 'approved' ||
-      log.entryStatus === 'verified'
-    ) {
+    if (log.approvalStatus === 'approved' || log.entryStatus === 'verified') {
       throw new BadRequestException(
         'This entry has already been verified and can no longer be deleted directly — use the audited correction workflow.',
       );
@@ -4113,11 +4155,14 @@ export class EngagementService {
       where: { projectId: opp.id },
     });
     for (const participation of participations) {
-      const effective = await this.resolveAttendanceApproverTypeForParticipation(
-        participation,
-        opp,
-      );
-      const override = (opp.attendanceRoutingOverride || 'auto').trim().toLowerCase();
+      const effective =
+        await this.resolveAttendanceApproverTypeForParticipation(
+          participation,
+          opp,
+        );
+      const override = (opp.attendanceRoutingOverride || 'auto')
+        .trim()
+        .toLowerCase();
       const target =
         override === 'partner'
           ? 'partner'

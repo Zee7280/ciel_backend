@@ -56,13 +56,19 @@ import {
 } from './report-progress.util';
 import { setNestedProperty as setNestedPropertyUtil } from './nested-path.util';
 import { persistSection8Visibility } from './media-visibility.util';
-import { applyEvidenceAccess, type EvidenceViewerRole } from './evidence-access.util';
+import {
+  applyEvidenceAccess,
+  type EvidenceViewerRole,
+} from './evidence-access.util';
 import {
   buildReportReviewPackage,
   reviewPackageIncludesAnalysis,
   type ReportReviewPackage,
 } from './review-package.util';
-import { isPrivateCandidateOpportunity, reviewRouteForOpportunity } from '../opportunities/private-candidate.util';
+import {
+  isPrivateCandidateOpportunity,
+  reviewRouteForOpportunity,
+} from '../opportunities/private-candidate.util';
 import {
   redactCiiV45Fields,
   redactIndependentAnalysesForExternal,
@@ -91,15 +97,23 @@ import {
 import { trackingOrganizationName } from './tracking-org-name.util';
 
 /** Project-level total, or the sum of each activity's unique reach when that field is no longer on the form. */
-function distinctBeneficiariesFromSection4(section4: any): number | string | null {
+function distinctBeneficiariesFromSection4(
+  section4: any,
+): number | string | null {
   const summary =
     section4?.project_summary?.distinct_total_beneficiaries ??
     section4?.distinct_total_beneficiaries ??
     section4?.total_beneficiaries;
-  if (summary !== undefined && summary !== null && String(summary).trim() !== '') {
+  if (
+    summary !== undefined &&
+    summary !== null &&
+    String(summary).trim() !== ''
+  ) {
     return summary;
   }
-  const blocks = Array.isArray(section4?.activity_blocks) ? section4.activity_blocks : [];
+  const blocks = Array.isArray(section4?.activity_blocks)
+    ? section4.activity_blocks
+    : [];
   let sum = 0;
   let any = false;
   for (const block of blocks) {
@@ -385,7 +399,9 @@ export class StudentReportsService {
     let totalVerifiedHours = 0;
     for (const log of logs) {
       if (!this.isAttendanceLogCountedForSubmitHours(log)) continue;
-      const hours = hoursFromAttendanceLog(log as unknown as Record<string, unknown>);
+      const hours = hoursFromAttendanceLog(
+        log as unknown as Record<string, unknown>,
+      );
       if (!(hours > 0)) continue;
       const rawOwner = String(log.participantId || '');
       const ownerId = rosterById.has(rawOwner)
@@ -452,7 +468,8 @@ export class StudentReportsService {
     if (raw === 'continue') return 'draft';
     const st = String(raw || '').toLowerCase();
     if (isPrivateCandidateOpportunity(opportunity)) {
-      if (st === 'payment_pending' || st === 'submitted') return 'pending_payment';
+      if (st === 'payment_pending' || st === 'submitted')
+        return 'pending_payment';
       return raw ?? 'draft';
     }
     // University reporting fee is paused (Dr Moeed). Leftover fee-hold rows read as submitted.
@@ -937,7 +954,8 @@ export class StudentReportsService {
       },
       section4: {
         project_summary: {
-          distinct_total_beneficiaries: distinctBeneficiariesFromSection4(section4),
+          distinct_total_beneficiaries:
+            distinctBeneficiariesFromSection4(section4),
         },
       },
       // Student's own self-rated reflection competencies (not AI-scored — safe to always
@@ -1047,15 +1065,18 @@ export class StudentReportsService {
 
   /** Faculty (read-only) get the analysis report only after CIEL PK Admin has accepted the report.
    * CII internals are redacted the same way as student/partner/university detail reads. */
-  static withholdAnalysisForFacultyUntilApproved<T extends { data?: Record<string, any> }>(
-    response: T,
-  ): T {
+  static withholdAnalysisForFacultyUntilApproved<
+    T extends { data?: Record<string, any> },
+  >(response: T): T {
     if (!response?.data) return response;
-    const redacted = StudentReportsService.redactCiiV45ForExternalViewer(response);
+    const redacted =
+      StudentReportsService.redactCiiV45ForExternalViewer(response);
     if (!redacted.data) return redacted;
     return {
       ...redacted,
-      data: StudentReportsService.withholdAnalysisUntilAdminApproved(redacted.data),
+      data: StudentReportsService.withholdAnalysisUntilAdminApproved(
+        redacted.data,
+      ),
     };
   }
 
@@ -1715,9 +1736,7 @@ export class StudentReportsService {
     return {
       ...base,
       participation_type:
-        overrides.participation_type ||
-        base.participation_type ||
-        'individual',
+        overrides.participation_type || base.participation_type || 'individual',
       team_lead: teamLead,
       team_members: teamMembers,
       attendance_logs: attendanceLogs,
@@ -2455,8 +2474,9 @@ export class StudentReportsService {
     const ciiV45Lock = report.ciiV45Lock;
     const publicLevel =
       pickCiiV45DisplayBadge(report.ciiV45, ciiV45Lock) ??
-      ((report.ciiV45 as { finalBadge?: { level?: number; name?: string } })
-        ?.finalBadge ?? null);
+      (report.ciiV45 as { finalBadge?: { level?: number; name?: string } })
+        ?.finalBadge ??
+      null;
     const publishedScore = pickCiiV45DisplayScore(report.ciiV45, ciiV45Lock);
     const lockedFinal =
       publishedScore == null ? null : Math.round(publishedScore);
@@ -2571,14 +2591,18 @@ export class StudentReportsService {
     const facultyOk =
       opp.faculty_verified === true ||
       String(opp.facultyApprovalStatus || '').toLowerCase() === 'approved' ||
-      String(opp.facultyApprovalStatus || '').toLowerCase() === 'not_applicable' ||
-      String(opp.faculty_verification_status || '').toLowerCase() === 'not_required' ||
-      String(opp.faculty_verification_status || '').toLowerCase() === 'faculty_verified';
+      String(opp.facultyApprovalStatus || '').toLowerCase() ===
+        'not_applicable' ||
+      String(opp.faculty_verification_status || '').toLowerCase() ===
+        'not_required' ||
+      String(opp.faculty_verification_status || '').toLowerCase() ===
+        'faculty_verified';
     const partnerOk =
       opp.requiresPartnerApproval !== true ||
       opp.partnerVerified === true ||
       String(opp.partnerApprovalStatus || '').toLowerCase() === 'approved' ||
-      String(opp.partnerApprovalStatus || '').toLowerCase() === 'not_applicable';
+      String(opp.partnerApprovalStatus || '').toLowerCase() ===
+        'not_applicable';
     const liveOk =
       opp.admin_approved === true &&
       (opp.workflowStage === 'live' ||
@@ -2615,14 +2639,12 @@ export class StudentReportsService {
     );
   }
 
-  private participationAllowsReportStart(status: string | null | undefined): boolean {
-    return [
-      'accepted',
-      'approved',
-      'verified',
-      'paid',
-      'finalized',
-    ].includes(String(status || '').toLowerCase());
+  private participationAllowsReportStart(
+    status: string | null | undefined,
+  ): boolean {
+    return ['accepted', 'approved', 'verified', 'paid', 'finalized'].includes(
+      String(status || '').toLowerCase(),
+    );
   }
 
   /** A repair problem must never break a read/write: failures are logged and treated as "no seat". */
@@ -2832,7 +2854,9 @@ export class StudentReportsService {
         ? sup.external_partner_email
         : undefined;
     const fromSupPartner =
-      sup && typeof sup.partner_email === 'string' ? sup.partner_email : undefined;
+      sup && typeof sup.partner_email === 'string'
+        ? sup.partner_email
+        : undefined;
     const ctx = opportunity.executing_context as
       | { partner?: { official_email?: string } }
       | undefined;
@@ -2844,7 +2868,9 @@ export class StudentReportsService {
       | { official_email?: string }
       | undefined;
     const fromPo =
-      po && typeof po.official_email === 'string' ? po.official_email : undefined;
+      po && typeof po.official_email === 'string'
+        ? po.official_email
+        : undefined;
     for (const c of [fromCollab, fromSupExt, fromSupPartner, fromCtx, fromPo]) {
       const e = this.normalizeEmail(c || '');
       if (e && e.includes('@')) return e;
@@ -2866,7 +2892,9 @@ export class StudentReportsService {
   }
 
   /** After Super Admin publishes, send the student Impact Package. Faculty / student / university get the analysis report; partner / NGO get the same package without it. */
-  private async notifyReviewPackagePublished(report: StudentReport): Promise<void> {
+  private async notifyReviewPackagePublished(
+    report: StudentReport,
+  ): Promise<void> {
     if (typeof this.mailService.sendReportPackagePublished !== 'function') {
       return;
     }
@@ -2933,7 +2961,10 @@ export class StudentReportsService {
     };
 
     await send(full.student?.email || '', 'student');
-    await send(this.resolveReportFacultyEmail(full, full.opportunity), 'faculty');
+    await send(
+      this.resolveReportFacultyEmail(full, full.opportunity),
+      'faculty',
+    );
     await send(this.resolveReportPartnerEmail(full.opportunity), 'partner');
     for (const email of await this.resolveReportUniversityEmails(full)) {
       await send(email, 'university');
@@ -2963,11 +2994,14 @@ export class StudentReportsService {
       .replace(/\s+/g, ' ');
   }
 
-  private async resolveReportUniversityEmails(report: StudentReport): Promise<string[]> {
+  private async resolveReportUniversityEmails(
+    report: StudentReport,
+  ): Promise<string[]> {
     const studentUni = this.institutionKey(
       report.student?.university || report.student?.institution,
     );
-    if (!studentUni || typeof this.usersRepository.find !== 'function') return [];
+    if (!studentUni || typeof this.usersRepository.find !== 'function')
+      return [];
     const rows = await this.usersRepository.find({
       where: { role: UserRole.UNIVERSITY },
     });
@@ -2991,7 +3025,8 @@ export class StudentReportsService {
     if (!report) throw new NotFoundException('Report not found');
 
     const user = await this.usersRepository.findOne({ where: { id: userId } });
-    if (!user) throw new ForbiddenException('You do not have access to this report');
+    if (!user)
+      throw new ForbiddenException('You do not have access to this report');
 
     const projectKey = report.opportunityId || report.project_id || '';
     const enrollment = this.looksLikeUuid(projectKey)
@@ -3002,7 +3037,10 @@ export class StudentReportsService {
         )
       : null;
     const callerEmail = this.normalizeEmail(user.email);
-    const facultyEmail = this.resolveReportFacultyEmail(report, report.opportunity);
+    const facultyEmail = this.resolveReportFacultyEmail(
+      report,
+      report.opportunity,
+    );
     const partnerEmail = this.resolveReportPartnerEmail(report.opportunity);
     const isLead = report.studentId === userId;
     // A teammate is someone on the SAME team (or application) as the report owner. Any other
@@ -3062,13 +3100,17 @@ export class StudentReportsService {
     }
 
     const projectTitle =
-      report.opportunity?.title || report.project_id || 'Community Service report';
+      report.opportunity?.title ||
+      report.project_id ||
+      'Community Service report';
     const teamLeadName = report.student?.name || 'Team Lead';
 
     if (fac.includes('revision') || st === 'revision') {
       const leadEmail = this.normalizeEmail(report.student?.email);
       if (!leadEmail) {
-        throw new BadRequestException('No team lead email is saved on this report.');
+        throw new BadRequestException(
+          'No team lead email is saved on this report.',
+        );
       }
       await this.mailService.sendStudentImpactReportFacultyDecision(
         leadEmail,
@@ -3088,7 +3130,8 @@ export class StudentReportsService {
     // Every submitted report is reviewed by CIEL PK Admin (Faculty is read-only), so a reminder always
     // goes to the admin review inbox — never to a Faculty "approval" email that nobody can act on.
     {
-      const pack = (report.review_package || {}) as Partial<ReportReviewPackage>;
+      const pack = (report.review_package ||
+        {}) as Partial<ReportReviewPackage>;
       await this.mailService.sendAdminStudentReportSubmitted(
         projectTitle,
         report.opportunityId || '',
@@ -3097,16 +3140,19 @@ export class StudentReportsService {
         {
           reviewHref: pack.admin_review_href,
           analyserHref: pack.ai_analyser_href,
-          flashHref: pack.admin_doc_hrefs?.flashcard || pack.documents?.flashcard?.href,
+          flashHref:
+            pack.admin_doc_hrefs?.flashcard || pack.documents?.flashcard?.href,
           detailedHref:
-            pack.admin_doc_hrefs?.detailed_report || pack.documents?.detailed_report?.href,
+            pack.admin_doc_hrefs?.detailed_report ||
+            pack.documents?.detailed_report?.href,
           evidenceCount: pack.documents?.evidence?.count,
         },
       );
       return {
         success: true,
         sent_to: 'admin',
-        message: 'CIEL PK has been reminded that this report is awaiting review.',
+        message:
+          'CIEL PK has been reminded that this report is awaiting review.',
       };
     }
   }
@@ -3336,7 +3382,9 @@ export class StudentReportsService {
               parsedData.section11,
               parsedData.cii_index,
             )
-          : this.stripDraftCiiFromSection11(parsedData.section11)) as StudentReport['section11'],
+          : this.stripDraftCiiFromSection11(
+              parsedData.section11,
+            )) as StudentReport['section11'],
         sdg_summary_stage: 'preliminary',
         sdg_validation_status: 'pending',
       });
@@ -3348,8 +3396,7 @@ export class StudentReportsService {
     // Sync Summary Fields (Section 2)
     // Re-generate in backend to ensure consistency
     const opportunityForSummary =
-      opportunityForPolicy &&
-      opportunityForPolicy.id === report.opportunityId
+      opportunityForPolicy && opportunityForPolicy.id === report.opportunityId
         ? opportunityForPolicy
         : report.opportunityId
           ? await this.opportunitiesRepository.findOne({
@@ -3423,14 +3470,16 @@ export class StudentReportsService {
         });
       }
       if (opportunityIdFromDto) {
-        const requiredHoursPerStudent =
-          requiredHoursPerStudentFromOpportunity(opportunityForSummary);
+        const requiredHoursPerStudent = requiredHoursPerStudentFromOpportunity(
+          opportunityForSummary,
+        );
         await this.assertEveryTeamMemberMetRequiredHours(
           String(opportunityIdFromDto),
           requiredHoursPerStudent,
           reportOwnerId,
           [report.project_id, opportunityForSummary?.id].filter(
-            (id): id is string => Boolean(id && String(id) !== String(opportunityIdFromDto)),
+            (id): id is string =>
+              Boolean(id && String(id) !== String(opportunityIdFromDto)),
           ),
         );
       }
@@ -3479,7 +3528,11 @@ export class StudentReportsService {
       }
     }
 
-    if (shouldSubmit && !report.facultyId && report.section1?.faculty_supervisor_email) {
+    if (
+      shouldSubmit &&
+      !report.facultyId &&
+      report.section1?.faculty_supervisor_email
+    ) {
       await this.handleFacultyAssignment(
         report,
         report.section1.faculty_supervisor_email,
@@ -3505,7 +3558,8 @@ export class StudentReportsService {
       const student = await this.usersRepository.findOne({
         where: { id: studentId },
       });
-      const pack = (report.review_package || {}) as Partial<ReportReviewPackage>;
+      const pack = (report.review_package ||
+        {}) as Partial<ReportReviewPackage>;
       void this.mailService
         .sendAdminStudentReportSubmitted(
           projectTitle,
@@ -3515,7 +3569,9 @@ export class StudentReportsService {
           {
             reviewHref: pack.admin_review_href,
             analyserHref: pack.ai_analyser_href,
-            flashHref: pack.admin_doc_hrefs?.flashcard || pack.documents?.flashcard?.href,
+            flashHref:
+              pack.admin_doc_hrefs?.flashcard ||
+              pack.documents?.flashcard?.href,
             detailedHref:
               pack.admin_doc_hrefs?.detailed_report ||
               pack.documents?.detailed_report?.href,
@@ -3577,7 +3633,8 @@ export class StudentReportsService {
 
     let report = await this.findExistingStudentReport(
       reportOwnerId,
-      opportunityId || String(parsedData.opportunityId || parsedData.project_id || ''),
+      opportunityId ||
+        String(parsedData.opportunityId || parsedData.project_id || ''),
     );
 
     if (report) {
@@ -3838,9 +3895,7 @@ export class StudentReportsService {
     if (fromMs !== null || toMs !== null) {
       reports = reports.filter((row) => {
         const ms = new Date(
-          (row.reportSubmittedAt ??
-            row.submission_date ??
-            row.createdAt) as Date,
+          row.reportSubmittedAt ?? row.submission_date ?? row.createdAt,
         ).getTime();
         if (Number.isNaN(ms)) return false;
         if (fromMs !== null && ms < fromMs) return false;
@@ -4007,7 +4062,10 @@ export class StudentReportsService {
   async buildDetailResponse(
     report: StudentReport,
     attendanceParticipantStudentId?: string,
-    options?: { allProjectAttendance?: boolean; evidenceViewer?: EvidenceViewerRole },
+    options?: {
+      allProjectAttendance?: boolean;
+      evidenceViewer?: EvidenceViewerRole;
+    },
   ) {
     const response = await this.formatReportResponse(
       report,
@@ -4123,7 +4181,10 @@ export class StudentReportsService {
       } = out.section11 as Record<string, unknown>;
       out.section11 = rest;
     }
-    const pkg = out.review_package as Record<string, unknown> | null | undefined;
+    const pkg = out.review_package as
+      | Record<string, unknown>
+      | null
+      | undefined;
     if (pkg && typeof pkg === 'object') {
       const {
         ai_analyser_href: _h,
@@ -4443,7 +4504,10 @@ export class StudentReportsService {
       // Shared report owned by someone else on this project → viewer is a teammate.
       isLead = false;
     } else {
-      isLead = mine.isTeamLead === true || !report.studentId || report.studentId === viewerStudentId;
+      isLead =
+        mine.isTeamLead === true ||
+        !report.studentId ||
+        report.studentId === viewerStudentId;
     }
 
     const leadUser = canonicalLeadId
@@ -4451,7 +4515,9 @@ export class StudentReportsService {
       : report.student;
 
     const participationMode =
-      looksTeam || Boolean(canonicalLeadId) || (!isLead && report.studentId !== viewerStudentId)
+      looksTeam ||
+      Boolean(canonicalLeadId) ||
+      (!isLead && report.studentId !== viewerStudentId)
         ? ('team' as const)
         : ('individual' as const);
 
@@ -4600,11 +4666,13 @@ export class StudentReportsService {
             (log as { locationPin?: string | null }).locationPin ?? null,
           activity_type: log.activityType,
           description: log.description,
-          hours: hoursFromAttendanceLog(log as unknown as Record<string, unknown>),
+          hours: hoursFromAttendanceLog(
+            log as unknown as Record<string, unknown>,
+          ),
           evidence_url: log.evidenceUrl,
           entryStatus: log.entryStatus,
-          approval_status: (log as { approvalStatus?: string | null })
-            .approvalStatus ?? null,
+          approval_status:
+            (log as { approvalStatus?: string | null }).approvalStatus ?? null,
           approval_action_reason:
             (log as { approvalActionReason?: string | null })
               .approvalActionReason ?? null,
@@ -4619,16 +4687,16 @@ export class StudentReportsService {
     // Only consumed by the `allProjectAttendance` metrics override below — skip the pass over
     // attendance logs entirely on the common path (a student viewing their own report).
     const liveLoggedHours = options?.allProjectAttendance
-      ? (Array.isArray(mappedAttendanceLogs) ? mappedAttendanceLogs : []).reduce(
-          (sum, log) => {
-            const rec = log as { approval_status?: unknown; hours?: unknown };
-            if (String(rec.approval_status || '').toLowerCase() === 'rejected') {
-              return sum;
-            }
-            return sum + (Number(rec.hours) || 0);
-          },
-          0,
-        )
+      ? (Array.isArray(mappedAttendanceLogs)
+          ? mappedAttendanceLogs
+          : []
+        ).reduce((sum, log) => {
+          const rec = log as { approval_status?: unknown; hours?: unknown };
+          if (String(rec.approval_status || '').toLowerCase() === 'rejected') {
+            return sum;
+          }
+          return sum + (Number(rec.hours) || 0);
+        }, 0)
       : 0;
     const storedLeadRecord = this.asUnknownRecord(report.section1?.team_lead);
     const storedTeamLead =
@@ -4668,7 +4736,8 @@ export class StudentReportsService {
           end_date: report.opportunity?.timeline?.end_date,
           expected_hours: report.opportunity?.timeline?.expected_hours,
           participation_scope: report.opportunity?.participation_scope ?? null,
-          restricted_universities: report.opportunity?.restricted_universities ?? null,
+          restricted_universities:
+            report.opportunity?.restricted_universities ?? null,
         },
         required_hours: requiredHoursPerStudentFromOpportunity(
           report.opportunity,
@@ -4783,9 +4852,9 @@ export class StudentReportsService {
 
     const explicit = Boolean(
       options &&
-        (options.delete_report !== undefined ||
-          options.delete_attendance !== undefined ||
-          options.delete_payment !== undefined),
+      (options.delete_report !== undefined ||
+        options.delete_attendance !== undefined ||
+        options.delete_payment !== undefined),
     );
     const deleteReport = explicit ? Boolean(options?.delete_report) : true;
     const deleteAttendance = Boolean(options?.delete_attendance);
@@ -4800,7 +4869,9 @@ export class StudentReportsService {
       : [];
     const owner =
       roster.find((row) => row.studentId === report.studentId) ||
-      roster.find((row) => row.isTeamLead && row.studentId === report.studentId) ||
+      roster.find(
+        (row) => row.isTeamLead && row.studentId === report.studentId,
+      ) ||
       null;
     const teamId = (owner?.teamId || '').trim();
     const applicationId = (owner?.applicationId || '').trim();
@@ -5015,14 +5086,20 @@ export class StudentReportsService {
 
     const decisionStamp = new Date();
     const currentStatusKey = String(report.status || '').toLowerCase();
-    if (action === 'approve' && ['draft', 'continue', ''].includes(currentStatusKey)) {
+    if (
+      action === 'approve' &&
+      ['draft', 'continue', ''].includes(currentStatusKey)
+    ) {
       throw new BadRequestException(
         'This report has not been submitted yet and cannot be approved.',
       );
     }
     // A report that was sent back stays unpublishable until the student resubmits it — otherwise a
     // second click on Approve would publish the very content that was just rejected.
-    if (action === 'approve' && ['revision', 'rejected'].includes(currentStatusKey)) {
+    if (
+      action === 'approve' &&
+      ['revision', 'rejected'].includes(currentStatusKey)
+    ) {
       throw new BadRequestException(
         'This report was sent back for revision. It can be accepted only after the student resubmits it.',
       );
@@ -5054,7 +5131,11 @@ export class StudentReportsService {
           'A reason is required to close a report.',
         );
       }
-      if (currentStatusKey !== 'verified' && currentStatusKey !== 'paid' && report.admin_status !== 'approved') {
+      if (
+        currentStatusKey !== 'verified' &&
+        currentStatusKey !== 'paid' &&
+        report.admin_status !== 'approved'
+      ) {
         throw new BadRequestException(
           'Only an already-approved/published report can be closed. Use reject or unlock for a report still in review.',
         );
@@ -5257,7 +5338,11 @@ export class StudentReportsService {
     ) {
       void this.notifyStudentAdminDecision(
         report,
-        action === 'reject' ? 'revision' : action === 'close' ? 'closed' : 'unlocked',
+        action === 'reject'
+          ? 'revision'
+          : action === 'close'
+            ? 'closed'
+            : 'unlocked',
         reason,
       ).catch((err) =>
         this.logger.error(
@@ -5294,11 +5379,18 @@ export class StudentReportsService {
   }
 
   /** Retires the CII lock (kept in `ciiV45.previousLocks` for audit) so the score must be re-run. */
-  private supersedeCiiLock(report: StudentReport, reason: 'rejected' | 'unlocked') {
+  private supersedeCiiLock(
+    report: StudentReport,
+    reason: 'rejected' | 'unlocked',
+  ) {
     // The earlier CII approval (faculty_status mirrors the lock) belonged to the content that is
     // being sent back; without this reset the admin could re-publish the resubmitted report with
     // no fresh analysis.
-    if (['approved', 'verified'].includes(String(report.faculty_status || '').toLowerCase())) {
+    if (
+      ['approved', 'verified'].includes(
+        String(report.faculty_status || '').toLowerCase(),
+      )
+    ) {
       report.faculty_status = 'pending';
     }
     const lock = report.ciiV45Lock as unknown as Record<string, unknown> | null;
@@ -5309,7 +5401,11 @@ export class StudentReportsService {
       ...prev,
       previousLocks: [
         ...history,
-        { ...lock, supersededAt: new Date().toISOString(), supersededBy: reason },
+        {
+          ...lock,
+          supersededAt: new Date().toISOString(),
+          supersededBy: reason,
+        },
       ],
     } as unknown as StudentReport['ciiV45'];
     report.ciiV45Lock = null;
@@ -5324,7 +5420,9 @@ export class StudentReportsService {
       report.student ??
       (await this.usersRepository.findOne({ where: { id: report.studentId } }));
     const title =
-      report.opportunity?.title || report.project_id || 'your community service report';
+      report.opportunity?.title ||
+      report.project_id ||
+      'your community service report';
     const heading =
       kind === 'revision'
         ? 'Report needs changes'
@@ -5684,11 +5782,7 @@ export class StudentReportsService {
         opportunity?.title || report.project_id || 'Student Project';
 
       void this.mailService
-        .sendFacultyInvite(
-          email,
-          student?.name || 'A Student',
-          projectTitle,
-        )
+        .sendFacultyInvite(email, student?.name || 'A Student', projectTitle)
         .catch((error) => {
           this.logger.warn(
             `Faculty invite email failed for report ${report.id}: ${error instanceof Error ? error.message : String(error)}`,
@@ -5775,10 +5869,13 @@ export class StudentReportsService {
               start_time: log.startTime,
               end_time: log.endTime,
               location: log.organizationName,
-              location_pin: (log as { locationPin?: string | null }).locationPin ?? null,
+              location_pin:
+                (log as { locationPin?: string | null }).locationPin ?? null,
               activity_type: log.activityType,
               description: log.description,
-              hours: hoursFromAttendanceLog(log as unknown as Record<string, unknown>),
+              hours: hoursFromAttendanceLog(
+                log as unknown as Record<string, unknown>,
+              ),
               evidence_url: log.evidenceUrl,
               entryStatus: log.entryStatus,
               approval_status: (log as any).approvalStatus ?? null,

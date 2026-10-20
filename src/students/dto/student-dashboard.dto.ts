@@ -1,133 +1,133 @@
 export interface DashboardStats {
-    activeCourses: number;
-    impactPoints: number;
-    projectsCompleted: number;
-    hoursVolunteered: number;
+  activeCourses: number;
+  impactPoints: number;
+  projectsCompleted: number;
+  hoursVolunteered: number;
 }
 
 export interface ActiveProject {
-    id: string;
-    title: string;
-    category: string;
-    assignedAt: string; // ISO Date
-    status: string;
-    progress: number; // 0-100
-    /** Canonical report lifecycle for this project when a student_reports row exists (additive for clients). */
-    report_status?: string | null;
-    /** Opportunity requirement per student (`timeline.expected_hours` if set, else `requiredHours`). */
-    required_hours_per_student?: number;
-    participation_type?: string;
-    academic_integration_type?: string | null;
-    /** Team enrollments on this project sharing the same `team_id` / application group; 1 for individual. */
-    team_size?: number;
+  id: string;
+  title: string;
+  category: string;
+  assignedAt: string; // ISO Date
+  status: string;
+  progress: number; // 0-100
+  /** Canonical report lifecycle for this project when a student_reports row exists (additive for clients). */
+  report_status?: string | null;
+  /** Opportunity requirement per student (`timeline.expected_hours` if set, else `requiredHours`). */
+  required_hours_per_student?: number;
+  participation_type?: string;
+  academic_integration_type?: string | null;
+  /** Team enrollments on this project sharing the same `team_id` / application group; 1 for individual. */
+  team_size?: number;
 }
 
 export interface Deadline {
-    id: string;
-    title: string;
-    date: string; // ISO Date
-    /** urgent → red; warning → amber; any other string → default styling */
-    type: string;
+  id: string;
+  title: string;
+  date: string; // ISO Date
+  /** urgent → red; warning → amber; any other string → default styling */
+  type: string;
 }
 
 export interface DashboardOverviewSample {
-    id: string;
-    title: string;
-    hint?: string;
+  id: string;
+  title: string;
+  hint?: string;
 }
 
 export interface DashboardOverview {
-    activeProjectsCount: number;
-    pendingApprovalsCount: number;
-    reportsUnderReviewCount: number;
-    totalVerifiedHours: number;
-    completedCount: number;
-    pendingApprovalsSample: DashboardOverviewSample[];
-    reportsUnderReviewSample: DashboardOverviewSample[];
-    hoursActivityBars: number[];
-    completedActivityBars: number[];
-    completedSample?: { id: string; title: string };
-    impactHistoryBadgeCount?: number;
-    /** Reports where the student still owes fee / must submit payment proof (`partner_verified`, legacy `payment_pending`). */
-    pendingPaymentsCount?: number;
-    /** Reports with proof submitted and awaiting staff (`payment_under_review`). */
-    paymentsUnderReviewCount?: number;
-    pendingPaymentsSample?: DashboardOverviewSample[];
+  activeProjectsCount: number;
+  pendingApprovalsCount: number;
+  reportsUnderReviewCount: number;
+  totalVerifiedHours: number;
+  completedCount: number;
+  pendingApprovalsSample: DashboardOverviewSample[];
+  reportsUnderReviewSample: DashboardOverviewSample[];
+  hoursActivityBars: number[];
+  completedActivityBars: number[];
+  completedSample?: { id: string; title: string };
+  impactHistoryBadgeCount?: number;
+  /** Reports where the student still owes fee / must submit payment proof (`partner_verified`, legacy `payment_pending`). */
+  pendingPaymentsCount?: number;
+  /** Reports with proof submitted and awaiting staff (`payment_under_review`). */
+  paymentsUnderReviewCount?: number;
+  pendingPaymentsSample?: DashboardOverviewSample[];
 }
 
 export interface ContinueReportQuickAction {
-    projectId: string;
-    title: string;
-    subtitle: string;
+  projectId: string;
+  title: string;
+  subtitle: string;
 }
 
 export interface ViewPaymentQuickAction {
-    projectId: string;
-    title: string;
-    subtitle?: string;
+  projectId: string;
+  title: string;
+  subtitle?: string;
 }
 
 export interface ViewReportResultsQuickAction {
-    projectId: string;
-    title: string;
+  projectId: string;
+  title: string;
 }
 
 export interface DashboardQuickActions {
-    continueReport: ContinueReportQuickAction | null;
-    /** Deeplink to student payment flow (first project that needs fee / slip). */
-    viewPayment?: ViewPaymentQuickAction | null;
-    /** Distinct from payment: finalized report / outcome viewing. */
-    viewReportResults?: ViewReportResultsQuickAction | null;
+  continueReport: ContinueReportQuickAction | null;
+  /** Deeplink to student payment flow (first project that needs fee / slip). */
+  viewPayment?: ViewPaymentQuickAction | null;
+  /** Distinct from payment: finalized report / outcome viewing. */
+  viewReportResults?: ViewReportResultsQuickAction | null;
 }
 
 export interface DashboardNotificationItem {
-    id: string;
-    title: string;
-    detail: string;
-    tone?: 'urgent' | 'warning' | 'neutral';
-    /** Lets the UI style tiles (e.g. payment vs generic review) without parsing copy. */
-    category?: 'payment' | 'report' | 'approval' | 'deadline' | string;
+  id: string;
+  title: string;
+  detail: string;
+  tone?: 'urgent' | 'warning' | 'neutral';
+  /** Lets the UI style tiles (e.g. payment vs generic review) without parsing copy. */
+  category?: 'payment' | 'report' | 'approval' | 'deadline' | string;
 }
 
 export interface DashboardNotificationsPreview {
-    active: DashboardNotificationItem[];
-    pending: DashboardNotificationItem[];
-    underReview: DashboardNotificationItem[];
+  active: DashboardNotificationItem[];
+  pending: DashboardNotificationItem[];
+  underReview: DashboardNotificationItem[];
 }
 
 export interface DashboardPendingSummaryItem {
-    key: string;
-    title: string;
-    count: number;
-    href: string;
-    tone?: 'urgent' | 'warning' | 'neutral' | 'success';
-    description?: string;
+  key: string;
+  title: string;
+  count: number;
+  href: string;
+  tone?: 'urgent' | 'warning' | 'neutral' | 'success';
+  description?: string;
 }
 
 export interface DashboardPendingSummary {
-    total: number;
-    items: DashboardPendingSummaryItem[];
+  total: number;
+  items: DashboardPendingSummaryItem[];
 }
 
 /** Account-level analytics on the student dashboard (not tied to a single project). */
 export interface StudentDashboardAnalytics {
-    profile_completion_percent: number;
-    completed_required_fields: number;
-    total_required_fields: number;
-    /** Both profile and identity verification passed. */
-    verified: boolean;
+  profile_completion_percent: number;
+  completed_required_fields: number;
+  total_required_fields: number;
+  /** Both profile and identity verification passed. */
+  verified: boolean;
 }
 
 export interface StudentDashboardResponse {
-    success: boolean;
-    data: {
-        stats: DashboardStats;
-        activeProjects: ActiveProject[];
-        deadlines: Deadline[];
-        overview?: DashboardOverview;
-        quickActions?: DashboardQuickActions;
-        notificationsPreview?: DashboardNotificationsPreview;
-        pendingSummary?: DashboardPendingSummary;
-        student_analytics?: StudentDashboardAnalytics;
-    };
+  success: boolean;
+  data: {
+    stats: DashboardStats;
+    activeProjects: ActiveProject[];
+    deadlines: Deadline[];
+    overview?: DashboardOverview;
+    quickActions?: DashboardQuickActions;
+    notificationsPreview?: DashboardNotificationsPreview;
+    pendingSummary?: DashboardPendingSummary;
+    student_analytics?: StudentDashboardAnalytics;
+  };
 }

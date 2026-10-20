@@ -106,9 +106,7 @@ export function applyEvidenceAccess<
     visibility,
     can_view: allowed,
     can_download: canDownloadEvidence({ section8: data.section8 }),
-    message: allowed
-      ? null
-      : 'Evidence verified — not publicly available',
+    message: allowed ? null : 'Evidence verified — not publicly available',
   };
   if (allowed) {
     return { ...response, data: { ...data, evidence_access: access } };

@@ -20,7 +20,9 @@ const complete = {
   section5: { observed_change: 'Change' },
   section6: { use_resources: 'no' },
   section7: { has_partners: 'no' },
-  section8: { evidence_files: [{ url: 'https://cdn.example/a.jpg', name: 'a.jpg' }] },
+  section8: {
+    evidence_files: [{ url: 'https://cdn.example/a.jpg', name: 'a.jpg' }],
+  },
   section9: { reflection_biggest_learning: 'Learned' },
   section10: { continuation_status: 'yes' },
 };
@@ -39,7 +41,9 @@ describe('impact-package-packet.util', () => {
     const v = validateImpactPackagePacket(broken);
     expect(v.ok).toBe(false);
     expect(v.issues.some((issue) => /section 3/i.test(issue))).toBe(true);
-    expect(() => assertPacketReadyForAnalysis(broken)).toThrow(BadRequestException);
+    expect(() => assertPacketReadyForAnalysis(broken)).toThrow(
+      BadRequestException,
+    );
   });
 
   it('treats empty section objects as present so submitted shells still analyse', () => {
@@ -62,7 +66,9 @@ describe('impact-package-packet.util', () => {
 
   it('builds the canonical packet Admin/analyser consume', () => {
     const packet = buildCanonicalImpactPacket(complete as never);
-    expect(packet.schema_version).toBe(IMPACT_PACKAGE_SYNC_CONTRACT.schema_version);
+    expect(packet.schema_version).toBe(
+      IMPACT_PACKAGE_SYNC_CONTRACT.schema_version,
+    );
     expect(packet.flashcard.title).toBe('SOS Classroom Learning');
     expect(packet.detailed_report.sections).toHaveLength(9);
     expect(packet.detailed_report.sections[3]).toMatchObject({

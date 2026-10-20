@@ -9,7 +9,15 @@ export const AVATAR_LOGO_MAX_BYTES = 5 * 1024 * 1024;
 export const PROOF_MAX_BYTES = 10 * 1024 * 1024;
 
 const IMAGE_MIME = /^image\/(jpeg|jpg|png|webp|gif|heic|heif)$/i;
-const IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.heic', '.heif']);
+const IMAGE_EXT = new Set([
+  '.jpg',
+  '.jpeg',
+  '.png',
+  '.webp',
+  '.gif',
+  '.heic',
+  '.heif',
+]);
 const PROOF_EXT = new Set([...IMAGE_EXT, '.pdf']);
 
 type FilterCb = (error: Error | null, accept: boolean) => void;
@@ -23,10 +31,18 @@ function ext(file: FileLike): string {
 export const imageUploadOptions = {
   limits: { fileSize: AVATAR_LOGO_MAX_BYTES, files: 2 },
   fileFilter: (_req: unknown, file: FileLike, cb: FilterCb) => {
-    if (IMAGE_MIME.test(String(file.mimetype || '')) && IMAGE_EXT.has(ext(file))) {
+    if (
+      IMAGE_MIME.test(String(file.mimetype || '')) &&
+      IMAGE_EXT.has(ext(file))
+    ) {
       return cb(null, true);
     }
-    cb(new BadRequestException('Upload a JPG, PNG, WebP or GIF image (max 5 MB).'), false);
+    cb(
+      new BadRequestException(
+        'Upload a JPG, PNG, WebP or GIF image (max 5 MB).',
+      ),
+      false,
+    );
   },
 };
 

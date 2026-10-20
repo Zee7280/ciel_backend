@@ -28,7 +28,9 @@ describe('settings registry', () => {
     bad('STUDENT_APPLY_MAINTENANCE_MESSAGE', 'x'.repeat(501));
     expect(ok('contact_email', ' Hello@Ciel.PK ')).toBe('hello@ciel.pk');
     bad('contact_email', 'not-an-email');
-    expect(ok('ADMIN_REVIEW_EMAILS', 'a@x.co, B@x.co,a@x.co')).toBe('a@x.co,b@x.co');
+    expect(ok('ADMIN_REVIEW_EMAILS', 'a@x.co, B@x.co,a@x.co')).toBe(
+      'a@x.co,b@x.co',
+    );
     bad('ADMIN_REVIEW_EMAILS', 'a@x.co,nope');
     bad(
       'ADMIN_REVIEW_EMAILS',
@@ -39,7 +41,8 @@ describe('settings registry', () => {
   it('accepts a past date or the disabled sentinel for STUDENT_APPLY_CLOSED_BEFORE, not a future one', () => {
     const now = new Date('2026-06-01T00:00:00Z');
     expect(
-      validateSettingValue('STUDENT_APPLY_CLOSED_BEFORE', '2026-05-01', now).value,
+      validateSettingValue('STUDENT_APPLY_CLOSED_BEFORE', '2026-05-01', now)
+        .value,
     ).toBe('2026-05-01T00:00:00.000Z');
     expect(ok('STUDENT_APPLY_CLOSED_BEFORE', 'disabled')).toBe('disabled');
     expect(() =>

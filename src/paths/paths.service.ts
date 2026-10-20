@@ -432,7 +432,8 @@ export class PathsService implements OnModuleInit {
       where: { kind, entryId, email: normEmail },
       order: { createdAt: 'DESC' },
     });
-    const invite = candidates.find((i) => i.status !== 'revoked') ?? candidates[0];
+    const invite =
+      candidates.find((i) => i.status !== 'revoked') ?? candidates[0];
     if (!invite) throw new NotFoundException('Invite not found');
     if (invite.invitedByUserId !== requesterUserId) {
       throw new ForbiddenException(
@@ -1038,7 +1039,9 @@ export class PathsService implements OnModuleInit {
         'No instructor email is saved on this record. Add it in Step 1 first.',
       );
     }
-    const approval = String(entry.facultyApprovalStatus || 'pending').toLowerCase();
+    const approval = String(
+      entry.facultyApprovalStatus || 'pending',
+    ).toLowerCase();
     if (entry.status !== 'submitted' || approval !== 'pending') {
       throw new BadRequestException(
         approval === 'approved'
@@ -1055,13 +1058,17 @@ export class PathsService implements OnModuleInit {
     if (last && !Number.isNaN(last.getTime())) {
       const elapsed = Date.now() - last.getTime();
       if (elapsed < REMIND_EVERY_MS) {
-        const hoursLeft = Math.max(1, Math.ceil((REMIND_EVERY_MS - elapsed) / 3_600_000));
+        const hoursLeft = Math.max(
+          1,
+          Math.ceil((REMIND_EVERY_MS - elapsed) / 3_600_000),
+        );
         throw new BadRequestException(
           `A reminder was already emailed to ${teacherEmail} in the last 24 hours. You can send another in about ${hoursLeft} hour${hoursLeft === 1 ? '' : 's'}.`,
         );
       }
     }
-    const studentName = entry.studentInfo?.studentName?.trim() || 'Your student';
+    const studentName =
+      entry.studentInfo?.studentName?.trim() || 'Your student';
     const title = entry.projectTitle || entry.course || 'Untitled coursework';
     const ok = await this.mailService.sendCourseworkReviewReminder(
       teacherEmail,
@@ -1076,7 +1083,10 @@ export class PathsService implements OnModuleInit {
       );
     }
     const sentAt = new Date();
-    await this.courseProjectRepo.update({ id: entry.id }, { facultyReminderSentAt: sentAt });
+    await this.courseProjectRepo.update(
+      { id: entry.id },
+      { facultyReminderSentAt: sentAt },
+    );
     return { sent: true, to: teacherEmail, sentAt };
   }
 
@@ -1292,10 +1302,7 @@ export class PathsService implements OnModuleInit {
         '__no_university__',
       cielpk: () => '__ciel__',
     };
-    const scopeLabel: Record<
-      Level,
-      (group: CourseProjectEntry[]) => string
-    > = {
+    const scopeLabel: Record<Level, (group: CourseProjectEntry[]) => string> = {
       faculty: (group) =>
         `${group[0]?.studentInfo?.teacherName || 'Faculty'} live`,
       university: (group) =>
@@ -1303,10 +1310,11 @@ export class PathsService implements OnModuleInit {
       cielpk: () => 'CIEL PK live',
     };
 
-    const liveByLevel: Record<
-      Level,
-      Map<string, CourseworkRibbonEntry>
-    > = { faculty: new Map(), university: new Map(), cielpk: new Map() };
+    const liveByLevel: Record<Level, Map<string, CourseworkRibbonEntry>> = {
+      faculty: new Map(),
+      university: new Map(),
+      cielpk: new Map(),
+    };
 
     (['faculty', 'university', 'cielpk'] as const).forEach((level) => {
       const groups = new Map<string, CourseProjectEntry[]>();

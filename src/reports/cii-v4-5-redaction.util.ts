@@ -115,8 +115,12 @@ export function redactCiiV45Fields(
       }))
     : [];
 
-  const extraMileUplift = ciiV45.extraMileUplift as { total?: unknown } | undefined;
-  const integrityPenalty = ciiV45.integrityPenalty as { points?: unknown } | undefined;
+  const extraMileUplift = ciiV45.extraMileUplift as
+    | { total?: unknown }
+    | undefined;
+  const integrityPenalty = ciiV45.integrityPenalty as
+    | { points?: unknown }
+    | undefined;
 
   return {
     ciiV45: {

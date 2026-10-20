@@ -41,12 +41,17 @@ export function setNestedProperty(
   for (let i = 0; i < keys.length - 1; i++) {
     const { name, index } = parse(keys[i]);
     if (index !== null) {
-      if (!own(current, name) || !Array.isArray(current[name])) current[name] = [];
+      if (!own(current, name) || !Array.isArray(current[name]))
+        current[name] = [];
       const arr = current[name] as any[];
       if (!arr[index] || typeof arr[index] !== 'object') arr[index] = {};
       current = arr[index];
     } else {
-      if (!own(current, name) || !current[name] || typeof current[name] !== 'object') {
+      if (
+        !own(current, name) ||
+        !current[name] ||
+        typeof current[name] !== 'object'
+      ) {
         current[name] = {};
       }
       current = current[name];
@@ -55,7 +60,8 @@ export function setNestedProperty(
 
   const { name, index } = parse(keys[keys.length - 1]);
   if (index !== null) {
-    if (!own(current, name) || !Array.isArray(current[name])) current[name] = [];
+    if (!own(current, name) || !Array.isArray(current[name]))
+      current[name] = [];
     current[name][index] = value;
   } else {
     current[name] = value;

@@ -33,7 +33,9 @@ function asRecord(value: unknown): UnknownRecord {
  * contact details (WhatsApp numbers) that carry no evaluative signal — same "strip what the model
  * doesn't need" rule as buildCielPkAiEvaluationPayload applies for Community Service reports.
  */
-export function buildFypAiEvaluationPayload(entry: FypEntry): FypAiEvaluationPayload {
+export function buildFypAiEvaluationPayload(
+  entry: FypEntry,
+): FypAiEvaluationPayload {
   const projectInfo = asRecord(entry.projectInfo);
   const teamMembers = Array.isArray(projectInfo.teamMembers)
     ? (projectInfo.teamMembers as unknown[]).map((m) => {
@@ -80,7 +82,8 @@ export function buildFypAiEvaluationPayload(entry: FypEntry): FypAiEvaluationPay
     section_summaries: asRecord(entry.sectionSummaries),
     system_validation: {
       sensitive_fields_removed: true,
-      has_section_summaries: Object.keys(asRecord(entry.sectionSummaries)).length > 0,
+      has_section_summaries:
+        Object.keys(asRecord(entry.sectionSummaries)).length > 0,
     },
   };
 }

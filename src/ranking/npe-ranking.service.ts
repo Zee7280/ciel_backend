@@ -44,7 +44,12 @@ import {
 import { npeCalculate, npeRankPool } from './npe-ranking.scoring';
 import { NpeStudioPublication } from './entities/npe-studio-publication.entity';
 import { buildNpeAiPayload } from './npe-package-payload.util';
-import { STUDIO_LENSES, buildStudioFacets, type StudioCandidate, type StudioLens } from './npe-studio.util';
+import {
+  STUDIO_LENSES,
+  buildStudioFacets,
+  type StudioCandidate,
+  type StudioLens,
+} from './npe-studio.util';
 
 export type NpeActor = {
   userId: string;
@@ -73,14 +78,20 @@ export function describeAiFailure(err: unknown): string {
   if (err instanceof HttpException) {
     const body = err.getResponse();
     if (typeof body === 'string' && body.trim()) return body.trim();
-    const rec = body && typeof body === 'object' ? (body as Record<string, unknown>) : null;
+    const rec =
+      body && typeof body === 'object'
+        ? (body as Record<string, unknown>)
+        : null;
     for (const key of ['error', 'message']) {
       const value = rec?.[key];
       if (typeof value === 'string' && value.trim()) return value.trim();
-      if (Array.isArray(value) && value.length) return value.map(String).join('; ');
+      if (Array.isArray(value) && value.length)
+        return value.map(String).join('; ');
     }
   }
-  return err instanceof Error && err.message ? err.message : 'Ranking AI call failed.';
+  return err instanceof Error && err.message
+    ? err.message
+    : 'Ranking AI call failed.';
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -88,7 +99,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     ? (value as Record<string, unknown>)
     : null;
 }
-
 
 @Injectable()
 export class NpeRankingService {
@@ -119,7 +129,9 @@ export class NpeRankingService {
   scopeFor(actor: NpeActor): string {
     if (actor.role === 'ciel_admin') return 'national';
     if (!actor.organizationId) {
-      throw new ForbiddenException('University ranking requires an organization.');
+      throw new ForbiddenException(
+        'University ranking requires an organization.',
+      );
     }
     return `university:${actor.organizationId}`;
   }
@@ -168,7 +180,10 @@ export class NpeRankingService {
   ) {
     // A client built against an older weighting may still send its version; accept any supported
     // one. A new run is always created under the current version, a continued run keeps its own.
-    if (body.rubricVersion && !isSupportedNpeRubricVersion(body.rubricVersion)) {
+    if (
+      body.rubricVersion &&
+      !isSupportedNpeRubricVersion(body.rubricVersion)
+    ) {
       throw new BadRequestException('Unsupported ranking rubric version.');
     }
     const requested = body.projects || [];
@@ -177,7 +192,8 @@ export class NpeRankingService {
     }
     const pool = await this.poolReports(actor);
     const byId = new Map(pool.map((r) => [r.id, r]));
-    const eligible: Array<{ report: StudentReport; pkg: NpePackageRecord }> = [];
+    const eligible: Array<{ report: StudentReport; pkg: NpePackageRecord }> =
+      [];
     for (const item of requested) {
       const report = byId.get(item.id);
       if (!report) {
@@ -205,7 +221,9 @@ export class NpeRankingService {
       }
       run.packageVersions = {
         ...(run.packageVersions || {}),
-        ...Object.fromEntries(eligible.map((row) => [row.report.id, row.pkg.version])),
+        ...Object.fromEntries(
+          eligible.map((row) => [row.report.id, row.pkg.version]),
+        ),
       };
       await this.runs.save(run);
     } else {
@@ -268,7 +286,9 @@ export class NpeRankingService {
               model: 'npe_ranking_evaluation',
               reusedFromRun: prior.runId,
               payloadVersion: NPE_PAYLOAD_VERSION,
-              evidenceRead: (prior.audit as { evidenceRead?: unknown } | null)?.evidenceRead ?? null,
+              evidenceRead:
+                (prior.audit as { evidenceRead?: unknown } | null)
+                  ?.evidenceRead ?? null,
             },
           }),
         );
@@ -278,13 +298,20 @@ export class NpeRankingService {
 
     const started = Date.now();
     let cursor = 0;
-    const readOne = async (row: { report: StudentReport; pkg: NpePackageRecord }) => {
+    const readOne = async (row: {
+      report: StudentReport;
+      pkg: NpePackageRecord;
+    }) => {
       const evaluation = await this.evaluateOne(row.report, row.pkg);
       const score =
         evaluation.readComplete && !evaluation.flags.length
           ? (() => {
               try {
-                return npeCalculate(row.pkg.cii ?? 0, evaluation.criteria, run.rubricVersion);
+                return npeCalculate(
+                  row.pkg.cii ?? 0,
+                  evaluation.criteria,
+                  run.rubricVersion,
+                );
               } catch {
                 return null;
               }
@@ -321,7 +348,10 @@ export class NpeRankingService {
       }
     };
     await Promise.all(
-      Array.from({ length: Math.min(NPE_ANALYZE_CONCURRENCY, pending.length) }, worker),
+      Array.from(
+        { length: Math.min(NPE_ANALYZE_CONCURRENCY, pending.length) },
+        worker,
+      ),
     );
 
     return this.serializeRun(run.id, actor);
@@ -344,7 +374,9 @@ export class NpeRankingService {
       .innerJoin('e.run', 'r')
       // The AI read is identical across supported rubric versions (only the weights differ), so a
       // read made under any of them is reused and simply re-scored under the new run's version.
-      .where('r.rubricVersion IN (:...rvs)', { rvs: [...NPE_SUPPORTED_RUBRIC_VERSIONS] })
+      .where('r.rubricVersion IN (:...rvs)', {
+        rvs: [...NPE_SUPPORTED_RUBRIC_VERSIONS],
+      })
       .andWhere('e.reportId IN (:...ids)', { ids: wanted.map((w) => w.id) })
       .andWhere('e.readComplete = true')
       .orderBy('e.createdAt', 'DESC')
@@ -354,7 +386,11 @@ export class NpeRankingService {
       if (row.packageVersion !== versionById.get(row.reportId)) continue;
       if ((row.flags || []).length) continue;
       // Only reads made from the complete package (current payload version) are re-used.
-      if ((row.audit as { payloadVersion?: number } | null)?.payloadVersion !== NPE_PAYLOAD_VERSION) continue;
+      if (
+        (row.audit as { payloadVersion?: number } | null)?.payloadVersion !==
+        NPE_PAYLOAD_VERSION
+      )
+        continue;
       out.set(row.reportId, row);
     }
     return out;
@@ -370,15 +406,21 @@ export class NpeRankingService {
     const scope = this.scopeFor(actor);
     const run = runId
       ? await this.requireRun(runId, actor)
-      : await this.runs.findOne({ where: { scope }, order: { createdAt: 'DESC' } });
+      : await this.runs.findOne({
+          where: { scope },
+          order: { createdAt: 'DESC' },
+        });
     const { rows, rubric } = await this.buildRows(run, actor);
-    const rankedRows = rows.filter((r) => r.status === 'Ranked' && r.rank != null);
+    const rankedRows = rows.filter(
+      (r) => r.status === 'Ranked' && r.rank != null,
+    );
     const reviewItems = run
       ? this.reviewItems(rows, rankedRows, run.reviewClearances || {})
       : [];
     const pendingReviews = reviewItems.filter(
       (item) =>
-        (item.type === 'Validation' || item.type === 'Close comparison') && !item.cleared,
+        (item.type === 'Validation' || item.type === 'Close comparison') &&
+        !item.cleared,
     ).length;
     const candidates: StudioCandidate[] = rows.map((r) => ({
       id: r.id,
@@ -414,8 +456,12 @@ export class NpeRankingService {
       candidates,
       pendingReviews,
       packageCount: rows.length,
-      eligibleCount: rows.filter((r) => r.status === 'Ready' || r.status === 'Ranked').length,
-      heldCount: rows.filter((r) => r.status === 'Review' || r.status === 'Excluded').length,
+      eligibleCount: rows.filter(
+        (r) => r.status === 'Ready' || r.status === 'Ranked',
+      ).length,
+      heldCount: rows.filter(
+        (r) => r.status === 'Review' || r.status === 'Excluded',
+      ).length,
     };
   }
 
@@ -426,7 +472,8 @@ export class NpeRankingService {
    */
   async studioRankingsForReports(reportIds: string[], scopes: string[]) {
     const out = new Map<string, Array<Record<string, unknown>>>();
-    if (!this.studioPublications || !reportIds.length || !scopes.length) return out;
+    if (!this.studioPublications || !reportIds.length || !scopes.length)
+      return out;
     const wanted = new Set(reportIds);
     const rows = await this.studioPublications.find({
       where: { scope: In(scopes) },
@@ -471,7 +518,9 @@ export class NpeRankingService {
     if (actor.role === 'ciel_admin') return;
     const pool = await this.poolReports(actor);
     if (!pool.some((r) => r.id === reportId)) {
-      throw new ForbiddenException('This project is outside your ranking scope.');
+      throw new ForbiddenException(
+        'This project is outside your ranking scope.',
+      );
     }
   }
 
@@ -508,7 +557,9 @@ export class NpeRankingService {
         `${unread} eligible package(s) have not been read yet, or changed since they were read. Run the analysis again before publishing, so the snapshot ranks every eligible project.`,
       );
     }
-    const pending = (payload.reviewItems as Array<{ id: string; type: string }>).filter(
+    const pending = (
+      payload.reviewItems as Array<{ id: string; type: string }>
+    ).filter(
       (item) =>
         (item.type === 'Validation' || item.type === 'Close comparison') &&
         !run.reviewClearances?.[item.id],
@@ -551,7 +602,9 @@ export class NpeRankingService {
         })),
       );
     } catch (err) {
-      this.logger.warn(`Badge sync after publish failed: ${(err as Error).message}`);
+      this.logger.warn(
+        `Badge sync after publish failed: ${(err as Error).message}`,
+      );
     }
     return { status: 'published', snapshotId: snapshot.id };
   }
@@ -579,7 +632,9 @@ export class NpeRankingService {
     ).catch(() => new Map<string, Array<Record<string, unknown>>>());
     return cards.map((rawCard) => {
       const studioRankings = studio.get(rawCard.id);
-      const card = studioRankings?.length ? { ...rawCard, studioRankings } : rawCard;
+      const card = studioRankings?.length
+        ? { ...rawCard, studioRankings }
+        : rawCard;
       const nat = nationalMap.get(card.id);
       const uni = uniMap.get(card.id);
       if (!nat && !uni) return card;
@@ -591,7 +646,10 @@ export class NpeRankingService {
           excellenceScore: nat?.excellenceScore ?? uni!.excellenceScore,
           nationalRank: nat?.rank ?? null,
           universityRank: uni?.rank ?? null,
-          publishedAt: (nat ? national!.publishedAt : university!.publishedAt).toISOString(),
+          publishedAt: (nat
+            ? national!.publishedAt
+            : university!.publishedAt
+          ).toISOString(),
         },
       };
     });
@@ -623,12 +681,19 @@ export class NpeRankingService {
     const cards =
       actor.role === 'ciel_admin'
         ? await this.communityAward.listForAdmin()
-        : await this.communityAward.listForUniversity(actor.organizationId || '');
+        : await this.communityAward.listForUniversity(
+            actor.organizationId || '',
+          );
     const ids = cards.map((c) => c.id);
     if (!ids.length) return [];
     const rows = await this.reports.find({
       where: { id: In(ids) },
-      relations: ['student', 'faculty', 'opportunity', 'opportunity.organization'],
+      relations: [
+        'student',
+        'faculty',
+        'opportunity',
+        'opportunity.organization',
+      ],
     });
     // The ranking compares only projects whose CII has been approved AND locked. Unlocked packages
     // would just sit in the review queue as noise and can never be ranked.
@@ -663,27 +728,42 @@ export class NpeRankingService {
     ]);
     const seatsByProject = new Map<string, Participation[]>();
     for (const seat of seats) {
-      seatsByProject.set(seat.projectId, [...(seatsByProject.get(seat.projectId) ?? []), seat]);
+      seatsByProject.set(seat.projectId, [
+        ...(seatsByProject.get(seat.projectId) ?? []),
+        seat,
+      ]);
     }
     const logsByProject = new Map<string, AttendanceLog[]>();
     for (const log of logs) {
-      logsByProject.set(log.projectId, [...(logsByProject.get(log.projectId) ?? []), log]);
+      logsByProject.set(log.projectId, [
+        ...(logsByProject.get(log.projectId) ?? []),
+        log,
+      ]);
     }
 
     for (const report of reports) {
-      const projectId = String(report.opportunityId || report.project_id || '').trim();
+      const projectId = String(
+        report.opportunityId || report.project_id || '',
+      ).trim();
       const projectSeats = seatsByProject.get(projectId) ?? [];
       if (!projectSeats.length) continue;
       const groups = groupSiblingSeats(projectSeats);
-      const canonicalOf = (seatId: string) => groups.get(seatId)?.canonical ?? null;
+      const canonicalOf = (seatId: string) =>
+        groups.get(seatId)?.canonical ?? null;
       const mine =
         projectSeats.find((p) => p.studentId === report.studentId) ?? null;
       // Scope to the author's team (same rule as the report dossier); a solo author is judged alone.
       let scoped = projectSeats;
-      if (mine?.teamId) scoped = projectSeats.filter((p) => p.teamId === mine.teamId);
-      else if (mine?.applicationId) scoped = projectSeats.filter((p) => p.applicationId === mine.applicationId);
+      if (mine?.teamId)
+        scoped = projectSeats.filter((p) => p.teamId === mine.teamId);
+      else if (mine?.applicationId)
+        scoped = projectSeats.filter(
+          (p) => p.applicationId === mine.applicationId,
+        );
       else if (mine) scoped = [mine];
-      const canonicalSeats = scoped.filter((p) => canonicalOf(p.id)?.id === p.id);
+      const canonicalSeats = scoped.filter(
+        (p) => canonicalOf(p.id)?.id === p.id,
+      );
       if (!canonicalSeats.length) continue;
       const seatIds = new Set(scoped.map((p) => p.id));
 
@@ -703,7 +783,11 @@ export class NpeRankingService {
         });
       const hoursFor = (seatId: string) =>
         liveLogs
-          .filter((l) => l.participantId === seatId && String(l.approval_status || '').toLowerCase() !== 'rejected')
+          .filter(
+            (l) =>
+              l.participantId === seatId &&
+              String(l.approval_status || '').toLowerCase() !== 'rejected',
+          )
           .reduce((sum, l) => sum + l.hours, 0);
       const toPerson = (p: Participation) => ({
         id: p.id,
@@ -720,16 +804,22 @@ export class NpeRankingService {
         canonicalSeats[0];
       const members = canonicalSeats.filter((p) => p.id !== leadSeat.id);
       const stored =
-        report.section1 && typeof report.section1 === 'object' && !Array.isArray(report.section1)
+        report.section1 &&
+        typeof report.section1 === 'object' &&
+        !Array.isArray(report.section1)
           ? (report.section1 as Record<string, unknown>)
           : {};
       const storedLead =
-        stored.team_lead && typeof stored.team_lead === 'object' && !Array.isArray(stored.team_lead)
+        stored.team_lead &&
+        typeof stored.team_lead === 'object' &&
+        !Array.isArray(stored.team_lead)
           ? (stored.team_lead as Record<string, unknown>)
           : {};
       report.section1 = {
         ...stored,
-        participation_type: members.length ? 'team' : stored.participation_type || 'individual',
+        participation_type: members.length
+          ? 'team'
+          : stored.participation_type || 'individual',
         team_lead: { ...storedLead, ...toPerson(leadSeat) },
         team_members: members.map(toPerson),
         attendance_logs: liveLogs,
@@ -773,7 +863,9 @@ export class NpeRankingService {
           readComplete: false,
           flags: [
             ...npeRanking.flags,
-            ...unread.map((file) => `Could not read ${file.name}: ${file.reason}`),
+            ...unread.map(
+              (file) => `Could not read ${file.name}: ${file.reason}`,
+            ),
           ],
           evidenceRead: evidenceInspection ?? null,
         };
@@ -786,7 +878,9 @@ export class NpeRankingService {
         evidenceRead: evidenceInspection ?? null,
       };
     } catch (err) {
-      return unreadNpeEvaluation(report.id, pkg.version, [describeAiFailure(err)]);
+      return unreadNpeEvaluation(report.id, pkg.version, [
+        describeAiFailure(err),
+      ]);
     }
   }
 
@@ -802,11 +896,17 @@ export class NpeRankingService {
   ) {
     const rubric = run?.rubricVersion || NPE_RUBRIC_VERSION;
     const reports = await this.poolReports(actor);
-    const stored = run ? await this.evaluations.find({ where: { runId: run.id } }) : [];
+    const stored = run
+      ? await this.evaluations.find({ where: { runId: run.id } })
+      : [];
     const evalById = new Map(stored.map((row) => [row.reportId, row]));
-    const liveById = new Map((liveResults || []).map((row) => [row.projectId, row]));
+    const liveById = new Map(
+      (liveResults || []).map((row) => [row.projectId, row]),
+    );
 
-    const facetsById = new Map(reports.map((r) => [r.id, buildStudioFacets(r)]));
+    const facetsById = new Map(
+      reports.map((r) => [r.id, buildStudioFacets(r)]),
+    );
     const computed = reports.map((report) => {
       const pkg = buildNpePackageRecord(report);
       const gate = gateNpePackage(pkg);
@@ -814,7 +914,9 @@ export class NpeRankingService {
       // A read only counts for the package version it was made from: if the student's report changed
       // (re-submitted / re-approved) since, the old judgment must not rank the new content.
       const storedEval = evalById.get(report.id);
-      const staleRead = Boolean(storedEval && storedEval.packageVersion !== pkg.version);
+      const staleRead = Boolean(
+        storedEval && storedEval.packageVersion !== pkg.version,
+      );
       const saved = staleRead ? undefined : storedEval;
       const evaluation: NpeAiEvaluation | null = live
         ? live
@@ -832,7 +934,12 @@ export class NpeRankingService {
           : null;
       const evidenceRead =
         evaluation?.evidenceRead ??
-        ((saved?.audit as { evidenceRead?: NpeAiEvaluation['evidenceRead'] } | null)?.evidenceRead ?? null);
+        (
+          saved?.audit as {
+            evidenceRead?: NpeAiEvaluation['evidenceRead'];
+          } | null
+        )?.evidenceRead ??
+        null;
       let status = gate.status;
       let reason = gate.reason;
       if (status === 'Eligible' && evaluation) {
@@ -856,7 +963,8 @@ export class NpeRankingService {
           score = npeCalculate(pkg.cii, evaluation.criteria, rubric);
         } catch {
           status = 'Review';
-          reason = 'AI returned incomplete criterion scores. Held without guessing marks.';
+          reason =
+            'AI returned incomplete criterion scores. Held without guessing marks.';
         }
       } else if (saved?.scoreBreakdown && status === 'Ranked') {
         score = saved.scoreBreakdown as ReturnType<typeof npeCalculate>;
@@ -916,8 +1024,14 @@ export class NpeRankingService {
     if (!run) throw new NotFoundException('Ranking run not found.');
     const { rows } = await this.buildRows(run, actor, liveResults);
 
-    const rankedRows = rows.filter((r) => r.status === 'Ranked' && r.rank != null);
-    const reviewItems = this.reviewItems(rows, rankedRows, run.reviewClearances || {});
+    const rankedRows = rows.filter(
+      (r) => r.status === 'Ranked' && r.rank != null,
+    );
+    const reviewItems = this.reviewItems(
+      rows,
+      rankedRows,
+      run.reviewClearances || {},
+    );
 
     const progress = {
       total: rows.filter((r) => r.status !== 'Excluded').length,
@@ -941,11 +1055,29 @@ export class NpeRankingService {
   }
 
   private reviewItems(
-    rows: Array<{ id: string; title: string; status: string; reason: string; rank: number | null; score: number | null }>,
-    ranked: Array<{ id: string; title: string; rank: number | null; score: number | null }>,
+    rows: Array<{
+      id: string;
+      title: string;
+      status: string;
+      reason: string;
+      rank: number | null;
+      score: number | null;
+    }>,
+    ranked: Array<{
+      id: string;
+      title: string;
+      rank: number | null;
+      score: number | null;
+    }>,
     clearances: Record<string, boolean>,
   ) {
-    const out: Array<{ id: string; title: string; reason: string; type: string; cleared: boolean }> = [];
+    const out: Array<{
+      id: string;
+      title: string;
+      reason: string;
+      type: string;
+      cleared: boolean;
+    }> = [];
     for (const row of rows) {
       if (row.status === 'Review' || row.status === 'Excluded') {
         out.push({
@@ -966,7 +1098,8 @@ export class NpeRankingService {
         out.push({
           id,
           title: row.title,
-          reason: 'Leading project: blinded second review required before publication.',
+          reason:
+            'Leading project: blinded second review required before publication.',
           type: 'Validation',
           cleared: Boolean(clearances[id]),
         });
@@ -975,12 +1108,17 @@ export class NpeRankingService {
     for (let i = 0; i < ordered.length - 1; i++) {
       const a = ordered[i];
       const b = ordered[i + 1];
-      if (a.score != null && b.score != null && Math.abs(a.score - b.score) <= 2) {
+      if (
+        a.score != null &&
+        b.score != null &&
+        Math.abs(a.score - b.score) <= 2
+      ) {
         const id = `${a.id}:${b.id}:close`;
         out.push({
           id,
           title: `${a.title} ↔ ${b.title}`,
-          reason: 'Scores within 2 points. Validate source evidence and scoring consistency.',
+          reason:
+            'Scores within 2 points. Validate source evidence and scoring consistency.',
           type: 'Close comparison',
           cleared: Boolean(clearances[id]),
         });

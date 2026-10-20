@@ -8,11 +8,7 @@ import { MaintenanceException } from '../common/guards/maintenance.guard';
 import { InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'crypto';
 import { Request } from 'express';
-import {
-  Brackets,
-  Repository,
-  SelectQueryBuilder,
-} from 'typeorm';
+import { Brackets, Repository, SelectQueryBuilder } from 'typeorm';
 import { IssueLog } from './entities/issue-log.entity';
 
 type RequestUser = {
@@ -186,8 +182,13 @@ export class IssueLogsService {
   }
 
   /** Marks logs handled (idempotent); returns how many rows changed. */
-  async resolve(ids: string[], adminId: string | null): Promise<{ resolved: number }> {
-    const clean = [...new Set((ids || []).map((x) => String(x).trim()).filter(Boolean))].slice(0, 500);
+  async resolve(
+    ids: string[],
+    adminId: string | null,
+  ): Promise<{ resolved: number }> {
+    const clean = [
+      ...new Set((ids || []).map((x) => String(x).trim()).filter(Boolean)),
+    ].slice(0, 500);
     if (!clean.length) return { resolved: 0 };
     const res = await this.issueLogRepository
       .createQueryBuilder()
@@ -264,7 +265,8 @@ export class IssueLogsService {
     }
     const resolvedFilter = (query.resolved || '').trim().toLowerCase();
     if (resolvedFilter === 'open') qb.andWhere('log.resolvedAt IS NULL');
-    else if (resolvedFilter === 'resolved') qb.andWhere('log.resolvedAt IS NOT NULL');
+    else if (resolvedFilter === 'resolved')
+      qb.andWhere('log.resolvedAt IS NOT NULL');
     if (query.dateFrom && query.dateTo) {
       qb.andWhere('log.createdAt BETWEEN :dateFrom AND :dateTo', {
         dateFrom: new Date(query.dateFrom),
@@ -381,9 +383,7 @@ export class IssueLogsService {
       protocol: typeof r.protocol === 'string' ? r.protocol : null,
       hostname: typeof r.hostname === 'string' ? r.hostname : null,
       host:
-        typeof request.headers?.host === 'string'
-          ? request.headers.host
-          : null,
+        typeof request.headers?.host === 'string' ? request.headers.host : null,
     };
   }
 

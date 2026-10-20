@@ -1,5 +1,8 @@
 import { Module } from '@nestjs/common';
-import { PartnersController, PartnerAliasController } from './partners.controller';
+import {
+  PartnersController,
+  PartnerAliasController,
+} from './partners.controller';
 import { UsersModule } from '../users/users.module';
 import { OrganizationsModule } from '../organizations/organizations.module';
 import { ReportsModule } from '../reports/reports.module';
@@ -12,18 +15,18 @@ import { FacultyUniversityScopeModule } from '../faculty-university-scope/facult
 import { FacultyModule } from '../faculty/faculty.module';
 
 @Module({
-    imports: [
-        UsersModule,
-        OrganizationsModule,
-        ReportsModule,
-        OpportunitiesModule,
-        StudentsModule,
-        OrganizationMembershipModule,
-        CommunityAwardModule,
-        NpeRankingModule,
-        FacultyUniversityScopeModule,
-        FacultyModule,
-    ],
-    controllers: [PartnersController, PartnerAliasController],
+  imports: [
+    UsersModule,
+    OrganizationsModule,
+    ReportsModule,
+    OpportunitiesModule,
+    StudentsModule,
+    OrganizationMembershipModule,
+    CommunityAwardModule,
+    NpeRankingModule,
+    FacultyUniversityScopeModule,
+    FacultyModule,
+  ],
+  controllers: [PartnersController, PartnerAliasController],
 })
-export class PartnersModule { }
+export class PartnersModule {}

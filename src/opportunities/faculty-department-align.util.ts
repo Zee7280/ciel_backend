@@ -10,7 +10,9 @@ type Json = Record<string, unknown>;
 const MAX_DEPTH = 8;
 
 function isObj(v: unknown): v is Json {
-  return !!v && typeof v === 'object' && !Array.isArray(v) && !(v instanceof Date);
+  return (
+    !!v && typeof v === 'object' && !Array.isArray(v) && !(v instanceof Date)
+  );
 }
 
 function normEmail(v: unknown): string {
@@ -18,7 +20,11 @@ function normEmail(v: unknown): string {
 }
 
 /** Objects in a response that carry a faculty email + a department we may need to correct. */
-function visit(node: unknown, depth: number, onTarget: (email: string, set: (dept: string) => void) => void) {
+function visit(
+  node: unknown,
+  depth: number,
+  onTarget: (email: string, set: (dept: string) => void) => void,
+) {
   if (depth > MAX_DEPTH || !node || typeof node !== 'object') return;
   if (Array.isArray(node)) {
     for (const item of node) visit(item, depth + 1, onTarget);
@@ -55,7 +61,10 @@ export function collectFacultyEmails(body: unknown): string[] {
 }
 
 /** Mutates `body` in place; only emails present in `directory` (registered faculty WITH a profile department) change. */
-export function applyFacultyDepartments(body: unknown, directory: Map<string, string>): void {
+export function applyFacultyDepartments(
+  body: unknown,
+  directory: Map<string, string>,
+): void {
   if (!directory.size) return;
   visit(body, 0, (email, set) => {
     const dept = directory.get(email);
@@ -83,11 +92,17 @@ export async function loadFacultyDepartmentDirectory(
 }
 
 /** Best-effort: a lookup failure must never break the response. */
-export async function alignFacultyDepartments(body: unknown, ds: Pick<DataSource, 'query'>): Promise<unknown> {
+export async function alignFacultyDepartments(
+  body: unknown,
+  ds: Pick<DataSource, 'query'>,
+): Promise<unknown> {
   try {
     const emails = collectFacultyEmails(body);
     if (!emails.length) return body;
-    applyFacultyDepartments(body, await loadFacultyDepartmentDirectory(ds, emails));
+    applyFacultyDepartments(
+      body,
+      await loadFacultyDepartmentDirectory(ds, emails),
+    );
   } catch {
     /* keep the stored value */
   }

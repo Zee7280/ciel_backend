@@ -127,14 +127,18 @@ export function buildCanonicalImpactPacket(
     report_id: String(report.id || ''),
     flashcard: {
       title,
-      project_id: String(report.opportunityId || report.project_id || report.id || ''),
+      project_id: String(
+        report.opportunityId || report.project_id || report.id || '',
+      ),
     },
     detailed_report: {
       sections: IMPACT_PACKAGE_CONTENT_SOURCES.map((src) => ({
         id: src.id,
         name: src.name,
         source: [...src.keys],
-        present: src.keys.every((key) => asRecord((report as Record<string, unknown>)[key])),
+        present: src.keys.every((key) =>
+          asRecord((report as Record<string, unknown>)[key]),
+        ),
       })),
     },
     evidence: { files },

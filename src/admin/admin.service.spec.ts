@@ -105,7 +105,9 @@ const makeAdminServiceForTests = (overrides: Record<string, unknown> = {}) => {
     repositories.reportPartnerApprovalSettings as any,
     repositories.organizationMembershipService as any,
     repositories.partnerMembershipSettings as any,
-    (repositories as any).studentSubscriptionService ?? { releasePendingStudentAccounts: jest.fn().mockResolvedValue(0) },
+    (repositories as any).studentSubscriptionService ?? {
+      releasePendingStudentAccounts: jest.fn().mockResolvedValue(0),
+    },
     repositories.feedbackService as any,
     repositories.mailService as any,
     repositories.notificationsService as any,
@@ -542,7 +544,12 @@ describe('AdminService verified hours / dashboard', () => {
     const attendanceRepo = {
       createQueryBuilder: jest.fn(() =>
         makeQb([
-          { studentId: 's1', opportunityId: 'p1', period: '2026-03', hours: '5.5' },
+          {
+            studentId: 's1',
+            opportunityId: 'p1',
+            period: '2026-03',
+            hours: '5.5',
+          },
         ]),
       ),
     };
@@ -551,8 +558,18 @@ describe('AdminService verified hours / dashboard', () => {
       timesheetRepository: {
         createQueryBuilder: jest.fn(() =>
           makeQb([
-            { studentId: 's1', opportunityId: 'p1', period: '2026-03', hours: '10' },
-            { studentId: 's2', opportunityId: 'p1', period: '2026-03', hours: '2' },
+            {
+              studentId: 's1',
+              opportunityId: 'p1',
+              period: '2026-03',
+              hours: '10',
+            },
+            {
+              studentId: 's2',
+              opportunityId: 'p1',
+              period: '2026-03',
+              hours: '2',
+            },
           ]),
         ),
       },
@@ -599,7 +616,10 @@ describe('AdminService verified hours / dashboard', () => {
       dataSource: fakeDataSource(
         new Map<unknown, unknown>([
           [Payment, { count: jest.fn().mockResolvedValue(4) }],
-          [OrganizationMembershipFee, { count: jest.fn().mockResolvedValue(3) }],
+          [
+            OrganizationMembershipFee,
+            { count: jest.fn().mockResolvedValue(3) },
+          ],
           [IssueLog, { count: jest.fn().mockResolvedValue(8) }],
           [SupportTicket, { count: jest.fn().mockResolvedValue(6) }],
         ]),
@@ -660,10 +680,17 @@ describe('AdminService participation review', () => {
     const seat: any = { id: 'a', status: 'pending', studentId: 'st-1' };
     const save = jest.fn();
     const service = makeAdminServiceForTests({
-      participationRepository: { findOne: jest.fn().mockResolvedValue(seat), save },
+      participationRepository: {
+        findOne: jest.fn().mockResolvedValue(seat),
+        save,
+      },
     });
     await service.rejectApplication('a', '  Missing documents ', 'admin-9');
-    expect(seat).toMatchObject({ status: 'rejected', reviewedBy: 'admin-9', reviewReason: 'Missing documents' });
+    expect(seat).toMatchObject({
+      status: 'rejected',
+      reviewedBy: 'admin-9',
+      reviewReason: 'Missing documents',
+    });
     expect(seat.reviewedAt).toBeInstanceOf(Date);
   });
 });
@@ -712,7 +739,9 @@ describe('AdminService settings', () => {
         description: expect.any(String),
       }),
     );
-    expect(platformSettings.invalidate).toHaveBeenCalledWith('REPORTING_FEE_PKR');
+    expect(platformSettings.invalidate).toHaveBeenCalledWith(
+      'REPORTING_FEE_PKR',
+    );
     expect(auditLogsService.recordMutation).toHaveBeenCalledWith(
       expect.objectContaining({
         details: {
@@ -728,8 +757,20 @@ describe('AdminService settings', () => {
   it('getSettings is read-only and returns only registry keys', async () => {
     const { service, settingRepository } = makeSettingsService(null);
     settingRepository.find.mockResolvedValue([
-      { id: '1', key: 'site_name', value: 'X', type: 'string', updatedAt: new Date() },
-      { id: '2', key: 'SECRET_THING', value: 'y', type: 'string', updatedAt: new Date() },
+      {
+        id: '1',
+        key: 'site_name',
+        value: 'X',
+        type: 'string',
+        updatedAt: new Date(),
+      },
+      {
+        id: '2',
+        key: 'SECRET_THING',
+        value: 'y',
+        type: 'string',
+        updatedAt: new Date(),
+      },
     ]);
     const res = await service.getSettings();
     expect(res.data.map((r) => r.key)).toEqual(['site_name']);
@@ -768,7 +809,9 @@ describe('AdminService remindStudentsOnZeroHourProjects', () => {
 
   it('dry run counts without sending', async () => {
     const { service, mailService } = setup();
-    const res = await service.remindStudentsOnZeroHourProjects({ dryRun: true });
+    const res = await service.remindStudentsOnZeroHourProjects({
+      dryRun: true,
+    });
     expect(res.would_notify).toBe(2);
     expect(res.students_notified).toBe(0);
     expect(mailService.sendHoursLoggingReminder).not.toHaveBeenCalled();

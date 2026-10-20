@@ -252,7 +252,10 @@ export function getParticipantApprovingFacultyEmails(participant: {
   facultySupervisorEmail?: string | null;
   primaryFacultyEmail?: string | null;
 }): string[] {
-  const raw = [participant.facultySupervisorEmail, participant.primaryFacultyEmail];
+  const raw = [
+    participant.facultySupervisorEmail,
+    participant.primaryFacultyEmail,
+  ];
   return Array.from(
     new Set(raw.map((v) => (v || '').trim().toLowerCase()).filter(Boolean)),
   );

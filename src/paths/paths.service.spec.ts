@@ -472,7 +472,12 @@ describe('PathsService — team member invites', () => {
     const { service, mailService } = makeService({ inviteRepo });
 
     await expect(
-      service.resendTeamInvite('user-1', 'course_project', 'entry-1', 'bob@test.com'),
+      service.resendTeamInvite(
+        'user-1',
+        'course_project',
+        'entry-1',
+        'bob@test.com',
+      ),
     ).rejects.toThrow(BadRequestException);
     expect(mailService.sendPathTeamInvite).not.toHaveBeenCalled();
   });
@@ -1036,7 +1041,9 @@ describe('PathsService — coursework AI score is never returned to a student', 
         processInfo: { activities: ['Site survey'] },
         resultsInfo: { resultsSummary: 'Rooftop can host 5kW.' },
         sdgMapping: { notApplicable: true },
-        reflectionInfo: { lessonLearned: 'Data collection takes longer than planned.' },
+        reflectionInfo: {
+          lessonLearned: 'Data collection takes longer than planned.',
+        },
       },
     ];
     const manager = {
@@ -1354,7 +1361,9 @@ describe('PathsService — coursework submit/resubmit emails', () => {
       processInfo: { activities: ['Site survey'] },
       resultsInfo: { resultsSummary: 'Rooftop can host 5kW.' },
       sdgMapping: { notApplicable: true },
-      reflectionInfo: { lessonLearned: 'Data collection takes longer than planned.' },
+      reflectionInfo: {
+        lessonLearned: 'Data collection takes longer than planned.',
+      },
     });
     await service.updateCourseProjectByIdForUser('student-1', 'entry-1', {
       status: 'submitted',
@@ -1388,7 +1397,9 @@ describe('PathsService — coursework submit/resubmit emails', () => {
       processInfo: { activities: ['Site survey'] },
       resultsInfo: { resultsSummary: 'Rooftop can host 5kW.' },
       sdgMapping: { notApplicable: true },
-      reflectionInfo: { lessonLearned: 'Data collection takes longer than planned.' },
+      reflectionInfo: {
+        lessonLearned: 'Data collection takes longer than planned.',
+      },
     });
     await service.updateCourseProjectByIdForUser('student-1', 'entry-1', {
       addedNote: 'fixed',
@@ -1858,7 +1869,12 @@ describe('PathsService — public coursework verification', () => {
       facultyApprovalAt: new Date('2026-01-01'),
       verificationPublicSlug: 'abc-123',
       meritRibbon: {
-        faculty: { rank: 2, of: 8, scope: 'Faculty supervision', badgeLevel: 'Silver' },
+        faculty: {
+          rank: 2,
+          of: 8,
+          scope: 'Faculty supervision',
+          badgeLevel: 'Silver',
+        },
         cielpk: { rank: 1, of: 8, scope: 'Your cohort', badgeLevel: 'Gold' },
       },
     });
@@ -1883,7 +1899,12 @@ describe('PathsService — public coursework verification', () => {
       facultyApprovalAt: new Date('2026-01-01'),
       verificationPublicSlug: 'abc-123',
       meritRibbon: {
-        faculty: { rank: 2, of: 8, scope: 'Faculty supervision', badgeLevel: 'Silver' },
+        faculty: {
+          rank: 2,
+          of: 8,
+          scope: 'Faculty supervision',
+          badgeLevel: 'Silver',
+        },
       },
     });
     const result = await service.getPublicCourseworkVerification('abc-123');
@@ -3258,7 +3279,10 @@ describe('PathsService — listVenturesForAdmin excludes drafts from decision-st
 });
 
 describe('PathsService.remindCourseProjectFaculty — student nudges the reviewing faculty', () => {
-  const build = (entryOverrides: Record<string, unknown> = {}, mailOk = true) => {
+  const build = (
+    entryOverrides: Record<string, unknown> = {},
+    mailOk = true,
+  ) => {
     const entry: Record<string, unknown> = {
       id: 'entry-1',
       userId: 'stu-1',
@@ -3268,7 +3292,11 @@ describe('PathsService.remindCourseProjectFaculty — student nudges the reviewi
       projectTitle: 'Network Audit',
       course: 'Computer Networking',
       updatedAt: new Date(Date.now() - 3 * 86_400_000),
-      studentInfo: { studentName: 'Zubair Ali', teacherName: 'Dr Khan', teacherEmail: 'khan@uni.edu.pk' },
+      studentInfo: {
+        studentName: 'Zubair Ali',
+        teacherName: 'Dr Khan',
+        teacherEmail: 'khan@uni.edu.pk',
+      },
       ...entryOverrides,
     };
     const courseProjectRepo = {
@@ -3313,31 +3341,60 @@ describe('PathsService.remindCourseProjectFaculty — student nudges the reviewi
   });
 
   it('refuses a second reminder inside 24 hours and says when the next one is allowed', async () => {
-    const { service, mailService } = build({ facultyReminderSentAt: new Date(Date.now() - 2 * 3_600_000) });
-    await expect(service.remindCourseProjectFaculty('stu-1', 'entry-1')).rejects.toThrow(/last 24 hours/);
+    const { service, mailService } = build({
+      facultyReminderSentAt: new Date(Date.now() - 2 * 3_600_000),
+    });
+    await expect(
+      service.remindCourseProjectFaculty('stu-1', 'entry-1'),
+    ).rejects.toThrow(/last 24 hours/);
     expect(mailService.sendCourseworkReviewReminder).not.toHaveBeenCalled();
   });
 
   it('allows a reminder again once 24 hours have passed', async () => {
-    const { service, mailService } = build({ facultyReminderSentAt: new Date(Date.now() - 25 * 3_600_000) });
-    await expect(service.remindCourseProjectFaculty('stu-1', 'entry-1')).resolves.toMatchObject({ sent: true });
+    const { service, mailService } = build({
+      facultyReminderSentAt: new Date(Date.now() - 25 * 3_600_000),
+    });
+    await expect(
+      service.remindCourseProjectFaculty('stu-1', 'entry-1'),
+    ).resolves.toMatchObject({ sent: true });
     expect(mailService.sendCourseworkReviewReminder).toHaveBeenCalledTimes(1);
   });
 
   it('refuses when the record is a draft, already approved, or already answered', async () => {
-    await expect(build({ status: 'draft' }).service.remindCourseProjectFaculty('stu-1', 'entry-1')).rejects.toThrow(/Submit the record/);
-    await expect(build({ facultyApprovalStatus: 'approved' }).service.remindCourseProjectFaculty('stu-1', 'entry-1')).rejects.toThrow(/already been approved/);
-    await expect(build({ facultyApprovalStatus: 'revision_requested' }).service.remindCourseProjectFaculty('stu-1', 'entry-1')).rejects.toThrow(/already responded/);
+    await expect(
+      build({ status: 'draft' }).service.remindCourseProjectFaculty(
+        'stu-1',
+        'entry-1',
+      ),
+    ).rejects.toThrow(/Submit the record/);
+    await expect(
+      build({
+        facultyApprovalStatus: 'approved',
+      }).service.remindCourseProjectFaculty('stu-1', 'entry-1'),
+    ).rejects.toThrow(/already been approved/);
+    await expect(
+      build({
+        facultyApprovalStatus: 'revision_requested',
+      }).service.remindCourseProjectFaculty('stu-1', 'entry-1'),
+    ).rejects.toThrow(/already responded/);
   });
 
   it('refuses without an instructor email, and a stranger gets 404', async () => {
-    await expect(build({ studentInfo: { studentName: 'Z' } }).service.remindCourseProjectFaculty('stu-1', 'entry-1')).rejects.toThrow(/No instructor email/);
-    await expect(build().service.remindCourseProjectFaculty('someone-else', 'entry-1')).rejects.toThrow(/not found/);
+    await expect(
+      build({
+        studentInfo: { studentName: 'Z' },
+      }).service.remindCourseProjectFaculty('stu-1', 'entry-1'),
+    ).rejects.toThrow(/No instructor email/);
+    await expect(
+      build().service.remindCourseProjectFaculty('someone-else', 'entry-1'),
+    ).rejects.toThrow(/not found/);
   });
 
   it('surfaces a delivery failure instead of pretending it was sent, and does not stamp the time', async () => {
     const { service, courseProjectRepo } = build({}, false);
-    await expect(service.remindCourseProjectFaculty('stu-1', 'entry-1')).rejects.toThrow(/could not deliver/);
+    await expect(
+      service.remindCourseProjectFaculty('stu-1', 'entry-1'),
+    ).rejects.toThrow(/could not deliver/);
     expect(courseProjectRepo.update).not.toHaveBeenCalled();
   });
 });

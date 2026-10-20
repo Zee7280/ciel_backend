@@ -5,7 +5,10 @@ import { ResetPasswordDto } from './reset-password.dto';
 describe('SignupDto / ResetPasswordDto — validation that the form used to be the only guard for', () => {
   const pipe = new ValidationPipe({ whitelist: true, transform: true });
   const signup = { type: 'body', metatype: SignupDto } as ArgumentMetadata;
-  const reset = { type: 'body', metatype: ResetPasswordDto } as ArgumentMetadata;
+  const reset = {
+    type: 'body',
+    metatype: ResetPasswordDto,
+  } as ArgumentMetadata;
 
   const student = (over: Record<string, unknown> = {}) => ({
     role: 'student',
@@ -45,7 +48,12 @@ describe('SignupDto / ResetPasswordDto — validation that the form used to be t
 
   it('trims surrounding whitespace on accepted values', async () => {
     const out = (await pipe.transform(
-      student({ name: '  Ali Khan  ', email: ' ali@uni.edu.pk ', institution: ' BNU ', registrationNumber: ' 22-0451 ' }),
+      student({
+        name: '  Ali Khan  ',
+        email: ' ali@uni.edu.pk ',
+        institution: ' BNU ',
+        registrationNumber: ' 22-0451 ',
+      }),
       signup,
     )) as SignupDto;
     expect(out.name).toBe('Ali Khan');
@@ -55,7 +63,11 @@ describe('SignupDto / ResetPasswordDto — validation that the form used to be t
   });
 
   it('reset-password applies the same password policy', async () => {
-    await expect(pipe.transform({ token: 't', newPassword: '12345678' }, reset)).rejects.toBeTruthy();
-    await expect(pipe.transform({ token: 't', newPassword: 'Tr0ub4dor&3' }, reset)).resolves.toBeTruthy();
+    await expect(
+      pipe.transform({ token: 't', newPassword: '12345678' }, reset),
+    ).rejects.toBeTruthy();
+    await expect(
+      pipe.transform({ token: 't', newPassword: 'Tr0ub4dor&3' }, reset),
+    ).resolves.toBeTruthy();
   });
 });

@@ -21,12 +21,24 @@ export interface FypAiDimension {
 export const FYP_AI_RUBRIC: FypAiDimension[] = [
   { key: 'challenge', label: 'Challenge, Purpose & Significance', max: 10 },
   { key: 'grounding', label: 'Disciplinary Grounding & Context', max: 10 },
-  { key: 'originality', label: 'Originality, Independence & Contribution', max: 15 },
+  {
+    key: 'originality',
+    label: 'Originality, Independence & Contribution',
+    max: 15,
+  },
   { key: 'rigor', label: 'Method / Process & Disciplinary Rigor', max: 20 },
-  { key: 'analysis', label: 'Analysis, Development & Critical Reasoning', max: 15 },
+  {
+    key: 'analysis',
+    label: 'Analysis, Development & Critical Reasoning',
+    max: 15,
+  },
   { key: 'output', label: 'Quality & Resolution of Final Output', max: 15 },
   { key: 'evidence', label: 'Evidence, Validation & Results', max: 10 },
-  { key: 'reflection', label: 'Limitations, Reflection & Future Direction', max: 5 },
+  {
+    key: 'reflection',
+    label: 'Limitations, Reflection & Future Direction',
+    max: 5,
+  },
 ];
 
 export const FYP_AI_MAX = FYP_AI_RUBRIC.reduce((sum, d) => sum + d.max, 0); // 100
@@ -140,7 +152,13 @@ export function computeFypAiResult(input: FypAiComputeInput): FypAiResult {
   // Ported 1:1 from the locked mockup gates (CIEL_PK_FYP_Faculty_Review_Loop_FINAL_v4).
   if (
     final >= 90 &&
-    !(originality >= 12 && rigor >= 17 && analysis >= 12 && output >= 13 && evidence >= 8)
+    !(
+      originality >= 12 &&
+      rigor >= 17 &&
+      analysis >= 12 &&
+      output >= 13 &&
+      evidence >= 8
+    )
   ) {
     final = Math.min(final, 89.9);
     gatesApplied.push(
@@ -149,15 +167,21 @@ export function computeFypAiResult(input: FypAiComputeInput): FypAiResult {
   }
   if (rigor < 10) {
     final = Math.min(final, 59);
-    gatesApplied.push('Capped at 59 — Method/Process & Disciplinary Rigor scored below half.');
+    gatesApplied.push(
+      'Capped at 59 — Method/Process & Disciplinary Rigor scored below half.',
+    );
   }
   if (output < 8) {
     final = Math.min(final, 64);
-    gatesApplied.push('Capped at 64 — Quality & Resolution of Final Output scored below half.');
+    gatesApplied.push(
+      'Capped at 64 — Quality & Resolution of Final Output scored below half.',
+    );
   }
   if (originality < 7) {
     final = Math.min(final, 74);
-    gatesApplied.push('Capped at 74 — Originality, Independence & Contribution scored below half.');
+    gatesApplied.push(
+      'Capped at 74 — Originality, Independence & Contribution scored below half.',
+    );
   }
 
   return {

@@ -1,373 +1,392 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Index, BeforeInsert, BeforeUpdate, AfterLoad, AfterInsert, AfterUpdate } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
+  UpdateDateColumn,
+  Index,
+  BeforeInsert,
+  BeforeUpdate,
+  AfterLoad,
+  AfterInsert,
+  AfterUpdate,
+} from 'typeorm';
 import { randomUUID } from 'crypto';
-import { parseStoredUrlList, urlListColumnTransformer } from '../../common/url-list-column';
+import {
+  parseStoredUrlList,
+  urlListColumnTransformer,
+} from '../../common/url-list-column';
 
 export interface CourseProjectGroupMember {
-    name: string;
-    email?: string;
-    rollNumber?: string;
-    /** Optional — lets the owner's "WhatsApp" nudge button link straight to this teammate's chat
-     * instead of a generic share sheet. Same shape as FypTeamMember's fields. */
-    whatsappCode?: string;
-    whatsappNumber?: string;
-    /** Server-computed from team_member_invites — 'accepted' only once the named teammate has
-     * clicked their emailed invite link while signed in with this exact email. Ignored on write. */
-    inviteStatus?: 'pending' | 'accepted';
+  name: string;
+  email?: string;
+  rollNumber?: string;
+  /** Optional — lets the owner's "WhatsApp" nudge button link straight to this teammate's chat
+   * instead of a generic share sheet. Same shape as FypTeamMember's fields. */
+  whatsappCode?: string;
+  whatsappNumber?: string;
+  /** Server-computed from team_member_invites — 'accepted' only once the named teammate has
+   * clicked their emailed invite link while signed in with this exact email. Ignored on write. */
+  inviteStatus?: 'pending' | 'accepted';
 }
 
 export interface CourseProjectStudentInfo {
-    studentName?: string;
-    rollNumber?: string;
-    studentEmail?: string;
-    universityName?: string;
-    disciplineName?: string;
-    /** School / department free text — distinct from disciplineName (HEC programme search), added for the 8-step "final form" wizard. */
-    department?: string;
-    /** Programme, e.g. "BBA" — added for the "final form" wizard. */
-    programme?: string;
-    courseCode?: string;
-    semester?: string;
-    teamMode?: string; // 'Individual' | 'Pair' | 'Group / Team' | 'Whole class' | 'Interdisciplinary team' (legacy data may say 'Solo' | 'Group')
-    /** Older entries may still hold plain name strings from before email capture was added — read via normalizeGroupMembers, don't assume objects. */
-    groupMembers?: (string | CourseProjectGroupMember)[];
-    /** What type(s) of coursework this was (assignment, semester project, case study, ...) — distinct from assignmentInfo.format (the output's shape). Tap all that apply. */
-    courseworkTypes?: string[];
-    courseworkTypeOther?: string;
-    /** @deprecated pre-multi-select shape — still read for entries submitted before this was a tap-all field. */
-    courseworkType?: string;
-    teacherName?: string;
-    teacherEmail?: string;
-    /** Instructor's WhatsApp (optional) — lets the student's "WhatsApp <teacher>" reminder open a
-     * direct chat instead of the generic share sheet. Same code+number split as groupMembers. */
-    teacherWhatsappCode?: string;
-    teacherWhatsappNumber?: string;
-    notes?: string;
+  studentName?: string;
+  rollNumber?: string;
+  studentEmail?: string;
+  universityName?: string;
+  disciplineName?: string;
+  /** School / department free text — distinct from disciplineName (HEC programme search), added for the 8-step "final form" wizard. */
+  department?: string;
+  /** Programme, e.g. "BBA" — added for the "final form" wizard. */
+  programme?: string;
+  courseCode?: string;
+  semester?: string;
+  teamMode?: string; // 'Individual' | 'Pair' | 'Group / Team' | 'Whole class' | 'Interdisciplinary team' (legacy data may say 'Solo' | 'Group')
+  /** Older entries may still hold plain name strings from before email capture was added — read via normalizeGroupMembers, don't assume objects. */
+  groupMembers?: (string | CourseProjectGroupMember)[];
+  /** What type(s) of coursework this was (assignment, semester project, case study, ...) — distinct from assignmentInfo.format (the output's shape). Tap all that apply. */
+  courseworkTypes?: string[];
+  courseworkTypeOther?: string;
+  /** @deprecated pre-multi-select shape — still read for entries submitted before this was a tap-all field. */
+  courseworkType?: string;
+  teacherName?: string;
+  teacherEmail?: string;
+  /** Instructor's WhatsApp (optional) — lets the student's "WhatsApp <teacher>" reminder open a
+   * direct chat instead of the generic share sheet. Same code+number split as groupMembers. */
+  teacherWhatsappCode?: string;
+  teacherWhatsappNumber?: string;
+  notes?: string;
 }
 
 export interface CourseProjectAssignmentInfo {
-    /** Legacy single-select format — kept in sync with formats[0] for back-compat with admin views and CourseworkCard. */
-    format?: string;
-    formatOther?: string;
-    /** Multi-select formats — first pick is primary/leads. Added for the "final form" wizard. */
-    formats?: string[];
-    /** Explicit student override of which pathway leads when formats span more than one — unset means "first pick leads". */
-    leadRoute?: string;
-    whatAsked?: string;
-    realWorldIssue?: string;
-    notes?: string;
+  /** Legacy single-select format — kept in sync with formats[0] for back-compat with admin views and CourseworkCard. */
+  format?: string;
+  formatOther?: string;
+  /** Multi-select formats — first pick is primary/leads. Added for the "final form" wizard. */
+  formats?: string[];
+  /** Explicit student override of which pathway leads when formats span more than one — unset means "first pick leads". */
+  leadRoute?: string;
+  whatAsked?: string;
+  realWorldIssue?: string;
+  notes?: string;
 }
 
 export interface CourseProjectAimsInfo {
-    aimStatement?: string;
-    objectives?: string[];
-    /** Who/what the work was intended to benefit, influence or improve. */
-    beneficiaries?: string[];
-    beneficiariesOther?: string;
-    notes?: string;
+  aimStatement?: string;
+  objectives?: string[];
+  /** Who/what the work was intended to benefit, influence or improve. */
+  beneficiaries?: string[];
+  beneficiariesOther?: string;
+  notes?: string;
 }
 
 export interface CourseProjectProcessInfo {
-    activities?: string[];
-    activitiesOther?: string;
-    methods?: string[];
-    methodsOther?: string;
-    sampleScale?: string;
-    /** Who the student engaged or worked with while doing the work. */
-    stakeholders?: string[];
-    stakeholdersOther?: string;
-    notes?: string;
+  activities?: string[];
+  activitiesOther?: string;
+  methods?: string[];
+  methodsOther?: string;
+  sampleScale?: string;
+  /** Who the student engaged or worked with while doing the work. */
+  stakeholders?: string[];
+  stakeholdersOther?: string;
+  notes?: string;
 }
 
 /** One measured/estimated result inside resultsInfo.metrics — up to 5 per entry. */
 export interface CourseProjectMetric {
-    id: string;
-    name?: string;
-    type?: string;
-    typeOther?: string;
-    value?: string;
-    unit?: string;
-    unitOther?: string;
-    /** "Actual — measured" | "Target — intended future result" | "Estimated / projected" | "Proposed — not yet tested" */
-    status?: string;
-    meaning?: string;
-    sample?: string;
-    periodFrom?: string;
-    periodTo?: string;
-    source?: string;
-    sourceOther?: string;
-    character?: string;
-    verifier?: string;
-    verifierOther?: string;
-    comparedBeforeAfter?: boolean;
-    baseline?: string;
-    evidenceAttached?: boolean;
+  id: string;
+  name?: string;
+  type?: string;
+  typeOther?: string;
+  value?: string;
+  unit?: string;
+  unitOther?: string;
+  /** "Actual — measured" | "Target — intended future result" | "Estimated / projected" | "Proposed — not yet tested" */
+  status?: string;
+  meaning?: string;
+  sample?: string;
+  periodFrom?: string;
+  periodTo?: string;
+  source?: string;
+  sourceOther?: string;
+  character?: string;
+  verifier?: string;
+  verifierOther?: string;
+  comparedBeforeAfter?: boolean;
+  baseline?: string;
+  evidenceAttached?: boolean;
 }
 
 export interface CourseProjectResultsInfo {
-    outputs?: string[];
-    outputsOther?: string;
-    outputDescription?: string;
-    findings?: string[];
-    /** "Did you measure a result?" — Yes / Partly / No (findings-only) / Not yet. Drives whether `metrics` applies. */
-    measured?: string;
-    /** Up to 5 structured results — replaces the older single evidenceStatus/metricName/metricValue/metricUnit/numberRepresents fields below. */
-    metrics?: CourseProjectMetric[];
-    measurableImpact?: string;
-    limitationType?: string;
-    limitationOther?: string;
-    limitationDetail?: string;
-    /** "How should this limitation be considered when reading your results?" */
-    limitationInterpretation?: string;
-    /** Up to 3 optional next-step recommendations. */
-    recommendations?: string[];
-    /** 2-3 sentence summary of the most important result. */
-    resultsSummary?: string;
-    notes?: string;
-    /** @deprecated pre-multi-metric shape — still read for entries submitted before this system existed. */
-    evidenceStatus?: string;
-    /** @deprecated see evidenceStatus */
-    metricName?: string;
-    /** @deprecated see evidenceStatus */
-    metricValue?: string;
-    /** @deprecated see evidenceStatus */
-    metricUnit?: string;
-    /** @deprecated see evidenceStatus */
-    numberRepresents?: string;
+  outputs?: string[];
+  outputsOther?: string;
+  outputDescription?: string;
+  findings?: string[];
+  /** "Did you measure a result?" — Yes / Partly / No (findings-only) / Not yet. Drives whether `metrics` applies. */
+  measured?: string;
+  /** Up to 5 structured results — replaces the older single evidenceStatus/metricName/metricValue/metricUnit/numberRepresents fields below. */
+  metrics?: CourseProjectMetric[];
+  measurableImpact?: string;
+  limitationType?: string;
+  limitationOther?: string;
+  limitationDetail?: string;
+  /** "How should this limitation be considered when reading your results?" */
+  limitationInterpretation?: string;
+  /** Up to 3 optional next-step recommendations. */
+  recommendations?: string[];
+  /** 2-3 sentence summary of the most important result. */
+  resultsSummary?: string;
+  notes?: string;
+  /** @deprecated pre-multi-metric shape — still read for entries submitted before this system existed. */
+  evidenceStatus?: string;
+  /** @deprecated see evidenceStatus */
+  metricName?: string;
+  /** @deprecated see evidenceStatus */
+  metricValue?: string;
+  /** @deprecated see evidenceStatus */
+  metricUnit?: string;
+  /** @deprecated see evidenceStatus */
+  numberRepresents?: string;
 }
 
 export interface CourseProjectSdgEntry {
-    goalNumber: number;
-    targets: string[];
-    how?: string;
-    /** 'Direct' | 'Supporting' — the first entry in the array is always the primary SDG. */
-    strength?: string;
+  goalNumber: number;
+  targets: string[];
+  how?: string;
+  /** 'Direct' | 'Supporting' — the first entry in the array is always the primary SDG. */
+  strength?: string;
 }
 
 export interface CourseProjectSdgMapping {
-    origin?: string;
-    /** Honestly declared "no genuine SDG link" — flagged for teacher confirmation rather than force-mapped; the record still counts fully. */
-    notApplicable?: boolean;
-    entries?: CourseProjectSdgEntry[];
-    notes?: string;
+  origin?: string;
+  /** Honestly declared "no genuine SDG link" — flagged for teacher confirmation rather than force-mapped; the record still counts fully. */
+  notApplicable?: boolean;
+  entries?: CourseProjectSdgEntry[];
+  notes?: string;
 }
 
 export interface CourseProjectReflectionInfo {
-    lessonLearned?: string;
-    /** Legacy honesty rating — superseded by integrationLevel in the "final form" wizard, kept for older entries. */
-    sdgLinkHonesty?: string;
-    /** How strongly sustainability was connected to the actual work (new taxonomy). */
-    integrationLevel?: string;
-    skills?: string[];
-    skillsOther?: string;
-    /** Structured "what's next" choice, e.g. "Recommended for implementation". */
-    nextSteps?: string;
-    nextStepsOther?: string;
-    /** Optional one-line elaboration on what's next — free text, shown alongside nextSteps. */
-    whatsNext?: string;
-    adviceNextSemester?: string;
-    notes?: string;
+  lessonLearned?: string;
+  /** Legacy honesty rating — superseded by integrationLevel in the "final form" wizard, kept for older entries. */
+  sdgLinkHonesty?: string;
+  /** How strongly sustainability was connected to the actual work (new taxonomy). */
+  integrationLevel?: string;
+  skills?: string[];
+  skillsOther?: string;
+  /** Structured "what's next" choice, e.g. "Recommended for implementation". */
+  nextSteps?: string;
+  nextStepsOther?: string;
+  /** Optional one-line elaboration on what's next — free text, shown alongside nextSteps. */
+  whatsNext?: string;
+  adviceNextSemester?: string;
+  notes?: string;
 }
 
 /** Which optional modules apply to this assignment's format (Aim, Activities, Method, Findings, Results/evidence, Limitations). */
 export interface CourseProjectModuleInclusion {
-    aim?: boolean;
-    act?: boolean;
-    meth?: boolean;
-    find?: boolean;
-    /** @deprecated the final-form wizard's tile is "Results / evidence" (key `res`), not "Impact" — kept for older entries. */
-    imp?: boolean;
-    /** Results / evidence — whether this section applies to the declared format. */
-    res?: boolean;
-    lim?: boolean;
+  aim?: boolean;
+  act?: boolean;
+  meth?: boolean;
+  find?: boolean;
+  /** @deprecated the final-form wizard's tile is "Results / evidence" (key `res`), not "Impact" — kept for older entries. */
+  imp?: boolean;
+  /** Results / evidence — whether this section applies to the declared format. */
+  res?: boolean;
+  lim?: boolean;
 }
 
 /** One published ranking badge at a single level — see CourseProjectEntry.meritRibbon. */
 export interface CourseworkRibbonEntry {
-    rank: number;
-    of: number;
-    scope: string;
-    total?: number;
-    badgeLevel?: 'Gold' | 'Silver' | 'Bronze' | 'Participant';
-    previousRank?: number | null;
-    at: string;
+  rank: number;
+  of: number;
+  scope: string;
+  total?: number;
+  badgeLevel?: 'Gold' | 'Silver' | 'Bronze' | 'Participant';
+  previousRank?: number | null;
+  at: string;
 }
 
 /** A snapshot of the prior faculty decision, captured immediately before a resubmission silently
  * discards it (see applyCourseProjectPatch) — so "no silent overwrite" holds for the one field
  * group that previously vanished on every resubmit. */
 export interface CourseProjectVersionSnapshot {
-    versionedAt: string;
-    reason: 'resubmission_after_approval' | 'resubmission_after_return';
-    priorFacultyApprovalStatus: string;
-    priorFacultyApprovalNote: string | null;
-    priorFacultyApprovalAt: string | null;
-    priorFacultyModeration?: CourseProjectEntry['facultyModeration'];
-    priorMeritRibbon?: CourseProjectEntry['meritRibbon'];
+  versionedAt: string;
+  reason: 'resubmission_after_approval' | 'resubmission_after_return';
+  priorFacultyApprovalStatus: string;
+  priorFacultyApprovalNote: string | null;
+  priorFacultyApprovalAt: string | null;
+  priorFacultyModeration?: CourseProjectEntry['facultyModeration'];
+  priorMeritRibbon?: CourseProjectEntry['meritRibbon'];
 }
 
 /** Per-section review text (student-accepted or edited) shown on the final review/flash-card step. */
 export interface CourseProjectSectionSummaries {
-    course?: string;
-    assignment?: string;
-    aims?: string;
-    process?: string;
-    results?: string;
-    sdg?: string;
-    reflection?: string;
+  course?: string;
+  assignment?: string;
+  aims?: string;
+  process?: string;
+  results?: string;
+  sdg?: string;
+  reflection?: string;
 }
 
 /** One record per student — the Course Project path's single draft-autosaved entry (8-step coursework wizard). */
 @Entity('course_project_entries')
 export class CourseProjectEntry {
-    @PrimaryGeneratedColumn('uuid')
-    id: string;
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
 
-    @Index()
-    @Column()
-    userId: string;
+  @Index()
+  @Column()
+  userId: string;
 
-    // ---------- Legacy fields (kept for backward compatibility — admin views read these) ----------
-    @Column({ nullable: true })
-    course: string;
+  // ---------- Legacy fields (kept for backward compatibility — admin views read these) ----------
+  @Column({ nullable: true })
+  course: string;
 
-    @Column({ nullable: true })
-    projectTitle: string;
+  @Column({ nullable: true })
+  projectTitle: string;
 
-    @Column({ type: 'text', nullable: true })
-    projectDescription: string;
+  @Column({ type: 'text', nullable: true })
+  projectDescription: string;
 
-    @Column({ type: 'simple-array', nullable: true })
-    sdgs: number[];
+  @Column({ type: 'simple-array', nullable: true })
+  sdgs: number[];
 
-    /** JSON text (legacy TypeORM simple-array CSV still reads). Do not use simple-array — S3 URL lists must not split on commas. */
-    @Column({ type: 'text', nullable: true, transformer: urlListColumnTransformer })
-    evidenceUrls: string[];
+  /** JSON text (legacy TypeORM simple-array CSV still reads). Do not use simple-array — S3 URL lists must not split on commas. */
+  @Column({
+    type: 'text',
+    nullable: true,
+    transformer: urlListColumnTransformer,
+  })
+  evidenceUrls: string[];
 
-    /** What the uploaded files include (report, slides, poster, photos, video, etc.) — student-declared, shown alongside the upload boxes at review. */
-    @Column({ type: 'simple-array', nullable: true })
-    evidenceTypes: string[];
+  /** What the uploaded files include (report, slides, poster, photos, video, etc.) — student-declared, shown alongside the upload boxes at review. */
+  @Column({ type: 'simple-array', nullable: true })
+  evidenceTypes: string[];
 
-    /** The primary uploaded assignment file (essay/deck/design file/code link) — distinct from evidenceUrls' supporting files. Drives half the Verifiability score. */
-    @Column({ type: 'text', nullable: true })
-    assignmentFileUrl: string | null;
+  /** The primary uploaded assignment file (essay/deck/design file/code link) — distinct from evidenceUrls' supporting files. Drives half the Verifiability score. */
+  @Column({ type: 'text', nullable: true })
+  assignmentFileUrl: string | null;
 
-    /** Faculty review gate — only "approved" entries count toward Merit Model rankings/AI picks/showcase, mirroring FYP's eligibility gate. */
-    @Column({ default: 'pending' })
-    facultyApprovalStatus: string; // pending | approved | rejected | revision_requested
+  /** Faculty review gate — only "approved" entries count toward Merit Model rankings/AI picks/showcase, mirroring FYP's eligibility gate. */
+  @Column({ default: 'pending' })
+  facultyApprovalStatus: string; // pending | approved | rejected | revision_requested
 
-    @Column({ type: 'text', nullable: true })
-    facultyApprovalNote: string | null;
+  @Column({ type: 'text', nullable: true })
+  facultyApprovalNote: string | null;
 
-    @Column({ type: 'timestamp', nullable: true })
-    facultyApprovalAt: Date | null;
+  @Column({ type: 'timestamp', nullable: true })
+  facultyApprovalAt: Date | null;
 
-    /** Last time the student asked CIEL PK to re-email the reviewing faculty (POST …/remind-faculty).
-     * Rate-limits the nudge to once per 24h so a reviewer is never spammed. */
-    @Column({ type: 'timestamp', nullable: true })
-    facultyReminderSentAt: Date | null;
+  /** Last time the student asked CIEL PK to re-email the reviewing faculty (POST …/remind-faculty).
+   * Rate-limits the nudge to once per 24h so a reviewer is never spammed. */
+  @Column({ type: 'timestamp', nullable: true })
+  facultyReminderSentAt: Date | null;
 
-    /** The faculty's own per-criterion moderation of the AI proposal, captured and frozen at approval —
-     * without this, the "Faculty Moderation" tab's overrides/reasons/audit hash were computed in the UI
-     * and silently discarded on reload since only action+note ever reached the backend. Cleared whenever
-     * the record leaves 'approved' (revision/reject), same as meritRibbon, so a stale lock never lingers. */
-    @Column({ type: 'jsonb', nullable: true })
-    facultyModeration?: {
-        levels: Record<string, number>;
-        notes?: Record<string, string>;
-        facultyScore: number;
-        band?: string;
-        lockHash?: string;
-        at: string;
-    } | null;
+  /** The faculty's own per-criterion moderation of the AI proposal, captured and frozen at approval —
+   * without this, the "Faculty Moderation" tab's overrides/reasons/audit hash were computed in the UI
+   * and silently discarded on reload since only action+note ever reached the backend. Cleared whenever
+   * the record leaves 'approved' (revision/reject), same as meritRibbon, so a stale lock never lingers. */
+  @Column({ type: 'jsonb', nullable: true })
+  facultyModeration?: {
+    levels: Record<string, number>;
+    notes?: Record<string, string>;
+    facultyScore: number;
+    band?: string;
+    lockHash?: string;
+    at: string;
+  } | null;
 
-    /** Up to three independent, simultaneous ranking badges — one per publishing level. Each level is
-     * only ever written by that level's own role (faculty / university-or-org-admin / super-admin, see
-     * PathsService.deriveCourseworkRibbonLevel) and publishing one level never touches the others, so a
-     * record can carry a Faculty rank, a University rank and a CIEL PK rank all at once. badgeLevel is a
-     * rank-percentile tier (see PathsService.computeRankBadgeLevel); previousRank is that level's rank the
-     * last time it was ranked, captured just before being overwritten by a new run at that same level —
-     * null/undefined means this is the first-ever ranked run at that level. */
-    @Column({ type: 'jsonb', nullable: true })
-    meritRibbon?: {
-        faculty?: CourseworkRibbonEntry;
-        university?: CourseworkRibbonEntry;
-        cielpk?: CourseworkRibbonEntry;
-    } | null;
+  /** Up to three independent, simultaneous ranking badges — one per publishing level. Each level is
+   * only ever written by that level's own role (faculty / university-or-org-admin / super-admin, see
+   * PathsService.deriveCourseworkRibbonLevel) and publishing one level never touches the others, so a
+   * record can carry a Faculty rank, a University rank and a CIEL PK rank all at once. badgeLevel is a
+   * rank-percentile tier (see PathsService.computeRankBadgeLevel); previousRank is that level's rank the
+   * last time it was ranked, captured just before being overwritten by a new run at that same level —
+   * null/undefined means this is the first-ever ranked run at that level. */
+  @Column({ type: 'jsonb', nullable: true })
+  meritRibbon?: {
+    faculty?: CourseworkRibbonEntry;
+    university?: CourseworkRibbonEntry;
+    cielpk?: CourseworkRibbonEntry;
+  } | null;
 
-    // ---------- Step 1: You & the course ----------
-    @Column({ type: 'jsonb', nullable: true })
-    studentInfo: CourseProjectStudentInfo | null;
+  // ---------- Step 1: You & the course ----------
+  @Column({ type: 'jsonb', nullable: true })
+  studentInfo: CourseProjectStudentInfo | null;
 
-    // ---------- Step 2: The assignment & its format ----------
-    @Column({ type: 'jsonb', nullable: true })
-    assignmentInfo: CourseProjectAssignmentInfo | null;
+  // ---------- Step 2: The assignment & its format ----------
+  @Column({ type: 'jsonb', nullable: true })
+  assignmentInfo: CourseProjectAssignmentInfo | null;
 
-    // ---------- Step 3: Aim & objectives ----------
-    @Column({ type: 'jsonb', nullable: true })
-    aimsInfo: CourseProjectAimsInfo | null;
+  // ---------- Step 3: Aim & objectives ----------
+  @Column({ type: 'jsonb', nullable: true })
+  aimsInfo: CourseProjectAimsInfo | null;
 
-    // ---------- Step 4: How the work was done ----------
-    @Column({ type: 'jsonb', nullable: true })
-    processInfo: CourseProjectProcessInfo | null;
+  // ---------- Step 4: How the work was done ----------
+  @Column({ type: 'jsonb', nullable: true })
+  processInfo: CourseProjectProcessInfo | null;
 
-    // ---------- Step 5: What came out of it ----------
-    @Column({ type: 'jsonb', nullable: true })
-    resultsInfo: CourseProjectResultsInfo | null;
+  // ---------- Step 5: What came out of it ----------
+  @Column({ type: 'jsonb', nullable: true })
+  resultsInfo: CourseProjectResultsInfo | null;
 
-    // ---------- Step 6: SDG mapping ----------
-    @Column({ type: 'jsonb', nullable: true })
-    sdgMapping: CourseProjectSdgMapping | null;
+  // ---------- Step 6: SDG mapping ----------
+  @Column({ type: 'jsonb', nullable: true })
+  sdgMapping: CourseProjectSdgMapping | null;
 
-    // ---------- Step 7: Reflection ----------
-    @Column({ type: 'jsonb', nullable: true })
-    reflectionInfo: CourseProjectReflectionInfo | null;
+  // ---------- Step 7: Reflection ----------
+  @Column({ type: 'jsonb', nullable: true })
+  reflectionInfo: CourseProjectReflectionInfo | null;
 
-    // ---------- Step 8: Attach, review & submit ----------
-    @Column({ type: 'jsonb', nullable: true })
-    moduleInclusion: CourseProjectModuleInclusion | null;
+  // ---------- Step 8: Attach, review & submit ----------
+  @Column({ type: 'jsonb', nullable: true })
+  moduleInclusion: CourseProjectModuleInclusion | null;
 
-    @Column({ type: 'jsonb', nullable: true })
-    sectionSummaries: CourseProjectSectionSummaries | null;
+  @Column({ type: 'jsonb', nullable: true })
+  sectionSummaries: CourseProjectSectionSummaries | null;
 
-    /** Append-only — see CourseProjectVersionSnapshot. Never rewritten or trimmed. */
-    @Column({ type: 'jsonb', default: () => "'[]'" })
-    versions: CourseProjectVersionSnapshot[];
+  /** Append-only — see CourseProjectVersionSnapshot. Never rewritten or trimmed. */
+  @Column({ type: 'jsonb', default: () => "'[]'" })
+  versions: CourseProjectVersionSnapshot[];
 
-    @Column({ type: 'text', nullable: true })
-    addedNote: string;
+  @Column({ type: 'text', nullable: true })
+  addedNote: string;
 
-    /** How many of the 8 wizard steps are complete. */
-    @Column({ type: 'int', default: 0 })
-    stepCompleted: number;
+  /** How many of the 8 wizard steps are complete. */
+  @Column({ type: 'int', default: 0 })
+  stepCompleted: number;
 
-    @Column({ default: 'draft' })
-    status: string; // draft | submitted
+  @Column({ default: 'draft' })
+  status: string; // draft | submitted
 
-    /** Unique public key for the badge's QR/share verify link — assigned once, never overwritten,
-     * mirrors StudentReport's verificationPublicSlug mechanism. */
-    @Column({ type: 'varchar', length: 36, nullable: true, unique: true })
-    verificationPublicSlug: string | null;
+  /** Unique public key for the badge's QR/share verify link — assigned once, never overwritten,
+   * mirrors StudentReport's verificationPublicSlug mechanism. */
+  @Column({ type: 'varchar', length: 36, nullable: true, unique: true })
+  verificationPublicSlug: string | null;
 
-    @CreateDateColumn()
-    createdAt: Date;
+  @CreateDateColumn()
+  createdAt: Date;
 
-    @UpdateDateColumn()
-    updatedAt: Date;
+  @UpdateDateColumn()
+  updatedAt: Date;
 
-    @BeforeInsert()
-    @BeforeUpdate()
-    assignVerificationPublicSlugIfNeeded(): void {
-        if (!this.verificationPublicSlug?.trim()) {
-            this.verificationPublicSlug = randomUUID();
-        }
+  @BeforeInsert()
+  @BeforeUpdate()
+  assignVerificationPublicSlugIfNeeded(): void {
+    if (!this.verificationPublicSlug?.trim()) {
+      this.verificationPublicSlug = randomUUID();
     }
+  }
 
-    /** TypeORM may write the transformer `to()` JSON string back onto the entity after save.
-     * Re-hydrate so every API response exposes a real string[]. */
-    @AfterLoad()
-    @AfterInsert()
-    @AfterUpdate()
-    hydrateEvidenceUrls(): void {
-        this.evidenceUrls = parseStoredUrlList(this.evidenceUrls);
-    }
+  /** TypeORM may write the transformer `to()` JSON string back onto the entity after save.
+   * Re-hydrate so every API response exposes a real string[]. */
+  @AfterLoad()
+  @AfterInsert()
+  @AfterUpdate()
+  hydrateEvidenceUrls(): void {
+    this.evidenceUrls = parseStoredUrlList(this.evidenceUrls);
+  }
 }

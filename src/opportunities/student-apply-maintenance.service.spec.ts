@@ -5,8 +5,8 @@ describe('StudentApplyMaintenanceService expiry toggle', () => {
   const build = (rows: Array<{ key: string; value: string }>) => {
     const repo: any = {
       find: jest.fn(async () => rows),
-      findOne: jest.fn(async ({ where }: any) =>
-        rows.find((r) => r.key === where.key) ?? null,
+      findOne: jest.fn(
+        async ({ where }: any) => rows.find((r) => r.key === where.key) ?? null,
       ),
       create: jest.fn((v: any) => v),
       save: jest.fn(async (v: any) => {
@@ -20,7 +20,9 @@ describe('StudentApplyMaintenanceService expiry toggle', () => {
   it("parses 'disabled' and empty as no cutoff", () => {
     expect(parseClosedBeforeSettingValue('disabled')).toBeNull();
     expect(parseClosedBeforeSettingValue('')).toBeNull();
-    expect(parseClosedBeforeSettingValue('2026-01-01T00:00:00Z')).toBeInstanceOf(Date);
+    expect(
+      parseClosedBeforeSettingValue('2026-01-01T00:00:00Z'),
+    ).toBeInstanceOf(Date);
   });
 
   it('keeps expiry off after cache refresh and never seeds over a disabled row', async () => {

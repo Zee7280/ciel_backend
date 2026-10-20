@@ -58,7 +58,11 @@ export function isRealCalendarDate(input: string): boolean {
   if (!m) return false;
   const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
   const dt = new Date(Date.UTC(y, mo - 1, d));
-  return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d;
+  return (
+    dt.getUTCFullYear() === y &&
+    dt.getUTCMonth() === mo - 1 &&
+    dt.getUTCDate() === d
+  );
 }
 
 /** Lexicographic compare for YYYY-MM-DD (ascending). */
@@ -156,7 +160,9 @@ export function canRecordCompletedService(
   timeline: unknown,
   today: string = todayDateOnlyPk(),
 ): boolean {
-  return resolveLifecyclePhase(timeline, today) === 'service_ended_reporting_open';
+  return (
+    resolveLifecyclePhase(timeline, today) === 'service_ended_reporting_open'
+  );
 }
 
 export function canEditOrSubmitReport(

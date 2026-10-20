@@ -55,7 +55,10 @@ import {
   resolveReportFlashEvidence,
   resolveReportFlashHours,
 } from './community-award.util';
-import { isPrivateCandidateOpportunity, reviewRouteForOpportunity } from '../opportunities/private-candidate.util';
+import {
+  isPrivateCandidateOpportunity,
+  reviewRouteForOpportunity,
+} from '../opportunities/private-candidate.util';
 import { composeFacultyReportRemarks } from './faculty-report-remarks.util';
 import { trackingOrganizationName } from './tracking-org-name.util';
 import { isReportPartnerStepSatisfied } from './report-partner-approval.util';
@@ -78,9 +81,13 @@ export function mapFacultyListCii(report: {
   const lockedRaw = report.ciiV45Lock?.locked;
   const locked = lockedRaw === true || lockedRaw === 'true';
   const badge =
-    ciiFinal != null || locked ? pickCiiV45DisplayBadge(report.ciiV45, report.ciiV45Lock) : null;
+    ciiFinal != null || locked
+      ? pickCiiV45DisplayBadge(report.ciiV45, report.ciiV45Lock)
+      : null;
   const stored =
-    report.ciiV45 && typeof report.ciiV45 === 'object' && !Array.isArray(report.ciiV45)
+    report.ciiV45 &&
+    typeof report.ciiV45 === 'object' &&
+    !Array.isArray(report.ciiV45)
       ? (report.ciiV45 as { aiReportScore?: unknown })
       : undefined;
   return {
@@ -108,7 +115,10 @@ function lockedAdminEvidenceCriteria(locked: CiiV45Result | null): {
     assessed?.status === 'ASSESSED' &&
     Array.isArray(assessed.criteria) &&
     assessed.criteria.length === CII_V45_EVIDENCE_DIMENSION.criteria.length &&
-    assessed.criteria.every((c) => c && String(c.anchor) !== 'P' && typeof c.reasoningSummary === 'string')
+    assessed.criteria.every(
+      (c) =>
+        c && String(c.anchor) !== 'P' && typeof c.reasoningSummary === 'string',
+    )
   ) {
     return {
       assessorId: assessed.assessorId || 'locked-admin',
@@ -135,7 +145,8 @@ function lockedAdminEvidenceCriteria(locked: CiiV45Result | null): {
     criteria: rows.map((c) => ({
       criterion: c.criterion,
       anchor: c.anchor as Exclude<CiiV45Anchor, 'P'>,
-      reasoningSummary: c.reasoningSummary?.trim() || 'Locked Admin evidence assessment.',
+      reasoningSummary:
+        c.reasoningSummary?.trim() || 'Locked Admin evidence assessment.',
       evidenceIds: c.evidenceIds,
     })),
   };
@@ -231,7 +242,8 @@ export function mapFacultyListPackage(
     lead
       ? {
           name: pickListString(lead.name, report.student?.name) || 'Student',
-          hours: pickListNumber(lead.hours) || (members.length ? 0 : flashHours),
+          hours:
+            pickListNumber(lead.hours) || (members.length ? 0 : flashHours),
           required,
         }
       : {
@@ -265,8 +277,7 @@ export function mapFacultyListPackage(
         supervision.supervisor_name,
         supervision.supervisorName,
       ) || null,
-    story:
-      pickListString(s2?.summary_text, s2?.problem_statement) || null,
+    story: pickListString(s2?.summary_text, s2?.problem_statement) || null,
     evidence_count: resolveReportFlashEvidence(report),
     participation_type: s1?.participation_type || 'individual',
     member_hours: memberHours,
@@ -496,9 +507,12 @@ export class FacultyReportsService {
         .where('report."opportunityId"::text IN (:...scopedOppIds)', {
           scopedOppIds: scopedOpportunityIds,
         })
-        .orWhere(`TRIM(COALESCE(report.project_id, '')) IN (:...scopedOppIds)`, {
-          scopedOppIds: scopedOpportunityIds,
-        })
+        .orWhere(
+          `TRIM(COALESCE(report.project_id, '')) IN (:...scopedOppIds)`,
+          {
+            scopedOppIds: scopedOpportunityIds,
+          },
+        )
         .orderBy('report.updatedAt', 'DESC')
         .getMany(),
       this.attendanceLogsRepository.find({
@@ -508,7 +522,9 @@ export class FacultyReportsService {
 
     const oppById = new Map(
       opportunities
-        .filter((opp) => !isRejectedOpportunity(opp) && !isPrivateStudentPathway(opp))
+        .filter(
+          (opp) => !isRejectedOpportunity(opp) && !isPrivateStudentPathway(opp),
+        )
         .map((opp) => [opp.id, opp]),
     );
     const allowedIds = new Set(oppById.keys());
@@ -540,7 +556,9 @@ export class FacultyReportsService {
       const sid = studentId.trim();
       const em = email.trim().toLowerCase();
       return (
-        pool.find((r) => sid && String(r.studentId || r.student?.id || '') === sid) ||
+        pool.find(
+          (r) => sid && String(r.studentId || r.student?.id || '') === sid,
+        ) ||
         pool.find(
           (r) =>
             em &&
@@ -561,7 +579,8 @@ export class FacultyReportsService {
       const opp = oppById.get(seat.projectId);
       if (!opp) continue;
       const group = seatGroups.get(seat.id);
-      if (group && group.siblings.length > 1 && group.canonical.id !== seat.id) continue;
+      if (group && group.siblings.length > 1 && group.canonical.id !== seat.id)
+        continue;
       const email = pickListString(seat.student?.email, seat.email);
       const report = matchReport(
         seat.projectId,
@@ -622,7 +641,8 @@ export class FacultyReportsService {
         draft_locked: !submitted,
         member_hours: [
           {
-            name: pickListString(seat.student?.name, seat.fullName) || 'Student',
+            name:
+              pickListString(seat.student?.name, seat.fullName) || 'Student',
             hours: Math.round(liveHours * 10) / 10,
             required,
           },
@@ -632,7 +652,9 @@ export class FacultyReportsService {
 
     for (const report of reports) {
       if (usedReportIds.has(report.id)) continue;
-      const projectId = String(report.opportunityId || report.project_id || '').trim();
+      const projectId = String(
+        report.opportunityId || report.project_id || '',
+      ).trim();
       const opp = oppById.get(projectId);
       if (!opp) continue;
       const projectLogs = logsByProject.get(projectId) ?? [];
@@ -654,14 +676,18 @@ export class FacultyReportsService {
         hours: Math.round(liveHours * 10) / 10,
         required_hours: required,
         hours_progress_pct:
-          required > 0 ? Math.min(100, Math.round((liveHours / required) * 100)) : 0,
+          required > 0
+            ? Math.min(100, Math.round((liveHours / required) * 100))
+            : 0,
         ...progress,
         status: report.status,
         faculty_status: report.faculty_status,
         submission_date: report.submission_date,
         report_submitted_at: report.reportSubmittedAt,
         updated_at: report.updatedAt,
-        last_activity_at: latestActivityIso([report.updatedAt, report.reportSubmittedAt]) || null,
+        last_activity_at:
+          latestActivityIso([report.updatedAt, report.reportSubmittedAt]) ||
+          null,
         draft_locked: !progress.is_submitted,
         member_hours: [
           {
@@ -674,8 +700,10 @@ export class FacultyReportsService {
     }
 
     data.sort((a, b) => {
-      const ta = Date.parse(String(a.last_activity_at || a.updated_at || '')) || 0;
-      const tb = Date.parse(String(b.last_activity_at || b.updated_at || '')) || 0;
+      const ta =
+        Date.parse(String(a.last_activity_at || a.updated_at || '')) || 0;
+      const tb =
+        Date.parse(String(b.last_activity_at || b.updated_at || '')) || 0;
       return tb - ta;
     });
 
@@ -736,9 +764,7 @@ export class FacultyReportsService {
           review_route: reviewRouteForOpportunity(r.opportunity),
           project_id: r.opportunityId || r.project_id || null,
           hours:
-            liveHours != null
-              ? liveHours
-              : resolveReportFlashHours(r.section1),
+            liveHours != null ? liveHours : resolveReportFlashHours(r.section1),
           submission_date: r.submission_date,
           report_submitted_at: r.reportSubmittedAt,
           partner_approved_at: r.partnerApprovedAt,
@@ -873,7 +899,9 @@ export class FacultyReportsService {
     // or carrying award badges) that silently strips the score its certificate and rankings rest on,
     // so it needs the same explicit confirmation as sending a published report back for changes.
     const published =
-      ['verified', 'paid'].includes(String(report.status || '').toLowerCase()) ||
+      ['verified', 'paid'].includes(
+        String(report.status || '').toLowerCase(),
+      ) ||
       (Array.isArray(report.awardBadges) && report.awardBadges.length > 0);
     if (report.ciiV45Lock?.locked && published && opts.force !== true) {
       throw new BadRequestException(
@@ -896,11 +924,12 @@ export class FacultyReportsService {
     model?: string;
   }> {
     const completeness = buildCiiV45InputCompletenessFromEvalPayload(payload);
-    const { ciiV45, evidenceInspection, model } = await this.aiService.summarize(
-      'cii_v4_5_evaluation',
-      { ...payload, sourceValidation: { inputCompleteness: completeness } },
-      { skipEvidenceImages: true },
-    );
+    const { ciiV45, evidenceInspection, model } =
+      await this.aiService.summarize(
+        'cii_v4_5_evaluation',
+        { ...payload, sourceValidation: { inputCompleteness: completeness } },
+        { skipEvidenceImages: true },
+      );
     if (!ciiV45) {
       throw new BadRequestException(
         'The AI did not return a readable CII v5.0 evaluation. Please retry.',
@@ -908,7 +937,7 @@ export class FacultyReportsService {
     }
     try {
       const normalized = normalizeCiiV5AiPayload({
-        ...(ciiV45 as CiiV45EvaluatorPayload),
+        ...ciiV45,
         reportId,
         inputFingerprint: payload.input_fingerprint,
         inputCompleteness: completeness,
@@ -919,7 +948,7 @@ export class FacultyReportsService {
       if (!(error instanceof CiiV45ValidationError)) throw error;
       console.error(
         `CII v5.0 validation failed for report ${reportId}: ${error.message}`,
-        JSON.stringify((ciiV45 as CiiV45EvaluatorPayload).sectionScores),
+        JSON.stringify(ciiV45.sectionScores),
       );
       throw new BadRequestException(
         `The AI returned an invalid CII v5.0 evaluation (${error.message}). Please retry.`,
@@ -954,29 +983,51 @@ export class FacultyReportsService {
     report: StudentReport,
     opts: { adminRescore?: boolean } = {},
   ) {
-    const payload = await buildCielPkAiEvaluationPayloadV45(report, this.s3Service);
+    const payload = await buildCielPkAiEvaluationPayloadV45(
+      report,
+      this.s3Service,
+    );
 
-    const { result, evidenceInspection, model } = await this.evaluateCiiV45(payload, report.id);
+    const { result, evidenceInspection, model } = await this.evaluateCiiV45(
+      payload,
+      report.id,
+    );
 
     // A rescore clears the lock; keep the superseded lock on the record instead of losing it.
     const priorLock = report.ciiV45Lock?.locked ? report.ciiV45Lock : null;
-    const priorLocks = ((report.ciiV45 as Record<string, unknown> | null)?.previousLocks as unknown[]) ?? [];
+    const priorLocks =
+      ((report.ciiV45 as Record<string, unknown> | null)
+        ?.previousLocks as unknown[]) ?? [];
     const nextCiiV45 = {
       ...result,
       ...(opts.adminRescore && (priorLock || priorLocks.length)
         ? {
             previousLocks: [
               ...priorLocks,
-              ...(priorLock ? [{ ...priorLock, supersededAt: new Date().toISOString(), reason: 'admin_rescore' }] : []),
+              ...(priorLock
+                ? [
+                    {
+                      ...priorLock,
+                      supersededAt: new Date().toISOString(),
+                      reason: 'admin_rescore',
+                    },
+                  ]
+                : []),
             ],
           }
         : {}),
       evidenceInspection,
       computedAt: new Date().toISOString(),
       runHistory: [
-        ...(((report.ciiV45 as Record<string, unknown> | null)?.runHistory as unknown[]) ?? []).slice(-19),
+        ...(
+          ((report.ciiV45 as Record<string, unknown> | null)
+            ?.runHistory as unknown[]) ?? []
+        ).slice(-19),
         {
-          score: result.diagnosticCII ?? result.aiReportScore ?? pickCiiV45DisplayScore(result, null),
+          score:
+            result.diagnosticCII ??
+            result.aiReportScore ??
+            pickCiiV45DisplayScore(result, null),
           status: result.scoreStatus,
           at: new Date().toISOString(),
           model: model ?? null,
@@ -994,7 +1045,9 @@ export class FacultyReportsService {
       .set(
         (opts.adminRescore
           ? { ciiV45: nextCiiV45, ciiV45Lock: () => 'NULL' }
-          : { ciiV45: nextCiiV45 }) as unknown as import('typeorm').QueryDeepPartialEntity<StudentReport>,
+          : {
+              ciiV45: nextCiiV45,
+            }) as unknown as import('typeorm').QueryDeepPartialEntity<StudentReport>,
       )
       .where('id = :id', { id: report.id });
     if (!opts.adminRescore) {
@@ -1063,7 +1116,9 @@ export class FacultyReportsService {
     // Confirming the CII publishes the report (status -> verified), so it must follow the same
     // gate as the plain Approve action: never publish a draft, or a report that was just sent back
     // for revision and has not been resubmitted yet.
-    const currentStatus = String(report.status || '').trim().toLowerCase();
+    const currentStatus = String(report.status || '')
+      .trim()
+      .toLowerCase();
     if (['draft', 'continue', ''].includes(currentStatus)) {
       throw new BadRequestException(
         'This report has not been submitted yet and cannot be approved.',
@@ -1074,13 +1129,20 @@ export class FacultyReportsService {
         'This report was sent back for revision. It can be accepted only after the student resubmits it.',
       );
     }
-    const storedRaw = report.ciiV45 as unknown as CiiV45Result | null | undefined;
+    const storedRaw = report.ciiV45 as unknown as
+      | CiiV45Result
+      | null
+      | undefined;
 
     if (!storedRaw) {
-      throw new BadRequestException('Run the CII v4.5 analysis before approving.');
+      throw new BadRequestException(
+        'Run the CII v4.5 analysis before approving.',
+      );
     }
     if (report.ciiV45Lock?.locked) {
-      throw new BadRequestException("This report's CII v4.5 score is already locked.");
+      throw new BadRequestException(
+        "This report's CII v4.5 score is already locked.",
+      );
     }
 
     let stored = storedRaw;
@@ -1115,9 +1177,14 @@ export class FacultyReportsService {
       }
     }
 
-    const aiRecommendedScore = pickCiiV45DisplayScore(stored, report.ciiV45Lock);
+    const aiRecommendedScore = pickCiiV45DisplayScore(
+      stored,
+      report.ciiV45Lock,
+    );
     if (aiRecommendedScore == null) {
-      throw new BadRequestException('Run the CII v4.5 analysis before approving.');
+      throw new BadRequestException(
+        'Run the CII v4.5 analysis before approving.',
+      );
     }
 
     // Recompute the fingerprint fresh from the report's CURRENT live data — the same protective
@@ -1126,7 +1193,8 @@ export class FacultyReportsService {
     // match the stored one and the stale evaluation must not be published.
     const liveFingerprint = computeCiiV45InputFingerprint(
       report,
-      (await buildCielPkAiEvaluationPayloadV45(report, this.s3Service)).uploaded_evidence_files,
+      (await buildCielPkAiEvaluationPayloadV45(report, this.s3Service))
+        .uploaded_evidence_files,
     );
     if (liveFingerprint !== stored.inputFingerprint) {
       throw new BadRequestException(
@@ -1142,7 +1210,10 @@ export class FacultyReportsService {
     // Moderation changes only the published number — it can never invent a badge the quality
     // gates don't support. Re-derive the badge from the SAME gate results the calculator already
     // computed (never hand-roll a second gate-walk), just against the (possibly moderated) score.
-    const finalBadge = resolveBadgeForScore(adminApprovedScore, stored.qualityGates);
+    const finalBadge = resolveBadgeForScore(
+      adminApprovedScore,
+      stored.qualityGates,
+    );
 
     const approvedAt = new Date().toISOString();
     const decisionRecord = {
@@ -1157,7 +1228,10 @@ export class FacultyReportsService {
       approvedAt,
       note: note || '',
     };
-    const hash = crypto.createHash('sha256').update(JSON.stringify(decisionRecord)).digest('hex');
+    const hash = crypto
+      .createHash('sha256')
+      .update(JSON.stringify(decisionRecord))
+      .digest('hex');
 
     const nextCiiV45 = {
       ...(stored as unknown as Record<string, unknown>),
@@ -1198,7 +1272,9 @@ export class FacultyReportsService {
       }
     }
     const nextAdminApprovedAt = report.adminApprovedAt ?? new Date();
-    const nextPartnerStatus = isReportPartnerStepSatisfied(report.partner_status)
+    const nextPartnerStatus = isReportPartnerStepSatisfied(
+      report.partner_status,
+    )
       ? report.partner_status
       : 'not_applicable';
 
@@ -1215,11 +1291,15 @@ export class FacultyReportsService {
         status: 'verified',
       } as unknown as import('typeorm').QueryDeepPartialEntity<StudentReport>)
       .where('id = :id', { id: report.id })
-      .andWhere(`("ciiV45Lock" IS NULL OR ("ciiV45Lock"->>'locked') IS DISTINCT FROM 'true')`)
+      .andWhere(
+        `("ciiV45Lock" IS NULL OR ("ciiV45Lock"->>'locked') IS DISTINCT FROM 'true')`,
+      )
       .execute();
 
     if (!updateResult.affected) {
-      throw new BadRequestException("This report's CII v4.5 score is already locked.");
+      throw new BadRequestException(
+        "This report's CII v4.5 score is already locked.",
+      );
     }
 
     await this.approveAttendanceLogsOnFlashCardLock(report, adminId);
@@ -1255,7 +1335,9 @@ export class FacultyReportsService {
     ).trim();
     if (!projectId) return;
 
-    const studentId = String(report.studentId || report.student?.id || '').trim();
+    const studentId = String(
+      report.studentId || report.student?.id || '',
+    ).trim();
     let logs: AttendanceLog[] = [];
     try {
       logs = await this.attendanceLogsRepository.find({
@@ -1266,8 +1348,9 @@ export class FacultyReportsService {
       return;
     }
 
-    const seed = logs.find((log) => log.participant?.studentId === studentId)
-      ?.participant;
+    const seed = logs.find(
+      (log) => log.participant?.studentId === studentId,
+    )?.participant;
     const now = new Date();
     const toApprove = logs.filter((log) => {
       const status = String(log.approvalStatus || '')
@@ -1298,8 +1381,7 @@ export class FacultyReportsService {
       log.entryStatus = 'verified';
       log.approvalActorUserId = actorId;
       log.approvalActionAt = now;
-      log.approvalActionReason =
-        'Approved with faculty flash-card score lock';
+      log.approvalActionReason = 'Approved with faculty flash-card score lock';
     }
     try {
       await this.attendanceLogsRepository.save(toApprove);
@@ -1417,7 +1499,10 @@ export class FacultyReportsService {
     }
 
     // Build the AI evaluation payload (same as the admin run)
-    const aiPayload = await buildCielPkAiEvaluationPayloadV45(report, this.s3Service);
+    const aiPayload = await buildCielPkAiEvaluationPayloadV45(
+      report,
+      this.s3Service,
+    );
 
     // Same evaluate-with-one-fallback-attempt flow as the admin run.
     // Reuse locked Admin Dim 7 so the stored score is comparable /100, not the /85 mix.
@@ -1498,7 +1583,9 @@ export class FacultyReportsService {
   ) {
     const ids = Array.from(new Set((reportIds || []).filter(Boolean)));
     if (ids.length === 0) {
-      throw new BadRequestException('reportIds must include at least one report id.');
+      throw new BadRequestException(
+        'reportIds must include at least one report id.',
+      );
     }
     if (ids.length > FacultyReportsService.MAX_BATCH_SIZE) {
       throw new BadRequestException(

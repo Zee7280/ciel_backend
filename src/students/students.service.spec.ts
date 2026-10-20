@@ -3,50 +3,53 @@ import { StudentsService } from './students.service';
 import { ReportPartnerApprovalSettingsService } from '../reports/report-partner-approval-settings.service';
 
 const makeService = (overrides: Record<string, unknown> = {}) => {
-    const repositories = {
-      usersRepository: {},
-      opportunitiesRepository: {},
-      timesheetsRepository: { find: jest.fn().mockResolvedValue([]) },
-      participantRepository: { find: jest.fn().mockResolvedValue([]) },
-      studentReportsRepository: { find: jest.fn().mockResolvedValue([]) },
-      orgRepository: {},
-      otpRepository: {},
-      usersService: {},
-      mailService: {},
-      engagementService: {},
-      opportunityWorkflow: {},
-      opportunitiesService: {},
-      opportunityApplicationsService: {},
-      studentReportsService: {
-        getMergedReportsForParticipant: jest.fn().mockResolvedValue([]),
-      },
-      reportPartnerApprovalSettings: {
-        reportRequiresPartnerApprovalSync: jest.fn().mockImplementation((report: { opportunity?: { requiresPartnerApproval?: boolean } }) =>
-          Boolean(report?.opportunity?.requiresPartnerApproval),
+  const repositories = {
+    usersRepository: {},
+    opportunitiesRepository: {},
+    timesheetsRepository: { find: jest.fn().mockResolvedValue([]) },
+    participantRepository: { find: jest.fn().mockResolvedValue([]) },
+    studentReportsRepository: { find: jest.fn().mockResolvedValue([]) },
+    orgRepository: {},
+    otpRepository: {},
+    usersService: {},
+    mailService: {},
+    engagementService: {},
+    opportunityWorkflow: {},
+    opportunitiesService: {},
+    opportunityApplicationsService: {},
+    studentReportsService: {
+      getMergedReportsForParticipant: jest.fn().mockResolvedValue([]),
+    },
+    reportPartnerApprovalSettings: {
+      reportRequiresPartnerApprovalSync: jest
+        .fn()
+        .mockImplementation(
+          (report: { opportunity?: { requiresPartnerApproval?: boolean } }) =>
+            Boolean(report?.opportunity?.requiresPartnerApproval),
         ),
-        isEnabledCached: jest.fn().mockReturnValue(true),
-      },
-      ...overrides,
-    };
-
-    return new StudentsService(
-      repositories.usersRepository as any,
-      repositories.opportunitiesRepository as any,
-      repositories.timesheetsRepository as any,
-      repositories.participantRepository as any,
-      repositories.studentReportsRepository as any,
-      repositories.orgRepository as any,
-      repositories.otpRepository as any,
-      repositories.usersService as any,
-      repositories.mailService as any,
-      repositories.engagementService as any,
-      repositories.opportunityWorkflow as any,
-      repositories.opportunitiesService as any,
-      repositories.opportunityApplicationsService as any,
-      repositories.studentReportsService as any,
-      repositories.reportPartnerApprovalSettings as any,
-    );
+      isEnabledCached: jest.fn().mockReturnValue(true),
+    },
+    ...overrides,
   };
+
+  return new StudentsService(
+    repositories.usersRepository as any,
+    repositories.opportunitiesRepository as any,
+    repositories.timesheetsRepository as any,
+    repositories.participantRepository as any,
+    repositories.studentReportsRepository as any,
+    repositories.orgRepository as any,
+    repositories.otpRepository as any,
+    repositories.usersService as any,
+    repositories.mailService as any,
+    repositories.engagementService as any,
+    repositories.opportunityWorkflow as any,
+    repositories.opportunitiesService as any,
+    repositories.opportunityApplicationsService as any,
+    repositories.studentReportsService as any,
+    repositories.reportPartnerApprovalSettings as any,
+  );
+};
 
 describe('StudentsService impact history', () => {
   it('includes an approved student-created opportunity in the student browse listing', async () => {
@@ -83,7 +86,9 @@ describe('StudentsService impact history', () => {
         count: jest.fn().mockResolvedValue(0),
       },
       opportunityApplicationsService: {
-        mapCurrentApplicationsForOpportunities: jest.fn().mockResolvedValue(new Map()),
+        mapCurrentApplicationsForOpportunities: jest
+          .fn()
+          .mockResolvedValue(new Map()),
         resolveStudentJoinOverlay: jest.fn().mockResolvedValue({
           applicationStatus: null,
           hasApplied: false,
@@ -98,7 +103,10 @@ describe('StudentsService impact history', () => {
 
     const result = await service.getOpportunities({}, 'user-1');
 
-    expect(result.data.map((o: any) => o.id)).toEqual(['opp-team-1', 'opp-normal-1']);
+    expect(result.data.map((o: any) => o.id)).toEqual([
+      'opp-team-1',
+      'opp-normal-1',
+    ]);
     expect(result.path_counts).toEqual({
       all: 2,
       community_service: 2,
@@ -147,7 +155,9 @@ describe('StudentsService impact history', () => {
         count: jest.fn().mockResolvedValue(0),
       },
       opportunityApplicationsService: {
-        mapCurrentApplicationsForOpportunities: jest.fn().mockResolvedValue(new Map()),
+        mapCurrentApplicationsForOpportunities: jest
+          .fn()
+          .mockResolvedValue(new Map()),
         resolveStudentJoinOverlay: jest.fn().mockResolvedValue({
           applicationStatus: null,
           hasApplied: false,
@@ -201,7 +211,10 @@ describe('StudentsService impact history', () => {
     const enrolledService = makeService({
       opportunitiesRepository: { findOne: jest.fn().mockResolvedValue(hidden) },
       participantRepository: {
-        findOne: jest.fn().mockResolvedValue({ studentId: 'enrolled-user', projectId: 'opp-hidden' }),
+        findOne: jest.fn().mockResolvedValue({
+          studentId: 'enrolled-user',
+          projectId: 'opp-hidden',
+        }),
         count: jest.fn().mockResolvedValue(0),
       },
       opportunityApplicationsService: {
@@ -214,7 +227,10 @@ describe('StudentsService impact history', () => {
         countSeatsInFlight: jest.fn().mockResolvedValue(0),
       },
     });
-    const result = await enrolledService.getOpportunityById('opp-hidden', 'enrolled-user');
+    const result = await enrolledService.getOpportunityById(
+      'opp-hidden',
+      'enrolled-user',
+    );
     expect(result.success).toBe(true);
     expect(result.data.id).toBe('opp-hidden');
   });
@@ -244,7 +260,9 @@ describe('StudentsService impact history', () => {
         count: jest.fn().mockResolvedValue(0),
       },
       opportunityApplicationsService: {
-        mapCurrentApplicationsForOpportunities: jest.fn().mockResolvedValue(new Map()),
+        mapCurrentApplicationsForOpportunities: jest
+          .fn()
+          .mockResolvedValue(new Map()),
         resolveStudentJoinOverlay: jest.fn().mockResolvedValue({
           applicationStatus: null,
           hasApplied: false,
@@ -442,51 +460,53 @@ describe('StudentsService impact history', () => {
 describe('StudentsService getDashboard analytics', () => {
   it('exposes student_analytics and per-project fields including team_size', async () => {
     const createdAt = new Date('2025-01-15T12:00:00Z');
-    const participantFind = jest.fn().mockImplementation((opts: { select?: string[] }) => {
-      if (opts?.select) {
+    const participantFind = jest
+      .fn()
+      .mockImplementation((opts: { select?: string[] }) => {
+        if (opts?.select) {
+          return Promise.resolve([
+            {
+              id: 'self-p',
+              projectId: 'proj-1',
+              teamId: 'team-a',
+              applicationId: null,
+              participationMode: 'team',
+            },
+            {
+              id: 'mate-1',
+              projectId: 'proj-1',
+              teamId: 'team-a',
+              applicationId: null,
+              participationMode: 'team',
+            },
+            {
+              id: 'mate-2',
+              projectId: 'proj-1',
+              teamId: 'team-a',
+              applicationId: null,
+              participationMode: 'team',
+            },
+          ]);
+        }
         return Promise.resolve([
           {
+            projectId: 'proj-1',
+            createdAt,
+            status: 'approved',
+            participationMode: 'team',
+            teamId: 'team-a',
+            applicationId: null,
+            academicIntegrationType: 'Course-Linked',
             id: 'self-p',
-            projectId: 'proj-1',
-            teamId: 'team-a',
-            applicationId: null,
-            participationMode: 'team',
-          },
-          {
-            id: 'mate-1',
-            projectId: 'proj-1',
-            teamId: 'team-a',
-            applicationId: null,
-            participationMode: 'team',
-          },
-          {
-            id: 'mate-2',
-            projectId: 'proj-1',
-            teamId: 'team-a',
-            applicationId: null,
-            participationMode: 'team',
+            project: {
+              title: 'Community Lab',
+              sdg_info: { sdg_id: '4' },
+              timeline: { expected_hours: 40 },
+              requiredHours: 16,
+            },
           },
         ]);
-      }
-      return Promise.resolve([
-        {
-          projectId: 'proj-1',
-          createdAt,
-          status: 'approved',
-          participationMode: 'team',
-          teamId: 'team-a',
-          applicationId: null,
-          academicIntegrationType: 'Course-Linked',
-          id: 'self-p',
-          project: {
-            title: 'Community Lab',
-            sdg_info: { sdg_id: '4' },
-            timeline: { expected_hours: 40 },
-            requiredHours: 16,
-          },
-        },
-      ]);
-    });
+      });
 
     const service = new StudentsService(
       {
@@ -510,7 +530,10 @@ describe('StudentsService getDashboard analytics', () => {
         count: jest.fn().mockResolvedValue(0),
         find: participantFind,
       } as any,
-      { find: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0) } as any,
+      {
+        find: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+      } as any,
       {} as any,
       {} as any,
       {} as any,
@@ -546,29 +569,31 @@ describe('StudentsService getDashboard analytics', () => {
   });
 
   it('falls back to opportunity.requiredHours when timeline expected_hours is absent', async () => {
-    const participantFind = jest.fn().mockImplementation((opts: { select?: string[] }) => {
-      if (opts?.select) {
-        return Promise.resolve([]);
-      }
-      return Promise.resolve([
-        {
-          projectId: 'proj-2',
-          createdAt: new Date(),
-          status: 'approved',
-          participationMode: 'individual',
-          teamId: null,
-          applicationId: null,
-          academicIntegrationType: null,
-          id: 'solo-p',
-          project: {
-            title: 'Solo',
-            sdg_info: {},
-            timeline: {},
-            requiredHours: 24,
+    const participantFind = jest
+      .fn()
+      .mockImplementation((opts: { select?: string[] }) => {
+        if (opts?.select) {
+          return Promise.resolve([]);
+        }
+        return Promise.resolve([
+          {
+            projectId: 'proj-2',
+            createdAt: new Date(),
+            status: 'approved',
+            participationMode: 'individual',
+            teamId: null,
+            applicationId: null,
+            academicIntegrationType: null,
+            id: 'solo-p',
+            project: {
+              title: 'Solo',
+              sdg_info: {},
+              timeline: {},
+              requiredHours: 24,
+            },
           },
-        },
-      ]);
-    });
+        ]);
+      });
 
     const service = new StudentsService(
       {
@@ -589,7 +614,10 @@ describe('StudentsService getDashboard analytics', () => {
       {} as any,
       { find: jest.fn().mockResolvedValue([]) } as any,
       { count: jest.fn().mockResolvedValue(0), find: participantFind } as any,
-      { find: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0) } as any,
+      {
+        find: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+      } as any,
       {} as any,
       {} as any,
       {} as any,
@@ -612,7 +640,9 @@ describe('StudentsService getDashboard analytics', () => {
 });
 
 describe('StudentsService.sendTeamMemberOtp', () => {
-  const makeOtpService = (existingSeat: { id: string; isTeamLead: boolean } | null) => {
+  const makeOtpService = (
+    existingSeat: { id: string; isTeamLead: boolean } | null,
+  ) => {
     const qb = {
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
@@ -650,7 +680,11 @@ describe('StudentsService.sendTeamMemberOtp', () => {
 
   it('sends OTP when the email is not already on the project', async () => {
     const service = makeOtpService(null);
-    const result = await service.sendTeamMemberOtp('new@test.edu', 'proj-1', true);
+    const result = await service.sendTeamMemberOtp(
+      'new@test.edu',
+      'proj-1',
+      true,
+    );
     expect(result).toEqual({
       success: true,
       message: 'OTP sent successfully',
@@ -695,7 +729,9 @@ describe('StudentsService.sendTeamMemberOtp', () => {
         create: jest.fn().mockImplementation((row) => row),
         save,
       },
-      mailService: { sendTeamMemberOtp: jest.fn().mockResolvedValue(undefined) },
+      mailService: {
+        sendTeamMemberOtp: jest.fn().mockResolvedValue(undefined),
+      },
     });
     await service.sendTeamMemberOtp('  New@Test.EDU  ');
     expect(save).toHaveBeenCalledWith(
@@ -711,7 +747,9 @@ describe('StudentsService.sendTeamMemberOtp', () => {
         createQueryBuilder: jest.fn().mockReturnValue({
           where: jest.fn().mockReturnThis(),
           andWhere: jest.fn().mockReturnThis(),
-          getOne: jest.fn().mockRejectedValue(new Error('invalid input syntax for type uuid')),
+          getOne: jest
+            .fn()
+            .mockRejectedValue(new Error('invalid input syntax for type uuid')),
         }),
       },
       otpRepository: {
@@ -719,9 +757,15 @@ describe('StudentsService.sendTeamMemberOtp', () => {
         create: jest.fn().mockImplementation((row) => row),
         save,
       },
-      mailService: { sendTeamMemberOtp: jest.fn().mockResolvedValue(undefined) },
+      mailService: {
+        sendTeamMemberOtp: jest.fn().mockResolvedValue(undefined),
+      },
     });
-    const result = await service.sendTeamMemberOtp('new@test.edu', 'not-a-real-uuid', true);
+    const result = await service.sendTeamMemberOtp(
+      'new@test.edu',
+      'not-a-real-uuid',
+      true,
+    );
     expect(result).toEqual({ success: true, message: 'OTP sent successfully' });
     expect(save).toHaveBeenCalled();
   });
@@ -732,9 +776,13 @@ describe('StudentsService.sendTeamMemberOtp', () => {
       otpRepository: {
         findOne: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockImplementation((row) => row),
-        save: jest.fn().mockRejectedValue(new Error('relation "otps" has no column "foo"')),
+        save: jest
+          .fn()
+          .mockRejectedValue(new Error('relation "otps" has no column "foo"')),
       },
-      mailService: { sendTeamMemberOtp: jest.fn().mockResolvedValue(undefined) },
+      mailService: {
+        sendTeamMemberOtp: jest.fn().mockResolvedValue(undefined),
+      },
     });
     await expect(service.sendTeamMemberOtp('new@test.edu')).rejects.toThrow(
       /Failed to send verification code/,
@@ -750,14 +798,18 @@ describe('StudentsService.confirmTeamMemberOtp', () => {
       service.confirmTeamMemberOtp(' New@Test.EDU ', '123456'),
     ).rejects.toThrow(/Invalid OTP/);
     expect(findOne).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { email: 'new@test.edu', otp: '123456' } }),
+      expect.objectContaining({
+        where: { email: 'new@test.edu', otp: '123456' },
+      }),
     );
   });
 
   it('turns an OTP lookup failure into a clean message instead of an unhandled 500', async () => {
     const service = makeService({
       otpRepository: {
-        findOne: jest.fn().mockRejectedValue(new Error('connection terminated')),
+        findOne: jest
+          .fn()
+          .mockRejectedValue(new Error('connection terminated')),
       },
     });
     await expect(
@@ -766,24 +818,39 @@ describe('StudentsService.confirmTeamMemberOtp', () => {
   });
 
   it('keeps the row as proof of verification (verifiedAt set, code burned) instead of deleting it', async () => {
-    const record: any = { email: 'new@test.edu', otp: '123456', expiresAt: new Date(Date.now() + 60000), verifiedAt: null };
+    const record: any = {
+      email: 'new@test.edu',
+      otp: '123456',
+      expiresAt: new Date(Date.now() + 60000),
+      verifiedAt: null,
+    };
     const save = jest.fn().mockImplementation(async (r) => r);
-    const service = makeService({ otpRepository: { findOne: jest.fn().mockResolvedValue(record), save } });
+    const service = makeService({
+      otpRepository: { findOne: jest.fn().mockResolvedValue(record), save },
+    });
     const result = await service.confirmTeamMemberOtp('new@test.edu', '123456');
     expect(result).toEqual({ success: true, message: 'Email verified' });
-    expect(save).toHaveBeenCalledWith(expect.objectContaining({ otp: '', verifiedAt: expect.any(Date) }));
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ otp: '', verifiedAt: expect.any(Date) }),
+    );
     expect(record.expiresAt.getTime()).toBeLessThanOrEqual(Date.now());
   });
 
   it('fails clearly when the verification cannot be recorded (apply would otherwise refuse the member)', async () => {
-    const record = { email: 'new@test.edu', otp: '123456', expiresAt: new Date(Date.now() + 60000) };
+    const record = {
+      email: 'new@test.edu',
+      otp: '123456',
+      expiresAt: new Date(Date.now() + 60000),
+    };
     const service = makeService({
       otpRepository: {
         findOne: jest.fn().mockResolvedValue(record),
         save: jest.fn().mockRejectedValue(new Error('row locked')),
       },
     });
-    await expect(service.confirmTeamMemberOtp('new@test.edu', '123456')).rejects.toThrow(/Could not record the verification/);
+    await expect(
+      service.confirmTeamMemberOtp('new@test.edu', '123456'),
+    ).rejects.toThrow(/Could not record the verification/);
   });
 });
 
@@ -791,12 +858,14 @@ describe('StudentsService.sendTeamMemberVerification', () => {
   it('turns a mail-send failure into a clean message instead of an unhandled 500', async () => {
     const service = makeService({
       mailService: {
-        sendTeamMemberInvite: jest.fn().mockRejectedValue(new Error('SMTP auth failed')),
+        sendTeamMemberInvite: jest
+          .fn()
+          .mockRejectedValue(new Error('SMTP auth failed')),
       },
     });
-    await expect(service.sendTeamMemberVerification('new@test.edu')).rejects.toThrow(
-      /Failed to send the invitation email/,
-    );
+    await expect(
+      service.sendTeamMemberVerification('new@test.edu'),
+    ).rejects.toThrow(/Failed to send the invitation email/);
   });
 });
 
@@ -818,8 +887,15 @@ describe('StudentsService.updateStudentOpportunity — same guards as create', (
     const save = jest.fn(async (row: unknown) => row);
     const validateEditPatch = jest.fn();
     const service = makeService({
-      opportunitiesRepository: { findOne: jest.fn().mockResolvedValue(opp), save },
-      usersRepository: { findOne: jest.fn().mockResolvedValue({ id: 'stu-1', university: 'BNU' }) },
+      opportunitiesRepository: {
+        findOne: jest.fn().mockResolvedValue(opp),
+        save,
+      },
+      usersRepository: {
+        findOne: jest
+          .fn()
+          .mockResolvedValue({ id: 'stu-1', university: 'BNU' }),
+      },
       opportunitiesService: {
         validateEditPatch,
         validateLocation: jest.fn(),
@@ -839,16 +915,21 @@ describe('StudentsService.updateStudentOpportunity — same guards as create', (
     ).rejects.toThrow(/own university/);
   });
 
-  it('forces restricted_universities to the student\'s own university, ignoring the client value', async () => {
+  it("forces restricted_universities to the student's own university, ignoring the client value", async () => {
     const { service, opp } = setup();
     await service.updateStudentOpportunity('stu-1', 'opp-1', {
       title: 'New title',
       restricted_universities: ['LUMS', 'IBA'],
-      participation_scope: { rule: 'own_university_only', university_names: ['LUMS'] },
+      participation_scope: {
+        rule: 'own_university_only',
+        university_names: ['LUMS'],
+      },
     } as any);
     expect(opp.restricted_universities).toEqual(['BNU']);
     expect((opp.participation_scope as any).university_names).toEqual(['BNU']);
-    expect((opp.participation_scope as any).creator_university_name).toBe('BNU');
+    expect((opp.participation_scope as any).creator_university_name).toBe(
+      'BNU',
+    );
   });
 
   it('runs the create-time validators on the edited keys', async () => {
@@ -867,7 +948,9 @@ describe('StudentsService.updateStudentOpportunity — same guards as create', (
       throw new Error('All safety_declaration checks must be true');
     });
     await expect(
-      service.updateStudentOpportunity('stu-1', 'opp-1', { safety_declaration: {} } as any),
+      service.updateStudentOpportunity('stu-1', 'opp-1', {
+        safety_declaration: {},
+      } as any),
     ).rejects.toThrow(/safety_declaration/);
     expect(save).not.toHaveBeenCalled();
   });
@@ -875,7 +958,8 @@ describe('StudentsService.updateStudentOpportunity — same guards as create', (
 
 describe('StudentsService.applyToOpportunity — dates, seats and team eligibility', () => {
   const TODAY = new Date().toISOString().slice(0, 10);
-  const addDays = (d: number) => new Date(Date.now() + d * 86400000).toISOString().slice(0, 10);
+  const addDays = (d: number) =>
+    new Date(Date.now() + d * 86400000).toISOString().slice(0, 10);
 
   const build = (opts: {
     timeline?: Record<string, unknown>;
@@ -891,24 +975,38 @@ describe('StudentsService.applyToOpportunity — dates, seats and team eligibili
       status: 'active',
       admin_approved: true,
       workflowStage: 'live',
-      timeline: opts.timeline ?? { start_date: addDays(-5), end_date: addDays(20), volunteers_required: 10 },
+      timeline: opts.timeline ?? {
+        start_date: addDays(-5),
+        end_date: addDays(20),
+        volunteers_required: 10,
+      },
       participation_scope: opts.scope ?? { rule: 'open_all_universities' },
       supervision: { contact: 'faculty@uni.edu' },
     };
-    const user = { id: 'lead', name: 'Lead', email: 'lead@uni.edu', university: 'BNU', department: 'Arch' };
+    const user = {
+      id: 'lead',
+      name: 'Lead',
+      email: 'lead@uni.edu',
+      university: 'BNU',
+      department: 'Arch',
+    };
     const qb = {
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
       getOne: jest.fn().mockResolvedValue(null),
       getMany: jest.fn().mockResolvedValue(opts.memberUsers ?? []),
     };
-    const createApplication = jest.fn().mockResolvedValue({ id: 'app-1', internalStatus: 'pending_faculty' });
+    const createApplication = jest
+      .fn()
+      .mockResolvedValue({ id: 'app-1', internalStatus: 'pending_faculty' });
     const chain: any = new Proxy(
       {},
       {
         get: (_t, prop: string) => {
-          if (prop === 'getMany' || prop === 'getRawMany') return jest.fn().mockResolvedValue([]);
-          if (prop === 'getOne' || prop === 'getRawOne') return jest.fn().mockResolvedValue(null);
+          if (prop === 'getMany' || prop === 'getRawMany')
+            return jest.fn().mockResolvedValue([]);
+          if (prop === 'getOne' || prop === 'getRawOne')
+            return jest.fn().mockResolvedValue(null);
           if (prop === 'getCount') return jest.fn().mockResolvedValue(0);
           return jest.fn().mockReturnValue(chain);
         },
@@ -918,7 +1016,9 @@ describe('StudentsService.applyToOpportunity — dates, seats and team eligibili
       hasOpenPipelineApplication: jest.fn().mockResolvedValue(false),
       findLatestForStudentOpportunity: jest.fn().mockResolvedValue(null),
       isTerminalRejection: jest.fn().mockReturnValue(false),
-      collectClaimedEmailsOnOpenApplications: jest.fn().mockResolvedValue(new Set()),
+      collectClaimedEmailsOnOpenApplications: jest
+        .fn()
+        .mockResolvedValue(new Set()),
       isTeamSlugInUseOnOpportunity: jest.fn().mockResolvedValue(false),
       countSeatsInFlight: jest.fn().mockResolvedValue(0),
       createApplication,
@@ -926,8 +1026,13 @@ describe('StudentsService.applyToOpportunity — dates, seats and team eligibili
       applicationStage: jest.fn().mockReturnValue('faculty'),
     };
     const service = makeService({
-      opportunitiesRepository: { findOne: jest.fn().mockResolvedValue(opportunity) },
-      usersRepository: { findOne: jest.fn().mockResolvedValue(user), createQueryBuilder: jest.fn(() => qb) },
+      opportunitiesRepository: {
+        findOne: jest.fn().mockResolvedValue(opportunity),
+      },
+      usersRepository: {
+        findOne: jest.fn().mockResolvedValue(user),
+        createQueryBuilder: jest.fn(() => qb),
+      },
       participantRepository: {
         findOne: jest.fn().mockResolvedValue(null),
         find: jest.fn().mockResolvedValue([]),
@@ -937,7 +1042,9 @@ describe('StudentsService.applyToOpportunity — dates, seats and team eligibili
       opportunityApplicationsService: apps,
       otpRepository: {
         find: jest.fn().mockResolvedValue(
-          (opts.verifiedEmails ?? ['a@uni.edu', 'b@uni.edu', 'a@other.edu']).map((email) => ({
+          (
+            opts.verifiedEmails ?? ['a@uni.edu', 'b@uni.edu', 'a@other.edu']
+          ).map((email) => ({
             email,
             otp: '',
             expiresAt: new Date(),
@@ -966,21 +1073,31 @@ describe('StudentsService.applyToOpportunity — dates, seats and team eligibili
 
   it('accepts an eligible individual application while the project is running', async () => {
     const { service, createApplication } = build({});
-    await expect(service.applyToOpportunity('lead', dto())).resolves.toMatchObject({ success: true });
+    await expect(
+      service.applyToOpportunity('lead', dto()),
+    ).resolves.toMatchObject({ success: true });
     expect(createApplication).toHaveBeenCalled();
   });
 
   it('refuses NEW applications after the project end date, even inside the 60-day reporting window', async () => {
     const { service, createApplication } = build({
-      timeline: { start_date: addDays(-40), end_date: addDays(-10), volunteers_required: 10 },
+      timeline: {
+        start_date: addDays(-40),
+        end_date: addDays(-10),
+        volunteers_required: 10,
+      },
     });
-    await expect(service.applyToOpportunity('lead', dto())).rejects.toThrow(/has ended, so new applications are closed/);
+    await expect(service.applyToOpportunity('lead', dto())).rejects.toThrow(
+      /has ended, so new applications are closed/,
+    );
     expect(createApplication).not.toHaveBeenCalled();
   });
 
   it('refuses when every seat is taken', async () => {
     const { service, createApplication } = build({ occupied: 10 });
-    await expect(service.applyToOpportunity('lead', dto())).rejects.toThrow(/All seats .* are taken/);
+    await expect(service.applyToOpportunity('lead', dto())).rejects.toThrow(
+      /All seats .* are taken/,
+    );
     expect(createApplication).not.toHaveBeenCalled();
   });
 
@@ -1000,50 +1117,94 @@ describe('StudentsService.applyToOpportunity — dates, seats and team eligibili
     ).rejects.toThrow(/Only 2 seats left/);
   });
 
-  it("refuses a team member whose account is not eligible (different university than the opportunity allows)", async () => {
+  it('refuses a team member whose account is not eligible (different university than the opportunity allows)', async () => {
     const { service, createApplication } = build({
-      scope: { rule: 'own_university_only', creator_university_name: 'BNU', university_names: ['BNU'] },
-      memberUsers: [{ id: 'm1', email: 'a@other.edu', university: 'LUMS', department: 'CS' }],
+      scope: {
+        rule: 'own_university_only',
+        creator_university_name: 'BNU',
+        university_names: ['BNU'],
+      },
+      memberUsers: [
+        {
+          id: 'm1',
+          email: 'a@other.edu',
+          university: 'LUMS',
+          department: 'CS',
+        },
+      ],
     });
     await expect(
       service.applyToOpportunity(
         'lead',
         dto({
           participation_type: 'team',
-          team_members: [{ email: 'a@other.edu', name: 'A', mobile: '03001111111', university: 'BNU' }],
+          team_members: [
+            {
+              email: 'a@other.edu',
+              name: 'A',
+              mobile: '03001111111',
+              university: 'BNU',
+            },
+          ],
         }),
       ),
-    ).rejects.toThrow(/a@other.edu is at LUMS, but this opportunity is open to/);
+    ).rejects.toThrow(
+      /a@other.edu is at LUMS, but this opportunity is open to/,
+    );
     expect(createApplication).not.toHaveBeenCalled();
   });
 
   it('refuses a teammate declared at a university outside the listing scope, account or not', async () => {
     const { service, createApplication } = build({
-      scope: { rule: 'own_university_only', creator_university_name: 'Beaconhouse National University (BNU)' },
+      scope: {
+        rule: 'own_university_only',
+        creator_university_name: 'Beaconhouse National University (BNU)',
+      },
     });
     await expect(
       service.applyToOpportunity(
         'lead',
         dto({
           participation_type: 'team',
-          team_members: [{ email: 'a@uni.edu', name: 'Ayesha', mobile: '03001111111', university: 'LUMS' }],
+          team_members: [
+            {
+              email: 'a@uni.edu',
+              name: 'Ayesha',
+              mobile: '03001111111',
+              university: 'LUMS',
+            },
+          ],
         }),
       ),
-    ).rejects.toThrow(/Ayesha is at LUMS, but this opportunity is open to Beaconhouse National University \(BNU\) students only/);
+    ).rejects.toThrow(
+      /Ayesha is at LUMS, but this opportunity is open to Beaconhouse National University \(BNU\) students only/,
+    );
     expect(createApplication).not.toHaveBeenCalled();
   });
 
   it('accepts the short profile spelling of the host university ("BNU") for lead and teammates', async () => {
     const { service, createApplication } = build({
-      scope: { rule: 'own_university_only', creator_university_name: 'Beaconhouse National University (BNU)' },
-      memberUsers: [{ id: 'm1', email: 'a@uni.edu', university: 'BNU', department: 'CS' }],
+      scope: {
+        rule: 'own_university_only',
+        creator_university_name: 'Beaconhouse National University (BNU)',
+      },
+      memberUsers: [
+        { id: 'm1', email: 'a@uni.edu', university: 'BNU', department: 'CS' },
+      ],
     });
     await expect(
       service.applyToOpportunity(
         'lead',
         dto({
           participation_type: 'team',
-          team_members: [{ email: 'a@uni.edu', name: 'A', mobile: '03001111111', university: 'BNU' }],
+          team_members: [
+            {
+              email: 'a@uni.edu',
+              name: 'A',
+              mobile: '03001111111',
+              university: 'BNU',
+            },
+          ],
         }),
       ),
     ).resolves.toMatchObject({ success: true });
@@ -1052,14 +1213,24 @@ describe('StudentsService.applyToOpportunity — dates, seats and team eligibili
 
   it('refuses a teammate with no CIEL account on a university-restricted listing (declared university is not trusted)', async () => {
     const { service, createApplication } = build({
-      scope: { rule: 'own_university_only', creator_university_name: 'Beaconhouse National University (BNU)' },
+      scope: {
+        rule: 'own_university_only',
+        creator_university_name: 'Beaconhouse National University (BNU)',
+      },
     });
     await expect(
       service.applyToOpportunity(
         'lead',
         dto({
           participation_type: 'team',
-          team_members: [{ email: 'a@uni.edu', name: 'A', mobile: '03001111111', university: 'BNU' }],
+          team_members: [
+            {
+              email: 'a@uni.edu',
+              name: 'A',
+              mobile: '03001111111',
+              university: 'BNU',
+            },
+          ],
         }),
       ),
     ).rejects.toThrow(/a@uni.edu has no CIEL student account/);
@@ -1069,12 +1240,20 @@ describe('StudentsService.applyToOpportunity — dates, seats and team eligibili
   it('refuses a "team" with nobody besides the lead', async () => {
     const { service, createApplication } = build({});
     await expect(
-      service.applyToOpportunity('lead', dto({ participation_type: 'team', team_members: [] })),
+      service.applyToOpportunity(
+        'lead',
+        dto({ participation_type: 'team', team_members: [] }),
+      ),
     ).rejects.toThrow(/at least one teammate/);
     await expect(
       service.applyToOpportunity(
         'lead',
-        dto({ participation_type: 'team', team_members: [{ email: 'lead@uni.edu', name: 'Lead', mobile: '03001111111' }] }),
+        dto({
+          participation_type: 'team',
+          team_members: [
+            { email: 'lead@uni.edu', name: 'Lead', mobile: '03001111111' },
+          ],
+        }),
       ),
     ).rejects.toThrow(/at least one teammate/);
     expect(createApplication).not.toHaveBeenCalled();
@@ -1088,8 +1267,19 @@ describe('StudentsService.applyToOpportunity — dates, seats and team eligibili
         dto({
           participation_type: 'team',
           team_members: [
-            { email: 'lead@uni.edu', name: 'Lead', mobile: '03001111111', cnic: '35202-1234567-1', role: 'Lead' },
-            { email: 'a@uni.edu', name: 'A', mobile: '03002222222', cnic: '3520212345671' },
+            {
+              email: 'lead@uni.edu',
+              name: 'Lead',
+              mobile: '03001111111',
+              cnic: '35202-1234567-1',
+              role: 'Lead',
+            },
+            {
+              email: 'a@uni.edu',
+              name: 'A',
+              mobile: '03002222222',
+              cnic: '3520212345671',
+            },
           ],
         }),
       ),
@@ -1097,7 +1287,9 @@ describe('StudentsService.applyToOpportunity — dates, seats and team eligibili
   });
 
   it('refuses a teammate whose email has no confirmed OTP', async () => {
-    const { service, createApplication } = build({ verifiedEmails: ['b@uni.edu'] });
+    const { service, createApplication } = build({
+      verifiedEmails: ['b@uni.edu'],
+    });
     await expect(
       service.applyToOpportunity(
         'lead',
@@ -1115,7 +1307,10 @@ describe('StudentsService.applyToOpportunity — dates, seats and team eligibili
 });
 
 describe('StudentsService.updateStudentOpportunity — lifecycle guards and resubmit', () => {
-  const setupWith = (oppOverrides: Record<string, unknown>, serviceOverrides: Record<string, unknown> = {}) => {
+  const setupWith = (
+    oppOverrides: Record<string, unknown>,
+    serviceOverrides: Record<string, unknown> = {},
+  ) => {
     const opp: Record<string, unknown> = {
       id: 'opp-1',
       creatorId: 'stu-1',
@@ -1140,8 +1335,15 @@ describe('StudentsService.updateStudentOpportunity — lifecycle guards and resu
       return { notifyFaculty: false, notifyPartner: false };
     });
     const service = makeService({
-      opportunitiesRepository: { findOne: jest.fn().mockResolvedValue(opp), save },
-      usersRepository: { findOne: jest.fn().mockResolvedValue({ id: 'stu-1', university: 'BNU' }) },
+      opportunitiesRepository: {
+        findOne: jest.fn().mockResolvedValue(opp),
+        save,
+      },
+      usersRepository: {
+        findOne: jest
+          .fn()
+          .mockResolvedValue({ id: 'stu-1', university: 'BNU' }),
+      },
       opportunitiesService: {
         validateEditPatch: jest.fn(),
         validateLocation: jest.fn(),
@@ -1161,9 +1363,15 @@ describe('StudentsService.updateStudentOpportunity — lifecycle guards and resu
   };
 
   it('refuses to edit a LIVE listing (nothing saved)', async () => {
-    const { service, save } = setupWith({ admin_approved: true, status: 'active', workflowStage: 'live' });
+    const { service, save } = setupWith({
+      admin_approved: true,
+      status: 'active',
+      workflowStage: 'live',
+    });
     await expect(
-      service.updateStudentOpportunity('stu-1', 'opp-1', { title: 'Rewrite after going live' } as any),
+      service.updateStudentOpportunity('stu-1', 'opp-1', {
+        title: 'Rewrite after going live',
+      } as any),
     ).rejects.toThrow(/Approved opportunities cannot be updated/);
     expect(save).not.toHaveBeenCalled();
   });
@@ -1175,7 +1383,9 @@ describe('StudentsService.updateStudentOpportunity — lifecycle guards and resu
       facultyApprovalStatus: 'rejected',
     });
     await expect(
-      service.updateStudentOpportunity('stu-1', 'opp-1', { title: 'Try again' } as any),
+      service.updateStudentOpportunity('stu-1', 'opp-1', {
+        title: 'Try again',
+      } as any),
     ).rejects.toThrow(/permanently rejected/);
     expect(save).not.toHaveBeenCalled();
   });
@@ -1183,14 +1393,18 @@ describe('StudentsService.updateStudentOpportunity — lifecycle guards and resu
   it('refuses a student who is not the creator', async () => {
     const { service, save } = setupWith({ creatorId: 'someone-else' });
     await expect(
-      service.updateStudentOpportunity('stu-1', 'opp-1', { title: 'Not mine' } as any),
+      service.updateStudentOpportunity('stu-1', 'opp-1', {
+        title: 'Not mine',
+      } as any),
     ).rejects.toThrow(/do not have access/);
     expect(save).not.toHaveBeenCalled();
   });
 
   it('a routine edit while pending keeps the stage, bumps nothing, and reports a plain update', async () => {
     const { service, opp, applyResubmit } = setupWith({});
-    const res = await service.updateStudentOpportunity('stu-1', 'opp-1', { title: 'Typo fix' } as any);
+    const res = await service.updateStudentOpportunity('stu-1', 'opp-1', {
+      title: 'Typo fix',
+    } as any);
     expect(res.message).toBe('Opportunity updated successfully');
     expect(opp.workflowStage).toBe('pending_faculty');
     expect(opp.version).toBe(1);
@@ -1198,19 +1412,24 @@ describe('StudentsService.updateStudentOpportunity — lifecycle guards and resu
   });
 
   it('an edit during revision resubmits: pipeline re-planned, reason cleared, version bumped, reviewers notified per plan', async () => {
-    const { service, opp, applyResubmit, notifyFaculty, notifyPartner } = setupWith({
-      status: 'revision',
-      workflowStage: 'revision',
-      adminApprovalStatus: 'revision_requested',
-      rejectionReason: 'Add the schedule.',
-    });
-    applyResubmit.mockImplementationOnce(async (row: Record<string, unknown>) => {
-      row.workflowStage = 'pending_faculty';
-      row.status = 'pending_faculty';
-      return { notifyFaculty: true, notifyPartner: false };
-    });
+    const { service, opp, applyResubmit, notifyFaculty, notifyPartner } =
+      setupWith({
+        status: 'revision',
+        workflowStage: 'revision',
+        adminApprovalStatus: 'revision_requested',
+        rejectionReason: 'Add the schedule.',
+      });
+    applyResubmit.mockImplementationOnce(
+      async (row: Record<string, unknown>) => {
+        row.workflowStage = 'pending_faculty';
+        row.status = 'pending_faculty';
+        return { notifyFaculty: true, notifyPartner: false };
+      },
+    );
 
-    const res = await service.updateStudentOpportunity('stu-1', 'opp-1', { title: 'Schedule added' } as any);
+    const res = await service.updateStudentOpportunity('stu-1', 'opp-1', {
+      title: 'Schedule added',
+    } as any);
 
     expect(res.message).toBe('Opportunity updated and resubmitted for review');
     expect(applyResubmit).toHaveBeenCalledTimes(1);

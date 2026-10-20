@@ -15,13 +15,21 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 
 @Module({
-    imports: [TypeOrmModule.forFeature([SupportFaq, SupportTicket, User]), AuditLogsModule, NotificationsModule],
-    controllers: [
-        StudentSupportController,
-        FacultySupportController,
-        PartnerSupportController,
-        AdminSupportController,
-    ],
-    providers: [StudentSupportService, AdminSupportService, CreateTicketRateLimitGuard],
+  imports: [
+    TypeOrmModule.forFeature([SupportFaq, SupportTicket, User]),
+    AuditLogsModule,
+    NotificationsModule,
+  ],
+  controllers: [
+    StudentSupportController,
+    FacultySupportController,
+    PartnerSupportController,
+    AdminSupportController,
+  ],
+  providers: [
+    StudentSupportService,
+    AdminSupportService,
+    CreateTicketRateLimitGuard,
+  ],
 })
-export class SupportModule { }
+export class SupportModule {}

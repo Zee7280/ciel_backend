@@ -15,13 +15,21 @@ import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 import { FacultyUniversityScopeModule } from '../faculty-university-scope/faculty-university-scope.module';
 
 @Module({
-    imports: [
-        TypeOrmModule.forFeature([Organization, User, Opportunity, OpportunityApplication, Timesheet, Report, Participation]),
-        AuditLogsModule,
-        FacultyUniversityScopeModule,
-    ],
-    controllers: [OrganizationsController, AdminOrganizationsController],
-    providers: [OrganizationsService],
-    exports: [OrganizationsService],
+  imports: [
+    TypeOrmModule.forFeature([
+      Organization,
+      User,
+      Opportunity,
+      OpportunityApplication,
+      Timesheet,
+      Report,
+      Participation,
+    ]),
+    AuditLogsModule,
+    FacultyUniversityScopeModule,
+  ],
+  controllers: [OrganizationsController, AdminOrganizationsController],
+  providers: [OrganizationsService],
+  exports: [OrganizationsService],
 })
-export class OrganizationsModule { }
+export class OrganizationsModule {}

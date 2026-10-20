@@ -1,8 +1,8 @@
 import { StudentReportsService } from './student-reports.service';
 
-const redact = (StudentReportsService as any).redactSection11ScoreForStudent.bind(
-  StudentReportsService,
-);
+const redact = (
+  StudentReportsService as any
+).redactSection11ScoreForStudent.bind(StudentReportsService);
 
 const PENDING_RESPONSE = {
   success: true,
@@ -13,7 +13,7 @@ const PENDING_RESPONSE = {
       ai_generated_impact_score: 92,
       institutional_alignment_score: 88,
       verified_narrative: 'A glowing AI narrative.',
-      summary_text: "Section 11 audit: strong evidence base.",
+      summary_text: 'Section 11 audit: strong evidence base.',
       audit_meta: { risk_level: 'low' },
     },
   },
@@ -23,8 +23,12 @@ describe('StudentReportsService.redactSection11ScoreForStudent', () => {
   it('strips the AI-only score/narrative fields before Faculty has approved', () => {
     const result = redact(PENDING_RESPONSE);
 
-    expect(result.data.section11).not.toHaveProperty('ai_generated_impact_score');
-    expect(result.data.section11).not.toHaveProperty('institutional_alignment_score');
+    expect(result.data.section11).not.toHaveProperty(
+      'ai_generated_impact_score',
+    );
+    expect(result.data.section11).not.toHaveProperty(
+      'institutional_alignment_score',
+    );
     expect(result.data.section11).not.toHaveProperty('verified_narrative');
     // The student's own self-audit text (from the wizard's Section 11 step) stays intact.
     expect(result.data.section11.summary_text).toBe(
@@ -54,7 +58,8 @@ describe('StudentReportsService.redactSection11ScoreForStudent', () => {
   });
 });
 
-const stripWritable = (StudentReportsService.prototype as any).stripStudentWritableSection11;
+const stripWritable = (StudentReportsService.prototype as any)
+  .stripStudentWritableSection11;
 
 describe('StudentReportsService.stripStudentWritableSection11', () => {
   it('drops the AI-only score/narrative fields from a client-submitted section11 payload', () => {

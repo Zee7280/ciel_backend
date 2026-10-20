@@ -1,60 +1,63 @@
 export type Section1AnalyticsStakeholder =
-    | 'ciel'
-    | 'student'
-    | 'partner'
-    | 'university'
-    | 'un_government';
+  | 'ciel'
+  | 'student'
+  | 'partner'
+  | 'university'
+  | 'un_government';
 
 export type Section1AnalyticsScope = 'project' | 'aggregate';
 
 export type Section1AnalyticsFieldCategory = 'basic' | 'premium' | 'restricted';
 
 export interface Section1AnalyticsFieldDefinition {
-    key: string;
-    category: Section1AnalyticsFieldCategory;
-    presentation: string;
-    /** Stakeholders allowed to receive this field (after scope/auth checks). */
-    stakeholders: Section1AnalyticsStakeholder[];
+  key: string;
+  category: Section1AnalyticsFieldCategory;
+  presentation: string;
+  /** Stakeholders allowed to receive this field (after scope/auth checks). */
+  stakeholders: Section1AnalyticsStakeholder[];
 }
 
 export type Section1AnalyticsFieldValues = Record<string, unknown>;
 
 export interface Section1AnalyticsFieldMeta {
-    category: Section1AnalyticsFieldCategory;
-    presentation: string;
+  category: Section1AnalyticsFieldCategory;
+  presentation: string;
 }
 
 /** Additive grouping for UI bands — does not replace `fields` / `meta`. */
 export type Section1FieldsByCategory = Record<
-    Section1AnalyticsFieldCategory,
-    Section1AnalyticsFieldValues
+  Section1AnalyticsFieldCategory,
+  Section1AnalyticsFieldValues
 >;
 
-export type Section1CategoryCounts = Record<Section1AnalyticsFieldCategory, number>;
+export type Section1CategoryCounts = Record<
+  Section1AnalyticsFieldCategory,
+  number
+>;
 
 export interface Section1AnalyticsResponse {
-    success: true;
-    data: {
-        stakeholder: Section1AnalyticsStakeholder;
-        scope: Section1AnalyticsScope;
-        project_id?: string;
-        student_id?: string;
-        organization_id?: string;
-        fields: Section1AnalyticsFieldValues;
-        meta: Record<string, Section1AnalyticsFieldMeta>;
-        /** UI helper: same values as `fields`, split by `meta.category`. */
-        fields_by_category: Section1FieldsByCategory;
-        category_counts: Section1CategoryCounts;
-    };
+  success: true;
+  data: {
+    stakeholder: Section1AnalyticsStakeholder;
+    scope: Section1AnalyticsScope;
+    project_id?: string;
+    student_id?: string;
+    organization_id?: string;
+    fields: Section1AnalyticsFieldValues;
+    meta: Record<string, Section1AnalyticsFieldMeta>;
+    /** UI helper: same values as `fields`, split by `meta.category`. */
+    fields_by_category: Section1FieldsByCategory;
+    category_counts: Section1CategoryCounts;
+  };
 }
 
 export interface Section1AnalyticsRequestContext {
-    stakeholder: Section1AnalyticsStakeholder;
-    scope: Section1AnalyticsScope;
-    requesterUserId: string;
-    requesterRole: string;
-    organizationId?: string | null;
-    projectId?: string;
-    studentId?: string;
-    universityOrgId?: string;
+  stakeholder: Section1AnalyticsStakeholder;
+  scope: Section1AnalyticsScope;
+  requesterUserId: string;
+  requesterRole: string;
+  organizationId?: string | null;
+  projectId?: string;
+  studentId?: string;
+  universityOrgId?: string;
 }

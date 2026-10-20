@@ -13,14 +13,14 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 
 @Module({
-    imports: [
-        AuditLogsModule,
-        NotificationsModule,
-        TypeOrmModule.forFeature([Participation, Setting, Payment, StudentReport]),
-        StorageModule,
-    ],
-    controllers: [StudentPaymentsController, AdminPaymentsController],
-    providers: [PaymentsService],
-    exports: [PaymentsService],
+  imports: [
+    AuditLogsModule,
+    NotificationsModule,
+    TypeOrmModule.forFeature([Participation, Setting, Payment, StudentReport]),
+    StorageModule,
+  ],
+  controllers: [StudentPaymentsController, AdminPaymentsController],
+  providers: [PaymentsService],
+  exports: [PaymentsService],
 })
-export class PaymentsModule { }
+export class PaymentsModule {}

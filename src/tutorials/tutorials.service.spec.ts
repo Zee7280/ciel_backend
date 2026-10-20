@@ -11,7 +11,10 @@ describe('TutorialsService URL validation', () => {
 
   it('accepts storage-hosted https URLs', () => {
     expect(
-      service.assertTutorialUrl(`${prefix}platform-tutorials/videos/a.mp4`, 'videoUrl'),
+      service.assertTutorialUrl(
+        `${prefix}platform-tutorials/videos/a.mp4`,
+        'videoUrl',
+      ),
     ).toContain('platform-tutorials');
   });
 
@@ -22,7 +25,9 @@ describe('TutorialsService URL validation', () => {
     'https://evil.example.com/a.mp4',
     `${prefix}other-folder/a.mp4`,
   ])('rejects %s', (url) => {
-    expect(() => service.assertTutorialUrl(url, 'videoUrl')).toThrow(BadRequestException);
+    expect(() => service.assertTutorialUrl(url, 'videoUrl')).toThrow(
+      BadRequestException,
+    );
   });
 
   it('treats empty as null', () => {

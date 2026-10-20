@@ -4,7 +4,12 @@ import { createHash } from 'crypto';
 export const CREATE_DEDUPE_WINDOW_MS = 2 * 60 * 1000;
 
 /** Statuses that never block a fresh create (creator gave up / it was closed). */
-export const CREATE_DEDUPE_IGNORED_STATUSES = ['rejected', 'deleted', 'cancelled', 'draft'];
+export const CREATE_DEDUPE_IGNORED_STATUSES = [
+  'rejected',
+  'deleted',
+  'cancelled',
+  'draft',
+];
 
 export function normalizeCreateTitle(title: unknown): string {
   return String(title ?? '')

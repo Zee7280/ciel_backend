@@ -21,7 +21,9 @@ const ctx = () =>
 
 describe('AdminMutationAuditInterceptor', () => {
   it('logs successful mutations with outcome and a target label', async () => {
-    const auditLogs = { recordMutation: jest.fn().mockResolvedValue(undefined) };
+    const auditLogs = {
+      recordMutation: jest.fn().mockResolvedValue(undefined),
+    };
     const i = new AdminMutationAuditInterceptor(auditLogs as never);
     await firstValueFrom(i.intercept(ctx(), { handle: () => of(1) }));
     await new Promise((r) => setImmediate(r));
@@ -34,7 +36,9 @@ describe('AdminMutationAuditInterceptor', () => {
   });
 
   it('also logs failed mutations with outcome=failure and the status code', async () => {
-    const auditLogs = { recordMutation: jest.fn().mockResolvedValue(undefined) };
+    const auditLogs = {
+      recordMutation: jest.fn().mockResolvedValue(undefined),
+    };
     const i = new AdminMutationAuditInterceptor(auditLogs as never);
     await expect(
       firstValueFrom(

@@ -74,10 +74,14 @@ export function reviewPackageIncludesAnalysis(
   return audience !== 'partner';
 }
 
-export function analysisIsAttached(report: Partial<StudentReport> | null | undefined): boolean {
+export function analysisIsAttached(
+  report: Partial<StudentReport> | null | undefined,
+): boolean {
   const lock = report?.ciiV45Lock as { locked?: unknown } | null | undefined;
   const locked = lock?.locked === true || lock?.locked === 'true';
-  return Boolean(locked && pickCiiV45DisplayScore(report?.ciiV45, lock) != null);
+  return Boolean(
+    locked && pickCiiV45DisplayScore(report?.ciiV45, lock) != null,
+  );
 }
 
 function extOf(url: string, name: string): string {
@@ -91,10 +95,12 @@ export function classifyReviewPackageEvidenceKind(
   name: string,
 ): ReviewPackageEvidenceKind {
   const ext = extOf(url, name);
-  if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'avif'].includes(ext)) return 'image';
+  if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'avif'].includes(ext))
+    return 'image';
   if (ext === 'pdf') return 'pdf';
   if (['mp4', 'webm', 'mov', 'm4v'].includes(ext)) return 'video';
-  if (/image\//i.test(url) || /\.(jpe?g|png|gif|webp)(\?|$)/i.test(url)) return 'image';
+  if (/image\//i.test(url) || /\.(jpe?g|png|gif|webp)(\?|$)/i.test(url))
+    return 'image';
   if (/\.pdf(\?|$)/i.test(url)) return 'pdf';
   return 'file';
 }
@@ -111,17 +117,21 @@ export function buildReportReviewPackage(
   frontendBase = '',
 ): ReportReviewPackage {
   const reportId = String(report.id || '').trim();
-  const projectId = String(report.opportunityId || report.project_id || reportId).trim();
-  const files = collectReportEvidenceFiles(report as StudentReport).map((file) => {
-    const kind = classifyReviewPackageEvidenceKind(file.url, file.name);
-    return {
-      url: file.url,
-      name: file.name,
-      source: file.source,
-      kind,
-      previewable: kind === 'image' || kind === 'pdf' || kind === 'video',
-    };
-  });
+  const projectId = String(
+    report.opportunityId || report.project_id || reportId,
+  ).trim();
+  const files = collectReportEvidenceFiles(report as StudentReport).map(
+    (file) => {
+      const kind = classifyReviewPackageEvidenceKind(file.url, file.name);
+      return {
+        url: file.url,
+        name: file.name,
+        source: file.source,
+        kind,
+        previewable: kind === 'image' || kind === 'pdf' || kind === 'video',
+      };
+    },
+  );
   const adminReview = joinHref(
     frontendBase,
     `/dashboard/admin/reports/verify/${encodeURIComponent(reportId)}?package=1`,

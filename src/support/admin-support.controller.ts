@@ -1,17 +1,17 @@
 import {
-    Body,
-    Controller,
-    Delete,
-    Get,
-    HttpCode,
-    HttpStatus,
-    Param,
-    ParseIntPipe,
-    Patch,
-    Post,
-    Query,
-    UseGuards,
-    UseInterceptors,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseIntPipe,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
@@ -28,54 +28,54 @@ import { AdminMutationAuditInterceptor } from '../audit-logs/admin-mutation-audi
 @Roles(UserRole.SUPER_ADMIN)
 @UseInterceptors(AdminMutationAuditInterceptor)
 export class AdminSupportController {
-    constructor(private readonly adminSupportService: AdminSupportService) { }
+  constructor(private readonly adminSupportService: AdminSupportService) {}
 
-    @Get('faqs')
-    listFaqs() {
-        return this.adminSupportService.listFaqs();
-    }
+  @Get('faqs')
+  listFaqs() {
+    return this.adminSupportService.listFaqs();
+  }
 
-    @Post('faqs')
-    createFaq(@Body() dto: CreateSupportFaqDto) {
-        return this.adminSupportService.createFaq(dto);
-    }
+  @Post('faqs')
+  createFaq(@Body() dto: CreateSupportFaqDto) {
+    return this.adminSupportService.createFaq(dto);
+  }
 
-    @Patch('faqs/:id')
-    updateFaq(
-        @Param('id', ParseIntPipe) id: number,
-        @Body() dto: UpdateSupportFaqDto,
-    ) {
-        return this.adminSupportService.updateFaq(id, dto);
-    }
+  @Patch('faqs/:id')
+  updateFaq(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateSupportFaqDto,
+  ) {
+    return this.adminSupportService.updateFaq(id, dto);
+  }
 
-    @Delete('faqs/:id')
-    @HttpCode(HttpStatus.NO_CONTENT)
-    deleteFaq(@Param('id', ParseIntPipe) id: number) {
-        return this.adminSupportService.deleteFaq(id);
-    }
+  @Delete('faqs/:id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  deleteFaq(@Param('id', ParseIntPipe) id: number) {
+    return this.adminSupportService.deleteFaq(id);
+  }
 
-    @Get('tickets')
-    listTickets(
-        @Query('status') status?: string,
-        @Query('page') page?: string,
-        @Query('limit') limit?: string,
-    ) {
-        return this.adminSupportService.listTickets(status, { page, limit });
-    }
+  @Get('tickets')
+  listTickets(
+    @Query('status') status?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.adminSupportService.listTickets(status, { page, limit });
+  }
 
-    @Get('tickets/:id')
-    getTicket(@Param('id') id: string) {
-        return this.adminSupportService.getTicket(id);
-    }
+  @Get('tickets/:id')
+  getTicket(@Param('id') id: string) {
+    return this.adminSupportService.getTicket(id);
+  }
 
-    @Patch('tickets/:id')
-    updateTicket(@Param('id') id: string, @Body() dto: UpdateSupportTicketDto) {
-        return this.adminSupportService.updateTicket(id, dto);
-    }
+  @Patch('tickets/:id')
+  updateTicket(@Param('id') id: string, @Body() dto: UpdateSupportTicketDto) {
+    return this.adminSupportService.updateTicket(id, dto);
+  }
 
-    @Delete('tickets/:id')
-    @HttpCode(HttpStatus.NO_CONTENT)
-    deleteTicket(@Param('id') id: string) {
-        return this.adminSupportService.deleteTicket(id);
-    }
+  @Delete('tickets/:id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  deleteTicket(@Param('id') id: string) {
+    return this.adminSupportService.deleteTicket(id);
+  }
 }

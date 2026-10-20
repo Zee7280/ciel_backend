@@ -8,16 +8,16 @@ import { ConversationParticipant } from './entities/conversation-participant.ent
 import { User } from '../users/entities/user.entity';
 
 @Module({
-    imports: [
-        TypeOrmModule.forFeature([
-            Conversation,
-            Message,
-            ConversationParticipant,
-            User
-        ])
-    ],
-    providers: [ChatService],
-    controllers: [ChatController],
-    exports: [ChatService]
+  imports: [
+    TypeOrmModule.forFeature([
+      Conversation,
+      Message,
+      ConversationParticipant,
+      User,
+    ]),
+  ],
+  providers: [ChatService],
+  controllers: [ChatController],
+  exports: [ChatService],
 })
-export class ChatModule { }
+export class ChatModule {}

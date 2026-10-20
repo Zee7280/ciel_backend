@@ -401,5 +401,4 @@ export class UpdateOpportunityDto {
   @IsObject()
   @IsOptional()
   visibility_and_academic_linkage?: any;
-
 }

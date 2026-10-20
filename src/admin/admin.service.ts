@@ -337,7 +337,8 @@ export class AdminService {
         id: r.id,
         key: r.key,
         value: r.value,
-        description: r.description ?? getSettingSpec(r.key)?.description ?? null,
+        description:
+          r.description ?? getSettingSpec(r.key)?.description ?? null,
         type: r.type,
         updatedAt: r.updatedAt,
       }));
@@ -502,15 +503,19 @@ export class AdminService {
       safe('joinApplications', () =>
         this.opportunityApplicationsService.countPendingAdmin(),
       ),
-      safe('payments', async () =>
-        (await this.repoOf(Payment)?.count({
-          where: { status: PaymentStatus.PENDING },
-        })) ?? 0,
+      safe(
+        'payments',
+        async () =>
+          (await this.repoOf(Payment)?.count({
+            where: { status: PaymentStatus.PENDING },
+          })) ?? 0,
       ),
-      safe('orgMembership', async () =>
-        (await this.repoOf(OrganizationMembershipFee)?.count({
-          where: { status: 'pending_review' },
-        })) ?? 0,
+      safe(
+        'orgMembership',
+        async () =>
+          (await this.repoOf(OrganizationMembershipFee)?.count({
+            where: { status: 'pending_review' },
+          })) ?? 0,
       ),
       safe('reportsAwaitingAdmin', () =>
         this.studentReportRepository.count({
@@ -521,19 +526,25 @@ export class AdminService {
         }),
       ),
       // "open" = unresolved error-severity entries from the last 7 days (admins resolve them in Issue Logs).
-      safe('issueLogsOpen', async () =>
-        (await this.repoOf(IssueLog)?.count({
-          where: {
-            severity: 'error',
-            resolvedAt: IsNull(),
-            createdAt: MoreThanOrEqual(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)),
-          },
-        })) ?? 0,
+      safe(
+        'issueLogsOpen',
+        async () =>
+          (await this.repoOf(IssueLog)?.count({
+            where: {
+              severity: 'error',
+              resolvedAt: IsNull(),
+              createdAt: MoreThanOrEqual(
+                new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+              ),
+            },
+          })) ?? 0,
       ),
-      safe('supportOpen', async () =>
-        (await this.repoOf(SupportTicket)?.count({
-          where: { status: 'open' },
-        })) ?? 0,
+      safe(
+        'supportOpen',
+        async () =>
+          (await this.repoOf(SupportTicket)?.count({
+            where: { status: 'open' },
+          })) ?? 0,
       ),
     ]);
     return {
@@ -598,7 +609,10 @@ export class AdminService {
         .createQueryBuilder('t')
         .select('t.studentId', 'studentId')
         .addSelect('t.opportunityId', 'opportunityId')
-        .addSelect("to_char(t.createdAt + interval '5 hours', 'YYYY-MM')", 'period')
+        .addSelect(
+          "to_char(t.createdAt + interval '5 hours', 'YYYY-MM')",
+          'period',
+        )
         .addSelect('COALESCE(SUM(t.hours), 0)', 'hours')
         .where('t.status = :verified', { verified: 'verified' });
       if (ids) tqb.andWhere('t.opportunityId IN (:...ids)', { ids });
@@ -854,7 +868,9 @@ export class AdminService {
       const universityNames = new Set<string>();
       for (const row of [...uniFromUsers, ...uniFromPart]) {
         // Lowercase so "NUST" / "Nust" / "nust" collapse to one university, not three.
-        const n = String((row as { name?: string }).name || '').trim().toLowerCase();
+        const n = String((row as { name?: string }).name || '')
+          .trim()
+          .toLowerCase();
         if (n) universityNames.add(n);
       }
       const total_universities = universityNames.size;
@@ -1170,7 +1186,9 @@ export class AdminService {
     const universityNames = new Set<string>();
     for (const row of [...uniFromUsers, ...uniFromPart]) {
       // Lowercase so case-variant spellings of the same university aren't counted twice.
-      const n = String((row as { name?: string }).name || '').trim().toLowerCase();
+      const n = String((row as { name?: string }).name || '')
+        .trim()
+        .toLowerCase();
       if (n) universityNames.add(n);
     }
     const institution_count = universityNames.size;
@@ -1468,9 +1486,16 @@ export class AdminService {
       this.toAnalyticsNumber(section4?.total_beneficiaries) ??
       this.toAnalyticsNumber(section4?.my_beneficiaries);
     if (stored) return stored;
-    const blocks = Array.isArray(section4?.activity_blocks) ? section4.activity_blocks : [];
+    const blocks = Array.isArray(section4?.activity_blocks)
+      ? section4.activity_blocks
+      : [];
     return blocks.reduce((sum, block) => {
-      return sum + (this.toAnalyticsNumber(block?.unique_beneficiaries || block?.beneficiaries_reached) ?? 0);
+      return (
+        sum +
+        (this.toAnalyticsNumber(
+          block?.unique_beneficiaries || block?.beneficiaries_reached,
+        ) ?? 0)
+      );
     }, 0);
   }
 
@@ -1844,8 +1869,7 @@ export class AdminService {
         await this.buildStudentEmailProjectMatchMap(normalizedEmail);
     }
 
-    const paginated =
-      Number.isFinite(opts.page) || Number.isFinite(opts.limit);
+    const paginated = Number.isFinite(opts.page) || Number.isFinite(opts.limit);
     const limit = paginated
       ? Math.min(Math.max(Math.floor(opts.limit as number) || 50, 1), 200)
       : undefined;
@@ -1916,7 +1940,11 @@ export class AdminService {
             where: {
               opportunityId: In(oppIds),
               withdrawnAt: IsNull(),
-              internalStatus: In(['pending_faculty', 'pending_partner', 'pending_admin']),
+              internalStatus: In([
+                'pending_faculty',
+                'pending_partner',
+                'pending_admin',
+              ]),
             },
             relations: ['studentUser'],
           })
@@ -1938,7 +1966,8 @@ export class AdminService {
         this.opportunityApplicationsService.adminBrowseApplicationTeamSummaryForQueue(
           app,
         );
-      const seats = team && team.team_member_count >= 1 ? team.team_member_count : 1;
+      const seats =
+        team && team.team_member_count >= 1 ? team.team_member_count : 1;
       pipelineSeatsByOpp.set(
         app.opportunityId,
         (pipelineSeatsByOpp.get(app.opportunityId) ?? 0) + seats,
@@ -2061,7 +2090,8 @@ export class AdminService {
   /** Last-sent marker per recipient when no DB notification record is available (resets on restart). */
   private readonly zeroHourReminderSentAt = new Map<string, number>();
 
-  private static readonly ZERO_HOURS_REMINDER_TITLE = 'Log your volunteer hours';
+  private static readonly ZERO_HOURS_REMINDER_TITLE =
+    'Log your volunteer hours';
   private static readonly ZERO_HOURS_COOLDOWN_MS = 24 * 60 * 60 * 1000;
   private static readonly ZERO_HOURS_BATCH_SIZE = 10;
   private static readonly ZERO_HOURS_MAIL_TIMEOUT_MS = 15_000;
@@ -2170,7 +2200,10 @@ export class AdminService {
     let skippedCooldown = 0;
     for (const [key, r] of recipients) {
       const lastMem = this.zeroHourReminderSentAt.get(key) ?? 0;
-      if ((r.studentId && dbRecent.has(r.studentId)) || now - lastMem < cooldownMs) {
+      if (
+        (r.studentId && dbRecent.has(r.studentId)) ||
+        now - lastMem < cooldownMs
+      ) {
         skippedCooldown += 1;
         continue;
       }
@@ -2257,7 +2290,9 @@ export class AdminService {
   }
 
   /** One report per student+project: highest status wins, then newest update (not newest-only). */
-  private dedupeReportsPerStudentProject(reports: StudentReport[]): StudentReport[] {
+  private dedupeReportsPerStudentProject(
+    reports: StudentReport[],
+  ): StudentReport[] {
     const best = new Map<string, StudentReport>();
     for (const report of reports) {
       const projectId = this.getReportProjectId(report);
@@ -2271,8 +2306,7 @@ export class AdminService {
         continue;
       }
       const rankDiff =
-        reportStatusRank(report.status) -
-        reportStatusRank(current.status);
+        reportStatusRank(report.status) - reportStatusRank(current.status);
       const newer =
         new Date(report.updatedAt ?? report.createdAt ?? 0).getTime() >
         new Date(current.updatedAt ?? current.createdAt ?? 0).getTime();
@@ -2371,12 +2405,23 @@ export class AdminService {
     }
 
     const MONTHS = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
     ];
     const hoursTrendMap: Record<string, number> = {};
     for (const event of impactEvents) {
-      hoursTrendMap[event.period] = (hoursTrendMap[event.period] || 0) + event.hours;
+      hoursTrendMap[event.period] =
+        (hoursTrendMap[event.period] || 0) + event.hours;
     }
     const hoursTrend = Object.entries(hoursTrendMap)
       .sort(([a], [b]) => a.localeCompare(b))
@@ -2418,7 +2463,10 @@ export class AdminService {
       const key = this.getReportProjectId(report) ?? `report:${report.id}`;
       reportedByProject.set(
         key,
-        Math.max(reportedByProject.get(key) ?? 0, this.getReportBeneficiaries(report)),
+        Math.max(
+          reportedByProject.get(key) ?? 0,
+          this.getReportBeneficiaries(report),
+        ),
       );
     }
     let totalBeneficiaries = 0;
@@ -2474,17 +2522,17 @@ export class AdminService {
     );
   }
 
-  async getAuditLogs(
-    page?: number,
-    limit?: number,
-    filters?: AuditLogFilters,
-  ) {
+  async getAuditLogs(page?: number, limit?: number, filters?: AuditLogFilters) {
     const {
       logs,
       total,
       page: p,
       limit: l,
-    } = await this.auditLogsService.findPaginated(page ?? 1, limit ?? 20, filters);
+    } = await this.auditLogsService.findPaginated(
+      page ?? 1,
+      limit ?? 20,
+      filters,
+    );
 
     return {
       success: true,

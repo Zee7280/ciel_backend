@@ -50,7 +50,8 @@ export function npeCalculate(
       throw new Error(`NPE judgment missing or invalid for ${row.key}`);
     }
     const factor = NPE_EVIDENCE_FACTORS[judgment.confidence];
-    scores[row.key] = profile.criteria[row.key] * (judgment.anchor / 5) * factor;
+    scores[row.key] =
+      profile.criteria[row.key] * (judgment.anchor / 5) * factor;
   }
   const total =
     Math.round(
@@ -87,11 +88,17 @@ export function npeTupleCompare(
 
 /** Competition ranking: identical tuples share a rank (1, 1, 3). ID is display-only. */
 export function npeRankPool<
-  T extends { total: number; impact: number; sustain: number; cii: number; id: string },
+  T extends {
+    total: number;
+    impact: number;
+    sustain: number;
+    cii: number;
+    id: string;
+  },
 >(rows: T[]): Array<T & { rank: number }> {
-  const sorted = rows.slice().sort(
-    (a, b) => npeTupleCompare(a, b) || a.id.localeCompare(b.id),
-  );
+  const sorted = rows
+    .slice()
+    .sort((a, b) => npeTupleCompare(a, b) || a.id.localeCompare(b.id));
   let last: T | null = null;
   let rank = 0;
   return sorted.map((row, i) => {
@@ -103,5 +110,5 @@ export function npeRankPool<
 
 export function npePercentile(rank: number, n: number): number | null {
   if (n <= 1) return null;
-  return Math.round((100 * (n - rank) / (n - 1)) * 10) / 10;
+  return Math.round(((100 * (n - rank)) / (n - 1)) * 10) / 10;
 }

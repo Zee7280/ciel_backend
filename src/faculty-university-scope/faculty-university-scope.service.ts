@@ -173,12 +173,12 @@ export class FacultyUniversityScopeService {
         if (id) ids.add(id);
       }
     };
-    merge(fromParticipations);
-    merge(fromParticipationsStudentOrg);
-    merge(fromEnrollmentOnParticipation);
-    merge(fromApps);
-    merge(fromAppsStudentOrg);
-    merge(fromCreators);
+    merge(fromParticipations as { id?: string }[]);
+    merge(fromParticipationsStudentOrg as { id?: string }[]);
+    merge(fromEnrollmentOnParticipation as { id?: string }[]);
+    merge(fromApps as { id?: string }[]);
+    merge(fromAppsStudentOrg as { id?: string }[]);
+    merge(fromCreators as { id?: string }[]);
     for (const o of ownedByUniversityOrg) {
       if (o.id) ids.add(o.id);
     }
@@ -255,9 +255,7 @@ export class FacultyUniversityScopeService {
       .where('LOWER(user.email) = :email', { email })
       .getOne();
     if (!faculty || faculty.role !== UserRole.FACULTY) {
-      throw new BadRequestException(
-        'No faculty account exists for that email',
-      );
+      throw new BadRequestException('No faculty account exists for that email');
     }
 
     const org = await this.orgRepo.findOne({

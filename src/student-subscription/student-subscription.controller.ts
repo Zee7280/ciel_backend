@@ -30,7 +30,10 @@ export class StudentSubscriptionController {
 
   @Get('status')
   async status(@Request() req: any) {
-    return { success: true, data: await this.subscriptionService.getStatusForStudent(req.user.id) };
+    return {
+      success: true,
+      data: await this.subscriptionService.getStatusForStudent(req.user.id),
+    };
   }
 
   @Post('submit-proof')
@@ -41,9 +44,18 @@ export class StudentSubscriptionController {
     @Body() body: { paid_amount?: string },
   ) {
     if (!file) {
-      throw new BadRequestException('Proof file is required (field name: proof)');
+      throw new BadRequestException(
+        'Proof file is required (field name: proof)',
+      );
     }
-    const proofUrl = await this.s3Service.uploadFile(file, 'subscription-proofs');
-    return this.subscriptionService.submitProof(req.user.id, proofUrl, body?.paid_amount);
+    const proofUrl = await this.s3Service.uploadFile(
+      file,
+      'subscription-proofs',
+    );
+    return this.subscriptionService.submitProof(
+      req.user.id,
+      proofUrl,
+      body?.paid_amount,
+    );
   }
 }

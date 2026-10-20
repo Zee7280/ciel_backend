@@ -173,7 +173,12 @@ export function beneficiariesFromSection4(section4: unknown): number {
   if (stored) return stored;
   const blocks = Array.isArray(s?.activity_blocks) ? s.activity_blocks : [];
   return blocks.reduce((sum, block) => {
-    return sum + toBeneficiaryCount(block?.unique_beneficiaries || block?.beneficiaries_reached);
+    return (
+      sum +
+      toBeneficiaryCount(
+        block?.unique_beneficiaries || block?.beneficiaries_reached,
+      )
+    );
   }, 0);
 }
 

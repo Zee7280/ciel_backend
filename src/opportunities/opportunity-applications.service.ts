@@ -124,7 +124,9 @@ export class OpportunityApplicationsService {
     reason?: string | null,
   ): Promise<void> {
     const title =
-      decision === 'approved' ? 'Application approved' : 'Application not approved';
+      decision === 'approved'
+        ? 'Application approved'
+        : 'Application not approved';
     const projectTitle = app.opportunity?.title || 'your opportunity';
     const message =
       decision === 'approved'
@@ -1029,9 +1031,7 @@ export class OpportunityApplicationsService {
   }
 
   /** @internal shared with AdminTeamSafetyService */
-  isLowProgressReportStatus(
-    status: string | null | undefined,
-  ): boolean {
+  isLowProgressReportStatus(status: string | null | undefined): boolean {
     const st = String(status || '')
       .trim()
       .toLowerCase();
@@ -1085,7 +1085,8 @@ export class OpportunityApplicationsService {
       : [];
     const pendingIds = new Set(pendingApps.map((a) => a.id));
     const pendingNames = pendingApps.map(
-      (a) => a.studentUser?.name || a.studentUser?.email || 'a pending applicant',
+      (a) =>
+        a.studentUser?.name || a.studentUser?.email || 'a pending applicant',
     );
     const unknown = missingIds.filter((id) => !pendingIds.has(id));
     const parts: string[] = [];
@@ -1240,56 +1241,58 @@ export class OpportunityApplicationsService {
 
       const leadStudentId = leadRow.studentId;
       await (async () => {
-      if (!leadStudentId) return;
+        if (!leadStudentId) return;
 
-      const allStudentIds = members
-        .map((m) => m.studentId)
-        .filter((id): id is string => Boolean(id));
-      const reports = await reportRepo
-        .createQueryBuilder('r')
-        .where('r.studentId IN (:...allStudentIds)', { allStudentIds })
-        .andWhere(
-          '(r.opportunityId = :oid OR (r.project_id IS NOT NULL AND TRIM(r.project_id) = CAST(:oid AS varchar)))',
-          { oid: opportunityId },
-        )
-        .getMany();
+        const allStudentIds = members
+          .map((m) => m.studentId)
+          .filter((id): id is string => Boolean(id));
+        const reports = await reportRepo
+          .createQueryBuilder('r')
+          .where('r.studentId IN (:...allStudentIds)', { allStudentIds })
+          .andWhere(
+            '(r.opportunityId = :oid OR (r.project_id IS NOT NULL AND TRIM(r.project_id) = CAST(:oid AS varchar)))',
+            { oid: opportunityId },
+          )
+          .getMany();
 
-      const leadReports = reports.filter((r) => r.studentId === leadStudentId);
-      const leadHasReport = leadReports.length > 0;
+        const leadReports = reports.filter(
+          (r) => r.studentId === leadStudentId,
+        );
+        const leadHasReport = leadReports.length > 0;
 
-      if (reassignDraft && !leadHasReport) {
-        const donor = reports
-          .filter(
+        if (reassignDraft && !leadHasReport) {
+          const donor = reports
+            .filter(
+              (r) =>
+                r.studentId !== leadStudentId &&
+                this.isLowProgressReportStatus(r.status),
+            )
+            .sort(
+              (a, b) =>
+                (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0) ||
+                (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0),
+            )[0];
+          if (donor) {
+            mergeUndo.reassigned = {
+              reportId: donor.id,
+              fromStudentId: donor.studentId,
+            };
+            donor.studentId = leadStudentId;
+            await reportRepo.save(donor);
+          }
+        }
+
+        if (deleteNonLeadDrafts) {
+          const toDelete = reports.filter(
             (r) =>
               r.studentId !== leadStudentId &&
               this.isLowProgressReportStatus(r.status),
-          )
-          .sort(
-            (a, b) =>
-              (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0) ||
-              (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0),
-          )[0];
-        if (donor) {
-          mergeUndo.reassigned = {
-            reportId: donor.id,
-            fromStudentId: donor.studentId,
-          };
-          donor.studentId = leadStudentId;
-          await reportRepo.save(donor);
+          );
+          if (toDelete.length) {
+            mergeUndo.deletedReports = plain(toDelete);
+            await reportRepo.remove(toDelete);
+          }
         }
-      }
-
-      if (deleteNonLeadDrafts) {
-        const toDelete = reports.filter(
-          (r) =>
-            r.studentId !== leadStudentId &&
-            this.isLowProgressReportStatus(r.status),
-        );
-        if (toDelete.length) {
-          mergeUndo.deletedReports = plain(toDelete);
-          await reportRepo.remove(toDelete);
-        }
-      }
       })();
 
       const snapshot = await saveSnapshot(em, {
@@ -1457,11 +1460,11 @@ export class OpportunityApplicationsService {
           id: member.id,
           supports_admin_patch: true,
           name: studentIdMislinked
-            ? member.fullName ?? member.student?.name ?? null
-            : member.student?.name ?? member.fullName ?? null,
+            ? (member.fullName ?? member.student?.name ?? null)
+            : (member.student?.name ?? member.fullName ?? null),
           email: studentIdMislinked
-            ? member.email ?? member.student?.email ?? null
-            : member.student?.email ?? member.email ?? null,
+            ? (member.email ?? member.student?.email ?? null)
+            : (member.student?.email ?? member.email ?? null),
           role:
             isIndividualEntry || member.id === canonicalLead.id
               ? 'lead'
@@ -1680,9 +1683,9 @@ export class OpportunityApplicationsService {
           id: app.id,
           supports_admin_patch: true,
           member_source: 'pending_application',
-              enrolled: false,
-              application_id: app.id,
-              application_status: app.internalStatus,
+          enrolled: false,
+          application_id: app.id,
+          application_status: app.internalStatus,
           name: leadUser?.name ?? null,
           email: leadUser?.email ?? null,
           role: 'lead',
@@ -1724,9 +1727,9 @@ export class OpportunityApplicationsService {
           id: `pending:${app.id}:m:${em}`,
           supports_admin_patch: true,
           member_source: 'pending_application',
-              enrolled: false,
-              application_id: app.id,
-              application_status: app.internalStatus,
+          enrolled: false,
+          application_id: app.id,
+          application_status: app.internalStatus,
           name: typeof m?.name === 'string' ? m.name : null,
           email: typeof m?.email === 'string' ? m.email.trim() : null,
           role: 'member',
@@ -2544,9 +2547,13 @@ export class OpportunityApplicationsService {
       relations: ['student'],
     });
     summary.student_id_links_repaired +=
-      await this.relinkMismatchedStudentIdSeats(opportunityId, afterEmailDedupe, {
-        mergeDuplicates: true,
-      });
+      await this.relinkMismatchedStudentIdSeats(
+        opportunityId,
+        afterEmailDedupe,
+        {
+          mergeDuplicates: true,
+        },
+      );
 
     const teamIds = new Set<string>();
     const finalSeats = await this.participationRepo.find({
@@ -2622,11 +2629,15 @@ export class OpportunityApplicationsService {
   private async loadLoginUserIdByEmailMap(
     emails: string[],
   ): Promise<Map<string, string>> {
-    const unique = [...new Set(emails.map((e) => this.normalizeEmail(e)).filter(Boolean))];
+    const unique = [
+      ...new Set(emails.map((e) => this.normalizeEmail(e)).filter(Boolean)),
+    ];
     const map = new Map<string, string>();
     if (!unique.length) return map;
     const owners = await Promise.all(
-      unique.map(async (em) => [em, await this.usersService.findByEmail(em)] as const),
+      unique.map(
+        async (em) => [em, await this.usersService.findByEmail(em)] as const,
+      ),
     );
     for (const [em, owner] of owners) {
       if (owner?.id) map.set(em, owner.id);
@@ -2634,7 +2645,11 @@ export class OpportunityApplicationsService {
     return map;
   }
 
-  private applyEmailOwnerProfile(seat: Participation, owner: User, rosterEmail: string) {
+  private applyEmailOwnerProfile(
+    seat: Participation,
+    owner: User,
+    rosterEmail: string,
+  ) {
     seat.studentId = owner.id;
     seat.fullName = owner.name || seat.fullName;
     seat.email = this.normalizeEmail(owner.email) || rosterEmail;
@@ -4467,7 +4482,11 @@ export class OpportunityApplicationsService {
     const email = this.normalizeEmail(student?.email ?? '');
 
     const approved = await this.appRepo.find({
-      where: { opportunityId: oid, internalStatus: 'approved', withdrawnAt: IsNull() },
+      where: {
+        opportunityId: oid,
+        internalStatus: 'approved',
+        withdrawnAt: IsNull(),
+      },
       relations: ['studentUser'],
     });
     const relevant = approved.filter((a) => {
@@ -4477,7 +4496,9 @@ export class OpportunityApplicationsService {
         ? (a.applyPayload['team_members'] as Array<{ email?: string }>)
         : [];
       return members.some(
-        (m) => typeof m?.email === 'string' && this.normalizeEmail(m.email) === email,
+        (m) =>
+          typeof m?.email === 'string' &&
+          this.normalizeEmail(m.email) === email,
       );
     });
     if (!relevant.length) return false;

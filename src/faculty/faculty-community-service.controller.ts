@@ -105,7 +105,10 @@ export class FacultyCommunityServiceController {
         'You can only reopen reporting for opportunities you created or supervise.',
       );
     }
-    const data = await this.opportunitiesService.reopenReportingWindow(id, until);
+    const data = await this.opportunitiesService.reopenReportingWindow(
+      id,
+      until,
+    );
     return { success: true, data };
   }
 }

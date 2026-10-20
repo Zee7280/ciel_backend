@@ -3,9 +3,18 @@ import { assertStudentReportUploadMeta } from './student-report-file-upload';
 
 const SHOULD_ACCEPT = [
   ['report.pdf', 'application/pdf'],
-  ['essay.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
-  ['deck.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'],
-  ['data.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+  [
+    'essay.docx',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  ],
+  [
+    'deck.pptx',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  ],
+  [
+    'data.xlsx',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ],
   ['sheet.csv', 'text/csv'],
   ['photo.jpg', 'image/jpeg'],
   ['photo.gif', 'image/gif'],
@@ -24,13 +33,18 @@ const SHOULD_BLOCK = [
 ] as const;
 
 describe('assertStudentReportUploadMeta', () => {
-  it.each(SHOULD_ACCEPT)('accepts supporting file %s', (filename, contentType) => {
-    expect(() => assertStudentReportUploadMeta({ filename, contentType, size: 2048 })).not.toThrow();
-  });
+  it.each(SHOULD_ACCEPT)(
+    'accepts supporting file %s',
+    (filename, contentType) => {
+      expect(() =>
+        assertStudentReportUploadMeta({ filename, contentType, size: 2048 }),
+      ).not.toThrow();
+    },
+  );
 
   it.each(SHOULD_BLOCK)('blocks dangerous file %s', (filename, contentType) => {
-    expect(() => assertStudentReportUploadMeta({ filename, contentType, size: 2048 })).toThrow(
-      BadRequestException,
-    );
+    expect(() =>
+      assertStudentReportUploadMeta({ filename, contentType, size: 2048 }),
+    ).toThrow(BadRequestException);
   });
 });

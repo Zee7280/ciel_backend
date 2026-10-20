@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { Participation } from '../engagement/entities/participant.entity';
@@ -91,14 +95,18 @@ export class AdminTeamSafetyService {
     let draftsToRemove: StudentReport[] = [];
 
     if (dto.op === 'split') {
-      if (!sourceTeamId) blockers.push(`${who} is already an individual enrollment.`);
+      if (!sourceTeamId)
+        blockers.push(`${who} is already an individual enrollment.`);
     } else if (dto.op === 'set_lead') {
       if (!sourceTeamId) blockers.push(`${who} is not on a team.`);
-      else if (member.isTeamLead) blockers.push(`${who} is already the team lead.`);
+      else if (member.isTeamLead)
+        blockers.push(`${who} is already the team lead.`);
     } else {
       targetTeamId = (dto.target_team_id || '').trim();
-      if (!targetTeamId) blockers.push('Choose the team to move this member into.');
-      else if (targetTeamId === sourceTeamId) blockers.push(`${who} is already on that team.`);
+      if (!targetTeamId)
+        blockers.push('Choose the team to move this member into.');
+      else if (targetTeamId === sourceTeamId)
+        blockers.push(`${who} is already on that team.`);
       else {
         targetMembers = await this.participationRepo.find({
           where: {
@@ -108,7 +116,10 @@ export class AdminTeamSafetyService {
           },
           order: { createdAt: 'ASC' },
         });
-        if (!targetMembers.length) blockers.push('That team was not found on this project. Reload and try again.');
+        if (!targetMembers.length)
+          blockers.push(
+            'That team was not found on this project. Reload and try again.',
+          );
         else {
           const capError = teamCapacityError(
             targetMembers.length,
@@ -118,21 +129,38 @@ export class AdminTeamSafetyService {
         }
       }
       if (member.studentId) {
-        const reports = await this.apps.findReportsForOpportunityStudents(opportunityId, [member.studentId]);
-        if (reports.some((r) => this.apps.isBlockingReportStatusForTeamMerge(r.status))) {
-          blockers.push(`${who} already has a submitted or verified report. Resolve it manually first.`);
+        const reports = await this.apps.findReportsForOpportunityStudents(
+          opportunityId,
+          [member.studentId],
+        );
+        if (
+          reports.some((r) =>
+            this.apps.isBlockingReportStatusForTeamMerge(r.status),
+          )
+        ) {
+          blockers.push(
+            `${who} already has a submitted or verified report. Resolve it manually first.`,
+          );
         }
-        draftsToRemove = reports.filter((r) => this.apps.isLowProgressReportStatus(r.status));
+        draftsToRemove = reports.filter((r) =>
+          this.apps.isLowProgressReportStatus(r.status),
+        );
         if (draftsToRemove.length) {
-          warnings.push(`${draftsToRemove.length} draft report(s) of ${who} will be removed (restorable with Undo); the team lead's report is used instead.`);
+          warnings.push(
+            `${draftsToRemove.length} draft report(s) of ${who} will be removed (restorable with Undo); the team lead's report is used instead.`,
+          );
         }
       }
     }
     if (leavingLead && successor && dto.op !== 'set_lead') {
-      warnings.push(`${successor.fullName || 'Another member'} becomes lead of the team ${who} leaves.`);
+      warnings.push(
+        `${successor.fullName || 'Another member'} becomes lead of the team ${who} leaves.`,
+      );
     }
     if (dto.op === 'split' && sourceTeamId && member.studentId) {
-      warnings.push('The team report stays with the team lead; this member will need their own report.');
+      warnings.push(
+        'The team report stays with the team lead; this member will need their own report.',
+      );
     }
 
     const preview = {
@@ -140,7 +168,11 @@ export class AdminTeamSafetyService {
       data: {
         can_apply: blockers.length === 0,
         op: dto.op,
-        member: { id: member.id, name: member.fullName ?? null, email: member.email ?? null },
+        member: {
+          id: member.id,
+          name: member.fullName ?? null,
+          email: member.email ?? null,
+        },
         from_team_id: sourceTeamId || null,
         to_team_id: dto.op === 'move' ? targetTeamId : null,
         undoable: true,
@@ -218,7 +250,12 @@ export class AdminTeamSafetyService {
 
       const snapshot = await saveSnapshot(em, {
         opportunityId,
-        kind: dto.op === 'move' ? 'move_member' : dto.op === 'split' ? 'split_member' : 'set_lead',
+        kind:
+          dto.op === 'move'
+            ? 'move_member'
+            : dto.op === 'split'
+              ? 'split_member'
+              : 'set_lead',
         label:
           dto.op === 'move'
             ? `${who} → team ${targetTeamId}`
@@ -339,7 +376,11 @@ export class AdminTeamSafetyService {
     if (!member) {
       throw new NotFoundException('Team member not found for this opportunity');
     }
-    const preview = await this.buildDeletePreview(opportunityId, [member], false);
+    const preview = await this.buildDeletePreview(
+      opportunityId,
+      [member],
+      false,
+    );
     const dbTeamId = (member.teamId || '').trim();
     if (dbTeamId && member.isTeamLead) {
       const others = await this.participationRepo.find({
@@ -369,7 +410,10 @@ export class AdminTeamSafetyService {
       .map((m) => m.studentId)
       .filter((id): id is string => Boolean(id));
     const reports = studentIds.length
-      ? await this.apps.findReportsForOpportunityStudents(opportunityId, studentIds)
+      ? await this.apps.findReportsForOpportunityStudents(
+          opportunityId,
+          studentIds,
+        )
       : [];
     const payments = studentIds.length
       ? await this.participationRepo.manager.getRepository(Payment).count({
@@ -453,7 +497,7 @@ export class AdminTeamSafetyService {
     const nonLeadReports = nonLead.length
       ? await this.apps.findReportsForOpportunityStudents(
           opportunityId,
-          nonLead.map((m) => m.studentId as string),
+          nonLead.map((m) => m.studentId),
         )
       : [];
     const submitted = nonLeadReports.filter((r) =>

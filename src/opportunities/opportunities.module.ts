@@ -19,7 +19,10 @@ import { User } from '../users/entities/user.entity';
 import { MailModule } from '../mail/mail.module';
 import { StudentReport } from '../reports/entities/student-report.entity';
 import { AdminTeamSnapshot } from './entities/admin-team-snapshot.entity';
-import { StudentOpportunitiesController, StudentOpportunitySingularController } from './student-opportunities.controller';
+import {
+  StudentOpportunitiesController,
+  StudentOpportunitySingularController,
+} from './student-opportunities.controller';
 import { OpportunityTokenExpirySubscriber } from './opportunity-token-expiry.subscriber';
 import { OpportunityWorkflowService } from './opportunity-workflow.service';
 import { VerificationVerifyAuthGuard } from '../auth/verification-verify-auth.guard';
@@ -30,28 +33,48 @@ import { Setting } from '../settings/entities/setting.entity';
 import { StudentApplyMaintenanceService } from './student-apply-maintenance.service';
 
 @Module({
-    imports: [
-        TypeOrmModule.forFeature([
-            Opportunity,
-            Organization,
-            Participation,
-            User,
-            OpportunityApplication,
-            StudentReport,
-            AttendanceLog,
-            Setting,
-            AdminTeamSnapshot,
-        ]),
-        OrganizationsModule,
-        UsersModule,
-        EngagementModule,
-        MailModule,
-        NotificationsModule,
-        AuditLogsModule,
-        FacultyUniversityScopeModule,
-    ],
-    controllers: [OpportunitiesController, AdminOpportunitiesController, PublicOpportunitiesController, ParticipantsController, StudentOpportunitiesController, StudentOpportunitySingularController],
-    providers: [OpportunitiesService, OpportunityWorkflowService, OpportunityApplicationsService, AdminTeamSafetyService, VerificationVerifyAuthGuard, OpportunityTokenExpirySubscriber, StudentApplyMaintenanceService],
-    exports: [OpportunitiesService, OpportunityWorkflowService, OpportunityApplicationsService, StudentApplyMaintenanceService],
+  imports: [
+    TypeOrmModule.forFeature([
+      Opportunity,
+      Organization,
+      Participation,
+      User,
+      OpportunityApplication,
+      StudentReport,
+      AttendanceLog,
+      Setting,
+      AdminTeamSnapshot,
+    ]),
+    OrganizationsModule,
+    UsersModule,
+    EngagementModule,
+    MailModule,
+    NotificationsModule,
+    AuditLogsModule,
+    FacultyUniversityScopeModule,
+  ],
+  controllers: [
+    OpportunitiesController,
+    AdminOpportunitiesController,
+    PublicOpportunitiesController,
+    ParticipantsController,
+    StudentOpportunitiesController,
+    StudentOpportunitySingularController,
+  ],
+  providers: [
+    OpportunitiesService,
+    OpportunityWorkflowService,
+    OpportunityApplicationsService,
+    AdminTeamSafetyService,
+    VerificationVerifyAuthGuard,
+    OpportunityTokenExpirySubscriber,
+    StudentApplyMaintenanceService,
+  ],
+  exports: [
+    OpportunitiesService,
+    OpportunityWorkflowService,
+    OpportunityApplicationsService,
+    StudentApplyMaintenanceService,
+  ],
 })
-export class OpportunitiesModule { }
+export class OpportunitiesModule {}

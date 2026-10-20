@@ -1,3 +1,5 @@
+import { academicDepartmentsMatch } from '../common/academic-department.util';
+
 /**
  * University scope of an opportunity, shared by apply (students.service) and seat registration
  * (engagement.service) so a member can never be seated at a university the listing excludes.
@@ -114,4 +116,57 @@ export function universityScopeError(
   }
   if (allow.some((a) => universityNamesMatch(a, name))) return null;
   return `${who} is at ${name}, but this opportunity is open to ${allowed} students only.`;
+}
+
+/** Departments / programmes the listing is limited to, in listing spelling; empty = any department. */
+export function collectOpportunityDepartmentAllowlist(
+  opp: ScopeLike,
+): string[] {
+  const scope =
+    opp?.participation_scope && typeof opp.participation_scope === 'object'
+      ? (opp.participation_scope as Record<string, unknown>)
+      : null;
+  if (!scope) return [];
+  const rule = typeof scope.rule === 'string' ? scope.rule.toLowerCase() : '';
+  const restriction =
+    scope.department_restriction &&
+    typeof scope.department_restriction === 'object'
+      ? (scope.department_restriction as Record<string, unknown>)
+      : null;
+  const departments = stringList(restriction?.departments);
+  const specific =
+    String(restriction?.scope ?? 'all').toLowerCase() === 'specific' ||
+    rule === 'departments_across_universities' ||
+    rule === 'own_university_departments';
+  return specific ? departments : [];
+}
+
+/**
+ * null when `person` may take a seat on this listing; otherwise a message naming who is blocked
+ * and what the listing is open to. University first (same words as universityScopeError), then
+ * the department / programme list, compared through academicDepartmentsMatch so a profile
+ * programme ("BS Computer Science") satisfies a listing department ("Computer Science").
+ */
+export function participationScopeError(
+  person: { university?: unknown; department?: unknown },
+  opp: ScopeLike,
+  who = 'This student',
+  options: {
+    /** false: a blank department is not judged here (a later account-based check decides). */
+    requireDepartment?: boolean;
+  } = {},
+): string | null {
+  const uniErr = universityScopeError(person.university, opp, who);
+  if (uniErr) return uniErr;
+  const departments = collectOpportunityDepartmentAllowlist(opp);
+  if (departments.length === 0) return null;
+  const dept =
+    typeof person.department === 'string' ? person.department.trim() : '';
+  const allowed = departments.join(', ');
+  if (!dept) {
+    if (options.requireDepartment === false) return null;
+    return `${who} has no department / programme set — this opportunity is open to ${allowed} students only.`;
+  }
+  if (departments.some((d) => academicDepartmentsMatch(d, dept))) return null;
+  return `${who} is in ${dept}, but this opportunity is open to ${allowed} students only.`;
 }

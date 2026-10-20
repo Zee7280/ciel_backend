@@ -5,9 +5,9 @@ import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 
 @Global()
 @Module({
-    imports: [AuditLogsModule],
-    controllers: [AdminMailController],
-    providers: [MailService],
-    exports: [MailService],
+  imports: [AuditLogsModule],
+  controllers: [AdminMailController],
+  providers: [MailService],
+  exports: [MailService],
 })
-export class MailModule { }
+export class MailModule {}

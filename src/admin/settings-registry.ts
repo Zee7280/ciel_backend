@@ -51,7 +51,8 @@ export const SETTINGS_REGISTRY: readonly SettingSpec[] = [
   {
     key: STUDENT_APPLY_CLOSED_BEFORE_KEY,
     kind: 'iso_date_or_disabled',
-    description: 'Listings created on or before this date cannot accept applies',
+    description:
+      'Listings created on or before this date cannot accept applies',
   },
   {
     key: STUDENT_APPLY_EXPIRED_MESSAGE_KEY,
@@ -176,7 +177,8 @@ export function validateSettingValue(
   switch (spec.kind) {
     case 'boolean': {
       const v = text.toLowerCase();
-      if (['true', '1', 'yes', 'on'].includes(v)) return { spec, value: 'true' };
+      if (['true', '1', 'yes', 'on'].includes(v))
+        return { spec, value: 'true' };
       if (['false', '0', 'no', 'off'].includes(v))
         return { spec, value: 'false' };
       return fail('must be a boolean (true or false).');

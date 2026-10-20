@@ -1,8 +1,8 @@
 import {
-    BadRequestException,
-    ForbiddenException,
-    Injectable,
-    NotFoundException,
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Not, Repository } from 'typeorm';
@@ -15,328 +15,342 @@ import { User } from '../users/entities/user.entity';
 import { S3Service } from '../common/s3.service';
 import { canDownloadEvidence } from '../reports/evidence-access.util';
 import {
-    collectReportEvidenceFiles,
-    ReportEvidenceFileRef,
+  collectReportEvidenceFiles,
+  ReportEvidenceFileRef,
 } from '../reports/collect-report-evidence.util';
 import { trackingOrganizationName } from '../reports/tracking-org-name.util';
 
 const MAX_FILES_PER_ZIP = 250;
 
 type ZipEntry = ReportEvidenceFileRef & {
-    zipPath: string;
+  zipPath: string;
 };
 
 type FacultyInfo = {
-    faculty_id: string | null;
-    faculty_name: string | null;
-    faculty_email: string | null;
+  faculty_id: string | null;
+  faculty_name: string | null;
+  faculty_email: string | null;
 };
 
 @Injectable()
 export class AdminProjectEvidenceService {
-    constructor(
-        @InjectRepository(Opportunity)
-        private readonly opportunityRepository: Repository<Opportunity>,
-        @InjectRepository(StudentReport)
-        private readonly studentReportRepository: Repository<StudentReport>,
-        @InjectRepository(AttendanceLog)
-        private readonly attendanceLogRepository: Repository<AttendanceLog>,
-        @InjectRepository(User)
-        private readonly usersRepository: Repository<User>,
-        private readonly s3Service: S3Service,
-    ) { }
+  constructor(
+    @InjectRepository(Opportunity)
+    private readonly opportunityRepository: Repository<Opportunity>,
+    @InjectRepository(StudentReport)
+    private readonly studentReportRepository: Repository<StudentReport>,
+    @InjectRepository(AttendanceLog)
+    private readonly attendanceLogRepository: Repository<AttendanceLog>,
+    @InjectRepository(User)
+    private readonly usersRepository: Repository<User>,
+    private readonly s3Service: S3Service,
+  ) {}
 
-    async getEvidenceOverview() {
-        const opportunities = await this.opportunityRepository.find({
-            relations: ['organization'],
-            order: { createdAt: 'DESC' },
-        });
+  async getEvidenceOverview() {
+    const opportunities = await this.opportunityRepository.find({
+      relations: ['organization'],
+      order: { createdAt: 'DESC' },
+    });
 
-        const reports = await this.studentReportRepository.find({
-            relations: ['student'],
-        });
+    const reports = await this.studentReportRepository.find({
+      relations: ['student'],
+    });
 
-        const attendanceWithEvidence = await this.attendanceLogRepository.find({
-            where: { evidenceUrl: Not(IsNull()) },
-            relations: ['participant'],
-        });
+    const attendanceWithEvidence = await this.attendanceLogRepository.find({
+      where: { evidenceUrl: Not(IsNull()) },
+      relations: ['participant'],
+    });
 
-        const facultyIds = [
-            ...new Set(
-                opportunities
-                    .map((opp) => opp.facultyId?.trim())
-                    .filter((id): id is string => Boolean(id)),
-            ),
-        ];
-        const facultyUsers =
-            facultyIds.length > 0
-                ? await this.usersRepository.find({
-                      where: { id: In(facultyIds) },
-                      select: ['id', 'name', 'email'],
-                  })
-                : [];
-        const facultyById = new Map(facultyUsers.map((u) => [u.id, u]));
+    const facultyIds = [
+      ...new Set(
+        opportunities
+          .map((opp) => opp.facultyId?.trim())
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+    const facultyUsers =
+      facultyIds.length > 0
+        ? await this.usersRepository.find({
+            where: { id: In(facultyIds) },
+            select: ['id', 'name', 'email'],
+          })
+        : [];
+    const facultyById = new Map(facultyUsers.map((u) => [u.id, u]));
 
-        const reportsByProject = new Map<string, StudentReport[]>();
-        for (const report of reports) {
-            const projectId = report.opportunityId ?? report.project_id;
-            if (!projectId) continue;
-            const list = reportsByProject.get(projectId) ?? [];
-            list.push(report);
-            reportsByProject.set(projectId, list);
-        }
-
-        const attendanceByProject = new Map<string, AttendanceLog[]>();
-        for (const log of attendanceWithEvidence) {
-            if (!log.evidenceUrl?.trim()) continue;
-            const list = attendanceByProject.get(log.projectId) ?? [];
-            list.push(log);
-            attendanceByProject.set(log.projectId, list);
-        }
-
-        const projects = opportunities.map((opp) => {
-            const projectReports = reportsByProject.get(opp.id) ?? [];
-            const projectAttendance = attendanceByProject.get(opp.id) ?? [];
-
-            const fileUrls = new Set<string>();
-            for (const report of projectReports) {
-                for (const file of collectReportEvidenceFiles(report)) {
-                    fileUrls.add(file.url);
-                }
-            }
-            for (const log of projectAttendance) {
-                if (log.evidenceUrl) fileUrls.add(log.evidenceUrl);
-            }
-
-            const faculty = this.resolveFacultyInfo(
-                opp,
-                opp.facultyId ? facultyById.get(opp.facultyId) : undefined,
-            );
-
-            return {
-                id: opp.id,
-                title: opp.title,
-                status: opp.status,
-                organization_name: trackingOrganizationName(opp) || '—',
-                report_count: projectReports.length,
-                evidence_file_count: fileUrls.size,
-                ...faculty,
-            };
-        });
-
-        return { success: true, data: { projects } };
+    const reportsByProject = new Map<string, StudentReport[]>();
+    for (const report of reports) {
+      const projectId = report.opportunityId ?? report.project_id;
+      if (!projectId) continue;
+      const list = reportsByProject.get(projectId) ?? [];
+      list.push(report);
+      reportsByProject.set(projectId, list);
     }
 
-    private resolveFacultyInfo(
-        opp: Opportunity,
-        linkedUser?: Pick<User, 'id' | 'name' | 'email'>,
-    ): FacultyInfo {
-        const sup =
-            opp.supervision && typeof opp.supervision === 'object'
-                ? (opp.supervision as Record<string, unknown>)
-                : null;
-        const supervisionName =
-            typeof sup?.supervisor_name === 'string' ? sup.supervisor_name.trim() : '';
-        const supervisionContact =
-            typeof sup?.contact === 'string' ? sup.contact.trim() : '';
-        const supervisionEmail = supervisionContact.includes('@')
-            ? supervisionContact.toLowerCase()
-            : '';
-
-        const faculty_id = opp.facultyId?.trim() || linkedUser?.id || null;
-        const faculty_name =
-            supervisionName || linkedUser?.name?.trim() || null;
-        const faculty_email =
-            supervisionEmail || linkedUser?.email?.trim()?.toLowerCase() || null;
-
-        return { faculty_id, faculty_name, faculty_email };
+    const attendanceByProject = new Map<string, AttendanceLog[]>();
+    for (const log of attendanceWithEvidence) {
+      if (!log.evidenceUrl?.trim()) continue;
+      const list = attendanceByProject.get(log.projectId) ?? [];
+      list.push(log);
+      attendanceByProject.set(log.projectId, list);
     }
 
-    async streamProjectEvidenceZip(opportunityId: string, res: Response): Promise<void> {
-        const id = opportunityId?.trim();
-        if (!id) {
-            throw new BadRequestException('Project id is required');
+    const projects = opportunities.map((opp) => {
+      const projectReports = reportsByProject.get(opp.id) ?? [];
+      const projectAttendance = attendanceByProject.get(opp.id) ?? [];
+
+      const fileUrls = new Set<string>();
+      for (const report of projectReports) {
+        for (const file of collectReportEvidenceFiles(report)) {
+          fileUrls.add(file.url);
         }
+      }
+      for (const log of projectAttendance) {
+        if (log.evidenceUrl) fileUrls.add(log.evidenceUrl);
+      }
 
-        const opportunity = await this.opportunityRepository.findOne({
-            where: { id },
-            relations: ['organization'],
-        });
-        if (!opportunity) {
-            throw new NotFoundException('Project not found');
-        }
+      const faculty = this.resolveFacultyInfo(
+        opp,
+        opp.facultyId ? facultyById.get(opp.facultyId) : undefined,
+      );
 
-        const reports = await this.studentReportRepository.find({
-            where: [{ opportunityId: id }, { project_id: id }],
-            relations: ['student'],
-        });
+      return {
+        id: opp.id,
+        title: opp.title,
+        status: opp.status,
+        organization_name: trackingOrganizationName(opp) || '—',
+        report_count: projectReports.length,
+        evidence_file_count: fileUrls.size,
+        ...faculty,
+      };
+    });
 
-        const attendanceLogs = await this.attendanceLogRepository.find({
-            where: { projectId: id, evidenceUrl: Not(IsNull()) },
-            relations: ['participant'],
-        });
+    return { success: true, data: { projects } };
+  }
 
-        // Sharing rule: only Public evidence can be downloaded. Restricted/Private is view-only,
-        // blocked for every role including Super Admin.
-        const downloadableReports = reports.filter((r) => canDownloadEvidence(r));
-        if (reports.length > 0 && downloadableReports.length === 0) {
-            throw new ForbiddenException(
-                'Evidence downloads are blocked: this project shares evidence as Restricted/Private. Only Public evidence can be downloaded.',
-            );
-        }
-        const attendanceDownloadable =
-            reports.length > 0 && downloadableReports.length === reports.length;
-        const entries = this.buildZipEntries(
-            opportunity.title,
-            downloadableReports,
-            attendanceDownloadable ? attendanceLogs : [],
-        );
-        if (entries.length === 0) {
-            throw new NotFoundException('No evidence files found for this project');
-        }
-        if (entries.length > MAX_FILES_PER_ZIP) {
-            throw new BadRequestException(
-                `Too many evidence files (${entries.length}). Maximum ${MAX_FILES_PER_ZIP} per download.`,
-            );
-        }
+  private resolveFacultyInfo(
+    opp: Opportunity,
+    linkedUser?: Pick<User, 'id' | 'name' | 'email'>,
+  ): FacultyInfo {
+    const sup =
+      opp.supervision && typeof opp.supervision === 'object'
+        ? (opp.supervision as Record<string, unknown>)
+        : null;
+    const supervisionName =
+      typeof sup?.supervisor_name === 'string'
+        ? sup.supervisor_name.trim()
+        : '';
+    const supervisionContact =
+      typeof sup?.contact === 'string' ? sup.contact.trim() : '';
+    const supervisionEmail = supervisionContact.includes('@')
+      ? supervisionContact.toLowerCase()
+      : '';
 
-        const safeTitle = this.sanitizePathSegment(opportunity.title) || 'project';
-        const filename = `${safeTitle}-${id.slice(0, 8)}-evidence.zip`;
+    const faculty_id = opp.facultyId?.trim() || linkedUser?.id || null;
+    const faculty_name = supervisionName || linkedUser?.name?.trim() || null;
+    const faculty_email =
+      supervisionEmail || linkedUser?.email?.trim()?.toLowerCase() || null;
 
-        // Download first so the skipped count is known before headers are sent.
-        const downloadedEntries: Array<{ zipPath: string; buffer: Buffer }> = [];
-        let skipped = 0;
-        for (const entry of entries) {
-            const downloaded = await this.s3Service.getObjectBufferByPublicUrl(entry.url);
-            if (!downloaded || downloaded.buffer.length === 0) {
-                skipped += 1;
-                continue;
-            }
-            downloadedEntries.push({ zipPath: entry.zipPath, buffer: downloaded.buffer });
-        }
+    return { faculty_id, faculty_name, faculty_email };
+  }
 
-        // ASCII fallback + RFC 5987 filename* so non-ASCII titles don't break the header.
-        const asciiFallback = filename.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
-        res.setHeader('Content-Type', 'application/zip');
-        res.setHeader(
-            'Content-Disposition',
-            `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(filename).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`,
-        );
-        res.setHeader('X-Evidence-Skipped', String(skipped));
-        res.setHeader('Access-Control-Expose-Headers', 'X-Evidence-Skipped, Content-Disposition');
-
-        const archive = archiver('zip', { zlib: { level: 6 } });
-        archive.on('error', (err) => {
-            console.error('Evidence zip archive error:', err);
-            if (!res.headersSent) {
-                res.status(500).end();
-            } else {
-                res.end();
-            }
-        });
-
-        archive.pipe(res);
-
-        const usedPaths = new Set<string>();
-        let added = 0;
-
-        for (const entry of downloadedEntries) {
-            let zipPath = entry.zipPath;
-            let suffix = 1;
-            while (usedPaths.has(zipPath)) {
-                const dot = entry.zipPath.lastIndexOf('.');
-                if (dot > 0) {
-                    zipPath = `${entry.zipPath.slice(0, dot)}-${suffix}${entry.zipPath.slice(dot)}`;
-                } else {
-                    zipPath = `${entry.zipPath}-${suffix}`;
-                }
-                suffix += 1;
-            }
-            usedPaths.add(zipPath);
-            archive.append(entry.buffer, { name: zipPath });
-            added += 1;
-        }
-
-        if (skipped > 0) {
-            archive.append(
-                Buffer.from(
-                    `Some files could not be downloaded from storage (${skipped} skipped, ${added} included).\n`,
-                    'utf8',
-                ),
-                { name: '_README_skipped_files.txt' },
-            );
-        }
-
-        if (added === 0) {
-            archive.append(
-                Buffer.from(
-                    'No files could be retrieved from S3 for this project. Check bucket credentials and URLs.\n',
-                    'utf8',
-                ),
-                { name: '_README_no_files_downloaded.txt' },
-            );
-        }
-
-        await new Promise<void>((resolve, reject) => {
-            archive.once('end', () => resolve());
-            archive.once('error', (err) => reject(err));
-            archive.finalize();
-        });
+  async streamProjectEvidenceZip(
+    opportunityId: string,
+    res: Response,
+  ): Promise<void> {
+    const id = opportunityId?.trim();
+    if (!id) {
+      throw new BadRequestException('Project id is required');
     }
 
-    private buildZipEntries(
-        projectTitle: string,
-        reports: StudentReport[],
-        attendanceLogs: AttendanceLog[],
-    ): ZipEntry[] {
-        const map = new Map<string, ZipEntry>();
-        const projectFolder = this.sanitizePathSegment(projectTitle) || 'project';
-
-        for (const report of reports) {
-            const studentLabel = this.studentFolderLabel(report);
-            const reportFolder = report.id.slice(0, 8);
-
-            for (const file of collectReportEvidenceFiles(report)) {
-                if (map.has(file.url)) continue;
-                const fileName = this.sanitizePathSegment(file.name) || 'evidence';
-                map.set(file.url, {
-                    ...file,
-                    zipPath: `${projectFolder}/${studentLabel}/reports/${reportFolder}/${file.source}/${fileName}`,
-                });
-            }
-        }
-
-        for (const log of attendanceLogs) {
-            const url = log.evidenceUrl?.trim();
-            if (!url || map.has(url)) continue;
-            const studentId = log.participant?.studentId ?? 'unknown-student';
-            const fileName =
-                this.sanitizePathSegment(url.split('?')[0].split('/').pop() || '') ||
-                `attendance-${log.id.slice(0, 8)}`;
-            map.set(url, {
-                url,
-                name: fileName,
-                source: 'attendance_logs',
-                zipPath: `${projectFolder}/${this.sanitizePathSegment(studentId)}/attendance/${fileName}`,
-            });
-        }
-
-        return Array.from(map.values());
+    const opportunity = await this.opportunityRepository.findOne({
+      where: { id },
+      relations: ['organization'],
+    });
+    if (!opportunity) {
+      throw new NotFoundException('Project not found');
     }
 
-    private studentFolderLabel(report: StudentReport): string {
-        const email = report.student?.email?.trim();
-        if (email) {
-            return this.sanitizePathSegment(email.split('@')[0]) || 'student';
-        }
-        return this.sanitizePathSegment(report.studentId.slice(0, 8)) || 'student';
+    const reports = await this.studentReportRepository.find({
+      where: [{ opportunityId: id }, { project_id: id }],
+      relations: ['student'],
+    });
+
+    const attendanceLogs = await this.attendanceLogRepository.find({
+      where: { projectId: id, evidenceUrl: Not(IsNull()) },
+      relations: ['participant'],
+    });
+
+    // Sharing rule: only Public evidence can be downloaded. Restricted/Private is view-only,
+    // blocked for every role including Super Admin.
+    const downloadableReports = reports.filter((r) => canDownloadEvidence(r));
+    if (reports.length > 0 && downloadableReports.length === 0) {
+      throw new ForbiddenException(
+        'Evidence downloads are blocked: this project shares evidence as Restricted/Private. Only Public evidence can be downloaded.',
+      );
+    }
+    const attendanceDownloadable =
+      reports.length > 0 && downloadableReports.length === reports.length;
+    const entries = this.buildZipEntries(
+      opportunity.title,
+      downloadableReports,
+      attendanceDownloadable ? attendanceLogs : [],
+    );
+    if (entries.length === 0) {
+      throw new NotFoundException('No evidence files found for this project');
+    }
+    if (entries.length > MAX_FILES_PER_ZIP) {
+      throw new BadRequestException(
+        `Too many evidence files (${entries.length}). Maximum ${MAX_FILES_PER_ZIP} per download.`,
+      );
     }
 
-    private sanitizePathSegment(value: string): string {
-        return value
-            .trim()
-            .replace(/[/\\?%*:|"<>]/g, '-')
-            .replace(/\s+/g, '_')
-            .slice(0, 80);
+    const safeTitle = this.sanitizePathSegment(opportunity.title) || 'project';
+    const filename = `${safeTitle}-${id.slice(0, 8)}-evidence.zip`;
+
+    // Download first so the skipped count is known before headers are sent.
+    const downloadedEntries: Array<{ zipPath: string; buffer: Buffer }> = [];
+    let skipped = 0;
+    for (const entry of entries) {
+      const downloaded = await this.s3Service.getObjectBufferByPublicUrl(
+        entry.url,
+      );
+      if (!downloaded || downloaded.buffer.length === 0) {
+        skipped += 1;
+        continue;
+      }
+      downloadedEntries.push({
+        zipPath: entry.zipPath,
+        buffer: downloaded.buffer,
+      });
     }
+
+    // ASCII fallback + RFC 5987 filename* so non-ASCII titles don't break the header.
+    const asciiFallback = filename
+      .replace(/[^\x20-\x7e]/g, '_')
+      .replace(/["\\]/g, '_');
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(filename).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`,
+    );
+    res.setHeader('X-Evidence-Skipped', String(skipped));
+    res.setHeader(
+      'Access-Control-Expose-Headers',
+      'X-Evidence-Skipped, Content-Disposition',
+    );
+
+    const archive = archiver('zip', { zlib: { level: 6 } });
+    archive.on('error', (err) => {
+      console.error('Evidence zip archive error:', err);
+      if (!res.headersSent) {
+        res.status(500).end();
+      } else {
+        res.end();
+      }
+    });
+
+    archive.pipe(res);
+
+    const usedPaths = new Set<string>();
+    let added = 0;
+
+    for (const entry of downloadedEntries) {
+      let zipPath = entry.zipPath;
+      let suffix = 1;
+      while (usedPaths.has(zipPath)) {
+        const dot = entry.zipPath.lastIndexOf('.');
+        if (dot > 0) {
+          zipPath = `${entry.zipPath.slice(0, dot)}-${suffix}${entry.zipPath.slice(dot)}`;
+        } else {
+          zipPath = `${entry.zipPath}-${suffix}`;
+        }
+        suffix += 1;
+      }
+      usedPaths.add(zipPath);
+      archive.append(entry.buffer, { name: zipPath });
+      added += 1;
+    }
+
+    if (skipped > 0) {
+      archive.append(
+        Buffer.from(
+          `Some files could not be downloaded from storage (${skipped} skipped, ${added} included).\n`,
+          'utf8',
+        ),
+        { name: '_README_skipped_files.txt' },
+      );
+    }
+
+    if (added === 0) {
+      archive.append(
+        Buffer.from(
+          'No files could be retrieved from S3 for this project. Check bucket credentials and URLs.\n',
+          'utf8',
+        ),
+        { name: '_README_no_files_downloaded.txt' },
+      );
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      archive.once('end', () => resolve());
+      archive.once('error', (err) => reject(err));
+      archive.finalize();
+    });
+  }
+
+  private buildZipEntries(
+    projectTitle: string,
+    reports: StudentReport[],
+    attendanceLogs: AttendanceLog[],
+  ): ZipEntry[] {
+    const map = new Map<string, ZipEntry>();
+    const projectFolder = this.sanitizePathSegment(projectTitle) || 'project';
+
+    for (const report of reports) {
+      const studentLabel = this.studentFolderLabel(report);
+      const reportFolder = report.id.slice(0, 8);
+
+      for (const file of collectReportEvidenceFiles(report)) {
+        if (map.has(file.url)) continue;
+        const fileName = this.sanitizePathSegment(file.name) || 'evidence';
+        map.set(file.url, {
+          ...file,
+          zipPath: `${projectFolder}/${studentLabel}/reports/${reportFolder}/${file.source}/${fileName}`,
+        });
+      }
+    }
+
+    for (const log of attendanceLogs) {
+      const url = log.evidenceUrl?.trim();
+      if (!url || map.has(url)) continue;
+      const studentId = log.participant?.studentId ?? 'unknown-student';
+      const fileName =
+        this.sanitizePathSegment(url.split('?')[0].split('/').pop() || '') ||
+        `attendance-${log.id.slice(0, 8)}`;
+      map.set(url, {
+        url,
+        name: fileName,
+        source: 'attendance_logs',
+        zipPath: `${projectFolder}/${this.sanitizePathSegment(studentId)}/attendance/${fileName}`,
+      });
+    }
+
+    return Array.from(map.values());
+  }
+
+  private studentFolderLabel(report: StudentReport): string {
+    const email = report.student?.email?.trim();
+    if (email) {
+      return this.sanitizePathSegment(email.split('@')[0]) || 'student';
+    }
+    return this.sanitizePathSegment(report.studentId.slice(0, 8)) || 'student';
+  }
+
+  private sanitizePathSegment(value: string): string {
+    return value
+      .trim()
+      .replace(/[/\\?%*:|"<>]/g, '-')
+      .replace(/\s+/g, '_')
+      .slice(0, 80);
+  }
 }

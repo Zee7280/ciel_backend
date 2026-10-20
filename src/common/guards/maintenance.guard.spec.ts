@@ -26,14 +26,22 @@ const token = (role: string) => jwt.sign({ sub: 'u1', role }, SECRET);
 describe('MaintenanceGuard', () => {
   it('lets everything through when maintenance is off', async () => {
     await expect(
-      makeGuard(false).canActivate(ctx({ method: 'GET', originalUrl: '/api/v1/opportunities' })),
+      makeGuard(false).canActivate(
+        ctx({ method: 'GET', originalUrl: '/api/v1/opportunities' }),
+      ),
     ).resolves.toBe(true);
   });
 
   it('blocks anonymous and non-admin requests with 503 during maintenance', async () => {
     const guard = makeGuard(true);
     await expect(
-      guard.canActivate(ctx({ method: 'GET', originalUrl: '/api/v1/opportunities', headers: {} })),
+      guard.canActivate(
+        ctx({
+          method: 'GET',
+          originalUrl: '/api/v1/opportunities',
+          headers: {},
+        }),
+      ),
     ).rejects.toThrow(ServiceUnavailableException);
     await expect(
       guard.canActivate(
@@ -85,7 +93,13 @@ describe('MaintenanceGuard', () => {
       ).resolves.toBe(true);
     }
     await expect(
-      guard.canActivate(ctx({ method: 'POST', originalUrl: '/api/v1/auth/signup', headers: {} })),
+      guard.canActivate(
+        ctx({
+          method: 'POST',
+          originalUrl: '/api/v1/auth/signup',
+          headers: {},
+        }),
+      ),
     ).rejects.toThrow(ServiceUnavailableException);
   });
 

@@ -7,7 +7,11 @@ import { StudentReport } from '../reports/entities/student-report.entity';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import { User } from '../users/entities/user.entity';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
-import { enrollmentLooksLikeTeam, findCanonicalTeamLeadParticipation, findPreferredProjectEnrollment } from '../engagement/team-lead-canonical.util';
+import {
+  enrollmentLooksLikeTeam,
+  findCanonicalTeamLeadParticipation,
+  findPreferredProjectEnrollment,
+} from '../engagement/team-lead-canonical.util';
 import {
   attendanceCountsTowardProgress,
   resolveEffectiveAttendanceApproverType,

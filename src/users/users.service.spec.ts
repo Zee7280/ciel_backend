@@ -1,11 +1,24 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
-import { UsersService, escapeLikePattern, hashResetToken } from './users.service';
+import {
+  UsersService,
+  escapeLikePattern,
+  hashResetToken,
+} from './users.service';
 
 function build(repo: any) {
-  return new UsersService(repo, {} as any, {} as any, { getUiFlags: jest.fn().mockResolvedValue({}) } as any);
+  return new UsersService(
+    repo,
+    {} as any,
+    {} as any,
+    { getUiFlags: jest.fn().mockResolvedValue({}) } as any,
+  );
 }
 function repoMock(overrides: any = {}) {
-  const qb = { leftJoinAndSelect: jest.fn().mockReturnThis(), where: jest.fn().mockReturnThis(), getOne: jest.fn().mockResolvedValue(null) };
+  const qb = {
+    leftJoinAndSelect: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    getOne: jest.fn().mockResolvedValue(null),
+  };
   return {
     createQueryBuilder: jest.fn().mockReturnValue(qb),
     create: jest.fn((x) => x),
@@ -27,7 +40,12 @@ describe('UsersService', () => {
 
   it('create lowercases email, hashes password and writes encrypted passwordRecord', async () => {
     const repo = repoMock();
-    const saved = await build(repo).create({ name: 'A', email: '  A@B.C ', password: 'password1', role: 'student' } as any);
+    const saved = await build(repo).create({
+      name: 'A',
+      email: '  A@B.C ',
+      password: 'password1',
+      role: 'student',
+    } as any);
     expect(saved.email).toBe('a@b.c');
     expect(saved.password).not.toBe('password1');
     expect(typeof (saved as any).passwordRecord).toBe('string');
@@ -38,12 +56,18 @@ describe('UsersService', () => {
   it('create returns 409 on duplicate email', async () => {
     const repo = repoMock();
     repo._qb.getOne.mockResolvedValue({ id: 'x' });
-    await expect(build(repo).create({ email: 'a@b.c', password: 'password1' } as any)).rejects.toThrow(ConflictException);
+    await expect(
+      build(repo).create({ email: 'a@b.c', password: 'password1' } as any),
+    ).rejects.toThrow(ConflictException);
   });
 
   it('update bumps tokenVersion on role/status change only', async () => {
     const repo = repoMock();
-    repo.findOne.mockResolvedValue({ id: 'u', role: 'student', status: 'active' });
+    repo.findOne.mockResolvedValue({
+      id: 'u',
+      role: 'student',
+      status: 'active',
+    });
     const svc = build(repo);
     await svc.update('u', { status: 'active' });
     expect(repo.increment).not.toHaveBeenCalled();
@@ -53,8 +77,14 @@ describe('UsersService', () => {
 
   it('blocks self role/status change when actorId given', async () => {
     const repo = repoMock();
-    repo.findOne.mockResolvedValue({ id: 'u', role: 'admin', status: 'active' });
-    await expect(build(repo).update('u', { role: 'student' }, 'u')).rejects.toThrow(BadRequestException);
+    repo.findOne.mockResolvedValue({
+      id: 'u',
+      role: 'admin',
+      status: 'active',
+    });
+    await expect(
+      build(repo).update('u', { role: 'student' }, 'u'),
+    ).rejects.toThrow(BadRequestException);
   });
 
   it('remove blocks self, last admin, and maps FK errors to 409', async () => {
@@ -84,7 +114,9 @@ describe('UsersService — password reset tokens are stored hashed', () => {
     const repo: any = { findOne: jest.fn().mockResolvedValue({ id: 'u1' }) };
     const svc = build(repo);
     await svc.findByResetToken('raw-token-abc');
-    expect(repo.findOne).toHaveBeenCalledWith({ where: { passwordResetToken: hashResetToken('raw-token-abc') } });
+    expect(repo.findOne).toHaveBeenCalledWith({
+      where: { passwordResetToken: hashResetToken('raw-token-abc') },
+    });
     repo.findOne.mockClear();
     expect(await svc.findByResetToken('')).toBeNull();
     expect(await svc.findByResetToken('   ')).toBeNull();
@@ -112,7 +144,14 @@ describe('UsersService — admin list filters', () => {
 
   it('filters by status and expands search across university fields', async () => {
     const repo = listRepo([
-      { id: '1', name: 'A', email: 'a@b.c', role: 'student', status: 'active', university: 'BNU' },
+      {
+        id: '1',
+        name: 'A',
+        email: 'a@b.c',
+        role: 'student',
+        status: 'active',
+        university: 'BNU',
+      },
     ]);
     await build(repo).findAllForAdmin({
       page: 1,
@@ -138,7 +177,10 @@ describe('UsersService — admin list filters', () => {
         passwordRecord: encryptPasswordRecord('secret1234'),
       },
     ];
-    const hidden = await build(listRepo(rows)).findAllForAdmin({ page: 1, limit: 10 });
+    const hidden = await build(listRepo(rows)).findAllForAdmin({
+      page: 1,
+      limit: 10,
+    });
     expect((hidden.data[0] as any).stored_password).toBeUndefined();
     const shown = await build(listRepo(rows)).findAllForAdmin({
       page: 1,
@@ -149,7 +191,6 @@ describe('UsersService — admin list filters', () => {
     expect((shown.data[0] as any).password).toBeUndefined();
   });
 });
-
 
 describe('UsersService — student institution/programme set once', () => {
   const setup = (user: any) => {
@@ -162,23 +203,63 @@ describe('UsersService — student institution/programme set once', () => {
   };
 
   it('lets a student with no university/programme set them', async () => {
-    const user: any = { id: 's', role: 'student', institution: '', university: null, department: '' };
+    const user: any = {
+      id: 's',
+      role: 'student',
+      institution: '',
+      university: null,
+      department: '',
+    };
     const { svc } = setup(user);
-    await svc.updateGenericProfile('s', { institution: 'BNU', university: 'BNU', department: 'BS CS' });
-    expect([user.institution, user.university, user.department]).toEqual(['BNU', 'BNU', 'BS CS']);
+    await svc.updateGenericProfile('s', {
+      institution: 'BNU',
+      university: 'BNU',
+      department: 'BS CS',
+    });
+    expect([user.institution, user.university, user.department]).toEqual([
+      'BNU',
+      'BNU',
+      'BS CS',
+    ]);
   });
 
   it('ignores changes once a student already has them', async () => {
-    const user: any = { id: 's', role: 'student', institution: 'BNU', university: 'BNU', department: 'BS CS', faculty_department: 'BS CS' };
+    const user: any = {
+      id: 's',
+      role: 'student',
+      institution: 'BNU',
+      university: 'BNU',
+      department: 'BS CS',
+      faculty_department: 'BS CS',
+    };
     const { svc } = setup(user);
-    await svc.updateGenericProfile('s', { institution: 'LUMS', university: 'LUMS', department: 'BBA', faculty_department: 'BBA' });
-    expect([user.institution, user.university, user.department, user.faculty_department]).toEqual(['BNU', 'BNU', 'BS CS', 'BS CS']);
+    await svc.updateGenericProfile('s', {
+      institution: 'LUMS',
+      university: 'LUMS',
+      department: 'BBA',
+      faculty_department: 'BBA',
+    });
+    expect([
+      user.institution,
+      user.university,
+      user.department,
+      user.faculty_department,
+    ]).toEqual(['BNU', 'BNU', 'BS CS', 'BS CS']);
   });
 
   it('still lets an admin change them', async () => {
-    const user: any = { id: 's', role: 'student', institution: 'BNU', department: 'BS CS' };
+    const user: any = {
+      id: 's',
+      role: 'student',
+      institution: 'BNU',
+      department: 'BS CS',
+    };
     const { svc } = setup(user);
-    await svc.updateGenericProfile('s', { institution: 'LUMS', department: 'BBA' }, { isAdminCaller: true });
+    await svc.updateGenericProfile(
+      's',
+      { institution: 'LUMS', department: 'BBA' },
+      { isAdminCaller: true },
+    );
     expect([user.institution, user.department]).toEqual(['LUMS', 'BBA']);
   });
 });

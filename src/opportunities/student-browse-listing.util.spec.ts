@@ -49,7 +49,7 @@ describe('student browse listing fields', () => {
         },
         sdg_info: { sdg_id: '4' },
         secondary_sdgs: [{ sdg_id: '11' }],
-        partner_organization: { organization_name: 'SOS Children\'s Villages' },
+        partner_organization: { organization_name: "SOS Children's Villages" },
         supervision: { faculty_department: 'CS' },
       },
       { remaining_seats: 25, organization_name: 'Fallback Org' },
@@ -94,46 +94,46 @@ describe('student browse listing fields', () => {
     expect(fields.is_virtual).toBe(true);
   });
 
-    it('counts public explore stats from live listing rows', () => {
-      expect(
-        buildPublicExploreStats([
-          {
-            organization_name: 'SOS',
-            participant_count: 12,
-            admin_approved: true,
-          },
-          {
-            partner_name: 'BNU Innovation Hub',
-            participant_count: 8,
-            faculty_verified: true,
-          },
-        ]),
-      ).toEqual({
-        total: 2,
-        verified: 2,
-        partners: 2,
-        students_impacted: 20,
-      });
+  it('counts public explore stats from live listing rows', () => {
+    expect(
+      buildPublicExploreStats([
+        {
+          organization_name: 'SOS',
+          participant_count: 12,
+          admin_approved: true,
+        },
+        {
+          partner_name: 'BNU Innovation Hub',
+          participant_count: 8,
+          faculty_verified: true,
+        },
+      ]),
+    ).toEqual({
+      total: 2,
+      verified: 2,
+      partners: 2,
+      students_impacted: 20,
     });
+  });
 
-    it('maps faculty-created rows without an Organization to faculty', () => {
-      expect(
-        classifyBrowseCreator({
-          isStudentCreated: false,
-          facultyId: 'fac-1',
-          organizationId: null,
-        }),
-      ).toBe('faculty');
-    });
+  it('maps faculty-created rows without an Organization to faculty', () => {
+    expect(
+      classifyBrowseCreator({
+        isStudentCreated: false,
+        facultyId: 'fac-1',
+        organizationId: null,
+      }),
+    ).toBe('faculty');
+  });
 
-    it('does not label a student-created row as partner', () => {
-      expect(
-        classifyBrowseCreator({
-          isStudentCreated: true,
-          created_by_role: 'student',
-        }),
-      ).toBe('student');
-    });
+  it('does not label a student-created row as partner', () => {
+    expect(
+      classifyBrowseCreator({
+        isStudentCreated: true,
+        created_by_role: 'student',
+      }),
+    ).toBe('student');
+  });
 
   it('picks the first https cover URL when present', () => {
     expect(

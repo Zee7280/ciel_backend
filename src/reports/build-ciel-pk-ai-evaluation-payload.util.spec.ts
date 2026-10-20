@@ -240,7 +240,11 @@ describe('buildCielPkAiEvaluationPayload', () => {
     ).attendance_summary;
     expect(attendanceSummary?.max_daily_attendance_hours_per_student).toBe(9);
     const section3 = payload.section3_sdg_strategy_intent as {
-      primary_sdg?: { target_code?: string; indicator_code?: string; sub_indicator?: string };
+      primary_sdg?: {
+        target_code?: string;
+        indicator_code?: string;
+        sub_indicator?: string;
+      };
     };
     expect(section3.primary_sdg).toMatchObject({
       target_code: '4.a',
@@ -256,7 +260,11 @@ describe('buildCielPkAiEvaluationPayload', () => {
         site_note?: string;
         sdgs?: number[];
         serves_beneficiaries?: boolean;
-        beneficiaries?: { unique_count?: number; overlap_note?: string; counting_method?: string };
+        beneficiaries?: {
+          unique_count?: number;
+          overlap_note?: string;
+          counting_method?: string;
+        };
       }>;
     };
     expect(section4.activity_blocks?.[0]).toMatchObject({
@@ -317,7 +325,11 @@ describe('buildCielPkAiEvaluationPayload', () => {
     expect(s4.project_summary.geographic_reach).toBe('Single Site');
     expect(s4.activity_blocks[0]).not.toHaveProperty('ladder_ui');
     expect(
-      (payload.section5_outcomes_systemic_change as { challenge_tags: string[] }).challenge_tags,
+      (
+        payload.section5_outcomes_systemic_change as {
+          challenge_tags: string[];
+        }
+      ).challenge_tags,
     ).toEqual(['limited_budget']);
   });
 
@@ -358,7 +370,11 @@ describe('buildCielPkAiEvaluationPayload', () => {
         attendance_logs?: Array<{ verification_status?: string }>;
       }
     ).attendance_logs;
-    expect(logs?.map((row) => row.verification_status)).toEqual(['logged', 'logged', 'rejected']);
+    expect(logs?.map((row) => row.verification_status)).toEqual([
+      'logged',
+      'logged',
+      'rejected',
+    ]);
   });
 
   it('counts live sessionHours on attendance logs the same way submit does', () => {
@@ -371,8 +387,16 @@ describe('buildCielPkAiEvaluationPayload', () => {
         team_lead: { name: 'Saber Ara', hours: 0 },
         team_members: [],
         attendance_logs: [
-          { student_name: 'Saber Ara', sessionHours: 7, approval_status: 'pending' },
-          { student_name: 'Saber Ara', sessionHours: 9, approvalStatus: 'pending' },
+          {
+            student_name: 'Saber Ara',
+            sessionHours: 7,
+            approval_status: 'pending',
+          },
+          {
+            student_name: 'Saber Ara',
+            sessionHours: 9,
+            approvalStatus: 'pending',
+          },
         ],
         metrics: { total_verified_hours: 0 },
       },
@@ -401,29 +425,53 @@ function minimalV45Report(): StudentReport {
     faculty_status: 'pending',
     partner_status: 'pending',
     admin_status: 'pending',
-    student: { id: 'student-45', name: 'Zara Ijaz', email: 'student@bnu.edu.pk' },
+    student: {
+      id: 'student-45',
+      name: 'Zara Ijaz',
+      email: 'student@bnu.edu.pk',
+    },
     opportunity: {
       id: 'opp-45',
       title: 'Abroo Teaching Initiative',
       location: { city: 'Lahore', country: 'Pakistan' },
-      timeline: { start_date: '2026-05-01', end_date: '2026-05-30', expected_hours: 16 },
+      timeline: {
+        start_date: '2026-05-01',
+        end_date: '2026-05-30',
+        expected_hours: 16,
+      },
     },
     section1: {
       participation_type: 'individual',
-      team_lead: { name: 'Zara Ijaz', fullName: 'Zara Ijaz', email: 'student@bnu.edu.pk', hours: '18' },
+      team_lead: {
+        name: 'Zara Ijaz',
+        fullName: 'Zara Ijaz',
+        email: 'student@bnu.edu.pk',
+        hours: '18',
+      },
       team_members: [],
       attendance_logs: [],
       metrics: { total_verified_hours: 18, verified_session_count: 1 },
     },
-    section2: { discipline: 'Economics', problem_statement: 'Limited exposure.' },
+    section2: {
+      discipline: 'Economics',
+      problem_statement: 'Limited exposure.',
+    },
     section3: { primary_sdg: { goal_number: 4 }, secondary_sdgs: [] },
     section4: { activity_blocks: [], project_summary: {} },
-    section5: { observed_change: 'Improved awareness.', measurable_outcomes: [] },
+    section5: {
+      observed_change: 'Improved awareness.',
+      measurable_outcomes: [],
+    },
     section6: { use_resources: 'no' },
     section7: { has_partners: 'no' },
     section8: {
       has_evidence: 'yes',
-      evidence_files: [{ url: 'https://example.com/files/evidence-1.jpg', name: 'evidence-1.jpg' }],
+      evidence_files: [
+        {
+          url: 'https://example.com/files/evidence-1.jpg',
+          name: 'evidence-1.jpg',
+        },
+      ],
     },
     section9: { personal_learning: 'Grew communication skills.' },
     section10: { continuation_status: 'partially' },
@@ -433,15 +481,24 @@ function minimalV45Report(): StudentReport {
 describe('buildCielPkAiEvaluationPayloadV45', () => {
   it('builds the v5.0 payload with a metadata fingerprint and does not fetch evidence bytes', async () => {
     const s3 = { getObjectBufferByPublicUrl: jest.fn() };
-    const payload = await buildCielPkAiEvaluationPayloadV45(minimalV45Report(), s3 as never);
+    const payload = await buildCielPkAiEvaluationPayloadV45(
+      minimalV45Report(),
+      s3 as never,
+    );
 
-    expect(payload.schema_version).toBe(CIEL_PK_AI_EVALUATION_SCHEMA_VERSION_V45);
+    expect(payload.schema_version).toBe(
+      CIEL_PK_AI_EVALUATION_SCHEMA_VERSION_V45,
+    );
     expect(payload.report_id).toBe('report-45');
     expect(payload.uploaded_evidence_files).toHaveLength(1);
     expect(payload.uploaded_evidence_files[0].file_integrity.sha256).toBeNull();
     expect(s3.getObjectBufferByPublicUrl).not.toHaveBeenCalled();
     expect(
-      (payload.system_validation.scoring_rubric as { cii_v45_framework_version: string }).cii_v45_framework_version,
+      (
+        payload.system_validation.scoring_rubric as {
+          cii_v45_framework_version: string;
+        }
+      ).cii_v45_framework_version,
     ).toBe('5.0');
     expect(typeof payload.input_fingerprint).toBe('string');
     expect(payload.input_fingerprint.length).toBeGreaterThan(0);
@@ -457,14 +514,22 @@ describe('buildCielPkAiEvaluationPayloadV45', () => {
 describe('computeCiiV45InputFingerprint', () => {
   it('is deterministic for identical input and changes when a section changes', () => {
     const report = minimalV45Report();
-    const files = [{ file_id: 'EV-001', url: 'https://a.example/1', storage_path: '/1' }];
+    const files = [
+      { file_id: 'EV-001', url: 'https://a.example/1', storage_path: '/1' },
+    ];
 
     const fp1 = computeCiiV45InputFingerprint(report, files);
-    const fp2 = computeCiiV45InputFingerprint({ ...report } as StudentReport, files);
+    const fp2 = computeCiiV45InputFingerprint(
+      { ...report } as StudentReport,
+      files,
+    );
     expect(fp1).toBe(fp2);
 
     const changed = computeCiiV45InputFingerprint(
-      { ...report, section9: { personal_learning: 'A different reflection entirely.' } } as StudentReport,
+      {
+        ...report,
+        section9: { personal_learning: 'A different reflection entirely.' },
+      } as StudentReport,
       files,
     );
     expect(changed).not.toBe(fp1);
@@ -476,7 +541,11 @@ describe('computeCiiV45InputFingerprint', () => {
       { file_id: 'EV-001', url: 'https://a.example/1', storage_path: '/1' },
     ]);
     const fp2 = computeCiiV45InputFingerprint(report, [
-      { file_id: 'EV-001', url: 'https://a.example/replaced', storage_path: '/1' },
+      {
+        file_id: 'EV-001',
+        url: 'https://a.example/replaced',
+        storage_path: '/1',
+      },
     ]);
     expect(fp1).not.toBe(fp2);
   });
@@ -508,7 +577,13 @@ describe('buildCiiV45InputCompletenessFromEvalPayload', () => {
       system_validation: { required_sections_present: true },
     } as any);
     expect(completeness.individualHours).toEqual([
-      { studentId: 's1', hours: 16, requiredHours: 16, verified: true, recordComplete: true },
+      {
+        studentId: 's1',
+        hours: 16,
+        requiredHours: 16,
+        verified: true,
+        recordComplete: true,
+      },
     ]);
     expect(completeness.mandatoryFieldsComplete).toBe(true);
     expect(completeness.gaps).toEqual([]);
@@ -522,9 +597,16 @@ describe('buildCiiV45InputCompletenessFromEvalPayload', () => {
         team_members: [],
       },
       submission_metadata: {},
-      system_validation: { required_sections_present: true, team_lead_signature_valid: false },
+      system_validation: {
+        required_sections_present: true,
+        team_lead_signature_valid: false,
+      },
     } as any);
     expect(completeness.mandatoryFieldsComplete).toBe(false);
-    expect(completeness.gaps.some((g) => g.type === 'SIGNATURE_INVALID' && g.mandatory)).toBe(true);
+    expect(
+      completeness.gaps.some(
+        (g) => g.type === 'SIGNATURE_INVALID' && g.mandatory,
+      ),
+    ).toBe(true);
   });
 });

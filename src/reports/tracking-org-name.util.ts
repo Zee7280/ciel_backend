@@ -48,10 +48,18 @@ export function trackingOrganizationName(
       : {};
   return (
     pickOrgField(opp.partner_organization, 'organization_name', 'name') ||
-    pickOrgField(opp.external_partner_collaboration, 'organization_name', 'name') ||
+    pickOrgField(
+      opp.external_partner_collaboration,
+      'organization_name',
+      'name',
+    ) ||
     pickOrgField(ctx.partner, 'organization_name', 'name') ||
     pickOrgField(opp.executing_organization, 'organization_name', 'name') ||
-    pickOrgField(opp.supervision, 'partner_org_name', 'external_partner_org_name') ||
+    pickOrgField(
+      opp.supervision,
+      'partner_org_name',
+      'external_partner_org_name',
+    ) ||
     (isDisplayableOrgName(opp.organization?.name)
       ? String(opp.organization?.name).trim()
       : null)

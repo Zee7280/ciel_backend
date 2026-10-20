@@ -40,8 +40,6 @@ import { NotifyCommunityAwardDto } from '../reports/dto/notify-community-award.d
 import { S3Service } from '../common/s3.service';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
 import { FacultyReportsService } from '../reports/faculty-reports.service';
-import { RunIndependentAnalysisDto } from '../faculty/dto/run-independent-analysis.dto';
-import { RunIndependentAnalysisBatchDto } from '../faculty/dto/run-independent-analysis-batch.dto';
 import { NpeRankingService } from '../ranking/npe-ranking.service';
 import { NpeStudioService } from '../ranking/npe-studio.service';
 import {
@@ -53,6 +51,25 @@ import {
 
 /** The AI analyzer feeds scores and rankings, so only CIEL PK Admin may run it. */
 const ANALYZER_ADMIN_ONLY = 'The AI analyzer can only be run by CIEL PK Admin.';
+
+/** Shape of `req.user` as returned by JwtStrategy.validate. */
+interface PartnerRequestUser {
+  id: string;
+  email?: string;
+  role?: UserRole;
+  organizationId?: string;
+  name?: string;
+}
+
+interface PartnerRequest {
+  user: PartnerRequestUser;
+}
+
+/** Optional admin-only override fields accepted on the logo upload form. */
+interface LogoUploadBody {
+  userId?: string;
+  id?: string;
+}
 
 @Controller('partners')
 @UseGuards(JwtAuthGuard, RolesGuard, MembershipActiveGuard)
@@ -79,7 +96,7 @@ export class PartnersController {
   ) {}
 
   @Get('me')
-  async getPartnerProfile(@Request() req) {
+  async getPartnerProfile(@Request() req: PartnerRequest) {
     const org = await this.organizationsService.getMyOrganization(req.user.id);
     if (!org) {
       return { success: false, message: 'Organization not found' };
@@ -117,7 +134,7 @@ export class PartnersController {
 
   @Patch('me')
   async updatePartnerProfile(
-    @Request() req,
+    @Request() req: PartnerRequest,
     @Body() updateOrganizationDto: UpdateOrganizationDto,
   ) {
     // We might need to map incoming camelCase/snake_case if DTO doesn't handle it.
@@ -132,9 +149,9 @@ export class PartnersController {
   @Post('me/logo')
   @UseInterceptors(FileInterceptor('logo', imageUploadOptions))
   async uploadLogo(
-    @Request() req,
-    @UploadedFile() file: any,
-    @Body() body: any,
+    @Request() req: PartnerRequest,
+    @UploadedFile() file: Express.Multer.File,
+    @Body() body: LogoUploadBody,
   ) {
     if (!file) {
       throw new BadRequestException('Logo file not provided');
@@ -159,15 +176,18 @@ export class PartnersController {
   @Post('profile/logo')
   @UseInterceptors(FileInterceptor('logo', imageUploadOptions))
   async uploadLogoProfile(
-    @Request() req,
-    @UploadedFile() file: any,
-    @Body() body: any,
+    @Request() req: PartnerRequest,
+    @UploadedFile() file: Express.Multer.File,
+    @Body() body: LogoUploadBody,
   ) {
     return this.uploadLogo(req, file, body);
   }
 
   @Get('dashboard')
-  async getDashboardStats(@Request() req, @Query('id') userId?: string) {
+  async getDashboardStats(
+    @Request() req: PartnerRequest,
+    @Query('id') userId?: string,
+  ) {
     let orgId = req.user.organizationId;
 
     if (userId && req.user?.role === UserRole.SUPER_ADMIN) {
@@ -189,7 +209,7 @@ export class PartnersController {
   }
 
   @Get('community-service/award-cards')
-  async communityAwardCards(@Request() req) {
+  async communityAwardCards(@Request() req: PartnerRequest) {
     if (!req.user.organizationId) {
       throw new BadRequestException('User is not linked to an organization');
     }
@@ -216,12 +236,16 @@ export class PartnersController {
           }
         : undefined,
     );
-    return { success: true, data: decorated, scope: isUni ? 'university' : 'partner' };
+    return {
+      success: true,
+      data: decorated,
+      scope: isUni ? 'university' : 'partner',
+    };
   }
 
   @Post('community-service/award-notify')
   async communityAwardNotify(
-    @Request() req,
+    @Request() req: PartnerRequest,
     @Body() dto: NotifyCommunityAwardDto,
   ) {
     if (!req.user.organizationId) {
@@ -256,58 +280,89 @@ export class PartnersController {
   }
 
   @Get('community-service/ranking/packages')
-  async npeRankingPackages(@Request() req) {
+  async npeRankingPackages(@Request() req: PartnerRequest) {
     const actor = await this.assertUniversityRankingActor(req);
     const data = await this.npeRanking.listPackages(actor);
     return { success: true, data };
   }
 
   @Post('community-service/ranking/analyze')
-  async npeRankingAnalyze(@Request() req, @Body() dto: NpeAnalyzeDto) {
+  async npeRankingAnalyze(
+    @Request() req: PartnerRequest,
+    @Body() dto: NpeAnalyzeDto,
+  ) {
     const actor = await this.assertUniversityRankingActor(req);
     const data = await this.npeRanking.analyze(actor, dto);
     return { success: true, data };
   }
 
   @Post('community-service/ranking/reviews')
-  async npeRankingClearReview(@Request() req, @Body() dto: NpeClearReviewDto) {
+  async npeRankingClearReview(
+    @Request() req: PartnerRequest,
+    @Body() dto: NpeClearReviewDto,
+  ) {
     const actor = await this.assertUniversityRankingActor(req);
-    const data = await this.npeRanking.clearReview(actor, dto.runId, dto.itemId);
+    const data = await this.npeRanking.clearReview(
+      actor,
+      dto.runId,
+      dto.itemId,
+    );
     return { success: true, data };
   }
 
   @Post('community-service/ranking/studio/preview')
-  async npeStudioPreview(@Request() req, @Body() dto: NpeStudioDto) {
+  async npeStudioPreview(
+    @Request() req: PartnerRequest,
+    @Body() dto: NpeStudioDto,
+  ) {
     const actor = await this.assertUniversityRankingActor(req);
     return { success: true, data: await this.npeStudio.preview(actor, dto) };
   }
 
   @Post('community-service/ranking/studio/publish')
-  async npeStudioPublish(@Request() req, @Body() dto: NpeStudioDto) {
+  async npeStudioPublish(
+    @Request() req: PartnerRequest,
+    @Body() dto: NpeStudioDto,
+  ) {
     const actor = await this.assertUniversityRankingActor(req);
     return { success: true, data: await this.npeStudio.publish(actor, dto) };
   }
 
   @Get('community-service/ranking/studio/history')
-  async npeStudioHistory(@Request() req) {
+  async npeStudioHistory(@Request() req: PartnerRequest) {
     const actor = await this.assertUniversityRankingActor(req);
     return { success: true, data: await this.npeStudio.history(actor) };
   }
 
   @Get('community-service/ranking/studio/publications/:id')
-  async npeStudioPublication(@Request() req, @Param('id', new ParseUUIDPipe()) id: string) {
+  async npeStudioPublication(
+    @Request() req: PartnerRequest,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
     const actor = await this.assertUniversityRankingActor(req);
-    return { success: true, data: await this.npeStudio.getPublication(actor, id) };
+    return {
+      success: true,
+      data: await this.npeStudio.getPublication(actor, id),
+    };
   }
 
   @Get('community-service/ranking/studio/project/:reportId')
-  async npeStudioProject(@Request() req, @Param('reportId', new ParseUUIDPipe()) reportId: string) {
+  async npeStudioProject(
+    @Request() req: PartnerRequest,
+    @Param('reportId', new ParseUUIDPipe()) reportId: string,
+  ) {
     const actor = await this.assertUniversityRankingActor(req);
-    return { success: true, data: await this.npeStudio.rankingsForProject(actor, reportId) };
+    return {
+      success: true,
+      data: await this.npeStudio.rankingsForProject(actor, reportId),
+    };
   }
 
   @Post('community-service/ranking/publish')
-  async npeRankingPublish(@Request() req, @Body() dto: NpePublishDto) {
+  async npeRankingPublish(
+    @Request() req: PartnerRequest,
+    @Body() dto: NpePublishDto,
+  ) {
     const actor = await this.assertUniversityRankingActor(req);
     const data = await this.npeRanking.publish(actor, dto.runId);
     return { success: true, data };
@@ -315,30 +370,23 @@ export class PartnersController {
 
   /** Blocked: independent AI analysis is an admin-only action (see admin/community-service). */
   @Post('community-service/reports/:id/independent-analysis')
-  async communityServiceIndependentAnalysis(
-    @Request() _req,
-    @Param('id') _id: string,
-    @Body() _body: RunIndependentAnalysisDto,
-  ) {
-    throw new ForbiddenException(ANALYZER_ADMIN_ONLY);
+  communityServiceIndependentAnalysis(): Promise<never> {
+    return Promise.reject(new ForbiddenException(ANALYZER_ADMIN_ONLY));
   }
 
   /** Batch counterpart — run independent analysis across several reports from this university's
    * pool at once, so the resulting score/trend update lands on each affected student's My Impact
    * Wall in a single action instead of one report at a time. */
   @Post('community-service/reports/independent-analysis/batch')
-  async communityServiceIndependentAnalysisBatch(
-    @Request() _req,
-    @Body() _body: RunIndependentAnalysisBatchDto,
-  ) {
-    throw new ForbiddenException(ANALYZER_ADMIN_ONLY);
+  communityServiceIndependentAnalysisBatch(): Promise<never> {
+    return Promise.reject(new ForbiddenException(ANALYZER_ADMIN_ONLY));
   }
 
   /** Read-only CII v4.5 breakdown (section scores + verified highlights, never per-criterion
    * detail) for a single admin-approved report this org can already see via award-cards. */
   @Get('community-service/reports/:id/cii-v4-5')
   async communityServiceCiiV45Breakdown(
-    @Request() req,
+    @Request() req: PartnerRequest,
     @Param('id') id: string,
   ) {
     if (!req.user.organizationId) {
@@ -367,7 +415,7 @@ export class PartnersController {
   }
 
   @Get('community-service/faculty-representatives')
-  async communityFacultyRepresentatives(@Request() req) {
+  async communityFacultyRepresentatives(@Request() req: PartnerRequest) {
     if (!req.user.organizationId) {
       throw new BadRequestException('User is not linked to an organization');
     }
@@ -403,7 +451,7 @@ export class PartnersController {
 
   @Post('community-service/faculty-representatives')
   async allocateFacultyRepresentative(
-    @Request() req,
+    @Request() req: PartnerRequest,
     @Body() body: { faculty_email?: string },
   ) {
     if (!req.user.organizationId) {
@@ -437,7 +485,7 @@ export class PartnersController {
 
   @Delete('community-service/faculty-representatives/:facultyUserId')
   async revokeFacultyRepresentative(
-    @Request() req,
+    @Request() req: PartnerRequest,
     @Param('facultyUserId') facultyUserId: string,
   ) {
     if (!req.user.organizationId) {
@@ -461,7 +509,7 @@ export class PartnersController {
 
   /** University-organization participation & verification analytics (403 for non-university orgs). */
   @Get('university/analytics')
-  async getUniversityAnalytics(@Request() req) {
+  async getUniversityAnalytics(@Request() req: PartnerRequest) {
     const orgId = req.user.organizationId;
     if (!orgId) {
       throw new BadRequestException('User is not linked to an organization');
@@ -471,7 +519,7 @@ export class PartnersController {
 
   /** Partner org: students assigned to this partner’s opportunities, mix and required hours. */
   @Get('students/analytics')
-  async getPartnerStudentsAnalytics(@Request() req) {
+  async getPartnerStudentsAnalytics(@Request() req: PartnerRequest) {
     const orgId = req.user.organizationId;
     if (!orgId) {
       throw new BadRequestException('User is not linked to an organization');
@@ -480,7 +528,7 @@ export class PartnersController {
   }
 
   @Get('impact/metrics')
-  async getImpactMetrics(@Request() req) {
+  async getImpactMetrics(@Request() req: PartnerRequest) {
     const orgId = req.user.organizationId;
     if (!orgId) {
       throw new BadRequestException('User is not linked to an organization');
@@ -493,7 +541,10 @@ export class PartnersController {
    * `/partner/reports` on PartnerAliasController below, which returns community-service
    * StudentReport dossiers. See that controller's class comment for the full explanation. */
   @Get('reports')
-  getReports(@Request() req, @Query() query) {
+  getReports(
+    @Request() req: PartnerRequest,
+    @Query() query: Record<string, unknown>,
+  ) {
     return this.reportsService.findAllForPartner(
       req.user.organizationId,
       query,
@@ -501,13 +552,13 @@ export class PartnersController {
   }
 
   @Post('reports')
-  createReport(@Request() req, @Body() dto: CreateReportDto) {
+  createReport(@Request() req: PartnerRequest, @Body() dto: CreateReportDto) {
     return this.reportsService.createReport(req.user.organizationId, dto);
   }
 
   @Put('reports/:id')
   updateReport(
-    @Request() req,
+    @Request() req: PartnerRequest,
     @Param('id') id: string,
     @Body() dto: UpdateReportDto,
   ) {
@@ -515,13 +566,16 @@ export class PartnersController {
   }
 
   @Delete('reports/:id')
-  deleteReport(@Request() req, @Param('id') id: string) {
+  deleteReport(@Request() req: PartnerRequest, @Param('id') id: string) {
     return this.reportsService.deleteReport(id, req.user.organizationId);
   }
 
   // Get Applicants for an Opportunity
   @Post('opportunities/applicants')
-  async getApplicants(@Request() req, @Body() dto: GetApplicantsDto) {
+  async getApplicants(
+    @Request() req: PartnerRequest,
+    @Body() dto: GetApplicantsDto,
+  ) {
     if (!req.user.organizationId) {
       throw new BadRequestException('User is not linked to an organization');
     }
@@ -536,7 +590,10 @@ export class PartnersController {
 
   // Update Applicant Status
   @Post('opportunities/applicants/update')
-  async updateApplicantStatus(@Request() req, @Body() dto: UpdateApplicantDto) {
+  async updateApplicantStatus(
+    @Request() req: PartnerRequest,
+    @Body() dto: UpdateApplicantDto,
+  ) {
     if (!req.user.organizationId) {
       throw new BadRequestException('User is not linked to an organization');
     }
@@ -551,7 +608,7 @@ export class PartnersController {
   /** Student join requests on this org's listings: faculty-approved → partner (if required) → CIEL admin. */
   @Get('opportunity-applications')
   listOpportunityApplications(
-    @Request() req,
+    @Request() req: PartnerRequest,
     @Query('status') status?: 'pending' | 'history',
   ) {
     if (!req.user.organizationId) {
@@ -564,7 +621,10 @@ export class PartnersController {
   }
 
   @Post('opportunity-applications/:id/approve')
-  approveOpportunityApplication(@Request() req, @Param('id') id: string) {
+  approveOpportunityApplication(
+    @Request() req: PartnerRequest,
+    @Param('id') id: string,
+  ) {
     if (!req.user.organizationId) {
       throw new BadRequestException('User is not linked to an organization');
     }
@@ -576,7 +636,7 @@ export class PartnersController {
 
   @Post('opportunity-applications/:id/reject')
   rejectOpportunityApplication(
-    @Request() req,
+    @Request() req: PartnerRequest,
     @Param('id') id: string,
     @Body() body: { reason?: string },
   ) {
@@ -591,7 +651,10 @@ export class PartnersController {
   }
 
   @Get('student-reports')
-  async getStudentReports(@Request() req, @Query() query: any) {
+  async getStudentReports(
+    @Request() req: PartnerRequest,
+    @Query() query: Record<string, unknown>,
+  ) {
     if (!req.user.organizationId) {
       throw new BadRequestException('User is not linked to an organization');
     }
@@ -613,7 +676,10 @@ export class PartnersController {
   }
 
   @Get('student-reports/:id')
-  async getStudentReportById(@Request() req, @Param('id') id: string) {
+  async getStudentReportById(
+    @Request() req: PartnerRequest,
+    @Param('id') id: string,
+  ) {
     return this.studentReportsService.findOneForPartner(
       id,
       req.user.organizationId,
@@ -647,7 +713,10 @@ export class PartnersController {
     UserRole.FACULTY,
   )
   @Post('approvals/:id/approve')
-  async approveOpportunity(@Request() req, @Param('id', new ParseUUIDPipe()) id: string) {
+  async approveOpportunity(
+    @Request() req: PartnerRequest,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
     const saved = await this.opportunitiesService.partnerDashboardApprove(id, {
       email: req.user.email || '',
       organizationId: req.user.organizationId || null,
@@ -674,7 +743,7 @@ export class PartnersController {
   )
   @Post('approvals/:id/reject')
   async rejectOpportunity(
-    @Request() req,
+    @Request() req: PartnerRequest,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() body: { reason?: string },
   ) {
@@ -708,7 +777,7 @@ export class PartnersController {
   )
   @Post('approvals/:id/revise')
   async reviseOpportunity(
-    @Request() req,
+    @Request() req: PartnerRequest,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() body: { reason?: string },
   ) {
@@ -785,7 +854,10 @@ export class PartnerAliasController {
   /** Community-service StudentReport dossiers for this partner org — NOT the same feature as
    * plural `/partners/reports` (NGO impact-form CRUD, legacy `Report` entity). See class comment. */
   @Get('reports')
-  async getReports(@Request() req, @Query() query: any) {
+  async getReports(
+    @Request() req: PartnerRequest,
+    @Query() query: Record<string, unknown>,
+  ) {
     if (!req.user.organizationId) {
       throw new BadRequestException('User is not linked to an organization');
     }
@@ -811,7 +883,7 @@ export class PartnerAliasController {
 
   @Get('opportunity-applications')
   listOpportunityApplications(
-    @Request() req,
+    @Request() req: PartnerRequest,
     @Query('status') status?: 'pending' | 'history',
   ) {
     if (!req.user.organizationId) {
@@ -824,7 +896,10 @@ export class PartnerAliasController {
   }
 
   @Post('opportunity-applications/:id/approve')
-  approveOpportunityApplication(@Request() req, @Param('id') id: string) {
+  approveOpportunityApplication(
+    @Request() req: PartnerRequest,
+    @Param('id') id: string,
+  ) {
     if (!req.user.organizationId) {
       throw new BadRequestException('User is not linked to an organization');
     }
@@ -836,7 +911,7 @@ export class PartnerAliasController {
 
   @Post('opportunity-applications/:id/reject')
   rejectOpportunityApplication(
-    @Request() req,
+    @Request() req: PartnerRequest,
     @Param('id') id: string,
     @Body() body: { reason?: string },
   ) {
@@ -851,7 +926,7 @@ export class PartnerAliasController {
   }
 
   @Get('reports/:id')
-  async getReportById(@Request() req, @Param('id') id: string) {
+  async getReportById(@Request() req: PartnerRequest, @Param('id') id: string) {
     // The university dashboard lists reports on every institution-linked opportunity (see
     // getReports above), so the same scope must be readable here — read-only, not reviewable.
     let universityScopeOpportunityIds: string[] = [];
@@ -892,7 +967,10 @@ export class PartnerAliasController {
   }
 
   @Post('opportunities/applicants')
-  async getApplicants(@Request() req, @Body() dto: GetApplicantsDto) {
+  async getApplicants(
+    @Request() req: PartnerRequest,
+    @Body() dto: GetApplicantsDto,
+  ) {
     if (!req.user.organizationId) {
       throw new BadRequestException('User is not linked to an organization');
     }
@@ -906,7 +984,10 @@ export class PartnerAliasController {
   }
 
   @Post('opportunities/applicants/update')
-  async updateApplicantStatus(@Request() req, @Body() dto: UpdateApplicantDto) {
+  async updateApplicantStatus(
+    @Request() req: PartnerRequest,
+    @Body() dto: UpdateApplicantDto,
+  ) {
     if (!req.user.organizationId) {
       throw new BadRequestException('User is not linked to an organization');
     }
@@ -930,7 +1011,10 @@ export class PartnerAliasController {
     UserRole.FACULTY,
   )
   @Post('approvals/:id/approve')
-  async approveOpportunity(@Request() req, @Param('id', new ParseUUIDPipe()) id: string) {
+  async approveOpportunity(
+    @Request() req: PartnerRequest,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
     const saved = await this.opportunitiesService.partnerDashboardApprove(id, {
       email: req.user.email || '',
       organizationId: req.user.organizationId || null,
@@ -957,7 +1041,7 @@ export class PartnerAliasController {
   )
   @Post('approvals/:id/reject')
   async rejectOpportunity(
-    @Request() req,
+    @Request() req: PartnerRequest,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() body: { reason?: string },
   ) {
@@ -991,7 +1075,7 @@ export class PartnerAliasController {
   )
   @Post('approvals/:id/revise')
   async reviseOpportunity(
-    @Request() req,
+    @Request() req: PartnerRequest,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() body: { reason?: string },
   ) {

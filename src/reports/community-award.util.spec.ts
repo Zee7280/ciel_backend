@@ -1,374 +1,415 @@
 import {
-    attendanceLogCountsTowardHours,
-    communityAwardInputsFromReport,
-    communityServiceLevel,
-    hoursFromAttendanceLog,
-    requiredHoursPerStudentFromOpportunity,
-    isCommunityAwardLiveReport,
-    isCommunityAwardMedalReport,
-    resolveDisplayCii,
-    resolveReportFlashEvidence,
-    resolveReportFlashHours,
-    resolveReportFlashOutcomes,
-    resolveReportFlashSessions,
-    scoreCommunityAward,
+  attendanceLogCountsTowardHours,
+  communityAwardInputsFromReport,
+  communityServiceLevel,
+  hoursFromAttendanceLog,
+  requiredHoursPerStudentFromOpportunity,
+  isCommunityAwardLiveReport,
+  isCommunityAwardMedalReport,
+  resolveDisplayCii,
+  resolveReportFlashEvidence,
+  resolveReportFlashHours,
+  resolveReportFlashOutcomes,
+  resolveReportFlashSessions,
+  scoreCommunityAward,
 } from './community-award.util';
 
 describe('community-award.util', () => {
-    it('scores CII as 40% of the 100-point index and caps each band', () => {
-        const high = scoreCommunityAward({
-            cii: 90,
-            hours: 50,
-            sessions: 10,
-            evidenceCount: 6,
-            hasBaseline: true,
-            hasEndline: true,
-            hasMeasuredChange: true,
-            continuation: 'yes',
-            partnerCount: 1,
-        });
-        expect(high.pts[0]).toBe(36);
-        expect(high.total).toBeGreaterThanOrEqual(85);
-
-        const thin = scoreCommunityAward({
-            cii: 0,
-            hours: 0,
-            sessions: 0,
-            evidenceCount: 0,
-            hasBaseline: false,
-            hasEndline: false,
-            hasMeasuredChange: false,
-            continuation: '',
-            partnerCount: 0,
-        });
-        expect(thin.total).toBeLessThan(15);
+  it('scores CII as 40% of the 100-point index and caps each band', () => {
+    const high = scoreCommunityAward({
+      cii: 90,
+      hours: 50,
+      sessions: 10,
+      evidenceCount: 6,
+      hasBaseline: true,
+      hasEndline: true,
+      hasMeasuredChange: true,
+      continuation: 'yes',
+      partnerCount: 1,
     });
+    expect(high.pts[0]).toBe(36);
+    expect(high.total).toBeGreaterThanOrEqual(85);
+
+    const thin = scoreCommunityAward({
+      cii: 0,
+      hours: 0,
+      sessions: 0,
+      evidenceCount: 0,
+      hasBaseline: false,
+      hasEndline: false,
+      hasMeasuredChange: false,
+      continuation: '',
+      partnerCount: 0,
+    });
+    expect(thin.total).toBeLessThan(15);
+  });
 });
 
 describe('isCommunityAwardLiveReport', () => {
-    it('keeps faculty-approved and verified reports on the live deck', () => {
-        expect(isCommunityAwardLiveReport({ faculty_status: 'approved', status: 'submitted' })).toBe(true);
-        expect(isCommunityAwardLiveReport({ faculty_status: 'pending', status: 'verified' })).toBe(true);
-    });
+  it('keeps faculty-approved and verified reports on the live deck', () => {
+    expect(
+      isCommunityAwardLiveReport({
+        faculty_status: 'approved',
+        status: 'submitted',
+      }),
+    ).toBe(true);
+    expect(
+      isCommunityAwardLiveReport({
+        faculty_status: 'pending',
+        status: 'verified',
+      }),
+    ).toBe(true);
+  });
 
-    it('keeps submitted reports in the waiting inbox even when hours are already logged', () => {
-        expect(isCommunityAwardLiveReport({ faculty_status: 'pending', status: 'submitted' })).toBe(false);
-        expect(isCommunityAwardLiveReport({ faculty_status: 'pending', status: 'submitted' })).toBe(false);
-        expect(isCommunityAwardLiveReport({ faculty_status: 'pending', status: 'paid' })).toBe(false);
-    });
+  it('keeps submitted reports in the waiting inbox even when hours are already logged', () => {
+    expect(
+      isCommunityAwardLiveReport({
+        faculty_status: 'pending',
+        status: 'submitted',
+      }),
+    ).toBe(false);
+    expect(
+      isCommunityAwardLiveReport({
+        faculty_status: 'pending',
+        status: 'submitted',
+      }),
+    ).toBe(false);
+    expect(
+      isCommunityAwardLiveReport({ faculty_status: 'pending', status: 'paid' }),
+    ).toBe(false);
+  });
 
-    it('excludes drafts and rejections', () => {
-        expect(isCommunityAwardLiveReport({ faculty_status: 'pending', status: 'draft' })).toBe(false);
-        expect(isCommunityAwardLiveReport({ faculty_status: 'rejected', status: 'submitted' })).toBe(false);
-    });
+  it('excludes drafts and rejections', () => {
+    expect(
+      isCommunityAwardLiveReport({
+        faculty_status: 'pending',
+        status: 'draft',
+      }),
+    ).toBe(false);
+    expect(
+      isCommunityAwardLiveReport({
+        faculty_status: 'rejected',
+        status: 'submitted',
+      }),
+    ).toBe(false);
+  });
 
-    it('treats CIEL PK-published private-candidate reports as live without Faculty', () => {
-        expect(
-            isCommunityAwardLiveReport({
-                faculty_status: 'not_applicable',
-                admin_status: 'approved',
-                status: 'verified',
-            }),
-        ).toBe(true);
-        expect(
-            isCommunityAwardLiveReport({
-                faculty_status: 'not_applicable',
-                admin_status: 'pending',
-                status: 'paid',
-            }),
-        ).toBe(false);
-    });
+  it('treats CIEL PK-published private-candidate reports as live without Faculty', () => {
+    expect(
+      isCommunityAwardLiveReport({
+        faculty_status: 'not_applicable',
+        admin_status: 'approved',
+        status: 'verified',
+      }),
+    ).toBe(true);
+    expect(
+      isCommunityAwardLiveReport({
+        faculty_status: 'not_applicable',
+        admin_status: 'pending',
+        status: 'paid',
+      }),
+    ).toBe(false);
+  });
 });
 
 describe('isCommunityAwardMedalReport', () => {
-    it('requires faculty and admin sign-off for the award vault', () => {
-        expect(
-            isCommunityAwardMedalReport({
-                faculty_status: 'approved',
-                admin_status: 'approved',
-                status: 'submitted',
-            }),
-        ).toBe(true);
-        expect(
-            isCommunityAwardMedalReport({
-                faculty_status: 'approved',
-                admin_status: 'pending',
-                status: 'submitted',
-            }),
-        ).toBe(false);
-        expect(
-            isCommunityAwardMedalReport({
-                faculty_status: 'pending',
-                admin_status: 'approved',
-                status: 'verified',
-            }),
-        ).toBe(false);
-        expect(
-            isCommunityAwardMedalReport({
-                faculty_status: 'approved',
-                admin_status: 'pending',
-                status: 'verified',
-            }),
-        ).toBe(true);
-        expect(
-            isCommunityAwardMedalReport({
-                faculty_status: 'not_applicable',
-                admin_status: 'approved',
-                status: 'verified',
-            }),
-        ).toBe(true);
-        expect(
-            isCommunityAwardMedalReport({
-                faculty_status: 'approved',
-                admin_status: 'approved',
-                status: 'closed',
-            }),
-        ).toBe(false);
-        expect(
-            isCommunityAwardMedalReport({
-                faculty_status: 'approved',
-                admin_status: 'rejected',
-                status: 'revision',
-            }),
-        ).toBe(false);
-    });
+  it('requires faculty and admin sign-off for the award vault', () => {
+    expect(
+      isCommunityAwardMedalReport({
+        faculty_status: 'approved',
+        admin_status: 'approved',
+        status: 'submitted',
+      }),
+    ).toBe(true);
+    expect(
+      isCommunityAwardMedalReport({
+        faculty_status: 'approved',
+        admin_status: 'pending',
+        status: 'submitted',
+      }),
+    ).toBe(false);
+    expect(
+      isCommunityAwardMedalReport({
+        faculty_status: 'pending',
+        admin_status: 'approved',
+        status: 'verified',
+      }),
+    ).toBe(false);
+    expect(
+      isCommunityAwardMedalReport({
+        faculty_status: 'approved',
+        admin_status: 'pending',
+        status: 'verified',
+      }),
+    ).toBe(true);
+    expect(
+      isCommunityAwardMedalReport({
+        faculty_status: 'not_applicable',
+        admin_status: 'approved',
+        status: 'verified',
+      }),
+    ).toBe(true);
+    expect(
+      isCommunityAwardMedalReport({
+        faculty_status: 'approved',
+        admin_status: 'approved',
+        status: 'closed',
+      }),
+    ).toBe(false);
+    expect(
+      isCommunityAwardMedalReport({
+        faculty_status: 'approved',
+        admin_status: 'rejected',
+        status: 'revision',
+      }),
+    ).toBe(false);
+  });
 });
 
 describe('communityServiceLevel', () => {
-    it('bands the 4 tiers at the 85/70/50 thresholds, inclusive lower bound', () => {
-        expect(communityServiceLevel(100)).toBe('Transformative');
-        expect(communityServiceLevel(85)).toBe('Transformative');
-        expect(communityServiceLevel(84)).toBe('Distinguished');
-        expect(communityServiceLevel(70)).toBe('Distinguished');
-        expect(communityServiceLevel(69)).toBe('Strong');
-        expect(communityServiceLevel(50)).toBe('Strong');
-        expect(communityServiceLevel(49)).toBe('Developing');
-        expect(communityServiceLevel(0)).toBe('Developing');
-    });
+  it('bands the 4 tiers at the 85/70/50 thresholds, inclusive lower bound', () => {
+    expect(communityServiceLevel(100)).toBe('Transformative');
+    expect(communityServiceLevel(85)).toBe('Transformative');
+    expect(communityServiceLevel(84)).toBe('Distinguished');
+    expect(communityServiceLevel(70)).toBe('Distinguished');
+    expect(communityServiceLevel(69)).toBe('Strong');
+    expect(communityServiceLevel(50)).toBe('Strong');
+    expect(communityServiceLevel(49)).toBe('Developing');
+    expect(communityServiceLevel(0)).toBe('Developing');
+  });
 });
 
 describe('requiredHoursPerStudentFromOpportunity — same bar as submit + wizard', () => {
-    it('uses timeline expected_hours when set', () => {
-        expect(
-            requiredHoursPerStudentFromOpportunity({
-                timeline: { expected_hours: 24 },
-                requiredHours: 16,
-            }),
-        ).toBe(24);
-    });
+  it('uses timeline expected_hours when set', () => {
+    expect(
+      requiredHoursPerStudentFromOpportunity({
+        timeline: { expected_hours: 24 },
+        requiredHours: 16,
+      }),
+    ).toBe(24);
+  });
 
-    it('falls back to the requiredHours column, then 16', () => {
-        expect(
-            requiredHoursPerStudentFromOpportunity({
-                timeline: {},
-                requiredHours: 40,
-            }),
-        ).toBe(40);
-        expect(requiredHoursPerStudentFromOpportunity({ timeline: {} })).toBe(16);
-        expect(requiredHoursPerStudentFromOpportunity(null)).toBe(16);
-    });
+  it('falls back to the requiredHours column, then 16', () => {
+    expect(
+      requiredHoursPerStudentFromOpportunity({
+        timeline: {},
+        requiredHours: 40,
+      }),
+    ).toBe(40);
+    expect(requiredHoursPerStudentFromOpportunity({ timeline: {} })).toBe(16);
+    expect(requiredHoursPerStudentFromOpportunity(null)).toBe(16);
+  });
 });
 
 describe('hoursFromAttendanceLog — same clock math as the student wizard', () => {
-    it('uses start/end when sessionHours is 0', () => {
-        expect(
-            hoursFromAttendanceLog({
-                sessionHours: 0,
-                startTime: '09:00',
-                endTime: '13:00',
-            }),
-        ).toBe(4);
-        expect(
-            hoursFromAttendanceLog({
-                hours: 0,
-                start_time: '08:00:00',
-                end_time: '17:00:00',
-            }),
-        ).toBe(9);
-    });
+  it('uses start/end when sessionHours is 0', () => {
+    expect(
+      hoursFromAttendanceLog({
+        sessionHours: 0,
+        startTime: '09:00',
+        endTime: '13:00',
+      }),
+    ).toBe(4);
+    expect(
+      hoursFromAttendanceLog({
+        hours: 0,
+        start_time: '08:00:00',
+        end_time: '17:00:00',
+      }),
+    ).toBe(9);
+  });
 
-    it('ignores rejected sessions', () => {
-        expect(
-            attendanceLogCountsTowardHours({
-                approvalStatus: 'rejected',
-                sessionHours: 16,
-            }),
-        ).toBe(false);
-        expect(
-            attendanceLogCountsTowardHours({
-                approval_status: 'pending',
-                sessionHours: 4,
-            }),
-        ).toBe(true);
-    });
+  it('ignores rejected sessions', () => {
+    expect(
+      attendanceLogCountsTowardHours({
+        approvalStatus: 'rejected',
+        sessionHours: 16,
+      }),
+    ).toBe(false);
+    expect(
+      attendanceLogCountsTowardHours({
+        approval_status: 'pending',
+        sessionHours: 4,
+      }),
+    ).toBe(true);
+  });
 });
 
 describe('resolveReportFlashHours — same cascade as the V23 flashcard', () => {
-    it('uses session logs when metrics hours are empty', () => {
-        expect(
-            resolveReportFlashHours({
-                metrics: { total_verified_hours: 0 },
-                attendance_logs: [
-                    { hours: 2, approval_status: 'pending' },
-                    { hours: 2, start_time: '09:00', end_time: '11:00' },
-                ],
-            }),
-        ).toBe(4);
-    });
+  it('uses session logs when metrics hours are empty', () => {
+    expect(
+      resolveReportFlashHours({
+        metrics: { total_verified_hours: 0 },
+        attendance_logs: [
+          { hours: 2, approval_status: 'pending' },
+          { hours: 2, start_time: '09:00', end_time: '11:00' },
+        ],
+      }),
+    ).toBe(4);
+  });
 
-    it('ignores rejected logs and falls back to roster hours', () => {
-        expect(
-            resolveReportFlashHours({
-                metrics: { total_verified_hours: 0 },
-                attendance_logs: [{ hours: 8, approval_status: 'rejected' }],
-                team_lead: { hours: 6 },
-                team_members: [{ hours: 4 }],
-            }),
-        ).toBe(10);
-    });
+  it('ignores rejected logs and falls back to roster hours', () => {
+    expect(
+      resolveReportFlashHours({
+        metrics: { total_verified_hours: 0 },
+        attendance_logs: [{ hours: 8, approval_status: 'rejected' }],
+        team_lead: { hours: 6 },
+        team_members: [{ hours: 4 }],
+      }),
+    ).toBe(10);
+  });
 
-    it('uses live attendance hours only when the stored blob is still 0', () => {
-        expect(resolveReportFlashHours({ metrics: { total_verified_hours: 16 } }, 40)).toBe(16);
-        expect(resolveReportFlashHours({ metrics: { total_verified_hours: 0 } }, 12)).toBe(12);
-    });
+  it('uses live attendance hours only when the stored blob is still 0', () => {
+    expect(
+      resolveReportFlashHours({ metrics: { total_verified_hours: 16 } }, 40),
+    ).toBe(16);
+    expect(
+      resolveReportFlashHours({ metrics: { total_verified_hours: 0 } }, 12),
+    ).toBe(12);
+  });
 });
 
 describe('resolveDisplayCii', () => {
-    it('shows the v4.5 score on flashcards even while the lock row is still unlocked', () => {
-        expect(
-            resolveDisplayCii({
-                section11: { ai_generated_impact_score: 54 },
-                ciiV45: { finalCII: 54 },
-                ciiV45Lock: { locked: false },
-            }),
-        ).toBe(54);
-    });
+  it('shows the v4.5 score on flashcards even while the lock row is still unlocked', () => {
+    expect(
+      resolveDisplayCii({
+        section11: { ai_generated_impact_score: 54 },
+        ciiV45: { finalCII: 54 },
+        ciiV45Lock: { locked: false },
+      }),
+    ).toBe(54);
+  });
 
-    it('returns the admin-locked final score', () => {
-        expect(
-            resolveDisplayCii({
-                section11: { ai_generated_impact_score: 54 },
-                ciiV45: { finalCII: 71.4 },
-                ciiV45Lock: { locked: true },
-            }),
-        ).toBe(71);
-        expect(
-            resolveDisplayCii({
-                section11: { ai_generated_impact_score: 54 },
-                ciiV45: { finalCII: '90.5' },
-                ciiV45Lock: { locked: true },
-            }),
-        ).toBe(91);
-        expect(
-            resolveDisplayCii({
-                section11: { ai_generated_impact_score: 54 },
-                ciiV45: { diagnosticCII: 80, finalCII: 75 },
-                ciiV45Lock: { locked: true, adminApprovedScore: 75 },
-            }),
-        ).toBe(75);
-    });
+  it('returns the admin-locked final score', () => {
+    expect(
+      resolveDisplayCii({
+        section11: { ai_generated_impact_score: 54 },
+        ciiV45: { finalCII: 71.4 },
+        ciiV45Lock: { locked: true },
+      }),
+    ).toBe(71);
+    expect(
+      resolveDisplayCii({
+        section11: { ai_generated_impact_score: 54 },
+        ciiV45: { finalCII: '90.5' },
+        ciiV45Lock: { locked: true },
+      }),
+    ).toBe(91);
+    expect(
+      resolveDisplayCii({
+        section11: { ai_generated_impact_score: 54 },
+        ciiV45: { diagnosticCII: 80, finalCII: 75 },
+        ciiV45Lock: { locked: true, adminApprovedScore: 75 },
+      }),
+    ).toBe(75);
+  });
 
-    it('treats JSON string "true" as an admin lock, same as the flashcard', () => {
-        expect(
-            resolveDisplayCii({
-                section11: { ai_generated_impact_score: 54 },
-                ciiV45: { finalCII: 71.4 },
-                ciiV45Lock: { locked: 'true' },
-            }),
-        ).toBe(71);
-        expect(
-            resolveDisplayCii({
-                section11: { ai_generated_impact_score: 54 },
-                ciiV45: { finalCII: 71.4 },
-                ciiV45Lock: { locked: 'false' },
-            }),
-        ).toBe(71);
-    });
+  it('treats JSON string "true" as an admin lock, same as the flashcard', () => {
+    expect(
+      resolveDisplayCii({
+        section11: { ai_generated_impact_score: 54 },
+        ciiV45: { finalCII: 71.4 },
+        ciiV45Lock: { locked: 'true' },
+      }),
+    ).toBe(71);
+    expect(
+      resolveDisplayCii({
+        section11: { ai_generated_impact_score: 54 },
+        ciiV45: { finalCII: 71.4 },
+        ciiV45Lock: { locked: 'false' },
+      }),
+    ).toBe(71);
+  });
 
-    it('keeps legacy section11 CII when there is no lock record', () => {
-        expect(
-            resolveDisplayCii({
-                section11: { ai_generated_impact_score: 88 },
-            }),
-        ).toBe(88);
-    });
+  it('keeps legacy section11 CII when there is no lock record', () => {
+    expect(
+      resolveDisplayCii({
+        section11: { ai_generated_impact_score: 88 },
+      }),
+    ).toBe(88);
+  });
 
-    it('shows the AI score on flashcards while Admin evidence is still pending', () => {
-        expect(
-            resolveDisplayCii({
-                section11: { ai_generated_impact_score: 54 },
-                ciiV45: {
-                    diagnosticCII: null,
-                    finalCII: null,
-                    aiReportScore: 57.9,
-                    knownBasePoints: 57.9,
-                    adminEvidenceAssessment: { status: 'PENDING' },
-                } as Record<string, unknown>,
-                ciiV45Lock: { locked: false },
-            }),
-        ).toBe(58);
-    });
+  it('shows the AI score on flashcards while Admin evidence is still pending', () => {
+    expect(
+      resolveDisplayCii({
+        section11: { ai_generated_impact_score: 54 },
+        ciiV45: {
+          diagnosticCII: null,
+          finalCII: null,
+          aiReportScore: 57.9,
+          knownBasePoints: 57.9,
+          adminEvidenceAssessment: { status: 'PENDING' },
+        } as Record<string, unknown>,
+        ciiV45Lock: { locked: false },
+      }),
+    ).toBe(58);
+  });
 });
 
 describe('resolveReportFlashEvidence', () => {
-    it('counts session evidence when section8 files are empty', () => {
-        expect(
-            resolveReportFlashEvidence({
-                section8: { evidence_files: [] },
-                section1: {
-                    attendance_logs: [
-                        { evidence_url: 'https://cdn.example/a.jpg' },
-                        { hours: 2 },
-                    ],
-                },
-            }),
-        ).toBe(1);
-    });
+  it('counts session evidence when section8 files are empty', () => {
+    expect(
+      resolveReportFlashEvidence({
+        section8: { evidence_files: [] },
+        section1: {
+          attendance_logs: [
+            { evidence_url: 'https://cdn.example/a.jpg' },
+            { hours: 2 },
+          ],
+        },
+      }),
+    ).toBe(1);
+  });
 
-    it('counts section media_urls the same way the exhibition gallery does', () => {
-        expect(
-            resolveReportFlashEvidence({
-                section8: { evidence_files: [] },
-                section5: { media_urls: ['https://cdn.example/a.jpg', 'https://cdn.example/b.jpg'] },
-            }),
-        ).toBe(2);
-    });
+  it('counts section media_urls the same way the exhibition gallery does', () => {
+    expect(
+      resolveReportFlashEvidence({
+        section8: { evidence_files: [] },
+        section5: {
+          media_urls: [
+            'https://cdn.example/a.jpg',
+            'https://cdn.example/b.jpg',
+          ],
+        },
+      }),
+    ).toBe(2);
+  });
 });
 
 describe('resolveReportFlashSessions / outcomes — same sources as the V23 flashcard', () => {
-    it('counts non-rejected attendance logs before section4 totals', () => {
-        expect(
-            resolveReportFlashSessions(
-                {
-                    metrics: { total_active_days: 1 },
-                    attendance_logs: [
-                        { hours: 2, approval_status: 'pending' },
-                        { hours: 2 },
-                        { hours: 8, approval_status: 'rejected' },
-                    ],
-                },
-                { total_sessions: 9 },
-            ),
-        ).toBe(2);
-    });
+  it('counts non-rejected attendance logs before section4 totals', () => {
+    expect(
+      resolveReportFlashSessions(
+        {
+          metrics: { total_active_days: 1 },
+          attendance_logs: [
+            { hours: 2, approval_status: 'pending' },
+            { hours: 2 },
+            { hours: 8, approval_status: 'rejected' },
+          ],
+        },
+        { total_sessions: 9 },
+      ),
+    ).toBe(2);
+  });
 
-    it('reads measurable_outcomes when legacy baseline/endline fields are empty', () => {
-        const outcomes = resolveReportFlashOutcomes({
-            measurable_outcomes: [
-                { metric: 'Attendance', baseline: '20', endline: '45' },
-            ],
-        });
-        expect(outcomes.baseline).toBe('20');
-        expect(outcomes.endline).toBe('45');
-        expect(outcomes.change).toContain('20 → 45');
-        expect(
-            communityAwardInputsFromReport({
-                section5: {
-                    measurable_outcomes: [
-                        { metric: 'Attendance', baseline: '20', endline: '45' },
-                    ],
-                },
-            }).hasMeasuredChange,
-        ).toBe(true);
+  it('reads measurable_outcomes when legacy baseline/endline fields are empty', () => {
+    const outcomes = resolveReportFlashOutcomes({
+      measurable_outcomes: [
+        { metric: 'Attendance', baseline: '20', endline: '45' },
+      ],
     });
+    expect(outcomes.baseline).toBe('20');
+    expect(outcomes.endline).toBe('45');
+    expect(outcomes.change).toContain('20 → 45');
+    expect(
+      communityAwardInputsFromReport({
+        section5: {
+          measurable_outcomes: [
+            { metric: 'Attendance', baseline: '20', endline: '45' },
+          ],
+        },
+      }).hasMeasuredChange,
+    ).toBe(true);
+  });
 });

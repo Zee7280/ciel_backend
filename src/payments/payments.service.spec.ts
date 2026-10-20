@@ -18,10 +18,14 @@ describe('PaymentsService manual payment decisions', () => {
       update: jest.fn(async () => ({ affected: updateAffected })),
     };
     const notifications: any = {
-      createApprovalNotification: jest.fn().mockRejectedValue(new Error('boom')),
+      createApprovalNotification: jest
+        .fn()
+        .mockRejectedValue(new Error('boom')),
     };
     const mail: any = {
-      sendStudentOpportunityStatusUpdate: jest.fn().mockRejectedValue(new Error('smtp')),
+      sendStudentOpportunityStatusUpdate: jest
+        .fn()
+        .mockRejectedValue(new Error('smtp')),
     };
     const reportRepo: any = { findOne: jest.fn(async () => null) };
     const service = new PaymentsService(
@@ -38,13 +42,21 @@ describe('PaymentsService manual payment decisions', () => {
 
   it('uses a conditional update, stores reviewer and survives notification failures', async () => {
     const { service, paymentRepo, notifications, mail } = build();
-    const res = await service.verifyManualPayment('p1', PaymentStatus.APPROVED, undefined, {
-      id: 'admin-1',
-    });
+    const res = await service.verifyManualPayment(
+      'p1',
+      PaymentStatus.APPROVED,
+      undefined,
+      {
+        id: 'admin-1',
+      },
+    );
     expect(res.success).toBe(true);
     expect(paymentRepo.update).toHaveBeenCalledWith(
       { id: 'p1', status: PaymentStatus.PENDING },
-      expect.objectContaining({ status: PaymentStatus.APPROVED, reviewedBy: 'admin-1' }),
+      expect.objectContaining({
+        status: PaymentStatus.APPROVED,
+        reviewedBy: 'admin-1',
+      }),
     );
     expect(notifications.createApprovalNotification).toHaveBeenCalled();
     expect(mail.sendStudentOpportunityStatusUpdate).toHaveBeenCalled();

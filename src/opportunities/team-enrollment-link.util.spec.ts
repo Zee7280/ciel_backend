@@ -70,7 +70,11 @@ describe('countSeatsByRosterEmail', () => {
 
 describe('pickSeatToKeepWhenRelinking', () => {
   it('keeps the team member seat instead of collapsing onto an individual leftover', () => {
-    const ownerIndividual: SeatFx = { id: 'individual', teamId: null, isTeamLead: false };
+    const ownerIndividual: SeatFx = {
+      id: 'individual',
+      teamId: null,
+      isTeamLead: false,
+    };
     const teamMember: SeatFx = {
       id: 'team-row',
       teamId: 'cf890ae9-46a6-4de0-9f18-dabad608c19a',
@@ -82,7 +86,11 @@ describe('pickSeatToKeepWhenRelinking', () => {
   });
 
   it('keeps the already-correct team lead when the mislinked row is not on a team', () => {
-    const ownerLead: SeatFx = { id: 'lead', teamId: 'team-1', isTeamLead: true };
+    const ownerLead: SeatFx = {
+      id: 'lead',
+      teamId: 'team-1',
+      isTeamLead: true,
+    };
     const stray: SeatFx = { id: 'stray', teamId: null, isTeamLead: false };
     expect(pickSeatToKeepWhenRelinking(ownerLead, stray).id).toBe('lead');
   });

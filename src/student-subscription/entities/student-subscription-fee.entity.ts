@@ -8,7 +8,10 @@ import {
 } from 'typeorm';
 import { User } from '../../users/entities/user.entity';
 
-export type StudentSubscriptionFeeStatus = 'pending_review' | 'approved' | 'rejected';
+export type StudentSubscriptionFeeStatus =
+  | 'pending_review'
+  | 'approved'
+  | 'rejected';
 
 /** One bank-transfer proof submitted by a student for the subscription fee. */
 @Entity('student_subscription_fees')
@@ -24,7 +27,12 @@ export class StudentSubscriptionFee {
   userId: string;
 
   /** University the student declared at signup, captured at submission time for the admin queue. */
-  @Column({ name: 'university_name', type: 'varchar', length: 255, nullable: true })
+  @Column({
+    name: 'university_name',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
   universityName: string | null;
 
   @Column({ type: 'int', name: 'paid_amount_pkr' })

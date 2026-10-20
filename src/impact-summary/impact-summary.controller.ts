@@ -5,11 +5,11 @@ import { ImpactSummaryService } from './impact-summary.service';
 @Controller('students')
 @UseGuards(JwtAuthGuard)
 export class ImpactSummaryController {
-    constructor(private readonly impactSummaryService: ImpactSummaryService) { }
+  constructor(private readonly impactSummaryService: ImpactSummaryService) {}
 
-    @Get('impact/summary')
-    async getSummary(@Request() req) {
-        const data = await this.impactSummaryService.getSummary(req.user.id);
-        return { success: true, data };
-    }
+  @Get('impact/summary')
+  async getSummary(@Request() req: { user: { id: string } }) {
+    const data = await this.impactSummaryService.getSummary(req.user.id);
+    return { success: true, data };
+  }
 }

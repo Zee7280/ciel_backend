@@ -1,5 +1,8 @@
 import { ArgumentMetadata, ValidationPipe } from '@nestjs/common';
-import { CreateOpportunityDto, UpdateOpportunityDto } from './create-opportunity.dto';
+import {
+  CreateOpportunityDto,
+  UpdateOpportunityDto,
+} from './create-opportunity.dto';
 
 describe('CreateOpportunityDto — draft flag survives whitelist', () => {
   const pipe = new ValidationPipe({ whitelist: true, transform: true });
@@ -137,8 +140,14 @@ describe('CreateOpportunityDto — draft flag survives whitelist', () => {
 
 describe('CreateOpportunityDto / UpdateOpportunityDto — hardened validation', () => {
   const pipe = new ValidationPipe({ whitelist: true, transform: true });
-  const create = { type: 'body', metatype: CreateOpportunityDto } as ArgumentMetadata;
-  const update = { type: 'body', metatype: UpdateOpportunityDto } as ArgumentMetadata;
+  const create = {
+    type: 'body',
+    metatype: CreateOpportunityDto,
+  } as ArgumentMetadata;
+  const update = {
+    type: 'body',
+    metatype: UpdateOpportunityDto,
+  } as ArgumentMetadata;
   const full = {
     title: 'Campus cleanup',
     types: ['Community Service'],
@@ -162,13 +171,21 @@ describe('CreateOpportunityDto / UpdateOpportunityDto — hardened validation', 
     ['zero seats', { timeline: { volunteers_required: 0 } }],
     ['seats over cap', { timeline: { volunteers_required: 5001 } }],
   ])('rejects a full submit with %s', async (_label, patch) => {
-    await expect(pipe.transform({ ...full, ...patch }, create)).rejects.toBeTruthy();
+    await expect(
+      pipe.transform({ ...full, ...patch }, create),
+    ).rejects.toBeTruthy();
   });
 
   it('still lets an incomplete draft through (0 hours / empty title)', async () => {
     await expect(
       pipe.transform(
-        { draft: true, title: '', types: [], mode: '', timeline: { expected_hours: 0, volunteers_required: 0 } },
+        {
+          draft: true,
+          title: '',
+          types: [],
+          mode: '',
+          timeline: { expected_hours: 0, volunteers_required: 0 },
+        },
         create,
       ),
     ).resolves.toBeTruthy();
@@ -194,19 +211,40 @@ describe('CreateOpportunityDto / UpdateOpportunityDto — hardened validation', 
 
 describe('CreateOpportunityDto — field bounds', () => {
   const pipe = new ValidationPipe({ whitelist: true, transform: true });
-  const metadata: ArgumentMetadata = { type: 'body', metatype: CreateOpportunityDto };
-  const base = { title: 'Ok', types: ['Community Service'], mode: 'Remote', verification_method: [] };
+  const metadata: ArgumentMetadata = {
+    type: 'body',
+    metatype: CreateOpportunityDto,
+  };
+  const base = {
+    title: 'Ok',
+    types: ['Community Service'],
+    mode: 'Remote',
+    verification_method: [],
+  };
 
   it('rejects a title over 200 chars', async () => {
-    await expect(pipe.transform({ ...base, title: 'x'.repeat(201) }, metadata)).rejects.toBeTruthy();
+    await expect(
+      pipe.transform({ ...base, title: 'x'.repeat(201) }, metadata),
+    ).rejects.toBeTruthy();
   });
   it('rejects zero volunteers and negative hours', async () => {
-    await expect(pipe.transform({ ...base, timeline: { volunteers_required: 0 } }, metadata)).rejects.toBeTruthy();
-    await expect(pipe.transform({ ...base, timeline: { expected_hours: -1 } }, metadata)).rejects.toBeTruthy();
+    await expect(
+      pipe.transform(
+        { ...base, timeline: { volunteers_required: 0 } },
+        metadata,
+      ),
+    ).rejects.toBeTruthy();
+    await expect(
+      pipe.transform({ ...base, timeline: { expected_hours: -1 } }, metadata),
+    ).rejects.toBeTruthy();
   });
   it('accepts unicode/emoji titles and in-range numbers', async () => {
     const r: any = await pipe.transform(
-      { ...base, title: 'صفائی مہم 🌳', timeline: { volunteers_required: 5, expected_hours: 10 } },
+      {
+        ...base,
+        title: 'صفائی مہم 🌳',
+        timeline: { volunteers_required: 5, expected_hours: 10 },
+      },
       metadata,
     );
     expect(r.title).toBe('صفائی مہم 🌳');

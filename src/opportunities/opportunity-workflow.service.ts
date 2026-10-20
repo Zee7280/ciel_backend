@@ -343,7 +343,10 @@ export class OpportunityWorkflowService {
       return;
     }
     // A partner link must never leapfrog a faculty gate that is still open.
-    if (opp.facultyApprovalStatus === LINE_STATUS.PENDING && !opp.faculty_verified) {
+    if (
+      opp.facultyApprovalStatus === LINE_STATUS.PENDING &&
+      !opp.faculty_verified
+    ) {
       opp.workflowStage = WORKFLOW_STAGE.PENDING_FACULTY;
       opp.status = 'pending_faculty';
       return;

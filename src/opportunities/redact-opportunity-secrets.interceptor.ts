@@ -1,4 +1,9 @@
-import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nestjs/common';
+import {
+  CallHandler,
+  ExecutionContext,
+  Injectable,
+  NestInterceptor,
+} from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { Observable } from 'rxjs';
 import { mergeMap } from 'rxjs/operators';
@@ -17,12 +22,17 @@ import {
 export class RedactOpportunitySecretsInterceptor implements NestInterceptor {
   constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
 
-  intercept(_context: ExecutionContext, next: CallHandler): Observable<unknown> {
+  intercept(
+    _context: ExecutionContext,
+    next: CallHandler,
+  ): Observable<unknown> {
     return next
       .handle()
       .pipe(
         mergeMap(async (body) =>
-          redactOpportunitySecrets(await alignFacultyDepartments(body, this.dataSource)),
+          redactOpportunitySecrets(
+            await alignFacultyDepartments(body, this.dataSource),
+          ),
         ),
       );
   }
@@ -33,13 +43,18 @@ export class RedactOpportunitySecretsInterceptor implements NestInterceptor {
 export class RedactOpportunityBrowseInterceptor implements NestInterceptor {
   constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
 
-  intercept(_context: ExecutionContext, next: CallHandler): Observable<unknown> {
+  intercept(
+    _context: ExecutionContext,
+    next: CallHandler,
+  ): Observable<unknown> {
     return next
       .handle()
       .pipe(
         mergeMap(async (body) =>
           redactOpportunityContactDetails(
-            redactOpportunitySecrets(await alignFacultyDepartments(body, this.dataSource)),
+            redactOpportunitySecrets(
+              await alignFacultyDepartments(body, this.dataSource),
+            ),
           ),
         ),
       );
@@ -51,9 +66,16 @@ export class RedactOpportunityBrowseInterceptor implements NestInterceptor {
 export class FacultyDepartmentAlignInterceptor implements NestInterceptor {
   constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
 
-  intercept(_context: ExecutionContext, next: CallHandler): Observable<unknown> {
+  intercept(
+    _context: ExecutionContext,
+    next: CallHandler,
+  ): Observable<unknown> {
     return next
       .handle()
-      .pipe(mergeMap(async (body) => alignFacultyDepartments(body, this.dataSource)));
+      .pipe(
+        mergeMap(async (body) =>
+          alignFacultyDepartments(body, this.dataSource),
+        ),
+      );
   }
 }

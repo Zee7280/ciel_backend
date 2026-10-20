@@ -17,7 +17,10 @@ export const BNU_DEGREE_PROGRAMS: { school: string; programs: string[] }[] = [
   },
   {
     school: 'Razia Hassan School of Architecture',
-    programs: ['Bachelor of Architecture (B.Arch)', 'Bachelor in Interior Design'],
+    programs: [
+      'Bachelor of Architecture (B.Arch)',
+      'Bachelor in Interior Design',
+    ],
   },
   {
     school: 'Seeta Majeed School of Liberal Arts & Social Sciences',
@@ -99,10 +102,16 @@ export function isSchoolOrInstituteAcademicLabel(value: string): boolean {
   if (!t) return false;
   const folded = foldAcademicLabel(t);
   if (folded === 'sms') return true;
-  if (BNU_DEGREE_PROGRAMS.some((group) => foldAcademicLabel(group.school) === folded)) {
+  if (
+    BNU_DEGREE_PROGRAMS.some(
+      (group) => foldAcademicLabel(group.school) === folded,
+    )
+  ) {
     return true;
   }
-  if (BNU_FACULTY_DEPARTMENTS.some((label) => foldAcademicLabel(label) === folded)) {
+  if (
+    BNU_FACULTY_DEPARTMENTS.some((label) => foldAcademicLabel(label) === folded)
+  ) {
     return true;
   }
   return /\bschool of\b/i.test(t) || /^institute of\b/i.test(t);
@@ -112,7 +121,7 @@ export function isSchoolOrInstituteAcademicLabel(value: string): boolean {
 export function departmentFromDegreeProgram(program: string): string {
   const raw = program.trim();
   if (!raw) return '';
-  let s = raw
+  const s = raw
     .replace(/^(associate degree in)\s+/i, '')
     .replace(/^(bachelor of|bachelor in|master of)\s+/i, '')
     .replace(/^(mphil|phd)\s+/i, '')
@@ -126,6 +135,65 @@ export function departmentFromDegreeProgram(program: string): string {
   return s;
 }
 
+function foldAcademicUnitKey(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+/**
+ * Every spelling under which one academic unit may be stored: the label itself, without a
+ * "School of …" / "Institute of …" wrapper, without a degree prefix ("BS Computer Science" →
+ * "Computer Science"), the BNU school a programme belongs to, and a trailing "(ABBR)".
+ * A student profile stores an HEC programme while a listing stores a department or school, so the
+ * two sides must be compared through this set, never by exact string.
+ * Keep in lockstep with ciel_frontend/src/utils/universityData.ts academicUnitMatchKeys.
+ */
+export function academicUnitMatchKeys(
+  value: string | null | undefined,
+): string[] {
+  const raw = String(value ?? '').trim();
+  if (!raw) return [];
+  const forms = new Set<string>();
+  const add = (v: string) => {
+    const k = foldAcademicUnitKey(v);
+    if (k) forms.add(k);
+  };
+  const expand = (v: string) => {
+    const t = v.trim();
+    if (!t) return;
+    add(t);
+    add(stripSchoolWrapperFromAcademicUnit(t));
+    const abbr = t.match(/^(.*?)\s*\(([^()]{2,24})\)\s*$/);
+    if (abbr) {
+      add(abbr[1]);
+      add(abbr[2]);
+    }
+  };
+  expand(raw);
+  const asDepartment = departmentFromDegreeProgram(raw);
+  if (asDepartment) expand(asDepartment);
+  const rawKey = foldAcademicUnitKey(raw);
+  const group = BNU_DEGREE_PROGRAMS.find((g) =>
+    g.programs.some((prog) => foldAcademicUnitKey(prog) === rawKey),
+  );
+  if (group) expand(group.school);
+  return Array.from(forms);
+}
+
+/** true when two stored academic-unit labels refer to the same department / school / programme. */
+export function academicDepartmentsMatch(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
+  const ka = academicUnitMatchKeys(a);
+  if (!ka.length) return false;
+  const kb = new Set(academicUnitMatchKeys(b));
+  return ka.some((k) => kb.has(k));
+}
+
 /**
  * Report Academic "Department" must not include the school name.
  * Prefer a department derived from the degree program when the stored value is a school.
@@ -134,7 +202,9 @@ export function sanitizeReportAcademicDepartment(
   department: string | null | undefined,
   academicProgram?: string | null,
 ): string {
-  const fromProgram = departmentFromDegreeProgram(String(academicProgram || ''));
+  const fromProgram = departmentFromDegreeProgram(
+    String(academicProgram || ''),
+  );
   const dept = String(department || '').trim();
   if (!dept) return fromProgram;
 
@@ -145,7 +215,8 @@ export function sanitizeReportAcademicDepartment(
         .slice(group.school.length)
         .replace(/^[\s,;:–—\-/|]+/, '')
         .trim();
-      if (!rest) return fromProgram || stripSchoolWrapperFromAcademicUnit(group.school);
+      if (!rest)
+        return fromProgram || stripSchoolWrapperFromAcademicUnit(group.school);
       break;
     }
   }

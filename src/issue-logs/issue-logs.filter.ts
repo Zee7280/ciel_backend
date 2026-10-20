@@ -10,8 +10,9 @@ const PG_INVALID_TEXT_REPRESENTATION = '22P02';
  * database error as a 500. The request itself is at fault, so answer 400 like ParseUUIDPipe does.
  */
 export function translateDatabaseInputError(exception: unknown): unknown {
-  const code = (exception as { driverError?: { code?: unknown }; code?: unknown } | null)?.driverError
-    ?.code ?? (exception as { code?: unknown } | null)?.code;
+  const code =
+    (exception as { driverError?: { code?: unknown }; code?: unknown } | null)
+      ?.driverError?.code ?? (exception as { code?: unknown } | null)?.code;
   if (code === PG_INVALID_TEXT_REPRESENTATION) {
     return new BadRequestException('Invalid identifier in request.');
   }

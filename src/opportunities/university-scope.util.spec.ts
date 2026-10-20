@@ -92,3 +92,108 @@ describe('universityScopeError', () => {
     expect(universityScopeError('', { participation_scope: null })).toBeNull();
   });
 });
+
+import {
+  collectOpportunityDepartmentAllowlist,
+  participationScopeError,
+} from './university-scope.util';
+
+describe('participationScopeError (university + department)', () => {
+  const deptOpp = {
+    restricted_universities: ['Beaconhouse National University (BNU)'],
+    participation_scope: {
+      rule: 'departments_across_universities',
+      university_names: ['Beaconhouse National University (BNU)'],
+      department_restriction: {
+        scope: 'specific',
+        departments: ['Computer Science'],
+      },
+    },
+  };
+  it('lists departments only for department-specific scopes', () => {
+    expect(collectOpportunityDepartmentAllowlist(deptOpp)).toEqual([
+      'Computer Science',
+    ]);
+    expect(
+      collectOpportunityDepartmentAllowlist({
+        participation_scope: {
+          rule: 'open_all_universities',
+          department_restriction: { scope: 'all', departments: ['X'] },
+        },
+      }),
+    ).toEqual([]);
+    expect(collectOpportunityDepartmentAllowlist(null)).toEqual([]);
+  });
+  it('accepts a profile programme that belongs to the listed department', () => {
+    expect(
+      participationScopeError(
+        { university: 'BNU', department: 'BS Computer Science' },
+        deptOpp,
+        'Ali',
+      ),
+    ).toBeNull();
+    expect(
+      participationScopeError(
+        { university: 'BNU', department: 'Computer Science' },
+        deptOpp,
+        'Ali',
+      ),
+    ).toBeNull();
+  });
+  it('blocks the wrong department, a missing department, and the wrong university (university first)', () => {
+    expect(
+      participationScopeError(
+        { university: 'BNU', department: 'BS Psychology' },
+        deptOpp,
+        'Ali',
+      ),
+    ).toMatch(
+      /Ali is in BS Psychology, but this opportunity is open to Computer Science students only/,
+    );
+    expect(
+      participationScopeError(
+        { university: 'BNU', department: '' },
+        deptOpp,
+        'Ali',
+      ),
+    ).toMatch(/has no department/);
+    expect(
+      participationScopeError(
+        { university: 'LUMS', department: 'BS Computer Science' },
+        deptOpp,
+        'Ali',
+      ),
+    ).toMatch(/Ali is at LUMS/);
+  });
+  it('can defer a blank department to a later account check', () => {
+    expect(
+      participationScopeError(
+        { university: 'BNU', department: '' },
+        deptOpp,
+        'Ali',
+        { requireDepartment: false },
+      ),
+    ).toBeNull();
+    expect(
+      participationScopeError(
+        { university: 'BNU', department: 'BS Psychology' },
+        deptOpp,
+        'Ali',
+        { requireDepartment: false },
+      ),
+    ).toMatch(/is in BS Psychology/);
+  });
+  it('never blocks on department when the listing has no department restriction', () => {
+    expect(
+      participationScopeError(
+        { university: 'BNU', department: '' },
+        {
+          participation_scope: {
+            rule: 'own_university_only',
+            creator_university_name: 'BNU',
+          },
+        },
+      ),
+    ).toBeNull();
+  });
+});

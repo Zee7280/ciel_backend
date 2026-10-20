@@ -187,11 +187,16 @@ describe('supervisor approval scope', () => {
   };
 
   it('only the primary supervisor may approve', () => {
-    expect(getParticipantApprovingFacultyEmails(seat)).toEqual(['lead@uni.edu']);
+    expect(getParticipantApprovingFacultyEmails(seat)).toEqual([
+      'lead@uni.edu',
+    ]);
   });
 
   it('the secondary supervisor stays in the visibility scope', () => {
-    expect(getParticipantFacultyEmails(seat)).toEqual(['lead@uni.edu', 'co@uni.edu']);
+    expect(getParticipantFacultyEmails(seat)).toEqual([
+      'lead@uni.edu',
+      'co@uni.edu',
+    ]);
   });
 
   it('secondary cannot act on an unassigned faculty attendance log', () => {
@@ -202,10 +207,22 @@ describe('supervisor approval scope', () => {
     };
     const approving = getParticipantApprovingFacultyEmails(seat);
     expect(
-      canUserActOnAttendanceQueue('u1', UserRole.FACULTY, 'co@uni.edu', log, approving),
+      canUserActOnAttendanceQueue(
+        'u1',
+        UserRole.FACULTY,
+        'co@uni.edu',
+        log,
+        approving,
+      ),
     ).toBe(false);
     expect(
-      canUserActOnAttendanceQueue('u1', UserRole.FACULTY, 'lead@uni.edu', log, approving),
+      canUserActOnAttendanceQueue(
+        'u1',
+        UserRole.FACULTY,
+        'lead@uni.edu',
+        log,
+        approving,
+      ),
     ).toBe(true);
   });
 });

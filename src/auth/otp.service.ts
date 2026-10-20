@@ -1,12 +1,12 @@
 import {
-    Injectable,
-    BadRequestException,
-    ForbiddenException,
-    ConflictException,
-    HttpException,
-    HttpStatus,
-    Logger,
-    ServiceUnavailableException,
+  Injectable,
+  BadRequestException,
+  ForbiddenException,
+  ConflictException,
+  HttpException,
+  HttpStatus,
+  Logger,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { MoreThan, Repository } from 'typeorm';
@@ -27,185 +27,195 @@ const BCRYPT_ROUNDS = 8;
 
 @Injectable()
 export class OtpService {
-    private readonly logger = new Logger(OtpService.name);
+  private readonly logger = new Logger(OtpService.name);
 
-    constructor(
-        @InjectRepository(EmailOtp)
-        private readonly emailOtpRepository: Repository<EmailOtp>,
-        private readonly mailService: MailService,
-        private readonly usersService: UsersService,
-    ) {}
+  constructor(
+    @InjectRepository(EmailOtp)
+    private readonly emailOtpRepository: Repository<EmailOtp>,
+    private readonly mailService: MailService,
+    private readonly usersService: UsersService,
+  ) {}
 
-    private normalizeEmail(email: string): string {
-        return String(email || '')
-            .trim()
-            .toLowerCase();
+  private normalizeEmail(email: string): string {
+    return String(email || '')
+      .trim()
+      .toLowerCase();
+  }
+
+  private generateSixDigitOtp(): string {
+    const n = crypto.randomInt(0, 1_000_000);
+    return n.toString().padStart(6, '0');
+  }
+
+  private plainOtpMatches(stored: string, provided: string): boolean {
+    const a = String(stored);
+    const b = String(provided);
+    try {
+      if (a.length !== b.length) {
+        return false;
+      }
+      return crypto.timingSafeEqual(
+        Buffer.from(a, 'utf8'),
+        Buffer.from(b, 'utf8'),
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  async sendOtp(rawEmail: string) {
+    const email = this.normalizeEmail(rawEmail);
+    if (!email) {
+      throw new BadRequestException('Email is required');
     }
 
-    private generateSixDigitOtp(): string {
-        const n = crypto.randomInt(0, 1_000_000);
-        return n.toString().padStart(6, '0');
+    const existingUser = await this.usersService.findByEmail(email);
+    if (existingUser) {
+      throw new ConflictException('This email is already registered');
     }
 
-    private plainOtpMatches(stored: string, provided: string): boolean {
-        const a = String(stored);
-        const b = String(provided);
-        try {
-            if (a.length !== b.length) {
-                return false;
-            }
-            return crypto.timingSafeEqual(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8'));
-        } catch {
-            return false;
-        }
+    const latest = await this.emailOtpRepository.findOne({
+      where: { email },
+      order: { createdAt: 'DESC' },
+    });
+    if (
+      latest?.createdAt &&
+      Date.now() - new Date(latest.createdAt).getTime() < MIN_RESEND_INTERVAL_MS
+    ) {
+      throw new HttpException(
+        'Please wait a few seconds before requesting another code.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
     }
 
-    async sendOtp(rawEmail: string) {
-        const email = this.normalizeEmail(rawEmail);
-        if (!email) {
-            throw new BadRequestException('Email is required');
-        }
+    await this.emailOtpRepository.delete({ email });
 
-        const existingUser = await this.usersService.findByEmail(email);
-        if (existingUser) {
-            throw new ConflictException('This email is already registered');
-        }
+    const otp = this.generateSixDigitOtp();
+    const otpHash = await bcrypt.hash(otp, BCRYPT_ROUNDS);
+    const expiresAt = new Date(Date.now() + OTP_TTL_MS);
 
-        const latest = await this.emailOtpRepository.findOne({
-            where: { email },
-            order: { createdAt: 'DESC' },
-        });
-        if (
-            latest?.createdAt &&
-            Date.now() - new Date(latest.createdAt).getTime() < MIN_RESEND_INTERVAL_MS
-        ) {
-            throw new HttpException(
-                'Please wait a few seconds before requesting another code.',
-                HttpStatus.TOO_MANY_REQUESTS,
-            );
-        }
+    // Only the hash is stored — the plain code lives in the email alone.
+    await this.emailOtpRepository.save(
+      this.emailOtpRepository.create({
+        email,
+        otp: null,
+        otpHash,
+        expiresAt,
+        verified: false,
+        attempts: 0,
+      }),
+    );
 
-        await this.emailOtpRepository.delete({ email });
-
-        const otp = this.generateSixDigitOtp();
-        const otpHash = await bcrypt.hash(otp, BCRYPT_ROUNDS);
-        const expiresAt = new Date(Date.now() + OTP_TTL_MS);
-
-        // Only the hash is stored — the plain code lives in the email alone.
-        await this.emailOtpRepository.save(
-            this.emailOtpRepository.create({
-                email,
-                otp: null,
-                otpHash,
-                expiresAt,
-                verified: false,
-                attempts: 0,
-            }),
-        );
-
-        try {
-            await this.mailService.sendOtpEmail(email, otp);
-        } catch (error) {
-            // No email went out, so this code is unusable — drop it and tell the user plainly.
-            this.logger.error(
-                `OTP email failed for ${email}: ${(error as Error)?.message || error}`,
-            );
-            await this.emailOtpRepository.delete({ email });
-            throw new ServiceUnavailableException(
-                'We could not send the verification email right now. Please try again in a moment.',
-            );
-        }
-
-        return {
-            success: true,
-            message: 'OTP sent',
-        };
+    try {
+      await this.mailService.sendOtpEmail(email, otp);
+    } catch (error) {
+      // No email went out, so this code is unusable — drop it and tell the user plainly.
+      this.logger.error(
+        `OTP email failed for ${email}: ${(error as Error)?.message || error}`,
+      );
+      await this.emailOtpRepository.delete({ email });
+      throw new ServiceUnavailableException(
+        'We could not send the verification email right now. Please try again in a moment.',
+      );
     }
 
-    /** Serialises verifyOtp per email inside this process: the attempt counter is a read-modify-write,
-     * so without this 200 parallel guesses would all read attempts=0 and bypass the 5-try cap. */
-    private readonly verifyLocks = new Map<string, Promise<unknown>>();
+    return {
+      success: true,
+      message: 'OTP sent',
+    };
+  }
 
-    private async withVerifyLock<T>(email: string, fn: () => Promise<T>): Promise<T> {
-        const prev = this.verifyLocks.get(email) ?? Promise.resolve();
-        let release!: () => void;
-        const gate = new Promise<void>((r) => (release = r));
-        const tail = prev.then(() => gate);
-        this.verifyLocks.set(email, tail);
-        try {
-            await prev.catch(() => undefined);
-            return await fn();
-        } finally {
-            release();
-            if (this.verifyLocks.get(email) === tail) this.verifyLocks.delete(email);
-        }
+  /** Serialises verifyOtp per email inside this process: the attempt counter is a read-modify-write,
+   * so without this 200 parallel guesses would all read attempts=0 and bypass the 5-try cap. */
+  private readonly verifyLocks = new Map<string, Promise<unknown>>();
+
+  private async withVerifyLock<T>(
+    email: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const prev = this.verifyLocks.get(email) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const tail = prev.then(() => gate);
+    this.verifyLocks.set(email, tail);
+    try {
+      await prev.catch(() => undefined);
+      return await fn();
+    } finally {
+      release();
+      if (this.verifyLocks.get(email) === tail) this.verifyLocks.delete(email);
+    }
+  }
+
+  async verifyOtp(rawEmail: string, rawOtp: string) {
+    const email = this.normalizeEmail(rawEmail);
+    return this.withVerifyLock(email, () =>
+      this.verifyOtpUnlocked(email, rawOtp),
+    );
+  }
+
+  private async verifyOtpUnlocked(email: string, rawOtp: string) {
+    const otp = String(rawOtp || '').trim();
+
+    // Latest row for this email — including already-verified — so a retry after a
+    // failed signup (duplicate, validation, etc.) does not look like an expired code.
+    const row = await this.emailOtpRepository.findOne({
+      where: { email },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (!row || new Date() > row.expiresAt) {
+      throw new BadRequestException(
+        'Invalid or expired OTP. Please request a new code.',
+      );
     }
 
-    async verifyOtp(rawEmail: string, rawOtp: string) {
-        const email = this.normalizeEmail(rawEmail);
-        return this.withVerifyLock(email, () => this.verifyOtpUnlocked(email, rawOtp));
+    if ((row.attempts ?? 0) >= MAX_VERIFY_ATTEMPTS) {
+      await this.emailOtpRepository.delete({ email });
+      throw new BadRequestException(
+        'Too many incorrect attempts. Please request a new code.',
+      );
     }
 
-    private async verifyOtpUnlocked(email: string, rawOtp: string) {
-        const otp = String(rawOtp || '').trim();
-
-        // Latest row for this email — including already-verified — so a retry after a
-        // failed signup (duplicate, validation, etc.) does not look like an expired code.
-        const row = await this.emailOtpRepository.findOne({
-            where: { email },
-            order: { createdAt: 'DESC' },
-        });
-
-        if (!row || new Date() > row.expiresAt) {
-            throw new BadRequestException('Invalid or expired OTP. Please request a new code.');
-        }
-
-        if ((row.attempts ?? 0) >= MAX_VERIFY_ATTEMPTS) {
-            await this.emailOtpRepository.delete({ email });
-            throw new BadRequestException(
-                'Too many incorrect attempts. Please request a new code.',
-            );
-        }
-
-        const valid = row.otpHash
-            ? await bcrypt.compare(otp, row.otpHash)
-            : row.otp
-              ? this.plainOtpMatches(row.otp, otp)
-              : false;
-        if (!valid) {
-            row.attempts = (row.attempts ?? 0) + 1;
-            await this.emailOtpRepository.save(row);
-            throw new BadRequestException('Invalid OTP');
-        }
-
-        if (!row.verified) {
-            row.verified = true;
-            row.expiresAt = new Date(Date.now() + VERIFIED_SIGNUP_WINDOW_MS);
-            await this.emailOtpRepository.save(row);
-        }
-
-        return {
-            success: true,
-            message: 'OTP verified',
-        };
+    const valid = row.otpHash
+      ? await bcrypt.compare(otp, row.otpHash)
+      : row.otp
+        ? this.plainOtpMatches(row.otp, otp)
+        : false;
+    if (!valid) {
+      row.attempts = (row.attempts ?? 0) + 1;
+      await this.emailOtpRepository.save(row);
+      throw new BadRequestException('Invalid OTP');
     }
 
-    async requireVerifiedEmailForSignup(rawEmail: string): Promise<void> {
-        const email = this.normalizeEmail(rawEmail);
-        const row = await this.emailOtpRepository.findOne({
-            where: { email, verified: true, expiresAt: MoreThan(new Date()) },
-            order: { createdAt: 'DESC' },
-        });
-
-        if (!row) {
-            throw new ForbiddenException(
-                'Email not verified. Please complete OTP verification first.',
-            );
-        }
+    if (!row.verified) {
+      row.verified = true;
+      row.expiresAt = new Date(Date.now() + VERIFIED_SIGNUP_WINDOW_MS);
+      await this.emailOtpRepository.save(row);
     }
 
-    async clearOtpsForEmail(rawEmail: string): Promise<void> {
-        const email = this.normalizeEmail(rawEmail);
-        await this.emailOtpRepository.delete({ email });
+    return {
+      success: true,
+      message: 'OTP verified',
+    };
+  }
+
+  async requireVerifiedEmailForSignup(rawEmail: string): Promise<void> {
+    const email = this.normalizeEmail(rawEmail);
+    const row = await this.emailOtpRepository.findOne({
+      where: { email, verified: true, expiresAt: MoreThan(new Date()) },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (!row) {
+      throw new ForbiddenException(
+        'Email not verified. Please complete OTP verification first.',
+      );
     }
+  }
+
+  async clearOtpsForEmail(rawEmail: string): Promise<void> {
+    const email = this.normalizeEmail(rawEmail);
+    await this.emailOtpRepository.delete({ email });
+  }
 }

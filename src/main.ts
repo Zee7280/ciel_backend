@@ -25,7 +25,10 @@ async function bootstrap() {
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
     if (process.env.NODE_ENV === 'production') {
-      res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+      res.setHeader(
+        'Strict-Transport-Security',
+        'max-age=15552000; includeSubDomains',
+      );
     }
     next();
   });
@@ -38,18 +41,27 @@ async function bootstrap() {
     .map((o) => o.trim().replace(/\/+$/, ''))
     .filter(Boolean);
   if (process.env.NODE_ENV === 'production' && allowedOrigins.length === 0) {
-    // eslint-disable-next-line no-console
-    console.warn('[security] CORS_ALLOWED_ORIGINS is not set — any origin may call this API. Set it in production.');
+    console.warn(
+      '[security] CORS_ALLOWED_ORIGINS is not set — any origin may call this API. Set it in production.',
+    );
   }
-  if (process.env.NODE_ENV === 'production' && !process.env.FRONTEND_URL && !process.env.APP_URL) {
-    // eslint-disable-next-line no-console
-    console.warn('[config] FRONTEND_URL / APP_URL is not set — emailed links and QR codes may point to the wrong site.');
+  if (
+    process.env.NODE_ENV === 'production' &&
+    !process.env.FRONTEND_URL &&
+    !process.env.APP_URL
+  ) {
+    console.warn(
+      '[config] FRONTEND_URL / APP_URL is not set — emailed links and QR codes may point to the wrong site.',
+    );
   }
   app.enableCors({
     origin: (origin, callback) => {
       if (allowedOrigins.length === 0) {
         callback(null, origin || '*');
-      } else if (!origin || allowedOrigins.includes(origin.replace(/\/+$/, ''))) {
+      } else if (
+        !origin ||
+        allowedOrigins.includes(origin.replace(/\/+$/, ''))
+      ) {
         callback(null, origin || true);
       } else {
         callback(null, false);
@@ -57,18 +69,20 @@ async function bootstrap() {
     },
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
-    allowedHeaders: 'Content-Type, Accept, Authorization, X-Requested-With, Origin, X-Csrf-Token',
+    allowedHeaders:
+      'Content-Type, Accept, Authorization, X-Requested-With, Origin, X-Csrf-Token',
   });
-
 
   // Never let a password hash / reset token leave the server, even if a service serialises a User.
   app.useGlobalInterceptors(new StripSecretsInterceptor());
 
   // Enable validation pipe
-  app.useGlobalPipes(new ValidationPipe({
-    whitelist: true,
-    transform: true,
-  }));
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+    }),
+  );
 
   // API routes live under /api/v1; keep GET / for health/ops (Vercel, browsers).
   app.setGlobalPrefix('api/v1', {
@@ -92,7 +106,8 @@ async function bootstrap() {
   const portArgIndex = process.argv.indexOf('-port');
   const portArgIndexLong = process.argv.indexOf('--port');
   const index = portArgIndex !== -1 ? portArgIndex : portArgIndexLong;
-  const port = index !== -1 ? process.argv[index + 1] : (process.env.PORT ?? 3000);
+  const port =
+    index !== -1 ? process.argv[index + 1] : (process.env.PORT ?? 3000);
 
   await app.listen(port);
   console.log(`Application is running on: ${await app.getUrl()}`);

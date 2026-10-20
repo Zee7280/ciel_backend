@@ -16,7 +16,9 @@ describe('report progress', () => {
   });
 
   it('submitted reports are 100%', () => {
-    expect(computeReportProgress({ status: 'submitted' }).progress_pct).toBe(100);
+    expect(computeReportProgress({ status: 'submitted' }).progress_pct).toBe(
+      100,
+    );
     expect(
       computeReportProgress({ status: 'draft', reportSubmittedAt: new Date() })
         .is_submitted,
@@ -41,7 +43,11 @@ describe('report progress', () => {
       is_submitted: false,
       progress_pct: 30,
     }) as Record<string, unknown>;
-    expect(out).toMatchObject({ id: 'r1', progress_pct: 30, draft_locked: true });
+    expect(out).toMatchObject({
+      id: 'r1',
+      progress_pct: 30,
+      draft_locked: true,
+    });
     expect(out).not.toHaveProperty('story');
     expect(out).not.toHaveProperty('ciiV45');
     expect(out).not.toHaveProperty('student_email');

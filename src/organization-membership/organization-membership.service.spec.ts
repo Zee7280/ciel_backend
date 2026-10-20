@@ -16,14 +16,22 @@ describe('OrganizationMembershipService approvals', () => {
       update: jest.fn(async () => ({ affected: 1 })),
     };
     const userRepo: any = { update: jest.fn(async () => ({})) };
-    const settingRepo: any = { findOne: jest.fn(async () => ({ value: '10000' })) };
+    const settingRepo: any = {
+      findOne: jest.fn(async () => ({ value: '10000' })),
+    };
     const service = new OrganizationMembershipService(
       feeRepo,
       userRepo,
       settingRepo,
       {} as any,
-      { sendStudentOpportunityStatusUpdate: jest.fn().mockRejectedValue(new Error('x')) } as any,
-      { createApprovalNotification: jest.fn().mockRejectedValue(new Error('x')) } as any,
+      {
+        sendStudentOpportunityStatusUpdate: jest
+          .fn()
+          .mockRejectedValue(new Error('x')),
+      } as any,
+      {
+        createApprovalNotification: jest.fn().mockRejectedValue(new Error('x')),
+      } as any,
     );
     return { service, userRepo, feeRepo };
   }

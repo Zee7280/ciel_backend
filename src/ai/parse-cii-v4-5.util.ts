@@ -17,17 +17,18 @@ import {
  * readable JSON object is not rejected as "Invalid claim inventory".
  */
 
-const REQUIRED_KEYS: (keyof CiiV45EvaluatorPayload)[] = [
-  'sectionScores',
-];
+const REQUIRED_KEYS: (keyof CiiV45EvaluatorPayload)[] = ['sectionScores'];
 
 function hasOwn(value: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
 }
 
-export function parseCiiV45Response(raw: string): CiiV45EvaluatorPayload | null {
+export function parseCiiV45Response(
+  raw: string,
+): CiiV45EvaluatorPayload | null {
   const parsed = extractSection11JsonObject(raw);
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+    return null;
   const value = parsed as Record<string, unknown>;
 
   // exceptionalFeature is nullable; v5.0.2 report-quality JSON does not require
@@ -44,15 +45,18 @@ export function parseCiiV45Response(raw: string): CiiV45EvaluatorPayload | null 
     (typeof value.report_id === 'string' && value.report_id.trim()) ||
     'pending';
   const inputFingerprint =
-    (typeof value.inputFingerprint === 'string' && value.inputFingerprint.trim()) ||
-    (typeof value.input_fingerprint === 'string' && value.input_fingerprint.trim()) ||
+    (typeof value.inputFingerprint === 'string' &&
+      value.inputFingerprint.trim()) ||
+    (typeof value.input_fingerprint === 'string' &&
+      value.input_fingerprint.trim()) ||
     'pending';
   value.reportId = reportId;
   value.inputFingerprint = inputFingerprint;
   if (!Array.isArray(value.sectionScores)) return null;
   if (!Array.isArray(value.adminReviewReasons)) value.adminReviewReasons = [];
   if (!Array.isArray(value.strengths)) value.strengths = [];
-  if (!Array.isArray(value.developmentPriorities)) value.developmentPriorities = [];
+  if (!Array.isArray(value.developmentPriorities))
+    value.developmentPriorities = [];
   if (typeof value.analysisSummary !== 'string') value.analysisSummary = '';
   if (typeof value.studentFeedback !== 'string') value.studentFeedback = '';
   if (!Array.isArray(value.claimInventory)) value.claimInventory = [];
@@ -67,7 +71,15 @@ export function parseCiiV45Response(raw: string): CiiV45EvaluatorPayload | null 
   if (!value.inputCompleteness || typeof value.inputCompleteness !== 'object') {
     value.inputCompleteness = {
       gaps: [],
-      individualHours: [{ studentId: 'pending', hours: null, requiredHours: 16, verified: false, recordComplete: false }],
+      individualHours: [
+        {
+          studentId: 'pending',
+          hours: null,
+          requiredHours: 16,
+          verified: false,
+          recordComplete: false,
+        },
+      ],
       mandatoryFieldsComplete: true,
     };
   }
@@ -155,7 +167,9 @@ function enumFromAlias<T extends string>(
   aliases: Record<string, T>,
   fallback: T,
 ): T {
-  const key = asStringId(value).toUpperCase().replace(/[\s-]+/g, '_');
+  const key = asStringId(value)
+    .toUpperCase()
+    .replace(/[\s-]+/g, '_');
   return aliases[key] ?? fallback;
 }
 
@@ -178,72 +192,93 @@ function uniqueId(base: string, used: Set<string>): string {
  * support enum, missing evidenceIds). Coerce those here so Analyze can score
  * instead of 400 "Invalid claim inventory".
  */
-function normalizeClaimAndEvidenceArrays(payload: CiiV45EvaluatorPayload): void {
+function normalizeClaimAndEvidenceArrays(
+  payload: CiiV45EvaluatorPayload,
+): void {
   const usedEvidence = new Set<string>();
-  payload.evidenceAudit = (Array.isArray(payload.evidenceAudit) ? payload.evidenceAudit : []).map(
-    (raw, i) => {
-      const rec = asRecord(raw);
-      const evidenceId = uniqueId(
-        asStringId(rec.evidenceId || rec.id || rec.file_id) || `E${i + 1}`,
-        usedEvidence,
-      );
-      const row: CiiV45EvidenceAudit = {
-        evidenceId,
-        fileName: typeof rec.fileName === 'string' ? rec.fileName : undefined,
-        fileType: typeof rec.fileType === 'string' ? rec.fileType : undefined,
-        privacy: enumFromAlias(rec.privacy, PRIVACY_ALIASES, 'RESTRICTED'),
-        material: asBoolean(rec.material, true),
-        processingStatus: enumFromAlias(rec.processingStatus, PROCESSING_ALIASES, 'INACCESSIBLE'),
-        claimIds: asStringIds(rec.claimIds),
-        actualContentSummary:
-          typeof rec.actualContentSummary === 'string' ? rec.actualContentSummary : undefined,
-        matchConfidence:
-          typeof rec.matchConfidence === 'number' && Number.isFinite(rec.matchConfidence)
-            ? rec.matchConfidence
-            : null,
-        supportStatus: enumFromAlias(
-          rec.supportStatus ?? rec.status,
-          SUPPORT_ALIASES,
-          'PROCESSING_REQUIRED',
-        ),
-        evidenceStrength: typeof rec.evidenceStrength === 'string' ? rec.evidenceStrength : undefined,
-        independence: typeof rec.independence === 'string' ? rec.independence : undefined,
-        explanation: typeof rec.explanation === 'string' ? rec.explanation : undefined,
-      };
-      return row;
-    },
-  );
+  payload.evidenceAudit = (
+    Array.isArray(payload.evidenceAudit) ? payload.evidenceAudit : []
+  ).map((raw, i) => {
+    const rec = asRecord(raw);
+    const evidenceId = uniqueId(
+      asStringId(rec.evidenceId || rec.id || rec.file_id) || `E${i + 1}`,
+      usedEvidence,
+    );
+    const row: CiiV45EvidenceAudit = {
+      evidenceId,
+      fileName: typeof rec.fileName === 'string' ? rec.fileName : undefined,
+      fileType: typeof rec.fileType === 'string' ? rec.fileType : undefined,
+      privacy: enumFromAlias(rec.privacy, PRIVACY_ALIASES, 'RESTRICTED'),
+      material: asBoolean(rec.material, true),
+      processingStatus: enumFromAlias(
+        rec.processingStatus,
+        PROCESSING_ALIASES,
+        'INACCESSIBLE',
+      ),
+      claimIds: asStringIds(rec.claimIds),
+      actualContentSummary:
+        typeof rec.actualContentSummary === 'string'
+          ? rec.actualContentSummary
+          : undefined,
+      matchConfidence:
+        typeof rec.matchConfidence === 'number' &&
+        Number.isFinite(rec.matchConfidence)
+          ? rec.matchConfidence
+          : null,
+      supportStatus: enumFromAlias(
+        rec.supportStatus ?? rec.status,
+        SUPPORT_ALIASES,
+        'PROCESSING_REQUIRED',
+      ),
+      evidenceStrength:
+        typeof rec.evidenceStrength === 'string'
+          ? rec.evidenceStrength
+          : undefined,
+      independence:
+        typeof rec.independence === 'string' ? rec.independence : undefined,
+      explanation:
+        typeof rec.explanation === 'string' ? rec.explanation : undefined,
+    };
+    return row;
+  });
   const evidenceIds = payload.evidenceAudit.map((e) => e.evidenceId);
 
   const usedClaims = new Set<string>();
   // The model may return bare strings here; widen to unknown so the string branch below type-checks.
-  payload.claimInventory = (Array.isArray(payload.claimInventory) ? (payload.claimInventory as unknown[]) : []).map(
-    (raw, i) => {
-      if (typeof raw === 'string') {
-        return {
-          claimId: uniqueId(`C${i + 1}`, usedClaims),
-          text: raw.trim(),
-          material: Boolean(raw.trim()),
-          evidenceIds: [],
-          supportStatus: 'PROCESSING_REQUIRED' as const,
-        };
-      }
-      const rec = asRecord(raw);
-      const text = typeof rec.text === 'string' ? rec.text : undefined;
-      const row: CiiV45Claim = {
-        claimId: uniqueId(asStringId(rec.claimId || rec.id) || `C${i + 1}`, usedClaims),
-        text,
-        material: asBoolean(rec.material, Boolean(text?.trim())),
-        evidenceIds: asStringIds(rec.evidenceIds).filter((id) => evidenceIds.includes(id)),
-        supportStatus: enumFromAlias(
-          rec.supportStatus ?? rec.status ?? rec.claimSupport,
-          SUPPORT_ALIASES,
-          'PROCESSING_REQUIRED',
-        ),
+  payload.claimInventory = (
+    Array.isArray(payload.claimInventory)
+      ? (payload.claimInventory as unknown[])
+      : []
+  ).map((raw, i) => {
+    if (typeof raw === 'string') {
+      return {
+        claimId: uniqueId(`C${i + 1}`, usedClaims),
+        text: raw.trim(),
+        material: Boolean(raw.trim()),
+        evidenceIds: [],
+        supportStatus: 'PROCESSING_REQUIRED' as const,
       };
-      return row;
-    },
-  );
+    }
+    const rec = asRecord(raw);
+    const text = typeof rec.text === 'string' ? rec.text : undefined;
+    const row: CiiV45Claim = {
+      claimId: uniqueId(
+        asStringId(rec.claimId || rec.id) || `C${i + 1}`,
+        usedClaims,
+      ),
+      text,
+      material: asBoolean(rec.material, Boolean(text?.trim())),
+      evidenceIds: asStringIds(rec.evidenceIds).filter((id) =>
+        evidenceIds.includes(id),
+      ),
+      supportStatus: enumFromAlias(
+        rec.supportStatus ?? rec.status ?? rec.claimSupport,
+        SUPPORT_ALIASES,
+        'PROCESSING_REQUIRED',
+      ),
+    };
+    return row;
+  });
   const claimIds = payload.claimInventory.map((c) => c.claimId);
   for (const evidence of payload.evidenceAudit) {
     evidence.claimIds = evidence.claimIds.filter((id) => claimIds.includes(id));

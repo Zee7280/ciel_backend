@@ -1,5 +1,9 @@
+import { academicDepartmentsMatch } from '../common/academic-department.util';
 import { randomUUID } from 'crypto';
-import { resolveTeamSeatCap, teamCapacityError } from '../engagement/team-capacity.util';
+import {
+  resolveTeamSeatCap,
+  teamCapacityError,
+} from '../engagement/team-capacity.util';
 import {
   Injectable,
   Logger,
@@ -63,12 +67,17 @@ import {
 } from '../opportunities/student-browse-listing.util';
 import { purifyStudentOpportunityContent } from '../opportunities/opportunity-content-purify.util';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
-import { applyCanonicalPrivateCandidatePhone, isPrivateCandidateDto, isPrivateCandidateOpportunity } from '../opportunities/private-candidate.util';
+import {
+  applyCanonicalPrivateCandidatePhone,
+  isPrivateCandidateDto,
+  isPrivateCandidateOpportunity,
+} from '../opportunities/private-candidate.util';
 import { isTeamApplyFromParticipationAndMembers } from '../opportunities/apply-team-payload.util';
 import {
+  collectOpportunityDepartmentAllowlist,
   collectOpportunityUniversityAllowlist,
+  participationScopeError,
   universityNamesMatch,
-  universityScopeError,
 } from '../opportunities/university-scope.util';
 import { isReportPartnerStepSatisfied } from '../reports/report-partner-approval.util';
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
@@ -125,8 +134,18 @@ export class StudentsService {
     Map<
       string,
       {
-        national: { rank: number; of: number; score: number; publishedAt: string } | null;
-        university: { rank: number; of: number; score: number; publishedAt: string } | null;
+        national: {
+          rank: number;
+          of: number;
+          score: number;
+          publishedAt: string;
+        } | null;
+        university: {
+          rank: number;
+          of: number;
+          score: number;
+          publishedAt: string;
+        } | null;
       }
     >
   > {
@@ -144,7 +163,10 @@ export class StudentsService {
         const isNational = snap.scope === 'national';
         for (const row of snap.standings || []) {
           if (!wanted.has(row.reportId)) continue;
-          const entry = out.get(row.reportId) ?? { national: null, university: null };
+          const entry = out.get(row.reportId) ?? {
+            national: null,
+            university: null,
+          };
           const band = {
             rank: row.rank,
             of: snap.standings.length,
@@ -698,7 +720,11 @@ export class StudentsService {
 
     // Backward compatibility: restricted_universities
     if (opp.restricted_universities && opp.restricted_universities.length > 0) {
-      if (!opp.restricted_universities.some((u) => universityNamesMatch(u, userUniversity))) {
+      if (
+        !opp.restricted_universities.some((u) =>
+          universityNamesMatch(u, userUniversity),
+        )
+      ) {
         if (!userUniversity) {
           return {
             eligible: false,
@@ -720,13 +746,16 @@ export class StudentsService {
     const departments: string[] =
       scope.department_restriction?.departments || [];
 
-    const deptSet = departments.map(this.normalize);
-
     // Spelling-tolerant: "BNU" on a profile must still match "Beaconhouse National University (BNU)".
-    const uniMatch = (names: string[]) => names.some((n) => universityNamesMatch(n, userUniversity));
+    const uniMatch = (names: string[]) =>
+      names.some((n) => universityNamesMatch(n, userUniversity));
     const isCreatorUni = universityNamesMatch(creatorUni, userUniversity);
+    // Profile holds an HEC programme ("BS Computer Science"); the listing holds a department or
+    // BNU school. Compare through every spelling of the unit, never the raw strings.
     const deptMatch =
-      deptScope === 'all' || (!!userDept && deptSet.includes(userDept));
+      deptScope === 'all' ||
+      (!!userDept &&
+        departments.some((d) => academicDepartmentsMatch(d, userDept)));
 
     const deptFail = (): { eligible: false; message: string } => {
       if (!userDept) {
@@ -853,13 +882,18 @@ export class StudentsService {
         });
         if (
           scopedOpp &&
-          collectOpportunityUniversityAllowlist(scopedOpp).length > 0
+          (collectOpportunityUniversityAllowlist(scopedOpp).length > 0 ||
+            collectOpportunityDepartmentAllowlist(scopedOpp).length > 0)
         ) {
           const teammate = await this.usersRepository
             .createQueryBuilder('u')
             .where('LOWER(TRIM(u.email)) = :emailNorm', { emailNorm })
             .getOne();
-          const reason = this.teammateScopeProblem(teammate, scopedOpp, emailNorm);
+          const reason = this.teammateScopeProblem(
+            teammate,
+            scopedOpp,
+            emailNorm,
+          );
           if (reason) throw new BadRequestException(reason);
         }
       } catch (err) {
@@ -941,8 +975,11 @@ export class StudentsService {
     if (!teammate) {
       return `${emailNorm} has no CIEL student account. This opportunity is limited to selected universities, so every teammate must register on CIEL first.`;
     }
-    return universityScopeError(
-      teammate.university || teammate.institution,
+    return participationScopeError(
+      {
+        university: teammate.university || teammate.institution,
+        department: teammate.department || teammate.major,
+      },
       opportunity,
       teammate.name || emailNorm,
     );
@@ -1003,8 +1040,13 @@ export class StudentsService {
 
   /** Every teammate on a team apply must have confirmed the OTP sent to their email (the dialog
    * enforces it, but the API is what actually hands out seats). */
-  private async assertTeamMemberEmailsOtpVerified(emails: string[], projectId: string) {
-    const unique = [...new Set(emails.map((e) => e.trim().toLowerCase()).filter(Boolean))];
+  private async assertTeamMemberEmailsOtpVerified(
+    emails: string[],
+    projectId: string,
+  ) {
+    const unique = [
+      ...new Set(emails.map((e) => e.trim().toLowerCase()).filter(Boolean)),
+    ];
     if (!unique.length) return;
     const rows = await this.otpRepository.find({
       where: { email: In(unique), projectId },
@@ -1012,7 +1054,9 @@ export class StudentsService {
     const cutoff = Date.now() - StudentsService.TEAM_MEMBER_OTP_VALID_MS;
     const verified = new Set(
       rows
-        .filter((r) => r.verifiedAt && new Date(r.verifiedAt).getTime() >= cutoff)
+        .filter(
+          (r) => r.verifiedAt && new Date(r.verifiedAt).getTime() >= cutoff,
+        )
         .map((r) => r.email.trim().toLowerCase()),
     );
     const missing = unique.filter((e) => !verified.has(e));
@@ -1425,10 +1469,12 @@ export class StudentsService {
     const underReviewNotifs = reportsUnderReviewList.slice(0, 5).map((r) => {
       const paymentish =
         isPrivateCandidateOpportunity(r.opportunity) &&
-        (r.status === 'payment_under_review' ||
-          r.status === 'payment_pending');
+        (r.status === 'payment_under_review' || r.status === 'payment_pending');
       let detail = 'Submitted — review in progress.';
-      if (isPrivateCandidateOpportunity(r.opportunity) && r.status === 'payment_under_review') {
+      if (
+        isPrivateCandidateOpportunity(r.opportunity) &&
+        r.status === 'payment_under_review'
+      ) {
         detail = 'Payment proof is under review.';
       } else if (
         isPrivateCandidateOpportunity(r.opportunity) &&
@@ -1718,7 +1764,10 @@ export class StudentsService {
             );
           const occupiedSeats = await this.getOccupiedSeats(o.id);
           const volunteersRequired = o.timeline?.volunteers_required || 0;
-          const remainingSeats = Math.max(0, volunteersRequired - occupiedSeats);
+          const remainingSeats = Math.max(
+            0,
+            volunteersRequired - occupiedSeats,
+          );
           const applicationStatus = overlay.applicationStatus;
           const hasApplied = overlay.hasApplied;
           const app = overlay.app;
@@ -1730,8 +1779,11 @@ export class StudentsService {
           const organizationName =
             o.organization?.name ||
             (!o.organizationId
-              ? (await this.opportunitiesService.getFacultyOrgFallback(o.facultyId))
-                  ?.name
+              ? (
+                  await this.opportunitiesService.getFacultyOrgFallback(
+                    o.facultyId,
+                  )
+                )?.name
               : null) ||
             'Unknown';
 
@@ -2337,7 +2389,9 @@ export class StudentsService {
         | undefined;
       if (scopePatch) {
         const rule = String(scopePatch.rule || '').toLowerCase();
-        if (!['own_university_only', 'own_university_departments'].includes(rule)) {
+        if (
+          !['own_university_only', 'own_university_departments'].includes(rule)
+        ) {
           throw new BadRequestException(
             'Students may only scope an opportunity to their own university — either all departments or specific departments.',
           );
@@ -2597,7 +2651,9 @@ export class StudentsService {
         const cnicDigits = String(member?.cnic ?? '').replace(/\D/g, '');
         if (cnicDigits) {
           if (cnicDigits.length !== 13) {
-            throw new BadRequestException(`${label}: CNIC must be exactly 13 digits.`);
+            throw new BadRequestException(
+              `${label}: CNIC must be exactly 13 digits.`,
+            );
           }
           const prior = seenCnics.get(cnicDigits);
           if (prior) {
@@ -2638,7 +2694,17 @@ export class StudentsService {
           member.mobile = parsedMemberPhone.e164;
           // The university each member is declared at must be inside the listing's scope. The
           // account-based check further down only covers members who already have an account.
-          const scopeErr = universityScopeError(member.university, opportunity, label);
+          const scopeErr = participationScopeError(
+            {
+              university: member.university,
+              department: member.program || member.department,
+            },
+            opportunity,
+            label,
+            // The row is what the lead typed; the member's own account (required on a scoped
+            // listing) is checked below and is the one that decides a blank department.
+            { requireDepartment: false },
+          );
           if (scopeErr) throw new BadRequestException(scopeErr);
         }
         sanitized.push(member);
@@ -2649,20 +2715,27 @@ export class StudentsService {
         await this.usersService.update(user.id, { cnic: leadCnicFromApply });
         user.cnic = leadCnicFromApply;
       }
-      const seatCap = resolveTeamSeatCap(opportunity.timeline?.volunteers_required);
+      const seatCap = resolveTeamSeatCap(
+        opportunity.timeline?.volunteers_required,
+      );
       const capError = teamCapacityError(sanitized.length, seatCap);
       if (capError) throw new BadRequestException(capError);
     }
 
     if (isTeamApply) {
       // A "team" of one is an individual application that would later block real teammates.
-      if (!Array.isArray(teamMembersPayload) || teamMembersPayload.length === 0) {
+      if (
+        !Array.isArray(teamMembersPayload) ||
+        teamMembersPayload.length === 0
+      ) {
         throw new BadRequestException(
           'A team application needs at least one teammate besides you. Add a verified member, or apply as an individual.',
         );
       }
       await this.assertTeamMemberEmailsOtpVerified(
-        teamMembersPayload.map((m) => (typeof m?.email === 'string' ? m.email : '')),
+        teamMembersPayload.map((m) =>
+          typeof m?.email === 'string' ? m.email : '',
+        ),
         dto.opportunityId,
       );
     }
@@ -2717,10 +2790,13 @@ export class StudentsService {
     // Seats: the whole team (lead + members) must fit in what is still free, counting everything
     // already seated or in flight — not just the size of this one team.
     {
-      const seats = resolveTeamSeatCap(opportunity.timeline?.volunteers_required);
+      const seats = resolveTeamSeatCap(
+        opportunity.timeline?.volunteers_required,
+      );
       if (seats > 0) {
         const requested =
-          1 + (Array.isArray(teamMembersPayload) ? teamMembersPayload.length : 0);
+          1 +
+          (Array.isArray(teamMembersPayload) ? teamMembersPayload.length : 0);
         const occupied = await this.getOccupiedSeats(dto.opportunityId);
         if (occupied + requested > seats) {
           const free = Math.max(0, seats - occupied);
@@ -2737,16 +2813,25 @@ export class StudentsService {
     // (a different university / department than the opportunity allows must not ride in on the
     // lead's eligibility). Members without an account yet are checked when they sign up and claim
     // their seat.
-    if (isTeamApply && Array.isArray(teamMembersPayload) && teamMembersPayload.length > 0) {
+    if (
+      isTeamApply &&
+      Array.isArray(teamMembersPayload) &&
+      teamMembersPayload.length > 0
+    ) {
       const memberEmails = teamMembersPayload
-        .map((m) => (typeof m?.email === 'string' ? m.email.trim().toLowerCase() : ''))
+        .map((m) =>
+          typeof m?.email === 'string' ? m.email.trim().toLowerCase() : '',
+        )
         .filter(Boolean);
       if (memberEmails.length) {
         const memberUsers = await this.usersRepository
           .createQueryBuilder('u')
           .where('LOWER(TRIM(u.email)) IN (:...memberEmails)', { memberEmails })
           .getMany();
-        if (collectOpportunityUniversityAllowlist(opportunity).length > 0) {
+        if (
+          collectOpportunityUniversityAllowlist(opportunity).length > 0 ||
+          collectOpportunityDepartmentAllowlist(opportunity).length > 0
+        ) {
           const known = new Set(
             memberUsers.map((u) => (u.email || '').trim().toLowerCase()),
           );
@@ -2757,12 +2842,19 @@ export class StudentsService {
             );
           }
           for (const u of memberUsers) {
-            const problem = this.teammateScopeProblem(u, opportunity, (u.email || '').toLowerCase());
+            const problem = this.teammateScopeProblem(
+              u,
+              opportunity,
+              (u.email || '').toLowerCase(),
+            );
             if (problem) throw new BadRequestException(problem);
           }
         }
         for (const memberUser of memberUsers) {
-          const memberElig = this.getOpportunityEligibility(memberUser, opportunity);
+          const memberElig = this.getOpportunityEligibility(
+            memberUser,
+            opportunity,
+          );
           if (!memberElig.eligible) {
             throw new ForbiddenException(
               `${memberUser.email} cannot join this opportunity: ${memberElig.message}`,
@@ -3719,6 +3811,4 @@ export class StudentsService {
       }),
     };
   }
-
-
 }

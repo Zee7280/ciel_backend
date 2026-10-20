@@ -348,7 +348,9 @@ describe('EngagementService', () => {
       );
       expect(result.pending).toHaveLength(0);
       expect((result as { count?: number }).count).toBe(0);
-      expect(mockAttendanceLogRepository.createQueryBuilder).not.toHaveBeenCalled();
+      expect(
+        mockAttendanceLogRepository.createQueryBuilder,
+      ).not.toHaveBeenCalled();
     });
   });
 
@@ -481,7 +483,10 @@ describe('EngagementService', () => {
 
     describe('team lead logging for a teammate', () => {
       const MATE_SEAT_ID = '11111111-2222-4333-8444-555555555555';
-      const setupProxy = (t: ReturnType<typeof fx>, teammateEmail = 'mate@x.pk') => {
+      const setupProxy = (
+        t: ReturnType<typeof fx>,
+        teammateEmail = 'mate@x.pk',
+      ) => {
         const teammate = {
           id: MATE_SEAT_ID,
           studentId: 'mate-user',
@@ -496,7 +501,11 @@ describe('EngagementService', () => {
           async ({ where }: any) => {
             if (where?.id === teammate.id) return teammate;
             if (where?.isTeamLead && where?.studentId === 'lead-user')
-              return { id: 'lead-row', studentId: 'lead-user', isTeamLead: true };
+              return {
+                id: 'lead-row',
+                studentId: 'lead-user',
+                isTeamLead: true,
+              };
             return null;
           },
         );
@@ -515,7 +524,9 @@ describe('EngagementService', () => {
           name: t.name.faculty,
         });
         mockAttendanceLogRepository.create.mockImplementation((x: any) => x);
-        mockAttendanceLogRepository.save.mockImplementation(async (x: any) => x);
+        mockAttendanceLogRepository.save.mockImplementation(
+          async (x: any) => x,
+        );
         return teammate;
       };
 
@@ -537,7 +548,10 @@ describe('EngagementService', () => {
         const t = fx('proxy-no-hijack');
         const teammate = setupProxy(t, 'lead@x.pk');
         // Lead's own email matches the teammate seat's email — must NOT re-link the seat.
-        mockUserRepository.findOne.mockResolvedValue({ id: 'lead-user', email: 'lead@x.pk' });
+        mockUserRepository.findOne.mockResolvedValue({
+          id: 'lead-user',
+          email: 'lead@x.pk',
+        });
         mockParticipationRepository.find.mockResolvedValue([]);
         const saved: any = await service.addAttendanceLog(
           'lead-user',
@@ -546,8 +560,12 @@ describe('EngagementService', () => {
         );
         expect(teammate.studentId).toBe('mate-user');
         expect(saved.participantId).toBe(teammate.id);
-        const savedRows = mockParticipationRepository.save.mock.calls.map((c: any[]) => c[0]);
-        expect(savedRows.some((r: any) => r?.studentId === 'lead-user')).toBe(false);
+        const savedRows = mockParticipationRepository.save.mock.calls.map(
+          (c: any[]) => c[0],
+        );
+        expect(savedRows.some((r: any) => r?.studentId === 'lead-user')).toBe(
+          false,
+        );
       });
 
       it('marks a seat owner’s own entry as self-logged', async () => {
@@ -805,7 +823,9 @@ describe('EngagementService', () => {
       await service.addAttendanceLog(t.id.student, t.id.participation, dto);
       await new Promise((resolve) => setImmediate(resolve));
 
-      expect(mockMailService.sendAttendancePendingReview).not.toHaveBeenCalled();
+      expect(
+        mockMailService.sendAttendancePendingReview,
+      ).not.toHaveBeenCalled();
       expect(mockAttendanceLogRepository.create).toHaveBeenCalledWith(
         expect.objectContaining({
           assignedApproverUserId: t.id.partnerUser,
@@ -1017,7 +1037,9 @@ describe('EngagementService', () => {
       expect(mockAttendanceLogRepository.create).toHaveBeenCalledWith(
         expect.objectContaining({ assignedApproverType: 'partner' }),
       );
-      expect(mockMailService.sendAttendancePendingReview).not.toHaveBeenCalled();
+      expect(
+        mockMailService.sendAttendancePendingReview,
+      ).not.toHaveBeenCalled();
     });
 
     it('should fall back to faculty when partner route has organizationId but no partner contact', async () => {
@@ -1507,7 +1529,10 @@ describe('EngagementService', () => {
     it('refuses a brand-new teammate seat whose email never confirmed the OTP', async () => {
       const t = fx('register-otp');
       mockOtpRepository.findOne.mockResolvedValue(null);
-      mockUserRepository.findOne.mockResolvedValueOnce({ id: t.id.u1, email: t.email.existing });
+      mockUserRepository.findOne.mockResolvedValueOnce({
+        id: t.id.u1,
+        email: t.email.existing,
+      });
       const dto = {
         projectId: t.id.project,
         participationMode: 'team',
@@ -1526,7 +1551,11 @@ describe('EngagementService', () => {
           .mockResolvedValueOnce(null) // existingByCnic
           .mockResolvedValueOnce(null) // existingByStudent
           .mockResolvedValueOnce(null) // existingStudentSeat
-          .mockResolvedValueOnce({ id: 'acct-1', name: 'Ayesha', university: 'BNU' }), // teammate account
+          .mockResolvedValueOnce({
+            id: 'acct-1',
+            name: 'Ayesha',
+            university: 'BNU',
+          }), // teammate account
         createQueryBuilder: jest
           .fn()
           .mockReturnValueOnce(mockUserQueryBuilder({ id: 'acct-1' }))
@@ -1540,7 +1569,9 @@ describe('EngagementService', () => {
       (mockParticipationRepository as any).manager = {
         transaction: jest.fn().mockImplementation((cb) => cb(mockManager)),
       };
-      await expect(service.registerParticipant(t.id.u1, dto)).rejects.toThrow(/has not confirmed the email OTP yet/);
+      await expect(service.registerParticipant(t.id.u1, dto)).rejects.toThrow(
+        /has not confirmed the email OTP yet/,
+      );
       expect(mockManager.save).not.toHaveBeenCalled();
     });
 
@@ -1825,7 +1856,9 @@ describe('EngagementService', () => {
         createQueryBuilder: jest
           .fn()
           .mockReturnValueOnce(mockUserQueryBuilder(null))
-          .mockReturnValueOnce(mockParticipationQueryBuilder(existingLead as Participation)),
+          .mockReturnValueOnce(
+            mockParticipationQueryBuilder(existingLead as Participation),
+          ),
         create: jest.fn().mockReturnValue({ id: 'new-participation' }),
         save: jest.fn(),
       };
@@ -1841,13 +1874,22 @@ describe('EngagementService', () => {
     });
   });
 
-  describe('one-time verification hour gate uses the form\'s required hours', () => {
+  describe("one-time verification hour gate uses the form's required hours", () => {
     const run = (opp: Record<string, unknown>, hours: number) => {
-      mockParticipationRepository.find.mockResolvedValue([{ id: 'part-1', fullName: 'Ali' }]);
-      mockAttendanceLogRepository.find.mockResolvedValue([
-        { participantId: 'part-1', sessionHours: hours, approvalStatus: 'approved' },
+      mockParticipationRepository.find.mockResolvedValue([
+        { id: 'part-1', fullName: 'Ali' },
       ]);
-      return (service as any).assertAllParticipantsMeetMinimumHoursForVerify(opp, 'proj-1');
+      mockAttendanceLogRepository.find.mockResolvedValue([
+        {
+          participantId: 'part-1',
+          sessionHours: hours,
+          approvalStatus: 'approved',
+        },
+      ]);
+      return (service as any).assertAllParticipantsMeetMinimumHoursForVerify(
+        opp,
+        'proj-1',
+      );
     };
 
     it('blocks until timeline.expected_hours is met, even though the column default is 16', async () => {
@@ -1863,7 +1905,9 @@ describe('EngagementService', () => {
     });
 
     it('falls back to requiredHours when the timeline has no hours', async () => {
-      await expect(run({ timeline: {}, requiredHours: 16 }, 10)).rejects.toThrow(/at least 16 hours/);
+      await expect(
+        run({ timeline: {}, requiredHours: 16 }, 10),
+      ).rejects.toThrow(/at least 16 hours/);
     });
   });
 
@@ -1900,9 +1944,13 @@ describe('EngagementService', () => {
 
     it('rejects an entry shorter than 2 hours', async () => {
       setup(baseParticipation());
-      await expect(service.addAttendanceLog('u1', 'p1', dto({ startTime: '09:00', endTime: '10:30' }))).rejects.toThrow(
-        'at least 2 hours',
-      );
+      await expect(
+        service.addAttendanceLog(
+          'u1',
+          'p1',
+          dto({ startTime: '09:00', endTime: '10:30' }),
+        ),
+      ).rejects.toThrow('at least 2 hours');
     });
 
     it.each([
@@ -1910,92 +1958,191 @@ describe('EngagementService', () => {
       ['exact duplicate', '09:00', '12:00'],
       ['contained', '10:00', '12:00'],
     ])('rejects a %s session on the same day', async (_l, start, end) => {
-      setup(baseParticipation([{ dateOfEngagement: '2026-10-01', startTime: '09:00', endTime: '12:00', sessionHours: 3 }]));
-      await expect(service.addAttendanceLog('u1', 'p1', dto({ startTime: start, endTime: end }))).rejects.toThrow(
-        'overlaps another entry',
+      setup(
+        baseParticipation([
+          {
+            dateOfEngagement: '2026-10-01',
+            startTime: '09:00',
+            endTime: '12:00',
+            sessionHours: 3,
+          },
+        ]),
       );
+      await expect(
+        service.addAttendanceLog(
+          'u1',
+          'p1',
+          dto({ startTime: start, endTime: end }),
+        ),
+      ).rejects.toThrow('overlaps another entry');
     });
 
     it('ignores a REJECTED earlier entry and different days when checking overlap', async () => {
       setup(
         baseParticipation([
-          { dateOfEngagement: '2026-10-01', startTime: '09:00', endTime: '12:00', sessionHours: 3, approvalStatus: 'rejected' },
-          { dateOfEngagement: '2026-09-30', startTime: '09:00', endTime: '12:00', sessionHours: 3 },
+          {
+            dateOfEngagement: '2026-10-01',
+            startTime: '09:00',
+            endTime: '12:00',
+            sessionHours: 3,
+            approvalStatus: 'rejected',
+          },
+          {
+            dateOfEngagement: '2026-09-30',
+            startTime: '09:00',
+            endTime: '12:00',
+            sessionHours: 3,
+          },
         ]),
       );
       // accepted: only a live (non-rejected) entry on the SAME day can overlap
-      await expect(service.addAttendanceLog('u1', 'p1', dto())).resolves.toBeDefined();
+      await expect(
+        service.addAttendanceLog('u1', 'p1', dto()),
+      ).resolves.toBeDefined();
     });
 
     it('a log for "today" in Pakistan is not "in the future" during 00:00-05:00 PKT', async () => {
-      jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate', 'setTimeout'] });
+      jest.useFakeTimers({
+        doNotFake: ['nextTick', 'setImmediate', 'setTimeout'],
+      });
       jest.setSystemTime(new Date('2026-10-03T21:30:00Z')); // 02:30 on 4 Oct PKT
       try {
         setup(baseParticipation());
-        await expect(service.addAttendanceLog('u1', 'p1', dto({ dateOfEngagement: '2026-10-04' }))).resolves.toBeDefined();
-        await expect(service.addAttendanceLog('u1', 'p1', dto({ dateOfEngagement: '2026-10-05' }))).rejects.toThrow(
-          'cannot be in the future',
-        );
+        await expect(
+          service.addAttendanceLog(
+            'u1',
+            'p1',
+            dto({ dateOfEngagement: '2026-10-04' }),
+          ),
+        ).resolves.toBeDefined();
+        await expect(
+          service.addAttendanceLog(
+            'u1',
+            'p1',
+            dto({ dateOfEngagement: '2026-10-05' }),
+          ),
+        ).rejects.toThrow('cannot be in the future');
       } finally {
         jest.useRealTimers();
       }
     });
 
     it('no new hours after the reporting window (project end + 60 days) has closed', async () => {
-      setup(baseParticipation(), { timeline: { start_date: '2024-01-01', end_date: '2024-02-01' } });
+      setup(baseParticipation(), {
+        timeline: { start_date: '2024-01-01', end_date: '2024-02-01' },
+      });
       await expect(
-        service.addAttendanceLog('u1', 'p1', dto({ dateOfEngagement: '2024-01-15' })),
+        service.addAttendanceLog(
+          'u1',
+          'p1',
+          dto({ dateOfEngagement: '2024-01-15' }),
+        ),
       ).rejects.toThrow(/Reporting period has closed/);
     });
   });
 
   describe('registerParticipant — only for seats the caller already holds', () => {
     const dto = (over: Record<string, unknown> = {}) =>
-      ({ projectId: 'proj1', email: 'a@b.com', fullName: 'A', cnic: '1234567890123', mobile: '03001234567', ...over }) as any;
+      ({
+        projectId: 'proj1',
+        email: 'a@b.com',
+        fullName: 'A',
+        cnic: '1234567890123',
+        mobile: '03001234567',
+        ...over,
+      }) as any;
     const mockApprovedApp = (app: unknown) => {
-      (service as any).opportunityApplicationRepository = { findOne: jest.fn().mockResolvedValue(app) };
+      (service as any).opportunityApplicationRepository = {
+        findOne: jest.fn().mockResolvedValue(app),
+      };
     };
 
     beforeEach(() => {
-      mockOpportunityRepository.findOne.mockResolvedValue({ id: 'proj1', isStudentCreated: false, creatorId: 'someone-else' });
+      mockOpportunityRepository.findOne.mockResolvedValue({
+        id: 'proj1',
+        isStudentCreated: false,
+        creatorId: 'someone-else',
+      });
       mockParticipationRepository.findOne.mockResolvedValue(null);
       mockApprovedApp(null);
     });
 
     it('refuses a student with no application and no seat (cannot mint an approved seat)', async () => {
-      await expect(service.registerParticipant('u1', dto(), 'student')).rejects.toThrow(/Apply to this project/);
+      await expect(
+        service.registerParticipant('u1', dto(), 'student'),
+      ).rejects.toThrow(/Apply to this project/);
     });
 
     it('refuses non-students (faculty / NGO accounts) outright', async () => {
       for (const role of ['faculty', 'ngo', 'university', 'corporate']) {
-        await expect(service.registerParticipant('u1', dto(), role)).rejects.toThrow(/Only students/);
+        await expect(
+          service.registerParticipant('u1', dto(), role),
+        ).rejects.toThrow(/Only students/);
       }
     });
 
     it('refuses a student whose seat was rejected and who has no approved application', async () => {
-      mockParticipationRepository.findOne.mockResolvedValue({ id: 'p1', studentId: 'u1', status: 'rejected' });
-      await expect(service.registerParticipant('u1', dto(), 'student')).rejects.toThrow(/not approved/);
+      mockParticipationRepository.findOne.mockResolvedValue({
+        id: 'p1',
+        studentId: 'u1',
+        status: 'rejected',
+      });
+      await expect(
+        service.registerParticipant('u1', dto(), 'student'),
+      ).rejects.toThrow(/not approved/);
     });
 
     it('a plain member cannot register ANOTHER student via a client-supplied studentId', async () => {
-      mockParticipationRepository.findOne.mockResolvedValue({ id: 'p1', studentId: 'u1', status: 'approved', isTeamLead: false });
-      await expect(service.registerParticipant('u1', dto({ studentId: 'victim' }), 'student')).rejects.toThrow(
-        /only register your own/,
-      );
+      mockParticipationRepository.findOne.mockResolvedValue({
+        id: 'p1',
+        studentId: 'u1',
+        status: 'approved',
+        isTeamLead: false,
+      });
+      await expect(
+        service.registerParticipant(
+          'u1',
+          dto({ studentId: 'victim' }),
+          'student',
+        ),
+      ).rejects.toThrow(/only register your own/);
     });
 
     it('a seat holder passes the gate (later failures would be about the registration data, not access)', async () => {
-      mockParticipationRepository.findOne.mockResolvedValue({ id: 'p1', studentId: 'u1', status: 'approved', isTeamLead: false });
-      (mockParticipationRepository as any).manager = { transaction: jest.fn().mockRejectedValue(new Error('reached-transaction')) };
-      await expect(service.registerParticipant('u1', dto(), 'student')).rejects.toThrow('reached-transaction');
+      mockParticipationRepository.findOne.mockResolvedValue({
+        id: 'p1',
+        studentId: 'u1',
+        status: 'approved',
+        isTeamLead: false,
+      });
+      (mockParticipationRepository as any).manager = {
+        transaction: jest
+          .fn()
+          .mockRejectedValue(new Error('reached-transaction')),
+      };
+      await expect(
+        service.registerParticipant('u1', dto(), 'student'),
+      ).rejects.toThrow('reached-transaction');
     });
 
     it('the creator of a student-created project may register without applying; admin always may', async () => {
-      mockOpportunityRepository.findOne.mockResolvedValue({ id: 'proj1', isStudentCreated: true, creatorId: 'u1' });
-      (mockParticipationRepository as any).manager = { transaction: jest.fn().mockRejectedValue(new Error('reached-transaction')) };
-      await expect(service.registerParticipant('u1', dto(), 'student')).rejects.toThrow('reached-transaction');
+      mockOpportunityRepository.findOne.mockResolvedValue({
+        id: 'proj1',
+        isStudentCreated: true,
+        creatorId: 'u1',
+      });
+      (mockParticipationRepository as any).manager = {
+        transaction: jest
+          .fn()
+          .mockRejectedValue(new Error('reached-transaction')),
+      };
+      await expect(
+        service.registerParticipant('u1', dto(), 'student'),
+      ).rejects.toThrow('reached-transaction');
       mockOpportunityRepository.findOne.mockResolvedValue({ id: 'proj1' });
-      await expect(service.registerParticipant('admin1', dto(), 'admin')).rejects.toThrow('reached-transaction');
+      await expect(
+        service.registerParticipant('admin1', dto(), 'admin'),
+      ).rejects.toThrow('reached-transaction');
     });
   });
 
@@ -2023,28 +2170,59 @@ describe('EngagementService', () => {
 
     it('project logs return only id / name / flags for the participant, never CNIC hash, mobile or email', async () => {
       mockAttendanceLogRepository.find.mockResolvedValue([logRow()]);
-      const out: any[] = await service.getProjectAttendanceLogs('proj1', 'student');
-      expect(out[0].participant).toEqual({ id: 'p1', fullName: 'Sara Khan', studentId: 'u2', isTeamLead: false });
-      expect(JSON.stringify(out)).not.toMatch(/deadbeefhash|ciphertext|\+923001234567|sara@uni\.edu|1234/);
+      const out: any[] = await service.getProjectAttendanceLogs(
+        'proj1',
+        'student',
+      );
+      expect(out[0].participant).toEqual({
+        id: 'p1',
+        fullName: 'Sara Khan',
+        studentId: 'u2',
+        isTeamLead: false,
+      });
+      expect(JSON.stringify(out)).not.toMatch(
+        /deadbeefhash|ciphertext|\+923001234567|sara@uni\.edu|1234/,
+      );
     });
 
     it('student and admin keep the evidence link; partner / faculty / university / NGO do not', async () => {
       mockAttendanceLogRepository.find.mockResolvedValue([logRow()]);
       for (const role of ['student', 'admin']) {
-        const out: any[] = await service.getProjectAttendanceLogs('proj1', role);
+        const out: any[] = await service.getProjectAttendanceLogs(
+          'proj1',
+          role,
+        );
         expect(out[0].evidenceUrl).toContain('attendance-evidence');
       }
-      for (const role of ['ngo', 'faculty', 'university', 'corporate', 'organization_admin']) {
-        const out: any[] = await service.getProjectAttendanceLogs('proj1', role);
+      for (const role of [
+        'ngo',
+        'faculty',
+        'university',
+        'corporate',
+        'organization_admin',
+      ]) {
+        const out: any[] = await service.getProjectAttendanceLogs(
+          'proj1',
+          role,
+        );
         expect(out[0].evidenceUrl).toBeNull();
       }
     });
 
     it('per-participation logs follow the same evidence rule', async () => {
-      mockParticipationRepository.findOne.mockResolvedValue({ id: 'p1', attendanceLogs: [logRow()] });
-      const asNgo: any[] = (await service.getAttendanceLogs('p1', 'ngo')) as any;
+      mockParticipationRepository.findOne.mockResolvedValue({
+        id: 'p1',
+        attendanceLogs: [logRow()],
+      });
+      const asNgo: any[] = (await service.getAttendanceLogs(
+        'p1',
+        'ngo',
+      )) as any;
       expect(asNgo[0].evidenceUrl).toBeNull();
-      const asStudent: any[] = (await service.getAttendanceLogs('p1', 'student')) as any;
+      const asStudent: any[] = (await service.getAttendanceLogs(
+        'p1',
+        'student',
+      )) as any;
       expect(asStudent[0].evidenceUrl).toContain('attendance-evidence');
     });
   });

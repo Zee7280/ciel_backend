@@ -1,25 +1,30 @@
-
-import { IsNotEmpty, IsNumber, IsString, IsArray, IsOptional } from 'class-validator';
+import {
+  IsNotEmpty,
+  IsNumber,
+  IsString,
+  IsArray,
+  IsOptional,
+} from 'class-validator';
 
 export class CreateFundingApplicationDto {
-    @IsNotEmpty()
-    @IsNumber()
-    fundingId: number;
+  @IsNotEmpty()
+  @IsNumber()
+  fundingId: number;
 
-    @IsNotEmpty()
-    @IsNumber()
-    proposedBudget: number;
+  @IsNotEmpty()
+  @IsNumber()
+  proposedBudget: number;
 
-    @IsNotEmpty()
-    @IsString()
-    projectDescription: string;
+  @IsNotEmpty()
+  @IsString()
+  projectDescription: string;
 
-    @IsNotEmpty()
-    @IsNumber()
-    expectedBeneficiaries: number;
+  @IsNotEmpty()
+  @IsNumber()
+  expectedBeneficiaries: number;
 
-    @IsOptional()
-    @IsArray()
-    @IsString({ each: true })
-    documents: string[];
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  documents: string[];
 }

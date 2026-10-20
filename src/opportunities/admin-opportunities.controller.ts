@@ -33,9 +33,14 @@ import { SetAttendanceRoutingDto } from './dto/set-attendance-routing.dto';
 import { AdminSetOpportunityContactsDto } from './dto/admin-set-opportunity-contacts.dto';
 import { AdminDirectoryControlDto } from './dto/admin-directory-control.dto';
 
+type AuthedRequest = { user: { id: string; name?: string; email?: string } };
+
 @Controller('admin/opportunities')
 @UseGuards(JwtAuthGuard)
-@UseInterceptors(AdminMutationAuditInterceptor, FacultyDepartmentAlignInterceptor)
+@UseInterceptors(
+  AdminMutationAuditInterceptor,
+  FacultyDepartmentAlignInterceptor,
+)
 export class AdminOpportunitiesController {
   constructor(
     private readonly opportunitiesService: OpportunitiesService,
@@ -106,7 +111,7 @@ export class AdminOpportunitiesController {
   @Post(':id/approve')
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
-  async approve(@Request() req, @Param('id', new ParseUUIDPipe()) id: string) {
+  async approve(@Request() req: AuthedRequest, @Param('id', new ParseUUIDPipe()) id: string) {
     await this.opportunitiesService.approve(id, {
       id: req.user.id,
       name: req.user.name,
@@ -118,7 +123,7 @@ export class AdminOpportunitiesController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
   async approvePatch(
-    @Request() req,
+    @Request() req: AuthedRequest,
     @Param('id', new ParseUUIDPipe()) id: string,
   ) {
     await this.opportunitiesService.approve(id, {
@@ -153,7 +158,7 @@ export class AdminOpportunitiesController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
   async reject(
-    @Request() req,
+    @Request() req: AuthedRequest,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() body: { reason: string },
   ) {
@@ -168,7 +173,7 @@ export class AdminOpportunitiesController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
   async revise(
-    @Request() req,
+    @Request() req: AuthedRequest,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() body: { reason: string },
   ) {
@@ -245,7 +250,7 @@ export class AdminOpportunitiesController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
   async mergeTeams(
-    @Request() req,
+    @Request() req: AuthedRequest,
     @Param('id') opportunityId: string,
     @Body() dto: AdminMergeTeamMembersDto,
   ) {
@@ -291,7 +296,7 @@ export class AdminOpportunitiesController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
   async applyTeamOp(
-    @Request() req,
+    @Request() req: AuthedRequest,
     @Param('id') opportunityId: string,
     @Body() dto: AdminTeamOpDto,
   ) {
@@ -307,9 +312,7 @@ export class AdminOpportunitiesController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
   async listTeamSnapshots(@Param('id') opportunityId: string) {
-    return this.adminTeamSafety.adminListTeamSnapshots(
-      opportunityId,
-    );
+    return this.adminTeamSafety.adminListTeamSnapshots(opportunityId);
   }
 
   @Post(':id/team-snapshots/:snapshotId/restore')
@@ -317,7 +320,7 @@ export class AdminOpportunitiesController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
   async restoreTeamSnapshot(
-    @Request() req,
+    @Request() req: AuthedRequest,
     @Param('id') opportunityId: string,
     @Param('snapshotId', new ParseUUIDPipe()) snapshotId: string,
   ) {
@@ -335,10 +338,7 @@ export class AdminOpportunitiesController {
     @Param('id') opportunityId: string,
     @Param('teamId') teamId: string,
   ) {
-    return this.adminTeamSafety.adminPreviewDeleteTeam(
-      opportunityId,
-      teamId,
-    );
+    return this.adminTeamSafety.adminPreviewDeleteTeam(opportunityId, teamId);
   }
 
   @Get(':id/teams/:teamId/members/:memberId/delete-preview')
@@ -360,7 +360,7 @@ export class AdminOpportunitiesController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
   async deleteTeam(
-    @Request() req,
+    @Request() req: AuthedRequest,
     @Param('id') opportunityId: string,
     @Param('teamId') teamId: string,
   ) {
@@ -394,7 +394,7 @@ export class AdminOpportunitiesController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
   async deleteTeamMember(
-    @Request() req,
+    @Request() req: AuthedRequest,
     @Param('id') opportunityId: string,
     @Param('teamId') teamId: string,
     @Param('memberId') memberId: string,

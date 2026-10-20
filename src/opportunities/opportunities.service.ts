@@ -44,7 +44,10 @@ import {
 } from '../mail/mail.service';
 import { isUUID } from 'class-validator';
 import { randomUUID } from 'crypto';
-import { applyCanonicalPrivateCandidatePhone, isPrivateCandidateDto } from './private-candidate.util';
+import {
+  applyCanonicalPrivateCandidatePhone,
+  isPrivateCandidateDto,
+} from './private-candidate.util';
 import { isPubliclyVisibleOpportunity as isPubliclyVisibleOpportunityUtil } from './opportunity-visibility.util';
 import {
   OpportunityWorkflowService,
@@ -231,11 +234,14 @@ function sanitizeWizardProgress(
 ): { resume_step: string; updated_at: string } | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const step = (raw as { resume_step?: unknown }).resume_step;
-  if (typeof step !== 'string' || !STUDENT_WIZARD_STEP_KEYS.has(step)) return null;
+  if (typeof step !== 'string' || !STUDENT_WIZARD_STEP_KEYS.has(step))
+    return null;
   return { resume_step: step, updated_at: new Date().toISOString() };
 }
 
-function pickDraftPersistFields(dto: Record<string, unknown>): Record<string, unknown> {
+function pickDraftPersistFields(
+  dto: Record<string, unknown>,
+): Record<string, unknown> {
   let plain: Record<string, unknown>;
   try {
     plain = JSON.parse(JSON.stringify(dto ?? {})) as Record<string, unknown>;
@@ -757,7 +763,16 @@ export class OpportunitiesService {
     return (
       opp.workflowStage === WORKFLOW_STAGE.REJECTED ||
       opp.workflowStage === WORKFLOW_STAGE.REVISION ||
-      ['rejected', 'revision', 'draft', 'closed', 'cancelled', 'canceled', 'completed', 'archived'].includes(status)
+      [
+        'rejected',
+        'revision',
+        'draft',
+        'closed',
+        'cancelled',
+        'canceled',
+        'completed',
+        'archived',
+      ].includes(status)
     );
   }
 
@@ -987,10 +1002,7 @@ export class OpportunitiesService {
     const fir =
       val?.faculty_institutional_representative &&
       typeof val.faculty_institutional_representative === 'object'
-        ? (val.faculty_institutional_representative as Record<
-            string,
-            unknown
-          >)
+        ? (val.faculty_institutional_representative as Record<string, unknown>)
         : undefined;
     // Partner / NGO / University forms mirror the EXECUTING ORGANIZATION's official contact into
     // supervision.contact (role "Executing organization — official contact"). That person is not a
@@ -1000,7 +1012,9 @@ export class OpportunitiesService {
     // faculty representative counts for those.
     const supRole =
       sup && typeof sup.role === 'string' ? sup.role.trim().toLowerCase() : '';
-    const supIsExecutingOrgContact = supRole.startsWith('executing organization');
+    const supIsExecutingOrgContact = supRole.startsWith(
+      'executing organization',
+    );
     const raw =
       (!supIsExecutingOrgContact &&
         sup &&
@@ -1090,16 +1104,17 @@ export class OpportunitiesService {
     // on such rows still reads `pending_faculty` / unverified, which used to force them into a faculty
     // stage with nobody to review it.
     const noFacultyLine =
-      opp.facultyApprovalStatus === LINE_STATUS.NOT_APPLICABLE && !facultyEmailNow;
+      opp.facultyApprovalStatus === LINE_STATUS.NOT_APPLICABLE &&
+      !facultyEmailNow;
     const facultyLineNeedsReview =
       !noFacultyLine &&
       (facultyEmailChanged ||
-      opp.facultyApprovalStatus === LINE_STATUS.REJECTED ||
-      opp.facultyApprovalStatus === LINE_STATUS.REVISION_REQUESTED ||
-      opp.faculty_verification_status === 'rejected' ||
-      !opp.faculty_verified ||
-      opp.facultyApprovalStatus === LINE_STATUS.PENDING ||
-      opp.faculty_verification_status === WORKFLOW_STAGE.PENDING_FACULTY);
+        opp.facultyApprovalStatus === LINE_STATUS.REJECTED ||
+        opp.facultyApprovalStatus === LINE_STATUS.REVISION_REQUESTED ||
+        opp.faculty_verification_status === 'rejected' ||
+        !opp.faculty_verified ||
+        opp.facultyApprovalStatus === LINE_STATUS.PENDING ||
+        opp.faculty_verification_status === WORKFLOW_STAGE.PENDING_FACULTY);
 
     if (facultyLineNeedsReview) {
       opp.workflowStage = WORKFLOW_STAGE.PENDING_FACULTY;
@@ -1172,13 +1187,17 @@ export class OpportunitiesService {
     const isUniversity = user.role === UserRole.UNIVERSITY;
     if (!isOwner && !isAdmin && !isNamedFaculty && !isNamedPartner) {
       if (!isUniversity) {
-        throw new ForbiddenException('You do not have access to this opportunity');
+        throw new ForbiddenException(
+          'You do not have access to this opportunity',
+        );
       }
       const creator = await this.getOpportunityCreatorContact(opp);
       const userUni = String(user.university || user.institution || '')
         .trim()
         .toLowerCase();
-      const creatorUni = String(creator?.university || creator?.institution || '')
+      const creatorUni = String(
+        creator?.university || creator?.institution || '',
+      )
         .trim()
         .toLowerCase();
       if (!userUni || !creatorUni || userUni !== creatorUni) {
@@ -1199,7 +1218,8 @@ export class OpportunitiesService {
           'No faculty email is saved on this opportunity.',
         );
       }
-      const sent = await this.notifyFacultyForStudentOpportunityVerification(opp);
+      const sent =
+        await this.notifyFacultyForStudentOpportunityVerification(opp);
       if (!sent) {
         throw new BadRequestException(
           `The email could not be sent to ${facultyTo}. The mail server rejected it.`,
@@ -1252,7 +1272,8 @@ export class OpportunitiesService {
       return {
         success: true,
         sent_to: 'admin',
-        message: 'CIEL PK has been reminded that this opportunity is ready for final approval.',
+        message:
+          'CIEL PK has been reminded that this opportunity is ready for final approval.',
         ...tracker,
         reminder: reminderCopy,
       };
@@ -1278,7 +1299,10 @@ export class OpportunitiesService {
     const expired = (at: Date | string | null | undefined) =>
       !!at && new Date(at).getTime() <= now;
     if (which === 'faculty') {
-      if (!opp.faculty_verification_token || expired(opp.facultyTokenExpiresAt)) {
+      if (
+        !opp.faculty_verification_token ||
+        expired(opp.facultyTokenExpiresAt)
+      ) {
         opp.faculty_verification_token = randomUUID();
         await this.opportunitiesRepository.save(opp);
       }
@@ -1481,8 +1505,14 @@ export class OpportunitiesService {
     ] as const) {
       const email = block?.official_email;
       if (email == null || email === '') continue;
-      if (typeof email !== 'string' || email.length > 254 || !this.isValidEmail(email.trim())) {
-        throw new BadRequestException(`${key}.official_email must be a valid email`);
+      if (
+        typeof email !== 'string' ||
+        email.length > 254 ||
+        !this.isValidEmail(email.trim())
+      ) {
+        throw new BadRequestException(
+          `${key}.official_email must be a valid email`,
+        );
       }
     }
   }
@@ -1607,7 +1637,12 @@ export class OpportunitiesService {
         `objectives.description is too long (max ${OPPORTUNITY_LONG_TEXT_MAX} characters).`,
       );
     }
-    if (tooLong(activity?.student_responsibilities, STUDENT_RESPONSIBILITIES_MAX_LENGTH)) {
+    if (
+      tooLong(
+        activity?.student_responsibilities,
+        STUDENT_RESPONSIBILITIES_MAX_LENGTH,
+      )
+    ) {
       throw new BadRequestException(
         `activity_details.student_responsibilities is too long (max ${STUDENT_RESPONSIBILITIES_MAX_LENGTH} characters).`,
       );
@@ -1652,11 +1687,18 @@ export class OpportunitiesService {
     visibility_and_academic_linkage?: any;
   }) {
     const checks: Array<[string, unknown]> = [
-      ['executing_organization.official_email', src.executing_organization?.official_email],
-      ['partner_organization.official_email', src.partner_organization?.official_email],
+      [
+        'executing_organization.official_email',
+        src.executing_organization?.official_email,
+      ],
+      [
+        'partner_organization.official_email',
+        src.partner_organization?.official_email,
+      ],
       [
         'faculty_institutional_representative.official_email',
-        src.visibility_and_academic_linkage?.faculty_institutional_representative?.official_email,
+        src.visibility_and_academic_linkage
+          ?.faculty_institutional_representative?.official_email,
       ],
     ];
     for (const [label, value] of checks) {
@@ -1910,11 +1952,10 @@ export class OpportunitiesService {
   }
 
   private frontendOrigin(): string {
-    return (
-      process.env.FRONTEND_URL ||
-      process.env.APP_URL ||
-      ''
-    ).replace(/\/+$/, '');
+    return (process.env.FRONTEND_URL || process.env.APP_URL || '').replace(
+      /\/+$/,
+      '',
+    );
   }
 
   /** Whether CIEL admin final-approve may run without skipping required gates. */
@@ -2112,8 +2153,8 @@ export class OpportunitiesService {
           returnTo: this.getPartnerApprovalReturnTo(opportunity.id),
           introText:
             introText ??
-            (`The faculty supervisor has approved <strong>${this.escHtml(opportunity.title)}</strong>. ` +
-              'Please review the partner execution scope to continue this opportunity in CIEL.'),
+            `The faculty supervisor has approved <strong>${this.escHtml(opportunity.title)}</strong>. ` +
+              'Please review the partner execution scope to continue this opportunity in CIEL.',
           ctaLabel: 'Review partner approval',
         },
       );
@@ -2154,7 +2195,9 @@ export class OpportunitiesService {
       .replace(/"/g, '&quot;');
   }
 
-  private async handleFacultyApprovedSideEffects(opportunity: Opportunity): Promise<{
+  private async handleFacultyApprovedSideEffects(
+    opportunity: Opportunity,
+  ): Promise<{
     partnerEmailSent: boolean;
     partnerEmail: string | null;
   }> {
@@ -2220,7 +2263,8 @@ export class OpportunitiesService {
       !opportunity.execution_verified;
     const stillNeedsCielReview =
       opportunity.workflowStage === WORKFLOW_STAGE.PENDING_ADMIN ||
-      (opportunity.status === 'pending_approval' && !opportunity.admin_approved);
+      (opportunity.status === 'pending_approval' &&
+        !opportunity.admin_approved);
     if (
       stillNeedsCielReview &&
       (!execBlocking || opportunity.isStudentCreated)
@@ -2267,14 +2311,11 @@ export class OpportunitiesService {
           isStudentCreator: opportunity.isStudentCreated === true,
         });
       } catch (error) {
-        console.warn(
-          'Failed to send opportunity live start-report email',
-          {
-            opportunityId: opportunity.id,
-            to: creator.email,
-            error: (error as Error).message,
-          },
-        );
+        console.warn('Failed to send opportunity live start-report email', {
+          opportunityId: opportunity.id,
+          to: creator.email,
+          error: (error as Error).message,
+        });
       }
     } else {
       console.warn(
@@ -2354,7 +2395,10 @@ export class OpportunitiesService {
     });
   }
 
-  private liveEmailReportPath(role: string | undefined, opportunityId: string): string {
+  private liveEmailReportPath(
+    role: string | undefined,
+    opportunityId: string,
+  ): string {
     const id = encodeURIComponent(opportunityId);
     if (!role || role === UserRole.STUDENT) {
       return `/dashboard/student/report?projectId=${id}`;
@@ -2367,7 +2411,11 @@ export class OpportunitiesService {
 
   async create(userId: string, createOpportunityDto: CreateOpportunityDto) {
     if (createOpportunityDto?.draft === true) {
-      return this.saveCreatorOpportunityDraft(userId, null, createOpportunityDto);
+      return this.saveCreatorOpportunityDraft(
+        userId,
+        null,
+        createOpportunityDto,
+      );
     }
     const user = await this.usersRepository.findOne({
       where: { id: userId },
@@ -2417,7 +2465,9 @@ export class OpportunitiesService {
       createOpportunityDto.mode,
       createOpportunityDto.location,
     );
-    this.validateTimeline(createOpportunityDto.timeline, { requireDates: true });
+    this.validateTimeline(createOpportunityDto.timeline, {
+      requireDates: true,
+    });
 
     const isFaculty = user.role === UserRole.FACULTY;
     const isCielAdmin = user.role === UserRole.SUPER_ADMIN;
@@ -2445,7 +2495,9 @@ export class OpportunitiesService {
       this.opportunitiesRepository.manager.connection.createQueryRunner();
     try {
       await lockRunner.connect();
-      await lockRunner.query('SELECT pg_advisory_lock(hashtext($1))', [lockKey]);
+      await lockRunner.query('SELECT pg_advisory_lock(hashtext($1))', [
+        lockKey,
+      ]);
       try {
         const recent = await this.opportunitiesRepository
           .createQueryBuilder('o')
@@ -2462,7 +2514,10 @@ export class OpportunitiesService {
         if (recent) return recent;
         // Only a genuinely different submission with a reused title is a duplicate; an identical
         // retry / double-click is answered by the fingerprint short-circuit above.
-        await this.assertNoOwnDuplicateTitle(user.id, createOpportunityDto.title);
+        await this.assertNoOwnDuplicateTitle(
+          user.id,
+          createOpportunityDto.title,
+        );
         return await this.finishCreatingCreatorOpportunity(
           user,
           org,
@@ -2470,7 +2525,9 @@ export class OpportunitiesService {
           fingerprint,
         );
       } finally {
-        await lockRunner.query('SELECT pg_advisory_unlock(hashtext($1))', [lockKey]);
+        await lockRunner.query('SELECT pg_advisory_unlock(hashtext($1))', [
+          lockKey,
+        ]);
       }
     } finally {
       await lockRunner.release();
@@ -2872,9 +2929,7 @@ export class OpportunitiesService {
     applyCanonicalPrivateCandidatePhone(dto, { required: true });
     if (
       !(dto.objectives as { description?: unknown })?.description ||
-      !String(
-        (dto.objectives as { description?: unknown }).description,
-      ).trim()
+      !String((dto.objectives as { description?: unknown }).description).trim()
     ) {
       throw new BadRequestException('objectives.description is required');
     }
@@ -3113,7 +3168,6 @@ export class OpportunitiesService {
     // "unclaimed_student_initiated" organization behind when it does (students retry a lot).
     let saved: Opportunity;
     try {
-
       let resolvedFacultyId: string | null = null;
       if (dto.supervision?.contact) {
         const facultyUser = await this.usersRepository.findOne({
@@ -3177,7 +3231,10 @@ export class OpportunitiesService {
           requiresPartner,
         );
       } else {
-        this.opportunityWorkflow.initStudentCreated(opportunity, requiresPartner);
+        this.opportunityWorkflow.initStudentCreated(
+          opportunity,
+          requiresPartner,
+        );
       }
       saved = await this.opportunitiesRepository.save(opportunity);
     } catch (e) {
@@ -3220,7 +3277,7 @@ export class OpportunitiesService {
           this.mailService.sendFacultyStudentOpportunityVerification(
             facultyTo,
             saved.title,
-            saved.faculty_verification_token!,
+            saved.faculty_verification_token,
             studentVerifyDetails,
             {
               path: '/verify/faculty',
@@ -3263,8 +3320,7 @@ export class OpportunitiesService {
           partnerEmail,
           saved.title,
           {
-            leadText:
-              `${studentName}${studentUni ? ` (${studentUni})` : ''} has submitted the community service opportunity "${saved.title}" on CIEL PK and listed your organization as the partner / host.`,
+            leadText: `${studentName}${studentUni ? ` (${studentUni})` : ''} has submitted the community service opportunity "${saved.title}" on CIEL PK and listed your organization as the partner / host.`,
             nextStepText:
               'Next step: the faculty supervisor reviews it first. Once they approve, you will receive a separate email with your partner approval link — no action is needed from you yet.',
           },
@@ -3362,7 +3418,9 @@ export class OpportunitiesService {
           String(opportunity.status || '').toLowerCase(),
         )
       ) {
-        throw new BadRequestException('Approved opportunities cannot be updated');
+        throw new BadRequestException(
+          'Approved opportunities cannot be updated',
+        );
       }
       // CIEL PK / faculty rejections are terminal ("permanently rejected" everywhere the student is
       // told). A partner-only rejection of a private-candidate listing remains resubmittable here
@@ -3452,7 +3510,9 @@ export class OpportunitiesService {
         opportunity.status === 'active' ||
         opportunity.workflowStage === WORKFLOW_STAGE.LIVE;
       if (live) {
-        throw new BadRequestException('Approved opportunities cannot be updated');
+        throw new BadRequestException(
+          'Approved opportunities cannot be updated',
+        );
       }
     }
 
@@ -3463,18 +3523,27 @@ export class OpportunitiesService {
     const materialBefore = this.liveMaterialSignature(opportunity);
     const facultyEmailBefore = this.getFacultyEmailFromOpportunity(opportunity);
 
-    const { id: _dtoId, draft: _draftFlag, ...rawPatch } =
-      updateOpportunityDto as UpdateOpportunityDto & { id: string };
+    const {
+      id: _dtoId,
+      draft: _draftFlag,
+      ...rawPatch
+    } = updateOpportunityDto as UpdateOpportunityDto & { id: string };
     // PATCH /opportunities/:id passes the raw body (no DTO whitelist), and POST /update's DTO
     // still exposes `status` — strip every server-controlled column so an edit can never
     // self-approve, republish, reassign ownership or forge verification tokens. Then allow-list
     // wizard fields so an untyped PATCH cannot copy unknown keys either.
-    const stripped = stripServerControlledFields(rawPatch) as Record<string, unknown>;
+    const stripped = stripServerControlledFields(rawPatch) as Record<
+      string,
+      unknown
+    >;
     const patch: Record<string, unknown> = {};
     for (const key of UPDATE_PERSIST_KEYS) {
       if (!Object.prototype.hasOwnProperty.call(stripped, key)) continue;
       if (stripped[key] === undefined) continue;
-      if (isStudentOwner && (key === 'participation_scope' || key === 'restricted_universities')) {
+      if (
+        isStudentOwner &&
+        (key === 'participation_scope' || key === 'restricted_universities')
+      ) {
         continue;
       }
       patch[key] = stripped[key];
@@ -3570,7 +3639,8 @@ export class OpportunitiesService {
         // request — only rewind the specific line that actually needs re-review. An already
         // -approved partner line must not be forced back to pending just because CIEL PK (or the
         // faculty's own edit) touched the opportunity after a sibling line was flagged.
-        const partnerEmailNow = this.resolvePartnerEmailFromOpportunity(opportunity);
+        const partnerEmailNow =
+          this.resolvePartnerEmailFromOpportunity(opportunity);
         const partnerEmailChanged =
           this.normalizeEmail(
             rejectedResubmitSnapshot.partnerEmailBefore || '',
@@ -3628,7 +3698,8 @@ export class OpportunitiesService {
         opportunity.partnerToken &&
         !editExecBlocking
       ) {
-        const partnerEmail = this.resolvePartnerEmailFromOpportunity(opportunity);
+        const partnerEmail =
+          this.resolvePartnerEmailFromOpportunity(opportunity);
         if (partnerEmail) {
           try {
             const verifyDetails = this.buildOpportunityVerificationEmailDetails(
@@ -3711,24 +3782,29 @@ export class OpportunitiesService {
       // the faculty's behalf, so the row would be stuck for everyone.
       const needsFacultyReverify =
         (opportunity.facultyApprovalStatus === LINE_STATUS.REJECTED ||
-          opportunity.facultyApprovalStatus === LINE_STATUS.REVISION_REQUESTED) &&
+          opportunity.facultyApprovalStatus ===
+            LINE_STATUS.REVISION_REQUESTED) &&
         !!this.getFacultyEmailFromOpportunity(opportunity);
-      const partnerEmailNow = this.resolvePartnerEmailFromOpportunity(opportunity);
+      const partnerEmailNow =
+        this.resolvePartnerEmailFromOpportunity(opportunity);
       const partnerContactChanged =
-        this.normalizeEmail(rejectedResubmitSnapshot.partnerEmailBefore || '') !==
-        this.normalizeEmail(partnerEmailNow || '');
+        this.normalizeEmail(
+          rejectedResubmitSnapshot.partnerEmailBefore || '',
+        ) !== this.normalizeEmail(partnerEmailNow || '');
       const needsPartnerReverify =
         opportunity.requiresPartnerApproval &&
         (rejectedResubmitSnapshot.partnerLineRejected ||
           opportunity.partnerApprovalStatus === LINE_STATUS.REJECTED ||
-          opportunity.partnerApprovalStatus === LINE_STATUS.REVISION_REQUESTED ||
+          opportunity.partnerApprovalStatus ===
+            LINE_STATUS.REVISION_REQUESTED ||
           rejectedResubmitSnapshot.partnerLineFlagged ||
           partnerContactChanged);
 
       if (needsFacultyReverify) {
         opportunity.facultyApprovalStatus = LINE_STATUS.PENDING;
         opportunity.faculty_verified = false;
-        opportunity.faculty_verification_status = WORKFLOW_STAGE.PENDING_FACULTY;
+        opportunity.faculty_verification_status =
+          WORKFLOW_STAGE.PENDING_FACULTY;
         opportunity.faculty_verification_token = randomUUID();
         opportunity.adminApprovalStatus = LINE_STATUS.PENDING;
         if (execBlocking) {
@@ -3782,8 +3858,9 @@ export class OpportunitiesService {
       const facultyNow = this.getFacultyEmailFromOpportunity(opportunity);
       const adminEmail = this.normalizeEmail(user.email);
       const partnerChanged =
-        this.normalizeEmail(rejectedResubmitSnapshot.partnerEmailBefore || '') !==
-        this.normalizeEmail(partnerNow || '');
+        this.normalizeEmail(
+          rejectedResubmitSnapshot.partnerEmailBefore || '',
+        ) !== this.normalizeEmail(partnerNow || '');
       const facultyChanged =
         this.normalizeEmail(facultyEmailBefore || '') !==
         this.normalizeEmail(facultyNow || '');
@@ -3798,7 +3875,10 @@ export class OpportunitiesService {
         } else if (requiresPartner && partnerChanged) {
           opportunity.partnerToken = randomUUID();
         }
-        if (requiresFaculty && (facultyChanged || !opportunity.faculty_verification_token)) {
+        if (
+          requiresFaculty &&
+          (facultyChanged || !opportunity.faculty_verification_token)
+        ) {
           opportunity.faculty_verification_token = randomUUID();
         }
         this.opportunityWorkflow.initCielAdminCreated(opportunity, {
@@ -3843,9 +3923,12 @@ export class OpportunitiesService {
       }
     }
 
-    const savedOpportunity = await this.opportunitiesRepository.save(opportunity);
+    const savedOpportunity =
+      await this.opportunitiesRepository.save(opportunity);
     if (notifyFacultyAfterOrgResubmit) {
-      await this.notifyFacultyForStudentOpportunityVerification(savedOpportunity);
+      await this.notifyFacultyForStudentOpportunityVerification(
+        savedOpportunity,
+      );
     }
     if (notifyPartnerAfterOrgResubmit) {
       // sendPartnerApprovalEmail swallows mail errors (returns false) — a flaky SMTP never
@@ -4101,7 +4184,9 @@ export class OpportunitiesService {
     id: string | null,
     dto: Record<string, unknown>,
   ) {
-    return this.persistOpportunityDraft(userId, id, dto, { isStudentCreated: true });
+    return this.persistOpportunityDraft(userId, id, dto, {
+      isStudentCreated: true,
+    });
   }
 
   /**
@@ -4116,15 +4201,24 @@ export class OpportunitiesService {
     const user = await this.usersRepository.findOne({ where: { id: userId } });
     if (!user) throw new ForbiddenException('User not found');
     if (user.role === UserRole.STUDENT) {
-      return this.saveStudentOpportunityDraft(userId, id, dto as Record<string, unknown>);
+      return this.saveStudentOpportunityDraft(
+        userId,
+        id,
+        dto as Record<string, unknown>,
+      );
     }
     const org = await this.organizationsService.getMyOrganization(userId);
     const isFaculty = user.role === UserRole.FACULTY;
-    return this.persistOpportunityDraft(userId, id, dto as Record<string, unknown>, {
-      isStudentCreated: false,
-      facultyId: isFaculty ? user.id : null,
-      organizationId: org?.id ?? null,
-    });
+    return this.persistOpportunityDraft(
+      userId,
+      id,
+      dto as Record<string, unknown>,
+      {
+        isStudentCreated: false,
+        facultyId: isFaculty ? user.id : null,
+        organizationId: org?.id ?? null,
+      },
+    );
   }
 
   private async persistOpportunityDraft(
@@ -4350,7 +4444,9 @@ export class OpportunitiesService {
     } else if (filters.partner_id && filters.partner_id !== 'me') {
       if (!isUUID(String(filters.partner_id))) {
         // not an organisation or user id: a clean 404, not a database "invalid uuid" error
-        throw new NotFoundException('Organisation not found for the given partner_id');
+        throw new NotFoundException(
+          'Organisation not found for the given partner_id',
+        );
       }
       let resolvedOrgId: string | null = null;
       // Check if it's already an org ID
@@ -4507,7 +4603,9 @@ export class OpportunitiesService {
           filters?.partner_id === 'me'
             ? {
                 is_org_owner:
-                  !!org && !!opp.organizationId && opp.organizationId === org.id,
+                  !!org &&
+                  !!opp.organizationId &&
+                  opp.organizationId === org.id,
                 can_partner_review: await this.partnerReviewIdentityMatches(
                   opp,
                   filterPartnerEmail || '',
@@ -4722,11 +4820,7 @@ export class OpportunitiesService {
     if (candidates.includes(email)) return true;
 
     if (
-      await this.namedPartnerOrgMatches(
-        opp,
-        viewer.organizationId,
-        viewer.id,
-      )
+      await this.namedPartnerOrgMatches(opp, viewer.organizationId, viewer.id)
     ) {
       return true;
     }
@@ -4752,7 +4846,8 @@ export class OpportunitiesService {
     viewer: OpportunityDetailViewer,
   ): boolean {
     if (!viewer?.id) return false;
-    const isOwner = !!opp.creatorId && String(opp.creatorId) === String(viewer.id);
+    const isOwner =
+      !!opp.creatorId && String(opp.creatorId) === String(viewer.id);
     if (viewer.role === UserRole.FACULTY) {
       if (isOwner && (opp.facultyId === viewer.id || opp.facultyId == null))
         return true;
@@ -4778,7 +4873,10 @@ export class OpportunitiesService {
     } catch {
       return false;
     }
-    if (!org || !this.facultyUniversityScope.isUniversityOrganization(org as any))
+    if (
+      !org ||
+      !this.facultyUniversityScope.isUniversityOrganization(org as any)
+    )
       return false;
     const ids =
       await this.facultyUniversityScope.resolveOpportunityIdsForUniversityOrganization(
@@ -4840,7 +4938,12 @@ export class OpportunitiesService {
           ? await this.isInViewerUniversityScope(opportunity.id, viewer)
           : false;
 
-      if (!isPublic && !isParticipant && !hasOwnApplication && !inUniversityScope) {
+      if (
+        !isPublic &&
+        !isParticipant &&
+        !hasOwnApplication &&
+        !inUniversityScope
+      ) {
         throw new NotFoundException('Opportunity not found');
       }
     }
@@ -4881,7 +4984,9 @@ export class OpportunitiesService {
         : null,
       // What THIS viewer may actually do with the record, so the UI never offers a button the
       // API would refuse (e.g. "Edit" to an executing-org contact or a university observer).
-      viewer_access: { can_edit: this.viewerMayEditOpportunity(opportunity, viewer) },
+      viewer_access: {
+        can_edit: this.viewerMayEditOpportunity(opportunity, viewer),
+      },
     };
     // Supervisor / partner / executing-org contact details are for the owner, designated
     // reviewers and admin only — a plain viewer of a live opportunity does not get them.
@@ -5625,12 +5730,22 @@ export class OpportunitiesService {
     // audit trail names the resolved partner contact email rather than a user id.
     const linkActor: ApprovalActor = {
       id: null,
-      name: this.resolvePartnerEmailFromOpportunity(opportunity) || 'Partner (via link)',
+      name:
+        this.resolvePartnerEmailFromOpportunity(opportunity) ||
+        'Partner (via link)',
     };
     if (action === 'reject') {
-      this.opportunityWorkflow.afterPartnerRejected(opportunity, reason, linkActor);
+      this.opportunityWorkflow.afterPartnerRejected(
+        opportunity,
+        reason,
+        linkActor,
+      );
     } else {
-      this.opportunityWorkflow.afterPartnerRevision(opportunity, reason, linkActor);
+      this.opportunityWorkflow.afterPartnerRevision(
+        opportunity,
+        reason,
+        linkActor,
+      );
     }
     const saved = await this.opportunitiesRepository.save(opportunity);
 
@@ -5681,7 +5796,10 @@ export class OpportunitiesService {
       title: opportunity.title,
       alreadyVerified,
       closed,
-      canDecide: !alreadyVerified && !closed && this.isAwaitingFacultyDashboardReview(opportunity),
+      canDecide:
+        !alreadyVerified &&
+        !closed &&
+        this.isAwaitingFacultyDashboardReview(opportunity),
       isStudentCreated: !!opportunity.isStudentCreated,
       record: {
         title: opportunity.title,
@@ -5748,9 +5866,17 @@ export class OpportunitiesService {
       name: this.resolveFacultyEmail(opportunity) || 'Faculty (via link)',
     };
     if (action === 'reject') {
-      this.opportunityWorkflow.afterFacultyRejected(opportunity, reason, linkActor);
+      this.opportunityWorkflow.afterFacultyRejected(
+        opportunity,
+        reason,
+        linkActor,
+      );
     } else {
-      this.opportunityWorkflow.afterFacultyRevision(opportunity, reason, linkActor);
+      this.opportunityWorkflow.afterFacultyRevision(
+        opportunity,
+        reason,
+        linkActor,
+      );
     }
     await this.assignFacultyIdFromSupervisionIfMissing(opportunity);
     const saved = await this.opportunitiesRepository.save(opportunity);
@@ -5862,7 +5988,9 @@ export class OpportunitiesService {
       }
       this.opportunityWorkflow.afterPartnerVerified(opportunity, {
         id: null,
-        name: this.resolvePartnerEmailFromOpportunity(opportunity) || 'Partner (via link)',
+        name:
+          this.resolvePartnerEmailFromOpportunity(opportunity) ||
+          'Partner (via link)',
       });
       await this.assignFacultyIdFromSupervisionIfMissing(opportunity);
       await this.opportunitiesRepository.save(opportunity);
@@ -5938,7 +6066,9 @@ export class OpportunitiesService {
       }
       this.opportunityWorkflow.afterFacultyCreatedPartnerVerified(opportunity, {
         id: null,
-        name: this.resolvePartnerEmailFromOpportunity(opportunity) || 'Partner (via link)',
+        name:
+          this.resolvePartnerEmailFromOpportunity(opportunity) ||
+          'Partner (via link)',
       });
       verifiedRole = 'Partner';
       await this.assignFacultyIdFromSupervisionIfMissing(opportunity);
@@ -6163,7 +6293,8 @@ export class OpportunitiesService {
     }
     this.opportunityWorkflow.afterFacultyVerified(opp, {
       id: user?.id ?? null,
-      name: user?.email || this.resolveFacultyEmail(opp) || 'Faculty (via link)',
+      name:
+        user?.email || this.resolveFacultyEmail(opp) || 'Faculty (via link)',
     });
     await this.assignFacultyIdFromSupervisionIfMissing(opp);
     await this.opportunitiesRepository.save(opp);
@@ -6246,7 +6377,10 @@ export class OpportunitiesService {
   }
 
   /** Exact name, or the registered name as a whole word inside the name the student typed. */
-  private orgNamesReferToSamePartner(candidate: string, target: string): boolean {
+  private orgNamesReferToSamePartner(
+    candidate: string,
+    target: string,
+  ): boolean {
     const left = this.foldPartnerOrgName(candidate);
     const right = this.foldPartnerOrgName(target);
     if (!left || !right || right.length < 3) return false;
@@ -6288,7 +6422,9 @@ export class OpportunitiesService {
       .join(' OR ')})`;
   }
 
-  private partnerOrgNameMatchParams(orgNameNorm: string): Record<string, string> {
+  private partnerOrgNameMatchParams(
+    orgNameNorm: string,
+  ): Record<string, string> {
     const folded = this.foldPartnerOrgName(orgNameNorm);
     const token = folded.length >= 4;
     return {
@@ -6383,7 +6519,8 @@ export class OpportunitiesService {
     // Any partner contact email the creator entered — the partner list matches all of them.
     const actorEmail = this.normalizeEmail(partnerEmail);
     const emailMatches =
-      !!actorEmail && this.collectPartnerContactEmails(opp).includes(actorEmail);
+      !!actorEmail &&
+      this.collectPartnerContactEmails(opp).includes(actorEmail);
     // On a student-created row `organizationId` is the *host partner's* organisation, so its
     // members are the reviewers. On an org/faculty/admin-created row it is the CREATOR's own
     // organisation — accepting it would let the creator (or a colleague) acknowledge the distinct
@@ -6904,7 +7041,10 @@ export class OpportunitiesService {
 
     let notifyPlan = { notifyFaculty: false, notifyPartner: false };
     if (!opp.admin_approved) {
-      notifyPlan = await this.applyStudentCreatedOpportunityResubmit(opp, before);
+      notifyPlan = await this.applyStudentCreatedOpportunityResubmit(
+        opp,
+        before,
+      );
     }
 
     await this.opportunitiesRepository.save(opp);
@@ -6914,7 +7054,9 @@ export class OpportunitiesService {
     // contact leaves the new reviewer with nothing and the old one with a dead link.
     // Best effort: a mail failure must never undo the contact change.
     if (notifyPlan.notifyFaculty) {
-      void this.notifyFacultyForStudentOpportunityVerification(opp).catch(() => undefined);
+      void this.notifyFacultyForStudentOpportunityVerification(opp).catch(
+        () => undefined,
+      );
     }
     if (notifyPlan.notifyPartner) {
       void this.sendPartnerApprovalEmail(opp).catch(() => undefined);

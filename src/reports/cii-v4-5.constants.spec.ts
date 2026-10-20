@@ -32,16 +32,18 @@ function buildValidPayload(
 ): CiiV45EvaluatorPayload {
   const sectionScores = CII_V45_DIMENSIONS.map((dim) => ({
     dimension: dim.id,
-    criterionScores: dim.criteria.map(({ key }): CiiV45CriterionScore => ({
-      criterion: key,
-      anchor: 2,
-      qualityAnchor: 2,
-      verificationStatus: dim.id === '7' ? 'ADMIN_VERIFIED' : 'AI_REPORT',
-      sourceRefs: ['s1'],
-      evidenceIds: [],
-      reasoningSummary: 'Sound, credible undergraduate service.',
-      deductionReason: null,
-    })),
+    criterionScores: dim.criteria.map(
+      ({ key }): CiiV45CriterionScore => ({
+        criterion: key,
+        anchor: 2,
+        qualityAnchor: 2,
+        verificationStatus: dim.id === '7' ? 'ADMIN_VERIFIED' : 'AI_REPORT',
+        sourceRefs: ['s1'],
+        evidenceIds: [],
+        reasoningSummary: 'Sound, credible undergraduate service.',
+        deductionReason: null,
+      }),
+    ),
   }));
 
   const base: CiiV45EvaluatorPayload = {
@@ -51,7 +53,13 @@ function buildValidPayload(
     inputCompleteness: {
       gaps: [],
       individualHours: [
-        { studentId: 's1', hours: 20, requiredHours: 16, verified: true, recordComplete: true },
+        {
+          studentId: 's1',
+          hours: 20,
+          requiredHours: 16,
+          verified: true,
+          recordComplete: true,
+        },
       ],
       mandatoryFieldsComplete: true,
     },
@@ -127,7 +135,12 @@ describe('computeCiiV45Result', () => {
     expect(CII_V45_ADMIN_EVIDENCE_MAX).toBe(15);
     const dim1 = CII_V45_DIMENSIONS.find((d) => d.id === '1')!;
     expect(dim1.name).toBe('Participation & Individual Effort');
-    expect(dim1.criteria.map((c) => c.key)).toEqual(['role', 'quality', 'hoursCompletion', 'continuity']);
+    expect(dim1.criteria.map((c) => c.key)).toEqual([
+      'role',
+      'quality',
+      'hoursCompletion',
+      'continuity',
+    ]);
     const dim3 = CII_V45_DIMENSIONS.find((d) => d.id === '3')!;
     expect(dim3.criteria.map((c) => [c.key, c.weight])).toEqual([
       ['alignment', 2.5],
@@ -152,9 +165,13 @@ describe('computeCiiV45Result', () => {
   });
 
   it('rejects a payload with the wrong number of dimensions', () => {
-    const payload = buildValidPayload({ sectionScores: buildValidPayload().sectionScores.slice(0, 9) });
+    const payload = buildValidPayload({
+      sectionScores: buildValidPayload().sectionScores.slice(0, 9),
+    });
     expect(() => computeCiiV45Result(payload)).toThrow(CiiV45ValidationError);
-    expect(() => computeCiiV45Result(payload)).toThrow(/ten analytical dimensions/i);
+    expect(() => computeCiiV45Result(payload)).toThrow(
+      /ten analytical dimensions/i,
+    );
   });
 
   it('rejects a duplicate dimension', () => {
@@ -162,7 +179,9 @@ describe('computeCiiV45Result', () => {
     const payload = buildValidPayload({
       sectionScores: [...base.sectionScores.slice(0, 9), base.sectionScores[0]],
     });
-    expect(() => computeCiiV45Result(payload)).toThrow(/Missing\/duplicate dimension/);
+    expect(() => computeCiiV45Result(payload)).toThrow(
+      /Missing\/duplicate dimension/,
+    );
   });
 
   it('rejects an invalid criterion count for a dimension', () => {
@@ -170,14 +189,20 @@ describe('computeCiiV45Result', () => {
     const payload = {
       ...base,
       sectionScores: base.sectionScores.map((s) =>
-        s.dimension !== '1' ? s : { ...s, criterionScores: s.criterionScores.slice(0, 2) },
+        s.dimension !== '1'
+          ? s
+          : { ...s, criterionScores: s.criterionScores.slice(0, 2) },
       ),
     };
-    expect(() => computeCiiV45Result(payload)).toThrow(/Invalid criterion count/);
+    expect(() => computeCiiV45Result(payload)).toThrow(
+      /Invalid criterion count/,
+    );
   });
 
   it('rejects an out-of-range anchor', () => {
-    const payload = withCriterion(buildValidPayload(), '1', 'role', { anchor: 5 as never });
+    const payload = withCriterion(buildValidPayload(), '1', 'role', {
+      anchor: 5 as never,
+    });
     expect(() => computeCiiV45Result(payload)).toThrow(/Invalid anchor/);
   });
 
@@ -212,12 +237,14 @@ describe('computeCiiV45Result', () => {
       applyAdminEvidenceAssessment(payload, {
         assessorId: 'admin-1',
         assessedAt: '2026-01-01T00:00:00.000Z',
-        criteria: CII_V45_DIMENSIONS.find((d) => d.id === '7')!.criteria.map((c) => ({
-          criterion: c.key,
-          anchor: 2 as const,
-          reasoningSummary: 'Admin reviewed originals — sound coverage.',
-          evidenceIds: ['ev-1'],
-        })),
+        criteria: CII_V45_DIMENSIONS.find((d) => d.id === '7')!.criteria.map(
+          (c) => ({
+            criterion: c.key,
+            anchor: 2 as const,
+            reasoningSummary: 'Admin reviewed originals — sound coverage.',
+            evidenceIds: ['ev-1'],
+          }),
+        ),
       }),
     );
     expect(combined.scoreStatus).toBe('FINAL');
@@ -232,12 +259,18 @@ describe('computeCiiV45Result', () => {
         items: [{ category: 'effort', points: 0.5, studentId: 's1' }],
       },
     });
-    expect(() => computeCiiV45Result(payload)).toThrow(/Uplift requires individual/);
+    expect(() => computeCiiV45Result(payload)).toThrow(
+      /Uplift requires individual/,
+    );
   });
 
   it('rejects a positive integrity penalty without a confirmed student-origin issue', () => {
-    const payload = buildValidPayload({ integrityPenalty: { points: 3, issues: [] } });
-    expect(() => computeCiiV45Result(payload)).toThrow(/Integrity penalty requires confirmed/);
+    const payload = buildValidPayload({
+      integrityPenalty: { points: 3, issues: [] },
+    });
+    expect(() => computeCiiV45Result(payload)).toThrow(
+      /Integrity penalty requires confirmed/,
+    );
   });
 
   it('flags RESUBMISSION_REQUIRED when a student genuinely falls short on required hours', () => {
@@ -245,7 +278,13 @@ describe('computeCiiV45Result', () => {
       inputCompleteness: {
         gaps: [],
         individualHours: [
-          { studentId: 's1', hours: 10, requiredHours: 16, verified: true, recordComplete: true },
+          {
+            studentId: 's1',
+            hours: 10,
+            requiredHours: 16,
+            verified: true,
+            recordComplete: true,
+          },
         ],
         mandatoryFieldsComplete: true,
       },
@@ -260,14 +299,24 @@ describe('computeCiiV45Result', () => {
   it('flags RESUBMISSION_REQUIRED on a mandatory STUDENT_NOT_PROVIDED gap', () => {
     const payload = buildValidPayload({
       inputCompleteness: {
-        gaps: [{ type: 'STUDENT_NOT_PROVIDED', material: true, mandatory: true }],
+        gaps: [
+          { type: 'STUDENT_NOT_PROVIDED', material: true, mandatory: true },
+        ],
         individualHours: [
-          { studentId: 's1', hours: 20, requiredHours: 16, verified: true, recordComplete: true },
+          {
+            studentId: 's1',
+            hours: 20,
+            requiredHours: 16,
+            verified: true,
+            recordComplete: true,
+          },
         ],
         mandatoryFieldsComplete: true,
       },
     });
-    expect(computeCiiV45Result(payload).scoreStatus).toBe('RESUBMISSION_REQUIRED');
+    expect(computeCiiV45Result(payload).scoreStatus).toBe(
+      'RESUBMISSION_REQUIRED',
+    );
     expect(computeCiiV45Result(payload).diagnosticCII).toBe(70);
     expect(computeCiiV45Result(payload).finalCII).toBeNull();
   });
@@ -277,7 +326,13 @@ describe('computeCiiV45Result', () => {
       inputCompleteness: {
         gaps: [{ type: 'SYSTEM_DATA_GAP', material: true }],
         individualHours: [
-          { studentId: 's1', hours: 20, requiredHours: 16, verified: true, recordComplete: true },
+          {
+            studentId: 's1',
+            hours: 20,
+            requiredHours: 16,
+            verified: true,
+            recordComplete: true,
+          },
         ],
         mandatoryFieldsComplete: true,
       },
@@ -328,7 +383,13 @@ describe('computeCiiV45Result', () => {
       inputCompleteness: {
         gaps: [],
         individualHours: [
-          { studentId: 's1', hours: 20, requiredHours: 16, verified: false, recordComplete: true },
+          {
+            studentId: 's1',
+            hours: 20,
+            requiredHours: 16,
+            verified: false,
+            recordComplete: true,
+          },
         ],
         mandatoryFieldsComplete: true,
       },
@@ -347,7 +408,10 @@ describe('computeCiiV45Result', () => {
     for (const dim of CII_V45_DIMENSIONS) {
       if (dim.id === '4B' || dim.id === '7') continue;
       for (const { key } of dim.criteria) {
-        payload = withCriterion(payload, dim.id, key, { anchor: 4, qualityAnchor: 4 });
+        payload = withCriterion(payload, dim.id, key, {
+          anchor: 4,
+          qualityAnchor: 4,
+        });
       }
     }
     const result = computeCiiV45Result(payload);
@@ -384,7 +448,10 @@ describe('computeCiiV45Result', () => {
         },
       ],
     };
-    const withoutFeature = computeCiiV45Result({ ...payload, exceptionalFeature: null });
+    const withoutFeature = computeCiiV45Result({
+      ...payload,
+      exceptionalFeature: null,
+    });
     expect(withoutFeature.recommendedBadge?.level).toBe(5);
     expect(withoutFeature.recommendedBadge?.gateCapped).toBe(true);
 
@@ -403,13 +470,17 @@ describe('computeCiiV45Result', () => {
 
   it('rounds the diagnostic score to exactly one decimal place', () => {
     const result = computeCiiV45Result(buildValidPayload());
-    expect(result.diagnosticCII).toBe(Math.round((result.diagnosticCII as number) * 10) / 10);
+    expect(result.diagnosticCII).toBe(
+      Math.round((result.diagnosticCII as number) * 10) / 10,
+    );
   });
 
   it('does not let advisory Admin review reasons suppress a valid Composite CII', () => {
     const result = computeCiiV45Result(
       buildValidPayload({
-        adminReviewReasons: ['Outcome label and proof should be reconciled by Admin.'],
+        adminReviewReasons: [
+          'Outcome label and proof should be reconciled by Admin.',
+        ],
       }),
     );
     expect(result.scoreStatus).toBe('FINAL');
@@ -420,9 +491,22 @@ describe('computeCiiV45Result', () => {
     const result = computeCiiV45Result(
       buildValidPayload({
         inputCompleteness: {
-          gaps: [{ type: 'SIGNATURE_INVALID', material: true, mandatory: true, field: 'signature_name' }],
+          gaps: [
+            {
+              type: 'SIGNATURE_INVALID',
+              material: true,
+              mandatory: true,
+              field: 'signature_name',
+            },
+          ],
           individualHours: [
-            { studentId: 's1', hours: 20, requiredHours: 16, verified: true, recordComplete: true },
+            {
+              studentId: 's1',
+              hours: 20,
+              requiredHours: 16,
+              verified: true,
+              recordComplete: true,
+            },
           ],
           mandatoryFieldsComplete: false,
         },
@@ -438,7 +522,13 @@ describe('computeCiiV45Result', () => {
         inputCompleteness: {
           gaps: [],
           individualHours: [
-            { studentId: 's1', hours: 16, requiredHours: 16, verified: true, recordComplete: false },
+            {
+              studentId: 's1',
+              hours: 16,
+              requiredHours: 16,
+              verified: true,
+              recordComplete: false,
+            },
           ],
           mandatoryFieldsComplete: true,
         },
@@ -449,7 +539,9 @@ describe('computeCiiV45Result', () => {
   });
 
   it('defaults missing Dimension 7 marks to Sound (2)', () => {
-    const filled = completeAdminEvidenceCriteria([{ criterion: 'ethics', anchor: 4 }]);
+    const filled = completeAdminEvidenceCriteria([
+      { criterion: 'ethics', anchor: 4 },
+    ]);
     expect(filled).toHaveLength(7);
     expect(filled.find((c) => c.criterion === 'ethics')?.anchor).toBe(4);
     expect(filled.filter((c) => c.anchor === 2)).toHaveLength(6);
@@ -462,14 +554,20 @@ describe('computeCiiV45Result', () => {
       sectionScores: base.sectionScores
         .filter((s) => s.dimension !== '7')
         .map((s) =>
-          s.dimension !== '1' ? s : { ...s, criterionScores: s.criterionScores.slice(0, 2) },
+          s.dimension !== '1'
+            ? s
+            : { ...s, criterionScores: s.criterionScores.slice(0, 2) },
         ),
     };
     const payload = normalizeCiiV5AiPayload(truncated);
     const dim1 = payload.sectionScores.find((s) => s.dimension === '1')!;
     expect(dim1.criterionScores).toHaveLength(4);
-    expect(dim1.criterionScores.filter((c) => c.anchor === 'P')).toHaveLength(2);
-    expect(payload.adminReviewReasons.some((r) => r.includes('AI omitted criteria'))).toBe(true);
+    expect(dim1.criterionScores.filter((c) => c.anchor === 'P')).toHaveLength(
+      2,
+    );
+    expect(
+      payload.adminReviewReasons.some((r) => r.includes('AI omitted criteria')),
+    ).toBe(true);
     const result = computeCiiV45Result(payload);
     expect(result.scoreStatus).toBe('ADMIN_REVIEW_REQUIRED');
     expect(result.aiReportScore).toBeNull();
@@ -491,7 +589,9 @@ describe('computeCiiV45Result', () => {
     };
     const payload = normalizeCiiV5AiPayload(renamed as never);
     expect(computeCiiV45Result(payload).aiReportScore).toBe(59.5);
-    expect(computeCiiV45Result(payload).scoreStatus).toBe('ADMIN_EVIDENCE_REQUIRED');
+    expect(computeCiiV45Result(payload).scoreStatus).toBe(
+      'ADMIN_EVIDENCE_REQUIRED',
+    );
   });
 
   it('maps unnamed AI criterion rows by position when the count matches', () => {
@@ -502,17 +602,18 @@ describe('computeCiiV45Result', () => {
         .filter((s) => s.dimension !== '7')
         .map((s) => ({
           dimension: s.dimension,
-          criterionScores: s.criterionScores.map(({ criterion: _ignored, ...rest }) => rest),
+          criterionScores: s.criterionScores.map(
+            ({ criterion: _ignored, ...rest }) => rest,
+          ),
         })),
     };
     const payload = normalizeCiiV5AiPayload(stripped as never);
     const result = computeCiiV45Result(payload);
-    expect(payload.sectionScores.find((s) => s.dimension === '1')?.criterionScores.map((c) => c.criterion)).toEqual([
-      'role',
-      'quality',
-      'hoursCompletion',
-      'continuity',
-    ]);
+    expect(
+      payload.sectionScores
+        .find((s) => s.dimension === '1')
+        ?.criterionScores.map((c) => c.criterion),
+    ).toEqual(['role', 'quality', 'hoursCompletion', 'continuity']);
     expect(result.aiReportScore).toBe(59.5);
     expect(result.scoreStatus).toBe('ADMIN_EVIDENCE_REQUIRED');
   });
@@ -520,21 +621,28 @@ describe('computeCiiV45Result', () => {
   it('aliases hoursConsistency from older AI payloads onto hoursCompletion', () => {
     const payload = normalizeCiiV5AiPayload({
       ...buildValidPayload(),
-      sectionScores: CII_V45_DIMENSIONS.filter((d) => d.id !== '7').map((dim) => ({
-        dimension: dim.id,
-        criterionScores: dim.criteria.map(({ key }) => ({
-          criterion: dim.id === '1' && key === 'hoursCompletion' ? 'hoursConsistency' : key,
-          anchor: 2 as const,
-          qualityAnchor: 2 as const,
-          verificationStatus: 'AI_REPORT' as const,
-          sourceRefs: ['s1'],
-          evidenceIds: [],
-          reasoningSummary: 'Sound.',
-        })),
-      })),
+      sectionScores: CII_V45_DIMENSIONS.filter((d) => d.id !== '7').map(
+        (dim) => ({
+          dimension: dim.id,
+          criterionScores: dim.criteria.map(({ key }) => ({
+            criterion:
+              dim.id === '1' && key === 'hoursCompletion'
+                ? 'hoursConsistency'
+                : key,
+            anchor: 2 as const,
+            qualityAnchor: 2 as const,
+            verificationStatus: 'AI_REPORT' as const,
+            sourceRefs: ['s1'],
+            evidenceIds: [],
+            reasoningSummary: 'Sound.',
+          })),
+        }),
+      ),
     });
     const dim1 = payload.sectionScores.find((s) => s.dimension === '1')!;
-    expect(dim1.criterionScores.some((c) => c.criterion === 'hoursCompletion')).toBe(true);
+    expect(
+      dim1.criterionScores.some((c) => c.criterion === 'hoursCompletion'),
+    ).toBe(true);
     expect(computeCiiV45Result(payload).aiReportScore).toBe(59.5);
   });
 
@@ -568,7 +676,8 @@ describe('computeCiiV45Result', () => {
           points: 1.25,
           studentId: 's1',
           evidenceIds: ['E1'],
-          beyondBaseJustification: 'Distinct extra effort beyond the 16-hour base.',
+          beyondBaseJustification:
+            'Distinct extra effort beyond the 16-hour base.',
           adminVerified: true,
         },
       ],
@@ -581,11 +690,13 @@ describe('computeCiiV45Result', () => {
     const combined = applyAdminEvidenceAssessment(pending, {
       assessorId: 'admin-1',
       assessedAt: '2026-01-01T00:00:00.000Z',
-      criteria: CII_V45_DIMENSIONS.find((d) => d.id === '7')!.criteria.map((c) => ({
-        criterion: c.key,
-        anchor: 2 as const,
-        evidenceIds: [],
-      })),
+      criteria: CII_V45_DIMENSIONS.find((d) => d.id === '7')!.criteria.map(
+        (c) => ({
+          criterion: c.key,
+          anchor: 2 as const,
+          evidenceIds: [],
+        }),
+      ),
     });
     for (const row of combined.adminEvidenceAssessment?.criteria ?? []) {
       expect(row.reasoningSummary).toMatch(/CIEL PK Admin assigned Anchor 2/);

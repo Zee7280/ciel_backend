@@ -156,7 +156,9 @@ describe('TeamFormationService', () => {
         participationMode: 'team',
         student: { name: 'Member' },
       });
-      await expect(service.formTeamFromLead('student-lead', 'proj-1', ['mem-1'])).rejects.toThrow(/Only the team lead/);
+      await expect(
+        service.formTeamFromLead('student-lead', 'proj-1', ['mem-1']),
+      ).rejects.toThrow(/Only the team lead/);
     });
 
     it("cannot poach a student who is in another team, or another team's lead", async () => {
@@ -165,10 +167,15 @@ describe('TeamFormationService', () => {
         { ...memberRow, isTeamLead: true, teamId: 'TM-OTHER' },
         { ...memberRow, isTeamLead: true, teamId: null },
       ]) {
-        mockParticipationRepo.find.mockImplementation(async (opts: { where?: { id?: unknown } }) =>
-          opts?.where && (opts.where as { id?: unknown }).id ? [taken] : [{ ...leadRow }, taken],
+        mockParticipationRepo.find.mockImplementation(
+          async (opts: { where?: { id?: unknown } }) =>
+            opts?.where && (opts.where as { id?: unknown }).id
+              ? [taken]
+              : [{ ...leadRow }, taken],
         );
-        await expect(service.formTeamFromLead('student-lead', 'proj-1', ['mem-1'])).rejects.toThrow(/already belong to another team/);
+        await expect(
+          service.formTeamFromLead('student-lead', 'proj-1', ['mem-1']),
+        ).rejects.toThrow(/already belong to another team/);
       }
     });
 
@@ -180,10 +187,15 @@ describe('TeamFormationService', () => {
         participationMode: 'team',
         student: { name: 'Lead' },
       });
-      mockParticipationRepo.find.mockImplementation(async (opts: { where?: { id?: unknown } }) =>
-        opts?.where && (opts.where as { id?: unknown }).id ? [{ ...memberRow, teamId: 'TM-MINE' }] : [{ ...leadRow }],
+      mockParticipationRepo.find.mockImplementation(
+        async (opts: { where?: { id?: unknown } }) =>
+          opts?.where && (opts.where as { id?: unknown }).id
+            ? [{ ...memberRow, teamId: 'TM-MINE' }]
+            : [{ ...leadRow }],
       );
-      await expect(service.formTeamFromLead('student-lead', 'proj-1', ['mem-1'])).resolves.toMatchObject({ formed: true });
+      await expect(
+        service.formTeamFromLead('student-lead', 'proj-1', ['mem-1']),
+      ).resolves.toMatchObject({ formed: true });
       expect(mailService.sendTeamMemberAddedToProject).not.toHaveBeenCalled();
     });
 
@@ -195,30 +207,56 @@ describe('TeamFormationService', () => {
         participationMode: 'team',
         student: { name: 'Lead' },
       });
-      mockParticipationRepo.find.mockImplementation(async (opts: { where?: { id?: unknown } }) =>
-        opts?.where && (opts.where as { id?: unknown }).id
-          ? [{ ...memberRow, teamId: null }]
-          : [{ ...leadRow }],
+      mockParticipationRepo.find.mockImplementation(
+        async (opts: { where?: { id?: unknown } }) =>
+          opts?.where && (opts.where as { id?: unknown }).id
+            ? [{ ...memberRow, teamId: null }]
+            : [{ ...leadRow }],
       );
       await service.formTeamFromLead('student-lead', 'proj-1', ['mem-1']);
       expect(mailService.sendTeamMemberAddedToProject).toHaveBeenCalledTimes(1);
     });
 
     it('respects the opportunity seat count and the platform maximum of 20', async () => {
-      mockOpportunityRepo.findOne.mockResolvedValueOnce({ id: 'proj-1', title: 'T', timeline: { volunteers_required: 2 } });
-      const many = Array.from({ length: 3 }, (_, i) => ({ ...memberRow, id: `m${i}` }));
-      mockParticipationRepo.find.mockImplementation(async (opts: { where?: { id?: unknown } }) =>
-        opts?.where && (opts.where as { id?: unknown }).id ? many : [{ ...leadRow }],
-      );
-      await expect(service.formTeamFromLead('student-lead', 'proj-1', ['m0', 'm1', 'm2'])).rejects.toThrow(/seat/);
-
-      mockOpportunityRepo.findOne.mockResolvedValueOnce({ id: 'proj-1', title: 'T' });
-      const twenty = Array.from({ length: 20 }, (_, i) => ({ ...memberRow, id: `m${i}` }));
-      mockParticipationRepo.find.mockImplementation(async (opts: { where?: { id?: unknown } }) =>
-        opts?.where && (opts.where as { id?: unknown }).id ? twenty : [{ ...leadRow }],
+      mockOpportunityRepo.findOne.mockResolvedValueOnce({
+        id: 'proj-1',
+        title: 'T',
+        timeline: { volunteers_required: 2 },
+      });
+      const many = Array.from({ length: 3 }, (_, i) => ({
+        ...memberRow,
+        id: `m${i}`,
+      }));
+      mockParticipationRepo.find.mockImplementation(
+        async (opts: { where?: { id?: unknown } }) =>
+          opts?.where && (opts.where as { id?: unknown }).id
+            ? many
+            : [{ ...leadRow }],
       );
       await expect(
-        service.formTeamFromLead('student-lead', 'proj-1', twenty.map((m) => m.id)),
+        service.formTeamFromLead('student-lead', 'proj-1', ['m0', 'm1', 'm2']),
+      ).rejects.toThrow(/seat/);
+
+      mockOpportunityRepo.findOne.mockResolvedValueOnce({
+        id: 'proj-1',
+        title: 'T',
+      });
+      const twenty = Array.from({ length: 20 }, (_, i) => ({
+        ...memberRow,
+        id: `m${i}`,
+      }));
+      mockParticipationRepo.find.mockImplementation(
+        async (opts: { where?: { id?: unknown } }) =>
+          opts?.where && (opts.where as { id?: unknown }).id
+            ? twenty
+            : [{ ...leadRow }],
+      );
+      await expect(
+        service.formTeamFromLead(
+          'student-lead',
+          'proj-1',
+          twenty.map((m) => m.id),
+        ),
       ).rejects.toThrow(/at most 20/);
     });
   });

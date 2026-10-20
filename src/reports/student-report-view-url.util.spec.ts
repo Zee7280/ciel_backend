@@ -39,7 +39,9 @@ describe('buildStudentReportPageUrl', () => {
     ).toBe(
       'https://cielpk.com/dashboard/student/report?projectId=opp-9&view=report',
     );
-    expect(buildStudentReportPageUrl('  ', 'report', 'https://cielpk.com')).toBeNull();
+    expect(
+      buildStudentReportPageUrl('  ', 'report', 'https://cielpk.com'),
+    ).toBeNull();
     expect(buildStudentReportPageUrl(null, 'print')).toBeNull();
   });
 });

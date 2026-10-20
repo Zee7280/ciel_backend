@@ -6,11 +6,18 @@ import { CreateCepSurveyResponseDto } from './dto/create-cep-survey-response.dto
 @Controller('feedback')
 @UseGuards(JwtAuthGuard)
 export class FeedbackController {
-    constructor(private readonly feedbackService: FeedbackService) {}
+  constructor(private readonly feedbackService: FeedbackService) {}
 
-    /** CEP / Community Engagement report experience (student-focused; any logged-in role may submit). */
-    @Post('cep-experience')
-    async submitCep(@Request() req, @Body() dto: CreateCepSurveyResponseDto) {
-        return this.feedbackService.submitCepExperience(req.user.id, req.user.role || '', dto);
-    }
+  /** CEP / Community Engagement report experience (student-focused; any logged-in role may submit). */
+  @Post('cep-experience')
+  async submitCep(
+    @Request() req: { user: { id: string; role?: string } },
+    @Body() dto: CreateCepSurveyResponseDto,
+  ) {
+    return this.feedbackService.submitCepExperience(
+      req.user.id,
+      req.user.role || '',
+      dto,
+    );
+  }
 }

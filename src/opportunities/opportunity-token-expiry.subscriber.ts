@@ -1,6 +1,14 @@
 import { Injectable } from '@nestjs/common';
-import { DataSource, EntitySubscriberInterface, InsertEvent, UpdateEvent } from 'typeorm';
-import { Opportunity, verificationTokenTtlMs } from './entities/opportunity.entity';
+import {
+  DataSource,
+  EntitySubscriberInterface,
+  InsertEvent,
+  UpdateEvent,
+} from 'typeorm';
+import {
+  Opportunity,
+  verificationTokenTtlMs,
+} from './entities/opportunity.entity';
 
 type TokenPair = Pick<
   Opportunity,
@@ -32,7 +40,8 @@ export function stampVerificationTokenExpiry(
     if (!next.faculty_verification_token) {
       next.facultyTokenExpiresAt = null;
     } else if (
-      next.faculty_verification_token !== (previous?.faculty_verification_token ?? null)
+      next.faculty_verification_token !==
+      (previous?.faculty_verification_token ?? null)
     ) {
       next.facultyTokenExpiresAt = expiresAt();
     }
@@ -40,9 +49,7 @@ export function stampVerificationTokenExpiry(
 }
 
 @Injectable()
-export class OpportunityTokenExpirySubscriber
-  implements EntitySubscriberInterface<Opportunity>
-{
+export class OpportunityTokenExpirySubscriber implements EntitySubscriberInterface<Opportunity> {
   constructor(dataSource: DataSource) {
     dataSource.subscribers.push(this);
   }

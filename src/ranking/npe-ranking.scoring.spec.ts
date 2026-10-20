@@ -1,4 +1,9 @@
-import { npeCalculate, npeCiiAnchor, npePercentile, npeRankPool } from './npe-ranking.scoring';
+import {
+  npeCalculate,
+  npeCiiAnchor,
+  npePercentile,
+  npeRankPool,
+} from './npe-ranking.scoring';
 import type { NpeCriterionJudgment } from './npe-ranking.scoring';
 import {
   NPE_CRITERIA,
@@ -15,7 +20,10 @@ function judgment(
   return { anchor, confidence, reason: 'test', claimIds: ['c1'] };
 }
 
-function all(anchor: number, confidence: NpeCriterionJudgment['confidence'] = 'high') {
+function all(
+  anchor: number,
+  confidence: NpeCriterionJudgment['confidence'] = 'high',
+) {
   return Object.fromEntries(
     NPE_CRITERION_KEYS.map((k) => [k, judgment(anchor, confidence)]),
   ) as Record<(typeof NPE_CRITERION_KEYS)[number], NpeCriterionJudgment>;
@@ -35,12 +43,22 @@ describe('npe-ranking.scoring', () => {
     expect(NPE_RUBRIC_VERSION).toBe('NPE-1.2');
     expect(NPE_CRITERIA.reduce((sum, row) => sum + row.weight, 0)).toBe(90);
     expect(NPE_CRITERIA.map((c) => [c.key, c.weight])).toEqual([
-      ['impact', 22], ['need', 13], ['sustain', 9], ['partner', 9],
-      ['efficiency', 9], ['sdg', 9], ['scale', 9], ['learning', 10],
+      ['impact', 22],
+      ['need', 13],
+      ['sustain', 9],
+      ['partner', 9],
+      ['efficiency', 9],
+      ['sdg', 9],
+      ['scale', 9],
+      ['learning', 10],
     ]);
-    expect(npeCriteriaFor('NPE-1.1').reduce((sum, row) => sum + row.weight, 0)).toBe(85);
+    expect(
+      npeCriteriaFor('NPE-1.1').reduce((sum, row) => sum + row.weight, 0),
+    ).toBe(85);
     // unknown versions never throw: they score with the current weighting
-    expect(npeCriteriaFor('NPE-9.9').reduce((sum, row) => sum + row.weight, 0)).toBe(90);
+    expect(
+      npeCriteriaFor('NPE-9.9').reduce((sum, row) => sum + row.weight, 0),
+    ).toBe(90);
   });
 
   it('caps locked CII at its weight even when stored CII is 110 (10 under NPE-1.2, 15 under NPE-1.1)', () => {
@@ -56,13 +74,32 @@ describe('npe-ranking.scoring', () => {
   });
 
   it('NPE-1.2 matches the Ranking Studio formula: sum(weight * anchor/5) + 10% of CII', () => {
-    const anchors = { impact: 4.5, need: 4, sustain: 3.5, partner: 3, efficiency: 4, sdg: 4.5, scale: 3, learning: 4 };
+    const anchors = {
+      impact: 4.5,
+      need: 4,
+      sustain: 3.5,
+      partner: 3,
+      efficiency: 4,
+      sdg: 4.5,
+      scale: 3,
+      learning: 4,
+    };
     const criteria = Object.fromEntries(
       Object.entries(anchors).map(([k, a]) => [k, judgment(a, 'high')]),
     ) as Record<(typeof NPE_CRITERION_KEYS)[number], NpeCriterionJudgment>;
     const studio =
-      22 * (4.5 / 5) + 13 * (4 / 5) + 9 * (3.5 / 5) + 9 * (3 / 5) + 9 * (4 / 5) + 9 * (4.5 / 5) + 9 * (3 / 5) + 10 * (4 / 5) + 82 * 0.1;
-    expect(npeCalculate(82, criteria).total).toBe(Math.round(studio * 100) / 100);
+      22 * (4.5 / 5) +
+      13 * (4 / 5) +
+      9 * (3.5 / 5) +
+      9 * (3 / 5) +
+      9 * (4 / 5) +
+      9 * (4.5 / 5) +
+      9 * (3 / 5) +
+      10 * (4 / 5) +
+      82 * 0.1;
+    expect(npeCalculate(82, criteria).total).toBe(
+      Math.round(studio * 100) / 100,
+    );
   });
 
   it('applies evidence factor per criterion, not as a blanket multiplier', () => {

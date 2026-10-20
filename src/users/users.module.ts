@@ -9,9 +9,14 @@ import { OrganizationMembershipModule } from '../organization-membership/organiz
 import { StudentSubscriptionModule } from '../student-subscription/student-subscription.module';
 
 @Module({
-    imports: [TypeOrmModule.forFeature([User]), NotificationsModule, OrganizationMembershipModule, StudentSubscriptionModule],
-    controllers: [UsersController, ProfileController],
-    providers: [UsersService],
-    exports: [UsersService],
+  imports: [
+    TypeOrmModule.forFeature([User]),
+    NotificationsModule,
+    OrganizationMembershipModule,
+    StudentSubscriptionModule,
+  ],
+  controllers: [UsersController, ProfileController],
+  providers: [UsersService],
+  exports: [UsersService],
 })
-export class UsersModule { }
+export class UsersModule {}

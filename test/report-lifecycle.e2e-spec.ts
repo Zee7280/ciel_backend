@@ -12,14 +12,28 @@ import { UserRole } from '../src/users/enums/user-role.enum';
 import { Participation } from '../src/engagement/entities/participant.entity';
 import { StudentReport } from '../src/reports/entities/student-report.entity';
 
-const day = (d: number) => new Date(Date.now() + d * 86400000).toISOString().slice(0, 10);
+const day = (d: number) =>
+  new Date(Date.now() + d * 86400000).toISOString().slice(0, 10);
 
-const ETHICS = { authentic: true, informed_consent: true, no_harm: true, privacy_respected: true };
+const ETHICS = {
+  authentic: true,
+  informed_consent: true,
+  no_harm: true,
+  privacy_respected: true,
+};
 const COMPETENCY = {
-  cognitive_systemic: 3, cognitive_critical: 3, cognitive_evaluate: 3,
-  practical_design: 3, practical_evidence: 3, practical_engagement: 3,
-  social_empathy: 3, social_diversity: 3, social_collaboration: 3,
-  transformative_longterm: 3, transformative_benefits: 3, transformative_sustainability: 3,
+  cognitive_systemic: 3,
+  cognitive_critical: 3,
+  cognitive_evaluate: 3,
+  practical_design: 3,
+  practical_evidence: 3,
+  practical_engagement: 3,
+  social_empathy: 3,
+  social_diversity: 3,
+  social_collaboration: 3,
+  transformative_longterm: 3,
+  transformative_benefits: 3,
+  transformative_sustainability: 3,
 };
 
 /** A body that clears every section-level submit rule (mirrors the live wizard). */
@@ -53,7 +67,10 @@ function fullSections(signature = 'Jane Student') {
           outputs: [{ title: 'Filters installed', quantity: '5' }],
         },
       ],
-      project_summary: { distinct_total_beneficiaries: 50, counting_method: 'Headcount' },
+      project_summary: {
+        distinct_total_beneficiaries: 50,
+        counting_method: 'Headcount',
+      },
     },
     section5: {
       observed_change:
@@ -77,7 +94,11 @@ function fullSections(signature = 'Jane Student') {
     },
     section6: { use_resources: 'no' },
     section7: { has_partners: 'no' },
-    section8: { has_evidence: 'no', media_visible: 'internal', ethical_compliance: ETHICS },
+    section8: {
+      has_evidence: 'no',
+      media_visible: 'internal',
+      ethical_compliance: ETHICS,
+    },
     section9: {
       academic_integration: 'Course-linked assignment',
       skills_grown: ['💬 Communication'],
@@ -98,7 +119,10 @@ function fullSections(signature = 'Jane Student') {
       scaling_potential: 'Not scalable',
       policy_influence: 'No',
     },
-    section11: { final_declaration: [true, true, true, true, true], signature_name: signature },
+    section11: {
+      final_declaration: [true, true, true, true, true],
+      signature_name: signature,
+    },
   };
 }
 
@@ -118,7 +142,9 @@ describe('Impact Report lifecycle (real app + real Postgres)', () => {
   beforeEach(() => h.mail.reset());
 
   const student = (over: Record<string, any> = {}) =>
-    h.makeUser(UserRole.STUDENT, { overrides: { university: 'E2E University', cnic: null, ...over } as any });
+    h.makeUser(UserRole.STUDENT, {
+      overrides: { university: 'E2E University', cnic: null, ...over } as any,
+    });
 
   /** Live NGO opportunity, 6 required hours, window open, open to all universities. */
   const liveOpp = async (over: Record<string, any> = {}) => {
@@ -131,14 +157,24 @@ describe('Impact Report lifecycle (real app + real Postgres)', () => {
       status: 'active',
       workflowStage: 'live',
       admin_approved: true,
-      timeline: { type: 'fixed', start_date: day(-20), end_date: day(20), expected_hours: 6, volunteers_required: 8 },
+      timeline: {
+        type: 'fixed',
+        start_date: day(-20),
+        end_date: day(20),
+        expected_hours: 6,
+        volunteers_required: 8,
+      },
       participation_scope: { rule: 'open_all_universities' },
       ...over,
     } as any);
     return { opp: await h.reload(res.body.id), ngo, org };
   };
 
-  const seat = async (projectId: string, u: E2eUser, o: { lead?: boolean; teamId?: string | null } = {}) => {
+  const seat = async (
+    projectId: string,
+    u: E2eUser,
+    o: { lead?: boolean; teamId?: string | null } = {},
+  ) => {
     const parts = h.ds.getRepository(Participation);
     return parts.save(
       parts.create({
@@ -168,27 +204,46 @@ describe('Impact Report lifecycle (real app + real Postgres)', () => {
     ) as unknown as Participation;
   };
 
-  const logHours = async (u: E2eUser, seatId: string, start: string, end: string, daysAgo = 2) => {
-    const r = await h.as(u).post(`/engagement/${seatId}/attendance`).send({
-      dateOfEngagement: day(-daysAgo),
-      startTime: start,
-      endTime: end,
-      organizationName: 'E2E School',
-      activityType: 'Teaching',
-      description: 'Taught a class',
-    });
+  const logHours = async (
+    u: E2eUser,
+    seatId: string,
+    start: string,
+    end: string,
+    daysAgo = 2,
+  ) => {
+    const r = await h
+      .as(u)
+      .post(`/engagement/${seatId}/attendance`)
+      .send({
+        dateOfEngagement: day(-daysAgo),
+        startTime: start,
+        endTime: end,
+        organizationName: 'E2E School',
+        activityType: 'Teaching',
+        description: 'Taught a class',
+      });
     expect(r.status).toBe(201);
     return r.body.data;
   };
 
   const draft = (u: E2eUser, oppId: string, body: Record<string, any>) =>
-    h.as(u).post('/student/reports/draft').send({ opportunityId: oppId, project_id: oppId, ...body });
+    h
+      .as(u)
+      .post('/student/reports/draft')
+      .send({ opportunityId: oppId, project_id: oppId, ...body });
   const submit = (u: E2eUser, oppId: string, body: Record<string, any>) =>
-    h.as(u).post(`/student/reports/${oppId}/submit`).send({ project_id: oppId, ...body });
-  const view = (u: E2eUser, key: string) => h.as(u).get(`/student/reports/${key}`);
-  const check = (u: E2eUser, oppId: string) => h.as(u).get(`/students/reports/check?opportunityId=${oppId}`);
-  const adminVerify = (id: string, body: Record<string, any>) => h.as(admin).patch(`/admin/reports/${id}/verify`).send(body);
-  const row = (id: string) => reports.findOneOrFail({ where: { id } }) as Promise<StudentReport>;
+    h
+      .as(u)
+      .post(`/student/reports/${oppId}/submit`)
+      .send({ project_id: oppId, ...body });
+  const view = (u: E2eUser, key: string) =>
+    h.as(u).get(`/student/reports/${key}`);
+  const check = (u: E2eUser, oppId: string) =>
+    h.as(u).get(`/students/reports/check?opportunityId=${oppId}`);
+  const adminVerify = (id: string, body: Record<string, any>) =>
+    h.as(admin).patch(`/admin/reports/${id}/verify`).send(body);
+  const row = (id: string) =>
+    reports.findOneOrFail({ where: { id } }) as Promise<StudentReport>;
 
   /** Seated solo student on a live listing with the required hours already logged. */
   const readyWorld = async () => {
@@ -205,16 +260,22 @@ describe('Impact Report lifecycle (real app + real Postgres)', () => {
     it('a student without an approved seat cannot draft or submit; a seated one can draft', async () => {
       const { opp } = await liveOpp();
       const stranger = await student();
-      const d = await draft(stranger, opp.id, { section2: { problem_statement: 'x' } });
+      const d = await draft(stranger, opp.id, {
+        section2: { problem_statement: 'x' },
+      });
       expect(d.status).toBe(403);
       expect(d.body.message).toMatch(/Apply to this opportunity/);
       const s = await submit(stranger, opp.id, fullSections());
       expect(s.status).toBe(403);
-      expect(await reports.count({ where: { studentId: stranger.id } })).toBe(0);
+      expect(await reports.count({ where: { studentId: stranger.id } })).toBe(
+        0,
+      );
 
       const seated = await student();
       await seat(opp.id, seated);
-      const ok = await draft(seated, opp.id, { section2: { problem_statement: 'first words' } });
+      const ok = await draft(seated, opp.id, {
+        section2: { problem_statement: 'first words' },
+      });
       expect(ok.status).toBe(201);
       expect(ok.body.data.report_id).toBeTruthy();
       expect((await row(ok.body.data.report_id)).status).toBe('draft');
@@ -224,21 +285,37 @@ describe('Impact Report lifecycle (real app + real Postgres)', () => {
       const { opp } = await liveOpp();
       const s = await student();
       await seat(opp.id, s);
-      await h.opps.update(opp.id, { admin_approved: false, workflowStage: 'pending_approval', status: 'pending_approval' } as any);
-      const notLive = await draft(s, opp.id, { section2: { problem_statement: 'x' } });
+      await h.opps.update(opp.id, {
+        admin_approved: false,
+        workflowStage: 'pending_approval',
+        status: 'pending_approval',
+      } as any);
+      const notLive = await draft(s, opp.id, {
+        section2: { problem_statement: 'x' },
+      });
       expect(notLive.status).toBe(403);
       expect(notLive.body.message).toMatch(/not live/);
 
       await h.opps.update(opp.id, {
-        admin_approved: true, workflowStage: 'live', status: 'active',
-        timeline: { type: 'fixed', start_date: day(-200), end_date: day(-100), expected_hours: 6, volunteers_required: 8 },
+        admin_approved: true,
+        workflowStage: 'live',
+        status: 'active',
+        timeline: {
+          type: 'fixed',
+          start_date: day(-200),
+          end_date: day(-100),
+          expected_hours: 6,
+          volunteers_required: 8,
+        },
       } as any);
-      const closed = await draft(s, opp.id, { section2: { problem_statement: 'x' } });
+      const closed = await draft(s, opp.id, {
+        section2: { problem_statement: 'x' },
+      });
       expect(closed.status).toBe(403);
       expect(closed.body.message).toMatch(/closed/i);
     });
 
-    it('a stranger student / faculty / NGO cannot read a seated student\'s report', async () => {
+    it("a stranger student / faculty / NGO cannot read a seated student's report", async () => {
       const w = await readyWorld();
       const d = await draft(w.lead, w.opp.id, fullSections());
       expect(d.status).toBe(201);
@@ -250,9 +327,15 @@ describe('Impact Report lifecycle (real app + real Postgres)', () => {
       // no seat → pre-populate must not happen and no report body may leak
       expect(r2.body?.data?.section2?.problem_statement).toBeUndefined();
       const faculty = await h.makeUser(UserRole.FACULTY);
-      expect((await h.as(faculty).get(`/faculty/reports/${rid}`)).status).toBeGreaterThanOrEqual(400);
-      const otherNgo = await h.makeUser(UserRole.NGO, { org: await h.makeOrg() });
-      expect((await h.as(otherNgo).get(`/partner/reports/${rid}`)).status).toBe(403);
+      expect(
+        (await h.as(faculty).get(`/faculty/reports/${rid}`)).status,
+      ).toBeGreaterThanOrEqual(400);
+      const otherNgo = await h.makeUser(UserRole.NGO, {
+        org: await h.makeOrg(),
+      });
+      expect((await h.as(otherNgo).get(`/partner/reports/${rid}`)).status).toBe(
+        403,
+      );
     });
   });
 
@@ -261,7 +344,13 @@ describe('Impact Report lifecycle (real app + real Postgres)', () => {
     it('repeated partial saves merge section by section; status/check/view agree; no reviewer mail', async () => {
       const w = await readyWorld();
       const full = fullSections();
-      const d1 = await draft(w.lead, w.opp.id, { section2: full.section2, section1: { ...full.section1, faculty_supervisor_email: `unregistered.${uniq()}@e2e.test` } });
+      const d1 = await draft(w.lead, w.opp.id, {
+        section2: full.section2,
+        section1: {
+          ...full.section1,
+          faculty_supervisor_email: `unregistered.${uniq()}@e2e.test`,
+        },
+      });
       expect(d1.status).toBe(201);
       const rid = d1.body.data.report_id;
       const d2 = await draft(w.lead, w.opp.id, { section3: full.section3 });
@@ -269,8 +358,12 @@ describe('Impact Report lifecycle (real app + real Postgres)', () => {
       expect(d2.body.data.report_id).toBe(rid); // same row, never a duplicate
       const r = await row(rid);
       expect(r.status).toBe('draft');
-      expect(r.section2?.problem_statement).toBe(full.section2.problem_statement); // kept
-      expect(r.section3?.contribution_intent_statement).toBe(full.section3.contribution_intent_statement);
+      expect(r.section2?.problem_statement).toBe(
+        full.section2.problem_statement,
+      ); // kept
+      expect(r.section3?.contribution_intent_statement).toBe(
+        full.section3.contribution_intent_statement,
+      );
       expect(await reports.count({ where: { studentId: w.lead.id } })).toBe(1);
 
       const c = await check(w.lead, w.opp.id);
@@ -282,7 +375,9 @@ describe('Impact Report lifecycle (real app + real Postgres)', () => {
       const v = await view(w.lead, w.opp.id);
       expect(v.status).toBe(200);
       expect(v.body.data.status).toBe('draft');
-      expect(v.body.data.section2?.problem_statement).toBe(full.section2.problem_statement);
+      expect(v.body.data.section2?.problem_statement).toBe(
+        full.section2.problem_statement,
+      );
       // an autosave is not a submit: nobody is emailed (faculty invite / admin review)
       expect(h.mail.of('sendAdminStudentReportSubmitted')).toHaveLength(0);
       expect(h.mail.of('sendFacultyInvite')).toHaveLength(0);
@@ -292,12 +387,20 @@ describe('Impact Report lifecycle (real app + real Postgres)', () => {
       const w = await readyWorld();
       const d = await draft(w.lead, w.opp.id, {
         ...fullSections(),
-        section11: { ...fullSections().section11, ai_generated_impact_score: 99, institutional_alignment_score: 99, verified_narrative: 'x', cii_index: { totalScore: 99 } },
+        section11: {
+          ...fullSections().section11,
+          ai_generated_impact_score: 99,
+          institutional_alignment_score: 99,
+          verified_narrative: 'x',
+          cii_index: { totalScore: 99 },
+        },
       });
       expect(d.status).toBe(201);
       const r = await row(d.body.data.report_id);
       expect((r.section11 as any)?.ai_generated_impact_score).toBeUndefined();
-      expect((r.section11 as any)?.institutional_alignment_score).toBeUndefined();
+      expect(
+        (r.section11 as any)?.institutional_alignment_score,
+      ).toBeUndefined();
       expect((r.section11 as any)?.cii_index).toBeUndefined();
     });
   });
@@ -316,7 +419,9 @@ describe('Impact Report lifecycle (real app + real Postgres)', () => {
       const r = await row(rid);
       expect(r.status).toBe('draft');
       expect(r.reportSubmittedAt).toBeNull();
-      expect(r.section2?.problem_statement).toBe(partial.section2.problem_statement);
+      expect(r.section2?.problem_statement).toBe(
+        partial.section2.problem_statement,
+      );
       expect(h.mail.of('sendAdminStudentReportSubmitted')).toHaveLength(0);
     });
 
@@ -328,9 +433,13 @@ describe('Impact Report lifecycle (real app + real Postgres)', () => {
       const r = await submit(s, opp.id, fullSections());
       expect(r.status).toBe(400);
       expect(r.body.message).toMatch(/Required engagement hours/);
-      expect(r.body.validation_issues?.[0]?.field).toBe('metrics.individual_hours');
+      expect(r.body.validation_issues?.[0]?.field).toBe(
+        'metrics.individual_hours',
+      );
       const rows = await reports.find({ where: { studentId: s.id } });
-      expect(rows.every((x) => x.status === 'draft' && !x.reportSubmittedAt)).toBe(true);
+      expect(
+        rows.every((x) => x.status === 'draft' && !x.reportSubmittedAt),
+      ).toBe(true);
     });
 
     it('a first-time submit with no prior draft still needs a seat and hours (no partial row left behind)', async () => {
@@ -365,30 +474,53 @@ describe('Impact Report lifecycle (real app + real Postgres)', () => {
       expect(c.body.data.is_editable).toBe(false);
 
       // double submit: same row, no re-stamp, no second mail
-      const again = await submit(w.lead, w.opp.id, { ...body, section2: { ...body.section2, problem_statement: 'CHANGED AFTER SUBMIT ' + body.section2.problem_statement } });
+      const again = await submit(w.lead, w.opp.id, {
+        ...body,
+        section2: {
+          ...body.section2,
+          problem_statement:
+            'CHANGED AFTER SUBMIT ' + body.section2.problem_statement,
+        },
+      });
       expect(again.status).toBe(201);
       expect(again.body.data.already_submitted).toBe(true);
       const r2 = await row(rid);
-      expect(r2.section2?.problem_statement).toBe(body.section2.problem_statement);
-      expect(new Date(r2.reportSubmittedAt!).getTime()).toBe(new Date(r.reportSubmittedAt!).getTime());
+      expect(r2.section2?.problem_statement).toBe(
+        body.section2.problem_statement,
+      );
+      expect(new Date(r2.reportSubmittedAt!).getTime()).toBe(
+        new Date(r.reportSubmittedAt!).getTime(),
+      );
       expect(h.mail.of('sendAdminStudentReportSubmitted')).toHaveLength(1);
 
       // autosave after submit must not touch content or status
-      const d = await draft(w.lead, w.opp.id, { section2: { ...body.section2, problem_statement: 'DRAFT AFTER SUBMIT' } });
+      const d = await draft(w.lead, w.opp.id, {
+        section2: { ...body.section2, problem_statement: 'DRAFT AFTER SUBMIT' },
+      });
       expect(d.status).toBe(201);
       const r3 = await row(rid);
       expect(r3.status).toBe('submitted');
-      expect(r3.section2?.problem_statement).toBe(body.section2.problem_statement);
+      expect(r3.section2?.problem_statement).toBe(
+        body.section2.problem_statement,
+      );
     });
 
     it('faculty is read-only; partner cannot verify and cannot open before CIEL PK accepts; admin lists it as needing review', async () => {
       const w = await readyWorld();
       const s = await submit(w.lead, w.opp.id, fullSections());
       const rid = s.body.data.report_id;
-      const faculty = await h.makeUser(UserRole.FACULTY, { email: 'faculty@e2e.test'.replace('faculty', `fac.${uniq()}`) });
-      const act = await h.as(faculty).post(`/faculty/reports/${rid}/action`).send({ status: 'approved' });
+      const faculty = await h.makeUser(UserRole.FACULTY, {
+        email: 'faculty@e2e.test'.replace('faculty', `fac.${uniq()}`),
+      });
+      const act = await h
+        .as(faculty)
+        .post(`/faculty/reports/${rid}/action`)
+        .send({ status: 'approved' });
       expect(act.status).toBe(403);
-      for (const p of [`/partner/reports/${rid}/verify`, `/partners/student-reports/${rid}/verify`]) {
+      for (const p of [
+        `/partner/reports/${rid}/verify`,
+        `/partners/student-reports/${rid}/verify`,
+      ]) {
         const r = await h.as(w.ngo).patch(p).send({ action: 'approve' });
         expect(r.status).toBe(403);
       }
@@ -417,38 +549,59 @@ describe('Impact Report lifecycle (real app + real Postgres)', () => {
       expect(noCii.status).toBe(400);
       expect(noCii.body.message).toMatch(/CII/);
       expect((await adminVerify(rid, { action: 'reject' })).status).toBe(400);
-      expect((await adminVerify(rid, { action: 'reject', reason: '   ' })).status).toBe(400);
-      expect((await adminVerify(rid, { action: 'bogus', reason: 'x' })).status).toBe(400);
+      expect(
+        (await adminVerify(rid, { action: 'reject', reason: '   ' })).status,
+      ).toBe(400);
+      expect(
+        (await adminVerify(rid, { action: 'bogus', reason: 'x' })).status,
+      ).toBe(400);
       expect((await row(rid)).status).toBe('submitted');
 
       // reject with reason -> revision, student notified, editable again
       h.mail.reset();
-      const rej = await adminVerify(rid, { action: 'reject', reason: 'Please add the baseline survey.' });
+      const rej = await adminVerify(rid, {
+        action: 'reject',
+        reason: 'Please add the baseline survey.',
+      });
       expect(rej.status).toBe(200);
       expect(rej.body.data.status).toBe('revision');
       expect(rej.body.data.admin_status).toBe('rejected');
       const c = await check(w.lead, w.opp.id);
       expect(c.body.data.status).toBe('revision');
       expect(c.body.data.is_editable).toBe(true);
-      expect(String(c.body.data.feedback || c.body.data.admin_feedback)).toMatch(/baseline survey/);
+      expect(
+        String(c.body.data.feedback || c.body.data.admin_feedback),
+      ).toMatch(/baseline survey/);
       // the rejected report cannot be approved by a second click
       const reApprove = await adminVerify(rid, { action: 'approve' });
       expect(reApprove.status).toBe(400);
       expect(reApprove.body.message).toMatch(/resubmits/);
       // ...and neither can CII Confirm publish it while it is sent back
-      await reports.update(rid, { ciiV45: { finalCII: 70, inputFingerprint: 'fp' } } as any);
-      const ciiConfirm = await h.as(admin).post(`/admin/community-service/reports/${rid}/cii-v4-5/approve`).send({});
+      await reports.update(rid, {
+        ciiV45: { finalCII: 70, inputFingerprint: 'fp' },
+      } as any);
+      const ciiConfirm = await h
+        .as(admin)
+        .post(`/admin/community-service/reports/${rid}/cii-v4-5/approve`)
+        .send({});
       expect(ciiConfirm.status).toBe(400);
       expect(ciiConfirm.body.message).toMatch(/resubmits/);
       expect((await row(rid)).status).toBe('revision');
       await reports.update(rid, { ciiV45: null } as any);
 
       // student edits in revision (autosave keeps 'revision'), then resubmits
-      const edited = { ...body.section2, problem_statement: body.section2.problem_statement + ' Baseline survey of forty households attached.' };
+      const edited = {
+        ...body.section2,
+        problem_statement:
+          body.section2.problem_statement +
+          ' Baseline survey of forty households attached.',
+      };
       const d = await draft(w.lead, w.opp.id, { section2: edited });
       expect(d.status).toBe(201);
       expect((await row(rid)).status).toBe('revision');
-      expect((await row(rid)).section2?.problem_statement).toBe(edited.problem_statement);
+      expect((await row(rid)).section2?.problem_statement).toBe(
+        edited.problem_statement,
+      );
       h.mail.reset();
       const re = await submit(w.lead, w.opp.id, { ...body, section2: edited });
       expect(re.status).toBe(201);
@@ -464,7 +617,15 @@ describe('Impact Report lifecycle (real app + real Postgres)', () => {
       // CIEL PK locks the CII (AI step simulated: lock written as approveCiiV45ForAdmin would)
       await reports.update(rid, {
         ciiV45: { finalCII: 72, frameworkVersion: '4.5' },
-        ciiV45Lock: { locked: true, hash: 'e2e', lockedAt: new Date().toISOString(), lockedByAdminId: admin.id, inputFingerprint: 'fp', scoreStatusAtLock: 'FINAL', adminApprovedScore: 72 },
+        ciiV45Lock: {
+          locked: true,
+          hash: 'e2e',
+          lockedAt: new Date().toISOString(),
+          lockedByAdminId: admin.id,
+          inputFingerprint: 'fp',
+          scoreStatusAtLock: 'FINAL',
+          adminApprovedScore: 72,
+        },
       } as any);
       h.mail.reset();
       const pub = await adminVerify(rid, { action: 'approve' });
@@ -481,13 +642,20 @@ describe('Impact Report lifecycle (real app + real Postgres)', () => {
       await new Promise((res) => setTimeout(res, 150));
       const pkg = h.mail.of('sendReportPackagePublished');
       expect(pkg.length).toBeGreaterThanOrEqual(1);
-      expect(pkg.some((m) => m.args[0]?.audience === 'student' && m.args[0]?.to === w.lead.email)).toBe(true);
+      expect(
+        pkg.some(
+          (m) =>
+            m.args[0]?.audience === 'student' && m.args[0]?.to === w.lead.email,
+        ),
+      ).toBe(true);
 
       // student: verified, locked for edits, score visible only as published
       const sc = await check(w.lead, w.opp.id);
       expect(sc.body.data.status).toBe('verified');
       expect(sc.body.data.is_editable).toBe(false);
-      expect((await draft(w.lead, w.opp.id, { section2: body.section2 })).status).toBe(400);
+      expect(
+        (await draft(w.lead, w.opp.id, { section2: body.section2 })).status,
+      ).toBe(400);
       expect((await submit(w.lead, w.opp.id, body)).status).toBe(400);
       const sv = await view(w.lead, rid);
       expect(sv.status).toBe(200);
@@ -499,27 +667,40 @@ describe('Impact Report lifecycle (real app + real Postgres)', () => {
       const list = await h.as(w.ngo).get('/partner/reports?limit=100');
       expect(list.status).toBe(200);
       expect(list.body.data.map((x: any) => x.id)).toContain(rid);
-      const otherNgo = await h.makeUser(UserRole.NGO, { org: await h.makeOrg() });
-      expect((await h.as(otherNgo).get(`/partner/reports/${rid}`)).status).toBe(403);
+      const otherNgo = await h.makeUser(UserRole.NGO, {
+        org: await h.makeOrg(),
+      });
+      expect((await h.as(otherNgo).get(`/partner/reports/${rid}`)).status).toBe(
+        403,
+      );
 
       // re-approve is idempotent: same timestamp, no second package mail
       h.mail.reset();
       const again = await adminVerify(rid, { action: 'approve' });
       expect(again.status).toBe(200);
-      expect(new Date(again.body.data.admin_approved_at).getTime()).toBe(new Date(v.adminApprovedAt!).getTime());
+      expect(new Date(again.body.data.admin_approved_at).getTime()).toBe(
+        new Date(v.adminApprovedAt!).getTime(),
+      );
       await new Promise((res) => setTimeout(res, 100));
       expect(h.mail.of('sendReportPackagePublished')).toHaveLength(0);
 
       // public verification works for a verified report
       const slug = v.verificationPublicSlug;
       expect(slug).toBeTruthy();
-      const pubv = await h.as(null).get(`/public/impact-reports/${slug}/verification`);
+      const pubv = await h
+        .as(null)
+        .get(`/public/impact-reports/${slug}/verification`);
       expect(pubv.status).toBe(200);
 
       // undoing a published decision needs force; close needs a reason and ends the report
-      expect((await adminVerify(rid, { action: 'reject', reason: 'oops' })).status).toBe(400);
+      expect(
+        (await adminVerify(rid, { action: 'reject', reason: 'oops' })).status,
+      ).toBe(400);
       expect((await adminVerify(rid, { action: 'close' })).status).toBe(400);
-      const closed = await adminVerify(rid, { action: 'close', reason: 'Duplicate of another package' });
+      const closed = await adminVerify(rid, {
+        action: 'close',
+        reason: 'Duplicate of another package',
+      });
       expect(closed.status).toBe(200);
       expect(closed.body.data.status).toBe('closed');
       expect((await row(rid)).closeReason).toBe('Duplicate of another package');
@@ -527,13 +708,25 @@ describe('Impact Report lifecycle (real app + real Postgres)', () => {
 
     it('force reject of a published report reopens it for the student and retires the CII lock', async () => {
       const w = await readyWorld();
-      const rid = (await submit(w.lead, w.opp.id, fullSections())).body.data.report_id;
+      const rid = (await submit(w.lead, w.opp.id, fullSections())).body.data
+        .report_id;
       await reports.update(rid, {
         ciiV45: { finalCII: 60 },
-        ciiV45Lock: { locked: true, hash: 'e2e', lockedAt: new Date().toISOString(), lockedByAdminId: admin.id, inputFingerprint: 'fp', scoreStatusAtLock: 'FINAL' },
+        ciiV45Lock: {
+          locked: true,
+          hash: 'e2e',
+          lockedAt: new Date().toISOString(),
+          lockedByAdminId: admin.id,
+          inputFingerprint: 'fp',
+          scoreStatusAtLock: 'FINAL',
+        },
       } as any);
       expect((await adminVerify(rid, { action: 'approve' })).status).toBe(200);
-      const forced = await adminVerify(rid, { action: 'reject', reason: 'Evidence withdrawn', force: true });
+      const forced = await adminVerify(rid, {
+        action: 'reject',
+        reason: 'Evidence withdrawn',
+        force: true,
+      });
       expect(forced.status).toBe(200);
       expect(forced.body.data.status).toBe('revision');
       const r = await row(rid);
@@ -552,15 +745,31 @@ describe('Impact Report lifecycle (real app + real Postgres)', () => {
       const w = await readyWorld();
       const body = fullSections();
       const rid = (await submit(w.lead, w.opp.id, body)).body.data.report_id;
-      await reports.update(rid, { ciiV45: { finalCII: 60 }, ciiV45Lock: { locked: true } } as any);
+      await reports.update(rid, {
+        ciiV45: { finalCII: 60 },
+        ciiV45Lock: { locked: true },
+      } as any);
       expect((await adminVerify(rid, { action: 'approve' })).status).toBe(200);
-      const un = await adminVerify(rid, { action: 'unlock', reason: 'Student asked to extend', force: true });
+      const un = await adminVerify(rid, {
+        action: 'unlock',
+        reason: 'Student asked to extend',
+        force: true,
+      });
       expect(un.status).toBe(200);
       expect(un.body.data.status).toBe('draft');
-      const edited = { ...body.section2, problem_statement: 'After unlock ' + body.section2.problem_statement };
-      expect((await draft(w.lead, w.opp.id, { section2: edited })).status).toBe(201);
-      expect((await row(rid)).section2?.problem_statement).toBe(edited.problem_statement);
-      expect((await submit(w.lead, w.opp.id, { ...body, section2: edited })).status).toBe(201);
+      const edited = {
+        ...body.section2,
+        problem_statement: 'After unlock ' + body.section2.problem_statement,
+      };
+      expect((await draft(w.lead, w.opp.id, { section2: edited })).status).toBe(
+        201,
+      );
+      expect((await row(rid)).section2?.problem_statement).toBe(
+        edited.problem_statement,
+      );
+      expect(
+        (await submit(w.lead, w.opp.id, { ...body, section2: edited })).status,
+      ).toBe(201);
       expect((await row(rid)).status).toBe('submitted');
     });
   });
@@ -577,15 +786,23 @@ describe('Impact Report lifecycle (real app + real Postgres)', () => {
       await logHours(lead, leadSeat.id, '09:00', '12:00', 3);
       await logHours(lead, leadSeat.id, '09:00', '12:00', 2);
 
-      const mateDraft = await draft(mate, opp.id, { section2: fullSections().section2 });
+      const mateDraft = await draft(mate, opp.id, {
+        section2: fullSections().section2,
+      });
       expect(mateDraft.status).toBe(403);
       expect(mateDraft.body.message).toMatch(/team lead/i);
       expect((await submit(mate, opp.id, fullSections())).status).toBe(403);
 
       const short = await submit(lead, opp.id, fullSections());
       expect(short.status).toBe(400);
-      expect(short.body.message).toMatch(/Every team member must individually meet/);
-      expect(short.body.validation_issues.some((i: any) => String(i.message).includes(mateSeat.fullName))).toBe(true);
+      expect(short.body.message).toMatch(
+        /Every team member must individually meet/,
+      );
+      expect(
+        short.body.validation_issues.some((i: any) =>
+          String(i.message).includes(mateSeat.fullName),
+        ),
+      ).toBe(true);
 
       await logHours(mate, mateSeat.id, '09:00', '12:00', 3);
       await logHours(lead, mateSeat.id, '09:00', '12:00', 2); // lead proxy entry counts for the mate
@@ -603,33 +820,40 @@ describe('Impact Report lifecycle (real app + real Postgres)', () => {
     });
   });
 
-
-    it('reminding the reviewer: the owner and their teammates may; another team or a solo student on the same project may not', async () => {
-      const { opp } = await liveOpp();
-      const lead = await student();
-      const mate = await student();
-      const teamId = `TM-${uniq().toUpperCase()}`;
-      const leadSeat = await seat(opp.id, lead, { lead: true, teamId });
-      const mateSeat = await seat(opp.id, mate, { teamId });
-      for (const [u, st] of [[lead, leadSeat], [mate, mateSeat]] as const) {
-        await logHours(u, st.id, '09:00', '12:00', 3);
-        await logHours(u, st.id, '09:00', '12:00', 2);
-      }
-      const rid = (await submit(lead, opp.id, fullSections())).body.data.report_id;
-      const otherTeamMember = await student();
-      await seat(opp.id, otherTeamMember, { lead: true, teamId: `TM-${uniq().toUpperCase()}` });
-      const solo = await student();
-      await seat(opp.id, solo);
-
-      const remind = (u: E2eUser) => h.as(u).post(`/student/reports/${rid}/remind-reviewer`).send({});
-      expect((await remind(lead)).status).toBe(201);
-      expect((await remind(mate)).status).toBe(201);
-      for (const outsider of [otherTeamMember, solo]) {
-        const r = await remind(outsider);
-        expect(r.status).toBe(403);
-        expect(JSON.stringify(r.body)).not.toContain(lead.email); // the lead's e-mail is never disclosed
-      }
+  it('reminding the reviewer: the owner and their teammates may; another team or a solo student on the same project may not', async () => {
+    const { opp } = await liveOpp();
+    const lead = await student();
+    const mate = await student();
+    const teamId = `TM-${uniq().toUpperCase()}`;
+    const leadSeat = await seat(opp.id, lead, { lead: true, teamId });
+    const mateSeat = await seat(opp.id, mate, { teamId });
+    for (const [u, st] of [
+      [lead, leadSeat],
+      [mate, mateSeat],
+    ] as const) {
+      await logHours(u, st.id, '09:00', '12:00', 3);
+      await logHours(u, st.id, '09:00', '12:00', 2);
+    }
+    const rid = (await submit(lead, opp.id, fullSections())).body.data
+      .report_id;
+    const otherTeamMember = await student();
+    await seat(opp.id, otherTeamMember, {
+      lead: true,
+      teamId: `TM-${uniq().toUpperCase()}`,
     });
+    const solo = await student();
+    await seat(opp.id, solo);
+
+    const remind = (u: E2eUser) =>
+      h.as(u).post(`/student/reports/${rid}/remind-reviewer`).send({});
+    expect((await remind(lead)).status).toBe(201);
+    expect((await remind(mate)).status).toBe(201);
+    for (const outsider of [otherTeamMember, solo]) {
+      const r = await remind(outsider);
+      expect(r.status).toBe(403);
+      expect(JSON.stringify(r.body)).not.toContain(lead.email); // the lead's e-mail is never disclosed
+    }
+  });
 
   // ------------------------------------------------------------------ robustness
   describe('R7 malformed ids and listings', () => {
@@ -641,17 +865,35 @@ describe('Impact Report lifecycle (real app + real Postgres)', () => {
         [s, 'get', `/student/reports/${unknown}`],
         [s, 'get', '/students/reports/check?opportunityId=not-a-uuid'],
         [s, 'post', '/student/reports/not-a-uuid/submit', fullSections()],
-        [s, 'post', '/student/reports/draft', { opportunityId: 'not-a-uuid', section2: {} }],
+        [
+          s,
+          'post',
+          '/student/reports/draft',
+          { opportunityId: 'not-a-uuid', section2: {} },
+        ],
         [s, 'post', `/student/reports/${unknown}/draft`, { section2: {} }],
         [s, 'post', '/student/reports/not-a-uuid/remind-reviewer', {}],
         [admin, 'get', '/admin/reports/not-a-uuid'],
         [admin, 'get', `/admin/reports/${unknown}`],
-        [admin, 'patch', '/admin/reports/not-a-uuid/verify', { action: 'approve' }],
-        [admin, 'patch', `/admin/reports/${unknown}/verify`, { action: 'reject', reason: 'x' }],
+        [
+          admin,
+          'patch',
+          '/admin/reports/not-a-uuid/verify',
+          { action: 'approve' },
+        ],
+        [
+          admin,
+          'patch',
+          `/admin/reports/${unknown}/verify`,
+          { action: 'reject', reason: 'x' },
+        ],
         [admin, 'get', '/admin/reports/not-a-uuid/ai-evaluation-payload'],
       ];
       for (const [u, m, p, b] of probes) {
-        const r = m === 'get' ? await h.as(u).get(p) : (h.as(u) as any)[m](p).send(b ?? {});
+        const r =
+          m === 'get'
+            ? await h.as(u).get(p)
+            : (h.as(u) as any)[m](p).send(b ?? {});
         const res = await r;
         expect({ p, status: res.status < 500 }).toEqual({ p, status: true });
         expect(res.status).toBeGreaterThanOrEqual(200);
@@ -661,19 +903,31 @@ describe('Impact Report lifecycle (real app + real Postgres)', () => {
 
     it('a student only ever lists their own reports; studentId spoofing is refused', async () => {
       const w = await readyWorld();
-      const rid = (await draft(w.lead, w.opp.id, { section2: fullSections().section2 })).body.data.report_id;
+      const rid = (
+        await draft(w.lead, w.opp.id, { section2: fullSections().section2 })
+      ).body.data.report_id;
       const other = await student();
-      const spoof = await h.as(other).get(`/students/reports?studentId=${w.lead.id}`);
+      const spoof = await h
+        .as(other)
+        .get(`/students/reports?studentId=${w.lead.id}`);
       expect([400, 403]).toContain(spoof.status);
       const mineOther = await h.as(other).get('/student/reports');
       expect(mineOther.status).toBe(200);
-      expect(mineOther.body.data.map((x: any) => x.id ?? x.report_id)).not.toContain(rid);
+      expect(
+        mineOther.body.data.map((x: any) => x.id ?? x.report_id),
+      ).not.toContain(rid);
       const mine = await h.as(w.lead).get('/student/reports');
       expect(mine.status).toBe(200);
-      expect(mine.body.data.map((x: any) => x.id ?? x.report_id)).toContain(rid);
-      const alias = await h.as(other).get(`/student/reports?studentId=${w.lead.id}`);
+      expect(mine.body.data.map((x: any) => x.id ?? x.report_id)).toContain(
+        rid,
+      );
+      const alias = await h
+        .as(other)
+        .get(`/student/reports?studentId=${w.lead.id}`);
       expect(alias.status).toBe(200);
-      expect(alias.body.data.map((x: any) => x.id ?? x.report_id)).not.toContain(rid);
+      expect(
+        alias.body.data.map((x: any) => x.id ?? x.report_id),
+      ).not.toContain(rid);
     });
   });
 });

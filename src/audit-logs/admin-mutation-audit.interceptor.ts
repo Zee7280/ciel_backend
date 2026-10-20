@@ -60,7 +60,11 @@ export class AdminMutationAuditInterceptor implements NestInterceptor {
 
   private async recordIfMutation(
     context: ExecutionContext,
-    result: { outcome: 'success' | 'failure'; statusCode?: number; error?: string } = {
+    result: {
+      outcome: 'success' | 'failure';
+      statusCode?: number;
+      error?: string;
+    } = {
       outcome: 'success',
     },
   ): Promise<void> {

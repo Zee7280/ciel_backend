@@ -16,7 +16,8 @@ export const DEFAULT_STUDENT_APPLY_MAINTENANCE_MESSAGE =
 export const DEFAULT_STUDENT_APPLY_EXPIRED_MESSAGE =
   'This opportunity has expired. Enrolled students can continue reports and attendance.';
 
-export const CATALOG_APPLY_CLOSED_MESSAGE = DEFAULT_STUDENT_APPLY_EXPIRED_MESSAGE;
+export const CATALOG_APPLY_CLOSED_MESSAGE =
+  DEFAULT_STUDENT_APPLY_EXPIRED_MESSAGE;
 
 export type ApplyBlockedReason =
   | 'maintenance'
@@ -44,7 +45,8 @@ export function parseBooleanSettingValue(
 ): boolean {
   if (value == null || String(value).trim() === '') return defaultEnabled;
   const normalized = String(value).trim().toLowerCase();
-  if (['false', '0', 'no', 'off', 'disabled'].includes(normalized)) return false;
+  if (['false', '0', 'no', 'off', 'disabled'].includes(normalized))
+    return false;
   if (['true', '1', 'yes', 'on', 'enabled'].includes(normalized)) return true;
   return defaultEnabled;
 }
@@ -67,7 +69,8 @@ export function parseClosedBeforeSettingValue(
   value: string | null | undefined,
 ): Date | null {
   const raw = String(value || '').trim();
-  if (!raw || raw.toLowerCase() === CLOSED_BEFORE_DISABLED_SENTINEL) return null;
+  if (!raw || raw.toLowerCase() === CLOSED_BEFORE_DISABLED_SENTINEL)
+    return null;
   const d = new Date(raw);
   if (Number.isNaN(d.getTime())) return null;
   return d;
@@ -131,7 +134,8 @@ export function decorateApplyGate(
     return {
       applications_open: false,
       apply_blocked_reason: 'catalog_closed',
-      apply_blocked_message: state.expiredMessage || CATALOG_APPLY_CLOSED_MESSAGE,
+      apply_blocked_message:
+        state.expiredMessage || CATALOG_APPLY_CLOSED_MESSAGE,
       apply_maintenance: maintenance,
     };
   }

@@ -308,8 +308,7 @@ export class SectionReportAnalyticsService {
           average_completion_percent: avg,
           // A report that only has partner OR admin sign-off (not both) isn't fully verified yet —
           // status only reaches 'verified' once the whole approval chain has completed.
-          verified_reports: reports.filter((r) => isVerifiedReport(r))
-            .length,
+          verified_reports: reports.filter((r) => isVerifiedReport(r)).length,
           total_reports: reports.length,
         },
       },
@@ -451,7 +450,9 @@ export class SectionReportAnalyticsService {
     const statements = withSec.filter(isSubstantive).length;
     const weak = withSec.length - statements;
     const validation = this.dist(
-      withSec.map((r) => (isSubstantive(r) ? 'substantive' : 'thin_justification')),
+      withSec.map((r) =>
+        isSubstantive(r) ? 'substantive' : 'thin_justification',
+      ),
     );
     return {
       project_title: projectTitle,
@@ -471,37 +472,55 @@ export class SectionReportAnalyticsService {
    * activity ladder only carry `activity_blocks` / `project_summary`, so derive from those.
    */
   private section4View(r: StudentReport) {
-    const s4 = (r.section4 || {}) as Record<string, any>;
-    const blocks: Array<Record<string, any>> = Array.isArray(s4.activity_blocks)
-      ? s4.activity_blocks.filter((b: unknown) => b && typeof b === 'object')
-      : [];
+    const isRecord = (v: unknown): v is Record<string, unknown> =>
+      Boolean(v) && typeof v === 'object';
+    const asList = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+    const s4: Record<string, unknown> = r.section4 || {};
+    const blocks: Array<Record<string, unknown>> = asList(
+      s4.activity_blocks,
+    ).filter(isRecord);
     const sessionOutputs = blocks.reduce((sum, b) => {
-      const outs: Array<Record<string, any>> = Array.isArray(b.outputs) ? b.outputs : [];
+      const outs = asList(b.outputs);
       return (
         sum +
         outs
-          .filter((o) => /session/i.test(String(o?.unit || '')))
-          .reduce((n, o) => n + (this.parseNum(o?.quantity) || 0), 0)
+          .filter((o) =>
+            /session/i.test(String((isRecord(o) ? o.unit : undefined) || '')),
+          )
+          .reduce(
+            (n, o) =>
+              n +
+              (this.parseNum(isRecord(o) ? o.quantity : undefined) || 0),
+            0,
+          )
       );
     }, 0);
     const blockPeople = blocks.reduce(
       (sum, b) =>
-        sum + (this.parseNum(b.unique_beneficiaries) || this.parseNum(b.beneficiaries_reached) || 0),
+        sum +
+        (this.parseNum(b.unique_beneficiaries) ||
+          this.parseNum(b.beneficiaries_reached) ||
+          0),
       0,
     );
     const firstType = blocks
       .map((b) => String(b.primary_category || b.sub_category || '').trim())
       .find(Boolean);
+    const projectSummary = isRecord(s4.project_summary)
+      ? s4.project_summary
+      : undefined;
     return {
       activityType: s4.activity_type || firstType || 'Unspecified',
       deliveryMode:
         s4.delivery_mode ||
-        blocks.map((b) => String(b.geographic_reach || '').trim()).find(Boolean) ||
+        blocks
+          .map((b) => String(b.geographic_reach || '').trim())
+          .find(Boolean) ||
         'Unspecified',
       beneficiaries:
         this.parseNum(s4.total_beneficiaries) ||
         this.parseNum(s4.my_beneficiaries) ||
-        this.parseNum(s4.project_summary?.distinct_total_beneficiaries) ||
+        this.parseNum(projectSummary?.distinct_total_beneficiaries) ||
         blockPeople ||
         0,
       sessions:
@@ -511,11 +530,9 @@ export class SectionReportAnalyticsService {
         0,
       hours: this.parseNum(s4.my_hours) || 0,
       categories: [
-        ...(Array.isArray(s4.beneficiary_categories) ? s4.beneficiary_categories : []),
-        ...blocks.flatMap((b) =>
-          Array.isArray(b.beneficiary_categories) ? b.beneficiary_categories : [],
-        ),
-      ] as unknown[],
+        ...asList(s4.beneficiary_categories),
+        ...blocks.flatMap((b) => asList(b.beneficiary_categories)),
+      ],
     };
   }
 
@@ -750,12 +767,18 @@ export class SectionReportAnalyticsService {
       if (types.length === 0) bypass += 1;
       for (const t of types) typeMap.set(t, (typeMap.get(t) || 0) + 1);
       const vis = resolveMediaVisibility(r.section8?.media_visible);
-      visMap.set(MEDIA_VISIBILITY_LABELS[vis], (visMap.get(MEDIA_VISIBILITY_LABELS[vis]) || 0) + 1);
+      visMap.set(
+        MEDIA_VISIBILITY_LABELS[vis],
+        (visMap.get(MEDIA_VISIBILITY_LABELS[vis]) || 0) + 1,
+      );
       if (r.section8?.partner_verification) partnerVerified += 1;
       const studentConsentOk =
         vis !== 'public' || hasPublicSharePermission(r.section8);
       if (studentConsentOk) ethicsOk += 1;
-      if (isPublicMediaVisibility(vis) && !hasPublicSharePermission(r.section8)) {
+      if (
+        isPublicMediaVisibility(vis) &&
+        !hasPublicSharePermission(r.section8)
+      ) {
         consentRisk += 1;
       }
       credibilitySum += this.credibilityScore(r);
@@ -935,13 +958,15 @@ export class SectionReportAnalyticsService {
         ?.percent === 'number'
         ? (metrics.section_completion_rate as { percent: number }).percent
         : 0;
+    const scalar = (v: unknown, fallback: string | number): string | number =>
+      typeof v === 'number' || typeof v === 'string' ? v : fallback;
     switch (section) {
       case 3:
-        return `${metrics.goal_coverage_count ?? 0} SDG goals · ${completion}% mapped`;
+        return `${scalar(metrics.goal_coverage_count, 0)} SDG goals · ${completion}% mapped`;
       case 4:
-        return `${metrics.total_beneficiaries ?? 0} beneficiaries reported`;
+        return `${scalar(metrics.total_beneficiaries, 0)} beneficiaries reported`;
       case 6:
-        return `${metrics.total_resource_entries ?? 0} resource entries · ${completion}% complete`;
+        return `${scalar(metrics.total_resource_entries, 0)} resource entries · ${completion}% complete`;
       case 7: {
         const p = (
           metrics.projects_with_partners_percent as { percent?: number }
@@ -954,7 +979,7 @@ export class SectionReportAnalyticsService {
         return `${p ?? 0}% evidence-backed`;
       }
       case 9:
-        return `Avg competency ${metrics.avg_self_rating ?? '—'} · ${completion}% complete`;
+        return `Avg competency ${scalar(metrics.avg_self_rating, '—')} · ${completion}% complete`;
       case 10: {
         const p = (metrics.continuation_yes_rate as { percent?: number })
           ?.percent;
@@ -1029,7 +1054,7 @@ export class SectionReportAnalyticsService {
   private hasContent(section: unknown): boolean {
     if (section == null) return false;
     if (typeof section !== 'object') return false;
-    return Object.keys(section as object).length > 0;
+    return Object.keys(section).length > 0;
   }
 
   private parseNum(v: unknown): number {

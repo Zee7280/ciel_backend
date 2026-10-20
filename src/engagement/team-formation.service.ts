@@ -140,7 +140,11 @@ export class TeamFormationService {
       if (capError) throw new BadRequestException(capError);
       const existingMembers = leadTeamId
         ? await this.participationRepo.count({
-            where: { projectId, teamId: leadTeamId, status: In([...ACTIVE_STATUSES]) },
+            where: {
+              projectId,
+              teamId: leadTeamId,
+              status: In([...ACTIVE_STATUSES]),
+            },
           })
         : 1;
       if (members.length + Math.max(existingMembers, 1) > MAX_TEAM_SIZE) {

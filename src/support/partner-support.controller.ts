@@ -1,14 +1,16 @@
 import {
-    Body,
-    Controller,
-    Get,
-    Param,
-    Post,
-    Query,
-    Request,
-    UseGuards,
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Query,
+  Request,
+  UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+
+type AuthenticatedRequest = { user: { id: string } };
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
@@ -19,37 +21,37 @@ import { CreateTicketRateLimitGuard } from './guards/create-ticket-rate-limit.gu
 @Controller('partner/support')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(
-    UserRole.NGO,
-    UserRole.UNIVERSITY,
-    UserRole.CORPORATE,
-    UserRole.ORGANIZATION_ADMIN,
+  UserRole.NGO,
+  UserRole.UNIVERSITY,
+  UserRole.CORPORATE,
+  UserRole.ORGANIZATION_ADMIN,
 )
 export class PartnerSupportController {
-    constructor(private readonly supportService: StudentSupportService) { }
+  constructor(private readonly supportService: StudentSupportService) {}
 
-    @Get('faqs')
-    listFaqs() {
-        return this.supportService.listFaqs();
-    }
+  @Get('faqs')
+  listFaqs() {
+    return this.supportService.listFaqs();
+  }
 
-    @Get('tickets')
-    listTickets(@Request() req) {
-        return this.supportService.listTickets(req.user.id);
-    }
+  @Get('tickets')
+  listTickets(@Request() req: AuthenticatedRequest) {
+    return this.supportService.listTickets(req.user.id);
+  }
 
-    @Get('tickets/track')
-    trackTicket(@Request() req, @Query('reference') reference?: string) {
-        return this.supportService.trackByReference(req.user.id, reference);
-    }
+  @Get('tickets/track')
+  trackTicket(@Request() req: AuthenticatedRequest, @Query('reference') reference?: string) {
+    return this.supportService.trackByReference(req.user.id, reference);
+  }
 
-    @Get('tickets/:id')
-    getTicket(@Request() req, @Param('id') id: string) {
-        return this.supportService.getTicket(req.user.id, id);
-    }
+  @Get('tickets/:id')
+  getTicket(@Request() req: AuthenticatedRequest, @Param('id') id: string) {
+    return this.supportService.getTicket(req.user.id, id);
+  }
 
-    @Post('tickets')
-    @UseGuards(CreateTicketRateLimitGuard)
-    createTicket(@Request() req, @Body() dto: CreateSupportTicketDto) {
-        return this.supportService.createTicket(req.user.id, dto, 'PT');
-    }
+  @Post('tickets')
+  @UseGuards(CreateTicketRateLimitGuard)
+  createTicket(@Request() req: AuthenticatedRequest, @Body() dto: CreateSupportTicketDto) {
+    return this.supportService.createTicket(req.user.id, dto, 'PT');
+  }
 }

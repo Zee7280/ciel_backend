@@ -119,10 +119,42 @@ describe('buildOpportunityApprovalTracker', () => {
     };
     const cases: Array<[Record<string, unknown>, string]> = [
       [{ isStudentCreated: true, creatorId: 'u1' }, 'Student'],
-      [{ isStudentCreated: false, creatorId: 'u1', facultyId: 'u1', organizationId: null }, 'Faculty'],
-      [{ isStudentCreated: false, creatorId: 'u1', facultyId: 'u2', organizationId: 'org' }, 'Partner / NGO'],
-      [{ isStudentCreated: false, creatorId: 'u1', facultyId: null, organizationId: 'org' }, 'Partner / NGO'],
-      [{ isStudentCreated: false, creatorId: 'u1', facultyId: null, organizationId: null }, 'CIEL PK admin'],
+      [
+        {
+          isStudentCreated: false,
+          creatorId: 'u1',
+          facultyId: 'u1',
+          organizationId: null,
+        },
+        'Faculty',
+      ],
+      [
+        {
+          isStudentCreated: false,
+          creatorId: 'u1',
+          facultyId: 'u2',
+          organizationId: 'org',
+        },
+        'Partner / NGO',
+      ],
+      [
+        {
+          isStudentCreated: false,
+          creatorId: 'u1',
+          facultyId: null,
+          organizationId: 'org',
+        },
+        'Partner / NGO',
+      ],
+      [
+        {
+          isStudentCreated: false,
+          creatorId: 'u1',
+          facultyId: null,
+          organizationId: null,
+        },
+        'CIEL PK admin',
+      ],
     ];
     for (const [extra, label] of cases) {
       const t = buildOpportunityApprovalTracker({ ...rev, ...extra });
@@ -181,6 +213,8 @@ describe('buildApprovalReminderCopy', () => {
     expect(copy.email_body).toContain('SOS Classroom Transformation');
     expect(copy.email_body).toContain('Dr Hina Malik');
     expect(copy.open_url).toContain('/dashboard/faculty/approvals');
-    expect(copy.whatsapp_text).toContain('https://app.cielpk.com/dashboard/faculty/approvals');
+    expect(copy.whatsapp_text).toContain(
+      'https://app.cielpk.com/dashboard/faculty/approvals',
+    );
   });
 });

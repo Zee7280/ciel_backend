@@ -7,7 +7,16 @@ describe('stripSecrets', () => {
       data: {
         id: 'c1',
         participants: [
-          { userId: 'u1', user: { id: 'u1', name: 'A', password: '$2b$hash', passwordResetToken: 'tok', passwordResetExpiry: new Date() } },
+          {
+            userId: 'u1',
+            user: {
+              id: 'u1',
+              name: 'A',
+              password: '$2b$hash',
+              passwordResetToken: 'tok',
+              passwordResetExpiry: new Date(),
+            },
+          },
         ],
       },
     };
@@ -27,7 +36,7 @@ describe('stripSecrets', () => {
   it('survives circular structures', () => {
     const a: any = { name: 'a', password: 'p' };
     a.self = a;
-    const out = stripSecrets(a) as any;
+    const out = stripSecrets(a);
     expect(out.password).toBeUndefined();
     expect(out.name).toBe('a');
   });
@@ -49,14 +58,20 @@ describe('stripSecrets — approval tokens', () => {
       liaisonToken: 'dddddddd-4444',
       title: 'T',
     }) as any;
-    expect(JSON.stringify(out)).not.toMatch(/aaaaaaaa|bbbbbbbb|cccccccc|dddddddd/);
+    expect(JSON.stringify(out)).not.toMatch(
+      /aaaaaaaa|bbbbbbbb|cccccccc|dddddddd/,
+    );
     expect(out.partnerToken).toBe('hidden');
     expect(out.faculty_verification_token).toBe('hidden');
     expect(out.title).toBe('T');
   });
 
   it('leaves empty / null tokens alone (so "no token" stays falsy)', () => {
-    const out = stripSecrets({ partnerToken: null, liaisonToken: '', execution_verification_token: undefined }) as any;
+    const out = stripSecrets({
+      partnerToken: null,
+      liaisonToken: '',
+      execution_verification_token: undefined,
+    }) as any;
     expect(out.partnerToken).toBeNull();
     expect(out.liaisonToken).toBe('');
     expect(out.execution_verification_token).toBeUndefined();

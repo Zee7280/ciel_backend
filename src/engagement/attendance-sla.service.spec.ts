@@ -62,6 +62,8 @@ describe('AttendanceSlaService', () => {
   it('does not send partner day-3 reminders', async () => {
     const result = await service.processPartnerAttendanceSla();
     expect(result.reminders_sent).toBe(0);
-    expect(mailService.sendAttendancePendingPartnerReview).not.toHaveBeenCalled();
+    expect(
+      mailService.sendAttendancePendingPartnerReview,
+    ).not.toHaveBeenCalled();
   });
 });

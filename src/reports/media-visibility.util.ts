@@ -1,4 +1,8 @@
-export const MEDIA_VISIBILITY_VALUES = ['public', 'restricted', 'private'] as const;
+export const MEDIA_VISIBILITY_VALUES = [
+  'public',
+  'restricted',
+  'private',
+] as const;
 
 export type MediaVisibility = (typeof MEDIA_VISIBILITY_VALUES)[number];
 

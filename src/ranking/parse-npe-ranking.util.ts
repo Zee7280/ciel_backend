@@ -40,7 +40,9 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function asConfidence(value: unknown): NpeEvidenceConfidence | null {
-  const key = String(value || '').trim().toLowerCase();
+  const key = String(value || '')
+    .trim()
+    .toLowerCase();
   return key in NPE_EVIDENCE_FACTORS ? (key as NpeEvidenceConfidence) : null;
 }
 
@@ -53,7 +55,10 @@ export function parseNpeRankingResponse(raw: string): NpeAiEvaluation | null {
     return null;
   }
   if (typeof rec.readComplete !== 'boolean') return null;
-  if (!Array.isArray(rec.flags) || rec.flags.some((f) => typeof f !== 'string')) {
+  if (
+    !Array.isArray(rec.flags) ||
+    rec.flags.some((f) => typeof f !== 'string')
+  ) {
     return null;
   }
   if (typeof rec.summary !== 'string' || typeof rec.limitations !== 'string') {
@@ -67,7 +72,13 @@ export function parseNpeRankingResponse(raw: string): NpeAiEvaluation | null {
     if (!c || typeof c.id !== 'string' || claimIds.has(c.id)) return null;
     const support = asConfidence(c.support);
     if (!support) return null;
-    for (const key of ['statement', 'source', 'locator', 'limitation', 'criterion'] as const) {
+    for (const key of [
+      'statement',
+      'source',
+      'locator',
+      'limitation',
+      'criterion',
+    ] as const) {
       if (typeof c[key] !== 'string') return null;
     }
     claimIds.add(c.id);
@@ -138,7 +149,8 @@ export function unreadNpeEvaluation(
     packageVersion,
     readComplete: false,
     flags,
-    summary: 'Held for review — material evidence or package could not be read.',
+    summary:
+      'Held for review — material evidence or package could not be read.',
     limitations: flags.join('; ') || 'Unread source.',
     criteria,
     claims: [],

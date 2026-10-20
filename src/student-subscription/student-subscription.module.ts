@@ -18,7 +18,10 @@ import { StorageModule } from '../common/storage.module';
     AuditLogsModule,
     StorageModule,
   ],
-  controllers: [StudentSubscriptionController, AdminStudentSubscriptionController],
+  controllers: [
+    StudentSubscriptionController,
+    AdminStudentSubscriptionController,
+  ],
   providers: [StudentSubscriptionService, SubscriptionActiveGuard],
   exports: [StudentSubscriptionService, SubscriptionActiveGuard],
 })

@@ -72,7 +72,12 @@ export class StudentReport {
   adminApprovedAt: Date | null;
 
   /** Last admin who approved/rejected/unlocked this report (additive audit columns). */
-  @Column({ name: 'admin_reviewed_by', type: 'varchar', length: 255, nullable: true })
+  @Column({
+    name: 'admin_reviewed_by',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
   adminReviewedBy: string | null;
 
   @Column({ name: 'admin_reviewed_at', type: 'timestamptz', nullable: true })
@@ -96,7 +101,12 @@ export class StudentReport {
   @Column({ name: 'closed_at', type: 'timestamptz', nullable: true })
   closedAt: Date | null;
 
-  @Column({ name: 'closed_by_admin_id', type: 'varchar', length: 255, nullable: true })
+  @Column({
+    name: 'closed_by_admin_id',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
   closedByAdminId: string | null;
 
   @Column({ name: 'close_reason', type: 'text', nullable: true })

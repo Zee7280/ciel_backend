@@ -20,15 +20,21 @@ describe('phone-e164.util', () => {
     expect(validateVerificationPhone('+923001234567')).toBeNull();
     expect(validateVerificationPhone('03001234567')).toBeNull();
     expect(validateVerificationPhone('')).toMatch(/must provide/);
-    expect(validateVerificationPhone('2001234567')).toMatch(/10 digits starting with 3/);
-    expect(validateVerificationPhone('30012')).toMatch(/10 digits starting with 3/);
+    expect(validateVerificationPhone('2001234567')).toMatch(
+      /10 digits starting with 3/,
+    );
+    expect(validateVerificationPhone('30012')).toMatch(
+      /10 digits starting with 3/,
+    );
   });
 
   it('treats empty as valid when optional and rejects incomplete PK mobiles', () => {
     expect(validatePhoneE164('', { required: false })).toBeNull();
     expect(validatePhoneE164('', { required: true })).toMatch(/Enter a mobile/);
     expect(canonicalizePhoneInput('03001234567').e164).toBe('+923001234567');
-    expect(canonicalizePhoneInput('2001234567').error).toMatch(/10 digits starting with 3/);
+    expect(canonicalizePhoneInput('2001234567').error).toMatch(
+      /10 digits starting with 3/,
+    );
     expect(canonicalizePhoneInput('', { required: false })).toEqual({
       e164: '',
       error: null,

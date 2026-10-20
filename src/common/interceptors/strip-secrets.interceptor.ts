@@ -49,16 +49,17 @@ export function stripSecrets<T>(value: T, seen = new WeakSet<object>()): T {
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
     if (SECRET_KEYS.has(k)) continue;
     if (MASKED_TOKEN_KEYS.has(k)) {
-      out[k] =
-        typeof v === 'string' && v.trim() ? MASKED_TOKEN_PLACEHOLDER : v;
+      out[k] = typeof v === 'string' && v.trim() ? MASKED_TOKEN_PLACEHOLDER : v;
       continue;
     }
     out[k] = stripSecrets(v, seen);
   }
   // Keep entity prototypes (class instances serialise through toJSON-less default anyway).
-  return (proto && proto !== Object.prototype
-    ? Object.assign(Object.create(proto), out)
-    : out) as T;
+  return (
+    proto && proto !== Object.prototype
+      ? Object.assign(Object.create(proto), out)
+      : out
+  ) as T;
 }
 
 @Injectable()

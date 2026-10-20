@@ -40,7 +40,8 @@ export function npePackageVersion(report: StudentReport): string {
   const schema =
     (typeof stored?.schema_version === 'string' && stored.schema_version) ||
     IMPACT_PACKAGE_SYNC_CONTRACT.schema_version;
-  const stamp = report.reportSubmittedAt || report.submission_date || report.updatedAt;
+  const stamp =
+    report.reportSubmittedAt || report.submission_date || report.updatedAt;
   return `${schema}:${new Date(stamp).toISOString()}`;
 }
 
@@ -88,8 +89,10 @@ export function gateNpePackage(p: NpePackageRecord): NpeGate {
     issues.push('CII lock / scale not validated');
   }
   if (p.packageComplete !== true) issues.push('Incomplete report package');
-  if (p.hoursMet !== true) issues.push('Required individual hours not verified');
-  if (p.consentComplete !== true) issues.push('Declarations / consent incomplete');
+  if (p.hoursMet !== true)
+    issues.push('Required individual hours not verified');
+  if (p.consentComplete !== true)
+    issues.push('Declarations / consent incomplete');
   if (p.evidenceAccessible !== true) issues.push('Evidence access incomplete');
   if (p.integrity !== 'clear') issues.push('Integrity requires review');
   return {
@@ -123,9 +126,7 @@ export function buildNpePackageRecord(report: StudentReport): NpePackageRecord {
   return {
     id: report.id,
     title:
-      report.opportunity?.title ||
-      report.project_id ||
-      'Community service',
+      report.opportunity?.title || report.project_id || 'Community service',
     university: npeUniversity(report),
     pathway: npePathway(report),
     version: npePackageVersion(report),
@@ -136,10 +137,12 @@ export function buildNpePackageRecord(report: StudentReport): NpePackageRecord {
     packageComplete,
     hoursMet: reportIndividualHoursMet(report),
     consentComplete: medal || overall === 'submitted' || overall === 'verified',
-    evidenceAccessible: files.length === 0 || files.every((f) => {
-      const rec = asRecord(f);
-      return Boolean(rec && (typeof rec.url === 'string' && rec.url.trim()));
-    }),
+    evidenceAccessible:
+      files.length === 0 ||
+      files.every((f) => {
+        const rec = asRecord(f);
+        return Boolean(rec && typeof rec.url === 'string' && rec.url.trim());
+      }),
     integrity: approval === 'rejected' ? 'confirmed_fraud' : 'clear',
     parts: [
       'Flashcard',

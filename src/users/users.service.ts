@@ -16,7 +16,9 @@ import { createHash } from 'crypto';
 
 /** Reset tokens are stored hashed: a DB read must not hand out working reset links. */
 export function hashResetToken(token: string): string {
-  return createHash('sha256').update(String(token ?? '')).digest('hex');
+  return createHash('sha256')
+    .update(String(token ?? ''))
+    .digest('hex');
 }
 import { NotificationsService } from '../notifications/notifications.service';
 import { StudentSubscriptionService } from '../student-subscription/student-subscription.service';
@@ -83,9 +85,7 @@ function composeContactFromUserPhone(
   if (!dialDigits) return normalizeE164Phone(rawPhone) || rawPhone;
   return (
     normalizeE164Phone(
-      nationalDigits.startsWith(dialDigits)
-        ? `+${nationalDigits}`
-        : rawPhone,
+      nationalDigits.startsWith(dialDigits) ? `+${nationalDigits}` : rawPhone,
       `+${dialDigits}`,
     ) || `+${dialDigits}${nationalDigits}`
   );
@@ -134,11 +134,12 @@ export class UsersService {
   }
 
   async formatUserResponse(user: User) {
-    const [notifications_count, membershipFlags, subscriptionFlags] = await Promise.all([
-      this.notificationsService.countUnread(user.id),
-      this.organizationMembershipService.getUiFlags(user),
-      this.studentSubscriptionService.getUiFlags(user),
-    ]);
+    const [notifications_count, membershipFlags, subscriptionFlags] =
+      await Promise.all([
+        this.notificationsService.countUnread(user.id),
+        this.organizationMembershipService.getUiFlags(user),
+        this.studentSubscriptionService.getUiFlags(user),
+      ]);
     let roleTitle: string = user.role;
     // Simple mapping based on known roles
     if (user.role === UserRole.SUPER_ADMIN) roleTitle = 'Super Admin';
@@ -229,7 +230,10 @@ export class UsersService {
     if (dto.bio) user.bio = dto.bio;
     if (dto.department && !studentIdentityLocked(user.department))
       user.department = dto.department;
-    if (dto.faculty_department && !studentIdentityLocked(user.faculty_department))
+    if (
+      dto.faculty_department &&
+      !studentIdentityLocked(user.faculty_department)
+    )
       user.faculty_department = dto.faculty_department;
     if (dto.orgName) user.orgName = dto.orgName;
     if (dto.contactPerson) user.contactPerson = dto.contactPerson;

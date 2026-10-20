@@ -58,10 +58,7 @@ export async function findCanonicalTeamLeadStudentId(
 
 /** Team seat: explicit team mode, or a shared `teamId` even if mode still defaults to individual. */
 export function enrollmentLooksLikeTeam(
-  participation?: Pick<
-    Participation,
-    'participationMode' | 'teamId'
-  > | null,
+  participation?: Pick<Participation, 'participationMode' | 'teamId'> | null,
 ): boolean {
   if (!participation) return false;
   if (participation.participationMode === 'team') return true;
@@ -85,7 +82,9 @@ export function pickPreferredProjectEnrollment(
     if (aTeam !== bTeam) return bTeam - aTeam;
     const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
     const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-    return aTime - bTime || String(a.id || '').localeCompare(String(b.id || ''));
+    return (
+      aTime - bTime || String(a.id || '').localeCompare(String(b.id || ''))
+    );
   })[0];
 }
 
@@ -131,7 +130,12 @@ export async function loadSameTeamParticipations(
   projectId: string,
   viewer: Pick<
     Participation,
-    'id' | 'studentId' | 'teamId' | 'applicationId' | 'participationMode' | 'isTeamLead'
+    | 'id'
+    | 'studentId'
+    | 'teamId'
+    | 'applicationId'
+    | 'participationMode'
+    | 'isTeamLead'
   >,
 ): Promise<Participation[]> {
   const pid = projectId.trim();
@@ -267,7 +271,8 @@ export function groupSiblingSeats(
   const norm = (v?: string | null) => (v || '').trim().toLowerCase();
   const studentByEmail = new Map<string, string>();
   for (const r of rows) {
-    if (r.studentId && norm(r.email)) studentByEmail.set(norm(r.email), r.studentId);
+    if (r.studentId && norm(r.email))
+      studentByEmail.set(norm(r.email), r.studentId);
   }
   const byPerson = new Map<string, Participation[]>();
   for (const r of rows) {
@@ -278,7 +283,10 @@ export function groupSiblingSeats(
     byPerson.set(key, [...(byPerson.get(key) ?? []), r]);
   }
 
-  const out = new Map<string, { canonical: Participation; siblings: Participation[] }>();
+  const out = new Map<
+    string,
+    { canonical: Participation; siblings: Participation[] }
+  >();
   for (const seats of byPerson.values()) {
     // union-find over team / application links
     const parent = new Map<string, string>();
@@ -321,8 +329,9 @@ export function groupSiblingSeats(
       // loose leftovers follow the person's preferred seat
       const preferred = pickPreferredProjectEnrollment(seats) ?? seats[0];
       const target =
-        [...clusters.entries()].find(([, list]) => list.some((x) => x.id === preferred.id))?.[0] ??
-        [...clusters.keys()][0];
+        [...clusters.entries()].find(([, list]) =>
+          list.some((x) => x.id === preferred.id),
+        )?.[0] ?? [...clusters.keys()][0];
       clusters.set(target, [...clusters.get(target)!, ...loose]);
     }
     for (const list of clusters.values()) {

@@ -54,7 +54,9 @@ describe('pickCiiV45DisplayScore', () => {
 
   it('does not invent a score when the analyser has not produced numbers', () => {
     expect(pickCiiV45DisplayScore(null, null)).toBeNull();
-    expect(pickCiiV45DisplayScore({ diagnosticCII: null, baseCII: null }, null)).toBeNull();
+    expect(
+      pickCiiV45DisplayScore({ diagnosticCII: null, baseCII: null }, null),
+    ).toBeNull();
   });
 });
 
@@ -64,8 +66,12 @@ describe('pickCiiV45DisplayBadge', () => {
       finalBadge: { name: 'Published', level: 4 },
       diagnosticBadge: { name: 'Provisional', level: 3 },
     };
-    expect(pickCiiV45DisplayBadge(cii, { locked: true })?.name).toBe('Published');
-    expect(pickCiiV45DisplayBadge(cii, { locked: false })?.name).toBe('Provisional');
+    expect(pickCiiV45DisplayBadge(cii, { locked: true })?.name).toBe(
+      'Published',
+    );
+    expect(pickCiiV45DisplayBadge(cii, { locked: false })?.name).toBe(
+      'Provisional',
+    );
   });
 
   it('keeps the diagnostic badge while Admin evidence is still pending', () => {

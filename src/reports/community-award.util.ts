@@ -73,7 +73,11 @@ function pickFlashNumber(value: unknown): number {
     const parsed = Number(value.replace(/,/g, '').trim());
     return Number.isFinite(parsed) ? parsed : 0;
   }
-  if (value != null && typeof value === 'object' && typeof (value as { toString?: unknown }).toString === 'function') {
+  if (
+    value != null &&
+    typeof value === 'object' &&
+    typeof (value as { toString?: unknown }).toString === 'function'
+  ) {
     const parsed = Number(String(value).replace(/,/g, '').trim());
     return Number.isFinite(parsed) ? parsed : 0;
   }
@@ -81,9 +85,7 @@ function pickFlashNumber(value: unknown): number {
 }
 
 function logCountsTowardHours(log: Record<string, unknown>): boolean {
-  const status = String(
-    log.approval_status ?? log.approvalStatus ?? '',
-  )
+  const status = String(log.approval_status ?? log.approvalStatus ?? '')
     .trim()
     .toLowerCase();
   return status !== 'rejected';
@@ -148,7 +150,8 @@ export function requiredHoursPerStudentFromOpportunity(
 
 function logHasEvidence(log: Record<string, unknown>): boolean {
   if (log.evidence_file) return true;
-  if (typeof log.evidence_url === 'string' && log.evidence_url.trim()) return true;
+  if (typeof log.evidence_url === 'string' && log.evidence_url.trim())
+    return true;
   return Array.isArray(log.evidence_urls) && log.evidence_urls.length > 0;
 }
 
@@ -186,7 +189,12 @@ export type ReportFlashSource = {
   section9?: { media_urls?: unknown } | null;
   section10?: { media_urls?: unknown } | null;
   section11?: Record<string, unknown> | null;
-  ciiV45?: { finalCII?: unknown; diagnosticCII?: unknown; baseCII?: unknown; knownBasePoints?: unknown } | null;
+  ciiV45?: {
+    finalCII?: unknown;
+    diagnosticCII?: unknown;
+    baseCII?: unknown;
+    knownBasePoints?: unknown;
+  } | null;
   ciiV45Lock?: { locked?: unknown; adminApprovedScore?: unknown } | null;
   evidence_urls?: unknown;
 };
@@ -204,7 +212,9 @@ export function resolveReportFlashHours(
     ? section1.attendance_logs
     : [];
   const logHours = logs
-    .filter((log) => log && typeof log === 'object' && logCountsTowardHours(log))
+    .filter(
+      (log) => log && typeof log === 'object' && logCountsTowardHours(log),
+    )
     .reduce((sum, log) => sum + effectiveHoursFromLog(log), 0);
   const rosterHours =
     pickFlashNumber(section1?.team_lead?.hours) +
@@ -233,7 +243,11 @@ export function resolveReportFlashHours(
 
 function finiteCii(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string' && value.trim() && Number.isFinite(Number(value))) {
+  if (
+    typeof value === 'string' &&
+    value.trim() &&
+    Number.isFinite(Number(value))
+  ) {
     return Number(value);
   }
   return null;
@@ -265,7 +279,9 @@ export function resolveScoringCii(report: ReportFlashSource): number | null {
 }
 
 /** Same sources the exhibition flashcard uses for baseline → endline / observed change. */
-export function resolveReportFlashOutcomes(section5: ReportFlashSource['section5']): {
+export function resolveReportFlashOutcomes(
+  section5: ReportFlashSource['section5'],
+): {
   baseline: string;
   endline: string;
   change: string;
@@ -320,7 +336,9 @@ export function resolveReportFlashEvidence(report: ReportFlashSource): number {
   const files = Array.isArray(report.section8?.evidence_files)
     ? report.section8.evidence_files.length
     : 0;
-  const urls = Array.isArray(report.evidence_urls) ? report.evidence_urls.length : 0;
+  const urls = Array.isArray(report.evidence_urls)
+    ? report.evidence_urls.length
+    : 0;
   const logs = Array.isArray(report.section1?.attendance_logs)
     ? report.section1.attendance_logs
     : [];
@@ -507,5 +525,7 @@ export function isCommunityAwardMedalReport(input: {
     LIVE_STATUS.has(faculty) ||
     faculty === 'not_applicable' ||
     faculty === 'not_required';
-  return facultySignedOff && (LIVE_STATUS.has(admin) || LIVE_STATUS.has(overall));
+  return (
+    facultySignedOff && (LIVE_STATUS.has(admin) || LIVE_STATUS.has(overall))
+  );
 }

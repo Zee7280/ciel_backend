@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ForbiddenException,
+  BadRequestException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, Not } from 'typeorm';
 import { Conversation } from './entities/conversation.entity';
@@ -9,320 +14,363 @@ import { User } from '../users/entities/user.entity';
 
 /** The ONLY user fields chat ever returns. Never serialise a User entity: it carries the bcrypt
  * hash, the (plaintext) password-reset token, CNIC and settings. */
-export function toChatUser(user: Pick<User, 'id' | 'name' | 'avatar' | 'role'> | null | undefined) {
-    if (!user) return null;
-    return { id: user.id, name: user.name, avatar: user.avatar, role: user.role };
+export function toChatUser(
+  user: Pick<User, 'id' | 'name' | 'avatar' | 'role'> | null | undefined,
+) {
+  if (!user) return null;
+  return { id: user.id, name: user.name, avatar: user.avatar, role: user.role };
 }
 
 /** Conversation as returned to the client: participants/lastMessage reduced to safe fields. */
-export function toChatConversation(
-    conv: Conversation,
-    creatorId: string,
-) {
-    const otherParticipants = (conv.participants || [])
-        .filter((p) => p.userId !== creatorId)
-        .map((p) => toChatUser(p.user) ?? { id: p.userId, name: 'Unknown', avatar: undefined, role: undefined });
-    return {
-        id: conv.id,
-        type: conv.type,
-        lastMessageId: conv.lastMessageId,
-        lastMessage: conv.lastMessage
-            ? {
-                  id: conv.lastMessage.id,
-                  conversationId: conv.lastMessage.conversationId,
-                  senderId: conv.lastMessage.senderId,
-                  content: conv.lastMessage.content,
-                  isRead: conv.lastMessage.isRead,
-                  createdAt: conv.lastMessage.createdAt,
-              }
-            : null,
-        createdAt: conv.createdAt,
-        updatedAt: conv.updatedAt,
-        otherParticipants,
-    };
+export function toChatConversation(conv: Conversation, creatorId: string) {
+  const otherParticipants = (conv.participants || [])
+    .filter((p) => p.userId !== creatorId)
+    .map(
+      (p) =>
+        toChatUser(p.user) ?? {
+          id: p.userId,
+          name: 'Unknown',
+          avatar: undefined,
+          role: undefined,
+        },
+    );
+  return {
+    id: conv.id,
+    type: conv.type,
+    lastMessageId: conv.lastMessageId,
+    lastMessage: conv.lastMessage
+      ? {
+          id: conv.lastMessage.id,
+          conversationId: conv.lastMessage.conversationId,
+          senderId: conv.lastMessage.senderId,
+          content: conv.lastMessage.content,
+          isRead: conv.lastMessage.isRead,
+          createdAt: conv.lastMessage.createdAt,
+        }
+      : null,
+    createdAt: conv.createdAt,
+    updatedAt: conv.updatedAt,
+    otherParticipants,
+  };
 }
 
 @Injectable()
 export class ChatService {
-    constructor(
-        @InjectRepository(Conversation)
-        private conversationRepository: Repository<Conversation>,
-        @InjectRepository(Message)
-        private messageRepository: Repository<Message>,
-        @InjectRepository(ConversationParticipant)
-        private participantRepository: Repository<ConversationParticipant>,
-        @InjectRepository(User)
-        private usersRepository: Repository<User>,
-    ) { }
+  constructor(
+    @InjectRepository(Conversation)
+    private conversationRepository: Repository<Conversation>,
+    @InjectRepository(Message)
+    private messageRepository: Repository<Message>,
+    @InjectRepository(ConversationParticipant)
+    private participantRepository: Repository<ConversationParticipant>,
+    @InjectRepository(User)
+    private usersRepository: Repository<User>,
+  ) {}
 
-    async createConversation(createConversationDto: CreateConversationDto, creatorId: string) {
-        const { participantIds, type = 'DIRECT' } = createConversationDto;
+  async createConversation(
+    createConversationDto: CreateConversationDto,
+    creatorId: string,
+  ) {
+    const { participantIds, type = 'DIRECT' } = createConversationDto;
 
-        // Ensure creator is included
-        const allParticipants = Array.from(
-            new Set([...(participantIds || []).filter((id) => typeof id === 'string' && id.trim()), creatorId]),
+    // Ensure creator is included
+    const allParticipants = Array.from(
+      new Set([
+        ...(participantIds || []).filter(
+          (id) => typeof id === 'string' && id.trim(),
+        ),
+        creatorId,
+      ]),
+    );
+    if (allParticipants.length < 2) {
+      throw new BadRequestException('Choose at least one other participant.');
+    }
+    if (allParticipants.length > 50) {
+      throw new BadRequestException('Too many participants.');
+    }
+    if (type === 'DIRECT' && allParticipants.length !== 2) {
+      throw new BadRequestException(
+        'A direct conversation has exactly one other participant.',
+      );
+    }
+    // Every participant must be a real, active account — no chats with arbitrary / suspended ids.
+    const activeCount = await this.usersRepository.count({
+      where: { id: In(allParticipants), status: 'active' as never },
+    });
+    if (activeCount !== allParticipants.length) {
+      throw new BadRequestException(
+        'One or more participants are not available for chat.',
+      );
+    }
+
+    // Check if direct conversation already exists
+    if (type === 'DIRECT' && allParticipants.length === 2) {
+      const existingConversation = await this.conversationRepository
+        .createQueryBuilder('conversation')
+        .innerJoinAndSelect('conversation.participants', 'p')
+        .innerJoinAndSelect('p.user', 'user')
+        .leftJoinAndSelect('conversation.lastMessage', 'lastMessage')
+        .where('conversation.type = :type', { type: 'DIRECT' })
+        .andWhere(
+          'EXISTS (SELECT 1 FROM conversation_participants cp WHERE cp."conversationId" = conversation.id AND cp."userId" = :u1)',
+          { u1: allParticipants[0] },
+        )
+        .andWhere(
+          'EXISTS (SELECT 1 FROM conversation_participants cp WHERE cp."conversationId" = conversation.id AND cp."userId" = :u2)',
+          { u2: allParticipants[1] },
+        )
+        .getOne();
+
+      if (existingConversation) {
+        return toChatConversation(existingConversation, creatorId);
+      }
+    }
+
+    const conversation = this.conversationRepository.create({
+      type,
+    });
+    const savedConversation =
+      await this.conversationRepository.save(conversation);
+
+    const participants = allParticipants.map((userId) =>
+      this.participantRepository.create({
+        conversationId: savedConversation.id,
+        userId,
+      }),
+    );
+    await this.participantRepository.save(participants);
+
+    // Fetch the full conversation with relations to return to frontend
+    const fullConversation = await this.conversationRepository.findOne({
+      where: { id: savedConversation.id },
+      relations: ['participants', 'participants.user', 'lastMessage'],
+    });
+
+    if (!fullConversation) {
+      throw new NotFoundException('Conversation could not be created');
+    }
+
+    return toChatConversation(fullConversation, creatorId);
+  }
+
+  async getConversations(userId: string) {
+    // Find conversation IDs where the user is a participant
+    const userParticipants = await this.participantRepository.find({
+      where: { userId },
+      select: ['conversationId'],
+    });
+
+    if (userParticipants.length === 0) return [];
+
+    const conversationIds = userParticipants.map((p) => p.conversationId);
+
+    // Fetch those conversations fully populated
+    const conversations = await this.conversationRepository.find({
+      where: { id: In(conversationIds) },
+      relations: ['participants', 'participants.user', 'lastMessage'],
+      order: { updatedAt: 'DESC' },
+    });
+
+    // Fallback: manually fetch users if TypeORM failed to map participants.user
+    const allUserIds = new Set<string>();
+    conversations.forEach((c) =>
+      c.participants.forEach((p) => {
+        if (!p.user) allUserIds.add(p.userId);
+      }),
+    );
+
+    let fallbackUsers = new Map<string, any>();
+    if (allUserIds.size > 0) {
+      const users = await this.usersRepository.find({
+        where: { id: In(Array.from(allUserIds)) },
+        select: ['id', 'name', 'avatar', 'role'],
+      });
+      fallbackUsers = new Map(users.map((u) => [u.id, u]));
+    }
+
+    return conversations.map((conv) => {
+      const otherParticipants = (conv.participants || []).filter(
+        (cp) => cp.userId !== userId,
+      );
+
+      return {
+        id: conv.id,
+        type: conv.type,
+        lastMessageId: conv.lastMessageId,
+        lastMessage: conv.lastMessage,
+        createdAt: conv.createdAt,
+        updatedAt: conv.updatedAt,
+        otherParticipants: otherParticipants.map((op) => {
+          const foundUser = op.user || fallbackUsers.get(op.userId);
+          return {
+            id: foundUser?.id || op.userId,
+            name: foundUser?.name || 'Unknown',
+            avatar: foundUser?.avatar,
+            role: foundUser?.role,
+          };
+        }),
+      };
+    });
+  }
+
+  async getMessages(conversationId: string, userId: string) {
+    // Check if user is a participant
+    const isParticipant = await this.participantRepository.findOne({
+      where: { conversationId, userId },
+    });
+
+    if (!isParticipant) {
+      throw new ForbiddenException(
+        'You are not a participant in this conversation',
+      );
+    }
+
+    const messages = await this.messageRepository.find({
+      where: { conversationId },
+      order: { createdAt: 'ASC' },
+      relations: ['sender'],
+    });
+
+    // Never return the sender's full User row (hash / reset token / CNIC).
+    return messages.map((m) => ({
+      id: m.id,
+      conversationId: m.conversationId,
+      senderId: m.senderId,
+      content: m.content,
+      isRead: m.isRead,
+      createdAt: m.createdAt,
+      updatedAt: m.updatedAt,
+      sender: toChatUser(m.sender),
+    }));
+  }
+
+  async sendMessage(createMessageDto: CreateMessageDto, senderId: string) {
+    try {
+      console.log('--- START sendMessage ---');
+      const { conversationId, content } = createMessageDto;
+      console.log('Payload:', { conversationId, content, senderId });
+
+      // Check if user is a participant
+      const isParticipant = await this.participantRepository.findOne({
+        where: { conversationId, userId: senderId },
+      });
+
+      if (!isParticipant) {
+        console.log('Validation failed: User is not participant');
+        throw new ForbiddenException(
+          'You are not a participant in this conversation',
         );
-        if (allParticipants.length < 2) {
-            throw new BadRequestException('Choose at least one other participant.');
-        }
-        if (allParticipants.length > 50) {
-            throw new BadRequestException('Too many participants.');
-        }
-        if (type === 'DIRECT' && allParticipants.length !== 2) {
-            throw new BadRequestException('A direct conversation has exactly one other participant.');
-        }
-        // Every participant must be a real, active account — no chats with arbitrary / suspended ids.
-        const activeCount = await this.usersRepository.count({
-            where: { id: In(allParticipants), status: 'active' as never },
-        });
-        if (activeCount !== allParticipants.length) {
-            throw new BadRequestException('One or more participants are not available for chat.');
-        }
+      }
+      console.log('Participant check passed.');
 
-        // Check if direct conversation already exists
-        if (type === 'DIRECT' && allParticipants.length === 2) {
-            const existingConversation = await this.conversationRepository.createQueryBuilder('conversation')
-                .innerJoinAndSelect('conversation.participants', 'p')
-                .innerJoinAndSelect('p.user', 'user')
-                .leftJoinAndSelect('conversation.lastMessage', 'lastMessage')
-                .where('conversation.type = :type', { type: 'DIRECT' })
-                .andWhere('EXISTS (SELECT 1 FROM conversation_participants cp WHERE cp."conversationId" = conversation.id AND cp."userId" = :u1)', { u1: allParticipants[0] })
-                .andWhere('EXISTS (SELECT 1 FROM conversation_participants cp WHERE cp."conversationId" = conversation.id AND cp."userId" = :u2)', { u2: allParticipants[1] })
-                .getOne();
+      const message = this.messageRepository.create({
+        conversationId,
+        senderId,
+        content,
+      });
+      console.log('Message instance created.');
 
-            if (existingConversation) {
-                return toChatConversation(existingConversation, creatorId);
+      const savedMessage = await this.messageRepository.save(message);
+      console.log('Message saved successfully with id:', savedMessage.id);
+
+      // Update last message in conversation
+      await this.conversationRepository.update(conversationId, {
+        lastMessageId: savedMessage.id,
+      });
+      console.log('Conversation lastMessageId updated.');
+
+      // Return plain object (avoid circular JSON serialization error)
+      const sender = await this.usersRepository.findOne({
+        where: { id: senderId },
+      });
+      console.log('Sender found?', !!sender);
+
+      return {
+        id: savedMessage.id,
+        conversationId: savedMessage.conversationId,
+        senderId: savedMessage.senderId,
+        content: savedMessage.content,
+        isRead: savedMessage.isRead,
+        createdAt: savedMessage.createdAt,
+        updatedAt: savedMessage.updatedAt,
+        sender: sender
+          ? {
+              id: sender.id,
+              name: sender.name,
+              avatar: sender.avatar,
+              role: sender.role,
             }
-        }
+          : null,
+      };
+    } catch (error) {
+      console.error('--- ERROR IN sendMessage ---', error);
+      throw error;
+    }
+  }
 
-        const conversation = this.conversationRepository.create({
-            type
-        });
-        const savedConversation = await this.conversationRepository.save(conversation);
+  async markAsRead(conversationId: string, userId: string) {
+    // Same membership gate as getMessages/sendMessage — only a participant may mutate
+    // read state on a conversation.
+    const isParticipant = await this.participantRepository.findOne({
+      where: { conversationId, userId },
+    });
 
-        const participants = allParticipants.map(userId =>
-            this.participantRepository.create({
-                conversationId: savedConversation.id,
-                userId
-            })
-        );
-        await this.participantRepository.save(participants);
-
-        // Fetch the full conversation with relations to return to frontend
-        const fullConversation = await this.conversationRepository.findOne({
-            where: { id: savedConversation.id },
-            relations: ['participants', 'participants.user', 'lastMessage']
-        });
-
-        if (!fullConversation) {
-            throw new NotFoundException('Conversation could not be created');
-        }
-
-        return toChatConversation(fullConversation, creatorId);
+    if (!isParticipant) {
+      throw new ForbiddenException(
+        'You are not a participant in this conversation',
+      );
     }
 
-    async getConversations(userId: string) {
-        // Find conversation IDs where the user is a participant
-        const userParticipants = await this.participantRepository.find({
-            where: { userId },
-            select: ['conversationId']
-        });
+    await this.messageRepository.update(
+      { conversationId, senderId: Not(userId), isRead: false },
+      { isRead: true },
+    );
+    return { success: true };
+  }
 
-        if (userParticipants.length === 0) return [];
+  async getUnreadCount(userId: string) {
+    const conversations = await this.participantRepository.find({
+      where: { userId },
+      select: ['conversationId'],
+    });
 
-        const conversationIds = userParticipants.map(p => p.conversationId);
+    const conversationIds = conversations.map((c) => c.conversationId);
+    if (conversationIds.length === 0) return 0;
 
-        // Fetch those conversations fully populated
-        const conversations = await this.conversationRepository.find({
-            where: { id: In(conversationIds) },
-            relations: ['participants', 'participants.user', 'lastMessage'],
-            order: { updatedAt: 'DESC' }
-        });
+    const count = await this.messageRepository.count({
+      where: {
+        conversationId: In(conversationIds),
+        senderId: Not(userId),
+        isRead: false,
+      },
+    });
 
-        // Fallback: manually fetch users if TypeORM failed to map participants.user
-        const allUserIds = new Set<string>();
-        conversations.forEach(c => c.participants.forEach(p => {
-            if (!p.user) allUserIds.add(p.userId);
-        }));
+    return count;
+  }
 
-        let fallbackUsers = new Map<string, any>();
-        if (allUserIds.size > 0) {
-            const users = await this.usersRepository.find({
-                where: { id: In(Array.from(allUserIds)) },
-                select: ['id', 'name', 'avatar', 'role']
-            });
-            fallbackUsers = new Map(users.map(u => [u.id, u]));
-        }
+  async getChatUsers(userId: string, search?: string) {
+    const query = this.usersRepository
+      .createQueryBuilder('user')
+      .where('user.id != :userId', { userId })
+      .andWhere('user.status = :status', { status: 'active' });
 
-        return conversations.map(conv => {
-            const otherParticipants = (conv.participants || []).filter(cp => cp.userId !== userId);
-
-            return {
-                id: conv.id,
-                type: conv.type,
-                lastMessageId: conv.lastMessageId,
-                lastMessage: conv.lastMessage,
-                createdAt: conv.createdAt,
-                updatedAt: conv.updatedAt,
-                otherParticipants: otherParticipants.map(op => {
-                    const foundUser = op.user || fallbackUsers.get(op.userId);
-                    return {
-                        id: foundUser?.id || op.userId,
-                        name: foundUser?.name || 'Unknown',
-                        avatar: foundUser?.avatar,
-                        role: foundUser?.role
-                    };
-                })
-            };
-        });
+    if (search) {
+      query.andWhere('(user.name ILIKE :search OR user.email ILIKE :search)', {
+        search: `%${search}%`,
+      });
     }
 
-    async getMessages(conversationId: string, userId: string) {
-        // Check if user is a participant
-        const isParticipant = await this.participantRepository.findOne({
-            where: { conversationId, userId }
-        });
+    // Limit results for performance
+    query.limit(20);
 
-        if (!isParticipant) {
-            throw new ForbiddenException('You are not a participant in this conversation');
-        }
+    const users = await query.getMany();
 
-        const messages = await this.messageRepository.find({
-            where: { conversationId },
-            order: { createdAt: 'ASC' },
-            relations: ['sender']
-        });
-
-        // Never return the sender's full User row (hash / reset token / CNIC).
-        return messages.map((m) => ({
-            id: m.id,
-            conversationId: m.conversationId,
-            senderId: m.senderId,
-            content: m.content,
-            isRead: m.isRead,
-            createdAt: m.createdAt,
-            updatedAt: m.updatedAt,
-            sender: toChatUser(m.sender),
-        }));
-    }
-
-    async sendMessage(createMessageDto: CreateMessageDto, senderId: string) {
-        try {
-            console.log('--- START sendMessage ---');
-            const { conversationId, content } = createMessageDto;
-            console.log('Payload:', { conversationId, content, senderId });
-
-            // Check if user is a participant
-            const isParticipant = await this.participantRepository.findOne({
-                where: { conversationId, userId: senderId }
-            });
-
-            if (!isParticipant) {
-                console.log('Validation failed: User is not participant');
-                throw new ForbiddenException('You are not a participant in this conversation');
-            }
-            console.log('Participant check passed.');
-
-            const message = this.messageRepository.create({
-                conversationId,
-                senderId,
-                content
-            });
-            console.log('Message instance created.');
-
-            const savedMessage = await this.messageRepository.save(message);
-            console.log('Message saved successfully with id:', savedMessage.id);
-
-            // Update last message in conversation
-            await this.conversationRepository.update(conversationId, {
-                lastMessageId: savedMessage.id
-            });
-            console.log('Conversation lastMessageId updated.');
-
-            // Return plain object (avoid circular JSON serialization error)
-            const sender = await this.usersRepository.findOne({ where: { id: senderId } });
-            console.log('Sender found?', !!sender);
-
-            return {
-                id: savedMessage.id,
-                conversationId: savedMessage.conversationId,
-                senderId: savedMessage.senderId,
-                content: savedMessage.content,
-                isRead: savedMessage.isRead,
-                createdAt: savedMessage.createdAt,
-                updatedAt: savedMessage.updatedAt,
-                sender: sender ? {
-                    id: sender.id,
-                    name: sender.name,
-                    avatar: sender.avatar,
-                    role: sender.role
-                } : null
-            };
-        } catch (error) {
-            console.error('--- ERROR IN sendMessage ---', error);
-            throw error;
-        }
-    }
-
-    async markAsRead(conversationId: string, userId: string) {
-        // Same membership gate as getMessages/sendMessage — only a participant may mutate
-        // read state on a conversation.
-        const isParticipant = await this.participantRepository.findOne({
-            where: { conversationId, userId }
-        });
-
-        if (!isParticipant) {
-            throw new ForbiddenException('You are not a participant in this conversation');
-        }
-
-        await this.messageRepository.update(
-            { conversationId, senderId: Not(userId), isRead: false },
-            { isRead: true }
-        );
-        return { success: true };
-    }
-
-    async getUnreadCount(userId: string) {
-        const conversations = await this.participantRepository.find({
-            where: { userId },
-            select: ['conversationId']
-        });
-
-        const conversationIds = conversations.map(c => c.conversationId);
-        if (conversationIds.length === 0) return 0;
-
-        const count = await this.messageRepository.count({
-            where: {
-                conversationId: In(conversationIds),
-                senderId: Not(userId),
-                isRead: false
-            }
-        });
-
-        return count;
-    }
-
-    async getChatUsers(userId: string, search?: string) {
-        const query = this.usersRepository.createQueryBuilder('user')
-            .where('user.id != :userId', { userId })
-            .andWhere('user.status = :status', { status: 'active' });
-
-        if (search) {
-            query.andWhere('(user.name ILIKE :search OR user.email ILIKE :search)', { search: `%${search}%` });
-        }
-
-        // Limit results for performance
-        query.limit(20);
-
-        const users = await query.getMany();
-
-        return users.map(user => ({
-            id: user.id,
-            name: user.name,
-            email: user.email,
-            avatar: user.avatar,
-            role: user.role
-        }));
-    }
+    return users.map((user) => ({
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      avatar: user.avatar,
+      role: user.role,
+    }));
+  }
 }
-

@@ -11,19 +11,19 @@ import { AdminFacultyUniversityScopeController } from './admin-faculty-universit
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 
 @Module({
-    imports: [
-        TypeOrmModule.forFeature([
-            FacultyUniversityScopeAssignment,
-            User,
-            Organization,
-            Participation,
-            OpportunityApplication,
-            Opportunity,
-        ]),
-        AuditLogsModule,
-    ],
-    controllers: [AdminFacultyUniversityScopeController],
-    providers: [FacultyUniversityScopeService],
-    exports: [FacultyUniversityScopeService],
+  imports: [
+    TypeOrmModule.forFeature([
+      FacultyUniversityScopeAssignment,
+      User,
+      Organization,
+      Participation,
+      OpportunityApplication,
+      Opportunity,
+    ]),
+    AuditLogsModule,
+  ],
+  controllers: [AdminFacultyUniversityScopeController],
+  providers: [FacultyUniversityScopeService],
+  exports: [FacultyUniversityScopeService],
 })
 export class FacultyUniversityScopeModule {}

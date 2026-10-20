@@ -9,7 +9,8 @@ function deriveKey(secret: string): Buffer {
 
 function candidateKeys(): Buffer[] {
   const current =
-    (process.env.ENCRYPTION_KEY || '').trim() || LEGACY_DEFAULT_ENCRYPTION_SECRET;
+    (process.env.ENCRYPTION_KEY || '').trim() ||
+    LEGACY_DEFAULT_ENCRYPTION_SECRET;
   const keys = [deriveKey(current)];
   const previous = (process.env.ENCRYPTION_KEY_PREVIOUS || '').trim();
   if (previous && previous !== current) keys.push(deriveKey(previous));

@@ -130,7 +130,10 @@ describe('attendance-unlock.util', () => {
     );
     expect(
       computeAcademicCompletionPercent(
-        { ...baseParticipation, academicProgram: null } as unknown as Participation,
+        {
+          ...baseParticipation,
+          academicProgram: null,
+        } as unknown as Participation,
         baseUser,
       ),
     ).toBe(80);

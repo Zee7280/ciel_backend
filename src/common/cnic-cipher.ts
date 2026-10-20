@@ -32,22 +32,32 @@ function looksLikeCnic(value: string): boolean {
 export class CnicCipher {
   private readonly candidates: Candidate[];
 
-  constructor(opts: { current?: string | null; previous?: string | null } = {}) {
-    const current = (opts.current || '').trim() || LEGACY_DEFAULT_ENCRYPTION_SECRET;
+  constructor(
+    opts: { current?: string | null; previous?: string | null } = {},
+  ) {
+    const current =
+      (opts.current || '').trim() || LEGACY_DEFAULT_ENCRYPTION_SECRET;
     const list: Candidate[] = [{ label: 'current', key: deriveKey(current) }];
     const previous = (opts.previous || '').trim();
     if (previous && previous !== current) {
       list.push({ label: 'previous', key: deriveKey(previous) });
     }
     if (current !== LEGACY_DEFAULT_ENCRYPTION_SECRET) {
-      list.push({ label: 'legacy', key: deriveKey(LEGACY_DEFAULT_ENCRYPTION_SECRET) });
+      list.push({
+        label: 'legacy',
+        key: deriveKey(LEGACY_DEFAULT_ENCRYPTION_SECRET),
+      });
     }
     this.candidates = list;
   }
 
   /** True when a non-default ENCRYPTION_KEY is in use (i.e. rotation away from the public default is possible). */
   get usesCustomKey(): boolean {
-    return this.candidates[0].key.compare(deriveKey(LEGACY_DEFAULT_ENCRYPTION_SECRET)) !== 0;
+    return (
+      this.candidates[0].key.compare(
+        deriveKey(LEGACY_DEFAULT_ENCRYPTION_SECRET),
+      ) !== 0
+    );
   }
 
   encrypt(text: string): string {
@@ -61,7 +71,11 @@ export class CnicCipher {
   private attempt(text: string, key: Buffer): string | null {
     try {
       const [ivHex, encryptedText] = text.split(':');
-      const decipher = crypto.createDecipheriv(ALGORITHM, key, Buffer.from(ivHex, 'hex'));
+      const decipher = crypto.createDecipheriv(
+        ALGORITHM,
+        key,
+        Buffer.from(ivHex, 'hex'),
+      );
       let out = decipher.update(encryptedText, 'hex', 'utf8');
       out += decipher.final('utf8');
       return out;

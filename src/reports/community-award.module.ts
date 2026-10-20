@@ -6,8 +6,11 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { CommunityAwardService } from './community-award.service';
 
 @Module({
-    imports: [TypeOrmModule.forFeature([StudentReport, Organization]), NotificationsModule],
-    providers: [CommunityAwardService],
-    exports: [CommunityAwardService],
+  imports: [
+    TypeOrmModule.forFeature([StudentReport, Organization]),
+    NotificationsModule,
+  ],
+  providers: [CommunityAwardService],
+  exports: [CommunityAwardService],
 })
 export class CommunityAwardModule {}

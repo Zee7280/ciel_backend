@@ -23,32 +23,32 @@ import { AiModule } from '../ai/ai.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
-    imports: [
-        TypeOrmModule.forFeature([
-            StudentReport,
-            AttendanceLog,
-            User,
-            Opportunity,
-            Participation,
-            Timesheet,
-            OpportunityApplication,
-        ]),
-        OpportunitiesModule,
-        FacultyUniversityScopeModule,
-        StudentsModule,
-        CommunityAwardModule,
-        NpeRankingModule,
-        AiModule,
-        NotificationsModule,
-    ],
-    controllers: [
-        FacultyReportsController,
-        FacultyCommunityServiceController,
-        FacultyController,
-        FacultyDashboardController,
-        FacultyApplicationsController,
-    ],
-    providers: [FacultyReportsService, FacultyService],
-    exports: [FacultyReportsService, FacultyService],
+  imports: [
+    TypeOrmModule.forFeature([
+      StudentReport,
+      AttendanceLog,
+      User,
+      Opportunity,
+      Participation,
+      Timesheet,
+      OpportunityApplication,
+    ]),
+    OpportunitiesModule,
+    FacultyUniversityScopeModule,
+    StudentsModule,
+    CommunityAwardModule,
+    NpeRankingModule,
+    AiModule,
+    NotificationsModule,
+  ],
+  controllers: [
+    FacultyReportsController,
+    FacultyCommunityServiceController,
+    FacultyController,
+    FacultyDashboardController,
+    FacultyApplicationsController,
+  ],
+  providers: [FacultyReportsService, FacultyService],
+  exports: [FacultyReportsService, FacultyService],
 })
-export class FacultyModule { }
+export class FacultyModule {}

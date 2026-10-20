@@ -112,13 +112,17 @@ function partnerCleared(opp: TrackerOpp): boolean {
  */
 export function opportunityCreatorLabel(opp: TrackerOpp): string {
   if (opp.isStudentCreated) return 'Student';
-  if (opp.creatorId && opp.facultyId && opp.creatorId === opp.facultyId) return 'Faculty';
+  if (opp.creatorId && opp.facultyId && opp.creatorId === opp.facultyId)
+    return 'Faculty';
   if (!opp.organizationId) return 'CIEL PK admin';
   return 'Partner / NGO';
 }
 
 function facultyLabel(opp: TrackerOpp): string {
-  const s = opp.supervision && typeof opp.supervision === 'object' ? opp.supervision : {};
+  const s =
+    opp.supervision && typeof opp.supervision === 'object'
+      ? opp.supervision
+      : {};
   return (
     txt(s.supervisor_name) ||
     txt(s.faculty_name) ||
@@ -146,7 +150,9 @@ function waitingSince(opp: TrackerOpp): string | null {
   return iso(opp.updatedAt) || iso(opp.createdAt);
 }
 
-export function buildOpportunityApprovalTracker(opp: TrackerOpp): OpportunityApprovalTracker {
+export function buildOpportunityApprovalTracker(
+  opp: TrackerOpp,
+): OpportunityApprovalTracker {
   const id = String(opp.id || '').trim();
   const stage = lower(opp.workflowStage);
   const status = lower(opp.status);
@@ -167,7 +173,9 @@ export function buildOpportunityApprovalTracker(opp: TrackerOpp): OpportunityApp
     faculty: facultyCleared(opp) && !draft,
     partner: partnerCleared(opp) && !draft,
     partner_required: partnerRequired,
-    admin: opp.admin_approved === true || lower(opp.adminApprovalStatus) === 'approved',
+    admin:
+      opp.admin_approved === true ||
+      lower(opp.adminApprovalStatus) === 'approved',
   };
 
   if (draft) {
@@ -217,7 +225,11 @@ export function buildOpportunityApprovalTracker(opp: TrackerOpp): OpportunityApp
 
   // Only mark Published when the opportunity is actually live — admin line alone is not enough
   // (stale admin_approval_status was showing "Published" + Email CIEL PK at the same time).
-  if (stage === 'live' || status === 'live' || (status === 'active' && checklist.admin)) {
+  if (
+    stage === 'live' ||
+    status === 'live' ||
+    (status === 'active' && checklist.admin)
+  ) {
     return {
       public_code,
       linked_draft: false,
@@ -226,11 +238,21 @@ export function buildOpportunityApprovalTracker(opp: TrackerOpp): OpportunityApp
       next_step: 'Browse Opportunities / Community Service Workspace',
       waiting_since: null,
       route,
-      checklist: { ...checklist, student: true, faculty: true, partner: true, admin: true },
+      checklist: {
+        ...checklist,
+        student: true,
+        faculty: true,
+        partner: true,
+        admin: true,
+      },
     };
   }
 
-  if (stage === 'pending_faculty' || status === 'pending_faculty' || status === 'pending_verification') {
+  if (
+    stage === 'pending_faculty' ||
+    status === 'pending_faculty' ||
+    status === 'pending_verification'
+  ) {
     return {
       public_code,
       linked_draft: false,
@@ -276,7 +298,10 @@ export function buildOpportunityApprovalTracker(opp: TrackerOpp): OpportunityApp
     linked_draft: false,
     currently_with: status ? status.replace(/_/g, ' ') : 'In review',
     currently_with_role: 'none',
-    next_step: partnerRequired && !partnerCleared(opp) ? 'Partner/NGO acknowledgement' : 'CIEL PK review',
+    next_step:
+      partnerRequired && !partnerCleared(opp)
+        ? 'Partner/NGO acknowledgement'
+        : 'CIEL PK review',
     waiting_since: waitingSince(opp),
     route,
     checklist,

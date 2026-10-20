@@ -6,7 +6,8 @@
  */
 
 /** Admin → Settings: require the subscription fee for non-member-university students (default on). */
-export const STUDENT_SUBSCRIPTION_REQUIRED_KEY = 'STUDENT_SUBSCRIPTION_REQUIRED';
+export const STUDENT_SUBSCRIPTION_REQUIRED_KEY =
+  'STUDENT_SUBSCRIPTION_REQUIRED';
 
 /** Admin → Settings: the fee amount in whole PKR (default 300). */
 export const STUDENT_SUBSCRIPTION_FEE_PKR_KEY = 'STUDENT_SUBSCRIPTION_FEE_PKR';
@@ -22,7 +23,8 @@ export function parseStudentSubscriptionRequiredSettingValue(
 ): boolean {
   if (value == null || String(value).trim() === '') return defaultEnabled;
   const normalized = String(value).trim().toLowerCase();
-  if (['false', '0', 'no', 'off', 'disabled'].includes(normalized)) return false;
+  if (['false', '0', 'no', 'off', 'disabled'].includes(normalized))
+    return false;
   if (['true', '1', 'yes', 'on', 'enabled'].includes(normalized)) return true;
   return defaultEnabled;
 }
@@ -36,7 +38,9 @@ export function parseStudentSubscriptionFeePkr(
 }
 
 /** Case/whitespace-insensitive university name key used to match a student's university to an Organization. */
-export function normalizeUniversityName(name: string | null | undefined): string {
+export function normalizeUniversityName(
+  name: string | null | undefined,
+): string {
   return String(name ?? '')
     .trim()
     .toLowerCase()

@@ -12,13 +12,24 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 
 @Module({
-    imports: [
-        TypeOrmModule.forFeature([OrganizationMembershipFee, User, Setting]),
-        AuditLogsModule,
-        NotificationsModule,
-    ],
-    controllers: [OrganizationMembershipController, AdminOrganizationMembershipController],
-    providers: [OrganizationMembershipService, MembershipActiveGuard, PartnerMembershipSettingsService],
-    exports: [OrganizationMembershipService, MembershipActiveGuard, PartnerMembershipSettingsService],
+  imports: [
+    TypeOrmModule.forFeature([OrganizationMembershipFee, User, Setting]),
+    AuditLogsModule,
+    NotificationsModule,
+  ],
+  controllers: [
+    OrganizationMembershipController,
+    AdminOrganizationMembershipController,
+  ],
+  providers: [
+    OrganizationMembershipService,
+    MembershipActiveGuard,
+    PartnerMembershipSettingsService,
+  ],
+  exports: [
+    OrganizationMembershipService,
+    MembershipActiveGuard,
+    PartnerMembershipSettingsService,
+  ],
 })
-export class OrganizationMembershipModule { }
+export class OrganizationMembershipModule {}

@@ -13,6 +13,7 @@ Rules:
 - Never claim the project will "achieve" an SDG or solve poverty; describe a realistic local contribution.
 - Plan genuine supervised work. The activity must give every student enough real preparatory, delivery and follow-up work to reach the required hours. Idle time (e.g. waiting for paint to dry) and report writing do not count. If the idea is too small for seats × hours, say so plainly in feasibility_warning and suggest reducing seats or hours or broadening the activity.
 - Use simple, specific language a first-year student understands. No markdown, no emojis, no headings.
+- For every SDG you return, ALWAYS choose the single closest official target_id and indicator_id from the SDG catalog in the message. Copy the ids exactly; never invent an id that is not listed.
 
 Respond with ONE JSON object and nothing else, using exactly these keys:
 {
@@ -31,6 +32,6 @@ Respond with ONE JSON object and nothing else, using exactly these keys:
   "prerequisites": "short eligibility / preparation note",
   "resources": "what support or materials are needed or provided; say 'to be confirmed' when unknown",
   "feasibility_warning": "honest check of whether seats × hours is realistic for this scope",
-  "primary_sdg": { "sdg_id": "1-17", "target_id": "e.g. 4.a or empty", "why": "why this SDG is genuinely relevant", "local_metric": "one simple local measure" },
-  "supporting_sdg": { "sdg_id": "1-17 different from primary", "target_id": "or empty", "why": "justification" } or null
+  "primary_sdg": { "sdg_id": "1-17", "target_id": "closest target from the catalog, e.g. 4.a", "indicator_id": "closest indicator under that target, e.g. 4.a.1", "why": "why this SDG is genuinely relevant", "local_metric": "one simple local measure" },
+  "supporting_sdg": { "sdg_id": "1-17 different from primary", "target_id": "closest target from the catalog", "indicator_id": "closest indicator under that target", "why": "justification" } or null
 }`;

@@ -3,6 +3,7 @@ import {
   PRIVATE_TEAM_MAX_SEATS,
   type TeamMode,
 } from '../opportunities/team-mode.util';
+import { SDG_TARGET_INDICATORS } from './sdg-catalog.constant';
 
 /**
  * Student "Generate & Auto-Fill" opportunity draft: prompt building and response parsing.
@@ -95,6 +96,7 @@ export type OpportunityDraftInput = {
 export type OpportunityDraftSdg = {
   sdg_id: string;
   target_id: string;
+  indicator_id: string;
   why: string;
 };
 
@@ -137,6 +139,9 @@ export function buildOpportunityDraftPrompt(
     `Allowed beneficiary types: ${DRAFT_BENEFICIARY_TYPES.join(' | ')}`,
     `Allowed skills: ${DRAFT_SKILLS.join(' | ')}`,
     '',
+    'SDG catalog — target_id and indicator_id must be copied from this list (target: [indicators]):',
+    ...sdgCatalogPromptLines(),
+    '',
     'Fixed facts from the student (do not change them):',
     `- Creator: ${input.creator_pathway === 'private' ? 'private / independent student' : 'university-linked student'}`,
     `- Who can join: ${
@@ -161,6 +166,16 @@ export function buildOpportunityDraftPrompt(
     'NOTES>>>',
   ];
   return lines.join('\n');
+}
+
+/** One compact line per SDG: `SDG 4: 4.1 [4.1.1, 4.1.2] | 4.2 [...]`. */
+function sdgCatalogPromptLines(): string[] {
+  return Object.entries(SDG_TARGET_INDICATORS).map(
+    ([sdg, targets]) =>
+      `SDG ${sdg}: ${Object.entries(targets)
+        .map(([t, inds]) => `${t} [${inds.join(', ')}]`)
+        .join(' | ')}`,
+  );
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -207,13 +222,23 @@ function sdgId(value: unknown): string {
   return Number.isInteger(n) && n >= 1 && n <= 17 ? String(n) : '';
 }
 
-/** SDG target ids look like "4.1" / "4.a" and must belong to the SDG; anything else is dropped. */
+/** A target id ("4.1" / "4.a") that exists for this SDG in the wizard catalog; anything else is dropped. */
 function sdgTarget(value: unknown, id: string): string {
   if (typeof value !== 'string') return '';
   const t = value.trim().toLowerCase();
-  return /^\d{1,2}\.(\d{1,2}|[a-c])$/.test(t) && t.split('.')[0] === id
-    ? t
-    : '';
+  const targets = SDG_TARGET_INDICATORS[id];
+  // Own keys only: "constructor" / "__proto__" must not pass as targets.
+  return targets && Object.hasOwn(targets, t) ? t : '';
+}
+
+/** An indicator id ("4.1.1") listed under that target in the catalog; anything else is dropped. */
+function sdgIndicator(value: unknown, id: string, target: string): string {
+  if (typeof value !== 'string' || !target) return '';
+  const i = value.trim().toLowerCase();
+  const targets = SDG_TARGET_INDICATORS[id];
+  const indicators =
+    targets && Object.hasOwn(targets, target) ? targets[target] : undefined;
+  return Array.isArray(indicators) && indicators.includes(i) ? i : '';
 }
 
 function parseSdg(
@@ -224,9 +249,11 @@ function parseSdg(
   if (!r) return null;
   const id = sdgId(r.sdg_id);
   if (!id) return null;
+  const target = sdgTarget(r.target_id, id);
   return {
     sdg_id: id,
-    target_id: sdgTarget(r.target_id, id),
+    target_id: target,
+    indicator_id: sdgIndicator(r.indicator_id, id, target),
     why: cleanText(r.why, whyMax),
     local_metric: cleanText(r.local_metric, LIMITS.local_metric),
   };
@@ -276,6 +303,7 @@ export function parseOpportunityDraftResponse(
       ? {
           sdg_id: supportingRaw.sdg_id,
           target_id: supportingRaw.target_id,
+          indicator_id: supportingRaw.indicator_id,
           why: supportingRaw.why,
         }
       : null;

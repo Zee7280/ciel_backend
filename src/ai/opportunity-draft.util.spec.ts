@@ -25,10 +25,16 @@ const goodResponse = (over: Record<string, unknown> = {}) =>
     primary_sdg: {
       sdg_id: '4',
       target_id: '4.a',
+      indicator_id: '4.a.1',
       why: 'Better learning environments.',
       local_metric: 'Classrooms improved',
     },
-    supporting_sdg: { sdg_id: 12, target_id: '12.5', why: 'Reuse furniture.' },
+    supporting_sdg: {
+      sdg_id: 12,
+      target_id: '12.5',
+      indicator_id: '12.5.1',
+      why: 'Reuse furniture.',
+    },
     faculty_email: 'should-be-ignored@uni.edu',
     ...over,
   });
@@ -48,6 +54,8 @@ describe('buildOpportunityDraftPrompt', () => {
     expect(prompt).toContain('Potential student-hours (places × hours): 160');
     expect(prompt).toContain('SOS Village, Lahore');
     expect(prompt).toContain('<<<NOTES');
+    expect(prompt).toContain('SDG 9: 9.1 [9.1.1, 9.1.2]');
+    expect(prompt).toMatch(/SDG 4: .*4\.a \[4\.a\.1\]/);
     expect(prompt).toContain('NOTES>>>');
     expect(prompt).toContain('[phone removed]');
     expect(prompt).toContain('[email removed]');
@@ -81,12 +89,14 @@ describe('parseOpportunityDraftResponse', () => {
     expect(f!.primary_sdg).toEqual({
       sdg_id: '4',
       target_id: '4.a',
+      indicator_id: '4.a.1',
       why: 'Better learning environments.',
       local_metric: 'Classrooms improved',
     });
     expect(f!.supporting_sdg).toEqual({
       sdg_id: '12',
       target_id: '12.5',
+      indicator_id: '12.5.1',
       why: 'Reuse furniture.',
     });
     expect(f).not.toHaveProperty('faculty_email');
@@ -107,6 +117,67 @@ describe('parseOpportunityDraftResponse', () => {
     expect(bad!.primary_sdg).toBeNull();
     expect(bad!.supporting_sdg).toBeNull();
     expect(bad!.mode).toBe('');
+  });
+
+  it('keeps only catalog targets / indicators, so the SDG dropdowns can show them', () => {
+    const f = parseOpportunityDraftResponse(
+      goodResponse({
+        primary_sdg: {
+          sdg_id: '9',
+          target_id: '9.C',
+          indicator_id: '9.c.1',
+          why: 'x',
+        },
+        supporting_sdg: {
+          sdg_id: '4',
+          target_id: '4.9',
+          indicator_id: '4.9.1',
+          why: 'y',
+        },
+      }),
+    );
+    expect(f!.primary_sdg).toMatchObject({
+      sdg_id: '9',
+      target_id: '9.c',
+      indicator_id: '9.c.1',
+    });
+    // 4.9 is not an official target: both ids are dropped, the SDG itself is kept.
+    expect(f!.supporting_sdg).toMatchObject({
+      sdg_id: '4',
+      target_id: '',
+      indicator_id: '',
+    });
+    // An indicator that belongs to another target is dropped.
+    const g = parseOpportunityDraftResponse(
+      goodResponse({
+        primary_sdg: { sdg_id: '4', target_id: '4.1', indicator_id: '4.a.1' },
+      }),
+    );
+    expect(g!.primary_sdg).toMatchObject({
+      target_id: '4.1',
+      indicator_id: '',
+    });
+  });
+
+  it('ignores object-prototype names as SDG ids instead of throwing', () => {
+    for (const bad of [
+      'constructor',
+      '__proto__',
+      'toString',
+      'hasOwnProperty',
+    ]) {
+      const f = parseOpportunityDraftResponse(
+        goodResponse({
+          primary_sdg: { sdg_id: '4', target_id: bad, indicator_id: bad },
+          supporting_sdg: { sdg_id: '9', target_id: '9.1', indicator_id: bad },
+        }),
+      );
+      expect(f!.primary_sdg).toMatchObject({ target_id: '', indicator_id: '' });
+      expect(f!.supporting_sdg).toMatchObject({
+        target_id: '9.1',
+        indicator_id: '',
+      });
+    }
   });
 
   it('caps long text and scrubs personal details the model echoed back', () => {

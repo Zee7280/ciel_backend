@@ -47,3 +47,51 @@ describe('AiController.summarize — evaluator sections are CIEL PK Admin only',
     ).resolves.toBeTruthy();
   });
 });
+
+describe('AiController.opportunityDraft — roles and feature flag', () => {
+  const draft = { fields: { title: 'T' }, model: 'm' };
+  const make = (enabled: boolean | null) => {
+    const ai = { generateOpportunityDraft: jest.fn().mockResolvedValue(draft) };
+    const settings =
+      enabled === null
+        ? undefined
+        : { isAiOpportunityDraftEnabled: jest.fn().mockResolvedValue(enabled) };
+    const controller = new AiController(
+      ai as unknown as AiService,
+      settings as never,
+    );
+    return { ai, controller };
+  };
+  const as = (role: string) => ({ user: { id: 'u1', role: role as UserRole } });
+  const body = { idea: 'tree plantation' };
+
+  it('drafts for students, faculty and admin when the flag is on', async () => {
+    const { ai, controller } = make(true);
+    for (const role of ['student', 'faculty', 'admin']) {
+      await expect(
+        controller.opportunityDraft(as(role), body),
+      ).resolves.toEqual({ success: true, data: draft });
+    }
+    expect(ai.generateOpportunityDraft).toHaveBeenCalledWith(body);
+  });
+
+  it('refuses other roles', async () => {
+    const { ai, controller } = make(true);
+    for (const role of ['ngo', 'university', 'corporate']) {
+      await expect(
+        controller.opportunityDraft(as(role), body),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    }
+    expect(ai.generateOpportunityDraft).not.toHaveBeenCalled();
+  });
+
+  it('is unavailable while the flag is off or settings are missing', async () => {
+    for (const enabled of [false, null]) {
+      const { ai, controller } = make(enabled);
+      await expect(
+        controller.opportunityDraft(as('student'), body),
+      ).rejects.toMatchObject({ status: 503 });
+      expect(ai.generateOpportunityDraft).not.toHaveBeenCalled();
+    }
+  });
+});

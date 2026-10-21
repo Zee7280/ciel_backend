@@ -20,6 +20,13 @@ import {
   type NpeAiEvaluation,
 } from '../ranking/parse-npe-ranking.util';
 import { scrubPersonalText } from '../common/scrub-personal-text.util';
+import { OPPORTUNITY_DRAFT_SYSTEM_PROMPT } from './prompts/opportunity-draft-prompt.constant';
+import {
+  buildOpportunityDraftPrompt,
+  parseOpportunityDraftResponse,
+  type OpportunityDraftFields,
+  type OpportunityDraftInput,
+} from './opportunity-draft.util';
 import { ciiEvidenceInspectCache } from '../reports/build-ciel-pk-ai-evaluation-payload.util';
 
 /** Shared rules for the executive flashcard section summaries (V12). Scoring prompts do not use this. */
@@ -1947,6 +1954,76 @@ ${JSON.stringify(data)}`;
       default:
         return `Summarize project data professionally: ${JSON.stringify(data)}`;
     }
+  }
+
+  /** True when this environment can call OpenAI at all (drives the public AI-draft flag). */
+  isConfigured(): boolean {
+    return Boolean(process.env.OPENAI_API_KEY?.trim());
+  }
+
+  /**
+   * Student "Generate & Auto-Fill": drafts the editable text fields of an opportunity from rough
+   * notes. Returns validated fields only (see opportunity-draft.util.ts); the student reviews all.
+   */
+  async generateOpportunityDraft(
+    input: OpportunityDraftInput,
+  ): Promise<{ fields: OpportunityDraftFields; model: string }> {
+    if (!this.isConfigured()) {
+      throw new HttpException(
+        { error: 'AI drafting is not available right now.' },
+        503,
+      );
+    }
+    let text: string;
+    try {
+      text = await this.generateSummaryWithOpenAI(
+        buildOpportunityDraftPrompt(input),
+        {
+          systemMessage: OPPORTUNITY_DRAFT_SYSTEM_PROMPT,
+          responseFormat: { type: 'json_object' },
+          temperature: 0.5,
+          maxTokens: 6000,
+          reasoningEffort: 'low',
+          timeoutMs: 60_000,
+          retryEmptyOnce: true,
+        },
+      );
+    } catch (error: unknown) {
+      const status =
+        typeof error === 'object' && error !== null && 'status' in error
+          ? (error as { status?: unknown }).status
+          : undefined;
+      if (status === 429) {
+        throw new HttpException(
+          { error: 'AI limit reached. Please wait a minute and try again.' },
+          429,
+        );
+      }
+      if (status === 504) {
+        throw new HttpException(
+          { error: 'The AI took too long. Please try again.' },
+          504,
+        );
+      }
+      this.logger.warn(
+        `Opportunity draft failed: ${resolveOpenAiErrorMessage(error)}`,
+      );
+      throw new HttpException(
+        {
+          error:
+            'AI drafting failed. Please try again or fill the form yourself.',
+        },
+        503,
+      );
+    }
+    const fields = parseOpportunityDraftResponse(text);
+    if (!fields) {
+      throw new HttpException(
+        { error: 'AI returned an unreadable draft. Please try again.' },
+        502,
+      );
+    }
+    return { fields, model: resolveOpenAiSummaryModel() };
   }
 
   async summarize(

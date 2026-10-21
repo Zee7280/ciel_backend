@@ -1723,6 +1723,8 @@ export class MailService {
     reportPath: string;
     publicCode?: string;
     isStudentCreator?: boolean;
+    /** Private team (opportunities.team_mode): nobody applies, the creator adds members in the report. */
+    isPrivateTeam?: boolean;
   }) {
     const from =
       this.configService.get<string>('MAIL_FROM') ||
@@ -1761,7 +1763,11 @@ export class MailService {
             student
               ? 'As the student who created this opportunity, you can <strong>start your report</strong> right away — log service hours, add evidence, and submit for verification.'
               : 'Your listing is live. Students can discover and apply, and you can follow progress from your Community Service dashboard.'
-          }</p>
+          }</p>${
+            input.isPrivateTeam
+              ? '<p style="margin: 0 0 18px 0;"><strong>This is a private team:</strong> nobody applies. Start your report and add your members in Section 1 (up to the seats you reserved, including you).</p>'
+              : ''
+          }
 
           <div style="background: #f3faf7; border: 1px solid #d3ebe3; border-radius: 12px; padding: 14px 16px; margin: 0 0 22px 0;">
             <p style="margin: 0 0 8px 0; font-size: 11px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: #1f7a61;">Opportunity details</p>

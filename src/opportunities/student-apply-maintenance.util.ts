@@ -1,3 +1,8 @@
+import {
+  isPrivateTeamOpportunity,
+  PRIVATE_TEAM_APPLY_BLOCKED_MESSAGE,
+} from './team-mode.util';
+
 /** Pause Join / Apply only. Reports, attendance, and review keep running. */
 export const STUDENT_APPLY_MAINTENANCE_ENABLED_KEY =
   'STUDENT_APPLY_MAINTENANCE_ENABLED';
@@ -23,7 +28,8 @@ export type ApplyBlockedReason =
   | 'maintenance'
   | 'catalog_closed'
   | 'opportunity_expired'
-  | 'opportunity_hidden';
+  | 'opportunity_hidden'
+  | 'private_team';
 
 export type ApplyMaintenanceState = {
   maintenanceEnabled: boolean;
@@ -90,6 +96,7 @@ export function decorateApplyGate(
     createdAt?: Date | string | null;
     admin_hidden?: boolean;
     admin_expired?: boolean;
+    team_mode?: string | null;
   },
   state: ApplyMaintenanceState,
 ): ApplyGateFields {
@@ -111,6 +118,14 @@ export function decorateApplyGate(
       apply_blocked_reason: 'opportunity_expired',
       apply_blocked_message:
         state.expiredMessage || CATALOG_APPLY_CLOSED_MESSAGE,
+      apply_maintenance: maintenance,
+    };
+  }
+  if (isPrivateTeamOpportunity(opportunity)) {
+    return {
+      applications_open: false,
+      apply_blocked_reason: 'private_team',
+      apply_blocked_message: PRIVATE_TEAM_APPLY_BLOCKED_MESSAGE,
       apply_maintenance: maintenance,
     };
   }

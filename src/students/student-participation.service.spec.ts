@@ -23,8 +23,15 @@ describe('StudentParticipationService', () => {
       .mockResolvedValue(new Set()),
   };
 
+  const oppFindOne = jest.fn();
+
   beforeEach(async () => {
     jest.clearAllMocks();
+    oppFindOne.mockResolvedValue({
+      id: 'opp-1',
+      title: 'Water Project',
+      isStudentCreated: true,
+    });
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         StudentParticipationService,
@@ -35,11 +42,7 @@ describe('StudentParticipationService', () => {
         {
           provide: getRepositoryToken(Opportunity),
           useValue: {
-            findOne: jest.fn().mockResolvedValue({
-              id: 'opp-1',
-              title: 'Water Project',
-              isStudentCreated: true,
-            }),
+            findOne: oppFindOne,
           },
         },
         {
@@ -118,5 +121,29 @@ describe('StudentParticipationService', () => {
     const guide = await service.getParticipationGuide('u1', 'opp-1');
     expect(guide.can_apply).toBe(true);
     expect(guide.messages.en).toContain('Do not apply');
+  });
+
+  it('never offers Apply on a private team, and points the creator to the report', async () => {
+    mockParticipationRepo.findOne.mockResolvedValue(null);
+    mockParticipationRepo.find.mockResolvedValue([]);
+    oppFindOne.mockResolvedValue({
+      id: 'opp-1',
+      title: 'Water Project',
+      isStudentCreated: true,
+      creatorId: 'creator-1',
+      team_mode: 'private_team',
+    });
+
+    const outsider = await service.getParticipationGuide('u1', 'opp-1');
+    expect(outsider.can_apply).toBe(false);
+    expect(outsider.can_apply_as_team_lead).toBe(false);
+    expect(outsider.recommended_action).toBe('wait_for_lead');
+    expect(outsider.messages.en).toMatch(/private team/i);
+
+    const creator = await service.getParticipationGuide('creator-1', 'opp-1');
+    expect(creator.can_apply).toBe(false);
+    expect(creator.recommended_action).toBe('open_own_report');
+    expect(creator.messages.en).toMatch(/add your members/);
+    expect(mockApps.hasOpenPipelineApplication).not.toHaveBeenCalled();
   });
 });

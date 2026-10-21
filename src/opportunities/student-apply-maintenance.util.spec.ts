@@ -30,6 +30,30 @@ describe('student apply maintenance util', () => {
     );
   });
 
+  it('closes Apply on a private team, while open and legacy listings stay open', () => {
+    const fresh = new Date('2026-12-01T00:00:00.000Z');
+    const privateGate = decorateApplyGate(
+      { createdAt: fresh, team_mode: 'private_team' },
+      openState,
+    );
+    expect(privateGate.applications_open).toBe(false);
+    expect(privateGate.apply_blocked_reason).toBe('private_team');
+    expect(privateGate.apply_blocked_message).toMatch(/private team/i);
+    for (const team_mode of ['open', null, undefined]) {
+      expect(
+        decorateApplyGate({ createdAt: fresh, team_mode }, openState)
+          .applications_open,
+      ).toBe(true);
+    }
+    // Hidden still wins, so the card reports the stronger reason.
+    expect(
+      decorateApplyGate(
+        { createdAt: fresh, team_mode: 'private_team', admin_hidden: true },
+        openState,
+      ).apply_blocked_reason,
+    ).toBe('opportunity_hidden');
+  });
+
   it('blocks apply when maintenance is on, even for new listings', () => {
     const gate = decorateApplyGate(
       { createdAt: new Date('2026-12-01T00:00:00.000Z') },

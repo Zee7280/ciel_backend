@@ -18,6 +18,10 @@ import {
 } from '../engagement/attendance-approver.util';
 import { buildTeamDisplayName } from '../engagement/team-display-name.util';
 import {
+  isPrivateTeamOpportunity,
+  PRIVATE_TEAM_APPLY_BLOCKED_MESSAGE,
+} from '../opportunities/team-mode.util';
+import {
   participationPhaseLabel,
   resolveParticipationPhase,
 } from './participation-phase.util';
@@ -263,6 +267,28 @@ export class StudentParticipationService {
           },
         },
         { participation: mine, opportunity, reportStatus },
+      );
+    }
+
+    // Private team: nobody applies. The creator starts the report and adds members there.
+    if (isPrivateTeamOpportunity(opportunity)) {
+      const isCreator = opportunity.creatorId === studentUserId;
+      const message = isCreator
+        ? 'This is your private team. Start your report and add your members in Section 1.'
+        : PRIVATE_TEAM_APPLY_BLOCKED_MESSAGE;
+      return this.enrichGuide(
+        {
+          your_role: 'none',
+          recommended_action: isCreator ? 'open_own_report' : 'wait_for_lead',
+          can_apply: false,
+          can_apply_as_team_lead: false,
+          team_lead_name: null,
+          team_display_name: null,
+          attendance_approver_type: approverType,
+          attendance_approver_label: approverLabel,
+          messages: { en: message, ur: message },
+        },
+        { participation: null, opportunity },
       );
     }
 

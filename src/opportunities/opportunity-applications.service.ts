@@ -36,6 +36,12 @@ import {
 import { Opportunity } from './entities/opportunity.entity';
 import { WORKFLOW_STAGE } from './opportunity-workflow.service';
 import { isTeamApplyFromParticipationAndMembers } from './apply-team-payload.util';
+import {
+  countOccupiedSeats,
+  lockOpportunitySeats,
+  pendingApplicationSeatCount,
+  seatsUnavailableMessage,
+} from './seat-capacity.util';
 import { AdminPatchTeamMemberDto } from './dto/admin-patch-team-member.dto';
 import { AdminMergeTeamMembersDto } from './dto/admin-merge-team-members.dto';
 import {
@@ -3738,12 +3744,10 @@ export class OpportunityApplicationsService {
 
     let total = 0;
     for (const app of apps) {
-      const teamSummary = this.adminBrowseApplicationTeamSummaryForQueue(app);
-      if (teamSummary && teamSummary.team_member_count >= 1) {
-        total += teamSummary.team_member_count;
-      } else {
-        total += 1;
-      }
+      total += pendingApplicationSeatCount(
+        app.applyPayload,
+        app.studentUser?.email,
+      );
     }
     return total;
   }
@@ -3757,14 +3761,52 @@ export class OpportunityApplicationsService {
     });
   }
 
-  async createApplication(params: {
-    studentUserId: string;
-    opportunityId: string;
-    primaryFacultyEmail?: string | null;
-    secondaryFacultyEmail?: string | null;
-    attendanceApproverType?: 'faculty' | 'partner';
-    applyPayload: Record<string, unknown>;
-  }) {
+  /**
+   * Inserts a join application. With `seatGuard` (a listing with a seat cap), the free-seat check and
+   * the insert run in one transaction under the listing's seat lock, so two simultaneous applies can
+   * never both take the last places.
+   */
+  async createApplication(
+    params: {
+      studentUserId: string;
+      opportunityId: string;
+      primaryFacultyEmail?: string | null;
+      secondaryFacultyEmail?: string | null;
+      attendanceApproverType?: 'faculty' | 'partner';
+      applyPayload: Record<string, unknown>;
+    },
+    seatGuard?: { seats: number; requested: number },
+  ) {
+    if (!seatGuard || !(seatGuard.seats > 0)) {
+      return this.insertApplication(params, this.appRepo);
+    }
+    return this.appRepo.manager.transaction(async (em) => {
+      await lockOpportunitySeats(em, params.opportunityId);
+      const occupied = await countOccupiedSeats(em, params.opportunityId);
+      const full = seatsUnavailableMessage(
+        seatGuard.seats,
+        occupied,
+        seatGuard.requested,
+      );
+      if (full) throw new BadRequestException(full);
+      return this.insertApplication(
+        params,
+        em.getRepository(OpportunityApplication),
+      );
+    });
+  }
+
+  private async insertApplication(
+    params: {
+      studentUserId: string;
+      opportunityId: string;
+      primaryFacultyEmail?: string | null;
+      secondaryFacultyEmail?: string | null;
+      attendanceApproverType?: 'faculty' | 'partner';
+      applyPayload: Record<string, unknown>;
+    },
+    repo: Repository<OpportunityApplication>,
+  ) {
     const primary = params.primaryFacultyEmail
       ? this.normalizeEmail(params.primaryFacultyEmail)
       : null;
@@ -3774,7 +3816,7 @@ export class OpportunityApplicationsService {
     const attendanceApproverType =
       params.attendanceApproverType === 'partner' ? 'partner' : 'faculty';
 
-    const row = this.appRepo.create({
+    const row = repo.create({
       opportunityId: params.opportunityId,
       studentUserId: params.studentUserId,
       internalStatus: 'pending_admin',
@@ -3784,7 +3826,7 @@ export class OpportunityApplicationsService {
       applyPayload: params.applyPayload,
     });
     try {
-      return await this.appRepo.save(row);
+      return await repo.save(row);
     } catch (e) {
       if ((e as { code?: unknown } | null)?.code === '23505') {
         throw new BadRequestException('Already applied to this opportunity');

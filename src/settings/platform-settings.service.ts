@@ -51,6 +51,22 @@ export class PlatformSettingsService {
     return this.getBool(PLATFORM_SETTING_KEYS.ALLOW_REGISTRATIONS, true);
   }
 
+  /** Student AI opportunity draft (Generate & Auto-Fill). */
+  isAiOpportunityDraftEnabled(): Promise<boolean> {
+    return this.getBool(
+      PLATFORM_SETTING_KEYS.STUDENT_AI_OPPORTUNITY_DRAFT_ENABLED,
+      false,
+    );
+  }
+
+  /** Gates creating NEW private teams only; existing private teams keep their rules either way. */
+  isPrivateTeamEnabled(): Promise<boolean> {
+    return this.getBool(
+      PLATFORM_SETTING_KEYS.STUDENT_PRIVATE_TEAM_ENABLED,
+      false,
+    );
+  }
+
   /** Non-sensitive config for the public site shell (GET /public/config). */
   async getPublicConfig() {
     const [
@@ -61,6 +77,8 @@ export class PlatformSettingsService {
       reportingFee,
       subscriptionRequired,
       subscriptionFee,
+      privateTeamEnabled,
+      aiDraftEnabled,
     ] = await Promise.all([
       this.isMaintenanceMode(),
       this.isRegistrationAllowed(),
@@ -69,6 +87,8 @@ export class PlatformSettingsService {
       this.getString(PLATFORM_SETTING_KEYS.REPORTING_FEE_PKR),
       this.getBool(PLATFORM_SETTING_KEYS.STUDENT_SUBSCRIPTION_REQUIRED, true),
       this.getString(PLATFORM_SETTING_KEYS.STUDENT_SUBSCRIPTION_FEE_PKR),
+      this.isPrivateTeamEnabled(),
+      this.isAiOpportunityDraftEnabled(),
     ]);
     const positiveInt = (raw: string | null, fallback: number) => {
       const n = parseInt(String(raw ?? '').replace(/[^\d]/g, ''), 10);
@@ -83,6 +103,10 @@ export class PlatformSettingsService {
       reporting_fee_pkr: positiveInt(reportingFee, 200),
       student_subscription_required: subscriptionRequired,
       student_subscription_fee_pkr: positiveInt(subscriptionFee, 300),
+      student_private_team_enabled: privateTeamEnabled,
+      // Only advertised when this server can actually reach OpenAI.
+      student_ai_draft_enabled:
+        aiDraftEnabled && Boolean(process.env.OPENAI_API_KEY?.trim()),
     };
   }
 }

@@ -135,6 +135,17 @@ export const SETTINGS_REGISTRY: readonly SettingSpec[] = [
     max: 60,
     description: 'Review SLA (days)',
   },
+  {
+    key: PLATFORM_SETTING_KEYS.STUDENT_PRIVATE_TEAM_ENABLED,
+    kind: 'boolean',
+    description: 'Let students create Private Team opportunities',
+  },
+  {
+    key: PLATFORM_SETTING_KEYS.STUDENT_AI_OPPORTUNITY_DRAFT_ENABLED,
+    kind: 'boolean',
+    description:
+      'Let students draft opportunities with AI (Generate & Auto-Fill)',
+  },
 ];
 
 const BY_KEY = new Map(SETTINGS_REGISTRY.map((s) => [s.key, s]));

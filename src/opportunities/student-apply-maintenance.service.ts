@@ -99,6 +99,7 @@ export class StudentApplyMaintenanceService implements OnModuleInit {
       createdAt?: Date | string | null;
       admin_hidden?: boolean;
       admin_expired?: boolean;
+      team_mode?: string | null;
     },
     state: ApplyMaintenanceState,
   ): ApplyGateFields {
@@ -109,6 +110,7 @@ export class StudentApplyMaintenanceService implements OnModuleInit {
     createdAt?: Date | string | null;
     admin_hidden?: boolean;
     admin_expired?: boolean;
+    team_mode?: string | null;
   }): Promise<void> {
     const state = await this.getState();
     const gate = decorateApplyGate(opportunity, state);

@@ -1818,6 +1818,118 @@ describe('EngagementService', () => {
       );
     });
 
+    describe('builder listings: total seats under the listing seat lock', () => {
+      const run = (opts: {
+        teamMode: string | null;
+        occupied: number;
+        seats?: number;
+        callerRole?: string;
+      }) => {
+        const t = fx(`register-seat-lock-${opts.teamMode}-${opts.occupied}`);
+        const dto = {
+          projectId: t.id.project,
+          participationMode: 'team',
+          isTeamLead: false,
+          email: t.email.member,
+          fullName: t.name.teamMember,
+          cnic: '1234567890123',
+          mobile: '03001234567',
+          team_id: t.id.teamId,
+        } as RegisterParticipantDto;
+        const query = jest.fn().mockResolvedValue([]);
+        const mockManager = {
+          findOne: jest
+            .fn()
+            .mockResolvedValueOnce({
+              id: t.id.project,
+              title: t.title,
+              status: 'active',
+              admin_approved: true,
+              team_mode: opts.teamMode,
+              timeline: { volunteers_required: opts.seats ?? 5 },
+            })
+            .mockResolvedValueOnce(null), // existingByCnic
+          createQueryBuilder: jest
+            .fn()
+            .mockReturnValueOnce(mockUserQueryBuilder(null))
+            .mockReturnValueOnce(mockParticipationQueryBuilder(null)),
+          create: jest.fn().mockReturnValue({}),
+          save: jest
+            .fn()
+            .mockImplementation(
+              (entity: unknown, data: Record<string, unknown>) => ({
+                id: 'new-id',
+                ...data,
+              }),
+            ),
+          query,
+          // Team cap counts teammates (where.teamId); total seats count every occupied seat.
+          count: jest.fn((_e: unknown, o: { where: { teamId?: string } }) =>
+            Promise.resolve(o.where.teamId ? 1 : opts.occupied),
+          ),
+          find: jest.fn().mockResolvedValue([]),
+        };
+        mockParticipationRepository.manager = {
+          transaction: jest
+            .fn()
+            .mockImplementation((cb: (m: typeof mockManager) => unknown) =>
+              cb(mockManager),
+            ),
+        };
+        return {
+          call: () =>
+            service.registerParticipant(t.id.u1, dto, opts.callerRole),
+          mockManager,
+          query,
+        };
+      };
+
+      it('refuses a new seat on a full private team / open builder listing', async () => {
+        for (const teamMode of ['private_team', 'open']) {
+          const { call, mockManager, query } = run({ teamMode, occupied: 5 });
+          await expect(call()).rejects.toThrow(
+            'All seats for this opportunity are taken.',
+          );
+          expect(query).toHaveBeenCalledWith(
+            'SELECT pg_advisory_xact_lock(hashtext($1))',
+            [expect.stringMatching(/^opportunity_seats:/)],
+          );
+          expect(mockManager.save).not.toHaveBeenCalled();
+        }
+      });
+
+      it('allows a new seat while places remain, after taking the lock', async () => {
+        const { call, mockManager, query } = run({
+          teamMode: 'open',
+          occupied: 4,
+        });
+        await call();
+        expect(query).toHaveBeenCalledTimes(1);
+        expect(mockManager.save).toHaveBeenCalled();
+      });
+
+      it('lets a Super Admin repair a full builder listing (same exemption as scope / OTP)', async () => {
+        const { call, mockManager, query } = run({
+          teamMode: 'open',
+          occupied: 5,
+          callerRole: 'admin',
+        });
+        await call();
+        expect(query).not.toHaveBeenCalled();
+        expect(mockManager.save).toHaveBeenCalled();
+      });
+
+      it('leaves legacy listings (no team_mode) on the old rules: no lock, no total check', async () => {
+        const { call, mockManager, query } = run({
+          teamMode: null,
+          occupied: 50,
+        });
+        await call();
+        expect(query).not.toHaveBeenCalled();
+        expect(mockManager.save).toHaveBeenCalled();
+      });
+    });
+
     it('rejects a second team lead on the same teamId', async () => {
       const t = fx('register-second-lead');
       const studentId = t.id.u2;

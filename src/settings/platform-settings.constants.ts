@@ -12,6 +12,10 @@ export const PLATFORM_SETTING_KEYS = {
   /** Student subscription fee for non-member-university students (see student-subscription.util.ts). */
   STUDENT_SUBSCRIPTION_REQUIRED: 'STUDENT_SUBSCRIPTION_REQUIRED',
   STUDENT_SUBSCRIPTION_FEE_PKR: 'STUDENT_SUBSCRIPTION_FEE_PKR',
+  /** Student builder "Private Team" choice (team-mode.util.ts). Off by default. */
+  STUDENT_PRIVATE_TEAM_ENABLED: 'STUDENT_PRIVATE_TEAM_ENABLED',
+  /** Student builder "Generate & Auto-Fill" (POST /ai/opportunity-draft). Off by default. */
+  STUDENT_AI_OPPORTUNITY_DRAFT_ENABLED: 'STUDENT_AI_OPPORTUNITY_DRAFT_ENABLED',
 } as const;
 
 export function parseBooleanSetting(

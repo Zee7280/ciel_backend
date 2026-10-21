@@ -21,6 +21,7 @@ import { OrganizationsService } from '../organizations/organizations.service';
 import { MailService } from '../mail/mail.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
+import { PlatformSettingsService } from '../settings/platform-settings.service';
 import { OpportunityApplicationsService } from './opportunity-applications.service';
 
 // create() gates on a fully-complete profile before it even looks at approval routing — stub it
@@ -57,6 +58,7 @@ interface ServicePrivates {
   opportunityWorkflow: Stubbed<OpportunityWorkflowService>;
   opportunityApplicationsService: Stubbed<OpportunityApplicationsService>;
   facultyUniversityScope: Stubbed<FacultyUniversityScopeService>;
+  platformSettings: Stubbed<PlatformSettingsService>;
   isPubliclyVisibleOpportunity(opp: Opportunity): boolean;
   viewerMayEditOpportunity(
     opp: Opportunity,
@@ -746,6 +748,68 @@ describe('OpportunitiesService — createStudentOpportunity advisory lock', () =
   });
 });
 
+describe('OpportunitiesService — generic update keeps a private team within 1–20 seats', () => {
+  const setup = (teamMode: string | null) => {
+    const opp = {
+      id: 'opp-pt',
+      creatorId: 'student-1',
+      isStudentCreated: true,
+      status: 'pending_faculty',
+      workflowStage: 'pending_faculty',
+      facultyApprovalStatus: 'pending',
+      partnerApprovalStatus: 'not_applicable',
+      adminApprovalStatus: 'pending',
+      faculty_verified: false,
+      faculty_verification_status: 'pending_faculty',
+      partnerVerified: true,
+      requiresPartnerApproval: false,
+      supervision: { contact: 'teacher@uni.edu' },
+      timeline: {
+        start_date: '2026-11-01',
+        end_date: '2026-12-01',
+        volunteers_required: 8,
+      },
+      team_mode: teamMode,
+    } as unknown as Opportunity;
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
+    const service = makeService({
+      findOne: jest.fn().mockResolvedValue(opp),
+      save,
+    });
+    privates(service).usersRepository = {
+      findOne: jest
+        .fn()
+        .mockResolvedValue({ id: 'student-1', role: 'student' }),
+    };
+    privates(service).organizationsService = {
+      getMyOrganization: jest.fn().mockResolvedValue(null),
+    };
+    return { service, save };
+  };
+  const bigTimeline = {
+    id: 'opp-pt',
+    timeline: {
+      start_date: '2026-11-01',
+      end_date: '2026-12-01',
+      volunteers_required: 500,
+    },
+  } as unknown as UpdateOpportunityDto;
+
+  it('refuses raising a private team above 20 seats through POST /opportunities/update', async () => {
+    const { service, save } = setup('private_team');
+    await expect(updateRow(service, 'student-1', bigTimeline)).rejects.toThrow(
+      /1–20 seats/,
+    );
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('leaves legacy listings free to change seats as before', async () => {
+    const { service, save } = setup(null);
+    await updateRow(service, 'student-1', bigTimeline);
+    expect(save).toHaveBeenCalled();
+  });
+});
+
 describe('OpportunitiesService — student edit/resubmit after faculty revision', () => {
   it('re-enters pending_faculty (not stuck in "revision") when the student saves an edit', async () => {
     const opp = {
@@ -1257,6 +1321,70 @@ describe('OpportunitiesService — saveStudentOpportunityDraft (first-save regre
 
     expect(create.mock.calls[0][0].wizard_progress).toBeUndefined();
     expect(create.mock.calls[1][0].wizard_progress).toBeUndefined();
+  });
+
+  describe('team_mode', () => {
+    const setup = (privateTeamEnabled: boolean) => {
+      const create = jest.fn((payload: Record<string, unknown>) => payload);
+      const save = jest.fn((payload: Record<string, unknown>) =>
+        Promise.resolve({ id: 'new-draft-id', ...payload }),
+      );
+      const service = makeService({ create, save });
+      privates(service).usersRepository = {
+        findOne: jest.fn().mockResolvedValue({ id: 'student-1' }),
+      };
+      privates(service).platformSettings = {
+        isPrivateTeamEnabled: jest.fn().mockResolvedValue(privateTeamEnabled),
+      };
+      return { service, create };
+    };
+
+    it('stores a private team on a student draft when the feature is on', async () => {
+      const { service, create } = setup(true);
+      await service.saveStudentOpportunityDraft('student-1', null, {
+        draft: true,
+        title: 'Classroom upgrade',
+        team_mode: 'private_team',
+      });
+      expect(create.mock.calls[0][0].team_mode).toBe('private_team');
+    });
+
+    it('refuses a private team draft while the feature is off; open drafts save with legacy null', async () => {
+      const { service, create } = setup(false);
+      await expect(
+        service.saveStudentOpportunityDraft('student-1', null, {
+          draft: true,
+          title: 'Classroom upgrade',
+          team_mode: 'private_team',
+        }),
+      ).rejects.toThrow(/not available yet/);
+      await service.saveStudentOpportunityDraft('student-1', null, {
+        draft: true,
+        title: 'Classroom upgrade',
+        team_mode: 'open',
+      });
+      expect(create.mock.calls[0][0].team_mode).toBeNull();
+    });
+
+    it('never writes team_mode on a faculty / partner draft', async () => {
+      const { service, create } = setup(true);
+      await (
+        service as unknown as {
+          persistOpportunityDraft: (
+            userId: string,
+            id: string | null,
+            dto: Record<string, unknown>,
+            ownership: { isStudentCreated: boolean },
+          ) => Promise<unknown>;
+        }
+      ).persistOpportunityDraft(
+        'student-1',
+        null,
+        { draft: true, title: 'Faculty listing', team_mode: 'private_team' },
+        { isStudentCreated: false },
+      );
+      expect(create.mock.calls[0][0].team_mode).toBeUndefined();
+    });
   });
 });
 
@@ -2185,6 +2313,36 @@ describe('OpportunitiesService — Faculty / Partner / CIEL notify loop', () => 
     expect(
       privates(service).mailService.sendAdminStudentMayStartReport,
     ).toHaveBeenCalledWith('Campus garden', 'opp-1', 'Ali');
+    expect(
+      privates(service).mailService.sendOpportunityLiveStartReportEmail,
+    ).toHaveBeenCalledWith(expect.objectContaining({ isPrivateTeam: false }));
+  });
+
+  it('CIEL approve of a private team tells the creator to add members in the report', async () => {
+    const opp = {
+      id: 'opp-1',
+      title: 'Campus garden',
+      isStudentCreated: true,
+      creatorId: 'student-1',
+      workflowStage: 'pending_admin',
+      status: 'pending_approval',
+      admin_approved: false,
+      adminApprovalStatus: 'pending',
+      faculty_verified: true,
+      facultyApprovalStatus: 'approved',
+      requiresPartnerApproval: false,
+      partnerVerified: true,
+      partnerApprovalStatus: 'not_applicable',
+      timeline: { expected_hours: 16, volunteers_required: 8 },
+      team_mode: 'private_team',
+    } as unknown as Opportunity;
+    const { service } = mailReadyService(opp);
+
+    await service.approve('opp-1', { id: 'admin-1', name: 'CIEL PK' });
+
+    expect(
+      privates(service).mailService.sendOpportunityLiveStartReportEmail,
+    ).toHaveBeenCalledWith(expect.objectContaining({ isPrivateTeam: true }));
   });
 
   it('remind-reviewer on the CIEL queue emails admin without changing stage', async () => {

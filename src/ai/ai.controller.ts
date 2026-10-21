@@ -2,8 +2,10 @@ import {
   Body,
   Controller,
   ForbiddenException,
+  Optional,
   Post,
   Request,
+  ServiceUnavailableException,
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -14,6 +16,15 @@ import {
 import { UserRole } from '../users/enums/user-role.enum';
 import { AiService } from './ai.service';
 import { SummarizeAiDto } from './dto/summarize-ai.dto';
+import { OpportunityDraftDto } from './dto/opportunity-draft.dto';
+import { PlatformSettingsService } from '../settings/platform-settings.service';
+
+/** Roles that create opportunities through the guided wizard and may ask AI for a draft. */
+const OPPORTUNITY_DRAFT_ROLES = new Set<UserRole | undefined>([
+  UserRole.STUDENT,
+  UserRole.FACULTY,
+  UserRole.SUPER_ADMIN,
+]);
 
 /**
  * Evaluator sections produce institutional scores / verdicts. Only CIEL PK Admin may trigger them
@@ -33,7 +44,51 @@ interface AuthenticatedRequest {
 @Controller('ai')
 @UseGuards(JwtAuthGuard, RateLimitGuard)
 export class AiController {
-  constructor(private readonly aiService: AiService) {}
+  constructor(
+    private readonly aiService: AiService,
+    @Optional()
+    private readonly platformSettings?: PlatformSettingsService,
+  ) {}
+
+  /** Drafts editable opportunity text from a student's brainstorm. Never sets approvals or contacts. */
+  @Post('opportunity-draft')
+  @RateLimit(
+    {
+      name: 'ai-opportunity-draft',
+      limit: 3,
+      windowMs: 60_000,
+      by: 'user',
+      message: 'Too many AI drafts. Please wait a minute and try again.',
+    },
+    {
+      name: 'ai-opportunity-draft-daily',
+      limit: 30,
+      windowMs: 24 * 60 * 60_000,
+      by: 'user',
+      message:
+        'Daily AI draft limit reached. Please continue editing the form yourself.',
+    },
+  )
+  async opportunityDraft(
+    @Request() req: AuthenticatedRequest,
+    @Body() dto: OpportunityDraftDto,
+  ) {
+    if (!OPPORTUNITY_DRAFT_ROLES.has(req.user?.role)) {
+      throw new ForbiddenException(
+        'AI drafting is not available for this account.',
+      );
+    }
+    const enabled = this.platformSettings
+      ? await this.platformSettings.isAiOpportunityDraftEnabled()
+      : false;
+    if (!enabled) {
+      throw new ServiceUnavailableException(
+        'AI drafting is not available right now.',
+      );
+    }
+    const result = await this.aiService.generateOpportunityDraft(dto);
+    return { success: true, data: result };
+  }
 
   @Post('summarize')
   @RateLimit({

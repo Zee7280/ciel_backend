@@ -221,6 +221,13 @@ export class Opportunity {
   @Column({ default: false })
   admin_expired: boolean;
 
+  /**
+   * Student builder join rule: `private_team` (creator adds members in the report, no applies) or
+   * `open`. Null on every legacy row = open with the pre-builder rules. See team-mode.util.ts.
+   */
+  @Column({ type: 'varchar', length: 16, nullable: true })
+  team_mode: 'private_team' | 'open' | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

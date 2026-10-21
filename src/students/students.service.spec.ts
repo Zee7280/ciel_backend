@@ -941,10 +941,63 @@ describe('StudentsService.updateStudentOpportunity — same guards as create', (
         validateLocation: jest.fn(),
         validateTimeline: jest.fn(),
         snapshotStudentOpportunityResubmit: jest.fn(),
+        assertStudentTeamMode,
       },
     });
-    return { service, opp, save, validateEditPatch };
+    return { service, opp, save, validateEditPatch, assertStudentTeamMode };
   };
+  const assertStudentTeamMode = jest.fn((mode: unknown) =>
+    Promise.resolve(mode ?? null),
+  );
+
+  it('validates team_mode against the stored mode and seats, and stores the result', async () => {
+    const { service, opp, assertStudentTeamMode: check } = setup();
+    check.mockClear();
+    await service.updateStudentOpportunity(
+      'stu-1',
+      'opp-1',
+      asEditDto({
+        team_mode: 'private_team',
+        timeline: { volunteers_required: 8 },
+      }),
+    );
+    expect(check).toHaveBeenCalledWith(
+      'private_team',
+      { volunteers_required: 8 },
+      { requireSeats: true, previous: undefined },
+    );
+    expect((opp as { team_mode?: unknown }).team_mode).toBe('private_team');
+  });
+
+  it('re-checks a private team when only the seats change', async () => {
+    const { service, opp, assertStudentTeamMode: check } = setup();
+    (opp as { team_mode?: unknown }).team_mode = 'private_team';
+    check.mockClear();
+    check.mockRejectedValueOnce(new Error('A private team has 1–20 seats'));
+    await expect(
+      service.updateStudentOpportunity(
+        'stu-1',
+        'opp-1',
+        asEditDto({ timeline: { volunteers_required: 50 } }),
+      ),
+    ).rejects.toThrow(/1–20 seats/);
+    expect(check).toHaveBeenCalledWith(
+      'private_team',
+      { volunteers_required: 50 },
+      { requireSeats: true, previous: 'private_team' },
+    );
+  });
+
+  it('does not touch team_mode on unrelated edits', async () => {
+    const { service, assertStudentTeamMode: check } = setup();
+    check.mockClear();
+    await service.updateStudentOpportunity(
+      'stu-1',
+      'opp-1',
+      asEditDto({ title: 'Renamed' }),
+    );
+    expect(check).not.toHaveBeenCalled();
+  });
 
   it('refuses to widen the scope to all universities', async () => {
     const { service } = setup();
@@ -1126,6 +1179,42 @@ describe('StudentsService.applyToOpportunity — dates, seats and team eligibili
 
   it('accepts an eligible individual application while the project is running', async () => {
     const { service, createApplication } = build({});
+    await expect(
+      service.applyToOpportunity('lead', dto()),
+    ).resolves.toMatchObject({ success: true });
+    expect(createApplication).toHaveBeenCalled();
+  });
+
+  it('re-checks seats atomically when inserting (seat guard: listing seats + people on this application)', async () => {
+    const { service, createApplication } = build({});
+    await service.applyToOpportunity(
+      'lead',
+      dto({
+        participation_type: 'team',
+        team_members: [
+          { email: 'a@uni.edu', name: 'A', mobile: '03001111111' },
+          { email: 'b@uni.edu', name: 'B', mobile: '03002222222' },
+        ],
+      }),
+    );
+    expect(createApplication).toHaveBeenCalledWith(
+      expect.objectContaining({ studentUserId: 'lead' }),
+      { seats: 10, requested: 3 },
+    );
+  });
+
+  it('refuses every application on a private team (the creator adds members in the report)', async () => {
+    const { service, opportunity, createApplication } = build({});
+    opportunity.team_mode = 'private_team';
+    await expect(service.applyToOpportunity('lead', dto())).rejects.toThrow(
+      /private team/i,
+    );
+    expect(createApplication).not.toHaveBeenCalled();
+  });
+
+  it('still accepts applications on an open builder listing', async () => {
+    const { service, opportunity, createApplication } = build({});
+    opportunity.team_mode = 'open';
     await expect(
       service.applyToOpportunity('lead', dto()),
     ).resolves.toMatchObject({ success: true });

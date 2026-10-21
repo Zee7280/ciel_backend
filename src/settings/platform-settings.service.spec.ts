@@ -25,6 +25,41 @@ describe('PlatformSettingsService', () => {
     expect(repo.findOne).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps private teams off until an admin enables them, and exposes the flag publicly', async () => {
+    const off = new PlatformSettingsService(makeRepo(null) as never);
+    expect(await off.isPrivateTeamEnabled()).toBe(false);
+    expect((await off.getPublicConfig()).student_private_team_enabled).toBe(
+      false,
+    );
+    const on = new PlatformSettingsService(makeRepo('true') as never);
+    expect(await on.isPrivateTeamEnabled()).toBe(true);
+    expect((await on.getPublicConfig()).student_private_team_enabled).toBe(
+      true,
+    );
+  });
+
+  it('advertises AI drafting only when the flag is on AND an OpenAI key exists', async () => {
+    const realKey = process.env.OPENAI_API_KEY;
+    try {
+      process.env.OPENAI_API_KEY = 'sk-test';
+      const on = new PlatformSettingsService(makeRepo('true') as never);
+      expect(await on.isAiOpportunityDraftEnabled()).toBe(true);
+      expect((await on.getPublicConfig()).student_ai_draft_enabled).toBe(true);
+      const off = new PlatformSettingsService(makeRepo(null) as never);
+      expect((await off.getPublicConfig()).student_ai_draft_enabled).toBe(
+        false,
+      );
+      delete process.env.OPENAI_API_KEY;
+      const noKey = new PlatformSettingsService(makeRepo('true') as never);
+      expect((await noKey.getPublicConfig()).student_ai_draft_enabled).toBe(
+        false,
+      );
+    } finally {
+      if (realKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = realKey;
+    }
+  });
+
   it('never throws when the settings table is unreadable', async () => {
     const svc = new PlatformSettingsService(
       makeRepo(new Error('db down')) as never,

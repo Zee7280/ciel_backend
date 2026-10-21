@@ -7,6 +7,7 @@ import {
   ValidateIf,
   ValidateNested,
   IsInt,
+  IsIn,
   IsUUID,
   IsNotEmpty,
   ArrayNotEmpty,
@@ -17,6 +18,7 @@ import {
   Matches,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { TEAM_MODES, type TeamMode } from '../team-mode.util';
 
 /** Full create/submit must satisfy title/types/mode/verification. A mid-wizard `{draft:true}`
  * save is incomplete by definition — StudentController / OpportunitiesService persist it with
@@ -231,6 +233,11 @@ export class CreateOpportunityDto {
   @IsOptional()
   visibility?: string;
 
+  /** Student builder join rule (see team-mode.util.ts). Ignored on non-student listings. */
+  @IsOptional()
+  @IsIn(TEAM_MODES)
+  team_mode?: TeamMode | null;
+
   @IsArray()
   @IsOptional()
   restricted_universities?: string[];
@@ -353,6 +360,11 @@ export class UpdateOpportunityDto {
   @IsString()
   @IsOptional()
   visibility?: string;
+
+  /** Student builder join rule (see team-mode.util.ts). Ignored on non-student listings. */
+  @IsOptional()
+  @IsIn(TEAM_MODES)
+  team_mode?: TeamMode | null;
 
   // NOTE: status / sdg / admin_approval_required are intentionally NOT editable here — workflow
   // state is server-owned and sdg is derived from sdg_info.sdg_id.

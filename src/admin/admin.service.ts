@@ -2048,6 +2048,7 @@ export class AdminService {
         admin_hidden: opp.admin_hidden === true,
         admin_expired: opp.admin_expired === true,
         directory_visible: isPubliclyVisibleOpportunity(opp),
+        team_mode: opp.team_mode ?? null,
         volunteers: occupiedSeats,
         volunteers_required: volunteersRequired,
         hours,

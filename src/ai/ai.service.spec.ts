@@ -402,3 +402,77 @@ describe('AiService — CII v4.5 evaluation branch', () => {
     expect(global.fetch).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('AiService.generateOpportunityDraft', () => {
+  const realFetch = global.fetch;
+  const realKey = process.env.OPENAI_API_KEY;
+  beforeEach(() => {
+    process.env.OPENAI_API_KEY = 'sk-test';
+  });
+  afterEach(() => {
+    global.fetch = realFetch;
+    if (realKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = realKey;
+  });
+
+  const draftJson = JSON.stringify({
+    title: 'Tree Plantation Drive',
+    summary: 'Students plant and care for native trees with the host.',
+    activity_types: ['Environmental Action'],
+    skills: ['Teamwork'],
+    primary_sdg: {
+      sdg_id: '15',
+      target_id: '15.1',
+      why: 'Restores green cover.',
+    },
+  });
+  const chat = (content: string) =>
+    JSON.stringify({ choices: [{ message: { content } }] });
+
+  it('asks for JSON with the draft system prompt and returns validated fields', async () => {
+    const f = fetchMock().mockResolvedValue(res(200, chat(draftJson)));
+    global.fetch = f as never;
+    const out = await new AiService().generateOpportunityDraft({
+      idea: 'plant trees in park, call 0300-1234567',
+      seats: 10,
+      hours: 16,
+    });
+    expect(out.fields.title).toBe('Tree Plantation Drive');
+    expect(out.fields.activity_types).toEqual(['Environmental Action']);
+    const sent = sentBody(f);
+    expect(sent.response_format).toEqual({ type: 'json_object' });
+    expect(sent.messages[0].content).toContain('CIEL PK');
+    expect(sent.messages[1].content).toContain('[phone removed]');
+    expect(sent.messages[1].content).not.toContain('0300-1234567');
+  });
+
+  it('is unavailable (503) without an API key, without calling OpenAI', async () => {
+    delete process.env.OPENAI_API_KEY;
+    const f = fetchMock();
+    global.fetch = f as never;
+    const svc = new AiService();
+    expect(svc.isConfigured()).toBe(false);
+    await expect(
+      svc.generateOpportunityDraft({ idea: 'tree plantation' }),
+    ).rejects.toMatchObject({ status: 503 });
+    expect(f).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unreadable model answer with 502', async () => {
+    global.fetch = fetchMock().mockResolvedValue(
+      res(200, chat('sorry, I cannot help')),
+    ) as never;
+    await expect(
+      new AiService().generateOpportunityDraft({ idea: 'tree plantation' }),
+    ).rejects.toMatchObject({ status: 502 });
+  });
+
+  it('passes an OpenAI rate limit through as 429', async () => {
+    global.fetch = fetchMock().mockResolvedValue(
+      res(429, JSON.stringify({ error: { message: 'rate limited' } })),
+    ) as never;
+    await expect(
+      new AiService().generateOpportunityDraft({ idea: 'tree plantation' }),
+    ).rejects.toMatchObject({ status: 429 });
+  });
+});

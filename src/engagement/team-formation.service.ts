@@ -15,12 +15,15 @@ import {
   countDistinctTeamIdsOnProject,
 } from './team-display-name.util';
 import { demoteExtraTeamLeadsInScope } from './team-lead-canonical.util';
-import { resolveTeamSeatCap, teamCapacityError } from './team-capacity.util';
+import {
+  MAX_TEAM_SIZE,
+  resolveTeamSeatCap,
+  teamCapacityError,
+} from './team-capacity.util';
 import { MailService } from '../mail/mail.service';
 import { NotificationsService } from '../notifications/notifications.service';
 
-/** Platform-wide maximum team size (team lead included). */
-export const MAX_TEAM_SIZE = 20;
+export { MAX_TEAM_SIZE };
 
 const ACTIVE_STATUSES = [
   'approved',

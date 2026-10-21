@@ -7,7 +7,16 @@ import {
   Optional,
 } from '@nestjs/common';
 import { CnicCipher } from '../common/cnic-cipher';
-import { resolveTeamSeatCap, teamCapacityError } from './team-capacity.util';
+import {
+  resolveTeamSeatCap,
+  resolveTeamSizeCap,
+  teamSizeCapError,
+} from './team-capacity.util';
+import {
+  countOccupiedSeats,
+  lockOpportunitySeats,
+  seatsUnavailableMessage,
+} from '../opportunities/seat-capacity.util';
 import { IssueLogsService } from '../issue-logs/issue-logs.service';
 import { sessionsOverlap } from './attendance-time.util';
 import {
@@ -90,10 +99,6 @@ const PROJECT_TEAM_VISIBILITY_STATUSES: readonly string[] = [
 const ATTENDANCE_REVIEW_DEFERRED_TO_FLASHCARD: boolean = true;
 
 /** Shapes of the loosely-typed jsonb columns on Opportunity that this service reads. */
-type OpportunityTimelineJson =
-  | { volunteers_required?: unknown }
-  | null
-  | undefined;
 type PartnerOrganizationJson = { contact_person?: string } | null | undefined;
 
 /** Shallow copy of `obj` without `keys` — same own-enumerable semantics as rest destructuring. */
@@ -778,13 +783,34 @@ export class EngagementService {
           }
         }
 
-        // Team size cap: lead + members may not exceed the opportunity's seats (volunteers_required).
-        if (isTeamMemberRegistration && !participation.id && effectiveTeamId) {
-          const cap = resolveTeamSeatCap(
-            (opportunity.timeline as OpportunityTimelineJson)
+        // Builder listings (`team_mode` set): a NEW seat must also fit the listing's total places,
+        // checked under the same seat lock as Apply Now so report-stage additions and applications
+        // can never overbook together. Legacy listings keep their per-team rule only.
+        // Super Admin repairs (scope / OTP already exempt) are not blocked by the total.
+        if (
+          !participation.id &&
+          opportunity.team_mode &&
+          callerRole !== UserRole.SUPER_ADMIN
+        ) {
+          const totalSeats = resolveTeamSeatCap(
+            (opportunity.timeline as { volunteers_required?: unknown } | null)
               ?.volunteers_required,
           );
-          if (cap) {
+          if (totalSeats > 0) {
+            await lockOpportunitySeats(manager, opportunity.id);
+            const full = seatsUnavailableMessage(
+              totalSeats,
+              await countOccupiedSeats(manager, opportunity.id),
+              1,
+            );
+            if (full) throw new BadRequestException(full);
+          }
+        }
+
+        // Team size cap: lead + members may not exceed the opportunity's seats (volunteers_required),
+        // and builder listings (`team_mode` set) also cap each team at MAX_TEAM_SIZE.
+        if (isTeamMemberRegistration && !participation.id && effectiveTeamId) {
+          if (resolveTeamSizeCap(opportunity)) {
             // Count teammates only (the lead is not a "team member" for this cap).
             const currentMembers = await manager.count(Participation, {
               where: {
@@ -793,7 +819,7 @@ export class EngagementService {
                 isTeamLead: false,
               },
             });
-            const capError = teamCapacityError(currentMembers + 1, cap);
+            const capError = teamSizeCapError(currentMembers + 1, opportunity);
             if (capError) throw new BadRequestException(capError);
           }
         }

@@ -103,6 +103,37 @@ describe('MailService — SMTP reliability', () => {
     expect(sendMailReliable.mock.calls[0][0].to).toBe('partner@ngo.org');
     expect(sendMailReliable.mock.calls[1][0].to).toBe('faculty@uni.edu');
   });
+  it('live start-report email tells a private-team creator to add members, and nobody else', async () => {
+    const { service, internals } = makeService();
+    const sendMailReliable = jest.fn<Promise<unknown>, [SendMailOptions]>(() =>
+      Promise.resolve({ messageId: 'x' }),
+    );
+    internals.sendMailReliable = sendMailReliable;
+    const base = {
+      to: 'ali@uni.edu',
+      creatorName: 'Ali Khan',
+      projectTitle: 'Campus garden',
+      partnerName: '—',
+      requiredHours: '16',
+      projectPeriod: 'Oct – Dec 2026',
+      reportPath: '/dashboard/student/report?projectId=opp-1',
+      isStudentCreator: true,
+    };
+
+    await service.sendOpportunityLiveStartReportEmail({
+      ...base,
+      isPrivateTeam: true,
+    });
+    await service.sendOpportunityLiveStartReportEmail(base);
+
+    const [privateHtml, openHtml] = sendMailReliable.mock.calls.map((c) =>
+      typeof c[0].html === 'string' ? c[0].html : '',
+    );
+    expect(privateHtml).toContain('This is a private team');
+    expect(privateHtml).toContain('add your members in Section 1');
+    expect(openHtml).not.toContain('private team');
+  });
+
   it('admin bulk email: one message per recipient, dedupes, skips invalid, survives failures', async () => {
     const { service, internals } = makeService();
     const send = jest

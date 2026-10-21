@@ -5,6 +5,7 @@ import {
   UnauthorizedException,
   BadRequestException,
   ConflictException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
@@ -91,6 +92,13 @@ import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import { Payment } from '../payments/entities/payment.entity';
 import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
+import { PlatformSettingsService } from '../settings/platform-settings.service';
+import {
+  PRIVATE_TEAM_DISABLED_MESSAGE,
+  privateTeamSeatsError,
+  teamModeError,
+  type TeamMode,
+} from './team-mode.util';
 import {
   REPORTING_WINDOW_DAYS,
   addDaysToDateOnly,
@@ -419,7 +427,47 @@ export class OpportunitiesService {
     private readonly opportunityWorkflow: OpportunityWorkflowService,
     private readonly opportunityApplicationsService: OpportunityApplicationsService,
     private readonly facultyUniversityScope: FacultyUniversityScopeService,
+    @Optional()
+    private readonly platformSettings?: PlatformSettingsService,
   ) {}
+
+  /**
+   * Validates a student listing's `team_mode` and returns the value to store (null = open/legacy).
+   * Choosing a NEW mode needs STUDENT_PRIVATE_TEAM_ENABLED (with it off, `open` is stored as null and
+   * `private_team` is refused); a row that already has its mode stays editable if the flag is later
+   * switched off. `requireSeats` (submit / full edit) also
+   * enforces the 1–20 private seat range — drafts are partial, so they only check the value.
+   */
+  async assertStudentTeamMode(
+    teamMode: unknown,
+    timeline: unknown,
+    opts: { requireSeats: boolean; previous?: string | null },
+  ): Promise<TeamMode | null> {
+    if (teamMode === undefined || teamMode === null || teamMode === '') {
+      return null;
+    }
+    const invalid = teamModeError(teamMode);
+    if (invalid) throw new BadRequestException(invalid);
+    const mode = teamMode as TeamMode;
+    if (opts.previous === mode) {
+      if (mode === 'open') return mode;
+    } else {
+      const enabled = this.platformSettings
+        ? await this.platformSettings.isPrivateTeamEnabled()
+        : false;
+      // With the feature off, `open` stays the legacy null (no builder per-team cap), so a client
+      // that sends it cannot move a listing onto the new rules.
+      if (!enabled && mode === 'open') return null;
+      if (!enabled)
+        throw new BadRequestException(PRIVATE_TEAM_DISABLED_MESSAGE);
+    }
+    if (mode === 'open') return mode;
+    if (opts.requireSeats) {
+      const seatsError = privateTeamSeatsError(timeline);
+      if (seatsError) throw new BadRequestException(seatsError);
+    }
+    return mode;
+  }
 
   private isValidEmail(email?: string) {
     if (!email) return false;
@@ -2180,6 +2228,7 @@ export class OpportunitiesService {
       admin_hidden: opp.admin_hidden === true,
       admin_expired: opp.admin_expired === true,
       directory_visible: this.isPubliclyVisibleOpportunity(opp),
+      team_mode: opp.team_mode ?? null,
     };
   }
 
@@ -2424,7 +2473,9 @@ export class OpportunitiesService {
     await this.notifyStudentOpportunityUpdate(opportunity, {
       title: 'Opportunity live',
       message: opportunity.isStudentCreated
-        ? 'Your opportunity has passed admin review and is now live on CIEL. You can begin your report from your dashboard.'
+        ? opportunity.team_mode === 'private_team'
+          ? 'Your private team is live on CIEL. Start your report and add your members in Section 1 — nobody applies to a private team.'
+          : 'Your opportunity has passed admin review and is now live on CIEL. You can begin your report from your dashboard.'
         : 'Your opportunity has passed admin review and is now live on CIEL. Students can now discover and apply to it.',
       emailSubject: 'Your opportunity is now live',
       skipStatusEmail: true,
@@ -2446,6 +2497,7 @@ export class OpportunitiesService {
             opportunity.createdAt,
           ),
           isStudentCreator: opportunity.isStudentCreated === true,
+          isPrivateTeam: opportunity.team_mode === 'private_team',
         });
       } catch (error) {
         console.warn('Failed to send opportunity live start-report email', {
@@ -2783,6 +2835,8 @@ export class OpportunitiesService {
       'partnerVerified',
       'execution_verified',
       'wizard_progress',
+      // Join rules for student listings only; faculty / partner / admin listings stay open.
+      'team_mode',
     ]);
     const payload: DeepPartial<Opportunity> = {
       ...safeCreateFields,
@@ -3106,6 +3160,11 @@ export class OpportunitiesService {
     this.validateLocation(dto.mode, dto.location);
     this.validateTimeline(dto.timeline, { requireDates: true });
     this.validateParticipationScope(dto.participation_scope);
+    dto.team_mode = await this.assertStudentTeamMode(
+      dto.team_mode,
+      dto.timeline,
+      { requireSeats: true, previous: null },
+    );
 
     // A student-created opportunity must stay scoped to the student's own university
     // (all departments, or specific departments) — never another university, and never
@@ -3717,6 +3776,11 @@ export class OpportunitiesService {
     }
     if (patch.timeline !== undefined) {
       this.validateTimeline(opportunity.timeline, { requireDates: true });
+      // This route skips the student wizard's team_mode checks; a private team stays within 1–20.
+      if (opportunity.team_mode === 'private_team') {
+        const seatsError = privateTeamSeatsError(opportunity.timeline);
+        if (seatsError) throw new BadRequestException(seatsError);
+      }
     }
     if (
       patch.objectives !== undefined &&
@@ -4383,6 +4447,10 @@ export class OpportunitiesService {
     );
     this.sanitizeAndBoundContent(fields as never);
     applyCanonicalPrivateCandidatePhone(fields, { required: false });
+    // `team_mode` is not a shared draft/update key (org listings never carry it): student drafts
+    // validate and store it separately below.
+    const draftTeamModeSent =
+      ownership.isStudentCreated && rawFields.team_mode !== undefined;
     const title =
       typeof fields.title === 'string' && fields.title.trim()
         ? fields.title.trim()
@@ -4411,6 +4479,13 @@ export class OpportunitiesService {
             'This opportunity has already been submitted and can no longer be saved as a draft',
           );
         }
+        if (draftTeamModeSent) {
+          fields.team_mode = await this.assertStudentTeamMode(
+            rawFields.team_mode,
+            null,
+            { requireSeats: false, previous: opportunity.team_mode },
+          );
+        }
         Object.assign(opportunity, fields, {
           title,
           status: 'draft',
@@ -4420,6 +4495,13 @@ export class OpportunitiesService {
         return { success: true, data: saved };
       }
 
+      if (draftTeamModeSent) {
+        fields.team_mode = await this.assertStudentTeamMode(
+          rawFields.team_mode,
+          null,
+          { requireSeats: false, previous: null },
+        );
+      }
       const payload: DeepPartial<Opportunity> = {
         ...fields,
         title,

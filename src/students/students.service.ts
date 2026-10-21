@@ -2,8 +2,13 @@ import { academicDepartmentsMatch } from '../common/academic-department.util';
 import { randomUUID } from 'crypto';
 import {
   resolveTeamSeatCap,
-  teamCapacityError,
+  teamSizeCapError,
 } from '../engagement/team-capacity.util';
+import {
+  isPrivateTeamOpportunity,
+  PRIVATE_TEAM_APPLY_BLOCKED_MESSAGE,
+} from '../opportunities/team-mode.util';
+import { seatsUnavailableMessage } from '../opportunities/seat-capacity.util';
 import {
   Injectable,
   Logger,
@@ -1897,6 +1902,7 @@ export class StudentsService {
               organization_name: organizationName,
             }),
             created_by_role: classifyBrowseCreator(o),
+            team_mode: o.team_mode ?? null,
             teamMembers: [], // We no longer fetch team members in a list view for performance, or we can fetch them if needed.
           };
         }),
@@ -2308,6 +2314,7 @@ export class StudentsService {
         participation_scope:
           (opportunity.participation_scope as unknown) ?? null,
         restricted_universities: opportunity.restricted_universities ?? null,
+        team_mode: opportunity.team_mode ?? null,
         createdAt: opportunity.createdAt,
         updatedAt: opportunity.updatedAt,
         ...this.applyGateFields(opportunity, applyState),
@@ -2424,6 +2431,7 @@ export class StudentsService {
     applyCanonicalPrivateCandidatePhone(dto, {
       required: isPrivateCandidateDto(dto),
     });
+    const previousTeamMode = opportunity.team_mode;
 
     const patchableFields: (keyof CreateOpportunityDto)[] = [
       'title',
@@ -2450,6 +2458,7 @@ export class StudentsService {
       'visibility_and_academic_linkage',
       'external_partner_collaboration',
       'academic_linkage',
+      'team_mode',
     ];
 
     const patch: Partial<Opportunity> = {};
@@ -2508,6 +2517,15 @@ export class StudentsService {
       this.opportunitiesService.validateTimeline(opportunity.timeline, {
         requireDates: true,
       });
+    }
+    // Re-checked when either side changes: a private team must stay within 1–20 seats.
+    if (dto.team_mode !== undefined || dto.timeline !== undefined) {
+      opportunity.team_mode =
+        await this.opportunitiesService.assertStudentTeamMode(
+          opportunity.team_mode,
+          opportunity.timeline,
+          { requireSeats: true, previous: previousTeamMode },
+        );
     }
     if (
       dto.objectives !== undefined &&
@@ -2593,6 +2611,10 @@ export class StudentsService {
 
     if (!opportunity) {
       throw new NotFoundException('Opportunity not found');
+    }
+    // Checked here as well as in the apply gate below, which is skipped when its settings lookup fails.
+    if (isPrivateTeamOpportunity(opportunity)) {
+      throw new BadRequestException(PRIVATE_TEAM_APPLY_BLOCKED_MESSAGE);
     }
     if (this.studentApplyMaintenance) {
       try {
@@ -2806,10 +2828,7 @@ export class StudentsService {
         await this.usersService.update(user.id, { cnic: leadCnicFromApply });
         user.cnic = leadCnicFromApply;
       }
-      const seatCap = resolveTeamSeatCap(
-        timelineOf(opportunity)?.volunteers_required,
-      );
-      const capError = teamCapacityError(sanitized.length, seatCap);
+      const capError = teamSizeCapError(sanitized.length, opportunity);
       if (capError) throw new BadRequestException(capError);
     }
 
@@ -2877,25 +2896,20 @@ export class StudentsService {
     }
 
     // Seats: the whole team (lead + members) must fit in what is still free, counting everything
-    // already seated or in flight — not just the size of this one team.
-    {
-      const seats = resolveTeamSeatCap(
-        timelineOf(opportunity)?.volunteers_required,
+    // already seated or in flight — not just the size of this one team. Checked here to fail fast,
+    // and again atomically under the listing's seat lock when the application is inserted.
+    const seatCap = resolveTeamSeatCap(
+      timelineOf(opportunity)?.volunteers_required,
+    );
+    const seatsRequested =
+      1 + (Array.isArray(teamMembersPayload) ? teamMembersPayload.length : 0);
+    if (seatCap > 0) {
+      const full = seatsUnavailableMessage(
+        seatCap,
+        await this.getOccupiedSeats(dto.opportunityId),
+        seatsRequested,
       );
-      if (seats > 0) {
-        const requested =
-          1 +
-          (Array.isArray(teamMembersPayload) ? teamMembersPayload.length : 0);
-        const occupied = await this.getOccupiedSeats(dto.opportunityId);
-        if (occupied + requested > seats) {
-          const free = Math.max(0, seats - occupied);
-          throw new BadRequestException(
-            free === 0
-              ? 'All seats for this opportunity are taken.'
-              : `Only ${free} seat${free === 1 ? '' : 's'} left, but this application needs ${requested}.`,
-          );
-        }
-      }
+      if (full) throw new BadRequestException(full);
     }
 
     // Every team member who already has an account must be eligible for this opportunity too
@@ -2969,14 +2983,17 @@ export class StudentsService {
       attendance_approver_type: attendanceApproverType,
     };
 
-    const saved = await this.opportunityApplicationsService.createApplication({
-      studentUserId: userId,
-      opportunityId: dto.opportunityId,
-      primaryFacultyEmail: dto.primary_faculty_email,
-      secondaryFacultyEmail: dto.secondary_faculty_email,
-      attendanceApproverType,
-      applyPayload,
-    });
+    const saved = await this.opportunityApplicationsService.createApplication(
+      {
+        studentUserId: userId,
+        opportunityId: dto.opportunityId,
+        primaryFacultyEmail: dto.primary_faculty_email,
+        secondaryFacultyEmail: dto.secondary_faculty_email,
+        attendanceApproverType,
+        applyPayload,
+      },
+      { seats: seatCap, requested: seatsRequested },
+    );
 
     if (
       dto.primary_faculty_email &&

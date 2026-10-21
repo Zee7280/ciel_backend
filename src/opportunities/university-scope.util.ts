@@ -35,6 +35,35 @@ export function universityNamesMatch(a: unknown, b: unknown): boolean {
   return (!!abbrA && abbrA === fb) || (!!abbrB && abbrB === fa);
 }
 
+/** Postgres twin of {@link foldUniversityName}. */
+function foldUniversityNameSql(expr: string): string {
+  return `TRIM(REGEXP_REPLACE(LOWER(COALESCE(${expr}, '')), '[^a-z0-9]+', ' ', 'g'))`;
+}
+
+/**
+ * SQL condition that is true exactly when {@link universityNamesMatch}(column value, `name`) is —
+ * for filtering rows in the database by the same rule apply eligibility uses. `paramPrefix` keeps
+ * the bound parameter names unique when several of these share one query.
+ */
+export function universityNameMatchSql(
+  columnExpr: string,
+  name: unknown,
+  paramPrefix: string,
+): { sql: string; params: Record<string, string | string[]> } {
+  const full = foldUniversityName(name);
+  if (!full) return { sql: 'FALSE', params: {} };
+  const keys = [...new Set([full, parenthesisedAbbreviation(name)])].filter(
+    Boolean,
+  );
+  const abbr = foldUniversityNameSql(
+    `SUBSTRING(COALESCE(${columnExpr}, '') FROM '\\(([^()]{2,12})\\)\\s*$')`,
+  );
+  return {
+    sql: `(${foldUniversityNameSql(columnExpr)} IN (:...${paramPrefix}Keys) OR (${abbr} <> '' AND ${abbr} = :${paramPrefix}Full))`,
+    params: { [`${paramPrefix}Keys`]: keys, [`${paramPrefix}Full`]: full },
+  };
+}
+
 type ScopeLike =
   | {
       restricted_universities?: unknown;

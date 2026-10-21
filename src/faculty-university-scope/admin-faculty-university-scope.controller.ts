@@ -38,6 +38,10 @@ export class AdminFacultyUniversityScopeController {
         university_organization_id: r.universityOrganization?.id,
         university_organization_name: r.universityOrganization?.name,
         assigned_by_admin_id: r.assignedByAdmin?.id,
+        assigned_by_name: r.assignedByAdmin?.name ?? null,
+        assigned_by_email: r.assignedByAdmin?.email ?? null,
+        // 'admin' = CIEL PK admin; anything else = the university's own operator account.
+        assigned_by_role: r.assignedByAdmin?.role ?? null,
         created_at: r.createdAt,
       })),
     }));

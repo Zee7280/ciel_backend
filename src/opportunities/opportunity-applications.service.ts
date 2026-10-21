@@ -3922,9 +3922,16 @@ export class OpportunityApplicationsService {
       await this.facultyUniversityScopeService.getAssignmentForFaculty(
         facultyUserId,
       );
-    const orgNorm = assignment?.universityOrganization?.name
-      ? this.facultyUniversityScopeService.normalizeOrgName(
-          assignment.universityOrganization.name,
+    const delegatedOrg = assignment?.universityOrganization?.name
+      ? assignment.universityOrganization
+      : null;
+    // Same student-identity rule as canFacultyReviewApplicationAsUniversityDelegate, so every
+    // row listed here as "delegate" can actually be approved / rejected.
+    const delegatedProfile = delegatedOrg
+      ? this.facultyUniversityScopeService.studentProfileMatchesOrganizationSql(
+          's',
+          delegatedOrg.name,
+          'delegate',
         )
       : null;
 
@@ -3944,7 +3951,7 @@ export class OpportunityApplicationsService {
             "LOWER(TRIM(COALESCE(o.supervision->>'contact', ''))) = :email",
             { email },
           );
-          if (orgNorm) {
+          if (delegatedOrg && delegatedProfile) {
             outer.orWhere(
               new Brackets((inner) => {
                 inner
@@ -3952,8 +3959,11 @@ export class OpportunityApplicationsService {
                     studentRole: UserRole.STUDENT,
                   })
                   .andWhere(
-                    "(LOWER(TRIM(COALESCE(s.university, ''))) = :orgNorm OR LOWER(TRIM(COALESCE(s.institution, ''))) = :orgNorm)",
-                    { orgNorm },
+                    `(${delegatedProfile.sql} OR s."organizationId"::text = :delegateOrgId)`,
+                    {
+                      ...delegatedProfile.params,
+                      delegateOrgId: delegatedOrg.id,
+                    },
                   );
               }),
             );

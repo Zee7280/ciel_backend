@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -13,6 +14,10 @@ import { UserRole } from '../users/enums/user-role.enum';
 import { Participation } from '../engagement/entities/participant.entity';
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
+import {
+  universityNameMatchSql,
+  universityNamesMatch,
+} from '../opportunities/university-scope.util';
 
 @Injectable()
 export class FacultyUniversityScopeService {
@@ -65,16 +70,59 @@ export class FacultyUniversityScopeService {
     return row?.universityOrganization?.id ?? null;
   }
 
-  /** Students whose profile university/institution string matches the organization name (normalized). */
+  /**
+   * Students whose profile university/institution names this organization — by the same
+   * spelling-tolerant rule as apply eligibility ({@link universityNamesMatch}: "BNU" and
+   * "Beaconhouse  National University (BNU)" both name "Beaconhouse National University (BNU)").
+   */
   studentProfileMatchesOrganization(
     student: User | null | undefined,
-    orgNameNorm: string,
+    orgName: string,
   ): boolean {
-    if (!student || student.role !== UserRole.STUDENT || !orgNameNorm)
-      return false;
-    const u = this.normalizeOrgName(student.university || '');
-    const i = this.normalizeOrgName(student.institution || '');
-    return u === orgNameNorm || i === orgNameNorm;
+    if (!student || student.role !== UserRole.STUDENT || !orgName) return false;
+    return (
+      universityNamesMatch(student.university, orgName) ||
+      universityNamesMatch(student.institution, orgName)
+    );
+  }
+
+  /** SQL twin of {@link studentProfileMatchesOrganization} for the user aliased `alias`. */
+  studentProfileMatchesOrganizationSql(
+    alias: string,
+    orgName: string,
+    paramPrefix: string,
+  ): { sql: string; params: Record<string, string | string[]> } {
+    const uni = universityNameMatchSql(
+      `${alias}.university`,
+      orgName,
+      `${paramPrefix}U`,
+    );
+    const inst = universityNameMatchSql(
+      `${alias}.institution`,
+      orgName,
+      `${paramPrefix}I`,
+    );
+    return {
+      sql: `(${uni.sql} OR ${inst.sql})`,
+      params: { ...uni.params, ...inst.params },
+    };
+  }
+
+  /**
+   * A student of this university: the profile names it, or the account is linked to the
+   * organization itself — the two student-identity sources the delegated-faculty views use.
+   */
+  async studentBelongsToOrganization(
+    student: User | null | undefined,
+    org: Pick<Organization, 'id' | 'name'>,
+  ): Promise<boolean> {
+    if (!student?.id || student.role !== UserRole.STUDENT) return false;
+    if (this.studentProfileMatchesOrganization(student, org.name)) return true;
+    if (student.organization?.id) return student.organization.id === org.id;
+    const linked = await this.usersRepo.count({
+      where: { id: student.id, organization: { id: org.id } },
+    });
+    return linked > 0;
   }
 
   /**
@@ -89,16 +137,23 @@ export class FacultyUniversityScopeService {
     });
     if (!org) return [];
     const n = this.normalizeOrgName(org.name);
+    const profile = this.studentProfileMatchesOrganizationSql(
+      'u',
+      org.name,
+      'scopeProfile',
+    );
+    const enrollment = universityNameMatchSql(
+      'p.universityName',
+      org.name,
+      'scopeEnroll',
+    );
 
     const fromParticipations = await this.participationRepo
       .createQueryBuilder('p')
       .innerJoin('p.student', 'u')
       .select('DISTINCT p.projectId', 'id')
       .where('u.role = :sr', { sr: UserRole.STUDENT })
-      .andWhere(
-        "(LOWER(TRIM(COALESCE(u.university, ''))) = :n OR LOWER(TRIM(COALESCE(u.institution, ''))) = :n)",
-        { n },
-      )
+      .andWhere(profile.sql, profile.params)
       .getRawMany();
 
     const fromParticipationsStudentOrg = await this.participationRepo
@@ -121,7 +176,7 @@ export class FacultyUniversityScopeService {
           b.where(`TRIM(COALESCE(p.universityId, '')) = :orgId`, {
             orgId: universityOrganizationId,
           })
-            .orWhere(`LOWER(TRIM(COALESCE(p.universityName, ''))) = :n`, { n })
+            .orWhere(enrollment.sql, enrollment.params)
             .orWhere(`LOWER(TRIM(COALESCE(p.universityId, ''))) = :n`, { n });
         }),
       )
@@ -133,10 +188,7 @@ export class FacultyUniversityScopeService {
       .select('DISTINCT a.opportunityId', 'id')
       .where('u.role = :sr', { sr: UserRole.STUDENT })
       .andWhere('a.withdrawnAt IS NULL')
-      .andWhere(
-        "(LOWER(TRIM(COALESCE(u.university, ''))) = :n OR LOWER(TRIM(COALESCE(u.institution, ''))) = :n)",
-        { n },
-      )
+      .andWhere(profile.sql, profile.params)
       .getRawMany();
 
     const fromAppsStudentOrg = await this.applicationRepo
@@ -155,10 +207,7 @@ export class FacultyUniversityScopeService {
       .innerJoin(User, 'u', 'u.id::text = o."creatorId"::text')
       .select('DISTINCT o.id', 'id')
       .where('u.role = :sr', { sr: UserRole.STUDENT })
-      .andWhere(
-        "(LOWER(TRIM(COALESCE(u.university, ''))) = :n OR LOWER(TRIM(COALESCE(u.institution, ''))) = :n)",
-        { n },
-      )
+      .andWhere(profile.sql, profile.params)
       .getRawMany();
 
     const ownedByUniversityOrg = await this.opportunityRepo.find({
@@ -285,9 +334,15 @@ export class FacultyUniversityScopeService {
       relations: ['facultyUser', 'universityOrganization', 'assignedByAdmin'],
     });
     if (existing) {
-      existing.universityOrganization = org;
-      existing.assignedByAdmin = operator;
-      return this.assignmentRepo.save(existing);
+      // A university may re-confirm its own faculty, never take one over from another
+      // university; moving a faculty between universities is a CIEL PK admin decision.
+      if (existing.universityOrganization?.id !== org.id) {
+        throw new ConflictException(
+          'This faculty is already authorised for another university. Ask CIEL PK admin to move them.',
+        );
+      }
+      // Already authorised here: nothing to change, and the original grantor stays on record.
+      return existing;
     }
     const created = this.assignmentRepo.create({
       facultyUser: faculty,
@@ -353,7 +408,9 @@ export class FacultyUniversityScopeService {
   ): Promise<boolean> {
     const row = await this.getAssignmentForFaculty(facultyUserId);
     if (!row?.universityOrganization) return false;
-    const n = this.normalizeOrgName(row.universityOrganization.name);
-    return this.studentProfileMatchesOrganization(studentUser, n);
+    return this.studentBelongsToOrganization(
+      studentUser,
+      row.universityOrganization,
+    );
   }
 }

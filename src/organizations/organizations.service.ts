@@ -26,6 +26,7 @@ import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { Report } from '../reports/entities/report.entity';
 import { Participation } from '../engagement/entities/participant.entity';
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
+import { universityNameMatchSql } from '../opportunities/university-scope.util';
 import { canonicalizePhoneInput } from '../common/phone-e164.util';
 import { passwordPolicyError } from '../auth/password-policy.util';
 
@@ -128,11 +129,25 @@ export class OrganizationsService {
    * stats so a university doesn't inherit every co-participant of an opportunity its students
    * merely joined alongside people from other schools.
    */
+  /**
+   * Enrollment / profile name columns matched to the university by the apply-eligibility rule
+   * (universityNamesMatch: "BNU" names "Beaconhouse National University (BNU)"), so these stats
+   * agree with the opportunity set from resolveOpportunityIdsForUniversityOrganization.
+   */
+  private universityNameConditions(orgName: string, prefix: string) {
+    return [
+      universityNameMatchSql('p.universityName', orgName, `${prefix}Enroll`),
+      universityNameMatchSql('student.institution', orgName, `${prefix}Inst`),
+      universityNameMatchSql('student.university', orgName, `${prefix}Uni`),
+    ];
+  }
+
   private async resolveUniversityAffiliatedStudentIds(
     orgId: string,
     orgName: string,
   ): Promise<Set<string>> {
     const orgNameNorm = orgName.trim().toLowerCase();
+    const names = this.universityNameConditions(orgName, 'affil');
     const rows = await this.participationRepository
       .createQueryBuilder('p')
       .leftJoin('p.project', 'project')
@@ -148,21 +163,10 @@ export class OrganizationsService {
             .orWhere(`project."organizationId"::text = :orgId`, { orgId })
             .orWhere(`student."organizationId"::text = :orgId`, { orgId })
             .orWhere(
-              `LOWER(TRIM(COALESCE(p.universityName, ''))) = :orgNameNorm`,
-              { orgNameNorm },
-            )
-            .orWhere(
               `LOWER(TRIM(COALESCE(p.universityId, ''))) = :orgNameNorm`,
               { orgNameNorm },
-            )
-            .orWhere(
-              `LOWER(TRIM(COALESCE(student.institution, ''))) = :orgNameNorm`,
-              { orgNameNorm },
-            )
-            .orWhere(
-              `LOWER(TRIM(COALESCE(student.university, ''))) = :orgNameNorm`,
-              { orgNameNorm },
             );
+          for (const n of names) b.orWhere(n.sql, n.params);
         }),
       )
       .getRawMany<{ studentId: string }>();
@@ -1088,29 +1092,13 @@ export class OrganizationsService {
             .orWhere(`project."organizationId"::text = :orgId`, { orgId })
             .orWhere(`student."organizationId"::text = :orgId`, { orgId })
             .orWhere(
-              `LOWER(TRIM(COALESCE(p.universityName, ''))) = :orgNameNorm`,
-              {
-                orgNameNorm,
-              },
-            )
-            .orWhere(
               `LOWER(TRIM(COALESCE(p.universityId, ''))) = :orgNameNorm`,
               {
                 orgNameNorm,
               },
-            )
-            .orWhere(
-              `LOWER(TRIM(COALESCE(student.institution, ''))) = :orgNameNorm`,
-              {
-                orgNameNorm,
-              },
-            )
-            .orWhere(
-              `LOWER(TRIM(COALESCE(student.university, ''))) = :orgNameNorm`,
-              {
-                orgNameNorm,
-              },
             );
+          for (const n of this.universityNameConditions(org.name, 'stud'))
+            b.orWhere(n.sql, n.params);
         }),
       )
       .getMany();

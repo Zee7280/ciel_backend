@@ -32,6 +32,7 @@ import {
   Section1AnalyticsStakeholder,
 } from './section1-analytics.types';
 import { Section1AnalyticsQueryDto } from './dto/section1-analytics-query.dto';
+import { universityNameMatchSql } from '../opportunities/university-scope.util';
 import { getProfileCompletionStatus } from '../users/profile-completion.util';
 
 const ACTIVE_PARTICIPATION_STATUSES = [
@@ -999,7 +1000,6 @@ export class Section1AnalyticsService {
       where: { id: orgId },
     });
     if (!org) return [];
-    const orgNameNorm = org.name.trim().toLowerCase();
     return this.participationRepository
       .createQueryBuilder('p')
       .leftJoinAndSelect('p.project', 'project')
@@ -1008,17 +1008,22 @@ export class Section1AnalyticsService {
       .andWhere('p.status IN (:...st)', { st: ACTIVE_PARTICIPATION_STATUSES })
       .andWhere(
         new Brackets((b) => {
+          // Same name rule as apply eligibility ("BNU" names "Beaconhouse National University (BNU)").
+          const enroll = universityNameMatchSql(
+            'p.universityName',
+            org.name,
+            's1Enroll',
+          );
+          const uni = universityNameMatchSql(
+            'student.university',
+            org.name,
+            's1Uni',
+          );
           b.where(`TRIM(COALESCE(p.universityId, '')) = :orgId`, { orgId })
             .orWhere(`project."organizationId"::text = :orgId`, { orgId })
             .orWhere(`student."organizationId"::text = :orgId`, { orgId })
-            .orWhere(
-              `LOWER(TRIM(COALESCE(p.universityName, ''))) = :orgNameNorm`,
-              { orgNameNorm },
-            )
-            .orWhere(
-              `LOWER(TRIM(COALESCE(student.university, ''))) = :orgNameNorm`,
-              { orgNameNorm },
-            );
+            .orWhere(enroll.sql, enroll.params)
+            .orWhere(uni.sql, uni.params);
         }),
       )
       .getMany();

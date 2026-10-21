@@ -798,6 +798,77 @@ describe('AdminService settings', () => {
   });
 });
 
+describe('AdminService getProjects tracker fields', () => {
+  it('returns the approval checklist, waiting_since and created_at the Project Tracker reads', async () => {
+    const createdAt = new Date('2026-09-01T10:00:00.000Z');
+    const opp = {
+      id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeffff0001',
+      title: 'Women Empowerment',
+      status: 'pending_approval',
+      workflowStage: 'pending_admin',
+      facultyApprovalStatus: 'approved',
+      partnerApprovalStatus: 'approved',
+      adminApprovalStatus: 'pending',
+      requiresPartnerApproval: true,
+      isStudentCreated: true,
+      admin_approved: false,
+      creatorId: 'u1',
+      createdAt,
+      updatedAt: createdAt,
+      types: [],
+      timeline: { volunteers_required: 4, expected_hours: 16 },
+      location: { city: 'Lahore' },
+    };
+    const service = makeAdminServiceForTests({
+      opportunityRepository: { find: jest.fn().mockResolvedValue([opp]) },
+      participationRepository: {
+        createQueryBuilder: jest.fn(() => makeQb([])),
+      },
+      opportunityApplicationRepository: {
+        find: jest.fn().mockResolvedValue([]),
+      },
+      usersRepository: {
+        find: jest
+          .fn()
+          .mockResolvedValue([
+            { id: 'u1', name: 'Ali', email: 'ali@x.co', phone: null },
+          ]),
+      },
+    });
+    const internals = service as unknown as Record<string, jest.Mock>;
+    internals.loadOccupiedEnrollmentsByProject = jest
+      .fn()
+      .mockResolvedValue(new Map());
+    internals.computeVerifiedHours = jest
+      .fn()
+      .mockResolvedValue({ total: 0, byOpportunity: new Map() });
+    internals.computeLoggedHoursByOpportunity = jest
+      .fn()
+      .mockResolvedValue(new Map());
+
+    const { data } = await service.getProjects();
+    const row = data[0] as Record<string, unknown>;
+    expect(row.created_at).toBe('2026-09-01T10:00:00.000Z');
+    expect(row.waiting_since).toBe('2026-09-01T10:00:00.000Z');
+    expect(row.approval_checklist).toEqual({
+      student: true,
+      faculty: true,
+      partner: true,
+      partner_required: true,
+      admin: false,
+    });
+    expect(row.currently_with_role).toBe('admin');
+    // Existing fields stay as they were.
+    expect(row.remaining_seats).toBe(4);
+    expect(row.creator).toEqual({
+      id: 'u1',
+      name: 'Ali',
+      email: 'ali@x.co',
+      phone: null,
+    });
+  });
+});
+
 describe('AdminService remindStudentsOnZeroHourProjects', () => {
   const setup = (over: Record<string, unknown> = {}) => {
     const mailService = {

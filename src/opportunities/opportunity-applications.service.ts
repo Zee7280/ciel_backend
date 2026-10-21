@@ -968,6 +968,7 @@ export class OpportunityApplicationsService {
     if (!report) {
       return {
         impact_report_started: false,
+        impact_report_id: null,
         impact_report_status: null,
         impact_report_summary: 'No impact report yet',
         impact_report_partner_status: null,
@@ -1003,6 +1004,7 @@ export class OpportunityApplicationsService {
 
     return {
       impact_report_started: true,
+      impact_report_id: report.id,
       impact_report_status: st,
       impact_report_summary: summary,
       impact_report_partner_status: ps,
@@ -1905,6 +1907,7 @@ export class OpportunityApplicationsService {
         id: a.id,
         student_name: a.studentUser?.name ?? null,
         student_email: a.studentUser?.email ?? null,
+        student_user_id: a.studentUserId ?? null,
         internal_status: a.internalStatus,
         application_status: this.toPublicApplicationStatus(
           a.internalStatus,

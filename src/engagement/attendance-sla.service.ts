@@ -17,7 +17,7 @@ export class AttendanceSlaService {
     private readonly notificationsService: NotificationsService,
   ) {}
 
-  async processPartnerAttendanceSla(): Promise<{
+  processPartnerAttendanceSla(): Promise<{
     reminders_sent: number;
     escalated: number;
     scanned: number;
@@ -28,6 +28,6 @@ export class AttendanceSlaService {
     void this.userRepo;
     void this.mailService;
     void this.notificationsService;
-    return { reminders_sent: 0, escalated: 0, scanned: 0 };
+    return Promise.resolve({ reminders_sent: 0, escalated: 0, scanned: 0 });
   }
 }

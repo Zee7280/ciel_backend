@@ -8,9 +8,22 @@ import { UserRole } from '../src/users/enums/user-role.enum';
 import { Otp } from '../src/students/entities/otp.entity';
 import { Participation } from '../src/engagement/entities/participant.entity';
 import { OpportunityApplication } from '../src/opportunities/entities/opportunity-application.entity';
+import { User } from '../src/users/entities/user.entity';
+import { Opportunity } from '../src/opportunities/entities/opportunity.entity';
+import { QueryDeepPartialEntity } from 'typeorm';
 
 const day = (d: number) =>
   new Date(Date.now() + d * 86400000).toISOString().slice(0, 10);
+
+interface CreatedBody {
+  id: string;
+}
+interface AppliedBody {
+  data: { application_id: string };
+}
+interface MyEngagementBody {
+  data: { projectId: string; cnic: string }[];
+}
 
 describe("Team lead's apply-time CNIC reaches the approved seat and report identity (real app + real Postgres)", () => {
   let h: Harness;
@@ -27,8 +40,9 @@ describe("Team lead's apply-time CNIC reaches the approved seat and report ident
     const org = await h.makeOrg();
     const ngo = await h.makeUser(UserRole.NGO, { org });
     const res = await h.as(ngo).post('/opportunities').send(oppPayload());
-    await adminApprove(h, admin, res.body.id);
-    await h.opps.update(res.body.id, {
+    const { id } = res.body as CreatedBody;
+    await adminApprove(h, admin, id);
+    await h.opps.update(id, {
       status: 'active',
       workflowStage: 'live',
       admin_approved: true,
@@ -40,12 +54,15 @@ describe("Team lead's apply-time CNIC reaches the approved seat and report ident
         volunteers_required: 6,
       },
       participation_scope: { rule: 'open_all_universities' },
-    } as any);
-    return h.reload(res.body.id);
+    } as unknown as QueryDeepPartialEntity<Opportunity>);
+    return h.reload(id);
   };
   const student = () =>
     h.makeUser(UserRole.STUDENT, {
-      overrides: { university: 'E2E University', cnic: null } as any,
+      overrides: {
+        university: 'E2E University',
+        cnic: null,
+      } as unknown as Partial<User>,
     });
   const otpVerify = async (
     caller: E2eUser,
@@ -103,19 +120,18 @@ describe("Team lead's apply-time CNIC reaches the approved seat and report ident
         ],
       });
     expect(applied.status).toBe(201);
+    const applicationId = (applied.body as AppliedBody).data.application_id;
 
     // profile now carries the lead CNIC
     const profile = await h.users.findOneOrFail({ where: { id: lead.id } });
     expect(String(profile.cnic).replace(/\D/g, '')).toBe('3520276543219');
 
-    await h.ds
-      .getRepository(OpportunityApplication)
-      .update(applied.body.data.application_id, {
-        internalStatus: 'pending_admin',
-      } as any);
+    await h.ds.getRepository(OpportunityApplication).update(applicationId, {
+      internalStatus: 'pending_admin',
+    } as QueryDeepPartialEntity<OpportunityApplication>);
     await h
       .as(admin)
-      .post(`/admin/applications/${applied.body.data.application_id}/approve`)
+      .post(`/admin/applications/${applicationId}/approve`)
       .send({})
       .expect(201);
 
@@ -125,15 +141,17 @@ describe("Team lead's apply-time CNIC reaches the approved seat and report ident
     expect(seat.isTeamLead).toBe(true);
     expect(seat.cnicLast4).toBe('3219');
 
-    const my = (await h.as(lead).get('/engagement/my')).body.data as any[];
+    const my = (
+      (await h.as(lead).get('/engagement/my')).body as MyEngagementBody
+    ).data;
     const mine = my.find((r) => r.projectId === opp.id);
-    expect(String(mine.cnic).replace(/\D/g, '')).toBe('3520276543219'); // what the report identity card reads
+    expect(String(mine?.cnic).replace(/\D/g, '')).toBe('3520276543219'); // what the report identity card reads
   });
 
   it('does not overwrite a CNIC already on the profile', async () => {
     const opp = await liveOpp();
     const lead = await h.makeUser(UserRole.STUDENT, {
-      overrides: { university: 'E2E University', cnic: '3520299999999' } as any,
+      overrides: { university: 'E2E University', cnic: '3520299999999' },
     });
     const mate = await student();
     await otpVerify(lead, mate.email, opp.id);

@@ -35,6 +35,18 @@ const validEvaluation = () => {
   });
 };
 
+/** What the service hands to `fetch` and what the test's fake returns. */
+type FetchInit = { body: string; signal?: unknown };
+type FetchResponse = {
+  ok: boolean;
+  status: number;
+  text: () => Promise<string>;
+};
+/** The Chat Completions request body the service sends. */
+interface SentChatRequest {
+  messages: Array<{ content: unknown }>;
+}
+
 const BKT = 'https://bkt.s3.eu.amazonaws.com/e';
 const file = (
   id: string,
@@ -65,25 +77,33 @@ describe('NPE ranking: evidence given to the model', () => {
     store: Record<string, { buffer: Buffer; contentType: string } | null>,
   ) {
     const s3 = {
-      getObjectBufferByPublicUrl: jest.fn(
-        async (url: string) => store[url.split('/').pop()!] ?? null,
+      getObjectBufferByPublicUrl: jest.fn((url: string) =>
+        Promise.resolve(store[url.split('/').pop()!] ?? null),
       ),
     };
-    const f = jest.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      text: async () =>
-        JSON.stringify({
-          choices: [{ message: { content: validEvaluation() } }],
-        }),
-    });
+    const f = jest
+      .fn<Promise<FetchResponse>, [string, FetchInit]>()
+      .mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: () =>
+          Promise.resolve(
+            JSON.stringify({
+              choices: [{ message: { content: validEvaluation() } }],
+            }),
+          ),
+      });
     global.fetch = f as never;
     const out = await new AiService(s3 as never).summarize(
       'npe_ranking_evaluation',
       { projectId: 'r1', uploaded_evidence_files: files },
     );
-    const content = JSON.parse(f.mock.calls[0][1].body).messages[1]
-      .content as Array<{ type: string; text?: string; image_url?: unknown }>;
+    const sent = JSON.parse(f.mock.calls[0][1].body) as SentChatRequest;
+    const content = sent.messages[1].content as Array<{
+      type: string;
+      text?: string;
+      image_url?: unknown;
+    }>;
     const texts = (
       Array.isArray(content)
         ? content
@@ -143,9 +163,7 @@ describe('NPE ranking: evidence given to the model', () => {
     const shown = out.evidenceInspection!.inspected.map((i) => i.id).sort();
     expect(shown).toHaveLength(4);
     expect(shown).toEqual(expect.arrayContaining(['E5', 'E6'])); // later sections are not starved by section 1
-    expect(
-      (content as any[]).filter((p) => p.type === 'image_url'),
-    ).toHaveLength(4);
+    expect(content.filter((p) => p.type === 'image_url')).toHaveLength(4);
     expect(out.evidenceInspection!.notInspected).toHaveLength(2);
     expect(out.evidenceInspection!.notInspected[0].reason).toMatch(
       /only 4 images/,

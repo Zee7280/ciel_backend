@@ -110,10 +110,10 @@ describe('review-package.util', () => {
     expect(pack.packet_integrity.ok).toBe(true);
     expect(pack.canonical_packet.detailed_report.sections).toHaveLength(9);
 
-    const { section3: _drop, ...broken } = report as unknown as Record<
-      string,
-      unknown
-    >;
+    const broken: Record<string, unknown> = {
+      ...(report as unknown as Record<string, unknown>),
+    };
+    delete broken.section3;
     const held = buildReportReviewPackage(
       broken as unknown as StudentReport,
       '',

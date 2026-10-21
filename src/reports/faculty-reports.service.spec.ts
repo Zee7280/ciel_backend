@@ -8,30 +8,96 @@ import {
   CII_V45_DIMENSIONS,
   CiiV45EvaluatorPayload,
 } from './cii-v4-5.constants';
-import { buildCielPkAiEvaluationPayloadV45 } from './build-ciel-pk-ai-evaluation-payload.util';
+import {
+  buildCielPkAiEvaluationPayloadV45,
+  type EvidenceByteSource,
+} from './build-ciel-pk-ai-evaluation-payload.util';
+import type { StudentReport } from './entities/student-report.entity';
+
+/** Local view of the shapes the tests assert on (the service's own return types are
+ * intentionally not imported — this spec only reads the fields it checks). */
+type CiiV45Data = {
+  finalCII: number | null;
+  scoreStatus: string;
+  aiReportScore: number | null;
+  adminEvidenceScore: number | null;
+  adminEvidenceAssessment: {
+    status: string;
+    criteria: Array<{ reasoningSummary?: string }>;
+  };
+  sectionScores: Array<{
+    dimension: string;
+    criterionScores: Array<{ anchor: unknown }>;
+  }>;
+  previousLocks: unknown[];
+  runHistory: Array<Record<string, unknown>>;
+  evidenceInspection: { notInspected: Array<{ id: string }> };
+};
+type CiiV45LockData = {
+  locked: boolean;
+  hash: string;
+  aiRecommendedScore?: number;
+  adminApprovedScore?: number;
+  scoreWasModerated?: boolean;
+};
+type ApprovalData = { ciiV45: CiiV45Data; ciiV45Lock: CiiV45LockData };
+type IndependentAnalysisData = {
+  analysis: { runByRole: string; score: number | null };
+};
+type BatchData = {
+  total: number;
+  succeeded: number;
+  failed: number;
+  results: Array<{ reportId: string; success: boolean; score?: number }>;
+};
+/** A report fixture whose `ciiV45` blob the test mutates (e.g. to pin a fingerprint). */
+type ReportFixture = Record<string, unknown> & {
+  ciiV45: Record<string, unknown>;
+};
+
+const asCii = (v: unknown) => v as CiiV45Data;
+const asApproval = (v: unknown) => v as ApprovalData;
+const asIndependent = (v: unknown) => v as IndependentAnalysisData;
+const asBatch = (v: unknown) => v as BatchData;
+
+type ReportRow = Record<string, unknown>;
+type MockQb = {
+  leftJoin: jest.Mock<MockQb, unknown[]>;
+  leftJoinAndSelect: jest.Mock<MockQb, unknown[]>;
+  where: jest.Mock<MockQb, unknown[]>;
+  andWhere: jest.Mock<MockQb, unknown[]>;
+  orWhere: jest.Mock<MockQb, unknown[]>;
+  orderBy: jest.Mock<MockQb, unknown[]>;
+  getOne: jest.Mock<Promise<ReportRow | null>, []>;
+  getMany?: jest.Mock<Promise<ReportRow[]>, []>;
+  update: jest.Mock<MockQb, unknown[]>;
+  set: jest.Mock<MockQb, [Record<string, unknown>]>;
+  execute: jest.Mock<Promise<{ affected: number }>, []>;
+};
+type Deps = ConstructorParameters<typeof FacultyReportsService>;
 
 function makeService(
-  report: Record<string, unknown> | null,
-  aiServiceOverrides: Record<string, unknown> = {},
+  report: ReportRow | null,
+  aiServiceOverrides: Partial<{ summarize: jest.Mock }> = {},
   updateAffected = 1,
 ) {
-  const qb: any = {
+  const qb: MockQb = {
     leftJoin: jest.fn(() => qb),
     leftJoinAndSelect: jest.fn(() => qb),
     where: jest.fn(() => qb),
     andWhere: jest.fn(() => qb),
     orWhere: jest.fn(() => qb),
     orderBy: jest.fn(() => qb),
-    getOne: jest.fn(async () => report),
+    getOne: jest.fn(() => Promise.resolve(report)),
     update: jest.fn(() => qb),
-    set: jest.fn(() => qb),
-    execute: jest.fn(async () => ({ affected: updateAffected })),
+    set: jest.fn<MockQb, [Record<string, unknown>]>(() => qb),
+    execute: jest.fn(() => Promise.resolve({ affected: updateAffected })),
   };
   const studentReportsRepository = {
     createQueryBuilder: jest.fn(() => qb),
-    save: jest.fn(async (row: Record<string, unknown>) => row),
-    update: jest.fn(async () => ({ affected: 1 })),
-    findOne: jest.fn(async () => report),
+    save: jest.fn((row: Record<string, unknown>) => Promise.resolve(row)),
+    update: jest.fn(() => Promise.resolve({ affected: 1 })),
+    findOne: jest.fn(() => Promise.resolve(report)),
   };
   const facultyService = {
     getScopedOpportunityIds: jest.fn().mockResolvedValue([]),
@@ -54,7 +120,7 @@ function makeService(
   };
   const attendanceLogsRepository = {
     find: jest.fn().mockResolvedValue([]),
-    save: jest.fn(async (rows: unknown) => rows),
+    save: jest.fn((rows: unknown) => Promise.resolve(rows)),
   };
   const participationRepository = {
     find: jest.fn().mockResolvedValue([]),
@@ -69,17 +135,17 @@ function makeService(
     getObjectBufferByPublicUrl: jest.fn().mockResolvedValue(null),
   };
   const service = new FacultyReportsService(
-    studentReportsRepository as any,
-    {} as any,
-    facultyService as any,
-    aiService as any,
-    facultyUniversityScopeService as any,
-    attendanceLogsRepository as any,
-    mailService as any,
-    notificationsService as any,
-    participationRepository as any,
-    opportunitiesRepository as any,
-    s3Service as any,
+    studentReportsRepository as unknown as Deps[0],
+    {} as Deps[1],
+    facultyService as unknown as Deps[2],
+    aiService as unknown as Deps[3],
+    facultyUniversityScopeService as unknown as Deps[4],
+    attendanceLogsRepository as unknown as Deps[5],
+    mailService as unknown as Deps[6],
+    notificationsService as unknown as Deps[7],
+    participationRepository as unknown as Deps[8],
+    opportunitiesRepository as unknown as Deps[9],
+    s3Service as unknown as Deps[10],
   );
   return {
     service,
@@ -101,10 +167,12 @@ function makeService(
 async function fingerprintForReport(
   report: Record<string, unknown>,
 ): Promise<string> {
-  const s3 = { getObjectBufferByPublicUrl: jest.fn().mockResolvedValue(null) };
+  const s3 = {
+    getObjectBufferByPublicUrl: jest.fn().mockResolvedValue(null),
+  } as unknown as EvidenceByteSource;
   const payload = await buildCielPkAiEvaluationPayloadV45(
-    report as any,
-    s3 as any,
+    report as unknown as StudentReport,
+    s3,
   );
   return payload.input_fingerprint;
 }
@@ -215,10 +283,10 @@ describe('FacultyReportsService — runCiiV45AnalysisForAdmin', () => {
     const result = await service.runCiiV45AnalysisForAdmin('report-1');
 
     expect(result.success).toBe(true);
-    expect((result.data as any).finalCII).toBeNull();
-    expect((result.data as any).scoreStatus).toBe('ADMIN_EVIDENCE_REQUIRED');
-    expect((result.data as any).aiReportScore).toBe(85);
-    expect((result.data as any).adminEvidenceScore).toBeNull();
+    expect(asCii(result.data).finalCII).toBeNull();
+    expect(asCii(result.data).scoreStatus).toBe('ADMIN_EVIDENCE_REQUIRED');
+    expect(asCii(result.data).aiReportScore).toBe(85);
+    expect(asCii(result.data).adminEvidenceScore).toBeNull();
     expect(qb.execute).toHaveBeenCalled();
     // Must never full-entity save() a stale `report` object — that would clobber a
     // concurrently-set ciiV45Lock (see the dedicated race-condition test below).
@@ -260,13 +328,16 @@ describe('FacultyReportsService — runCiiV45AnalysisForAdmin', () => {
         force: true,
       });
       expect(out.success).toBe(true);
-      const set = qb.set.mock.calls[0][0];
+      const set = qb.set.mock.calls[0][0] as {
+        ciiV45Lock: () => string;
+        ciiV45: CiiV45Data;
+      };
       expect(set.ciiV45Lock()).toBe('NULL');
       expect(set.ciiV45.previousLocks).toEqual([
         expect.objectContaining({
           hash: 'h1',
           reason: 'admin_rescore',
-          supersededAt: expect.any(String),
+          supersededAt: expect.any(String) as unknown,
         }),
       ]);
     });
@@ -296,13 +367,14 @@ describe('FacultyReportsService — runCiiV45AnalysisForAdmin', () => {
   });
 
   it('combines 85 AI + 15 Admin evidence on Confirm', async () => {
-    const report: any = analysableReport();
+    const report = analysableReport();
     const { service, qb } = makeService(report, {
       summarize: jest.fn().mockResolvedValue({ ciiV45: CII_V45_AI_RESPONSE }),
     });
     const analysed = await service.runCiiV45AnalysisForAdmin('report-1');
     report.ciiV45 = analysed.data;
-    report.ciiV45.inputFingerprint = await fingerprintForReport(report);
+    (report.ciiV45 as Record<string, unknown>).inputFingerprint =
+      await fingerprintForReport(report);
 
     const dim7 = CII_V45_DIMENSIONS.find((d) => d.id === '7')!;
     const result = await service.approveCiiV45ForAdmin(
@@ -318,9 +390,9 @@ describe('FacultyReportsService — runCiiV45AnalysisForAdmin', () => {
         evidenceIds: ['E1'],
       })),
     );
-    expect((result.data as any).ciiV45Lock.locked).toBe(true);
-    expect((result.data as any).ciiV45.finalCII).toBe(100);
-    expect((result.data as any).ciiV45.adminEvidenceScore).toBe(15);
+    expect(asApproval(result.data).ciiV45Lock.locked).toBe(true);
+    expect(asApproval(result.data).ciiV45.finalCII).toBe(100);
+    expect(asApproval(result.data).ciiV45.adminEvidenceScore).toBe(15);
     expect(qb.set).toHaveBeenCalledWith(
       expect.objectContaining({
         admin_status: 'approved',
@@ -332,19 +404,20 @@ describe('FacultyReportsService — runCiiV45AnalysisForAdmin', () => {
   });
 
   it('Confirm without Dim 7 marks defaults Sound (2) and publishes a /100 CII', async () => {
-    const report: any = analysableReport();
+    const report = analysableReport();
     const { service, qb } = makeService(report, {
       summarize: jest.fn().mockResolvedValue({ ciiV45: CII_V45_AI_RESPONSE }),
     });
     const analysed = await service.runCiiV45AnalysisForAdmin('report-1');
     report.ciiV45 = analysed.data;
-    report.ciiV45.inputFingerprint = await fingerprintForReport(report);
+    (report.ciiV45 as Record<string, unknown>).inputFingerprint =
+      await fingerprintForReport(report);
 
     const result = await service.approveCiiV45ForAdmin('report-1', 'admin-1');
-    expect((result.data as any).ciiV45Lock.locked).toBe(true);
-    expect((result.data as any).ciiV45.adminEvidenceScore).toBe(10.5);
-    expect((result.data as any).ciiV45.finalCII).toBe(95.5);
-    expect((result.data as any).ciiV45.adminEvidenceAssessment.status).toBe(
+    expect(asApproval(result.data).ciiV45Lock.locked).toBe(true);
+    expect(asApproval(result.data).ciiV45.adminEvidenceScore).toBe(10.5);
+    expect(asApproval(result.data).ciiV45.finalCII).toBe(95.5);
+    expect(asApproval(result.data).ciiV45.adminEvidenceAssessment.status).toBe(
       'ASSESSED',
     );
     expect(qb.set).toHaveBeenCalledWith(
@@ -356,13 +429,14 @@ describe('FacultyReportsService — runCiiV45AnalysisForAdmin', () => {
   });
 
   it('Confirm fills a default evidence rationale when Admin leaves Dim 7 notes blank', async () => {
-    const report: any = analysableReport();
+    const report = analysableReport();
     const { service } = makeService(report, {
       summarize: jest.fn().mockResolvedValue({ ciiV45: CII_V45_AI_RESPONSE }),
     });
     const analysed = await service.runCiiV45AnalysisForAdmin('report-1');
     report.ciiV45 = analysed.data;
-    report.ciiV45.inputFingerprint = await fingerprintForReport(report);
+    (report.ciiV45 as Record<string, unknown>).inputFingerprint =
+      await fingerprintForReport(report);
 
     const dim7 = CII_V45_DIMENSIONS.find((d) => d.id === '7')!;
     const result = await service.approveCiiV45ForAdmin(
@@ -376,11 +450,11 @@ describe('FacultyReportsService — runCiiV45AnalysisForAdmin', () => {
         anchor: 4 as const,
       })),
     );
-    expect((result.data as any).ciiV45Lock.locked).toBe(true);
-    expect((result.data as any).ciiV45.finalCII).toBe(100);
+    expect(asApproval(result.data).ciiV45Lock.locked).toBe(true);
+    expect(asApproval(result.data).ciiV45.finalCII).toBe(100);
     expect(
-      (result.data as any).ciiV45.adminEvidenceAssessment.criteria.every(
-        (c: { reasoningSummary: string }) =>
+      asApproval(result.data).ciiV45.adminEvidenceAssessment.criteria.every(
+        (c) =>
           typeof c.reasoningSummary === 'string' && c.reasoningSummary.trim(),
       ),
     ).toBe(true);
@@ -415,14 +489,12 @@ describe('FacultyReportsService — runCiiV45AnalysisForAdmin', () => {
 
     const result = await service.runCiiV45AnalysisForAdmin('report-1');
     expect(result.success).toBe(true);
-    expect((result.data as any).scoreStatus).toBe('ADMIN_REVIEW_REQUIRED');
-    const dim1 = (result.data as any).sectionScores.find(
-      (s: { dimension: string }) => s.dimension === '1',
-    );
+    expect(asCii(result.data).scoreStatus).toBe('ADMIN_REVIEW_REQUIRED');
+    const dim1 = asCii(result.data).sectionScores.find(
+      (s) => s.dimension === '1',
+    )!;
     expect(dim1.criterionScores).toHaveLength(4);
-    expect(
-      dim1.criterionScores.some((c: { anchor: unknown }) => c.anchor === 'P'),
-    ).toBe(true);
+    expect(dim1.criterionScores.some((c) => c.anchor === 'P')).toBe(true);
   });
 
   it('calls the model once with evidence images omitted (v5.0 report-quality layer)', async () => {
@@ -434,7 +506,12 @@ describe('FacultyReportsService — runCiiV45AnalysisForAdmin', () => {
           : s,
       ),
     };
-    const summarize = jest.fn().mockResolvedValue({ ciiV45: incomplete });
+    const summarize = jest
+      .fn<
+        Promise<{ ciiV45: CiiV45EvaluatorPayload }>,
+        [string, unknown, { skipEvidenceImages?: boolean }?]
+      >()
+      .mockResolvedValue({ ciiV45: incomplete });
     const { service } = makeService(analysableReport('report-2'), {
       summarize,
     });
@@ -461,7 +538,7 @@ describe('FacultyReportsService — runCiiV45AnalysisForAdmin', () => {
       service.runCiiV45AnalysisForAdmin('report-3'),
     ).rejects.toMatchObject({
       response: { statusCode: 400 },
-      message: expect.stringContaining('readable'),
+      message: expect.stringContaining('readable') as unknown,
     });
     await expect(
       service.runCiiV45AnalysisForAdmin('report-3'),
@@ -530,7 +607,7 @@ describe('FacultyReportsService — approveCiiV45ForAdmin', () => {
   });
 
   it('lets admin publish when analysis flagged RESUBMISSION_REQUIRED', async () => {
-    const report: any = {
+    const report: ReportFixture = {
       id: 'report-1',
       status: 'submitted',
       section1: { team_lead: { hours: 20 } },
@@ -547,13 +624,13 @@ describe('FacultyReportsService — approveCiiV45ForAdmin', () => {
     const { service } = makeService(report);
 
     const result = await service.approveCiiV45ForAdmin('report-1', 'admin-1');
-    expect((result.data as any).ciiV45Lock.locked).toBe(true);
-    expect((result.data as any).ciiV45.finalCII).toBe(60.3);
-    expect((result.data as any).ciiV45Lock.aiRecommendedScore).toBe(60.3);
+    expect(asApproval(result.data).ciiV45Lock.locked).toBe(true);
+    expect(asApproval(result.data).ciiV45.finalCII).toBe(60.3);
+    expect(asApproval(result.data).ciiV45Lock.aiRecommendedScore).toBe(60.3);
   });
 
   it('lets admin publish when analysis is still ADMIN_REVIEW_REQUIRED', async () => {
-    const report: any = {
+    const report: ReportFixture = {
       id: 'report-1',
       status: 'submitted',
       section1: { team_lead: { hours: 20 } },
@@ -569,8 +646,8 @@ describe('FacultyReportsService — approveCiiV45ForAdmin', () => {
     const { service } = makeService(report);
 
     const result = await service.approveCiiV45ForAdmin('report-1', 'admin-1');
-    expect((result.data as any).ciiV45Lock.locked).toBe(true);
-    expect((result.data as any).ciiV45.finalCII).toBe(70);
+    expect(asApproval(result.data).ciiV45Lock.locked).toBe(true);
+    expect(asApproval(result.data).ciiV45.finalCII).toBe(70);
   });
 
   it('refuses to publish when the report changed since the analysis ran (fingerprint mismatch)', async () => {
@@ -593,7 +670,7 @@ describe('FacultyReportsService — approveCiiV45ForAdmin', () => {
   });
 
   it('refuses when a concurrent request wins the lock first (atomic compare-and-swap affects 0 rows)', async () => {
-    const report: any = {
+    const report: ReportFixture = {
       id: 'report-1',
       status: 'submitted',
       section1: { team_lead: { hours: 20 } },
@@ -615,7 +692,7 @@ describe('FacultyReportsService — approveCiiV45ForAdmin', () => {
   });
 
   it('approves the student pending attendance logs when the CII v4.5 score is locked', async () => {
-    const report: any = {
+    const report: ReportFixture = {
       id: 'report-1',
       status: 'submitted',
       studentId: 'stu-1',
@@ -660,7 +737,7 @@ describe('FacultyReportsService — approveCiiV45ForAdmin', () => {
     jest.useFakeTimers().setSystemTime(new Date('2024-01-01T00:00:00.000Z'));
     try {
       const baseReport = async () => {
-        const report: any = {
+        const report: ReportFixture = {
           id: 'report-1',
           status: 'submitted',
           section1: { team_lead: { hours: 20 } },
@@ -691,18 +768,18 @@ describe('FacultyReportsService — approveCiiV45ForAdmin', () => {
         'Different note',
       );
 
-      expect((resultA.data as any).ciiV45Lock.hash).not.toBe(
-        (resultB.data as any).ciiV45Lock.hash,
+      expect(asApproval(resultA.data).ciiV45Lock.hash).not.toBe(
+        asApproval(resultB.data).ciiV45Lock.hash,
       );
-      expect((resultA.data as any).ciiV45Lock.locked).toBe(true);
-      expect((resultA.data as any).ciiV45.finalCII).toBe(80);
+      expect(asApproval(resultA.data).ciiV45Lock.locked).toBe(true);
+      expect(asApproval(resultA.data).ciiV45.finalCII).toBe(80);
     } finally {
       jest.useRealTimers();
     }
   });
 
   it('ignores a manual final-score override — Confirm publishes the generated Composite CII', async () => {
-    const report: any = {
+    const report: ReportFixture = {
       id: 'report-1',
       status: 'submitted',
       ciiV45: {
@@ -722,9 +799,9 @@ describe('FacultyReportsService — approveCiiV45ForAdmin', () => {
       75,
       'Evidence was weaker than the AI assessed.',
     );
-    expect((result.data as any).ciiV45Lock.scoreWasModerated).toBe(false);
-    expect((result.data as any).ciiV45Lock.adminApprovedScore).toBe(80);
-    expect((result.data as any).ciiV45Lock.aiRecommendedScore).toBe(80);
+    expect(asApproval(result.data).ciiV45Lock.scoreWasModerated).toBe(false);
+    expect(asApproval(result.data).ciiV45Lock.adminApprovedScore).toBe(80);
+    expect(asApproval(result.data).ciiV45Lock.aiRecommendedScore).toBe(80);
   });
 });
 
@@ -790,7 +867,7 @@ describe('FacultyReportsService — runIndependentAiAnalysis (multi-stakeholder 
     const { service, qb } = makeService(lockedReport(), {
       summarize: jest.fn().mockResolvedValue({ ciiV45: CII_V45_AI_RESPONSE }),
     });
-    qb.getOne = jest.fn(async () => null); // outside this faculty's assignment scope
+    qb.getOne = jest.fn(() => Promise.resolve(null)); // outside this faculty's assignment scope
 
     await expect(
       service.runIndependentAiAnalysis(
@@ -821,8 +898,8 @@ describe('FacultyReportsService — runIndependentAiAnalysis (multi-stakeholder 
     );
 
     expect(result.success).toBe(true);
-    expect((result.data as any).analysis.runByRole).toBe('faculty');
-    expect((result.data as any).analysis.score).toBe(100);
+    expect(asIndependent(result.data).analysis.runByRole).toBe('faculty');
+    expect(asIndependent(result.data).analysis.score).toBe(100);
     expect(studentReportsRepository.update).toHaveBeenCalledWith(
       'report-1',
       expect.objectContaining({
@@ -879,7 +956,7 @@ describe('FacultyReportsService — runIndependentAiAnalysis (multi-stakeholder 
     );
 
     expect(result.success).toBe(true);
-    expect((result.data as any).analysis.runByRole).toBe('university');
+    expect(asIndependent(result.data).analysis.runByRole).toBe('university');
   });
 
   it('ciel_admin: runs unrestricted, no scope required', async () => {
@@ -895,7 +972,7 @@ describe('FacultyReportsService — runIndependentAiAnalysis (multi-stakeholder 
     );
 
     expect(result.success).toBe(true);
-    expect((result.data as any).analysis.runByRole).toBe('ciel_admin');
+    expect(asIndependent(result.data).analysis.runByRole).toBe('ciel_admin');
   });
 });
 
@@ -963,10 +1040,10 @@ describe('FacultyReportsService — runIndependentAiAnalysisBatch', () => {
     );
 
     expect(result.success).toBe(true);
-    expect((result.data as any).total).toBe(1);
-    expect((result.data as any).succeeded).toBe(1);
-    expect((result.data as any).failed).toBe(0);
-    expect((result.data as any).results[0]).toEqual(
+    expect(asBatch(result.data).total).toBe(1);
+    expect(asBatch(result.data).succeeded).toBe(1);
+    expect(asBatch(result.data).failed).toBe(0);
+    expect(asBatch(result.data).results[0]).toEqual(
       expect.objectContaining({
         reportId: 'report-1',
         success: true,
@@ -982,9 +1059,11 @@ describe('FacultyReportsService — runIndependentAiAnalysisBatch', () => {
     // Second id resolves to nothing (e.g. someone else's report, outside ciel_admin's... in this
     // case simulate "not found" by having findOne return null only for the second lookup).
     let call = 0;
-    studentReportsRepository.findOne = jest.fn(async () => {
+    studentReportsRepository.findOne = jest.fn(() => {
       call += 1;
-      return call === 2 ? null : lockedReport();
+      return Promise.resolve<ReportRow | null>(
+        call === 2 ? null : lockedReport(),
+      );
     });
 
     const result = await service.runIndependentAiAnalysisBatch(
@@ -993,11 +1072,11 @@ describe('FacultyReportsService — runIndependentAiAnalysisBatch', () => {
       'ciel_admin',
     );
 
-    expect((result.data as any).total).toBe(2);
-    expect((result.data as any).succeeded).toBe(1);
-    expect((result.data as any).failed).toBe(1);
+    expect(asBatch(result.data).total).toBe(2);
+    expect(asBatch(result.data).succeeded).toBe(1);
+    expect(asBatch(result.data).failed).toBe(1);
     expect(
-      (result.data as any).results.find((r: any) => r.reportId === 'report-2'),
+      asBatch(result.data).results.find((r) => r.reportId === 'report-2'),
     ).toEqual(expect.objectContaining({ success: false }));
   });
 });
@@ -1165,7 +1244,7 @@ describe('mapFacultyListPackage', () => {
         summary_text: 'Workshops for out-of-school youth in Johar Town.',
       },
       section8: { evidence_files: [] },
-    } as any;
+    } as unknown as StudentReport;
     const pkg = mapFacultyListPackage(report, 22);
     expect(pkg.university).toBe('BNU');
     expect(pkg.faculty_name).toBe('Dr. Hina Malik');
@@ -1185,7 +1264,7 @@ describe('mapFacultyListPackage', () => {
         metrics: { total_verified_hours: 16 },
       },
       section2: {},
-    } as any;
+    } as unknown as StudentReport;
     expect(mapFacultyListPackage(report, 44).member_hours[0].hours).toBe(44);
   });
 
@@ -1197,7 +1276,7 @@ describe('mapFacultyListPackage', () => {
         metrics: { total_verified_hours: 0 },
       },
       section2: {},
-    } as any;
+    } as unknown as StudentReport;
     expect(mapFacultyListPackage(report, 18).member_hours[0].hours).toBe(18);
   });
 });
@@ -1218,7 +1297,7 @@ describe('FacultyReportsService — draft progress (opens only after submit)', (
     };
     const { service, qb } = makeService(null);
     qb.orderBy = jest.fn(() => qb);
-    qb.getMany = jest.fn(async () => [draft]);
+    qb.getMany = jest.fn(() => Promise.resolve<ReportRow[]>([draft]));
     const res = await service.listDraftProgress('f-1', 'f@x.com');
     expect(qb.andWhere).toHaveBeenCalledWith(
       "report.status IN ('draft', 'continue')",
@@ -1245,7 +1324,7 @@ describe('FacultyReportsService — draft progress (opens only after submit)', (
   it('excludes draft AND continue reports from the submitted-report queries', async () => {
     const { service, qb } = makeService(null);
     qb.orderBy = jest.fn(() => qb);
-    qb.getMany = jest.fn(async () => []);
+    qb.getMany = jest.fn(() => Promise.resolve<ReportRow[]>([]));
     await service.listAssignedReports('f-1', 'f@x.com');
     expect(qb.andWhere).toHaveBeenCalledWith(
       "report.status NOT IN ('draft', 'continue')",
@@ -1305,7 +1384,7 @@ describe('FacultyReportsService — project tracking (assigned students + live h
         dateOfEngagement: '2026-04-02',
       },
     ]);
-    qb.getMany = jest.fn(async () => []);
+    qb.getMany = jest.fn(() => Promise.resolve<ReportRow[]>([]));
     const res = await service.listProjectTracking('f-1', 'f@x.com');
     expect(res.data).toHaveLength(1);
     const row = res.data[0];
@@ -1360,7 +1439,7 @@ describe('FacultyReportsService — project tracking (assigned students + live h
       },
     ]);
     attendanceLogsRepository.find.mockResolvedValue([]);
-    qb.getMany = jest.fn(async () => []);
+    qb.getMany = jest.fn(() => Promise.resolve<ReportRow[]>([]));
     const res = await service.listProjectTracking('f-1', 'f@x.com');
     expect(res.data).toHaveLength(1);
     const row = res.data[0];
@@ -1436,16 +1515,17 @@ describe('FacultyReportsService — AI analysis run safety (lock, history, incom
       { ...analysableReport('report-hist'), ciiV45: previous },
       { summarize },
     );
-    const res: any = await service.runCiiV45AnalysisForAdmin('report-hist');
-    expect(res.data.runHistory).toHaveLength(2);
-    expect(res.data.runHistory[0]).toMatchObject({ score: 41, model: 'm0' });
-    expect(res.data.runHistory[1]).toMatchObject({
+    const res = await service.runCiiV45AnalysisForAdmin('report-hist');
+    const data = asCii(res.data);
+    expect(data.runHistory).toHaveLength(2);
+    expect(data.runHistory[0]).toMatchObject({ score: 41, model: 'm0' });
+    expect(data.runHistory[1]).toMatchObject({
       score: 85,
       model: 'gpt-test',
       inspectedImages: 1,
       notInspectedFiles: 1,
     });
-    expect(res.data.evidenceInspection.notInspected[0].id).toBe('E2');
+    expect(data.evidenceInspection.notInspected[0].id).toBe('E2');
   });
 
   it('an incomplete run with no numeric score still cannot be locked', async () => {

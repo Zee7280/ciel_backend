@@ -232,7 +232,13 @@ export class TutorialsService {
   private normalizeSortOrder(value: unknown): number {
     if (typeof value === 'number' && Number.isFinite(value))
       return Math.trunc(value);
-    const n = parseInt(String(value ?? '').trim(), 10);
+    const text =
+      typeof value === 'string'
+        ? value
+        : value == null
+          ? ''
+          : String(value as number | boolean);
+    const n = parseInt(text.trim(), 10);
     return Number.isFinite(n) ? n : 0;
   }
 

@@ -3,11 +3,11 @@ import { TutorialsService } from './tutorials.service';
 
 describe('TutorialsService URL validation', () => {
   const prefix = 'https://bucket.s3.eu.amazonaws.com/';
-  const s3: any = {
+  const s3 = {
     keyFromPublicUrl: (u: string) =>
       u.startsWith(prefix) ? decodeURIComponent(u.slice(prefix.length)) : null,
   };
-  const service = new TutorialsService({} as any, s3);
+  const service = new TutorialsService({} as never, s3 as never);
 
   it('accepts storage-hosted https URLs', () => {
     expect(

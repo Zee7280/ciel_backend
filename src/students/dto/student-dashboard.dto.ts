@@ -85,8 +85,11 @@ export interface DashboardNotificationItem {
   title: string;
   detail: string;
   tone?: 'urgent' | 'warning' | 'neutral';
-  /** Lets the UI style tiles (e.g. payment vs generic review) without parsing copy. */
-  category?: 'payment' | 'report' | 'approval' | 'deadline' | string;
+  /**
+   * Lets the UI style tiles (e.g. payment vs generic review) without parsing copy.
+   * Known values: 'payment' | 'report' | 'approval' | 'deadline' (open-ended for new tiles).
+   */
+  category?: string;
 }
 
 export interface DashboardNotificationsPreview {

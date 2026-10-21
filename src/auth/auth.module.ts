@@ -29,7 +29,7 @@ import { Organization } from '../organizations/entities/organization.entity';
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => ({
+      useFactory: (configService: ConfigService) => ({
         secret: resolveJwtSecret(configService.get<string>('JWT_SECRET')),
         signOptions: { expiresIn: '10h' },
       }),

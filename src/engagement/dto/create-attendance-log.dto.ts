@@ -1,12 +1,9 @@
 import {
   IsString,
-  IsDecimal,
   IsISO8601,
   MaxLength,
   Matches,
   IsOptional,
-  IsBooleanString,
-  IsBoolean,
 } from 'class-validator';
 import {
   ATTENDANCE_DESCRIPTION_MAX_CHARS,

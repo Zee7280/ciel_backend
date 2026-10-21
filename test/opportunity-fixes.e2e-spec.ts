@@ -13,10 +13,16 @@ import {
 import { adminApprove, detail, verifyToken } from './e2e/helpers';
 import { UserRole } from '../src/users/enums/user-role.enum';
 import { MailService } from '../src/mail/mail.service';
+import { Opportunity } from '../src/opportunities/entities/opportunity.entity';
+import { QueryDeepPartialEntity } from 'typeorm';
 import {
   isPrivateCandidateOpportunity,
   reviewRouteForOpportunity,
 } from '../src/opportunities/private-candidate.util';
+
+/** `{ data: { id } }` envelope returned by the student wizard create route */
+const dataId = (res: { body: unknown }): string =>
+  (res.body as { data: { id: string } }).data.id;
 
 describe('Opportunity workflow fixes (real app + real Postgres)', () => {
   let h: Harness;
@@ -38,7 +44,7 @@ describe('Opportunity workflow fixes (real app + real Postgres)', () => {
   const createOrgOpp = async (ngo: E2eUser, body: Record<string, any> = {}) => {
     const res = await h.as(ngo).post('/opportunities').send(oppPayload(body));
     expect(res.status).toBe(201);
-    return res.body.id as string;
+    return (res.body as { id: string }).id;
   };
 
   // ---------------------------------------------------------------- legacy mirror on org listings
@@ -49,8 +55,8 @@ describe('Opportunity workflow fixes (real app + real Postgres)', () => {
     expect(o.facultyApprovalStatus).toBe('not_applicable');
     expect(o.status).toBe('pending_approval');
     // the legacy field must keep NOT saying "not_required": that value means "private / independent candidate"
-    expect(isPrivateCandidateOpportunity(o as any)).toBe(false);
-    expect(reviewRouteForOpportunity(o as any)).toBe('faculty');
+    expect(isPrivateCandidateOpportunity(o)).toBe(false);
+    expect(reviewRouteForOpportunity(o)).toBe('faculty');
   });
 
   it('"Remind reviewer" on such a listing reminds CIEL PK instead of failing on a faculty that does not exist', async () => {
@@ -61,8 +67,9 @@ describe('Opportunity workflow fixes (real app + real Postgres)', () => {
       .post(`/student/opportunity/${id}/remind-reviewer`)
       .send({});
     expect(res.status).toBe(201);
-    expect(res.body.sent_to).toBe('admin');
-    expect(res.body.message).not.toMatch(/faculty/i);
+    const body = res.body as { sent_to: string; message: string };
+    expect(body.sent_to).toBe('admin');
+    expect(body.message).not.toMatch(/faculty/i);
   });
 
   it('an admin editing only a partner contact on such a listing does not push it back to a faculty step with no reviewer', async () => {
@@ -106,7 +113,8 @@ describe('Opportunity workflow fixes (real app + real Postgres)', () => {
       .as(null)
       .get('/public/opportunities?partner_id=not-a-uuid');
     expect(anon.status).toBe(200);
-    expect(anon.body.data ?? anon.body).toEqual([]);
+    const anonBody = anon.body as { data?: unknown };
+    expect(anonBody.data ?? anonBody).toEqual([]);
     const sql = await h.as(admin).get("/opportunities?partner_id=' OR 1=1 --");
     expect(sql.status).toBeLessThan(500);
   });
@@ -121,8 +129,8 @@ describe('Opportunity workflow fixes (real app + real Postgres)', () => {
         .post('/student/opportunity')
         .send(studentPayload(fac.email));
       expect(sub.status).toBe(201);
-      const id = sub.body.data.id;
-      const original = (await h.reload(id)).faculty_verification_token!;
+      const id = dataId(sub);
+      const original = (await h.reload(id)).faculty_verification_token;
       await h.ds.query(
         `UPDATE opportunities SET "facultyTokenExpiresAt" = now() - interval '1 day' WHERE id = $1`,
         [id],
@@ -149,13 +157,13 @@ describe('Opportunity workflow fixes (real app + real Postgres)', () => {
     it('a still-valid link is kept: reminding does not invalidate the mail the reviewer already has', async () => {
       const s = await h.makeUser(UserRole.STUDENT);
       const fac = await h.makeUser(UserRole.FACULTY);
-      const id = (
+      const id = dataId(
         await h
           .as(s)
           .post('/student/opportunity')
-          .send(studentPayload(fac.email))
-      ).body.data.id;
-      const original = (await h.reload(id)).faculty_verification_token!;
+          .send(studentPayload(fac.email)),
+      );
+      const original = (await h.reload(id)).faculty_verification_token;
       h.mail.reset();
       await h.as(s).post(`/student/opportunity/${id}/remind-reviewer`).send({});
       expect(
@@ -182,17 +190,17 @@ describe('Opportunity workflow fixes (real app + real Postgres)', () => {
           }),
         );
       expect(sub.status).toBe(201);
-      const id = sub.body.data.id;
+      const id = dataId(sub);
       const o0 = await h.reload(id);
-      const stalePartner = o0.partnerToken!;
+      const stalePartner = o0.partnerToken;
       // the partner token was issued at creation; by the time the faculty acts it has expired
       await h.ds.query(
         `UPDATE opportunities SET "partnerTokenExpiresAt" = now() - interval '1 day' WHERE id = $1`,
         [id],
       );
-      expect(
-        (await verifyToken(h, o0.faculty_verification_token!)).status,
-      ).toBe(201);
+      expect((await verifyToken(h, o0.faculty_verification_token)).status).toBe(
+        201,
+      );
       const mails = h.mail.of('sendPartnerVerification');
       expect(mails).toHaveLength(1);
       const emailed = mails[0].args[2] as string;
@@ -205,12 +213,15 @@ describe('Opportunity workflow fixes (real app + real Postgres)', () => {
   it('an unrelated partial update does not turn expiring reviewer links into permanent ones', async () => {
     const s = await h.makeUser(UserRole.STUDENT);
     const fac = await h.makeUser(UserRole.FACULTY);
-    const id = (
-      await h.as(s).post('/student/opportunity').send(studentPayload(fac.email))
-    ).body.data.id;
+    const id = dataId(
+      await h
+        .as(s)
+        .post('/student/opportunity')
+        .send(studentPayload(fac.email)),
+    );
     const before = (await h.reload(id)).facultyTokenExpiresAt;
     expect(before).toBeTruthy();
-    await h.opps.update(id, { admin_hidden: true } as any); // any partial column update
+    await h.opps.update(id, { admin_hidden: true }); // any partial column update
     expect((await h.reload(id)).facultyTokenExpiresAt?.getTime()).toBe(
       before!.getTime(),
     );
@@ -222,13 +233,13 @@ describe('Opportunity workflow fixes (real app + real Postgres)', () => {
       const s = await h.makeUser(UserRole.STUDENT);
       const oldFac = await h.makeUser(UserRole.FACULTY);
       const newFac = await h.makeUser(UserRole.FACULTY);
-      const id = (
+      const id = dataId(
         await h
           .as(s)
           .post('/student/opportunity')
-          .send(studentPayload(oldFac.email))
-      ).body.data.id;
-      const oldToken = (await h.reload(id)).faculty_verification_token!;
+          .send(studentPayload(oldFac.email)),
+      );
+      const oldToken = (await h.reload(id)).faculty_verification_token;
       h.mail.reset();
 
       const res = await h
@@ -252,26 +263,28 @@ describe('Opportunity workflow fixes (real app + real Postgres)', () => {
       const s = await h.makeUser(UserRole.STUDENT);
       const oldFac = await h.makeUser(UserRole.FACULTY);
       const newFac = await h.makeUser(UserRole.FACULTY);
-      const id = (
+      const id = dataId(
         await h
           .as(s)
           .post('/student/opportunity')
-          .send(studentPayload(oldFac.email))
-      ).body.data.id;
-      const mailer = h.app.get(MailService) as any;
-      const original = mailer.sendFacultyStudentOpportunityVerification;
-      mailer.sendFacultyStudentOpportunityVerification = async () => {
-        throw new Error('smtp down');
-      };
+          .send(studentPayload(oldFac.email)),
+      );
+      const mailer = h.app.get(MailService);
+      const original = mailer.sendFacultyStudentOpportunityVerification.bind(
+        mailer,
+      ) as MailService['sendFacultyStudentOpportunityVerification'];
+      mailer.sendFacultyStudentOpportunityVerification = () =>
+        Promise.reject(new Error('smtp down'));
       try {
         const res = await h
           .as(admin)
           .patch(`/admin/opportunities/${id}/contacts`)
           .send({ faculty_supervisor_email: newFac.email });
         expect(res.status).toBe(200);
-        expect(((await h.reload(id)).supervision as any).contact).toBe(
-          newFac.email,
-        );
+        const supervision = (await h.reload(id)).supervision as {
+          contact: string;
+        };
+        expect(supervision.contact).toBe(newFac.email);
       } finally {
         mailer.sendFacultyStudentOpportunityVerification = original;
       }
@@ -296,7 +309,7 @@ describe('Opportunity workflow fixes (real app + real Postgres)', () => {
           },
         }),
       );
-    const id = sub.body.data.id;
+    const id = dataId(sub);
     const o0 = await h.reload(id);
     expect(o0.requiresPartnerApproval).toBe(true);
     // the admin removes the partner contact: nobody is left to ask
@@ -310,7 +323,7 @@ describe('Opportunity workflow fixes (real app + real Postgres)', () => {
       o1.partnerApprovalStatus !== 'not_applicable',
     );
     // faculty approves with the (fresh) link: the row moves to CIEL PK, not to a partner stage with no reviewer
-    expect((await verifyToken(h, o1.faculty_verification_token!)).status).toBe(
+    expect((await verifyToken(h, o1.faculty_verification_token)).status).toBe(
       201,
     );
     const o2 = await h.reload(id);
@@ -332,7 +345,7 @@ describe('Opportunity workflow fixes (real app + real Postgres)', () => {
         partner_phone: '+923001110003',
         supervisor_name: 'Dr Name',
       },
-    } as any);
+    } as unknown as QueryDeepPartialEntity<Opportunity>);
     const stranger = await h.makeUser(UserRole.STUDENT);
     const pub = JSON.stringify(
       (await h.as(null).get('/public/opportunities')).body,

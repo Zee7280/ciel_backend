@@ -2,9 +2,9 @@ import { PlatformSettingsService } from './platform-settings.service';
 
 describe('PlatformSettingsService', () => {
   const makeRepo = (value: string | null | Error) => ({
-    findOne: jest.fn(async () => {
-      if (value instanceof Error) throw value;
-      return value === null ? null : { value };
+    findOne: jest.fn((): Promise<{ value: string } | null> => {
+      if (value instanceof Error) return Promise.reject(value);
+      return Promise.resolve(value === null ? null : { value });
     }),
   });
 

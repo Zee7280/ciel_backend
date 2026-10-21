@@ -123,7 +123,13 @@ export class AdminTeamSafetyService {
         else {
           const capError = teamCapacityError(
             targetMembers.length,
-            resolveTeamSeatCap(opportunity.timeline?.volunteers_required),
+            resolveTeamSeatCap(
+              (
+                opportunity.timeline as {
+                  volunteers_required?: unknown;
+                } | null
+              )?.volunteers_required,
+            ),
           );
           if (capError) blockers.push(capError);
         }

@@ -135,7 +135,9 @@ export function collectOpportunityDepartmentAllowlist(
       : null;
   const departments = stringList(restriction?.departments);
   const specific =
-    String(restriction?.scope ?? 'all').toLowerCase() === 'specific' ||
+    String(
+      (restriction?.scope as string | undefined) ?? 'all',
+    ).toLowerCase() === 'specific' ||
     rule === 'departments_across_universities' ||
     rule === 'own_university_departments';
   return specific ? departments : [];

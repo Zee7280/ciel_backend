@@ -49,6 +49,18 @@ import {
 import { VentureMeritModelQueryDto } from './dto/venture-merit-model-query.dto';
 import { ResendTeamInviteDto } from './dto/team-invite.dto';
 
+/** req.user as populated by JwtStrategy.validate — declared locally (like the other controllers)
+ * so every handler reads a typed principal instead of an untyped request. */
+type AuthenticatedRequest = {
+  user: {
+    id: string;
+    email: string;
+    role: string;
+    organizationId: string;
+    status?: string;
+  };
+};
+
 @Controller('paths')
 @UseGuards(JwtAuthGuard, SubscriptionActiveGuard)
 export class PathsController {
@@ -60,7 +72,7 @@ export class PathsController {
   /** JSON-only presign shared by all path workspaces' evidence/material uploads. */
   @Post('evidence/presign')
   async presignEvidence(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Body()
     body: { filename?: string; contentType?: string; size?: number | string },
   ) {
@@ -79,7 +91,7 @@ export class PathsController {
   @Get('course-project')
   @UseGuards(RolesGuard)
   @Roles(UserRole.STUDENT)
-  async getCourseProject(@Request() req) {
+  async getCourseProject(@Request() req: AuthenticatedRequest) {
     const data = await this.pathsService.getCourseProject(req.user.id);
     return { success: true, data };
   }
@@ -88,7 +100,7 @@ export class PathsController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.STUDENT)
   async updateCourseProject(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Body() dto: UpdateCourseProjectDto,
   ) {
     const data = await this.pathsService.upsertCourseProject(req.user.id, dto);
@@ -100,7 +112,7 @@ export class PathsController {
   @Get('course-projects')
   @UseGuards(RolesGuard)
   @Roles(UserRole.STUDENT)
-  async listCourseProjects(@Request() req) {
+  async listCourseProjects(@Request() req: AuthenticatedRequest) {
     const data = await this.pathsService.listCourseProjects(
       req.user.id,
       req.user.email,
@@ -111,7 +123,7 @@ export class PathsController {
   @Post('course-projects')
   @UseGuards(RolesGuard)
   @Roles(UserRole.STUDENT)
-  async createCourseProject(@Request() req) {
+  async createCourseProject(@Request() req: AuthenticatedRequest) {
     const data = await this.pathsService.createCourseProject(req.user.id);
     return { success: true, data };
   }
@@ -120,7 +132,7 @@ export class PathsController {
   @Get('course-projects/supervised')
   @UseGuards(RolesGuard)
   @Roles(UserRole.FACULTY)
-  async listSupervisedCourseProjects(@Request() req) {
+  async listSupervisedCourseProjects(@Request() req: AuthenticatedRequest) {
     const data = await this.pathsService.listCourseProjectsForTeacher(
       req.user.email,
     );
@@ -131,7 +143,9 @@ export class PathsController {
   @Get('course-projects/in-progress')
   @UseGuards(RolesGuard)
   @Roles(UserRole.FACULTY)
-  async listInProgressSupervisedCourseProjects(@Request() req) {
+  async listInProgressSupervisedCourseProjects(
+    @Request() req: AuthenticatedRequest,
+  ) {
     const data = await this.pathsService.listInProgressCourseProjectsForTeacher(
       req.user.email,
     );
@@ -143,7 +157,7 @@ export class PathsController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.FACULTY)
   async facultyReviewCourseProject(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: FacultyReviewCourseProjectDto,
   ) {
@@ -165,7 +179,7 @@ export class PathsController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN)
   async listUniversityCourseProjects(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Query('status') status?: 'draft' | 'submitted',
     @Query('approvalStatus')
     approvalStatus?: 'pending' | 'approved' | 'rejected' | 'revision_requested',
@@ -189,7 +203,7 @@ export class PathsController {
     UserRole.SUPER_ADMIN,
   )
   async getCourseProjectMeritModel(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Query() query: MeritModelQueryDto,
   ) {
     const data = await this.pathsService.getCourseProjectMeritModel(
@@ -209,7 +223,7 @@ export class PathsController {
     UserRole.SUPER_ADMIN,
   )
   async notifyCourseProjectMeritRanks(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Body() dto: NotifyMeritRanksDto,
   ) {
     const data = await this.pathsService.notifyCourseProjectMeritRanks(
@@ -223,7 +237,7 @@ export class PathsController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.STUDENT)
   async getCourseProjectById(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     const data = await this.pathsService.getCourseProjectByIdForUser(
@@ -238,7 +252,7 @@ export class PathsController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.STUDENT)
   async updateCourseProjectById(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateCourseProjectDto,
   ) {
@@ -256,7 +270,7 @@ export class PathsController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.STUDENT)
   async remindCourseProjectFaculty(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     const data = await this.pathsService.remindCourseProjectFaculty(
@@ -271,7 +285,7 @@ export class PathsController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.STUDENT)
   async deleteCourseProjectById(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     await this.pathsService.deleteCourseProjectByIdForUser(req.user.id, id);
@@ -283,7 +297,7 @@ export class PathsController {
   @Get('fyp-thesis')
   @UseGuards(RolesGuard)
   @Roles(UserRole.STUDENT)
-  async getFyp(@Request() req) {
+  async getFyp(@Request() req: AuthenticatedRequest) {
     const data = await this.pathsService.getFyp(req.user.id, req.user.email);
     return { success: true, data };
   }
@@ -291,7 +305,10 @@ export class PathsController {
   @Patch('fyp-thesis')
   @UseGuards(RolesGuard)
   @Roles(UserRole.STUDENT)
-  async updateFyp(@Request() req, @Body() dto: UpdateFypDto) {
+  async updateFyp(
+    @Request() req: AuthenticatedRequest,
+    @Body() dto: UpdateFypDto,
+  ) {
     const data = await this.pathsService.upsertFyp(
       req.user.id,
       dto,
@@ -303,7 +320,10 @@ export class PathsController {
   @Post('fyp-thesis/deliverables')
   @UseGuards(RolesGuard)
   @Roles(UserRole.STUDENT)
-  async addFypDeliverable(@Request() req, @Body() dto: AddFypDeliverableDto) {
+  async addFypDeliverable(
+    @Request() req: AuthenticatedRequest,
+    @Body() dto: AddFypDeliverableDto,
+  ) {
     const data = await this.pathsService.addFypDeliverable(
       req.user.id,
       dto,
@@ -318,7 +338,7 @@ export class PathsController {
   @Get('fyp-theses')
   @UseGuards(RolesGuard)
   @Roles(UserRole.STUDENT)
-  async listFyps(@Request() req) {
+  async listFyps(@Request() req: AuthenticatedRequest) {
     const data = await this.pathsService.listFyps(req.user.id, req.user.email);
     return { success: true, data };
   }
@@ -326,7 +346,7 @@ export class PathsController {
   @Post('fyp-theses')
   @UseGuards(RolesGuard)
   @Roles(UserRole.STUDENT)
-  async createFyp(@Request() req) {
+  async createFyp(@Request() req: AuthenticatedRequest) {
     const data = await this.pathsService.createFyp(req.user.id);
     return { success: true, data };
   }
@@ -334,7 +354,10 @@ export class PathsController {
   @Get('fyp-theses/:id')
   @UseGuards(RolesGuard)
   @Roles(UserRole.STUDENT)
-  async getFypById(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
+  async getFypById(
+    @Request() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
     const data = await this.pathsService.getFypByIdForUser(
       req.user.id,
       req.user.email,
@@ -347,7 +370,7 @@ export class PathsController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.STUDENT)
   async updateFypById(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateFypDto,
   ) {
@@ -363,7 +386,10 @@ export class PathsController {
   @Delete('fyp-theses/:id')
   @UseGuards(RolesGuard)
   @Roles(UserRole.STUDENT)
-  async deleteFypById(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
+  async deleteFypById(
+    @Request() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
     await this.pathsService.deleteFypByIdForUser(req.user.id, id);
     return { success: true };
   }
@@ -372,7 +398,7 @@ export class PathsController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.STUDENT)
   async addFypDeliverableById(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: AddFypDeliverableDto,
   ) {
@@ -389,7 +415,7 @@ export class PathsController {
   @Get('fyp-thesis/supervised')
   @UseGuards(RolesGuard)
   @Roles(UserRole.FACULTY)
-  async listSupervisedFyp(@Request() req) {
+  async listSupervisedFyp(@Request() req: AuthenticatedRequest) {
     const data = await this.pathsService.listFypForTeacher(req.user.email);
     return { success: true, data };
   }
@@ -398,7 +424,7 @@ export class PathsController {
   @Get('fyp-thesis/in-progress')
   @UseGuards(RolesGuard)
   @Roles(UserRole.FACULTY)
-  async listInProgressSupervisedFyp(@Request() req) {
+  async listInProgressSupervisedFyp(@Request() req: AuthenticatedRequest) {
     const data = await this.pathsService.listInProgressFypForTeacher(
       req.user.email,
     );
@@ -412,7 +438,7 @@ export class PathsController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN)
   async listUniversityFyp(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Query('status') status?: 'draft' | 'submitted',
     @Query('approvalStatus')
     approvalStatus?: 'pending' | 'approved' | 'rejected' | 'revision_requested',
@@ -430,7 +456,7 @@ export class PathsController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.FACULTY)
   async supervisorReviewFyp(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: SupervisorReviewFypDto,
   ) {
@@ -448,7 +474,7 @@ export class PathsController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.FACULTY)
   async getFypForSupervisorReview(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     const data = await this.pathsService.getFypForSupervisorReview(
@@ -462,7 +488,10 @@ export class PathsController {
   @Post('fyp-thesis/:id/ai-analysis/analyse')
   @UseGuards(RolesGuard)
   @Roles(UserRole.FACULTY)
-  async analyseFypAi(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
+  async analyseFypAi(
+    @Request() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
     return await this.pathsService.runFypAiAnalysis(req.user.email, id);
   }
 
@@ -471,7 +500,7 @@ export class PathsController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.FACULTY)
   async editFypAiAnalysis(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: EditFypAiAnalysisDto,
   ) {
@@ -483,7 +512,7 @@ export class PathsController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.FACULTY)
   async approveFypAiAnalysis(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ApproveFypAiAnalysisDto,
   ) {
@@ -505,7 +534,7 @@ export class PathsController {
     UserRole.SUPER_ADMIN,
   )
   async getFypMeritModel(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Query() query: FypMeritModelQueryDto,
   ) {
     const data = await this.pathsService.getFypMeritModel(req.user, query);
@@ -521,7 +550,10 @@ export class PathsController {
     UserRole.ORGANIZATION_ADMIN,
     UserRole.SUPER_ADMIN,
   )
-  async notifyFypMeritRanks(@Request() req, @Body() dto: NotifyMeritRanksDto) {
+  async notifyFypMeritRanks(
+    @Request() req: AuthenticatedRequest,
+    @Body() dto: NotifyMeritRanksDto,
+  ) {
     const data = await this.pathsService.notifyFypMeritRanks(req.user, dto);
     return { success: true, data };
   }
@@ -537,7 +569,10 @@ export class PathsController {
 
   /** The invited teammate accepts — must be signed in with the exact email the invite was sent to. */
   @Post('team-invites/:token/accept')
-  async acceptTeamInvite(@Request() req, @Param('token') token: string) {
+  async acceptTeamInvite(
+    @Request() req: AuthenticatedRequest,
+    @Param('token') token: string,
+  ) {
     const data = await this.pathsService.acceptTeamInvite(
       token,
       req.user.id,
@@ -549,7 +584,10 @@ export class PathsController {
   /** The report owner resends a still-pending invite — looked up by (kind, entryId, email), not
    * token, since the owner's own view never exposes a teammate's invite token. */
   @Post('team-invites/resend')
-  async resendTeamInvite(@Request() req, @Body() dto: ResendTeamInviteDto) {
+  async resendTeamInvite(
+    @Request() req: AuthenticatedRequest,
+    @Body() dto: ResendTeamInviteDto,
+  ) {
     const data = await this.pathsService.resendTeamInvite(
       req.user.id,
       dto.kind,
@@ -565,7 +603,7 @@ export class PathsController {
   @Get('startup-business/supervised')
   @UseGuards(RolesGuard)
   @Roles(UserRole.FACULTY)
-  async listSupervisedVentures(@Request() req) {
+  async listSupervisedVentures(@Request() req: AuthenticatedRequest) {
     const data = await this.pathsService.listVenturesForTeacher(
       req.user.email,
       req.user.id,
@@ -577,7 +615,7 @@ export class PathsController {
   @Get('startup-business/in-progress')
   @UseGuards(RolesGuard)
   @Roles(UserRole.FACULTY)
-  async listInProgressSupervisedVentures(@Request() req) {
+  async listInProgressSupervisedVentures(@Request() req: AuthenticatedRequest) {
     const data = await this.pathsService.listInProgressVenturesForTeacher(
       req.user.email,
       req.user.id,
@@ -592,7 +630,7 @@ export class PathsController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.UNIVERSITY, UserRole.ORGANIZATION_ADMIN)
   async listUniversityVentures(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Query('status') status?: 'draft' | 'submitted',
     @Query('approvalStatus')
     approvalStatus?:
@@ -614,7 +652,7 @@ export class PathsController {
   @Get('startup-business/investor-hub')
   @UseGuards(RolesGuard)
   @Roles(UserRole.INVESTOR)
-  async listInvestorHubVentures(@Request() req) {
+  async listInvestorHubVentures(@Request() req: AuthenticatedRequest) {
     const maskFounders = req.user?.status === 'pending';
     const data = await this.pathsService.listVenturesForInvestorHub({
       maskFounders,
@@ -630,7 +668,7 @@ export class PathsController {
   @Post('startup-business/self-certify')
   @UseGuards(RolesGuard)
   @Roles(UserRole.FACULTY)
-  async selfCertifyOwnVenture(@Request() req) {
+  async selfCertifyOwnVenture(@Request() req: AuthenticatedRequest) {
     const data = await this.pathsService.selfCertifyOwnVenture(req.user.id);
     return { success: true, data };
   }
@@ -640,7 +678,7 @@ export class PathsController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.FACULTY)
   async supervisorReviewVenture(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: SupervisorReviewVentureDto,
   ) {
@@ -665,10 +703,12 @@ export class PathsController {
     UserRole.SUPER_ADMIN,
   )
   async getVentureMeritModel(
-    @Request() req,
+    /** Declared (and validated by the global ValidationPipe) for API symmetry with the coursework
+     * and FYP merit models; the venture service does not honor stage/sdgGoal filters yet. */
     @Query() query: VentureMeritModelQueryDto,
+    @Request() req: AuthenticatedRequest,
   ) {
-    const data = await this.pathsService.getVentureMeritModel(req.user, query);
+    const data = await this.pathsService.getVentureMeritModel(req.user);
     return { success: true, data };
   }
 
@@ -682,7 +722,7 @@ export class PathsController {
     UserRole.SUPER_ADMIN,
   )
   async notifyVentureMeritRanks(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Body() dto: NotifyMeritRanksDto,
   ) {
     const data = await this.pathsService.notifyVentureMeritRanks(req.user, dto);
@@ -692,7 +732,7 @@ export class PathsController {
   @Get('startup-business')
   @UseGuards(RolesGuard)
   @Roles(UserRole.STUDENT, UserRole.FACULTY)
-  async getVenture(@Request() req) {
+  async getVenture(@Request() req: AuthenticatedRequest) {
     const data = await this.pathsService.getVenture(
       req.user.id,
       req.user.email,
@@ -703,7 +743,10 @@ export class PathsController {
   @Patch('startup-business')
   @UseGuards(RolesGuard)
   @Roles(UserRole.STUDENT, UserRole.FACULTY)
-  async updateVenture(@Request() req, @Body() dto: UpdateVentureDto) {
+  async updateVenture(
+    @Request() req: AuthenticatedRequest,
+    @Body() dto: UpdateVentureDto,
+  ) {
     const data = await this.pathsService.upsertVenture(req.user.id, dto);
     return { success: true, data };
   }
@@ -712,7 +755,7 @@ export class PathsController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.STUDENT)
   async setVentureVisibility(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Body() dto: SetVentureVisibilityDto,
   ) {
     const result = await this.pathsService.setVentureVisibility(
@@ -728,7 +771,10 @@ export class PathsController {
   @Post('startup-business/documents')
   @UseGuards(RolesGuard)
   @Roles(UserRole.STUDENT, UserRole.FACULTY)
-  async addVentureDocument(@Request() req, @Body() dto: AddVentureDocumentDto) {
+  async addVentureDocument(
+    @Request() req: AuthenticatedRequest,
+    @Body() dto: AddVentureDocumentDto,
+  ) {
     const data = await this.pathsService.addVentureDocument(req.user.id, dto);
     return { success: true, data };
   }

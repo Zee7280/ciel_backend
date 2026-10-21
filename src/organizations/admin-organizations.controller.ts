@@ -5,19 +5,24 @@ import {
   Post,
   Delete,
   Body,
-  Query,
   Param,
   UseGuards,
   Request,
   UseInterceptors,
 } from '@nestjs/common';
 import { OrganizationsService } from './organizations.service';
+import type { AdminCreateOrganizationInput } from './organizations.service';
 import { AdminRejectOrganizationDto } from './dto/organization.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
 import { AdminMutationAuditInterceptor } from '../audit-logs/admin-mutation-audit.interceptor';
+
+/** Shape of `req.user` as returned by JwtStrategy.validate. */
+interface AdminOrgRequest {
+  user: { id: string };
+}
 
 @Controller('admin/organizations')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -40,14 +45,14 @@ export class AdminOrganizationsController {
   }
 
   @Patch(':id/approve')
-  approve(@Param('id') id: string, @Request() req) {
+  approve(@Param('id') id: string, @Request() req: AdminOrgRequest) {
     return this.organizationsService.approveOrganization(id, req.user.id);
   }
 
   @Patch(':id/reject')
   reject(
     @Param('id') id: string,
-    @Request() req,
+    @Request() req: AdminOrgRequest,
     @Body() dto: AdminRejectOrganizationDto,
   ) {
     return this.organizationsService.rejectOrganization(id, req.user.id, dto);
@@ -64,7 +69,10 @@ export class AdminOrganizationsController {
   }
 
   @Post('create')
-  create(@Body() body: any, @Request() req) {
+  create(
+    @Body() body: AdminCreateOrganizationInput,
+    @Request() req: AdminOrgRequest,
+  ) {
     return this.organizationsService.createForAdmin(body, req.user.id);
   }
 

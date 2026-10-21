@@ -25,6 +25,13 @@ import {
 } from './tutorials.service';
 import { S3Service } from '../common/s3.service';
 
+/** Client-declared file metadata for a presigned upload (validated in assertUploadMeta). */
+type UploadMeta = {
+  filename?: string;
+  contentType?: string;
+  sizeBytes?: number | string;
+};
+
 const tutorialUpload = FileFieldsInterceptor(
   [
     { name: 'video', maxCount: 1 },
@@ -95,7 +102,12 @@ export class AdminTutorialsController {
   }
 
   @Post('presign')
-  async presign(@Body() body: any) {
+  async presign(
+    @Body()
+    body:
+      | { video?: UploadMeta; document?: UploadMeta; poster?: UploadMeta }
+      | undefined,
+  ) {
     const video = body?.video;
     const document = body?.document;
     const poster = body?.poster;
@@ -199,7 +211,7 @@ export class AdminTutorialsController {
   }
 
   private assertUploadMeta(
-    meta: any,
+    meta: UploadMeta | undefined,
     kind: 'video' | 'document' | 'poster',
   ): { filename: string; contentType: string; sizeBytes: number } {
     const filename = String(meta?.filename ?? '').trim();

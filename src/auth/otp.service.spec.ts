@@ -8,6 +8,15 @@ import {
 } from '@nestjs/common';
 import { OtpService } from './otp.service';
 
+type OtpRow = {
+  email: string;
+  otp: string | null;
+  otpHash: string | null;
+  expiresAt: Date;
+  verified: boolean;
+  attempts: number;
+};
+
 describe('OtpService.verifyOtp', () => {
   const mailService = { sendOtpEmail: jest.fn() };
   const usersService = { findByEmail: jest.fn() };
@@ -79,7 +88,7 @@ describe('OtpService.verifyOtp', () => {
   });
 
   it('counts a wrong guess, and drops the code after too many so it cannot be brute-forced', async () => {
-    const row: any = {
+    const row: OtpRow = {
       email: 'a@b.com',
       otp: null,
       otpHash: await bcrypt.hash('123456', 4),
@@ -108,7 +117,7 @@ describe('OtpService.verifyOtp', () => {
   });
 
   it('verifies against the hash and extends the row to the signup window', async () => {
-    const row: any = {
+    const row: OtpRow = {
       email: 'a@b.com',
       otp: null,
       otpHash: await bcrypt.hash('123456', 4),
@@ -124,19 +133,25 @@ describe('OtpService.verifyOtp', () => {
 });
 
 describe('OtpService.sendOtp', () => {
-  function make(opts: { latest?: any; user?: any; mail?: jest.Mock }) {
-    const repo: any = {
+  function make(opts: {
+    latest?: unknown;
+    user?: unknown;
+    mail?: jest.Mock<Promise<void>, [string, string]>;
+  }) {
+    const repo = {
       findOne: jest.fn().mockResolvedValue(opts.latest ?? null),
       delete: jest.fn(),
-      create: jest.fn((x) => x),
-      save: jest.fn(async (x) => x),
+      create: jest.fn((x: unknown) => x),
+      save: jest.fn((x: unknown) => Promise.resolve(x)),
     };
-    const mail = { sendOtpEmail: opts.mail ?? jest.fn() };
+    const mail = {
+      sendOtpEmail: opts.mail ?? jest.fn<Promise<void>, [string, string]>(),
+    };
     const users = {
       findByEmail: jest.fn().mockResolvedValue(opts.user ?? null),
     };
     return {
-      service: new OtpService(repo, mail as never, users as never),
+      service: new OtpService(repo as never, mail as never, users as never),
       repo,
       mail,
     };
@@ -145,12 +160,12 @@ describe('OtpService.sendOtp', () => {
   it('stores only the hash (never the plain code) and emails the plain code', async () => {
     const { service, repo, mail } = make({});
     await service.sendOtp('New@X.com');
-    const saved = repo.save.mock.calls[0][0];
+    const saved = repo.save.mock.calls[0][0] as Pick<OtpRow, 'otp' | 'otpHash'>;
     expect(saved.otp).toBeNull();
     expect(saved.otpHash).toMatch(/^\$2[aby]\$/);
     const sent = mail.sendOtpEmail.mock.calls[0][1];
     expect(sent).toMatch(/^\d{6}$/);
-    expect(await bcrypt.compare(sent, saved.otpHash)).toBe(true);
+    expect(await bcrypt.compare(sent, saved.otpHash as string)).toBe(true);
   });
 
   it('throttles a second request inside the resend window (429) without sending mail', async () => {
@@ -209,10 +224,17 @@ describe('OtpService.requireVerifiedEmailForSignup', () => {
   });
 
   it('only accepts a verified row that has not expired', async () => {
-    const repo = { findOne: jest.fn().mockResolvedValue({ verified: true }) };
+    const repo = {
+      findOne: jest
+        .fn<
+          Promise<unknown>,
+          [{ where: { verified: boolean; expiresAt: unknown } }]
+        >()
+        .mockResolvedValue({ verified: true }),
+    };
     const service = new OtpService(repo as never, {} as never, {} as never);
     await service.requireVerifiedEmailForSignup('x@y.com');
-    const where = repo.findOne.mock.calls[0][0].where;
+    const { where } = repo.findOne.mock.calls[0][0];
     expect(where.verified).toBe(true);
     expect(where.expiresAt).toBeDefined(); // MoreThan(now) — a stale verification no longer counts
   });
@@ -220,7 +242,7 @@ describe('OtpService.requireVerifiedEmailForSignup', () => {
 
 describe('OtpService.verifyOtp — parallel guesses cannot bypass the attempt cap', () => {
   it('200 simultaneous wrong guesses only ever consume 5 attempts, then the code is dropped', async () => {
-    const row: any = {
+    const row: OtpRow = {
       email: 'a@b.com',
       otp: null,
       otpHash: await bcrypt.hash('123456', 4),
@@ -238,8 +260,9 @@ describe('OtpService.verifyOtp — parallel guesses cannot bypass the attempt ca
       save: jest.fn(async () => {
         await new Promise((r) => setTimeout(r, 1));
       }),
-      delete: jest.fn(async () => {
+      delete: jest.fn(() => {
         deleted = true;
+        return Promise.resolve();
       }),
     };
     const service = new OtpService(

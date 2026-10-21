@@ -4,21 +4,114 @@
  * Also proves the pre-existing flow (packages -> reviews -> official publish -> badges) and old
  * NPE-1.1 runs keep working.
  */
+import request from 'supertest';
+import { DeepPartial, Repository } from 'typeorm';
 import { bootHarness, Harness, E2eUser, oppPayload, uniq } from './e2e/harness';
 import { adminApprove } from './e2e/helpers';
 import { UserRole } from '../src/users/enums/user-role.enum';
+import { Opportunity } from '../src/opportunities/entities/opportunity.entity';
 import { StudentReport } from '../src/reports/entities/student-report.entity';
 import { NpeRankingRun } from '../src/ranking/entities/npe-ranking-run.entity';
 import { NpeRankingEvaluation } from '../src/ranking/entities/npe-ranking-evaluation.entity';
-import { npeCalculate } from '../src/ranking/npe-ranking.scoring';
+import {
+  npeCalculate,
+  NpeCriterionJudgment,
+} from '../src/ranking/npe-ranking.scoring';
 import { npePackageVersion } from '../src/ranking/npe-ranking-eligibility';
 import {
   NPE_CRITERIA,
   NPE_CRITERION_KEYS,
+  NpeCriterionKey,
   npeCriteriaFor,
 } from '../src/ranking/npe-ranking.constants';
 
 const BASE = '/admin/community-service/ranking';
+
+/** A supertest response whose JSON body is known to have shape `T`. */
+type Res<T> = Omit<request.Response, 'body'> & { body: T };
+const typed = <T>(t: request.Test): Promise<Res<T>> =>
+  t.then((r) => r as Res<T>);
+
+/** Column-level patch for `h.opps.update` (the entity's jsonb columns are `any`). */
+type OppPatch = Partial<Opportunity>;
+type ReportPatch = Parameters<Repository<StudentReport>['update']>[1];
+type Judgments = Record<NpeCriterionKey, NpeCriterionJudgment>;
+
+// Response shapes, limited to the fields these tests inspect.
+interface PackageRow {
+  id: string;
+  status: string;
+  score: number | null;
+  scoreBreakdown: { cii: number };
+}
+interface StudioRow {
+  id: string;
+  label: string;
+  rank: number | null;
+  metric: number;
+  projectCount?: number;
+}
+interface Criterion {
+  weight: number;
+}
+interface ReviewItem {
+  id: string;
+  type: string;
+  cleared: boolean;
+}
+interface PackagesRes {
+  data: {
+    rubricVersion: string;
+    criteria: Criterion[];
+    packages: unknown[];
+    run: {
+      runId: string;
+      rubricVersion: string;
+      rows: PackageRow[];
+      criteria: Criterion[];
+      reviewItems: ReviewItem[];
+    };
+  };
+}
+interface PreviewRes {
+  message?: string;
+  data: {
+    scope: string;
+    rubricVersion: string;
+    result: { name: string; rows: StudioRow[] };
+    counts: unknown;
+    options: { university: string[]; skills: string[] };
+    publishBlockers: string[];
+  };
+}
+interface Publication {
+  id: string;
+  [k: string]: unknown;
+}
+interface PublishRes {
+  message?: string;
+  data: { status: string; publication: Publication; snapshotId?: string };
+}
+interface PublicationDetailRes {
+  data: { rows: StudioRow[] };
+}
+interface HistoryRes {
+  data: Array<{ id: string; revision: number }>;
+}
+interface ListRes {
+  data: unknown[];
+}
+interface MessageRes {
+  message?: string;
+}
+interface AwardCard {
+  id: string;
+  studioRankings?: unknown[];
+  npeStanding?: unknown;
+}
+interface AwardCardsRes {
+  data?: { cards?: AwardCard[] };
+}
 
 type Spec = {
   name: string;
@@ -55,15 +148,16 @@ describe('Ranking Studio (real app + real Postgres)', () => {
       overrides: {
         university: spec.university,
         department: spec.department,
-      } as any,
+      },
     });
     const created = await h
       .as(ngo)
       .post('/opportunities')
       .send(oppPayload({ title: `${spec.name} ${uniq()}` }));
     expect(created.status).toBe(201);
-    await adminApprove(h, admin, created.body.id);
-    await h.opps.update(created.body.id, {
+    const oppId = (created.body as { id: string }).id;
+    await adminApprove(h, admin, oppId);
+    await h.opps.update(oppId, {
       status: 'active',
       workflowStage: 'live',
       admin_approved: true,
@@ -75,13 +169,13 @@ describe('Ranking Studio (real app + real Postgres)', () => {
         volunteers_required: 5,
       },
       location: { city: spec.city },
-    } as any);
+    } as OppPatch);
     const reports = h.ds.getRepository(StudentReport);
     const row = await reports.save(
       reports.create({
         studentId: student.id,
-        opportunityId: created.body.id,
-        project_id: created.body.id,
+        opportunityId: oppId,
+        project_id: oppId,
         status: 'verified',
         faculty_status: 'approved',
         admin_status: 'approved',
@@ -114,7 +208,7 @@ describe('Ranking Studio (real app + real Postgres)', () => {
           finalBadge: { name: 'Advanced' },
         },
         ...over,
-      } as any) as unknown as StudentReport,
+      } as DeepPartial<StudentReport>),
     );
     ids[spec.name] = row.id;
     versions[spec.name] = npePackageVersion(row); // a read only counts for the package version it was made from
@@ -145,7 +239,7 @@ describe('Ranking Studio (real app + real Postgres)', () => {
         claims: [],
         summary: 's',
         limitations: 'l',
-      } as any),
+      } as DeepPartial<NpeRankingEvaluation>),
     );
   };
 
@@ -220,7 +314,7 @@ describe('Ranking Studio (real app + real Postgres)', () => {
         packageVersions: {},
         reviewClearances: {},
         meta: {},
-      } as any) as unknown as NpeRankingRun,
+      } as DeepPartial<NpeRankingRun>),
     );
     for (const s of specs) await seedEvaluation(run.id, ids[s.name], s);
   });
@@ -234,7 +328,11 @@ describe('Ranking Studio (real app + real Postgres)', () => {
   const preview = (
     body: Record<string, unknown> = {},
     user: E2eUser | null = admin,
-  ) => h.as(user).post(`${BASE}/studio/preview`).send(body);
+  ) => typed<PreviewRes>(h.as(user).post(`${BASE}/studio/preview`).send(body));
+  const publish = (body: Record<string, unknown>) =>
+    typed<PublishRes>(h.as(admin).post(`${BASE}/studio/publish`).send(body));
+  const packages = () =>
+    typed<PackagesRes>(h.as(admin).get(`${BASE}/packages`));
   const expectedTotal = (s: Spec) =>
     npeCalculate(
       s.cii,
@@ -243,7 +341,7 @@ describe('Ranking Studio (real app + real Postgres)', () => {
           k,
           judgment(k === 'impact' && s.impact != null ? s.impact : s.anchors),
         ]),
-      ) as any,
+      ) as Judgments,
       'NPE-1.2',
     ).total;
 
@@ -263,18 +361,15 @@ describe('Ranking Studio (real app + real Postgres)', () => {
 
   // ---------------------------------------------------------------- the NPE-1.2 formula
   it('the packages route reports NPE-1.2 with weights that sum to 100 (90 criteria + 10 CII)', async () => {
-    const res = await h.as(admin).get(`${BASE}/packages`);
+    const res = await packages();
     expect(res.status).toBe(200);
     expect(res.body.data.rubricVersion).toBe('NPE-1.2');
-    const total = (res.body.data.criteria as any[]).reduce(
-      (s, c) => s + c.weight,
-      0,
-    );
+    const total = res.body.data.criteria.reduce((s, c) => s + c.weight, 0);
     expect(total).toBe(90);
     expect(res.body.data.packages).toHaveLength(4);
     expect(res.body.data.run.rubricVersion).toBe('NPE-1.2');
     // every ranked row carries the NPE-1.2 score, recomputed from the stored judgments
-    for (const row of res.body.data.run.rows as any[]) {
+    for (const row of res.body.data.run.rows) {
       const spec = specs.find((s) => ids[s.name] === row.id)!;
       expect(row.status).toBe('Ranked');
       expect(row.score).toBe(expectedTotal(spec));
@@ -293,8 +388,8 @@ describe('Ranking Studio (real app + real Postgres)', () => {
     const expected = [...specs]
       .sort((a, b) => expectedTotal(b) - expectedTotal(a))
       .map((s) => ids[s.name]);
-    expect(result.rows.map((r: any) => r.id)).toEqual(expected);
-    expect(result.rows.map((r: any) => r.rank)).toEqual([1, 2, 3, 4]);
+    expect(result.rows.map((r) => r.id)).toEqual(expected);
+    expect(result.rows.map((r) => r.rank)).toEqual([1, 2, 3, 4]);
     expect(result.name).toBe(
       'Overall Project Excellence — All eligible projects',
     );
@@ -314,7 +409,7 @@ describe('Ranking Studio (real app + real Postgres)', () => {
 
   it('each angle ranks by its own measure, and filters narrow the audience first', async () => {
     const top = async (body: Record<string, unknown>) =>
-      (await preview(body)).body.data.result.rows.map((r: any) =>
+      (await preview(body)).body.data.result.rows.map((r) =>
         r.label.replace(/ [0-9a-f]{8}$/, ''),
       );
     expect(await top({ lens: 'cii' })).toEqual([
@@ -369,7 +464,7 @@ describe('Ranking Studio (real app + real Postgres)', () => {
 
   it('comparing universities uses the mean of project scores and shows sample sizes', async () => {
     const res = await preview({ lens: 'excellence', groupBy: 'university' });
-    const rows = res.body.data.result.rows as any[];
+    const rows = res.body.data.result.rows;
     const mean = (names: string[]) =>
       names
         .map((n) => expectedTotal(specs.find((s) => s.name === n)!))
@@ -384,8 +479,8 @@ describe('Ranking Studio (real app + real Postgres)', () => {
       'Top Universities · Overall Project Excellence — All eligible projects',
     );
     const skills = (await preview({ lens: 'cii', groupBy: 'skill' })).body.data
-      .result.rows as any[];
-    expect(skills.find((r) => r.id === 'Leadership').projectCount).toBe(2);
+      .result.rows;
+    expect(skills.find((r) => r.id === 'Leadership')!.projectCount).toBe(2);
   });
 
   it('custom weighting blends impact, sustainability, learning and locked CII, and is scale-free', async () => {
@@ -402,8 +497,8 @@ describe('Ranking Studio (real app + real Postgres)', () => {
       lens: 'custom',
       weights: { impact: 70, sustain: 40, learning: 50, cii: 40 },
     });
-    expect(w1.body.data.result.rows.map((r: any) => r.metric)).toEqual(
-      w2.body.data.result.rows.map((r: any) => r.metric),
+    expect(w1.body.data.result.rows.map((r) => r.metric)).toEqual(
+      w2.body.data.result.rows.map((r) => r.metric),
     );
   });
 
@@ -437,7 +532,7 @@ describe('Ranking Studio (real app + real Postgres)', () => {
   // ---------------------------------------------------------------- publishing
   it('an evidence-based ranking cannot be published until the required reviews are cleared; then it can', async () => {
     const body = { lens: 'excellence', groupBy: 'project' };
-    const blocked = await h.as(admin).post(`${BASE}/studio/publish`).send(body);
+    const blocked = await publish(body);
     expect(blocked.status).toBe(400);
     expect(blocked.body.message).toMatch(/review/i);
     expect((await preview(body)).body.data.publishBlockers.join(' ')).toMatch(
@@ -445,8 +540,8 @@ describe('Ranking Studio (real app + real Postgres)', () => {
     );
 
     // clear the review queue through the existing route, exactly as the admin does
-    const pk = await h.as(admin).get(`${BASE}/packages`);
-    const items = (pk.body.data.run.reviewItems as any[]).filter(
+    const pk = await packages();
+    const items = pk.body.data.run.reviewItems.filter(
       (i) =>
         (i.type === 'Validation' || i.type === 'Close comparison') &&
         !i.cleared,
@@ -468,7 +563,7 @@ describe('Ranking Studio (real app + real Postgres)', () => {
       groupBy: 'university',
       filters: { year: '2026' },
     };
-    const first = await h.as(admin).post(`${BASE}/studio/publish`).send(body);
+    const first = await publish(body);
     expect(first.status).toBe(201);
     expect(first.body.data.status).toBe('published');
     const pub = first.body.data.publication;
@@ -481,22 +576,20 @@ describe('Ranking Studio (real app + real Postgres)', () => {
     });
 
     // double click / retry: nothing new is created
-    const again = await h.as(admin).post(`${BASE}/studio/publish`).send(body);
+    const again = await publish(body);
     expect(again.body.data.status).toBe('unchanged');
     expect(again.body.data.publication.id).toBe(pub.id);
 
     // one project logs far more hours -> standings change -> revision 2, same cohort, movement recorded
+    // (written as the live rows look: team_lead.hours is a number here, not as the entity types it)
     await h.ds.getRepository(StudentReport).update(ids['Alpha'], {
       section1: {
         participation_type: 'individual',
         team_lead: { name: 'a', university: 'Uni A', degree: 'CS', hours: 500 },
         metrics: { total_verified_hours: 500 },
       },
-    } as any);
-    const second = await h
-      .as(admin)
-      .post(`${BASE}/studio/publish`)
-      .send({ ...body, name: 'Hours champions 2026' });
+    } as unknown as ReportPatch);
+    const second = await publish({ ...body, name: 'Hours champions 2026' });
     expect(second.body.data.status).toBe('published');
     expect(second.body.data.publication).toMatchObject({
       revision: 2,
@@ -508,7 +601,7 @@ describe('Ranking Studio (real app + real Postgres)', () => {
       .as(admin)
       .get(`${BASE}/studio/publications/${second.body.data.publication.id}`);
     expect(detail.status).toBe(200);
-    const rows = detail.body.data.rows as any[];
+    const rows = (detail.body as PublicationDetailRes).data.rows;
     // revision 1: Uni B (mean 37.5h) ahead of Uni A (32.5h); revision 2: Alpha's 500h lifts Uni A
     expect(rows.find((r) => r.id === 'Uni A')).toMatchObject({
       rank: 1,
@@ -523,10 +616,9 @@ describe('Ranking Studio (real app + real Postgres)', () => {
 
     const history = await h.as(admin).get(`${BASE}/studio/history`);
     expect(history.status).toBe(200);
-    expect((history.body.data as any[]).map((p) => p.revision).sort()).toEqual([
-      1, 2,
-    ]);
-    expect(history.body.data[0]).toHaveProperty('top');
+    const historyBody = history.body as HistoryRes;
+    expect(historyBody.data.map((p) => p.revision).sort()).toEqual([1, 2]);
+    expect(historyBody.data[0]).toHaveProperty('top');
   });
 
   it('a project sees every ranking it belongs to (label, filters, position, revision) on its Impact Wall', async () => {
@@ -534,7 +626,7 @@ describe('Ranking Studio (real app + real Postgres)', () => {
       .as(admin)
       .get(`${BASE}/studio/project/${ids['Charlie']}`);
     expect(res.status).toBe(200);
-    const list = res.body.data as any[];
+    const list = (res.body as ListRes).data;
     expect(list).toHaveLength(1); // the latest revision of the one published ranking, not both
     expect(list[0]).toMatchObject({
       name: 'Hours champions 2026',
@@ -549,10 +641,12 @@ describe('Ranking Studio (real app + real Postgres)', () => {
     });
     expect(
       (
-        await h
-          .as(admin)
-          .get(`${BASE}/studio/project/00000000-0000-4000-8000-000000000000`)
-      ).body.data,
+        (
+          await h
+            .as(admin)
+            .get(`${BASE}/studio/project/00000000-0000-4000-8000-000000000000`)
+        ).body as ListRes
+      ).data,
     ).toEqual([]);
     expect(
       (await h.as(admin).get(`${BASE}/studio/project/not-a-uuid`)).status,
@@ -574,12 +668,13 @@ describe('Ranking Studio (real app + real Postgres)', () => {
   it('award cards carry the published studio rankings (additive field) and keep their existing fields', async () => {
     const res = await h.as(admin).get('/admin/community-service/award-cards');
     expect(res.status).toBe(200);
-    const cards = (res.body.data?.cards ?? res.body.data) as any[];
+    const data = (res.body as AwardCardsRes).data;
+    const cards = (data?.cards ?? data) as AwardCard[];
     const card = cards.find((c) => c.id === ids['Alpha']);
     expect(card).toBeTruthy();
     expect(card).toHaveProperty('project_title');
     expect(card).toHaveProperty('cii');
-    expect(card.studioRankings?.[0]).toMatchObject({
+    expect(card!.studioRankings?.[0]).toMatchObject({
       name: 'Hours champions 2026',
       groupBy: 'university',
     });
@@ -587,25 +682,27 @@ describe('Ranking Studio (real app + real Postgres)', () => {
 
   // ---------------------------------------------------------------- existing flow is untouched
   it('the existing official publish still works end to end and stores the NPE-1.2 snapshot', async () => {
-    const res = await h
-      .as(admin)
-      .post(`${BASE}/publish`)
-      .send({ runId: run.id, rubricVersion: 'NPE-1.1' }); // an older client may still send 1.1
+    const res = await typed<PublishRes>(
+      h
+        .as(admin)
+        .post(`${BASE}/publish`)
+        .send({ runId: run.id, rubricVersion: 'NPE-1.1' }), // an older client may still send 1.1
+    );
     expect(res.status).toBe(201);
     expect(res.body.data.status).toBe('published');
-    const again = await h
-      .as(admin)
-      .post(`${BASE}/publish`)
-      .send({ runId: run.id });
+    const again = await typed<PublishRes>(
+      h.as(admin).post(`${BASE}/publish`).send({ runId: run.id }),
+    );
     expect(again.body.data.snapshotId).toBe(res.body.data.snapshotId);
-    const snap = await h.ds.query(
+    const snap = await h.ds.query<Array<Record<string, unknown>>>(
       'select rubric_version, jsonb_array_length(standings) as n from npe_ranking_snapshots where id = $1',
       [res.body.data.snapshotId],
     );
     expect(snap[0]).toMatchObject({ rubric_version: 'NPE-1.2', n: 4 });
     const cards = await h.as(admin).get('/admin/community-service/award-cards');
-    const list = (cards.body.data?.cards ?? cards.body.data) as any[];
-    expect(list.find((c) => c.id === ids['Alpha']).npeStanding).toMatchObject({
+    const data = (cards.body as AwardCardsRes).data;
+    const list = (data?.cards ?? data) as AwardCard[];
+    expect(list.find((c) => c.id === ids['Alpha'])!.npeStanding).toMatchObject({
       nationalRank: 1,
     });
   });
@@ -621,25 +718,23 @@ describe('Ranking Studio (real app + real Postgres)', () => {
         packageVersions: {},
         reviewClearances: {},
         meta: {},
-      } as any) as unknown as NpeRankingRun,
+      } as DeepPartial<NpeRankingRun>),
     );
     for (const s of specs) await seedEvaluation(legacy.id, ids[s.name], s);
-    const res = await h.as(admin).get(`${BASE}/packages`);
+    const res = await packages();
     expect(res.body.data.run.runId).toBe(legacy.id); // latest run of the scope
     expect(res.body.data.run.rubricVersion).toBe('NPE-1.1');
-    expect(
-      (res.body.data.run.criteria as any[]).reduce((s, c) => s + c.weight, 0),
-    ).toBe(85);
-    // (Delta: its anchors and CII differ in proportion, so the two weightings give different totals)
-    const alpha = (res.body.data.run.rows as any[]).find(
-      (r) => r.id === ids['Delta'],
+    expect(res.body.data.run.criteria.reduce((s, c) => s + c.weight, 0)).toBe(
+      85,
     );
+    // (Delta: its anchors and CII differ in proportion, so the two weightings give different totals)
+    const alpha = res.body.data.run.rows.find((r) => r.id === ids['Delta'])!;
     const spec = specs[3];
     const legacyScore = npeCalculate(
       spec.cii,
       Object.fromEntries(
         NPE_CRITERION_KEYS.map((k) => [k, judgment(spec.anchors)]),
-      ) as any,
+      ) as Judgments,
       'NPE-1.1',
     ).total;
     expect(alpha.score).toBe(legacyScore);
@@ -652,8 +747,7 @@ describe('Ranking Studio (real app + real Postgres)', () => {
     const studio = await preview({ runId: legacy.id, lens: 'excellence' });
     expect(studio.body.data.rubricVersion).toBe('NPE-1.1');
     expect(
-      studio.body.data.result.rows.find((r: any) => r.id === ids['Delta'])
-        .metric,
+      studio.body.data.result.rows.find((r) => r.id === ids['Delta'])!.metric,
     ).toBe(legacyScore);
   });
 
@@ -666,26 +760,30 @@ describe('Ranking Studio (real app + real Postgres)', () => {
         projects: [{ id: ids['Alpha'], version: 'x' }],
       });
     expect(unknown.status).toBe(400);
-    expect(unknown.body.message).toMatch(/Unsupported ranking rubric/);
+    expect((unknown.body as MessageRes).message).toMatch(
+      /Unsupported ranking rubric/,
+    );
     const old = await h
       .as(admin)
       .post(`${BASE}/analyze`)
       .send({ rubricVersion: 'NPE-1.1', projects: [] });
     expect(old.status).toBe(400);
-    expect(old.body.message).toMatch(/No projects submitted/); // got past the version check
+    expect((old.body as MessageRes).message).toMatch(/No projects submitted/); // got past the version check
   });
 
   it('a university uses the same studio for its own cohort only and cannot read another cohort or project', async () => {
     const uniOrg = await h.makeOrg('Uni A', 'UNIVERSITY');
     const uni = await h.makeUser(UserRole.UNIVERSITY, { org: uniOrg });
-    const mine = await h
-      .as(uni)
-      .post('/partners/community-service/ranking/studio/preview')
-      .send({ lens: 'cii' });
+    const mine = await typed<PreviewRes>(
+      h
+        .as(uni)
+        .post('/partners/community-service/ranking/studio/preview')
+        .send({ lens: 'cii' }),
+    );
     expect(mine.status).toBe(201);
     expect(mine.body.data.scope).toBe(`university:${uniOrg.id}`);
     expect(mine.body.data.result.rows.length).toBeLessThanOrEqual(2); // only Uni A's reports can ever appear
-    for (const row of mine.body.data.result.rows as any[])
+    for (const row of mine.body.data.result.rows)
       expect(['Alpha', 'Bravo']).toContain(
         row.label.replace(/ [0-9a-f]{8}$/, ''),
       );
@@ -698,7 +796,7 @@ describe('Ranking Studio (real app + real Postgres)', () => {
     expect(other.status).toBe(403);
     // the university cannot open the national publications
     const natHistory = await h.as(admin).get(`${BASE}/studio/history`);
-    const natId = natHistory.body.data[0].id;
+    const natId = (natHistory.body as HistoryRes).data[0].id;
     expect(
       (
         await h
@@ -710,10 +808,12 @@ describe('Ranking Studio (real app + real Postgres)', () => {
     ).toBe(403);
     expect(
       (
-        await h
-          .as(uni)
-          .get('/partners/community-service/ranking/studio/history')
-      ).body.data,
+        (
+          await h
+            .as(uni)
+            .get('/partners/community-service/ranking/studio/history')
+        ).body as ListRes
+      ).data,
     ).toEqual([]);
     // university publishing without analysis: evidence-free angle works, evidence-based angle is blocked
     expect(
@@ -728,17 +828,14 @@ describe('Ranking Studio (real app + real Postgres)', () => {
 
   it('two simultaneous publishes of the same ranking create exactly one revision (no database error for the loser)', async () => {
     const body = { lens: 'reach', groupBy: 'project', name: 'Race ranking' };
-    const [a, b] = await Promise.all([
-      h.as(admin).post(`${BASE}/studio/publish`).send(body),
-      h.as(admin).post(`${BASE}/studio/publish`).send(body),
-    ]);
+    const [a, b] = await Promise.all([publish(body), publish(body)]);
     expect([a.status, b.status]).toEqual([201, 201]);
     expect([a.body.data.status, b.body.data.status].sort()).toEqual([
       'published',
       'unchanged',
     ]);
     expect(a.body.data.publication.id).toBe(b.body.data.publication.id);
-    const count = await h.ds.query(
+    const count = await h.ds.query<Array<{ n: number }>>(
       "select count(*)::int as n from npe_studio_publications where name = 'Race ranking'",
     );
     expect(count[0].n).toBe(1);

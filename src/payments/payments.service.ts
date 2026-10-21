@@ -38,7 +38,11 @@ export class PaymentsService {
     return setting ? setting.value : defaultValue;
   }
 
-  async submitPaymentProof(studentId: string, projectId: string, file: any) {
+  async submitPaymentProof(
+    studentId: string,
+    projectId: string,
+    file: Express.Multer.File,
+  ) {
     const participant = await this.participantRepository.findOne({
       where: { studentId, projectId },
     });
@@ -122,7 +126,7 @@ export class PaymentsService {
   async submitManualPayment(
     studentId: string,
     projectId: string,
-    file: any,
+    file: Express.Multer.File,
     paidAmountRaw?: string | number,
   ) {
     const paidAmount = this.parsePaidAmount(paidAmountRaw);
@@ -549,12 +553,7 @@ export class PaymentsService {
   private async listManualPayments(
     status: PaymentStatus,
     opts?: { page?: number | string; limit?: number | string },
-  ): Promise<{
-    rows: any[];
-    total: number;
-    page: number | null;
-    limit: number | null;
-  }> {
+  ) {
     const paging = this.normalizePaging(opts);
     const [payments, total] = await this.paymentRepository.findAndCount({
       where: { status },

@@ -381,7 +381,10 @@ export class StudentParticipationService {
     const ownReportStatus = !isMember ? reportStatus : null;
 
     const requiredHours =
-      Number(opportunity.timeline?.expected_hours) ||
+      Number(
+        (opportunity.timeline as { expected_hours?: unknown } | null)
+          ?.expected_hours,
+      ) ||
       Number(opportunity.requiredHours) ||
       16;
 

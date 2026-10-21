@@ -129,10 +129,7 @@ export interface ChangePasswordInput {
 }
 
 /** Loosely typed admin/user patch accepted by `update()` (callers pass partial user rows). */
-type UserUpdatePatch = Partial<Omit<User, 'settings'>> & {
-  settings?: LooseObject | null;
-  passwordRecord?: string | null;
-};
+type UserUpdatePatch = Partial<User> & { passwordRecord?: string | null };
 
 /**
  * Build a single international string for clients that read `contact` (e.g. student profile).
@@ -255,7 +252,8 @@ export class UsersService {
       requires_profile_verification: user.requires_profile_verification,
       profile_verified: user.profile_verified,
       identity_verified: user.identity_verified,
-      investor: (user.settings as LooseObject | null | undefined)?.investor ?? null,
+      investor:
+        (user.settings as LooseObject | null | undefined)?.investor ?? null,
       ...membershipFlags,
       ...subscriptionFlags,
     };
@@ -312,16 +310,11 @@ export class UsersService {
       dto.investorHub &&
       typeof dto.investorHub === 'object'
     ) {
-      const settings =
-        user.settings && typeof user.settings === 'object'
-          ? { ...user.settings }
-          : {};
-      const investor =
-        settings.investor && typeof settings.investor === 'object'
-          ? { ...settings.investor }
-          : {};
-      const prevHub =
-        investor.hub && typeof investor.hub === 'object' ? investor.hub : {};
+      const settings = cloneLooseObject(user.settings);
+      const investor = cloneLooseObject(settings.investor);
+      const prevHub: LooseObject = isLooseObject(investor.hub)
+        ? investor.hub
+        : {};
       const incoming = dto.investorHub as {
         savedIds?: unknown;
         interest?: unknown;
@@ -329,7 +322,7 @@ export class UsersService {
         activity?: unknown;
         deskMsgs?: unknown;
       };
-      const savedIds = Array.isArray(incoming.savedIds)
+      const savedIds: unknown[] = Array.isArray(incoming.savedIds)
         ? [
             ...new Set(
               incoming.savedIds.map((id) => String(id)).filter(Boolean),
@@ -346,7 +339,7 @@ export class UsersService {
               .map((row) => {
                 const r = row as Record<string, unknown>;
                 return {
-                  entryId: String(r.entryId || r.id || ''),
+                  entryId: coerceToString(r.entryId || r.id || ''),
                   note: typeof r.note === 'string' ? r.note.slice(0, 2000) : '',
                   at:
                     typeof r.at === 'string' ? r.at : new Date().toISOString(),
@@ -363,10 +356,10 @@ export class UsersService {
               .map((row) => {
                 const r = row as Record<string, unknown>;
                 return {
-                  when: String(r.when || '').slice(0, 80),
-                  ev: String(r.ev || '').slice(0, 500),
-                  v: String(r.v || '—').slice(0, 200),
-                  vis: String(r.vis || 'CIEL PK').slice(0, 80),
+                  when: coerceToString(r.when || '').slice(0, 80),
+                  ev: coerceToString(r.ev || '').slice(0, 500),
+                  v: coerceToString(r.v || '—').slice(0, 200),
+                  vis: coerceToString(r.vis || 'CIEL PK').slice(0, 80),
                 };
               })
               .filter((row) => row.ev)
@@ -382,8 +375,8 @@ export class UsersService {
                   r.t === 'me' || r.t === 'them' || r.t === 'sys' ? r.t : 'me';
                 return {
                   t,
-                  x: String(r.x || '').slice(0, 2000),
-                  w: String(r.w || '').slice(0, 80),
+                  x: coerceToString(r.x || '').slice(0, 2000),
+                  w: coerceToString(r.w || '').slice(0, 80),
                 };
               })
               .filter((row) => row.x)
@@ -414,22 +407,17 @@ export class UsersService {
       dto.investorMandate &&
       typeof dto.investorMandate === 'object'
     ) {
-      const settings =
-        user.settings && typeof user.settings === 'object'
-          ? { ...user.settings }
-          : {};
-      const investor =
-        settings.investor && typeof settings.investor === 'object'
-          ? { ...settings.investor }
-          : {};
+      const settings = cloneLooseObject(user.settings);
+      const investor = cloneLooseObject(settings.investor);
       const m = dto.investorMandate as Record<string, unknown>;
       const copyStr = (key: string) => {
-        if (typeof m[key] === 'string')
-          investor[key] = String(m[key]).slice(0, 500);
+        const value = m[key];
+        if (typeof value === 'string') investor[key] = value.slice(0, 500);
       };
       const copyArr = (key: string) => {
-        if (Array.isArray(m[key])) {
-          investor[key] = m[key]
+        const value = m[key];
+        if (Array.isArray(value)) {
+          investor[key] = value
             .map((x) => String(x))
             .filter(Boolean)
             .slice(0, 20);
@@ -449,7 +437,7 @@ export class UsersService {
       copyStr('website');
       copyStr('linkedin');
       if (typeof m.screeningNotes === 'string')
-        investor.screeningNotes = String(m.screeningNotes).slice(0, 2000);
+        investor.screeningNotes = m.screeningNotes.slice(0, 2000);
       user.settings = { ...settings, investor };
     }
     if (isAdminCaller) {
@@ -583,13 +571,13 @@ export class UsersService {
     }
     const [users, sqlTotal] = await qb.getManyAndCount();
     const mapped = users.map((user) => {
-      const {
-        password: _pw,
-        passwordResetToken: _prt,
-        passwordResetExpiry: _pre,
-        passwordRecord,
-        ...rest
-      } = user as User & { passwordRecord?: string | null };
+      const { passwordRecord } = user;
+      const rest = omitKeys(user, [
+        'password',
+        'passwordResetToken',
+        'passwordResetExpiry',
+        'passwordRecord',
+      ]);
       const { profile_complete, profile_missing_fields } =
         getProfileCompletionStatus(user);
       return {
@@ -632,13 +620,14 @@ export class UsersService {
     /** Acting admin's id (admin route only). When given, self role/status changes are blocked. */
     actorId?: string,
   ): Promise<User> {
-    const passwordBeingUpdated = !!updateUserDto?.password;
+    const input = updateUserDto as UserUpdatePatch;
+    const passwordBeingUpdated = !!input?.password;
     let passwordRecordPatch: string | undefined;
-    if (updateUserDto.password && !updateUserDto.password.startsWith('$2b$')) {
-      passwordRecordPatch = encryptPasswordRecord(updateUserDto.password);
-      updateUserDto.password = await bcrypt.hash(updateUserDto.password, 10);
+    if (input.password && !input.password.startsWith('$2b$')) {
+      passwordRecordPatch = encryptPasswordRecord(input.password);
+      input.password = await bcrypt.hash(input.password, 10);
     }
-    const patch = { ...updateUserDto };
+    const patch: UserUpdatePatch = { ...input };
     if (passwordRecordPatch) {
       patch.passwordRecord = passwordRecordPatch;
     } else {
@@ -676,14 +665,8 @@ export class UsersService {
 
     if (patch.status === 'active' || patch.status === 'rejected') {
       if (existing?.role === UserRole.INVESTOR) {
-        const settings =
-          existing.settings && typeof existing.settings === 'object'
-            ? { ...existing.settings }
-            : {};
-        const investor =
-          settings.investor && typeof settings.investor === 'object'
-            ? { ...settings.investor }
-            : {};
+        const settings = cloneLooseObject(existing.settings);
+        const investor = cloneLooseObject(settings.investor);
         investor.kycStatus =
           patch.status === 'active' ? 'verified' : 'rejected';
         investor.verifiedAt =
@@ -770,7 +753,7 @@ export class UsersService {
     };
   }
 
-  async changePassword(userId: string, changePasswordDto: any) {
+  async changePassword(userId: string, changePasswordDto: ChangePasswordInput) {
     const { currentPassword, newPassword } = changePasswordDto;
     const user = await this.usersRepository.findOne({ where: { id: userId } });
 

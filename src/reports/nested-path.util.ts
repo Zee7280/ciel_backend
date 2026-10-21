@@ -34,18 +34,18 @@ export function setNestedProperty(
     return { name, index };
   };
 
-  const own = (o: object, k: string) =>
-    Object.prototype.hasOwnProperty.call(o, k);
+  const own = (o: object, k: string): boolean =>
+    Object.prototype.hasOwnProperty.call(o, k) as boolean;
 
-  let current: Record<string, any> = obj;
+  let current: Record<string, unknown> = obj;
   for (let i = 0; i < keys.length - 1; i++) {
     const { name, index } = parse(keys[i]);
     if (index !== null) {
       if (!own(current, name) || !Array.isArray(current[name]))
         current[name] = [];
-      const arr = current[name] as any[];
+      const arr = current[name] as unknown[];
       if (!arr[index] || typeof arr[index] !== 'object') arr[index] = {};
-      current = arr[index];
+      current = arr[index] as Record<string, unknown>;
     } else {
       if (
         !own(current, name) ||
@@ -54,7 +54,7 @@ export function setNestedProperty(
       ) {
         current[name] = {};
       }
-      current = current[name];
+      current = current[name] as Record<string, unknown>;
     }
   }
 
@@ -62,7 +62,7 @@ export function setNestedProperty(
   if (index !== null) {
     if (!own(current, name) || !Array.isArray(current[name]))
       current[name] = [];
-    current[name][index] = value;
+    (current[name] as unknown[])[index] = value;
   } else {
     current[name] = value;
   }

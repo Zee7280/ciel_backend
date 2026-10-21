@@ -6,7 +6,7 @@ import {
   RateLimitRule,
 } from './rate-limit.guard';
 
-function ctx(req: any, rules: RateLimitRule[]) {
+function ctx(req: Record<string, unknown>, rules: RateLimitRule[]) {
   const reflector = new Reflector();
   jest
     .spyOn(reflector, 'getAllAndOverride')

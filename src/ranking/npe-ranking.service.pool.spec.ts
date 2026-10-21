@@ -1,34 +1,60 @@
 import { HttpException } from '@nestjs/common';
+import type { Repository } from 'typeorm';
+import type { AttendanceLog } from '../engagement/entities/attendance-log.entity';
+import type { Participation } from '../engagement/entities/participant.entity';
+import type { AiService } from '../ai/ai.service';
+import type { CommunityAwardService } from '../reports/community-award.service';
+import type { StudentReport } from '../reports/entities/student-report.entity';
+import type { NpeRankingEvaluation } from './entities/npe-ranking-evaluation.entity';
+import type { NpeRankingRun } from './entities/npe-ranking-run.entity';
+import type { NpeRankingSnapshot } from './entities/npe-ranking-snapshot.entity';
+import {
+  buildNpePackageRecord,
+  gateNpePackage,
+} from './npe-ranking-eligibility';
 import {
   NpeRankingService,
   NPE_ANALYZE_BUDGET_MS,
   describeAiFailure,
+  type NpeActor,
 } from './npe-ranking.service';
+
+type FindMock = { find: jest.Mock };
+
+/** Private surface of NpeRankingService exercised by these tests. */
+type ServicePrivate = {
+  poolReports(actor: NpeActor): Promise<StudentReport[]>;
+  findReusableEvaluations(
+    wanted: Array<{ id: string; version: string }>,
+  ): Promise<Map<string, NpeRankingEvaluation>>;
+};
 
 function build(
   over: {
-    reports?: any;
-    evaluations?: any;
-    cards?: any[];
-    attendanceLogs?: any;
-    participations?: any;
+    reports?: FindMock;
+    evaluations?: { createQueryBuilder: jest.Mock };
+    cards?: Array<{ id: string }>;
+    attendanceLogs?: FindMock;
+    participations?: FindMock;
   } = {},
-) {
+): ServicePrivate {
   const communityAward = {
     listForAdmin: jest.fn().mockResolvedValue(over.cards ?? []),
     listForUniversity: jest.fn().mockResolvedValue(over.cards ?? []),
   };
   const svc = new NpeRankingService(
-    over.reports ?? ({} as any),
-    { findOne: jest.fn().mockResolvedValue(null) } as any,
-    over.evaluations ?? ({} as any),
-    {} as any,
-    communityAward as any,
-    {} as any,
-    over.attendanceLogs,
-    over.participations,
-  ) as any;
-  return svc;
+    (over.reports ?? {}) as unknown as Repository<StudentReport>,
+    {
+      findOne: jest.fn().mockResolvedValue(null),
+    } as unknown as Repository<NpeRankingRun>,
+    (over.evaluations ?? {}) as unknown as Repository<NpeRankingEvaluation>,
+    {} as unknown as Repository<NpeRankingSnapshot>,
+    communityAward as unknown as CommunityAwardService,
+    {} as unknown as AiService,
+    over.attendanceLogs as unknown as Repository<AttendanceLog> | undefined,
+    over.participations as unknown as Repository<Participation> | undefined,
+  );
+  return svc as unknown as ServicePrivate;
 }
 
 describe('NPE ranking pool', () => {
@@ -44,12 +70,12 @@ describe('NPE ranking pool', () => {
       reports: { find: jest.fn().mockResolvedValue(rows) },
     });
     const pool = await svc.poolReports({ userId: 'a', role: 'ciel_admin' });
-    expect(pool.map((r: any) => r.id)).toEqual(['locked', 'string-locked']);
+    expect(pool.map((r) => r.id)).toEqual(['locked', 'string-locked']);
   });
 
   it('judges the hours gate on LIVE attendance logs, not the stored section1 snapshot', async () => {
     const PROJECT = '11111111-2222-4333-8444-555555555555';
-    const report: any = {
+    const report = {
       id: 'rep',
       studentId: 'lead-user',
       opportunityId: PROJECT,
@@ -66,7 +92,7 @@ describe('NPE ranking pool', () => {
         team_members: [{ id: 'seat-mate', fullName: 'Mate' }],
         attendance_logs: [],
       },
-    };
+    } as unknown as StudentReport;
     const seats = [
       {
         id: 'seat-lead',
@@ -145,10 +171,6 @@ describe('NPE ranking pool', () => {
       attendanceLogs: { find: jest.fn().mockResolvedValue(logs) },
       participations: { find: jest.fn().mockResolvedValue(seats) },
     });
-    const {
-      buildNpePackageRecord,
-      gateNpePackage,
-    } = require('./npe-ranking-eligibility');
     expect(buildNpePackageRecord(report).hoursMet).toBe(false); // stored JSON alone would hold it
     const pool = await svc.poolReports({ userId: 'a', role: 'ciel_admin' });
     const pkg = buildNpePackageRecord(pool[0]);
@@ -156,7 +178,7 @@ describe('NPE ranking pool', () => {
     expect(gateNpePackage(pkg).reason).not.toMatch(/hours/);
     const s1 = pool[0].section1;
     expect(s1.team_members).toHaveLength(1); // ghost duplicate folded, other team excluded
-    expect(s1.team_members[0].hours).toBe(20); // 12 + 8 on the canonical seat, rejected 5 ignored
+    expect(s1.team_members?.[0]?.hours).toBe(20); // 12 + 8 on the canonical seat, rejected 5 ignored
     expect(s1.team_lead.hours).toBe(20);
   });
 
@@ -167,7 +189,7 @@ describe('NPE ranking pool', () => {
 
 describe('NPE reusable evaluations', () => {
   it('reuses the latest clean read of the same package version only', async () => {
-    const qb: any = {
+    const qb = {
       innerJoin: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
@@ -227,7 +249,7 @@ describe('NPE reusable evaluations', () => {
       { id: 'd', version: 'v1' },
     ]);
     expect([...out.keys()]).toEqual(['a']);
-    expect(out.get('a').runId).toBe('r2');
+    expect(out.get('a')?.runId).toBe('r2');
   });
 });
 

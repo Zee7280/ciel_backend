@@ -4,10 +4,17 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { FindOptionsWhere, Repository } from 'typeorm';
 import { Report } from './entities/report.entity';
 import { CreateReportDto } from './dto/create-report.dto';
 import { UpdateReportDto } from './dto/update-report.dto';
+
+/** Raw listing query (page/limit arrive as numbers or numeric strings from the controller). */
+type PartnerReportListQuery = {
+  status?: string;
+  page?: number;
+  limit?: number;
+};
 
 @Injectable()
 export class ReportsService {
@@ -16,11 +23,11 @@ export class ReportsService {
     private reportsRepository: Repository<Report>,
   ) {}
 
-  async findAllForPartner(userId: string, query: any) {
-    const { status, page = 1, limit = 10 } = query;
+  async findAllForPartner(userId: string, query: unknown) {
+    const { status, page = 1, limit = 10 } = query as PartnerReportListQuery;
     const skip = (page - 1) * limit;
 
-    const whereClause: any = { organizationId: userId };
+    const whereClause: FindOptionsWhere<Report> = { organizationId: userId };
     if (status) {
       whereClause.status = status;
     }
@@ -45,8 +52,8 @@ export class ReportsService {
       })),
       pagination: {
         total,
-        page: parseInt(page),
-        limit: parseInt(limit),
+        page: parseInt(String(page)),
+        limit: parseInt(String(limit)),
       },
     };
   }

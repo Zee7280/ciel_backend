@@ -5,9 +5,12 @@
  */
 import './e2e-env';
 import { writeFileSync, appendFileSync } from 'fs';
-import { bootHarness, oppPayload } from './harness';
+import { DeepPartial } from 'typeorm';
+import { bootHarness, HarnessOptions, oppPayload } from './harness';
 import { adminApprove } from './helpers';
 import { UserRole } from '../../src/users/enums/user-role.enum';
+import { User } from '../../src/users/entities/user.entity';
+import { Opportunity } from '../../src/opportunities/entities/opportunity.entity';
 import { Otp } from '../../src/students/entities/otp.entity';
 import { Participation } from '../../src/engagement/entities/participant.entity';
 import { npePackageVersion } from '../../src/ranking/npe-ranking-eligibility';
@@ -22,8 +25,32 @@ const BNU = 'Beaconhouse National University (BNU)';
 const day = (d: number) =>
   new Date(Date.now() + d * 86400000).toISOString().slice(0, 10);
 
+/** `pg` ships no typings (and @types/pg is not installed): the few client members this file uses. */
+type PgClient = {
+  connect(): Promise<void>;
+  query(sql: string): Promise<unknown>;
+  end(): Promise<void>;
+};
+const PgClient = Client as unknown as new (config: {
+  host: string;
+  port: number;
+  user?: string;
+  password?: string;
+  database: string;
+}) => PgClient;
+
+/** The slice of the NPE evaluation payload the stub reads. */
+type NpeStubPayload = {
+  title?: string;
+  projectId?: string;
+  packageVersion?: string;
+  uploaded_evidence_files?: { file_id: string; file_name: string }[];
+};
+
+type CreatedBody = { id: string };
+
 async function freshScratchDb() {
-  const c = new Client({
+  const c = new PgClient({
     host: process.env.DB_HOST || '127.0.0.1',
     port: Number(process.env.DB_PORT || 5432),
     user: process.env.DB_USERNAME,
@@ -42,9 +69,10 @@ async function freshScratchDb() {
 (async () => {
   await freshScratchDb();
   // Deterministic stand-in for OpenAI: a finished evaluation for any package, with a mixed evidence-read report.
-  const aiStub = {
-    summarize: async (section: string, payload: any) => {
-      if (section !== 'npe_ranking_evaluation') return { summary: '' };
+  const aiStub: HarnessOptions['ai'] = {
+    summarize: (section: string, payload: NpeStubPayload) => {
+      if (section !== 'npe_ranking_evaluation')
+        return Promise.resolve({ summary: '' });
       const keys = [
         'impact',
         'need',
@@ -76,11 +104,8 @@ async function freshScratchDb() {
         support: 'high',
         limitation: 'stub',
       }));
-      const files = (payload.uploaded_evidence_files ?? []) as Array<{
-        file_id: string;
-        file_name: string;
-      }>;
-      return {
+      const files = payload.uploaded_evidence_files ?? [];
+      return Promise.resolve({
         summary: 'stub',
         npeRanking: {
           projectId: payload.projectId,
@@ -96,18 +121,16 @@ async function freshScratchDb() {
           inspected: files
             .slice(0, 1)
             .map((f) => ({ id: f.file_id, name: f.file_name })),
-          notInspected: files
-            .slice(1)
-            .map((f) => ({
-              id: f.file_id,
-              name: f.file_name,
-              reason:
-                'file type cannot be read by the analyzer (video / office document / other)',
-            })),
+          notInspected: files.slice(1).map((f) => ({
+            id: f.file_id,
+            name: f.file_name,
+            reason:
+              'file type cannot be read by the analyzer (video / office document / other)',
+          })),
         },
-      };
+      });
     },
-  } as any;
+  };
   const h = await bootHarness({ ai: aiStub });
   const admin = await h.makeUser(UserRole.SUPER_ADMIN);
   const org = await h.makeOrg('Browser NGO');
@@ -122,8 +145,9 @@ async function freshScratchDb() {
       throw new Error(
         `create failed ${res.status} ${JSON.stringify(res.body)}`,
       );
-    await adminApprove(h, admin, res.body.id);
-    await h.opps.update(res.body.id, {
+    const created = res.body as CreatedBody;
+    await adminApprove(h, admin, created.id);
+    const live: DeepPartial<Opportunity> = {
       status: 'active',
       workflowStage: 'live',
       admin_approved: true,
@@ -135,8 +159,9 @@ async function freshScratchDb() {
         volunteers_required: 4,
       },
       participation_scope: scope,
-    } as any);
-    return res.body.id as string;
+    };
+    await h.opps.update(created.id, live);
+    return created.id;
   };
 
   const scopedId = await liveOpp('Browser Scoped (BNU only)', {
@@ -152,12 +177,12 @@ async function freshScratchDb() {
   const legacyId = await liveOpp('Browser Legacy (BNU restricted)', {
     rule: 'open_all_universities',
   });
-  await h.opps.update(legacyId, { restricted_universities: [BNU] } as any);
+  await h.opps.update(legacyId, { restricted_universities: [BNU] });
   const lumsStudent = await h.makeUser(UserRole.STUDENT, {
-    overrides: { name: 'Lums Student', university: 'LUMS' } as any,
+    overrides: { name: 'Lums Student', university: 'LUMS' },
   });
   const bnuMate = await h.makeUser(UserRole.STUDENT, {
-    overrides: { name: 'Bnu Mate', university: 'BNU' } as any,
+    overrides: { name: 'Bnu Mate', university: 'BNU' },
   });
 
   const lead = await h.makeUser(UserRole.STUDENT, {
@@ -166,7 +191,7 @@ async function freshScratchDb() {
       university: 'BNU',
       phone: '+923038444425',
       cnic: null,
-    } as any,
+    } as unknown as Partial<User>,
   });
   // Lead with an approved team seat on the open project (for the report Section 1 teammate flow).
   const reportLead = await h.makeUser(UserRole.STUDENT, {
@@ -175,7 +200,7 @@ async function freshScratchDb() {
       university: 'BNU',
       phone: '+923031111111',
       cnic: null,
-    } as any,
+    } as unknown as Partial<User>,
   });
   const parts = h.ds.getRepository(Participation);
   const teamId = 'TM-2026-BROWSER-SEED';
@@ -201,12 +226,12 @@ async function freshScratchDb() {
       participationMode: 'team',
       isTeamLead: true,
       teamId,
-    } as any),
+    }),
   );
 
   // Admin + an enrolled team with a draft report, for the Teams & enrollments browser checks.
   const adminUser = await h.makeUser(UserRole.SUPER_ADMIN, {
-    overrides: { name: 'Browser Admin' } as any,
+    overrides: { name: 'Browser Admin' },
   });
   const seatCols = (email: string) => ({
     email,
@@ -224,13 +249,13 @@ async function freshScratchDb() {
     mobileVerified: true,
     status: 'approved',
     primaryFacultyEmail: 'faculty@e2e.test',
-    attendanceApproverType: 'partner',
+    attendanceApproverType: 'partner' as const,
   });
   const teamA = await h.makeUser(UserRole.STUDENT, {
-    overrides: { name: 'Alpha Lead', university: 'BNU' } as any,
+    overrides: { name: 'Alpha Lead', university: 'BNU' },
   });
   const teamB = await h.makeUser(UserRole.STUDENT, {
-    overrides: { name: 'Beta Member', university: 'BNU' } as any,
+    overrides: { name: 'Beta Member', university: 'BNU' },
   });
   const adminTeamId = 'TM-2026-ADMIN-DEMO';
   await parts.save(
@@ -242,7 +267,7 @@ async function freshScratchDb() {
       participationMode: 'team',
       isTeamLead: true,
       teamId: adminTeamId,
-    } as any),
+    }),
   );
   await parts.save(
     parts.create({
@@ -253,11 +278,11 @@ async function freshScratchDb() {
       participationMode: 'team',
       isTeamLead: false,
       teamId: adminTeamId,
-    } as any),
+    }),
   );
   // Third seat on the same team: lets a browser run check lead→member attendance across two members.
   const teamZ = await h.makeUser(UserRole.STUDENT, {
-    overrides: { name: 'Zubair Member', university: 'BNU' } as any,
+    overrides: { name: 'Zubair Member', university: 'BNU' },
   });
   await parts.save(
     parts.create({
@@ -268,13 +293,13 @@ async function freshScratchDb() {
       participationMode: 'team',
       isTeamLead: false,
       teamId: adminTeamId,
-    } as any),
+    }),
   );
   const teamC = await h.makeUser(UserRole.STUDENT, {
-    overrides: { name: 'Gamma Lead', university: 'BNU' } as any,
+    overrides: { name: 'Gamma Lead', university: 'BNU' },
   });
   const teamD = await h.makeUser(UserRole.STUDENT, {
-    overrides: { name: 'Delta Member', university: 'BNU' } as any,
+    overrides: { name: 'Delta Member', university: 'BNU' },
   });
   await parts.save(
     parts.create({
@@ -285,7 +310,7 @@ async function freshScratchDb() {
       participationMode: 'team',
       isTeamLead: true,
       teamId: 'TM-2026-ADMIN-GAMMA',
-    } as any),
+    }),
   );
   await parts.save(
     parts.create({
@@ -296,7 +321,7 @@ async function freshScratchDb() {
       participationMode: 'team',
       isTeamLead: false,
       teamId: 'TM-2026-ADMIN-GAMMA',
-    } as any),
+    }),
   );
   const reports = h.ds.getRepository(StudentReport);
   await reports.save(
@@ -305,7 +330,7 @@ async function freshScratchDb() {
       opportunityId: openId,
       project_id: openId,
       status: 'draft',
-    } as any) as any,
+    }),
   );
 
   const userJson = (
@@ -328,22 +353,18 @@ async function freshScratchDb() {
   // Approved, CII-locked packages + one finished analysis run, for the Ranking Studio click-through.
   {
     const reports = h.ds.getRepository(StudentReport);
-    const runRow = (await h.ds
-      .getRepository(NpeRankingRun)
-      .save(
-        h.ds
-          .getRepository(NpeRankingRun)
-          .create({
-            rubricVersion: 'NPE-1.2',
-            scope: 'national',
-            role: 'ciel_admin',
-            status: 'draft',
-            createdByUserId: admin.id,
-            packageVersions: {},
-            reviewClearances: {},
-            meta: {},
-          } as any) as any,
-      )) as any;
+    const runRow = await h.ds.getRepository(NpeRankingRun).save(
+      h.ds.getRepository(NpeRankingRun).create({
+        rubricVersion: 'NPE-1.2',
+        scope: 'national',
+        role: 'ciel_admin',
+        status: 'draft',
+        createdByUserId: admin.id,
+        packageVersions: {},
+        reviewClearances: {},
+        meta: {},
+      }),
+    );
     const seeds = [
       [
         'Clean Water Drive',
@@ -459,7 +480,7 @@ async function freshScratchDb() {
           name: `${title} Lead`,
           university: uni,
           department: dept,
-        } as any,
+        },
       });
       const opp = await h
         .as(ngo)
@@ -473,8 +494,9 @@ async function freshScratchDb() {
         throw new Error(
           `ranking seed opp failed ${opp.status} ${JSON.stringify(opp.body)}`,
         );
-      await adminApprove(h, admin, opp.body.id);
-      await h.opps.update(opp.body.id, {
+      const oppId = (opp.body as CreatedBody).id;
+      await adminApprove(h, admin, oppId);
+      const past: DeepPartial<Opportunity> = {
         status: 'active',
         workflowStage: 'live',
         admin_approved: true,
@@ -486,12 +508,14 @@ async function freshScratchDb() {
           volunteers_required: 4,
         },
         location: { city },
-      } as any);
-      const rep: any = await reports.save(
+      };
+      await h.opps.update(oppId, past);
+      // Seeded as loose JSON on purpose (e.g. numeric hours), so it is not shaped like the entity's section types.
+      const rep = await reports.save(
         reports.create({
           studentId: stu.id,
-          opportunityId: opp.body.id,
-          project_id: opp.body.id,
+          opportunityId: oppId,
+          project_id: oppId,
           status: 'verified',
           faculty_status: 'approved',
           admin_status: 'approved',
@@ -535,7 +559,7 @@ async function freshScratchDb() {
             scoreStatusAtLock: 'FINAL',
             finalBadge: { name: cii >= 80 ? 'Advanced' : 'Impact Contributor' },
           },
-        } as any) as any,
+        } as unknown as DeepPartial<StudentReport>),
       );
       if (!anchor) continue; // seeded as 'approved but not yet read by the AI'
       const criteria = Object.fromEntries(
@@ -558,31 +582,27 @@ async function freshScratchDb() {
           },
         ]),
       );
-      await h.ds
-        .getRepository(NpeRankingEvaluation)
-        .save(
-          h.ds
-            .getRepository(NpeRankingEvaluation)
-            .create({
-              runId: runRow.id,
-              reportId: rep.id,
-              packageVersion: npePackageVersion(rep),
-              readComplete: true,
-              flags: [],
-              criteria,
-              claims: [
-                {
-                  id: 'c1',
-                  statement: 'Measured outcome documented in the report.',
-                  source: 'Detailed report',
-                  locator: 'S5',
-                  support: 'high',
-                },
-              ],
-              summary: `${title}: documented outcomes with partner verification.`,
-              limitations: 'Seeded demo evaluation.',
-            } as any) as any,
-        );
+      await h.ds.getRepository(NpeRankingEvaluation).save(
+        h.ds.getRepository(NpeRankingEvaluation).create({
+          runId: runRow.id,
+          reportId: rep.id,
+          packageVersion: npePackageVersion(rep),
+          readComplete: true,
+          flags: [],
+          criteria,
+          claims: [
+            {
+              id: 'c1',
+              statement: 'Measured outcome documented in the report.',
+              source: 'Detailed report',
+              locator: 'S5',
+              support: 'high',
+            },
+          ],
+          summary: `${title}: documented outcomes with partner verification.`,
+          limitations: 'Seeded demo evaluation.',
+        }),
+      );
     }
   }
 
@@ -595,7 +615,7 @@ async function freshScratchDb() {
     contactEmail: 'office@lums.test',
     contactPhone: '+923001112244',
     websiteUrl: 'https://lums.example.org',
-  } as any);
+  });
   const lumsUser = await h.makeUser(UserRole.UNIVERSITY, {
     org: lumsOrg,
     overrides: {
@@ -603,7 +623,7 @@ async function freshScratchDb() {
       university: 'LUMS',
       institution: 'LUMS',
       city: 'Lahore',
-    } as any,
+    },
   });
   const emptyUniOrg = await h.makeOrg('Empty Uni', 'UNIVERSITY');
   await h.orgs.update(emptyUniOrg.id, {
@@ -614,7 +634,7 @@ async function freshScratchDb() {
     contactEmail: 'office@empty.test',
     contactPhone: '+923001112266',
     websiteUrl: 'https://empty.example.org',
-  } as any);
+  });
   const emptyUniUser = await h.makeUser(UserRole.UNIVERSITY, {
     org: emptyUniOrg,
     overrides: {
@@ -622,7 +642,7 @@ async function freshScratchDb() {
       university: 'Empty Uni',
       institution: 'Empty Uni',
       city: 'Lahore',
-    } as any,
+    },
   });
 
   // Partner / faculty logins with complete profiles, for the "Duplicate opportunity" click-through.
@@ -634,7 +654,7 @@ async function freshScratchDb() {
     contactEmail: ngo.email,
     contactPhone: '+923001112233',
     websiteUrl: 'https://browser-ngo.example.org',
-  } as any);
+  });
   const facultyUser = await h.makeUser(UserRole.FACULTY, {
     overrides: {
       name: 'Browser Faculty',
@@ -643,7 +663,7 @@ async function freshScratchDb() {
       city: 'Lahore',
       department: 'Computer Science',
       designation: 'Professor',
-    } as any,
+    } as Partial<User>,
   });
   const facSrc = await h
     .as(facultyUser)
@@ -730,7 +750,7 @@ async function freshScratchDb() {
             phone: '+923001234567',
             contact: '+923001234567',
           },
-          sourceId: facSrc.body.id,
+          sourceId: (facSrc.body as CreatedBody).id,
         },
         lead: {
           token: lead.token,
@@ -781,15 +801,18 @@ async function freshScratchDb() {
 
   const seen = new Map<string, string>();
   const otps = h.ds.getRepository(Otp);
-  setInterval(async () => {
-    try {
-      for (const r of await otps.find()) {
-        if (r.otp && seen.get(r.email) !== r.otp) {
-          seen.set(r.email, r.otp);
-          appendFileSync(OTP_LOG, `${r.email} ${r.otp}\n`);
+  setInterval(() => {
+    otps
+      .find()
+      .then((rows) => {
+        for (const r of rows) {
+          if (r.otp && seen.get(r.email) !== r.otp) {
+            seen.set(r.email, r.otp);
+            appendFileSync(OTP_LOG, `${r.email} ${r.otp}\n`);
+          }
         }
-      }
-    } catch {}
+      })
+      .catch(() => undefined); // a failed poll is retried on the next tick
   }, 700);
 })().catch((e) => {
   console.error('serve-for-browser failed', e);

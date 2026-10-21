@@ -1,5 +1,14 @@
 import { ConfigService } from '@nestjs/config';
+import type { SendMailOptions } from 'nodemailer';
 import { MailService } from './mail.service';
+
+/** Private members the reliability tests reach into. */
+type MailServiceInternals = {
+  transporter: { sendMail: jest.Mock; verify: jest.Mock };
+  fallbackTransporter: { sendMail: jest.Mock; verify: jest.Mock } | null;
+  sendMailReliable: (mailOptions: SendMailOptions) => Promise<unknown>;
+  sleep: (ms: number) => Promise<void>;
+};
 
 describe('MailService — SMTP reliability', () => {
   function makeService() {
@@ -17,22 +26,26 @@ describe('MailService — SMTP reliability', () => {
         return map[key];
       }),
     } as unknown as ConfigService;
-    return new MailService(config);
+    const service = new MailService(config);
+    return {
+      service,
+      internals: service as unknown as MailServiceInternals,
+    };
   }
 
   it('retries transient primary SMTP failures then succeeds', async () => {
-    const service = makeService();
-    jest.spyOn(service as any, 'sleep').mockResolvedValue(undefined);
+    const { internals } = makeService();
+    jest.spyOn(internals, 'sleep').mockResolvedValue(undefined);
     const sendMail = jest
       .fn()
       .mockRejectedValueOnce(
         Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }),
       )
       .mockResolvedValueOnce({ messageId: 'ok-1' });
-    (service as any).transporter = { sendMail, verify: jest.fn() };
-    (service as any).fallbackTransporter = null;
+    internals.transporter = { sendMail, verify: jest.fn() };
+    internals.fallbackTransporter = null;
 
-    await (service as any).sendMailReliable({
+    await internals.sendMailReliable({
       from: 'CIEL <noreply@cielpk.com>',
       to: 'faculty@uni.edu',
       subject: 'test',
@@ -43,21 +56,21 @@ describe('MailService — SMTP reliability', () => {
   });
 
   it('uses fallback SMTP when primary retries are exhausted', async () => {
-    const service = makeService();
-    jest.spyOn(service as any, 'sleep').mockResolvedValue(undefined);
+    const { internals } = makeService();
+    jest.spyOn(internals, 'sleep').mockResolvedValue(undefined);
     const primarySend = jest
       .fn()
       .mockRejectedValue(
         Object.assign(new Error('conn reset'), { code: 'ECONNRESET' }),
       );
     const fallbackSend = jest.fn().mockResolvedValue({ messageId: 'fb-1' });
-    (service as any).transporter = { sendMail: primarySend, verify: jest.fn() };
-    (service as any).fallbackTransporter = {
+    internals.transporter = { sendMail: primarySend, verify: jest.fn() };
+    internals.fallbackTransporter = {
       sendMail: fallbackSend,
       verify: jest.fn(),
     };
 
-    await (service as any).sendMailReliable({
+    await internals.sendMailReliable({
       from: 'CIEL <noreply@cielpk.com>',
       to: 'partner@ngo.org',
       subject: 'partner verify',
@@ -69,9 +82,11 @@ describe('MailService — SMTP reliability', () => {
   });
 
   it('sendPartnerVerification and sendFacultyStudentOpportunityVerification go through reliable send', async () => {
-    const service = makeService();
-    const sendMailReliable = jest.fn().mockResolvedValue({ messageId: 'x' });
-    (service as any).sendMailReliable = sendMailReliable;
+    const { service, internals } = makeService();
+    const sendMailReliable = jest.fn<Promise<unknown>, [SendMailOptions]>(() =>
+      Promise.resolve({ messageId: 'x' }),
+    );
+    internals.sendMailReliable = sendMailReliable;
 
     await service.sendPartnerVerification(
       'partner@ngo.org',
@@ -89,11 +104,12 @@ describe('MailService — SMTP reliability', () => {
     expect(sendMailReliable.mock.calls[1][0].to).toBe('faculty@uni.edu');
   });
   it('admin bulk email: one message per recipient, dedupes, skips invalid, survives failures', async () => {
-    const service = makeService();
+    const { service, internals } = makeService();
     const send = jest
-      .spyOn(service as any, 'sendMailReliable')
-      .mockImplementation(async (m: any) => {
-        if (m.to === 'bad@x.com') throw new Error('smtp');
+      .spyOn(internals, 'sendMailReliable')
+      .mockImplementation((m: SendMailOptions) => {
+        if (m.to === 'bad@x.com') return Promise.reject(new Error('smtp'));
+        return Promise.resolve(undefined);
       });
     const result = await service.sendAdminComposedEmail({
       to: ['a@x.com', 'A@x.com', 'bad@x.com', 'not-an-email', 'b@x.com'],
@@ -106,11 +122,11 @@ describe('MailService — SMTP reliability', () => {
       skipped: ['not-an-email'],
     });
     expect(send).toHaveBeenCalledTimes(3);
-    expect((send.mock.calls[0][0] as any).to).toBe('a@x.com');
+    expect(send.mock.calls[0][0].to).toBe('a@x.com');
   });
 
   it('admin bulk email: rejects more than 200 recipients', async () => {
-    const service = makeService();
+    const { service } = makeService();
     const to = Array.from({ length: 201 }, (_, i) => `u${i}@x.com`);
     await expect(
       service.sendAdminComposedEmail({

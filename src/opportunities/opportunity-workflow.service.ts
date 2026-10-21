@@ -499,7 +499,9 @@ export class OpportunityWorkflowService {
     opp: Opportunity,
     extra?: { teamMembers?: unknown[] },
   ): Record<string, unknown> {
-    const org = (opp as any).organization;
+    const org = opp.organization as { name?: string | null } | null | undefined;
+    const sdgInfo = opp.sdg_info as { sdg_id?: string | null } | null;
+    const objectives = opp.objectives as { description?: string | null } | null;
     const tracker = buildOpportunityApprovalTracker(opp);
     return {
       id: opp.id,
@@ -507,10 +509,10 @@ export class OpportunityWorkflowService {
       creator_id: opp.creatorId,
       creatorId: opp.creatorId,
       organization: org?.name || 'Unknown',
-      category: opp.sdg_info?.sdg_id || opp.sdg || 'General',
+      category: sdgInfo?.sdg_id || opp.sdg || 'General',
       status: this.responseStatus(opp),
       submitted_at: opp.createdAt?.toISOString?.() ?? opp.createdAt,
-      description: opp.objectives?.description || '',
+      description: objectives?.description || '',
       teamMembers: extra?.teamMembers ?? [],
       admin_approved: opp.admin_approved === true,
       workflow_stage: opp.workflowStage,

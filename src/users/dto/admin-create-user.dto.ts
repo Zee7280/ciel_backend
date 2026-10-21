@@ -27,7 +27,7 @@ export class AdminCreateUserDto {
   @IsAcceptablePassword()
   password: string;
 
-  @Transform(({ value }) => normalizeUserRoleInput(value))
+  @Transform(({ value }) => normalizeUserRoleInput<unknown>(value))
   @IsEnum(UserRole)
   role: UserRole;
 

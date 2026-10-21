@@ -16,6 +16,11 @@ import { UserRole } from '../users/enums/user-role.enum';
 import { OrganizationMembershipService } from './organization-membership.service';
 import { AdminMutationAuditInterceptor } from '../audit-logs/admin-mutation-audit.interceptor';
 
+/** Shape of `req.user` as returned by JwtStrategy.validate. */
+interface AdminMembershipRequest {
+  user: { id: string };
+}
+
 @Controller('admin/org-membership')
 @UseGuards(JwtAuthGuard)
 @UseInterceptors(AdminMutationAuditInterceptor)
@@ -59,7 +64,7 @@ export class AdminOrganizationMembershipController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
   async approve(
-    @Request() req: any,
+    @Request() req: AdminMembershipRequest,
     @Param('id') id: string,
     @Body() body?: { allowAmountMismatch?: boolean },
   ) {
@@ -81,7 +86,7 @@ export class AdminOrganizationMembershipController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
   async reject(
-    @Request() req: any,
+    @Request() req: AdminMembershipRequest,
     @Param('id') id: string,
     @Body() body: { feedback?: string },
   ) {

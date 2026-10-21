@@ -1,18 +1,55 @@
+import { Repository } from 'typeorm';
+import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import { PlatformStatsService } from './platform-stats.service';
 
-function makeService(attendanceLogsRepository: Record<string, jest.Mock>) {
-  const noop = {} as any;
-  return new PlatformStatsService(
-    noop, // usersRepository
-    noop, // organizationsRepository
-    noop, // opportunitiesRepository
-    noop, // participationsRepository
-    attendanceLogsRepository as any,
-    noop, // studentReportsRepository
-    noop, // courseProjectRepository
-    noop, // fypRepository
-    noop, // ventureRepository
+type QueryBuilderMock = {
+  innerJoin: jest.Mock;
+  select: jest.Mock;
+  addSelect: jest.Mock;
+  where: jest.Mock;
+  andWhere: jest.Mock;
+  groupBy: jest.Mock;
+  addGroupBy: jest.Mock;
+  getRawMany: jest.Mock;
+};
+type AttendanceLogsRepositoryMock = { createQueryBuilder: jest.Mock };
+/** Private-method surface exercised directly by these tests. */
+type ServicePrivate = {
+  sumVerifiedHoursByProjectAndStudent(
+    pairs: { projectId: string; studentId: string }[],
+  ): Promise<Map<string, number>>;
+};
+
+/** Untouched repository stub — these tests never reach it. */
+const noop = <T>(): T => ({}) as T;
+
+function makeService(attendanceLogsRepository: AttendanceLogsRepositoryMock) {
+  const service = new PlatformStatsService(
+    noop(), // usersRepository
+    noop(), // organizationsRepository
+    noop(), // opportunitiesRepository
+    noop(), // participationsRepository
+    attendanceLogsRepository as unknown as Repository<AttendanceLog>,
+    noop(), // studentReportsRepository
+    noop(), // courseProjectRepository
+    noop(), // fypRepository
+    noop(), // ventureRepository
   );
+  return service as unknown as ServicePrivate;
+}
+
+function makeQueryBuilder(getRawMany: jest.Mock): QueryBuilderMock {
+  const qb: QueryBuilderMock = {
+    innerJoin: jest.fn(() => qb),
+    select: jest.fn(() => qb),
+    addSelect: jest.fn(() => qb),
+    where: jest.fn(() => qb),
+    andWhere: jest.fn(() => qb),
+    groupBy: jest.fn(() => qb),
+    addGroupBy: jest.fn(() => qb),
+    getRawMany,
+  };
+  return qb;
 }
 
 describe("PlatformStatsService — community dividend never trusts a report's own client-submitted hours", () => {
@@ -22,20 +59,11 @@ describe("PlatformStatsService — community dividend never trusts a report's ow
       { projectId: 'opp-1', studentId: 'stu-2', total: '8' },
       { projectId: 'opp-2', studentId: 'stu-1', total: '5' },
     ]);
-    const qb: any = {
-      innerJoin: jest.fn(() => qb),
-      select: jest.fn(() => qb),
-      addSelect: jest.fn(() => qb),
-      where: jest.fn(() => qb),
-      andWhere: jest.fn(() => qb),
-      groupBy: jest.fn(() => qb),
-      addGroupBy: jest.fn(() => qb),
-      getRawMany,
-    };
+    const qb = makeQueryBuilder(getRawMany);
     const attendanceLogsRepository = { createQueryBuilder: jest.fn(() => qb) };
     const service = makeService(attendanceLogsRepository);
 
-    const result = await (service as any).sumVerifiedHoursByProjectAndStudent([
+    const result = await service.sumVerifiedHoursByProjectAndStudent([
       { projectId: 'opp-1', studentId: 'stu-1' },
       { projectId: 'opp-1', studentId: 'stu-2' },
       { projectId: 'opp-1', studentId: 'stu-1' }, // duplicate pair — must not double-query or double-count
@@ -71,20 +99,11 @@ describe("PlatformStatsService — community dividend never trusts a report's ow
       { projectId: 'opp-shared', studentId: 'stu-a', total: '10' },
       { projectId: 'opp-shared', studentId: 'stu-b', total: '6' },
     ]);
-    const qb: any = {
-      innerJoin: jest.fn(() => qb),
-      select: jest.fn(() => qb),
-      addSelect: jest.fn(() => qb),
-      where: jest.fn(() => qb),
-      andWhere: jest.fn(() => qb),
-      groupBy: jest.fn(() => qb),
-      addGroupBy: jest.fn(() => qb),
-      getRawMany,
-    };
+    const qb = makeQueryBuilder(getRawMany);
     const attendanceLogsRepository = { createQueryBuilder: jest.fn(() => qb) };
     const service = makeService(attendanceLogsRepository);
 
-    const result = await (service as any).sumVerifiedHoursByProjectAndStudent([
+    const result = await service.sumVerifiedHoursByProjectAndStudent([
       { projectId: 'opp-shared', studentId: 'stu-a' },
       { projectId: 'opp-shared', studentId: 'stu-b' },
     ]);
@@ -99,9 +118,7 @@ describe("PlatformStatsService — community dividend never trusts a report's ow
     const attendanceLogsRepository = { createQueryBuilder: jest.fn() };
     const service = makeService(attendanceLogsRepository);
 
-    const result = await (service as any).sumVerifiedHoursByProjectAndStudent(
-      [],
-    );
+    const result = await service.sumVerifiedHoursByProjectAndStudent([]);
 
     expect(attendanceLogsRepository.createQueryBuilder).not.toHaveBeenCalled();
     expect(result.size).toBe(0);

@@ -479,7 +479,6 @@ export class AdminService {
         return 0;
       }
     };
-    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const [
       opportunityApprovals,
       pendingUsers,
@@ -726,7 +725,7 @@ export class AdminService {
 
     // SDG Distribution
     const opportunities = await this.opportunityRepository.find();
-    const sdgMap = opportunities.reduce((acc, opp) => {
+    const sdgMap = opportunities.reduce<Record<string, number>>((acc, opp) => {
       const sdg = opp.sdg || 'Unknown';
       acc[sdg] = (acc[sdg] || 0) + 1;
       return acc;
@@ -856,19 +855,19 @@ export class AdminService {
         .select('DISTINCT TRIM(u.university)', 'name')
         .where('u.role = :role', { role: UserRole.STUDENT })
         .andWhere("TRIM(COALESCE(u.university, '')) <> ''")
-        .getRawMany();
+        .getRawMany<{ name?: string }>();
 
       const uniFromPart = await this.participationRepository
         .createQueryBuilder('p')
         .select('DISTINCT TRIM(p.universityName)', 'name')
         .where('p.student_id IS NOT NULL')
         .andWhere("TRIM(COALESCE(p.universityName, '')) <> ''")
-        .getRawMany();
+        .getRawMany<{ name?: string }>();
 
       const universityNames = new Set<string>();
       for (const row of [...uniFromUsers, ...uniFromPart]) {
         // Lowercase so "NUST" / "Nust" / "nust" collapse to one university, not three.
-        const n = String((row as { name?: string }).name || '')
+        const n = String(row.name || '')
           .trim()
           .toLowerCase();
         if (n) universityNames.add(n);
@@ -1174,19 +1173,19 @@ export class AdminService {
       .select('DISTINCT TRIM(u.university)', 'name')
       .where('u.role = :role', { role: UserRole.STUDENT })
       .andWhere("TRIM(COALESCE(u.university, '')) <> ''")
-      .getRawMany();
+      .getRawMany<{ name?: string }>();
 
     const uniFromPart = await this.participationRepository
       .createQueryBuilder('p')
       .select('DISTINCT TRIM(p.universityName)', 'name')
       .where('p.student_id IS NOT NULL')
       .andWhere("TRIM(COALESCE(p.universityName, '')) <> ''")
-      .getRawMany();
+      .getRawMany<{ name?: string }>();
 
     const universityNames = new Set<string>();
     for (const row of [...uniFromUsers, ...uniFromPart]) {
       // Lowercase so case-variant spellings of the same university aren't counted twice.
-      const n = String((row as { name?: string }).name || '')
+      const n = String(row.name || '')
         .trim()
         .toLowerCase();
       if (n) universityNames.add(n);
@@ -1315,7 +1314,7 @@ export class AdminService {
     const student = p.student as User | undefined;
     const fromStudent = (student?.city || '').trim();
 
-    const loc = p.project?.location;
+    const loc: unknown = p.project?.location;
     let fromProject = '';
     if (loc && typeof loc === 'object' && loc !== null) {
       const city = String(
@@ -1338,7 +1337,11 @@ export class AdminService {
     project: Opportunity | null | undefined,
   ): number {
     if (!project) return 0;
-    const raw = project.timeline?.expected_hours;
+    const timeline = project.timeline as
+      | { expected_hours?: unknown }
+      | null
+      | undefined;
+    const raw = timeline?.expected_hours;
     const fromT = Number(raw);
     if (Number.isFinite(fromT) && fromT > 0) return fromT;
     const rh = Number(project.requiredHours);
@@ -1346,7 +1349,7 @@ export class AdminService {
   }
 
   private getSDGColor(sdg: string): string {
-    const colors = {
+    const colors: Record<string, string> = {
       'No Poverty': '#e5243b',
       'Zero Hunger': '#DDA63A',
       'Good Health and Well-being': '#4C9F38',
@@ -1392,7 +1395,9 @@ export class AdminService {
       if (Array.isArray(v)) return v.length > 0;
       if (v && typeof v === 'object')
         return this.hasMeaningfulAnalyticsObjectValue(v);
-      return v !== null && v !== undefined && String(v).trim() !== '';
+      // Only a string can stringify to blank; every other non-nullish primitive is meaningful.
+      if (typeof v === 'string') return v.trim() !== '';
+      return v !== null && v !== undefined;
     });
   }
 
@@ -1500,9 +1505,13 @@ export class AdminService {
   }
 
   private getOpportunityBeneficiaries(opportunity: Opportunity): number {
+    const objectives = opportunity.objectives as
+      | { beneficiaries_count?: unknown; total_beneficiaries?: unknown }
+      | null
+      | undefined;
     return (
-      this.toAnalyticsNumber(opportunity.objectives?.beneficiaries_count) ??
-      this.toAnalyticsNumber(opportunity.objectives?.total_beneficiaries) ??
+      this.toAnalyticsNumber(objectives?.beneficiaries_count) ??
+      this.toAnalyticsNumber(objectives?.total_beneficiaries) ??
       0
     );
   }
@@ -1513,7 +1522,7 @@ export class AdminService {
   ): string {
     const primarySdg = (
       report?.section3 as
-        | { primary_sdg?: { goal_number?: unknown; goal_title?: unknown } }
+        | { primary_sdg?: { goal_number?: unknown; goal_title?: string } }
         | undefined
     )?.primary_sdg;
     const goalNumber = this.toAnalyticsNumber(primarySdg?.goal_number);
@@ -1522,12 +1531,11 @@ export class AdminService {
         ? `SDG ${goalNumber}: ${primarySdg.goal_title}`
         : `SDG ${goalNumber}`;
     }
-    return (
-      opportunity?.sdg ||
-      opportunity?.sdg_info?.sdg_id ||
-      opportunity?.sdg_info?.goal ||
-      'Unknown'
-    );
+    const sdgInfo = opportunity?.sdg_info as
+      | { sdg_id?: string; goal?: string }
+      | null
+      | undefined;
+    return opportunity?.sdg || sdgInfo?.sdg_id || sdgInfo?.goal || 'Unknown';
   }
 
   private normalizeStudentEmailFilter(raw?: string | null): string | null {
@@ -1990,9 +1998,14 @@ export class AdminService {
         (participationSeatsByOpp.get(opp.id) ?? 0) +
         (pipelineSeatsByOpp.get(opp.id) ?? 0);
 
-      const volunteersRequired = Number(opp.timeline?.volunteers_required) || 0;
+      const timelineFields = opp.timeline as
+        | { volunteers_required?: unknown; expected_hours?: unknown }
+        | null
+        | undefined;
+      const volunteersRequired =
+        Number(timelineFields?.volunteers_required) || 0;
       const perVolunteerHours =
-        Number(opp.timeline?.expected_hours) || opp.requiredHours || 0;
+        Number(timelineFields?.expected_hours) || opp.requiredHours || 0;
       let targetHours = 0;
       if (volunteersRequired > 0 && perVolunteerHours > 0) {
         targetHours = volunteersRequired * perVolunteerHours;
@@ -2044,7 +2057,9 @@ export class AdminService {
         remaining_hours: remainingHours,
         remaining_seats: remainingSeats,
         remaining_members: remainingSeats,
-        location: opp.location?.city || 'Unknown',
+        location:
+          (opp.location as { city?: string } | null | undefined)?.city ||
+          'Unknown',
         supervision: opp.supervision,
         timeline: opp.timeline,
         participation_scope: opp.participation_scope,
@@ -2544,7 +2559,7 @@ export class AdminService {
         target: log.target,
         target_type: log.target_type,
         ip: log.ip,
-        details: log.details,
+        details: log.details as unknown,
         created_at: log.created_at,
       })),
       meta: {

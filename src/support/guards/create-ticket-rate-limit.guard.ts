@@ -14,9 +14,7 @@ export class CreateTicketRateLimitGuard implements CanActivate {
   private readonly hits = new Map<string, number[]>();
 
   canActivate(context: ExecutionContext): boolean {
-    const req = context
-      .switchToHttp()
-      .getRequest<{ user?: { id?: string } }>();
+    const req = context.switchToHttp().getRequest<{ user?: { id?: string } }>();
     const userId: string | undefined = req.user?.id;
     if (!userId) {
       return true;

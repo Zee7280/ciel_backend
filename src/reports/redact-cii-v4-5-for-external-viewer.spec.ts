@@ -1,8 +1,13 @@
 import { StudentReportsService } from './student-reports.service';
 
-const redact = (
-  StudentReportsService as any
-).redactCiiV45ForExternalViewer.bind(StudentReportsService);
+/** Test-local view of the private static under test (same shape as the real signature). */
+type RedactCiiV45Statics = {
+  redactCiiV45ForExternalViewer: <T>(response: T) => T;
+};
+
+const redactStatics = StudentReportsService as unknown as RedactCiiV45Statics;
+const redact = <T>(response: T): T =>
+  redactStatics.redactCiiV45ForExternalViewer(response);
 
 const UNLOCKED_RESPONSE = {
   success: true,

@@ -25,6 +25,11 @@ const ADMIN_ONLY_SECTIONS = new Set([
   'fyp_ai_evaluation',
 ]);
 
+/** The request as populated by JwtAuthGuard (JwtStrategy.validate). */
+interface AuthenticatedRequest {
+  user?: { id?: string; role?: UserRole };
+}
+
 @Controller('ai')
 @UseGuards(JwtAuthGuard, RateLimitGuard)
 export class AiController {
@@ -38,7 +43,10 @@ export class AiController {
     by: 'user',
     message: 'Too many AI requests. Please wait a minute and try again.',
   })
-  async summarize(@Request() req, @Body() dto: SummarizeAiDto) {
+  async summarize(
+    @Request() req: AuthenticatedRequest,
+    @Body() dto: SummarizeAiDto,
+  ) {
     if (
       ADMIN_ONLY_SECTIONS.has(dto.section) &&
       req.user?.role !== UserRole.SUPER_ADMIN

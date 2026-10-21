@@ -10,10 +10,26 @@ import {
   UploadedFiles,
 } from '@nestjs/common';
 import { UsersService } from './users.service';
+import type { GenericProfileUpdateInput } from './users.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { S3Service } from '../common/s3.service';
 import { UserRole } from './enums/user-role.enum';
+
+/** `req.user` as populated by JwtStrategy.validate(). */
+type AuthenticatedRequest = { user: { id: string; role?: UserRole } };
+
+/** Multipart profile form: profile fields plus the legacy `contact`/`image` aliases. */
+type ProfileUpdateBody = GenericProfileUpdateInput & {
+  userId?: string;
+  contact?: string;
+  image?: string;
+};
+
+type ProfileUploadFiles = {
+  image?: Express.Multer.File[];
+  avatar?: Express.Multer.File[];
+};
 
 @Controller('user')
 export class UsersController {
@@ -24,7 +40,7 @@ export class UsersController {
 
   @UseGuards(JwtAuthGuard)
   @Get('me')
-  getProfile(@Request() req) {
+  getProfile(@Request() req: AuthenticatedRequest) {
     // req.user has the payload from JwtStrategy (userId, email, role)
     // We user userId to fetch full profile
     return this.usersService.getProfile(req.user.id);
@@ -32,7 +48,7 @@ export class UsersController {
 
   @UseGuards(JwtAuthGuard)
   @Post('me')
-  getProfilePost(@Request() req) {
+  getProfilePost(@Request() req: AuthenticatedRequest) {
     return this.usersService.getProfile(req.user.id);
   }
 
@@ -48,9 +64,9 @@ export class UsersController {
     ),
   )
   async updateProfile(
-    @Request() req,
-    @Body() body: any,
-    @UploadedFiles() files: any,
+    @Request() req: AuthenticatedRequest,
+    @Body() body: ProfileUpdateBody,
+    @UploadedFiles() files: ProfileUploadFiles | undefined,
   ) {
     // `userId` in the body is only honoured as an admin override. Any other caller edits
     // their own profile only — otherwise any authenticated user could rewrite (and self-verify)
@@ -62,7 +78,7 @@ export class UsersController {
       isAdminCaller && requestedUserId ? requestedUserId : req.user.id;
 
     // Map 'contact' to 'phone', 'image' to 'avatar'
-    const dto: any = { ...body };
+    const dto: ProfileUpdateBody = { ...body };
     if (body.contact) dto.phone = body.contact;
     if (body.university) dto.university = body.university;
     if (body.department) dto.department = body.department;

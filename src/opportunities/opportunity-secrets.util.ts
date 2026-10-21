@@ -22,7 +22,7 @@ export function redactOpportunitySecrets<T>(value: T, depth = 0): T {
     return value;
   if (value instanceof Date || Buffer.isBuffer(value)) return value;
   if (Array.isArray(value)) {
-    return value.map((v) =>
+    return (value as unknown[]).map((v) =>
       redactOpportunitySecrets(v, depth + 1),
     ) as unknown as T;
   }
@@ -60,7 +60,7 @@ export function redactOpportunityContactDetails<T>(
     return value;
   if (value instanceof Date || Buffer.isBuffer(value)) return value;
   if (Array.isArray(value)) {
-    return value.map((v) =>
+    return (value as unknown[]).map((v) =>
       redactOpportunityContactDetails(v, parentKey, depth + 1),
     ) as unknown as T;
   }
@@ -70,13 +70,13 @@ export function redactOpportunityContactDetails<T>(
     if (k === 'contact' && parentKey === 'supervision') continue;
     if (k === 'approvalHistory' && Array.isArray(v)) {
       // Actor names of emailed-link approvals are the reviewer's email address.
-      out[k] = v.map((entry) => {
+      out[k] = (v as unknown[]).map((entry) => {
         if (!entry || typeof entry !== 'object') return entry;
-        const {
-          actorId: _id,
-          actorName: _name,
-          ...rest
-        } = entry as Record<string, unknown>;
+        const rest: Record<string, unknown> = {
+          ...(entry as Record<string, unknown>),
+        };
+        delete rest.actorId;
+        delete rest.actorName;
         return rest;
       });
       continue;

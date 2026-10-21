@@ -1,9 +1,13 @@
 import { BadRequestException } from '@nestjs/common';
 import { OrganizationMembershipService } from './organization-membership.service';
 
+type MembershipServiceArgs = ConstructorParameters<
+  typeof OrganizationMembershipService
+>;
+
 describe('OrganizationMembershipService approvals', () => {
   function build(paid: number) {
-    const row: any = {
+    const row = {
       id: 'f1',
       userId: 'u1',
       organizationId: null,
@@ -11,28 +15,29 @@ describe('OrganizationMembershipService approvals', () => {
       paidAmountPkr: paid,
       user: { id: 'u1', role: 'university', email: 'u@x.com' },
     };
-    const feeRepo: any = {
-      findOne: jest.fn(async () => row),
-      update: jest.fn(async () => ({ affected: 1 })),
+    const feeRepo = {
+      findOne: jest.fn(() => Promise.resolve(row)),
+      update: jest.fn(() => Promise.resolve({ affected: 1 })),
     };
-    const userRepo: any = { update: jest.fn(async () => ({})) };
-    const settingRepo: any = {
-      findOne: jest.fn(async () => ({ value: '10000' })),
+    const userRepo = { update: jest.fn(() => Promise.resolve({})) };
+    const settingRepo = {
+      findOne: jest.fn(() => Promise.resolve({ value: '10000' })),
     };
-    const service = new OrganizationMembershipService(
+    const args = [
       feeRepo,
       userRepo,
       settingRepo,
-      {} as any,
+      {},
       {
         sendStudentOpportunityStatusUpdate: jest
           .fn()
           .mockRejectedValue(new Error('x')),
-      } as any,
+      },
       {
         createApprovalNotification: jest.fn().mockRejectedValue(new Error('x')),
-      } as any,
-    );
+      },
+    ] as unknown as MembershipServiceArgs;
+    const service = new OrganizationMembershipService(...args);
     return { service, userRepo, feeRepo };
   }
 

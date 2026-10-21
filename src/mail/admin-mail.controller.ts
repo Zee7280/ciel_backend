@@ -13,8 +13,10 @@ import { Roles } from '../auth/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
 import { AdminMutationAuditInterceptor } from '../audit-logs/admin-mutation-audit.interceptor';
 import { MailService } from './mail.service';
-import { AdminSendEmailDto } from './dto/admin-send-email.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
+
+/** Raw multipart body; validated by hand below because `to` may arrive as a string or an array. */
+type AdminSendEmailBody = Record<string, unknown>;
 
 @Controller('admin/email')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -29,11 +31,16 @@ export class AdminMailController {
       limits: { fileSize: 3 * 1024 * 1024 },
     }),
   )
-  async send(@UploadedFile() image?: Express.Multer.File, @Body() dto?: any) {
+  async send(
+    @UploadedFile() image?: Express.Multer.File,
+    @Body() dto?: AdminSendEmailBody,
+  ) {
     const to = this.toArray(dto?.to);
-    const subject = String(dto?.subject ?? '').trim();
-    const messageHtml = String(dto?.messageHtml ?? '').trim();
-    const messageText = dto?.messageText ? String(dto.messageText) : undefined;
+    const subject = this.asString(dto?.subject ?? '').trim();
+    const messageHtml = this.asString(dto?.messageHtml ?? '').trim();
+    const messageText = dto?.messageText
+      ? this.asString(dto.messageText)
+      : undefined;
 
     if (!to.length) {
       throw new BadRequestException('Recipient(s) required');
@@ -60,6 +67,11 @@ export class AdminMailController {
       failedRecipients: result.failed,
       skippedRecipients: result.skipped,
     };
+  }
+
+  /** Same coercion as `String(v)` for form fields that are strings in practice. */
+  private asString(v: unknown): string {
+    return String(v as string);
   }
 
   private toArray(v: unknown): string[] {

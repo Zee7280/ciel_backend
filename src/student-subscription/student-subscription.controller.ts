@@ -18,6 +18,9 @@ import { UserRole } from '../users/enums/user-role.enum';
 import { S3Service } from '../common/s3.service';
 import { StudentSubscriptionService } from './student-subscription.service';
 
+/** `req.user` as populated by JwtStrategy.validate(). */
+type AuthenticatedRequest = { user: { id: string } };
+
 /** Student side of the subscription fee. Deliberately NOT behind SubscriptionActiveGuard. */
 @Controller('student/subscription')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -29,7 +32,7 @@ export class StudentSubscriptionController {
   ) {}
 
   @Get('status')
-  async status(@Request() req: any) {
+  async status(@Request() req: AuthenticatedRequest) {
     return {
       success: true,
       data: await this.subscriptionService.getStatusForStudent(req.user.id),
@@ -39,8 +42,8 @@ export class StudentSubscriptionController {
   @Post('submit-proof')
   @UseInterceptors(FileInterceptor('proof', proofUploadOptions))
   async submitProof(
-    @Request() req: any,
-    @UploadedFile() file: any,
+    @Request() req: AuthenticatedRequest,
+    @UploadedFile() file: Express.Multer.File | undefined,
     @Body() body: { paid_amount?: string },
   ) {
     if (!file) {

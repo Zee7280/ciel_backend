@@ -41,6 +41,16 @@ import {
 import { PlatformSettingsService } from '../settings/platform-settings.service';
 import { canonicalizePhoneInput } from '../common/phone-e164.util';
 
+/** Shallow copy without the given keys (same result as rest-destructuring them away). */
+function omitKeys<T extends object, K extends keyof T>(
+  obj: T,
+  keys: readonly K[],
+): Omit<T, K> {
+  const copy = { ...obj };
+  for (const key of keys) Reflect.deleteProperty(copy, key);
+  return copy;
+}
+
 @Injectable()
 export class AuthService implements OnApplicationBootstrap {
   constructor(
@@ -180,14 +190,16 @@ export class AuthService implements OnApplicationBootstrap {
       throw new ForbiddenException('New registrations are temporarily closed.');
     }
     try {
-      const {
-        password,
-        email: rawEmail,
-        acceptedTerms: _acceptedTerms,
-        ...rawUserData
-      } = signupDto;
-      const { status: _clientStatus, ...userData } =
-        rawUserData as SignupDto & { status?: string };
+      const { password, email: rawEmail } = signupDto;
+      const rawUserData = omitKeys(signupDto, [
+        'password',
+        'email',
+        'acceptedTerms',
+      ]);
+      const userData = omitKeys(
+        rawUserData as SignupDto & { status?: string },
+        ['status'],
+      );
       const email = rawEmail.trim().toLowerCase();
 
       if (!isPublicSignupRole(userData.role)) {
@@ -267,19 +279,20 @@ export class AuthService implements OnApplicationBootstrap {
       }
 
       const {
-        organizationCategory: _oc,
-        legalRegistrationType: _lrt,
         affiliationProofUrl,
         affiliationProofKind,
         affiliationProofLabel,
         investorProfile,
         ...userCreateData
-      } = userData as typeof userData & {
-        affiliationProofUrl?: string;
-        affiliationProofKind?: string;
-        affiliationProofLabel?: string;
-        investorProfile?: Record<string, unknown>;
-      };
+      } = omitKeys(
+        userData as typeof userData & {
+          affiliationProofUrl?: string;
+          affiliationProofKind?: string;
+          affiliationProofLabel?: string;
+          investorProfile?: Record<string, unknown>;
+        },
+        ['organizationCategory', 'legalRegistrationType'],
+      );
 
       let investorExtras: {
         status?: string;
@@ -451,7 +464,7 @@ export class AuthService implements OnApplicationBootstrap {
       console.error('Signup error:', error);
 
       // Handle duplicate email error from database
-      if (error.code === '23505') {
+      if ((error as { code?: string }).code === '23505') {
         throw new ConflictException('Email already exists');
       }
 

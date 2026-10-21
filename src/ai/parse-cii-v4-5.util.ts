@@ -20,7 +20,12 @@ import {
 const REQUIRED_KEYS: (keyof CiiV45EvaluatorPayload)[] = ['sectionScores'];
 
 function hasOwn(value: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(value, key);
+  return Object.prototype.hasOwnProperty.call(value, key) as boolean;
+}
+
+/** Plain `String(value)` coercion of a dynamic (parsed-JSON) field. */
+function asText(value: unknown): string {
+  return String(value);
 }
 
 export function parseCiiV45Response(
@@ -37,7 +42,9 @@ export function parseCiiV45Response(
     if (!hasOwn(value, key) || value[key] === undefined) return null;
   }
 
-  const framework = String(value.frameworkVersion ?? '5.0').trim();
+  const framework = (
+    value.frameworkVersion == null ? '5.0' : asText(value.frameworkVersion)
+  ).trim();
   if (framework !== '5.0' && framework !== '4.5') return null;
   value.frameworkVersion = '5.0';
   const reportId =

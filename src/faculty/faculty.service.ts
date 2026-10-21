@@ -6,14 +6,7 @@ import {
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
 import { FacultyAnalyticsQueryDto } from './dto/faculty-analytics-query.dto';
 import { InjectRepository } from '@nestjs/typeorm';
-import {
-  Brackets,
-  In,
-  IsNull,
-  Not,
-  Repository,
-  SelectQueryBuilder,
-} from 'typeorm';
+import { Brackets, In, Repository, SelectQueryBuilder } from 'typeorm';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { User } from '../users/entities/user.entity';
 import { StudentReport } from '../reports/entities/student-report.entity';
@@ -91,6 +84,20 @@ type ActivityRow = {
   created_at: string;
   sortAt: number;
 };
+
+/** Loose views of the JSON columns on Opportunity that the dashboard reads (typed `any` on the entity). */
+type OpportunityTimelineJson = { expected_hours?: unknown } | null | undefined;
+type OpportunitySdgInfoJson = { sdg_id?: unknown } | null | undefined;
+
+/** Same object the `{ liaisonToken: _, partnerToken: _, ...rest }` rest-spread produced: own enumerable keys minus the two tokens. */
+function withoutTokens<T extends object>(
+  opportunity: T,
+): Omit<T, 'liaisonToken' | 'partnerToken'> {
+  const copy = { ...opportunity } as Record<string, unknown>;
+  delete copy.liaisonToken;
+  delete copy.partnerToken;
+  return copy as Omit<T, 'liaisonToken' | 'partnerToken'>;
+}
 
 /** Query `view` on GET /faculty/dashboard — Instagram-style context switch for delegated university visibility. */
 export type FacultyDashboardViewMode = 'combined' | 'personal' | 'university';
@@ -315,7 +322,7 @@ export class FacultyService {
     project: Opportunity | null | undefined,
   ): number {
     if (!project) return 0;
-    const raw = project.timeline?.expected_hours;
+    const raw = (project.timeline as OpportunityTimelineJson)?.expected_hours;
     const fromT = Number(raw);
     if (Number.isFinite(fromT) && fromT > 0) return fromT;
     const rh = Number(project.requiredHours);
@@ -892,7 +899,7 @@ export class FacultyService {
   }
 
   private formatSdgLabel(opp: Opportunity): string {
-    const n = opp.sdg_info?.sdg_id;
+    const n = (opp.sdg_info as OpportunitySdgInfoJson)?.sdg_id;
     const num =
       typeof n === 'number' ? n : typeof n === 'string' ? parseInt(n, 10) : NaN;
     if (!Number.isNaN(num) && num >= 1 && num <= 17) {
@@ -1268,11 +1275,7 @@ export class FacultyService {
       order: { submission_date: 'DESC' },
     });
 
-    const {
-      liaisonToken: _lt,
-      partnerToken: _pt,
-      ...opportunitySafe
-    } = opportunity;
+    const opportunitySafe = withoutTokens(opportunity);
 
     return {
       success: true,
@@ -1383,7 +1386,10 @@ export class FacultyService {
           eisScore,
           impactScore,
           impact_metrics_released: metricsReleased,
-          sdg: opp.sdg || opp.sdg_info?.sdg_id || 'N/A',
+          sdg:
+            opp.sdg ||
+            (opp.sdg_info as OpportunitySdgInfoJson)?.sdg_id ||
+            'N/A',
           opportunityStatus: opp.status,
           workflowStage: opp.workflowStage ?? null,
           workflow_stage: opp.workflowStage ?? null,
@@ -1706,7 +1712,11 @@ export class FacultyService {
     const recent_activity = [...activities]
       .sort((a, b) => b.sortAt - a.sortAt)
       .slice(0, 18)
-      .map(({ sortAt: _s, ...rest }) => rest);
+      .map(({ title, description, created_at }) => ({
+        title,
+        description,
+        created_at,
+      }));
 
     return {
       success: true,

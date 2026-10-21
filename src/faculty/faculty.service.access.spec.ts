@@ -1,23 +1,54 @@
 import { NotFoundException } from '@nestjs/common';
+import type { Repository } from 'typeorm';
+import type { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
+import type { Opportunity } from '../opportunities/entities/opportunity.entity';
+import type { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
+import type { OpportunitiesService } from '../opportunities/opportunities.service';
+import type { StudentReport } from '../reports/entities/student-report.entity';
+import type { Participation } from '../engagement/entities/participant.entity';
+import type { Timesheet } from '../timesheets/entities/timesheet.entity';
+import type { User } from '../users/entities/user.entity';
 import { FacultyService } from './faculty.service';
+
+/** Private surface of FacultyService exercised by these tests. */
+type ServicePrivate = {
+  resolveFacultyScopedOpportunityIds: (
+    facultyId: string,
+    facultyEmail: string,
+  ) => Promise<string[]>;
+  approvalActionForRow: (
+    opp: Opportunity,
+    facultyId: string,
+    fe: string,
+    delegatedIds: Set<string>,
+    reportAwaitingFacultyGate: boolean,
+  ) => 'faculty_review' | 'partner_ack';
+};
 
 function makeFacultyService(
   opp: Record<string, unknown> | null,
   scopedIds: string[] = [],
 ) {
   const service = new FacultyService(
-    { findOne: jest.fn().mockResolvedValue(opp) } as any, // opportunitiesRepository
-    { findOne: jest.fn().mockResolvedValue(null) } as any, // usersRepository
-    { find: jest.fn().mockResolvedValue([]) } as any, // studentReportsRepository
-    {} as any, // participationRepository
-    {} as any, // timesheetsRepository
-    {} as any, // opportunityApplicationsRepository
-    {} as any, // facultyUniversityScopeService
-    { isAwaitingPartnerDashboardReview: () => true } as any, // opportunitiesService
+    {
+      findOne: jest.fn().mockResolvedValue(opp),
+    } as unknown as Repository<Opportunity>, // opportunitiesRepository
+    {
+      findOne: jest.fn().mockResolvedValue(null),
+    } as unknown as Repository<User>, // usersRepository
+    {
+      find: jest.fn().mockResolvedValue([]),
+    } as unknown as Repository<StudentReport>, // studentReportsRepository
+    {} as unknown as Repository<Participation>, // participationRepository
+    {} as unknown as Repository<Timesheet>, // timesheetsRepository
+    {} as unknown as Repository<OpportunityApplication>, // opportunityApplicationsRepository
+    {} as unknown as FacultyUniversityScopeService, // facultyUniversityScopeService
+    {
+      isAwaitingPartnerDashboardReview: () => true,
+    } as unknown as OpportunitiesService, // opportunitiesService
   );
-  (service as any).resolveFacultyScopedOpportunityIds = jest
-    .fn()
-    .mockResolvedValue(scopedIds);
+  (service as unknown as ServicePrivate).resolveFacultyScopedOpportunityIds =
+    jest.fn().mockResolvedValue(scopedIds);
   return service;
 }
 
@@ -34,11 +65,7 @@ describe('FacultyService — a row on the approvals list is always openable / ro
 
   it('GET /faculty/approvals/:id opens a row listed only via the NGO faculty-link email', async () => {
     const service = makeFacultyService(firOpp, []); // not in the dashboard scope
-    const res: any = await service.getProjectDetail(
-      'fac-1',
-      'FIR@uni.edu',
-      'opp-1',
-    );
+    const res = await service.getProjectDetail('fac-1', 'FIR@uni.edu', 'opp-1');
     expect(res.data.opportunity.id).toBe('opp-1');
   });
 
@@ -51,7 +78,7 @@ describe('FacultyService — a row on the approvals list is always openable / ro
 
   it('partner_ack routing recognises every partner contact email, not just the first source', () => {
     const service = makeFacultyService(null);
-    const opp: any = {
+    const opp = {
       id: 'opp-2',
       creatorId: 'c1',
       isStudentCreated: false,
@@ -64,9 +91,15 @@ describe('FacultyService — a row on the approvals list is always openable / ro
       workflowStage: 'pending_partner',
       status: 'pending_partner',
       faculty_verified: true,
-    };
+    } as unknown as Opportunity;
     const action = (fe: string) =>
-      (service as any).approvalActionForRow(opp, 'fac-9', fe, new Set(), false);
+      (service as unknown as ServicePrivate).approvalActionForRow(
+        opp,
+        'fac-9',
+        fe,
+        new Set(),
+        false,
+      );
     expect(action('second@ngo.org')).toBe('partner_ack');
     expect(action('first@ngo.org')).toBe('partner_ack');
     expect(action('nobody@x.org')).toBe('faculty_review');

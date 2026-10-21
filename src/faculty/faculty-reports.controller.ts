@@ -21,6 +21,14 @@ import { RunIndependentAnalysisBatchDto } from './dto/run-independent-analysis-b
 const FACULTY_REPORT_WRITE_BLOCKED =
   'Faculty report review is read-only. Run Analyzer, Approve, Request revision and Reject are handled by CIEL PK Admin.';
 
+/** Request user as populated by JwtStrategy.validate. */
+type FacultyRequest = { user: { id: string; email: string } };
+
+/** Every faculty write route rejects with the same 403 (as a rejected promise, like the async handlers before). */
+function facultyWriteBlocked(): Promise<never> {
+  return Promise.reject(new ForbiddenException(FACULTY_REPORT_WRITE_BLOCKED));
+}
+
 @Controller('faculty/reports')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.FACULTY)
@@ -28,7 +36,7 @@ export class FacultyReportsController {
   constructor(private readonly facultyReportsService: FacultyReportsService) {}
 
   @Get()
-  async getAssignedReports(@Request() req) {
+  async getAssignedReports(@Request() req: FacultyRequest) {
     return await this.facultyReportsService.findAll(
       req.user.id,
       req.user.email,
@@ -37,7 +45,7 @@ export class FacultyReportsController {
 
   /** In-progress (not yet submitted) reports: progress only; opening stays blocked until submit. */
   @Get('progress')
-  async getDraftProgress(@Request() req) {
+  async getDraftProgress(@Request() req: FacultyRequest) {
     return await this.facultyReportsService.listDraftProgress(
       req.user.id,
       req.user.email,
@@ -45,7 +53,7 @@ export class FacultyReportsController {
   }
 
   @Get(':id')
-  async getReportById(@Request() req, @Param('id') id: string) {
+  async getReportById(@Request() req: FacultyRequest, @Param('id') id: string) {
     return await this.facultyReportsService.findOne(
       id,
       req.user.id,
@@ -54,43 +62,37 @@ export class FacultyReportsController {
   }
 
   /** Read-only faculty policy — decisions live on CIEL PK Admin. */
+  // The DTO params below stay on the signatures so ValidationPipe still validates the body before the 403.
   @Post(':id/action')
-  async handleAction(
-    @Request() _req,
-    @Param('id') _id: string,
-    @Body() _body: FacultyReportActionDto,
-  ) {
-    throw new ForbiddenException(FACULTY_REPORT_WRITE_BLOCKED);
+  handleAction(@Body() body: FacultyReportActionDto): Promise<never> {
+    void body;
+    return facultyWriteBlocked();
   }
 
   @Post(':id/cii-v4-5/analyse')
-  async analyseCiiV45(@Request() _req, @Param('id') _id: string) {
-    throw new ForbiddenException(FACULTY_REPORT_WRITE_BLOCKED);
+  analyseCiiV45(): Promise<never> {
+    return facultyWriteBlocked();
   }
 
   @Post(':id/cii-v4-5/approve')
-  async approveCiiV45(
-    @Request() _req,
-    @Param('id') _id: string,
-    @Body() _body: ApproveCiiV45Dto,
-  ) {
-    throw new ForbiddenException(FACULTY_REPORT_WRITE_BLOCKED);
+  approveCiiV45(@Body() body: ApproveCiiV45Dto): Promise<never> {
+    void body;
+    return facultyWriteBlocked();
   }
 
   @Post(':id/cii-v4-5/independent-analysis')
-  async runIndependentAnalysis(
-    @Request() _req,
-    @Param('id') _id: string,
-    @Body() _body: RunIndependentAnalysisDto,
-  ) {
-    throw new ForbiddenException(FACULTY_REPORT_WRITE_BLOCKED);
+  runIndependentAnalysis(
+    @Body() body: RunIndependentAnalysisDto,
+  ): Promise<never> {
+    void body;
+    return facultyWriteBlocked();
   }
 
   @Post('cii-v4-5/independent-analysis/batch')
-  async runIndependentAnalysisBatch(
-    @Request() _req,
-    @Body() _body: RunIndependentAnalysisBatchDto,
-  ) {
-    throw new ForbiddenException(FACULTY_REPORT_WRITE_BLOCKED);
+  runIndependentAnalysisBatch(
+    @Body() body: RunIndependentAnalysisBatchDto,
+  ): Promise<never> {
+    void body;
+    return facultyWriteBlocked();
   }
 }

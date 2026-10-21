@@ -29,6 +29,22 @@ const REQUIRED_FIELDS = [
   'types',
 ];
 
+/** The opportunity row as the detail route returns it (either bare or wrapped in `data`). */
+interface DetailRow {
+  timeline: { start_date?: string; expected_hours?: number };
+  [key: string]: unknown;
+}
+type DetailBody = { data?: DetailRow } | undefined;
+
+/** `{ id }` returned by POST /opportunities */
+const idOf = (res: { body: unknown }): string =>
+  (res.body as { id: string }).id;
+/** `{ data: { id } }` (student wizard) or `{ id }` */
+const createdId = (res: { body: unknown }): string => {
+  const b = res.body as { id?: string; data?: { id?: string } };
+  return (b.data?.id ?? b.id)!;
+};
+
 describe('Duplicate opportunity: source payload is complete, safe and scoped (real app + real Postgres)', () => {
   let h: Harness;
   let admin: E2eUser;
@@ -75,14 +91,16 @@ describe('Duplicate opportunity: source payload is complete, safe and scoped (re
 
   const open = async (viewer: E2eUser | null, id: string, label: string) => {
     const res = await detail(h, viewer, id);
+    const body = res.body as DetailBody;
     if (res.status === 200 || res.status === 201)
-      dump[label] = res.body?.data ?? res.body;
+      dump[label] = body?.data ?? body;
     return res;
   };
 
-  const expectCopyable = (res: any) => {
+  const expectCopyable = (res: { status: number; body: unknown }) => {
     expect([200, 201]).toContain(res.status);
-    const d = res.body?.data ?? res.body;
+    const body = res.body as DetailBody;
+    const d = (body?.data ?? body) as DetailRow;
     for (const f of REQUIRED_FIELDS)
       expect({ f, present: d?.[f] !== undefined && d?.[f] !== null }).toEqual({
         f,
@@ -105,7 +123,7 @@ describe('Duplicate opportunity: source payload is complete, safe and scoped (re
         }),
       );
     expect(create.status).toBe(201);
-    const id = create.body.id;
+    const id = idOf(create);
     expectCopyable(await open(fac, id, 'faculty_creator'));
     expectCopyable(await open(admin, id, 'faculty_admin'));
     expect((await adminApprove(h, admin, id)).status).toBeLessThan(300);
@@ -128,7 +146,7 @@ describe('Duplicate opportunity: source payload is complete, safe and scoped (re
         }),
       );
     expect(create.status).toBe(201);
-    const id = create.body.id;
+    const id = idOf(create);
     expectCopyable(await open(ngo, id, 'ngo_creator'));
     expectCopyable(await open(linked, id, 'ngo_linked_faculty'));
     const stranger = await h.makeUser(UserRole.FACULTY);
@@ -150,7 +168,7 @@ describe('Duplicate opportunity: source payload is complete, safe and scoped (re
         }),
       );
     expect(create.status).toBe(201);
-    const id = create.body.data?.id ?? create.body.id;
+    const id = createdId(create);
     expectCopyable(await open(fac, id, 'student_supervisor'));
     expectCopyable(await open(s, id, 'student_creator'));
     const stranger = await h.makeUser(UserRole.STUDENT);
@@ -167,7 +185,7 @@ describe('Duplicate opportunity: source payload is complete, safe and scoped (re
     const ids: string[] = [];
     // own, pending admin
     ids.push(
-      (
+      idOf(
         await h
           .as(fac)
           .post('/opportunities')
@@ -176,11 +194,11 @@ describe('Duplicate opportunity: source payload is complete, safe and scoped (re
               title: `Mine pending ${uniq()}`,
               supervision: { contact: fac.email },
             }),
-          )
-      ).body.id,
+          ),
+      ),
     );
     // own, live
-    const live = (
+    const live = idOf(
       await h
         .as(fac)
         .post('/opportunities')
@@ -189,12 +207,12 @@ describe('Duplicate opportunity: source payload is complete, safe and scoped (re
             title: `Mine live ${uniq()}`,
             supervision: { contact: fac.email },
           }),
-        )
-    ).body.id;
+        ),
+    );
     await adminApprove(h, admin, live);
     ids.push(live);
     // own, rejected
-    const rej = (
+    const rej = idOf(
       await h
         .as(fac)
         .post('/opportunities')
@@ -203,8 +221,8 @@ describe('Duplicate opportunity: source payload is complete, safe and scoped (re
             title: `Mine rejected ${uniq()}`,
             supervision: { contact: fac.email },
           }),
-        )
-    ).body.id;
+        ),
+    );
     await h
       .as(admin)
       .post(`/admin/opportunities/${rej}/reject`)
@@ -212,7 +230,7 @@ describe('Duplicate opportunity: source payload is complete, safe and scoped (re
     ids.push(rej);
     // NGO row naming this faculty (waiting on the faculty)
     ids.push(
-      (
+      idOf(
         await h
           .as(ngo)
           .post('/opportunities')
@@ -221,8 +239,8 @@ describe('Duplicate opportunity: source payload is complete, safe and scoped (re
               title: `Linked ${uniq()}`,
               supervision: { contact: fac.email, supervisor_name: 'Dr' },
             }),
-          )
-      ).body.id,
+          ),
+      ),
     );
     // student-created row supervised by this faculty
     const stu = await h
@@ -233,11 +251,13 @@ describe('Duplicate opportunity: source payload is complete, safe and scoped (re
           title: `Student ${uniq()} sanitation drive`,
         }),
       );
-    ids.push(stu.body.data?.id ?? stu.body.id);
+    ids.push(createdId(stu));
 
     const mine = await h.as(fac).get('/opportunities/faculty/mine');
     expect(mine.status).toBe(200);
-    const listed = (mine.body.data as any[]).map((r) => r.id);
+    const listed = (mine.body as { data: { id: string }[] }).data.map(
+      (r) => r.id,
+    );
     for (const id of ids) {
       expect({ id, listed: listed.includes(id) }).toEqual({ id, listed: true });
       expectCopyable(await detail(h, fac, id));
@@ -252,7 +272,7 @@ describe('Duplicate opportunity: source payload is complete, safe and scoped (re
   it('admin-created: the admin can copy it', async () => {
     const create = await h.as(admin).post('/opportunities').send(full());
     expect(create.status).toBe(201);
-    expectCopyable(await open(admin, create.body.id, 'admin_creator'));
+    expectCopyable(await open(admin, idOf(create), 'admin_creator'));
   });
 
   it('the copy itself is an independent new opportunity: creating with the copied payload and a new title leaves the source untouched', async () => {
@@ -277,9 +297,9 @@ describe('Duplicate opportunity: source payload is complete, safe and scoped (re
         }),
       );
     expect(copy.status).toBe(201);
-    expect(copy.body.id).not.toBe(src.body.id);
-    const a = await h.reload(src.body.id);
-    const b = await h.reload(copy.body.id);
+    expect(idOf(copy)).not.toBe(idOf(src));
+    const a = await h.reload(idOf(src));
+    const b = await h.reload(idOf(copy));
     expect(a.title).not.toBe(b.title);
     expect(a.timeline).toEqual(b.timeline);
     // submitting the SAME title + payload again is treated as a retry and returns the original row,
@@ -290,11 +310,11 @@ describe('Duplicate opportunity: source payload is complete, safe and scoped (re
       .send(
         full({
           title: a.title,
-          timeline: a.timeline,
+          timeline: a.timeline as Record<string, unknown>,
           supervision: { contact: fac.email },
         }),
       );
     expect([200, 201, 409]).toContain(same.status);
-    if (same.status !== 409) expect(same.body.id).toBe(a.id);
+    if (same.status !== 409) expect(idOf(same)).toBe(a.id);
   });
 });

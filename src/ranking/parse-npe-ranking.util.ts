@@ -40,9 +40,16 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function asConfidence(value: unknown): NpeEvidenceConfidence | null {
-  const key = String(value || '')
-    .trim()
-    .toLowerCase();
+  // Same text as the former `String(value || '')` for every value that can name a level: a string,
+  // or an array (Array#toString is join(','), so the model's `["high"]` still reads as "high").
+  // Numbers, booleans and objects never stringified to a level key, so they still resolve to null.
+  const text =
+    typeof value === 'string'
+      ? value
+      : Array.isArray(value)
+        ? (value as string[]).join(',')
+        : '';
+  const key = text.trim().toLowerCase();
   return key in NPE_EVIDENCE_FACTORS ? (key as NpeEvidenceConfidence) : null;
 }
 

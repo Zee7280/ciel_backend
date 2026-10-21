@@ -98,7 +98,7 @@ export class AuthController {
    * immediately, instead of staying valid until it expires after the client forgot it. */
   @Post('logout')
   @UseGuards(JwtAuthGuard)
-  async logout(@Request() req) {
+  async logout(@Request() req: { user: { id: string } }) {
     await this.authService.logout(req.user.id);
     return { success: true };
   }

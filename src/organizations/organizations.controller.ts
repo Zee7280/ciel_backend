@@ -1,12 +1,10 @@
 import {
   Controller,
   Get,
-  Patch,
   Post,
   Body,
   UseGuards,
   Request,
-  Query,
 } from '@nestjs/common';
 import { OrganizationsService } from './organizations.service';
 import {
@@ -16,19 +14,24 @@ import {
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { UserRole } from '../users/enums/user-role.enum';
 
+/** Shape of `req.user` as returned by JwtStrategy.validate. */
+interface OrganisationRequest {
+  user: { id: string; role?: UserRole };
+}
+
 @Controller('organisation')
 @UseGuards(JwtAuthGuard)
 export class OrganizationsController {
   constructor(private readonly organizationsService: OrganizationsService) {}
 
   @Get('profile')
-  getMyOrganization(@Request() req) {
+  getMyOrganization(@Request() req: OrganisationRequest) {
     return this.organizationsService.getMyOrganization(req.user.id);
   }
 
   @Post('profile')
   createOrUpdateMyOrganization(
-    @Request() req,
+    @Request() req: OrganisationRequest,
     @Body() updateDto: UpdateOrganizationDto,
   ) {
     return this.organizationsService.updateMyOrganization(
@@ -38,7 +41,10 @@ export class OrganizationsController {
   }
 
   @Post('profile/detail')
-  getDetail(@Request() req, @Body() body: any) {
+  getDetail(
+    @Request() req: OrganisationRequest,
+    @Body() body: { userId?: string },
+  ) {
     // `userId` in the body is only honoured as an admin override; everyone else reads their own org.
     const isAdminCaller = req.user?.role === UserRole.SUPER_ADMIN;
     const requestedUserId = body?.userId ? String(body.userId) : null;
@@ -49,12 +55,15 @@ export class OrganizationsController {
   }
 
   @Get('profile/detail')
-  getDetailGet(@Request() req) {
+  getDetailGet(@Request() req: OrganisationRequest) {
     return this.organizationsService.getMyOrganization(req.user.id);
   }
 
   @Post('profile/acknowledge')
-  acknowledgePolicies(@Request() req, @Body() dto: AcknowledgePolicyDto) {
+  acknowledgePolicies(
+    @Request() req: OrganisationRequest,
+    @Body() dto: AcknowledgePolicyDto,
+  ) {
     return this.organizationsService.acknowledgePolicies(req.user.id, dto);
   }
 }

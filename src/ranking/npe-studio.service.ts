@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { NpeStudioDto } from './dto/npe-ranking.dto';
 import { NpeStudioPublication } from './entities/npe-studio-publication.entity';
 import { npeCriteriaFor } from './npe-ranking.constants';
@@ -20,7 +20,6 @@ import {
   normalizeCustomWeights,
   sanitizeStudioFilters,
   type StudioCandidate,
-  type StudioGroupBy,
   type StudioLens,
   type StudioResult,
 } from './npe-studio.util';

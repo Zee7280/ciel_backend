@@ -216,7 +216,9 @@ function collectSdgIds(opportunity: {
     const raw = rec
       ? (rec.sdg_id ?? rec.id ?? rec.goal_number ?? rec.number)
       : value;
-    const key = String(raw ?? '').trim();
+    const key = String(
+      (raw as string | number | null | undefined) ?? '',
+    ).trim();
     if (key && !ids.includes(key)) ids.push(key);
   };
   push(opportunity.sdg_info);
@@ -228,7 +230,9 @@ function collectSdgIds(opportunity: {
 }
 
 function isRemoteMode(mode: unknown): boolean {
-  return /remote|virtual|online/.test(String(mode || '').toLowerCase());
+  return /remote|virtual|online/.test(
+    String((mode as string | null | undefined) || '').toLowerCase(),
+  );
 }
 
 function isUrgentEndDate(endDate: string | null, now = new Date()): boolean {

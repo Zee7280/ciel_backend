@@ -157,7 +157,7 @@ export class CreateUserDto {
   @Type(() => InvestorSignupProfileDto)
   investorProfile?: InvestorSignupProfileDto;
 
-  @Transform(({ value }) => normalizeUserRoleInput(value))
+  @Transform(({ value }) => normalizeUserRoleInput<unknown>(value))
   @IsEnum(UserRole)
   role: UserRole;
 

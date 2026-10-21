@@ -41,9 +41,13 @@ export function isReportPartnerStepSatisfied(
  * Kept as a function so existing callers and the settings registry stay compiling.
  */
 export function evaluateReportRequiresPartnerApproval(
-  _report: ReportPartnerApprovalInput,
-  _partnerApprovalGloballyEnabled: boolean,
-  _hasMeaningfulObjectValue: (value: unknown) => boolean,
+  report: ReportPartnerApprovalInput,
+  partnerApprovalGloballyEnabled: boolean,
+  hasMeaningfulObjectValue: (value: unknown) => boolean,
 ): boolean {
+  // Parameters are kept so existing callers and the settings registry stay compiling.
+  void report;
+  void partnerApprovalGloballyEnabled;
+  void hasMeaningfulObjectValue;
   return false;
 }

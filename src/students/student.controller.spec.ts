@@ -1,4 +1,17 @@
 import { StudentController } from './student.controller';
+import { StudentsService } from './students.service';
+import { StudentParticipationService } from './student-participation.service';
+import { StudentReportsService } from '../reports/student-reports.service';
+import { S3Service } from '../common/s3.service';
+import { CreateOpportunityDto } from '../opportunities/dto/create-opportunity.dto';
+
+type StudentRequest = Parameters<
+  StudentController['createIndependentProject']
+>[0];
+
+const asRequest = (user: { id: string }) => ({ user }) as StudentRequest;
+const asCreateDto = (dto: Record<string, unknown>) =>
+  dto as unknown as CreateOpportunityDto;
 
 function makeController() {
   const studentsService = {
@@ -6,17 +19,17 @@ function makeController() {
       .fn()
       .mockResolvedValue({ success: true, data: { id: 'draft-1' } }),
     createStudentOpportunity: jest
-      .fn()
+      .fn<Promise<unknown>, [string, Partial<CreateOpportunityDto>]>()
       .mockResolvedValue({ success: true, data: { id: 'created-1' } }),
     updateStudentOpportunity: jest
       .fn()
       .mockResolvedValue({ success: true, data: { id: 'updated-1' } }),
   };
   const controller = new StudentController(
-    studentsService as any,
-    {} as any,
-    {} as any,
-    {} as any,
+    studentsService as unknown as StudentsService,
+    {} as StudentReportsService,
+    {} as StudentParticipationService,
+    {} as S3Service,
   );
   return { controller, studentsService };
 }
@@ -32,11 +45,11 @@ describe('StudentController — student-created opportunity create/update', () =
     const { controller, studentsService } = makeController();
 
     await controller.createIndependentProject(
-      { user: { id: 'student-1' } } as any,
-      {
+      asRequest({ id: 'student-1' }),
+      asCreateDto({
         draft: true,
         title: 'Untitled',
-      } as any,
+      }),
     );
 
     expect(studentsService.saveStudentOpportunityDraft).toHaveBeenCalledWith(
@@ -51,10 +64,10 @@ describe('StudentController — student-created opportunity create/update', () =
     const { controller, studentsService } = makeController();
 
     await controller.createIndependentProject(
-      { user: { id: 'student-1' } } as any,
-      {
+      asRequest({ id: 'student-1' }),
+      asCreateDto({
         title: 'Complete submission',
-      } as any,
+      }),
     );
 
     expect(studentsService.createStudentOpportunity).toHaveBeenCalledWith(
@@ -68,12 +81,12 @@ describe('StudentController — student-created opportunity create/update', () =
     const { controller, studentsService } = makeController();
 
     await controller.updateIndependentProject(
-      { user: { id: 'student-1' } } as any,
+      asRequest({ id: 'student-1' }),
       'opp-1',
-      {
+      asCreateDto({
         draft: true,
         title: 'Still editing',
-      } as any,
+      }),
     );
 
     expect(studentsService.saveStudentOpportunityDraft).toHaveBeenCalledWith(
@@ -88,11 +101,11 @@ describe('StudentController — student-created opportunity create/update', () =
     const { controller, studentsService } = makeController();
 
     await controller.updateIndependentProject(
-      { user: { id: 'student-1' } } as any,
+      asRequest({ id: 'student-1' }),
       'opp-1',
-      {
+      asCreateDto({
         title: 'Final submission',
-      } as any,
+      }),
     );
 
     expect(studentsService.updateStudentOpportunity).toHaveBeenCalledWith(
@@ -107,18 +120,14 @@ describe('StudentController — student-created opportunity create/update', () =
     const { controller, studentsService } = makeController();
 
     await controller.createIndependentProject(
-      { user: { id: 'student-1' } } as any,
-      {
+      asRequest({ id: 'student-1' }),
+      asCreateDto({
         draft: false,
         title: 'Complete submission',
-      } as any,
+      }),
     );
 
-    const passed = studentsService.createStudentOpportunity.mock
-      .calls[0][1] as {
-      draft?: boolean;
-      title?: string;
-    };
+    const passed = studentsService.createStudentOpportunity.mock.calls[0][1];
     expect(passed.title).toBe('Complete submission');
     expect(passed.draft).toBeUndefined();
   });

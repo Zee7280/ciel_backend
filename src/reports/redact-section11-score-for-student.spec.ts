@@ -1,8 +1,19 @@
 import { StudentReportsService } from './student-reports.service';
 
-const redact = (
-  StudentReportsService as any
-).redactSection11ScoreForStudent.bind(StudentReportsService);
+/** Test-local views of the private members under test (same shapes as the real signatures). */
+type RedactSection11Statics = {
+  redactSection11ScoreForStudent: <T>(response: T) => T;
+};
+type StripWritableProto = {
+  stripStudentWritableSection11: (
+    section11: unknown,
+  ) => Record<string, unknown> | undefined;
+};
+
+const redactStatics =
+  StudentReportsService as unknown as RedactSection11Statics;
+const redact = <T>(response: T): T =>
+  redactStatics.redactSection11ScoreForStudent(response);
 
 const PENDING_RESPONSE = {
   success: true,
@@ -58,8 +69,9 @@ describe('StudentReportsService.redactSection11ScoreForStudent', () => {
   });
 });
 
-const stripWritable = (StudentReportsService.prototype as any)
-  .stripStudentWritableSection11;
+const stripWritable = (
+  StudentReportsService.prototype as unknown as StripWritableProto
+).stripStudentWritableSection11;
 
 describe('StudentReportsService.stripStudentWritableSection11', () => {
   it('drops the AI-only score/narrative fields from a client-submitted section11 payload', () => {
@@ -69,7 +81,7 @@ describe('StudentReportsService.stripStudentWritableSection11', () => {
       verified_narrative: 'forged',
       summary_text: 'my self-audit',
       audit_meta: { risk_level: 'low' },
-    });
+    }) as Record<string, unknown>;
 
     expect(result).not.toHaveProperty('ai_generated_impact_score');
     expect(result).not.toHaveProperty('institutional_alignment_score');

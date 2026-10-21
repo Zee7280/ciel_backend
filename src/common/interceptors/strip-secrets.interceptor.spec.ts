@@ -20,7 +20,7 @@ describe('stripSecrets', () => {
         ],
       },
     };
-    const out = stripSecrets(body) as any;
+    const out = stripSecrets(body);
     const u = out.data.participants[0].user;
     expect(u).toEqual({ id: 'u1', name: 'A' });
     expect(JSON.stringify(out)).not.toMatch(/\$2b\$hash|passwordReset/);
@@ -28,13 +28,16 @@ describe('stripSecrets', () => {
 
   it('keeps everything else intact (dates, null, numbers, nested)', () => {
     const d = new Date('2026-01-01T00:00:00Z');
-    const out = stripSecrets({ a: 1, b: null, c: d, d: [{ e: 'x' }] }) as any;
+    const out = stripSecrets({ a: 1, b: null, c: d, d: [{ e: 'x' }] });
     expect(out).toEqual({ a: 1, b: null, c: d, d: [{ e: 'x' }] });
     expect(out.c).toBe(d);
   });
 
   it('survives circular structures', () => {
-    const a: any = { name: 'a', password: 'p' };
+    const a: { name: string; password?: string; self?: unknown } = {
+      name: 'a',
+      password: 'p',
+    };
     a.self = a;
     const out = stripSecrets(a);
     expect(out.password).toBeUndefined();
@@ -57,7 +60,7 @@ describe('stripSecrets — approval tokens', () => {
       execution_verification_token: 'cccccccc-3333',
       liaisonToken: 'dddddddd-4444',
       title: 'T',
-    }) as any;
+    });
     expect(JSON.stringify(out)).not.toMatch(
       /aaaaaaaa|bbbbbbbb|cccccccc|dddddddd/,
     );
@@ -71,7 +74,7 @@ describe('stripSecrets — approval tokens', () => {
       partnerToken: null,
       liaisonToken: '',
       execution_verification_token: undefined,
-    }) as any;
+    });
     expect(out.partnerToken).toBeNull();
     expect(out.liaisonToken).toBe('');
     expect(out.execution_verification_token).toBeUndefined();

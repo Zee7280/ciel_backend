@@ -6,6 +6,7 @@ import { AppModule } from './app.module';
 import { join } from 'path';
 import * as fs from 'fs';
 import { json, urlencoded } from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import compression from 'compression';
 import { StripSecretsInterceptor } from './common/interceptors/strip-secrets.interceptor';
 
@@ -20,7 +21,7 @@ async function bootstrap() {
   app.use(urlencoded({ extended: true, limit: bodyLimit }));
 
   // Basic security headers (no extra dependency). The API serves JSON, so these are safe everywhere.
-  app.use((_req: any, res: any, next: () => void) => {
+  app.use((_req: Request, res: Response, next: NextFunction) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
@@ -112,4 +113,4 @@ async function bootstrap() {
   await app.listen(port);
   console.log(`Application is running on: ${await app.getUrl()}`);
 }
-bootstrap();
+void bootstrap();

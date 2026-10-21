@@ -63,7 +63,9 @@ import {
 /** Never echo credential material (password hash / deprecated password record) back to the browser. */
 function stripUserSecrets<T>(user: T): T {
   if (!user || typeof user !== 'object') return user;
-  const safe: Record<string, unknown> = { ...(user as Record<string, unknown>) };
+  const safe: Record<string, unknown> = {
+    ...(user as Record<string, unknown>),
+  };
   delete safe.password;
   delete safe.passwordRecord;
   delete safe.passwordResetToken;
@@ -139,7 +141,10 @@ export class AdminController {
   }
 
   @Post('applications/:id/approve')
-  approveOpportunityApplication(@Request() req: AdminRequest, @Param('id') id: string) {
+  approveOpportunityApplication(
+    @Request() req: AdminRequest,
+    @Param('id') id: string,
+  ) {
     return this.opportunityApplicationsService.adminApprove(id, req.user.id);
   }
 
@@ -335,7 +340,10 @@ export class AdminController {
   }
 
   @Post('issue-logs/resolve')
-  resolveIssueLogs(@Request() req: AdminRequest, @Body() body: { ids?: string[] }) {
+  resolveIssueLogs(
+    @Request() req: AdminRequest,
+    @Body() body: { ids?: string[] },
+  ) {
     return this.issueLogsService
       .resolve(Array.isArray(body?.ids) ? body.ids : [], req.user?.id ?? null)
       .then((r) => ({ success: true, ...r }));
@@ -383,7 +391,10 @@ export class AdminController {
   }
 
   @Post('community-service/ranking/analyze')
-  async npeRankingAnalyze(@Request() req: AdminRequest, @Body() dto: NpeAnalyzeDto) {
+  async npeRankingAnalyze(
+    @Request() req: AdminRequest,
+    @Body() dto: NpeAnalyzeDto,
+  ) {
     const data = await this.npeRanking.analyze(
       { userId: req.user.id, role: 'ciel_admin' },
       dto,
@@ -392,7 +403,10 @@ export class AdminController {
   }
 
   @Post('community-service/ranking/reviews')
-  async npeRankingClearReview(@Request() req: AdminRequest, @Body() dto: NpeClearReviewDto) {
+  async npeRankingClearReview(
+    @Request() req: AdminRequest,
+    @Body() dto: NpeClearReviewDto,
+  ) {
     const data = await this.npeRanking.clearReview(
       { userId: req.user.id, role: 'ciel_admin' },
       dto.runId,
@@ -403,7 +417,10 @@ export class AdminController {
 
   /** Ranking Studio: standings for any angle (lens × comparison × filters). Writes nothing. */
   @Post('community-service/ranking/studio/preview')
-  async npeStudioPreview(@Request() req: AdminRequest, @Body() dto: NpeStudioDto) {
+  async npeStudioPreview(
+    @Request() req: AdminRequest,
+    @Body() dto: NpeStudioDto,
+  ) {
     const data = await this.npeStudio.preview(
       { userId: req.user.id, role: 'ciel_admin' },
       dto,
@@ -413,7 +430,10 @@ export class AdminController {
 
   /** Publishes the studio ranking exactly as the server recomputes it (never the client's rows). */
   @Post('community-service/ranking/studio/publish')
-  async npeStudioPublish(@Request() req: AdminRequest, @Body() dto: NpeStudioDto) {
+  async npeStudioPublish(
+    @Request() req: AdminRequest,
+    @Body() dto: NpeStudioDto,
+  ) {
     const data = await this.npeStudio.publish(
       { userId: req.user.id, role: 'ciel_admin' },
       dto,
@@ -456,7 +476,10 @@ export class AdminController {
   }
 
   @Post('community-service/ranking/publish')
-  async npeRankingPublish(@Request() req: AdminRequest, @Body() dto: NpePublishDto) {
+  async npeRankingPublish(
+    @Request() req: AdminRequest,
+    @Body() dto: NpePublishDto,
+  ) {
     const data = await this.npeRanking.publish(
       { userId: req.user.id, role: 'ciel_admin' },
       dto.runId,

@@ -23,6 +23,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 
+/** Request user as populated by JwtStrategy.validate. */
+type FacultyRequest = { user: { id: string; email: string } };
+
 @Controller('faculty/community-service')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.FACULTY)
@@ -41,7 +44,7 @@ export class FacultyCommunityServiceController {
    * and report progress. Does not expose student phone numbers.
    */
   @Get('tracking')
-  async tracking(@Request() req) {
+  async tracking(@Request() req: FacultyRequest) {
     return this.facultyReportsService.listProjectTracking(
       req.user.id,
       req.user.email,
@@ -50,7 +53,7 @@ export class FacultyCommunityServiceController {
 
   /** Read-only pool for linked projects. Faculty cannot run or publish Ruberix ranking. */
   @Get('award-cards')
-  async awardCards(@Request() req) {
+  async awardCards(@Request() req: FacultyRequest) {
     const reports = await this.facultyReportsService.listAssignedReports(
       req.user.id,
       req.user.email,
@@ -64,16 +67,20 @@ export class FacultyCommunityServiceController {
   }
 
   @Post('award-notify')
-  async awardNotify(@Request() _req, @Body() _dto: NotifyCommunityAwardDto) {
-    throw new ForbiddenException(
-      'Only University and CIEL PK Super Admin can run or publish Community Service Ruberix rankings.',
+  awardNotify(@Body() dto: NotifyCommunityAwardDto): Promise<never> {
+    // The DTO stays on the signature so ValidationPipe still validates the body before the 403.
+    void dto;
+    return Promise.reject(
+      new ForbiddenException(
+        'Only University and CIEL PK Super Admin can run or publish Community Service Ruberix rankings.',
+      ),
     );
   }
 
   /** Exceptional: reopen reporting window for an opportunity this faculty owns or supervises. */
   @Post('opportunities/:id/reopen-reporting-window')
   async reopenReportingWindow(
-    @Request() req,
+    @Request() req: FacultyRequest,
     @Param('id') id: string,
     @Body() body: { until?: string; reporting_window_reopened_until?: string },
   ) {

@@ -54,19 +54,15 @@ describe('demoteExtraTeamLeadsInScope', () => {
       isTeamLead: true,
       teamId: 'team-1',
     } as Participation;
-    const hamza = {
-      id: 'hamza',
-      isTeamLead: true,
-      teamId: 'team-1',
-    } as Participation;
     const qb = {
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
       getMany: jest.fn().mockResolvedValue([moeez]),
     };
+    const save = jest.fn().mockResolvedValue(undefined);
     const repo = {
       createQueryBuilder: jest.fn().mockReturnValue(qb),
-      save: jest.fn().mockResolvedValue(undefined),
+      save,
     } as unknown as Repository<Participation>;
 
     const n = await demoteExtraTeamLeadsInScope(
@@ -78,7 +74,7 @@ describe('demoteExtraTeamLeadsInScope', () => {
 
     expect(n).toBe(1);
     expect(moeez.isTeamLead).toBe(false);
-    expect(repo.save).toHaveBeenCalledWith([moeez]);
+    expect(save).toHaveBeenCalledWith([moeez]);
   });
 });
 
@@ -98,7 +94,7 @@ describe('enrollmentLooksLikeTeam', () => {
     expect(
       enrollmentLooksLikeTeam({
         participationMode: 'individual',
-        teamId: null as any,
+        teamId: null,
       } as unknown as Participation),
     ).toBe(false);
   });
@@ -111,7 +107,8 @@ describe('pickPreferredProjectEnrollment', () => {
       studentId: 'member-2',
       participationMode: 'individual',
       isTeamLead: false,
-      teamId: null as any,
+      // The column is nullable at the DB level even though the entity types it `string`.
+      teamId: null as unknown as string,
       createdAt: new Date('2019-01-01'),
     });
     const teamSeat = member({

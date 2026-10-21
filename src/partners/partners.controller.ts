@@ -37,6 +37,8 @@ import { StudentReportsService } from '../reports/student-reports.service';
 import { CommunityAwardService } from '../reports/community-award.service';
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
 import { NotifyCommunityAwardDto } from '../reports/dto/notify-community-award.dto';
+import { RunIndependentAnalysisDto } from '../faculty/dto/run-independent-analysis.dto';
+import { RunIndependentAnalysisBatchDto } from '../faculty/dto/run-independent-analysis-batch.dto';
 import { S3Service } from '../common/s3.service';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
 import { FacultyReportsService } from '../reports/faculty-reports.service';
@@ -52,7 +54,11 @@ import {
 /** The AI analyzer feeds scores and rankings, so only CIEL PK Admin may run it. */
 const ANALYZER_ADMIN_ONLY = 'The AI analyzer can only be run by CIEL PK Admin.';
 
-/** Shape of `req.user` as returned by JwtStrategy.validate. */
+/**
+ * Shape of `req.user` as returned by JwtStrategy.validate. `organizationId` is optional on the
+ * token; the handlers that have always forwarded it to a service unchecked keep doing so
+ * (`as string`) so the service sees exactly what it saw before.
+ */
 interface PartnerRequestUser {
   id: string;
   email?: string;
@@ -369,8 +375,12 @@ export class PartnersController {
   }
 
   /** Blocked: independent AI analysis is an admin-only action (see admin/community-service). */
+  // The DTO params below stay on the signatures so ValidationPipe still validates the body before the 403.
   @Post('community-service/reports/:id/independent-analysis')
-  communityServiceIndependentAnalysis(): Promise<never> {
+  communityServiceIndependentAnalysis(
+    @Body() body: RunIndependentAnalysisDto,
+  ): Promise<never> {
+    void body;
     return Promise.reject(new ForbiddenException(ANALYZER_ADMIN_ONLY));
   }
 
@@ -378,7 +388,10 @@ export class PartnersController {
    * pool at once, so the resulting score/trend update lands on each affected student's My Impact
    * Wall in a single action instead of one report at a time. */
   @Post('community-service/reports/independent-analysis/batch')
-  communityServiceIndependentAnalysisBatch(): Promise<never> {
+  communityServiceIndependentAnalysisBatch(
+    @Body() body: RunIndependentAnalysisBatchDto,
+  ): Promise<never> {
+    void body;
     return Promise.reject(new ForbiddenException(ANALYZER_ADMIN_ONLY));
   }
 
@@ -546,14 +559,17 @@ export class PartnersController {
     @Query() query: Record<string, unknown>,
   ) {
     return this.reportsService.findAllForPartner(
-      req.user.organizationId,
+      req.user.organizationId as string,
       query,
     );
   }
 
   @Post('reports')
   createReport(@Request() req: PartnerRequest, @Body() dto: CreateReportDto) {
-    return this.reportsService.createReport(req.user.organizationId, dto);
+    return this.reportsService.createReport(
+      req.user.organizationId as string,
+      dto,
+    );
   }
 
   @Put('reports/:id')
@@ -562,12 +578,19 @@ export class PartnersController {
     @Param('id') id: string,
     @Body() dto: UpdateReportDto,
   ) {
-    return this.reportsService.updateReport(id, req.user.organizationId, dto);
+    return this.reportsService.updateReport(
+      id,
+      req.user.organizationId as string,
+      dto,
+    );
   }
 
   @Delete('reports/:id')
   deleteReport(@Request() req: PartnerRequest, @Param('id') id: string) {
-    return this.reportsService.deleteReport(id, req.user.organizationId);
+    return this.reportsService.deleteReport(
+      id,
+      req.user.organizationId as string,
+    );
   }
 
   // Get Applicants for an Opportunity
@@ -682,7 +705,7 @@ export class PartnersController {
   ) {
     return this.studentReportsService.findOneForPartner(
       id,
-      req.user.organizationId,
+      req.user.organizationId as string,
       {
         viewerRole: req.user.role,
         partnerLinkedOpportunityIds:
@@ -949,7 +972,7 @@ export class PartnerAliasController {
     }
     return this.studentReportsService.findOneForPartner(
       id,
-      req.user.organizationId,
+      req.user.organizationId as string,
       {
         universityScopeOpportunityIds,
         partnerLinkedOpportunityIds,

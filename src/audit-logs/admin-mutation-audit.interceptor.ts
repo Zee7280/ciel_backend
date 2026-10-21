@@ -37,7 +37,7 @@ export class AdminMutationAuditInterceptor implements NestInterceptor {
     const getStatus = (err as { getStatus?: () => number } | null)?.getStatus;
     if (typeof getStatus === 'function') {
       try {
-        return getStatus.call(err);
+        return getStatus.call(err) as number;
       } catch {
         /* fall through */
       }

@@ -17,7 +17,6 @@ import { collectReportEvidenceFiles } from '../reports/collect-report-evidence.u
 import { CommunityAwardService } from '../reports/community-award.service';
 import { isCiiFacultyLocked } from '../reports/community-award.util';
 import { StudentReport } from '../reports/entities/student-report.entity';
-import { IMPACT_PACKAGE_CONTENT_SOURCES } from '../reports/impact-package-packet.util';
 import {
   NPE_PAYLOAD_VERSION,
   NPE_RUBRIC_VERSION,
@@ -92,12 +91,6 @@ export function describeAiFailure(err: unknown): string {
   return err instanceof Error && err.message
     ? err.message
     : 'Ranking AI call failed.';
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 @Injectable()

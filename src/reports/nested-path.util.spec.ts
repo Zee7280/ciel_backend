@@ -3,7 +3,7 @@ import { setNestedProperty } from './nested-path.util';
 
 describe('setNestedProperty', () => {
   it('builds nested objects and arrays from dotted / indexed paths', () => {
-    const o: any = {};
+    const o: Record<string, unknown> = {};
     setNestedProperty(o, 'section1.team_lead.name', 'Ali');
     setNestedProperty(o, 'section1.team_members[1].email', 'b@x.com');
     setNestedProperty(o, 'tags[0]', 'a');
@@ -26,13 +26,13 @@ describe('setNestedProperty', () => {
   ])(
     'rejects the prototype-pollution path %s and leaves Object.prototype clean',
     (path) => {
-      const o: any = {};
+      const o: Record<string, unknown> = {};
       expect(() => setNestedProperty(o, path, '1')).toThrow(
         BadRequestException,
       );
-      expect(({} as any).isAdmin).toBeUndefined();
-      expect(({} as any).polluted).toBeUndefined();
-      expect(({} as any).x).toBeUndefined();
+      expect(({} as Record<string, unknown>).isAdmin).toBeUndefined();
+      expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+      expect(({} as Record<string, unknown>).x).toBeUndefined();
     },
   );
 
@@ -50,9 +50,11 @@ describe('setNestedProperty', () => {
   });
 
   it('does not reuse inherited properties as containers', () => {
-    const o: any = {};
+    const o: Record<string, unknown> = {};
     setNestedProperty(o, 'toString.x', 1); // "toString" is inherited, must become an own plain object
     expect(Object.prototype.hasOwnProperty.call(o, 'toString')).toBe(true);
-    expect((Object.prototype.toString as any).x).toBeUndefined();
+    expect(
+      (Object.prototype.toString as unknown as Record<string, unknown>).x,
+    ).toBeUndefined();
   });
 });

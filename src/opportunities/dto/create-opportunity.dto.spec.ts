@@ -239,14 +239,14 @@ describe('CreateOpportunityDto — field bounds', () => {
     ).rejects.toBeTruthy();
   });
   it('accepts unicode/emoji titles and in-range numbers', async () => {
-    const r: any = await pipe.transform(
+    const r = (await pipe.transform(
       {
         ...base,
         title: 'صفائی مہم 🌳',
         timeline: { volunteers_required: 5, expected_hours: 10 },
       },
       metadata,
-    );
+    )) as { title: string };
     expect(r.title).toBe('صفائی مہم 🌳');
   });
 });

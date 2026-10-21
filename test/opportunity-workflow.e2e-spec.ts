@@ -1,7 +1,10 @@
+import * as jwt from 'jsonwebtoken';
+import { QueryDeepPartialEntity } from 'typeorm';
 import {
   bootHarness,
   Harness,
   E2eUser,
+  Api,
   oppPayload,
   studentPayload,
   uniq,
@@ -17,7 +20,52 @@ import {
 } from './e2e/helpers';
 import { MailService } from '../src/mail/mail.service';
 import { UserRole } from '../src/users/enums/user-role.enum';
+import { User } from '../src/users/entities/user.entity';
+import { Organization } from '../src/organizations/entities/organization.entity';
+import { Opportunity } from '../src/opportunities/entities/opportunity.entity';
 import { Participation } from '../src/engagement/entities/participant.entity';
+
+// ------------------------------------------------------------------ response shapes
+/** A row as the creator / faculty / admin / student list endpoints return it. */
+interface ListRow {
+  id: string;
+  status?: string;
+  workflow_stage?: string | null;
+  rejectionReason?: string | null;
+  rejection_reason?: string | null;
+  admin_can_approve?: boolean;
+  flow_status?: string;
+  currently_with?: string;
+  currently_with_role?: string;
+  next_step?: string;
+  approval_checklist: Record<string, boolean>;
+  public_code?: string;
+}
+/** `data` of POST /opportunities/detail */
+interface DetailData {
+  status: string;
+  rejection_reason?: string | null;
+  workflow_stage?: string | null;
+  admin_approval_status?: string | null;
+  detail_view: { overview: { title: string } };
+}
+type ReqBody = Record<string, unknown> | undefined;
+/** HTTP verb names on the harness API, as used by the table-driven authz tests */
+type Verb = keyof Api;
+
+/** `{ id }` returned by POST /opportunities */
+const idOf = (res: { body: unknown }): string =>
+  (res.body as { id: string }).id;
+/** `{ data: { id } }` returned by POST /student/opportunity */
+const dataId = (res: { body: unknown }): string =>
+  (res.body as { data: { id: string } }).data.id;
+/** `{ data: [...] }` list envelope */
+const dataRows = (res: { body: unknown }): ListRow[] =>
+  (res.body as { data: ListRow[] }).data;
+const dataIds = (res: { body: unknown }): string[] =>
+  dataRows(res).map((x) => x.id);
+const findRow = (res: { body: unknown }, id: string): ListRow =>
+  dataRows(res).find((x) => x.id === id)!;
 
 /**
  * End-to-end proof (real Nest app, real Postgres scratch DB, HTTP via supertest) that Create
@@ -49,20 +97,18 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
   const createOpp = async (user: E2eUser, body: Record<string, any>) => {
     const res = await h.as(user).post('/opportunities').send(body);
     expect(res.status).toBe(201);
-    return { res, opp: await h.reload(res.body.id) };
+    const id = idOf(res);
+    return { res, id, opp: await h.reload(id) };
   };
 
-  const historyOf = (o: any, line?: string) =>
-    ((o.approvalHistory ?? []) as any[]).filter(
-      (e) => !line || e.line === line,
-    );
+  const historyOf = (o: Opportunity, line?: string) =>
+    (o.approvalHistory ?? []).filter((e) => !line || e.line === line);
 
   // ------------------------------------------------------------------ S1
   describe('S1 NGO/Partner creates', () => {
     it('pending_approval -> admin approves -> live; student sees only after approval', async () => {
       const { org, user: ngo } = await ngoWithOrg();
-      const { res, opp: o0 } = await createOpp(ngo, oppPayload());
-      const id = res.body.id;
+      const { res, id, opp: o0 } = await createOpp(ngo, oppPayload());
       expect(o0.status).toBe('pending_approval');
       expect(o0.workflowStage).toBe('pending_admin');
       expect(o0.organizationId).toBe(org.id);
@@ -107,13 +153,16 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
     it('pending_faculty -> token verify -> pending_admin; replay no dup history; admin approves', async () => {
       const { user: ngo } = await ngoWithOrg();
       const fac = await h.makeUser(UserRole.FACULTY);
-      const { res, opp: o0 } = await createOpp(
+      const {
+        res,
+        id,
+        opp: o0,
+      } = await createOpp(
         ngo,
         oppPayload({
           supervision: { contact: fac.email, supervisor_name: 'Dr Fac' },
         }),
       );
-      const id = res.body.id;
       expect(o0.status).toBe('pending_faculty');
       expect(o0.workflowStage).toBe('pending_faculty');
       expect(o0.facultyApprovalStatus).toBe('pending');
@@ -128,11 +177,11 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
       expect(await adminQueueIds(h, admin)).not.toContain(id);
       const mine = await h.as(fac).get('/opportunities/faculty/mine');
       expect(mine.status).toBe(200);
-      expect((mine.body.data as any[]).map((x) => x.id)).toContain(id);
+      expect(dataIds(mine)).toContain(id);
       // admin cannot finalize while the faculty gate is open
       expect((await adminApprove(h, admin, id)).status).toBe(400);
 
-      const v1 = await verifyToken(h, o0.faculty_verification_token!);
+      const v1 = await verifyToken(h, o0.faculty_verification_token);
       expect(v1.status).toBe(201);
       const o1 = await h.reload(id);
       expect(o1.status).toBe('pending_approval');
@@ -141,7 +190,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
       expect(o1.faculty_verified).toBe(true);
       expect(historyOf(o1, 'faculty')).toHaveLength(1);
 
-      const v2 = await verifyToken(h, o0.faculty_verification_token!);
+      const v2 = await verifyToken(h, o0.faculty_verification_token);
       expect(v2.status).toBe(201);
       const o2 = await h.reload(id);
       expect(historyOf(o2, 'faculty')).toHaveLength(1);
@@ -202,7 +251,11 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
       const stranger = await h.makeUser(UserRole.NGO, {
         org: await h.makeOrg(),
       });
-      const { res, opp: o0 } = await createOpp(
+      const {
+        res,
+        id,
+        opp: o0,
+      } = await createOpp(
         ngo,
         oppPayload({
           executing_organization: {
@@ -212,7 +265,6 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
           partner_organization: { organization_name: 'Collab Org' },
         }),
       );
-      const id = res.body.id;
       expect(o0.status).toBe('pending_execution');
       expect(o0.execution_verified).toBe(false);
       expectNoSecrets(res, '(create response)');
@@ -253,7 +305,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
         org: await h.makeOrg(),
       });
       const partnerEmail = `partner.${uniq()}@e2e.test`;
-      const { res, opp: o0 } = await createOpp(
+      const { id, opp: o0 } = await createOpp(
         ngo,
         oppPayload({
           executing_organization: {
@@ -266,13 +318,12 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
           },
         }),
       );
-      const id = res.body.id;
       expect(o0.status).toBe('pending_execution');
       expect(o0.partnerToken).toBeTruthy();
       expect(o0.requiresPartnerApproval).toBe(true);
 
       // partner token used early must not skip the exec gate
-      await verifyToken(h, o0.partnerToken!);
+      await verifyToken(h, o0.partnerToken);
       const early = await h.reload(id);
       expect(early.status).toBe('pending_execution');
       expect((await adminApprove(h, admin, id)).status).toBe(400);
@@ -295,8 +346,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
   describe('S4 Faculty creates', () => {
     it('without partner: pending_approval -> admin -> live -> student visible', async () => {
       const fac = await h.makeUser(UserRole.FACULTY);
-      const { res, opp: o0 } = await createOpp(fac, oppPayload());
-      const id = res.body.id;
+      const { id, opp: o0 } = await createOpp(fac, oppPayload());
       expect(o0.status).toBe('pending_approval');
       expect(o0.workflowStage).toBe('pending_admin');
       expect(o0.facultyId).toBe(fac.id);
@@ -304,11 +354,11 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
       expect(o0.organizationId).toBeNull();
       expect(await studentBrowseIds(h, student)).not.toContain(id);
       const mine = await h.as(fac).get('/opportunities/faculty/mine');
-      expect((mine.body.data as any[]).map((x) => x.id)).toContain(id);
+      expect(dataIds(mine)).toContain(id);
       const authored = await h
         .as(fac)
         .get('/opportunities/faculty/mine?scope=authored');
-      expect((authored.body.data as any[]).map((x) => x.id)).toContain(id);
+      expect(dataIds(authored)).toContain(id);
       expect(await adminQueueIds(h, admin)).toContain(id);
       expect((await adminApprove(h, admin, id)).status).toBe(201);
       expect(await studentBrowseIds(h, student)).toContain(id);
@@ -318,7 +368,11 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
     it('with partner email: pending_partner -> partner token -> pending_approval -> admin -> live', async () => {
       const fac = await h.makeUser(UserRole.FACULTY);
       const partnerEmail = `host.${uniq()}@e2e.test`;
-      const { res, opp: o0 } = await createOpp(
+      const {
+        res,
+        id,
+        opp: o0,
+      } = await createOpp(
         fac,
         oppPayload({
           external_partner_collaboration: {
@@ -328,7 +382,6 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
           },
         }),
       );
-      const id = res.body.id;
       expect(o0.status).toBe('pending_partner');
       expect(o0.workflowStage).toBe('pending_partner');
       expect(o0.partnerToken).toBeTruthy();
@@ -342,11 +395,11 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
       const q = await h
         .as(admin)
         .get('/admin/opportunities/approval-queue?queue=pending');
-      const row = (q.body.data as any[]).find((x) => x.id === id);
+      const row = dataRows(q).find((x) => x.id === id);
       expect(row?.admin_can_approve).toBe(false);
       expect(row?.flow_status).toBe('Awaiting partner');
       expect((await adminApprove(h, admin, id)).status).toBe(400);
-      const v = await verifyToken(h, o0.partnerToken!);
+      const v = await verifyToken(h, o0.partnerToken);
       expect(v.status).toBe(201);
       const o1 = await h.reload(id);
       expect(o1.status).toBe('pending_approval');
@@ -354,7 +407,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
       expect(o1.partnerApprovalStatus).toBe('approved');
       expect(historyOf(o1, 'partner')).toHaveLength(1);
       // replay
-      expect((await verifyToken(h, o0.partnerToken!)).status).toBe(201);
+      expect((await verifyToken(h, o0.partnerToken)).status).toBe(201);
       expect(historyOf(await h.reload(id), 'partner')).toHaveLength(1);
       expect(await adminQueueIds(h, admin)).toContain(id);
       expect((await adminApprove(h, admin, id)).status).toBe(201);
@@ -416,8 +469,12 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
 
     it('incomplete profile blocks create (403 naming the missing field)', async () => {
       const { org, user } = await ngoWithOrg();
-      await h.users.update({ id: user.id }, { phone: null as any });
-      await h.orgs.update({ id: org.id }, { contactPhone: null as any });
+      await h.users.update({ id: user.id }, {
+        phone: null,
+      } as unknown as QueryDeepPartialEntity<User>);
+      await h.orgs.update({ id: org.id }, {
+        contactPhone: null,
+      } as unknown as QueryDeepPartialEntity<Organization>);
       const res = await h.as(user).post('/opportunities').send(oppPayload());
       expect(res.status).toBe(403);
       expect(JSON.stringify(res.body)).toMatch(/phone/);
@@ -427,17 +484,17 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
   // ------------------------------------------------------------------ S6
   describe('S6 Admin (CIEL super admin) creates', () => {
     it('no partner/faculty named -> live immediately, visible to students', async () => {
-      const { res, opp } = await createOpp(admin, oppPayload());
+      const { id, opp } = await createOpp(admin, oppPayload());
       expect(opp.workflowStage).toBe('live');
       expect(opp.status).toBe('active');
       expect(opp.admin_approved).toBe(true);
       expect(opp.creatorId).toBe(admin.id);
       expect(historyOf(opp, 'admin')).toHaveLength(1);
-      expect(await studentBrowseIds(h, student)).toContain(res.body.id);
+      expect(await studentBrowseIds(h, student)).toContain(id);
     });
 
     it('partner named -> pending_partner (not live) -> partner token -> live', async () => {
-      const { res, opp } = await createOpp(
+      const { id, opp } = await createOpp(
         admin,
         oppPayload({
           external_partner_collaboration: {
@@ -449,27 +506,27 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
       );
       expect(opp.workflowStage).toBe('pending_partner');
       expect(opp.admin_approved).toBe(false);
-      expect(await studentBrowseIds(h, student)).not.toContain(res.body.id);
-      expect((await verifyToken(h, opp.partnerToken!)).status).toBe(201);
-      const o = await h.reload(res.body.id);
+      expect(await studentBrowseIds(h, student)).not.toContain(id);
+      expect((await verifyToken(h, opp.partnerToken)).status).toBe(201);
+      const o = await h.reload(id);
       expect(o.workflowStage).toBe('live');
       expect(o.admin_approved).toBe(true);
-      expect(await studentBrowseIds(h, student)).toContain(res.body.id);
+      expect(await studentBrowseIds(h, student)).toContain(id);
     });
 
     it('faculty named -> pending_faculty (not live) -> faculty token -> live', async () => {
       const fac = await h.makeUser(UserRole.FACULTY);
-      const { res, opp } = await createOpp(
+      const { id, opp } = await createOpp(
         admin,
         oppPayload({ supervision: { contact: fac.email } }),
       );
       expect(opp.workflowStage).toBe('pending_faculty');
       expect(opp.admin_approved).toBe(false);
-      expect(await studentBrowseIds(h, student)).not.toContain(res.body.id);
+      expect(await studentBrowseIds(h, student)).not.toContain(id);
       expect(
-        (await verifyToken(h, opp.faculty_verification_token!)).status,
+        (await verifyToken(h, opp.faculty_verification_token)).status,
       ).toBe(201);
-      const o = await h.reload(res.body.id);
+      const o = await h.reload(id);
       expect(o.workflowStage).toBe('live');
       expect(o.admin_approved).toBe(true);
     });
@@ -498,8 +555,9 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
         });
       expect(draft.status).toBe(201);
       expectNoSecrets(draft, '(draft response)');
-      const draftId = draft.body.data.id;
-      expect(draft.body.data.status).toBe('draft');
+      const draftBody = draft.body as { data: { id: string; status: string } };
+      const draftId = draftBody.data.id;
+      expect(draftBody.data.status).toBe('draft');
       expect(await studentBrowseIds(h, student)).not.toContain(draftId);
       expect(await publicIds(h)).not.toContain(draftId);
       expect(await adminQueueIds(h, admin)).not.toContain(draftId);
@@ -516,7 +574,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
       const sub = await h.as(s).post('/student/opportunity').send(payload);
       expect(sub.status).toBe(201);
       expectNoSecrets(sub, '(submit response)');
-      const id = sub.body.data.id;
+      const id = dataId(sub);
       const o0 = await h.reload(id);
       expect(o0.status).toBe('pending_faculty');
       expect(o0.isStudentCreated).toBe(true);
@@ -537,22 +595,22 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
           .status,
       ).toBe(403);
       expect((await adminApprove(h, admin, id)).status).toBe(400);
-      expect((await verifyToken(h, o0.partnerToken!)).status).toBe(400); // partner before faculty
+      expect((await verifyToken(h, o0.partnerToken)).status).toBe(400); // partner before faculty
 
       const mineBefore = await h.as(s).get('/student/opportunity/mine');
       expect(mineBefore.status).toBe(200);
       expectNoSecrets(mineBefore);
-      expect((mineBefore.body.data as any[]).map((x) => x.id)).toEqual(
+      expect(dataIds(mineBefore)).toEqual(
         expect.arrayContaining([id, draftId]),
       );
 
-      expect(
-        (await verifyToken(h, o0.faculty_verification_token!)).status,
-      ).toBe(201);
+      expect((await verifyToken(h, o0.faculty_verification_token)).status).toBe(
+        201,
+      );
       const o1 = await h.reload(id);
       expect(o1.status).toBe('pending_partner');
       expect(h.mail.of('sendPartnerVerification')).toHaveLength(1);
-      expect((await verifyToken(h, o0.partnerToken!)).status).toBe(201);
+      expect((await verifyToken(h, o0.partnerToken)).status).toBe(201);
       const o2 = await h.reload(id);
       expect(o2.status).toBe('pending_approval');
       expect(await adminQueueIds(h, admin)).toContain(id);
@@ -596,7 +654,9 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
       );
       expect(rs.map((r) => r.status).sort()).toEqual([201, 409, 409]);
       expect(
-        await h.opps.count({ where: { creatorId: s.id, title: body.title } }),
+        await h.opps.count({
+          where: { creatorId: s.id, title: body.title as string },
+        }),
       ).toBe(1);
       // and the student can still create afterwards (no leaked advisory lock)
       const again = await h
@@ -623,7 +683,9 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
         (await h.as(s).post('/student/opportunity').send(body)).status,
       ).toBe(409);
       expect(
-        await h.opps.count({ where: { creatorId: s.id, title: body.title } }),
+        await h.opps.count({
+          where: { creatorId: s.id, title: body.title as string },
+        }),
       ).toBe(1);
     });
   });
@@ -669,9 +731,9 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
           .post('/student/opportunity')
           .send(studentPayload(fac.email));
         expect(r.status).toBe(201);
-        const o = await h.reload(r.body.data.id);
+        const o = await h.reload(dataId(r));
         expect(
-          (await verifyToken(h, o.faculty_verification_token!)).status,
+          (await verifyToken(h, o.faculty_verification_token)).status,
         ).toBe(201);
         expect((await h.reload(o.id)).workflowStage).toBe('pending_admin');
         return { creator: s, id: o.id };
@@ -682,7 +744,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
   const creatorSees = async (creator: E2eUser, id: string) => {
     const d = await detail(h, creator, id);
     expect(d.status).toBe(201);
-    return d.body.data;
+    return (d.body as { data: DetailData }).data;
   };
 
   // ------------------------------------------------------------------ S8
@@ -708,7 +770,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
             reason: 'Not suitable',
             version: 1,
           });
-          expect(Number.isNaN(Date.parse(entry.at))).toBe(false);
+          expect(Number.isNaN(Date.parse(entry!.at))).toBe(false);
 
           const d = await creatorSees(creator, id);
           expect(d.status).toBe('rejected');
@@ -837,21 +899,18 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
         .post('/verifications/faculty-decision')
         .send({ token: opp.faculty_verification_token, action: 'nuke' });
       expect(bad.status).toBe(400);
-      const r = await h
-        .as(null)
-        .post('/verifications/faculty-decision')
-        .send({
-          token: opp.faculty_verification_token,
-          action: 'revision',
-          reason: 'Need dates',
-        });
+      const r = await h.as(null).post('/verifications/faculty-decision').send({
+        token: opp.faculty_verification_token,
+        action: 'revision',
+        reason: 'Need dates',
+      });
       expect(r.status).toBe(201);
       const o = await h.reload(opp.id);
       expect(o.status).toBe('revision');
       expect(o.facultyApprovalStatus).toBe('revision_requested');
       // the same link can no longer approve a row in revision
       expect(
-        (await verifyToken(h, opp.faculty_verification_token!)).status,
+        (await verifyToken(h, opp.faculty_verification_token)).status,
       ).toBe(400);
       expect((await h.reload(opp.id)).status).toBe('revision');
     });
@@ -863,8 +922,8 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
         .as(s)
         .post('/student/opportunity')
         .send(studentPayload(fac.email));
-      const o = await h.reload(r.body.data.id);
-      await verifyToken(h, o.faculty_verification_token!);
+      const o = await h.reload(dataId(r));
+      await verifyToken(h, o.faculty_verification_token);
       expect((await adminApprove(h, admin, o.id)).status).toBe(201);
       const before = (await h.reload(o.id)).title;
       const up = await h
@@ -890,7 +949,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
         ngo,
         oppPayload({ supervision: { contact: fac.email } }),
       );
-      const oldToken = opp.faculty_verification_token!;
+      const oldToken = opp.faculty_verification_token;
       expect(
         (
           await h
@@ -918,7 +977,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
       // stale link is dead, new link works, then CIEL PK can finish
       expect((await verifyToken(h, oldToken)).status).toBe(404);
       expect((await adminApprove(h, admin, opp.id)).status).toBe(400);
-      expect((await verifyToken(h, o.faculty_verification_token!)).status).toBe(
+      expect((await verifyToken(h, o.faculty_verification_token)).status).toBe(
         201,
       );
       expect((await adminApprove(h, admin, opp.id)).status).toBe(201);
@@ -947,14 +1006,11 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
       );
       // partner org contact differs from creator => partner ack gate (no exec email => no exec gate)
       expect(opp.requiresPartnerApproval).toBe(true);
-      const r = await h
-        .as(null)
-        .post('/verifications/partner-decision')
-        .send({
-          token: opp.partnerToken,
-          action: 'revision',
-          reason: 'Scope unclear',
-        });
+      const r = await h.as(null).post('/verifications/partner-decision').send({
+        token: opp.partnerToken,
+        action: 'revision',
+        reason: 'Scope unclear',
+      });
       expect(r.status).toBe(201);
       expect((await h.reload(opp.id)).status).toBe('revision');
       const up = await h
@@ -980,9 +1036,9 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
         .post('/verifications/partner-decision')
         .send({ token: opp.partnerToken, action: 'revision', reason: 'again' });
       expect(stale.status).toBe(404);
-      expect((await verifyToken(h, opp.partnerToken!)).status).toBe(404);
+      expect((await verifyToken(h, opp.partnerToken)).status).toBe(404);
       expect((await h.reload(opp.id)).status).toBe('pending_partner');
-      expect((await verifyToken(h, o.partnerToken!)).status).toBe(201);
+      expect((await verifyToken(h, o.partnerToken)).status).toBe(201);
       expect((await h.reload(opp.id)).status).toBe('pending_approval');
     });
 
@@ -1002,11 +1058,12 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
         .as(null)
         .post('/verifications/partner-decision')
         .send({ token: opp.partnerToken, action: 'reject', reason: 'No' });
-      const mailSvc = h.app.get(MailService) as any;
-      const original = mailSvc.sendPartnerVerification;
-      mailSvc.sendPartnerVerification = async () => {
-        throw new Error('smtp down');
-      };
+      const mailSvc = h.app.get(MailService);
+      const original = mailSvc.sendPartnerVerification.bind(
+        mailSvc,
+      ) as MailService['sendPartnerVerification'];
+      mailSvc.sendPartnerVerification = () =>
+        Promise.reject(new Error('smtp down'));
       try {
         const up = await h
           .as(ngo)
@@ -1027,7 +1084,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
       it(`${kind.name}: empty / whitespace / missing / oversized reason -> 400, no state change `, async () => {
         const { id } = await kind.make();
         const before = await h.reload(id);
-        const bad: any[] = [
+        const bad: Record<string, unknown>[] = [
           {},
           { reason: '' },
           { reason: '   \n ' },
@@ -1041,7 +1098,9 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
               .post(`/admin/opportunities/${id}/${action}`)
               .send(body);
             expect(r.status).toBe(400);
-            expect(JSON.stringify(r.body.message)).toMatch(/reason/i);
+            expect(
+              JSON.stringify((r.body as { message: unknown }).message),
+            ).toMatch(/reason/i);
           }
         }
         const after = await h.reload(id);
@@ -1091,7 +1150,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
           ).status,
         ).toBe(201);
         const list = await h.as(creator).get(listPath);
-        const row = (list.body.data as any[]).find((x) => x.id === id);
+        const row = findRow(list, id);
         expect(row.currently_with).toBe(`${label} — revision requested`);
         expect(row.next_step).toBe(`${label} updates and resubmits`);
         expect(row.currently_with_role).toBe('student');
@@ -1127,12 +1186,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
         .post('/student/opportunity')
         .send(studentPayload(sf.email));
       expect(sr.status).toBe(201);
-      await expectLabel(
-        s,
-        sr.body.data.id,
-        'Student',
-        '/student/opportunity/mine',
-      );
+      await expectLabel(s, dataId(sr), 'Student', '/student/opportunity/mine');
     });
   });
 
@@ -1164,7 +1218,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
       ];
       for (const u of roles) {
         for (const [m, path, body] of adminPaths(opp.id)) {
-          const r = await (h.as(u) as any)[m](path).send(body);
+          const r = await h.as(u)[m](path).send(body);
           expect({ role: u.role, path, status: r.status }).toEqual({
             role: u.role,
             path,
@@ -1183,12 +1237,12 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
       const bad = { ...ngo, token: 'not.a.jwt' } as E2eUser;
       const forged = {
         ...ngo,
-        token: require('jsonwebtoken').sign(
+        token: jwt.sign(
           { sub: ngo.id, email: ngo.email, role: 'admin', tokenVersion: 0 },
           'wrong-secret',
         ),
       } as E2eUser;
-      const calls: [string, string, any][] = [
+      const calls: [Verb, string, ReqBody][] = [
         ['post', '/opportunities', oppPayload()],
         ['post', '/opportunities/update', { id: opp.id, title: 'x' }],
         ['post', '/opportunities/detail', { id: opp.id }],
@@ -1205,7 +1259,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
       ];
       for (const who of [null, bad, forged]) {
         for (const [m, path, body] of calls) {
-          const r = await (h.as(who) as any)[m](path).send(body);
+          const r = await h.as(who)[m](path).send(body);
           expect({ path, status: r.status }).toEqual({ path, status: 401 });
         }
       }
@@ -1348,10 +1402,11 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
           if (body[k] === undefined) delete body[k];
         const r = await h.as(ngo).post('/opportunities').send(body);
         expect({ label, status: r.status }).toEqual({ label, status: 400 });
-        expect({ label, msg: JSON.stringify(r.body.message) }).toEqual({
+        const matching: unknown = expect.stringMatching(msg);
+        expect({
           label,
-          msg: expect.stringMatching(msg),
-        });
+          msg: JSON.stringify((r.body as { message: unknown }).message),
+        }).toEqual({ label, msg: matching });
         expect({ label, rows: await h.opps.count() }).toEqual({
           label,
           rows: before,
@@ -1426,22 +1481,23 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
         .post('/opportunities')
         .send(oppPayload(evil));
       expect(created.status).toBe(201);
-      await expectClean(created.body.id);
+      const createdId = idOf(created);
+      await expectClean(createdId);
 
       const viaUpdate = await h
         .as(ngo)
         .post('/opportunities/update')
-        .send({ id: created.body.id, title: 'ok', ...evil });
+        .send({ id: createdId, title: 'ok', ...evil });
       expect([200, 201]).toContain(viaUpdate.status);
-      await expectClean(created.body.id);
+      await expectClean(createdId);
 
       const viaPatch = await h
         .as(ngo)
-        .patch(`/opportunities/${created.body.id}`)
+        .patch(`/opportunities/${createdId}`)
         .send({ title: 'ok2', ...evil });
       expect([200, 201]).toContain(viaPatch.status);
-      await expectClean(created.body.id);
-      expect((await h.reload(created.body.id)).title).toBe('ok2');
+      await expectClean(createdId);
+      expect((await h.reload(createdId)).title).toBe('ok2');
 
       // student draft flow: raw-body update route must not accept approval columns either
       const s = await h.makeUser(UserRole.STUDENT);
@@ -1453,10 +1509,10 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
       expect(d.status).toBe(201);
       const d2 = await h
         .as(s)
-        .post(`/student/opportunity/${d.body.data.id}`)
+        .post(`/student/opportunity/${dataId(d)}`)
         .send({ draft: true, ...evil, title: 'still draft' });
       expect([200, 201]).toContain(d2.status);
-      const dr = await h.reload(d.body.data.id);
+      const dr = await h.reload(dataId(d));
       expect(dr.status).toBe('draft');
       expect(dr.admin_approved).toBe(false);
       expect(dr.workflowStage).toBeNull();
@@ -1476,7 +1532,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
           }),
         );
       expect(sub.status).toBe(201);
-      const so = await h.reload(sub.body.data.id);
+      const so = await h.reload(dataId(sub));
       expect(so.status).toBe('pending_faculty');
       expect(so.admin_approved).toBe(false);
       expect(so.creatorId).toBe(s.id);
@@ -1512,7 +1568,8 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
         .post('/opportunities')
         .send({ ...oppPayload(), draft: true, title: 'Secret draft' });
       expect(d.status).toBe(201);
-      const id = d.body.data?.id ?? d.body.id;
+      const dBody = d.body as { id?: string; data?: { id?: string } };
+      const id = (dBody.data?.id ?? dBody.id)!;
       expect((await h.reload(id)).status).toBe('draft');
       const strangerNgo = await h.makeUser(UserRole.NGO, {
         org: await h.makeOrg(),
@@ -1536,11 +1593,11 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
       for (const u of [student, strangerNgo, fac, investor]) {
         const all = await h.as(u).get('/opportunities');
         expect(all.status).toBe(200);
-        expect((all.body.data as any[]).map((x) => x.id)).not.toContain(id);
+        expect(dataIds(all)).not.toContain(id);
       }
       // the org's colleague / owner see it in their scoped list
       const mine = await h.as(ngo).get('/opportunities?partner_id=me');
-      expect((mine.body.data as any[]).map((x) => x.id)).toContain(id);
+      expect(dataIds(mine)).toContain(id);
       void org;
     });
 
@@ -1559,7 +1616,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
       ]) {
         const r = await h.as(u).get('/opportunities');
         expect(r.status).toBe(200);
-        const ids = (r.body.data as any[]).map((x) => x.id);
+        const ids = dataIds(r);
         expect(ids).toContain(live.id);
         expect(ids).not.toContain(pending.id);
         expectNoSecrets(r, '(GET /opportunities)');
@@ -1573,21 +1630,29 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
         [1, 2, 3].map(() => h.as(ngo).post('/opportunities').send(body)),
       );
       expect(rs.map((r) => r.status)).toEqual([201, 201, 201]);
-      expect(new Set(rs.map((r) => r.body.id)).size).toBe(1);
+      expect(new Set(rs.map((r) => idOf(r))).size).toBe(1);
       expect(
-        await h.opps.count({ where: { creatorId: ngo.id, title: body.title } }),
+        await h.opps.count({
+          where: { creatorId: ngo.id, title: body.title as string },
+        }),
       ).toBe(1);
       expect(h.mail.of('sendAdminOpportunityReviewNeeded')).toHaveLength(1);
       // response shape is the same as a first create and never carries the internal hash / secrets
-      expect(rs[1].body.title).toBe(body.title);
-      expect(rs[1].body.createFingerprint).toBeUndefined();
+      const second = rs[1].body as {
+        title: string;
+        createFingerprint?: unknown;
+      };
+      expect(second.title).toBe(body.title);
+      expect(second.createFingerprint).toBeUndefined();
       expectNoSecrets(rs[1]);
       // sequential retry too
       const again = await h.as(ngo).post('/opportunities').send(body);
       expect(again.status).toBe(201);
-      expect(again.body.id).toBe(rs[0].body.id);
+      expect(idOf(again)).toBe(idOf(rs[0]));
       expect(
-        await h.opps.count({ where: { creatorId: ngo.id, title: body.title } }),
+        await h.opps.count({
+          where: { creatorId: ngo.id, title: body.title as string },
+        }),
       ).toBe(1);
     });
 
@@ -1604,17 +1669,17 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
       const f1 = await h.as(fac).post('/opportunities').send(fbody);
       const f2 = await h.as(fac).post('/opportunities').send(fbody);
       expect([f1.status, f2.status]).toEqual([201, 201]);
-      expect(f2.body.id).toBe(f1.body.id);
+      expect(idOf(f2)).toBe(idOf(f1));
       expect(h.mail.of('sendPartnerVerification')).toHaveLength(1);
       expect(await h.opps.count({ where: { creatorId: fac.id } })).toBe(1);
 
       const abody = oppPayload({ title: `Admin retry ${uniq()}` });
       const a1 = await h.as(admin).post('/opportunities').send(abody);
       const a2 = await h.as(admin).post('/opportunities').send(abody);
-      expect(a2.body.id).toBe(a1.body.id);
+      expect(idOf(a2)).toBe(idOf(a1));
       expect(
         await h.opps.count({
-          where: { creatorId: admin.id, title: abody.title },
+          where: { creatorId: admin.id, title: abody.title as string },
         }),
       ).toBe(1);
     });
@@ -1637,8 +1702,9 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
           }),
         );
       expect([a.status, b.status]).toEqual([201, 409]);
-      expect(b.body.code).toBe('DUPLICATE_OPPORTUNITY_TITLE');
-      expect(b.body.existingOpportunityId).toBe(a.body.id);
+      const dup = b.body as { code: string; existingOpportunityId: string };
+      expect(dup.code).toBe('DUPLICATE_OPPORTUNITY_TITLE');
+      expect(dup.existingOpportunityId).toBe(idOf(a));
       expect(await h.opps.count({ where: { creatorId: ngo.id, title } })).toBe(
         1,
       );
@@ -1648,15 +1714,15 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
       const body = oppPayload({ title: `Colleague ${uniq()}` });
       const c1 = await h.as(ngo).post('/opportunities').send(body);
       const c2 = await h.as(colleague).post('/opportunities').send(body);
-      expect(c2.body.id).not.toBe(c1.body.id);
+      expect(idOf(c2)).not.toBe(idOf(c1));
 
       // outside the 2-minute window the identical payload creates a new row
       await h.opps.update(
-        { id: c1.body.id },
+        { id: idOf(c1) },
         { createdAt: new Date(Date.now() - 10 * 60 * 1000) },
       );
       const c3 = await h.as(ngo).post('/opportunities').send(body);
-      expect(c3.body.id).not.toBe(c1.body.id);
+      expect(idOf(c3)).not.toBe(idOf(c1));
     });
 
     it('a rejected (or deleted) earlier row never blocks an identical re-create', async () => {
@@ -1667,19 +1733,19 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
         (
           await h
             .as(admin)
-            .post(`/admin/opportunities/${first.body.id}/reject`)
+            .post(`/admin/opportunities/${idOf(first)}/reject`)
             .send({ reason: 'No' })
         ).status,
       ).toBe(201);
       const second = await h.as(ngo).post('/opportunities').send(body);
       expect(second.status).toBe(201);
-      expect(second.body.id).not.toBe(first.body.id);
+      expect(idOf(second)).not.toBe(idOf(first));
 
       const third = await h
         .as(ngo)
         .post('/opportunities')
         .send(oppPayload({ title: `After delete ${uniq()}` }));
-      const del = await h.as(ngo).del(`/opportunities/${third.body.id}`);
+      const del = await h.as(ngo).del(`/opportunities/${idOf(third)}`);
       if (![200, 201].includes(del.status))
         throw new Error(
           `delete failed ${del.status} ${JSON.stringify(del.body)}`,
@@ -1687,17 +1753,21 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
       const again = await h
         .as(ngo)
         .post('/opportunities')
-        .send(oppPayload({ title: third.body.title }));
+        .send(oppPayload({ title: (third.body as { title: string }).title }));
       expect(again.status).toBe(201);
     });
   });
 
   // ------------------------------------------------------------------ S10
   describe('S10 dashboards / lists show the item in exactly the right place at each stage', () => {
-    const ids = (res: any) =>
-      ((res.body.data ?? res.body) as any[]).map((x) => x.id);
-    const rowOf = (res: any, id: string) =>
-      ((res.body.data ?? res.body) as any[]).find((x) => x.id === id);
+    /** rows of a list response, whether or not it is wrapped in `data` */
+    const rows = (res: { body: unknown }): ListRow[] => {
+      const b = res.body as { data?: ListRow[] };
+      return (b.data ?? b) as ListRow[];
+    };
+    const ids = (res: { body: unknown }) => rows(res).map((x) => x.id);
+    const rowOf = (res: { body: unknown }, id: string): ListRow =>
+      rows(res).find((x) => x.id === id)!;
 
     it('NGO + linked faculty: pending_faculty -> pending_admin -> live -> (second row) rejected / revision', async () => {
       const { user: ngo } = await ngoWithOrg();
@@ -1763,7 +1833,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
       expect(listRow.status).toBe('pending_verification');
       expect(listRow.workflow_stage).toBe('pending_faculty');
 
-      await verifyToken(h, opp.faculty_verification_token!);
+      await verifyToken(h, opp.faculty_verification_token);
       expect(await where()).toEqual({ ...base, adminPending: true });
 
       await adminApprove(h, admin, id);
@@ -1827,7 +1897,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
           }),
         );
       expect(r.status).toBe(201);
-      const id = r.body.data.id;
+      const id = dataId(r);
       const o0 = await h.reload(id);
       const mineRow = async () =>
         rowOf(await h.as(s).get('/student/opportunity/mine'), id);
@@ -1842,21 +1912,23 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
       expect((await mineRow()).workflow_stage).toBe('pending_faculty');
       expect(await facultyHas()).toBe(true);
       expect(await adminQueueIds(h, admin)).toContain(id); // student rows are visible to CIEL PK early (not approvable)
-      const q = (
-        await h.as(admin).get('/admin/opportunities/approval-queue')
-      ).body.data.find((x: any) => x.id === id);
+      const q = findRow(
+        await h.as(admin).get('/admin/opportunities/approval-queue'),
+        id,
+      );
       expect(q.admin_can_approve).toBe(false);
       expect(await studentBrowseIds(h, student)).not.toContain(id);
 
-      await verifyToken(h, o0.faculty_verification_token!);
+      await verifyToken(h, o0.faculty_verification_token);
       expect((await mineRow()).workflow_stage).toBe('pending_partner');
       expect(await partnerHas()).toBe(true);
-      await verifyToken(h, o0.partnerToken!);
+      await verifyToken(h, o0.partnerToken);
       expect((await mineRow()).workflow_stage).toBe('pending_admin');
       expect(
-        (
-          await h.as(admin).get('/admin/opportunities/approval-queue')
-        ).body.data.find((x: any) => x.id === id).admin_can_approve,
+        findRow(
+          await h.as(admin).get('/admin/opportunities/approval-queue'),
+          id,
+        ).admin_can_approve,
       ).toBe(true);
       await adminApprove(h, admin, id);
       expect((await mineRow()).status).toBe('live');
@@ -1879,19 +1951,15 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
 
       const { opp: live } = await createOpp(ngo, oppPayload());
       await adminApprove(h, admin, live.id);
-      await h.ds
-        .getRepository(Participation)
-        .save(
-          h.ds
-            .getRepository(Participation)
-            .create({
-              projectId: live.id,
-              studentId: student.id,
-              fullName: 'E2E Student',
-              mobile: '+923001234567',
-              email: student.email,
-            } as any),
-        );
+      await h.ds.getRepository(Participation).save(
+        h.ds.getRepository(Participation).create({
+          projectId: live.id,
+          studentId: student.id,
+          fullName: 'E2E Student',
+          mobile: '+923001234567',
+          email: student.email,
+        }),
+      );
       const blocked = await h.as(ngo).del(`/opportunities/${live.id}`);
       expect(blocked.status).toBe(400);
       expect(await h.opps.count({ where: { id: live.id } })).toBe(1);
@@ -1931,7 +1999,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
           const list = kind.isStudent
             ? await h.as(creator).get('/student/opportunity/mine')
             : await h.as(creator).get('/opportunities?created_by=me');
-          const row = (list.body.data as any[]).find((x) => x.id === id);
+          const row = findRow(list, id);
           expect(row.currently_with_role).toBe(exp.role);
           expect(row.approval_checklist.admin).toBe(exp.adminDone);
           expect(row.workflow_stage).toBe(db.workflowStage);
@@ -2002,10 +2070,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
         }),
       );
       const row = async () =>
-        (
-          (await h.as(ngo).get('/opportunities?created_by=me')).body
-            .data as any[]
-        ).find((x) => x.id === opp.id);
+        findRow(await h.as(ngo).get('/opportunities?created_by=me'), opp.id);
       let r = await row();
       expect(r.currently_with_role).toBe('faculty');
       expect(r.currently_with).toBe('Dr Named');
@@ -2014,7 +2079,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
         partner_required: true,
         admin: false,
       });
-      await verifyToken(h, opp.faculty_verification_token!);
+      await verifyToken(h, opp.faculty_verification_token);
       r = await row();
       expect(r.currently_with_role).toBe('partner');
       expect(r.currently_with).toBe('Collab Org');
@@ -2022,7 +2087,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
         faculty: true,
         partner: false,
       });
-      await verifyToken(h, (await h.reload(opp.id)).partnerToken!);
+      await verifyToken(h, (await h.reload(opp.id)).partnerToken);
       r = await row();
       expect(r.currently_with_role).toBe('admin');
       expect(r.approval_checklist).toMatchObject({
@@ -2051,13 +2116,13 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
           },
         }),
       );
-      await verifyToken(h, opp.faculty_verification_token!);
-      await verifyToken(h, (await h.reload(opp.id)).partnerToken!);
+      await verifyToken(h, opp.faculty_verification_token);
+      await verifyToken(h, (await h.reload(opp.id)).partnerToken);
       expect((await adminApprove(h, admin, opp.id)).status).toBe(201);
       const db = await h.reload(opp.id);
       const secrets = [db.faculty_verification_token, db.partnerToken].filter(
         Boolean,
-      ) as string[];
+      );
       expect(secrets.length).toBe(2);
       const private_ = [fac.email, poEmail, ngo.email, wa, '+923001234567'];
 
@@ -2065,7 +2130,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
         org: await h.makeOrg(),
       });
       const investor = await h.makeUser(UserRole.INVESTOR);
-      const bodies: [string, any][] = [];
+      const bodies: [string, unknown][] = [];
       for (const [label, u] of [
         ['student', student],
         ['strangerNgo', strangerNgo],
@@ -2154,13 +2219,13 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
             },
           }),
         );
-      const stuOpp = await h.reload(sr.body.data.id);
+      const stuOpp = await h.reload(dataId(sr));
       const secrets = [
         orgOpp.faculty_verification_token,
         orgOpp.partnerToken,
         stuOpp.faculty_verification_token,
         stuOpp.partnerToken,
-      ].filter(Boolean) as string[];
+      ].filter(Boolean);
       expect(secrets.length).toBe(4);
 
       const viewers: E2eUser[] = [ngo, fac, pUser, s, admin, student];
@@ -2242,14 +2307,11 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
           },
         }),
       );
-      const r = await h
-        .as(null)
-        .post('/verifications/partner-decision')
-        .send({
-          token: opp.partnerToken,
-          action: 'revision',
-          reason: 'Clarify',
-        });
+      const r = await h.as(null).post('/verifications/partner-decision').send({
+        token: opp.partnerToken,
+        action: 'revision',
+        reason: 'Clarify',
+      });
       expect(r.status).toBe(201);
       expect((await h.reload(opp.id)).status).toBe('revision');
       const up = await h
@@ -2280,7 +2342,9 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
         .post('/opportunities/update')
         .send({ id: opp.id, title: 'Renamed' });
       expect(up.status).toBe(201);
-      expect(up.body.supervision).toMatchObject({ contact: fac.email });
+      expect((up.body as { supervision: unknown }).supervision).toMatchObject({
+        contact: fac.email,
+      });
       const o = await h.reload(opp.id);
       expect(o.supervision).toMatchObject({
         contact: fac.email,
@@ -2386,7 +2450,10 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
       const o = await h.reload(opp.id);
       expect(o.status).toBe('rejected');
       expect(o.rejectionReason).toBe('Not our scope');
-      expect((await detail(h, ngo, opp.id)).body.data.status).toBe('rejected');
+      expect(
+        ((await detail(h, ngo, opp.id)).body as { data: DetailData }).data
+          .status,
+      ).toBe('rejected');
       expect((await adminApprove(h, admin, opp.id)).status).toBe(400);
 
       const fac = await h.makeUser(UserRole.FACULTY);
@@ -2439,7 +2506,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
         '1',
         "'; drop table opportunities;--",
       ]) {
-        const calls: [string, string, any, E2eUser][] = [
+        const calls: [Verb, string, ReqBody, E2eUser | null][] = [
           ['post', '/opportunities/detail', { id }, ngo],
           ['post', '/opportunities/update', { id, title: 'x' }, ngo],
           [
@@ -2490,7 +2557,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
             'get',
             `/public/opportunities/${encodeURIComponent(id)}`,
             undefined,
-            null as any,
+            null,
           ],
           [
             'post',
@@ -2556,30 +2623,30 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
             'get',
             `/verifications/partner-preview?token=${encodeURIComponent(id)}`,
             undefined,
-            null as any,
+            null,
           ],
           [
             'get',
             `/verifications/faculty-preview?token=${encodeURIComponent(id)}`,
             undefined,
-            null as any,
+            null,
           ],
-          ['post', '/verifications/verify', { token: id }, null as any],
+          ['post', '/verifications/verify', { token: id }, null],
           [
             'post',
             '/verifications/partner-decision',
             { token: id, action: 'reject' },
-            null as any,
+            null,
           ],
           [
             'post',
             '/verifications/faculty-decision',
             { token: id, action: 'reject' },
-            null as any,
+            null,
           ],
         ];
         for (const [m, path, body, u] of calls) {
-          const r = await (h.as(u) as any)[m](path).send(body);
+          const r = await h.as(u)[m](path).send(body);
           if (r.status >= 500 || r.status < 400)
             offenders.push(`${m.toUpperCase()} ${path} -> ${r.status}`);
         }
@@ -2599,7 +2666,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
         [opp.id],
       );
       expect(
-        (await verifyToken(h, opp.faculty_verification_token!)).status,
+        (await verifyToken(h, opp.faculty_verification_token)).status,
       ).toBe(404);
       expect((await h.reload(opp.id)).status).toBe('pending_faculty');
     });
@@ -2611,7 +2678,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
         .as(s)
         .post('/student/opportunity')
         .send(studentPayload(fac.email));
-      const o = await h.reload(r.body.data.id);
+      const o = await h.reload(dataId(r));
       const rej = await h
         .as(null)
         .post('/verifications/faculty-decision')
@@ -2628,7 +2695,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
         action: 'rejected',
       });
       const mine = await h.as(s).get('/student/opportunity/mine');
-      const row = (mine.body.data as any[]).find((x) => x.id === o.id);
+      const row = findRow(mine, o.id);
       expect(row.status).toBe('rejected');
       expect(row.rejection_reason).toBe('Out of scope');
       expect(
@@ -2647,7 +2714,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
             .send({ id: o.id, title: 'again' })
         ).status,
       ).toBe(400);
-      expect((await verifyToken(h, o.faculty_verification_token!)).status).toBe(
+      expect((await verifyToken(h, o.faculty_verification_token)).status).toBe(
         400,
       );
       expect((await adminApprove(h, admin, o.id)).status).toBe(400);
@@ -2668,7 +2735,7 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
           `private candidate create failed: ${r.status} ${JSON.stringify(r.body)}`,
         );
       }
-      const o = await h.reload(r.body.data.id);
+      const o = await h.reload(dataId(r));
       expect(o.faculty_verified).toBe(true);
       expect(o.status).toBe('pending_approval');
       expect(o.workflowStage).toBe('pending_admin');

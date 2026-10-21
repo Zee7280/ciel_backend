@@ -20,6 +20,11 @@ function stringField(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
+/** `String()` over a loosely-typed form value (same coercion; typed so the linter knows it is not a bare object). */
+function stringifyLoose(value: unknown): string {
+  return String(value as { toString(): string });
+}
+
 function isOtherChoice(value: unknown): boolean {
   const text = stringField(value).trim();
   if (!text) return false;
@@ -128,11 +133,11 @@ function activityHasOutputOrReach(block: Record<string, unknown>): boolean {
     const out = (entry || {}) as Record<string, unknown>;
     return (
       stringField(out.title).trim().length > 0 &&
-      String(out.quantity ?? '').trim().length > 0
+      stringifyLoose(out.quantity ?? '').trim().length > 0
     );
   });
-  const gross = String(block.beneficiaries_reached ?? '').trim();
-  const unique = String(
+  const gross = stringifyLoose(block.beneficiaries_reached ?? '').trim();
+  const unique = stringifyLoose(
     block.unique_beneficiaries ?? block.beneficiaries_reached ?? '',
   ).trim();
   return hasOutput || (gross.length > 0 && unique.length > 0);
@@ -212,7 +217,7 @@ function validateCoreSectionsPresence(report: {
     });
   }
   const affectedCount = Number(
-    String(section2.affected_count ?? '').replace(/,/g, ''),
+    stringifyLoose(section2.affected_count ?? '').replace(/,/g, ''),
   );
   if (
     !stringField(section2.affected_count).trim() ||

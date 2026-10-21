@@ -8,7 +8,9 @@ import {
 @Injectable()
 export class MembershipActiveGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
-    const req = context.switchToHttp().getRequest();
+    const req = context
+      .switchToHttp()
+      .getRequest<{ user?: { status?: string } }>();
     const status = req.user?.status;
     if (status === 'pending_membership_payment') {
       throw new ForbiddenException({

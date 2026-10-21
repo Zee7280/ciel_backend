@@ -120,6 +120,27 @@ const MIN_VALID_SUBMIT_SECTIONS = {
   },
 };
 
+/** Test-local views of private members under test (same shapes as the real signatures). */
+type PrivateServiceMethods = {
+  redactUnapprovedAiScoreForStudent: <T extends Record<string, unknown>>(
+    row: T,
+  ) => T;
+  assertEveryTeamMemberMetRequiredHours: (
+    projectId: string,
+    requiredHoursPerStudent: number,
+    submitterStudentId?: string,
+  ) => Promise<void>;
+};
+type PrivateStaticMethods = {
+  redactCiiV45ListingForStudent: <T extends Record<string, unknown>>(
+    row: T,
+  ) => T;
+};
+/** Shape of the `data` branch returned when a submit hits an already-locked report. */
+type SubmitResultData = { already_submitted?: boolean; status?: string };
+/** Admin listing response including the counts summary. */
+type ListingWithMeta = { meta: { counts: Record<string, number> } };
+
 // Fully approved + live listing: satisfies assertStudentOpportunityReportableForWrite
 // (faculty -> partner -> CIEL admin live) so tests reach the logic they actually exercise.
 const LIVE_OPP_GATES = {
@@ -143,15 +164,22 @@ describe('StudentReportsService', () => {
   // Backing store for the guarded update() in verifyReport's atomic compare-and-swap — mirrors
   // the mutation onto the same object `findOne` returned, so assertions on `report.<field>` after
   // calling verifyReport still see the applied values, same as the old blind save() did.
+  type VerifyReportQbState = {
+    __patch?: Record<string, unknown>;
+    __nextAffected?: number;
+  };
   const verifyReportQb = {
     update: jest.fn().mockReturnThis(),
-    set: jest.fn(function (this: any, patch: Record<string, unknown>) {
+    set: jest.fn(function (
+      this: VerifyReportQbState,
+      patch: Record<string, unknown>,
+    ) {
       this.__patch = patch;
       return this;
     }),
     where: jest.fn().mockReturnThis(),
     andWhere: jest.fn().mockReturnThis(),
-    execute: jest.fn(function (this: any) {
+    execute: jest.fn(function (this: VerifyReportQbState) {
       return Promise.resolve({ affected: this.__nextAffected ?? 1 });
     }),
     __patch: undefined as Record<string, unknown> | undefined,
@@ -214,8 +242,8 @@ describe('StudentReportsService', () => {
     reportRequiresPartnerApproval: jest
       .fn()
       .mockImplementation(
-        async (report: unknown, hasMeaningful: (v: unknown) => boolean) =>
-          evaluateGate(report, hasMeaningful),
+        (report: unknown, hasMeaningful: (v: unknown) => boolean) =>
+          Promise.resolve(evaluateGate(report, hasMeaningful)),
       ),
     reportRequiresPartnerApprovalSync: jest
       .fn()
@@ -255,14 +283,14 @@ describe('StudentReportsService', () => {
     mockStudentReportsRepository.find.mockReset();
     mockStudentReportsRepository.find.mockResolvedValue([]);
     mockStudentReportsRepository.create.mockImplementation(
-      (payload: any) => payload,
+      (payload: unknown) => payload,
     );
     mockStudentReportsRepository.save.mockImplementation(
-      async (report: any) => {
+      (report: { id?: string; verificationPublicSlug?: string | null }) => {
         if (!report.id) report.id = 'report-1';
         if (!report.verificationPublicSlug)
           report.verificationPublicSlug = null;
-        return report;
+        return Promise.resolve(report);
       },
     );
     mockUsersRepository.findOne.mockResolvedValue({
@@ -353,8 +381,8 @@ describe('StudentReportsService', () => {
         status: 'submitted',
         opportunityId: 'opp-1',
         project_id: 'opp-1',
-        reportSubmittedAt: expect.any(Date),
-        submission_date: expect.any(Date),
+        reportSubmittedAt: expect.any(Date) as unknown,
+        submission_date: expect.any(Date) as unknown,
       }),
     );
     expect(result.data.report_submitted_at).toBeInstanceOf(Date);
@@ -365,14 +393,16 @@ describe('StudentReportsService', () => {
       expect.objectContaining({
         review_package: expect.objectContaining({
           documents: expect.objectContaining({
-            flashcard: expect.objectContaining({ view: 'flash' }),
-            detailed_report: expect.objectContaining({ view: 'print' }),
-          }),
+            flashcard: expect.objectContaining({ view: 'flash' }) as unknown,
+            detailed_report: expect.objectContaining({
+              view: 'print',
+            }) as unknown,
+          }) as unknown,
           sync_contract: expect.objectContaining({
             final_authority: 'CIEL PK Super Admin',
-          }),
-          packet_integrity: expect.objectContaining({ ok: true }),
-        }),
+          }) as unknown,
+          packet_integrity: expect.objectContaining({ ok: true }) as unknown,
+        }) as unknown,
       }),
     );
   });
@@ -683,8 +713,8 @@ describe('StudentReportsService', () => {
         section3: expect.objectContaining({
           primary_sdg: expect.objectContaining({
             goal_number: null,
-          }),
-        }),
+          }) as unknown,
+        }) as unknown,
       }),
     );
   });
@@ -734,8 +764,8 @@ describe('StudentReportsService', () => {
             target_code: '4.a',
             indicator_code: '4.a.1',
             sub_indicator: 'Sessions / activities completed',
-          }),
-        }),
+          }) as unknown,
+        }) as unknown,
       }),
     );
   });
@@ -848,7 +878,9 @@ describe('StudentReportsService', () => {
 
   describe('redactUnapprovedAiScoreForStudent', () => {
     const redact = (row: Record<string, unknown>) =>
-      (service as any).redactUnapprovedAiScoreForStudent(row);
+      (
+        service as unknown as PrivateServiceMethods
+      ).redactUnapprovedAiScoreForStudent(row);
 
     it('strips the certificate before faculty sign-off but keeps the CII score', () => {
       expect(
@@ -931,8 +963,10 @@ describe('StudentReportsService', () => {
   });
 
   describe('redactCiiV45ListingForStudent (My Impact Wall list)', () => {
-    const redactListing = (row: Record<string, unknown>) =>
-      (StudentReportsService as any).redactCiiV45ListingForStudent(row);
+    const redactListing = <T extends Record<string, unknown>>(row: T): T =>
+      (
+        StudentReportsService as unknown as PrivateStaticMethods
+      ).redactCiiV45ListingForStudent(row);
 
     it('keeps the redacted CII score on the listing even before the score is locked', () => {
       const result = redactListing({
@@ -1947,20 +1981,20 @@ describe('StudentReportsService', () => {
     };
     mockStudentReportsRepository.findOne.mockResolvedValue(report);
     mockUsersRepository.find.mockImplementation(
-      async (opts: { where?: { role?: string } }) => {
+      (opts: { where?: { role?: string } }) => {
         if (opts?.where?.role === 'university') {
-          return [
+          return Promise.resolve([
             {
               email: 'uni@campus.test',
               university: 'LUMS',
               institution: 'LUMS',
             },
-          ];
+          ]);
         }
         if (opts?.where?.role === 'admin') {
-          return [{ email: 'super@cielpk.com' }];
+          return Promise.resolve([{ email: 'super@cielpk.com' }]);
         }
-        return [];
+        return Promise.resolve([]);
       },
     );
 
@@ -1968,7 +2002,7 @@ describe('StudentReportsService', () => {
     await new Promise((resolve) => setTimeout(resolve, 40));
 
     const audiences = mockMailService.sendReportPackagePublished.mock.calls.map(
-      (call) => call[0].audience,
+      (call: [{ audience: string }]) => call[0].audience,
     );
     expect(audiences).toEqual(
       expect.arrayContaining([
@@ -1983,11 +2017,11 @@ describe('StudentReportsService', () => {
       expect.objectContaining({
         to: 'amina@student.test',
         audience: 'student',
-        reviewHref: expect.stringContaining('view=flash'),
-        flashHref: expect.stringContaining('view=flash'),
-        detailedHref: expect.stringContaining('view=print'),
+        reviewHref: expect.stringContaining('view=flash') as unknown,
+        flashHref: expect.stringContaining('view=flash') as unknown,
+        detailedHref: expect.stringContaining('view=print') as unknown,
         includeAnalysis: true,
-        evidenceCount: expect.any(Number),
+        evidenceCount: expect.any(Number) as unknown,
       }),
     );
     expect(mockMailService.sendReportPackagePublished).toHaveBeenCalledWith(
@@ -1996,9 +2030,9 @@ describe('StudentReportsService', () => {
         audience: 'faculty',
         reviewHref: expect.stringContaining(
           '/dashboard/faculty/reports/report-1?view=dossier',
-        ),
-        flashHref: expect.stringContaining('doc=flashcard'),
-        detailedHref: expect.stringContaining('doc=report'),
+        ) as unknown,
+        flashHref: expect.stringContaining('doc=flashcard') as unknown,
+        detailedHref: expect.stringContaining('doc=report') as unknown,
         includeAnalysis: true,
       }),
     );
@@ -2008,7 +2042,7 @@ describe('StudentReportsService', () => {
         audience: 'university',
         reviewHref: expect.stringContaining(
           '/dashboard/partner/verify/report-1?package=1',
-        ),
+        ) as unknown,
         includeAnalysis: true,
       }),
     );
@@ -2018,7 +2052,7 @@ describe('StudentReportsService', () => {
         audience: 'partner',
         reviewHref: expect.stringContaining(
           '/dashboard/partner/verify/report-1?package=1',
-        ),
+        ) as unknown,
         includeAnalysis: false,
       }),
     );
@@ -2462,7 +2496,9 @@ describe('StudentReportsService', () => {
       opportunity: { title: 'Test' },
     };
     mockParticipantRepository.findOne.mockResolvedValue(null);
-    mockStudentReportsRepository.findOne.mockImplementation(async () => report);
+    mockStudentReportsRepository.findOne.mockImplementation(() =>
+      Promise.resolve(report),
+    );
 
     const result = await service.checkReportStatus('student-1', OPP);
     const data = result.data as {
@@ -2502,7 +2538,9 @@ describe('StudentReportsService', () => {
       opportunity: { title: 'Test' },
     };
     mockParticipantRepository.findOne.mockResolvedValue(null);
-    mockStudentReportsRepository.findOne.mockImplementation(async () => report);
+    mockStudentReportsRepository.findOne.mockImplementation(() =>
+      Promise.resolve(report),
+    );
 
     const result = await service.checkReportStatus('student-1', OPP);
     const data = result.data as { feedback?: string; status?: string };
@@ -2807,7 +2845,9 @@ describe('StudentReportsService', () => {
       opportunity: { id: 'opp-1', title: 'Test' },
     };
     mockStudentReportsRepository.findOne.mockResolvedValue(report);
-    mockStudentReportsRepository.save.mockImplementation(async (row) => row);
+    mockStudentReportsRepository.save.mockImplementation((row: unknown) =>
+      Promise.resolve(row),
+    );
 
     const result = await service.updateReportAiScore('report-ai-1', {
       section11: {
@@ -2998,7 +3038,7 @@ describe('StudentReportsService', () => {
       mk('e', 'draft', 'pending', 'Eve'),
     ]);
     const all = await service.findAll({ page: 1, limit: 50 });
-    expect((all as any).meta.counts).toEqual({
+    expect((all as ListingWithMeta).meta.counts).toEqual({
       needsReview: 2,
       verified: 1,
       revision: 1,
@@ -3013,7 +3053,7 @@ describe('StudentReportsService', () => {
     });
     expect(filtered.data).toHaveLength(1);
     expect(filtered.pagination.total).toBe(1);
-    expect((filtered as any).meta.counts.all).toBe(1);
+    expect((filtered as ListingWithMeta).meta.counts.all).toBe(1);
   });
 
   it('admin findAll returns one report per team when multiple teams share a project', async () => {
@@ -3401,7 +3441,7 @@ describe('StudentReportsService', () => {
       mockStudentReportsRepository.findOne.mockResolvedValue(report);
       mockStudentReportsRepository.save.mockClear();
 
-      const res: any = await service.createReport(
+      const res = await service.createReport(
         'student-1',
         {
           opportunityId: 'opp-1',
@@ -3410,11 +3450,14 @@ describe('StudentReportsService', () => {
         [],
         true,
       );
+      const resData = res.data as SubmitResultData;
 
       expect(res.success).toBe(true);
-      expect(res.data.already_submitted).toBe(true);
-      expect(res.data.status).toBe('partner_verified');
-      expect(report.section2.problem_statement).toBe('ORIGINAL');
+      expect(resData.already_submitted).toBe(true);
+      expect(resData.status).toBe('partner_verified');
+      expect(
+        (report.section2 as { problem_statement: string }).problem_statement,
+      ).toBe('ORIGINAL');
       expect(mockStudentReportsRepository.save).not.toHaveBeenCalled();
     });
 
@@ -3491,9 +3534,13 @@ describe('StudentReportsService', () => {
 
       expect(report.status).toBe('revision');
       expect(report.ciiV45Lock).toBeNull();
-      expect(report.ciiV45.finalCII).toBe(72); // old score text kept for audit …
-      expect(report.ciiV45.previousLocks).toHaveLength(1); // … but the lock is retired
-      expect(report.ciiV45.previousLocks[0]).toMatchObject({
+      const ciiAfter = report.ciiV45 as {
+        finalCII: number;
+        previousLocks: unknown[];
+      };
+      expect(ciiAfter.finalCII).toBe(72); // old score text kept for audit …
+      expect(ciiAfter.previousLocks).toHaveLength(1); // … but the lock is retired
+      expect(ciiAfter.previousLocks[0]).toMatchObject({
         locked: true,
         supersededBy: 'rejected',
       });
@@ -3580,11 +3627,9 @@ describe('StudentReportsService', () => {
       mockParticipantRepository.find.mockResolvedValue(roster);
       mockAttendanceLogsRepository.find.mockResolvedValue(logs);
       mockStudentReportsRepository.findOne.mockResolvedValue(null);
-      return (service as any).assertEveryTeamMemberMetRequiredHours(
-        'opp-1',
-        16,
-        submitter,
-      );
+      return (
+        service as unknown as PrivateServiceMethods
+      ).assertEveryTeamMemberMetRequiredHours('opp-1', 16, submitter);
     };
     const row = (
       id: string,
@@ -3855,14 +3900,14 @@ describe('StudentReportsService', () => {
       };
       mockStudentReportsRepository.findOne.mockResolvedValue(report);
 
-      const result: any = await service.createReport(
+      const result = await service.createReport(
         'student-1',
         { opportunityId: 'opp-1', ...MIN_VALID_SUBMIT_SECTIONS },
         [],
         true,
       );
 
-      expect(result.data.already_submitted).toBe(true);
+      expect((result.data as SubmitResultData).already_submitted).toBe(true);
       expect(result.message).toMatch(/already been submitted and is locked/);
       expect(report.status).toBe('submitted');
       expect(report.section2.problem_statement).toBe('original reviewed text');
@@ -3923,7 +3968,7 @@ describe('StudentReportsService', () => {
       };
       mockStudentReportsRepository.findOne.mockResolvedValue(report);
 
-      const result: any = await service.createReport(
+      const result = await service.createReport(
         'student-1',
         { opportunityId: 'opp-1', ...MIN_VALID_SUBMIT_SECTIONS },
         [],
@@ -4110,13 +4155,13 @@ describe('StudentReportsService', () => {
       expect(result.message).toBe('Draft saved successfully.');
       expect(mockStudentReportsRepository.save).not.toHaveBeenCalled();
 
-      const submitted: any = await service.createReport(
+      const submitted = await service.createReport(
         'student-1',
         { opportunityId: 'opp-1', ...MIN_VALID_SUBMIT_SECTIONS },
         [],
         true,
       );
-      expect(submitted.data.already_submitted).toBe(true);
+      expect((submitted.data as SubmitResultData).already_submitted).toBe(true);
       expect(mockStudentReportsRepository.save).not.toHaveBeenCalled();
     });
 
@@ -4139,10 +4184,14 @@ describe('StudentReportsService', () => {
       };
       mockStudentReportsRepository.findOne.mockResolvedValue(report);
 
-      const status: any = await service.checkReportStatus('student-1', OPP);
-      expect(status.data.is_editable).toBe(true);
-      expect(status.data.status).toBe('revision');
-      expect(JSON.stringify(status.data)).toContain(
+      const status = await service.checkReportStatus('student-1', OPP);
+      const statusData = status.data as {
+        is_editable?: boolean;
+        status?: string;
+      };
+      expect(statusData.is_editable).toBe(true);
+      expect(statusData.status).toBe('revision');
+      expect(JSON.stringify(statusData)).toContain(
         'Add signed attendance sheet.',
       );
     });

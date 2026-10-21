@@ -3,20 +3,88 @@
  * approved project, through the real analyze route? Real Nest app + scratch Postgres; the AI is a
  * recording stub (e2e never reaches OpenAI), so what the model would receive is asserted exactly.
  */
-import { bootHarness, Harness, E2eUser, oppPayload, uniq } from './e2e/harness';
+import request from 'supertest';
+import { DeepPartial } from 'typeorm';
+import {
+  bootHarness,
+  Harness,
+  HarnessOptions,
+  E2eUser,
+  oppPayload,
+  uniq,
+} from './e2e/harness';
 import { adminApprove } from './e2e/helpers';
 import { UserRole } from '../src/users/enums/user-role.enum';
+import { Opportunity } from '../src/opportunities/entities/opportunity.entity';
 import { StudentReport } from '../src/reports/entities/student-report.entity';
 import {
   NPE_CRITERION_KEYS,
   NPE_PAYLOAD_VERSION,
+  NpeCriterionKey,
 } from '../src/ranking/npe-ranking.constants';
 import { NpeRankingRun } from '../src/ranking/entities/npe-ranking-run.entity';
 import { NpeRankingEvaluation } from '../src/ranking/entities/npe-ranking-evaluation.entity';
-import { npeCalculate } from '../src/ranking/npe-ranking.scoring';
+import {
+  npeCalculate,
+  NpeCriterionJudgment,
+} from '../src/ranking/npe-ranking.scoring';
 
 const BASE = '/admin/community-service/ranking';
 const UNI = '/partners/community-service/ranking';
+
+/** A supertest response whose JSON body is known to have shape `T`. */
+type Res<T> = Omit<request.Response, 'body'> & { body: T };
+const typed = <T>(t: request.Test): Promise<Res<T>> =>
+  t.then((r) => r as Res<T>);
+
+/** Column-level patch for `h.opps.update` (the entity's jsonb columns are `any`). */
+type OppPatch = Partial<Opportunity>;
+type Judgments = Record<NpeCriterionKey, NpeCriterionJudgment>;
+
+/** What the recording AI stub receives for `npe_ranking_evaluation` (fields asserted here). */
+interface AiPayload {
+  projectId: string;
+  packageVersion: string;
+  university: string;
+  flashcard: { title: string };
+  sections: Record<string, unknown>;
+  systemAnalysis: unknown;
+  uploaded_evidence_files?: Array<{ file_id: string; file_name: string }>;
+  lockedCii: number;
+}
+
+// Response shapes, limited to the fields these tests inspect.
+interface RankRow {
+  id: string;
+  status: string;
+  rank: number | null;
+  score: number | null;
+  reason: string;
+  evidenceRead: { inspected: Array<{ name: string }>; notInspected: unknown[] };
+  evaluation: { summary: string };
+}
+interface AnalyzeRes {
+  message?: string;
+  data: {
+    runId: string;
+    rubricVersion: string;
+    progress: unknown;
+    rows: RankRow[];
+  };
+}
+interface StudioPreviewRes {
+  data: {
+    result: {
+      rows: Array<{ id: string }>;
+      heldIds: string[];
+      unreadIds: string[];
+    };
+    publishBlockers: string[];
+  };
+}
+interface MessageRes {
+  message?: string;
+}
 
 type Seed = {
   name: string;
@@ -61,7 +129,7 @@ describe('National ranking sends the complete package to the AI (real app + real
   let admin: E2eUser;
   let ngo: E2eUser;
   const ids: Record<string, string> = {};
-  const received: any[] = [];
+  const received: AiPayload[] = [];
   /** per-report override of what the (stub) evidence pass could not show the model */
   const notInspected = new Map<
     string,
@@ -98,16 +166,14 @@ describe('National ranking sends the complete package to the AI (real app + real
   };
 
   const aiStub = {
-    summarize: async (section: string, payload: any) => {
-      if (section !== 'npe_ranking_evaluation') return { summary: '' };
+    summarize: (section: string, payload: AiPayload) => {
+      if (section !== 'npe_ranking_evaluation')
+        return Promise.resolve({ summary: '' });
       aiCalls += 1;
       received.push(payload);
-      const files = (payload.uploaded_evidence_files ?? []) as Array<{
-        file_id: string;
-        file_name: string;
-      }>;
+      const files = payload.uploaded_evidence_files ?? [];
       const extra = notInspected.get(payload.projectId) ?? [];
-      return {
+      return Promise.resolve({
         summary: 'stub',
         npeRanking: evaluation(payload.projectId, payload.packageVersion),
         evidenceInspection: {
@@ -116,9 +182,9 @@ describe('National ranking sends the complete package to the AI (real app + real
             .map((f) => ({ id: f.file_id, name: f.file_name })),
           notInspected: extra,
         },
-      };
+      });
     },
-  } as any;
+  } as NonNullable<HarnessOptions['ai']>;
 
   beforeAll(async () => {
     h = await bootHarness({ ai: aiStub });
@@ -133,15 +199,16 @@ describe('National ranking sends the complete package to the AI (real app + real
     const reports = h.ds.getRepository(StudentReport);
     for (const s of seeds) {
       const student = await h.makeUser(UserRole.STUDENT, {
-        overrides: { university: s.university, department: 'CS' } as any,
+        overrides: { university: s.university, department: 'CS' },
       });
       const opp = await h
         .as(ngo)
         .post('/opportunities')
         .send(oppPayload({ title: `${s.name} Project ${uniq()}` }));
       expect(opp.status).toBe(201);
-      await adminApprove(h, admin, opp.body.id);
-      await h.opps.update(opp.body.id, {
+      const oppId = (opp.body as { id: string }).id;
+      await adminApprove(h, admin, oppId);
+      await h.opps.update(oppId, {
         status: 'active',
         workflowStage: 'live',
         admin_approved: true,
@@ -153,12 +220,13 @@ describe('National ranking sends the complete package to the AI (real app + real
           volunteers_required: 5,
         },
         location: { city: 'Lahore' },
-      } as any);
-      const row: any = await reports.save(
+      } as OppPatch);
+      // Seeded as the live rows look (team_lead.hours is a number here), not as the entity types them.
+      const row = await reports.save(
         reports.create({
           studentId: student.id,
-          opportunityId: opp.body.id,
-          project_id: opp.body.id,
+          opportunityId: oppId,
+          project_id: oppId,
           status: 'verified',
           faculty_status: 'approved',
           admin_status: 'approved',
@@ -264,7 +332,7 @@ describe('National ranking sends the complete package to the AI (real app + real
             scoreStatusAtLock: 'FINAL',
             finalBadge: { name: 'Advanced' },
           },
-        } as any) as any,
+        } as unknown as DeepPartial<StudentReport>),
       );
       ids[s.name] = row.id;
     }
@@ -288,10 +356,14 @@ describe('National ranking sends the complete package to the AI (real app + real
   const packages = async (base = BASE, user: E2eUser = admin) => {
     const res = await h.as(user).get(`${base}/packages`);
     expect(res.status).toBe(200);
-    return res.body.data as {
-      packages: Array<{ id: string; version: string }>;
-      run: any;
-    };
+    return (
+      res.body as {
+        data: {
+          packages: Array<{ id: string; version: string }>;
+          run: { rows: RankRow[] };
+        };
+      }
+    ).data;
   };
   const analyzeAll = async (
     base = BASE,
@@ -299,14 +371,20 @@ describe('National ranking sends the complete package to the AI (real app + real
     runId?: string,
   ) => {
     const pk = await packages(base, user);
-    return h
-      .as(user)
-      .post(`${base}/analyze`)
-      .send({
-        ...(runId ? { runId } : {}),
-        projects: pk.packages.map((p) => ({ id: p.id, version: p.version })),
-      });
+    return typed<AnalyzeRes>(
+      h
+        .as(user)
+        .post(`${base}/analyze`)
+        .send({
+          ...(runId ? { runId } : {}),
+          projects: pk.packages.map((p) => ({ id: p.id, version: p.version })),
+        }),
+    );
   };
+  const studioPreview = (body: Record<string, unknown>) =>
+    typed<StudioPreviewRes>(
+      h.as(admin).post(`${BASE}/studio/preview`).send(body),
+    );
 
   it('national: every approved package of EVERY university is read, one AI request each', async () => {
     const res = await analyzeAll();
@@ -323,7 +401,7 @@ describe('National ranking sends the complete package to the AI (real app + real
     expect(new Set(received.map((p) => p.university))).toEqual(
       new Set(['Uni A', 'Uni B']),
     );
-    const rows = res.body.data.rows as any[];
+    const rows = res.body.data.rows;
     expect(rows.every((r) => r.status === 'Ranked')).toBe(true);
     expect(res.body.data.rubricVersion).toBe('NPE-1.2');
   });
@@ -335,7 +413,7 @@ describe('National ranking sends the complete package to the AI (real app + real
       const name = seeds.find((s) => ids[s.name] === p.projectId)!.name;
       // 1 flashcard
       expect(p.flashcard).toMatchObject({
-        university: expect.any(String),
+        university: expect.any(String) as unknown,
         sdg: 'SDG 4',
         city: 'Lahore',
         teamSize: 2,
@@ -382,9 +460,9 @@ describe('National ranking sends the complete package to the AI (real app + real
         approvalRef: 'deadbeefcafe',
       });
       // 4 evidence manifest: every attached original
-      expect(
-        p.uploaded_evidence_files.map((f: any) => f.file_name).sort(),
-      ).toEqual(['clip.mp4', 'photo1.jpg', 'receipt.pdf']);
+      expect(p.uploaded_evidence_files!.map((f) => f.file_name).sort()).toEqual(
+        ['clip.mp4', 'photo1.jpg', 'receipt.pdf'],
+      );
       expect(p.lockedCii).toBe(85);
     }
   });
@@ -423,24 +501,21 @@ describe('National ranking sends the complete package to the AI (real app + real
       },
     ]);
     const res = await analyzeAll();
-    const alpha = (res.body.data.rows as any[]).find(
-      (r) => r.id === ids['Alpha'],
-    );
+    const alpha = res.body.data.rows.find((r) => r.id === ids['Alpha'])!;
     expect(alpha.status).toBe('Ranked'); // a video that cannot be read is supporting material, not a reason to hold
     expect(alpha.evidenceRead.notInspected).toEqual([
       expect.objectContaining({ name: 'clip.mp4' }),
     ]);
-    expect(alpha.evidenceRead.inspected.map((f: any) => f.name).sort()).toEqual(
-      ['photo1.jpg', 'receipt.pdf'],
-    );
-    const bravo = (res.body.data.rows as any[]).find(
-      (r) => r.id === ids['Bravo'],
-    );
+    expect(alpha.evidenceRead.inspected.map((f) => f.name).sort()).toEqual([
+      'photo1.jpg',
+      'receipt.pdf',
+    ]);
+    const bravo = res.body.data.rows.find((r) => r.id === ids['Bravo'])!;
     expect(bravo.evidenceRead.notInspected).toEqual([]);
     // survives a reload: it is stored with the evaluation, not just in the response
     const again = await packages();
     expect(
-      (again.run.rows as any[]).find((r) => r.id === ids['Alpha']).evidenceRead
+      again.run.rows.find((r) => r.id === ids['Alpha'])!.evidenceRead
         .notInspected,
     ).toHaveLength(1);
   });
@@ -454,19 +529,16 @@ describe('National ranking sends the complete package to the AI (real app + real
       },
     ]);
     const res = await analyzeAll();
-    const rows = res.body.data.rows as any[];
-    const charlie = rows.find((r) => r.id === ids['Charlie']);
+    const rows = res.body.data.rows;
+    const charlie = rows.find((r) => r.id === ids['Charlie'])!;
     expect(charlie.status).toBe('Review');
     expect(charlie.rank).toBeNull();
     expect(charlie.score).toBeNull();
     expect(charlie.reason).toMatch(/Could not read receipt\.pdf/);
     expect(rows.filter((r) => r.status === 'Ranked')).toHaveLength(3);
     // and the studio reports it as held, not as a low score
-    const studio = await h
-      .as(admin)
-      .post(`${BASE}/studio/preview`)
-      .send({ lens: 'excellence' });
-    expect(studio.body.data.result.rows.map((r: any) => r.id)).not.toContain(
+    const studio = await studioPreview({ lens: 'excellence' });
+    expect(studio.body.data.result.rows.map((r) => r.id)).not.toContain(
       ids['Charlie'],
     );
     expect(studio.body.data.result.heldIds).toContain(ids['Charlie']);
@@ -479,15 +551,13 @@ describe('National ranking sends the complete package to the AI (real app + real
     expect(second.status).toBe(201);
     expect(second.body.data.runId).not.toBe(first.body.data.runId);
     expect(aiCalls).toBe(4);
-    expect(
-      (second.body.data.rows as any[]).every((r) => r.status === 'Ranked'),
-    ).toBe(true);
+    expect(second.body.data.rows.every((r) => r.status === 'Ranked')).toBe(
+      true,
+    );
     // a CHANGED package (new version) is read again
-    await h.ds
-      .getRepository(StudentReport)
-      .update(ids['Delta'], {
-        reportSubmittedAt: new Date('2026-05-01T00:00:00Z'),
-      } as any);
+    await h.ds.getRepository(StudentReport).update(ids['Delta'], {
+      reportSubmittedAt: new Date('2026-05-01T00:00:00Z'),
+    });
     await analyzeAll();
     expect(aiCalls).toBe(5);
     expect(received[received.length - 1].projectId).toBe(ids['Delta']);
@@ -495,22 +565,18 @@ describe('National ranking sends the complete package to the AI (real app + real
 
   it('reads made under the older NPE-1.1 rubric are re-scored under NPE-1.2, never re-read (no AI cost on a rubric upgrade)', async () => {
     const pk = await packages();
-    const legacy: any = await h.ds
-      .getRepository(NpeRankingRun)
-      .save(
-        h.ds
-          .getRepository(NpeRankingRun)
-          .create({
-            rubricVersion: 'NPE-1.1',
-            scope: 'national',
-            role: 'ciel_admin',
-            status: 'published',
-            createdByUserId: admin.id,
-            packageVersions: {},
-            reviewClearances: {},
-            meta: {},
-          } as any) as any,
-      );
+    const legacy = await h.ds.getRepository(NpeRankingRun).save(
+      h.ds.getRepository(NpeRankingRun).create({
+        rubricVersion: 'NPE-1.1',
+        scope: 'national',
+        role: 'ciel_admin',
+        status: 'published',
+        createdByUserId: admin.id,
+        packageVersions: {},
+        reviewClearances: {},
+        meta: {},
+      } as DeepPartial<NpeRankingRun>),
+    );
     const criteria = Object.fromEntries(
       NPE_CRITERION_KEYS.map((k) => [
         k,
@@ -521,62 +587,50 @@ describe('National ranking sends the complete package to the AI (real app + real
           claimIds: [`${k}-1`],
         },
       ]),
-    );
+    ) as Judgments;
     for (const p of pk.packages) {
-      await h.ds
-        .getRepository(NpeRankingEvaluation)
-        .save(
-          h.ds
-            .getRepository(NpeRankingEvaluation)
-            .create({
-              runId: legacy.id,
-              reportId: p.id,
-              packageVersion: p.version,
-              readComplete: true,
-              flags: [],
-              criteria,
-              claims: [],
-              summary: 'old',
-              limitations: 'old',
-              audit: {
-                model: 'npe_ranking_evaluation',
-                payloadVersion: NPE_PAYLOAD_VERSION,
-              },
-            } as any) as any,
-        );
+      await h.ds.getRepository(NpeRankingEvaluation).save(
+        h.ds.getRepository(NpeRankingEvaluation).create({
+          runId: legacy.id,
+          reportId: p.id,
+          packageVersion: p.version,
+          readComplete: true,
+          flags: [],
+          criteria,
+          claims: [],
+          summary: 'old',
+          limitations: 'old',
+          audit: {
+            model: 'npe_ranking_evaluation',
+            payloadVersion: NPE_PAYLOAD_VERSION,
+          },
+        } as DeepPartial<NpeRankingEvaluation>),
+      );
     }
     const res = await analyzeAll();
     expect(res.status).toBe(201);
     expect(aiCalls).toBe(0); // every package was already read from the complete package; the judgment does not depend on the weights
     expect(res.body.data.rubricVersion).toBe('NPE-1.2');
-    const alpha = (res.body.data.rows as any[]).find(
-      (r) => r.id === ids['Alpha'],
-    );
-    const expected = npeCalculate(85, criteria as any, 'NPE-1.2').total;
+    const alpha = res.body.data.rows.find((r) => r.id === ids['Alpha'])!;
+    const expected = npeCalculate(85, criteria, 'NPE-1.2').total;
     expect(alpha.score).toBe(expected);
-    expect(alpha.score).not.toBe(
-      npeCalculate(85, criteria as any, 'NPE-1.1').total,
-    );
+    expect(alpha.score).not.toBe(npeCalculate(85, criteria, 'NPE-1.1').total);
   });
 
   it('reads made from the OLD, thinner package are not trusted: every package is read once more from the complete package', async () => {
     const pk = await packages();
-    const legacy: any = await h.ds
-      .getRepository(NpeRankingRun)
-      .save(
-        h.ds
-          .getRepository(NpeRankingRun)
-          .create({
-            rubricVersion: 'NPE-1.1',
-            scope: 'national',
-            role: 'ciel_admin',
-            status: 'published',
-            createdByUserId: admin.id,
-            packageVersions: {},
-            reviewClearances: {},
-            meta: {},
-          } as any) as any,
-      );
+    const legacy = await h.ds.getRepository(NpeRankingRun).save(
+      h.ds.getRepository(NpeRankingRun).create({
+        rubricVersion: 'NPE-1.1',
+        scope: 'national',
+        role: 'ciel_admin',
+        status: 'published',
+        createdByUserId: admin.id,
+        packageVersions: {},
+        reviewClearances: {},
+        meta: {},
+      } as DeepPartial<NpeRankingRun>),
+    );
     const criteria = Object.fromEntries(
       NPE_CRITERION_KEYS.map((k) => [
         k,
@@ -589,24 +643,20 @@ describe('National ranking sends the complete package to the AI (real app + real
       ]),
     );
     for (const p of pk.packages) {
-      await h.ds
-        .getRepository(NpeRankingEvaluation)
-        .save(
-          h.ds
-            .getRepository(NpeRankingEvaluation)
-            .create({
-              runId: legacy.id,
-              reportId: p.id,
-              packageVersion: p.version,
-              readComplete: true,
-              flags: [],
-              criteria,
-              claims: [],
-              summary: 'thin',
-              limitations: 'thin',
-              audit: { model: 'npe_ranking_evaluation' },
-            } as any) as any,
-        );
+      await h.ds.getRepository(NpeRankingEvaluation).save(
+        h.ds.getRepository(NpeRankingEvaluation).create({
+          runId: legacy.id,
+          reportId: p.id,
+          packageVersion: p.version,
+          readComplete: true,
+          flags: [],
+          criteria,
+          claims: [],
+          summary: 'thin',
+          limitations: 'thin',
+          audit: { model: 'npe_ranking_evaluation' },
+        } as DeepPartial<NpeRankingEvaluation>),
+      );
     }
     const res = await analyzeAll();
     expect(aiCalls).toBe(4); // none of the unmarked reads was re-used
@@ -618,26 +668,20 @@ describe('National ranking sends the complete package to the AI (real app + real
           Object.keys(p.sections).length === 9,
       ),
     ).toBe(true);
-    const alpha = (res.body.data.rows as any[]).find(
-      (r) => r.id === ids['Alpha'],
-    );
+    const alpha = res.body.data.rows.find((r) => r.id === ids['Alpha'])!;
     expect(alpha.evaluation.summary).toBe('stub'); // the new, full-package read replaced the thin one
   });
 
   it('a package that changed after it was read is NOT ranked on its old read, and nothing can be published until it is read again', async () => {
     const first = await analyzeAll();
-    expect(
-      (first.body.data.rows as any[]).every((r) => r.status === 'Ranked'),
-    ).toBe(true);
+    expect(first.body.data.rows.every((r) => r.status === 'Ranked')).toBe(true);
     // Delta's report is re-submitted / re-approved: its package version changes
-    await h.ds
-      .getRepository(StudentReport)
-      .update(ids['Delta'], {
-        reportSubmittedAt: new Date('2026-06-01T00:00:00Z'),
-      } as any);
+    await h.ds.getRepository(StudentReport).update(ids['Delta'], {
+      reportSubmittedAt: new Date('2026-06-01T00:00:00Z'),
+    });
     const pk = await packages();
-    const rows = pk.run.rows as any[];
-    const delta = rows.find((r) => r.id === ids['Delta']);
+    const rows = pk.run.rows;
+    const delta = rows.find((r) => r.id === ids['Delta'])!;
     expect(delta.status).toBe('Ready');
     expect(delta.rank).toBeNull();
     expect(delta.score).toBeNull();
@@ -649,12 +693,11 @@ describe('National ranking sends the complete package to the AI (real app + real
       .post(`${BASE}/publish`)
       .send({ runId: first.body.data.runId });
     expect(publish.status).toBe(400);
-    expect(publish.body.message).toMatch(/have not been read yet/);
+    expect((publish.body as MessageRes).message).toMatch(
+      /have not been read yet/,
+    );
     // studio: the selection is reported as not ready to publish, and the project is not silently dropped
-    const studio = await h
-      .as(admin)
-      .post(`${BASE}/studio/preview`)
-      .send({ lens: 'excellence' });
+    const studio = await studioPreview({ lens: 'excellence' });
     expect(studio.body.data.result.unreadIds).toEqual([ids['Delta']]);
     expect(studio.body.data.publishBlockers.join(' ')).toMatch(
       /have not been read yet/,
@@ -669,14 +712,13 @@ describe('National ranking sends the complete package to the AI (real app + real
     ).toBe(400);
     // an evaluation-free angle is unaffected
     expect(
-      (await h.as(admin).post(`${BASE}/studio/preview`).send({ lens: 'cii' }))
-        .body.data.publishBlockers,
+      (await studioPreview({ lens: 'cii' })).body.data.publishBlockers,
     ).toEqual([]);
     // reading it again fixes it
     const second = await analyzeAll();
-    expect(
-      (second.body.data.rows as any[]).every((r) => r.status === 'Ranked'),
-    ).toBe(true);
+    expect(second.body.data.rows.every((r) => r.status === 'Ranked')).toBe(
+      true,
+    );
     expect(aiCalls).toBe(5);
   });
 
@@ -692,7 +734,7 @@ describe('National ranking sends the complete package to the AI (real app + real
         })),
       });
     expect(res.status).toBe(400);
-    expect(res.body.message).toMatch(/Stale package version/);
+    expect((res.body as MessageRes).message).toMatch(/Stale package version/);
     expect(aiCalls).toBe(0);
   });
 
@@ -706,7 +748,9 @@ describe('National ranking sends the complete package to the AI (real app + real
       .post(`${BASE}/analyze`)
       .send({ projects: fake });
     expect(res.status).toBe(403); // reached the scope check; before the fix this was a 400 "no more than 200 elements"
-    expect(res.body.message).toMatch(/outside this ranking scope/);
+    expect((res.body as MessageRes).message).toMatch(
+      /outside this ranking scope/,
+    );
     const tooMany = await h
       .as(admin)
       .post(`${BASE}/analyze`)

@@ -1,13 +1,41 @@
 import { OpportunityApplicationsService } from './opportunity-applications.service';
 
+/** The private/public members this spec stubs or calls on the service under test. */
+type TestableService = {
+  provisionApprovedApplicationSeats: jest.Mock;
+  ensureSeatsForApprovedStudent: (
+    studentId: string,
+    opportunityId: string,
+  ) => Promise<boolean>;
+  adminApprove: jest.Mock;
+  reconcileMissingTeamMemberSeatsForOpportunity: jest.Mock;
+  adminListOpportunityTeams: jest.Mock;
+  adminEnrollPendingApplications: (
+    opportunityId: string,
+    adminUserId: string,
+  ) => Promise<{
+    success: boolean;
+    data: { approved: number; failed: number };
+  }>;
+};
+
+type RepoStub = Record<string, jest.Mock>;
+
 function build(
-  over: { appRepo?: any; userRepo?: any; opportunityRepo?: any } = {},
-) {
-  const args: any[] = new Array(11).fill({});
+  over: {
+    appRepo?: RepoStub;
+    userRepo?: RepoStub;
+    opportunityRepo?: RepoStub;
+  } = {},
+): TestableService {
+  const args: unknown[] = new Array<unknown>(11).fill({});
   args[0] = over.appRepo ?? {};
   args[1] = over.opportunityRepo ?? {};
   args[3] = over.userRepo ?? {};
-  return new (OpportunityApplicationsService as any)(...args);
+  const Ctor = OpportunityApplicationsService as unknown as new (
+    ...ctorArgs: unknown[]
+  ) => unknown;
+  return new Ctor(...args) as TestableService;
 }
 
 describe('ensureSeatsForApprovedStudent', () => {
@@ -29,7 +57,7 @@ describe('ensureSeatsForApprovedStudent', () => {
       true,
     );
     expect(provision).toHaveBeenCalledTimes(1);
-    expect(provision.mock.calls[0][0].id).toBe('a1');
+    expect((provision.mock.calls[0] as [{ id: string }])[0].id).toBe('a1');
   });
 
   it('provisions a teammate through the lead application team list', async () => {

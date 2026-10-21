@@ -1,10 +1,13 @@
 import { Harness, E2eUser } from './harness';
 
+type IdRow = { id: string };
+
 /** ids visible on the public directory */
 export async function publicIds(h: Harness): Promise<string[]> {
   const res = await h.as(null).get('/public/opportunities');
   expect(res.status).toBe(200);
-  return (res.body.data as any[]).map((o) => o.id);
+  const body = res.body as { data: IdRow[] };
+  return body.data.map((o) => o.id);
 }
 
 /** ids on the student browse list (`GET /students/opportunities`) */
@@ -14,11 +17,12 @@ export async function studentBrowseIds(
 ): Promise<string[]> {
   const res = await h.as(student).get('/students/opportunities?limit=200');
   expect(res.status).toBe(200);
-  const rows: any[] =
-    res.body?.data?.opportunities ??
-    res.body?.data ??
-    res.body?.opportunities ??
-    [];
+  const body = (res.body ?? {}) as { data?: unknown; opportunities?: unknown };
+  const data = body.data as { opportunities?: unknown } | undefined;
+  const rows = (data?.opportunities ??
+    body.data ??
+    body.opportunities ??
+    []) as IdRow[];
   return rows.map((o) => o.id);
 }
 
@@ -31,7 +35,8 @@ export async function adminQueueIds(
     .as(admin)
     .get(`/admin/opportunities/approval-queue?queue=${queue}`);
   expect(res.status).toBe(200);
-  return (res.body.data as any[]).map((o) => o.id);
+  const body = res.body as { data: IdRow[] };
+  return body.data.map((o) => o.id);
 }
 
 export async function adminApprove(h: Harness, admin: E2eUser, id: string) {
@@ -78,11 +83,18 @@ export function expectNoSecrets(res: { body: unknown }, label = '') {
     throw new Error(`secret token(s) leaked ${label}: ${found.join(', ')}`);
 }
 
-export const tokens = (o: any) => ({
-  faculty: o.faculty_verification_token as string | null,
-  partner: o.partnerToken as string | null,
-  exec: o.execution_verification_token as string | null,
-});
+export const tokens = (o: any) => {
+  const row = o as {
+    faculty_verification_token?: string | null;
+    partnerToken?: string | null;
+    execution_verification_token?: string | null;
+  };
+  return {
+    faculty: row.faculty_verification_token as string | null,
+    partner: row.partnerToken as string | null,
+    exec: row.execution_verification_token as string | null,
+  };
+};
 
 export async function verifyToken(
   h: Harness,

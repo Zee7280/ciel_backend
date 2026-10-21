@@ -304,7 +304,9 @@ function num(value: unknown): number {
   const n =
     typeof value === 'number'
       ? value
-      : Number(String(value ?? '').replace(/,/g, ''));
+      : Number(
+          String((value ?? '') as { toString(): string }).replace(/,/g, ''),
+        );
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
@@ -333,8 +335,9 @@ export function buildStudioFacets(report: StudentReport): StudioFacets {
   const date = valid ? dt.toISOString().slice(0, 10) : '';
   const monthIdx = valid ? dt.getUTCMonth() : -1;
 
-  const sdgNum =
+  const sdgNum: unknown =
     rec(s3.primary_sdg).goal_number ?? report.primary_sdg_goal ?? null;
+  const sdgLabel = sdgNum ? String(sdgNum as { toString(): string }) : '';
   const skillsRaw = Array.isArray(s9.skills_grown) ? s9.skills_grown : [];
   const skills = [
     ...new Set(
@@ -354,10 +357,12 @@ export function buildStudioFacets(report: StudentReport): StudioFacets {
     num(s4.total_beneficiaries) ||
     num(rec(report.opportunity?.objectives).beneficiaries_count);
 
-  const resources = Array.isArray(s6.resources) ? s6.resources : [];
+  const resources: unknown[] = Array.isArray(s6.resources)
+    ? (s6.resources as unknown[])
+    : [];
   const funds =
     str(s6.use_resources).toLowerCase() === 'yes'
-      ? resources.reduce((sum: number, r) => {
+      ? resources.reduce<number>((sum, r) => {
           const row = rec(r);
           return /pkr|rs\.?|rupee/i.test(str(row.unit))
             ? sum + num(row.amount)
@@ -387,7 +392,7 @@ export function buildStudioFacets(report: StudentReport): StudioFacets {
     department: str(lead.degree) || str(report.student?.department) || '—',
     instructor:
       str(s1.faculty_supervisor_name) || str(report.faculty?.name) || '',
-    sdg: sdgNum ? `SDG ${sdgNum}` : '',
+    sdg: sdgNum ? `SDG ${sdgLabel}` : '',
     skills,
     date,
     year: valid ? String(dt.getUTCFullYear()) : '',

@@ -14,6 +14,9 @@ import { Roles } from '../auth/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
 
+/** Request user as populated by JwtStrategy.validate. */
+type FacultyRequest = { user: { id: string; email: string } };
+
 @Controller('faculty/applications')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.FACULTY)
@@ -23,7 +26,10 @@ export class FacultyApplicationsController {
   ) {}
 
   @Get()
-  list(@Request() req, @Query('status') status?: 'pending' | 'history') {
+  list(
+    @Request() req: FacultyRequest,
+    @Query('status') status?: 'pending' | 'history',
+  ) {
     return this.opportunityApplicationsService.facultyList(
       req.user.email || '',
       req.user.id,
@@ -32,7 +38,7 @@ export class FacultyApplicationsController {
   }
 
   @Post(':id/approve')
-  approve(@Request() req, @Param('id') id: string) {
+  approve(@Request() req: FacultyRequest, @Param('id') id: string) {
     return this.opportunityApplicationsService.facultyApprove(
       id,
       req.user.email || '',
@@ -42,7 +48,7 @@ export class FacultyApplicationsController {
 
   @Post(':id/reject')
   reject(
-    @Request() req,
+    @Request() req: FacultyRequest,
     @Param('id') id: string,
     @Body() body: { reason?: string },
   ) {

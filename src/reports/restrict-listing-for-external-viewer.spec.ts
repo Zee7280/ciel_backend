@@ -1,7 +1,17 @@
 import { StudentReportsService } from './student-reports.service';
 
-const restrict = (StudentReportsService as any)
-  .restrictListingForExternalViewer;
+/** Test-local views of the private members under test (same shapes as the real signatures). */
+type ListingStatics = {
+  restrictListingForExternalViewer: <T>(row: T) => T & Record<string, unknown>;
+  stripAnalysisFromListingRow: <T>(row: T) => T;
+  stripAnalysisScalarsForPartner: <T>(row: T) => T;
+};
+type SupersedeCiiLockProto = {
+  supersedeCiiLock: (report: unknown, reason: 'rejected' | 'unlocked') => void;
+};
+
+const statics = StudentReportsService as unknown as ListingStatics;
+const restrict = statics.restrictListingForExternalViewer;
 
 describe('restrictListingForExternalViewer', () => {
   const lockedRow = {
@@ -68,7 +78,7 @@ describe('restrictListingForExternalViewer', () => {
 });
 
 describe('stripAnalysisFromListingRow (partner / NGO)', () => {
-  const strip = (StudentReportsService as any).stripAnalysisFromListingRow;
+  const strip = statics.stripAnalysisFromListingRow;
   it('removes the analysis report but keeps the package documents', () => {
     const out = strip({
       id: 'r1',
@@ -95,7 +105,7 @@ describe('stripAnalysisFromListingRow (partner / NGO)', () => {
 });
 
 describe('partner payload keeps CII score but drops analyser internals', () => {
-  const strip = (StudentReportsService as any).stripAnalysisScalarsForPartner;
+  const strip = statics.stripAnalysisScalarsForPartner;
   it('keeps scores and removes AI section11 keys and analyser links', () => {
     const out = strip({
       cii_score: 80,
@@ -123,8 +133,14 @@ describe('partner payload keeps CII score but drops analyser internals', () => {
 
 describe('supersedeCiiLock', () => {
   it('resets faculty approval so a resubmitted report needs a fresh analysis', () => {
-    const svc = Object.create(StudentReportsService.prototype);
-    const report: any = {
+    const svc = Object.create(
+      StudentReportsService.prototype,
+    ) as SupersedeCiiLockProto;
+    const report: {
+      faculty_status: string;
+      ciiV45: { finalCII: number; previousLocks?: unknown[] };
+      ciiV45Lock: { locked: boolean } | null;
+    } = {
       faculty_status: 'approved',
       ciiV45: { finalCII: 70 },
       ciiV45Lock: { locked: true },

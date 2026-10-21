@@ -45,7 +45,6 @@ import {
   FypAiDimensionInput,
 } from './fyp-ai-analysis.constants';
 import { buildFypAiEvaluationPayload } from './build-fyp-ai-evaluation-payload.util';
-import { VentureMeritModelQueryDto } from './dto/venture-merit-model-query.dto';
 import {
   AddVentureDocumentDto,
   UpdateVentureDto,
@@ -467,6 +466,7 @@ export class PathsService implements OnModuleInit {
    * would erase `teacherEmail`, `studentName`, etc.). Stripping the `undefined` keys first
    * restores real partial-merge (PATCH) semantics. */
   private static withoutUndefined<T extends object>(
+    this: void,
     obj: T | undefined,
   ): Partial<T> {
     if (!obj) return {};
@@ -949,7 +949,8 @@ export class PathsService implements OnModuleInit {
     (['faculty', 'university', 'cielpk'] as const).forEach((level) => {
       const ribbon = entry.meritRibbon?.[level];
       if (ribbon) {
-        const { total, ...rest } = ribbon;
+        const rest = { ...ribbon };
+        delete rest.total;
         redacted[level] = rest;
       }
     });
@@ -1370,7 +1371,7 @@ export class PathsService implements OnModuleInit {
     user: { role: string; email: string; organizationId?: string },
     filters: MeritModelQueryDto,
   ) {
-    const role = user.role;
+    const role = user.role as UserRole;
     let pool: Array<CourseProjectEntry & { student: User | null }> = [];
     let scopeLabel = 'No scope';
     const honorsWideFilters =
@@ -1533,11 +1534,9 @@ export class PathsService implements OnModuleInit {
   private static deriveCourseworkRibbonLevel(user: {
     role: string;
   }): 'faculty' | 'university' | 'cielpk' {
-    if (user.role === UserRole.FACULTY) return 'faculty';
-    if (
-      user.role === UserRole.UNIVERSITY ||
-      user.role === UserRole.ORGANIZATION_ADMIN
-    )
+    const role = user.role as UserRole;
+    if (role === UserRole.FACULTY) return 'faculty';
+    if (role === UserRole.UNIVERSITY || role === UserRole.ORGANIZATION_ADMIN)
       return 'university';
     return 'cielpk';
   }
@@ -1548,12 +1547,12 @@ export class PathsService implements OnModuleInit {
     email: string;
     organizationId?: string;
   }): { scope: PathGraderRunScope; key: string } | null {
-    if (user.role === UserRole.FACULTY) {
+    const role = user.role as UserRole;
+    if (role === UserRole.FACULTY) {
       return { scope: 'faculty', key: (user.email || '').trim().toLowerCase() };
     }
     if (
-      (user.role === UserRole.UNIVERSITY ||
-        user.role === UserRole.ORGANIZATION_ADMIN) &&
+      (role === UserRole.UNIVERSITY || role === UserRole.ORGANIZATION_ADMIN) &&
       user.organizationId
     ) {
       return { scope: 'university', key: user.organizationId };
@@ -2975,7 +2974,7 @@ export class PathsService implements OnModuleInit {
     user: { role: string; email: string; organizationId?: string },
     filters: FypMeritModelQueryDto,
   ) {
-    const role = user.role;
+    const role = user.role as UserRole;
     let pool: Array<FypEntry & { student: User | null }> = [];
     let scopeLabel = 'No scope';
     const honorsSupervisorFilter = role !== UserRole.FACULTY;
@@ -3613,11 +3612,12 @@ export class PathsService implements OnModuleInit {
 
   /** The Venture Merit Model — 100pt rubric ranking of eligible (submitted + supervisor-approved)
    * ventures. Scoped like Coursework/FYP: faculty supervision, university org, or CIEL-wide. */
-  async getVentureMeritModel(
-    user: { role: string; email: string; organizationId?: string },
-    _filters: VentureMeritModelQueryDto,
-  ) {
-    const role = user.role;
+  async getVentureMeritModel(user: {
+    role: string;
+    email: string;
+    organizationId?: string;
+  }) {
+    const role = user.role as UserRole;
     let pool: Array<VentureEntry & { student: User | null }> = [];
     let scopeLabel = 'No scope';
     const graderRuns = await this.peekGraderRunUsage('startup', user);
@@ -3684,7 +3684,7 @@ export class PathsService implements OnModuleInit {
     user: { role: string; email: string; organizationId?: string },
     dto: NotifyMeritRanksDto,
   ) {
-    const model = await this.getVentureMeritModel(user, {});
+    const model = await this.getVentureMeritModel(user);
     const ranked: RankedVentureMeritCard[] = Array.isArray(model.entries)
       ? model.entries
       : [];

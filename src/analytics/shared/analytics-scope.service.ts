@@ -55,8 +55,8 @@ export class AnalyticsScopeService {
     if (
       r === UserRole.NGO ||
       r === UserRole.CORPORATE ||
-      r === UserRole.ORGANIZATION_ADMIN ||
-      r === UserRole.PARTNER
+      r === UserRole.ORGANIZATION_ADMIN
+      // UserRole.PARTNER shares the NGO value and is covered by the NGO check above.
     ) {
       const t = String(orgType || '').toLowerCase();
       if (t.includes('university')) return 'university';

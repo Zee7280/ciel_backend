@@ -16,16 +16,14 @@ const opp = (dept: string, contact = 'Prof@uni.edu ') => ({
 describe('faculty department alignment', () => {
   it('replaces the student-typed department with the registered faculty profile department', async () => {
     const body = { success: true, data: opp('BS Botany') };
-    const ds = {
-      query: jest
-        .fn()
-        .mockResolvedValue([
-          { email: 'prof@uni.edu', dept: 'Computer Science' },
-        ]),
-    };
+    const query = jest.fn<Promise<any>, [string, unknown[]?]>();
+    query.mockResolvedValue([
+      { email: 'prof@uni.edu', dept: 'Computer Science' },
+    ]);
+    const ds = { query };
     await alignFacultyDepartments(body, ds);
     expect(body.data.supervision.faculty_department).toBe('Computer Science');
-    expect(ds.query.mock.calls[0][1]).toEqual([['prof@uni.edu']]);
+    expect(query.mock.calls[0][1]).toEqual([['prof@uni.edu']]);
   });
 
   it('works on lists, nested payloads and the detail-view faculty block', () => {

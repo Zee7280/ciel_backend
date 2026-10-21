@@ -1,7 +1,15 @@
 import { OpportunitiesService } from './opportunities.service';
 
-function svc() {
-  return Object.create(OpportunitiesService.prototype);
+/** The private members this spec reaches into on a bare prototype instance. */
+type MatchParamsService = {
+  facultyUniversityScope: { normalizeOrgName: (n: string) => string };
+  partnerOrgNameMatchParams: (orgNameNorm: string) => Record<string, string>;
+};
+
+function svc(): MatchParamsService {
+  return Object.create(
+    OpportunitiesService.prototype as object,
+  ) as MatchParamsService;
 }
 
 describe('partnerOrgNameMatchParams', () => {

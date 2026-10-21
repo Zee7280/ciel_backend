@@ -4,14 +4,38 @@
  * teammate's own seat, is visible from the teammate's login, records who typed it, cannot cross teams,
  * cannot steal a linked seat, and that delete permissions are right.
  */
+import { DeepPartial } from 'typeorm';
 import { bootHarness, Harness, E2eUser, oppPayload } from './e2e/harness';
 import { adminApprove } from './e2e/helpers';
 import { UserRole } from '../src/users/enums/user-role.enum';
+import { User } from '../src/users/entities/user.entity';
+import { Opportunity } from '../src/opportunities/entities/opportunity.entity';
 import { Participation } from '../src/engagement/entities/participant.entity';
 import { AttendanceLog } from '../src/engagement/entities/attendance-log.entity';
 
 const day = (d: number) =>
   new Date(Date.now() + d * 86400000).toISOString().slice(0, 10);
+
+/** What this spec reads from supertest responses. */
+type DataBody<T> = { data: T };
+type MessageBody = { message: string };
+type LogRow = {
+  id: string;
+  participantId: string;
+  loggedByRole?: string;
+  loggedByUserId?: string;
+  sessionHours?: number | string;
+  participant: { id: string };
+};
+type SeatRow = {
+  id: string;
+  studentId?: string | null;
+  email?: string;
+  teamId?: string | null;
+  projectId?: string;
+  attendanceLogs?: LogRow[];
+};
+type OppUpdate = DeepPartial<Opportunity>;
 
 describe('Attendance: self vs team-lead proxy entries (real app + real Postgres)', () => {
   let h: Harness;
@@ -30,8 +54,9 @@ describe('Attendance: self vs team-lead proxy entries (real app + real Postgres)
     const ngo = await h.makeUser(UserRole.NGO, { org });
     const res = await h.as(ngo).post('/opportunities').send(oppPayload());
     expect(res.status).toBe(201);
-    await adminApprove(h, admin, res.body.id);
-    await h.opps.update(res.body.id, {
+    const created = res.body as { id: string };
+    await adminApprove(h, admin, created.id);
+    await h.opps.update(created.id, {
       status: 'active',
       workflowStage: 'live',
       admin_approved: true,
@@ -43,22 +68,27 @@ describe('Attendance: self vs team-lead proxy entries (real app + real Postgres)
         volunteers_required: 8,
       },
       participation_scope: { rule: 'open_all_universities' },
-    } as any);
-    return h.reload(res.body.id);
+    } as OppUpdate);
+    return h.reload(created.id);
   };
 
   const student = () =>
     h.makeUser(UserRole.STUDENT, {
-      overrides: { university: 'E2E University', cnic: null } as any,
+      // cnic is deliberately NULL on these accounts (the column is typed as a string)
+      overrides: {
+        university: 'E2E University',
+        cnic: null,
+      } as unknown as Partial<User>,
     });
 
-  const seat = async (
+  const seat = (
     projectId: string,
     u: E2eUser | null,
     o: { lead?: boolean; teamId: string; email?: string },
   ) => {
     const parts = h.ds.getRepository(Participation);
     const email = o.email ?? u!.email;
+    // An unlinked ("ghost") seat stores NULL in the string-typed studentId column on purpose.
     return parts.save(
       parts.create({
         email,
@@ -83,8 +113,8 @@ describe('Attendance: self vs team-lead proxy entries (real app + real Postgres)
         teamId: o.teamId,
         primaryFacultyEmail: 'faculty@e2e.test',
         attendanceApproverType: 'partner',
-      } as any),
-    ) as unknown as Participation;
+      } as unknown as DeepPartial<Participation>),
+    );
   };
 
   const body = (over: Record<string, any> = {}) => ({
@@ -119,15 +149,16 @@ describe('Attendance: self vs team-lead proxy entries (real app + real Postgres)
       .post(`/engagement/${w.mateSeat.id}/attendance`)
       .send(body());
     expect(res.status).toBe(201);
-    expect(res.body.data.participantId).toBe(w.mateSeat.id);
-    expect(res.body.data.loggedByRole).toBe('self');
-    expect(res.body.data.loggedByUserId).toBe(w.mate.id);
+    const entry = (res.body as DataBody<LogRow>).data;
+    expect(entry.participantId).toBe(w.mateSeat.id);
+    expect(entry.loggedByRole).toBe('self');
+    expect(entry.loggedByUserId).toBe(w.mate.id);
 
     const mine = await h
       .as(w.mate)
       .get(`/engagement/${w.mateSeat.id}/attendance`);
     expect(mine.status).toBe(200);
-    expect(mine.body.data).toHaveLength(1);
+    expect((mine.body as DataBody<LogRow[]>).data).toHaveLength(1);
     expect(await logs(w.leadSeat.id)).toHaveLength(0);
   });
 
@@ -138,9 +169,10 @@ describe('Attendance: self vs team-lead proxy entries (real app + real Postgres)
       .post(`/engagement/${w.mateSeat.id}/attendance`)
       .send(body());
     expect(res.status).toBe(201);
-    expect(res.body.data.participantId).toBe(w.mateSeat.id);
-    expect(res.body.data.loggedByRole).toBe('team_lead');
-    expect(res.body.data.loggedByUserId).toBe(w.lead.id);
+    const entry = (res.body as DataBody<LogRow>).data;
+    expect(entry.participantId).toBe(w.mateSeat.id);
+    expect(entry.loggedByRole).toBe('team_lead');
+    expect(entry.loggedByUserId).toBe(w.lead.id);
 
     expect(await logs(w.leadSeat.id)).toHaveLength(0); // nothing leaks onto the lead's own seat
     const seatRow = await h.ds
@@ -152,23 +184,26 @@ describe('Attendance: self vs team-lead proxy entries (real app + real Postgres)
     const own = await h
       .as(w.mate)
       .get(`/engagement/${w.mateSeat.id}/attendance`);
-    expect(own.body.data.map((l: any) => l.id)).toContain(res.body.data.id);
+    expect((own.body as DataBody<LogRow[]>).data.map((l) => l.id)).toContain(
+      entry.id,
+    );
     const proj = await h
       .as(w.mate)
       .get(`/engagement/project/${w.opp.id}/attendance-logs`);
     expect(proj.status).toBe(200);
-    const row = proj.body.data.find((l: any) => l.id === res.body.data.id);
-    expect(row.participant.id).toBe(w.mateSeat.id);
-    expect(row.loggedByRole).toBe('team_lead');
+    const row = (proj.body as DataBody<LogRow[]>).data.find(
+      (l) => l.id === entry.id,
+    );
+    expect(row!.participant.id).toBe(w.mateSeat.id);
+    expect(row!.loggedByRole).toBe('team_lead');
     const mySeats = await h.as(w.mate).get('/engagement/my-participations');
     if (mySeats.status === 200) {
-      const mineSeat = (mySeats.body.data ?? mySeats.body).find?.(
-        (p: any) => p.id === w.mateSeat.id,
-      );
+      // either `{ data: SeatRow[] }` or a bare array; anything else has no `find`
+      const seatList = ((mySeats.body as { data?: unknown }).data ??
+        mySeats.body) as { find?: SeatRow[]['find'] };
+      const mineSeat = seatList.find?.((p) => p.id === w.mateSeat.id);
       if (mineSeat?.attendanceLogs)
-        expect(mineSeat.attendanceLogs.map((l: any) => l.id)).toContain(
-          res.body.data.id,
-        );
+        expect(mineSeat.attendanceLogs.map((l) => l.id)).toContain(entry.id);
     }
   });
 
@@ -212,7 +247,7 @@ describe('Attendance: self vs team-lead proxy entries (real app + real Postgres)
       .post(`/engagement/${w.mateSeat.id}/attendance`)
       .send(body());
     expect(r1.status).toBe(400);
-    expect(r1.body.message).toMatch(/Not authorized/);
+    expect((r1.body as MessageBody).message).toMatch(/Not authorized/);
 
     const r2 = await h
       .as(w.mate)
@@ -258,7 +293,7 @@ describe('Attendance: self vs team-lead proxy entries (real app + real Postgres)
       .as(w.lead)
       .post(`/engagement/${w.mateSeat.id}/attendance`)
       .send(body());
-    const id1 = lead1.body.data.id;
+    const id1 = (lead1.body as DataBody<LogRow>).data.id;
     const stranger = await student();
     const bad = await h
       .as(stranger)
@@ -276,7 +311,9 @@ describe('Attendance: self vs team-lead proxy entries (real app + real Postgres)
       .send(body({ dateOfEngagement: day(-3) }));
     const byMate = await h
       .as(w.mate)
-      .del(`/engagement/${w.mateSeat.id}/attendance/${lead2.body.data.id}`);
+      .del(
+        `/engagement/${w.mateSeat.id}/attendance/${(lead2.body as DataBody<LogRow>).data.id}`,
+      );
     expect(byMate.status).toBe(200);
 
     // A lead cannot delete an entry the TEAMMATE logged themselves.
@@ -286,7 +323,9 @@ describe('Attendance: self vs team-lead proxy entries (real app + real Postgres)
       .send(body({ dateOfEngagement: day(-4) }));
     const leadVsSelf = await h
       .as(w.lead)
-      .del(`/engagement/${w.mateSeat.id}/attendance/${self.body.data.id}`);
+      .del(
+        `/engagement/${w.mateSeat.id}/attendance/${(self.body as DataBody<LogRow>).data.id}`,
+      );
     expect(leadVsSelf.status).toBe(403);
   });
 
@@ -304,8 +343,9 @@ describe('Attendance: self vs team-lead proxy entries (real app + real Postgres)
       .post(`/engagement/${ghost.id}/attendance`)
       .send(body());
     expect(r.status).toBe(201);
-    expect(r.body.data.participantId).toBe(ghost.id);
-    expect(r.body.data.loggedByRole).toBe('team_lead');
+    const entry = (r.body as DataBody<LogRow>).data;
+    expect(entry.participantId).toBe(ghost.id);
+    expect(entry.loggedByRole).toBe('team_lead');
   });
 
   describe('member sees lead-entered hours even when the student has more than one seat on the project', () => {
@@ -315,20 +355,23 @@ describe('Attendance: self vs team-lead proxy entries (real app + real Postgres)
         .as(mate)
         .get(`/student/projects/${projectId}/my-participation`);
       const my = await h.as(mate).get('/engagement/my');
-      const mine = (my.body.data as any[]).filter(
+      const mine = (my.body as DataBody<SeatRow[]>).data.filter(
         (r) => r.projectId === projectId,
       );
       const proj = await h
         .as(mate)
         .get(`/engagement/project/${projectId}/attendance-logs`);
+      const partBody = part.body as
+        | { data?: { hours: { logged: number | string } } }
+        | undefined;
       return {
-        hours: part.body?.data?.hours,
+        hours: partBody?.data?.hours,
         // what the report page reads: the first /my seat for this project
         mySeatLogHours: (mine[0]?.attendanceLogs ?? []).reduce(
-          (x: number, l: any) => x + Number(l.sessionHours),
+          (x: number, l) => x + Number(l.sessionHours),
           0,
         ),
-        projectLogs: proj.body.data as any[],
+        projectLogs: (proj.body as DataBody<LogRow[]>).data,
         status: part.status,
       };
     };
@@ -341,7 +384,7 @@ describe('Attendance: self vs team-lead proxy entries (real app + real Postgres)
     ) => {
       const res = await h.as(lead).get(`/engagement/project/${projectId}/team`);
       expect(res.status).toBe(200);
-      return (res.body.data as any[]).filter(
+      return (res.body as DataBody<SeatRow[]>).data.filter(
         (r) => r.studentId === mate.id || r.email === mate.email,
       );
     };
@@ -354,12 +397,13 @@ describe('Attendance: self vs team-lead proxy entries (real app + real Postgres)
       await seat(opp.id, lead, { lead: true, teamId });
       const parts = h.ds.getRepository(Participation);
       // older individual leftover, then the real team seat
-      const leftover = await seat(opp.id, mate, { teamId: '' as any });
+      const leftover = await seat(opp.id, mate, { teamId: '' });
+      // teamId is cleared to NULL (the column is typed as a string)
       await parts.update(leftover.id, {
         participationMode: 'individual',
         teamId: null,
         primaryFacultyEmail: 'faculty@e2e.test',
-      } as any);
+      } as unknown as DeepPartial<Participation>);
       await seat(opp.id, mate, { teamId });
 
       // The lead's dropdown only offers team seats (frontend filters the roster by teamId).
@@ -384,7 +428,7 @@ describe('Attendance: self vs team-lead proxy entries (real app + real Postgres)
       // Even a lead entry that landed on the leftover seat must reach the member.
       const v = await memberView(mate, opp.id);
       expect(v.status).toBe(200);
-      expect(Number(v.hours.logged)).toBe(3 * rosterSeats.length);
+      expect(Number(v.hours!.logged)).toBe(3 * rosterSeats.length);
       expect(v.projectLogs.length).toBe(rosterSeats.length);
       expect(v.mySeatLogHours).toBe(3 * rosterSeats.length);
     });
@@ -408,12 +452,10 @@ describe('Attendance: self vs team-lead proxy entries (real app + real Postgres)
         .send(body({ dateOfEngagement: day(-3) }))
         .expect(201);
       const v = await memberView(mate, opp.id);
-      expect(Number(v.hours.logged)).toBe(6); // both entries count, wherever they were typed
+      expect(Number(v.hours!.logged)).toBe(6); // both entries count, wherever they were typed
       expect(v.mySeatLogHours).toBe(6);
       // Both landed on ONE seat (the canonical one), so the member's dashboard seat holds them all.
-      expect(new Set(v.projectLogs.map((l: any) => l.participantId)).size).toBe(
-        1,
-      );
+      expect(new Set(v.projectLogs.map((l) => l.participantId)).size).toBe(1);
     });
 
     it('entries ALREADY stored on a sibling seat (legacy data) are visible to the member', async () => {
@@ -437,15 +479,15 @@ describe('Attendance: self vs team-lead proxy entries (real app + real Postgres)
             organizationName: 'E2E School',
             activityType: 'Teaching',
             description: 'legacy',
-          } as any),
+          }),
         );
       }
       const v = await memberView(mate, opp.id);
-      expect(Number(v.hours.logged)).toBe(6);
+      expect(Number(v.hours!.logged)).toBe(6);
       expect(v.mySeatLogHours).toBe(6);
       expect(v.projectLogs).toHaveLength(2);
       const own = await h.as(mate).get(`/engagement/${first.id}/attendance`);
-      expect(own.body.data).toHaveLength(2);
+      expect((own.body as DataBody<LogRow[]>).data).toHaveLength(2);
       // The member deletes an entry using the id the project list shows (canonical seat), even if it sits on a sibling.
       const target = v.projectLogs[0];
       const del = await h
@@ -485,17 +527,16 @@ describe('Attendance: self vs team-lead proxy entries (real app + real Postgres)
       await seat(opp.id, lead, { lead: true, teamId });
       // older individual leftover FIRST, then the real team seat (the dedupe keeps the first by createdAt)
       const leftover = await seat(opp.id, mate, { teamId });
-      await h.ds
-        .getRepository(Participation)
-        .update(leftover.id, {
-          participationMode: 'individual',
-          teamId: null,
-        } as any);
+      await h.ds.getRepository(Participation).update(leftover.id, {
+        participationMode: 'individual',
+        teamId: null,
+      } as unknown as DeepPartial<Participation>);
       const real = await seat(opp.id, mate, { teamId });
 
       const roster = (
-        await h.as(lead).get(`/engagement/project/${opp.id}/team`)
-      ).body.data as any[];
+        (await h.as(lead).get(`/engagement/project/${opp.id}/team`))
+          .body as DataBody<SeatRow[]>
+      ).data;
       const rosterMate = roster.filter((r) => r.studentId === mate.id);
       expect(rosterMate).toHaveLength(1); // one card per person for the lead
 
@@ -505,11 +546,12 @@ describe('Attendance: self vs team-lead proxy entries (real app + real Postgres)
         .send(body())
         .expect(201);
       const memberSeats = (
-        (await h.as(mate).get('/engagement/my')).body.data as any[]
-      ).filter((r) => r.projectId === opp.id);
+        (await h.as(mate).get('/engagement/my')).body as DataBody<SeatRow[]>
+      ).data.filter((r) => r.projectId === opp.id);
       const logs = (
-        await h.as(lead).get(`/engagement/project/${opp.id}/attendance-logs`)
-      ).body.data as any[];
+        (await h.as(lead).get(`/engagement/project/${opp.id}/attendance-logs`))
+          .body as DataBody<LogRow[]>
+      ).data;
 
       expect(logs[0].participantId).toBe(rosterMate[0].id); // lead's card finds the entry
       expect(memberSeats[0].id).toBe(rosterMate[0].id); // member's page picks the same seat
@@ -531,17 +573,18 @@ describe('Attendance: self vs team-lead proxy entries (real app + real Postgres)
         .post(`/engagement/${seatB.id}/attendance`)
         .send(body());
       expect(r.status).toBe(201);
-      expect(r.body.data.participantId).toBe(seatB.id);
+      const entry = (r.body as DataBody<LogRow>).data;
+      expect(entry.participantId).toBe(seatB.id);
       expect(await logs(seatA.id)).toHaveLength(0);
       const proj = (
-        await h.as(dual).get(`/engagement/project/${opp.id}/attendance-logs`)
-      ).body.data as any[];
-      expect(proj.find((l) => l.id === r.body.data.id).participantId).toBe(
-        seatB.id,
-      );
+        (await h.as(dual).get(`/engagement/project/${opp.id}/attendance-logs`))
+          .body as DataBody<LogRow[]>
+      ).data;
+      expect(proj.find((l) => l.id === entry.id)!.participantId).toBe(seatB.id);
       const roster = (
-        await h.as(leadB).get(`/engagement/project/${opp.id}/team`)
-      ).body.data as any[];
+        (await h.as(leadB).get(`/engagement/project/${opp.id}/team`))
+          .body as DataBody<SeatRow[]>
+      ).data;
       expect(
         roster
           .filter((x) => x.studentId === dual.id)

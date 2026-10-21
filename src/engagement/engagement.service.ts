@@ -89,6 +89,28 @@ const PROJECT_TEAM_VISIBILITY_STATUSES: readonly string[] = [
  * paths guarded by it stay reachable for the compiler. */
 const ATTENDANCE_REVIEW_DEFERRED_TO_FLASHCARD: boolean = true;
 
+/** Shapes of the loosely-typed jsonb columns on Opportunity that this service reads. */
+type OpportunityTimelineJson =
+  | { volunteers_required?: unknown }
+  | null
+  | undefined;
+type PartnerOrganizationJson = { contact_person?: string } | null | undefined;
+
+/** Shallow copy of `obj` without `keys` — same own-enumerable semantics as rest destructuring. */
+function omitKeys<T extends object, K extends keyof T>(
+  obj: T,
+  keys: readonly K[],
+): Omit<T, K> {
+  const out = { ...obj } as Record<string, unknown>;
+  for (const key of keys) delete out[key as string];
+  return out as Omit<T, K>;
+}
+
+/** `String(v ?? '')` for an unknown value — every non-nullish value has Object.prototype.toString. */
+function stringifyUnknown(v: unknown): string {
+  return String((v ?? '') as { toString(): string });
+}
+
 @Injectable()
 export class EngagementService {
   private readonly logger = new Logger(EngagementService.name);
@@ -196,7 +218,7 @@ export class EngagementService {
       : '';
 
     // Check if already registered
-    let existing;
+    let existing: Participation | null | undefined;
     if (studentId) {
       existing = await this.participantRepository.findOne({
         where: { studentId, projectId: opportunity.id },
@@ -302,7 +324,7 @@ export class EngagementService {
       return this.decryptParticipation(saved);
     }
 
-    const participationData: any = {
+    const participationData: Partial<Participation> = {
       ...data,
       ...(normalizedEmailLookup ? { email: normalizedEmailLookup } : {}),
       projectId: opportunity.id,
@@ -340,9 +362,7 @@ export class EngagementService {
       }
     }
 
-    const participation = this.participantRepository.create(
-      participationData as Partial<Participation>,
-    );
+    const participation = this.participantRepository.create(participationData);
 
     if (data.cnic) {
       const normalizedCnic = (data.cnic || '').replace(/\D/g, '');
@@ -376,8 +396,10 @@ export class EngagementService {
     callerRole: string,
     dto: RegisterParticipantDto,
   ): Promise<{ mayRegisterOthers: boolean }> {
-    if (callerRole === UserRole.SUPER_ADMIN) return { mayRegisterOthers: true };
-    if (callerRole !== UserRole.STUDENT) {
+    // Role comes from the JWT user (DB-backed), so it is already a UserRole value.
+    const role = callerRole as UserRole;
+    if (role === UserRole.SUPER_ADMIN) return { mayRegisterOthers: true };
+    if (role !== UserRole.STUDENT) {
       throw new ForbiddenException(
         'Only students can register a project participation.',
       );
@@ -660,12 +682,11 @@ export class EngagementService {
         if (effectiveTeamId) {
           teamFields.teamId = effectiveTeamId;
         }
-        const {
-          primary_faculty_email,
-          secondary_faculty_email,
-          team_id,
-          ...registrationFields
-        } = dto;
+        const registrationFields = omitKeys(dto, [
+          'primary_faculty_email',
+          'secondary_faculty_email',
+          'team_id',
+        ]);
         registrationFields.department = sanitizeReportAcademicDepartment(
           registrationFields.department,
           registrationFields.academicProgram,
@@ -760,7 +781,8 @@ export class EngagementService {
         // Team size cap: lead + members may not exceed the opportunity's seats (volunteers_required).
         if (isTeamMemberRegistration && !participation.id && effectiveTeamId) {
           const cap = resolveTeamSeatCap(
-            opportunity.timeline?.volunteers_required,
+            (opportunity.timeline as OpportunityTimelineJson)
+              ?.volunteers_required,
           );
           if (cap) {
             // Count teammates only (the lead is not a "team member" for this cap).
@@ -836,7 +858,7 @@ export class EngagementService {
             } catch (error) {
               this.logger.error(
                 `Failed to send faculty approval request to ${primaryFacultyEmail}`,
-                error.stack,
+                (error as { stack?: string }).stack,
               );
             }
           }
@@ -851,7 +873,7 @@ export class EngagementService {
             } catch (error) {
               this.logger.error(
                 `Failed to send faculty collaborator notice to ${secondaryFacultyEmail}`,
-                error.stack,
+                (error as { stack?: string }).stack,
               );
             }
           }
@@ -1103,13 +1125,11 @@ export class EngagementService {
     const leadStudentIdsByTeam = new Map<string, Set<string>>();
     for (const row of rows) {
       if (row.isTeamLead !== true && row.is_team_lead !== true) continue;
-      const teamKey = String(
+      const teamKey = stringifyUnknown(
         row.teamId ?? row.team_id ?? row.applicationId ?? 'default',
       );
-      const em = String(row.email ?? '')
-        .trim()
-        .toLowerCase();
-      const sid = String(row.studentId ?? row.student_id ?? '').trim();
+      const em = stringifyUnknown(row.email).trim().toLowerCase();
+      const sid = stringifyUnknown(row.studentId ?? row.student_id).trim();
       if (em) {
         if (!leadEmailsByTeam.has(teamKey))
           leadEmailsByTeam.set(teamKey, new Set());
@@ -1125,13 +1145,11 @@ export class EngagementService {
     const seen = new Set<string>();
     const out: Record<string, unknown>[] = [];
     for (const row of rows) {
-      const teamKey = String(
+      const teamKey = stringifyUnknown(
         row.teamId ?? row.team_id ?? row.applicationId ?? 'default',
       );
-      const em = String(row.email ?? '')
-        .trim()
-        .toLowerCase();
-      const sid = String(row.studentId ?? row.student_id ?? '').trim();
+      const em = stringifyUnknown(row.email).trim().toLowerCase();
+      const sid = stringifyUnknown(row.studentId ?? row.student_id).trim();
       const isLead = row.isTeamLead === true || row.is_team_lead === true;
       if (!isLead) {
         const leadEmails = leadEmailsByTeam.get(teamKey);
@@ -1143,7 +1161,7 @@ export class EngagementService {
         ? `s:${sid}:${teamKey}`
         : em
           ? `e:${em}:${teamKey}`
-          : `id:${String(row.id ?? row.participantId ?? '')}`;
+          : `id:${stringifyUnknown(row.id ?? row.participantId)}`;
       if (seen.has(dedupeKey)) continue;
       seen.add(dedupeKey);
       out.push(row);
@@ -1354,7 +1372,7 @@ export class EngagementService {
     if (p.cnic && p.cnic.includes(':')) {
       try {
         p.cnic = this.decrypt(p.cnic);
-      } catch (e) {
+      } catch {
         this.logger.error(`Failed to decrypt CNIC for participation ${p.id}`);
       }
     }
@@ -2211,7 +2229,7 @@ export class EngagementService {
       assignedPartnerUserId,
     );
 
-    const { teammateOtp: _teammateOtp, ...dtoWithoutOtp } = dto;
+    const dtoWithoutOtp = omitKeys(dto, ['teammateOtp']);
     const log = this.attendanceLogRepository.create({
       ...dtoWithoutOtp,
       locationPin: dto.locationPin?.trim() || null,
@@ -2219,7 +2237,8 @@ export class EngagementService {
       projectId: participation.projectId,
       sessionHours,
       evidenceUploaded,
-      evidenceUrl: evidenceUrl as any,
+      // Column is nullable at the DB level (entity types it `string`); null is persisted as NULL.
+      evidenceUrl: evidenceUrl as string,
       approvalStatus: routing.approvalStatus,
       assignedApproverType: routing.assignedApproverType,
       assignedApproverUserId: routing.assignedApproverUserId,
@@ -2298,7 +2317,8 @@ export class EngagementService {
           recipientEmail,
           approver?.name ||
             String(
-              opportunity.partner_organization?.contact_person || '',
+              (opportunity.partner_organization as PartnerOrganizationJson)
+                ?.contact_person || '',
             ).trim() ||
             'Partner',
           'partner',
@@ -2823,7 +2843,7 @@ export class EngagementService {
         );
       } catch (error) {
         this.logger.warn(
-          `Attendance decision email to student failed for log ${logId}: ${error?.message || error}`,
+          `Attendance decision email to student failed for log ${logId}: ${(error as { message?: string } | null)?.message || error}`,
         );
       }
     }
@@ -3012,7 +3032,7 @@ export class EngagementService {
       emailNotified = true;
     } catch (error) {
       this.logger.warn(
-        `Attendance verification request email failed for project ${projectId}: ${error?.message || error}`,
+        `Attendance verification request email failed for project ${projectId}: ${(error as { message?: string } | null)?.message || error}`,
       );
     }
 
@@ -3196,10 +3216,12 @@ export class EngagementService {
    * through the report package, where `applyEvidenceAccess` decides.
    */
   private mayViewAttendanceEvidenceLinks(viewerRole?: string): boolean {
+    // Role comes from the JWT user (DB-backed), so it is already a UserRole value.
+    const role = viewerRole as UserRole | undefined;
     return (
-      viewerRole === undefined ||
-      viewerRole === UserRole.STUDENT ||
-      viewerRole === UserRole.SUPER_ADMIN
+      role === undefined ||
+      role === UserRole.STUDENT ||
+      role === UserRole.SUPER_ADMIN
     );
   }
 
@@ -3356,7 +3378,7 @@ export class EngagementService {
     if (!text || !text.includes(':')) return text;
     try {
       return this.decrypt(text);
-    } catch (e) {
+    } catch {
       return text;
     }
   }
@@ -3463,7 +3485,7 @@ export class EngagementService {
       return linkageEmails;
     }
 
-    const sup = opportunity.supervision;
+    const sup: unknown = opportunity.supervision;
     if (sup && typeof sup === 'object') {
       const o = sup as Record<string, unknown>;
       const raw =
@@ -3581,14 +3603,16 @@ export class EngagementService {
     return Object.values(value as Record<string, unknown>).some((v) => {
       if (Array.isArray(v)) return v.length > 0;
       if (v && typeof v === 'object') return this.hasMeaningfulObjectValue(v);
-      return v != null && String(v).trim() !== '';
+      // Only a string can stringify to blank; every other non-nullish primitive is meaningful.
+      if (typeof v === 'string') return v.trim() !== '';
+      return v != null;
     });
   }
 
   private resolveOpportunityLinkageFacultyEmails(
     opportunity: Opportunity,
   ): string[] {
-    const linkage = opportunity.visibility_and_academic_linkage;
+    const linkage: unknown = opportunity.visibility_and_academic_linkage;
     if (!linkage || typeof linkage !== 'object') {
       return [];
     }

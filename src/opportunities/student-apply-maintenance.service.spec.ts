@@ -1,20 +1,29 @@
+import { Repository } from 'typeorm';
+import { Setting } from '../settings/entities/setting.entity';
 import { StudentApplyMaintenanceService } from './student-apply-maintenance.service';
 import { parseClosedBeforeSettingValue } from './student-apply-maintenance.util';
 
+type SettingRow = { key: string; value: string };
+
 describe('StudentApplyMaintenanceService expiry toggle', () => {
-  const build = (rows: Array<{ key: string; value: string }>) => {
-    const repo: any = {
-      find: jest.fn(async () => rows),
-      findOne: jest.fn(
-        async ({ where }: any) => rows.find((r) => r.key === where.key) ?? null,
+  const build = (rows: SettingRow[]) => {
+    const repo = {
+      find: jest.fn(() => Promise.resolve(rows)),
+      findOne: jest.fn(({ where }: { where: { key: string } }) =>
+        Promise.resolve(rows.find((r) => r.key === where.key) ?? null),
       ),
-      create: jest.fn((v: any) => v),
-      save: jest.fn(async (v: any) => {
+      create: jest.fn((v: SettingRow) => v),
+      save: jest.fn((v: SettingRow) => {
         rows.push(v);
-        return v;
+        return Promise.resolve(v);
       }),
     };
-    return { repo, service: new StudentApplyMaintenanceService(repo) };
+    return {
+      repo,
+      service: new StudentApplyMaintenanceService(
+        repo as unknown as Repository<Setting>,
+      ),
+    };
   };
 
   it("parses 'disabled' and empty as no cutoff", () => {

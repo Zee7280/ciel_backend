@@ -103,7 +103,7 @@ export class VentureAcademicSetupDto {
   /** Self-declared by the student, matched verbatim against the reviewing faculty's own login
    * email in supervisorReviewVenture — format-checked only, never verified against a roster. */
   @IsOptional()
-  @ValidateIf((o) => !!o.supervisorEmail)
+  @ValidateIf((o: { supervisorEmail?: string }) => !!o.supervisorEmail)
   @IsEmail()
   @MaxLength(FREE_TEXT_MAX)
   supervisorEmail?: string;

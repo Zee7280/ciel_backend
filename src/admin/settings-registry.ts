@@ -169,7 +169,12 @@ export function validateSettingValue(
   if (!spec) {
     throw new BadRequestException(`Unknown or non-editable setting "${key}".`);
   }
-  const text = typeof raw === 'string' ? raw.trim() : String(raw ?? '').trim();
+  // Every non-nullish value carries Object.prototype.toString, so this is the same
+  // `String(raw)` coercion as before, just stated in a way the type checker can see.
+  const text =
+    typeof raw === 'string'
+      ? raw.trim()
+      : String((raw ?? '') as { toString(): string }).trim();
   const fail = (msg: string): never => {
     throw new BadRequestException(`${key}: ${msg}`);
   };

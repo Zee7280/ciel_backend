@@ -78,14 +78,23 @@ function pickFlashNumber(value: unknown): number {
     typeof value === 'object' &&
     typeof (value as { toString?: unknown }).toString === 'function'
   ) {
-    const parsed = Number(String(value).replace(/,/g, '').trim());
+    const parsed = Number(
+      String(value as { toString(): string })
+        .replace(/,/g, '')
+        .trim(),
+    );
     return Number.isFinite(parsed) ? parsed : 0;
   }
   return 0;
 }
 
+/** `String()` over a loosely-typed form value (same coercion; typed so the linter knows it is not a bare object). */
+function stringifyLoose(value: unknown): string {
+  return String(value as { toString(): string });
+}
+
 function logCountsTowardHours(log: Record<string, unknown>): boolean {
-  const status = String(log.approval_status ?? log.approvalStatus ?? '')
+  const status = stringifyLoose(log.approval_status ?? log.approvalStatus ?? '')
     .trim()
     .toLowerCase();
   return status !== 'rejected';
@@ -93,7 +102,7 @@ function logCountsTowardHours(log: Record<string, unknown>): boolean {
 
 function clockToMinutes(value: unknown): number | null {
   if (value == null) return null;
-  const raw = typeof value === 'string' ? value : String(value);
+  const raw = typeof value === 'string' ? value : stringifyLoose(value);
   const match = raw.trim().match(/^(\d{1,2}):(\d{2})/);
   if (!match) return null;
   return parseInt(match[1], 10) * 60 + parseInt(match[2], 10);
@@ -290,25 +299,26 @@ export function resolveReportFlashOutcomes(
     ? section5.measurable_outcomes
     : [];
   const firstComplete = rows.find((row) => {
-    const baseline = String(row?.baseline ?? '').trim();
-    const endline = String(row?.endline ?? '').trim();
+    const baseline = stringifyLoose(row?.baseline ?? '').trim();
+    const endline = stringifyLoose(row?.endline ?? '').trim();
     return Boolean(baseline && endline);
   });
   const firstAny = rows.find(
     (row) =>
-      String(row?.baseline ?? '').trim() || String(row?.endline ?? '').trim(),
+      stringifyLoose(row?.baseline ?? '').trim() ||
+      stringifyLoose(row?.endline ?? '').trim(),
   );
   const baseline =
-    String(section5?.baseline ?? '').trim() ||
-    String(firstComplete?.baseline ?? firstAny?.baseline ?? '').trim();
+    stringifyLoose(section5?.baseline ?? '').trim() ||
+    stringifyLoose(firstComplete?.baseline ?? firstAny?.baseline ?? '').trim();
   const endline =
-    String(section5?.endline ?? '').trim() ||
-    String(firstComplete?.endline ?? firstAny?.endline ?? '').trim();
+    stringifyLoose(section5?.endline ?? '').trim() ||
+    stringifyLoose(firstComplete?.endline ?? firstAny?.endline ?? '').trim();
   const change =
-    String(section5?.observed_change ?? '').trim() ||
-    String(section5?.story_now ?? '').trim() ||
+    stringifyLoose(section5?.observed_change ?? '').trim() ||
+    stringifyLoose(section5?.story_now ?? '').trim() ||
     (firstComplete
-      ? `${String(firstComplete.metric || firstComplete.outcome_area || 'Outcome').trim()}: ${String(firstComplete.baseline).trim()} → ${String(firstComplete.endline).trim()}`
+      ? `${stringifyLoose(firstComplete.metric || firstComplete.outcome_area || 'Outcome').trim()}: ${String(firstComplete.baseline).trim()} → ${String(firstComplete.endline).trim()}`
       : '');
   return { baseline, endline, change };
 }

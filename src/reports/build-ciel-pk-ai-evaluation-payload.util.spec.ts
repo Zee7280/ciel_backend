@@ -5,6 +5,7 @@ import {
   computeCiiV45InputFingerprint,
   CIEL_PK_AI_EVALUATION_SCHEMA_VERSION,
   CIEL_PK_AI_EVALUATION_SCHEMA_VERSION_V45,
+  type CielPkAiEvaluationPayloadV45,
 } from './build-ciel-pk-ai-evaluation-payload.util';
 import { StudentReport } from './entities/student-report.entity';
 
@@ -575,7 +576,7 @@ describe('buildCiiV45InputCompletenessFromEvalPayload', () => {
       },
       submission_metadata: {},
       system_validation: { required_sections_present: true },
-    } as any);
+    } as unknown as CielPkAiEvaluationPayloadV45);
     expect(completeness.individualHours).toEqual([
       {
         studentId: 's1',
@@ -601,7 +602,7 @@ describe('buildCiiV45InputCompletenessFromEvalPayload', () => {
         required_sections_present: true,
         team_lead_signature_valid: false,
       },
-    } as any);
+    } as unknown as CielPkAiEvaluationPayloadV45);
     expect(completeness.mandatoryFieldsComplete).toBe(false);
     expect(
       completeness.gaps.some(

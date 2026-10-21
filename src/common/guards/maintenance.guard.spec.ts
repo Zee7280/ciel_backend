@@ -12,9 +12,9 @@ const ctx = (req: Record<string, unknown>) =>
 
 const makeGuard = (maintenance: boolean | Error) => {
   const settings = {
-    isMaintenanceMode: jest.fn(async () => {
-      if (maintenance instanceof Error) throw maintenance;
-      return maintenance;
+    isMaintenanceMode: jest.fn((): Promise<boolean> => {
+      if (maintenance instanceof Error) return Promise.reject(maintenance);
+      return Promise.resolve(maintenance);
     }),
   };
   const config = { get: () => SECRET };

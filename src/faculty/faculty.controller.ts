@@ -19,6 +19,9 @@ import { OpportunitiesService } from '../opportunities/opportunities.service';
 import { buildOpportunityApprovalTracker } from '../opportunities/opportunity-approval-tracker.util';
 import { RedactOpportunitySecretsInterceptor } from '../opportunities/redact-opportunity-secrets.interceptor';
 
+/** Request user as populated by JwtStrategy.validate. */
+type FacultyRequest = { user: { id: string; email: string; name?: string } };
+
 @Controller('faculty/approvals')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.FACULTY)
@@ -30,7 +33,10 @@ export class FacultyController {
   ) {}
 
   @Get()
-  async getApprovals(@Request() req, @Query('status') status?: string) {
+  async getApprovals(
+    @Request() req: FacultyRequest,
+    @Query('status') status?: string,
+  ) {
     return this.facultyService.getApprovals(
       req.user.id,
       req.user.email || '',
@@ -41,7 +47,7 @@ export class FacultyController {
   /** Full student project (opportunity) detail + linked reports for this faculty supervisor */
   @Get(':id')
   async getProjectDetail(
-    @Request() req,
+    @Request() req: FacultyRequest,
     @Param('id', new ParseUUIDPipe()) id: string,
   ) {
     return this.facultyService.getProjectDetail(
@@ -52,7 +58,10 @@ export class FacultyController {
   }
 
   @Post(':id/approve')
-  async approve(@Request() req, @Param('id', new ParseUUIDPipe()) id: string) {
+  async approve(
+    @Request() req: FacultyRequest,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
     const saved = await this.opportunitiesService.facultyDashboardApprove(
       id,
       req.user.id,
@@ -89,7 +98,7 @@ export class FacultyController {
 
   @Post(':id/reject')
   async reject(
-    @Request() req,
+    @Request() req: FacultyRequest,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() body: { reason?: string; comment?: string },
   ) {
@@ -125,7 +134,7 @@ export class FacultyController {
 
   @Post(':id/revise')
   async revise(
-    @Request() req,
+    @Request() req: FacultyRequest,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() body: { reason?: string; comment?: string },
   ) {

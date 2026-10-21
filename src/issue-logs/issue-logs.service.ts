@@ -104,9 +104,8 @@ export class IssueLogsService {
       const body = this.sanitizeForLog(request.body);
       const query = this.sanitizeForLog(request.query);
       const params = this.sanitizeForLog(request.params);
-      const routePath = request.route?.path
-        ? String(request.route.path)
-        : undefined;
+      const route = request.route as { path?: string } | undefined;
+      const routePath = route?.path ? String(route.path) : undefined;
       const path =
         request.path || request.originalUrl?.split('?')[0] || request.url;
       const requestId =
@@ -538,15 +537,28 @@ export class IssueLogsService {
     return `${method ?? 'UNKNOWN'} ${path ?? ''}`.trim();
   }
 
-  private getStage(path?: string, body?: any, query?: any): string | null {
+  /** Property access on the sanitized request parts; non-objects simply have no properties. */
+  private asLookup(value: unknown): Record<string, unknown> | undefined {
+    return typeof value === 'object' && value !== null
+      ? (value as Record<string, unknown>)
+      : undefined;
+  }
+
+  private getStage(
+    path?: string,
+    body?: unknown,
+    query?: unknown,
+  ): string | null {
+    const b = this.asLookup(body);
+    const q = this.asLookup(query);
     const directStage =
-      body?.stage ??
-      body?.report_stage ??
-      body?.currentStage ??
-      body?.current_step ??
-      body?.currentStep ??
-      body?.section ??
-      query?.stage;
+      b?.stage ??
+      b?.report_stage ??
+      b?.currentStage ??
+      b?.current_step ??
+      b?.currentStep ??
+      b?.section ??
+      q?.stage;
     if (typeof directStage === 'string' && directStage.trim()) {
       return directStage.trim();
     }
@@ -578,19 +590,26 @@ export class IssueLogsService {
     return null;
   }
 
-  private getTargetId(params?: any, body?: any, query?: any): string | null {
+  private getTargetId(
+    params?: unknown,
+    body?: unknown,
+    query?: unknown,
+  ): string | null {
+    const p = this.asLookup(params);
+    const b = this.asLookup(body);
+    const q = this.asLookup(query);
     const value =
-      params?.id ??
-      params?.participantId ??
-      params?.projectId ??
-      body?.report_id ??
-      body?.reportId ??
-      body?.opportunityId ??
-      body?.project_id ??
-      query?.report_id ??
-      query?.reportId ??
-      query?.opportunityId ??
-      query?.project_id;
+      p?.id ??
+      p?.participantId ??
+      p?.projectId ??
+      b?.report_id ??
+      b?.reportId ??
+      b?.opportunityId ??
+      b?.project_id ??
+      q?.report_id ??
+      q?.reportId ??
+      q?.opportunityId ??
+      q?.project_id;
     return typeof value === 'string' && value.trim() ? value.trim() : null;
   }
 

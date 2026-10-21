@@ -58,7 +58,7 @@ export class CourseProjectStudentInfoDto {
   /** Self-declared by the student, matched verbatim against the reviewing faculty's own login
    * email in facultyReviewCourseProject — format-checked only, never verified against a roster. */
   @IsOptional()
-  @ValidateIf((o) => !!o.teacherEmail)
+  @ValidateIf((o: { teacherEmail?: string }) => !!o.teacherEmail)
   @IsEmail()
   teacherEmail?: string;
   @IsOptional() @IsString() notes?: string;

@@ -1,6 +1,18 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
+import { Repository } from 'typeorm';
 import { StudentSubscriptionService } from './student-subscription.service';
 import { PENDING_SUBSCRIPTION_STATUS } from './student-subscription.util';
+import { StudentSubscriptionFee } from './entities/student-subscription-fee.entity';
+import { User } from '../users/entities/user.entity';
+import { Organization } from '../organizations/entities/organization.entity';
+import { PlatformSettingsService } from '../settings/platform-settings.service';
+import { MailService } from '../mail/mail.service';
+import { NotificationsService } from '../notifications/notifications.service';
+
+/** Loose fee / user rows as the service reads them back from the mocked repositories. */
+type FeeRow = Record<string, unknown>;
+type UserRow = Record<string, unknown>;
+type FeeWhere = { where: { userId?: unknown; status?: unknown } };
 
 function build(
   opts: {
@@ -10,51 +22,53 @@ function build(
       orgType?: string;
       verificationStatus?: string;
     }>;
-    feeRows?: any[];
-    user?: any;
+    feeRows?: FeeRow[];
+    user?: UserRow;
   } = {},
 ) {
   const settings = opts.settings ?? {};
   const platformSettings = {
-    getString: jest.fn(async (key: string) => settings[key] ?? null),
-  } as any;
+    getString: jest.fn((key: string) => Promise.resolve(settings[key] ?? null)),
+  };
   const feeRows = opts.feeRows ?? [];
-  const feeRepo: any = {
-    findOne: jest.fn(async ({ where }: any) => {
+  const feeRepo = {
+    findOne: jest.fn(({ where }: FeeWhere) => {
       const rows = feeRows.filter(
         (r) =>
           r.userId === where.userId &&
           (!where.status || r.status === where.status),
       );
-      return rows[0] ?? null;
+      return Promise.resolve(rows[0] ?? null);
     }),
-    find: jest.fn(async () => feeRows),
-    create: jest.fn((x: any) => ({ id: 'fee-1', ...x })),
-    save: jest.fn(async (x: any) => x),
-    update: jest.fn(async () => ({ affected: 1 })),
+    find: jest.fn(() => Promise.resolve(feeRows)),
+    create: jest.fn((x: FeeRow) => ({ id: 'fee-1', ...x })),
+    save: jest.fn((x: FeeRow) => Promise.resolve(x)),
+    update: jest.fn(() => Promise.resolve({ affected: 1 })),
   };
-  const userRepo: any = {
-    findOne: jest.fn(async () => opts.user ?? null),
-    update: jest.fn(async () => ({ affected: 1 })),
+  const userRepo = {
+    findOne: jest.fn(() => Promise.resolve(opts.user ?? null)),
+    update: jest.fn(() => Promise.resolve({ affected: 1 })),
   };
-  const organizationRepo: any = {
-    find: jest.fn(async () =>
-      (opts.memberOrgs ?? []).map((o) => ({
-        orgType: 'university',
-        verificationStatus: 'APPROVED',
-        ...o,
-      })),
+  const organizationRepo = {
+    find: jest.fn(() =>
+      Promise.resolve(
+        (opts.memberOrgs ?? []).map((o) => ({
+          orgType: 'university',
+          verificationStatus: 'APPROVED',
+          ...o,
+        })),
+      ),
     ),
   };
-  const notifications = { createApprovalNotification: jest.fn() } as any;
-  const mail = { sendStudentOpportunityStatusUpdate: jest.fn() } as any;
+  const notifications = { createApprovalNotification: jest.fn() };
+  const mail = { sendStudentOpportunityStatusUpdate: jest.fn() };
   const svc = new StudentSubscriptionService(
-    feeRepo,
-    userRepo,
-    organizationRepo,
-    platformSettings,
-    mail,
-    notifications,
+    feeRepo as unknown as Repository<StudentSubscriptionFee>,
+    userRepo as unknown as Repository<User>,
+    organizationRepo as unknown as Repository<Organization>,
+    platformSettings as unknown as PlatformSettingsService,
+    mail as unknown as MailService,
+    notifications as unknown as NotificationsService,
   );
   return { svc, feeRepo, userRepo, organizationRepo, notifications, mail };
 }
@@ -230,7 +244,7 @@ describe('StudentSubscriptionService — admin decisions and flags', () => {
       user: { email: 'a@b.c' },
     };
     const { svc, feeRepo, userRepo, notifications, mail } = build();
-    feeRepo.findOne = jest.fn(async () => row);
+    feeRepo.findOne.mockImplementation(() => Promise.resolve(row));
     const out = await svc.approveSubmission('f1', 'admin-1');
     expect(out.status).toBe('approved');
     expect(userRepo.update).toHaveBeenCalledWith(
@@ -251,7 +265,7 @@ describe('StudentSubscriptionService — admin decisions and flags', () => {
       user: {},
     };
     const { svc, feeRepo } = build();
-    feeRepo.findOne = jest.fn(async () => row);
+    feeRepo.findOne.mockImplementation(() => Promise.resolve(row));
     await expect(svc.approveSubmission('f1', 'admin-1')).rejects.toThrow(
       /does not match/,
     );
@@ -271,7 +285,7 @@ describe('StudentSubscriptionService — admin decisions and flags', () => {
       user: {},
     };
     const { svc, feeRepo, userRepo } = build();
-    feeRepo.findOne = jest.fn(async () => row);
+    feeRepo.findOne.mockImplementation(() => Promise.resolve(row));
     const out = await svc.rejectSubmission('f1', 'admin-1', ' wrong receipt ');
     expect(out.status).toBe('rejected');
     expect(out.adminFeedback).toBe('wrong receipt');
@@ -287,7 +301,7 @@ describe('StudentSubscriptionService — admin decisions and flags', () => {
       role: 'student',
       status: PENDING_SUBSCRIPTION_STATUS,
       university: 'Other Uni',
-    } as any);
+    } as User);
     expect(flags).toEqual(
       expect.objectContaining({
         requires_subscription_payment: true,
@@ -300,13 +314,13 @@ describe('StudentSubscriptionService — admin decisions and flags', () => {
       id: 'u2',
       role: 'student',
       status: 'active',
-    } as any);
+    } as User);
     expect(active.requires_subscription_payment).toBe(false);
     const faculty = await svc.getUiFlags({
       id: 'u3',
       role: 'faculty',
       status: PENDING_SUBSCRIPTION_STATUS,
-    } as any);
+    } as User);
     expect(faculty.requires_subscription_payment).toBe(false);
   });
 
@@ -318,7 +332,7 @@ describe('StudentSubscriptionService — admin decisions and flags', () => {
       id: 'u1',
       role: 'student',
       status: PENDING_SUBSCRIPTION_STATUS,
-    } as any);
+    } as User);
     expect(flags.requires_subscription_payment).toBe(false);
     expect(userRepo.update).toHaveBeenCalledWith(
       { id: 'u1', status: PENDING_SUBSCRIPTION_STATUS },
@@ -335,7 +349,7 @@ describe('StudentSubscriptionService — admin decisions and flags', () => {
       role: 'student',
       status: PENDING_SUBSCRIPTION_STATUS,
       university: 'Lahore University of Management Sciences (LUMS)',
-    } as any);
+    } as User);
     expect(f1.requires_subscription_payment).toBe(false);
     expect(member.userRepo.update).toHaveBeenCalledWith(
       { id: 'u1', status: PENDING_SUBSCRIPTION_STATUS },
@@ -347,7 +361,7 @@ describe('StudentSubscriptionService — admin decisions and flags', () => {
       role: 'student',
       status: PENDING_SUBSCRIPTION_STATUS,
       university: 'Other',
-    } as any);
+    } as User);
     expect(f2.requires_subscription_payment).toBe(false);
     expect(off.userRepo.update).toHaveBeenCalled();
   });
@@ -359,7 +373,7 @@ describe('StudentSubscriptionService — admin decisions and flags', () => {
       role: 'student',
       status: PENDING_SUBSCRIPTION_STATUS,
       university: 'Other',
-    } as any);
+    } as User);
     expect(flags.requires_subscription_payment).toBe(true);
     expect(flags.subscription_reason).toMatch(
       /^Your university is not a CIEL member/,
@@ -368,7 +382,7 @@ describe('StudentSubscriptionService — admin decisions and flags', () => {
 
   it('release moves every pending student to active', async () => {
     const { svc, userRepo } = build();
-    userRepo.update = jest.fn(async () => ({ affected: 3 }));
+    userRepo.update.mockImplementation(() => Promise.resolve({ affected: 3 }));
     expect(await svc.releasePendingStudentAccounts()).toBe(3);
     expect(userRepo.update).toHaveBeenCalledWith(
       { role: 'student', status: PENDING_SUBSCRIPTION_STATUS },

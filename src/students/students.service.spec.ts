@@ -1,9 +1,32 @@
 import { NotFoundException } from '@nestjs/common';
+import { Repository } from 'typeorm';
 import { StudentsService } from './students.service';
 import { ReportPartnerApprovalSettingsService } from '../reports/report-partner-approval-settings.service';
+import { User } from '../users/entities/user.entity';
+import { Opportunity } from '../opportunities/entities/opportunity.entity';
+import { Timesheet } from '../timesheets/entities/timesheet.entity';
+import { Participation } from '../engagement/entities/participant.entity';
+import { StudentReport } from '../reports/entities/student-report.entity';
+import { Organization } from '../organizations/entities/organization.entity';
+import { Otp } from './entities/otp.entity';
+import { UsersService } from '../users/users.service';
+import { MailService } from '../mail/mail.service';
+import { EngagementService } from '../engagement/engagement.service';
+import { OpportunityWorkflowService } from '../opportunities/opportunity-workflow.service';
+import { OpportunitiesService } from '../opportunities/opportunities.service';
+import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
+import { StudentReportsService } from '../reports/student-reports.service';
+import { CreateOpportunityDto } from '../opportunities/dto/create-opportunity.dto';
+import { ApplyOpportunityDto } from './dto/apply-opportunity.dto';
+
+/** Partial mock object stood in for a constructor dependency. */
+const mockDep = <T>(mock: object = {}): T => mock as T;
+/** Loose edit payload for updateStudentOpportunity (tests exercise untyped JSON columns). */
+const asEditDto = (dto: Record<string, unknown>) =>
+  dto as Partial<CreateOpportunityDto>;
 
 const makeService = (overrides: Record<string, unknown> = {}) => {
-  const repositories = {
+  const repositories: Record<string, unknown> = {
     usersRepository: {},
     opportunitiesRepository: {},
     timesheetsRepository: { find: jest.fn().mockResolvedValue([]) },
@@ -33,21 +56,21 @@ const makeService = (overrides: Record<string, unknown> = {}) => {
   };
 
   return new StudentsService(
-    repositories.usersRepository as any,
-    repositories.opportunitiesRepository as any,
-    repositories.timesheetsRepository as any,
-    repositories.participantRepository as any,
-    repositories.studentReportsRepository as any,
-    repositories.orgRepository as any,
-    repositories.otpRepository as any,
-    repositories.usersService as any,
-    repositories.mailService as any,
-    repositories.engagementService as any,
-    repositories.opportunityWorkflow as any,
-    repositories.opportunitiesService as any,
-    repositories.opportunityApplicationsService as any,
-    repositories.studentReportsService as any,
-    repositories.reportPartnerApprovalSettings as any,
+    repositories.usersRepository as Repository<User>,
+    repositories.opportunitiesRepository as Repository<Opportunity>,
+    repositories.timesheetsRepository as Repository<Timesheet>,
+    repositories.participantRepository as Repository<Participation>,
+    repositories.studentReportsRepository as Repository<StudentReport>,
+    repositories.orgRepository as Repository<Organization>,
+    repositories.otpRepository as Repository<Otp>,
+    repositories.usersService as UsersService,
+    repositories.mailService as MailService,
+    repositories.engagementService as EngagementService,
+    repositories.opportunityWorkflow as OpportunityWorkflowService,
+    repositories.opportunitiesService as OpportunitiesService,
+    repositories.opportunityApplicationsService as OpportunityApplicationsService,
+    repositories.studentReportsService as StudentReportsService,
+    repositories.reportPartnerApprovalSettings as ReportPartnerApprovalSettingsService,
   );
 };
 
@@ -103,7 +126,7 @@ describe('StudentsService impact history', () => {
 
     const result = await service.getOpportunities({}, 'user-1');
 
-    expect(result.data.map((o: any) => o.id)).toEqual([
+    expect(result.data.map((o) => o.id)).toEqual([
       'opp-team-1',
       'opp-normal-1',
     ]);
@@ -171,7 +194,7 @@ describe('StudentsService impact history', () => {
     });
 
     const result = await service.getOpportunities({}, 'user-1');
-    expect(result.data.map((o: any) => o.id)).toEqual(['opp-visible']);
+    expect(result.data.map((o) => o.id)).toEqual(['opp-visible']);
   });
 
   it('getOpportunityById: a stranger gets 404 on a hidden opportunity, but an already-applied student still sees it', async () => {
@@ -509,7 +532,7 @@ describe('StudentsService getDashboard analytics', () => {
       });
 
     const service = new StudentsService(
-      {
+      mockDep<Repository<User>>({
         findOne: jest.fn().mockResolvedValue({
           id: 'student-1',
           name: 'Ada',
@@ -523,29 +546,31 @@ describe('StudentsService getDashboard analytics', () => {
           profile_verified: true,
           identity_verified: true,
         }),
-      } as any,
-      {} as any,
-      { find: jest.fn().mockResolvedValue([]) } as any,
-      {
+      }),
+      mockDep<Repository<Opportunity>>(),
+      mockDep<Repository<Timesheet>>({
+        find: jest.fn().mockResolvedValue([]),
+      }),
+      mockDep<Repository<Participation>>({
         count: jest.fn().mockResolvedValue(0),
         find: participantFind,
-      } as any,
-      {
+      }),
+      mockDep<Repository<StudentReport>>({
         find: jest.fn().mockResolvedValue([]),
         count: jest.fn().mockResolvedValue(0),
-      } as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {
+      }),
+      mockDep<Repository<Organization>>(),
+      mockDep<Repository<Otp>>(),
+      mockDep<UsersService>(),
+      mockDep<MailService>(),
+      mockDep<EngagementService>(),
+      mockDep<OpportunityWorkflowService>(),
+      mockDep<OpportunitiesService>(),
+      mockDep<OpportunityApplicationsService>(),
+      mockDep<StudentReportsService>({
         getMergedReportsForParticipant: jest.fn().mockResolvedValue([]),
-      } as any,
-      {} as any,
+      }),
+      mockDep<ReportPartnerApprovalSettingsService>(),
     );
 
     const result = await service.getDashboard('student-1');
@@ -596,7 +621,7 @@ describe('StudentsService getDashboard analytics', () => {
       });
 
     const service = new StudentsService(
-      {
+      mockDep<Repository<User>>({
         findOne: jest.fn().mockResolvedValue({
           id: 'student-1',
           name: 'Bob',
@@ -610,26 +635,31 @@ describe('StudentsService getDashboard analytics', () => {
           profile_verified: false,
           identity_verified: false,
         }),
-      } as any,
-      {} as any,
-      { find: jest.fn().mockResolvedValue([]) } as any,
-      { count: jest.fn().mockResolvedValue(0), find: participantFind } as any,
-      {
+      }),
+      mockDep<Repository<Opportunity>>(),
+      mockDep<Repository<Timesheet>>({
+        find: jest.fn().mockResolvedValue([]),
+      }),
+      mockDep<Repository<Participation>>({
+        count: jest.fn().mockResolvedValue(0),
+        find: participantFind,
+      }),
+      mockDep<Repository<StudentReport>>({
         find: jest.fn().mockResolvedValue([]),
         count: jest.fn().mockResolvedValue(0),
-      } as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {
+      }),
+      mockDep<Repository<Organization>>(),
+      mockDep<Repository<Otp>>(),
+      mockDep<UsersService>(),
+      mockDep<MailService>(),
+      mockDep<EngagementService>(),
+      mockDep<OpportunityWorkflowService>(),
+      mockDep<OpportunitiesService>(),
+      mockDep<OpportunityApplicationsService>(),
+      mockDep<StudentReportsService>({
         getMergedReportsForParticipant: jest.fn().mockResolvedValue([]),
-      } as any,
-      {} as any,
+      }),
+      mockDep<ReportPartnerApprovalSettingsService>(),
     );
 
     const result = await service.getDashboard('student-1');
@@ -655,8 +685,8 @@ describe('StudentsService.sendTeamMemberOtp', () => {
       },
       otpRepository: {
         findOne: jest.fn().mockResolvedValue(null),
-        create: jest.fn().mockImplementation((row) => row),
-        save: jest.fn().mockImplementation((row) => row),
+        create: jest.fn().mockImplementation((row: unknown) => row),
+        save: jest.fn().mockImplementation((row: unknown) => row),
       },
       mailService: {
         sendTeamMemberOtp: jest.fn().mockResolvedValue(undefined),
@@ -701,8 +731,8 @@ describe('StudentsService.sendTeamMemberOtp', () => {
           otp: '111111',
           expiresAt: new Date(Date.now() + 9 * 60 * 1000),
         }),
-        create: jest.fn().mockImplementation((row) => row),
-        save: jest.fn().mockImplementation((row) => row),
+        create: jest.fn().mockImplementation((row: unknown) => row),
+        save: jest.fn().mockImplementation((row: unknown) => row),
       },
       mailService: { sendTeamMemberOtp },
     });
@@ -721,12 +751,12 @@ describe('StudentsService.sendTeamMemberOtp', () => {
   });
 
   it('stores the OTP record against a normalized (trimmed, lowercased) email', async () => {
-    const save = jest.fn().mockImplementation((row) => row);
+    const save = jest.fn().mockImplementation((row: unknown) => row);
     const service = makeService({
       participantRepository: { find: jest.fn().mockResolvedValue([]) },
       otpRepository: {
         findOne: jest.fn().mockResolvedValue(null),
-        create: jest.fn().mockImplementation((row) => row),
+        create: jest.fn().mockImplementation((row: unknown) => row),
         save,
       },
       mailService: {
@@ -740,7 +770,7 @@ describe('StudentsService.sendTeamMemberOtp', () => {
   });
 
   it('skips a broken roster duplicate-check instead of 500ing the whole OTP send', async () => {
-    const save = jest.fn().mockImplementation((row) => row);
+    const save = jest.fn().mockImplementation((row: unknown) => row);
     const service = makeService({
       participantRepository: {
         find: jest.fn().mockResolvedValue([]),
@@ -754,7 +784,7 @@ describe('StudentsService.sendTeamMemberOtp', () => {
       },
       otpRepository: {
         findOne: jest.fn().mockResolvedValue(null),
-        create: jest.fn().mockImplementation((row) => row),
+        create: jest.fn().mockImplementation((row: unknown) => row),
         save,
       },
       mailService: {
@@ -775,7 +805,7 @@ describe('StudentsService.sendTeamMemberOtp', () => {
       participantRepository: { find: jest.fn().mockResolvedValue([]) },
       otpRepository: {
         findOne: jest.fn().mockResolvedValue(null),
-        create: jest.fn().mockImplementation((row) => row),
+        create: jest.fn().mockImplementation((row: unknown) => row),
         save: jest
           .fn()
           .mockRejectedValue(new Error('relation "otps" has no column "foo"')),
@@ -818,20 +848,30 @@ describe('StudentsService.confirmTeamMemberOtp', () => {
   });
 
   it('keeps the row as proof of verification (verifiedAt set, code burned) instead of deleting it', async () => {
-    const record: any = {
+    const record: {
+      email: string;
+      otp: string;
+      expiresAt: Date;
+      verifiedAt: Date | null;
+    } = {
       email: 'new@test.edu',
       otp: '123456',
       expiresAt: new Date(Date.now() + 60000),
       verifiedAt: null,
     };
-    const save = jest.fn().mockImplementation(async (r) => r);
+    const save = jest
+      .fn()
+      .mockImplementation((r: unknown) => Promise.resolve(r));
     const service = makeService({
       otpRepository: { findOne: jest.fn().mockResolvedValue(record), save },
     });
     const result = await service.confirmTeamMemberOtp('new@test.edu', '123456');
     expect(result).toEqual({ success: true, message: 'Email verified' });
     expect(save).toHaveBeenCalledWith(
-      expect.objectContaining({ otp: '', verifiedAt: expect.any(Date) }),
+      expect.objectContaining({
+        otp: '',
+        verifiedAt: expect.any(Date) as unknown,
+      }),
     );
     expect(record.expiresAt.getTime()).toBeLessThanOrEqual(Date.now());
   });
@@ -884,7 +924,7 @@ describe('StudentsService.updateStudentOpportunity — same guards as create', (
 
   const setup = () => {
     const opp = baseOpp();
-    const save = jest.fn(async (row: unknown) => row);
+    const save = jest.fn((row: unknown) => Promise.resolve(row));
     const validateEditPatch = jest.fn();
     const service = makeService({
       opportunitiesRepository: {
@@ -909,34 +949,46 @@ describe('StudentsService.updateStudentOpportunity — same guards as create', (
   it('refuses to widen the scope to all universities', async () => {
     const { service } = setup();
     await expect(
-      service.updateStudentOpportunity('stu-1', 'opp-1', {
-        participation_scope: { rule: 'open_all_universities' },
-      } as any),
+      service.updateStudentOpportunity(
+        'stu-1',
+        'opp-1',
+        asEditDto({
+          participation_scope: { rule: 'open_all_universities' },
+        }),
+      ),
     ).rejects.toThrow(/own university/);
   });
 
   it("forces restricted_universities to the student's own university, ignoring the client value", async () => {
     const { service, opp } = setup();
-    await service.updateStudentOpportunity('stu-1', 'opp-1', {
-      title: 'New title',
-      restricted_universities: ['LUMS', 'IBA'],
-      participation_scope: {
-        rule: 'own_university_only',
-        university_names: ['LUMS'],
-      },
-    } as any);
-    expect(opp.restricted_universities).toEqual(['BNU']);
-    expect((opp.participation_scope as any).university_names).toEqual(['BNU']);
-    expect((opp.participation_scope as any).creator_university_name).toBe(
-      'BNU',
+    await service.updateStudentOpportunity(
+      'stu-1',
+      'opp-1',
+      asEditDto({
+        title: 'New title',
+        restricted_universities: ['LUMS', 'IBA'],
+        participation_scope: {
+          rule: 'own_university_only',
+          university_names: ['LUMS'],
+        },
+      }),
     );
+    const scope = opp.participation_scope as {
+      university_names?: string[];
+      creator_university_name?: string;
+    };
+    expect(opp.restricted_universities).toEqual(['BNU']);
+    expect(scope.university_names).toEqual(['BNU']);
+    expect(scope.creator_university_name).toBe('BNU');
   });
 
   it('runs the create-time validators on the edited keys', async () => {
     const { service, validateEditPatch } = setup();
-    await service.updateStudentOpportunity('stu-1', 'opp-1', {
-      supervision: { contact: 'teacher@uni.edu' },
-    } as any);
+    await service.updateStudentOpportunity(
+      'stu-1',
+      'opp-1',
+      asEditDto({ supervision: { contact: 'teacher@uni.edu' } }),
+    );
     expect(validateEditPatch).toHaveBeenCalledWith(
       expect.objectContaining({ supervision: { contact: 'teacher@uni.edu' } }),
     );
@@ -948,16 +1000,17 @@ describe('StudentsService.updateStudentOpportunity — same guards as create', (
       throw new Error('All safety_declaration checks must be true');
     });
     await expect(
-      service.updateStudentOpportunity('stu-1', 'opp-1', {
-        safety_declaration: {},
-      } as any),
+      service.updateStudentOpportunity(
+        'stu-1',
+        'opp-1',
+        asEditDto({ safety_declaration: {} }),
+      ),
     ).rejects.toThrow(/safety_declaration/);
     expect(save).not.toHaveBeenCalled();
   });
 });
 
 describe('StudentsService.applyToOpportunity — dates, seats and team eligibility', () => {
-  const TODAY = new Date().toISOString().slice(0, 10);
   const addDays = (d: number) =>
     new Date(Date.now() + d * 86400000).toISOString().slice(0, 10);
 
@@ -969,7 +1022,7 @@ describe('StudentsService.applyToOpportunity — dates, seats and team eligibili
     /** Teammate emails with a recent confirmed OTP row. Defaults to every address the tests use. */
     verifiedEmails?: string[];
   }) => {
-    const opportunity: any = {
+    const opportunity: Record<string, unknown> = {
       id: '11111111-1111-4111-8111-111111111111',
       title: 'Project',
       status: 'active',
@@ -999,7 +1052,7 @@ describe('StudentsService.applyToOpportunity — dates, seats and team eligibili
     const createApplication = jest
       .fn()
       .mockResolvedValue({ id: 'app-1', internalStatus: 'pending_faculty' });
-    const chain: any = new Proxy(
+    const chain: unknown = new Proxy(
       {},
       {
         get: (_t, prop: string) => {
@@ -1069,7 +1122,7 @@ describe('StudentsService.applyToOpportunity — dates, seats and team eligibili
       primary_faculty_email: 'faculty@uni.edu',
       contact_phone_e164: '+923001234567',
       ...over,
-    }) as any;
+    }) as unknown as ApplyOpportunityDto;
 
   it('accepts an eligible individual application while the project is running', async () => {
     const { service, createApplication } = build({});
@@ -1325,14 +1378,14 @@ describe('StudentsService.updateStudentOpportunity — lifecycle guards and resu
       rejectionReason: null,
       ...oppOverrides,
     };
-    const save = jest.fn(async (row: unknown) => row);
+    const save = jest.fn((row: unknown) => Promise.resolve(row));
     const notifyFaculty = jest.fn().mockResolvedValue(undefined);
     const notifyPartner = jest.fn().mockResolvedValue(undefined);
-    const applyResubmit = jest.fn(async (row: Record<string, unknown>) => {
+    const applyResubmit = jest.fn((row: Record<string, unknown>) => {
       row.workflowStage = 'pending_admin';
       row.status = 'pending_approval';
       row.adminApprovalStatus = 'pending';
-      return { notifyFaculty: false, notifyPartner: false };
+      return Promise.resolve({ notifyFaculty: false, notifyPartner: false });
     });
     const service = makeService({
       opportunitiesRepository: {
@@ -1369,9 +1422,11 @@ describe('StudentsService.updateStudentOpportunity — lifecycle guards and resu
       workflowStage: 'live',
     });
     await expect(
-      service.updateStudentOpportunity('stu-1', 'opp-1', {
-        title: 'Rewrite after going live',
-      } as any),
+      service.updateStudentOpportunity(
+        'stu-1',
+        'opp-1',
+        asEditDto({ title: 'Rewrite after going live' }),
+      ),
     ).rejects.toThrow(/Approved opportunities cannot be updated/);
     expect(save).not.toHaveBeenCalled();
   });
@@ -1383,9 +1438,11 @@ describe('StudentsService.updateStudentOpportunity — lifecycle guards and resu
       facultyApprovalStatus: 'rejected',
     });
     await expect(
-      service.updateStudentOpportunity('stu-1', 'opp-1', {
-        title: 'Try again',
-      } as any),
+      service.updateStudentOpportunity(
+        'stu-1',
+        'opp-1',
+        asEditDto({ title: 'Try again' }),
+      ),
     ).rejects.toThrow(/permanently rejected/);
     expect(save).not.toHaveBeenCalled();
   });
@@ -1393,18 +1450,22 @@ describe('StudentsService.updateStudentOpportunity — lifecycle guards and resu
   it('refuses a student who is not the creator', async () => {
     const { service, save } = setupWith({ creatorId: 'someone-else' });
     await expect(
-      service.updateStudentOpportunity('stu-1', 'opp-1', {
-        title: 'Not mine',
-      } as any),
+      service.updateStudentOpportunity(
+        'stu-1',
+        'opp-1',
+        asEditDto({ title: 'Not mine' }),
+      ),
     ).rejects.toThrow(/do not have access/);
     expect(save).not.toHaveBeenCalled();
   });
 
   it('a routine edit while pending keeps the stage, bumps nothing, and reports a plain update', async () => {
     const { service, opp, applyResubmit } = setupWith({});
-    const res = await service.updateStudentOpportunity('stu-1', 'opp-1', {
-      title: 'Typo fix',
-    } as any);
+    const res = await service.updateStudentOpportunity(
+      'stu-1',
+      'opp-1',
+      asEditDto({ title: 'Typo fix' }),
+    );
     expect(res.message).toBe('Opportunity updated successfully');
     expect(opp.workflowStage).toBe('pending_faculty');
     expect(opp.version).toBe(1);
@@ -1419,17 +1480,17 @@ describe('StudentsService.updateStudentOpportunity — lifecycle guards and resu
         adminApprovalStatus: 'revision_requested',
         rejectionReason: 'Add the schedule.',
       });
-    applyResubmit.mockImplementationOnce(
-      async (row: Record<string, unknown>) => {
-        row.workflowStage = 'pending_faculty';
-        row.status = 'pending_faculty';
-        return { notifyFaculty: true, notifyPartner: false };
-      },
-    );
+    applyResubmit.mockImplementationOnce((row: Record<string, unknown>) => {
+      row.workflowStage = 'pending_faculty';
+      row.status = 'pending_faculty';
+      return Promise.resolve({ notifyFaculty: true, notifyPartner: false });
+    });
 
-    const res = await service.updateStudentOpportunity('stu-1', 'opp-1', {
-      title: 'Schedule added',
-    } as any);
+    const res = await service.updateStudentOpportunity(
+      'stu-1',
+      'opp-1',
+      asEditDto({ title: 'Schedule added' }),
+    );
 
     expect(res.message).toBe('Opportunity updated and resubmitted for review');
     expect(applyResubmit).toHaveBeenCalledTimes(1);

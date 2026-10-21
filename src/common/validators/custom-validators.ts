@@ -1,8 +1,4 @@
-import {
-  registerDecorator,
-  ValidationOptions,
-  ValidationArguments,
-} from 'class-validator';
+import { registerDecorator, ValidationOptions } from 'class-validator';
 
 export function IsCNIC(validationOptions?: ValidationOptions) {
   return function (object: object, propertyName: string) {
@@ -12,14 +8,14 @@ export function IsCNIC(validationOptions?: ValidationOptions) {
       propertyName: propertyName,
       options: validationOptions,
       validator: {
-        validate(value: any, args: ValidationArguments) {
+        validate(value: unknown) {
           if (typeof value !== 'string') return false;
 
           // UI sends xxxxx-xxxxxxx-x; engagement/apply often store 13 digits.
           const digits = value.replace(/\D/g, '');
           return digits.length === 13;
         },
-        defaultMessage(args: ValidationArguments) {
+        defaultMessage() {
           return 'CNIC must be 13 digits, with or without dashes (12345-1234567-1)';
         },
       },
@@ -35,14 +31,14 @@ export function IsPakistaniMobile(validationOptions?: ValidationOptions) {
       propertyName: propertyName,
       options: validationOptions,
       validator: {
-        validate(value: any, args: ValidationArguments) {
+        validate(value: unknown) {
           if (typeof value !== 'string') return false;
 
           // Pakistani mobile format: 03XXXXXXXXX (11 digits starting with 03)
           const mobileRegex = /^03\d{9}$/;
           return mobileRegex.test(value);
         },
-        defaultMessage(args: ValidationArguments) {
+        defaultMessage() {
           return 'Mobile number must be in Pakistani format: 03XXXXXXXXX (11 digits)';
         },
       },

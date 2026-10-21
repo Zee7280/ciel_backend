@@ -18,11 +18,15 @@ import { SubscriptionActiveGuard } from '../student-subscription/subscription-ac
 import { Roles } from '../auth/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
 import { StudentsService } from './students.service';
+import type { StudentOpportunitiesQuery } from './students.service';
 import { RedactOpportunityBrowseInterceptor } from '../opportunities/redact-opportunity-secrets.interceptor';
 import {
   ApplyOpportunityByIdDto,
   ApplyOpportunityDto,
 } from './dto/apply-opportunity.dto';
+
+/** `req.user` as populated by JwtStrategy.validate(). */
+type AuthenticatedRequest = { user: { id: string; role: UserRole } };
 
 @Controller('students')
 @UseGuards(JwtAuthGuard, RolesGuard, SubscriptionActiveGuard)
@@ -31,12 +35,15 @@ export class StudentsController {
   constructor(private readonly studentsService: StudentsService) {}
 
   @Get('me/dashboard')
-  getMyDashboard(@Request() req) {
+  getMyDashboard(@Request() req: AuthenticatedRequest) {
     return this.studentsService.getDashboard(req.user.id);
   }
 
   @Get('reports')
-  getReports(@Request() req, @Query('organisationId') organisationId: string) {
+  getReports(
+    @Request() req: AuthenticatedRequest,
+    @Query('organisationId') organisationId: string,
+  ) {
     if (!organisationId) {
       throw new BadRequestException('organisationId is required');
     }
@@ -45,7 +52,10 @@ export class StudentsController {
 
   @Get('opportunities')
   @UseInterceptors(RedactOpportunityBrowseInterceptor)
-  getOpportunities(@Request() req, @Query() query) {
+  getOpportunities(
+    @Request() req: AuthenticatedRequest,
+    @Query() query: StudentOpportunitiesQuery,
+  ) {
     // Same rule as the POST sibling below: a `student_id` in the query is only honoured for the
     // caller themselves or an admin — never as a way to read another student's scoped list.
     const requestedStudentId = query?.student_id || query?.studentId;
@@ -65,8 +75,8 @@ export class StudentsController {
   @Post('opportunities')
   @UseInterceptors(RedactOpportunityBrowseInterceptor)
   getOpportunitiesPost(
-    @Request() req,
-    @Query() query,
+    @Request() req: AuthenticatedRequest,
+    @Query() query: StudentOpportunitiesQuery,
     @Body() body?: { student_id?: string; studentId?: string },
   ) {
     const requestedStudentId = body?.student_id || body?.studentId;
@@ -85,14 +95,14 @@ export class StudentsController {
 
   @Get('opportunities/recommended')
   @UseInterceptors(RedactOpportunityBrowseInterceptor)
-  getRecommendedOpportunities(@Request() req) {
-    return this.studentsService.getRecommendedOpportunities(req.user.id);
+  getRecommendedOpportunities() {
+    return this.studentsService.getRecommendedOpportunities();
   }
 
   @Get('opportunities/:id')
   @UseInterceptors(RedactOpportunityBrowseInterceptor)
   getOpportunityById(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Param('id', new ParseUUIDPipe()) id: string,
   ) {
     return this.studentsService.getOpportunityById(id, req.user.id);
@@ -100,18 +110,24 @@ export class StudentsController {
 
   // Applications
   @Get('applications')
-  getApplications(@Request() req, @Query('status') status?: string) {
+  getApplications(
+    @Request() req: AuthenticatedRequest,
+    @Query('status') status?: string,
+  ) {
     return this.studentsService.getApplications(req.user.id, status);
   }
 
   @Post('applications')
-  applyToOpportunity(@Request() req, @Body() dto: ApplyOpportunityDto) {
+  applyToOpportunity(
+    @Request() req: AuthenticatedRequest,
+    @Body() dto: ApplyOpportunityDto,
+  ) {
     return this.studentsService.applyToOpportunity(req.user.id, dto);
   }
 
   @Post('opportunities/:id/apply')
   applyToOpportunityById(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() body: ApplyOpportunityByIdDto,
   ) {
@@ -122,13 +138,16 @@ export class StudentsController {
   }
 
   @Delete('applications/:id')
-  withdrawApplication(@Request() req, @Param('id') id: string) {
+  withdrawApplication(
+    @Request() req: AuthenticatedRequest,
+    @Param('id') id: string,
+  ) {
     return this.studentsService.withdrawApplication(req.user.id, id);
   }
 
   @Get('impact/history')
   getImpactHistoryGet(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Query('student_id') student_id?: string,
     @Query('studentId') studentId?: string,
   ) {
@@ -140,7 +159,7 @@ export class StudentsController {
 
   @Post('impact/history')
   getImpactHistory(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Body() body?: { student_id?: string; studentId?: string },
   ) {
     return this.studentsService.getImpactHistory(
@@ -151,7 +170,7 @@ export class StudentsController {
   }
 
   @Get('community-service/rankings')
-  getCommunityServiceRankings(@Request() req) {
+  getCommunityServiceRankings(@Request() req: AuthenticatedRequest) {
     return this.studentsService.getCommunityServiceRankings(req.user.id);
   }
 }

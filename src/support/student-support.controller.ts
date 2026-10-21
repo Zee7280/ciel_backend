@@ -35,7 +35,10 @@ export class StudentSupportController {
   }
 
   @Get('tickets/track')
-  trackTicket(@Request() req: AuthenticatedRequest, @Query('reference') reference?: string) {
+  trackTicket(
+    @Request() req: AuthenticatedRequest,
+    @Query('reference') reference?: string,
+  ) {
     return this.studentSupportService.trackByReference(req.user.id, reference);
   }
 
@@ -46,7 +49,10 @@ export class StudentSupportController {
 
   @Post('tickets')
   @UseGuards(CreateTicketRateLimitGuard)
-  createTicket(@Request() req: AuthenticatedRequest, @Body() dto: CreateSupportTicketDto) {
+  createTicket(
+    @Request() req: AuthenticatedRequest,
+    @Body() dto: CreateSupportTicketDto,
+  ) {
     return this.studentSupportService.createTicket(req.user.id, dto);
   }
 }

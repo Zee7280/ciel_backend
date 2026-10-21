@@ -111,7 +111,10 @@ export class AdminOpportunitiesController {
   @Post(':id/approve')
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
-  async approve(@Request() req: AuthedRequest, @Param('id', new ParseUUIDPipe()) id: string) {
+  async approve(
+    @Request() req: AuthedRequest,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
     await this.opportunitiesService.approve(id, {
       id: req.user.id,
       name: req.user.name,

@@ -1,10 +1,41 @@
-import { CommunityAwardService } from './community-award.service';
+import { Repository } from 'typeorm';
+import {
+  CommunityAwardCard,
+  CommunityAwardService,
+} from './community-award.service';
+import { StudentReport } from './entities/student-report.entity';
+import { Organization } from '../organizations/entities/organization.entity';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NotifyCommunityAwardDto } from './dto/notify-community-award.dto';
+
+type AwardBadge = NonNullable<StudentReport['awardBadges']>[number];
+
+/** The minimal report row these tests feed through the mocked repository. */
+type TestReport = {
+  id: string;
+  faculty_status: string;
+  admin_status: string;
+  status: string;
+  studentId: string;
+  awardBadges: AwardBadge[];
+  awardBadgeHistory: AwardBadge[];
+  section1: { team_lead: { name: string } };
+  opportunity: { title: string };
+};
+
+type FindOneArgs = { where: { id: string } };
+
+const asCards = (rows: Array<{ id: string; total: number }>) =>
+  rows as unknown as CommunityAwardCard[];
 
 function makeService() {
   return new CommunityAwardService(
-    { findOne: jest.fn(), save: jest.fn() } as any,
-    {} as any,
-    { createNotification: jest.fn() } as any,
+    {
+      findOne: jest.fn(),
+      save: jest.fn(),
+    } as unknown as Repository<StudentReport>,
+    {} as unknown as Repository<Organization>,
+    { createNotification: jest.fn() } as unknown as NotificationsService,
   );
 }
 
@@ -32,7 +63,7 @@ describe('CommunityAwardService — notify run is unlimited for every stakeholde
     }
   });
 
-  function approvedReport(id: string) {
+  function approvedReport(id: string): TestReport {
     return {
       id,
       faculty_status: 'approved',
@@ -47,19 +78,21 @@ describe('CommunityAwardService — notify run is unlimited for every stakeholde
   }
 
   it('publishes every CIEL PK national-ranking pick in the reviewed cohort', async () => {
-    const save = jest.fn().mockImplementation(async (row) => row);
+    const save = jest.fn((row: TestReport) => Promise.resolve(row));
     const service = new CommunityAwardService(
       {
-        findOne: jest
-          .fn()
-          .mockImplementation(async ({ where }) => approvedReport(where.id)),
+        findOne: jest.fn(({ where }: FindOneArgs) =>
+          Promise.resolve(approvedReport(where.id)),
+        ),
         save,
-      } as any,
-      {} as any,
-      { createNotification: jest.fn().mockResolvedValue(undefined) } as any,
+      } as unknown as Repository<StudentReport>,
+      {} as unknown as Repository<Organization>,
+      {
+        createNotification: jest.fn().mockResolvedValue(undefined),
+      } as unknown as NotificationsService,
     );
     const pool = [1, 2, 3, 4, 5].map((n) => ({ id: `r${n}`, total: 100 - n }));
-    const result = await service.notifyFromPool(pool as any, {
+    const result = await service.notifyFromPool(asCards(pool), {
       kind: 'ciel',
       scopeLabel: 'CIEL PK Network · 2026',
       picks: pool.map((card, index) => ({
@@ -74,19 +107,21 @@ describe('CommunityAwardService — notify run is unlimited for every stakeholde
   });
 
   it('still stores only the top 3 university award picks', async () => {
-    const save = jest.fn().mockImplementation(async (row) => row);
+    const save = jest.fn((row: TestReport) => Promise.resolve(row));
     const service = new CommunityAwardService(
       {
-        findOne: jest
-          .fn()
-          .mockImplementation(async ({ where }) => approvedReport(where.id)),
+        findOne: jest.fn(({ where }: FindOneArgs) =>
+          Promise.resolve(approvedReport(where.id)),
+        ),
         save,
-      } as any,
-      {} as any,
-      { createNotification: jest.fn().mockResolvedValue(undefined) } as any,
+      } as unknown as Repository<StudentReport>,
+      {} as unknown as Repository<Organization>,
+      {
+        createNotification: jest.fn().mockResolvedValue(undefined),
+      } as unknown as NotificationsService,
     );
     const pool = [1, 2, 3, 4, 5].map((n) => ({ id: `u${n}`, total: 100 - n }));
-    await service.notifyFromPool(pool as any, {
+    await service.notifyFromPool(asCards(pool), {
       kind: 'uni',
       scopeLabel: 'University cohort',
       picks: pool.map((card, index) => ({
@@ -103,7 +138,7 @@ describe('CommunityAwardService — notify run is unlimited for every stakeholde
     const service = makeService();
 
     for (const kind of ['fac', 'uni', 'par', 'ciel'] as const) {
-      const result: any = await service.notifyFromPool([], {
+      const result: Record<string, unknown> = await service.notifyFromPool([], {
         kind,
         reportIds: [],
       });
@@ -113,45 +148,45 @@ describe('CommunityAwardService — notify run is unlimited for every stakeholde
 });
 
 describe('CommunityAwardService.notifyFromPool — ranking is computed server-side', () => {
-  const report = (id: string) => ({
+  const report = (id: string): TestReport => ({
     id,
     faculty_status: 'approved',
     admin_status: 'approved',
     status: 'verified',
     studentId: `student-${id}`,
-    awardBadges: [] as any[],
-    awardBadgeHistory: [] as any[],
+    awardBadges: [],
+    awardBadgeHistory: [],
     section1: { team_lead: { name: 'Ali Raza' } },
     opportunity: { title: `Project ${id}` },
   });
   const build = () => {
-    const rows = new Map<string, any>();
+    const rows = new Map<string, TestReport>();
     const reports = {
-      findOne: jest.fn(async ({ where }) => {
+      findOne: jest.fn(({ where }: FindOneArgs) => {
         if (!rows.has(where.id)) rows.set(where.id, report(where.id));
-        return rows.get(where.id);
+        return Promise.resolve(rows.get(where.id));
       }),
-      save: jest.fn(async (row) => row),
+      save: jest.fn((row: TestReport) => Promise.resolve(row)),
     };
     const notifications = {
       createNotification: jest.fn().mockResolvedValue(undefined),
     };
     return {
       service: new CommunityAwardService(
-        reports as any,
-        {} as any,
-        notifications as any,
+        reports as unknown as Repository<StudentReport>,
+        {} as unknown as Repository<Organization>,
+        notifications as unknown as NotificationsService,
       ),
       rows,
       notifications,
     };
   };
-  const pool = [
+  const pool = asCards([
     { id: 'r1', total: 91 },
     { id: 'r2', total: 77 },
     { id: 'r3', total: 77 },
     { id: 'r4', total: 40 },
-  ] as any;
+  ]);
 
   it('ignores a crafted rank / of / total and stores the server-computed ones', async () => {
     const { service, rows } = build();
@@ -159,8 +194,8 @@ describe('CommunityAwardService.notifyFromPool — ranking is computed server-si
       kind: 'ciel',
       scopeLabel: 'National',
       picks: [{ reportId: 'r4', rank: 1, of: 1, total: 100 }],
-    } as any);
-    const badge = rows.get('r4').awardBadges[0];
+    });
+    const badge = rows.get('r4')!.awardBadges[0];
     expect(badge).toMatchObject({ rank: 4, of: 4, score: 40 });
   });
 
@@ -169,9 +204,9 @@ describe('CommunityAwardService.notifyFromPool — ranking is computed server-si
     await service.notifyFromPool(pool, {
       kind: 'ciel',
       reportIds: ['r2', 'r3'],
-    } as any);
-    expect(rows.get('r2').awardBadges[0].rank).toBe(2);
-    expect(rows.get('r3').awardBadges[0].rank).toBe(2);
+    });
+    expect(rows.get('r2')!.awardBadges[0].rank).toBe(2);
+    expect(rows.get('r3')!.awardBadges[0].rank).toBe(2);
   });
 
   it('faculty / university medals only go to the TRUE top-N — a lower-ranked report cannot be promoted by the client', async () => {
@@ -182,9 +217,12 @@ describe('CommunityAwardService.notifyFromPool — ranking is computed server-si
         { reportId: 'r4', rank: 1 },
         { reportId: 'r1', rank: 9 },
       ],
-    } as any);
+    });
     expect(rows.has('r4')).toBe(false);
-    expect(rows.get('r1').awardBadges[0]).toMatchObject({ rank: 1, score: 91 });
+    expect(rows.get('r1')!.awardBadges[0]).toMatchObject({
+      rank: 1,
+      score: 91,
+    });
     expect(res.notified).toBe(1);
   });
 
@@ -193,12 +231,12 @@ describe('CommunityAwardService.notifyFromPool — ranking is computed server-si
     await service.notifyFromPool(pool, {
       kind: 'ciel',
       reportIds: ['r1'],
-    } as any);
+    });
     await service.notifyFromPool(pool, {
       kind: 'ciel',
       reportIds: ['r1'],
-    } as any);
-    expect(rows.get('r1').awardBadgeHistory).toHaveLength(1);
+    });
+    expect(rows.get('r1')!.awardBadgeHistory).toHaveLength(1);
     expect(notifications.createNotification).toHaveBeenCalledTimes(1);
   });
 
@@ -207,7 +245,7 @@ describe('CommunityAwardService.notifyFromPool — ranking is computed server-si
     const res = await service.notifyFromPool(pool, {
       kind: 'ciel',
       reportIds: ['r1', 'r1', 'ghost'],
-    } as any);
+    });
     expect(res.notified).toBe(1);
     expect(rows.has('ghost')).toBe(false);
   });
@@ -239,7 +277,7 @@ describe('CommunityAwardService.toCard — organization name', () => {
         organization: { name: 'Student opportunity — Aabpashi — 9f84bc1f' },
         partner_organization: { organization_name: 'Abroo' },
       },
-    } as any);
+    } as unknown as StudentReport);
     expect(card.organization_name).toBe('Abroo');
     expect(card.organization_name).not.toMatch(/student opportunity|9f84bc1f/i);
   });
@@ -251,24 +289,27 @@ describe('CommunityAwardService.toCard — organization name', () => {
         title: 'Aabpashi',
         organization: { name: 'Student opportunity — Aabpashi — 9f84bc1f' },
       },
-    } as any);
+    } as unknown as StudentReport);
     expect(card.organization_name).toBe('Partner');
   });
 });
 
 describe('CommunityAwardService.listForPartnerOrg — partner linked by email/name', () => {
+  type WhereArgs = [string, Record<string, unknown>?];
   function serviceWithQb() {
-    const qb: any = {
+    const qb = {
       leftJoinAndSelect: jest.fn().mockReturnThis(),
-      where: jest.fn().mockReturnThis(),
+      where: jest.fn<unknown, WhereArgs>().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
       orderBy: jest.fn().mockReturnThis(),
       getMany: jest.fn().mockResolvedValue([]),
     };
     const service = new CommunityAwardService(
-      { createQueryBuilder: jest.fn().mockReturnValue(qb) } as any,
-      {} as any,
-      { createNotification: jest.fn() } as any,
+      {
+        createQueryBuilder: jest.fn().mockReturnValue(qb),
+      } as unknown as Repository<StudentReport>,
+      {} as unknown as Repository<Organization>,
+      { createNotification: jest.fn() } as unknown as NotificationsService,
     );
     return { service, qb };
   }
@@ -289,33 +330,42 @@ describe('CommunityAwardService.listForPartnerOrg — partner linked by email/na
 });
 
 describe('CommunityAwardService — badges follow a published ranking', () => {
-  function build(reportsById: Record<string, any>) {
-    const saved: any[] = [];
-    const notes: any[] = [];
-    const reports: any = {
-      findOne: jest.fn(async ({ where }: any) => reportsById[where.id] ?? null),
-      find: jest.fn(async ({ where }: any) =>
-        Object.values(reportsById).filter(
-          (r: any) => where.id.value?.includes(r.id) ?? true,
+  type FindArgs = { where: { id: { value?: string[] } } };
+  type ServiceWithReports = {
+    reports: { find: (...args: unknown[]) => Promise<TestReport[]> };
+  };
+  function build(reportsById: Record<string, TestReport>) {
+    const saved: TestReport[] = [];
+    const notes: unknown[][] = [];
+    const reports = {
+      findOne: jest.fn(({ where }: FindOneArgs) =>
+        Promise.resolve(reportsById[where.id] ?? null),
+      ),
+      find: jest.fn(({ where }: FindArgs) =>
+        Promise.resolve(
+          Object.values(reportsById).filter(
+            (r) => where.id.value?.includes(r.id) ?? true,
+          ),
         ),
       ),
-      save: jest.fn(async (r: any) => {
-        saved.push(JSON.parse(JSON.stringify(r)));
-        return r;
+      save: jest.fn((r: TestReport) => {
+        saved.push(JSON.parse(JSON.stringify(r)) as TestReport);
+        return Promise.resolve(r);
       }),
     };
     const svc = new CommunityAwardService(
-      reports,
-      {} as any,
+      reports as unknown as Repository<StudentReport>,
+      {} as unknown as Repository<Organization>,
       {
-        createNotification: jest.fn(async (...a: any[]) => {
+        createNotification: jest.fn((...a: unknown[]) => {
           notes.push(a);
+          return Promise.resolve();
         }),
-      } as any,
+      } as unknown as NotificationsService,
     );
     return { svc, saved, notes };
   }
-  const approved = (id: string, badges: any[] = []) => ({
+  const approved = (id: string, badges: AwardBadge[] = []): TestReport => ({
     id,
     studentId: `stu-${id}`,
     status: 'verified',
@@ -328,26 +378,26 @@ describe('CommunityAwardService — badges follow a published ranking', () => {
   });
 
   it('award-notify takes rank, cohort size and score from the published ranking and ignores unranked projects', async () => {
-    const r: any = { a: approved('a'), b: approved('b'), z: approved('z') };
+    const r: Record<string, TestReport> = {
+      a: approved('a'),
+      b: approved('b'),
+      z: approved('z'),
+    };
     const { svc, saved } = build(r);
-    const pool: any[] = [
+    const pool = asCards([
       { id: 'a', total: 10 },
       { id: 'b', total: 99 },
       { id: 'z', total: 80 },
-    ];
-    await svc.notifyFromPool(
-      pool,
-      {
-        kind: 'ciel',
-        reportIds: ['a', 'b', 'z'],
-        scopeLabel: 'National',
-      } as any,
-      'admin',
-      [
-        { reportId: 'a', rank: 1, score: 88.5 },
-        { reportId: 'b', rank: 2, score: 70 },
-      ],
-    );
+    ]);
+    const dto: NotifyCommunityAwardDto = {
+      kind: 'ciel',
+      reportIds: ['a', 'b', 'z'],
+      scopeLabel: 'National',
+    };
+    await svc.notifyFromPool(pool, dto, 'admin', [
+      { reportId: 'a', rank: 1, score: 88.5 },
+      { reportId: 'b', rank: 2, score: 70 },
+    ]);
     const byId = Object.fromEntries(saved.map((s) => [s.id, s.awardBadges[0]]));
     expect(byId.a).toMatchObject({ rank: 1, of: 2, score: 88.5 });
     expect(byId.b).toMatchObject({ rank: 2, of: 2, score: 70 });
@@ -355,7 +405,7 @@ describe('CommunityAwardService — badges follow a published ranking', () => {
   });
 
   it('sync rewrites an existing national medal, records history and notifies; unchanged ones are left alone', async () => {
-    const old = {
+    const old: AwardBadge = {
       kind: 'ciel',
       rank: 5,
       of: 6,
@@ -364,7 +414,7 @@ describe('CommunityAwardService — badges follow a published ranking', () => {
       label: 'x',
       at: 't',
     };
-    const same = {
+    const same: AwardBadge = {
       kind: 'ciel',
       rank: 2,
       of: 2,
@@ -373,9 +423,14 @@ describe('CommunityAwardService — badges follow a published ranking', () => {
       label: 'x',
       at: 't',
     };
-    const r: any = { a: approved('a', [old]), b: approved('b', [same]) };
+    const r: Record<string, TestReport> = {
+      a: approved('a', [old]),
+      b: approved('b', [same]),
+    };
     const { svc, saved, notes } = build(r);
-    (svc as any).reports.find = jest.fn(async () => Object.values(r));
+    (svc as unknown as ServiceWithReports).reports.find = jest.fn(() =>
+      Promise.resolve(Object.values(r)),
+    );
     const out = await svc.syncBadgesToPublishedRanking('ciel', 'National', [
       { reportId: 'a', rank: 1, score: 88.5 },
       { reportId: 'b', rank: 2, score: 70 },
@@ -393,7 +448,7 @@ describe('CommunityAwardService — badges follow a published ranking', () => {
   });
 
   it('top-N honours are dropped (history kept) when the published rank is outside the top N', async () => {
-    const uni = {
+    const uni: AwardBadge = {
       kind: 'uni',
       rank: 1,
       of: 6,
@@ -402,15 +457,15 @@ describe('CommunityAwardService — badges follow a published ranking', () => {
       label: 'x',
       at: 't',
     };
-    const r: any = { a: approved('a', [uni]) };
+    const r: Record<string, TestReport> = { a: approved('a', [uni]) };
     const { svc, saved } = build(r);
-    (svc as any).reports.find = jest.fn(async () => Object.values(r));
+    (svc as unknown as ServiceWithReports).reports.find = jest.fn(() =>
+      Promise.resolve(Object.values(r)),
+    );
     await svc.syncBadgesToPublishedRanking('uni', 'X', [
       { reportId: 'a', rank: 5, score: 40 },
     ]);
-    expect(
-      saved[0].awardBadges.find((b: any) => b.kind === 'uni'),
-    ).toBeUndefined();
+    expect(saved[0].awardBadges.find((b) => b.kind === 'uni')).toBeUndefined();
     expect(saved[0].awardBadgeHistory[0]).toMatchObject({
       kind: 'uni',
       rank: 5,

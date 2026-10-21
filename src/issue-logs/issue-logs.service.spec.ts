@@ -2,13 +2,24 @@ import { ArgumentsHost, BadRequestException } from '@nestjs/common';
 import { IssueLogsService } from './issue-logs.service';
 import { MaintenanceException } from '../common/guards/maintenance.guard';
 
+/** What the service hands to `repository.save`, as far as these tests inspect it. */
+type SavedIssueLog = {
+  stack?: string | null;
+  metadata: {
+    body?: { password?: string };
+    exceptionConstructName?: string;
+    requestTrace?: Record<string, unknown>;
+    safeHeaders?: Record<string, unknown>;
+  } & Record<string, unknown>;
+} & Record<string, unknown>;
+
 describe('IssueLogsService', () => {
-  const makeHost = (request: any): ArgumentsHost =>
+  const makeHost = (request: Record<string, unknown>): ArgumentsHost =>
     ({
       switchToHttp: () => ({
         getRequest: () => request,
       }),
-    }) as any;
+    }) as unknown as ArgumentsHost;
 
   const makeQueryBuilder = (rows: unknown[] = [], total = 0) => {
     const chain = {
@@ -22,8 +33,11 @@ describe('IssueLogsService', () => {
   };
 
   const makeRepository = (qb = makeQueryBuilder()) => ({
-    create: jest.fn((value) => value),
-    save: jest.fn().mockResolvedValue(undefined),
+    create: jest.fn((value: SavedIssueLog) => value),
+    save: jest.fn((value: SavedIssueLog): Promise<undefined> => {
+      void value;
+      return Promise.resolve(undefined);
+    }),
     findAndCount: jest.fn().mockResolvedValue([[], 0]),
     findOne: jest.fn().mockResolvedValue(null),
     createQueryBuilder: jest.fn().mockReturnValue(qb),
@@ -31,7 +45,7 @@ describe('IssueLogsService', () => {
 
   it('does not log expected maintenance-mode rejections', async () => {
     const repository = makeRepository();
-    const service = new IssueLogsService(repository as any);
+    const service = new IssueLogsService(repository as never);
     await service.logException(
       new MaintenanceException(),
       makeHost({ method: 'GET', url: '/api/v1/x', headers: {} }),
@@ -41,7 +55,7 @@ describe('IssueLogsService', () => {
 
   it('filters open vs resolved logs', async () => {
     const qb = makeQueryBuilder();
-    const service = new IssueLogsService(makeRepository(qb) as any);
+    const service = new IssueLogsService(makeRepository(qb) as never);
     await service.findAll({ resolved: 'open' });
     expect(qb.andWhere).toHaveBeenCalledWith('log.resolvedAt IS NULL');
     await service.findAll({ resolved: 'resolved' });
@@ -49,18 +63,18 @@ describe('IssueLogsService', () => {
   });
 
   it('resolve is idempotent and ignores blank ids', async () => {
-    const update: any = {
+    const update = {
       update: jest.fn().mockReturnThis(),
       set: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
       execute: jest.fn().mockResolvedValue({ affected: 2 }),
     };
-    const repository: any = {
+    const repository = {
       ...makeRepository(),
       createQueryBuilder: jest.fn().mockReturnValue(update),
     };
-    const service = new IssueLogsService(repository);
+    const service = new IssueLogsService(repository as never);
     expect(await service.resolve([' ', ''], 'adm')).toEqual({ resolved: 0 });
     expect(await service.resolve(['a', 'a', 'b'], 'adm')).toEqual({
       resolved: 2,
@@ -72,7 +86,7 @@ describe('IssueLogsService', () => {
 
   it('logs user-facing report errors with safe metadata', async () => {
     const repository = makeRepository();
-    const service = new IssueLogsService(repository as any);
+    const service = new IssueLogsService(repository as never);
 
     const method = 'POST';
     const requestUrl = '/api/v1/student/reports/project-1/submit';
@@ -120,7 +134,7 @@ describe('IssueLogsService', () => {
         requestId: 'request-1',
       }),
     );
-    expect(repository.save.mock.calls[0][0].metadata.body.password).toBe(
+    expect(repository.save.mock.calls[0][0].metadata.body?.password).toBe(
       '[REDACTED]',
     );
 
@@ -148,7 +162,7 @@ describe('IssueLogsService', () => {
   it('swallows repository errors so logging cannot break the response flow', async () => {
     const repository = makeRepository();
     repository.save.mockRejectedValueOnce(new Error('db down'));
-    const service = new IssueLogsService(repository as any);
+    const service = new IssueLogsService(repository as never);
 
     await expect(
       service.logException(
@@ -168,7 +182,7 @@ describe('IssueLogsService', () => {
 
   it('logs operational attendance failures with reason metadata', async () => {
     const repository = makeRepository();
-    const service = new IssueLogsService(repository as any);
+    const service = new IssueLogsService(repository as never);
 
     await service.logOperationalIssue({
       eventType: 'attendance_submit_failure',
@@ -203,7 +217,7 @@ describe('IssueLogsService', () => {
   it('caps admin list page size', async () => {
     const qb = makeQueryBuilder([], 0);
     const repository = makeRepository(qb);
-    const service = new IssueLogsService(repository as any);
+    const service = new IssueLogsService(repository as never);
 
     await service.findAll({
       page: '2',
@@ -218,7 +232,7 @@ describe('IssueLogsService', () => {
   it('applies search and module filters via query builder', async () => {
     const qb = makeQueryBuilder([{ id: 'log-1' }], 1);
     const repository = makeRepository(qb);
-    const service = new IssueLogsService(repository as any);
+    const service = new IssueLogsService(repository as never);
 
     const result = await service.findAll({
       search: 'Invalid credentials',

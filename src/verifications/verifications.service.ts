@@ -109,9 +109,9 @@ export class VerificationsService {
     let type = 'Timesheet';
     let entity: Timesheet | Report | null =
       await this.timesheetsRepository.findOne({
-      where: { id },
-      relations: ['opportunity'],
-    });
+        where: { id },
+        relations: ['opportunity'],
+      });
 
     if (!entity) {
       entity = await this.reportsRepository.findOne({ where: { id } });
@@ -136,9 +136,9 @@ export class VerificationsService {
     let type = 'Timesheet';
     let entity: Timesheet | Report | null =
       await this.timesheetsRepository.findOne({
-      where: { id },
-      relations: ['opportunity'],
-    });
+        where: { id },
+        relations: ['opportunity'],
+      });
 
     if (!entity) {
       entity = await this.reportsRepository.findOne({ where: { id } });

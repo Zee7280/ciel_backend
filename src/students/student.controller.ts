@@ -32,6 +32,26 @@ import {
 } from '../common/student-report-file-upload';
 import { S3Service } from '../common/s3.service';
 import { RedactOpportunitySecretsInterceptor } from '../opportunities/redact-opportunity-secrets.interceptor';
+import type { StudentOpportunitiesQuery } from './students.service';
+
+/** `req.user` as populated by JwtStrategy.validate(). */
+type AuthenticatedRequest = {
+  user: {
+    id: string;
+    email?: string;
+    role: UserRole;
+    organizationId?: string | null;
+  };
+};
+
+/** Copy of the submitted opportunity payload without the `draft` routing flag. */
+function withoutDraftFlag<T extends { draft?: boolean }>(
+  dto: T,
+): Omit<T, 'draft'> {
+  const copy: T = { ...dto };
+  delete copy.draft;
+  return copy;
+}
 
 @Controller('student')
 @UseGuards(JwtAuthGuard, RolesGuard, SubscriptionActiveGuard)
@@ -45,19 +65,22 @@ export class StudentController {
   ) {}
 
   @Get('projects')
-  getStudentProjects(@Request() req) {
+  getStudentProjects(@Request() req: AuthenticatedRequest) {
     return this.studentsService.getStudentProjects(req.user.id);
   }
 
   /** Alias for clients that POST (e.g. Next.js proxy); always scoped to JWT user. */
   @Post('projects')
-  postStudentProjects(@Request() req) {
+  postStudentProjects(@Request() req: AuthenticatedRequest) {
     return this.studentsService.getStudentProjects(req.user.id);
   }
 
   @Get('projects/:id')
   @UseInterceptors(RedactOpportunitySecretsInterceptor)
-  getProjectById(@Request() req, @Param('id', new ParseUUIDPipe()) id: string) {
+  getProjectById(
+    @Request() req: AuthenticatedRequest,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
     return this.studentsService.getProjectById(id, req.user.id, {
       id: req.user.id,
       email: req.user.email,
@@ -67,13 +90,16 @@ export class StudentController {
   }
 
   @Get('projects/:id/my-participation')
-  async getMyParticipation(@Request() req, @Param('id') id: string) {
+  async getMyParticipation(
+    @Request() req: AuthenticatedRequest,
+    @Param('id') id: string,
+  ) {
     return this.studentParticipationService.getMyParticipation(req.user.id, id);
   }
 
   @Get('opportunities/:id/participation-guide')
   async getParticipationGuide(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Param('id', new ParseUUIDPipe()) id: string,
   ) {
     // Only opportunities the caller may open at all (public-live / own / joined / applied).
@@ -91,13 +117,16 @@ export class StudentController {
   }
 
   @Get('opportunity')
-  getOpportunity(@Request() req, @Query() query: any) {
+  getOpportunity(
+    @Request() req: AuthenticatedRequest,
+    @Query() query: StudentOpportunitiesQuery,
+  ) {
     return this.studentsService.getOpportunities(query, req.user.id);
   }
 
   @Get('opportunities/similar')
   findSimilarOpportunities(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Query('title') title?: string,
     @Query('university') university?: string,
     @Query('excludeId') excludeId?: string,
@@ -115,7 +144,7 @@ export class StudentController {
   @Post('opportunity')
   @UseInterceptors(RedactOpportunitySecretsInterceptor)
   createIndependentProject(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Body() createOpportunityDto: CreateOpportunityDto,
   ) {
     if (createOpportunityDto?.draft === true) {
@@ -125,7 +154,7 @@ export class StudentController {
         createOpportunityDto as unknown as Record<string, unknown>,
       );
     }
-    const { draft: _draftFlag, ...createDto } = createOpportunityDto;
+    const createDto = withoutDraftFlag(createOpportunityDto);
     return this.studentsService.createStudentOpportunity(
       req.user.id,
       createDto,
@@ -143,7 +172,7 @@ export class StudentController {
     UserRole.ORGANIZATION_ADMIN,
   )
   remindOpportunityReviewer(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Param('id', new ParseUUIDPipe()) id: string,
   ) {
     return this.studentsService.remindOpportunityReviewer(req.user.id, id);
@@ -159,7 +188,10 @@ export class StudentController {
     UserRole.UNIVERSITY,
     UserRole.ORGANIZATION_ADMIN,
   )
-  remindReportReviewer(@Request() req, @Param('id') id: string) {
+  remindReportReviewer(
+    @Request() req: AuthenticatedRequest,
+    @Param('id') id: string,
+  ) {
     return this.studentReportsService.remindReportReviewer(req.user.id, id);
   }
 
@@ -167,7 +199,7 @@ export class StudentController {
   @Patch('opportunity/:id')
   @UseInterceptors(RedactOpportunitySecretsInterceptor)
   updateIndependentProject(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body()
     updateOpportunityDto: Partial<CreateOpportunityDto>,
@@ -179,7 +211,7 @@ export class StudentController {
         updateOpportunityDto as unknown as Record<string, unknown>,
       );
     }
-    const { draft: _draftFlag, ...updateDto } = updateOpportunityDto;
+    const updateDto = withoutDraftFlag(updateOpportunityDto);
     return this.studentsService.updateStudentOpportunity(
       req.user.id,
       id,
@@ -225,7 +257,10 @@ export class StudentController {
   // ---- Reports aliases (frontend uses /student not /students) ----
 
   @Get('reports')
-  getAllReports(@Request() req, @Query() query: any) {
+  getAllReports(
+    @Request() req: AuthenticatedRequest,
+    @Query() query: Record<string, unknown>,
+  ) {
     return this.studentReportsService.findAll({
       ...query,
       studentId: req.user.id,
@@ -233,7 +268,7 @@ export class StudentController {
   }
 
   @Get('reports/:id')
-  getReportById(@Request() req, @Param('id') id: string) {
+  getReportById(@Request() req: AuthenticatedRequest, @Param('id') id: string) {
     return this.studentReportsService.findOneByOpportunityOrId(id, req.user.id);
   }
 
@@ -245,8 +280,8 @@ export class StudentController {
     }),
   )
   async uploadFile(
-    @Request() req,
-    @UploadedFile() file: any,
+    @Request() req: AuthenticatedRequest,
+    @UploadedFile() file: Express.Multer.File | undefined,
     @Body('section') section: string,
   ) {
     if (!file) {
@@ -265,7 +300,7 @@ export class StudentController {
 
   @Post('reports/upload/presign')
   async presignUploadFile(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Body()
     body: {
       section?: string;
@@ -297,9 +332,9 @@ export class StudentController {
     }),
   )
   async uploadEvidenceFile(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Param('projectId') projectId: string,
-    @UploadedFile() file: any,
+    @UploadedFile() file: Express.Multer.File | undefined,
     @Body() body: { project_id?: string; section?: string; field?: string },
   ) {
     if (!file) {
@@ -338,7 +373,7 @@ export class StudentController {
 
   @Post('reports/:projectId/evidence/presign')
   async presignEvidenceFile(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Param('projectId') projectId: string,
     @Body()
     body: {
@@ -391,9 +426,9 @@ export class StudentController {
     }),
   )
   async submitReport(
-    @Request() req,
-    @Body() body: any,
-    @UploadedFiles() files: any[],
+    @Request() req: AuthenticatedRequest,
+    @Body() body: Record<string, unknown>,
+    @UploadedFiles() files: Express.Multer.File[],
   ) {
     return this.studentReportsService.createReport(
       req.user.id,
@@ -411,10 +446,10 @@ export class StudentController {
     }),
   )
   async submitReportWithId(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Param('id') id: string,
-    @Body() body: any,
-    @UploadedFiles() files: any[],
+    @Body() body: Record<string, unknown>,
+    @UploadedFiles() files: Express.Multer.File[],
   ) {
     // If opportunityId is not in body, use the one from URL
     if (!body.opportunityId) body.opportunityId = id;
@@ -434,9 +469,9 @@ export class StudentController {
     }),
   )
   async saveDraft(
-    @Request() req,
-    @Body() body: any,
-    @UploadedFiles() files: any[],
+    @Request() req: AuthenticatedRequest,
+    @Body() body: Record<string, unknown>,
+    @UploadedFiles() files: Express.Multer.File[],
   ) {
     return this.studentReportsService.saveDraft(req.user.id, body, files);
   }
@@ -449,10 +484,10 @@ export class StudentController {
     }),
   )
   async saveDraftWithId(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Param('id') id: string,
-    @Body() body: any,
-    @UploadedFiles() files: any[],
+    @Body() body: Record<string, unknown>,
+    @UploadedFiles() files: Express.Multer.File[],
   ) {
     if (!body.opportunityId) body.opportunityId = id;
     return this.studentReportsService.saveDraft(req.user.id, body, files);

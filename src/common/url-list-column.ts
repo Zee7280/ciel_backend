@@ -11,7 +11,10 @@ export function normalizeUrlList(raw: unknown): string[] {
 
 function splitStoredUrlString(raw: unknown): string[] {
   if (raw == null) return [];
-  const s = String(raw).trim();
+  // Stored column value is text; anything else is coerced exactly as String() would.
+  const s = (
+    typeof raw === 'string' ? raw : String(raw as string | number | boolean)
+  ).trim();
   if (!s) return [];
   if (s.startsWith('[')) {
     try {

@@ -17,6 +17,9 @@ import { UserRole } from '../users/enums/user-role.enum';
 import { AdminMutationAuditInterceptor } from '../audit-logs/admin-mutation-audit.interceptor';
 import { StudentSubscriptionService } from './student-subscription.service';
 
+/** `req.user` as populated by JwtStrategy.validate(). */
+type AuthenticatedRequest = { user: { id: string } };
+
 @Controller('admin/student-subscriptions')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.SUPER_ADMIN)
@@ -57,7 +60,7 @@ export class AdminStudentSubscriptionController {
 
   @Post(':id/approve')
   async approve(
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() body?: { allowAmountMismatch?: boolean },
   ) {
@@ -77,7 +80,7 @@ export class AdminStudentSubscriptionController {
 
   @Post(':id/reject')
   async reject(
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() body: { feedback?: string },
   ) {

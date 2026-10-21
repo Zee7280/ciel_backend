@@ -1,19 +1,42 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
+import { Repository } from 'typeorm';
 import {
   UsersService,
   escapeLikePattern,
   hashResetToken,
 } from './users.service';
+import { User } from './entities/user.entity';
+import { NotificationsService } from '../notifications/notifications.service';
+import { OrganizationMembershipService } from '../organization-membership/organization-membership.service';
+import { StudentSubscriptionService } from '../student-subscription/student-subscription.service';
+import { encryptPasswordRecord } from './password-record.util';
 
-function build(repo: any) {
+type UserRow = Record<string, unknown>;
+
+/** Mocked `Repository<User>` surface used by these tests; `_qb` exposes the query-builder mock. */
+type RepoMock = {
+  createQueryBuilder?: jest.Mock;
+  create?: jest.Mock<UserRow, [UserRow]>;
+  save?: jest.Mock<Promise<UserRow>, [UserRow]>;
+  findOne?: jest.Mock;
+  update?: jest.Mock<Promise<unknown>, [string, UserRow]>;
+  increment?: jest.Mock;
+  count?: jest.Mock;
+  delete?: jest.Mock;
+  _qb?: Record<string, jest.Mock>;
+};
+
+function build(repo: RepoMock) {
   return new UsersService(
-    repo,
-    {} as any,
-    {} as any,
-    { getUiFlags: jest.fn().mockResolvedValue({}) } as any,
+    repo as unknown as Repository<User>,
+    {} as NotificationsService,
+    {} as OrganizationMembershipService,
+    {
+      getUiFlags: jest.fn().mockResolvedValue({}),
+    } as unknown as StudentSubscriptionService,
   );
 }
-function repoMock(overrides: any = {}) {
+function repoMock(overrides: RepoMock = {}) {
   const qb = {
     leftJoinAndSelect: jest.fn().mockReturnThis(),
     where: jest.fn().mockReturnThis(),
@@ -21,8 +44,10 @@ function repoMock(overrides: any = {}) {
   };
   return {
     createQueryBuilder: jest.fn().mockReturnValue(qb),
-    create: jest.fn((x) => x),
-    save: jest.fn(async (x) => ({ id: 'new', ...x })),
+    create: jest.fn((x: UserRow) => x),
+    save: jest.fn<Promise<UserRow>, [UserRow]>((x) =>
+      Promise.resolve({ id: 'new', ...x }),
+    ),
     findOne: jest.fn(),
     update: jest.fn(),
     increment: jest.fn(),
@@ -45,19 +70,22 @@ describe('UsersService', () => {
       email: '  A@B.C ',
       password: 'password1',
       role: 'student',
-    } as any);
+    } as unknown as Parameters<UsersService['create']>[0]);
     expect(saved.email).toBe('a@b.c');
     expect(saved.password).not.toBe('password1');
-    expect(typeof (saved as any).passwordRecord).toBe('string');
-    expect((saved as any).passwordRecord).toContain(':');
-    expect((saved as any).passwordRecord).not.toBe('password1');
+    expect(typeof saved.passwordRecord).toBe('string');
+    expect(saved.passwordRecord).toContain(':');
+    expect(saved.passwordRecord).not.toBe('password1');
   });
 
   it('create returns 409 on duplicate email', async () => {
     const repo = repoMock();
     repo._qb.getOne.mockResolvedValue({ id: 'x' });
     await expect(
-      build(repo).create({ email: 'a@b.c', password: 'password1' } as any),
+      build(repo).create({
+        email: 'a@b.c',
+        password: 'password1',
+      } as unknown as Parameters<UsersService['create']>[0]),
     ).rejects.toThrow(ConflictException);
   });
 
@@ -102,38 +130,40 @@ describe('UsersService', () => {
 
 describe('UsersService — password reset tokens are stored hashed', () => {
   it('savePasswordResetToken persists the SHA-256 hash, never the raw token', async () => {
-    const repo: any = { update: jest.fn() };
+    const update = jest.fn<Promise<unknown>, [string, UserRow]>();
+    const repo: RepoMock = { update };
     await build(repo).savePasswordResetToken('u1', 'raw-token-abc', new Date());
-    const patch = repo.update.mock.calls[0][1];
+    const patch = update.mock.calls[0][1];
     expect(patch.passwordResetToken).toBe(hashResetToken('raw-token-abc'));
     expect(patch.passwordResetToken).not.toContain('raw-token-abc');
     expect(patch.passwordResetToken).toMatch(/^[a-f0-9]{64}$/);
   });
 
   it('findByResetToken looks up by hash and refuses empty tokens (cannot match a null/empty column)', async () => {
-    const repo: any = { findOne: jest.fn().mockResolvedValue({ id: 'u1' }) };
+    const findOne = jest.fn().mockResolvedValue({ id: 'u1' });
+    const repo: RepoMock = { findOne };
     const svc = build(repo);
     await svc.findByResetToken('raw-token-abc');
-    expect(repo.findOne).toHaveBeenCalledWith({
+    expect(findOne).toHaveBeenCalledWith({
       where: { passwordResetToken: hashResetToken('raw-token-abc') },
     });
-    repo.findOne.mockClear();
+    findOne.mockClear();
     expect(await svc.findByResetToken('')).toBeNull();
     expect(await svc.findByResetToken('   ')).toBeNull();
-    expect(repo.findOne).not.toHaveBeenCalled();
+    expect(findOne).not.toHaveBeenCalled();
   });
 });
 
 describe('UsersService — admin list filters', () => {
-  function listRepo(rows: any[]) {
-    const qb: any = {
+  function listRepo(rows: UserRow[]) {
+    const qb = {
       leftJoin: jest.fn().mockReturnThis(),
       addSelect: jest.fn().mockReturnThis(),
       orderBy: jest.fn().mockReturnThis(),
       addOrderBy: jest.fn().mockReturnThis(),
       skip: jest.fn().mockReturnThis(),
       take: jest.fn().mockReturnThis(),
-      andWhere: jest.fn().mockReturnThis(),
+      andWhere: jest.fn<unknown, [string, ...unknown[]]>().mockReturnThis(),
       getManyAndCount: jest.fn().mockResolvedValue([rows, rows.length]),
     };
     return {
@@ -159,13 +189,12 @@ describe('UsersService — admin list filters', () => {
       status: 'active',
       search: 'BNU',
     });
-    const sql = repo._qb.andWhere.mock.calls.map((c: any[]) => c[0]).join(' ');
+    const sql = repo._qb.andWhere.mock.calls.map((c) => c[0]).join(' ');
     expect(sql).toContain('user.status = :status');
     expect(sql).toContain('user.university ILIKE :search');
   });
 
   it('returns stored_password only when revealPasswordRecords is on', async () => {
-    const { encryptPasswordRecord } = require('./password-record.util');
     const rows = [
       {
         id: '1',
@@ -177,33 +206,42 @@ describe('UsersService — admin list filters', () => {
         passwordRecord: encryptPasswordRecord('secret1234'),
       },
     ];
+    type AdminRow = { stored_password?: string; password?: string };
     const hidden = await build(listRepo(rows)).findAllForAdmin({
       page: 1,
       limit: 10,
     });
-    expect((hidden.data[0] as any).stored_password).toBeUndefined();
+    expect((hidden.data[0] as AdminRow).stored_password).toBeUndefined();
     const shown = await build(listRepo(rows)).findAllForAdmin({
       page: 1,
       limit: 10,
       revealPasswordRecords: true,
     });
-    expect((shown.data[0] as any).stored_password).toBe('secret1234');
-    expect((shown.data[0] as any).password).toBeUndefined();
+    expect((shown.data[0] as AdminRow).stored_password).toBe('secret1234');
+    expect((shown.data[0] as AdminRow).password).toBeUndefined();
   });
 });
 
 describe('UsersService — student institution/programme set once', () => {
-  const setup = (user: any) => {
+  type ProfileUser = {
+    id: string;
+    role: string;
+    institution?: string | null;
+    university?: string | null;
+    department?: string | null;
+    faculty_department?: string | null;
+  };
+  const setup = (user: ProfileUser) => {
     const repo = repoMock();
     repo.findOne.mockResolvedValue(user);
-    repo.save.mockImplementation(async (x: any) => x);
-    const svc = build(repo) as any;
+    repo.save.mockImplementation((x: UserRow) => Promise.resolve(x));
+    const svc = build(repo);
     svc.formatUserResponse = jest.fn().mockResolvedValue({});
     return { repo, svc };
   };
 
   it('lets a student with no university/programme set them', async () => {
-    const user: any = {
+    const user: ProfileUser = {
       id: 's',
       role: 'student',
       institution: '',
@@ -224,7 +262,7 @@ describe('UsersService — student institution/programme set once', () => {
   });
 
   it('ignores changes once a student already has them', async () => {
-    const user: any = {
+    const user: ProfileUser = {
       id: 's',
       role: 'student',
       institution: 'BNU',
@@ -248,7 +286,7 @@ describe('UsersService — student institution/programme set once', () => {
   });
 
   it('still lets an admin change them', async () => {
-    const user: any = {
+    const user: ProfileUser = {
       id: 's',
       role: 'student',
       institution: 'BNU',

@@ -16,6 +16,11 @@ import { OrganizationMembershipService } from './organization-membership.service
 import { S3Service } from '../common/s3.service';
 import { UserRole } from '../users/enums/user-role.enum';
 
+/** Shape of `req.user` as returned by JwtStrategy.validate. */
+interface MembershipRequest {
+  user: { id: string; role: UserRole };
+}
+
 @Controller('organization-membership')
 @UseGuards(JwtAuthGuard)
 export class OrganizationMembershipController {
@@ -25,8 +30,8 @@ export class OrganizationMembershipController {
   ) {}
 
   @Get('fee')
-  async getMyFee(@Request() req: any) {
-    const role = req.user.role as UserRole;
+  async getMyFee(@Request() req: MembershipRequest) {
+    const role = req.user.role;
     const applies =
       await this.membershipService.roleRequiresMembershipPayment(role);
     if (!applies) {
@@ -49,8 +54,8 @@ export class OrganizationMembershipController {
   @Post('submit-proof')
   @UseInterceptors(FileInterceptor('proof', proofUploadOptions))
   async submitProof(
-    @Request() req: any,
-    @UploadedFile() file: any,
+    @Request() req: MembershipRequest,
+    @UploadedFile() file: Express.Multer.File | undefined,
     @Body() body: { paid_amount?: string },
   ) {
     if (!file) {

@@ -9,10 +9,8 @@ import {
   Request,
   ParseIntPipe,
 } from '@nestjs/common';
-import {
-  NotificationListQuery,
-  NotificationsService,
-} from './notifications.service';
+import { NotificationsService } from './notifications.service';
+import type { NotificationListQuery } from './notifications.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 type AuthenticatedRequest = { user: { id: string } };
@@ -54,12 +52,18 @@ export class NotificationsController {
   }
 
   @Put(':id/read')
-  markAsRead(@Request() req: AuthenticatedRequest, @Param('id', ParseIntPipe) id: number) {
+  markAsRead(
+    @Request() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
     return this.notificationsService.markAsRead(id, req.user.id);
   }
 
   @Delete(':id')
-  remove(@Request() req: AuthenticatedRequest, @Param('id', ParseIntPipe) id: number) {
+  remove(
+    @Request() req: AuthenticatedRequest,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
     return this.notificationsService.remove(id, req.user.id);
   }
 }

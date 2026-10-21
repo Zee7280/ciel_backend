@@ -27,15 +27,9 @@ import { canonicalizePhoneInput } from '../common/phone-e164.util';
 import { StudentReport } from '../reports/entities/student-report.entity';
 import { Payment } from '../payments/entities/payment.entity';
 import { AdminTeamSnapshot } from './entities/admin-team-snapshot.entity';
-import { AdminTeamOpDto } from './dto/admin-team-op.dto';
 import { universityScopeError } from './university-scope.util';
 import {
-  resolveTeamSeatCap,
-  teamCapacityError,
-} from '../engagement/team-capacity.util';
-import {
   plain,
-  restoreSnapshot,
   saveSnapshot,
   type SnapshotActor,
 } from './admin-team-snapshot.util';
@@ -94,6 +88,16 @@ export const TEAM_ACTIVE_PARTICIPATION_STATUSES: readonly string[] = [
   'pending_faculty_approval',
   'finalized',
 ];
+
+/** Teammate row as stored in `apply_payload.team_members` (free-form JSON from the apply form). */
+type ApplyPayloadTeamMember = {
+  email?: string;
+  name?: string;
+  mobile?: string;
+  cnic?: string;
+  university?: string;
+  program?: string;
+};
 
 @Injectable()
 export class OpportunityApplicationsService {
@@ -1509,7 +1513,9 @@ export class OpportunityApplicationsService {
     }
 
     const coveredTeamIds = new Set(
-      data.map((row) => String(row['team_id'] ?? '').trim()).filter(Boolean),
+      data
+        .map((row) => String((row['team_id'] as string | null) ?? '').trim())
+        .filter(Boolean),
     );
 
     const pendingPipelineApps = await this.appRepo.find({
@@ -1793,7 +1799,7 @@ export class OpportunityApplicationsService {
       admin_rejected: 0,
     };
     for (const r of pipelineCountRows) {
-      const key = String((r as { status?: unknown }).status ?? '').trim();
+      const key = String((r as { status?: string | null }).status ?? '').trim();
       if (key in appsByStatus)
         appsByStatus[key] = Number((r as { cnt?: unknown }).cnt) || 0;
     }
@@ -1948,8 +1954,10 @@ export class OpportunityApplicationsService {
               title: opp.title,
               status: opp.status,
               mode: opp.mode ?? null,
-              location: opp.location ?? null,
-              timeline: opp.timeline ?? null,
+              location:
+                (opp.location as Record<string, unknown> | null) ?? null,
+              timeline:
+                (opp.timeline as Record<string, unknown> | null) ?? null,
               admin_approved: opp.admin_approved,
               faculty_verification_status: opp.faculty_verification_status,
               faculty_verified: opp.faculty_verified,
@@ -2815,7 +2823,7 @@ export class OpportunityApplicationsService {
           : {};
       const lead = section1['team_lead'];
       if (lead && typeof lead === 'object') {
-        const o = lead as Record<string, unknown>;
+        const o = lead as Record<string, string | null | undefined>;
         const em = this.normalizeEmail(String(o['email'] ?? ''));
         const name = String(o['fullName'] ?? o['name'] ?? '').trim();
         if (em && !rosterEmails.has(em)) rosterEmails.set(em, { name });
@@ -2824,7 +2832,7 @@ export class OpportunityApplicationsService {
       if (!Array.isArray(members)) continue;
       for (const raw of members) {
         if (!raw || typeof raw !== 'object') continue;
-        const m = raw as Record<string, unknown>;
+        const m = raw as Record<string, string | null | undefined>;
         const em = this.normalizeEmail(String(m['email'] ?? ''));
         const name = String(
           m['fullName'] ?? m['name'] ?? m['full_name'] ?? '',
@@ -3774,8 +3782,8 @@ export class OpportunityApplicationsService {
     });
     try {
       return await this.appRepo.save(row);
-    } catch (e: any) {
-      if (e?.code === '23505') {
+    } catch (e) {
+      if ((e as { code?: unknown } | null)?.code === '23505') {
         throw new BadRequestException('Already applied to this opportunity');
       }
       throw e;
@@ -3879,7 +3887,6 @@ export class OpportunityApplicationsService {
     facultyEmail: string,
     facultyUserId: string,
   ): Promise<OpportunityApplication | null> {
-    const email = this.normalizeEmail(facultyEmail);
     const apps = await this.appRepo.find({
       where: {
         opportunityId,
@@ -4021,7 +4028,6 @@ export class OpportunityApplicationsService {
     facultyEmail: string,
     facultyUserId: string,
   ) {
-    const email = this.normalizeEmail(facultyEmail);
     const app = await this.appRepo.findOne({
       where: { id, withdrawnAt: IsNull() },
       relations: ['opportunity', 'studentUser'],
@@ -4319,11 +4325,15 @@ export class OpportunityApplicationsService {
       ? this.normalizeEmail(secondaryFaculty)
       : undefined;
     const contactPhone = (payload['contact_phone_e164'] as string) || undefined;
-    const rawTeamMembers = Array.isArray(payload['team_members'])
-      ? payload['team_members']
+    const rawTeamMembers: ApplyPayloadTeamMember[] = Array.isArray(
+      payload['team_members'],
+    )
+      ? (payload['team_members'] as ApplyPayloadTeamMember[])
       : [];
     const leadEmailNorm = this.normalizeEmail(user.email);
-    const teamMembersUnique: typeof rawTeamMembers = [];
+    // Every row kept here passed the `typeof m.email === 'string'` check below.
+    const teamMembersUnique: (ApplyPayloadTeamMember & { email: string })[] =
+      [];
     const seenMemberEmails = new Set<string>();
     for (const m of rawTeamMembers) {
       const em =
@@ -4332,7 +4342,7 @@ export class OpportunityApplicationsService {
       if (em === leadEmailNorm) continue;
       if (seenMemberEmails.has(em)) continue;
       seenMemberEmails.add(em);
-      teamMembersUnique.push(m);
+      teamMembersUnique.push(m as ApplyPayloadTeamMember & { email: string });
     }
     const attendanceApproverType =
       app.attendanceApproverType === 'partner' ||
@@ -4408,7 +4418,7 @@ export class OpportunityApplicationsService {
           secondaryFacultyEmail: normalizedSecondaryFaculty,
           attendanceApproverType,
           teamId,
-        } as any,
+        } as Partial<Participation>,
       );
     }
 
@@ -4441,7 +4451,7 @@ export class OpportunityApplicationsService {
             teamId,
             primaryFacultyEmail: normalizedPrimaryFaculty,
             attendanceApproverType,
-          } as any,
+          } as Partial<Participation>,
         );
       }
     }
@@ -4607,7 +4617,7 @@ export class OpportunityApplicationsService {
     const out: string[] = [];
     for (const m of raw) {
       if (!m || typeof m !== 'object') continue;
-      const em = String((m as Record<string, unknown>).email ?? '')
+      const em = String((m as { email?: string | null }).email ?? '')
         .trim()
         .toLowerCase();
       if (!em || seen.has(em)) continue;

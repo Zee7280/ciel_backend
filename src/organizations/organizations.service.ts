@@ -1,7 +1,6 @@
 import {
   Injectable,
   NotFoundException,
-  UnauthorizedException,
   ForbiddenException,
   BadRequestException,
   ConflictException,
@@ -32,6 +31,30 @@ import { passwordPolicyError } from '../auth/password-policy.util';
 
 /** Role buckets an admin may onboard — mirrors `orgType = role` from public signup. */
 const ADMIN_ONBOARD_ORG_TYPES = new Set(['ngo', 'corporate', 'university']);
+
+/** Shapes of the loosely-typed jsonb columns on Opportunity that this service reads. */
+type OpportunityLocationJson = { city?: string } | null | undefined;
+type OpportunityTimelineJson =
+  | { volunteers_required?: unknown; expected_hours?: unknown }
+  | null
+  | undefined;
+type OpportunitySdgInfoJson = { sdg_id?: unknown } | null | undefined;
+
+/** Organization with the admin-only verification fields removed. */
+type SafeOrganization = Omit<
+  Organization,
+  'verifiedBy' | 'verificationNotes' | 'isBlocked'
+>;
+
+/** Untyped admin "create organization" body (see AdminOrganizationsController.create). */
+export interface AdminCreateOrganizationInput {
+  name?: string;
+  type?: string;
+  email?: string;
+  password?: string;
+  contact?: string;
+  phone?: string;
+}
 
 const UNIVERSITY_SCOPED_PARTICIPATION_STATUSES = [
   'pending',
@@ -307,8 +330,9 @@ export class OrganizationsService {
         recentProjects: recentProjects.map((p) => ({
           id: p.id,
           title: p.title,
-          location: p.location?.city || 'Unknown',
-          volunteersNeeded: p.timeline?.volunteers_required || 0,
+          location: (p.location as OpportunityLocationJson)?.city || 'Unknown',
+          volunteersNeeded:
+            (p.timeline as OpportunityTimelineJson)?.volunteers_required || 0,
           volunteersApplied: applicantCounts.get(p.id) ?? 0,
           status: p.status,
         })),
@@ -417,8 +441,9 @@ export class OrganizationsService {
         recentProjects: recentProjects.map((p) => ({
           id: p.id,
           title: p.title,
-          location: p.location?.city || 'Unknown',
-          volunteersNeeded: p.timeline?.volunteers_required || 0,
+          location: (p.location as OpportunityLocationJson)?.city || 'Unknown',
+          volunteersNeeded:
+            (p.timeline as OpportunityTimelineJson)?.volunteers_required || 0,
           volunteersApplied: applicantCounts.get(p.id) ?? 0,
           status: p.status,
         })),
@@ -496,13 +521,11 @@ export class OrganizationsService {
       throw new ForbiddenException('Organization is blocked');
     }
 
-    const {
-      safeguardingAcknowledged,
-      dataPolicyAcknowledged,
-      userId: dtoUserId,
-      ...rest
-    } = updateDto;
-    const updateData: any = { ...rest };
+    const { safeguardingAcknowledged, dataPolicyAcknowledged, ...rest } =
+      updateDto;
+    // `userId` is only an admin override hint — never a column to write.
+    delete rest.userId;
+    const updateData: Partial<Organization> = { ...rest };
 
     if (safeguardingAcknowledged !== undefined) {
       updateData.safeguardingAcknowledged = safeguardingAcknowledged;
@@ -537,9 +560,9 @@ export class OrganizationsService {
       const savedOrg = await this.organizationsRepository.save(newOrg);
 
       // TS workaround: save can return array if inference is ambiguous
-      const orgToLink = Array.isArray(savedOrg)
-        ? savedOrg[0]
-        : (savedOrg as Organization);
+      const orgToLink: Organization = Array.isArray(savedOrg)
+        ? (savedOrg as Organization[])[0]
+        : savedOrg;
 
       // Link to user explicitly if needed
       user.organization = orgToLink;
@@ -590,13 +613,16 @@ export class OrganizationsService {
     return { success: true };
   }
 
-  private filterSensitiveFields(org: Organization) {
-    const { verifiedBy, verificationNotes, isBlocked, ...safeOrg } = org;
-    return safeOrg;
+  private filterSensitiveFields(org: Organization): SafeOrganization {
+    const safeOrg: Partial<Organization> = { ...org };
+    delete safeOrg.verifiedBy;
+    delete safeOrg.verificationNotes;
+    delete safeOrg.isBlocked;
+    return safeOrg as SafeOrganization;
   }
 
   // Admin Methods
-  async findAll(filters: any) {
+  async findAll(filters: { type?: string; status?: string; country?: string }) {
     const query = this.organizationsRepository.createQueryBuilder('org');
 
     if (filters.type) {
@@ -652,7 +678,12 @@ export class OrganizationsService {
           .where('member.organizationId = org.id');
       }, 'members_count')
       .orderBy('org.createdAt', 'DESC')
-      .getRawAndEntities();
+      .getRawAndEntities<{
+        org_id: string;
+        active_projects_count?: unknown;
+        opportunities_count?: unknown;
+        members_count?: unknown;
+      }>();
 
     const countsByOrgId = new Map<
       string,
@@ -665,7 +696,9 @@ export class OrganizationsService {
         members: r.members_count,
       });
     }
-    const toInt = (v: unknown) => parseInt(String(v ?? 0), 10) || 0;
+    // Same `String(v)` coercion as before: every non-nullish value has Object.prototype.toString.
+    const toInt = (v: unknown) =>
+      parseInt(String((v ?? 0) as { toString(): string }), 10) || 0;
 
     return orgs.entities.map((org) => {
       const counts = countsByOrgId.get(org.id);
@@ -873,7 +906,7 @@ export class OrganizationsService {
     return saved;
   }
 
-  async createForAdmin(data: any, adminId: string) {
+  async createForAdmin(data: AdminCreateOrganizationInput, adminId: string) {
     const email = String(data?.email ?? '')
       .trim()
       .toLowerCase();
@@ -937,8 +970,8 @@ export class OrganizationsService {
         );
         return { savedOrg: org, newUser: user };
       })
-      .catch((err) => {
-        if (err?.code === '23505') {
+      .catch((err: unknown) => {
+        if ((err as { code?: unknown } | null)?.code === '23505') {
           throw new ConflictException('Email already exists');
         }
         throw err;
@@ -1389,7 +1422,7 @@ export class OrganizationsService {
     project: Opportunity | null | undefined,
   ): number {
     if (!project) return 0;
-    const raw = project.timeline?.expected_hours;
+    const raw = (project.timeline as OpportunityTimelineJson)?.expected_hours;
     const fromT = Number(raw);
     if (Number.isFinite(fromT) && fromT > 0) return fromT;
     const rh = Number(project.requiredHours);
@@ -1399,12 +1432,13 @@ export class OrganizationsService {
   private parsePrimarySdgGoalNumber(opp: Opportunity): number | null {
     const parse = (raw: unknown): number | null => {
       if (raw == null || raw === '') return null;
-      const m = String(raw).match(/(\d{1,2})/);
+      // Same `String(raw)` coercion as before (raw is non-nullish here, so it has toString).
+      const m = String(raw as { toString(): string }).match(/(\d{1,2})/);
       if (!m) return null;
       const n = parseInt(m[1], 10);
       return n >= 1 && n <= 17 ? n : null;
     };
-    const fromInfo = parse(opp.sdg_info?.sdg_id);
+    const fromInfo = parse((opp.sdg_info as OpportunitySdgInfoJson)?.sdg_id);
     if (fromInfo != null) return fromInfo;
     return parse(opp.sdg);
   }

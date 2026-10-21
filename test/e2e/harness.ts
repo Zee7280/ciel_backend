@@ -4,7 +4,7 @@ import { JwtService } from '@nestjs/jwt';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { randomUUID } from 'crypto';
 import request from 'supertest';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, DeepPartial, Repository } from 'typeorm';
 import { AppModule } from '../../src/app.module';
 import { MailService } from '../../src/mail/mail.service';
 import { AiService } from '../../src/ai/ai.service';
@@ -32,9 +32,9 @@ function makeMailMock(cap: MailCapture): MailService {
     {
       get(_t, prop) {
         if (typeof prop === 'string' && /^(send|notify)/.test(prop)) {
-          return async (...args: any[]) => {
+          return (...args: any[]) => {
             cap.calls.push({ method: prop, args });
-            return true;
+            return Promise.resolve(true);
           };
         }
         return undefined;
@@ -163,7 +163,7 @@ export async function bootHarness(opts: HarnessOptions = {}): Promise<Harness> {
           role === UserRole.FACULTY ? 'Computer Science' : undefined,
         organization: opts.org ?? undefined,
         ...(opts.overrides ?? {}),
-      } as any) as unknown as User,
+      } as DeepPartial<User>),
     );
     const organizationId = opts.org?.id ?? null;
     return {
@@ -180,7 +180,7 @@ export async function bootHarness(opts: HarnessOptions = {}): Promise<Harness> {
       const t = fn(p);
       return u ? t.set('Authorization', `Bearer ${u.token}`) : t;
     };
-    const server = app.getHttpServer();
+    const server = app.getHttpServer() as Parameters<typeof request>[0];
     return {
       get: wrap((p) => request(server).get(API + p)),
       post: wrap((p) => request(server).post(API + p)),

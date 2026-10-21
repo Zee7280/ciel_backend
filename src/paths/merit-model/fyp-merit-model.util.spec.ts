@@ -6,7 +6,7 @@ function fixture(overrides: Partial<FypEntry>): FypEntry {
     id: 'fyp-1',
     userId: 'user-1',
     projectTitle: 'Test thesis',
-    overview: null as any,
+    overview: null as unknown as string,
     milestones: DEFAULT_FYP_MILESTONES,
     deliverables: [],
     communityLinkage: null,

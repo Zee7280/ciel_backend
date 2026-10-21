@@ -2,13 +2,22 @@ import { UnauthorizedException, Logger } from '@nestjs/common';
 import { JwtStrategy, isSessionStatusAllowed } from './jwt.strategy';
 import { resolveJwtSecret } from './jwt-secret.util';
 
-function build(user: any) {
-  const users = { findOne: jest.fn().mockResolvedValue(user) } as any;
-  const config = { get: () => 'test-secret' } as any;
-  return new JwtStrategy(config, users);
+type FakeUser = {
+  id: string;
+  role: string;
+  status: string;
+  tokenVersion: number;
+  name: string;
+  organization: { id: string; isBlocked: boolean };
+};
+
+function build(user: FakeUser) {
+  const users = { findOne: jest.fn().mockResolvedValue(user) };
+  const config = { get: () => 'test-secret' };
+  return new JwtStrategy(config as never, users as never);
 }
 
-const base = {
+const base: FakeUser = {
   id: 'u1',
   role: 'student',
   status: 'active',
@@ -59,32 +68,37 @@ describe('JwtStrategy.validate', () => {
 });
 
 describe('resolveJwtSecret', () => {
-  const logger = () => ({ error: jest.fn() }) as unknown as Logger;
+  const logger = () => ({ error: jest.fn() });
+  const asLogger = (l: ReturnType<typeof logger>) => l as unknown as Logger;
   const STRONG = 'a-strong-production-secret-1234567890';
 
   it('refuses to start in production without a strong secret', () => {
     for (const bad of [undefined, '', '   ', 'secretKey', 'short']) {
       expect(() =>
-        resolveJwtSecret(bad, logger(), 'production', false),
+        resolveJwtSecret(bad, asLogger(logger()), 'production', false),
       ).toThrow(/JWT_SECRET/);
     }
   });
   it('accepts a strong secret in production, silently', () => {
     const l = logger();
-    expect(resolveJwtSecret(STRONG, l, 'production', false)).toBe(STRONG);
-    expect((l as any).error).not.toHaveBeenCalled();
+    expect(resolveJwtSecret(STRONG, asLogger(l), 'production', false)).toBe(
+      STRONG,
+    );
+    expect(l.error).not.toHaveBeenCalled();
   });
   it('the explicit emergency flag downgrades the refusal to a loud error log', () => {
     const l = logger();
-    expect(resolveJwtSecret(undefined, l, 'production', true)).toBeTruthy();
-    expect((l as any).error).toHaveBeenCalled();
+    expect(
+      resolveJwtSecret(undefined, asLogger(l), 'production', true),
+    ).toBeTruthy();
+    expect(l.error).toHaveBeenCalled();
   });
   it('development / test keep the convenient fallback and stay quiet', () => {
     const l = logger();
-    expect(resolveJwtSecret(undefined, l, 'development', false)).toBe(
+    expect(resolveJwtSecret(undefined, asLogger(l), 'development', false)).toBe(
       'secretKey',
     );
-    expect(resolveJwtSecret('s', l, 'test', false)).toBe('s');
-    expect((l as any).error).not.toHaveBeenCalled();
+    expect(resolveJwtSecret('s', asLogger(l), 'test', false)).toBe('s');
+    expect(l.error).not.toHaveBeenCalled();
   });
 });

@@ -101,6 +101,132 @@ import {
   validateTimelineForPersist,
 } from './opportunity-timeline.util';
 
+/**
+ * Shapes of the jsonb columns the entity / DTOs declare as `any`. These are read-only views
+ * for type-safe access — the persisted JSON is not re-validated against them.
+ */
+export interface TimelineJson {
+  type?: string;
+  start_date?: string;
+  end_date?: string;
+  from_time?: string;
+  to_time?: string;
+  expected_hours?: number;
+  volunteers_required?: number;
+}
+
+export interface LocationJson {
+  city?: string;
+  venue?: string;
+  pin?: string;
+}
+
+export interface SdgInfoJson {
+  sdg_id?: string;
+  target_id?: string;
+  indicator_id?: string;
+}
+
+export interface ObjectivesJson {
+  description?: string;
+}
+
+export interface ActivityDetailsJson {
+  student_responsibilities?: string;
+}
+
+export interface SupervisionJson {
+  supervisor_name?: string;
+  role?: string;
+  contact?: string;
+  official_email?: string;
+  partner_org_name?: string;
+  partner_contact_person?: string;
+  partner_email?: string;
+  external_partner_email?: string;
+  faculty_department?: string;
+  faculty_university_name?: string;
+  whatsapp_e164?: string;
+  partner_whatsapp_e164?: string;
+  faculty_whatsapp?: string;
+  partner_phone?: string;
+  external_partner_phone?: string;
+}
+
+export interface OrganizationContactJson {
+  name?: string;
+  organization_name?: string;
+  contact_person?: string;
+  contact_person_name?: string;
+  contact_name?: string;
+  official_email?: string;
+  officialEmail?: string;
+}
+
+export interface ExecutingContextJson {
+  type?: string;
+  student_pathway?: string;
+  partner?: OrganizationContactJson;
+  independent_community_activity?: { activity_site_description?: string };
+}
+
+export interface ParticipationScopeJson {
+  rule?: string;
+  university_names?: string[];
+  creator_university_name?: string;
+  department_restriction?: { scope?: string; departments?: string[] };
+}
+
+export interface VisibilityAndAcademicLinkageJson {
+  faculty_institutional_representative?: OrganizationContactJson;
+}
+
+/** Typed view over the `any` jsonb columns shared by the entity and the create/update DTOs. */
+export interface OpportunityJsonColumns {
+  location?: LocationJson | null;
+  timeline?: TimelineJson | null;
+  sdg_info?: SdgInfoJson | null;
+  objectives?: ObjectivesJson | null;
+  activity_details?: ActivityDetailsJson | null;
+  supervision?: SupervisionJson | null;
+  executing_context?: ExecutingContextJson | null;
+  executing_organization?: OrganizationContactJson | null;
+  partner_organization?: OrganizationContactJson | null;
+  safety_supervision_declaration?: Record<string, unknown> | null;
+  safety_declaration?: Record<string, unknown> | null;
+  submission_confirmations?: Record<string, unknown> | null;
+  participation_scope?: ParticipationScopeJson | null;
+  visibility_and_academic_linkage?: VisibilityAndAcademicLinkageJson | null;
+  external_partner_collaboration?: OrganizationContactJson | null;
+  academic_linkage?: Record<string, unknown> | null;
+}
+
+/** Same object, viewed through {@link OpportunityJsonColumns} (no copy — writes go to the source). */
+function jsonColumnsOf(
+  source: Opportunity | CreateOpportunityDto | UpdateOpportunityDto,
+): OpportunityJsonColumns {
+  return source as OpportunityJsonColumns;
+}
+
+/** Shallow copy without the given keys (same result as rest-destructuring them away). */
+function omitKeys<T extends object, K extends string>(
+  source: T,
+  keys: readonly K[],
+): Omit<T, K> {
+  const copy = { ...source } as Record<string, unknown>;
+  for (const key of keys) delete copy[key];
+  return copy as Omit<T, K>;
+}
+
+/** Query-string filters accepted by the authenticated / public list endpoints. */
+interface OpportunityListFilters {
+  created_by?: string;
+  creator_id?: string;
+  partner_id?: string;
+  status?: string;
+  limit?: number;
+}
+
 /** Authenticated caller shape (`req.user`) used to gate opportunity detail reads. */
 export interface OpportunityDetailViewer {
   id?: string;
@@ -352,7 +478,11 @@ export class OpportunitiesService {
     return deleted;
   }
 
-  private extractQueryFailedDetail(error: QueryFailedError) {
+  /** Structural parameter: `instanceof QueryFailedError` narrows to `QueryFailedError<any>`. */
+  private extractQueryFailedDetail(error: {
+    driverError: unknown;
+    message: string;
+  }) {
     const driverError = error.driverError as
       | { detail?: string; message?: string }
       | undefined;
@@ -441,11 +571,12 @@ export class OpportunitiesService {
 
   /** Same heuristics as {@link resolvePartnerEmail}, reading persisted opportunity JSON. */
   private resolvePartnerEmailFromOpportunity(opp: Opportunity): string | null {
+    const json = jsonColumnsOf(opp);
     return this.resolvePartnerEmail({
-      external_partner_collaboration: opp.external_partner_collaboration,
-      supervision: opp.supervision,
-      executing_context: opp.executing_context,
-      partner_organization: opp.partner_organization,
+      external_partner_collaboration: json.external_partner_collaboration,
+      supervision: json.supervision,
+      executing_context: json.executing_context,
+      partner_organization: json.partner_organization,
     } as CreateOpportunityDto);
   }
 
@@ -529,13 +660,15 @@ export class OpportunitiesService {
       facultyAuthorEmail?: string;
     },
   ): OpportunityVerificationEmailDetails {
-    const timeline = opp.timeline as Record<string, unknown> | null | undefined;
+    const timeline = jsonColumnsOf(opp).timeline;
     const tl: string[] = [];
     if (timeline && typeof timeline === 'object') {
       if (timeline.start_date)
         tl.push(`Starts: ${String(timeline.start_date)}`);
       if (timeline.end_date) tl.push(`Ends: ${String(timeline.end_date)}`);
-      if (timeline.expected_hours != null && timeline.expected_hours !== '') {
+      // Legacy rows may hold '' here; compare through `unknown` so the check stays exact.
+      const expectedHours: unknown = timeline.expected_hours;
+      if (expectedHours != null && expectedHours !== '') {
         tl.push(`Expected hours: ${String(timeline.expected_hours)}`);
       }
     }
@@ -586,13 +719,7 @@ export class OpportunitiesService {
       | undefined;
     if (!partnerOrg && collab?.organization_name?.trim())
       partnerOrg = collab.organization_name.trim();
-    const ectPartner = opp.executing_context?.partner as
-      | {
-          organization_name?: string;
-          contact_person_name?: string;
-          contact_name?: string;
-        }
-      | undefined;
+    const ectPartner = jsonColumnsOf(opp).executing_context?.partner;
     if (!partnerOrg && ectPartner?.organization_name?.trim())
       partnerOrg = ectPartner.organization_name.trim();
 
@@ -672,11 +799,12 @@ export class OpportunitiesService {
     }
 
     let volunteersRequired: string | undefined;
+    const rawVolunteersRequired: unknown = timeline?.volunteers_required;
     if (
       timeline &&
       typeof timeline === 'object' &&
-      timeline.volunteers_required != null &&
-      timeline.volunteers_required !== ''
+      rawVolunteersRequired != null &&
+      rawVolunteersRequired !== ''
     ) {
       volunteersRequired = String(timeline.volunteers_required);
     }
@@ -806,7 +934,7 @@ export class OpportunitiesService {
   ): boolean {
     const ue = this.normalizeEmail(user.email);
     if (kind === 'faculty' || kind === 'liaison') {
-      if (user.role !== UserRole.FACULTY) return false;
+      if ((user.role as UserRole) !== UserRole.FACULTY) return false;
       if (opportunity.facultyId && user.id === opportunity.facultyId)
         return true;
       const sup = opportunity.supervision as
@@ -829,7 +957,7 @@ export class OpportunitiesService {
     }
     const pe = this.resolvePartnerEmailFromOpportunity(opportunity);
     if (!pe || ue !== this.normalizeEmail(pe)) return false;
-    if (user.role === UserRole.STUDENT) return false;
+    if ((user.role as UserRole) === UserRole.STUDENT) return false;
     return true;
   }
 
@@ -886,13 +1014,14 @@ export class OpportunitiesService {
   private studentOpportunityRequiresPartner(
     dto: CreateOpportunityDto,
   ): boolean {
-    const typePartner = dto.executing_context?.type === 'partner';
-    const collab = dto.external_partner_collaboration;
+    const typePartner =
+      jsonColumnsOf(dto).executing_context?.type === 'partner';
+    const collab: unknown = dto.external_partner_collaboration;
     const hasCollab =
       collab !== null &&
       collab !== undefined &&
       typeof collab === 'object' &&
-      Object.keys(collab as object).length > 0;
+      Object.keys(collab).length > 0;
     const sup = dto.supervision as
       | { external_partner_email?: string; partner_email?: string }
       | undefined;
@@ -968,7 +1097,7 @@ export class OpportunitiesService {
       return false;
     };
 
-    const sup = opp.supervision;
+    const sup: unknown = opp.supervision;
     if (sup && typeof sup === 'object') {
       const o = sup as Record<string, unknown>;
       const rawSup =
@@ -1376,28 +1505,30 @@ export class OpportunitiesService {
     return saved.id;
   }
 
-  private normalizeSafetyDeclaration(safety?: any) {
+  /** Falsy input is returned as-is; anything else is read as the (legacy or current) key set. */
+  private normalizeSafetyDeclaration(safety?: unknown): unknown {
     if (!safety) return safety;
+    const s = safety as Record<string, unknown>;
     return {
       environment_safe_and_appropriate:
-        safety.environment_safe_and_appropriate ??
-        safety.site_safe_and_suitable,
+        s.environment_safe_and_appropriate ?? s.site_safe_and_suitable,
       students_guided_and_supervised:
-        safety.students_guided_and_supervised ??
-        safety.students_properly_supervised,
+        s.students_guided_and_supervised ?? s.students_properly_supervised,
       lawful_ethical_and_non_hazardous:
-        safety.lawful_ethical_and_non_hazardous ??
-        safety.lawful_and_free_from_hazards,
+        s.lawful_ethical_and_non_hazardous ?? s.lawful_and_free_from_hazards,
       precautions_and_basic_safety:
-        safety.precautions_and_basic_safety ??
-        safety.basic_safety_and_emergency_measures,
+        s.precautions_and_basic_safety ?? s.basic_safety_and_emergency_measures,
     };
   }
 
-  private validateSafetyDeclaration(safety?: any) {
+  private validateSafetyDeclaration(safety?: unknown) {
     if (!safety)
       throw new BadRequestException('safety_declaration is required');
-    const normalized = this.normalizeSafetyDeclaration(safety);
+    // `safety` is truthy, so normalisation always yields the object literal above.
+    const normalized = this.normalizeSafetyDeclaration(safety) as Record<
+      string,
+      unknown
+    >;
     const keys = [
       'environment_safe_and_appropriate',
       'students_guided_and_supervised',
@@ -1413,26 +1544,24 @@ export class OpportunitiesService {
   }
 
   private resolveSafetyDeclarationPayload(dto: {
-    safety_declaration?: any;
-    safety_supervision_declaration?: any;
-  }) {
+    safety_declaration?: unknown;
+    safety_supervision_declaration?: unknown;
+  }): unknown {
     return dto.safety_declaration ?? dto.safety_supervision_declaration;
   }
 
-  private validateSubmissionConfirmations(confirm?: any) {
+  private validateSubmissionConfirmations(confirm?: unknown) {
     if (!confirm)
       throw new BadRequestException('submission_confirmations are required');
-    const normalized = {
+    const c = confirm as Record<string, unknown>;
+    const normalized: Record<string, unknown> = {
       academically_valid_and_accurately_described:
-        confirm.academically_valid_and_accurately_described ??
-        confirm.genuine_and_accurate,
+        c.academically_valid_and_accurately_described ?? c.genuine_and_accurate,
       activity_properly_supervised:
-        confirm.activity_properly_supervised ??
-        confirm.organization_responsible_for_execution,
-      environment_safe_and_appropriate:
-        confirm.environment_safe_and_appropriate,
-      information_correct_and_verifiable:
-        confirm.information_correct_and_verifiable,
+        c.activity_properly_supervised ??
+        c.organization_responsible_for_execution,
+      environment_safe_and_appropriate: c.environment_safe_and_appropriate,
+      information_correct_and_verifiable: c.information_correct_and_verifiable,
     };
     const keys = [
       'academically_valid_and_accurately_described',
@@ -1447,8 +1576,9 @@ export class OpportunitiesService {
     }
   }
 
-  private validateParticipationScope(scope?: any) {
-    if (!scope) return; // backward compatibility
+  private validateParticipationScope(scopeInput?: unknown) {
+    if (!scopeInput) return; // backward compatibility
+    const scope = scopeInput as ParticipationScopeJson;
     const rule = scope.rule;
     if (!rule)
       throw new BadRequestException('participation_scope.rule is required');
@@ -1497,14 +1627,15 @@ export class OpportunitiesService {
   /** Contact emails on the org blocks drive verification mails — reject malformed ones up front
    * (and never let a raw API call skip the form's own check). */
   private validateOrganizationContacts(dto: {
-    executing_organization?: any;
-    partner_organization?: any;
+    executing_organization?: unknown;
+    partner_organization?: unknown;
   }) {
     for (const [key, block] of [
       ['executing_organization', dto.executing_organization],
       ['partner_organization', dto.partner_organization],
     ] as const) {
-      const email = block?.official_email;
+      const email = (block as { official_email?: unknown } | null | undefined)
+        ?.official_email;
       if (email == null || email === '') continue;
       if (
         typeof email !== 'string' ||
@@ -1518,8 +1649,9 @@ export class OpportunitiesService {
     }
   }
 
-  private validateSupervision(supervision: any) {
-    if (!supervision) return;
+  private validateSupervision(supervisionInput: unknown) {
+    if (!supervisionInput) return;
+    const supervision = supervisionInput as SupervisionJson;
     if (
       supervision.whatsapp_e164 &&
       !/^\+[1-9]\d{7,14}$/.test(String(supervision.whatsapp_e164).trim())
@@ -1573,9 +1705,10 @@ export class OpportunitiesService {
    * "float" with no accurate location while still passing every other check. The frontend's own
    * form validation should already require this; this is the same rule enforced server-side so a
    * raw API call (or a form bug) can't bypass it. */
-  validateLocation(mode?: string, location?: any) {
+  validateLocation(mode?: string, location?: unknown) {
     if (mode === 'Remote') return;
-    const pin = typeof location?.pin === 'string' ? location.pin.trim() : '';
+    const loc = location as LocationJson | null | undefined;
+    const pin = typeof loc?.pin === 'string' ? loc.pin.trim() : '';
     if (!pin) {
       throw new BadRequestException(
         'location.pin is required for a non-Remote opportunity — pin the exact location on the map.',
@@ -1594,7 +1727,7 @@ export class OpportunitiesService {
    * phone canonicalisation, all-true safety/confirmation checks, scope shape). Shared by
    * `update()` and the student edit route so neither can persist what create would reject.
    */
-  validateEditPatch(patch: Record<string, any>) {
+  validateEditPatch(patch: Record<string, unknown>) {
     this.validateNestedContactEmails(patch);
     if (patch.supervision) this.validateSupervision(patch.supervision);
     if (patch.external_partner_collaboration) {
@@ -1683,22 +1816,23 @@ export class OpportunitiesService {
   /** Contact emails nested in free-form JSON blobs (not covered by the DTO): when present they
    * must be real emails, otherwise routing/mail silently fails and the listing is orphaned. */
   private validateNestedContactEmails(src: {
-    executing_organization?: any;
-    partner_organization?: any;
-    visibility_and_academic_linkage?: any;
+    executing_organization?: unknown;
+    partner_organization?: unknown;
+    visibility_and_academic_linkage?: unknown;
   }) {
+    const json = src as OpportunityJsonColumns;
     const checks: Array<[string, unknown]> = [
       [
         'executing_organization.official_email',
-        src.executing_organization?.official_email,
+        json.executing_organization?.official_email,
       ],
       [
         'partner_organization.official_email',
-        src.partner_organization?.official_email,
+        json.partner_organization?.official_email,
       ],
       [
         'faculty_institutional_representative.official_email',
-        src.visibility_and_academic_linkage
+        json.visibility_and_academic_linkage
           ?.faculty_institutional_representative?.official_email,
       ],
     ];
@@ -1710,9 +1844,10 @@ export class OpportunitiesService {
     }
   }
 
-  private validateExternalPartner(collab?: any) {
+  private validateExternalPartner(collab?: unknown) {
     if (!collab) return;
-    const { organization_name, contact_person, official_email } = collab;
+    const { organization_name, contact_person, official_email } =
+      collab as OrganizationContactJson;
     if (!organization_name || !contact_person || !official_email) {
       throw new BadRequestException(
         'external_partner_collaboration requires organization_name, contact_person, official_email',
@@ -1822,12 +1957,13 @@ export class OpportunitiesService {
     } | null,
     detail = false,
   ) {
-    const volunteersRequired = opp.timeline?.volunteers_required || 0;
+    const json = jsonColumnsOf(opp);
+    const volunteersRequired = json.timeline?.volunteers_required || 0;
     const organization = this.buildOpportunityOrganization(opp, orgFallback);
     const organizationName =
       organization?.name ||
-      opp.partner_organization?.organization_name ||
-      opp.executing_organization?.name ||
+      json.partner_organization?.organization_name ||
+      json.executing_organization?.name ||
       (opp.supervision &&
       typeof opp.supervision === 'object' &&
       typeof (opp.supervision as { faculty_university_name?: unknown })
@@ -1848,12 +1984,12 @@ export class OpportunitiesService {
       title: opp.title,
       createdAt: opp.createdAt,
       created_at: opp.createdAt,
-      description: opp.objectives?.description || '',
+      description: json.objectives?.description || '',
       status: this.getApiOpportunityStatus(opp),
       mode: opp.mode,
       types: opp.types,
-      sdg: opp.sdg_info?.sdg_id || opp.sdg || null,
-      sdg_info: opp.sdg_info,
+      sdg: json.sdg_info?.sdg_id || opp.sdg || null,
+      sdg_info: json.sdg_info,
       secondary_sdgs: Array.isArray(opp.secondary_sdgs)
         ? opp.secondary_sdgs
         : [],
@@ -1862,10 +1998,10 @@ export class OpportunitiesService {
       participant_count: occupiedSeats,
       remaining_seats: remainingSeats,
       volunteersNeeded: volunteersRequired,
-      location: opp.location,
-      timeline: opp.timeline,
-      from_time: opp.timeline?.from_time,
-      to_time: opp.timeline?.to_time,
+      location: json.location,
+      timeline: json.timeline,
+      from_time: json.timeline?.from_time,
+      to_time: json.timeline?.to_time,
       ...this.getWorkflowResponseFields(opp),
       ...listing,
       created_by_role: classifyBrowseCreator(opp),
@@ -1878,35 +2014,35 @@ export class OpportunitiesService {
     if (!detail) {
       return {
         ...base,
-        participation_scope: opp.participation_scope,
-        executing_context: opp.executing_context,
-        executing_organization: opp.executing_organization,
-        partner_organization: opp.partner_organization,
-        safety_supervision_declaration: opp.safety_supervision_declaration,
-        safety_declaration: opp.safety_declaration,
-        visibility_and_academic_linkage: opp.visibility_and_academic_linkage,
-        submission_confirmations: opp.submission_confirmations,
-        external_partner_collaboration: opp.external_partner_collaboration,
-        academic_linkage: opp.academic_linkage,
+        participation_scope: json.participation_scope,
+        executing_context: json.executing_context,
+        executing_organization: json.executing_organization,
+        partner_organization: json.partner_organization,
+        safety_supervision_declaration: json.safety_supervision_declaration,
+        safety_declaration: json.safety_declaration,
+        visibility_and_academic_linkage: json.visibility_and_academic_linkage,
+        submission_confirmations: json.submission_confirmations,
+        external_partner_collaboration: json.external_partner_collaboration,
+        academic_linkage: json.academic_linkage,
       };
     }
 
     return {
       ...base,
-      objectives: opp.objectives,
-      activity_details: opp.activity_details,
-      supervision: opp.supervision,
+      objectives: json.objectives,
+      activity_details: json.activity_details,
+      supervision: json.supervision,
       verification_method: opp.verification_method,
-      participation_scope: opp.participation_scope,
-      executing_context: opp.executing_context,
-      executing_organization: opp.executing_organization,
-      partner_organization: opp.partner_organization,
-      safety_supervision_declaration: opp.safety_supervision_declaration,
-      safety_declaration: opp.safety_declaration,
-      visibility_and_academic_linkage: opp.visibility_and_academic_linkage,
-      submission_confirmations: opp.submission_confirmations,
-      external_partner_collaboration: opp.external_partner_collaboration,
-      academic_linkage: opp.academic_linkage,
+      participation_scope: json.participation_scope,
+      executing_context: json.executing_context,
+      executing_organization: json.executing_organization,
+      partner_organization: json.partner_organization,
+      safety_supervision_declaration: json.safety_supervision_declaration,
+      safety_declaration: json.safety_declaration,
+      visibility_and_academic_linkage: json.visibility_and_academic_linkage,
+      submission_confirmations: json.submission_confirmations,
+      external_partner_collaboration: json.external_partner_collaboration,
+      academic_linkage: json.academic_linkage,
       detail_view: buildOpportunityDetailView(opp),
     };
   }
@@ -2223,7 +2359,7 @@ export class OpportunitiesService {
         );
         const oppId = opportunity.id;
         setTimeout(() => {
-          this.sendPartnerApprovalEmail(opportunity).then((ok) => {
+          void this.sendPartnerApprovalEmail(opportunity).then((ok) => {
             if (!ok) {
               console.warn(
                 'Background partner verification email retry failed',
@@ -2401,10 +2537,10 @@ export class OpportunitiesService {
     opportunityId: string,
   ): string {
     const id = encodeURIComponent(opportunityId);
-    if (!role || role === UserRole.STUDENT) {
+    if (!role || (role as UserRole) === UserRole.STUDENT) {
       return `/dashboard/student/report?projectId=${id}`;
     }
-    if (role === UserRole.FACULTY) {
+    if ((role as UserRole) === UserRole.FACULTY) {
       return '/dashboard/faculty/community-service';
     }
     return '/dashboard/partner/community-service';
@@ -2484,8 +2620,10 @@ export class OpportunitiesService {
     // inside a short window returns the row already created (no second row, no second emails).
     // A session advisory lock on a pinned connection (same pattern as the student flow) makes the
     // check-then-insert atomic per creator.
-    const { draft: _fpDraft, ...fingerprintBody } =
-      createOpportunityDto as CreateOpportunityDto & Record<string, unknown>;
+    const fingerprintBody = omitKeys(
+      createOpportunityDto as CreateOpportunityDto & Record<string, unknown>,
+      ['draft'],
+    );
     const fingerprint = createPayloadFingerprint({
       creatorId: user.id,
       organizationId: org?.id ?? null,
@@ -2541,14 +2679,13 @@ export class OpportunitiesService {
     createOpportunityDto: CreateOpportunityDto,
     createFingerprint: string,
   ) {
-    const userId = user.id;
     const isFaculty = user.role === UserRole.FACULTY;
     const isCielAdmin = user.role === UserRole.SUPER_ADMIN;
+    const dtoJson = jsonColumnsOf(createOpportunityDto);
 
     const hasExecContactEmail = !!this.normalizeEmail(
-      typeof createOpportunityDto.executing_organization?.official_email ===
-        'string'
-        ? createOpportunityDto.executing_organization.official_email
+      typeof dtoJson.executing_organization?.official_email === 'string'
+        ? dtoJson.executing_organization.official_email
         : undefined,
     );
     const needsExecutingOrgVerification =
@@ -2628,24 +2765,25 @@ export class OpportunitiesService {
       resolvedPartnerToken = randomUUID();
     }
 
-    const { draft: _orgDraftFlag, ...createFields } = createOpportunityDto;
-    // Strip client-controlled approval/live fields so a crafted payload cannot skip faculty/admin.
-    const {
-      admin_approved: _clientAdminApproved,
-      admin_approval_required: _clientAdminRequired,
-      workflowStage: _clientWorkflow,
-      workflow_stage: _clientWorkflowSnake,
-      faculty_verified: _clientFacultyVerified,
-      facultyApprovalStatus: _clientFacultyStatus,
-      partnerApprovalStatus: _clientPartnerStatus,
-      adminApprovalStatus: _clientAdminStatus,
-      status: _clientStatus,
-      isStudentCreated: _clientIsStudentCreated,
-      partnerVerified: _clientPartnerVerified,
-      execution_verified: _clientExecVerified,
-      wizard_progress: _clientWizardProgress, // draft-only resume marker; never stored on a submission
-      ...safeCreateFields
-    } = createFields as CreateOpportunityDto & Record<string, unknown>;
+    // Strip the draft flag and every client-controlled approval/live field so a crafted payload
+    // cannot skip faculty/admin. `wizard_progress` is a draft-only resume marker; never stored on
+    // a submission.
+    const safeCreateFields = omitKeys(createOpportunityDto, [
+      'draft',
+      'admin_approved',
+      'admin_approval_required',
+      'workflowStage',
+      'workflow_stage',
+      'faculty_verified',
+      'facultyApprovalStatus',
+      'partnerApprovalStatus',
+      'adminApprovalStatus',
+      'status',
+      'isStudentCreated',
+      'partnerVerified',
+      'execution_verified',
+      'wizard_progress',
+    ]);
     const payload: DeepPartial<Opportunity> = {
       ...safeCreateFields,
       organizationId: org?.id || null,
@@ -2659,7 +2797,7 @@ export class OpportunitiesService {
       execution_verification_status: executionVerificationToken
         ? 'pending_execution'
         : 'execution_verified',
-      sdg: createOpportunityDto.sdg_info?.sdg_id || 'SDG', // Fallback
+      sdg: dtoJson.sdg_info?.sdg_id || 'SDG', // Fallback
       ...(resolvedPartnerToken
         ? {
             partnerToken: resolvedPartnerToken,
@@ -2734,7 +2872,7 @@ export class OpportunitiesService {
     // Notify executing-org contact: sign in and confirm from opportunity detail (no public token link).
     if (
       executionVerificationToken &&
-      createOpportunityDto.executing_organization?.official_email
+      dtoJson.executing_organization?.official_email
     ) {
       const verifyBase = (
         process.env.FRONTEND_URL ||
@@ -2746,29 +2884,31 @@ export class OpportunitiesService {
       const portalLink = verifyBase ? `${verifyBase}${signInPath}` : signInPath;
       try {
         await this.mailService.sendExecutingOrganizationVerificationEmail(
-          createOpportunityDto.executing_organization.official_email,
+          dtoJson.executing_organization.official_email,
           saved.title,
           portalLink,
         );
-      } catch (e) {
+      } catch (e: unknown) {
         console.warn(
           'Failed to send executing org verification email',
-          e.message,
+          (e as { message?: unknown }).message,
         );
       }
     }
 
     // Informational notice only when there is no magic-link partner gate for this row.
-    const partnerEmail =
-      createOpportunityDto.partner_organization?.official_email;
+    const partnerEmail = dtoJson.partner_organization?.official_email;
     if (partnerEmail && !resolvedPartnerToken) {
       try {
         await this.mailService.sendPartnerOpportunityNotice(
           partnerEmail,
           saved.title,
         );
-      } catch (e) {
-        console.warn('Failed to send partner org email', e.message);
+      } catch (e: unknown) {
+        console.warn(
+          'Failed to send partner org email',
+          (e as { message?: unknown }).message,
+        );
       }
     }
 
@@ -2943,11 +3083,13 @@ export class OpportunitiesService {
       if (!dto.supervision?.faculty_department)
         throw new BadRequestException('faculty_department is required');
     }
-    if (!dto.executing_context?.type) {
+    const dtoJson = jsonColumnsOf(dto);
+    if (!dtoJson.executing_context?.type) {
       if (privateCandidate) {
         dto.executing_context = {
-          ...(typeof dto.executing_context === 'object' && dto.executing_context
-            ? dto.executing_context
+          ...(typeof dtoJson.executing_context === 'object' &&
+          dtoJson.executing_context
+            ? dtoJson.executing_context
             : {}),
           type: 'independent',
           student_pathway: 'private',
@@ -2983,19 +3125,19 @@ export class OpportunitiesService {
         'own_university_departments',
       ];
       const requestedRule = String(
-        dto.participation_scope?.rule || '',
+        dtoJson.participation_scope?.rule || '',
       ).toLowerCase();
       if (
-        dto.participation_scope &&
+        dtoJson.participation_scope &&
         !allowedStudentScopeRules.includes(requestedRule)
       ) {
         throw new BadRequestException(
           'Students may only scope an opportunity to their own university — either all departments or specific departments. Broader scopes require faculty, partner, or CIEL PK.',
         );
       }
-      if (dto.participation_scope) {
-        dto.participation_scope.creator_university_name = ownUniversity;
-        dto.participation_scope.university_names = [ownUniversity];
+      if (dtoJson.participation_scope) {
+        dtoJson.participation_scope.creator_university_name = ownUniversity;
+        dtoJson.participation_scope.university_names = [ownUniversity];
       }
       dto.restricted_universities = [ownUniversity];
     }
@@ -3020,8 +3162,8 @@ export class OpportunitiesService {
       }
     }
     const responsibilitiesLen =
-      typeof dto.activity_details?.student_responsibilities === 'string'
-        ? dto.activity_details.student_responsibilities.length
+      typeof dtoJson.activity_details?.student_responsibilities === 'string'
+        ? dtoJson.activity_details.student_responsibilities.length
         : 0;
     if (responsibilitiesLen > STUDENT_RESPONSIBILITIES_MAX_LENGTH) {
       throw new BadRequestException(
@@ -3032,15 +3174,17 @@ export class OpportunitiesService {
       this.validateExternalPartner(dto.external_partner_collaboration);
     }
 
-    if (dto.executing_context.type === 'partner') {
+    // executing_context.type was validated (or defaulted) above, so the block is present here.
+    if (dtoJson.executing_context?.type === 'partner') {
       const pe = this.resolvePartnerEmail(dto);
       if (!pe) {
         throw new BadRequestException(
           'Partner context requires a partner contact email (external_partner_collaboration.official_email, executing_context.partner.official_email, or supervision partner fields).',
         );
       }
-    } else if (dto.executing_context.type === 'independent') {
-      const ind = dto.executing_context.independent_community_activity || {};
+    } else if (dtoJson.executing_context?.type === 'independent') {
+      const ind =
+        dtoJson.executing_context.independent_community_activity || {};
       if (!privateCandidate && !ind.activity_site_description)
         throw new BadRequestException(
           'independent activity_site_description required',
@@ -3048,15 +3192,15 @@ export class OpportunitiesService {
     }
 
     const openAllParticipation =
-      String(dto.participation_scope?.rule || '').toLowerCase() ===
+      String(dtoJson.participation_scope?.rule || '').toLowerCase() ===
       'open_all_universities';
     const restricted =
       dto.restricted_universities && dto.restricted_universities.length > 0
         ? dto.restricted_universities
         : openAllParticipation || privateCandidate
           ? []
-          : dto.participation_scope?.creator_university_name
-            ? [dto.participation_scope.creator_university_name]
+          : dtoJson.participation_scope?.creator_university_name
+            ? [dtoJson.participation_scope.creator_university_name]
             : [];
 
     const requiresPartner = this.studentOpportunityRequiresPartner(dto);
@@ -3068,7 +3212,7 @@ export class OpportunitiesService {
     }
 
     const creatorUniversity =
-      dto.participation_scope?.creator_university_name?.trim() ||
+      dtoJson.participation_scope?.creator_university_name?.trim() ||
       user.university?.trim() ||
       user.institution?.trim() ||
       '';
@@ -3182,22 +3326,23 @@ export class OpportunitiesService {
         }
       }
 
-      const { draft: _studentDraftFlag, ...createFields } = dto;
-      // Strip client-controlled approval/live fields so a crafted payload cannot skip faculty/admin.
-      const {
-        admin_approved: _clientAdminApproved,
-        admin_approval_required: _clientAdminRequired,
-        workflowStage: _clientWorkflow,
-        workflow_stage: _clientWorkflowSnake,
-        faculty_verified: _clientFacultyVerified,
-        facultyApprovalStatus: _clientFacultyStatus,
-        partnerApprovalStatus: _clientPartnerStatus,
-        adminApprovalStatus: _clientAdminStatus,
-        status: _clientStatus,
-        isStudentCreated: _clientIsStudentCreated,
-        wizard_progress: _clientWizardProgress, // draft-only resume marker; a submission has no wizard to resume
-        ...safeCreateFields
-      } = createFields as CreateOpportunityDto & Record<string, unknown>;
+      // Strip the draft flag and every client-controlled approval/live field so a crafted payload
+      // cannot skip faculty/admin. `wizard_progress` is a draft-only resume marker; a submission
+      // has no wizard to resume.
+      const safeCreateFields = omitKeys(dto, [
+        'draft',
+        'admin_approved',
+        'admin_approval_required',
+        'workflowStage',
+        'workflow_stage',
+        'faculty_verified',
+        'facultyApprovalStatus',
+        'partnerApprovalStatus',
+        'adminApprovalStatus',
+        'status',
+        'isStudentCreated',
+        'wizard_progress',
+      ]);
       const payload: DeepPartial<Opportunity> = {
         ...safeCreateFields,
         organizationId,
@@ -3208,7 +3353,7 @@ export class OpportunitiesService {
             ? 'pending_partner'
             : 'pending_approval'
           : 'pending_faculty',
-        sdg: dto.sdg_info?.sdg_id || 'SDG',
+        sdg: jsonColumnsOf(dto).sdg_info?.sdg_id || 'SDG',
         restricted_universities: restricted,
         visibility:
           dto.visibility ||
@@ -3524,11 +3669,7 @@ export class OpportunitiesService {
     const materialBefore = this.liveMaterialSignature(opportunity);
     const facultyEmailBefore = this.getFacultyEmailFromOpportunity(opportunity);
 
-    const {
-      id: _dtoId,
-      draft: _draftFlag,
-      ...rawPatch
-    } = updateOpportunityDto as UpdateOpportunityDto & { id: string };
+    const rawPatch = omitKeys(updateOpportunityDto, ['id', 'draft']);
     // PATCH /opportunities/:id passes the raw body (no DTO whitelist), and POST /update's DTO
     // still exposes `status` — strip every server-controlled column so an edit can never
     // self-approve, republish, reassign ownership or forge verification tokens. Then allow-list
@@ -3579,16 +3720,14 @@ export class OpportunitiesService {
     }
     if (
       patch.objectives !== undefined &&
-      !String(
-        (opportunity.objectives as { description?: unknown } | null)
-          ?.description ?? '',
-      ).trim()
+      !String(jsonColumnsOf(opportunity).objectives?.description ?? '').trim()
     ) {
       throw new BadRequestException('objectives.description is required');
     }
 
-    if (updateOpportunityDto.sdg_info) {
-      opportunity.sdg = updateOpportunityDto.sdg_info.sdg_id || opportunity.sdg;
+    const updateSdgInfo = jsonColumnsOf(updateOpportunityDto).sdg_info;
+    if (updateSdgInfo) {
+      opportunity.sdg = updateSdgInfo.sdg_id || opportunity.sdg;
     }
 
     // Faculty edit/resubmit: force opportunity back into review lanes for fresh approval —
@@ -4050,7 +4189,8 @@ export class OpportunitiesService {
     const items = await Promise.all(
       rows.map(async (opp) => {
         const occupiedSeats = await this.getOccupiedSeats(opp.id);
-        const volunteersRequired = opp.timeline?.volunteers_required || 0;
+        const json = jsonColumnsOf(opp);
+        const volunteersRequired = json.timeline?.volunteers_required || 0;
         return {
           id: opp.id,
           _id: opp.id,
@@ -4061,11 +4201,11 @@ export class OpportunitiesService {
           ...this.getWorkflowResponseFields(opp),
           created_at: opp.createdAt,
           mode: opp.mode,
-          sdg: opp.sdg_info?.sdg_id || opp.sdg,
+          sdg: json.sdg_info?.sdg_id || opp.sdg,
           applicants_count: occupiedSeats,
           remaining_seats: Math.max(0, volunteersRequired - occupiedSeats),
           volunteers_required: volunteersRequired,
-          expected_hours: Number(opp.timeline?.expected_hours) || 0,
+          expected_hours: Number(json.timeline?.expected_hours) || 0,
           organization_name: isDisplayableOrgName(opp.organization?.name)
             ? String(opp.organization?.name).trim()
             : null,
@@ -4073,13 +4213,13 @@ export class OpportunitiesService {
           // Lets the "Pending Partner" status line name the actual person, same contact
           // resolution used on the student "mine" list.
           partner_contact_name:
-            (typeof opp.partner_organization?.contact_person === 'string' &&
-              opp.partner_organization.contact_person.trim()) ||
-            (typeof opp.partner_organization?.contact_person_name ===
+            (typeof json.partner_organization?.contact_person === 'string' &&
+              json.partner_organization.contact_person.trim()) ||
+            (typeof json.partner_organization?.contact_person_name ===
               'string' &&
-              opp.partner_organization.contact_person_name.trim()) ||
-            (typeof opp.supervision?.partner_contact_person === 'string' &&
-              opp.supervision.partner_contact_person.trim()) ||
+              json.partner_organization.contact_person_name.trim()) ||
+            (typeof json.supervision?.partner_contact_person === 'string' &&
+              json.supervision.partner_contact_person.trim()) ||
             null,
           partner_contact_email: this.resolvePartnerEmailFromOpportunity(opp),
           admin_approved: opp.admin_approved === true,
@@ -4095,7 +4235,7 @@ export class OpportunitiesService {
    * Community Service Workspace approval-stage tracker. Optional `status` narrows to one status
    * (e.g. `draft`); omitted returns everything the student has created, newest first. */
   async findMineForStudent(userId: string, options?: { status?: string }) {
-    const where: Record<string, unknown> = {
+    const where: FindOptionsWhere<Opportunity> = {
       creatorId: userId,
       isStudentCreated: true,
     };
@@ -4103,7 +4243,7 @@ export class OpportunitiesService {
       where.status = options.status;
     }
     const rows = await this.opportunitiesRepository.find({
-      where: where as any,
+      where,
       order: { updatedAt: 'DESC' },
     });
 
@@ -4235,15 +4375,11 @@ export class OpportunitiesService {
     const user = await this.usersRepository.findOne({ where: { id: userId } });
     if (!user) throw new ForbiddenException('User not found');
 
-    const {
-      draft: _draftFlag,
-      id: _dtoId,
-      ...rawFields
-    } = dto as Record<string, unknown> & { draft?: unknown; id?: unknown };
+    const rawFields = omitKeys(dto, ['draft', 'id']);
     // `POST /student/opportunity/:id` hands the raw request body to this method (no DTO whitelist),
     // so a draft save must never be able to write approval / ownership / token columns.
     const fields = pickDraftPersistFields(
-      stripServerControlledFields(rawFields) as Record<string, unknown>,
+      stripServerControlledFields(rawFields),
     );
     this.sanitizeAndBoundContent(fields as never);
     applyCanonicalPrivateCandidatePhone(fields, { required: false });
@@ -4384,7 +4520,9 @@ export class OpportunitiesService {
     return rows.map((r) => r.id);
   }
 
-  async findAll(userId: string, filters: any) {
+  async findAll(userId: string, filtersInput: unknown) {
+    // Query-string shape; a missing object fails at the same `filters.partner_id` read as before.
+    const filters = filtersInput as OpportunityListFilters;
     const org = await this.organizationsService.getMyOrganization(userId);
     const query =
       this.opportunitiesRepository.createQueryBuilder('opportunity');
@@ -4456,7 +4594,7 @@ export class OpportunitiesService {
           filters.partner_id,
         );
         resolvedOrgId = checkOrg.id;
-      } catch (e) {
+      } catch {
         // Not an org ID, maybe it's a User ID?
         const checkUserOrg = await this.organizationsService.getMyOrganization(
           filters.partner_id,
@@ -4594,7 +4732,8 @@ export class OpportunitiesService {
     const rows = await Promise.all(
       opportunities.map(async (opp) => {
         const occupiedSeats = await this.getOccupiedSeats(opp.id);
-        const volunteersRequired = opp.timeline?.volunteers_required || 0;
+        const json = jsonColumnsOf(opp);
+        const volunteersRequired = json.timeline?.volunteers_required || 0;
         const orgFallback = !opp.organizationId
           ? await this.getFacultyOrgFallback(opp.facultyId)
           : null;
@@ -4627,13 +4766,13 @@ export class OpportunitiesService {
           ...(viewerAccess ? { viewer_access: viewerAccess } : {}),
           status: this.getApiOpportunityStatus(opp),
           requires_partner_approval: opp.requiresPartnerApproval,
-          location: opp.location,
-          start_date: opp.timeline?.start_date,
-          end_date: opp.timeline?.end_date,
-          from_time: opp.timeline?.from_time,
-          to_time: opp.timeline?.to_time,
-          dates: opp.timeline ? { end: opp.timeline.end_date } : null,
-          capacity: opp.timeline
+          location: json.location,
+          start_date: json.timeline?.start_date,
+          end_date: json.timeline?.end_date,
+          from_time: json.timeline?.from_time,
+          to_time: json.timeline?.to_time,
+          dates: json.timeline ? { end: json.timeline.end_date } : null,
+          capacity: json.timeline
             ? {
                 volunteers: volunteersRequired,
                 remaining_seats: Math.max(
@@ -4643,16 +4782,16 @@ export class OpportunitiesService {
               }
             : null,
           applicants_count: occupiedSeats,
-          participation_scope: opp.participation_scope,
-          executing_context: opp.executing_context,
-          executing_organization: opp.executing_organization,
-          partner_organization: opp.partner_organization,
-          safety_supervision_declaration: opp.safety_supervision_declaration,
-          safety_declaration: opp.safety_declaration,
-          visibility_and_academic_linkage: opp.visibility_and_academic_linkage,
-          submission_confirmations: opp.submission_confirmations,
-          external_partner_collaboration: opp.external_partner_collaboration,
-          academic_linkage: opp.academic_linkage,
+          participation_scope: json.participation_scope,
+          executing_context: json.executing_context,
+          executing_organization: json.executing_organization,
+          partner_organization: json.partner_organization,
+          safety_supervision_declaration: json.safety_supervision_declaration,
+          safety_declaration: json.safety_declaration,
+          visibility_and_academic_linkage: json.visibility_and_academic_linkage,
+          submission_confirmations: json.submission_confirmations,
+          external_partner_collaboration: json.external_partner_collaboration,
+          academic_linkage: json.academic_linkage,
           organization: opp.organization || orgFallback,
           ...this.getWorkflowResponseFields(opp),
         };
@@ -4661,7 +4800,8 @@ export class OpportunitiesService {
     return redactContacts ? redactOpportunityContactDetails(rows) : rows;
   }
 
-  async getPublicOpportunities(filters: any = {}) {
+  async getPublicOpportunities(filtersInput: unknown = {}) {
+    const filters = filtersInput as Pick<OpportunityListFilters, 'partner_id'>;
     // Admin-approved opportunities that are "live" for students: either legacy status in the
     // public set, or workflow live (legacy faculty flow can keep status `pending_execution` until
     // executing org verifies — same rows already surface as live in authenticated APIs).
@@ -4868,16 +5008,13 @@ export class OpportunitiesService {
     viewer: OpportunityDetailViewer,
   ): Promise<boolean> {
     if (!viewer?.organizationId) return false;
-    let org: { id: string; orgType?: string | null } | null = null;
+    let org: Pick<Organization, 'id' | 'orgType'> | null = null;
     try {
       org = await this.organizationsService.findOne(viewer.organizationId);
     } catch {
       return false;
     }
-    if (
-      !org ||
-      !this.facultyUniversityScope.isUniversityOrganization(org as any)
-    )
+    if (!org || !this.facultyUniversityScope.isUniversityOrganization(org))
       return false;
     const ids =
       await this.facultyUniversityScope.resolveOpportunityIdsForUniversityOrganization(
@@ -5156,7 +5293,8 @@ export class OpportunitiesService {
     return Promise.all(
       opportunities.map(async (opp) => {
         const occupiedSeats = await this.getOccupiedSeats(opp.id);
-        const volunteersRequired = opp.timeline?.volunteers_required || 0;
+        const json = jsonColumnsOf(opp);
+        const volunteersRequired = json.timeline?.volunteers_required || 0;
         const orgFallback = !opp.organizationId
           ? await this.getFacultyOrgFallback(opp.facultyId)
           : null;
@@ -5164,13 +5302,12 @@ export class OpportunitiesService {
           ? (creatorById.get(opp.creatorId) ?? null)
           : null;
 
-        const {
-          faculty_verification_token: _ft,
-          partnerToken: _pt,
-          liaisonToken: _lt,
-          execution_verification_token: _et,
-          ...oppRest
-        } = opp;
+        const oppRest = omitKeys(opp, [
+          'faculty_verification_token',
+          'partnerToken',
+          'liaisonToken',
+          'execution_verification_token',
+        ]);
 
         const { flow_status, admin_can_approve } =
           this.describeAdminQueueFlow(opp);
@@ -5178,23 +5315,23 @@ export class OpportunitiesService {
         return {
           ...oppRest,
           status: this.getApiOpportunityStatus(opp),
-          start_date: opp.timeline?.start_date,
-          end_date: opp.timeline?.end_date,
-          from_time: opp.timeline?.from_time,
-          to_time: opp.timeline?.to_time,
+          start_date: json.timeline?.start_date,
+          end_date: json.timeline?.end_date,
+          from_time: json.timeline?.from_time,
+          to_time: json.timeline?.to_time,
           remaining_seats: Math.max(0, volunteersRequired - occupiedSeats),
           participant_count: occupiedSeats,
-          participation_scope: opp.participation_scope,
-          supervision: opp.supervision,
-          executing_context: opp.executing_context,
-          executing_organization: opp.executing_organization,
-          partner_organization: opp.partner_organization,
-          safety_supervision_declaration: opp.safety_supervision_declaration,
-          safety_declaration: opp.safety_declaration,
-          visibility_and_academic_linkage: opp.visibility_and_academic_linkage,
-          submission_confirmations: opp.submission_confirmations,
-          external_partner_collaboration: opp.external_partner_collaboration,
-          academic_linkage: opp.academic_linkage,
+          participation_scope: json.participation_scope,
+          supervision: json.supervision,
+          executing_context: json.executing_context,
+          executing_organization: json.executing_organization,
+          partner_organization: json.partner_organization,
+          safety_supervision_declaration: json.safety_supervision_declaration,
+          safety_declaration: json.safety_declaration,
+          visibility_and_academic_linkage: json.visibility_and_academic_linkage,
+          submission_confirmations: json.submission_confirmations,
+          external_partner_collaboration: json.external_partner_collaboration,
+          academic_linkage: json.academic_linkage,
           execution_verified: opp.execution_verified,
           admin_approved: opp.admin_approved,
           ...this.getWorkflowResponseFields(opp),
@@ -5645,6 +5782,7 @@ export class OpportunitiesService {
       throw new NotFoundException('Invalid or expired verification link.');
     }
     this.assertVerificationLinkNotExpired(opportunity.partnerTokenExpiresAt);
+    const json = jsonColumnsOf(opportunity);
     return {
       title: opportunity.title,
       alreadyVerified: !!opportunity.partnerVerified,
@@ -5657,12 +5795,12 @@ export class OpportunitiesService {
         title: opportunity.title,
         types: opportunity.types,
         mode: opportunity.mode,
-        location: opportunity.location,
-        timeline: opportunity.timeline,
-        objectives: opportunity.objectives,
-        activity_details: opportunity.activity_details,
-        supervision: opportunity.supervision,
-        sdg_info: opportunity.sdg_info,
+        location: json.location,
+        timeline: json.timeline,
+        objectives: json.objectives,
+        activity_details: json.activity_details,
+        supervision: json.supervision,
+        sdg_info: json.sdg_info,
         secondary_sdgs: opportunity.secondary_sdgs,
         verification_method: opportunity.verification_method,
         visibility: opportunity.visibility,
@@ -5793,6 +5931,7 @@ export class OpportunitiesService {
       ? !!opportunity.faculty_verified
       : opportunity.facultyApprovalStatus === LINE_STATUS.APPROVED;
     const closed = this.isClosedForTokenAction(opportunity);
+    const json = jsonColumnsOf(opportunity);
     return {
       title: opportunity.title,
       alreadyVerified,
@@ -5806,12 +5945,12 @@ export class OpportunitiesService {
         title: opportunity.title,
         types: opportunity.types,
         mode: opportunity.mode,
-        location: opportunity.location,
-        timeline: opportunity.timeline,
-        objectives: opportunity.objectives,
-        activity_details: opportunity.activity_details,
-        supervision: opportunity.supervision,
-        sdg_info: opportunity.sdg_info,
+        location: json.location,
+        timeline: json.timeline,
+        objectives: json.objectives,
+        activity_details: json.activity_details,
+        supervision: json.supervision,
+        sdg_info: json.sdg_info,
         secondary_sdgs: opportunity.secondary_sdgs,
         verification_method: opportunity.verification_method,
         visibility: opportunity.visibility,

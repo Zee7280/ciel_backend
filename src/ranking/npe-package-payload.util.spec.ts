@@ -5,8 +5,15 @@ import {
 } from './npe-package-payload.util';
 import { buildNpePackageRecord } from './npe-ranking-eligibility';
 import { collectReportEvidenceFiles } from '../reports/collect-report-evidence.util';
+import type { StudentReport } from '../reports/entities/student-report.entity';
 
-const report: any = {
+/** Shape of one redacted section-1 content block as the test reads it back. */
+type Section1Content = {
+  team_lead: { hours: number };
+  team_members: Array<{ hours: number }>;
+};
+
+const report = {
   id: 'rep-1',
   studentId: 'stu-1',
   project_id: 'opp-1',
@@ -119,17 +126,13 @@ const report: any = {
     adminNote: 'Approved after review by admin@ciel.pk',
     finalBadge: { name: 'Advanced' },
   },
-};
+} as unknown as StudentReport;
 
 const build = () => {
   const pkg = buildNpePackageRecord(report);
   return {
     pkg,
-    payload: buildNpeAiPayload(
-      report,
-      pkg,
-      collectReportEvidenceFiles(report),
-    ) as any,
+    payload: buildNpeAiPayload(report, pkg, collectReportEvidenceFiles(report)),
   };
 };
 
@@ -202,17 +205,15 @@ describe('NPE AI payload: the complete package goes to the model', () => {
     expect(payload.priorCii.summary).toBe('Strong, well documented project.');
     // 4 evidence manifest: every attached file, with the section it came from
     const names = payload.uploaded_evidence_files
-      .map((f: any) => f.file_name)
+      .map((f) => f.file_name)
       .sort();
     expect(names).toEqual(['a.jpg', 'receipt.pdf', 's1.jpg']);
-    expect(payload.uploaded_evidence_files.map((f: any) => f.file_id)).toEqual([
+    expect(payload.uploaded_evidence_files.map((f) => f.file_id)).toEqual([
       'E1',
       'E2',
       'E3',
     ]);
-    expect(payload.uploaded_evidence_files.every((f: any) => f.source)).toBe(
-      true,
-    );
+    expect(payload.uploaded_evidence_files.every((f) => f.source)).toBe(true);
   });
 
   it('never sends section 11 or any stored AI score', () => {
@@ -249,8 +250,9 @@ describe('NPE AI payload: the complete package goes to the model', () => {
     // the people and their hours are still there: only the identifiers go
     expect(all).toContain('Lead');
     expect(all).toContain('Mate');
-    expect(payload.sections['1'].content[0].team_lead.hours).toBe(20);
-    expect(payload.sections['1'].content[0].team_members[0].hours).toBe(18);
+    const s1 = payload.sections['1'].content[0] as Section1Content;
+    expect(s1.team_lead.hours).toBe(20);
+    expect(s1.team_members[0].hours).toBe(18);
   });
 
   it('does not mutate the stored report', () => {
@@ -260,16 +262,16 @@ describe('NPE AI payload: the complete package goes to the model', () => {
   });
 
   it('survives a thin report without throwing', () => {
-    const thin: any = {
+    const thin = {
       id: 'x',
       status: 'verified',
       updatedAt: new Date(),
       opportunity: {},
       student: {},
-    };
+    } as unknown as StudentReport;
     const pkg = buildNpePackageRecord(thin);
     expect(() => buildNpeAiPayload(thin, pkg, [])).not.toThrow();
-    const out: any = buildNpeAiPayload(thin, pkg, []);
+    const out = buildNpeAiPayload(thin, pkg, []);
     expect(out.uploaded_evidence_files).toEqual([]);
     expect(Object.keys(out.sections)).toHaveLength(9);
   });
@@ -285,7 +287,7 @@ describe('NPE AI payload: the complete package goes to the model', () => {
     expect(
       redactSensitiveDeep([{ CNIC: 'x', Mobile_Number: 'y', keep: 'ok' }]),
     ).toEqual([{ keep: 'ok' }]);
-    const cyc: any = { a: 1 };
+    const cyc: { a: number; self?: unknown } = { a: 1 };
     cyc.self = cyc;
     expect(() => redactSensitiveDeep(cyc)).not.toThrow(); // depth-limited, never loops forever
   });

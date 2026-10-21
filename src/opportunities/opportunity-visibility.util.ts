@@ -25,7 +25,9 @@ export function isPubliclyVisibleOpportunity(opp: Opportunity): boolean {
   if (opp.isStudentCreated) {
     return isApprovedLiveStudentOpportunity(opp);
   }
-  const linkage = opp.visibility_and_academic_linkage;
+  const linkage = opp.visibility_and_academic_linkage as {
+    visibility_type?: unknown;
+  } | null;
   const explicitType =
     linkage && typeof linkage.visibility_type === 'string'
       ? linkage.visibility_type.trim().toLowerCase()

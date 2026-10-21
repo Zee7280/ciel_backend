@@ -4,6 +4,8 @@ import {
   type NpePackageRecord,
 } from './npe-ranking-eligibility';
 import { NPE_CII_SCALE } from './npe-ranking.constants';
+import { reportIndividualHoursMet } from '../reports/build-ciel-pk-ai-evaluation-payload.util';
+import type { StudentReport } from '../reports/entities/student-report.entity';
 
 function pkg(over: Partial<NpePackageRecord> = {}): NpePackageRecord {
   return {
@@ -64,7 +66,7 @@ describe('buildNpePackageRecord parts', () => {
       },
       reportSubmittedAt: new Date('2026-01-01T00:00:00.000Z'),
       section8: { evidence_files: [] },
-    } as any);
+    } as unknown as StudentReport);
     expect(rec.parts.join(' ')).not.toMatch(/V13/i);
     expect(rec.parts).toEqual([
       'Flashcard',
@@ -77,9 +79,6 @@ describe('buildNpePackageRecord parts', () => {
 });
 
 describe('required hours: the ranking gate uses the same bar as the submit gate', () => {
-  const {
-    reportIndividualHoursMet,
-  } = require('../reports/build-ciel-pk-ai-evaluation-payload.util');
   const solo = (hours: number, opportunity: Record<string, unknown>) =>
     ({
       id: 'r',

@@ -1,8 +1,58 @@
 import { SectionReportAnalyticsService } from './section-report-analytics.service';
 import { StudentReport } from '../reports/entities/student-report.entity';
+import { AnalyticsScopeService } from './shared/analytics-scope.service';
+import {
+  AnalyticsStakeholder,
+  ReportSectionNumber,
+} from './shared/section-analytics.types';
+
+type DistRow = { label: string; count: number };
+type Pct = { percent: number };
+/** Loosely-typed view of the metric fields these tests assert on. */
+type TestMetrics = {
+  reports_with_section: number;
+  total_resource_entries: number;
+  self_funded_share: Pct;
+  mobilized_value_estimate: { amount: number };
+  resource_type_mix: DistRow[];
+  projects_with_partners_percent: Pct;
+  distinct_partners_estimate: number;
+  sdg17_classification_spread: DistRow[];
+  evidence_backed_percent: Pct;
+  partner_verified_percent: Pct;
+  avg_credibility_score: { score: number };
+  ethics_completion_rate: Pct;
+  discipline_distribution: DistRow[];
+  baseline_evidence_distribution: DistRow[];
+  problem_category_distribution: DistRow[];
+};
+type SectionCompute = (
+  reports: StudentReport[],
+  projectTitle: unknown,
+) => TestMetrics;
+type MetricsCtx = {
+  stakeholder: AnalyticsStakeholder;
+  scope: 'project' | 'aggregate';
+  titles: string[];
+};
+/** Private-method surface of the service exercised directly by these tests. */
+type ServicePrivate = {
+  computeSection2: SectionCompute;
+  computeSection6: SectionCompute;
+  computeSection7: SectionCompute;
+  computeSection8: SectionCompute;
+  computeSectionMetrics(
+    section: ReportSectionNumber,
+    reports: StudentReport[],
+    ctx: MetricsCtx,
+  ): TestMetrics;
+};
 
 describe('SectionReportAnalyticsService metrics', () => {
-  const service = new SectionReportAnalyticsService({} as any);
+  const service = new SectionReportAnalyticsService(
+    {} as AnalyticsScopeService,
+  );
+  const svc = service as unknown as ServicePrivate;
 
   function report(partial: Partial<StudentReport>): StudentReport {
     return {
@@ -44,7 +94,7 @@ describe('SectionReportAnalyticsService metrics', () => {
         },
       }),
     ];
-    const metrics = (service as any).computeSection6(reports, 'Demo');
+    const metrics = svc.computeSection6(reports, 'Demo');
     expect(metrics.total_resource_entries).toBe(2);
     expect(metrics.self_funded_share.percent).toBe(50);
     expect(metrics.mobilized_value_estimate.amount).toBe(33000);
@@ -85,7 +135,7 @@ describe('SectionReportAnalyticsService metrics', () => {
         },
       }),
     ];
-    const metrics = (service as any).computeSection7(reports, 'Demo');
+    const metrics = svc.computeSection7(reports, 'Demo');
     expect(metrics.projects_with_partners_percent.percent).toBe(50);
     expect(metrics.distinct_partners_estimate).toBe(2);
     const strategic = metrics.sdg17_classification_spread.find(
@@ -111,7 +161,7 @@ describe('SectionReportAnalyticsService metrics', () => {
         },
       }),
     ];
-    const metrics = (service as any).computeSection8(reports, 'Demo');
+    const metrics = svc.computeSection8(reports, 'Demo');
     expect(metrics.evidence_backed_percent.percent).toBe(100);
     expect(metrics.partner_verified_percent.percent).toBe(100);
     expect(metrics.avg_credibility_score.score).toBeGreaterThan(50);
@@ -122,16 +172,16 @@ describe('SectionReportAnalyticsService metrics', () => {
     const reports = [
       report({
         section2: {
-          problem_statement: { text: 'short' } as any,
-          discipline: { name: 'Computer Science' } as any,
+          problem_statement: { text: 'short' },
+          discipline: { name: 'Computer Science' },
           discipline_contribution: 'x',
-          baseline_evidence: ['survey', 'interview'] as any,
-          problem_category: 12 as any,
-          primary_beneficiary: null as any,
-        } as any,
+          baseline_evidence: ['survey', 'interview'],
+          problem_category: 12,
+          primary_beneficiary: null,
+        } as unknown as StudentReport['section2'],
       }),
     ];
-    const metrics = (service as any).computeSection2(reports, 'Demo');
+    const metrics = svc.computeSection2(reports, 'Demo');
     expect(metrics.reports_with_section).toBe(1);
     expect(metrics.discipline_distribution[0].label).toBe('Computer Science');
     expect(metrics.baseline_evidence_distribution[0].label).toContain('survey');
@@ -150,11 +200,12 @@ describe('SectionReportAnalyticsService metrics', () => {
         },
       }),
     ];
-    const svc = service as any;
-    const original = svc.computeSectionMetrics.bind(svc);
+    const original = svc.computeSectionMetrics.bind(
+      svc,
+    ) as ServicePrivate['computeSectionMetrics'];
     jest
       .spyOn(svc, 'computeSectionMetrics')
-      .mockImplementation((section: number, ...args: any[]) => {
+      .mockImplementation((section, ...args) => {
         if (section === 4) throw new Error('boom');
         return original(section, ...args);
       });

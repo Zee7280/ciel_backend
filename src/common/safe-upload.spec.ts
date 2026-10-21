@@ -6,7 +6,10 @@ import {
   UNSAFE_UPLOAD_MIME,
 } from './safe-upload';
 
-const run = (opts: any, file: any) =>
+type UploadOptions = typeof imageUploadOptions | typeof proofUploadOptions;
+type FileLike = { mimetype?: string; originalname?: string };
+
+const run = (opts: UploadOptions, file: FileLike) =>
   new Promise<{ err: Error | null; ok: boolean }>((resolve) =>
     opts.fileFilter({}, file, (err: Error | null, ok: boolean) =>
       resolve({ err, ok }),

@@ -11,7 +11,6 @@ import {
   Request,
   UseInterceptors,
   UploadedFile,
-  NotFoundException,
   ParseUUIDPipe,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -32,6 +31,11 @@ import {
 } from '../common/student-report-file-upload';
 import { S3Service } from '../common/s3.service';
 
+/** Shape of `req.user` as returned by JwtStrategy.validate. */
+interface EngagementRequest {
+  user: { id: string; role?: string };
+}
+
 @Controller('engagement')
 @UseGuards(JwtAuthGuard, SubscriptionActiveGuard)
 export class EngagementController {
@@ -42,7 +46,7 @@ export class EngagementController {
   ) {}
 
   @Get('my')
-  async getMy(@Request() req) {
+  async getMy(@Request() req: EngagementRequest) {
     const result = await this.engagementService.getMyParticipants(req.user.id);
     return {
       success: true,
@@ -53,7 +57,7 @@ export class EngagementController {
   /** Pending list is empty — attendance is confirmed on the faculty flash card. */
   @Get('attendance/pending')
   async listPendingAttendance(
-    @Request() req,
+    @Request() req: EngagementRequest,
     @Query('projectId') projectId?: string,
   ) {
     const result = await this.engagementService.listPendingAttendanceLogs(
@@ -69,7 +73,7 @@ export class EngagementController {
 
   @Patch('attendance/:logId')
   async patchAttendanceApproval(
-    @Request() req,
+    @Request() req: EngagementRequest,
     @Param('logId', ParseUUIDPipe) logId: string,
     @Body() dto: PatchAttendanceApprovalDto,
   ) {
@@ -88,7 +92,7 @@ export class EngagementController {
 
   @Post('project/:projectId/attendance/verify-request')
   async createAttendanceVerifyRequest(
-    @Request() req,
+    @Request() req: EngagementRequest,
     @Param('projectId', ParseUUIDPipe) projectId: string,
     @Body() dto: CreateAttendanceVerifyRequestDto,
   ) {
@@ -107,7 +111,7 @@ export class EngagementController {
   /** JSON-only presign — browser uploads attendance photo direct to S3 (bypasses serverless body limits). */
   @Post('attendance/evidence/presign')
   async presignAttendanceEvidence(
-    @Request() req,
+    @Request() req: EngagementRequest,
     @Body()
     body: { filename?: string; contentType?: string; size?: number | string },
   ) {
@@ -122,7 +126,10 @@ export class EngagementController {
   }
 
   @Post('teams/form')
-  async formTeam(@Request() req, @Body() dto: FormTeamFromLeadDto) {
+  async formTeam(
+    @Request() req: EngagementRequest,
+    @Body() dto: FormTeamFromLeadDto,
+  ) {
     const result = await this.teamFormationService.formTeamFromLead(
       req.user.id,
       dto.projectId,
@@ -132,7 +139,10 @@ export class EngagementController {
   }
 
   @Post('register')
-  async register(@Request() req, @Body() dto: RegisterParticipantDto) {
+  async register(
+    @Request() req: EngagementRequest,
+    @Body() dto: RegisterParticipantDto,
+  ) {
     const result = await this.engagementService.registerParticipant(
       req.user.id,
       dto,
@@ -153,7 +163,7 @@ export class EngagementController {
     }),
   )
   async addAttendance(
-    @Request() req,
+    @Request() req: EngagementRequest,
     @Param('id') id: string,
     @Body() dto: CreateAttendanceLogDto,
     @UploadedFile() file: Express.Multer.File,
@@ -172,7 +182,10 @@ export class EngagementController {
   }
 
   @Get(':id/attendance')
-  async getAttendance(@Request() req, @Param('id') id: string) {
+  async getAttendance(
+    @Request() req: EngagementRequest,
+    @Param('id') id: string,
+  ) {
     await this.engagementService.assertCanViewParticipationEngagement(
       req.user.id,
       req.user.role,
@@ -190,7 +203,7 @@ export class EngagementController {
 
   @Delete(':id/attendance/:logId')
   async deleteAttendance(
-    @Request() req,
+    @Request() req: EngagementRequest,
     @Param('id') id: string,
     @Param('logId', ParseUUIDPipe) logId: string,
   ) {
@@ -207,7 +220,7 @@ export class EngagementController {
   }
 
   @Get(':id/metrics')
-  async getMetrics(@Request() req, @Param('id') id: string) {
+  async getMetrics(@Request() req: EngagementRequest, @Param('id') id: string) {
     await this.engagementService.assertCanViewParticipationEngagement(
       req.user.id,
       req.user.role,
@@ -221,7 +234,7 @@ export class EngagementController {
   }
 
   @Get(':id/summary')
-  async getSummary(@Request() req, @Param('id') id: string) {
+  async getSummary(@Request() req: EngagementRequest, @Param('id') id: string) {
     await this.engagementService.assertCanViewParticipationEngagement(
       req.user.id,
       req.user.role,
@@ -235,7 +248,7 @@ export class EngagementController {
   }
 
   @Post(':id/finalize')
-  async finalize(@Request() req, @Param('id') id: string) {
+  async finalize(@Request() req: EngagementRequest, @Param('id') id: string) {
     const result = await this.engagementService.finalizeEngagement(
       req.user.id,
       id,
@@ -249,7 +262,7 @@ export class EngagementController {
 
   @Post(':id/faculty-approve')
   async facultyApprove(
-    @Request() req,
+    @Request() req: EngagementRequest,
     @Param('id', ParseUUIDPipe) id: string,
     @Body('status') status: string,
   ) {
@@ -268,7 +281,7 @@ export class EngagementController {
 
   @Get('project/:projectId/team')
   async getProjectTeam(
-    @Request() req,
+    @Request() req: EngagementRequest,
     @Param('projectId', ParseUUIDPipe) projectId: string,
   ) {
     await this.engagementService.assertCanViewProjectEngagement(
@@ -285,7 +298,7 @@ export class EngagementController {
 
   @Get('project/:projectId/attendance-logs')
   async getProjectAttendance(
-    @Request() req,
+    @Request() req: EngagementRequest,
     @Param('projectId', ParseUUIDPipe) projectId: string,
   ) {
     await this.engagementService.assertCanViewProjectEngagement(
@@ -305,7 +318,7 @@ export class EngagementController {
 
   @Delete(':id')
   async deleteParticipant(
-    @Request() req,
+    @Request() req: EngagementRequest,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     await this.engagementService.deleteParticipant(req.user.id, id);

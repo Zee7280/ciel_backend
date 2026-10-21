@@ -68,7 +68,10 @@ export class SectionReportAnalyticsController {
   @Get('admin/analytics/summary')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
-  getAdminSummary(@Request() req: AuthenticatedRequest, @Query() query: Section1AnalyticsQueryDto) {
+  getAdminSummary(
+    @Request() req: AuthenticatedRequest,
+    @Query() query: Section1AnalyticsQueryDto,
+  ) {
     return this.sectionReportAnalyticsService.getSummary(
       req.user,
       query,
@@ -95,7 +98,10 @@ export class SectionReportAnalyticsController {
   @Get('student/projects/:projectId/analytics/summary')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.STUDENT)
-  getStudentSummary(@Request() req: AuthenticatedRequest, @Param('projectId') projectId: string) {
+  getStudentSummary(
+    @Request() req: AuthenticatedRequest,
+    @Param('projectId') projectId: string,
+  ) {
     return this.sectionReportAnalyticsService.getSummary(req.user, {
       project_id: projectId,
       scope: 'project',
@@ -130,7 +136,10 @@ export class SectionReportAnalyticsController {
     UserRole.ORGANIZATION_ADMIN,
     UserRole.UNIVERSITY,
   )
-  getPartnerSummary(@Request() req: AuthenticatedRequest, @Query() query: Section1AnalyticsQueryDto) {
+  getPartnerSummary(
+    @Request() req: AuthenticatedRequest,
+    @Query() query: Section1AnalyticsQueryDto,
+  ) {
     return this.sectionReportAnalyticsService.getSummary(req.user, query);
   }
 
@@ -183,7 +192,10 @@ export class SectionReportAnalyticsController {
   @Get('faculty/analytics/summary')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.FACULTY)
-  getFacultySummary(@Request() req: AuthenticatedRequest, @Query() query: Section1AnalyticsQueryDto) {
+  getFacultySummary(
+    @Request() req: AuthenticatedRequest,
+    @Query() query: Section1AnalyticsQueryDto,
+  ) {
     return this.sectionReportAnalyticsService.getSummary(req.user, {
       ...query,
       scope: query.project_id ? 'project' : 'aggregate',

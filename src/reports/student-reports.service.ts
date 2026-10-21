@@ -9,7 +9,7 @@ import {
 import { NotificationsService } from '../notifications/notifications.service';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, QueryFailedError, Repository } from 'typeorm';
+import { FindOptionsWhere, In, QueryFailedError, Repository } from 'typeorm';
 import { StudentReport } from './entities/student-report.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
@@ -25,7 +25,6 @@ import {
 import { Participation } from '../engagement/entities/participant.entity';
 import { S3Service } from '../common/s3.service';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
-import * as path from 'path';
 
 import { User } from '../users/entities/user.entity';
 import { UserRole } from '../users/enums/user-role.enum';
@@ -96,9 +95,105 @@ import {
 } from './community-award.util';
 import { trackingOrganizationName } from './tracking-org-name.util';
 
+/** `String()` over a loosely-typed form value (same coercion; typed so the linter knows it is not a bare object). */
+function stringifyLoose(value: unknown): string {
+  return String(value as { toString(): string });
+}
+
+/** Section 4 as submitted by the wizard: project-level totals plus per-activity reach. */
+type Section4Like =
+  | {
+      project_summary?: { distinct_total_beneficiaries?: unknown } | null;
+      distinct_total_beneficiaries?: unknown;
+      total_beneficiaries?: unknown;
+      activity_blocks?: unknown;
+    }
+  | null
+  | undefined;
+
+type ActivityBlockLike =
+  | { unique_beneficiaries?: unknown; beneficiaries_reached?: unknown }
+  | null
+  | undefined;
+
+/** Section 3 primary SDG as stored / submitted (UN codes and form ids may both be present). */
+type PrimarySdgLike = {
+  goal_number?: unknown;
+  target_code?: unknown;
+  target_id?: unknown;
+  indicator_code?: unknown;
+  indicator_id?: unknown;
+  [key: string]: unknown;
+};
+
+type Section3Like =
+  | {
+      primary_sdg?: PrimarySdgLike | null;
+      contribution_intent_statement?: unknown;
+      sdgs?: unknown;
+      secondary_sdgs?: unknown;
+      [key: string]: unknown;
+    }
+  | null
+  | undefined;
+
+/** Opportunity JSON columns (`timeline` / `location` are untyped on the entity). */
+type OpportunityTimelineLike =
+  | {
+      type?: string;
+      start_date?: string;
+      end_date?: string;
+      expected_hours?: number | string;
+      location_district?: string;
+      location_province?: string;
+      location_country?: string;
+    }
+  | null
+  | undefined;
+
+type OpportunityLocationLike =
+  | { city?: string; district?: string; province?: string; country?: string }
+  | null
+  | undefined;
+
+/** Multipart report body after dot-path expansion (see parseFormData). */
+type ParsedReportFormData = {
+  opportunityId?: string;
+  project_id?: string;
+  submit?: unknown;
+  is_submit?: unknown;
+  final_submit?: unknown;
+  action?: unknown;
+  cii_index?: unknown;
+  section1?: StudentReport['section1'];
+  section2?: StudentReport['section2'];
+  section3?: StudentReport['section3'];
+  section4?: StudentReport['section4'];
+  section5?: StudentReport['section5'];
+  section6?: StudentReport['section6'];
+  section7?: StudentReport['section7'];
+  section8?: StudentReport['section8'];
+  section9?: StudentReport['section9'];
+  section10?: StudentReport['section10'];
+  section11?: unknown;
+};
+
+/** Listing query as received from the controllers (page/limit may be numeric strings). */
+type ReportListQuery = {
+  status?: string;
+  organizationId?: string;
+  studentId?: string;
+  page?: number | string;
+  limit?: number | string;
+  includeHidden?: unknown;
+  q?: unknown;
+  dateFrom?: unknown;
+  dateTo?: unknown;
+};
+
 /** Project-level total, or the sum of each activity's unique reach when that field is no longer on the form. */
 function distinctBeneficiariesFromSection4(
-  section4: any,
+  section4: Section4Like,
 ): number | string | null {
   const summary =
     section4?.project_summary?.distinct_total_beneficiaries ??
@@ -107,18 +202,18 @@ function distinctBeneficiariesFromSection4(
   if (
     summary !== undefined &&
     summary !== null &&
-    String(summary).trim() !== ''
+    stringifyLoose(summary).trim() !== ''
   ) {
-    return summary;
+    return summary as number | string;
   }
   const blocks = Array.isArray(section4?.activity_blocks)
-    ? section4.activity_blocks
+    ? (section4.activity_blocks as ActivityBlockLike[])
     : [];
   let sum = 0;
   let any = false;
   for (const block of blocks) {
     const raw = block?.unique_beneficiaries || block?.beneficiaries_reached;
-    const count = Number(String(raw ?? '').replace(/,/g, ''));
+    const count = Number(stringifyLoose(raw ?? '').replace(/,/g, ''));
     if (Number.isFinite(count) && count > 0) {
       sum += count;
       any = true;
@@ -154,12 +249,12 @@ export class StudentReportsService {
     private readonly opportunityApplicationsService?: OpportunityApplicationsService,
   ) {}
 
-  private hasMeaningfulObjectValue(value: any): boolean {
+  private hasMeaningfulObjectValue(value: unknown): boolean {
     if (!value || typeof value !== 'object') return false;
-    return Object.values(value).some((v) => {
+    return Object.values(value as Record<string, unknown>).some((v) => {
       if (Array.isArray(v)) return v.length > 0;
       if (v && typeof v === 'object') return this.hasMeaningfulObjectValue(v);
-      return v !== null && v !== undefined && String(v).trim() !== '';
+      return v !== null && v !== undefined && stringifyLoose(v).trim() !== '';
     });
   }
 
@@ -176,7 +271,7 @@ export class StudentReportsService {
 
   private pickOptionalString(value: unknown): string | null {
     if (value === null || value === undefined) return null;
-    const trimmed = String(value).trim();
+    const trimmed = stringifyLoose(value).trim();
     return trimmed || null;
   }
 
@@ -201,7 +296,10 @@ export class StudentReportsService {
     return raw?.trim() || 'Unknown';
   }
 
-  private syncSection3Metadata(report: StudentReport, section3: any): void {
+  private syncSection3Metadata(
+    report: StudentReport,
+    section3: Section3Like,
+  ): void {
     const primarySdg = section3?.primary_sdg;
     const goalNumber = this.parseOptionalInteger(primarySdg?.goal_number);
     const targetCode = this.pickOptionalString(
@@ -240,16 +338,16 @@ export class StudentReportsService {
                 '',
             }
           : section3.primary_sdg,
-      };
+      } as unknown as StudentReport['section3'];
     } else {
-      report.section3 = section3;
+      report.section3 = section3 as unknown as StudentReport['section3'];
     }
 
     report.primary_sdg_goal = goalNumber;
     report.primary_sdg_target = targetCode;
     report.primary_sdg_indicator = indicatorCode;
     report.contribution_intent_statement =
-      section3?.contribution_intent_statement;
+      section3?.contribution_intent_statement as string;
 
     if (report.contribution_intent_statement) {
       report.section3.summary_text = this.generateSDGStage1Summary(report);
@@ -263,11 +361,11 @@ export class StudentReportsService {
     const hasSectionPartner =
       report.section7?.has_partners === 'yes' ||
       report.section8?.partner_verification === true ||
-      partners.some((partner: any) => this.hasMeaningfulObjectValue(partner));
+      partners.some((partner) => this.hasMeaningfulObjectValue(partner));
     const hasOpportunityPartner =
       Boolean(report.opportunity?.requiresPartnerApproval) ||
       this.hasMeaningfulObjectValue(report.opportunity?.partner_organization);
-    const hasNgo = partners.some((partner: any) => {
+    const hasNgo = partners.some((partner) => {
       const type = String(partner?.type || partner?.name || '').toLowerCase();
       return type.includes('ngo') || type.includes('non-government');
     });
@@ -890,9 +988,11 @@ export class StudentReportsService {
     report: StudentReport,
     opportunityByProjectId?: Map<string, Opportunity>,
   ) {
-    const section3 = report.section3 as any;
-    const section4 = report.section4 as any;
-    const sdgs = section3?.sdgs ?? section3?.secondary_sdgs ?? [];
+    const section3 = report.section3 as Section3Like;
+    const section4 = report.section4 as Section4Like;
+    const sdgs = (section3?.sdgs ??
+      section3?.secondary_sdgs ??
+      []) as unknown[];
     const opportunity = this.resolveLinkedOpportunity(
       report,
       opportunityByProjectId,
@@ -1085,11 +1185,16 @@ export class StudentReportsService {
   private static withholdAnalysisUntilAdminApproved<
     T extends Record<string, any>,
   >(row: T): T {
+    const flags = row as {
+      status?: string | null;
+      faculty_status?: string | null;
+      admin_status?: string | null;
+    };
     if (
       isCommunityAwardMedalReport({
-        status: row.status,
-        faculty_status: row.faculty_status,
-        admin_status: row.admin_status,
+        status: flags.status,
+        faculty_status: flags.faculty_status,
+        admin_status: flags.admin_status,
       })
     ) {
       return row;
@@ -2715,12 +2820,12 @@ export class StudentReportsService {
     section11: unknown,
   ): Record<string, unknown> | undefined {
     if (!section11 || typeof section11 !== 'object') return undefined;
-    const {
-      ai_generated_impact_score,
-      institutional_alignment_score,
-      verified_narrative,
-      ...rest
-    } = section11 as Record<string, unknown>;
+    const rest: Record<string, unknown> = {
+      ...(section11 as Record<string, unknown>),
+    };
+    delete rest.ai_generated_impact_score;
+    delete rest.institutional_alignment_score;
+    delete rest.verified_narrative;
     return rest;
   }
 
@@ -2730,7 +2835,9 @@ export class StudentReportsService {
   ): Record<string, unknown> | undefined {
     const stripped = this.stripStudentWritableSection11(section11);
     if (!stripped) return undefined;
-    const { cii_index: _ciiIndex, ciiIndex: _ciiIndexAlt, ...rest } = stripped;
+    const rest: Record<string, unknown> = { ...stripped };
+    delete rest.cii_index;
+    delete rest.ciiIndex;
     return rest;
   }
 
@@ -2746,7 +2853,10 @@ export class StudentReportsService {
     return Object.keys(base).length ? base : undefined;
   }
 
-  private resolveSubmitIntent(parsedData: any, forceSubmit: boolean): boolean {
+  private resolveSubmitIntent(
+    parsedData: ParsedReportFormData,
+    forceSubmit: boolean,
+  ): boolean {
     if (forceSubmit) return true;
     const submitSignal =
       parsedData?.submit ??
@@ -2775,7 +2885,7 @@ export class StudentReportsService {
       opportunityId === ''
     )
       return;
-    const oid = String(opportunityId).trim();
+    const oid = stringifyLoose(opportunityId).trim();
     if (!this.looksLikeUuid(oid)) return;
 
     const mine = await findPreferredProjectEnrollment(
@@ -2810,7 +2920,7 @@ export class StudentReportsService {
   }
 
   private normalizeEmail(value: unknown): string {
-    return String(value || '')
+    return stringifyLoose(value || '')
       .trim()
       .toLowerCase();
   }
@@ -2988,7 +3098,7 @@ export class StudentReportsService {
   }
 
   private institutionKey(value: unknown): string {
-    return String(value || '')
+    return stringifyLoose(value || '')
       .trim()
       .toLowerCase()
       .replace(/\s+/g, ' ');
@@ -3087,7 +3197,6 @@ export class StudentReportsService {
 
     const st = String(report.status || '').toLowerCase();
     const fac = String(report.faculty_status || '').toLowerCase();
-    const privateCandidate = isPrivateCandidateOpportunity(report.opportunity);
     if (st === 'draft' || st === 'continue') {
       throw new BadRequestException(
         'This report is still a draft. Reminders are for submitted review.',
@@ -3159,8 +3268,8 @@ export class StudentReportsService {
 
   async createReport(
     studentId: string,
-    dto: any,
-    files: any[],
+    dto: unknown,
+    files: unknown[],
     forceSubmit = false,
   ) {
     // Parse form data and convert dot notation to nested objects
@@ -3185,9 +3294,11 @@ export class StudentReportsService {
         studentId,
         opportunityForPolicy,
       );
-      if (opportunityForPolicy?.timeline?.type === 'flexible') {
-        const startDate = new Date(opportunityForPolicy.timeline.start_date);
-        const endDate = new Date(opportunityForPolicy.timeline.end_date);
+      const policyTimeline =
+        opportunityForPolicy?.timeline as OpportunityTimelineLike;
+      if (policyTimeline?.type === 'flexible') {
+        const startDate = new Date(policyTimeline.start_date as string);
+        const endDate = new Date(policyTimeline.end_date as string);
         const diffMonths =
           (endDate.getFullYear() - startDate.getFullYear()) * 12 +
           (endDate.getMonth() - startDate.getMonth());
@@ -3427,8 +3538,8 @@ export class StudentReportsService {
     }
 
     // Point 3 Clean Up: Ensure team_members is not stored in the JSON blob
-    if (report.section1 && (report.section1 as any).team_members) {
-      delete (report.section1 as any).team_members;
+    if (report.section1 && report.section1.team_members) {
+      delete report.section1.team_members;
     }
 
     // Handle Faculty Assignment if faculty email is provided in Section 1
@@ -3504,7 +3615,10 @@ export class StudentReportsService {
 
     // Save files if any
     if (files && files.length > 0) {
-      const filePaths = await this.saveFiles(files, report.id);
+      const filePaths = await this.saveFiles(
+        files as Express.Multer.File[],
+        report.id,
+      );
 
       // Update report with file paths
       this.updateReportWithFilePaths(report, filePaths);
@@ -3608,7 +3722,7 @@ export class StudentReportsService {
     };
   }
 
-  async saveDraft(studentId: string, dto: any, files: any[]) {
+  async saveDraft(studentId: string, dto: unknown, files: unknown[]) {
     const parsedData = this.parseFormData(dto);
     const opportunityId = String(
       parsedData.opportunityId || parsedData.project_id || '',
@@ -3702,8 +3816,8 @@ export class StudentReportsService {
     }
 
     // Point 3 Clean Up: Ensure team_members is not stored in the JSON blob
-    if (report.section1 && (report.section1 as any).team_members) {
-      delete (report.section1 as any).team_members;
+    if (report.section1 && report.section1.team_members) {
+      delete report.section1.team_members;
     }
 
     // Handle Faculty Assignment if faculty email is provided in Section 1.
@@ -3725,7 +3839,10 @@ export class StudentReportsService {
     await this.studentReportsRepository.save(report);
 
     if (files && files.length > 0) {
-      const filePaths = await this.saveFiles(files, report.id);
+      const filePaths = await this.saveFiles(
+        files as Express.Multer.File[],
+        report.id,
+      );
       this.updateReportWithFilePaths(report, filePaths);
       await this.studentReportsRepository.save(report);
     }
@@ -3757,13 +3874,16 @@ export class StudentReportsService {
       return redactDraftRowForNonAdmin(row) as T;
     }
     const wrapped = StudentReportsService.redactCiiV45ForExternalViewer({
-      data: { ciiV45: row.ciiV45, ciiV45Lock: row.ciiV45Lock },
+      data: {
+        ciiV45: row.ciiV45 as unknown,
+        ciiV45Lock: row.ciiV45Lock as unknown,
+      },
     });
     const pkg = row.review_package as
       | { documents?: { evidence?: Record<string, unknown> } }
       | null
       | undefined;
-    const review_package = pkg?.documents?.evidence
+    const review_package: unknown = pkg?.documents?.evidence
       ? {
           ...pkg,
           documents: {
@@ -3771,7 +3891,7 @@ export class StudentReportsService {
             evidence: { ...pkg.documents.evidence, count: 0, files: [] },
           },
         }
-      : row.review_package;
+      : (row.review_package as unknown);
     return {
       ...row,
       ciiV45: wrapped.data?.ciiV45 ?? null,
@@ -3782,10 +3902,17 @@ export class StudentReportsService {
   }
 
   async findAll(
-    query: any,
+    query: unknown,
     options: { partnerView?: boolean; linkedOpportunityIds?: string[] } = {},
   ) {
-    const { status, organizationId, studentId, page = 1, limit = 10 } = query;
+    const listQuery = query as ReportListQuery;
+    const {
+      status,
+      organizationId,
+      studentId,
+      page = 1,
+      limit = 10,
+    } = listQuery;
     const limitNum =
       typeof limit === 'number'
         ? limit
@@ -3830,7 +3957,9 @@ export class StudentReportsService {
 
     // Partner scope: owned by the org, plus opportunities that only name the partner (email/name).
     const linkedIds = (options.linkedOpportunityIds ?? []).filter(Boolean);
-    let whereClause: any = {};
+    let whereClause:
+      | FindOptionsWhere<StudentReport>
+      | FindOptionsWhere<StudentReport>[] = {};
     if (organizationId) {
       whereClause = linkedIds.length
         ? [
@@ -3847,8 +3976,10 @@ export class StudentReportsService {
     });
 
     const includeHidden =
-      query?.includeHidden === true ||
-      ['true', '1'].includes(String(query?.includeHidden ?? '').toLowerCase());
+      listQuery?.includeHidden === true ||
+      ['true', '1'].includes(
+        stringifyLoose(listQuery?.includeHidden ?? '').toLowerCase(),
+      );
     if (!includeHidden) {
       reports = await this.filterReportsForAdminPartnerQueue(reports);
     }
@@ -3863,7 +3994,7 @@ export class StudentReportsService {
       });
     }
 
-    const searchTerm = String(query?.q ?? '')
+    const searchTerm = stringifyLoose(listQuery?.q ?? '')
       .trim()
       .toLowerCase();
     if (searchTerm) {
@@ -3883,15 +4014,15 @@ export class StudentReportsService {
     }
     const parseBound = (raw: unknown, endOfDay: boolean): number | null => {
       if (!raw) return null;
-      const d = new Date(String(raw));
+      const d = new Date(stringifyLoose(raw));
       if (Number.isNaN(d.getTime())) return null;
-      if (endOfDay && /^\d{4}-\d{2}-\d{2}$/.test(String(raw))) {
+      if (endOfDay && /^\d{4}-\d{2}-\d{2}$/.test(stringifyLoose(raw))) {
         d.setUTCHours(23, 59, 59, 999);
       }
       return d.getTime();
     };
-    const fromMs = parseBound(query?.dateFrom, false);
-    const toMs = parseBound(query?.dateTo, true);
+    const fromMs = parseBound(listQuery?.dateFrom, false);
+    const toMs = parseBound(listQuery?.dateTo, true);
     if (fromMs !== null || toMs !== null) {
       reports = reports.filter((row) => {
         const ms = new Date(
@@ -3968,8 +4099,8 @@ export class StudentReportsService {
   }
 
   /** University dashboard: reports on institution-linked opportunities, not only org-owned listings. */
-  async findAllByOpportunityIds(opportunityIds: string[], query: any) {
-    const { status, page = 1, limit = 10 } = query;
+  async findAllByOpportunityIds(opportunityIds: string[], query: unknown) {
+    const { status, page = 1, limit = 10 } = query as ReportListQuery;
     const limitNum =
       typeof limit === 'number'
         ? limit
@@ -4167,18 +4298,18 @@ export class StudentReportsService {
   private static stripAnalysisScalarsForPartner<T extends Record<string, any>>(
     row: T,
   ): T {
-    const out: Record<string, any> = { ...row };
+    const out: Record<string, unknown> = { ...row };
     if (out.section11 && typeof out.section11 === 'object') {
-      const {
-        cii_index: _a,
-        ciiIndex: _b,
-        ai_generated_impact_score: _c,
-        institutional_alignment_score: _d,
-        verified_narrative: _e,
-        audit_meta: _f,
-        summary_text: _g,
-        ...rest
-      } = out.section11 as Record<string, unknown>;
+      const rest: Record<string, unknown> = {
+        ...(out.section11 as Record<string, unknown>),
+      };
+      delete rest.cii_index;
+      delete rest.ciiIndex;
+      delete rest.ai_generated_impact_score;
+      delete rest.institutional_alignment_score;
+      delete rest.verified_narrative;
+      delete rest.audit_meta;
+      delete rest.summary_text;
       out.section11 = rest;
     }
     const pkg = out.review_package as
@@ -4186,13 +4317,11 @@ export class StudentReportsService {
       | null
       | undefined;
     if (pkg && typeof pkg === 'object') {
-      const {
-        ai_analyser_href: _h,
-        analysis_hrefs: _i,
-        admin_review_href: _j,
-        admin_doc_hrefs: _k,
-        ...pkgRest
-      } = pkg;
+      const pkgRest: Record<string, unknown> = { ...pkg };
+      delete pkgRest.ai_analyser_href;
+      delete pkgRest.analysis_hrefs;
+      delete pkgRest.admin_review_href;
+      delete pkgRest.admin_doc_hrefs;
       out.review_package = pkgRest;
     }
     return out as T;
@@ -4563,12 +4692,12 @@ export class StudentReportsService {
     ) {
       return response;
     }
-    const {
-      ai_generated_impact_score,
-      institutional_alignment_score,
-      verified_narrative,
-      ...restSection11
-    } = response.data.section11;
+    const restSection11: Record<string, unknown> = {
+      ...response.data.section11,
+    };
+    delete restSection11.ai_generated_impact_score;
+    delete restSection11.institutional_alignment_score;
+    delete restSection11.verified_narrative;
     return {
       ...response,
       data: { ...response.data, section11: restSection11 },
@@ -4692,7 +4821,10 @@ export class StudentReportsService {
           : []
         ).reduce((sum, log) => {
           const rec = log as { approval_status?: unknown; hours?: unknown };
-          if (String(rec.approval_status || '').toLowerCase() === 'rejected') {
+          if (
+            stringifyLoose(rec.approval_status || '').toLowerCase() ===
+            'rejected'
+          ) {
             return sum;
           }
           return sum + (Number(rec.hours) || 0);
@@ -4713,6 +4845,10 @@ export class StudentReportsService {
           }
         : undefined;
 
+    const opportunityLocation = report.opportunity
+      ?.location as OpportunityLocationLike;
+    const opportunityTimeline = report.opportunity
+      ?.timeline as OpportunityTimelineLike;
     return {
       success: true,
       data: {
@@ -4731,11 +4867,12 @@ export class StudentReportsService {
         opportunity: {
           id: report.opportunity?.id,
           title: report.opportunity?.title,
-          city: report.opportunity?.location?.city,
-          start_date: report.opportunity?.timeline?.start_date,
-          end_date: report.opportunity?.timeline?.end_date,
-          expected_hours: report.opportunity?.timeline?.expected_hours,
-          participation_scope: report.opportunity?.participation_scope ?? null,
+          city: opportunityLocation?.city,
+          start_date: opportunityTimeline?.start_date,
+          end_date: opportunityTimeline?.end_date,
+          expected_hours: opportunityTimeline?.expected_hours,
+          participation_scope:
+            (report.opportunity?.participation_scope as unknown) ?? null,
           restricted_universities:
             report.opportunity?.restricted_universities ?? null,
         },
@@ -5281,9 +5418,9 @@ export class StudentReportsService {
               closeReason: report.closeReason,
             }
           : {}),
-        ...(refreshedReviewPackage
-          ? { review_package: refreshedReviewPackage as any }
-          : {}),
+        ...((refreshedReviewPackage
+          ? { review_package: refreshedReviewPackage }
+          : {}) as Record<string, never>),
         ...((action === 'unlock' || (action === 'reject' && role === 'admin')
           ? {
               ciiV45: report.ciiV45,
@@ -5396,7 +5533,9 @@ export class StudentReportsService {
     const lock = report.ciiV45Lock as unknown as Record<string, unknown> | null;
     if (!lock || (lock.locked !== true && lock.locked !== 'true')) return;
     const prev = (report.ciiV45 ?? {}) as unknown as Record<string, unknown>;
-    const history = Array.isArray(prev.previousLocks) ? prev.previousLocks : [];
+    const history: unknown[] = Array.isArray(prev.previousLocks)
+      ? prev.previousLocks
+      : [];
     report.ciiV45 = {
       ...prev,
       previousLocks: [
@@ -5670,18 +5809,17 @@ export class StudentReportsService {
       report.section2?.problem_statement,
     );
 
-    let district = opportunity?.location?.district || 'District';
-    let province = opportunity?.location?.province || 'Province';
-    let country = opportunity?.location?.country || 'Pakistan';
+    const oppLocation = opportunity?.location as OpportunityLocationLike;
+    const oppTimeline = opportunity?.timeline as OpportunityTimelineLike;
+    let district = oppLocation?.district || 'District';
+    let province = oppLocation?.province || 'Province';
+    let country = oppLocation?.country || 'Pakistan';
 
     // Fallback to timeline if necessary
-    if (
-      !opportunity?.location?.district &&
-      opportunity?.timeline?.location_district
-    ) {
-      district = opportunity.timeline.location_district;
-      province = opportunity.timeline.location_province || province;
-      country = opportunity.timeline.location_country || country;
+    if (!oppLocation?.district && oppTimeline?.location_district) {
+      district = oppTimeline.location_district;
+      province = oppTimeline.location_province || province;
+      country = oppTimeline.location_country || country;
     }
 
     const location = `${district}, ${province}, ${country}`;
@@ -5693,23 +5831,28 @@ export class StudentReportsService {
     return `This project addresses a documented gap in ${pCategory} affecting ${beneficiary} in ${location}. Baseline assessment was informed through ${evidence}. The project demonstrates academic alignment with ${discipline}, ensuring structured and evidence-based engagement.`;
   }
 
-  private parseFormData(formData: any): any {
-    const result: any = {};
+  private parseFormData(formData: unknown): ParsedReportFormData {
+    const result: Record<string, unknown> = {};
+    const source = formData as Record<string, unknown>;
 
-    for (const key in formData) {
-      const value = formData[key];
+    for (const key in source) {
+      const value = source[key];
       this.setNestedProperty(result, key, value);
     }
 
-    return result;
+    return result as ParsedReportFormData;
   }
 
-  private setNestedProperty(obj: any, path: string, value: any) {
+  private setNestedProperty(
+    obj: Record<string, unknown>,
+    path: string,
+    value: unknown,
+  ) {
     setNestedPropertyUtil(obj, path, value);
   }
 
   private async saveFiles(
-    files: any[],
+    files: Express.Multer.File[],
     reportId: string,
   ): Promise<{ [key: string]: string[] }> {
     const filePaths: { [key: string]: string[] } = {};
@@ -5739,14 +5882,19 @@ export class StudentReportsService {
     report: StudentReport,
     filePaths: { [key: string]: string[] },
   ) {
+    const sections = report as unknown as Record<
+      string,
+      { media_urls?: string[] } | null | undefined
+    >;
     for (const section in filePaths) {
-      if (report[section]) {
+      const target = sections[section];
+      if (target) {
         // Initialize media_urls if it doesn't exist
-        if (!report[section].media_urls) {
-          report[section].media_urls = [];
+        if (!target.media_urls) {
+          target.media_urls = [];
         }
         // Add new URLs to the section
-        report[section].media_urls.push(...filePaths[section]);
+        target.media_urls.push(...filePaths[section]);
       }
     }
   }
@@ -5758,7 +5906,7 @@ export class StudentReportsService {
   ) {
     // 1. Search for faculty user
     const facultyUser = await this.usersRepository.findOne({
-      where: { email: email.toLowerCase(), role: 'faculty' as any },
+      where: { email: email.toLowerCase(), role: UserRole.FACULTY },
     });
 
     if (facultyUser) {
@@ -5878,7 +6026,9 @@ export class StudentReportsService {
               ),
               evidence_url: log.evidenceUrl,
               entryStatus: log.entryStatus,
-              approval_status: (log as any).approvalStatus ?? null,
+              approval_status:
+                (log as { approvalStatus?: string | null }).approvalStatus ??
+                null,
             }))
           : report.section1?.attendance_logs || [],
     };

@@ -36,7 +36,10 @@ export class AllFieldsConsoleController {
    * role’s field lens (not a live impersonation session).
    */
   @Get('view-as')
-  getViewAs(@Request() req: AuthenticatedRequest, @Query() query: AllFieldsConsoleViewAsQueryDto) {
+  getViewAs(
+    @Request() req: AuthenticatedRequest,
+    @Query() query: AllFieldsConsoleViewAsQueryDto,
+  ) {
     return this.consoleService.getViewAs(req.user, query.role, query.section, {
       project_id: query.project_id,
       university: query.university,

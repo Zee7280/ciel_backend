@@ -82,8 +82,8 @@ export class Section1AnalyticsService {
     if (
       r === UserRole.NGO ||
       r === UserRole.CORPORATE ||
-      r === UserRole.ORGANIZATION_ADMIN ||
-      r === UserRole.PARTNER
+      r === UserRole.ORGANIZATION_ADMIN
+      // UserRole.PARTNER shares the NGO value and is covered by the NGO check above.
     ) {
       const t = String(orgType || '').toLowerCase();
       if (t.includes('university')) return 'university';
@@ -145,7 +145,10 @@ export class Section1AnalyticsService {
     });
 
     let facultyScopedProjectIds: string[] | undefined;
-    if (scope === 'aggregate' && (requester.role as UserRole) === UserRole.FACULTY) {
+    if (
+      scope === 'aggregate' &&
+      (requester.role as UserRole) === UserRole.FACULTY
+    ) {
       // Same personal + delegated opportunity scope Faculty → Reports/Dashboard/Impact use —
       // keeps "my students" consistent across every faculty screen.
       facultyScopedProjectIds =

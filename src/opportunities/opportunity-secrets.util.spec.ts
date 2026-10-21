@@ -70,7 +70,12 @@ describe('redactOpportunityContactDetails', () => {
         },
       ],
       creator: { name: 'N', email: null },
-    }) as any;
+    }) as {
+      title: string;
+      supervision: Record<string, unknown>;
+      partner_organization: Record<string, unknown>;
+      approvalHistory: Record<string, unknown>[];
+    };
     const text = JSON.stringify(out);
     expect(text).not.toMatch(/fac@uni\.edu|p@org\.org|o@org\.org|\+92/);
     expect(out.supervision).toEqual({ supervisor_name: 'Dr X' });
@@ -88,7 +93,10 @@ describe('redactOpportunityContactDetails', () => {
     const out = redactOpportunityContactDetails({
       other: { contact: 'kept' },
       supervision: { contact: 'gone' },
-    }) as any;
+    }) as {
+      other: { contact?: string };
+      supervision: { contact?: string };
+    };
     expect(out.other.contact).toBe('kept');
     expect(out.supervision.contact).toBeUndefined();
   });

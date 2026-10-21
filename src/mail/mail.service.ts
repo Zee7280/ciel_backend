@@ -1,7 +1,27 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
-import sanitizeHtml from 'sanitize-html';
+import type { Address } from 'nodemailer/lib/mailer';
+import type { SentMessageInfo } from 'nodemailer/lib/smtp-transport';
+import sanitizeHtmlModule from 'sanitize-html';
+
+/** Minimal local typing for the subset of sanitize-html used here (the package ships no types). */
+type SanitizeHtmlOptions = {
+  allowedTags?: string[];
+  allowedAttributes?: Record<string, string[]>;
+  allowedSchemes?: string[];
+  transformTags?: Record<
+    string,
+    (
+      tagName: string,
+      attribs: Record<string, string>,
+    ) => { tagName: string; attribs: Record<string, string> }
+  >;
+};
+const sanitizeHtml = sanitizeHtmlModule as (
+  dirty: string,
+  options?: SanitizeHtmlOptions,
+) => string;
 
 /** Optional structured summary for faculty/partner verification emails. */
 export interface OpportunityVerificationEmailDetails {
@@ -45,9 +65,10 @@ export type AdminBulkEmailResult = {
 
 @Injectable()
 export class MailService {
-  private transporter: nodemailer.Transporter;
+  private transporter: nodemailer.Transporter<SentMessageInfo>;
   /** Alternate GoDaddy port (465↔587) used once if primary retries are exhausted. */
-  private fallbackTransporter: nodemailer.Transporter | null = null;
+  private fallbackTransporter: nodemailer.Transporter<SentMessageInfo> | null =
+    null;
   private readonly logger = new Logger(MailService.name);
 
   constructor(private configService: ConfigService) {
@@ -124,7 +145,7 @@ export class MailService {
     secure: boolean;
     user?: string;
     pass?: string;
-  }): nodemailer.Transporter {
+  }): nodemailer.Transporter<SentMessageInfo> {
     const rejectUnauthorized =
       (
         this.configService.get<string>('MAIL_TLS_REJECT_UNAUTHORIZED') ||
@@ -200,10 +221,13 @@ export class MailService {
    */
   private async sendMailReliable(
     mailOptions: nodemailer.SendMailOptions,
-  ): Promise<nodemailer.SentMessageInfo> {
+  ): Promise<SentMessageInfo> {
+    // Every caller passes plain address strings; structured Address objects fall back to .address.
+    const recipientText = (r: string | Address | undefined): string =>
+      typeof r === 'string' ? r : r?.address || '';
     const to = Array.isArray(mailOptions.to)
-      ? mailOptions.to.join(', ')
-      : String(mailOptions.to || '');
+      ? mailOptions.to.map(recipientText).join(', ')
+      : recipientText(mailOptions.to);
     if (!to.trim()) {
       throw new Error('Mail send aborted: empty recipient');
     }
@@ -251,8 +275,6 @@ export class MailService {
     heading: string;
     bodyHtml: string;
   }): string {
-    const headingEsc = this.escHtmlPlain(opts.heading);
-    const logoUrl = this.buildFrontendLink('/iel-pk-logo.png', {});
     return `
       <div style="background: #f8fafc; padding: 32px 16px; font-family: Arial, sans-serif;">
         <div style="max-width: 680px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
@@ -402,7 +424,7 @@ export class MailService {
     // address cannot fail the whole send.
     const sent: string[] = [];
     const failed: string[] = [];
-    let lastError: unknown;
+    let lastError: Error | undefined;
     for (const recipient of toList) {
       try {
         await this.sendMailReliable({
@@ -416,7 +438,7 @@ export class MailService {
         });
         sent.push(recipient);
       } catch (error) {
-        lastError = error;
+        lastError = error as Error;
         failed.push(recipient);
         this.logger.error(
           `Admin composed email failed for ${recipient}`,
@@ -539,7 +561,10 @@ export class MailService {
       });
       this.logger.log(`Welcome email sent to ${to}`);
     } catch (error) {
-      this.logger.error(`Failed to send welcome email to ${to}`, error.stack);
+      this.logger.error(
+        `Failed to send welcome email to ${to}`,
+        (error as Error).stack,
+      );
       // We don't throw here to avoid failing the signup process just because of an email error
     }
   }
@@ -609,7 +634,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed organization decision email to ${to}`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -645,7 +670,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed to send password reset email to ${to}`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -693,7 +718,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed to send executing organization verification email to ${to}`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -744,7 +769,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed to send partner opportunity notice email to ${to}`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -773,7 +798,10 @@ export class MailService {
       });
       this.logger.log(`OTP email sent to ${to}`);
     } catch (error) {
-      this.logger.error(`Failed to send OTP email to ${to}`, error.stack);
+      this.logger.error(
+        `Failed to send OTP email to ${to}`,
+        (error as Error).stack,
+      );
       throw error;
     }
   }
@@ -808,7 +836,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed to send team invite email to ${to}`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -872,7 +900,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed to send path team invite email to ${to}`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -924,7 +952,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed to send team member added email to ${params.to}`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -935,6 +963,8 @@ export class MailService {
     projectTitle: string,
     participationId: string,
   ) {
+    // Accepted for call-site compatibility; the email links to the approvals list, not one record.
+    void participationId;
     const from =
       this.configService.get<string>('MAIL_FROM') ||
       'CIEL <no-reply@cielpk.com>';
@@ -992,7 +1022,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed to send faculty approval request email to ${to}`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -1056,7 +1086,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed to send faculty collaborator notice email to ${to}`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -1097,7 +1127,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed to send application submission confirmation email to ${to}`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -1141,7 +1171,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed to send hours logging reminder email to ${to}`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -1189,7 +1219,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed to send faculty invite email to ${to}`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -1327,7 +1357,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed to send liaison verification email to ${to}`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -1457,7 +1487,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed to send partner verification email to ${to}`,
-        error.stack,
+        (error as Error).stack,
       );
       throw error;
     }
@@ -1508,7 +1538,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed to send student faculty-rejection email to ${to}`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -1615,7 +1645,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed to send faculty verification email to ${to}`,
-        error.stack,
+        (error as Error).stack,
       );
       throw error;
     }
@@ -1677,7 +1707,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed to send student opportunity status email to ${to}`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -1771,7 +1801,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed to send opportunity live start-report email to ${input.to}`,
-        error.stack,
+        (error as Error).stack,
       );
       throw error;
     }
@@ -1824,7 +1854,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed to send admin review email for ${opportunityId}`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -1910,7 +1940,10 @@ export class MailService {
       });
       this.logger.log(`OTP email sent to ${to}`);
     } catch (error) {
-      this.logger.error(`Failed to send OTP email to ${to}`, error.stack);
+      this.logger.error(
+        `Failed to send OTP email to ${to}`,
+        (error as Error).stack,
+      );
       throw error;
     }
   }
@@ -1959,7 +1992,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed ${reviewerType} attendance pending email`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -2102,7 +2135,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed admin attendance pending email for log ${logId}`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -2211,7 +2244,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed admin student-report submitted email for ${reportId}`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -2262,7 +2295,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed admin start-report notice for ${opportunityId}`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -2310,7 +2343,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed to send contact inquiry from ${email}`,
-        error.stack,
+        (error as Error).stack,
       );
       throw error;
     }
@@ -2355,7 +2388,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed to send coursework submission review email to ${to}`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -2450,7 +2483,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed to send coursework submission confirmation to ${to}`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -2493,7 +2526,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed to send coursework resubmission review email to ${to}`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -2542,7 +2575,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed to send ${pathLabel} connection email to faculty ${to}`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -2586,7 +2619,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed to send ${pathLabel} connection heads-up to CIEL PK`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -2627,7 +2660,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed to send coursework approval email to ${to}`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -2667,7 +2700,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed to send coursework revision-requested email to ${to}`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -2706,7 +2739,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed to send coursework rejection email to ${to}`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -2764,7 +2797,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed to send coursework rank notification email to ${to}`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -2826,7 +2859,7 @@ export class MailService {
     } catch (error) {
       this.logger.error(
         `Failed student impact-report ${status} email to ${to}`,
-        error.stack,
+        (error as Error).stack,
       );
     }
   }
@@ -2950,7 +2983,10 @@ export class MailService {
         html,
       });
     } catch (error) {
-      this.logger.error(`Failed published-package email to ${to}`, error.stack);
+      this.logger.error(
+        `Failed published-package email to ${to}`,
+        (error as Error).stack,
+      );
     }
   }
 }

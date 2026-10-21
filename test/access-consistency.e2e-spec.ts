@@ -13,11 +13,47 @@ import {
   expectNoSecrets,
   verifyToken,
 } from './e2e/helpers';
+import { DeepPartial } from 'typeorm';
 import { UserRole } from '../src/users/enums/user-role.enum';
 import { FacultyUniversityScopeAssignment } from '../src/faculty-university-scope/entities/faculty-university-scope-assignment.entity';
+import { Opportunity } from '../src/opportunities/entities/opportunity.entity';
 import { OpportunityApplication } from '../src/opportunities/entities/opportunity-application.entity';
 import { Participation } from '../src/engagement/entities/participant.entity';
 import { StudentReport } from '../src/reports/entities/student-report.entity';
+
+/** What this spec reads from supertest responses. */
+type Res = { status: number; body: unknown };
+type ViewerAccess = {
+  can_edit?: boolean;
+  can_partner_review?: boolean;
+  is_org_owner?: boolean;
+  is_executing_contact?: boolean;
+};
+type ListRow = {
+  id?: string;
+  opportunity_id?: string;
+  approval_action?: string;
+  admin_can_approve?: boolean;
+  viewer_access: ViewerAccess;
+};
+type DataBody<T> = { data: T };
+type DetailData = {
+  id?: string;
+  creator?: { email?: string | null } | null;
+  viewer_access: ViewerAccess;
+  supervision?: unknown;
+};
+type ReportView = DataBody<{ viewer_can_review: boolean }>;
+type MessageBody = { message: string };
+type OppUpdate = DeepPartial<Opportunity>;
+/** The persisted columns the it.each patches below read from the fresh row. */
+type PatchSource = {
+  supervision?: Record<string, unknown>;
+  executing_context: { partner?: Record<string, unknown> } & Record<
+    string,
+    unknown
+  >;
+};
 
 /**
  * Access-consistency matrix: every row a role's list / queue / dashboard shows must be openable
@@ -37,19 +73,20 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
   });
   beforeEach(() => h.mail.reset());
 
-  const idsOf = (res: any): string[] => {
+  type ListBody = ListRow[] | { data?: ListRow[]; items?: ListRow[] };
+  const idsOf = (res: Res): string[] => {
     expect(res.status).toBe(200);
-    const rows: any[] = Array.isArray(res.body)
-      ? res.body
-      : (res.body.data ?? res.body.items ?? []);
-    return rows.map((r) => r.id ?? r.opportunity_id);
+    const body = res.body as ListBody;
+    const rows: ListRow[] = Array.isArray(body)
+      ? body
+      : (body.data ?? body.items ?? []);
+    return rows.map((r) => (r.id ?? r.opportunity_id) as string);
   };
-  const rowOf = (res: any, id: string): any => {
+  const rowOf = (res: Res, id: string): ListRow => {
     expect(res.status).toBe(200);
-    const rows: any[] = Array.isArray(res.body)
-      ? res.body
-      : (res.body.data ?? []);
-    return rows.find((r) => (r.id ?? r.opportunity_id) === id);
+    const body = res.body as ListBody;
+    const rows: ListRow[] = Array.isArray(body) ? body : (body.data ?? []);
+    return rows.find((r) => (r.id ?? r.opportunity_id) === id) as ListRow;
   };
 
   const ngoWithOrg = async (
@@ -73,13 +110,13 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
       .post('/student/opportunity')
       .send(studentPayload(facultyEmail, over));
     expect(res.status).toBe(201);
-    return h.reload(res.body.data.id);
+    return h.reload((res.body as DataBody<{ id: string }>).data.id);
   };
 
   const orgCreate = async (user: E2eUser, body: Record<string, any>) => {
     const res = await h.as(user).post('/opportunities').send(body);
     expect(res.status).toBe(201);
-    return h.reload(res.body.id);
+    return h.reload((res.body as { id: string }).id);
   };
 
   // ------------------------------------------------------------------ faculty
@@ -117,19 +154,19 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
       const assigns = h.ds.getRepository(FacultyUniversityScopeAssignment);
       await assigns.save(
         assigns.create({
-          facultyUser: { id: delegate.id } as any,
-          universityOrganization: { id: uniOrg.id } as any,
+          facultyUser: { id: delegate.id },
+          universityOrganization: { id: uniOrg.id },
         }),
       );
       await assigns.save(
         assigns.create({
-          facultyUser: { id: delegateOther.id } as any,
-          universityOrganization: { id: otherUniOrg.id } as any,
+          facultyUser: { id: delegateOther.id },
+          universityOrganization: { id: otherUniOrg.id },
         }),
       );
 
       const student = await h.makeUser(UserRole.STUDENT, {
-        overrides: { university: uniName } as any,
+        overrides: { university: uniName },
       });
       const approveRow = await studentSubmit(student, named.email);
       const reviseRow = await studentSubmit(student, named.email);
@@ -246,7 +283,7 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
           visibility_and_academic_linkage: {
             faculty_institutional_representative: { official_email: fir.email },
           },
-        } as any);
+        } as OppUpdate);
         return opp;
       };
       const a = await mk();
@@ -295,7 +332,7 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
           primaryFacultyEmail: primary.email,
           secondaryFacultyEmail: secondary.email,
           applyPayload: {},
-        } as any),
+        }),
       );
       for (const f of [primary, secondary]) {
         expect(
@@ -308,13 +345,15 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
       ).not.toContain(opp.id);
       // an unrelated faculty sees the live record but never the creator's contact details
       const strangerView = await detail(h, stranger, opp.id);
-      expect(strangerView.body.data.creator?.email ?? null).toBeNull();
+      expect(
+        (strangerView.body as DataBody<DetailData>).data.creator?.email ?? null,
+      ).toBeNull();
       // join-applications queue: primary lists + approves; the row's action rule is the list rule
       const list = await h
         .as(primary)
         .get('/faculty/applications?status=pending');
       expect(list.status).toBe(200);
-      const appRow = (list.body.data as any[]).find(
+      const appRow = (list.body as DataBody<ListRow[]>).data.find(
         (r) => r.opportunity_id === opp.id,
       );
       expect(appRow).toBeTruthy();
@@ -322,7 +361,7 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
         (
           await h
             .as(stranger)
-            .post(`/faculty/applications/${appRow.id}/approve`)
+            .post(`/faculty/applications/${appRow!.id}/approve`)
             .send({})
         ).status,
       ).toBe(403);
@@ -330,7 +369,7 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
         (
           await h
             .as(primary)
-            .post(`/faculty/applications/${appRow.id}/approve`)
+            .post(`/faculty/applications/${appRow!.id}/approve`)
             .send({})
         ).status,
       ).toBe(201);
@@ -346,7 +385,7 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
       const opp = await orgCreate(ngo, oppPayload());
       await adminApprove(h, admin, opp.id);
       const apps = h.ds.getRepository(OpportunityApplication);
-      const mk = async (student: E2eUser) =>
+      const mk = (student: E2eUser) =>
         apps.save(
           apps.create({
             opportunityId: opp.id,
@@ -355,15 +394,15 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
             primaryFacultyEmail: primary.email,
             secondaryFacultyEmail: `  ${secondary.email.toUpperCase()} `, // stored un-normalised on purpose
             applyPayload: {},
-          } as any) as unknown as OpportunityApplication,
+          }),
         );
       const a1 = await mk(s1);
       const a2 = await mk(s2);
       const queueIds = async (f: E2eUser, status = 'pending') =>
         (
-          (await h.as(f).get(`/faculty/applications?status=${status}`)).body
-            .data as any[]
-        ).map((r) => r.id);
+          (await h.as(f).get(`/faculty/applications?status=${status}`))
+            .body as DataBody<{ id: string }[]>
+        ).data.map((r) => r.id);
       expect(await queueIds(secondary)).toEqual(
         expect.arrayContaining([a1.id, a2.id]),
       );
@@ -394,7 +433,9 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
         .post(`/faculty/applications/${a1.id}/approve`)
         .send({});
       expect(secApprove.status).toBe(403);
-      expect(secApprove.body.message).toMatch(/secondary \(visibility-only\)/);
+      expect((secApprove.body as MessageBody).message).toMatch(
+        /secondary \(visibility-only\)/,
+      );
       expect(
         (
           await h
@@ -436,9 +477,7 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
     });
 
     /** Student row past faculty review whose ONLY link to `pf` is one partner-contact field. */
-    const partnerGateRowNaming = async (
-      mutate: (opp: any, pf: E2eUser) => any,
-    ) => {
+    const partnerGateRowNaming = async () => {
       const student = await h.makeUser(UserRole.STUDENT);
       const fac = await h.makeUser(UserRole.FACULTY);
       const opp = await studentSubmit(student, fac.email, {
@@ -450,33 +489,33 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
           },
         },
       });
-      await verifyToken(h, opp.faculty_verification_token!);
+      await verifyToken(h, opp.faculty_verification_token);
       expect((await h.reload(opp.id)).workflowStage).toBe('pending_partner');
       return opp;
     };
 
-    it.each([
+    it.each<[string, (o: PatchSource, e: string) => OppUpdate]>([
       [
         'external_partner_collaboration.official_email',
-        (o: any, e: string) => ({
+        (o, e) => ({
           external_partner_collaboration: { official_email: e },
         }),
       ],
       [
         'supervision.partner_email',
-        (o: any, e: string) => ({
+        (o, e) => ({
           supervision: { ...o.supervision, partner_email: e },
         }),
       ],
       [
         'supervision.external_partner_email',
-        (o: any, e: string) => ({
+        (o, e) => ({
           supervision: { ...o.supervision, external_partner_email: e },
         }),
       ],
       [
         'executing_context.partner.official_email',
-        (o: any, e: string) => ({
+        (o, e) => ({
           executing_context: {
             ...o.executing_context,
             partner: { ...o.executing_context.partner, official_email: e },
@@ -488,9 +527,9 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
       async (_name, patch) => {
         const pf = await h.makeUser(UserRole.FACULTY);
         const stranger = await h.makeUser(UserRole.FACULTY);
-        const row = await partnerGateRowNaming(() => null);
+        const row = await partnerGateRowNaming();
         const fresh = await h.reload(row.id);
-        await h.opps.update(row.id, (patch as any)(fresh, pf.email));
+        await h.opps.update(row.id, patch(fresh, pf.email));
         expect(await approvalsHas(pf, row.id)).toBe(true);
         expect(
           rowOf(await h.as(pf).get('/faculty/approvals'), row.id)
@@ -542,7 +581,7 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
       });
       await h.opps.update(opp.id, {
         external_partner_collaboration: { official_email: pf.email },
-      } as any);
+      } as OppUpdate);
       expect(opp.workflowStage).toBe('pending_faculty');
       expect(await approvalsHas(supervisor, opp.id)).toBe(true);
       expect(await approvalsHas(pf, opp.id)).toBe(false); // list == action: pf cannot act on the faculty gate
@@ -569,12 +608,12 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
       const assigns = h.ds.getRepository(FacultyUniversityScopeAssignment);
       await assigns.save(
         assigns.create({
-          facultyUser: { id: delegate.id } as any,
-          universityOrganization: { id: uniOrg.id } as any,
+          facultyUser: { id: delegate.id },
+          universityOrganization: { id: uniOrg.id },
         }),
       );
       const student = await h.makeUser(UserRole.STUDENT, {
-        overrides: { university: uniName } as any,
+        overrides: { university: uniName },
       });
       const { user: ngo } = await ngoWithOrg();
       const opp = await orgCreate(ngo, oppPayload());
@@ -587,14 +626,17 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
           internalStatus: 'pending_faculty',
           primaryFacultyEmail: 'nobody@x.org',
           applyPayload: {},
-        } as any) as unknown as OpportunityApplication,
+        }),
       );
       const list = await h
         .as(delegate)
         .get('/faculty/applications?status=pending');
-      expect((list.body.data as any[]).some((r) => r.id === app.id)).toBe(true);
       expect(
-        (await detail(h, delegate, opp.id)).body.data.creator?.email,
+        (list.body as DataBody<ListRow[]>).data.some((r) => r.id === app.id),
+      ).toBe(true);
+      expect(
+        ((await detail(h, delegate, opp.id)).body as DataBody<DetailData>).data
+          .creator?.email,
       ).toBeTruthy(); // delegate acts, so sees contacts
       expect(
         (
@@ -624,7 +666,7 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
       const student = await h.makeUser(UserRole.STUDENT);
       const fac = await h.makeUser(UserRole.FACULTY);
       const opp = await studentSubmit(student, fac.email, partnerFields);
-      await verifyToken(h, opp.faculty_verification_token!);
+      await verifyToken(h, opp.faculty_verification_token);
       const after = await h.reload(opp.id);
       expect(after.workflowStage).toBe('pending_partner');
       return after;
@@ -653,7 +695,7 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
           official_email: later.email,
           organization_name: 'Host Two',
         },
-      } as any);
+      } as OppUpdate);
       for (const p of [first, later]) {
         expect(idsOf(await partnerList(p))).toContain(opp.id);
         expect((await detail(h, p, opp.id)).status).toBe(201);
@@ -723,7 +765,7 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
           },
         },
       });
-      await h.opps.update(opp.id, { organizationId: org.id } as any);
+      await h.opps.update(opp.id, { organizationId: org.id });
       for (const p of [member, colleague]) {
         expect(idsOf(await partnerList(p))).toContain(opp.id);
         expect((await detail(h, p, opp.id)).status).toBe(201);
@@ -770,7 +812,9 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
         expect(idsOf(await partnerList(u))).toContain(opp.id);
         const d = await detail(h, u, opp.id);
         expect(d.status).toBe(201);
-        expect(d.body.data.viewer_access.can_edit).toBe(true);
+        expect(
+          (d.body as DataBody<DetailData>).data.viewer_access.can_edit,
+        ).toBe(true);
         expect(rowOf(await partnerList(u), opp.id).viewer_access).toMatchObject(
           { is_org_owner: true, can_partner_review: false },
         );
@@ -782,7 +826,9 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
       // the named partner: listed, may review, but is NOT offered Edit (and the backend refuses it)
       const pd = await detail(h, partnerUser, opp.id);
       expect(pd.status).toBe(201);
-      expect(pd.body.data.viewer_access.can_edit).toBe(false);
+      expect(
+        (pd.body as DataBody<DetailData>).data.viewer_access.can_edit,
+      ).toBe(false);
       expect(
         rowOf(await partnerList(partnerUser), opp.id).viewer_access,
       ).toMatchObject({ is_org_owner: false, can_partner_review: true });
@@ -822,7 +868,9 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
       ).toBe(true);
       const d = await detail(h, execUser, opp.id);
       expect(d.status).toBe(201);
-      expect(d.body.data.viewer_access.can_edit).toBe(false);
+      expect((d.body as DataBody<DetailData>).data.viewer_access.can_edit).toBe(
+        false,
+      );
       expectNoSecrets(d, '(exec contact detail)');
       expect(idsOf(await partnerList(stranger))).not.toContain(opp.id);
       expect((await detail(h, stranger, opp.id)).status).toBe(404);
@@ -881,7 +929,7 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
       });
       const ngo = await h.makeUser(UserRole.NGO, { org: await h.makeOrg() });
       const student = await h.makeUser(UserRole.STUDENT, {
-        overrides: { university: uniName } as any,
+        overrides: { university: uniName },
       });
       const fac = await h.makeUser(UserRole.FACULTY);
       const opp = await studentSubmit(student, fac.email);
@@ -891,16 +939,21 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
       ).toContain(opp.id);
       const dash = await h.as(uniUser).get('/partners/dashboard');
       expect(dash.status).toBe(200);
-      const recent: any[] = dash.body.data.recentProjects;
+      const recent = (
+        dash.body as DataBody<{ recentProjects: { id: string }[] }>
+      ).data.recentProjects;
       expect(recent.map((r) => r.id)).toContain(opp.id);
       for (const r of recent) {
         const d = await detail(h, uniUser, r.id);
         expect(d.status).toBe(201);
-        expect(d.body.data.viewer_access.can_edit).toBe(false);
+        expect(
+          (d.body as DataBody<DetailData>).data.viewer_access.can_edit,
+        ).toBe(false);
       }
       const d = await detail(h, uniUser, opp.id);
-      expect(d.body.data.creator?.email ?? null).toBeNull(); // no student contact leak
-      expect(JSON.stringify(d.body.data.supervision ?? {})).not.toContain(
+      const detailData = (d.body as DataBody<DetailData>).data;
+      expect(detailData.creator?.email ?? null).toBeNull(); // no student contact leak
+      expect(JSON.stringify(detailData.supervision ?? {})).not.toContain(
         fac.email,
       );
       // no action rights come with read access
@@ -937,13 +990,13 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
       });
       const { user: hostNgo } = await ngoWithOrg();
       const student = await h.makeUser(UserRole.STUDENT, {
-        overrides: { university: uniName } as any,
+        overrides: { university: uniName },
       });
       const opp = await orgCreate(hostNgo, oppPayload());
       await adminApprove(h, admin, opp.id);
       // the university's student created / participates on this NGO listing
       await h.opps
-        .update(opp.id, { creatorId: student.id } as any)
+        .update(opp.id, { creatorId: student.id })
         .catch(() => undefined);
       const reports = h.ds.getRepository(StudentReport);
       const rep = await reports.save(
@@ -954,16 +1007,18 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
           status: 'submitted',
           faculty_status: 'approved',
           partner_status: 'pending',
-        } as any) as unknown as StudentReport,
+        }),
       );
       const list = await h.as(uniUser).get('/partner/reports?limit=50');
       expect(list.status).toBe(200);
-      expect(((list.body.data ?? []) as any[]).map((r) => r.id)).toContain(
-        rep.id,
-      );
+      expect(
+        ((list.body as { data?: { id: string }[] }).data ?? []).map(
+          (r) => r.id,
+        ),
+      ).toContain(rep.id);
       const open = await h.as(uniUser).get(`/partner/reports/${rep.id}`);
       expect(open.status).toBe(200);
-      expect(open.body.data.viewer_can_review).toBe(false);
+      expect((open.body as ReportView).data.viewer_can_review).toBe(false);
       expect(
         (
           await h
@@ -978,11 +1033,13 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
       ).toBe(403);
       const early = await h.as(hostNgo).get(`/partner/reports/${rep.id}`);
       expect(early.status).toBe(403);
-      expect(early.body.message).toMatch(/after CIEL PK Admin has accepted/);
-      await reports.update(rep.id, { admin_status: 'approved' } as any);
+      expect((early.body as MessageBody).message).toMatch(
+        /after CIEL PK Admin has accepted/,
+      );
+      await reports.update(rep.id, { admin_status: 'approved' });
       const host = await h.as(hostNgo).get(`/partner/reports/${rep.id}`);
       expect(host.status).toBe(200);
-      expect(host.body.data.viewer_can_review).toBe(true);
+      expect((host.body as ReportView).data.viewer_can_review).toBe(true);
     });
   });
 
@@ -1002,13 +1059,13 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
           internalStatus: 'pending_faculty',
           primaryFacultyEmail: 'x@y.test',
           applyPayload: {},
-        } as any),
+        }),
       );
       // listing leaves the public directory (closed)
       await h.opps.update(opp.id, {
         status: 'closed',
         workflowStage: 'closed',
-      } as any);
+      });
       expect((await detail(h, applicant, opp.id)).status).toBe(201);
       expect((await detail(h, other, opp.id)).status).toBe(404);
     });
@@ -1046,12 +1103,15 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
         .as(owner)
         .post('/student/opportunity')
         .send({ ...studentPayload(fac.email), draft: true });
-      const draftId = draftRes.body?.data?.id ?? draftRes.body?.id;
+      const draftBody = draftRes.body as
+        | { data?: { id?: string }; id?: string }
+        | undefined;
+      const draftId = draftBody?.data?.id ?? draftBody?.id;
       const rejectedRow = await orgCreate(ngo, oppPayload());
       await h.opps.update(rejectedRow.id, {
         status: 'rejected',
         workflowStage: 'rejected',
-      } as any);
+      });
       const live = await orgCreate(ngo, oppPayload());
       expect((await adminApprove(h, admin, live.id)).status).toBeLessThan(300);
 
@@ -1080,7 +1140,7 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
       const pub = await project(stranger, live.id);
       expect(pub.status).toBe(200);
       expectNoSecrets(pub, 'public project');
-      expect(pub.body.data.id).toBe(live.id);
+      expect((pub.body as DataBody<DetailData>).data.id).toBe(live.id);
 
       // applied / participating students keep access after the listing leaves the public directory
       const apps = h.ds.getRepository(OpportunityApplication);
@@ -1091,29 +1151,25 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
           internalStatus: 'pending_faculty',
           primaryFacultyEmail: 'x@y.test',
           applyPayload: {},
-        } as any),
+        }),
       );
-      await h.ds
-        .getRepository(Participation)
-        .save(
-          h.ds
-            .getRepository(Participation)
-            .create({
-              studentId: member.id,
-              projectId: live.id,
-              status: 'approved',
-              fullName: 'Member One',
-              mobile: '03001234567',
-              email: member.email,
-              cnicHash: `h${uniq()}`,
-              cnic: 'enc',
-              cnicLast4: '0000',
-            } as any),
-        );
+      await h.ds.getRepository(Participation).save(
+        h.ds.getRepository(Participation).create({
+          studentId: member.id,
+          projectId: live.id,
+          status: 'approved',
+          fullName: 'Member One',
+          mobile: '03001234567',
+          email: member.email,
+          cnicHash: `h${uniq()}`,
+          cnic: 'enc',
+          cnicLast4: '0000',
+        }),
+      );
       await h.opps.update(live.id, {
         status: 'closed',
         workflowStage: 'closed',
-      } as any);
+      });
       expect((await project(applicant, live.id)).status).toBe(200);
       expect((await project(member, live.id)).status).toBe(200);
       expect((await project(stranger, live.id)).status).toBe(404);
@@ -1130,12 +1186,14 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
         workflowStage: 'live',
         admin_approved: true,
         faculty_verified: true,
-      } as any);
+      });
       const seenByOwner = await project(owner, opp.id);
       expect(seenByOwner.status).toBe(200);
-      expect(JSON.stringify(seenByOwner.body.data.supervision ?? {})).toContain(
-        fac.email,
-      );
+      expect(
+        JSON.stringify(
+          (seenByOwner.body as DataBody<DetailData>).data.supervision ?? {},
+        ),
+      ).toContain(fac.email);
       const seenByStranger = await project(stranger, opp.id);
       expect(seenByStranger.status).toBe(200);
       expect(JSON.stringify(seenByStranger.body)).not.toContain(fac.email);
@@ -1165,13 +1223,13 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
       });
       const { user: hostNgo } = await ngoWithOrg();
       const student = await h.makeUser(UserRole.STUDENT, {
-        overrides: { university: uniName } as any,
+        overrides: { university: uniName },
       });
       const stranger = await h.makeUser(UserRole.STUDENT);
       const opp = await orgCreate(hostNgo, oppPayload());
       await adminApprove(h, admin, opp.id);
       await h.opps
-        .update(opp.id, { creatorId: student.id } as any)
+        .update(opp.id, { creatorId: student.id })
         .catch(() => undefined);
       const reports = h.ds.getRepository(StudentReport);
       const rep = await reports.save(
@@ -1182,11 +1240,11 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
           status: 'submitted',
           faculty_status: 'approved',
           partner_status: 'pending',
-        } as any) as unknown as StudentReport,
+        }),
       );
       const uni = await h.as(uniUser).get(`/students/reports/${rep.id}`);
       expect(uni.status).toBe(200);
-      expect(uni.body.data.viewer_can_review).toBe(false);
+      expect((uni.body as ReportView).data.viewer_can_review).toBe(false);
       expect(
         (await h.as(otherUni).get(`/students/reports/${rep.id}`)).status,
       ).toBe(403);
@@ -1194,15 +1252,17 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
       expect(
         (await h.as(hostNgo).get(`/students/reports/${rep.id}`)).status,
       ).toBe(403);
-      await reports.update(rep.id, { admin_status: 'approved' } as any);
+      await reports.update(rep.id, { admin_status: 'approved' });
       const host = await h.as(hostNgo).get(`/students/reports/${rep.id}`);
       expect(host.status).toBe(200);
-      expect(host.body.data.viewer_can_review).toBe(true);
+      expect((host.body as ReportView).data.viewer_can_review).toBe(true);
       // a stranger student gets an empty placeholder, never the report
       const strangerRead = await h
         .as(stranger)
         .get(`/students/reports/${rep.id}`);
-      expect(strangerRead.body?.data ?? null).toBeNull();
+      expect(
+        (strangerRead.body as { data?: unknown } | undefined)?.data ?? null,
+      ).toBeNull();
       expect(
         (await h.as(student).get(`/students/reports/${rep.id}`)).status,
       ).toBe(200);
@@ -1220,12 +1280,14 @@ describe('Access consistency: list rule == detail rule == action rule (real app 
         oppPayload({ supervision: { contact: fac.email } }),
       );
       const queue = (
-        await h
-          .as(admin)
-          .get('/admin/opportunities/approval-queue?queue=pending')
-      ).body.data as any[];
+        (
+          await h
+            .as(admin)
+            .get('/admin/opportunities/approval-queue?queue=pending')
+        ).body as DataBody<ListRow[]>
+      ).data;
       const readyRow = queue.find((r) => r.id === ready.id);
-      expect(readyRow.admin_can_approve).toBe(true);
+      expect(readyRow?.admin_can_approve).toBe(true);
       expect((await adminQueueIds(h, admin)).includes(waiting.id)).toBe(false); // faculty gate open: not on the CIEL queue
       expect((await adminApprove(h, admin, waiting.id)).status).toBe(400);
       expect((await adminApprove(h, admin, ready.id)).status).toBe(201);

@@ -13,7 +13,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, In, IsNull, Repository } from 'typeorm';
+import { Brackets, FindOptionsWhere, In, IsNull, Repository } from 'typeorm';
 import { User } from '../users/entities/user.entity';
 import { UserRole } from '../users/enums/user-role.enum';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
@@ -44,7 +44,6 @@ import {
   resolveParticipationPhase,
 } from './participation-phase.util';
 import {
-  LINE_STATUS,
   OpportunityWorkflowService,
   WORKFLOW_STAGE,
 } from '../opportunities/opportunity-workflow.service';
@@ -58,6 +57,7 @@ import {
   canJoinOrApply,
   resolveLifecyclePhase,
 } from '../opportunities/opportunity-timeline.util';
+import type { TimelineLike } from '../opportunities/opportunity-timeline.util';
 import { buildOpportunityApprovalTracker } from '../opportunities/opportunity-approval-tracker.util';
 import { buildOpportunityDetailView } from '../opportunities/opportunity-detail-view.util';
 import {
@@ -80,7 +80,6 @@ import {
   universityNamesMatch,
 } from '../opportunities/university-scope.util';
 import { isReportPartnerStepSatisfied } from '../reports/report-partner-approval.util';
-import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 import { StudentReport } from '../reports/entities/student-report.entity';
 import {
   isCommunityAwardMedalReport,
@@ -91,6 +90,75 @@ import { ReportPartnerApprovalSettingsService } from '../reports/report-partner-
 import { StudentApplyMaintenanceService } from '../opportunities/student-apply-maintenance.service';
 import type { ApplyMaintenanceState } from '../opportunities/student-apply-maintenance.util';
 import { canonicalizePhoneInput } from '../common/phone-e164.util';
+
+/*
+ * The Opportunity entity declares its JSON columns as `any`. These are the shapes this service
+ * actually reads from them (typing only — no runtime coercion is added).
+ */
+type OpportunityTimelineJson = {
+  start_date?: string | null;
+  end_date?: string | Date | null;
+  expected_hours?: number | null;
+  volunteers_required?: number | null;
+};
+type OpportunitySdgInfoJson = { sdg_id?: string | null };
+type OpportunityObjectivesJson = { description?: string | null };
+type OpportunityLocationJson = { city?: string | null };
+type ParticipationScopeJson = {
+  rule?: string;
+  university_names?: string[];
+  creator_university_name?: string;
+  department_restriction?: {
+    scope?: string;
+    departments?: string[];
+  } | null;
+};
+
+function timelineOf(
+  opportunity: Opportunity | null | undefined,
+): OpportunityTimelineJson | null | undefined {
+  return opportunity?.timeline as OpportunityTimelineJson | null | undefined;
+}
+
+/** Teammate row as sent by the apply form (free-form JSON; fields are validated where read). */
+type TeamMemberRow = Record<string, unknown> & {
+  name?: unknown;
+  email?: unknown;
+  cnic?: unknown;
+  mobile?: unknown;
+  university?: unknown;
+  program?: unknown;
+  department?: unknown;
+};
+
+/** Same coercion as `String(value)`, spelled out so the type-checker can see each branch. */
+function coerceToString(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (
+    typeof value === 'number' ||
+    typeof value === 'boolean' ||
+    typeof value === 'bigint' ||
+    typeof value === 'symbol' ||
+    value === null ||
+    value === undefined
+  ) {
+    return String(value);
+  }
+  return String(value as { toString(): string });
+}
+
+/** Browse-list query (`GET/POST /students/opportunities`); unknown keys pass through untouched. */
+export type StudentOpportunitiesQuery = {
+  sdg?: string | null;
+  location?: string | null;
+  type?: string | null;
+  status?: string | null;
+  page?: number | string;
+  limit?: number | string;
+  student_id?: string;
+  studentId?: string;
+  [key: string]: unknown;
+};
 
 @Injectable()
 export class StudentsService {
@@ -343,7 +411,7 @@ export class StudentsService {
    */
   private async assertTeamMembersNotAlreadySeatedOnOpportunity(
     opportunityId: string,
-    members: NonNullable<ApplyOpportunityDto['team_members']>,
+    members: TeamMemberRow[],
   ): Promise<void> {
     for (const member of members) {
       const raw = typeof member?.email === 'string' ? member.email.trim() : '';
@@ -452,7 +520,7 @@ export class StudentsService {
   ): number {
     if (!project) return 0;
     const fromTimeline = this.safeDashboardNumber(
-      project.timeline?.expected_hours,
+      timelineOf(project)?.expected_hours,
     );
     if (fromTimeline > 0) return fromTimeline;
     return this.safeDashboardNumber(project.requiredHours);
@@ -628,7 +696,7 @@ export class StudentsService {
   }
 
   private buildHoursActivityBars(timesheets: Timesheet[], weeks = 8): number[] {
-    const buckets = new Array(weeks).fill(0);
+    const buckets: number[] = new Array<number>(weeks).fill(0);
     const now = Date.now();
     const msWeek = 7 * 24 * 60 * 60 * 1000;
     for (const t of timesheets) {
@@ -645,7 +713,7 @@ export class StudentsService {
     reports: StudentReport[],
     months = 6,
   ): number[] {
-    const buckets = new Array(months).fill(0);
+    const buckets: number[] = new Array<number>(months).fill(0);
     const now = new Date();
     for (const r of reports) {
       if (!['paid', 'verified'].includes(r.status)) continue;
@@ -736,7 +804,10 @@ export class StudentsService {
       }
     }
 
-    const scope = opp.participation_scope;
+    const scope = opp.participation_scope as
+      | ParticipationScopeJson
+      | null
+      | undefined;
     if (!scope) return { eligible: true };
 
     const rule = scope.rule;
@@ -1292,10 +1363,14 @@ export class StudentsService {
         progress = Math.min(100, Math.round((hoursDone / required) * 100));
       }
 
-      const sdgId = app.project?.sdg_info?.sdg_id;
+      const sdgId = (
+        app.project?.sdg_info as OpportunitySdgInfoJson | null | undefined
+      )?.sdg_id;
       const category =
-        sdgId !== undefined && sdgId !== null && String(sdgId).length > 0
-          ? String(sdgId)
+        sdgId !== undefined &&
+        sdgId !== null &&
+        coerceToString(sdgId).length > 0
+          ? coerceToString(sdgId)
           : 'General';
 
       const rep = reportByProjectId.get(String(app.projectId));
@@ -1328,11 +1403,11 @@ export class StudentsService {
     });
 
     const deadLinesRaw = activeApplications
-      .filter((app) => app.project?.timeline?.end_date)
+      .filter((app) => timelineOf(app.project)?.end_date)
       .map((app) => ({
         id: String(app.projectId),
         title: `${app.project?.title || 'Project'} deadline`,
-        date: new Date(app.project.timeline!.end_date as string | Date),
+        date: new Date(timelineOf(app.project)!.end_date as string | Date),
         type: 'default',
       }))
       .sort((a, b) => a.date.getTime() - b.date.getTime())
@@ -1635,7 +1710,7 @@ export class StudentsService {
     };
   }
 
-  async getOpportunities(query: any, userId?: string) {
+  async getOpportunities(query: StudentOpportunitiesQuery, userId?: string) {
     const { sdg, location, type, status, page = 1, limit = 10 } = query;
     const pageNumber = Math.max(1, Number(page) || 1);
     const limitNumber = Math.max(1, Number(limit) || 10);
@@ -1697,7 +1772,6 @@ export class StudentsService {
     const participationByOpp = new Map<string, Participation>();
     const studentContextId = query?.student_id || query?.studentId || userId;
 
-    let appByOpp = new Map<string, OpportunityApplication>();
     if (studentContextId && opportunities.length > 0) {
       const opportunityIds = opportunities.map((o) => o.id);
       const applications = await this.participantRepository.find({
@@ -1711,12 +1785,11 @@ export class StudentsService {
         participationByOpp.set(app.projectId, app);
       });
 
-      appByOpp =
-        await this.opportunityApplicationsService.mapCurrentApplicationsForOpportunities(
-          studentContextId,
-          opportunityIds,
-          new Map(opportunities.map((o) => [o.id, o])),
-        );
+      await this.opportunityApplicationsService.mapCurrentApplicationsForOpportunities(
+        studentContextId,
+        opportunityIds,
+        new Map(opportunities.map((o) => [o.id, o])),
+      );
     }
 
     const normalizedLocation = this.normalize(location);
@@ -1731,10 +1804,16 @@ export class StudentsService {
       const matchesSdg =
         !normalizedSdg ||
         this.normalize(opportunity.sdg) === normalizedSdg ||
-        this.normalize(opportunity.sdg_info?.sdg_id) === normalizedSdg;
+        this.normalize(
+          (opportunity.sdg_info as OpportunitySdgInfoJson | null | undefined)
+            ?.sdg_id,
+        ) === normalizedSdg;
       const matchesLocation =
         !normalizedLocation ||
-        this.normalize(opportunity.location?.city) === normalizedLocation;
+        this.normalize(
+          (opportunity.location as OpportunityLocationJson | null | undefined)
+            ?.city,
+        ) === normalizedLocation;
       const matchesType =
         !normalizedType ||
         (Array.isArray(opportunity.types) &&
@@ -1758,12 +1837,14 @@ export class StudentsService {
           const part = participationByOpp.get(o.id);
           const overlay =
             await this.opportunityApplicationsService.resolveStudentJoinOverlay(
-              studentContextId,
+              // `userId` is optional here; the overlay helper has always received this
+              // possibly-undefined value (its signature just does not say so).
+              studentContextId as string,
               o,
               part ?? null,
             );
           const occupiedSeats = await this.getOccupiedSeats(o.id);
-          const volunteersRequired = o.timeline?.volunteers_required || 0;
+          const volunteersRequired = timelineOf(o)?.volunteers_required || 0;
           const remainingSeats = Math.max(
             0,
             volunteersRequired - occupiedSeats,
@@ -1793,7 +1874,9 @@ export class StudentsService {
             organization_name: organizationName,
             volunteersNeeded: volunteersRequired,
             remaining_seats: remainingSeats,
-            description: o.objectives?.description || 'No description',
+            description:
+              (o.objectives as OpportunityObjectivesJson | null | undefined)
+                ?.description || 'No description',
             application_status: applicationStatus,
             application_stage: app
               ? this.opportunityApplicationsService.applicationStage(
@@ -1872,7 +1955,8 @@ export class StudentsService {
     }
 
     const occupiedSeats = await this.getOccupiedSeats(id);
-    const volunteersRequired = opportunity.timeline?.volunteers_required || 0;
+    const volunteersRequired =
+      timelineOf(opportunity)?.volunteers_required || 0;
     const applyState = await this.loadApplyMaintenanceState();
 
     return {
@@ -1897,7 +1981,7 @@ export class StudentsService {
     };
   }
 
-  async getRecommendedOpportunities(userId: string) {
+  async getRecommendedOpportunities() {
     // Simple implementation - can be enhanced with ML
     const opportunities = await this.opportunitiesRepository.find({
       where: [
@@ -2211,17 +2295,18 @@ export class StudentsService {
         participationType,
         team_size: teamSize,
         teamSize,
-        location: opportunity.location,
-        timeline: opportunity.timeline,
+        location: opportunity.location as unknown,
+        timeline: opportunity.timeline as unknown,
         required_hours: this.resolveRequiredHoursPerStudent(opportunity) || 16,
-        sdg_info: opportunity.sdg_info,
-        objectives: opportunity.objectives,
-        activity_details: opportunity.activity_details,
-        supervision: opportunity.supervision,
+        sdg_info: opportunity.sdg_info as unknown,
+        objectives: opportunity.objectives as unknown,
+        activity_details: opportunity.activity_details as unknown,
+        supervision: opportunity.supervision as unknown,
         verification_method: opportunity.verification_method,
         // University scope (e.g. "BNU only") — the report / identity forms lock the university
         // picker to this so a BNU-only listing never ends up with a seat recorded at another university.
-        participation_scope: opportunity.participation_scope ?? null,
+        participation_scope:
+          (opportunity.participation_scope as unknown) ?? null,
         restricted_universities: opportunity.restricted_universities ?? null,
         createdAt: opportunity.createdAt,
         updatedAt: opportunity.updatedAt,
@@ -2368,10 +2453,12 @@ export class StudentsService {
     ];
 
     const patch: Partial<Opportunity> = {};
+    const dtoRecord = dto as Record<string, unknown>;
+    const patchRecord = patch as Record<string, unknown>;
     for (const field of patchableFields) {
-      const value = dto[field];
+      const value = dtoRecord[field];
       if (value !== undefined) {
-        patch[field as keyof Opportunity] = value;
+        patchRecord[field] = value;
       }
     }
 
@@ -2424,7 +2511,7 @@ export class StudentsService {
     }
     if (
       dto.objectives !== undefined &&
-      !String(
+      !coerceToString(
         (opportunity.objectives as { description?: unknown } | null)
           ?.description ?? '',
       ).trim()
@@ -2433,7 +2520,8 @@ export class StudentsService {
     }
 
     if (dto.sdg_info) {
-      opportunity.sdg = dto.sdg_info.sdg_id || opportunity.sdg;
+      opportunity.sdg =
+        (dto.sdg_info as OpportunitySdgInfoJson).sdg_id || opportunity.sdg;
     }
 
     let notifyFacultyAfterResubmit = false;
@@ -2475,7 +2563,7 @@ export class StudentsService {
 
   // Applications (using Timesheets as applications)
   async getApplications(userId: string, status?: string) {
-    const whereClause: any = { studentId: userId };
+    const whereClause: FindOptionsWhere<Timesheet> = { studentId: userId };
     if (status) whereClause.status = status;
 
     const applications = await this.timesheetsRepository.find({
@@ -2525,7 +2613,7 @@ export class StudentsService {
       );
     }
 
-    const timeline = opportunity.timeline;
+    const timeline = opportunity.timeline as TimelineLike | null | undefined;
     // Applications run from project start to project END. After the end date NEW applications are
     // closed (students already enrolled keep their 60-day window to finish and submit the report).
     const joinOpen = canJoinOrApply(timeline);
@@ -2639,16 +2727,19 @@ export class StudentsService {
       const seenEmails = new Set<string>();
       const seenCnics = new Map<string, string>();
       let leadCnicFromApply = '';
-      const sanitized: NonNullable<ApplyOpportunityDto['team_members']> = [];
+      const sanitized: TeamMemberRow[] = [];
       let rowNo = 0;
-      for (const member of dto.team_members) {
+      for (const member of dto.team_members as TeamMemberRow[]) {
         rowNo += 1;
         const label =
           typeof member?.name === 'string' && member.name.trim()
             ? member.name.trim()
             : `Team member ${rowNo}`;
         // One CNIC per person across the whole roster — the lead's own row (sent as row 1) included.
-        const cnicDigits = String(member?.cnic ?? '').replace(/\D/g, '');
+        const cnicDigits = coerceToString(member?.cnic ?? '').replace(
+          /\D/g,
+          '',
+        );
         if (cnicDigits) {
           if (cnicDigits.length !== 13) {
             throw new BadRequestException(
@@ -2716,7 +2807,7 @@ export class StudentsService {
         user.cnic = leadCnicFromApply;
       }
       const seatCap = resolveTeamSeatCap(
-        opportunity.timeline?.volunteers_required,
+        timelineOf(opportunity)?.volunteers_required,
       );
       const capError = teamCapacityError(sanitized.length, seatCap);
       if (capError) throw new BadRequestException(capError);
@@ -2733,7 +2824,7 @@ export class StudentsService {
         );
       }
       await this.assertTeamMemberEmailsOtpVerified(
-        teamMembersPayload.map((m) =>
+        (teamMembersPayload as TeamMemberRow[]).map((m) =>
           typeof m?.email === 'string' ? m.email : '',
         ),
         dto.opportunityId,
@@ -2757,20 +2848,18 @@ export class StudentsService {
       Array.isArray(teamMembersPayload) &&
       teamMembersPayload.length > 0
     ) {
-      for (const member of teamMembersPayload) {
-        const em =
-          typeof member?.email === 'string'
-            ? member.email.trim().toLowerCase()
-            : '';
+      for (const member of teamMembersPayload as TeamMemberRow[]) {
+        const rawEmail = typeof member?.email === 'string' ? member.email : '';
+        const em = rawEmail.trim().toLowerCase();
         if (em && claimedEmailsOnOpenApplications.has(em)) {
           throw new BadRequestException(
-            `${member.email} is already listed on another application for this opportunity.`,
+            `${rawEmail} is already listed on another application for this opportunity.`,
           );
         }
       }
       await this.assertTeamMembersNotAlreadySeatedOnOpportunity(
         dto.opportunityId,
-        teamMembersPayload,
+        teamMembersPayload as TeamMemberRow[],
       );
     }
 
@@ -2791,7 +2880,7 @@ export class StudentsService {
     // already seated or in flight — not just the size of this one team.
     {
       const seats = resolveTeamSeatCap(
-        opportunity.timeline?.volunteers_required,
+        timelineOf(opportunity)?.volunteers_required,
       );
       if (seats > 0) {
         const requested =
@@ -2818,7 +2907,7 @@ export class StudentsService {
       Array.isArray(teamMembersPayload) &&
       teamMembersPayload.length > 0
     ) {
-      const memberEmails = teamMembersPayload
+      const memberEmails = (teamMembersPayload as TeamMemberRow[])
         .map((m) =>
           typeof m?.email === 'string' ? m.email.trim().toLowerCase() : '',
         )
@@ -2981,7 +3070,7 @@ export class StudentsService {
 
     // Format data
     const reports = activeApplications.map((app) => {
-      const requiredHours = app.project.timeline?.expected_hours || 0;
+      const requiredHours = timelineOf(app.project)?.expected_hours || 0;
       const hoursDone = verifiedTimesheets
         .filter((t) => t.opportunityId === app.projectId)
         .reduce((sum, t) => sum + t.hours, 0);
@@ -2997,7 +3086,7 @@ export class StudentsService {
         opportunityId: app.project.id,
         projectName: app.project.title,
         startDate: app.createdAt,
-        endDate: app.project.timeline?.end_date || null,
+        endDate: timelineOf(app.project)?.end_date || null,
         totalHours: hoursDone,
         requiredHours: requiredHours,
         status: reportStatus,
@@ -3034,7 +3123,7 @@ export class StudentsService {
       if (Array.isArray(v)) return v.length > 0;
       if (v && typeof v === 'object')
         return this.hasMeaningfulImpactObjectValue(v);
-      return v !== null && v !== undefined && String(v).trim() !== '';
+      return v !== null && v !== undefined && coerceToString(v).trim() !== '';
     });
   }
 

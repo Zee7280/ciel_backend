@@ -42,9 +42,11 @@ export function stripSecrets<T>(value: T, seen = new WeakSet<object>()): T {
   if (seen.has(obj)) return value;
   seen.add(obj);
   if (Array.isArray(value)) {
-    return value.map((v) => stripSecrets(v, seen)) as unknown as T;
+    return (value as unknown[]).map((v) =>
+      stripSecrets(v, seen),
+    ) as unknown as T;
   }
-  const proto = Object.getPrototypeOf(value);
+  const proto = Object.getPrototypeOf(value) as object | null;
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
     if (SECRET_KEYS.has(k)) continue;
@@ -65,6 +67,6 @@ export function stripSecrets<T>(value: T, seen = new WeakSet<object>()): T {
 @Injectable()
 export class StripSecretsInterceptor implements NestInterceptor {
   intercept(_ctx: ExecutionContext, next: CallHandler): Observable<unknown> {
-    return next.handle().pipe(map((body) => stripSecrets(body)));
+    return next.handle().pipe(map((body: unknown) => stripSecrets(body)));
   }
 }

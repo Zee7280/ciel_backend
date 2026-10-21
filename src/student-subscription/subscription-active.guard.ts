@@ -14,7 +14,9 @@ import { PENDING_SUBSCRIPTION_STATUS } from './student-subscription.util';
 @Injectable()
 export class SubscriptionActiveGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
-    const req = context.switchToHttp().getRequest();
+    const req = context
+      .switchToHttp()
+      .getRequest<{ user?: { status?: string } }>();
     if (req.user?.status === PENDING_SUBSCRIPTION_STATUS) {
       throw new ForbiddenException({
         success: false,

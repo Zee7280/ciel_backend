@@ -40,7 +40,10 @@ export class PartnerSupportController {
   }
 
   @Get('tickets/track')
-  trackTicket(@Request() req: AuthenticatedRequest, @Query('reference') reference?: string) {
+  trackTicket(
+    @Request() req: AuthenticatedRequest,
+    @Query('reference') reference?: string,
+  ) {
     return this.supportService.trackByReference(req.user.id, reference);
   }
 
@@ -51,7 +54,10 @@ export class PartnerSupportController {
 
   @Post('tickets')
   @UseGuards(CreateTicketRateLimitGuard)
-  createTicket(@Request() req: AuthenticatedRequest, @Body() dto: CreateSupportTicketDto) {
+  createTicket(
+    @Request() req: AuthenticatedRequest,
+    @Body() dto: CreateSupportTicketDto,
+  ) {
     return this.supportService.createTicket(req.user.id, dto, 'PT');
   }
 }

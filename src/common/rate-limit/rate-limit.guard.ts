@@ -33,6 +33,19 @@ export const RateLimit = (...rules: RateLimitRule[]) =>
 
 type Bucket = number[];
 
+/** The parts of an Express request the limiter keys on (all optional — guards run before validation). */
+type RateLimitRequest = {
+  body?: { email?: string };
+  user?: { id?: string };
+  headers?: Record<string, string | string[] | undefined>;
+  ip?: string;
+  socket?: { remoteAddress?: string };
+};
+
+type RateLimitResponse = {
+  setHeader?: (name: string, value: string) => unknown;
+};
+
 /**
  * Dependency-free sliding-window limiter, held in process memory. It is a speed bump against
  * credential stuffing, OTP / reset-mail abuse and LLM-cost abuse. It is per Node instance — on a
@@ -53,7 +66,7 @@ export class RateLimitGuard implements CanActivate {
       ) ?? [];
     if (rules.length === 0) return true;
 
-    const req = context.switchToHttp().getRequest();
+    const req = context.switchToHttp().getRequest<RateLimitRequest>();
     const now = Date.now();
     this.sweep(now);
 
@@ -66,7 +79,7 @@ export class RateLimitGuard implements CanActivate {
           1,
           Math.ceil((hits[0] + rule.windowMs - now) / 1000),
         );
-        const res = context.switchToHttp().getResponse();
+        const res = context.switchToHttp().getResponse<RateLimitResponse>();
         res?.setHeader?.('Retry-After', String(retryAfterSec));
         throw new HttpException(
           {
@@ -96,7 +109,7 @@ export class RateLimitGuard implements CanActivate {
     return fresh;
   }
 
-  private keyFor(rule: RateLimitRule, req: any): string {
+  private keyFor(rule: RateLimitRule, req: RateLimitRequest): string {
     const ip = this.clientIp(req);
     const email = String(req?.body?.email ?? '')
       .trim()
@@ -113,7 +126,7 @@ export class RateLimitGuard implements CanActivate {
     }
   }
 
-  private clientIp(req: any): string {
+  private clientIp(req: RateLimitRequest): string {
     const fwd = req?.headers?.['x-forwarded-for'];
     const first = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(',')[0]?.trim();
     return first || req?.ip || req?.socket?.remoteAddress || 'unknown';

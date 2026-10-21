@@ -6,7 +6,8 @@ import { OrganizationMembershipFee } from '../organization-membership/entities/o
 import { IssueLog } from '../issue-logs/entities/issue-log.entity';
 import { SupportTicket } from '../support/entities/support-ticket.entity';
 import { MasterAnalyticsQueryDto } from './dto/master-analytics-query.dto';
-import { ReportPartnerApprovalSettingsService } from '../reports/report-partner-approval-settings.service';
+
+type AdminServiceArgs = ConstructorParameters<typeof AdminService>;
 
 /** Chainable TypeORM query-builder double that resolves to the given raw rows / count. */
 const makeQb = (rows: unknown[] = [], count = 0) => {
@@ -90,31 +91,39 @@ const makeAdminServiceForTests = (overrides: Record<string, unknown> = {}) => {
     ...overrides,
   };
 
-  return new AdminService(
-    repositories.usersRepository as any,
-    repositories.opportunityRepository as any,
-    repositories.reportRepository as any,
-    repositories.timesheetRepository as any,
-    repositories.auditLogsService as any,
-    repositories.settingRepository as any,
-    repositories.participationRepository as any,
-    repositories.studentReportRepository as any,
-    repositories.opportunityApplicationsService as any,
-    repositories.studentsService as any,
-    repositories.opportunityApplicationRepository as any,
-    repositories.reportPartnerApprovalSettings as any,
-    repositories.organizationMembershipService as any,
-    repositories.partnerMembershipSettings as any,
-    (repositories as any).studentSubscriptionService ?? {
+  // Optional collaborators only ever arrive through `overrides`.
+  const extra = overrides as {
+    studentSubscriptionService?: unknown;
+    dataSource?: unknown;
+    platformSettings?: unknown;
+  };
+
+  const args = [
+    repositories.usersRepository,
+    repositories.opportunityRepository,
+    repositories.reportRepository,
+    repositories.timesheetRepository,
+    repositories.auditLogsService,
+    repositories.settingRepository,
+    repositories.participationRepository,
+    repositories.studentReportRepository,
+    repositories.opportunityApplicationsService,
+    repositories.studentsService,
+    repositories.opportunityApplicationRepository,
+    repositories.reportPartnerApprovalSettings,
+    repositories.organizationMembershipService,
+    repositories.partnerMembershipSettings,
+    extra.studentSubscriptionService ?? {
       releasePendingStudentAccounts: jest.fn().mockResolvedValue(0),
     },
-    repositories.feedbackService as any,
-    repositories.mailService as any,
-    repositories.notificationsService as any,
+    repositories.feedbackService,
+    repositories.mailService,
+    repositories.notificationsService,
     undefined,
-    (repositories as any).dataSource,
-    (repositories as any).platformSettings,
-  );
+    extra.dataSource,
+    extra.platformSettings,
+  ] as unknown as AdminServiceArgs;
+  return new AdminService(...args);
 };
 
 describe('AdminService impact analytics', () => {
@@ -398,7 +407,7 @@ describe('AdminService getMasterAnalytics', () => {
     };
 
     const findOne = jest.fn().mockResolvedValue(participation);
-    const save = jest.fn().mockImplementation(async (row) => row);
+    const save = jest.fn((row: unknown) => Promise.resolve(row));
     const find = jest
       .fn()
       .mockResolvedValue([teamLead, participation, teammate]);
@@ -498,7 +507,7 @@ describe('AdminService getMasterAnalytics', () => {
     };
 
     const findOne = jest.fn().mockResolvedValue(teamLead);
-    const save = jest.fn().mockImplementation(async (row) => row);
+    const save = jest.fn((row: unknown) => Promise.resolve(row));
     const find = jest.fn().mockResolvedValue([teamLead, teammate, otherMember]);
 
     const service = makeAdminServiceForTests({
@@ -574,7 +583,14 @@ describe('AdminService verified hours / dashboard', () => {
         ),
       },
     });
-    const result = await (service as any).computeVerifiedHours();
+    const result = await (
+      service as unknown as {
+        computeVerifiedHours(): Promise<{
+          total: number;
+          byOpportunity: Map<string, number>;
+        }>;
+      }
+    ).computeVerifiedHours();
     expect(result.total).toBe(7.5);
     expect(result.byOpportunity.get('p1')).toBe(7.5);
   });
@@ -677,7 +693,11 @@ describe('AdminService participation review', () => {
   });
 
   it('persists reviewer, time and reason on participation approve/reject', async () => {
-    const seat: any = { id: 'a', status: 'pending', studentId: 'st-1' };
+    const seat: Record<string, unknown> = {
+      id: 'a',
+      status: 'pending',
+      studentId: 'st-1',
+    };
     const save = jest.fn();
     const service = makeAdminServiceForTests({
       participationRepository: {
@@ -696,12 +716,12 @@ describe('AdminService participation review', () => {
 });
 
 describe('AdminService settings', () => {
-  const makeSettingsService = (existing: any) => {
+  const makeSettingsService = (existing: unknown) => {
     const settingRepository = {
       find: jest.fn().mockResolvedValue([]),
       findOne: jest.fn().mockResolvedValue(existing),
-      create: jest.fn((x) => ({ ...x })),
-      save: jest.fn(async (x) => x),
+      create: jest.fn((x: Record<string, unknown>) => ({ ...x })),
+      save: jest.fn((x: unknown) => Promise.resolve(x)),
     };
     const auditLogsService = { recordMutation: jest.fn() };
     const platformSettings = { invalidate: jest.fn() };
@@ -736,7 +756,7 @@ describe('AdminService settings', () => {
         key: 'REPORTING_FEE_PKR',
         value: '2500',
         type: 'number',
-        description: expect.any(String),
+        description: expect.any(String) as string,
       }),
     );
     expect(platformSettings.invalidate).toHaveBeenCalledWith(

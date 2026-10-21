@@ -3,10 +3,30 @@ import { AiService } from './ai.service';
 const OK_BODY = JSON.stringify({
   choices: [{ message: { content: 'Plain summary text' } }],
 });
-const res = (status: number, body: string) => ({
+/** What the service hands to `fetch` and what the test's fake returns. */
+type FetchInit = { body: string; signal?: unknown };
+type FetchResponse = {
+  ok: boolean;
+  status: number;
+  text: () => Promise<string>;
+};
+/** The Chat Completions request body the service sends. */
+interface SentChatRequest {
+  model?: string;
+  reasoning_effort?: string;
+  max_completion_tokens?: number;
+  response_format?: unknown;
+  messages: Array<{ content: string }>;
+}
+const fetchMock = () => jest.fn<Promise<FetchResponse>, [string, FetchInit]>();
+const sentBody = (
+  f: jest.Mock<Promise<FetchResponse>, [string, FetchInit]>,
+  call = 0,
+) => JSON.parse(f.mock.calls[call][1].body) as SentChatRequest;
+const res = (status: number, body: string): FetchResponse => ({
   ok: status >= 200 && status < 300,
   status,
-  text: async () => body,
+  text: () => Promise.resolve(body),
 });
 
 describe('AiService — OpenAI transport hardening', () => {
@@ -33,11 +53,11 @@ describe('AiService — OpenAI transport hardening', () => {
     svc.summarize('section2_context_unknown_section', { x: 1 });
 
   it('passes an abort-signal timeout to every request', async () => {
-    const f = jest.fn().mockResolvedValue(res(200, OK_BODY));
+    const f = fetchMock().mockResolvedValue(res(200, OK_BODY));
     global.fetch = f as never;
     await run(new AiService());
     expect(f.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
-    const sent = JSON.parse(f.mock.calls[0][1].body);
+    const sent = sentBody(f);
     expect(sent.model).toBe('gpt-5.4');
     expect(sent.reasoning_effort).toBeUndefined();
     expect(sent.response_format).toBeUndefined();
@@ -161,13 +181,12 @@ describe('AiService — CII v4.5 evaluation branch', () => {
     studentFeedback: 'Good work.',
   });
 
+  const CII_OK_BODY = JSON.stringify({
+    choices: [{ message: { content: CII_V45_JSON } }],
+  });
+
   it('sends the v5.0 prompt/model and parses the response into ciiV45', async () => {
-    const f = jest.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      text: async () =>
-        JSON.stringify({ choices: [{ message: { content: CII_V45_JSON } }] }),
-    });
+    const f = fetchMock().mockResolvedValue(res(200, CII_OK_BODY));
     global.fetch = f as never;
 
     const out = await new AiService().summarize('cii_v4_5_evaluation', {
@@ -184,7 +203,7 @@ describe('AiService — CII v4.5 evaluation branch', () => {
       },
     });
 
-    const sent = JSON.parse(f.mock.calls[0][1].body);
+    const sent = sentBody(f);
     expect(sent.model).toBe('gpt-5.6-sol');
     expect(sent.reasoning_effort).toBe('low');
     expect(sent.max_completion_tokens).toBe(16000);
@@ -201,12 +220,7 @@ describe('AiService — CII v4.5 evaluation branch', () => {
 
   it('never fetches or attaches evidence originals on the report-quality call', async () => {
     const s3 = { getObjectBufferByPublicUrl: jest.fn() };
-    const f = jest.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      text: async () =>
-        JSON.stringify({ choices: [{ message: { content: CII_V45_JSON } }] }),
-    });
+    const f = fetchMock().mockResolvedValue(res(200, CII_OK_BODY));
     global.fetch = f as never;
 
     const out = await new AiService(s3 as never).summarize(
@@ -224,7 +238,7 @@ describe('AiService — CII v4.5 evaluation branch', () => {
     );
 
     expect(s3.getObjectBufferByPublicUrl).not.toHaveBeenCalled();
-    const sent = JSON.parse(f.mock.calls[0][1].body);
+    const sent = sentBody(f);
     expect(typeof sent.messages[1].content).toBe('string');
     expect(sent.messages[1].content).toContain('EVIDENCE FIREWALL');
     expect(out.evidenceInspection?.inspected).toEqual([]);
@@ -232,12 +246,12 @@ describe('AiService — CII v4.5 evaluation branch', () => {
   });
 
   it('rejects with a 502 when the model returns an unparseable CII v4.5 response', async () => {
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      text: async () =>
+    global.fetch = fetchMock().mockResolvedValue(
+      res(
+        200,
         JSON.stringify({ choices: [{ message: { content: '{not json' } }] }),
-    }) as never;
+      ),
+    ) as never;
 
     await expect(
       new AiService().summarize('cii_v4_5_evaluation', {
@@ -249,12 +263,7 @@ describe('AiService — CII v4.5 evaluation branch', () => {
   it('does not attach evidence images even when files are present on the payload', async () => {
     const bucketImg = 'https://bkt.s3.eu.amazonaws.com/evidence/a.jpg';
     const s3 = { getObjectBufferByPublicUrl: jest.fn() };
-    const f = jest.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      text: async () =>
-        JSON.stringify({ choices: [{ message: { content: CII_V45_JSON } }] }),
-    });
+    const f = fetchMock().mockResolvedValue(res(200, CII_OK_BODY));
     global.fetch = f as never;
 
     const out = await new AiService(s3 as never).summarize(
@@ -278,7 +287,7 @@ describe('AiService — CII v4.5 evaluation branch', () => {
     );
 
     expect(s3.getObjectBufferByPublicUrl).not.toHaveBeenCalled();
-    const userContent = JSON.parse(f.mock.calls[0][1].body).messages[1].content;
+    const userContent = sentBody(f).messages[1].content;
     expect(typeof userContent).toBe('string');
     expect(userContent).toContain('EVIDENCE FIREWALL');
     expect(out.evidenceInspection?.inspected).toEqual([]);
@@ -286,16 +295,16 @@ describe('AiService — CII v4.5 evaluation branch', () => {
   });
 
   it('parses CII JSON from array-shaped message content', async () => {
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      text: async () =>
+    global.fetch = fetchMock().mockResolvedValue(
+      res(
+        200,
         JSON.stringify({
           choices: [
             { message: { content: [{ type: 'text', text: CII_V45_JSON }] } },
           ],
         }),
-    }) as never;
+      ),
+    ) as never;
     const out = await new AiService().summarize('cii_v4_5_evaluation', {
       uploaded_evidence_files: [],
     });
@@ -305,10 +314,12 @@ describe('AiService — CII v4.5 evaluation branch', () => {
   it('retries empty length once without images and with a larger token budget', async () => {
     const bucketImg = 'https://bkt.s3.eu.amazonaws.com/evidence/a.jpg';
     const s3 = {
-      getObjectBufferByPublicUrl: jest.fn(async () => ({
-        buffer: Buffer.from('JPEGDATA'),
-        contentType: 'image/jpeg',
-      })),
+      getObjectBufferByPublicUrl: jest.fn(() =>
+        Promise.resolve({
+          buffer: Buffer.from('JPEGDATA'),
+          contentType: 'image/jpeg',
+        }),
+      ),
     };
     const empty = JSON.stringify({
       choices: [{ finish_reason: 'length', message: { content: '' } }],
@@ -316,8 +327,7 @@ describe('AiService — CII v4.5 evaluation branch', () => {
     const ok = JSON.stringify({
       choices: [{ message: { content: CII_V45_JSON } }],
     });
-    const f = jest
-      .fn()
+    const f = fetchMock()
       .mockResolvedValueOnce(res(200, empty))
       .mockResolvedValueOnce(res(200, ok));
     global.fetch = f as never;
@@ -338,8 +348,8 @@ describe('AiService — CII v4.5 evaluation branch', () => {
 
     expect(out.ciiV45?.frameworkVersion).toBe('5.0');
     expect(f).toHaveBeenCalledTimes(2);
-    const first = JSON.parse(f.mock.calls[0][1].body);
-    const second = JSON.parse(f.mock.calls[1][1].body);
+    const first = sentBody(f, 0);
+    const second = sentBody(f, 1);
     expect(first.max_completion_tokens).toBe(16000);
     expect(typeof first.messages[1].content).toBe('string');
     expect(second.max_completion_tokens).toBe(24000);
@@ -364,7 +374,9 @@ describe('AiService — CII v4.5 evaluation branch', () => {
     ).rejects.toMatchObject({
       status: 500,
       response: {
-        error: expect.stringContaining('OpenAI API key is not configured'),
+        error: expect.stringContaining(
+          'OpenAI API key is not configured',
+        ) as jest.AsymmetricMatcher,
         code: 'OPENAI_API_KEY_MISSING',
       },
     });
@@ -381,7 +393,11 @@ describe('AiService — CII v4.5 evaluation branch', () => {
       }),
     ).rejects.toMatchObject({
       status: 500,
-      response: { error: expect.stringContaining('token budget') },
+      response: {
+        error: expect.stringContaining(
+          'token budget',
+        ) as jest.AsymmetricMatcher,
+      },
     });
     expect(global.fetch).toHaveBeenCalledTimes(2);
   });

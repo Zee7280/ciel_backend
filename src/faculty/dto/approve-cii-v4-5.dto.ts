@@ -57,7 +57,7 @@ export class ApproveCiiV45Dto {
   /**
    * Ignored by v5.0.2 Confirm together with adminAdjustedScore.
    */
-  @ValidateIf((o) => o.adminAdjustedScore !== undefined)
+  @ValidateIf((o: ApproveCiiV45Dto) => o.adminAdjustedScore !== undefined)
   @IsOptional()
   @IsString()
   scoreModerationReason?: string;

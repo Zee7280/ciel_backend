@@ -5,6 +5,18 @@ import {
   effectiveEvidenceVisibility,
 } from './evidence-access.util';
 
+/** Shape of the `data` block after `applyEvidenceAccess`, as these tests read it. */
+type AccessedData = {
+  section8: { description?: string; evidence_files?: string[] };
+  section1: { attendance_logs: Array<{ hours: number }> };
+  review_package: { documents: { evidence: { count: number } } };
+  evidence_access: {
+    can_view: boolean;
+    can_download: boolean;
+    message: string | null;
+  };
+};
+
 const restricted = { media_visible: 'restricted' };
 const publicOk = { media_visible: 'public', public_share_permission: true };
 const publicNoConsent = { media_visible: 'public' };
@@ -59,7 +71,8 @@ describe('evidence access matrix', () => {
         },
       },
     };
-    const out = applyEvidenceAccess(resp, 'partner').data as any;
+    const out = applyEvidenceAccess(resp, 'partner')
+      .data as unknown as AccessedData;
     expect(JSON.stringify(out)).not.toContain('https://x/');
     expect(out.section8.description).toBe('d');
     expect(out.section1.attendance_logs[0].hours).toBe(2);
@@ -76,12 +89,15 @@ describe('evidence access matrix', () => {
       },
     };
     expect(
-      (applyEvidenceAccess(resp, 'admin').data as any).section8.evidence_files,
+      (applyEvidenceAccess(resp, 'admin').data as unknown as AccessedData)
+        .section8.evidence_files,
     ).toHaveLength(1);
-    const f = applyEvidenceAccess(resp, 'faculty').data as any;
+    const f = applyEvidenceAccess(resp, 'faculty')
+      .data as unknown as AccessedData;
     expect(f.section8.evidence_files).toHaveLength(1);
     expect(f.evidence_access.can_download).toBe(false);
-    const p = applyEvidenceAccess(resp, 'partner').data as any;
+    const p = applyEvidenceAccess(resp, 'partner')
+      .data as unknown as AccessedData;
     expect(p.section8.evidence_files).toEqual([]);
     expect(p.evidence_access.message).toMatch(/not publicly available/);
   });

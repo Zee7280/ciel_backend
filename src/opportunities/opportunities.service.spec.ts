@@ -3,23 +3,161 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
-import { OpportunitiesService } from './opportunities.service';
+import { EntityManager, Repository } from 'typeorm';
+import {
+  OpportunitiesService,
+  OpportunityDetailViewer,
+} from './opportunities.service';
 import { OpportunityWorkflowService } from './opportunity-workflow.service';
 import { Opportunity } from './entities/opportunity.entity';
+import {
+  CreateOpportunityDto,
+  UpdateOpportunityDto,
+} from './dto/create-opportunity.dto';
+import { User } from '../users/entities/user.entity';
+import { Organization } from '../organizations/entities/organization.entity';
+import { Participation } from '../engagement/entities/participant.entity';
+import { OrganizationsService } from '../organizations/organizations.service';
+import { MailService } from '../mail/mail.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
+import { OpportunityApplicationsService } from './opportunity-applications.service';
 
 // create() gates on a fully-complete profile before it even looks at approval routing — stub it
 // out so these tests can focus on the approval-status decision without building a fully valid
 // user profile.
 jest.mock('../users/profile-completion.util', () => ({
-  ...jest.requireActual('../users/profile-completion.util'),
+  ...jest.requireActual<typeof import('../users/profile-completion.util')>(
+    '../users/profile-completion.util',
+  ),
   getProfileCompletionStatus: () => ({
     profile_complete: true,
     profile_missing_fields: [],
   }),
 }));
 
+/** Partial stand-in for a collaborator: only real member names, any stub value. */
+type Stubbed<T> = { -readonly [K in keyof T]?: unknown };
+
+/** A raw SQL mock: `(sql, params?) => Promise<void>` — keeps `mock.calls` typed. */
+type QueryMock = jest.Mock<Promise<void>, [string, unknown[]?]>;
+
+/** Query-builder step mock: `(expr, params?)`; the implementation returns the builder itself. */
+type QbStepMock = jest.Mock<unknown, [string, Record<string, unknown>?]>;
+
+/** The service's private collaborators and methods these tests reach into directly. */
+interface ServicePrivates {
+  opportunitiesRepository: Stubbed<Repository<Opportunity>>;
+  participationRepository: Stubbed<Repository<Participation>>;
+  usersRepository: Stubbed<Repository<User>>;
+  organizationsRepository: Stubbed<Repository<Organization>>;
+  organizationsService: Stubbed<OrganizationsService>;
+  mailService: Stubbed<MailService>;
+  notificationsService: Stubbed<NotificationsService>;
+  opportunityWorkflow: Stubbed<OpportunityWorkflowService>;
+  opportunityApplicationsService: Stubbed<OpportunityApplicationsService>;
+  facultyUniversityScope: Stubbed<FacultyUniversityScopeService>;
+  isPubliclyVisibleOpportunity(opp: Opportunity): boolean;
+  viewerMayEditOpportunity(
+    opp: Opportunity,
+    viewer: OpportunityDetailViewer,
+  ): boolean;
+  resolveFacultyEmail(dto: {
+    supervision?: unknown;
+    visibility_and_academic_linkage?: unknown;
+  }): string | null;
+  sanitizeAndBoundContent(dto: {
+    title?: string;
+    objectives?: unknown;
+    activity_details?: unknown;
+  }): void;
+  assertFacultySupervisorForStudentOpportunity(
+    opp: Opportunity,
+    facultyUserId: string,
+    facultyEmail: string,
+  ): Promise<void>;
+  assertPartnerOwnsOpportunity(
+    opp: Opportunity,
+    partnerEmail: string,
+    organizationId?: string | null,
+    userId?: string | null,
+  ): Promise<void>;
+  partnerReviewIdentityMatches(
+    opp: Opportunity,
+    partnerEmail: string,
+    organizationId?: string | null,
+    userId?: string | null,
+    preloadedOrgNames?: string[],
+  ): Promise<boolean>;
+  finishCreatingStudentOpportunity(
+    dto: CreateOpportunityDto,
+    user: User,
+    privateCandidate: boolean,
+    requiresPartner: boolean,
+    partnerEmail: string | null,
+    restricted: string[],
+    openAllParticipation: boolean,
+  ): Promise<{ success: boolean; data: Opportunity }>;
+  notifyStudentOpportunityUpdate: (
+    opportunity: Opportunity,
+    input: Record<string, unknown>,
+  ) => Promise<void>;
+  handlePartnerApprovedSideEffects: (opportunity: Opportunity) => Promise<void>;
+  assignFacultyIdFromSupervisionIfMissing: (opp: Opportunity) => Promise<void>;
+  deleteOpportunityChildren: (
+    manager: EntityManager,
+    opportunityId: string,
+  ) => Promise<Record<string, number>>;
+}
+
+/** Same instance, viewed through its private surface (no copy). */
+const privates = (service: OpportunitiesService) =>
+  service as unknown as ServicePrivates;
+
+/** Minimal chainable query builder whose getCount() is always 0. */
+interface ZeroCountBuilder {
+  where(): ZeroCountBuilder;
+  andWhere(): ZeroCountBuilder;
+  getCount(): Promise<number>;
+}
+function zeroCountBuilder(): ZeroCountBuilder {
+  const qb: ZeroCountBuilder = {
+    where: () => qb,
+    andWhere: () => qb,
+    getCount: () => Promise.resolve(0),
+  };
+  return qb;
+}
+
+/** Collaborator a test never touches; its type is inferred from the constructor slot. */
+function unused<T>(): T {
+  return {} as unknown as T;
+}
+
+type SimilarRow = Awaited<
+  ReturnType<OpportunitiesService['findSimilarStudentCreatedOpportunities']>
+>[number];
+
+/** create()/update() also serve `{draft:true}` saves; these tests always submit, so the row comes back. */
+async function createRow(
+  service: OpportunitiesService,
+  userId: string,
+  dto: CreateOpportunityDto,
+): Promise<Opportunity> {
+  return (await service.create(userId, dto)) as Opportunity;
+}
+
+async function updateRow(
+  service: OpportunitiesService,
+  userId: string,
+  dto: UpdateOpportunityDto,
+  organizationId?: string,
+): Promise<Opportunity> {
+  return (await service.update(userId, dto, organizationId)) as Opportunity;
+}
+
 /** Fake EntityManager whose `connection.createQueryRunner()` hands out ONE pinned runner. */
-function lockManager(query: jest.Mock) {
+function lockManager(query: QueryMock) {
   const runner = { connect: jest.fn(), query, release: jest.fn() };
   return {
     query: jest.fn(),
@@ -30,12 +168,24 @@ function lockManager(query: jest.Mock) {
 
 /** Repo bits POST /opportunities' idempotency guard needs: pinned lock runner + recent-row query. */
 function createDedupeStubs(recent: unknown = null) {
-  const lockQuery = jest.fn().mockResolvedValue(undefined);
+  const lockQuery: QueryMock = jest
+    .fn<Promise<void>, [string, unknown[]?]>()
+    .mockResolvedValue(undefined);
   const dedupeGetOne = jest.fn().mockResolvedValue(recent);
-  const dedupeQb: any = {};
-  for (const m of ['where', 'andWhere', 'orderBy'])
-    dedupeQb[m] = jest.fn(() => dedupeQb);
-  dedupeQb.getOne = dedupeGetOne;
+  const dedupeQb = {
+    where: jest.fn<unknown, [string, Record<string, unknown>?]>() as QbStepMock,
+    andWhere: jest.fn<
+      unknown,
+      [string, Record<string, unknown>?]
+    >() as QbStepMock,
+    orderBy: jest.fn<
+      unknown,
+      [string, Record<string, unknown>?]
+    >() as QbStepMock,
+    getOne: dedupeGetOne,
+  };
+  for (const m of ['where', 'andWhere', 'orderBy'] as const)
+    dedupeQb[m].mockImplementation(() => dedupeQb);
   return {
     stubs: {
       manager: lockManager(lockQuery),
@@ -47,20 +197,19 @@ function createDedupeStubs(recent: unknown = null) {
   };
 }
 
-function makeService(opportunitiesRepo: Record<string, unknown>) {
-  const noop = {} as any;
+function makeService(opportunitiesRepo: Stubbed<Repository<Opportunity>>) {
   return new OpportunitiesService(
-    opportunitiesRepo as any,
-    noop, // participationRepository
-    noop, // usersRepository
-    noop, // organizationsRepository
-    noop, // organizationsService
-    noop, // engagementService
-    noop, // mailService
-    noop, // notificationsService
-    noop, // opportunityWorkflow
-    noop, // opportunityApplicationsService
-    noop, // facultyUniversityScope
+    opportunitiesRepo as unknown as Repository<Opportunity>,
+    unused(), // participationRepository
+    unused(), // usersRepository
+    unused(), // organizationsRepository
+    unused(), // organizationsService
+    unused(), // engagementService
+    unused(), // mailService
+    unused(), // notificationsService
+    unused(), // opportunityWorkflow
+    unused(), // opportunityApplicationsService
+    unused(), // facultyUniversityScope
   );
 }
 
@@ -246,11 +395,11 @@ describe('OpportunitiesService — public faculty verification', () => {
       status: 'pending_faculty',
       workflowStage: 'pending_faculty',
       title: 'Campus drive',
-    };
+    } as unknown as Opportunity;
     const findOne = jest.fn().mockResolvedValue(opp);
-    const save = jest.fn(async (row: any) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({ findOne, save });
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
 
     const result = await service.decideOpportunityViaFacultyToken(
       'ftok',
@@ -259,8 +408,8 @@ describe('OpportunitiesService — public faculty verification', () => {
     );
 
     expect(save).toHaveBeenCalled();
-    expect((opp as any).status).toBe('rejected');
-    expect((opp as any).rejectionReason).toBe('Not a fit');
+    expect(opp.status).toBe('rejected');
+    expect(opp.rejectionReason).toBe('Not a fit');
     expect(result.success).toBe(true);
   });
 });
@@ -268,7 +417,7 @@ describe('OpportunitiesService — public faculty verification', () => {
 describe('OpportunitiesService — public directory visibility (isPubliclyVisibleOpportunity)', () => {
   const service = makeService({});
   const isVisible = (opp: Partial<Opportunity>) =>
-    (service as any).isPubliclyVisibleOpportunity(opp as Opportunity);
+    privates(service).isPubliclyVisibleOpportunity(opp as Opportunity);
 
   it('shows a scoped faculty/partner opportunity publicly when a real participation_scope backs it (card public, Apply Now gated)', () => {
     expect(
@@ -407,7 +556,7 @@ describe('OpportunitiesService — student create-opportunity is locked to their
 
   it('rejects a student trying to scope their own opportunity to "open to all universities"', async () => {
     const service = makeService({});
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest.fn().mockResolvedValue({
         id: 'student-1',
         role: 'student',
@@ -424,13 +573,13 @@ describe('OpportunitiesService — student create-opportunity is locked to their
       service.createStudentOpportunity('student-1', {
         ...baseDto(),
         participation_scope: { rule: 'open_all_universities' },
-      } as any),
+      } as unknown as CreateOpportunityDto),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('rejects a student trying to restrict/target a university other than their own', async () => {
     const service = makeService({});
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest.fn().mockResolvedValue({
         id: 'student-1',
         role: 'student',
@@ -450,21 +599,25 @@ describe('OpportunitiesService — student create-opportunity is locked to their
           rule: 'restricted_specific_universities',
           university_names: ['University B'],
         },
-      } as any),
+      } as unknown as CreateOpportunityDto),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 });
 
 describe('OpportunitiesService — createStudentOpportunity advisory lock', () => {
   it('acquires and releases the per-student advisory lock around the duplicate-title check and create, even on the happy path', async () => {
-    const managerQuery = jest.fn().mockResolvedValue(undefined);
+    const managerQuery: QueryMock = jest
+      .fn<Promise<void>, [string, unknown[]?]>()
+      .mockResolvedValue(undefined);
     const opportunitiesRepo = {
       manager: lockManager(managerQuery),
-      create: jest.fn((payload: any) => payload),
-      save: jest.fn(async (row: any) => ({ ...row, id: 'opp-new' })),
+      create: jest.fn((payload: Opportunity) => payload),
+      save: jest.fn((row: Opportunity) =>
+        Promise.resolve({ ...row, id: 'opp-new' }),
+      ),
     };
     const service = makeService(opportunitiesRepo);
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest.fn().mockResolvedValue({
         id: 'student-1',
         role: 'student',
@@ -476,12 +629,14 @@ describe('OpportunitiesService — createStudentOpportunity advisory lock', () =
         department: 'CS',
       }),
     };
-    (service as any).organizationsRepository = {
-      create: jest.fn((row: any) => row),
-      save: jest.fn(async (row: any) => ({ ...row, id: 'org-1' })),
+    privates(service).organizationsRepository = {
+      create: jest.fn((row: Organization) => row),
+      save: jest.fn((row: Organization) =>
+        Promise.resolve({ ...row, id: 'org-1' }),
+      ),
     };
-    (service as any).opportunityWorkflow = { initStudentCreated: jest.fn() };
-    (service as any).mailService = {
+    privates(service).opportunityWorkflow = { initStudentCreated: jest.fn() };
+    privates(service).mailService = {
       sendFacultyStudentOpportunityVerification: jest
         .fn()
         .mockResolvedValue(undefined),
@@ -513,7 +668,7 @@ describe('OpportunitiesService — createStudentOpportunity advisory lock', () =
         environment_safe_and_appropriate: true,
         information_correct_and_verifiable: true,
       },
-    } as any);
+    } as unknown as CreateOpportunityDto);
 
     expect(result).toEqual(expect.objectContaining({ success: true }));
     expect(managerQuery.mock.calls[0][0]).toContain('pg_advisory_lock');
@@ -532,11 +687,13 @@ describe('OpportunitiesService — createStudentOpportunity advisory lock', () =
   });
 
   it('still releases the lock when the duplicate-title check throws', async () => {
-    const managerQuery = jest.fn().mockResolvedValue(undefined);
+    const managerQuery: QueryMock = jest
+      .fn<Promise<void>, [string, unknown[]?]>()
+      .mockResolvedValue(undefined);
     const opportunitiesRepo = { manager: lockManager(managerQuery) };
     const releaseMock = opportunitiesRepo.manager.runner.release;
     const service = makeService(opportunitiesRepo);
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest.fn().mockResolvedValue({
         id: 'student-1',
         role: 'student',
@@ -551,7 +708,7 @@ describe('OpportunitiesService — createStudentOpportunity advisory lock', () =
     jest
       .spyOn(service, 'findSimilarStudentCreatedOpportunities')
       .mockResolvedValue([
-        { id: 'existing-1', title: 'Beach clean-up drive' } as any,
+        { id: 'existing-1', title: 'Beach clean-up drive' } as SimilarRow,
       ]);
 
     await expect(
@@ -581,7 +738,7 @@ describe('OpportunitiesService — createStudentOpportunity advisory lock', () =
           environment_safe_and_appropriate: true,
           information_correct_and_verifiable: true,
         },
-      } as any),
+      } as unknown as CreateOpportunityDto),
     ).rejects.toThrow('similar title');
     expect(managerQuery).toHaveBeenCalledTimes(2);
     expect(managerQuery.mock.calls[1][0]).toContain('pg_advisory_unlock');
@@ -607,26 +764,26 @@ describe('OpportunitiesService — student edit/resubmit after faculty revision'
       supervision: { contact: 'teacher@uni.edu' },
     } as unknown as Opportunity;
     const findOne = jest.fn().mockResolvedValue(opp);
-    const save = jest.fn(async (row: Opportunity) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({ findOne, save });
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest
         .fn()
         .mockResolvedValue({ id: 'student-1', role: 'student' }),
     };
-    (service as any).organizationsService = {
+    privates(service).organizationsService = {
       getMyOrganization: jest.fn().mockResolvedValue(null),
     };
 
-    const saved = await service.update('student-1', {
+    const saved = await updateRow(service, 'student-1', {
       id: 'opp-1',
       title: 'Updated title after fixing supervision details',
-    } as any);
+    } as unknown as UpdateOpportunityDto);
 
-    expect((saved as any).workflowStage).toBe('pending_faculty');
-    expect((saved as any).status).toBe('pending_faculty');
-    expect((saved as any).facultyApprovalStatus).toBe('pending');
-    expect((saved as any).faculty_verification_token).toBeTruthy();
+    expect(saved.workflowStage).toBe('pending_faculty');
+    expect(saved.status).toBe('pending_faculty');
+    expect(saved.facultyApprovalStatus).toBe('pending');
+    expect(saved.faculty_verification_token).toBeTruthy();
   });
 
   it('does not force a private-candidate (no faculty line) resubmit back into pending_faculty', async () => {
@@ -646,24 +803,24 @@ describe('OpportunitiesService — student edit/resubmit after faculty revision'
       partner_organization: { official_email: 'partner@org.com' },
     } as unknown as Opportunity;
     const findOne = jest.fn().mockResolvedValue(opp);
-    const save = jest.fn(async (row: Opportunity) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({ findOne, save });
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest
         .fn()
         .mockResolvedValue({ id: 'student-2', role: 'student' }),
     };
-    (service as any).organizationsService = {
+    privates(service).organizationsService = {
       getMyOrganization: jest.fn().mockResolvedValue(null),
     };
 
-    const saved = await service.update('student-2', {
+    const saved = await updateRow(service, 'student-2', {
       id: 'opp-2',
       title: 'Fixed after partner rejection',
-    } as any);
+    } as unknown as UpdateOpportunityDto);
 
-    expect((saved as any).workflowStage).toBe('pending_partner');
-    expect((saved as any).facultyApprovalStatus).toBe('not_applicable');
+    expect(saved.workflowStage).toBe('pending_partner');
+    expect(saved.facultyApprovalStatus).toBe('not_applicable');
   });
 });
 
@@ -680,7 +837,7 @@ describe('OpportunitiesService — partnerDashboardApprove ownership guard', () 
   it('refuses a partner who is not the assigned reviewer, even for an already-approved opportunity', async () => {
     const opp = makeApprovedOpp();
     const findOne = jest.fn().mockResolvedValue(opp);
-    const save = jest.fn(async (row: any) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({ findOne, save });
 
     await expect(
@@ -706,20 +863,20 @@ describe('OpportunitiesService — partnerDashboardApprove ownership guard', () 
       partner_organization: { official_email: 'fellah.khalid@example.com' },
     };
     const findOne = jest.fn().mockResolvedValue(opp);
-    const save = jest.fn(async (row: any) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({ findOne, save });
-    (service as any).organizationsService = {
+    privates(service).organizationsService = {
       findOne: jest.fn().mockRejectedValue(new Error('stale org id')),
       getMyOrganization: jest
         .fn()
         .mockResolvedValue({ id: 'org-fellah', name: 'FELLAH' }),
     };
-    (service as any).facultyUniversityScope = {
+    privates(service).facultyUniversityScope = {
       normalizeOrgName: (name: string) => (name || '').trim().toLowerCase(),
     };
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
     jest
-      .spyOn(service as any, 'handlePartnerApprovedSideEffects')
+      .spyOn(privates(service), 'handlePartnerApprovedSideEffects')
       .mockResolvedValue(undefined);
 
     const result = await service.partnerDashboardApprove('opp-contact-name', {
@@ -751,19 +908,19 @@ describe('OpportunitiesService — partnerDashboardApprove ownership guard', () 
       },
     };
     const findOne = jest.fn().mockResolvedValue(opp);
-    const save = jest.fn(async (row: any) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({ findOne, save });
-    (service as any).organizationsService = {
+    privates(service).organizationsService = {
       findOne: jest
         .fn()
         .mockResolvedValue({ id: 'org-fellah', name: 'FELLAH' }),
     };
-    (service as any).facultyUniversityScope = {
+    privates(service).facultyUniversityScope = {
       normalizeOrgName: (name: string) => (name || '').trim().toLowerCase(),
     };
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
     jest
-      .spyOn(service as any, 'handlePartnerApprovedSideEffects')
+      .spyOn(privates(service), 'handlePartnerApprovedSideEffects')
       .mockResolvedValue(undefined);
 
     const result = await service.partnerDashboardApprove('opp-named-org', {
@@ -780,7 +937,7 @@ describe('OpportunitiesService — partnerDashboardApprove ownership guard', () 
   it('lets the correct partner double-click approve on an already-approved opportunity without erroring', async () => {
     const opp = makeApprovedOpp();
     const findOne = jest.fn().mockResolvedValue(opp);
-    const save = jest.fn(async (row: any) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({ findOne, save });
 
     const result = await service.partnerDashboardApprove('opp-partner-1', {
@@ -802,11 +959,11 @@ describe('OpportunitiesService — partnerDashboardApprove ownership guard', () 
       status: 'pending_partner',
     };
     const findOne = jest.fn().mockResolvedValue(opp);
-    const save = jest.fn(async (row: any) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({ findOne, save });
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
     const notifySpy = jest
-      .spyOn(service as any, 'notifyStudentOpportunityUpdate')
+      .spyOn(privates(service), 'notifyStudentOpportunityUpdate')
       .mockResolvedValue(undefined);
 
     const saved = await service.partnerDashboardRevise(
@@ -815,8 +972,8 @@ describe('OpportunitiesService — partnerDashboardApprove ownership guard', () 
       'Please confirm the exact venue address',
     );
 
-    expect((saved as any).partnerApprovalStatus).toBe('revision_requested');
-    expect((saved as any).status).toBe('revision');
+    expect(saved.partnerApprovalStatus).toBe('revision_requested');
+    expect(saved.status).toBe('revision');
     expect(notifySpy).toHaveBeenCalled();
   });
 });
@@ -829,13 +986,13 @@ describe('OpportunitiesService — decideOpportunityViaPartnerToken (public flas
       partnerVerified: false,
       isStudentCreated: true,
       title: 'Beach clean-up',
-    };
+    } as unknown as Opportunity;
     const findOne = jest.fn().mockResolvedValue(opp);
-    const save = jest.fn(async (row: any) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({ findOne, save });
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
     const notifySpy = jest
-      .spyOn(service as any, 'notifyStudentOpportunityUpdate')
+      .spyOn(privates(service), 'notifyStudentOpportunityUpdate')
       .mockResolvedValue(undefined);
 
     const result = await service.decideOpportunityViaPartnerToken(
@@ -845,8 +1002,8 @@ describe('OpportunitiesService — decideOpportunityViaPartnerToken (public flas
     );
 
     expect(save).toHaveBeenCalled();
-    expect((opp as any).status).toBe('rejected');
-    expect((opp as any).rejectionReason).toBe('Not a fit');
+    expect(opp.status).toBe('rejected');
+    expect(opp.rejectionReason).toBe('Not a fit');
     expect(notifySpy).toHaveBeenCalled();
     expect(result.success).toBe(true);
   });
@@ -858,13 +1015,13 @@ describe('OpportunitiesService — decideOpportunityViaPartnerToken (public flas
       partnerVerified: false,
       isStudentCreated: false,
       creatorId: undefined,
-    };
+    } as unknown as Opportunity;
     const findOne = jest.fn().mockResolvedValue(opp);
-    const save = jest.fn(async (row: any) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({ findOne, save });
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
     const notifySpy = jest
-      .spyOn(service as any, 'notifyStudentOpportunityUpdate')
+      .spyOn(privates(service), 'notifyStudentOpportunityUpdate')
       .mockResolvedValue(undefined);
 
     const result = await service.decideOpportunityViaPartnerToken(
@@ -874,8 +1031,8 @@ describe('OpportunitiesService — decideOpportunityViaPartnerToken (public flas
     );
 
     expect(save).toHaveBeenCalled();
-    expect((opp as any).partnerApprovalStatus).toBe('revision_requested');
-    expect((opp as any).status).toBe('revision');
+    expect(opp.partnerApprovalStatus).toBe('revision_requested');
+    expect(opp.status).toBe('revision');
     expect(notifySpy).toHaveBeenCalled();
     expect(result.success).toBe(true);
   });
@@ -914,9 +1071,9 @@ describe('OpportunitiesService — decideOpportunityViaPartnerToken (public flas
       isStudentCreated: false,
     };
     const findOne = jest.fn().mockResolvedValue(opp);
-    const save = jest.fn(async (row: any) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({ findOne, save });
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
 
     await expect(
       service.decideOpportunityViaPartnerToken(
@@ -968,12 +1125,12 @@ describe('OpportunitiesService — validateLocation (accurate-pin gate)', () => 
 
 describe('OpportunitiesService — saveStudentOpportunityDraft (first-save regression)', () => {
   it('always fills the required sdg column on a brand-new draft, even before the student has picked an SDG', async () => {
-    const create = jest.fn((payload) => payload);
-    const save = jest.fn((payload) =>
+    const create = jest.fn((payload: Record<string, unknown>) => payload);
+    const save = jest.fn((payload: Record<string, unknown>) =>
       Promise.resolve({ id: 'new-draft-id', ...payload }),
     );
     const service = makeService({ create, save });
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest.fn().mockResolvedValue({ id: 'student-1' }),
     };
 
@@ -986,18 +1143,18 @@ describe('OpportunitiesService — saveStudentOpportunityDraft (first-save regre
     });
 
     expect(create).toHaveBeenCalledWith(
-      expect.objectContaining({ sdg: expect.any(String) }),
+      expect.objectContaining({ sdg: expect.any(String) as unknown }),
     );
     expect(create.mock.calls[0][0].sdg).toBeTruthy();
   });
 
   it('uses the picked SDG once sdg_info is present', async () => {
-    const create = jest.fn((payload) => payload);
-    const save = jest.fn((payload) =>
+    const create = jest.fn((payload: Record<string, unknown>) => payload);
+    const save = jest.fn((payload: Record<string, unknown>) =>
       Promise.resolve({ id: 'new-draft-id', ...payload }),
     );
     const service = makeService({ create, save });
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest.fn().mockResolvedValue({ id: 'student-1' }),
     };
 
@@ -1016,12 +1173,12 @@ describe('OpportunitiesService — saveStudentOpportunityDraft (first-save regre
   });
 
   it('does not write draft/id/approval columns, and stores a blank mode as null', async () => {
-    const create = jest.fn((payload) => payload);
-    const save = jest.fn((payload) =>
+    const create = jest.fn((payload: Record<string, unknown>) => payload);
+    const save = jest.fn((payload: Record<string, unknown>) =>
       Promise.resolve({ id: 'new-draft-id', ...payload }),
     );
     const service = makeService({ create, save });
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest.fn().mockResolvedValue({ id: 'student-1' }),
     };
 
@@ -1037,7 +1194,7 @@ describe('OpportunitiesService — saveStudentOpportunityDraft (first-save regre
       status: 'active',
     });
 
-    const payload = create.mock.calls[0][0] as Record<string, unknown>;
+    const payload = create.mock.calls[0][0];
     expect(payload.draft).toBeUndefined();
     expect(payload.id).toBeUndefined();
     expect(payload.admin_approved).toBeUndefined();
@@ -1048,12 +1205,12 @@ describe('OpportunitiesService — saveStudentOpportunityDraft (first-save regre
   });
 
   it('stores the wizard resume step from wizard_progress, with a server timestamp and only a known step key', async () => {
-    const create = jest.fn((payload) => payload);
-    const save = jest.fn((payload) =>
+    const create = jest.fn((payload: Record<string, unknown>) => payload);
+    const save = jest.fn((payload: Record<string, unknown>) =>
       Promise.resolve({ id: 'new-draft-id', ...payload }),
     );
     const service = makeService({ create, save });
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest.fn().mockResolvedValue({ id: 'student-1' }),
     };
 
@@ -1067,10 +1224,10 @@ describe('OpportunitiesService — saveStudentOpportunityDraft (first-save regre
       },
     });
 
-    const payload = create.mock.calls[0][0] as Record<string, unknown>;
+    const payload = create.mock.calls[0][0];
     expect(payload.wizard_progress).toEqual({
       resume_step: 'C',
-      updated_at: expect.any(String),
+      updated_at: expect.any(String) as unknown,
     });
     expect(
       (payload.wizard_progress as { updated_at: string }).updated_at,
@@ -1078,12 +1235,12 @@ describe('OpportunitiesService — saveStudentOpportunityDraft (first-save regre
   });
 
   it('drops an unknown or malformed wizard_progress instead of persisting it', async () => {
-    const create = jest.fn((payload) => payload);
-    const save = jest.fn((payload) =>
+    const create = jest.fn((payload: Record<string, unknown>) => payload);
+    const save = jest.fn((payload: Record<string, unknown>) =>
       Promise.resolve({ id: 'new-draft-id', ...payload }),
     );
     const service = makeService({ create, save });
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest.fn().mockResolvedValue({ id: 'student-1' }),
     };
 
@@ -1098,12 +1255,8 @@ describe('OpportunitiesService — saveStudentOpportunityDraft (first-save regre
       wizard_progress: 'C',
     });
 
-    expect(
-      (create.mock.calls[0][0] as Record<string, unknown>).wizard_progress,
-    ).toBeUndefined();
-    expect(
-      (create.mock.calls[1][0] as Record<string, unknown>).wizard_progress,
-    ).toBeUndefined();
+    expect(create.mock.calls[0][0].wizard_progress).toBeUndefined();
+    expect(create.mock.calls[1][0].wizard_progress).toBeUndefined();
   });
 });
 
@@ -1128,12 +1281,12 @@ describe('OpportunitiesService — create() CIEL PK review requirement is server
       },
       sdg_info: { sdg_id: '14' },
       ...overrides,
-    } as any;
+    } as unknown as CreateOpportunityDto;
   }
 
   function makeOrgCreatorService() {
-    const create = jest.fn((payload) => payload);
-    const save = jest.fn((payload) =>
+    const create = jest.fn((payload: Record<string, unknown>) => payload);
+    const save = jest.fn((payload: Record<string, unknown>) =>
       Promise.resolve({ id: 'new-opp-id', ...payload }),
     );
     const { stubs, lockQuery, dedupeGetOne, dedupeQb } = createDedupeStubs();
@@ -1144,18 +1297,18 @@ describe('OpportunitiesService — create() CIEL PK review requirement is server
       find: jest.fn().mockResolvedValue([]),
       ...stubs,
     });
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest.fn().mockResolvedValue({
         id: 'ngo-user-1',
         role: 'ngo',
         email: 'contact@ngo.org',
       }),
     };
-    (service as any).organizationsService = {
+    privates(service).organizationsService = {
       getMyOrganization: jest.fn().mockResolvedValue({ id: 'org-1' }),
     };
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-    (service as any).mailService = {
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).mailService = {
       sendAdminOpportunityReviewNeeded: jest.fn(),
     };
     return { service, save, lockQuery, dedupeGetOne, dedupeQb };
@@ -1165,7 +1318,7 @@ describe('OpportunitiesService — create() CIEL PK review requirement is server
     'rejects %s accounts on the generic create endpoint (403)',
     async (role) => {
       const { service, save } = makeOrgCreatorService();
-      (service as any).usersRepository.findOne = jest
+      privates(service).usersRepository.findOne = jest
         .fn()
         .mockResolvedValue({ id: 'u-1', role, email: 'u@x.org' });
       await expect(
@@ -1236,7 +1389,8 @@ describe('OpportunitiesService — create() CIEL PK review requirement is server
   it('routes to pending_approval even when the client omits admin_approval_required', async () => {
     const { service, save } = makeOrgCreatorService();
 
-    const saved: any = await service.create(
+    const saved = await createRow(
+      service,
       'ngo-user-1',
       minimalOrgCreatorDto(),
     );
@@ -1244,7 +1398,7 @@ describe('OpportunitiesService — create() CIEL PK review requirement is server
     expect(saved.status).toBe('pending_approval');
     expect(save).toHaveBeenCalled();
     expect(
-      (service as any).mailService.sendAdminOpportunityReviewNeeded,
+      privates(service).mailService.sendAdminOpportunityReviewNeeded,
     ).toHaveBeenCalledWith(
       'Beach cleanup drive',
       'new-opp-id',
@@ -1256,7 +1410,8 @@ describe('OpportunitiesService — create() CIEL PK review requirement is server
   it('routes to pending_approval even when the client explicitly sends admin_approval_required: false', async () => {
     const { service } = makeOrgCreatorService();
 
-    const saved: any = await service.create(
+    const saved = await createRow(
+      service,
       'ngo-user-1',
       minimalOrgCreatorDto({ admin_approval_required: false }),
     );
@@ -1269,10 +1424,11 @@ describe('OpportunitiesService — create() CIEL PK review requirement is server
 
   it('gates on a linked faculty (NGO/Partner Org "Academic / faculty link" section) before CIEL PK ever sees it', async () => {
     const { service, save } = makeOrgCreatorService();
-    (service as any).mailService.sendFacultyStudentOpportunityVerification =
+    privates(service).mailService.sendFacultyStudentOpportunityVerification =
       jest.fn();
 
-    const saved: any = await service.create(
+    const saved = await createRow(
+      service,
       'ngo-user-1',
       minimalOrgCreatorDto({
         visibility_and_academic_linkage: {
@@ -1289,14 +1445,15 @@ describe('OpportunitiesService — create() CIEL PK review requirement is server
     expect(saved.faculty_verification_token).toBeTruthy();
     expect(save).toHaveBeenCalled();
     expect(
-      (service as any).mailService.sendFacultyStudentOpportunityVerification,
+      privates(service).mailService.sendFacultyStudentOpportunityVerification,
     ).toHaveBeenCalled();
   });
 
   it('marks the faculty line not_applicable (never blocks CIEL PK) when no faculty is linked', async () => {
     const { service } = makeOrgCreatorService();
 
-    const saved: any = await service.create(
+    const saved = await createRow(
+      service,
       'ngo-user-1',
       minimalOrgCreatorDto(),
     );
@@ -1311,7 +1468,8 @@ describe('OpportunitiesService — create() CIEL PK review requirement is server
   it('ignores a crafted admin_approved:true from the client payload', async () => {
     const { service } = makeOrgCreatorService();
 
-    const saved: any = await service.create(
+    const saved = await createRow(
+      service,
       'ngo-user-1',
       minimalOrgCreatorDto({ admin_approved: true, status: 'active' }),
     );
@@ -1323,9 +1481,10 @@ describe('OpportunitiesService — create() CIEL PK review requirement is server
 
   it('routes partner-organization ack to pending_partner (not premature CIEL PK email)', async () => {
     const { service } = makeOrgCreatorService();
-    (service as any).mailService.sendPartnerVerification = jest.fn();
+    privates(service).mailService.sendPartnerVerification = jest.fn();
 
-    const saved: any = await service.create(
+    const saved = await createRow(
+      service,
       'ngo-user-1',
       minimalOrgCreatorDto({
         partner_organization: {
@@ -1341,18 +1500,19 @@ describe('OpportunitiesService — create() CIEL PK review requirement is server
     expect(saved.status).toBe('pending_partner');
     expect(saved.workflowStage).toBe('pending_partner');
     expect(
-      (service as any).mailService.sendAdminOpportunityReviewNeeded,
+      privates(service).mailService.sendAdminOpportunityReviewNeeded,
     ).not.toHaveBeenCalled();
   });
 
   it('keeps faculty link gate when executing-org portal confirm is also required', async () => {
     const { service } = makeOrgCreatorService();
-    (service as any).mailService.sendFacultyStudentOpportunityVerification =
+    privates(service).mailService.sendFacultyStudentOpportunityVerification =
       jest.fn();
-    (service as any).mailService.sendExecutingOrganizationVerificationEmail =
+    privates(service).mailService.sendExecutingOrganizationVerificationEmail =
       jest.fn();
 
-    const saved: any = await service.create(
+    const saved = await createRow(
+      service,
       'ngo-user-1',
       minimalOrgCreatorDto({
         partner_organization: {
@@ -1381,18 +1541,18 @@ describe('OpportunitiesService — create() CIEL PK review requirement is server
     expect(saved.adminApprovalStatus).toBe('pending');
     // Faculty email waits until executing-org confirms (verifyExecutingOrganizationForUser).
     expect(
-      (service as any).mailService.sendFacultyStudentOpportunityVerification,
+      privates(service).mailService.sendFacultyStudentOpportunityVerification,
     ).not.toHaveBeenCalled();
     expect(
-      (service as any).mailService.sendAdminOpportunityReviewNeeded,
+      privates(service).mailService.sendAdminOpportunityReviewNeeded,
     ).not.toHaveBeenCalled();
   });
 });
 
 describe('OpportunitiesService — Super Admin create skips a second CIEL gate unless a stakeholder is named', () => {
   function makeCielAdminService() {
-    const create = jest.fn((payload) => payload);
-    const save = jest.fn((payload) =>
+    const create = jest.fn((payload: Record<string, unknown>) => payload);
+    const save = jest.fn((payload: Record<string, unknown>) =>
       Promise.resolve({ id: 'ciel-opp-id', ...payload }),
     );
     const service = makeService({
@@ -1402,18 +1562,18 @@ describe('OpportunitiesService — Super Admin create skips a second CIEL gate u
       find: jest.fn().mockResolvedValue([]),
       ...createDedupeStubs().stubs,
     });
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest.fn().mockResolvedValue({
         id: 'admin-1',
         role: 'admin',
         email: 'admin@ciel.pk',
       }),
     };
-    (service as any).organizationsService = {
+    privates(service).organizationsService = {
       getMyOrganization: jest.fn().mockResolvedValue(null),
     };
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-    (service as any).mailService = {
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).mailService = {
       sendAdminOpportunityReviewNeeded: jest.fn(),
       sendFacultyStudentOpportunityVerification: jest.fn(),
       sendPartnerVerification: jest.fn(),
@@ -1444,23 +1604,24 @@ describe('OpportunitiesService — Super Admin create skips a second CIEL gate u
       },
       sdg_info: { sdg_id: '15' },
       ...overrides,
-    } as any;
+    } as unknown as CreateOpportunityDto;
   }
 
   it('publishes immediately when CIEL Admin names neither a partner nor a faculty stakeholder', async () => {
     const { service } = makeCielAdminService();
-    const saved: any = await service.create('admin-1', minimalAdminDto());
+    const saved = await createRow(service, 'admin-1', minimalAdminDto());
     expect(saved.status).toBe('active');
     expect(saved.adminApprovalStatus).toBe('approved');
     expect(saved.admin_approved).toBe(true);
     expect(
-      (service as any).mailService.sendAdminOpportunityReviewNeeded,
+      privates(service).mailService.sendAdminOpportunityReviewNeeded,
     ).not.toHaveBeenCalled();
   });
 
   it('does not treat the Super Admin creator email as a faculty stakeholder', async () => {
     const { service } = makeCielAdminService();
-    const saved: any = await service.create(
+    const saved = await createRow(
+      service,
       'admin-1',
       minimalAdminDto({
         supervision: {
@@ -1476,7 +1637,8 @@ describe('OpportunitiesService — Super Admin create skips a second CIEL gate u
 
   it('waits on a named faculty (not CIEL) without a second admin queue', async () => {
     const { service } = makeCielAdminService();
-    const saved: any = await service.create(
+    const saved = await createRow(
+      service,
       'admin-1',
       minimalAdminDto({
         supervision: {
@@ -1491,16 +1653,17 @@ describe('OpportunitiesService — Super Admin create skips a second CIEL gate u
     expect(saved.admin_approved).toBe(false);
     expect(saved.faculty_verification_token).toBeTruthy();
     expect(
-      (service as any).mailService.sendFacultyStudentOpportunityVerification,
+      privates(service).mailService.sendFacultyStudentOpportunityVerification,
     ).toHaveBeenCalled();
     expect(
-      (service as any).mailService.sendAdminOpportunityReviewNeeded,
+      privates(service).mailService.sendAdminOpportunityReviewNeeded,
     ).not.toHaveBeenCalled();
   });
 
   it('waits on a named partner from the faculty-form collaboration payload without a second admin queue', async () => {
     const { service } = makeCielAdminService();
-    const saved: any = await service.create(
+    const saved = await createRow(
+      service,
       'admin-1',
       minimalAdminDto({
         external_partner_collaboration: {
@@ -1521,16 +1684,17 @@ describe('OpportunitiesService — Super Admin create skips a second CIEL gate u
     expect(saved.admin_approved).toBe(false);
     expect(saved.partnerToken).toBeTruthy();
     expect(
-      (service as any).mailService.sendPartnerVerification,
+      privates(service).mailService.sendPartnerVerification,
     ).toHaveBeenCalled();
     expect(
-      (service as any).mailService.sendAdminOpportunityReviewNeeded,
+      privates(service).mailService.sendAdminOpportunityReviewNeeded,
     ).not.toHaveBeenCalled();
   });
 
   it('does not email the partner until faculty has approved when both stakeholders are named', async () => {
     const { service } = makeCielAdminService();
-    const saved: any = await service.create(
+    const saved = await createRow(
+      service,
       'admin-1',
       minimalAdminDto({
         external_partner_collaboration: {
@@ -1548,10 +1712,10 @@ describe('OpportunitiesService — Super Admin create skips a second CIEL gate u
     expect(saved.status).toBe('pending_faculty');
     expect(saved.partnerToken).toBeTruthy();
     expect(
-      (service as any).mailService.sendFacultyStudentOpportunityVerification,
+      privates(service).mailService.sendFacultyStudentOpportunityVerification,
     ).toHaveBeenCalled();
     expect(
-      (service as any).mailService.sendPartnerVerification,
+      privates(service).mailService.sendPartnerVerification,
     ).not.toHaveBeenCalled();
   });
 });
@@ -1617,26 +1781,26 @@ describe('OpportunitiesService — faculty approve then emails partner', () => {
       admin_approved: false,
       adminApprovalStatus: 'pending',
     } as unknown as Opportunity;
-    const save = jest.fn(async (row: Opportunity) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({
       findOne: jest.fn().mockResolvedValue(opp),
       save,
     });
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-    (service as any).mailService = {
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).mailService = {
       sendPartnerVerification: jest.fn().mockResolvedValue(undefined),
       sendStudentOpportunityStatusUpdate: jest
         .fn()
         .mockResolvedValue(undefined),
     };
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest.fn().mockResolvedValue({
         id: 'student-1',
         email: 'ali@uni.edu',
         name: 'Ali',
       }),
     };
-    (service as any).notificationsService = {
+    privates(service).notificationsService = {
       createApprovalNotification: jest.fn().mockResolvedValue(undefined),
     };
 
@@ -1644,7 +1808,7 @@ describe('OpportunitiesService — faculty approve then emails partner', () => {
 
     expect(opp.status).toBe('pending_partner');
     expect(
-      (service as any).mailService.sendPartnerVerification,
+      privates(service).mailService.sendPartnerVerification,
     ).toHaveBeenCalledWith(
       'host@ngo.org',
       'Community garden',
@@ -1675,29 +1839,29 @@ describe('OpportunitiesService — faculty approve then emails partner', () => {
       adminApprovalStatus: 'pending',
       supervision: { contact: 'teacher@uni.edu' },
     } as unknown as Opportunity;
-    const save = jest.fn(async (row: Opportunity) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({
       findOne: jest.fn().mockResolvedValue(opp),
       save,
     });
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-    (service as any).mailService = {
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).mailService = {
       sendPartnerVerification: jest.fn().mockResolvedValue(undefined),
       sendStudentOpportunityStatusUpdate: jest
         .fn()
         .mockResolvedValue(undefined),
     };
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest.fn().mockResolvedValue({
         id: 'student-1',
         email: 'ali@uni.edu',
         name: 'Ali',
       }),
     };
-    (service as any).notificationsService = {
+    privates(service).notificationsService = {
       createApprovalNotification: jest.fn().mockResolvedValue(undefined),
     };
-    (service as any).opportunityApplicationsService = {
+    privates(service).opportunityApplicationsService = {
       findActionablePendingFacultyApplicationForDashboard: jest
         .fn()
         .mockResolvedValue(null),
@@ -1712,7 +1876,7 @@ describe('OpportunitiesService — faculty approve then emails partner', () => {
 
     expect(opp.status).toBe('pending_partner');
     expect(
-      (service as any).mailService.sendPartnerVerification,
+      privates(service).mailService.sendPartnerVerification,
     ).toHaveBeenCalled();
   });
 
@@ -1737,26 +1901,26 @@ describe('OpportunitiesService — faculty approve then emails partner', () => {
       admin_approved: false,
       adminApprovalStatus: 'pending',
     } as unknown as Opportunity;
-    const save = jest.fn(async (row: Opportunity) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({
       findOne: jest.fn().mockResolvedValue(opp),
       save,
     });
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-    (service as any).mailService = {
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).mailService = {
       sendPartnerVerification: jest.fn().mockResolvedValue(undefined),
       sendStudentOpportunityStatusUpdate: jest
         .fn()
         .mockResolvedValue(undefined),
     };
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest.fn().mockResolvedValue({
         id: 'student-1',
         email: 'ali@uni.edu',
         name: 'Ali',
       }),
     };
-    (service as any).notificationsService = {
+    privates(service).notificationsService = {
       createApprovalNotification: jest.fn().mockResolvedValue(undefined),
     };
 
@@ -1764,7 +1928,7 @@ describe('OpportunitiesService — faculty approve then emails partner', () => {
 
     expect(opp.partnerToken).toBeTruthy();
     expect(
-      (service as any).mailService.sendPartnerVerification,
+      privates(service).mailService.sendPartnerVerification,
     ).toHaveBeenCalledWith(
       'host@ngo.org',
       'Community garden',
@@ -1795,34 +1959,34 @@ describe('OpportunitiesService — faculty approve then emails partner', () => {
       execution_verification_token: null,
       execution_verified: true,
     } as unknown as Opportunity;
-    const save = jest.fn(async (row: Opportunity) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({
       findOne: jest.fn().mockResolvedValue(opp),
       save,
     });
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-    (service as any).mailService = {
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).mailService = {
       sendAdminOpportunityReviewNeeded: jest.fn().mockResolvedValue(undefined),
       sendStudentOpportunityStatusUpdate: jest
         .fn()
         .mockResolvedValue(undefined),
     };
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest.fn().mockResolvedValue({
         id: 'student-1',
         email: 'ali@uni.edu',
         name: 'Ali',
       }),
     };
-    (service as any).notificationsService = {
+    privates(service).notificationsService = {
       createApprovalNotification: jest.fn().mockResolvedValue(undefined),
     };
 
-    await (service as any).verifyOpportunityToken('ptok');
+    await service.verifyOpportunityToken('ptok');
 
     expect(opp.status).toBe('pending_approval');
     expect(
-      (service as any).mailService.sendAdminOpportunityReviewNeeded,
+      privates(service).mailService.sendAdminOpportunityReviewNeeded,
     ).toHaveBeenCalledWith(
       'Community garden',
       'opp-1',
@@ -1846,15 +2010,15 @@ describe('OpportunitiesService — faculty approve then emails partner', () => {
       faculty_verified: true,
       facultyApprovalStatus: 'approved',
     } as unknown as Opportunity;
-    const save = jest.fn(async (row: Opportunity) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({
       findOne: jest.fn().mockResolvedValue(opp),
       save,
     });
-    (service as any).mailService = {
+    privates(service).mailService = {
       sendPartnerVerification: jest.fn().mockResolvedValue(undefined),
     };
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest.fn().mockResolvedValue({
         id: 'student-1',
         email: 'ali@uni.edu',
@@ -1870,20 +2034,20 @@ describe('OpportunitiesService — faculty approve then emails partner', () => {
     expect(result.sent_to).toBe('partner');
     expect(opp.status).toBe('pending_partner');
     expect(
-      (service as any).mailService.sendPartnerVerification,
+      privates(service).mailService.sendPartnerVerification,
     ).toHaveBeenCalled();
   });
 });
 
 describe('OpportunitiesService — Faculty / Partner / CIEL notify loop', () => {
   function mailReadyService(opp: Opportunity) {
-    const save = jest.fn(async (row: Opportunity) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({
       findOne: jest.fn().mockResolvedValue(opp),
       save,
     });
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-    (service as any).mailService = {
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).mailService = {
       sendPartnerVerification: jest.fn().mockResolvedValue(undefined),
       sendAdminOpportunityReviewNeeded: jest.fn().mockResolvedValue(undefined),
       sendStudentOpportunityStatusUpdate: jest
@@ -1900,7 +2064,7 @@ describe('OpportunitiesService — Faculty / Partner / CIEL notify loop', () => 
         .fn()
         .mockResolvedValue(undefined),
     };
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest.fn().mockResolvedValue({
         id: 'student-1',
         email: 'ali@uni.edu',
@@ -1908,10 +2072,10 @@ describe('OpportunitiesService — Faculty / Partner / CIEL notify loop', () => 
         role: 'student',
       }),
     };
-    (service as any).notificationsService = {
+    privates(service).notificationsService = {
       createApprovalNotification: jest.fn().mockResolvedValue(undefined),
     };
-    (service as any).opportunityApplicationsService = {
+    privates(service).opportunityApplicationsService = {
       findActionablePendingFacultyApplicationForDashboard: jest
         .fn()
         .mockResolvedValue(null),
@@ -1945,10 +2109,10 @@ describe('OpportunitiesService — Faculty / Partner / CIEL notify loop', () => 
     expect(opp.status).toBe('pending_approval');
     expect(opp.workflowStage).toBe('pending_admin');
     expect(
-      (service as any).mailService.sendPartnerVerification,
+      privates(service).mailService.sendPartnerVerification,
     ).not.toHaveBeenCalled();
     expect(
-      (service as any).mailService.sendAdminOpportunityReviewNeeded,
+      privates(service).mailService.sendAdminOpportunityReviewNeeded,
     ).toHaveBeenCalledWith(
       'Campus garden',
       'opp-1',
@@ -2011,7 +2175,7 @@ describe('OpportunitiesService — Faculty / Partner / CIEL notify loop', () => 
     expect(saved.workflowStage).toBe('live');
     expect(saved.admin_approved).toBe(true);
     expect(
-      (service as any).mailService.sendOpportunityLiveStartReportEmail,
+      privates(service).mailService.sendOpportunityLiveStartReportEmail,
     ).toHaveBeenCalledWith(
       expect.objectContaining({
         to: 'ali@uni.edu',
@@ -2019,7 +2183,7 @@ describe('OpportunitiesService — Faculty / Partner / CIEL notify loop', () => 
       }),
     );
     expect(
-      (service as any).mailService.sendAdminStudentMayStartReport,
+      privates(service).mailService.sendAdminStudentMayStartReport,
     ).toHaveBeenCalledWith('Campus garden', 'opp-1', 'Ali');
   });
 
@@ -2043,7 +2207,7 @@ describe('OpportunitiesService — Faculty / Partner / CIEL notify loop', () => 
     expect(result.sent_to).toBe('admin');
     expect(opp.status).toBe('pending_approval');
     expect(
-      (service as any).mailService.sendAdminOpportunityReviewNeeded,
+      privates(service).mailService.sendAdminOpportunityReviewNeeded,
     ).toHaveBeenCalledWith(
       'Campus garden',
       'opp-1',
@@ -2073,13 +2237,13 @@ describe('OpportunitiesService — Faculty / Partner / CIEL notify loop', () => 
       execution_verified: true,
     } as unknown as Opportunity;
     const { service } = mailReadyService(opp);
-    (service as any).organizationsService = {
+    privates(service).organizationsService = {
       findOne: jest.fn().mockResolvedValue({ id: 'org-1', name: 'Host NGO' }),
       getMyOrganization: jest
         .fn()
         .mockResolvedValue({ id: 'org-1', name: 'Host NGO' }),
     };
-    (service as any).facultyUniversityScope = {
+    privates(service).facultyUniversityScope = {
       normalizeOrgName: (name: string) => (name || '').trim().toLowerCase(),
     };
 
@@ -2092,7 +2256,7 @@ describe('OpportunitiesService — Faculty / Partner / CIEL notify loop', () => 
 
     expect(opp.status).toBe('pending_approval');
     expect(
-      (service as any).mailService.sendAdminOpportunityReviewNeeded,
+      privates(service).mailService.sendAdminOpportunityReviewNeeded,
     ).toHaveBeenCalledWith(
       'Campus garden',
       'opp-1',
@@ -2128,7 +2292,7 @@ describe('OpportunitiesService — Faculty / Partner / CIEL notify loop', () => 
 
     expect(opp.status).toBe('rejected');
     expect(
-      (service as any).mailService.sendStudentOpportunityRejectedByFaculty,
+      privates(service).mailService.sendStudentOpportunityRejectedByFaculty,
     ).toHaveBeenCalledWith('ali@uni.edu', 'Campus garden', 'Unsafe site');
   });
 
@@ -2155,7 +2319,7 @@ describe('OpportunitiesService — Faculty / Partner / CIEL notify loop', () => 
       workflowStage: null,
     } as unknown as Opportunity;
     const { service } = mailReadyService(opp);
-    (service as any).usersRepository.findOne = jest.fn().mockResolvedValue({
+    privates(service).usersRepository.findOne = jest.fn().mockResolvedValue({
       id: 'partner-user',
       email: 'host@ngo.org',
     });
@@ -2168,10 +2332,10 @@ describe('OpportunitiesService — Faculty / Partner / CIEL notify loop', () => 
 
     expect(opp.status).toBe('pending_partner');
     expect(
-      (service as any).mailService.sendPartnerVerification,
+      privates(service).mailService.sendPartnerVerification,
     ).toHaveBeenCalled();
     expect(
-      (service as any).mailService.sendAdminOpportunityReviewNeeded,
+      privates(service).mailService.sendAdminOpportunityReviewNeeded,
     ).not.toHaveBeenCalled();
   });
 });
@@ -2201,14 +2365,14 @@ describe('OpportunitiesService — update() faculty-owned opportunity resubmit s
 
   function makeFacultyService(opp: Opportunity) {
     const findOne = jest.fn().mockResolvedValue(opp);
-    const save = jest.fn(async (row: Opportunity) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({ findOne, save });
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest
         .fn()
         .mockResolvedValue({ id: 'faculty-1', role: 'faculty' }),
     };
-    (service as any).organizationsService = {
+    privates(service).organizationsService = {
       getMyOrganization: jest.fn().mockResolvedValue(null),
     };
     return service;
@@ -2218,16 +2382,16 @@ describe('OpportunitiesService — update() faculty-owned opportunity resubmit s
     const opp = makeFacultyOpp();
     const service = makeFacultyService(opp);
 
-    const saved = await service.update('faculty-1', {
+    const saved = await updateRow(service, 'faculty-1', {
       id: 'fac-opp-1',
       title: 'Fixed a typo in the title',
-    } as any);
+    } as unknown as UpdateOpportunityDto);
 
-    expect((saved as any).status).toBe('active');
-    expect((saved as any).workflowStage).toBe('live');
-    expect((saved as any).admin_approved).toBe(true);
-    expect((saved as any).partnerApprovalStatus).toBe('approved');
-    expect((saved as any).adminApprovalStatus).toBe('approved');
+    expect(saved.status).toBe('active');
+    expect(saved.workflowStage).toBe('live');
+    expect(saved.admin_approved).toBe(true);
+    expect(saved.partnerApprovalStatus).toBe('approved');
+    expect(saved.adminApprovalStatus).toBe('approved');
   });
 
   it('after CIEL PK requests revision mid-chain, resubmitting only rewinds the admin line — the already-approved partner line is untouched', async () => {
@@ -2242,16 +2406,16 @@ describe('OpportunitiesService — update() faculty-owned opportunity resubmit s
     });
     const service = makeFacultyService(opp);
 
-    const saved = await service.update('faculty-1', {
+    const saved = await updateRow(service, 'faculty-1', {
       id: 'fac-opp-1',
       title: 'Addressed CIEL PK feedback',
-    } as any);
+    } as unknown as UpdateOpportunityDto);
 
-    expect((saved as any).partnerApprovalStatus).toBe('approved');
-    expect((saved as any).partnerVerified).toBe(true);
-    expect((saved as any).adminApprovalStatus).toBe('pending');
-    expect((saved as any).status).toBe('pending_approval');
-    expect((saved as any).workflowStage).toBe('pending_admin');
+    expect(saved.partnerApprovalStatus).toBe('approved');
+    expect(saved.partnerVerified).toBe(true);
+    expect(saved.adminApprovalStatus).toBe('pending');
+    expect(saved.status).toBe('pending_approval');
+    expect(saved.workflowStage).toBe('pending_admin');
   });
 
   it('(scoped-reset branch) if the partner line is flagged after the opportunity had already gone live, resubmitting rewinds both the partner and admin lines back to pending', async () => {
@@ -2268,16 +2432,16 @@ describe('OpportunitiesService — update() faculty-owned opportunity resubmit s
     });
     const service = makeFacultyService(opp);
 
-    const saved = await service.update('faculty-1', {
+    const saved = await updateRow(service, 'faculty-1', {
       id: 'fac-opp-1',
       title: 'Addressed partner feedback',
-    } as any);
+    } as unknown as UpdateOpportunityDto);
 
-    expect((saved as any).partnerApprovalStatus).toBe('pending');
-    expect((saved as any).partnerVerified).toBe(false);
-    expect((saved as any).adminApprovalStatus).toBe('pending');
-    expect((saved as any).status).toBe('pending_partner');
-    expect((saved as any).workflowStage).toBe('pending_partner');
+    expect(saved.partnerApprovalStatus).toBe('pending');
+    expect(saved.partnerVerified).toBe(false);
+    expect(saved.adminApprovalStatus).toBe('pending');
+    expect(saved.status).toBe('pending_partner');
+    expect(saved.workflowStage).toBe('pending_partner');
   });
 
   it('(full-reset branch) partner rejected before admin ever reviewed — resubmitting recomputes the pipeline and lands back in pending_partner', async () => {
@@ -2290,18 +2454,18 @@ describe('OpportunitiesService — update() faculty-owned opportunity resubmit s
       partnerVerified: false,
     });
     const service = makeFacultyService(opp);
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
 
-    const saved = await service.update('faculty-1', {
+    const saved = await updateRow(service, 'faculty-1', {
       id: 'fac-opp-1',
       title: 'Addressed partner feedback',
-    } as any);
+    } as unknown as UpdateOpportunityDto);
 
-    expect((saved as any).partnerApprovalStatus).toBe('pending');
-    expect((saved as any).partnerVerified).toBe(false);
-    expect((saved as any).adminApprovalStatus).toBe('pending');
-    expect((saved as any).status).toBe('pending_partner');
-    expect((saved as any).workflowStage).toBe('pending_partner');
+    expect(saved.partnerApprovalStatus).toBe('pending');
+    expect(saved.partnerVerified).toBe(false);
+    expect(saved.adminApprovalStatus).toBe('pending');
+    expect(saved.status).toBe('pending_partner');
+    expect(saved.workflowStage).toBe('pending_partner');
   });
 
   it('resubmit into pending_partner issues a fresh partner token and re-emails the partner; a mail failure does not fail the save', async () => {
@@ -2315,24 +2479,22 @@ describe('OpportunitiesService — update() faculty-owned opportunity resubmit s
     });
     const service = makeFacultyService(opp);
     const sendPartnerVerification = jest
-      .fn()
+      .fn<Promise<void>, Parameters<MailService['sendPartnerVerification']>>()
       .mockRejectedValue(new Error('smtp down'));
-    (service as any).mailService = { sendPartnerVerification };
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).mailService = { sendPartnerVerification };
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
 
-    const saved = await service.update('faculty-1', {
+    const saved = await updateRow(service, 'faculty-1', {
       id: 'fac-opp-1',
       title: 'Addressed partner feedback',
-    } as any);
+    } as unknown as UpdateOpportunityDto);
 
-    expect((saved as any).status).toBe('pending_partner');
-    expect((saved as any).partnerToken).toBeTruthy();
-    expect((saved as any).partnerToken).not.toBe('existing-partner-token');
+    expect(saved.status).toBe('pending_partner');
+    expect(saved.partnerToken).toBeTruthy();
+    expect(saved.partnerToken).not.toBe('existing-partner-token');
     expect(sendPartnerVerification).toHaveBeenCalledTimes(1);
     expect(sendPartnerVerification.mock.calls[0][0]).toBe('partner@org.com');
-    expect(sendPartnerVerification.mock.calls[0][2]).toBe(
-      (saved as any).partnerToken,
-    );
+    expect(sendPartnerVerification.mock.calls[0][2]).toBe(saved.partnerToken);
   });
 });
 
@@ -2360,24 +2522,26 @@ describe('OpportunitiesService — update() partner token rotation (scoped-reset
     } as unknown as Opportunity;
     const service = makeService({
       findOne: jest.fn().mockResolvedValue(opp),
-      save: jest.fn(async (row: Opportunity) => row),
+      save: jest.fn((row: Opportunity) => Promise.resolve(row)),
     });
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest
         .fn()
         .mockResolvedValue({ id: 'faculty-1', role: 'faculty' }),
     };
-    (service as any).organizationsService = {
+    privates(service).organizationsService = {
       getMyOrganization: jest.fn().mockResolvedValue(null),
     };
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-    const sendPartnerVerification = jest.fn().mockResolvedValue(true);
-    (service as any).mailService = { sendPartnerVerification };
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
+    const sendPartnerVerification = jest
+      .fn<Promise<void>, Parameters<MailService['sendPartnerVerification']>>()
+      .mockResolvedValue(undefined);
+    privates(service).mailService = { sendPartnerVerification };
 
-    const saved: any = await service.update('faculty-1', {
+    const saved = await updateRow(service, 'faculty-1', {
       id: 'fac-opp-9',
       title: 'T2',
-    } as any);
+    } as unknown as UpdateOpportunityDto);
 
     expect(saved.status).toBe('pending_partner');
     expect(saved.partnerToken).not.toBe('old-token');
@@ -2397,9 +2561,9 @@ describe('OpportunitiesService — revise() now supports non-student-created opp
       adminApprovalStatus: 'pending',
     } as unknown as Opportunity;
     const findOne = jest.fn().mockResolvedValue(opp);
-    const save = jest.fn(async (row: Opportunity) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({ findOne, save });
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
 
     const saved = await service.revise(
       'fac-opp-2',
@@ -2407,11 +2571,9 @@ describe('OpportunitiesService — revise() now supports non-student-created opp
       { id: 'admin-1', name: 'Ayesha (CIEL PK)' },
     );
 
-    expect((saved as any).status).toBe('revision');
-    expect((saved as any).adminApprovalStatus).toBe('revision_requested');
-    expect((saved as any).rejectionReason).toBe(
-      'Please add a specific location.',
-    );
+    expect(saved.status).toBe('revision');
+    expect(saved.adminApprovalStatus).toBe('revision_requested');
+    expect(saved.rejectionReason).toBe('Please add a specific location.');
   });
 });
 
@@ -2432,9 +2594,9 @@ describe('OpportunitiesService — approval actions record actor + timestamp + v
     } as unknown as Opportunity;
     const service = makeService({
       findOne: jest.fn().mockResolvedValue(opp),
-      save: jest.fn(async (row: Opportunity) => row),
+      save: jest.fn((row: Opportunity) => Promise.resolve(row)),
     });
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
 
     await expect(service.approve('opp-exec-1')).rejects.toBeInstanceOf(
       BadRequestException,
@@ -2453,10 +2615,10 @@ describe('OpportunitiesService — approval actions record actor + timestamp + v
       approvalHistory: [],
     } as unknown as Opportunity;
     const findOne = jest.fn().mockResolvedValue(opp);
-    const save = jest.fn(async (row: Opportunity) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({ findOne, save });
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-    (service as any).mailService = {
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).mailService = {
       sendAdminOpportunityReviewNeeded: jest.fn(),
     };
 
@@ -2467,7 +2629,7 @@ describe('OpportunitiesService — approval actions record actor + timestamp + v
     });
     const after = Date.now();
 
-    const history = (saved as any).approvalHistory;
+    const history = saved.approvalHistory;
     expect(history).toHaveLength(1);
     expect(history[0]).toMatchObject({
       line: 'admin',
@@ -2502,9 +2664,9 @@ describe('OpportunitiesService — approval actions record actor + timestamp + v
       ],
     } as unknown as Opportunity;
     const findOne = jest.fn().mockResolvedValue(opp);
-    const save = jest.fn(async (row: Opportunity) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({ findOne, save });
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
 
     const saved = await service.revise(
       'opp-audit-2',
@@ -2515,7 +2677,7 @@ describe('OpportunitiesService — approval actions record actor + timestamp + v
       },
     );
 
-    const history = (saved as any).approvalHistory;
+    const history = saved.approvalHistory;
     expect(history).toHaveLength(2);
     // The pre-existing faculty entry must survive untouched.
     expect(history[0]).toMatchObject({
@@ -2542,19 +2704,19 @@ describe('OpportunitiesService — approval actions record actor + timestamp + v
       version: 1,
       approvalHistory: [],
     } as unknown as Opportunity;
-    const save = jest.fn(async (row: Opportunity) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({
       findOne: jest.fn().mockResolvedValue(opp),
       save,
     });
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
 
     await expect(service.reject('opp-rej-1', '  ')).rejects.toBeInstanceOf(
       BadRequestException,
     );
     await service.reject('opp-rej-1', 'Not suitable', { id: 'a1', name: 'A' });
     await service.reject('opp-rej-1', 'Not suitable', { id: 'a1', name: 'A' });
-    expect((opp as any).approvalHistory).toHaveLength(1);
+    expect(opp.approvalHistory).toHaveLength(1);
     expect(save).toHaveBeenCalledTimes(1);
     await expect(service.revise('opp-rej-1', 'again')).rejects.toBeInstanceOf(
       BadRequestException,
@@ -2571,7 +2733,7 @@ describe('OpportunitiesService — approval actions record actor + timestamp + v
       admin_approved: true,
       workflowStage: 'live',
     } as unknown as Opportunity;
-    const save = jest.fn(async (row: Opportunity) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({
       findOne: jest.fn().mockResolvedValue(opp),
       save,
@@ -2585,11 +2747,11 @@ describe('OpportunitiesService — approval actions record actor + timestamp + v
     const closed = await service.setStatus('o', 'closed');
     expect(closed.status).toBe('closed');
     expect(opp.admin_approved).toBe(true);
-    expect((opp as any).workflowStage).toBe('live');
+    expect(opp.workflowStage).toBe('live');
     const reopened = await service.setStatus('o', 'active');
     expect(reopened.status).toBe('active');
     expect(opp.admin_approved).toBe(true);
-    expect((opp as any).workflowStage).toBe('live');
+    expect(opp.workflowStage).toBe('live');
   });
 
   it('setStatus(active) republishes an approved draft without re-approval', async () => {
@@ -2599,7 +2761,7 @@ describe('OpportunitiesService — approval actions record actor + timestamp + v
       admin_approved: true,
       workflowStage: 'live',
     } as unknown as Opportunity;
-    const save = jest.fn(async (row: Opportunity) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({
       findOne: jest.fn().mockResolvedValue(opp),
       save,
@@ -2607,11 +2769,11 @@ describe('OpportunitiesService — approval actions record actor + timestamp + v
     const saved = await service.setStatus('o', 'active');
     expect(saved.status).toBe('active');
     expect(opp.admin_approved).toBe(true);
-    expect((opp as any).workflowStage).toBe('live');
+    expect(opp.workflowStage).toBe('live');
   });
 
   it('setStatus(active) refuses unapproved, rejected, or in-revision listings', async () => {
-    const save = jest.fn(async (row: Opportunity) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const unapproved = {
       id: 'o',
       status: 'draft',
@@ -2667,7 +2829,7 @@ describe('OpportunitiesService — approval actions record actor + timestamp + v
         visibility_type: 'open_all_universities',
       },
     } as unknown as Opportunity;
-    const save = jest.fn(async (row: Opportunity) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({
       findOne: jest.fn().mockResolvedValue(opp),
       save,
@@ -2703,7 +2865,7 @@ describe('OpportunitiesService — approval actions record actor + timestamp + v
         visibility_type: 'open_all_universities',
       },
     } as unknown as Opportunity;
-    const save = jest.fn(async (row: Opportunity) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({
       findOne: jest.fn().mockResolvedValue(opp),
       save,
@@ -2719,7 +2881,7 @@ describe('OpportunitiesService — approval actions record actor + timestamp + v
   });
 
   it('setDirectoryControl() is stage-agnostic: hide/expire works on rejected, revision, and draft listings', async () => {
-    const save = jest.fn(async (row: Opportunity) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
 
     const rejected = {
       id: 'o',
@@ -2794,12 +2956,12 @@ describe('OpportunitiesService — update() strips server-controlled fields (mas
       title: 'Old title',
     } as unknown as Opportunity;
     const findOne = jest.fn().mockResolvedValue(opp);
-    const save = jest.fn(async (row: Opportunity) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({ findOne, save });
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest.fn().mockResolvedValue({ id: 'ngo-1', role: 'ngo' }),
     };
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
     return { service, opp, save };
   }
 
@@ -2807,7 +2969,11 @@ describe('OpportunitiesService — update() strips server-controlled fields (mas
     const { service, opp } = makeOrgService();
     await service.update(
       'ngo-1',
-      { id: 'org-opp-1', title: 'New title', ...forged } as any,
+      {
+        id: 'org-opp-1',
+        title: 'New title',
+        ...forged,
+      } as unknown as UpdateOpportunityDto,
       'org-1',
     );
     expect(opp.title).toBe('New title');
@@ -2820,7 +2986,7 @@ describe('OpportunitiesService — update() strips server-controlled fields (mas
     expect(opp.isStudentCreated).toBe(false);
     expect(opp.version).toBe(1);
     expect(opp.approvalHistory).toEqual([]);
-    expect((opp as any).partnerToken).toBeUndefined();
+    expect(opp.partnerToken).toBeUndefined();
   });
 
   it('rejects a user from another organization with 403', async () => {
@@ -2828,7 +2994,7 @@ describe('OpportunitiesService — update() strips server-controlled fields (mas
     await expect(
       service.update(
         'ngo-1',
-        { id: 'org-opp-1', title: 'Hijack' } as any,
+        { id: 'org-opp-1', title: 'Hijack' } as unknown as UpdateOpportunityDto,
         'someone-elses-org',
       ),
     ).rejects.toThrow(/access/i);
@@ -2839,13 +3005,13 @@ describe('OpportunitiesService — public token hardening', () => {
   const past = new Date(Date.now() - 60_000);
   const build = (opp: Partial<Opportunity> | null) => {
     const findOne = jest.fn().mockResolvedValue(opp);
-    const save = jest.fn(async (o: Opportunity) => o);
+    const save = jest.fn((o: Opportunity) => Promise.resolve(o));
     const service = makeService({ findOne, save });
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
     return { service, findOne, save };
   };
 
-  it.each([
+  const malformedTokens: unknown[] = [
     undefined,
     null,
     '',
@@ -2853,11 +3019,14 @@ describe('OpportunitiesService — public token hardening', () => {
     'a'.repeat(200),
     'tok en',
     "x' OR 1=1",
-    ['a'] as any,
-    { a: 1 } as any,
-  ])(
+    ['a'],
+    { a: 1 },
+  ];
+  it.each(malformedTokens)(
     'malformed token %p gets the generic 404 without querying the DB',
-    async (bad) => {
+    async (raw) => {
+      // Malformed input arrives typed as a string from the controller.
+      const bad = raw as string;
       const { service, findOne } = build(null);
       await expect(service.verifyFaculty(bad)).rejects.toThrow(
         NotFoundException,
@@ -2888,7 +3057,7 @@ describe('OpportunitiesService — public token hardening', () => {
       partnerVerified: false,
       partnerTokenExpiresAt: past,
       status: 'pending_partner',
-    } as any;
+    } as unknown as Opportunity;
     const { service, save } = build(opp);
     await expect(
       service.getPublicPartnerVerificationPreview('ptok'),
@@ -2910,7 +3079,7 @@ describe('OpportunitiesService — public token hardening', () => {
       creatorId: 'c',
       status: 'pending_faculty',
       workflowStage: 'pending_faculty',
-    } as any;
+    } as unknown as Opportunity;
     const { service, save } = build(opp);
     await expect(
       service.getPublicFacultyVerificationPreview('ftok'),
@@ -2935,7 +3104,7 @@ describe('OpportunitiesService — public token hardening', () => {
       status: 'pending_partner',
       workflowStage: 'pending_partner',
       approvalHistory: [],
-    } as any;
+    } as unknown as Opportunity;
     const { service, save } = build(opp);
     await expect(
       service.decideOpportunityViaPartnerToken(
@@ -2945,7 +3114,11 @@ describe('OpportunitiesService — public token hardening', () => {
       ),
     ).rejects.toThrow(BadRequestException);
     await expect(
-      service.decideOpportunityViaFacultyToken('ftok', 'reject', 123 as any),
+      service.decideOpportunityViaFacultyToken(
+        'ftok',
+        'reject',
+        123 as unknown as string,
+      ),
     ).rejects.toThrow(BadRequestException);
     expect(save).not.toHaveBeenCalled();
     expect(opp.approvalHistory).toHaveLength(0);
@@ -2962,7 +3135,7 @@ describe('OpportunitiesService — public token hardening', () => {
       workflowStage: 'rejected',
       status: 'rejected',
       approvalHistory: [],
-    } as any;
+    } as unknown as Opportunity;
     const { service, save } = build(opp);
     await expect(service.verifyFaculty('ftok')).rejects.toThrow(
       BadRequestException,
@@ -2986,7 +3159,7 @@ describe('OpportunitiesService — public token hardening', () => {
       workflowStage: 'revision',
       status: 'revision',
       approvalHistory: [],
-    } as any;
+    } as unknown as Opportunity;
     const { service, save } = build(opp);
     await expect(service.verifyFaculty('ftok')).rejects.toThrow(
       BadRequestException,
@@ -3007,7 +3180,7 @@ describe('OpportunitiesService — public token hardening', () => {
       workflowStage: 'revision',
       status: 'revision',
       approvalHistory: [],
-    } as any;
+    } as unknown as Opportunity;
     const a = build(inRevision);
     await expect(
       a.service.decideOpportunityViaPartnerToken('ptok', 'revision', 'r'),
@@ -3023,7 +3196,7 @@ describe('OpportunitiesService — public token hardening', () => {
       workflowStage: 'live',
       status: 'active',
       approvalHistory: [],
-    } as any;
+    } as unknown as Opportunity;
     const b = build(live);
     await expect(
       b.service.decideOpportunityViaPartnerToken('ptok', 'reject'),
@@ -3045,7 +3218,7 @@ describe('OpportunitiesService — public token hardening', () => {
         status,
         workflowStage,
         approvalHistory: [],
-      } as any;
+      } as unknown as Opportunity;
       const { service, save } = build(opp);
       await expect(service.verifyOpportunityToken('ptok')).rejects.toThrow(
         BadRequestException,
@@ -3066,7 +3239,7 @@ describe('OpportunitiesService — public token hardening', () => {
       status: 'rejected',
       workflowStage: 'rejected',
       approvalHistory: [],
-    } as any;
+    } as unknown as Opportunity;
     const { service, save } = build(opp);
     await expect(service.verifyOpportunityToken('ptok')).rejects.toThrow(
       BadRequestException,
@@ -3081,7 +3254,7 @@ describe('OpportunitiesService — public token hardening', () => {
       liaisonVerified: false,
       status: 'rejected',
       workflowStage: 'rejected',
-    } as any;
+    } as unknown as Opportunity;
     const a = build(rejected);
     await expect(a.service.verifyOpportunityToken('ltok')).rejects.toThrow(
       BadRequestException,
@@ -3097,9 +3270,9 @@ describe('OpportunitiesService — public token hardening', () => {
       status: 'pending_approval',
       workflowStage: 'pending_admin',
       facultyId: 'f',
-    } as any;
+    } as unknown as Opportunity;
     const b = build(pending);
-    (b.service as any).assignFacultyIdFromSupervisionIfMissing = jest.fn();
+    privates(b.service).assignFacultyIdFromSupervisionIfMissing = jest.fn();
     await b.service.verifyOpportunityToken('ltok');
     expect(pending.status).toBe('pending_approval');
   });
@@ -3111,15 +3284,15 @@ describe('OpportunitiesService — public token hardening', () => {
       execution_verified: false,
       status: 'rejected',
       workflowStage: 'rejected',
-    } as any;
+    } as unknown as Opportunity;
     const service = makeService({
       findOne: jest.fn().mockResolvedValue(opp),
       save: jest.fn(),
     });
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest.fn().mockResolvedValue({ id: 'u', email: 'a@b.org' }),
     };
-    (service as any).findOne = jest.fn().mockResolvedValue(opp);
+    service.findOne = jest.fn().mockResolvedValue(opp);
     await expect(
       service.verifyExecutingOrganizationForUser('u', 'a@b.org', 'o'),
     ).rejects.toThrow(BadRequestException);
@@ -3137,10 +3310,10 @@ describe('OpportunitiesService — public token hardening', () => {
       workflowStage: 'pending_partner',
       version: 3,
       approvalHistory: [],
-    } as any;
+    } as unknown as Opportunity;
     const { service, save } = build(opp);
-    (service as any).assignFacultyIdFromSupervisionIfMissing = jest.fn();
-    (service as any).handlePartnerApprovedSideEffects = jest.fn();
+    privates(service).assignFacultyIdFromSupervisionIfMissing = jest.fn();
+    privates(service).handlePartnerApprovedSideEffects = jest.fn();
     await service.verifyOpportunityToken('ptok');
     expect(opp.status).toBe('pending_approval');
     expect(opp.workflowStage).toBe('pending_admin');
@@ -3180,9 +3353,9 @@ describe('OpportunitiesService — e2e-found regressions', () => {
       const opp = baseOrgRow(over);
       const service = makeService({
         findOne: jest.fn().mockResolvedValue(opp),
-        save: jest.fn(async (row: Opportunity) => row),
+        save: jest.fn((row: Opportunity) => Promise.resolve(row)),
       });
-      (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+      privates(service).opportunityWorkflow = new OpportunityWorkflowService();
       await expect(
         service.approve('opp-r', { id: 'a1' }),
       ).rejects.toBeInstanceOf(BadRequestException);
@@ -3201,17 +3374,18 @@ describe('OpportunitiesService — e2e-found regressions', () => {
     });
     const service = makeService({
       findOne: jest.fn().mockResolvedValue(opp),
-      save: jest.fn(async (row: Opportunity) => row),
+      save: jest.fn((row: Opportunity) => Promise.resolve(row)),
     });
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest.fn().mockResolvedValue({ id: 'ngo-1', role: 'ngo' }),
     };
-    (service as any).mailService = {
+    privates(service).mailService = {
       sendAdminOpportunityReviewNeeded: jest.fn(),
     };
-    const saved: any = await service.update(
+    const saved = await updateRow(
+      service,
       'ngo-1',
-      { id: 'opp-r', title: 'Better' } as any,
+      { id: 'opp-r', title: 'Better' } as unknown as UpdateOpportunityDto,
       'org-1',
     );
     expect(saved.status).toBe('pending_approval');
@@ -3232,19 +3406,20 @@ describe('OpportunitiesService — e2e-found regressions', () => {
     });
     const service = makeService({
       findOne: jest.fn().mockResolvedValue(opp),
-      save: jest.fn(async (row: Opportunity) => row),
+      save: jest.fn((row: Opportunity) => Promise.resolve(row)),
     });
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest.fn().mockResolvedValue({ id: 'ngo-1', role: 'ngo' }),
     };
-    const saved: any = await service.update(
+    const saved = await updateRow(
+      service,
       'ngo-1',
       {
         id: 'opp-r',
         title: 'Only a title',
         supervision: undefined,
         partner_organization: undefined,
-      } as any,
+      } as unknown as UpdateOpportunityDto,
       'org-1',
     );
     expect(saved.title).toBe('Only a title');
@@ -3267,13 +3442,16 @@ describe('OpportunitiesService — e2e-found regressions', () => {
       });
       const service = makeService({
         findOne: jest.fn().mockResolvedValue(opp),
-        save: jest.fn(async (row: Opportunity) => row),
+        save: jest.fn((row: Opportunity) => Promise.resolve(row)),
       });
-      (service as any).usersRepository = {
+      privates(service).usersRepository = {
         findOne: jest.fn().mockResolvedValue({ id: 's1', role: 'student' }),
       };
       await expect(
-        service.update('s1', { id: 'opp-r', title: 'sneaky' } as any),
+        service.update('s1', {
+          id: 'opp-r',
+          title: 'sneaky',
+        } as unknown as UpdateOpportunityDto),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(opp.title).toBeUndefined();
     }
@@ -3291,10 +3469,10 @@ describe('OpportunitiesService — admin reject / revise require a reason', () =
       admin_approved: false,
     } as unknown as Opportunity;
     const findOne = jest.fn().mockResolvedValue(opp);
-    const save = jest.fn(async (row: Opportunity) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({ findOne, save });
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-    (service as any).notifyStudentOpportunityUpdate = jest.fn();
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).notifyStudentOpportunityUpdate = jest.fn();
     return { service, opp, save, findOne };
   }
 
@@ -3312,7 +3490,10 @@ describe('OpportunitiesService — admin reject / revise require a reason', () =
   ])('%s with reason %p -> 400 and no state change', async (action, reason) => {
     const { service, opp, save } = setup();
     await expect(
-      (service as any)[action]('opp-r-1', reason, { id: 'a', name: 'A' }),
+      service[action as 'reject' | 'revise']('opp-r-1', reason as string, {
+        id: 'a',
+        name: 'A',
+      }),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(save).not.toHaveBeenCalled();
     expect(opp.status).toBe('pending_approval');
@@ -3339,8 +3520,8 @@ describe('OpportunitiesService — admin reject / revise require a reason', () =
 
 describe('OpportunitiesService — create() idempotency for org / faculty / admin creators', () => {
   function setup(recent: unknown = null) {
-    const create = jest.fn((payload) => payload);
-    const save = jest.fn((payload) =>
+    const create = jest.fn((payload: Record<string, unknown>) => payload);
+    const save = jest.fn((payload: Record<string, unknown>) =>
       Promise.resolve({ id: 'new-opp-id', ...payload }),
     );
     const d = createDedupeStubs(recent);
@@ -3351,19 +3532,19 @@ describe('OpportunitiesService — create() idempotency for org / faculty / admi
       find: jest.fn().mockResolvedValue([]),
       ...d.stubs,
     });
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest.fn().mockResolvedValue({
         id: 'ngo-user-1',
         role: 'ngo',
         email: 'contact@ngo.org',
       }),
     };
-    (service as any).organizationsService = {
+    privates(service).organizationsService = {
       getMyOrganization: jest.fn().mockResolvedValue({ id: 'org-1' }),
     };
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
     const mailService = { sendAdminOpportunityReviewNeeded: jest.fn() };
-    (service as any).mailService = mailService;
+    privates(service).mailService = mailService;
     return { service, save, mailService, ...d };
   }
   const dto = (over: Record<string, unknown> = {}) => ({
@@ -3389,7 +3570,10 @@ describe('OpportunitiesService — create() idempotency for org / faculty / admi
   it('returns the recently created identical row: no save, no mail, lock taken and released', async () => {
     const existing = { id: 'existing-opp', title: 'Beach cleanup drive' };
     const { service, save, mailService, lockQuery, dedupeQb } = setup(existing);
-    const out = await service.create('ngo-user-1', dto() as any);
+    const out = await service.create(
+      'ngo-user-1',
+      dto() as unknown as CreateOpportunityDto,
+    );
     expect(out).toBe(existing);
     expect(save).not.toHaveBeenCalled();
     expect(mailService.sendAdminOpportunityReviewNeeded).not.toHaveBeenCalled();
@@ -3399,15 +3583,18 @@ describe('OpportunitiesService — create() idempotency for org / faculty / admi
     ]);
     expect(lockQuery.mock.calls[1][0]).toContain('pg_advisory_unlock');
     // rejected / deleted rows are excluded from the lookup
-    const ignored = dedupeQb.andWhere.mock.calls.find(
-      (c: any[]) => c[1]?.ignored,
-    )?.[1].ignored;
+    const ignored = dedupeQb.andWhere.mock.calls.find((c) => c[1]?.ignored)?.[1]
+      ?.ignored;
     expect(ignored).toEqual(expect.arrayContaining(['rejected', 'deleted']));
   });
 
   it('creates normally when nothing matches, stamps a fingerprint, and never returns it', async () => {
     const { service, save } = setup(null);
-    const out: any = await service.create('ngo-user-1', dto() as any);
+    const out = await createRow(
+      service,
+      'ngo-user-1',
+      dto() as unknown as CreateOpportunityDto,
+    );
     expect(save).toHaveBeenCalledTimes(1);
     expect(save.mock.calls[0][0].createFingerprint).toMatch(/^[0-9a-f]{64}$/);
     expect(out.createFingerprint).toBeUndefined();
@@ -3417,7 +3604,10 @@ describe('OpportunitiesService — create() idempotency for org / faculty / admi
   it('releases the lock even when creation throws', async () => {
     const { service, lockQuery } = setup(null);
     await expect(
-      service.create('ngo-user-1', dto({ mode: 'Onsite' }) as any),
+      service.create(
+        'ngo-user-1',
+        dto({ mode: 'Onsite' }) as unknown as CreateOpportunityDto,
+      ),
     ).rejects.toBeDefined();
     // validation fails before the lock is needed OR the lock is released — never left held
     const locks = lockQuery.mock.calls.filter((c) =>
@@ -3446,9 +3636,9 @@ describe('OpportunitiesService — university-scope (delegated) faculty can open
     } as unknown as Opportunity;
     const service = makeService({
       findOne: jest.fn().mockResolvedValue(opp),
-      save: jest.fn(async (row: Opportunity) => row),
+      save: jest.fn((row: Opportunity) => Promise.resolve(row)),
     });
-    (service as any).facultyUniversityScope = {
+    privates(service).facultyUniversityScope = {
       getDelegatedOrganizationId: jest
         .fn()
         .mockResolvedValue(delegatedIds ? 'uni-org-1' : null),
@@ -3456,29 +3646,21 @@ describe('OpportunitiesService — university-scope (delegated) faculty can open
         .fn()
         .mockResolvedValue(delegatedIds ?? []),
     };
-    (service as any).opportunityApplicationsService = {
+    privates(service).opportunityApplicationsService = {
       findActionablePendingFacultyApplicationForDashboard: jest
         .fn()
         .mockResolvedValue(null),
     };
-    (service as any).participationRepository = {
+    privates(service).participationRepository = {
       count: jest.fn().mockResolvedValue(0),
     };
-    (service as any).opportunitiesRepository.manager = {
+    privates(service).opportunitiesRepository.manager = {
       getRepository: () => ({
-        count: async () => 0,
-        createQueryBuilder: () => ({
-          where() {
-            return this;
-          },
-          andWhere() {
-            return this;
-          },
-          getCount: async () => 0,
-        }),
+        count: () => Promise.resolve(0),
+        createQueryBuilder: zeroCountBuilder,
       }),
     };
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest
         .fn()
         .mockResolvedValue({ id: 'student-1', name: 'S', email: 's@uni.edu' }),
@@ -3495,35 +3677,32 @@ describe('OpportunitiesService — university-scope (delegated) faculty can open
 
   it('detail: a delegated faculty gets the record (not 404)', async () => {
     const { service } = makeDelegateService(['opp-scope-1']);
-    const data: any = await service.findOneWithCreator(
-      'opp-scope-1',
-      delegate as any,
-    );
-    expect(data.id).toBe('opp-scope-1');
+    const data = await service.findOneWithCreator('opp-scope-1', delegate);
+    expect(data?.id).toBe('opp-scope-1');
   });
 
   it('detail: a faculty with no delegation for it still gets 404', async () => {
     const { service } = makeDelegateService(['some-other-opp']);
     await expect(
-      service.findOneWithCreator('opp-scope-1', delegate as any),
+      service.findOneWithCreator('opp-scope-1', delegate),
     ).rejects.toThrow(/not found/i);
   });
 
   it('detail: a faculty with no scope assignment at all still gets 404', async () => {
     const { service } = makeDelegateService(null);
     await expect(
-      service.findOneWithCreator('opp-scope-1', delegate as any),
+      service.findOneWithCreator('opp-scope-1', delegate),
     ).rejects.toThrow(/not found/i);
   });
 
   it('approve: delegated faculty passes the supervisor check (no 403)', async () => {
     const { service } = makeDelegateService(['opp-scope-1']);
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-    (service as any).mailService = {
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).mailService = {
       sendPartnerVerification: jest.fn(),
       sendStudentOpportunityStatusUpdate: jest.fn(),
     };
-    (service as any).notificationsService = {
+    privates(service).notificationsService = {
       createApprovalNotification: jest.fn(),
     };
     await expect(
@@ -3545,7 +3724,12 @@ describe('OpportunitiesService — university-scope (delegated) faculty can open
     async (method) => {
       const { service } = makeDelegateService(['some-other-opp']);
       await expect(
-        (service as any)[method](
+        service[
+          method as
+            | 'facultyDashboardApprove'
+            | 'facultyDashboardReject'
+            | 'facultyDashboardRevise'
+        ](
           'opp-scope-1',
           delegate.id,
           delegate.email,
@@ -3578,7 +3762,7 @@ describe('OpportunitiesService — every list-visible reviewer identity can open
       ...oppOver,
     } as unknown as Opportunity;
     const service = makeService({ findOne: jest.fn().mockResolvedValue(opp) });
-    (service as any).facultyUniversityScope = {
+    privates(service).facultyUniversityScope = {
       getDelegatedOrganizationId: jest.fn().mockResolvedValue(null),
       resolveOpportunityIdsForUniversityOrganization: jest
         .fn()
@@ -3589,24 +3773,16 @@ describe('OpportunitiesService — every list-visible reviewer identity can open
           .includes('university'),
       normalizeOrgName: (n: string) => (n || '').trim().toLowerCase(),
     };
-    (service as any).participationRepository = {
+    privates(service).participationRepository = {
       count: jest.fn().mockResolvedValue(0),
     };
-    (service as any).opportunitiesRepository.manager = {
+    privates(service).opportunitiesRepository.manager = {
       getRepository: () => ({
-        count: async () => (opts.hasApplication ? 1 : 0),
-        createQueryBuilder: () => ({
-          where() {
-            return this;
-          },
-          andWhere() {
-            return this;
-          },
-          getCount: async () => 0,
-        }),
+        count: () => Promise.resolve(opts.hasApplication ? 1 : 0),
+        createQueryBuilder: zeroCountBuilder,
       }),
     };
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest.fn().mockResolvedValue({
         id: 'creator-1',
         name: 'C',
@@ -3614,11 +3790,12 @@ describe('OpportunitiesService — every list-visible reviewer identity can open
         phone: '123',
       }),
     };
-    (service as any).organizationsService = {
-      findOne: jest.fn(async (id: string) => {
-        if (opts.uniOrg && id === opts.uniOrg.id) return opts.uniOrg;
-        throw new Error('not found');
-      }),
+    privates(service).organizationsService = {
+      findOne: jest.fn((id: string) =>
+        opts.uniOrg && id === opts.uniOrg.id
+          ? Promise.resolve(opts.uniOrg)
+          : Promise.reject(new Error('not found')),
+      ),
       getMyOrganization: jest.fn().mockResolvedValue(null),
     };
     return { service, opp };
@@ -3642,11 +3819,11 @@ describe('OpportunitiesService — every list-visible reviewer identity can open
       },
       supervision: { contact: 'someone.else@uni.edu' },
     });
-    const data: any = await service.findOneWithCreator(
+    const data = await service.findOneWithCreator(
       'opp-acc-1',
-      viewer('fir@uni.edu') as any,
+      viewer('fir@uni.edu'),
     );
-    expect(data.creator.email).toBe('creator@x.org'); // reviewer sees the contact
+    expect(data?.creator?.email).toBe('creator@x.org'); // reviewer sees the contact
   });
 
   it('detail: every partner contact email works, not only the first non-empty source', async () => {
@@ -3656,11 +3833,11 @@ describe('OpportunitiesService — every list-visible reviewer identity can open
       partner_organization: { official_email: 'third@ngo.org' },
     });
     for (const em of ['first@ngo.org', 'second@ngo.org', 'third@ngo.org']) {
-      const data: any = await service.findOneWithCreator(
+      const data = await service.findOneWithCreator(
         'opp-acc-1',
-        viewer(em, 'ngo') as any,
+        viewer(em, 'ngo'),
       );
-      expect(data.id).toBe('opp-acc-1');
+      expect(data?.id).toBe('opp-acc-1');
     }
   });
 
@@ -3668,11 +3845,11 @@ describe('OpportunitiesService — every list-visible reviewer identity can open
     const { service } = makeAccessService({
       executing_organization: { official_email: 'exec@org.pk' },
     });
-    const data: any = await service.findOneWithCreator(
+    const data = await service.findOneWithCreator(
       'opp-acc-1',
-      viewer('exec@org.pk', 'ngo') as any,
+      viewer('exec@org.pk', 'ngo'),
     );
-    expect(data.id).toBe('opp-acc-1');
+    expect(data?.id).toBe('opp-acc-1');
   });
 
   it('detail: an unrelated login still gets 404', async () => {
@@ -3685,7 +3862,7 @@ describe('OpportunitiesService — every list-visible reviewer identity can open
     await expect(
       service.findOneWithCreator(
         'opp-acc-1',
-        viewer('stranger@x.org', 'ngo', 'other-org') as any,
+        viewer('stranger@x.org', 'ngo', 'other-org'),
       ),
     ).rejects.toThrow(/not found/i);
   });
@@ -3696,13 +3873,13 @@ describe('OpportunitiesService — every list-visible reviewer identity can open
       {},
       { uniOrg: uni, uniIds: ['opp-acc-1'] },
     );
-    const data: any = await service.findOneWithCreator(
+    const data = await service.findOneWithCreator(
       'opp-acc-1',
-      viewer('reg@uni.edu', 'university', 'uni-org') as any,
+      viewer('reg@uni.edu', 'university', 'uni-org'),
     );
-    expect(data.id).toBe('opp-acc-1');
-    expect(data.creator.email).toBeUndefined(); // contact keys stripped for non-reviewers
-    expect(data.viewer_access.can_edit).toBe(false);
+    expect(data?.id).toBe('opp-acc-1');
+    expect(data?.creator?.email).toBeUndefined(); // contact keys stripped for non-reviewers
+    expect(data?.viewer_access.can_edit).toBe(false);
   });
 
   it('detail: a university whose scope does not contain the record, or a non-university org, still gets 404', async () => {
@@ -3711,7 +3888,7 @@ describe('OpportunitiesService — every list-visible reviewer identity can open
     await expect(
       a.service.findOneWithCreator(
         'opp-acc-1',
-        viewer('reg@uni.edu', 'university', 'uni-org') as any,
+        viewer('reg@uni.edu', 'university', 'uni-org'),
       ),
     ).rejects.toThrow(/not found/i);
     const ngo = { id: 'ngo-org', orgType: 'NGO', name: 'Ngo' };
@@ -3719,27 +3896,28 @@ describe('OpportunitiesService — every list-visible reviewer identity can open
     await expect(
       b.service.findOneWithCreator(
         'opp-acc-1',
-        viewer('x@ngo.org', 'ngo', 'ngo-org') as any,
+        viewer('x@ngo.org', 'ngo', 'ngo-org'),
       ),
     ).rejects.toThrow(/not found/i);
   });
 
   it('detail: a student with their own pending join request can still open a non-public listing', async () => {
     const { service } = makeAccessService({}, { hasApplication: true });
-    const data: any = await service.findOneWithCreator(
+    const data = await service.findOneWithCreator(
       'opp-acc-1',
-      viewer('stu@uni.edu', 'student') as any,
+      viewer('stu@uni.edu', 'student'),
     );
-    expect(data.id).toBe('opp-acc-1');
-    expect(data.creator.email).toBeUndefined();
+    expect(data?.id).toBe('opp-acc-1');
+    expect(data?.creator?.email).toBeUndefined();
   });
 
-  it('viewer_access.can_edit: creator org / owner yes; named partner, exec contact, university no', async () => {
+  it('viewer_access.can_edit: creator org / owner yes; named partner, exec contact, university no', () => {
     const { service, opp } = makeAccessService({
       organizationId: 'host-org',
       partner_organization: { official_email: 'p@ngo.org' },
     });
-    const edit = (v: any) => (service as any).viewerMayEditOpportunity(opp, v);
+    const edit = (v: OpportunityDetailViewer) =>
+      privates(service).viewerMayEditOpportunity(opp, v);
     expect(
       edit({ id: 'colleague', role: 'ngo', organizationId: 'host-org' }),
     ).toBe(true);
@@ -3754,7 +3932,7 @@ describe('OpportunitiesService — every list-visible reviewer identity can open
     expect(
       edit({ id: 'creator-1', role: 'faculty', organizationId: null }),
     ).toBe(true); // faculty creator (facultyId unset)
-    (opp as any).facultyId = 'another-faculty';
+    opp.facultyId = 'another-faculty';
     expect(
       edit({ id: 'creator-1', role: 'faculty', organizationId: null }),
     ).toBe(false); // update() would 403 here too
@@ -3769,14 +3947,14 @@ describe('OpportunitiesService — every list-visible reviewer identity can open
       supervision: { contact: 'someone.else@uni.edu' },
     });
     await expect(
-      (service as any).assertFacultySupervisorForStudentOpportunity(
+      privates(service).assertFacultySupervisorForStudentOpportunity(
         opp,
         'fac-1',
         'fir@uni.edu',
       ),
     ).resolves.toBeUndefined();
     await expect(
-      (service as any).assertFacultySupervisorForStudentOpportunity(
+      privates(service).assertFacultySupervisorForStudentOpportunity(
         opp,
         'fac-2',
         'nobody@uni.edu',
@@ -3792,7 +3970,7 @@ describe('OpportunitiesService — every list-visible reviewer identity can open
       executing_context: { partner: { official_email: 'ctx@ngo.org' } },
     });
     await expect(
-      (service as any).assertPartnerOwnsOpportunity(
+      privates(service).assertPartnerOwnsOpportunity(
         opp,
         'ctx@ngo.org',
         null,
@@ -3800,7 +3978,7 @@ describe('OpportunitiesService — every list-visible reviewer identity can open
       ),
     ).resolves.toBeUndefined();
     await expect(
-      (service as any).assertPartnerOwnsOpportunity(
+      privates(service).assertPartnerOwnsOpportunity(
         opp,
         'stranger@ngo.org',
         null,
@@ -3815,7 +3993,7 @@ describe('OpportunitiesService — every list-visible reviewer identity can open
       organizationId: 'host-org',
     });
     await expect(
-      (service as any).partnerReviewIdentityMatches(
+      privates(service).partnerReviewIdentityMatches(
         opp,
         'colleague@ngo.org',
         'host-org',
@@ -3845,25 +4023,25 @@ describe('OpportunitiesService — update() mass-assignment hardening', () => {
     }) as unknown as Opportunity;
 
   function setup(opp: Opportunity, role: string, userId: string) {
-    const save = jest.fn(async (row: Opportunity) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({
       findOne: jest.fn().mockResolvedValue(opp),
       save,
     });
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest.fn().mockResolvedValue({ id: userId, role }),
     };
-    (service as any).organizationsService = {
+    privates(service).organizationsService = {
       getMyOrganization: jest.fn().mockResolvedValue({ id: 'org-1' }),
     };
-    (service as any).opportunityWorkflow = { initFacultyCreated: jest.fn() };
+    privates(service).opportunityWorkflow = { initFacultyCreated: jest.fn() };
     return service;
   }
 
   it('ignores workflow / ownership / token keys sent through the untyped PATCH body', async () => {
     const opp = baseOpp();
     const service = setup(opp, 'faculty', 'fac-1');
-    const saved = (await service.update('fac-1', {
+    const saved = await updateRow(service, 'fac-1', {
       id: 'opp-ma',
       title: 'Edited title',
       admin_approved: true,
@@ -3875,8 +4053,8 @@ describe('OpportunitiesService — update() mass-assignment hardening', () => {
       partnerToken: 'forged',
       requiredHours: 1,
       sdg: 'forged-sdg',
-    } as any)) as any;
-    const row = saved.data ?? saved;
+    } as unknown as UpdateOpportunityDto);
+    const row = saved;
     expect(row.title).toBe('Edited title');
     expect(row.admin_approved).not.toBe(true);
     expect(row.status).not.toBe('active');
@@ -3904,7 +4082,7 @@ describe('OpportunitiesService — update() mass-assignment hardening', () => {
         id: 'opp-ma',
         title: 'Rewrite live listing',
         participation_scope: { rule: 'open_all_universities' },
-      } as any),
+      } as unknown as UpdateOpportunityDto),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
@@ -3920,13 +4098,13 @@ describe('OpportunitiesService — update() mass-assignment hardening', () => {
       restricted_universities: ['BNU'],
     } as unknown as Opportunity;
     const service = setup(opp, 'student', 'stu-2');
-    const saved = (await service.update('stu-2', {
+    const saved = await updateRow(service, 'stu-2', {
       id: 'opp-ma',
       title: 'New title',
       participation_scope: { rule: 'open_all_universities' },
       restricted_universities: [],
-    } as any)) as any;
-    const row = saved.data ?? saved;
+    } as unknown as UpdateOpportunityDto);
+    const row = saved;
     expect(row.participation_scope).toEqual({ rule: 'own_university_only' });
     expect(row.restricted_universities).toEqual(['BNU']);
   });
@@ -3934,7 +4112,8 @@ describe('OpportunitiesService — update() mass-assignment hardening', () => {
 
 describe('OpportunitiesService — nested contact email validation', () => {
   const service = makeService({});
-  const call = (patch: any) => (service as any).validateEditPatch(patch);
+  const call = (patch: Record<string, unknown>) =>
+    service.validateEditPatch(patch);
 
   it('rejects malformed executing / partner / faculty-rep emails', () => {
     expect(() =>
@@ -4004,31 +4183,31 @@ describe('OpportunitiesService — org-created routing, live-edit re-review, adm
       },
       sdg_info: { sdg_id: '14' },
       ...over,
-    }) as any;
+    }) as unknown as CreateOpportunityDto;
 
   function orgCreate() {
-    const save = jest.fn((payload) =>
+    const save = jest.fn((payload: Record<string, unknown>) =>
       Promise.resolve({ id: 'new-opp', ...payload }),
     );
     const service = makeService({
-      create: jest.fn((p) => p),
+      create: jest.fn((p: Record<string, unknown>) => p),
       save,
       findOne: jest.fn(),
       find: jest.fn().mockResolvedValue([]),
       ...createDedupeStubs().stubs,
     });
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest.fn().mockResolvedValue({
         id: 'ngo-1',
         role: 'ngo',
         email: 'creator@ngo.org',
       }),
     };
-    (service as any).organizationsService = {
+    privates(service).organizationsService = {
       getMyOrganization: jest.fn().mockResolvedValue({ id: 'org-1' }),
     };
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-    (service as any).mailService = {
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).mailService = {
       sendAdminOpportunityReviewNeeded: jest.fn(),
       sendFacultyStudentOpportunityVerification: jest.fn(),
     };
@@ -4037,7 +4216,7 @@ describe('OpportunitiesService — org-created routing, live-edit re-review, adm
 
   it('the executing-org contact mirrored into supervision.contact is NOT treated as a faculty (faculty stays optional)', async () => {
     const service = orgCreate();
-    const saved = (await service.create('ngo-1', orgDto())) as any;
+    const saved = await createRow(service, 'ngo-1', orgDto());
     expect(saved.status).toBe('pending_approval');
     expect(saved.faculty_verification_token ?? null).toBeNull();
     expect(saved.facultyApprovalStatus).toBe('not_applicable');
@@ -4045,7 +4224,8 @@ describe('OpportunitiesService — org-created routing, live-edit re-review, adm
 
   it('a real faculty representative still gates the listing, and the executing-org contact does not replace them', async () => {
     const service = orgCreate();
-    const saved = (await service.create(
+    const saved = await createRow(
+      service,
       'ngo-1',
       orgDto({
         visibility_and_academic_linkage: {
@@ -4054,10 +4234,10 @@ describe('OpportunitiesService — org-created routing, live-edit re-review, adm
           },
         },
       }),
-    )) as any;
+    );
     expect(saved.status).toBe('pending_faculty');
     expect(saved.faculty_verification_token).toBeTruthy();
-    expect((service as any).resolveFacultyEmail(saved)).toBe('prof@uni.edu');
+    expect(privates(service).resolveFacultyEmail(saved)).toBe('prof@uni.edu');
   });
 
   // ---------- update(): live material edits ----------
@@ -4092,19 +4272,19 @@ describe('OpportunitiesService — org-created routing, live-edit re-review, adm
     userId: string,
     email = 'x@y.z',
   ) {
-    const save = jest.fn(async (row: Opportunity) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({
       findOne: jest.fn().mockResolvedValue(opp),
       save,
     });
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest.fn().mockResolvedValue({ id: userId, role, email }),
     };
-    (service as any).organizationsService = {
+    privates(service).organizationsService = {
       getMyOrganization: jest.fn().mockResolvedValue({ id: 'org-1' }),
     };
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-    (service as any).mailService = {
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).mailService = {
       sendAdminOpportunityReviewNeeded: jest.fn(),
       sendPartnerVerification: jest.fn().mockResolvedValue(undefined),
       sendFacultyStudentOpportunityVerification: jest
@@ -4116,10 +4296,10 @@ describe('OpportunitiesService — org-created routing, live-edit re-review, adm
 
   it('faculty: a typo fix keeps a LIVE listing live', async () => {
     const { service } = updater(liveOpp(), 'faculty', 'fac-1');
-    const saved = (await service.update('fac-1', {
+    const saved = await updateRow(service, 'fac-1', {
       id: 'opp-live',
       title: 'Live listing (fixed typo)',
-    } as any)) as any;
+    } as unknown as UpdateOpportunityDto);
     expect(saved.admin_approved).toBe(true);
     expect(saved.workflowStage).toBe('live');
     expect(saved.status).toBe('active');
@@ -4131,10 +4311,10 @@ describe('OpportunitiesService — org-created routing, live-edit re-review, adm
       'faculty',
       'fac-1',
     );
-    const saved = (await service.update('fac-1', {
+    const saved = await updateRow(service, 'fac-1', {
       id: 'opp-live',
       participation_scope: { rule: 'open_all_universities' },
-    } as any)) as any;
+    } as unknown as UpdateOpportunityDto);
     expect(saved.admin_approved).toBe(false);
     expect(saved.workflowStage).toBe('pending_admin');
     expect(saved.adminApprovalStatus).toBe('pending');
@@ -4146,11 +4326,12 @@ describe('OpportunitiesService — org-created routing, live-edit re-review, adm
       'ngo',
       'ngo-1',
     );
-    const a = (await cosmetic.service.update(
+    const a = await updateRow(
+      cosmetic.service,
       'ngo-1',
-      { id: 'opp-live', title: 'Renamed' } as any,
+      { id: 'opp-live', title: 'Renamed' } as unknown as UpdateOpportunityDto,
       'org-1',
-    )) as any;
+    );
     expect(a.admin_approved).toBe(true);
     expect(a.workflowStage).toBe('live');
 
@@ -4159,11 +4340,15 @@ describe('OpportunitiesService — org-created routing, live-edit re-review, adm
       'ngo',
       'ngo-1',
     );
-    const b = (await material.service.update(
+    const b = await updateRow(
+      material.service,
       'ngo-1',
-      { id: 'opp-live', restricted_universities: ['LUMS'] } as any,
+      {
+        id: 'opp-live',
+        restricted_universities: ['LUMS'],
+      } as unknown as UpdateOpportunityDto,
       'org-1',
-    )) as any;
+    );
     expect(b.admin_approved).toBe(false);
     expect(b.workflowStage).toBe('pending_admin');
     expect(b.status).toBe('pending_approval');
@@ -4179,11 +4364,15 @@ describe('OpportunitiesService — org-created routing, live-edit re-review, adm
       adminApprovalStatus: 'revision_requested',
     });
     const { service } = updater(opp, 'ngo', 'ngo-1');
-    const saved = (await service.update(
+    const saved = await updateRow(
+      service,
       'ngo-1',
-      { id: 'opp-live', title: 'Fixed per feedback' } as any,
+      {
+        id: 'opp-live',
+        title: 'Fixed per feedback',
+      } as unknown as UpdateOpportunityDto,
       'org-1',
-    )) as any;
+    );
     expect(saved.workflowStage).toBe('pending_admin');
     expect(saved.status).toBe('pending_approval');
     expect(saved.adminApprovalStatus).toBe('pending');
@@ -4196,7 +4385,7 @@ describe('OpportunitiesService — org-created routing, live-edit re-review, adm
       supervision: {},
     });
     const { service } = updater(opp, 'admin', 'admin-1', 'admin@cielpk.com');
-    const saved = (await service.update('admin-1', {
+    const saved = await updateRow(service, 'admin-1', {
       id: 'opp-live',
       partner_organization: {
         organization_name: 'Partner',
@@ -4207,12 +4396,12 @@ describe('OpportunitiesService — org-created routing, live-edit re-review, adm
         contact_person: 'P',
         official_email: 'partner@org.com',
       },
-    } as any)) as any;
+    } as unknown as UpdateOpportunityDto);
     expect(saved.partnerToken).toBeTruthy();
     expect(saved.status).toBe('pending_partner');
     expect(saved.admin_approved).toBe(false);
     expect(
-      (service as any).mailService.sendPartnerVerification,
+      privates(service).mailService.sendPartnerVerification,
     ).toHaveBeenCalled();
   });
 });
@@ -4223,31 +4412,33 @@ describe('OpportunitiesService — student create does not leave orphan placehol
     name: 'Ali',
     email: 'ali@uni.edu',
     university: 'BNU',
-  } as any;
+  } as unknown as User;
   const dto = {
     title: 'Reading circles',
     mode: 'Remote',
     timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
     supervision: { contact: 'teacher@uni.edu', faculty_department: 'CS' },
     sdg_info: { sdg_id: '4' },
-  } as any;
+  } as unknown as CreateOpportunityDto;
 
   function build(opportunitySave: jest.Mock) {
     const orgDelete = jest.fn().mockResolvedValue(undefined);
     const service = makeService({
-      create: jest.fn((p) => p),
+      create: jest.fn((p: Record<string, unknown>) => p),
       save: opportunitySave,
     });
-    (service as any).organizationsRepository = {
-      create: jest.fn((r) => r),
-      save: jest.fn(async (r) => ({ ...r, id: 'org-placeholder' })),
+    privates(service).organizationsRepository = {
+      create: jest.fn((r: Organization) => r),
+      save: jest.fn((r: Organization) =>
+        Promise.resolve({ ...r, id: 'org-placeholder' }),
+      ),
       delete: orgDelete,
     };
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest.fn().mockResolvedValue(null),
     };
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-    (service as any).mailService = {
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).mailService = {
       sendFacultyStudentOpportunityVerification: jest
         .fn()
         .mockResolvedValue(undefined),
@@ -4260,7 +4451,7 @@ describe('OpportunitiesService — student create does not leave orphan placehol
       jest.fn().mockRejectedValue(new Error('db down')),
     );
     await expect(
-      (service as any).finishCreatingStudentOpportunity(
+      privates(service).finishCreatingStudentOpportunity(
         dto,
         user,
         false,
@@ -4275,9 +4466,11 @@ describe('OpportunitiesService — student create does not leave orphan placehol
 
   it('keeps the organization on success', async () => {
     const { service, orgDelete } = build(
-      jest.fn(async (row) => ({ id: 'opp-1', ...row })),
+      jest.fn((row: Partial<Opportunity>) =>
+        Promise.resolve({ id: 'opp-1', ...row }),
+      ),
     );
-    const res = await (service as any).finishCreatingStudentOpportunity(
+    const res = await privates(service).finishCreatingStudentOpportunity(
       dto,
       user,
       false,
@@ -4292,10 +4485,10 @@ describe('OpportunitiesService — student create does not leave orphan placehol
 });
 
 describe('OpportunitiesService — content hygiene applies to every creator type', () => {
-  const svc = () => makeService({}) as any;
+  const svc = () => privates(makeService({}));
 
   it('strips control characters and collapses the title whitespace', () => {
-    const dto: any = {
+    const dto = {
       title: '  Beach \n  clean\u0007up ',
       objectives: {
         description: 'Line1\u0000\u0008 text\r\n\r\n\r\n\r\n\r\nEnd',
@@ -4307,7 +4500,12 @@ describe('OpportunitiesService — content hygiene applies to every creator type
     };
     svc().sanitizeAndBoundContent(dto);
     expect(dto.title).toBe('Beach clean up');
-    expect(dto.objectives.description).not.toMatch(/[\u0000-\u0008]/);
+    const controlChars = Array.from({ length: 9 }, (_, code) =>
+      String.fromCharCode(code),
+    );
+    expect(
+      controlChars.some((ch) => dto.objectives.description.includes(ch)),
+    ).toBe(false);
     expect(dto.activity_details.student_responsibilities).toBe('ab');
     expect(dto.activity_details.skills_gained).toEqual(['Teaching']);
   });
@@ -4351,27 +4549,29 @@ describe('OpportunitiesService — non-student creators cannot double-submit the
         information_correct_and_verifiable: true,
       },
       sdg_info: { sdg_id: '14' },
-    }) as any;
+    }) as unknown as CreateOpportunityDto;
 
   const build = (existing: Array<Record<string, unknown>>) => {
-    const save = jest.fn((p) => Promise.resolve({ id: 'new-opp', ...p }));
+    const save = jest.fn((p: Record<string, unknown>) =>
+      Promise.resolve({ id: 'new-opp', ...p }),
+    );
     const service = makeService({
-      create: jest.fn((p) => p),
+      create: jest.fn((p: Record<string, unknown>) => p),
       save,
       findOne: jest.fn(),
       find: jest.fn().mockResolvedValue(existing),
       ...createDedupeStubs().stubs,
     });
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest
         .fn()
         .mockResolvedValue({ id: 'ngo-1', role: 'ngo', email: 'c@ngo.org' }),
     };
-    (service as any).organizationsService = {
+    privates(service).organizationsService = {
       getMyOrganization: jest.fn().mockResolvedValue({ id: 'org-1' }),
     };
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-    (service as any).mailService = {
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).mailService = {
       sendAdminOpportunityReviewNeeded: jest.fn(),
     };
     return { service, save };
@@ -4390,7 +4590,7 @@ describe('OpportunitiesService — non-student creators cannot double-submit the
       response: expect.objectContaining({
         code: 'DUPLICATE_OPPORTUNITY_TITLE',
         existingOpportunityId: 'old-1',
-      }),
+      }) as unknown,
     });
     expect(save).not.toHaveBeenCalled();
   });
@@ -4413,25 +4613,22 @@ describe('OpportunitiesService — non-student creators cannot double-submit the
 });
 
 describe('OpportunitiesService.decideOpportunityViaPartnerToken — a stale link cannot reopen a live opportunity', () => {
-  const run = async (
-    opp: Record<string, unknown>,
-    action: 'reject' | 'revision',
-  ) => {
-    const save = jest.fn(async (row) => row);
+  const run = (opp: Record<string, unknown>, action: 'reject' | 'revision') => {
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({
       findOne: jest.fn().mockResolvedValue(opp),
       save,
     });
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
-    (service as any).notifyStudentOpportunityUpdate = jest.fn();
-    return {
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).notifyStudentOpportunityUpdate = jest.fn();
+    return Promise.resolve({
       promise: service.decideOpportunityViaPartnerToken(
         'tok',
         action,
         'reason',
       ),
       save,
-    };
+    });
   };
 
   it.each([
@@ -4502,20 +4699,20 @@ describe('OpportunitiesService — student resubmit after CIEL PK / partner revi
       rejectionReason: 'Please add the activity schedule.',
       supervision: { contact: 'teacher@uni.edu' },
     } as unknown as Opportunity;
-    const save = jest.fn(async (row: Opportunity) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({
       findOne: jest.fn().mockResolvedValue(opp),
       save,
     });
-    (service as any).usersRepository = studentUser();
-    (service as any).organizationsService = {
+    privates(service).usersRepository = studentUser();
+    privates(service).organizationsService = {
       getMyOrganization: jest.fn().mockResolvedValue(null),
     };
 
-    const saved = (await service.update('student-1', {
+    const saved = await updateRow(service, 'student-1', {
       id: 'opp-1',
       title: 'Added the activity schedule as requested',
-    } as any)) as any;
+    } as unknown as UpdateOpportunityDto);
 
     expect(saved.workflowStage).toBe('pending_admin');
     expect(saved.status).toBe('pending_approval');
@@ -4546,20 +4743,20 @@ describe('OpportunitiesService — student resubmit after CIEL PK / partner revi
       supervision: { contact: 'teacher@uni.edu' },
       partner_organization: { official_email: 'partner@org.com' },
     } as unknown as Opportunity;
-    const save = jest.fn(async (row: Opportunity) => row);
+    const save = jest.fn((row: Opportunity) => Promise.resolve(row));
     const service = makeService({
       findOne: jest.fn().mockResolvedValue(opp),
       save,
     });
-    (service as any).usersRepository = studentUser();
-    (service as any).organizationsService = {
+    privates(service).usersRepository = studentUser();
+    privates(service).organizationsService = {
       getMyOrganization: jest.fn().mockResolvedValue(null),
     };
 
-    const saved = (await service.update('student-1', {
+    const saved = await updateRow(service, 'student-1', {
       id: 'opp-2',
       title: 'Partner details corrected',
-    } as any)) as any;
+    } as unknown as UpdateOpportunityDto);
 
     expect(saved.workflowStage).toBe('pending_partner');
     expect(saved.status).toBe('pending_partner');
@@ -4586,7 +4783,7 @@ describe('OpportunitiesService — draft save can never demote a submitted listi
       findOne: jest.fn().mockResolvedValue(opp),
       save,
     });
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest
         .fn()
         .mockResolvedValue({ id: 'student-1', role: 'student' }),
@@ -4616,7 +4813,7 @@ describe('OpportunitiesService — draft save can never demote a submitted listi
       findOne: jest.fn().mockResolvedValue(opp),
       save,
     });
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest
         .fn()
         .mockResolvedValue({ id: 'student-2', role: 'student' }),
@@ -4642,7 +4839,8 @@ describe('OpportunitiesService — remove() ownership and dependency guards', ()
       id: 'opp-1',
       creatorId: opts.creatorId,
     } as unknown as Opportunity;
-    const transaction = jest.fn(async (cb: (m: unknown) => Promise<unknown>) =>
+    // remove() hands over an async callback, so its promise is returned as-is.
+    const transaction = jest.fn((cb: (m: unknown) => Promise<unknown>) =>
       cb({ delete: jest.fn().mockResolvedValue({ affected: 1 }) }),
     );
     const otherRows = Array.from(
@@ -4659,15 +4857,15 @@ describe('OpportunitiesService — remove() ownership and dependency guards', ()
       findOne: jest.fn().mockResolvedValue(opp),
       manager,
     });
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest.fn().mockResolvedValue(opts.requester),
     };
-    (service as any).participationRepository = {
+    privates(service).participationRepository = {
       find: jest
         .fn()
         .mockResolvedValue([{ studentId: opts.creatorId }, ...otherRows]),
     };
-    (service as any).deleteOpportunityChildren = jest
+    privates(service).deleteOpportunityChildren = jest
       .fn()
       .mockResolvedValue({ participations: 1 });
     return { service, transaction };
@@ -4772,12 +4970,18 @@ describe('OpportunitiesService — student submit tells the partner right away, 
 
   const build = () => {
     const opportunitiesRepo = {
-      manager: lockManager(jest.fn().mockResolvedValue(undefined)),
-      create: jest.fn((payload: any) => payload),
-      save: jest.fn(async (row: any) => ({ ...row, id: row.id ?? 'opp-new' })),
+      manager: lockManager(
+        jest
+          .fn<Promise<void>, [string, unknown[]?]>()
+          .mockResolvedValue(undefined),
+      ),
+      create: jest.fn((payload: Opportunity) => payload),
+      save: jest.fn((row: Opportunity) =>
+        Promise.resolve({ ...row, id: row.id ?? 'opp-new' }),
+      ),
     };
     const service = makeService(opportunitiesRepo);
-    (service as any).usersRepository = {
+    privates(service).usersRepository = {
       findOne: jest.fn().mockResolvedValue({
         id: 'student-1',
         role: 'student',
@@ -4789,27 +4993,37 @@ describe('OpportunitiesService — student submit tells the partner right away, 
         department: 'CS',
       }),
     };
-    (service as any).organizationsRepository = {
-      create: jest.fn((row: any) => row),
-      save: jest.fn(async (row: any) => ({ ...row, id: 'org-1' })),
+    privates(service).organizationsRepository = {
+      create: jest.fn((row: Organization) => row),
+      save: jest.fn((row: Organization) =>
+        Promise.resolve({ ...row, id: 'org-1' }),
+      ),
     };
-    (service as any).opportunityWorkflow = new OpportunityWorkflowService();
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
     const mailService = {
       sendFacultyStudentOpportunityVerification: jest
-        .fn()
+        .fn<
+          Promise<void>,
+          Parameters<MailService['sendFacultyStudentOpportunityVerification']>
+        >()
         .mockResolvedValue(undefined),
       sendPartnerVerification: jest.fn().mockResolvedValue(undefined),
-      sendPartnerOpportunityNotice: jest.fn().mockResolvedValue(undefined),
+      sendPartnerOpportunityNotice: jest
+        .fn<
+          Promise<void>,
+          Parameters<MailService['sendPartnerOpportunityNotice']>
+        >()
+        .mockResolvedValue(undefined),
     };
-    (service as any).mailService = mailService;
+    privates(service).mailService = mailService;
     return { service, mailService, opportunitiesRepo };
   };
 
   it('emails the faculty link and a partner heads-up notice at submit — never the partner approval link', async () => {
     const { service, mailService } = build();
-    const result: any = await service.createStudentOpportunity(
+    const result = await service.createStudentOpportunity(
       'student-1',
-      studentDto(true) as any,
+      studentDto(true) as unknown as CreateOpportunityDto,
     );
 
     expect(result.success).toBe(true);
@@ -4826,8 +5040,8 @@ describe('OpportunitiesService — student submit tells the partner right away, 
       mailService.sendPartnerOpportunityNotice.mock.calls[0];
     expect(to).toBe('host@door.org');
     expect(title).toBe('CS');
-    expect(opts.leadText).toContain('Ali Raza');
-    expect(opts.nextStepText).toMatch(/faculty supervisor reviews it first/i);
+    expect(opts?.leadText).toContain('Ali Raza');
+    expect(opts?.nextStepText).toMatch(/faculty supervisor reviews it first/i);
     expect(mailService.sendPartnerVerification).not.toHaveBeenCalled();
   });
 
@@ -4835,7 +5049,7 @@ describe('OpportunitiesService — student submit tells the partner right away, 
     const { service, mailService } = build();
     await service.createStudentOpportunity(
       'student-1',
-      studentDto(false) as any,
+      studentDto(false) as unknown as CreateOpportunityDto,
     );
     expect(mailService.sendPartnerOpportunityNotice).not.toHaveBeenCalled();
     expect(mailService.sendPartnerVerification).not.toHaveBeenCalled();
@@ -4846,9 +5060,9 @@ describe('OpportunitiesService — student submit tells the partner right away, 
     mailService.sendPartnerOpportunityNotice.mockRejectedValueOnce(
       new Error('smtp down'),
     );
-    const result: any = await service.createStudentOpportunity(
+    const result = await service.createStudentOpportunity(
       'student-1',
-      studentDto(true) as any,
+      studentDto(true) as unknown as CreateOpportunityDto,
     );
     expect(result.success).toBe(true);
   });

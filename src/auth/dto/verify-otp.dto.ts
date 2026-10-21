@@ -5,8 +5,10 @@ export class VerifyOtpDto {
   @IsEmail()
   email: string;
 
-  @Transform(({ value }) =>
-    value !== undefined && value !== null ? String(value).trim() : value,
+  @Transform(({ value }: { value: unknown }) =>
+    value !== undefined && value !== null
+      ? String(value as string | number).trim()
+      : value,
   )
   @IsString()
   @Length(6, 6)

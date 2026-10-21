@@ -602,9 +602,11 @@ describe('computeCiiV45Result', () => {
         .filter((s) => s.dimension !== '7')
         .map((s) => ({
           dimension: s.dimension,
-          criterionScores: s.criterionScores.map(
-            ({ criterion: _ignored, ...rest }) => rest,
-          ),
+          criterionScores: s.criterionScores.map((c) => {
+            const rest: Partial<CiiV45CriterionScore> = { ...c };
+            delete rest.criterion;
+            return rest;
+          }),
         })),
     };
     const payload = normalizeCiiV5AiPayload(stripped as never);

@@ -37,7 +37,7 @@ const VERIFICATION_ACTOR_ROLES = [
   UserRole.ORGANIZATION_ADMIN,
 ];
 
-type AuthenticatedRequest = { user: { id: string } };
+type AuthenticatedRequest = { user: { id: string; role?: string } };
 /** Routes where the guard may or may not have attached a user (token is the credential). */
 type MaybeAuthenticatedRequest = {
   user?: { id?: string; email?: string; role?: string };
@@ -330,7 +330,7 @@ export class VerificationsController {
   @Roles(...VERIFICATION_ACTOR_ROLES)
   @Post('verifications/:id/approve')
   async approve(
-    @Request() req: MaybeAuthenticatedRequest,
+    @Request() req: AuthenticatedRequest,
     @Param('id') id: string,
     @Body() body: { feedback?: string },
   ) {
@@ -345,7 +345,7 @@ export class VerificationsController {
   @Roles(...VERIFICATION_ACTOR_ROLES)
   @Post('verifications/:id/reject')
   async reject(
-    @Request() req: MaybeAuthenticatedRequest,
+    @Request() req: AuthenticatedRequest,
     @Param('id') id: string,
     @Body() body: { reason: string },
   ) {

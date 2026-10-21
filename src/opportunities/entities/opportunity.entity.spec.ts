@@ -2,9 +2,9 @@ import { verificationTokenTtlMs } from './opportunity.entity';
 import { stampVerificationTokenExpiry } from '../opportunity-token-expiry.subscriber';
 
 const blank = () => ({
-  partnerToken: null as any,
+  partnerToken: null as unknown as string,
   partnerTokenExpiresAt: null as Date | null,
-  faculty_verification_token: null as any,
+  faculty_verification_token: null as unknown as string,
   facultyTokenExpiresAt: null as Date | null,
 });
 

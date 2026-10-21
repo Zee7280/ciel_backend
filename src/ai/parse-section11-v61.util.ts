@@ -94,7 +94,7 @@ const LEVEL_RANGES: Record<number, string> = {
   1: '0–47',
 };
 
-export function extractSection11JsonObject(raw: string): unknown | null {
+export function extractSection11JsonObject(raw: string): unknown {
   const trimmed = raw.trim();
   if (!trimmed) return null;
 

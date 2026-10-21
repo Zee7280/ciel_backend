@@ -37,7 +37,8 @@ describe('impact-package-packet.util', () => {
   });
 
   it('HOLDs when a mapped content section is missing', () => {
-    const { section3: _drop, ...broken } = complete;
+    const broken: Partial<typeof complete> = { ...complete };
+    delete broken.section3;
     const v = validateImpactPackagePacket(broken);
     expect(v.ok).toBe(false);
     expect(v.issues.some((issue) => /section 3/i.test(issue))).toBe(true);

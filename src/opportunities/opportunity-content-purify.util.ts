@@ -6,8 +6,9 @@
 export function purifyOpportunityMultilineText(input: unknown): string {
   if (typeof input !== 'string') return '';
   let text = input.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  // Strip control characters except newline/tab.
-  text = text.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
+  // Strip control characters except newline/tab (C0 controls + DEL; C1 controls are left alone,
+  // same set as the former `[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]` class).
+  text = text.replace(/(?![\t\n\r\u0080-\u009f])\p{Cc}/gu, '');
   text = text.replace(/\t/g, ' ');
   text = text.replace(/[ \t]+\n/g, '\n');
   text = text.replace(/\n{4,}/g, '\n\n\n');
@@ -31,7 +32,7 @@ export function purifyObjectivesPayload(
     next.description = purifyOpportunityMultilineText(src.description);
   }
   if (Array.isArray(src.beneficiaries_type)) {
-    next.beneficiaries_type = src.beneficiaries_type
+    next.beneficiaries_type = (src.beneficiaries_type as unknown[])
       .map((x) => (typeof x === 'string' ? x.trim() : x))
       .filter((x) => typeof x === 'string' && x.length > 0);
   }
@@ -78,9 +79,10 @@ export function purifyStudentOpportunityContent(
     if (purified) dto.activity_details = purified;
   }
   if (typeof dto.title === 'string') {
-    // Control characters (bell, NUL, ...) are removed, then whitespace is collapsed.
+    // Control characters (bell, NUL, ...) are removed, then whitespace is collapsed
+    // (C0 controls + DEL, same set as the former `[\x00-\x1f\x7f]` class).
     dto.title = dto.title
-      .replace(/[\x00-\x1f\x7f]/g, ' ')
+      .replace(/(?![\u0080-\u009f])\p{Cc}/gu, ' ')
       .replace(/\s+/g, ' ')
       .trim();
   }

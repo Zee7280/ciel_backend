@@ -32,7 +32,7 @@ export function toDateOnlyString(input: unknown): string | null {
   if (input instanceof Date && !Number.isNaN(input.getTime())) {
     return input.toISOString().slice(0, 10);
   }
-  const s = String(input).trim();
+  const s = String(input as string | number).trim();
   if (!s) return null;
   const m = /^(\d{4}-\d{2}-\d{2})/.exec(s);
   return m ? m[1] : null;
@@ -102,7 +102,7 @@ export function getProjectEndDate(timeline: unknown): string | null {
  * `application_deadline` / `close_applications_early` are ignored — applications close after the
  * project end date, never before.
  */
-export function isCloseApplicationsEarly(_timeline: unknown): boolean {
+export function isCloseApplicationsEarly(): boolean {
   return false;
 }
 
@@ -223,14 +223,16 @@ export function validateTimelineForPersist(
 
   // Real calendar dates only: the prefix regex in toDateOnlyString accepts "2026-13-45".
   for (const raw of [t.start_date, t.end_date]) {
-    const text = raw == null ? '' : String(raw).trim();
+    const text = raw == null ? '' : String(raw as string | number).trim();
     if (!text) continue;
     if (!isRealCalendarDate(text)) {
       return 'Dates must be valid calendar dates (YYYY-MM-DD).';
     }
   }
-  const from = String((t as { from_time?: unknown }).from_time ?? '').trim();
-  const to = String((t as { to_time?: unknown }).to_time ?? '').trim();
+  const from = String(
+    (t as { from_time?: string | null }).from_time ?? '',
+  ).trim();
+  const to = String((t as { to_time?: string | null }).to_time ?? '').trim();
   const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
   if ((from && !HHMM.test(from)) || (to && !HHMM.test(to))) {
     return 'Daily start and end times must be in HH:mm format.';

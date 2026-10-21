@@ -13,6 +13,9 @@ import { ConfigService } from '@nestjs/config';
 import { S3Service } from '../common/s3.service';
 import { MailService } from '../mail/mail.service';
 import { UserRole } from '../users/enums/user-role.enum';
+import { CreateAttendanceLogDto } from './dto/create-attendance-log.dto';
+import { CreateAttendanceVerifyRequestDto } from './dto/create-attendance-verify-request.dto';
+import { RegisterParticipantDto } from './dto/register-participant.dto';
 import {
   buildFacultyUserQueryBuilder,
   engagementSpecContext,
@@ -24,10 +27,26 @@ import {
 /** Shorthand: fresh emails/ids per test (never hard-code real domains). */
 const fx = engagementSpecContext;
 
+/** Private hour-gate reached through a cast (it is not part of the public surface). */
+type PrivateVerifyGate = {
+  assertAllParticipantsMeetMinimumHoursForVerify(
+    opportunity: Record<string, unknown>,
+    projectId: string,
+  ): Promise<void>;
+};
+
 describe('EngagementService', () => {
   let service: EngagementService;
 
-  const mockParticipationRepository = {
+  const mockParticipationRepository: {
+    findOne: jest.Mock;
+    find: jest.Mock;
+    create: jest.Mock;
+    save: jest.Mock;
+    /** Some tests attach these for the duration of one case. */
+    createQueryBuilder?: jest.Mock;
+    manager?: unknown;
+  } = {
     findOne: jest.fn(),
     find: jest.fn(),
     create: jest.fn(),
@@ -43,7 +62,7 @@ describe('EngagementService', () => {
     createQueryBuilder: jest.fn(),
   };
 
-  const mockOpportunityRepository = {
+  const mockOpportunityRepository: { findOne: jest.Mock; manager?: unknown } = {
     findOne: jest.fn(),
   };
 
@@ -320,7 +339,7 @@ describe('EngagementService', () => {
   });
 
   describe('listPendingAttendanceLogs', () => {
-    const qbStub = (): any => ({
+    const qbStub = () => ({
       leftJoinAndSelect: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
@@ -392,7 +411,7 @@ describe('EngagementService', () => {
         status: 'approved',
         primaryFacultyEmail: t.email.faculty,
       };
-      const dto = { ...standardAttendanceDto } as any;
+      const dto = { ...standardAttendanceDto } as CreateAttendanceLogDto;
 
       mockParticipationRepository.findOne.mockResolvedValue(mockParticipation);
       mockOpportunityRepository.findOne.mockResolvedValue({
@@ -444,7 +463,7 @@ describe('EngagementService', () => {
         projectId: t.id.project,
         status: 'approved',
       };
-      const dto = { ...standardAttendanceDto } as any;
+      const dto = { ...standardAttendanceDto } as CreateAttendanceLogDto;
 
       mockParticipationRepository.findOne.mockResolvedValue(mockParticipation);
       mockOpportunityRepository.findOne.mockResolvedValue({
@@ -498,15 +517,19 @@ describe('EngagementService', () => {
           status: 'approved',
         };
         mockParticipationRepository.findOne.mockImplementation(
-          async ({ where }: any) => {
-            if (where?.id === teammate.id) return teammate;
+          ({
+            where,
+          }: {
+            where?: { id?: string; isTeamLead?: boolean; studentId?: string };
+          }) => {
+            if (where?.id === teammate.id) return Promise.resolve(teammate);
             if (where?.isTeamLead && where?.studentId === 'lead-user')
-              return {
+              return Promise.resolve({
                 id: 'lead-row',
                 studentId: 'lead-user',
                 isTeamLead: true,
-              };
-            return null;
+              });
+            return Promise.resolve(null);
           },
         );
         mockParticipationRepository.find.mockResolvedValue([]);
@@ -523,9 +546,11 @@ describe('EngagementService', () => {
           role: UserRole.FACULTY,
           name: t.name.faculty,
         });
-        mockAttendanceLogRepository.create.mockImplementation((x: any) => x);
-        mockAttendanceLogRepository.save.mockImplementation(
-          async (x: any) => x,
+        mockAttendanceLogRepository.create.mockImplementation(
+          (x: unknown) => x,
+        );
+        mockAttendanceLogRepository.save.mockImplementation((x: unknown) =>
+          Promise.resolve(x),
         );
         return teammate;
       };
@@ -533,10 +558,10 @@ describe('EngagementService', () => {
       it("saves the entry on the teammate's seat and records the lead as author", async () => {
         const t = fx('proxy-lead-logs');
         const teammate = setupProxy(t);
-        const saved: any = await service.addAttendanceLog(
+        const saved = await service.addAttendanceLog(
           'lead-user',
           MATE_SEAT_ID,
-          { ...standardAttendanceDto } as any,
+          { ...standardAttendanceDto } as CreateAttendanceLogDto,
         );
         expect(saved.participantId).toBe(teammate.id);
         expect(saved.loggedByUserId).toBe('lead-user');
@@ -553,28 +578,26 @@ describe('EngagementService', () => {
           email: 'lead@x.pk',
         });
         mockParticipationRepository.find.mockResolvedValue([]);
-        const saved: any = await service.addAttendanceLog(
+        const saved = await service.addAttendanceLog(
           'lead-user',
           MATE_SEAT_ID,
-          { ...standardAttendanceDto } as any,
+          { ...standardAttendanceDto } as CreateAttendanceLogDto,
         );
         expect(teammate.studentId).toBe('mate-user');
         expect(saved.participantId).toBe(teammate.id);
         const savedRows = mockParticipationRepository.save.mock.calls.map(
-          (c: any[]) => c[0],
+          (c: unknown[]) => c[0] as { studentId?: string } | null | undefined,
         );
-        expect(savedRows.some((r: any) => r?.studentId === 'lead-user')).toBe(
-          false,
-        );
+        expect(savedRows.some((r) => r?.studentId === 'lead-user')).toBe(false);
       });
 
       it('marks a seat owner’s own entry as self-logged', async () => {
         const t = fx('proxy-self');
         setupProxy(t);
-        const saved: any = await service.addAttendanceLog(
+        const saved = await service.addAttendanceLog(
           'mate-user',
           MATE_SEAT_ID,
-          { ...standardAttendanceDto } as any,
+          { ...standardAttendanceDto } as CreateAttendanceLogDto,
         );
         expect(saved.loggedByRole).toBe('self');
         expect(saved.loggedByUserId).toBe('mate-user');
@@ -591,7 +614,7 @@ describe('EngagementService', () => {
         attendanceLocked: true,
         primaryFacultyEmail: t.email.faculty,
       };
-      const dto = { ...standardAttendanceDto } as any;
+      const dto = { ...standardAttendanceDto } as CreateAttendanceLogDto;
 
       mockParticipationRepository.findOne.mockResolvedValue(mockParticipation);
       mockOpportunityRepository.findOne.mockResolvedValue({
@@ -631,7 +654,7 @@ describe('EngagementService', () => {
         applicationId: t.id.app,
         status: 'approved',
       };
-      const dto = { ...standardAttendanceDto } as any;
+      const dto = { ...standardAttendanceDto } as CreateAttendanceLogDto;
 
       mockParticipationRepository.findOne.mockResolvedValue(mockParticipation);
       mockParticipationRepository.save.mockResolvedValue(mockParticipation);
@@ -691,7 +714,7 @@ describe('EngagementService', () => {
         attendanceApproverType: 'partner',
         email: t.email.student,
       };
-      const dto = { ...standardAttendanceDto } as any;
+      const dto = { ...standardAttendanceDto } as CreateAttendanceLogDto;
 
       mockParticipationRepository.findOne.mockResolvedValue(mockParticipation);
       mockOpportunityRepository.findOne.mockResolvedValue({
@@ -753,7 +776,7 @@ describe('EngagementService', () => {
         status: 'approved',
         attendanceApproverType: 'partner',
       };
-      const dto = { ...standardAttendanceDto } as any;
+      const dto = { ...standardAttendanceDto } as CreateAttendanceLogDto;
 
       mockParticipationRepository.findOne.mockResolvedValue(mockParticipation);
       mockOpportunityRepository.findOne.mockResolvedValue({
@@ -786,28 +809,30 @@ describe('EngagementService', () => {
       };
       mockUserRepository.createQueryBuilder.mockReturnValue(partnerQb as any);
       mockUserRepository.findOne.mockImplementation(
-        async (opts: { where?: { id?: string } }) => {
+        (opts: { where?: { id?: string } }) => {
           const id = opts?.where?.id;
           if (id === t.id.student) {
-            return {
+            return Promise.resolve({
               id: t.id.student,
               email: t.email.student,
               name: t.name.studentDisplay,
               role: UserRole.STUDENT,
-            };
+            });
           }
           if (id === t.id.partnerUser) {
-            return {
+            return Promise.resolve({
               id: t.id.partnerUser,
               email: t.email.partner,
               name: t.name.partnerContact,
               role: UserRole.NGO,
-            };
+            });
           }
-          return null;
+          return Promise.resolve(null);
         },
       );
-      mockParticipationRepository.save.mockImplementation(async (p) => p);
+      mockParticipationRepository.save.mockImplementation((p: unknown) =>
+        Promise.resolve(p),
+      );
       mockAttendanceLogRepository.create.mockReturnValue({
         ...dto,
         participantId: t.id.participation,
@@ -844,7 +869,7 @@ describe('EngagementService', () => {
         attendanceApproverType: 'partner',
         primaryFacultyEmail: t.email.faculty,
       };
-      const dto = { ...standardAttendanceDto } as any;
+      const dto = { ...standardAttendanceDto } as CreateAttendanceLogDto;
 
       mockParticipationRepository.findOne.mockResolvedValue(mockParticipation);
       mockOpportunityRepository.findOne.mockResolvedValue({
@@ -903,10 +928,12 @@ describe('EngagementService', () => {
         attendanceApproverType: 'partner',
         primaryFacultyEmail: t.email.faculty,
       };
-      const dto = { ...standardAttendanceDto } as any;
+      const dto = { ...standardAttendanceDto } as CreateAttendanceLogDto;
 
       mockParticipationRepository.findOne.mockResolvedValue(mockParticipation);
-      mockParticipationRepository.save.mockImplementation(async (p) => p);
+      mockParticipationRepository.save.mockImplementation((p: unknown) =>
+        Promise.resolve(p),
+      );
       mockOpportunityRepository.findOne.mockResolvedValue({
         id: t.id.project,
         title: t.projectTitleStudent,
@@ -975,10 +1002,12 @@ describe('EngagementService', () => {
         attendanceApproverType: 'faculty',
         primaryFacultyEmail: t.email.supervisor,
       };
-      const dto = { ...standardAttendanceDto } as any;
+      const dto = { ...standardAttendanceDto } as CreateAttendanceLogDto;
 
       mockParticipationRepository.findOne.mockResolvedValue(mockParticipation);
-      mockParticipationRepository.save.mockImplementation(async (p) => p);
+      mockParticipationRepository.save.mockImplementation((p: unknown) =>
+        Promise.resolve(p),
+      );
       mockUserRepository.findOne.mockReset();
       mockOpportunityRepository.findOne.mockResolvedValue({
         id: t.id.project,
@@ -1003,16 +1032,16 @@ describe('EngagementService', () => {
       };
       mockUserRepository.createQueryBuilder.mockReturnValue(partnerQb as any);
       mockUserRepository.findOne.mockImplementation(
-        async (opts: { where?: { id?: string } }) => {
+        (opts: { where?: { id?: string } }) => {
           if (opts?.where?.id === t.id.student) {
-            return {
+            return Promise.resolve({
               id: t.id.student,
               email: t.email.student,
               name: t.name.studentDisplay,
               role: UserRole.STUDENT,
-            };
+            });
           }
-          return null;
+          return Promise.resolve(null);
         },
       );
       mockAttendanceLogRepository.create.mockReturnValue({
@@ -1053,7 +1082,7 @@ describe('EngagementService', () => {
         attendanceApproverType: 'partner',
         primaryFacultyEmail: t.email.faculty,
       };
-      const dto = { ...standardAttendanceDto } as any;
+      const dto = { ...standardAttendanceDto } as CreateAttendanceLogDto;
 
       mockParticipationRepository.findOne.mockResolvedValue(mockParticipation);
       mockOpportunityRepository.findOne.mockResolvedValue({
@@ -1117,7 +1146,7 @@ describe('EngagementService', () => {
         description: 'Short valid description here.',
         organizationName: 'Org',
         activityType: 'Activity',
-      } as any;
+      } as CreateAttendanceLogDto;
 
       mockParticipationRepository.findOne.mockResolvedValue(mockParticipation);
       mockOpportunityRepository.findOne.mockResolvedValue({
@@ -1145,7 +1174,7 @@ describe('EngagementService', () => {
         startTime: '08:00',
         endTime: '18:00',
         description: 'Desc',
-      } as any;
+      } as CreateAttendanceLogDto;
 
       mockParticipationRepository.findOne.mockResolvedValue(mockParticipation);
 
@@ -1166,7 +1195,7 @@ describe('EngagementService', () => {
         startTime: '14:00',
         endTime: '18:00',
         description: 'Desc',
-      } as any;
+      } as CreateAttendanceLogDto;
 
       mockParticipationRepository.findOne.mockResolvedValue(mockParticipation);
 
@@ -1192,7 +1221,7 @@ describe('EngagementService', () => {
         description: 'Desc',
         organizationName: 'Org',
         activityType: 'Field Visit',
-      } as any;
+      } as CreateAttendanceLogDto;
 
       mockParticipationRepository.findOne.mockResolvedValue(mockParticipation);
       mockOpportunityRepository.findOne.mockResolvedValue({
@@ -1233,7 +1262,7 @@ describe('EngagementService', () => {
         startTime: '09:00',
         endTime: '10:00',
         description: 'Desc',
-      } as any;
+      } as CreateAttendanceLogDto;
 
       mockParticipationRepository.findOne.mockResolvedValue(mockParticipation);
 
@@ -1340,7 +1369,7 @@ describe('EngagementService', () => {
         projectId: t.id.project,
         participantId: `${t.id.participation}-other`,
         requestedAt: '2026-04-27T06:40:00.000Z',
-      } as any;
+      } as CreateAttendanceVerifyRequestDto;
 
       mockOpportunityRepository.findOne.mockResolvedValue({
         id: t.id.project,
@@ -1374,19 +1403,19 @@ describe('EngagementService', () => {
         projectId: t.id.project,
         participantId: `${t.id.participation}-victim`,
         requestedAt: '2026-04-27T06:40:00.000Z',
-      } as any;
+      } as CreateAttendanceVerifyRequestDto;
 
       const mockAppQb = {
         where: jest.fn().mockReturnThis(),
         andWhere: jest.fn().mockReturnThis(),
         getCount: jest.fn().mockResolvedValue(0),
       };
-      (mockOpportunityRepository as any).manager = {
+      mockOpportunityRepository.manager = {
         getRepository: jest.fn().mockReturnValue({
           createQueryBuilder: jest.fn().mockReturnValue(mockAppQb),
         }),
       };
-      (mockParticipationRepository as any).createQueryBuilder = jest
+      mockParticipationRepository.createQueryBuilder = jest
         .fn()
         .mockReturnValue({
           where: jest.fn().mockReturnThis(),
@@ -1426,8 +1455,8 @@ describe('EngagementService', () => {
         ),
       ).rejects.toThrow('Not authorized to request attendance verification');
 
-      delete (mockOpportunityRepository as any).manager;
-      delete (mockParticipationRepository as any).createQueryBuilder;
+      delete mockOpportunityRepository.manager;
+      delete mockParticipationRepository.createQueryBuilder;
     });
 
     it('should allow non-privileged user when unclaimed participant email matches actor', async () => {
@@ -1436,7 +1465,7 @@ describe('EngagementService', () => {
         projectId: t.id.project,
         participantId: t.id.participation,
         requestedAt: '2026-04-27T06:40:00.000Z',
-      } as any;
+      } as CreateAttendanceVerifyRequestDto;
 
       mockOpportunityRepository.findOne.mockResolvedValue({
         id: t.id.project,
@@ -1502,7 +1531,7 @@ describe('EngagementService', () => {
         cnic: '1234567890123',
         mobile: '03001234567',
         universityName: 'LUMS',
-      } as any;
+      } as RegisterParticipantDto;
       const mockManager = {
         findOne: jest
           .fn()
@@ -1517,8 +1546,12 @@ describe('EngagementService', () => {
         remove: jest.fn(),
         count: jest.fn().mockResolvedValue(0),
       };
-      (mockParticipationRepository as any).manager = {
-        transaction: jest.fn().mockImplementation((cb) => cb(mockManager)),
+      mockParticipationRepository.manager = {
+        transaction: jest
+          .fn()
+          .mockImplementation((cb: (m: typeof mockManager) => unknown) =>
+            cb(mockManager),
+          ),
       };
       await expect(service.registerParticipant(t.id.u1, dto)).rejects.toThrow(
         /Ayesha is at LUMS, but this opportunity is open to Beaconhouse National University \(BNU\) students only/,
@@ -1543,7 +1576,7 @@ describe('EngagementService', () => {
         cnic: '1234567890123',
         mobile: '03001234567',
         universityName: 'BNU',
-      } as any;
+      } as RegisterParticipantDto;
       const mockManager = {
         findOne: jest
           .fn()
@@ -1566,8 +1599,12 @@ describe('EngagementService', () => {
         remove: jest.fn(),
         count: jest.fn().mockResolvedValue(0),
       };
-      (mockParticipationRepository as any).manager = {
-        transaction: jest.fn().mockImplementation((cb) => cb(mockManager)),
+      mockParticipationRepository.manager = {
+        transaction: jest
+          .fn()
+          .mockImplementation((cb: (m: typeof mockManager) => unknown) =>
+            cb(mockManager),
+          ),
       };
       await expect(service.registerParticipant(t.id.u1, dto)).rejects.toThrow(
         /has not confirmed the email OTP yet/,
@@ -1585,7 +1622,7 @@ describe('EngagementService', () => {
         fullName: t.name.teamMember,
         cnic: '1234567890123',
         mobile: '03001234567',
-      } as any;
+      } as RegisterParticipantDto;
 
       const mockOpportunity = {
         id: projectId,
@@ -1612,15 +1649,23 @@ describe('EngagementService', () => {
           .mockReturnValueOnce(mockUserQueryBuilder(null))
           .mockReturnValueOnce(mockParticipationQueryBuilder(null)),
         create: jest.fn().mockReturnValue({}),
-        save: jest.fn().mockImplementation((entity, data) => ({
-          ...existingStudentSeat,
-          ...data,
-        })),
+        save: jest
+          .fn()
+          .mockImplementation(
+            (entity: unknown, data: Record<string, unknown>) => ({
+              ...existingStudentSeat,
+              ...data,
+            }),
+          ),
         remove: jest.fn(),
       };
 
-      (mockParticipationRepository as any).manager = {
-        transaction: jest.fn().mockImplementation((cb) => cb(mockManager)),
+      mockParticipationRepository.manager = {
+        transaction: jest
+          .fn()
+          .mockImplementation((cb: (m: typeof mockManager) => unknown) =>
+            cb(mockManager),
+          ),
       };
 
       const result = await service.registerParticipant(studentId, dto);
@@ -1646,7 +1691,7 @@ describe('EngagementService', () => {
         fullName: `${t.name.teamMember} Updated`,
         cnic: '1234567890123',
         mobile: '03001234567',
-      } as any;
+      } as RegisterParticipantDto;
 
       const mockOpportunity = {
         id: projectId,
@@ -1677,11 +1722,19 @@ describe('EngagementService', () => {
             ),
           ),
         create: jest.fn(),
-        save: jest.fn().mockImplementation((entity, data) => ({ ...data })),
+        save: jest
+          .fn()
+          .mockImplementation(
+            (entity: unknown, data: Record<string, unknown>) => ({ ...data }),
+          ),
       };
 
-      (mockParticipationRepository as any).manager = {
-        transaction: jest.fn().mockImplementation((cb) => cb(mockManager)),
+      mockParticipationRepository.manager = {
+        transaction: jest
+          .fn()
+          .mockImplementation((cb: (m: typeof mockManager) => unknown) =>
+            cb(mockManager),
+          ),
       };
 
       const result = await service.registerParticipant(studentId, dto);
@@ -1711,7 +1764,7 @@ describe('EngagementService', () => {
         primary_faculty_email: t.email.facultyMixed,
         secondary_faculty_email: t.email.cofaculty,
         team_id: t.id.teamId,
-      } as any;
+      } as RegisterParticipantDto;
 
       const mockOpportunity = {
         id: projectId,
@@ -1731,11 +1784,20 @@ describe('EngagementService', () => {
         create: jest.fn().mockReturnValue({}),
         save: jest
           .fn()
-          .mockImplementation((entity, data) => ({ id: 'new-id', ...data })),
+          .mockImplementation(
+            (entity: unknown, data: Record<string, unknown>) => ({
+              id: 'new-id',
+              ...data,
+            }),
+          ),
       };
 
-      (mockParticipationRepository as any).manager = {
-        transaction: jest.fn().mockImplementation((cb) => cb(mockManager)),
+      mockParticipationRepository.manager = {
+        transaction: jest
+          .fn()
+          .mockImplementation((cb: (m: typeof mockManager) => unknown) =>
+            cb(mockManager),
+          ),
       };
 
       await service.registerParticipant(studentId, dto);
@@ -1770,7 +1832,7 @@ describe('EngagementService', () => {
         cnic: '9876543210987',
         mobile: '03009876543',
         team_id: teamId,
-      } as any;
+      } as RegisterParticipantDto;
 
       const mockOpportunity = {
         id: projectId,
@@ -1809,8 +1871,12 @@ describe('EngagementService', () => {
         save: jest.fn(),
       };
 
-      (mockParticipationRepository as any).manager = {
-        transaction: jest.fn().mockImplementation((cb) => cb(mockManager)),
+      mockParticipationRepository.manager = {
+        transaction: jest
+          .fn()
+          .mockImplementation((cb: (m: typeof mockManager) => unknown) =>
+            cb(mockManager),
+          ),
       };
 
       await expect(service.registerParticipant(studentId, dto)).rejects.toThrow(
@@ -1832,7 +1898,7 @@ describe('EngagementService', () => {
         cnic: '1234567890123',
         mobile: '03001234567',
         team_id: t.id.teamId,
-      } as any;
+      } as RegisterParticipantDto;
 
       const mockOpportunity = {
         id: projectId,
@@ -1863,8 +1929,12 @@ describe('EngagementService', () => {
         save: jest.fn(),
       };
 
-      (mockParticipationRepository as any).manager = {
-        transaction: jest.fn().mockImplementation((cb) => cb(mockManager)),
+      mockParticipationRepository.manager = {
+        transaction: jest
+          .fn()
+          .mockImplementation((cb: (m: typeof mockManager) => unknown) =>
+            cb(mockManager),
+          ),
       };
 
       await expect(service.registerParticipant(studentId, dto)).rejects.toThrow(
@@ -1886,10 +1956,9 @@ describe('EngagementService', () => {
           approvalStatus: 'approved',
         },
       ]);
-      return (service as any).assertAllParticipantsMeetMinimumHoursForVerify(
-        opp,
-        'proj-1',
-      );
+      return (
+        service as unknown as PrivateVerifyGate
+      ).assertAllParticipantsMeetMinimumHoursForVerify(opp, 'proj-1');
     };
 
     it('blocks until timeline.expected_hours is met, even though the column default is 16', async () => {
@@ -1912,7 +1981,7 @@ describe('EngagementService', () => {
   });
 
   describe('attendance entry rules (min 2h, no overlap, PKT "today", reporting window)', () => {
-    const baseParticipation = (logs: any[] = []) => ({
+    const baseParticipation = (logs: Record<string, unknown>[] = []) => ({
       id: 'p1',
       studentId: 'u1',
       projectId: 'proj1',
@@ -1929,7 +1998,7 @@ describe('EngagementService', () => {
         organizationName: 'Org',
         activityType: 'Field Visit',
         ...over,
-      }) as any;
+      }) as CreateAttendanceLogDto;
     const setup = (participation: any, opp: Record<string, unknown> = {}) => {
       mockParticipationRepository.findOne.mockResolvedValue(participation);
       mockParticipationRepository.find.mockResolvedValue([]);
@@ -2050,9 +2119,11 @@ describe('EngagementService', () => {
         cnic: '1234567890123',
         mobile: '03001234567',
         ...over,
-      }) as any;
+      }) as RegisterParticipantDto;
     const mockApprovedApp = (app: unknown) => {
-      (service as any).opportunityApplicationRepository = {
+      (
+        service as unknown as { opportunityApplicationRepository: unknown }
+      ).opportunityApplicationRepository = {
         findOne: jest.fn().mockResolvedValue(app),
       };
     };
@@ -2115,7 +2186,7 @@ describe('EngagementService', () => {
         status: 'approved',
         isTeamLead: false,
       });
-      (mockParticipationRepository as any).manager = {
+      mockParticipationRepository.manager = {
         transaction: jest
           .fn()
           .mockRejectedValue(new Error('reached-transaction')),
@@ -2131,7 +2202,7 @@ describe('EngagementService', () => {
         isStudentCreated: true,
         creatorId: 'u1',
       });
-      (mockParticipationRepository as any).manager = {
+      mockParticipationRepository.manager = {
         transaction: jest
           .fn()
           .mockRejectedValue(new Error('reached-transaction')),
@@ -2170,10 +2241,7 @@ describe('EngagementService', () => {
 
     it('project logs return only id / name / flags for the participant, never CNIC hash, mobile or email', async () => {
       mockAttendanceLogRepository.find.mockResolvedValue([logRow()]);
-      const out: any[] = await service.getProjectAttendanceLogs(
-        'proj1',
-        'student',
-      );
+      const out = await service.getProjectAttendanceLogs('proj1', 'student');
       expect(out[0].participant).toEqual({
         id: 'p1',
         fullName: 'Sara Khan',
@@ -2188,10 +2256,7 @@ describe('EngagementService', () => {
     it('student and admin keep the evidence link; partner / faculty / university / NGO do not', async () => {
       mockAttendanceLogRepository.find.mockResolvedValue([logRow()]);
       for (const role of ['student', 'admin']) {
-        const out: any[] = await service.getProjectAttendanceLogs(
-          'proj1',
-          role,
-        );
+        const out = await service.getProjectAttendanceLogs('proj1', role);
         expect(out[0].evidenceUrl).toContain('attendance-evidence');
       }
       for (const role of [
@@ -2201,10 +2266,7 @@ describe('EngagementService', () => {
         'corporate',
         'organization_admin',
       ]) {
-        const out: any[] = await service.getProjectAttendanceLogs(
-          'proj1',
-          role,
-        );
+        const out = await service.getProjectAttendanceLogs('proj1', role);
         expect(out[0].evidenceUrl).toBeNull();
       }
     });
@@ -2214,15 +2276,9 @@ describe('EngagementService', () => {
         id: 'p1',
         attendanceLogs: [logRow()],
       });
-      const asNgo: any[] = (await service.getAttendanceLogs(
-        'p1',
-        'ngo',
-      )) as any;
+      const asNgo = await service.getAttendanceLogs('p1', 'ngo');
       expect(asNgo[0].evidenceUrl).toBeNull();
-      const asStudent: any[] = (await service.getAttendanceLogs(
-        'p1',
-        'student',
-      )) as any;
+      const asStudent = await service.getAttendanceLogs('p1', 'student');
       expect(asStudent[0].evidenceUrl).toContain('attendance-evidence');
     });
   });

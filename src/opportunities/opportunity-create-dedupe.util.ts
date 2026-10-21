@@ -12,7 +12,7 @@ export const CREATE_DEDUPE_IGNORED_STATUSES = [
 ];
 
 export function normalizeCreateTitle(title: unknown): string {
-  return String(title ?? '')
+  return String((title as string | null | undefined) ?? '')
     .toLowerCase()
     .replace(/\s+/g, ' ')
     .trim();

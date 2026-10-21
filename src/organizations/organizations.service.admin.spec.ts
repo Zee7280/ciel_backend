@@ -1,14 +1,21 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { OrganizationsService } from './organizations.service';
+import { AdminRejectOrganizationDto } from './dto/organization.dto';
 
-function build(orgRepo: any, usersRepo: any) {
-  const args: any[] = new Array(8).fill({});
+type OrganizationsServiceArgs = ConstructorParameters<
+  typeof OrganizationsService
+>;
+
+function build(orgRepo: unknown, usersRepo: unknown) {
+  const args: unknown[] = new Array<unknown>(8).fill({});
   args[0] = orgRepo;
   args[1] = usersRepo;
-  return new (OrganizationsService as any)(...args) as OrganizationsService;
+  return new OrganizationsService(
+    ...(args as unknown as OrganizationsServiceArgs),
+  );
 }
 const qb = () => {
-  const q: any = {
+  const q = {
     update: jest.fn().mockReturnThis(),
     set: jest.fn().mockReturnThis(),
     where: jest.fn().mockReturnThis(),
@@ -25,7 +32,7 @@ describe('OrganizationsService admin flows', () => {
       verifiedBy: 'first',
     };
     const repo = { findOne: jest.fn().mockResolvedValue(org), save: jest.fn() };
-    const res: any = await build(repo, {}).approveOrganization('o', 'second');
+    const res = await build(repo, {}).approveOrganization('o', 'second');
     expect(res.verifiedBy).toBe('first');
     expect(repo.save).not.toHaveBeenCalled();
   });
@@ -41,7 +48,7 @@ describe('OrganizationsService admin flows', () => {
     const q = qb();
     const repo = {
       findOne: jest.fn().mockResolvedValue({ id: 'o' }),
-      save: jest.fn(async (x) => x),
+      save: jest.fn((x: unknown) => Promise.resolve(x)),
     };
     await build(repo, { createQueryBuilder: () => q }).blockOrganization('o');
     expect(q.execute).toHaveBeenCalled();
@@ -50,10 +57,16 @@ describe('OrganizationsService admin flows', () => {
   it('createForAdmin validates password and duplicate email, stores contact in contactName', async () => {
     const usersRepo = { findOne: jest.fn().mockResolvedValue(null) };
     const manager = {
-      create: jest.fn((_e, x) => x),
-      save: jest.fn(async (x) => ({ id: 'id', ...x })),
+      create: jest.fn((_e: unknown, x: Record<string, unknown>) => x),
+      save: jest.fn((x: Record<string, unknown>) =>
+        Promise.resolve({ id: 'id', ...x }),
+      ),
     };
-    const repo: any = { manager: { transaction: (fn: any) => fn(manager) } };
+    const repo = {
+      manager: {
+        transaction: (fn: (m: typeof manager) => unknown) => fn(manager),
+      },
+    };
     const svc = build(repo, usersRepo);
     await expect(
       svc.createForAdmin(
@@ -119,7 +132,9 @@ describe('OrganizationsService admin flows', () => {
 
   it('approve and reject email the organization contacts without failing the decision', async () => {
     const mail = {
-      sendOrganizationDecisionEmail: jest.fn().mockResolvedValue(undefined),
+      sendOrganizationDecisionEmail: jest
+        .fn<Promise<void>, [{ to: string; decision: string }]>()
+        .mockResolvedValue(undefined),
     };
     const org = {
       id: 'o',
@@ -129,7 +144,7 @@ describe('OrganizationsService admin flows', () => {
     };
     const repo = {
       findOne: jest.fn().mockResolvedValue(org),
-      save: jest.fn(async (x) => x),
+      save: jest.fn((x: unknown) => Promise.resolve(x)),
     };
     const users = {
       find: jest
@@ -139,13 +154,13 @@ describe('OrganizationsService admin flows', () => {
           { email: 'contact@org.pk' },
         ]),
     };
-    const args: any[] = new Array(8).fill({});
+    const args: unknown[] = new Array<unknown>(8).fill({});
     args[0] = repo;
     args[1] = users;
     args[8] = mail;
-    const svc = new (OrganizationsService as any)(
-      ...args,
-    ) as OrganizationsService;
+    const svc = new OrganizationsService(
+      ...(args as unknown as OrganizationsServiceArgs),
+    );
     await svc.approveOrganization('o', 'adm');
     await new Promise((r) => setImmediate(r));
     const sent = mail.sendOrganizationDecisionEmail.mock.calls.map((c) => [
@@ -160,7 +175,9 @@ describe('OrganizationsService admin flows', () => {
       new Error('smtp down'),
     );
     await expect(
-      svc.rejectOrganization('o', 'adm', { notes: 'Missing docs' } as any),
+      svc.rejectOrganization('o', 'adm', {
+        notes: 'Missing docs',
+      } as AdminRejectOrganizationDto),
     ).resolves.toBeDefined();
   });
 });

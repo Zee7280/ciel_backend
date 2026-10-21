@@ -59,7 +59,6 @@ import {
   isPrivateCandidateOpportunity,
   reviewRouteForOpportunity,
 } from '../opportunities/private-candidate.util';
-import { composeFacultyReportRemarks } from './faculty-report-remarks.util';
 import { trackingOrganizationName } from './tracking-org-name.util';
 import { isReportPartnerStepSatisfied } from './report-partner-approval.util';
 import { assertPacketReadyForAnalysis } from './impact-package-packet.util';
@@ -181,10 +180,14 @@ const TRACKING_SEAT_STATUSES = [
 ] as const;
 
 function isPrivateStudentPathway(opp: Opportunity | null | undefined): boolean {
-  const ctx = opp?.executing_context;
+  const ctx: unknown = opp?.executing_context;
   if (!ctx || typeof ctx !== 'object') return false;
   return (
-    String((ctx as { student_pathway?: unknown }).student_pathway || '')
+    String(
+      ((ctx as { student_pathway?: unknown }).student_pathway || '') as {
+        toString(): string;
+      },
+    )
       .trim()
       .toLowerCase() === 'private'
   );
@@ -701,9 +704,21 @@ export class FacultyReportsService {
 
     data.sort((a, b) => {
       const ta =
-        Date.parse(String(a.last_activity_at || a.updated_at || '')) || 0;
+        Date.parse(
+          String(
+            (a.last_activity_at || a.updated_at || '') as {
+              toString(): string;
+            },
+          ),
+        ) || 0;
       const tb =
-        Date.parse(String(b.last_activity_at || b.updated_at || '')) || 0;
+        Date.parse(
+          String(
+            (b.last_activity_at || b.updated_at || '') as {
+              toString(): string;
+            },
+          ),
+        ) || 0;
       return tb - ta;
     });
 

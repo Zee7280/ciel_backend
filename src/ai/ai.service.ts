@@ -190,19 +190,90 @@ function textOnlyUserContent(content: string | OpenAiContentPart[]): string {
     .join('\n\n');
 }
 
+/** Plain `String(value)` coercion of a dynamic (parsed-JSON) field, exactly as a template literal would. */
+function promptText(value: unknown): string {
+  return String(value);
+}
+
+/** `String(value ?? fallback)` for an unknown field (null/undefined → fallback, anything else stringified). */
+function textOf(value: unknown, fallback: string): string {
+  return value == null ? fallback : promptText(value);
+}
+
+/**
+ * Loose view of the saved wizard section payloads that the flashcard prompts quote field by
+ * field. The values are whatever the student wizard stored; the prompt stringifies them as-is.
+ */
+interface SectionPromptData {
+  problem_statement?: unknown;
+  affected_group?: unknown;
+  system_gaps?: unknown;
+  discipline?: unknown;
+  discipline_other?: unknown;
+  discipline_contribution?: unknown;
+  baseline_evidence?: unknown;
+  baseline_evidence_other?: unknown;
+  primary_sdg?: {
+    goal_number?: unknown;
+    goal_title?: unknown;
+    target_id?: unknown;
+    indicator_id?: unknown;
+  } | null;
+  contribution_intent_statement?: unknown;
+  student_contribution_intent_statement?: unknown;
+  secondary_sdgs?: unknown;
+  activity_blocks?: unknown;
+  activities?: unknown;
+  project_summary?: { distinct_total_beneficiaries?: unknown } | null;
+  observed_change?: unknown;
+  measurable_outcomes?: unknown;
+  challenges?: unknown;
+  use_resources?: unknown;
+  resources?: unknown;
+  has_partners?: unknown;
+  partners?: unknown;
+  has_evidence?: unknown;
+  evidence_types?: unknown;
+  description?: unknown;
+  ethical_compliance?: unknown;
+  ethics?: unknown;
+  media_visible?: unknown;
+  partner_verification?: unknown;
+  academic_integration?: unknown;
+  personal_learning?: unknown;
+  academic_application?: unknown;
+  skills_grown?: unknown;
+  competency_scores?: unknown;
+  competencies?: unknown;
+  continuation_status?: unknown;
+  status?: unknown;
+  continuation_details?: unknown;
+  explanation?: unknown;
+  mechanisms?: unknown;
+  scaling_potential?: unknown;
+  scaling?: unknown;
+  policy_influence?: unknown;
+  policy?: unknown;
+}
+
+interface ActivityBlockReach {
+  unique_beneficiaries?: unknown;
+  beneficiaries_reached?: unknown;
+}
+
 /** Drop evidence originals/filenames and the bulky scoring table from the v5.0 report-quality prompt. */
 function slimCiiPayloadForModel(data: unknown): unknown {
   if (!data || typeof data !== 'object') return data;
   const rec = data as Record<string, unknown>;
   const {
-    uploaded_evidence_files: _files,
     section8_evidence_verification: section8Raw,
     system_validation: sysRaw,
-    evaluation_mode: _mode,
-    generated_at: _generated,
-    schema_version: _schema,
     ...rest
   } = rec;
+  delete rest.uploaded_evidence_files;
+  delete rest.evaluation_mode;
+  delete rest.generated_at;
+  delete rest.schema_version;
   const section8 =
     section8Raw &&
     typeof section8Raw === 'object' &&
@@ -263,14 +334,14 @@ export class AiService {
       ? (data as { uploaded_evidence_files: Array<Record<string, unknown>> })
           .uploaded_evidence_files
       : [];
-    const fileId = (f: Record<string, unknown>) => String(f?.file_id ?? '');
+    const fileId = (f: Record<string, unknown>) => textOf(f?.file_id, '');
     const fileName = (f: Record<string, unknown>) =>
-      String(f?.file_name ?? f?.url ?? 'file');
+      textOf(f?.file_name ?? f?.url, 'file');
     const imageCandidates: Array<Record<string, unknown>> = [];
     const pdfCandidates: Array<Record<string, unknown>> = [];
     for (const f of files) {
       const url = typeof f?.url === 'string' ? f.url : '';
-      const type = String(f?.file_type ?? '').toLowerCase();
+      const type = textOf(f?.file_type, '').toLowerCase();
       const looksImage =
         /^(jpe?g|png|webp|gif)$/.test(type) ||
         /\.(jpe?g|png|webp|gif)(\?|$)/i.test(url);
@@ -291,7 +362,7 @@ export class AiService {
     // four in order, so every part of the package is represented before any part gets two.
     const bySource = new Map<string, Array<Record<string, unknown>>>();
     for (const f of imageCandidates) {
-      const key = String(f?.source ?? 'other').split('.')[0];
+      const key = textOf(f?.source, 'other').split('.')[0];
       bySource.set(key, [...(bySource.get(key) ?? []), f]);
     }
     const toLoad: Array<Record<string, unknown>> = [];
@@ -543,7 +614,7 @@ Rules: a file under "NOT shown to you" was not read — do not describe its cont
         });
         const raw = await res.text();
         try {
-          responseJson = JSON.parse(raw);
+          responseJson = JSON.parse(raw) as OpenAiChatResponse;
         } catch {
           responseJson = {
             error: {
@@ -628,7 +699,7 @@ Rules: a file under "NOT shown to you" was not read — do not describe its cont
     return text;
   }
 
-  private buildPrompt(section: string, data: any): string {
+  private buildPrompt(section: string, data: SectionPromptData): string {
     switch (section) {
       // =====================================================
       // SECTION 1 EVALUATION
@@ -1092,12 +1163,12 @@ FINAL REVIEW PRINCIPLES
 Lens: Community Need & Starting Point. Describe only what was true before the project. Do not describe activities or results.
 
 Inputs (the student report section, as saved):
-- Problem / system need: ${data.problem_statement}
-- Who was affected: ${data.affected_group}
+- Problem / system need: ${String(data.problem_statement)}
+- Who was affected: ${String(data.affected_group)}
 - What was missing: ${JSON.stringify(data.system_gaps || [])}
-- Academic discipline: ${data.discipline}${data.discipline_other ? ` (${data.discipline_other})` : ''}
-- Discipline contribution: ${data.discipline_contribution}
-- Baseline evidence sources: ${JSON.stringify(data.baseline_evidence || [])} ${data.baseline_evidence_other ? `(${data.baseline_evidence_other})` : ''}
+- Academic discipline: ${String(data.discipline)}${data.discipline_other ? ` (${promptText(data.discipline_other)})` : ''}
+- Discipline contribution: ${String(data.discipline_contribution)}
+- Baseline evidence sources: ${JSON.stringify(data.baseline_evidence || [])} ${data.baseline_evidence_other ? `(${promptText(data.baseline_evidence_other)})` : ''}
 - Full section: ${JSON.stringify(data)}
 
 Output exactly these lines:
@@ -1177,11 +1248,11 @@ Provide a brief explanation of the score.`;
 Lens: SDG Contribution. Link the recorded work to the named targets. Do not treat an SDG icon as proof of impact.
 
 Inputs (the student report section, as saved):
-Primary SDG number: ${data.primary_sdg?.goal_number}
-Primary SDG title: ${data.primary_sdg?.goal_title}
-Target: ${data.primary_sdg?.target_id}
-Indicator: ${data.primary_sdg?.indicator_id}
-Contribution logic: ${data.contribution_intent_statement || data.student_contribution_intent_statement}
+Primary SDG number: ${String(data.primary_sdg?.goal_number)}
+Primary SDG title: ${String(data.primary_sdg?.goal_title)}
+Target: ${String(data.primary_sdg?.target_id)}
+Indicator: ${String(data.primary_sdg?.indicator_id)}
+Contribution logic: ${String(data.contribution_intent_statement || data.student_contribution_intent_statement)}
 Secondary SDGs: ${JSON.stringify(data.secondary_sdgs || [])}
 Full section: ${JSON.stringify(data)}
 
@@ -1257,7 +1328,7 @@ Lens: Activities & Outputs. Count what was delivered. Do not interpret outcomes 
 Inputs (the student report section, as saved):
 - Activity blocks: ${JSON.stringify(data.activity_blocks || data.activities || [])}
 - Project summary: ${JSON.stringify(data.project_summary || {})}
-- Distinct beneficiaries: ${data.project_summary?.distinct_total_beneficiaries || (Array.isArray(data.activity_blocks) ? data.activity_blocks.reduce((sum, block) => sum + (Number(String(block?.unique_beneficiaries || block?.beneficiaries_reached || '').replace(/,/g, '')) || 0), 0) : 0)}
+- Distinct beneficiaries: ${String(data.project_summary?.distinct_total_beneficiaries || (Array.isArray(data.activity_blocks) ? data.activity_blocks.reduce((sum: number, block: ActivityBlockReach | null | undefined) => sum + (Number(promptText(block?.unique_beneficiaries || block?.beneficiaries_reached || '').replace(/,/g, '')) || 0), 0) : 0))}
 - Full section: ${JSON.stringify(data)}
 
 Output exactly these lines:
@@ -1334,9 +1405,9 @@ Provide a brief explanation of the score.`;
 Lens: Outcomes & Measured Change. Report before → after only when both numbers are recorded. A short follow-up is a limit, not a hidden success.
 
 Inputs (the student report section, as saved):
-Observed change: ${data.observed_change}
+Observed change: ${String(data.observed_change)}
 Measurable outcomes: ${JSON.stringify(data.measurable_outcomes || [])}
-Challenges: ${data.challenges}
+Challenges: ${String(data.challenges)}
 Full section: ${JSON.stringify(data)}
 
 Output exactly these lines:
@@ -1430,7 +1501,7 @@ Provide a brief explanation of the score.`;
 Lens: Resources & Stewardship. Trace what was used and where it came from. Zero budget is a valid recorded fact.
 
 Inputs (the student report section, as saved):
-Uses extra resources: ${data.use_resources}
+Uses extra resources: ${String(data.use_resources)}
 Resource entries: ${JSON.stringify(data.resources || [])}
 Full section: ${JSON.stringify(data)}
 
@@ -1503,7 +1574,7 @@ Provide a brief explanation of the score.`;
 Lens: Partnership & Collaboration. A named role beats a paragraph of praise. Do not list an organization that is not in the input.
 
 Inputs (the student report section, as saved):
-Has partners: ${data.has_partners}
+Has partners: ${String(data.has_partners)}
 Partner entries: ${JSON.stringify(data.partners || [])}
 Full section: ${JSON.stringify(data)}
 
@@ -1576,12 +1647,12 @@ Provide a brief explanation of the score.`;
 Lens: Evidence, Ethics & Verification. Visibility does not change verification weight. Private evidence counts the same as public evidence.
 
 Inputs (the student report section, as saved):
-Has evidence: ${data.has_evidence}
+Has evidence: ${String(data.has_evidence)}
 Evidence types: ${JSON.stringify(data.evidence_types || [])}
-Description: ${data.description}
+Description: ${String(data.description)}
 Ethical compliance: ${JSON.stringify(data.ethical_compliance || data.ethics || {})}
-Visibility: ${data.media_visible}
-Partner verification: ${data.partner_verification}
+Visibility: ${String(data.media_visible)}
+Partner verification: ${String(data.partner_verification)}
 Full section: ${JSON.stringify(data)}
 
 Output exactly these lines:
@@ -1670,9 +1741,9 @@ Provide a brief explanation of the score.`;
 Lens: Reflection & Academic Growth. Prefer one real decision or shift in thinking over generic leadership language. Do not treat a row of perfect self-ratings as proof.
 
 Inputs (the student report section, as saved):
-Academic integration: ${data.academic_integration}
-Personal learning: ${data.personal_learning}
-Academic application: ${data.academic_application}
+Academic integration: ${String(data.academic_integration)}
+Personal learning: ${String(data.personal_learning)}
+Academic application: ${String(data.academic_application)}
 Skills grown: ${JSON.stringify(data.skills_grown || [])}
 Competency scores: ${JSON.stringify(data.competency_scores || data.competencies || {})}
 Full section: ${JSON.stringify(data)}
@@ -1750,11 +1821,11 @@ Provide a brief explanation of the score.`;
 Lens: Sustainability & Handover. A candid partial continuation with a named owner is stronger than an unsupported claim that the project continues forever.
 
 Inputs (the student report section, as saved):
-Continuation status: ${data.continuation_status || data.status}
-Continuation details: ${data.continuation_details || data.explanation}
+Continuation status: ${String(data.continuation_status || data.status)}
+Continuation details: ${String(data.continuation_details || data.explanation)}
 Mechanisms: ${JSON.stringify(data.mechanisms || [])}
-Scaling potential: ${data.scaling_potential || data.scaling}
-Policy influence: ${data.policy_influence || data.policy}
+Scaling potential: ${String(data.scaling_potential || data.scaling)}
+Policy influence: ${String(data.policy_influence || data.policy)}
 Full section: ${JSON.stringify(data)}
 
 Output exactly these lines:
@@ -1904,7 +1975,9 @@ ${JSON.stringify(data)}`;
     const isNpeRanking = section === 'npe_ranking_evaluation';
     const prompt = this.buildPrompt(
       section,
-      isCiiV45Evaluation ? slimCiiPayloadForModel(data) : data,
+      (isCiiV45Evaluation
+        ? slimCiiPayloadForModel(data)
+        : data) as SectionPromptData,
     );
 
     const openAiOpts: OpenAiCompletionOpts | undefined = isCiiV45Evaluation

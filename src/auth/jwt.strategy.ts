@@ -16,7 +16,21 @@ export function isSessionStatusAllowed(status: string, role: string): boolean {
   ) {
     return true;
   }
-  return role === UserRole.INVESTOR && status === 'pending';
+  return role === (UserRole.INVESTOR as string) && status === 'pending';
+}
+
+/** Claims minted by AuthService.login(); only `sub` is guaranteed on every token. */
+export interface JwtPayload {
+  sub: string;
+  email?: string;
+  role?: string;
+  tokenVersion?: number;
+  organizationId?: string;
+  organizationName?: string;
+  department?: string;
+  faculty_department?: string;
+  city?: string;
+  university?: string;
 }
 
 @Injectable()
@@ -35,7 +49,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
-  async validate(payload: any) {
+  async validate(payload: JwtPayload) {
     const user = await this.usersService.findOne(payload.sub);
     if (!user) {
       throw new UnauthorizedException();

@@ -140,8 +140,8 @@ export class StudentSubscriptionService {
     institution?: string | null;
     university?: string | null;
   }): Promise<boolean> {
-    if (String(input.role || '').toLowerCase() !== UserRole.STUDENT)
-      return false;
+    const role = String(input.role || '').toLowerCase() as UserRole;
+    if (role !== UserRole.STUDENT) return false;
     if (!(await this.isRequired())) return false;
     return !(await this.isMemberUniversity(
       input.institution,

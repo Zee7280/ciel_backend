@@ -48,11 +48,15 @@ describe('TeamFormationService', () => {
     manager: {
       transaction: jest.fn(
         async (
-          cb: (em: { getRepository: (e: unknown) => unknown }) => unknown,
+          cb: (em: {
+            getRepository: (e: unknown) => unknown;
+          }) => Promise<unknown>,
         ) => {
           const participationRepo = {
             findOne: jest.fn().mockResolvedValue({ ...leadRow }),
-            save: jest.fn(async (row: Record<string, unknown>) => row),
+            save: jest.fn((row: Record<string, unknown>) =>
+              Promise.resolve(row),
+            ),
             createQueryBuilder: jest.fn(() => ({
               where: jest.fn().mockReturnThis(),
               andWhere: jest.fn().mockReturnThis(),
@@ -67,7 +71,7 @@ describe('TeamFormationService', () => {
             })),
             remove: jest.fn(),
           };
-          return cb({
+          return await cb({
             getRepository: (entity: unknown) =>
               entity === StudentReport ? reportRepo : participationRepo,
           });
@@ -95,11 +99,11 @@ describe('TeamFormationService', () => {
       student: { name: 'Ali Hassan' },
     });
     mockParticipationRepo.find.mockImplementation(
-      async (opts: { where?: { id?: unknown } }) => {
+      (opts: { where?: { id?: unknown } }) => {
         if (opts?.where && (opts.where as { id?: unknown }).id) {
-          return [{ ...memberRow }];
+          return Promise.resolve([{ ...memberRow }]);
         }
-        return [{ ...leadRow }, { ...memberRow }];
+        return Promise.resolve([{ ...leadRow }, { ...memberRow }]);
       },
     );
 
@@ -168,10 +172,12 @@ describe('TeamFormationService', () => {
         { ...memberRow, isTeamLead: true, teamId: null },
       ]) {
         mockParticipationRepo.find.mockImplementation(
-          async (opts: { where?: { id?: unknown } }) =>
-            opts?.where && (opts.where as { id?: unknown }).id
-              ? [taken]
-              : [{ ...leadRow }, taken],
+          (opts: { where?: { id?: unknown } }) =>
+            Promise.resolve(
+              opts?.where && (opts.where as { id?: unknown }).id
+                ? [taken]
+                : [{ ...leadRow }, taken],
+            ),
         );
         await expect(
           service.formTeamFromLead('student-lead', 'proj-1', ['mem-1']),
@@ -188,10 +194,12 @@ describe('TeamFormationService', () => {
         student: { name: 'Lead' },
       });
       mockParticipationRepo.find.mockImplementation(
-        async (opts: { where?: { id?: unknown } }) =>
-          opts?.where && (opts.where as { id?: unknown }).id
-            ? [{ ...memberRow, teamId: 'TM-MINE' }]
-            : [{ ...leadRow }],
+        (opts: { where?: { id?: unknown } }) =>
+          Promise.resolve(
+            opts?.where && (opts.where as { id?: unknown }).id
+              ? [{ ...memberRow, teamId: 'TM-MINE' }]
+              : [{ ...leadRow }],
+          ),
       );
       await expect(
         service.formTeamFromLead('student-lead', 'proj-1', ['mem-1']),
@@ -208,10 +216,12 @@ describe('TeamFormationService', () => {
         student: { name: 'Lead' },
       });
       mockParticipationRepo.find.mockImplementation(
-        async (opts: { where?: { id?: unknown } }) =>
-          opts?.where && (opts.where as { id?: unknown }).id
-            ? [{ ...memberRow, teamId: null }]
-            : [{ ...leadRow }],
+        (opts: { where?: { id?: unknown } }) =>
+          Promise.resolve(
+            opts?.where && (opts.where as { id?: unknown }).id
+              ? [{ ...memberRow, teamId: null }]
+              : [{ ...leadRow }],
+          ),
       );
       await service.formTeamFromLead('student-lead', 'proj-1', ['mem-1']);
       expect(mailService.sendTeamMemberAddedToProject).toHaveBeenCalledTimes(1);
@@ -228,10 +238,12 @@ describe('TeamFormationService', () => {
         id: `m${i}`,
       }));
       mockParticipationRepo.find.mockImplementation(
-        async (opts: { where?: { id?: unknown } }) =>
-          opts?.where && (opts.where as { id?: unknown }).id
-            ? many
-            : [{ ...leadRow }],
+        (opts: { where?: { id?: unknown } }) =>
+          Promise.resolve(
+            opts?.where && (opts.where as { id?: unknown }).id
+              ? many
+              : [{ ...leadRow }],
+          ),
       );
       await expect(
         service.formTeamFromLead('student-lead', 'proj-1', ['m0', 'm1', 'm2']),
@@ -246,10 +258,12 @@ describe('TeamFormationService', () => {
         id: `m${i}`,
       }));
       mockParticipationRepo.find.mockImplementation(
-        async (opts: { where?: { id?: unknown } }) =>
-          opts?.where && (opts.where as { id?: unknown }).id
-            ? twenty
-            : [{ ...leadRow }],
+        (opts: { where?: { id?: unknown } }) =>
+          Promise.resolve(
+            opts?.where && (opts.where as { id?: unknown }).id
+              ? twenty
+              : [{ ...leadRow }],
+          ),
       );
       await expect(
         service.formTeamFromLead(

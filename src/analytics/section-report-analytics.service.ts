@@ -479,23 +479,16 @@ export class SectionReportAnalyticsService {
     const blocks: Array<Record<string, unknown>> = asList(
       s4.activity_blocks,
     ).filter(isRecord);
-    const sessionOutputs = blocks.reduce((sum, b) => {
-      const outs = asList(b.outputs);
+    const sessionOutputs = blocks.reduce<number>((sum, b) => {
+      const outs = asList(b.outputs).filter(isRecord);
       return (
         sum +
         outs
-          .filter((o) =>
-            /session/i.test(String((isRecord(o) ? o.unit : undefined) || '')),
-          )
-          .reduce(
-            (n, o) =>
-              n +
-              (this.parseNum(isRecord(o) ? o.quantity : undefined) || 0),
-            0,
-          )
+          .filter((o) => /session/i.test(this.legacyText(o.unit)))
+          .reduce<number>((n, o) => n + (this.parseNum(o.quantity) || 0), 0)
       );
     }, 0);
-    const blockPeople = blocks.reduce(
+    const blockPeople = blocks.reduce<number>(
       (sum, b) =>
         sum +
         (this.parseNum(b.unique_beneficiaries) ||
@@ -504,7 +497,7 @@ export class SectionReportAnalyticsService {
       0,
     );
     const firstType = blocks
-      .map((b) => String(b.primary_category || b.sub_category || '').trim())
+      .map((b) => this.legacyText(b.primary_category || b.sub_category).trim())
       .find(Boolean);
     const projectSummary = isRecord(s4.project_summary)
       ? s4.project_summary
@@ -514,7 +507,7 @@ export class SectionReportAnalyticsService {
       deliveryMode:
         s4.delivery_mode ||
         blocks
-          .map((b) => String(b.geographic_reach || '').trim())
+          .map((b) => this.legacyText(b.geographic_reach).trim())
           .find(Boolean) ||
         'Unspecified',
       beneficiaries:
@@ -1101,6 +1094,11 @@ export class SectionReportAnalyticsService {
       }
     }
     return 'Unspecified';
+  }
+
+  /** `String(value || '')`: falsy → '', anything else through its own toString (arrays join). */
+  private legacyText(value: unknown): string {
+    return String((value || '') as { toString(): string });
   }
 
   private asText(value: unknown): string {

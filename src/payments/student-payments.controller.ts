@@ -50,7 +50,7 @@ export class StudentPaymentsController {
     @Request() req: AuthenticatedRequest,
     @Body('projectId') projectId: string,
     @Body('paid_amount') paidAmount: string | number | undefined,
-    @UploadedFile() file: any,
+    @UploadedFile() file: Express.Multer.File | undefined,
   ) {
     if (!file) {
       throw new BadRequestException('Payment proof file is required');

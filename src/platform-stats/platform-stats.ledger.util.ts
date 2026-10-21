@@ -317,17 +317,9 @@ export function parseSdgGoalNumber(raw: unknown): number | null {
   return null;
 }
 
-/** Scalar-safe text: strings as-is, numbers/booleans/bigints stringified, anything else ''. */
+/** `String(value ?? '')`: nullish → '', anything else through its own toString (arrays join). */
 function scalarText(value: unknown): string {
-  if (typeof value === 'string') return value;
-  if (
-    typeof value === 'number' ||
-    typeof value === 'boolean' ||
-    typeof value === 'bigint'
-  ) {
-    return String(value);
-  }
-  return '';
+  return String((value ?? '') as { toString(): string });
 }
 
 function isRejectedSdgStatus(status: unknown): boolean {

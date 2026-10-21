@@ -121,6 +121,7 @@ export function buildNpeAiPayload(
 ) {
   const facets = buildStudioFacets(report);
   const system = buildNpeSystemAnalysis(report, pkg);
+  const reportRow = report as unknown as Record<string, unknown>;
   return {
     projectId: report.id,
     packageVersion: pkg.version,
@@ -154,17 +155,18 @@ export function buildNpeAiPayload(
       note: 'Orientation only. The detailed report and the evidence carry the facts.',
     },
     sections: Object.fromEntries(
-      IMPACT_PACKAGE_CONTENT_SOURCES.map((src) => [
-        src.id,
-        {
-          name: src.name,
-          content: src.keys.map((key) =>
-            redactSensitiveDeep(
-              (report as unknown as Record<string, unknown>)[key],
-            ),
-          ),
-        },
-      ]),
+      IMPACT_PACKAGE_CONTENT_SOURCES.map(
+        (src) =>
+          [
+            src.id,
+            {
+              name: src.name,
+              content: src.keys.map((key: string) =>
+                redactSensitiveDeep(reportRow[key]),
+              ),
+            },
+          ] as const,
+      ),
     ),
     // kept under its original name too, so older prompts / cached tooling still find it
     priorCii: {

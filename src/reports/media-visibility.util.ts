@@ -27,7 +27,7 @@ export const MEDIA_VISIBILITY_LABELS: Record<MediaVisibility, string> = {
 };
 
 export function normalizeMediaVisibility(value: unknown): MediaVisibility | '' {
-  const key = String(value || '')
+  const key = String((value || '') as { toString(): string })
     .trim()
     .toLowerCase();
   return ALIASES[key] || '';

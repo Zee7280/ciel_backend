@@ -50,7 +50,7 @@ type TrackerOpp = {
 };
 
 function lower(value: unknown): string {
-  return String(value ?? '')
+  return String((value as string | null | undefined) ?? '')
     .trim()
     .toLowerCase();
 }

@@ -2,10 +2,13 @@
  * Apply (individual / team) and report teammate registration against the real Nest app + scratch
  * Postgres: university scope, teammate OTP, min team size, duplicate CNIC. Mail is captured.
  */
+import { DeepPartial } from 'typeorm';
 import { bootHarness, Harness, E2eUser, oppPayload } from './e2e/harness';
 import { adminApprove } from './e2e/helpers';
 import { randomUUID } from 'crypto';
 import { UserRole } from '../src/users/enums/user-role.enum';
+import { User } from '../src/users/entities/user.entity';
+import { Opportunity } from '../src/opportunities/entities/opportunity.entity';
 import { Otp } from '../src/students/entities/otp.entity';
 import { Participation } from '../src/engagement/entities/participant.entity';
 import { StudentReport } from '../src/reports/entities/student-report.entity';
@@ -13,6 +16,25 @@ import { StudentReport } from '../src/reports/entities/student-report.entity';
 const BNU = 'Beaconhouse National University (BNU)';
 const day = (d: number) =>
   new Date(Date.now() + d * 86400000).toISOString().slice(0, 10);
+
+/** The fields this spec reads from the apply / admin team-ops response bodies. */
+type ApiBody = {
+  id: string;
+  success?: boolean;
+  message: string;
+  snapshot_id: string;
+  warnings: string[];
+  blockers: string[];
+  data: {
+    application_id: string;
+    members: unknown[];
+    reports: unknown[];
+    can_merge: boolean;
+    can_apply: boolean;
+    draft_reports_to_remove: number;
+  };
+};
+type SnapshotListBody = { data: { restored_at: string | null }[] };
 
 describe('Apply + teammate registration: scope, OTP, roster integrity (real app + real Postgres)', () => {
   let h: Harness;
@@ -32,8 +54,9 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
     const ngo = await h.makeUser(UserRole.NGO, { org });
     const res = await h.as(ngo).post('/opportunities').send(oppPayload());
     expect(res.status).toBe(201);
-    await adminApprove(h, admin, res.body.id);
-    await h.opps.update(res.body.id, {
+    const created = res.body as ApiBody;
+    await adminApprove(h, admin, created.id);
+    await h.opps.update(created.id, {
       status: 'active',
       workflowStage: 'live',
       admin_approved: true,
@@ -46,13 +69,14 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
       },
       participation_scope: { rule: 'open_all_universities' },
       ...over,
-    } as any);
-    return h.reload(res.body.id);
+    } as DeepPartial<Opportunity>);
+    return h.reload(created.id);
   };
 
   const student = (university: string) =>
     h.makeUser(UserRole.STUDENT, {
-      overrides: { university, cnic: null } as any,
+      // cnic is deliberately NULL on these accounts (the column is typed as a string)
+      overrides: { university, cnic: null } as unknown as Partial<User>,
     });
 
   /** Same two calls the dialog / report make; returns nothing but leaves a verifiedAt row. */
@@ -110,7 +134,7 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
         .post(`/students/opportunities/${opp.id}/apply`)
         .send(applyBody({ junk_key: 'x' }));
       expect(res.status).toBe(201);
-      expect(res.body.success).toBe(true);
+      expect((res.body as ApiBody).success).toBe(true);
     });
 
     it('rejects a malformed body on the :id/apply route instead of swallowing it (DTO now applies)', async () => {
@@ -132,7 +156,7 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
         .post(`/students/opportunities/${opp.id}/apply`)
         .send(applyBody({ participation_type: 'team', team_members: [] }));
       expect(res.status).toBe(400);
-      expect(res.body.message).toMatch(/at least one teammate/);
+      expect((res.body as ApiBody).message).toMatch(/at least one teammate/);
     });
 
     it('rejects a teammate whose email never confirmed the OTP', async () => {
@@ -144,7 +168,7 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
         .post(`/students/opportunities/${opp.id}/apply`)
         .send(applyBody({ participation_type: 'team', team_members: [m] }));
       expect(res.status).toBe(400);
-      expect(res.body.message).toMatch(
+      expect((res.body as ApiBody).message).toMatch(
         new RegExp(`${m.email} has not confirmed the email OTP`),
       );
     });
@@ -174,7 +198,7 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
           }),
         );
       expect(dup.status).toBe(400);
-      expect(dup.body.message).toMatch(/have the same CNIC/);
+      expect((dup.body as ApiBody).message).toMatch(/have the same CNIC/);
 
       const ok = await h
         .as(lead)
@@ -195,7 +219,7 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
           }),
         );
       expect(ok.status).toBe(201);
-      expect(ok.body.success).toBe(true);
+      expect((ok.body as ApiBody).success).toBe(true);
     });
   });
 
@@ -208,7 +232,7 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
         .post(`/students/opportunities/${opp.id}/apply`)
         .send(applyBody());
       expect(applied.status).toBe(201);
-      const appId = applied.body.data.application_id as string;
+      const appId = (applied.body as ApiBody).data.application_id;
 
       const res = await h
         .as(admin)
@@ -218,11 +242,13 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
           lead_participation_id: appId,
         });
       expect(res.status).toBe(400);
-      expect(res.body.message).toMatch(
+      expect((res.body as ApiBody).message).toMatch(
         /applied but is not enrolled yet. Use "Approve & enroll" first/,
       );
-      expect(res.body.message).toMatch(/1 selected enrollment was not found/);
-      expect(res.body.message).not.toContain(appId);
+      expect((res.body as ApiBody).message).toMatch(
+        /1 selected enrollment was not found/,
+      );
+      expect((res.body as ApiBody).message).not.toContain(appId);
     });
   });
 
@@ -255,7 +281,7 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
           participationMode: 'individual',
           isTeamLead: false,
           ...over,
-        } as any) as unknown as Participation,
+        } as DeepPartial<Participation>),
       );
     };
     const draft = async (
@@ -270,7 +296,7 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
           opportunityId: opp.id,
           project_id: opp.id,
           status,
-        } as any) as unknown as StudentReport,
+        }),
       );
     };
     const reportCount = (oppId: string, studentId: string) =>
@@ -297,15 +323,15 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
         .as(admin)
         .get(`/admin/opportunities/${opp.id}/teams/${teamId}/delete-preview`);
       expect(preview.status).toBe(200);
-      expect(preview.body.data.members).toHaveLength(2);
-      expect(preview.body.data.reports).toHaveLength(1);
+      expect((preview.body as ApiBody).data.members).toHaveLength(2);
+      expect((preview.body as ApiBody).data.reports).toHaveLength(1);
       expect(await seatCount(opp.id)).toBe(2);
 
       const del = await h
         .as(admin)
         .del(`/admin/opportunities/${opp.id}/teams/${teamId}`);
       expect(del.status).toBe(200);
-      const snapshotId = del.body.snapshot_id as string;
+      const snapshotId = (del.body as ApiBody).snapshot_id;
       expect(snapshotId).toBeTruthy();
       expect(await seatCount(opp.id)).toBe(0);
       expect(await reportCount(opp.id, b.id)).toBe(0);
@@ -314,12 +340,13 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
         .as(admin)
         .get(`/admin/opportunities/${opp.id}/team-snapshots`);
       expect(list.status).toBe(200);
-      expect(list.body.data[0]).toMatchObject({
+      const snapshots = (list.body as SnapshotListBody).data;
+      expect(snapshots[0]).toMatchObject({
         id: snapshotId,
         kind: 'delete_team',
         summary: { participations: 2, reports: 1 },
       });
-      expect(list.body.data[0].restored_at).toBeNull();
+      expect(snapshots[0].restored_at).toBeNull();
 
       const undo = await h
         .as(admin)
@@ -342,7 +369,7 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
         )
         .send({});
       expect(again.status).toBe(400);
-      expect(again.body.message).toMatch(/already undone/);
+      expect((again.body as ApiBody).message).toMatch(/already undone/);
     });
 
     it('delete lead member promotes the next seat; undo hands the lead role back; undo is refused if the student re-enrolled', async () => {
@@ -363,7 +390,9 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
           `/admin/opportunities/${opp.id}/teams/${teamId}/members/${lead.id}/delete-preview`,
         );
       expect(prev.status).toBe(200);
-      expect(prev.body.warnings.join(' ')).toMatch(/will become the team lead/);
+      expect((prev.body as ApiBody).warnings.join(' ')).toMatch(
+        /will become the team lead/,
+      );
 
       const del = await h
         .as(admin)
@@ -379,7 +408,7 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
       const undo = await h
         .as(admin)
         .post(
-          `/admin/opportunities/${opp.id}/team-snapshots/${del.body.snapshot_id}/restore`,
+          `/admin/opportunities/${opp.id}/team-snapshots/${(del.body as ApiBody).snapshot_id}/restore`,
         )
         .send({});
       expect(undo.status).toBe(200);
@@ -400,11 +429,13 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
       const clash = await h
         .as(admin)
         .post(
-          `/admin/opportunities/${opp.id}/team-snapshots/${del2.body.snapshot_id}/restore`,
+          `/admin/opportunities/${opp.id}/team-snapshots/${(del2.body as ApiBody).snapshot_id}/restore`,
         )
         .send({});
       expect(clash.status).toBe(400);
-      expect(clash.body.message).toMatch(/already has a new enrollment/);
+      expect((clash.body as ApiBody).message).toMatch(
+        /already has a new enrollment/,
+      );
       expect(
         await h.ds
           .getRepository(Participation)
@@ -428,8 +459,8 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
           lead_participation_id: sa.id,
         });
       expect(ok.status).toBe(200);
-      expect(ok.body.data.can_merge).toBe(true);
-      expect(ok.body.data.draft_reports_to_remove).toBe(1);
+      expect((ok.body as ApiBody).data.can_merge).toBe(true);
+      expect((ok.body as ApiBody).data.draft_reports_to_remove).toBe(1);
 
       const merged = await h
         .as(admin)
@@ -439,7 +470,7 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
           lead_participation_id: sa.id,
         });
       expect(merged.status).toBe(201);
-      expect(merged.body.snapshot_id).toBeTruthy();
+      expect((merged.body as ApiBody).snapshot_id).toBeTruthy();
       expect(await reportCount(opp.id, b.id)).toBe(0);
       const rows = await h.ds
         .getRepository(Participation)
@@ -449,7 +480,7 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
       const undo = await h
         .as(admin)
         .post(
-          `/admin/opportunities/${opp.id}/team-snapshots/${merged.body.snapshot_id}/restore`,
+          `/admin/opportunities/${opp.id}/team-snapshots/${(merged.body as ApiBody).snapshot_id}/restore`,
         )
         .send({});
       expect(undo.status).toBe(200);
@@ -494,64 +525,58 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
       // blockers
       expect(
         (
-          await h
-            .as(admin)
-            .post(`${url}/preview`)
-            .send({
+          (
+            await h.as(admin).post(`${url}/preview`).send({
               op: 'move',
               member_participation_id: sb.id,
               target_team_id: t1,
             })
-        ).body.blockers.join(' '),
+          ).body as ApiBody
+        ).blockers.join(' '),
       ).toMatch(/already on that team/);
       expect(
         (
-          await h
-            .as(admin)
-            .post(`${url}/preview`)
-            .send({ op: 'set_lead', member_participation_id: sa.id })
-        ).body.blockers.join(' '),
+          (
+            await h
+              .as(admin)
+              .post(`${url}/preview`)
+              .send({ op: 'set_lead', member_participation_id: sa.id })
+          ).body as ApiBody
+        ).blockers.join(' '),
       ).toMatch(/already the team lead/);
       expect(
         (
-          await h
-            .as(admin)
-            .post(`${url}/preview`)
-            .send({ op: 'split', member_participation_id: sc.id })
-        ).body.data.can_apply,
+          (
+            await h
+              .as(admin)
+              .post(`${url}/preview`)
+              .send({ op: 'split', member_participation_id: sc.id })
+          ).body as ApiBody
+        ).data.can_apply,
       ).toBe(true);
       expect(
         (
-          await h
-            .as(admin)
-            .post(`${url}/apply`)
-            .send({
-              op: 'move',
-              member_participation_id: sb.id,
-              target_team_id: 'no-such-team',
-            })
+          await h.as(admin).post(`${url}/apply`).send({
+            op: 'move',
+            member_participation_id: sb.id,
+            target_team_id: 'no-such-team',
+          })
         ).status,
       ).toBe(400);
 
       // move b (with a draft) into team two
-      const pv = await h
-        .as(admin)
-        .post(`${url}/preview`)
-        .send({
-          op: 'move',
-          member_participation_id: sb.id,
-          target_team_id: t2,
-        });
-      expect(pv.body.data.can_apply).toBe(true);
-      expect(pv.body.warnings.join(' ')).toMatch(/1 draft report/);
-      const mv = await h
-        .as(admin)
-        .post(`${url}/apply`)
-        .send({
-          op: 'move',
-          member_participation_id: sb.id,
-          target_team_id: t2,
-        });
+      const pv = await h.as(admin).post(`${url}/preview`).send({
+        op: 'move',
+        member_participation_id: sb.id,
+        target_team_id: t2,
+      });
+      expect((pv.body as ApiBody).data.can_apply).toBe(true);
+      expect((pv.body as ApiBody).warnings.join(' ')).toMatch(/1 draft report/);
+      const mv = await h.as(admin).post(`${url}/apply`).send({
+        op: 'move',
+        member_participation_id: sb.id,
+        target_team_id: t2,
+      });
       expect(mv.status).toBe(200);
       expect(await get(sb.id)).toMatchObject({
         teamId: t2,
@@ -562,7 +587,7 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
       const undoMove = await h
         .as(admin)
         .post(
-          `/admin/opportunities/${opp.id}/team-snapshots/${mv.body.snapshot_id}/restore`,
+          `/admin/opportunities/${opp.id}/team-snapshots/${(mv.body as ApiBody).snapshot_id}/restore`,
         )
         .send({});
       expect(undoMove.status).toBe(200);
@@ -593,7 +618,7 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
       await h
         .as(admin)
         .post(
-          `/admin/opportunities/${opp.id}/team-snapshots/${split.body.snapshot_id}/restore`,
+          `/admin/opportunities/${opp.id}/team-snapshots/${(split.body as ApiBody).snapshot_id}/restore`,
         )
         .send({});
       expect(await get(sb.id)).toMatchObject({ teamId: t1, isTeamLead: true });
@@ -622,12 +647,12 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
         .patch(base)
         .send({ university_name: 'LUMS' });
       expect(bad.status).toBe(200);
-      expect(bad.body.warnings.join(' ')).toMatch(
+      expect((bad.body as ApiBody).warnings.join(' ')).toMatch(
         /is at LUMS, but this opportunity is open to/,
       );
       const ok = await h.as(admin).patch(base).send({ university_name: 'BNU' });
       expect(ok.status).toBe(200);
-      expect(ok.body.warnings).toBeUndefined();
+      expect((ok.body as ApiBody).warnings).toBeUndefined();
     });
 
     it('merge preview blocks (and merge refuses) when a non-lead already submitted a report', async () => {
@@ -645,8 +670,8 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
         .as(admin)
         .post(`/admin/opportunities/${opp.id}/teams/merge-preview`)
         .send(body);
-      expect(pv.body.data.can_merge).toBe(false);
-      expect(pv.body.blockers.join(' ')).toMatch(
+      expect((pv.body as ApiBody).data.can_merge).toBe(false);
+      expect((pv.body as ApiBody).blockers.join(' ')).toMatch(
         /submitted or verified report/,
       );
       expect(
@@ -692,7 +717,7 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
       const lums = await student('LUMS');
       const wrongUni = await sendOtp(lead, lums.email, opp.id);
       expect(wrongUni.status).toBe(400);
-      expect(wrongUni.body.message).toMatch(
+      expect((wrongUni.body as ApiBody).message).toMatch(
         /is at LUMS, but this opportunity is open to .*BNU.* students only/,
       );
 
@@ -702,7 +727,9 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
         opp.id,
       );
       expect(stranger.status).toBe(400);
-      expect(stranger.body.message).toMatch(/has no CIEL student account/);
+      expect((stranger.body as ApiBody).message).toMatch(
+        /has no CIEL student account/,
+      );
       expect(
         await h.ds
           .getRepository(Otp)
@@ -714,19 +741,15 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
       const opp = await scoped();
       const lead = await student('BNU');
       const ghostEmail = `ghost.${Date.now()}@e2e.test`;
-      await h.ds
-        .getRepository(Otp)
-        .save(
-          h.ds
-            .getRepository(Otp)
-            .create({
-              email: ghostEmail,
-              otp: '',
-              expiresAt: new Date(),
-              verifiedAt: new Date(),
-              projectId: opp.id,
-            } as any),
-        );
+      await h.ds.getRepository(Otp).save(
+        h.ds.getRepository(Otp).create({
+          email: ghostEmail,
+          otp: '',
+          expiresAt: new Date(),
+          verifiedAt: new Date(),
+          projectId: opp.id,
+        }),
+      );
       const ghost = await h
         .as(lead)
         .post(`/students/opportunities/${opp.id}/apply`)
@@ -737,7 +760,9 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
           }),
         );
       expect(ghost.status).toBe(400);
-      expect(ghost.body.message).toMatch(/has no CIEL student account/);
+      expect((ghost.body as ApiBody).message).toMatch(
+        /has no CIEL student account/,
+      );
 
       const real = await student('BNU');
       await otpVerify(lead, real.email, opp.id);
@@ -751,7 +776,7 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
           }),
         );
       expect(declaredWrong.status).toBe(400);
-      expect(declaredWrong.body.message).toMatch(
+      expect((declaredWrong.body as ApiBody).message).toMatch(
         /is at LUMS, but this opportunity is open to/,
       );
     });
@@ -849,7 +874,7 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
           participationMode: 'team',
           isTeamLead: true,
           teamId,
-        } as any),
+        }),
       );
       return { lead, teamId };
     };
@@ -869,7 +894,7 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
         .post('/engagement/register')
         .send(registerBody(opp.id, teamId, { universityName: 'LUMS' }));
       expect(outOfScope.status).toBe(400);
-      expect(outOfScope.body.message).toMatch(
+      expect((outOfScope.body as ApiBody).message).toMatch(
         /is at LUMS, but this opportunity is open to/,
       );
 
@@ -878,7 +903,9 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
         .post('/engagement/register')
         .send(registerBody(opp.id, teamId));
       expect(ghost.status).toBe(400);
-      expect(ghost.body.message).toMatch(/has no CIEL student account/);
+      expect((ghost.body as ApiBody).message).toMatch(
+        /has no CIEL student account/,
+      );
 
       const lums = await student('LUMS');
       const lumsSeat = await h
@@ -891,7 +918,7 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
           }),
         );
       expect(lumsSeat.status).toBe(400);
-      expect(lumsSeat.body.message).toMatch(
+      expect((lumsSeat.body as ApiBody).message).toMatch(
         /is at LUMS, but this opportunity is open to/,
       );
 
@@ -899,7 +926,9 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
       const body = registerBody(opp.id, teamId, { email: mate.email });
       const noOtp = await h.as(lead).post('/engagement/register').send(body);
       expect(noOtp.status).toBe(400);
-      expect(noOtp.body.message).toMatch(/has not confirmed the email OTP/);
+      expect((noOtp.body as ApiBody).message).toMatch(
+        /has not confirmed the email OTP/,
+      );
 
       await otpVerify(lead, body.email, opp.id);
       const seated = await h.as(lead).post('/engagement/register').send(body);
@@ -931,7 +960,7 @@ describe('Apply + teammate registration: scope, OTP, roster integrity (real app 
           fullName: 'Me',
           participationMode: 'individual',
           isTeamLead: false,
-        } as any),
+        }),
       );
       const res = await h
         .as(me)

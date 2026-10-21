@@ -556,7 +556,7 @@ function aliasAiCriterionKey(key: string): string {
 }
 
 function normalizeAiDimensionId(value: unknown): string {
-  const raw = String(value ?? '').trim();
+  const raw = String((value ?? '') as { toString(): string }).trim();
   const match = raw.match(/^(?:dimension\s*)?(4A|4B|[1-9])$/i);
   return match ? match[1].toUpperCase() : raw;
 }
@@ -576,7 +576,12 @@ function aiCriterionRows(section: unknown): Record<string, unknown>[] {
 function pickAiCriterionKey(row: Record<string, unknown>): string {
   return aliasAiCriterionKey(
     String(
-      row.criterion ?? row.key ?? row.id ?? row.criterionId ?? row.name ?? '',
+      (row.criterion ??
+        row.key ??
+        row.id ??
+        row.criterionId ??
+        row.name ??
+        '') as { toString(): string },
     ),
   );
 }

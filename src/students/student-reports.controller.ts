@@ -28,6 +28,23 @@ import { OrganizationsService } from '../organizations/organizations.service';
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
 import { UserRole } from '../users/enums/user-role.enum';
 
+/** `req.user` as populated by JwtStrategy.validate(). */
+type AuthenticatedRequest = {
+  user: { id: string; role: UserRole; organizationId?: string };
+};
+
+/** class-validator style failure payload (`{ response: { message: ValidationError[] | string } }`). */
+type ValidationFailureLike = {
+  response?: {
+    message?: unknown;
+  };
+};
+
+type ValidationIssue = {
+  property?: string;
+  constraints?: Record<string, string>;
+};
+
 @Controller('students/reports')
 @UseGuards(JwtAuthGuard, SubscriptionActiveGuard)
 export class StudentReportsController {
@@ -47,9 +64,9 @@ export class StudentReportsController {
     }),
   )
   async submitReport(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Body() body: any,
-    @UploadedFiles() files: any[],
+    @UploadedFiles() files: Express.Multer.File[],
   ) {
     try {
       return await this.studentReportsService.createReport(
@@ -67,20 +84,22 @@ export class StudentReportsController {
       if (
         error instanceof HttpException &&
         typeof error.getResponse() === 'object' &&
-        !Array.isArray((error.getResponse() as any)?.message)
+        !Array.isArray((error.getResponse() as { message?: unknown })?.message)
       ) {
         throw error;
       }
-      if (error.response && error.response.message) {
+      const failure = error as ValidationFailureLike;
+      if (failure.response && failure.response.message) {
+        const message = failure.response.message;
         throw new BadRequestException({
           success: false,
           message: 'Validation failed',
-          errors: Array.isArray(error.response.message)
-            ? error.response.message.map((msg) => ({
+          errors: Array.isArray(message)
+            ? (message as ValidationIssue[]).map((msg) => ({
                 field: msg.property,
                 message: Object.values(msg.constraints || {}).join(', '),
               }))
-            : [{ message: error.response.message }],
+            : [{ message }],
         });
       }
       throw error;
@@ -97,10 +116,10 @@ export class StudentReportsController {
     }),
   )
   async submitReportSpecific(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Param('projectId') projectId: string,
-    @Body() body: any,
-    @UploadedFiles() files: any[],
+    @Body() body: Record<string, unknown>,
+    @UploadedFiles() files: Express.Multer.File[],
   ) {
     // Ensure projectId is in the body for the service logic
     body.projectId = projectId;
@@ -124,15 +143,18 @@ export class StudentReportsController {
     }),
   )
   async saveDraft(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Body() body: any,
-    @UploadedFiles() files: any[],
+    @UploadedFiles() files: Express.Multer.File[],
   ) {
     return await this.studentReportsService.saveDraft(req.user.id, body, files);
   }
 
   @Get()
-  async getAllReports(@Request() req, @Query() query: any) {
+  async getAllReports(
+    @Request() req: AuthenticatedRequest,
+    @Query() query: { studentId?: string; [key: string]: unknown },
+  ) {
     // Same ownership rule as `/check` below: default to the caller, and never let a plain
     // student read another student's reports (omitting `studentId` used to return everyone's).
     const isAdminCaller = req.user?.role === UserRole.SUPER_ADMIN;
@@ -154,7 +176,7 @@ export class StudentReportsController {
 
   @Get('check')
   async checkReportStatus(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Query() query: { studentId?: string; opportunityId?: string },
   ) {
     const studentId = (query.studentId || '').trim() || req.user.id;
@@ -170,9 +192,13 @@ export class StudentReportsController {
   }
 
   @Get(':id')
-  async getReportById(@Request() req, @Param('id') id: string) {
+  async getReportById(
+    @Request() req: AuthenticatedRequest,
+    @Param('id') id: string,
+  ) {
+    const partnerOrganizationId = req.user?.organizationId;
     if (
-      req.user?.organizationId &&
+      partnerOrganizationId &&
       [
         UserRole.NGO,
         UserRole.CORPORATE,
@@ -197,7 +223,7 @@ export class StudentReportsController {
       }
       return await this.studentReportsService.findOneForPartner(
         id,
-        req.user.organizationId,
+        partnerOrganizationId,
         { universityScopeOpportunityIds, viewerRole: req.user.role },
       );
     }
@@ -214,7 +240,7 @@ export class StudentReportsController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
   async verifyReport(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Param('id') id: string,
     @Body()
     body: {

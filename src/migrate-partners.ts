@@ -1,7 +1,5 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { UsersService } from './users/users.service';
-import { UserRole } from './users/enums/user-role.enum';
 import { DataSource } from 'typeorm';
 
 async function bootstrap() {
@@ -11,7 +9,7 @@ async function bootstrap() {
   console.log('Starting migration: Partner -> NGO');
 
   // Direct SQL update for efficiency and to bypass potential code checks
-  const result = await dataSource.query(
+  const result: unknown = await dataSource.query(
     `UPDATE users SET role = 'ngo' WHERE role = 'partner'`,
   );
 
@@ -20,4 +18,4 @@ async function bootstrap() {
   await app.close();
 }
 
-bootstrap();
+void bootstrap();

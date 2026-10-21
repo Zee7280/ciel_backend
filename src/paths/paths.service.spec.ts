@@ -3,7 +3,100 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
+import type { Repository } from 'typeorm';
+import type { AiService } from '../ai/ai.service';
+import type { MailService } from '../mail/mail.service';
+import type { NotificationsService } from '../notifications/notifications.service';
+import type { Organization } from '../organizations/entities/organization.entity';
+import type { User } from '../users/entities/user.entity';
+import type { CourseProjectEntry } from './entities/course-project-entry.entity';
+import type { FypEntry } from './entities/fyp-entry.entity';
+import type { PathGraderRun } from './entities/path-grader-run.entity';
+import type { TeamMemberInvite } from './entities/team-member-invite.entity';
+import type { VentureEntry } from './entities/venture-entry.entity';
 import { PathsService } from './paths.service';
+
+/** Builds the service from hand-rolled stand-ins — each test supplies only the members it exercises,
+ * so every dependency is accepted as `unknown` and cast once, here, to its injected type. */
+function createService(
+  courseProjectRepo: unknown,
+  fypRepo: unknown,
+  ventureRepo: unknown,
+  teamMemberInviteRepo: unknown,
+  usersRepo: unknown,
+  organizationsRepo: unknown,
+  mailService: unknown,
+  notificationsService: unknown,
+  graderRunRepo: unknown,
+  aiService: unknown,
+): PathsService {
+  return new PathsService(
+    courseProjectRepo as Repository<CourseProjectEntry>,
+    fypRepo as Repository<FypEntry>,
+    ventureRepo as Repository<VentureEntry>,
+    teamMemberInviteRepo as Repository<TeamMemberInvite>,
+    usersRepo as Repository<User>,
+    organizationsRepo as Repository<Organization>,
+    mailService as MailService,
+    notificationsService as NotificationsService,
+    graderRunRepo as Repository<PathGraderRun>,
+    aiService as AiService,
+  );
+}
+
+/** Private members the tests reach into directly. */
+type PathsServiceInternals = {
+  syncTeamInvites: (
+    kind: 'course_project' | 'fyp' | 'venture',
+    entryId: string,
+    invitedByUserId: string,
+    inviterName: string,
+    kindLabel: string,
+    title: string,
+    members: unknown[] | undefined | null,
+  ) => Promise<void>;
+  usersRepo: unknown;
+};
+const internals = (service: PathsService) =>
+  service as unknown as PathsServiceInternals;
+
+type MeritModelUser = Parameters<
+  PathsService['notifyCourseProjectMeritRanks']
+>[0];
+type CourseworkMeritModel = Awaited<
+  ReturnType<PathsService['getCourseProjectMeritModel']>
+>;
+type FypMeritModel = Awaited<ReturnType<PathsService['getFypMeritModel']>>;
+type VentureMeritModel = Awaited<
+  ReturnType<PathsService['getVentureMeritModel']>
+>;
+type UniversityVentures = Awaited<
+  ReturnType<PathsService['listVenturesForUniversity']>
+>;
+
+/** `expect.objectContaining` is typed `any`; wrapping it keeps nested matchers out of `any`-land. */
+const containing = (obj: Record<string, unknown>): unknown =>
+  expect.objectContaining(obj);
+
+/** Minimal chainable query-builder stand-in. */
+type FakeQueryBuilder = {
+  where: jest.Mock;
+  andWhere: jest.Mock;
+  orWhere: jest.Mock;
+  orderBy: jest.Mock;
+  getMany: jest.Mock;
+  getOne: jest.Mock;
+};
+
+/** View of a persisted fixture row for assertions on its nested jsonb columns. */
+type SavedRow = {
+  status: string;
+  facultyModeration: unknown;
+  meritRibbon: unknown;
+  reviewPipeline: { supervisorStatus: string };
+  publishSettings: { acceptIntros: boolean };
+  academicSetup: { supervisorEmail: string; supervisorName: string };
+};
 
 function matchesWhere(
   row: Record<string, unknown>,
@@ -18,23 +111,24 @@ function makeInviteRepo() {
   return {
     rows,
     create: jest.fn((data: Record<string, unknown>) => ({ ...data })),
-    save: jest.fn(async (row: Record<string, unknown>) => {
+    save: jest.fn((row: Record<string, unknown>) => {
       if (!row.id) {
         row.id = `invite-${nextId++}`;
         rows.push(row);
-        return row;
+        return Promise.resolve(row);
       }
       const idx = rows.findIndex((r) => r.id === row.id);
       if (idx === -1) rows.push(row);
       else rows[idx] = row;
-      return row;
+      return Promise.resolve(row);
     }),
-    find: jest.fn(async (opts: { where?: Record<string, unknown> } = {}) =>
-      rows.filter((r) => matchesWhere(r, opts.where ?? {})),
+    find: jest.fn((opts: { where?: Record<string, unknown> } = {}) =>
+      Promise.resolve(rows.filter((r) => matchesWhere(r, opts.where ?? {}))),
     ),
-    findOne: jest.fn(
-      async (opts: { where?: Record<string, unknown> } = {}) =>
+    findOne: jest.fn((opts: { where?: Record<string, unknown> } = {}) =>
+      Promise.resolve(
         rows.find((r) => matchesWhere(r, opts.where ?? {})) ?? null,
+      ),
     ),
   };
 }
@@ -56,7 +150,7 @@ describe('PathsService — team member invites', () => {
         projectTitle: 'My Report',
         course: null,
       }),
-      save: jest.fn(async (row: Record<string, unknown>) => row),
+      save: jest.fn((row: Record<string, unknown>) => Promise.resolve(row)),
     };
     const fypRepo = { findOne: jest.fn().mockResolvedValue(null) };
     const ventureRepo = { findOne: jest.fn().mockResolvedValue(null) };
@@ -65,17 +159,17 @@ describe('PathsService — team member invites', () => {
     };
     const organizationsRepo = {};
 
-    const service = new PathsService(
-      courseProjectRepo as any,
-      fypRepo as any,
-      ventureRepo as any,
-      inviteRepo as any,
-      usersRepo as any,
-      organizationsRepo as any,
-      mailService as any,
-      notificationsService as any,
-      {} as any,
-      {} as any,
+    const service = createService(
+      courseProjectRepo,
+      fypRepo,
+      ventureRepo,
+      inviteRepo,
+      usersRepo,
+      organizationsRepo,
+      mailService,
+      notificationsService,
+      {},
+      {},
     );
     return {
       service,
@@ -89,7 +183,7 @@ describe('PathsService — team member invites', () => {
   it('creates exactly one invite for a set of member emails, deduped case/whitespace-insensitively, and skips members with no email', async () => {
     const { service, inviteRepo, mailService } = makeService();
 
-    await (service as any).syncTeamInvites(
+    await internals(service).syncTeamInvites(
       'course_project',
       'entry-1',
       'user-1',
@@ -110,7 +204,7 @@ describe('PathsService — team member invites', () => {
     expect(mailService.sendPathTeamInvite).toHaveBeenCalledTimes(1);
     expect(mailService.sendPathTeamInvite).toHaveBeenCalledWith(
       'bob@test.com',
-      expect.objectContaining({
+      containing({
         inviterName: 'Ada',
         kindLabel: 'Course Project',
         title: 'My Report',
@@ -123,9 +217,9 @@ describe('PathsService — team member invites', () => {
       findOne: jest.fn().mockResolvedValue({ id: 'bob-1', role: 'student' }),
     };
     const { service, inviteRepo, mailService } = makeService();
-    (service as any).usersRepo = usersRepo;
+    internals(service).usersRepo = usersRepo;
 
-    await (service as any).syncTeamInvites(
+    await internals(service).syncTeamInvites(
       'course_project',
       'entry-1',
       'user-1',
@@ -143,7 +237,15 @@ describe('PathsService — team member invites', () => {
 
   it('does not re-invite (or re-send mail for) an email already invited for the same entry', async () => {
     const { service, inviteRepo, mailService } = makeService();
-    const args: [string, string, string, string, string, string, unknown[]] = [
+    const args: [
+      'course_project',
+      string,
+      string,
+      string,
+      string,
+      string,
+      unknown[],
+    ] = [
       'course_project',
       'entry-1',
       'user-1',
@@ -153,8 +255,8 @@ describe('PathsService — team member invites', () => {
       [{ name: 'Bob', email: 'bob@test.com' }],
     ];
 
-    await (service as any).syncTeamInvites(...args);
-    await (service as any).syncTeamInvites(...args);
+    await internals(service).syncTeamInvites(...args);
+    await internals(service).syncTeamInvites(...args);
 
     expect(inviteRepo.rows).toHaveLength(1);
     expect(mailService.sendPathTeamInvite).toHaveBeenCalledTimes(1);
@@ -162,7 +264,7 @@ describe('PathsService — team member invites', () => {
 
   it('invites separately-keyed entries independently, even with the same email', async () => {
     const { service, inviteRepo } = makeService();
-    await (service as any).syncTeamInvites(
+    await internals(service).syncTeamInvites(
       'course_project',
       'entry-1',
       'user-1',
@@ -171,7 +273,7 @@ describe('PathsService — team member invites', () => {
       'Report A',
       [{ email: 'bob@test.com' }],
     );
-    await (service as any).syncTeamInvites(
+    await internals(service).syncTeamInvites(
       'course_project',
       'entry-2',
       'user-1',
@@ -190,7 +292,7 @@ describe('PathsService — team member invites', () => {
   it("revokes a still-pending invite when the member's email is edited/removed on the next sync", async () => {
     const { service, inviteRepo, mailService } = makeService();
 
-    await (service as any).syncTeamInvites(
+    await internals(service).syncTeamInvites(
       'course_project',
       'entry-1',
       'user-1',
@@ -203,7 +305,7 @@ describe('PathsService — team member invites', () => {
     const originalToken = inviteRepo.rows[0].token;
 
     // The student fixes a typo — bob@test.com becomes bob.k@test.com.
-    await (service as any).syncTeamInvites(
+    await internals(service).syncTeamInvites(
       'course_project',
       'entry-1',
       'user-1',
@@ -239,7 +341,7 @@ describe('PathsService — team member invites', () => {
     const { service } = makeService({ inviteRepo });
 
     // Bob is removed from the group entirely — no members left.
-    await (service as any).syncTeamInvites(
+    await internals(service).syncTeamInvites(
       'course_project',
       'entry-1',
       'user-1',
@@ -268,7 +370,7 @@ describe('PathsService — team member invites', () => {
     });
     const { service, mailService } = makeService({ inviteRepo });
 
-    await (service as any).syncTeamInvites(
+    await internals(service).syncTeamInvites(
       'course_project',
       'entry-1',
       'user-1',
@@ -371,7 +473,7 @@ describe('PathsService — team member invites', () => {
     );
 
     expect(result).toEqual(
-      expect.objectContaining({ kind: 'course_project', entryId: 'entry-1' }),
+      containing({ kind: 'course_project', entryId: 'entry-1' }),
     );
     expect(inviteRepo.rows[0].status).toBe('accepted');
     expect(inviteRepo.rows[0].acceptedByUserId).toBe('user-2');
@@ -519,7 +621,7 @@ describe('PathsService — team member invites', () => {
     expect(result).toEqual({ success: true });
     expect(mailService.sendPathTeamInvite).toHaveBeenCalledWith(
       'bob@test.com',
-      expect.objectContaining({ token: 'tok-new' }),
+      containing({ token: 'tok-new' }),
     );
   });
 
@@ -554,7 +656,7 @@ describe('PathsService — coursework merit notify', () => {
     };
     const courseProjectRepo = {
       findOne: jest.fn(),
-      save: jest.fn(async (row: Record<string, unknown>) => row),
+      save: jest.fn((row: Record<string, unknown>) => Promise.resolve(row)),
     };
     const usersRepo = {
       findOne: jest.fn().mockResolvedValue({ email: 'student@test.com' }),
@@ -564,17 +666,17 @@ describe('PathsService — coursework merit notify', () => {
       sendCourseworkRankNotification: jest.fn().mockResolvedValue(undefined),
     };
     const graderRunRepo = makeGraderRunRepo();
-    const service = new PathsService(
-      courseProjectRepo as any,
-      {} as any,
-      {} as any,
-      makeInviteRepo() as any,
-      usersRepo as any,
-      {} as any,
-      mailService as any,
-      notificationsService as any,
-      graderRunRepo as any,
-      {} as any,
+    const service = createService(
+      courseProjectRepo,
+      {},
+      {},
+      makeInviteRepo(),
+      usersRepo,
+      {},
+      mailService,
+      notificationsService,
+      graderRunRepo,
+      {},
     );
     return {
       service,
@@ -592,7 +694,7 @@ describe('PathsService — coursework merit notify', () => {
     jest.spyOn(service, 'getCourseProjectMeritModel').mockResolvedValue({
       scope: { label: 'Faculty supervision' },
       entries: [{ id: 'entry-1', rank: 9 }],
-    } as any);
+    } as unknown as CourseworkMeritModel);
     courseProjectRepo.findOne.mockResolvedValue({
       id: 'entry-1',
       userId: 'student-1',
@@ -614,9 +716,9 @@ describe('PathsService — coursework merit notify', () => {
 
     expect(result.notified).toBe(1);
     expect(courseProjectRepo.save).toHaveBeenCalledWith(
-      expect.objectContaining({
-        meritRibbon: expect.objectContaining({
-          faculty: expect.objectContaining({
+      containing({
+        meritRibbon: containing({
+          faculty: containing({
             rank: 1,
             of: 8,
             scope: 'Your cohort',
@@ -628,7 +730,7 @@ describe('PathsService — coursework merit notify', () => {
     expect(notificationsService.createNotification).toHaveBeenCalledTimes(1);
     expect(notificationsService.createNotification).toHaveBeenCalledWith(
       'student-1',
-      expect.objectContaining({ title: 'Your coursework ranked #1' }),
+      containing({ title: 'Your coursework ranked #1' }),
     );
   });
 
@@ -638,7 +740,7 @@ describe('PathsService — coursework merit notify', () => {
     jest.spyOn(service, 'getCourseProjectMeritModel').mockResolvedValue({
       scope: { label: 'Your cohort' },
       entries: [{ id: 'entry-1', rank: 1 }],
-    } as any);
+    } as unknown as CourseworkMeritModel);
     courseProjectRepo.findOne.mockResolvedValue({
       id: 'entry-1',
       userId: 'student-1',
@@ -673,7 +775,7 @@ describe('PathsService — coursework merit notify', () => {
     jest.spyOn(service, 'getCourseProjectMeritModel').mockResolvedValue({
       scope: { label: 'Your cohort' },
       entries: [{ id: 'entry-1', rank: 1 }],
-    } as any);
+    } as unknown as CourseworkMeritModel);
     courseProjectRepo.findOne.mockResolvedValue({
       id: 'entry-1',
       userId: 'student-1',
@@ -701,9 +803,9 @@ describe('PathsService — coursework merit notify', () => {
 
     expect(result.notified).toBe(1);
     expect(courseProjectRepo.save).toHaveBeenCalledWith(
-      expect.objectContaining({
-        meritRibbon: expect.objectContaining({
-          faculty: expect.objectContaining({
+      containing({
+        meritRibbon: containing({
+          faculty: containing({
             rank: 1,
             of: 8,
             badgeLevel: 'Silver',
@@ -729,7 +831,7 @@ describe('PathsService — coursework merit notify', () => {
     jest.spyOn(service, 'getCourseProjectMeritModel').mockResolvedValue({
       scope: { label: 'Your cohort' },
       entries: [{ id: 'entry-1', rank: 1 }],
-    } as any);
+    } as unknown as CourseworkMeritModel);
     courseProjectRepo.findOne.mockResolvedValue({
       id: 'entry-1',
       userId: 'student-1',
@@ -778,7 +880,7 @@ describe('PathsService — coursework faculty review', () => {
     };
     const courseProjectRepo = {
       findOne: jest.fn().mockResolvedValue(entry),
-      save: jest.fn(async (row: Record<string, unknown>) => row),
+      save: jest.fn((row: Record<string, unknown>) => Promise.resolve(row)),
     };
     const usersRepo = {
       findOne: jest.fn().mockResolvedValue({ email: 'student@test.com' }),
@@ -788,17 +890,17 @@ describe('PathsService — coursework faculty review', () => {
       sendCourseworkRevisionRequested: jest.fn().mockResolvedValue(undefined),
       sendCourseworkRejected: jest.fn().mockResolvedValue(undefined),
     };
-    const service = new PathsService(
-      courseProjectRepo as any,
-      {} as any,
-      {} as any,
-      makeInviteRepo() as any,
-      usersRepo as any,
-      {} as any,
-      mailService as any,
-      notificationsService as any,
-      {} as any,
-      {} as any,
+    const service = createService(
+      courseProjectRepo,
+      {},
+      {},
+      makeInviteRepo(),
+      usersRepo,
+      {},
+      mailService,
+      notificationsService,
+      {},
+      {},
     );
     return { service, notificationsService, courseProjectRepo, mailService };
   };
@@ -810,7 +912,7 @@ describe('PathsService — coursework faculty review', () => {
       'entry-1',
       'approve',
     );
-    expect((saved as any).facultyApprovalStatus).toBe('approved');
+    expect(saved.facultyApprovalStatus).toBe('approved');
     expect(courseProjectRepo.save).toHaveBeenCalled();
     expect(mailService.sendCourseworkApproved).toHaveBeenCalledWith(
       'student@test.com',
@@ -827,8 +929,8 @@ describe('PathsService — coursework faculty review', () => {
       'revision',
       'Add more evidence',
     );
-    expect((saved as any).facultyApprovalStatus).toBe('revision_requested');
-    expect((saved as any).meritRibbon).toBeNull();
+    expect(saved.facultyApprovalStatus).toBe('revision_requested');
+    expect(saved.meritRibbon).toBeNull();
     expect(mailService.sendCourseworkRevisionRequested).toHaveBeenCalledWith(
       'student@test.com',
       'Ali',
@@ -845,7 +947,7 @@ describe('PathsService — coursework faculty review', () => {
       'reject',
       'Not enough SDG linkage',
     );
-    expect((saved as any).facultyApprovalStatus).toBe('rejected');
+    expect(saved.facultyApprovalStatus).toBe('rejected');
     expect(mailService.sendCourseworkRejected).toHaveBeenCalledWith(
       'student@test.com',
       'Ali',
@@ -870,13 +972,11 @@ describe('PathsService — coursework faculty review', () => {
       undefined,
       moderation,
     );
-    expect((saved as any).facultyModeration).toEqual(
-      expect.objectContaining(moderation),
-    );
-    expect((saved as any).facultyModeration.at).toEqual(expect.any(String));
+    expect(saved.facultyModeration).toEqual(containing(moderation));
+    expect(saved.facultyModeration!.at).toEqual(expect.any(String));
     expect(courseProjectRepo.save).toHaveBeenCalledWith(
-      expect.objectContaining({
-        facultyModeration: expect.objectContaining({ facultyScore: 78 }),
+      containing({
+        facultyModeration: containing({ facultyScore: 78 }),
       }),
     );
   });
@@ -889,7 +989,7 @@ describe('PathsService — coursework faculty review', () => {
       'reject',
       'Not enough SDG linkage',
     );
-    expect((saved as any).facultyModeration).toBeNull();
+    expect(saved.facultyModeration).toBeNull();
   });
 
   it('rejects with no reason are refused — a student is entitled to know why', async () => {
@@ -926,13 +1026,13 @@ describe('PathsService — coursework faculty review', () => {
 
 describe('PathsService — coursework AI score is never returned to a student', () => {
   function makeQb(result: Record<string, unknown>[]) {
-    const qb: any = {
+    const qb: FakeQueryBuilder = {
       where: jest.fn(() => qb),
       andWhere: jest.fn(() => qb),
       orWhere: jest.fn(() => qb),
       orderBy: jest.fn(() => qb),
-      getMany: jest.fn(async () => result),
-      getOne: jest.fn(async () => result[0] ?? null),
+      getMany: jest.fn(() => Promise.resolve(result)),
+      getOne: jest.fn(() => Promise.resolve(result[0] ?? null)),
     };
     return qb;
   }
@@ -942,21 +1042,21 @@ describe('PathsService — coursework AI score is never returned to a student', 
       createQueryBuilder: jest.fn(() => makeQb([entry])),
       find: jest.fn().mockResolvedValue([entry]),
     };
-    const service = new PathsService(
-      courseProjectRepo as any,
-      {} as any,
-      {} as any,
-      makeInviteRepo() as any,
-      { findOne: jest.fn() } as any,
-      {} as any,
-      {} as any,
-      { createNotification: jest.fn() } as any,
-      {} as any,
-      {} as any,
+    const service = createService(
+      courseProjectRepo,
+      {},
+      {},
+      makeInviteRepo(),
+      { findOne: jest.fn() },
+      {},
+      {},
+      { createNotification: jest.fn() },
+      {},
+      {},
     );
     jest
       .spyOn(service as any, 'courseProjectAnnotate')
-      .mockImplementation(async (entries: unknown) => entries as any);
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
     return { service, courseProjectRepo };
   };
 
@@ -975,11 +1075,11 @@ describe('PathsService — coursework AI score is never returned to a student', 
       'student-1',
       'student@test.com',
     );
-    expect((result as any).meritRibbon).toBeTruthy();
-    expect((result as any).meritRibbon.cielpk.total).toBeUndefined();
-    expect((result as any).meritRibbon.cielpk.rank).toBe(1);
-    expect((result as any).meritRibbon.university.rank).toBe(1);
-    expect((result as any).meritRibbon.faculty.rank).toBe(1);
+    expect(result.meritRibbon).toBeTruthy();
+    expect(result.meritRibbon!.cielpk!.total).toBeUndefined();
+    expect(result.meritRibbon!.cielpk!.rank).toBe(1);
+    expect(result.meritRibbon!.university!.rank).toBe(1);
+    expect(result.meritRibbon!.faculty!.rank).toBe(1);
   });
 
   it('getCourseProjectByIdForUser strips the numeric total for the owning student', async () => {
@@ -989,8 +1089,8 @@ describe('PathsService — coursework AI score is never returned to a student', 
       'student@test.com',
       'entry-1',
     );
-    expect((result as any).meritRibbon).toBeTruthy();
-    expect((result as any).meritRibbon.cielpk.total).toBeUndefined();
+    expect(result.meritRibbon).toBeTruthy();
+    expect(result.meritRibbon!.cielpk!.total).toBeUndefined();
   });
 
   it('never returns the faculty moderation breakdown to the owning student', async () => {
@@ -1007,7 +1107,7 @@ describe('PathsService — coursework AI score is never returned to a student', 
       'student-1',
       'student@test.com',
     );
-    expect((listed as any).facultyModeration).toBeNull();
+    expect(listed.facultyModeration).toBeNull();
 
     const { service: service2 } = makeStudentReadService({ ...withModeration });
     const byId = await service2.getCourseProjectByIdForUser(
@@ -1015,7 +1115,7 @@ describe('PathsService — coursework AI score is never returned to a student', 
       'student@test.com',
       'entry-1',
     );
-    expect((byId as any).facultyModeration).toBeNull();
+    expect(byId.facultyModeration).toBeNull();
   });
 
   it('resubmitting an approved entry clears the stale faculty moderation, not just the ribbon', async () => {
@@ -1048,41 +1148,41 @@ describe('PathsService — coursework AI score is never returned to a student', 
     ];
     const manager = {
       getRepository: () => ({
-        findOne: jest.fn(async () => rows[0] ?? null),
-        save: jest.fn(async (row: Record<string, unknown>) => {
+        findOne: jest.fn(() => Promise.resolve(rows[0] ?? null)),
+        save: jest.fn((row: Record<string, unknown>) => {
           rows[0] = row;
-          return row;
+          return Promise.resolve(row);
         }),
       }),
     };
-    const service = new PathsService(
+    const service = createService(
       {
         manager: {
-          transaction: jest.fn(async (fn: (m: unknown) => unknown) =>
-            fn(manager),
+          transaction: jest.fn((fn: (m: unknown) => unknown) =>
+            Promise.resolve(fn(manager)),
           ),
         },
-      } as any,
-      {} as any,
-      {} as any,
-      makeInviteRepo() as any,
-      { findOne: jest.fn() } as any,
-      {} as any,
+      },
+      {},
+      {},
+      makeInviteRepo(),
+      { findOne: jest.fn() },
+      {},
       {
         sendCourseworkSubmittedForReview: jest.fn(),
         sendCourseworkSubmissionConfirmation: jest.fn(),
         sendCourseworkResubmittedForReview: jest.fn(),
-      } as any,
-      { createNotification: jest.fn() } as any,
-      {} as any,
-      {} as any,
+      },
+      { createNotification: jest.fn() },
+      {},
+      {},
     );
     jest
       .spyOn(service as any, 'syncCourseProjectInvites')
       .mockResolvedValue(undefined);
     jest
       .spyOn(service as any, 'courseProjectAnnotate')
-      .mockImplementation(async (entries: unknown) => entries as any);
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
 
     // The student edits any field on their already-approved report — this alone must
     // invalidate the stale approval, including the faculty's own scoring breakdown, not
@@ -1090,12 +1190,12 @@ describe('PathsService — coursework AI score is never returned to a student', 
     const saved = await service.updateCourseProjectByIdForUser(
       'student-1',
       'entry-1',
-      { addedNote: 'tweak' } as any,
+      { addedNote: 'tweak' },
     );
 
-    expect((rows[0] as any).facultyModeration).toBeNull();
-    expect((saved as any).facultyApprovalStatus).toBe('pending');
-    expect((saved as any).facultyModeration).toBeNull();
+    expect((rows[0] as SavedRow).facultyModeration).toBeNull();
+    expect(saved.facultyApprovalStatus).toBe('pending');
+    expect(saved.facultyModeration).toBeNull();
   });
 
   it('the live PATCH endpoint never returns the faculty moderation breakdown, even mid-edit', async () => {
@@ -1118,52 +1218,52 @@ describe('PathsService — coursework AI score is never returned to a student', 
     ];
     const manager = {
       getRepository: () => ({
-        findOne: jest.fn(async () => rows[0] ?? null),
-        save: jest.fn(async (row: Record<string, unknown>) => {
+        findOne: jest.fn(() => Promise.resolve(rows[0] ?? null)),
+        save: jest.fn((row: Record<string, unknown>) => {
           rows[0] = row;
-          return row;
+          return Promise.resolve(row);
         }),
       }),
     };
-    const service = new PathsService(
+    const service = createService(
       {
         manager: {
-          transaction: jest.fn(async (fn: (m: unknown) => unknown) =>
-            fn(manager),
+          transaction: jest.fn((fn: (m: unknown) => unknown) =>
+            Promise.resolve(fn(manager)),
           ),
         },
-      } as any,
-      {} as any,
-      {} as any,
-      makeInviteRepo() as any,
-      { findOne: jest.fn() } as any,
-      {} as any,
+      },
+      {},
+      {},
+      makeInviteRepo(),
+      { findOne: jest.fn() },
+      {},
       {
         sendCourseworkSubmittedForReview: jest.fn(),
         sendCourseworkSubmissionConfirmation: jest.fn(),
-      } as any,
-      { createNotification: jest.fn() } as any,
-      {} as any,
-      {} as any,
+      },
+      { createNotification: jest.fn() },
+      {},
+      {},
     );
     jest
       .spyOn(service as any, 'syncCourseProjectInvites')
       .mockResolvedValue(undefined);
     jest
       .spyOn(service as any, 'courseProjectAnnotate')
-      .mockImplementation(async (entries: unknown) => entries as any);
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
 
     // facultyModeration wasn't reset here (entry never reached 'submitted'/'approved' this
     // save) — the response must still never carry it, mirroring listCourseProjects/getById.
     const saved = await service.updateCourseProjectByIdForUser(
       'student-1',
       'entry-1',
-      { addedNote: 'draft edit' } as any,
+      { addedNote: 'draft edit' },
     );
 
-    expect((saved as any).facultyModeration).toBeNull();
-    expect((saved as any).meritRibbon.university.rank).toBe(2);
-    expect((saved as any).meritRibbon.university.total).toBeUndefined();
+    expect(saved.facultyModeration).toBeNull();
+    expect(saved.meritRibbon!.university!.rank).toBe(2);
+    expect(saved.meritRibbon!.university!.total).toBeUndefined();
   });
 
   it('refuses to redirect an already-submitted entry to a different teacherEmail', async () => {
@@ -1178,40 +1278,40 @@ describe('PathsService — coursework AI score is never returned to a student', 
     ];
     const manager = {
       getRepository: () => ({
-        findOne: jest.fn(async () => rows[0] ?? null),
-        save: jest.fn(async (row: Record<string, unknown>) => {
+        findOne: jest.fn(() => Promise.resolve(rows[0] ?? null)),
+        save: jest.fn((row: Record<string, unknown>) => {
           rows[0] = row;
-          return row;
+          return Promise.resolve(row);
         }),
       }),
     };
-    const service = new PathsService(
+    const service = createService(
       {
         manager: {
-          transaction: jest.fn(async (fn: (m: unknown) => unknown) =>
-            fn(manager),
+          transaction: jest.fn((fn: (m: unknown) => unknown) =>
+            Promise.resolve(fn(manager)),
           ),
         },
-      } as any,
-      {} as any,
-      {} as any,
-      makeInviteRepo() as any,
-      { findOne: jest.fn() } as any,
-      {} as any,
+      },
+      {},
+      {},
+      makeInviteRepo(),
+      { findOne: jest.fn() },
+      {},
       {
         sendCourseworkSubmittedForReview: jest.fn(),
         sendCourseworkSubmissionConfirmation: jest.fn(),
-      } as any,
-      { createNotification: jest.fn() } as any,
-      {} as any,
-      {} as any,
+      },
+      { createNotification: jest.fn() },
+      {},
+      {},
     );
     jest
       .spyOn(service as any, 'syncCourseProjectInvites')
       .mockResolvedValue(undefined);
     jest
       .spyOn(service as any, 'courseProjectAnnotate')
-      .mockImplementation(async (entries: unknown) => entries as any);
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
 
     // A raw API call attempting to hijack review to a different faculty account.
     const saved = await service.updateCourseProjectByIdForUser(
@@ -1219,10 +1319,10 @@ describe('PathsService — coursework AI score is never returned to a student', 
       'entry-1',
       {
         studentInfo: { teacherEmail: 'teacherB@test.com', studentName: 'Ali' },
-      } as any,
+      },
     );
 
-    expect((saved as any).studentInfo.teacherEmail).toBe('teacherA@test.com');
+    expect(saved.studentInfo!.teacherEmail).toBe('teacherA@test.com');
   });
 
   it('still allows changing teacherEmail while the entry is still a draft', async () => {
@@ -1236,50 +1336,50 @@ describe('PathsService — coursework AI score is never returned to a student', 
     ];
     const manager = {
       getRepository: () => ({
-        findOne: jest.fn(async () => rows[0] ?? null),
-        save: jest.fn(async (row: Record<string, unknown>) => {
+        findOne: jest.fn(() => Promise.resolve(rows[0] ?? null)),
+        save: jest.fn((row: Record<string, unknown>) => {
           rows[0] = row;
-          return row;
+          return Promise.resolve(row);
         }),
       }),
     };
-    const service = new PathsService(
+    const service = createService(
       {
         manager: {
-          transaction: jest.fn(async (fn: (m: unknown) => unknown) =>
-            fn(manager),
+          transaction: jest.fn((fn: (m: unknown) => unknown) =>
+            Promise.resolve(fn(manager)),
           ),
         },
-      } as any,
-      {} as any,
-      {} as any,
-      makeInviteRepo() as any,
-      { findOne: jest.fn() } as any,
-      {} as any,
+      },
+      {},
+      {},
+      makeInviteRepo(),
+      { findOne: jest.fn() },
+      {},
       {
         sendCourseworkSubmittedForReview: jest.fn(),
         sendCourseworkSubmissionConfirmation: jest.fn(),
-      } as any,
-      { createNotification: jest.fn() } as any,
-      {} as any,
-      {} as any,
+      },
+      { createNotification: jest.fn() },
+      {},
+      {},
     );
     jest
       .spyOn(service as any, 'syncCourseProjectInvites')
       .mockResolvedValue(undefined);
     jest
       .spyOn(service as any, 'courseProjectAnnotate')
-      .mockImplementation(async (entries: unknown) => entries as any);
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
 
     const saved = await service.updateCourseProjectByIdForUser(
       'student-1',
       'entry-1',
       {
         studentInfo: { teacherEmail: 'teacherB@test.com' },
-      } as any,
+      },
     );
 
-    expect((saved as any).studentInfo.teacherEmail).toBe('teacherB@test.com');
+    expect(saved.studentInfo!.teacherEmail).toBe('teacherB@test.com');
   });
 });
 
@@ -1293,21 +1393,21 @@ describe('PathsService — coursework submit/resubmit emails', () => {
       : [];
     const manager = {
       getRepository: () => ({
-        findOne: jest.fn(async () => rows[0] ?? null),
+        findOne: jest.fn(() => Promise.resolve(rows[0] ?? null)),
         create: jest.fn((data: Record<string, unknown>) => ({
           status: 'draft',
           ...data,
         })),
-        save: jest.fn(async (row: Record<string, unknown>) => {
+        save: jest.fn((row: Record<string, unknown>) => {
           rows[0] = row;
-          return row;
+          return Promise.resolve(row);
         }),
       }),
     };
     const courseProjectRepo = {
       manager: {
-        transaction: jest.fn(async (fn: (m: unknown) => unknown) =>
-          fn(manager),
+        transaction: jest.fn((fn: (m: unknown) => unknown) =>
+          Promise.resolve(fn(manager)),
         ),
       },
     };
@@ -1323,24 +1423,24 @@ describe('PathsService — coursework submit/resubmit emails', () => {
         .fn()
         .mockResolvedValue(undefined),
     };
-    const service = new PathsService(
-      courseProjectRepo as any,
-      {} as any,
-      {} as any,
-      makeInviteRepo() as any,
-      usersRepo as any,
-      {} as any,
-      mailService as any,
-      notificationsService as any,
-      {} as any,
-      {} as any,
+    const service = createService(
+      courseProjectRepo,
+      {},
+      {},
+      makeInviteRepo(),
+      usersRepo,
+      {},
+      mailService,
+      notificationsService,
+      {},
+      {},
     );
     jest
       .spyOn(service as any, 'syncCourseProjectInvites')
       .mockResolvedValue(undefined);
     jest
       .spyOn(service as any, 'courseProjectAnnotate')
-      .mockImplementation(async (entries: unknown) => entries as any);
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
     return { service, mailService };
   };
 
@@ -1367,7 +1467,7 @@ describe('PathsService — coursework submit/resubmit emails', () => {
     });
     await service.updateCourseProjectByIdForUser('student-1', 'entry-1', {
       status: 'submitted',
-    } as any);
+    });
     expect(mailService.sendCourseworkSubmittedForReview).toHaveBeenCalledTimes(
       1,
     );
@@ -1403,14 +1503,14 @@ describe('PathsService — coursework submit/resubmit emails', () => {
     });
     await service.updateCourseProjectByIdForUser('student-1', 'entry-1', {
       addedNote: 'fixed',
-    } as any);
+    });
     expect(
       mailService.sendCourseworkResubmittedForReview,
     ).toHaveBeenCalledTimes(1);
 
     await service.updateCourseProjectByIdForUser('student-1', 'entry-1', {
       addedNote: 'fixed again',
-    } as any);
+    });
     expect(
       mailService.sendCourseworkResubmittedForReview,
     ).toHaveBeenCalledTimes(1);
@@ -1436,41 +1536,41 @@ describe('PathsService — coursework team-member edit', () => {
     ];
     const manager = {
       getRepository: () => ({
-        findOne: jest.fn(async () => rows[0] ?? null),
-        save: jest.fn(async (row: Record<string, unknown>) => {
+        findOne: jest.fn(() => Promise.resolve(rows[0] ?? null)),
+        save: jest.fn((row: Record<string, unknown>) => {
           rows[0] = row;
-          return row;
+          return Promise.resolve(row);
         }),
       }),
     };
-    const service = new PathsService(
+    const service = createService(
       {
         manager: {
-          transaction: jest.fn(async (fn: (m: unknown) => unknown) =>
-            fn(manager),
+          transaction: jest.fn((fn: (m: unknown) => unknown) =>
+            Promise.resolve(fn(manager)),
           ),
         },
-      } as any,
-      {} as any,
-      {} as any,
-      inviteRepo as any,
-      { findOne: jest.fn() } as any,
-      {} as any,
+      },
+      {},
+      {},
+      inviteRepo,
+      { findOne: jest.fn() },
+      {},
       {
         sendCourseworkSubmittedForReview: jest.fn(),
         sendCourseworkSubmissionConfirmation: jest.fn(),
         sendCourseworkResubmittedForReview: jest.fn(),
-      } as any,
-      { createNotification: jest.fn() } as any,
-      {} as any,
-      {} as any,
+      },
+      { createNotification: jest.fn() },
+      {},
+      {},
     );
     jest
       .spyOn(service as any, 'syncCourseProjectInvites')
       .mockResolvedValue(undefined);
     jest
       .spyOn(service as any, 'courseProjectAnnotate')
-      .mockImplementation(async (entries: unknown) => entries as any);
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
     return { service };
   };
 
@@ -1479,11 +1579,11 @@ describe('PathsService — coursework team-member edit', () => {
     const saved = await service.updateCourseProjectByIdForUser(
       'bob-1',
       'entry-1',
-      { addedNote: 'from teammate' } as any,
+      { addedNote: 'from teammate' },
       'bob@test.com',
     );
-    expect((saved as any).addedNote).toBe('from teammate');
-    expect((saved as any).isOwner).toBe(false);
+    expect(saved.addedNote).toBe('from teammate');
+    expect(saved.isOwner).toBe(false);
   });
 
   it('rejects a stranger who is not on the team', async () => {
@@ -1492,7 +1592,7 @@ describe('PathsService — coursework team-member edit', () => {
       service.updateCourseProjectByIdForUser(
         'eve-1',
         'entry-1',
-        { addedNote: 'nope' } as any,
+        { addedNote: 'nope' },
         'eve@test.com',
       ),
     ).rejects.toBeInstanceOf(NotFoundException);
@@ -1524,48 +1624,55 @@ describe('PathsService — FYP multi-record (list / create / id-scoped)', () => 
     ];
     const fypRepo = {
       create: jest.fn((data: Record<string, unknown>) => ({ ...data })),
-      findOne: jest.fn(
-        async (opts: { where?: Record<string, unknown> } = {}) =>
+      findOne: jest.fn((opts: { where?: Record<string, unknown> } = {}) =>
+        Promise.resolve(
           rows.find((r) => matchesWhere(r, opts.where ?? {})) ?? null,
+        ),
       ),
-      save: jest.fn(async (row: Record<string, unknown>) => {
+      save: jest.fn((row: Record<string, unknown>) => {
         if (!row.id) {
-          (row as any).id = `fyp-${rows.length + 1}`;
+          row.id = `fyp-${rows.length + 1}`;
           rows.push(row);
-          return row;
+          return Promise.resolve(row);
         }
         const idx = rows.findIndex((r) => r.id === row.id);
         if (idx === -1) rows.push(row);
         else rows[idx] = row;
-        return row;
+        return Promise.resolve(row);
       }),
-      delete: jest.fn(async (where: { id: string; userId: string }) => {
+      delete: jest.fn((where: { id: string; userId: string }) => {
         const idx = rows.findIndex(
           (r) => r.id === where.id && r.userId === where.userId,
         );
         if (idx !== -1) rows.splice(idx, 1);
+        return Promise.resolve();
       }),
       manager: {
-        transaction: jest.fn(async (fn: (m: unknown) => unknown) =>
-          fn({
-            getRepository: () => ({
-              findOne: jest.fn(
-                async (opts: { where?: Record<string, unknown> } = {}) =>
-                  rows.find((r) => matchesWhere(r, opts.where ?? {})) ?? null,
-              ),
-              save: jest.fn(async (row: Record<string, unknown>) => {
-                const idx = rows.findIndex((r) => r.id === row.id);
-                if (idx === -1) rows.push(row);
-                else rows[idx] = row;
-                return row;
+        transaction: jest.fn((fn: (m: unknown) => unknown) =>
+          Promise.resolve(
+            fn({
+              getRepository: () => ({
+                findOne: jest.fn(
+                  (opts: { where?: Record<string, unknown> } = {}) =>
+                    Promise.resolve(
+                      rows.find((r) => matchesWhere(r, opts.where ?? {})) ??
+                        null,
+                    ),
+                ),
+                save: jest.fn((row: Record<string, unknown>) => {
+                  const idx = rows.findIndex((r) => r.id === row.id);
+                  if (idx === -1) rows.push(row);
+                  else rows[idx] = row;
+                  return Promise.resolve(row);
+                }),
               }),
             }),
-          }),
+          ),
         ),
       },
       createQueryBuilder: () => {
         const state: { userId?: string; id?: string } = {};
-        const qb = {
+        const qb: FakeQueryBuilder = {
           where: jest.fn((_cond: string, params?: Record<string, unknown>) => {
             if (params && 'userId' in params)
               state.userId = params.userId as string;
@@ -1590,40 +1697,43 @@ describe('PathsService — FYP multi-record (list / create / id-scoped)', () => 
           }),
           orWhere: jest.fn(() => qb),
           orderBy: jest.fn(() => qb),
-          getMany: jest.fn(async () =>
-            rows.filter((r) =>
-              state.userId ? r.userId === state.userId : true,
+          getMany: jest.fn(() =>
+            Promise.resolve(
+              rows.filter((r) =>
+                state.userId ? r.userId === state.userId : true,
+              ),
             ),
           ),
-          getOne: jest.fn(
-            async () =>
+          getOne: jest.fn(() =>
+            Promise.resolve(
               rows.find(
                 (r) =>
                   r.id === state.id &&
                   (state.userId ? r.userId === state.userId : true),
               ) ?? null,
+            ),
           ),
         };
         return qb;
       },
     };
-    const service = new PathsService(
-      {} as any,
-      fypRepo as any,
-      {} as any,
-      inviteRepo as any,
-      { findOne: jest.fn() } as any,
-      {} as any,
-      {} as any,
-      { createNotification: jest.fn() } as any,
-      {} as any,
-      {} as any,
+    const service = createService(
+      {},
+      fypRepo,
+      {},
+      inviteRepo,
+      { findOne: jest.fn() },
+      {},
+      {},
+      { createNotification: jest.fn() },
+      {},
+      {},
     );
     jest.spyOn(service as any, 'syncFypInvites').mockResolvedValue(undefined);
     jest
       .spyOn(service as any, 'fypAnnotate')
-      .mockImplementation(async (entries: unknown) => entries as any);
-    return { service, rows };
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
+    return { service, rows, fypRepo };
   };
 
   it('createFyp always makes a new row, never reusing an existing one', async () => {
@@ -1631,26 +1741,26 @@ describe('PathsService — FYP multi-record (list / create / id-scoped)', () => 
     const before = rows.length;
     const created = await service.createFyp('owner-1');
     expect(rows.length).toBe(before + 1);
-    expect((created as any).isOwner).toBe(true);
+    expect(created.isOwner).toBe(true);
   });
 
   it('createFyp returns the existing row when the unique error is nested on driverError', async () => {
-    const { service, rows } = makeFypMultiRecordService();
+    const { service, rows, fypRepo } = makeFypMultiRecordService();
     const before = rows.length;
-    (service as any).fypRepo.save.mockRejectedValueOnce({
+    fypRepo.save.mockRejectedValueOnce({
       driverError: { code: '23505' },
       message: 'duplicate key value violates unique constraint',
     });
     const opened = await service.createFyp('owner-1');
     expect(rows.length).toBe(before);
-    expect((opened as any).id).toBe('fyp-1');
+    expect(opened.id).toBe('fyp-1');
   });
 
   it('listFyps returns every entry the user owns', async () => {
     const { service } = makeFypMultiRecordService();
     const list = await service.listFyps('owner-1', 'owner@test.com');
-    expect(list.map((e: any) => e.id).sort()).toEqual(['fyp-1', 'fyp-2']);
-    expect(list.every((e: any) => e.isOwner)).toBe(true);
+    expect(list.map((e) => e.id).sort()).toEqual(['fyp-1', 'fyp-2']);
+    expect(list.every((e) => e.isOwner)).toBe(true);
   });
 
   it('lets an accepted teammate patch the shared draft by id', async () => {
@@ -1658,11 +1768,11 @@ describe('PathsService — FYP multi-record (list / create / id-scoped)', () => 
     const saved = await service.updateFypByIdForUser(
       'bob-1',
       'fyp-1',
-      { addedNote: 'from teammate' } as any,
+      { addedNote: 'from teammate' },
       'bob@test.com',
     );
-    expect((saved as any).addedNote).toBe('from teammate');
-    expect((saved as any).isOwner).toBe(false);
+    expect(saved.addedNote).toBe('from teammate');
+    expect(saved.isOwner).toBe(false);
   });
 
   it('rejects a stranger who is not on the FYP team', async () => {
@@ -1671,7 +1781,7 @@ describe('PathsService — FYP multi-record (list / create / id-scoped)', () => 
       service.updateFypByIdForUser(
         'eve-1',
         'fyp-1',
-        { addedNote: 'nope' } as any,
+        { addedNote: 'nope' },
         'eve@test.com',
       ),
     ).rejects.toBeInstanceOf(NotFoundException);
@@ -1694,12 +1804,13 @@ describe('PathsService — FYP multi-record (list / create / id-scoped)', () => 
 
 function makeGraderRunRepo() {
   const rows: Array<Record<string, unknown>> = [];
-  const findOne = jest.fn(
-    async (opts: { where?: Record<string, unknown> } = {}) =>
+  const findOne = jest.fn((opts: { where?: Record<string, unknown> } = {}) =>
+    Promise.resolve(
       rows.find((r) => matchesWhere(r, opts.where ?? {})) ?? null,
+    ),
   );
   const create = jest.fn((data: Record<string, unknown>) => ({ ...data }));
-  const save = jest.fn(async (row: Record<string, unknown>) => {
+  const save = jest.fn((row: Record<string, unknown>) => {
     const idx = rows.findIndex(
       (r) =>
         r.scope === row.scope &&
@@ -1708,7 +1819,7 @@ function makeGraderRunRepo() {
     );
     if (idx === -1) rows.push(row);
     else rows[idx] = row;
-    return row;
+    return Promise.resolve(row);
   });
   return {
     rows,
@@ -1716,8 +1827,10 @@ function makeGraderRunRepo() {
     create,
     save,
     manager: {
-      transaction: jest.fn(async (fn: (m: unknown) => unknown) =>
-        fn({ getRepository: () => ({ findOne, create, save }) }),
+      transaction: jest.fn((fn: (m: unknown) => unknown) =>
+        Promise.resolve(
+          fn({ getRepository: () => ({ findOne, create, save }) }),
+        ),
       ),
     },
   };
@@ -1736,7 +1849,7 @@ describe('PathsService — coursework grader run limit', () => {
         facultyApprovalStatus: 'approved',
         studentInfo: { studentName: 'Ali Khan' },
       }),
-      save: jest.fn(async (row: Record<string, unknown>) => row),
+      save: jest.fn((row: Record<string, unknown>) => Promise.resolve(row)),
     };
     const usersRepo = {
       findOne: jest.fn().mockResolvedValue({ email: 'student@test.com' }),
@@ -1744,50 +1857,47 @@ describe('PathsService — coursework grader run limit', () => {
     const mailService = {
       sendCourseworkRankNotification: jest.fn().mockResolvedValue(undefined),
     };
-    const service = new PathsService(
-      courseProjectRepo as any,
-      {} as any,
-      {} as any,
-      makeInviteRepo() as any,
-      usersRepo as any,
-      {} as any,
-      mailService as any,
-      notificationsService as any,
-      graderRunRepo as any,
-      {} as any,
+    const service = createService(
+      courseProjectRepo,
+      {},
+      {},
+      makeInviteRepo(),
+      usersRepo,
+      {},
+      mailService,
+      notificationsService,
+      graderRunRepo,
+      {},
     );
     jest.spyOn(service, 'getCourseProjectMeritModel').mockResolvedValue({
       scope: { label: 'Your cohort' },
       entries: [{ id: 'entry-1', rank: 1 }],
-    } as any);
+    } as unknown as CourseworkMeritModel);
     return { service, graderRunRepo };
   };
 
   const notifyOnce = (service: PathsService, user: Record<string, unknown>) =>
-    service.notifyCourseProjectMeritRanks(
-      user as any,
-      {
-        picks: [{ entryId: 'entry-1', rank: 1, of: 5, total: 90 }],
-      } as any,
-    );
+    service.notifyCourseProjectMeritRanks(user as MeritModelUser, {
+      picks: [{ entryId: 'entry-1', rank: 1, of: 5, total: 90 }],
+    });
 
   it('allows exactly 3 runs per academic year for a faculty scope, then blocks the 4th', async () => {
     const { service } = makeGraderService();
     const user = { role: 'faculty', email: 'teacher@test.com' };
 
     const r1 = await notifyOnce(service, user);
-    expect((r1 as any).graderRuns).toEqual({
+    expect(r1.graderRuns).toEqual({
       unlimited: false,
       used: 1,
       limit: 3,
     });
     const r2 = await notifyOnce(service, user);
-    expect((r2 as any).graderRuns.used).toBe(2);
+    expect(r2.graderRuns.used).toBe(2);
     const r3 = await notifyOnce(service, user);
-    expect((r3 as any).graderRuns.used).toBe(3);
+    expect(r3.graderRuns.used).toBe(3);
 
     await expect(notifyOnce(service, user)).rejects.toMatchObject({
-      response: expect.objectContaining({
+      response: containing({
         code: 'GRADER_RUNS_EXHAUSTED',
         used: 3,
         limit: 3,
@@ -1809,7 +1919,7 @@ describe('PathsService — coursework grader run limit', () => {
       role: 'faculty',
       email: 'teacher-b@test.com',
     });
-    expect((rB as any).graderRuns).toEqual({
+    expect(rB.graderRuns).toEqual({
       unlimited: false,
       used: 1,
       limit: 3,
@@ -1822,7 +1932,7 @@ describe('PathsService — coursework grader run limit', () => {
       role: 'university',
       organizationId: 'org-1',
     });
-    expect((rUni as any).graderRuns).toEqual({
+    expect(rUni.graderRuns).toEqual({
       unlimited: false,
       used: 1,
       limit: 3,
@@ -1834,7 +1944,7 @@ describe('PathsService — coursework grader run limit', () => {
     const admin = { role: 'admin', email: 'admin@ciel.pk' };
     for (let i = 0; i < 5; i++) {
       const r = await notifyOnce(service, admin);
-      expect((r as any).graderRuns).toEqual({
+      expect(r.graderRuns).toEqual({
         unlimited: true,
         used: 0,
         limit: 0,
@@ -1846,17 +1956,17 @@ describe('PathsService — coursework grader run limit', () => {
 describe('PathsService — public coursework verification', () => {
   const makeVerifyService = (entry: Record<string, unknown> | null) => {
     const courseProjectRepo = { findOne: jest.fn().mockResolvedValue(entry) };
-    const service = new PathsService(
-      courseProjectRepo as any,
-      {} as any,
-      {} as any,
-      makeInviteRepo() as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
+    const service = createService(
+      courseProjectRepo,
+      {},
+      {},
+      makeInviteRepo(),
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
     );
     return { service, courseProjectRepo };
   };
@@ -1953,47 +2063,45 @@ describe('PathsService — FYP resubmission after rejection', () => {
     ];
     const manager = {
       getRepository: () => ({
-        findOne: jest.fn(async () => rows[0] ?? null),
+        findOne: jest.fn(() => Promise.resolve(rows[0] ?? null)),
         create: jest.fn((data: Record<string, unknown>) => ({ ...data })),
-        save: jest.fn(async (row: Record<string, unknown>) => {
+        save: jest.fn((row: Record<string, unknown>) => {
           rows[0] = row;
-          return row;
+          return Promise.resolve(row);
         }),
       }),
     };
     const fypRepo = {
       manager: {
-        transaction: jest.fn(async (fn: (m: unknown) => unknown) =>
-          fn(manager),
+        transaction: jest.fn((fn: (m: unknown) => unknown) =>
+          Promise.resolve(fn(manager)),
         ),
       },
     };
-    const service = new PathsService(
-      {} as any,
-      fypRepo as any,
-      {} as any,
-      makeInviteRepo() as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      { createNotification: jest.fn() } as any,
-      {} as any,
-      {} as any,
+    const service = createService(
+      {},
+      fypRepo,
+      {},
+      makeInviteRepo(),
+      {},
+      {},
+      {},
+      { createNotification: jest.fn() },
+      {},
+      {},
     );
     jest.spyOn(service as any, 'syncFypInvites').mockResolvedValue(undefined);
     jest
       .spyOn(service as any, 'fypAnnotate')
-      .mockImplementation(async (entries: unknown) => entries as any);
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
 
     const saved = await service.upsertFyp('student-1', {
       addedNote: 'fixed',
-    } as any);
+    });
 
-    expect((saved as any).supervisorApprovalStatus).toBe('pending');
-    expect((saved as any).supervisorApprovalAt).toBeNull();
-    expect((saved as any).supervisorApprovalNote).toBe(
-      'needs more literature review',
-    );
+    expect(saved.supervisorApprovalStatus).toBe('pending');
+    expect(saved.supervisorApprovalAt).toBeNull();
+    expect(saved.supervisorApprovalNote).toBe('needs more literature review');
   });
 
   it('also resets a revision_requested entry to pending on the next edit', async () => {
@@ -2010,46 +2118,46 @@ describe('PathsService — FYP resubmission after rejection', () => {
     ];
     const manager = {
       getRepository: () => ({
-        findOne: jest.fn(async () => rows[0] ?? null),
+        findOne: jest.fn(() => Promise.resolve(rows[0] ?? null)),
         create: jest.fn((data: Record<string, unknown>) => ({ ...data })),
-        save: jest.fn(async (row: Record<string, unknown>) => {
+        save: jest.fn((row: Record<string, unknown>) => {
           rows[0] = row;
-          return row;
+          return Promise.resolve(row);
         }),
       }),
     };
     const fypRepo = {
       manager: {
-        transaction: jest.fn(async (fn: (m: unknown) => unknown) =>
-          fn(manager),
+        transaction: jest.fn((fn: (m: unknown) => unknown) =>
+          Promise.resolve(fn(manager)),
         ),
       },
     };
-    const service = new PathsService(
-      {} as any,
-      fypRepo as any,
-      {} as any,
-      makeInviteRepo() as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      { createNotification: jest.fn() } as any,
-      {} as any,
-      {} as any,
+    const service = createService(
+      {},
+      fypRepo,
+      {},
+      makeInviteRepo(),
+      {},
+      {},
+      {},
+      { createNotification: jest.fn() },
+      {},
+      {},
     );
     jest.spyOn(service as any, 'syncFypInvites').mockResolvedValue(undefined);
     jest
       .spyOn(service as any, 'fypAnnotate')
-      .mockImplementation(async (entries: unknown) => entries as any);
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
 
     const saved = await service.upsertFyp('student-1', {
       addedNote: 'fixed',
-    } as any);
+    });
 
-    expect((saved as any).supervisorApprovalStatus).toBe('pending');
-    expect((saved as any).supervisorApprovalAt).toBeNull();
-    expect((saved as any).meritRibbon).toBeNull();
-    expect((saved as any).supervisorApprovalNote).toBe(
+    expect(saved.supervisorApprovalStatus).toBe('pending');
+    expect(saved.supervisorApprovalAt).toBeNull();
+    expect(saved.meritRibbon).toBeNull();
+    expect(saved.supervisorApprovalNote).toBe(
       'tighten the methodology section',
     );
   });
@@ -2065,44 +2173,44 @@ describe('PathsService — FYP resubmission after rejection', () => {
     ];
     const manager = {
       getRepository: () => ({
-        findOne: jest.fn(async () => rows[0] ?? null),
+        findOne: jest.fn(() => Promise.resolve(rows[0] ?? null)),
         create: jest.fn((data: Record<string, unknown>) => ({ ...data })),
-        save: jest.fn(async (row: Record<string, unknown>) => {
+        save: jest.fn((row: Record<string, unknown>) => {
           rows[0] = row;
-          return row;
+          return Promise.resolve(row);
         }),
       }),
     };
     const fypRepo = {
       manager: {
-        transaction: jest.fn(async (fn: (m: unknown) => unknown) =>
-          fn(manager),
+        transaction: jest.fn((fn: (m: unknown) => unknown) =>
+          Promise.resolve(fn(manager)),
         ),
       },
     };
-    const service = new PathsService(
-      {} as any,
-      fypRepo as any,
-      {} as any,
-      makeInviteRepo() as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      { createNotification: jest.fn() } as any,
-      {} as any,
-      {} as any,
+    const service = createService(
+      {},
+      fypRepo,
+      {},
+      makeInviteRepo(),
+      {},
+      {},
+      {},
+      { createNotification: jest.fn() },
+      {},
+      {},
     );
     jest.spyOn(service as any, 'syncFypInvites').mockResolvedValue(undefined);
     jest
       .spyOn(service as any, 'fypAnnotate')
-      .mockImplementation(async (entries: unknown) => entries as any);
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
 
     // A raw API call attempting to hijack review to a different supervisor account.
     const saved = await service.upsertFyp('student-1', {
       projectInfo: { supervisorEmail: 'supB@test.com', title: 'Solar audit' },
-    } as any);
+    });
 
-    expect((saved as any).projectInfo.supervisorEmail).toBe('supA@test.com');
+    expect(saved.projectInfo!.supervisorEmail).toBe('supA@test.com');
   });
 
   it('clears the stale aiAnalysis/aiAnalysisLock when a revision_requested entry is edited again', async () => {
@@ -2119,44 +2227,44 @@ describe('PathsService — FYP resubmission after rejection', () => {
     ];
     const manager = {
       getRepository: () => ({
-        findOne: jest.fn(async () => rows[0] ?? null),
+        findOne: jest.fn(() => Promise.resolve(rows[0] ?? null)),
         create: jest.fn((data: Record<string, unknown>) => ({ ...data })),
-        save: jest.fn(async (row: Record<string, unknown>) => {
+        save: jest.fn((row: Record<string, unknown>) => {
           rows[0] = row;
-          return row;
+          return Promise.resolve(row);
         }),
       }),
     };
     const fypRepo = {
       manager: {
-        transaction: jest.fn(async (fn: (m: unknown) => unknown) =>
-          fn(manager),
+        transaction: jest.fn((fn: (m: unknown) => unknown) =>
+          Promise.resolve(fn(manager)),
         ),
       },
     };
-    const service = new PathsService(
-      {} as any,
-      fypRepo as any,
-      {} as any,
-      makeInviteRepo() as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      { createNotification: jest.fn() } as any,
-      {} as any,
-      {} as any,
+    const service = createService(
+      {},
+      fypRepo,
+      {},
+      makeInviteRepo(),
+      {},
+      {},
+      {},
+      { createNotification: jest.fn() },
+      {},
+      {},
     );
     jest.spyOn(service as any, 'syncFypInvites').mockResolvedValue(undefined);
     jest
       .spyOn(service as any, 'fypAnnotate')
-      .mockImplementation(async (entries: unknown) => entries as any);
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
 
     const saved = await service.upsertFyp('student-1', {
       addedNote: 'fixed the methodology',
-    } as any);
+    });
 
-    expect((saved as any).aiAnalysis).toBeNull();
-    expect((saved as any).aiAnalysisLock).toBeNull();
+    expect(saved.aiAnalysis).toBeNull();
+    expect(saved.aiAnalysisLock).toBeNull();
   });
 });
 
@@ -2167,37 +2275,37 @@ describe('PathsService — FYP submit readiness gate', () => {
     ];
     const manager = {
       getRepository: () => ({
-        findOne: jest.fn(async () => rows[0] ?? null),
+        findOne: jest.fn(() => Promise.resolve(rows[0] ?? null)),
         create: jest.fn((data: Record<string, unknown>) => ({ ...data })),
-        save: jest.fn(async (row: Record<string, unknown>) => {
+        save: jest.fn((row: Record<string, unknown>) => {
           rows[0] = row;
-          return row;
+          return Promise.resolve(row);
         }),
       }),
     };
     const fypRepo = {
       manager: {
-        transaction: jest.fn(async (fn: (m: unknown) => unknown) =>
-          fn(manager),
+        transaction: jest.fn((fn: (m: unknown) => unknown) =>
+          Promise.resolve(fn(manager)),
         ),
       },
     };
-    const service = new PathsService(
-      {} as any,
-      fypRepo as any,
-      {} as any,
-      makeInviteRepo() as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      { createNotification: jest.fn() } as any,
-      {} as any,
-      {} as any,
+    const service = createService(
+      {},
+      fypRepo,
+      {},
+      makeInviteRepo(),
+      {},
+      {},
+      {},
+      { createNotification: jest.fn() },
+      {},
+      {},
     );
     jest.spyOn(service as any, 'syncFypInvites').mockResolvedValue(undefined);
     jest
       .spyOn(service as any, 'fypAnnotate')
-      .mockImplementation(async (entries: unknown) => entries as any);
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
     return { service };
   };
 
@@ -2207,7 +2315,7 @@ describe('PathsService — FYP submit readiness gate', () => {
       service.upsertFyp('student-1', {
         projectTitle: 'Solar audit',
         status: 'submitted',
-      } as any),
+      }),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
@@ -2217,7 +2325,7 @@ describe('PathsService — FYP submit readiness gate', () => {
       service.upsertFyp('student-1', {
         projectInfo: { supervisorEmail: 'sup@test.com' },
         status: 'submitted',
-      } as any),
+      }),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
@@ -2227,16 +2335,16 @@ describe('PathsService — FYP submit readiness gate', () => {
       projectTitle: 'Solar audit',
       projectInfo: { supervisorEmail: 'sup@test.com' },
       status: 'submitted',
-    } as any);
-    expect((saved as any).status).toBe('submitted');
+    });
+    expect(saved.status).toBe('submitted');
   });
 
   it('does not gate a plain draft autosave that never sets status: submitted', async () => {
     const { service } = makeDraftFypService();
     const saved = await service.upsertFyp('student-1', {
       addedNote: 'still working on it',
-    } as any);
-    expect((saved as any).addedNote).toBe('still working on it');
+    });
+    expect(saved.addedNote).toBe('still working on it');
   });
 });
 
@@ -2266,23 +2374,23 @@ describe('PathsService — FYP supervisor review', () => {
     };
     const fypRepo = {
       findOne: jest.fn().mockResolvedValue(entry),
-      save: jest.fn(async (row: Record<string, unknown>) => row),
+      save: jest.fn((row: Record<string, unknown>) => Promise.resolve(row)),
       createQueryBuilder: jest.fn(() => qb),
     };
     const usersRepo = {
       findOne: jest.fn().mockResolvedValue({ name: 'Ali Khan' }),
     };
-    const service = new PathsService(
-      {} as any,
-      fypRepo as any,
-      {} as any,
-      makeInviteRepo() as any,
-      usersRepo as any,
-      {} as any,
-      {} as any,
-      notificationsService as any,
-      {} as any,
-      {} as any,
+    const service = createService(
+      {},
+      fypRepo,
+      {},
+      makeInviteRepo(),
+      usersRepo,
+      {},
+      {},
+      notificationsService,
+      {},
+      {},
     );
     return { service, notificationsService, fypRepo };
   };
@@ -2294,10 +2402,10 @@ describe('PathsService — FYP supervisor review', () => {
       'fyp-1',
       'approve',
     );
-    expect((saved as any).supervisorApprovalStatus).toBe('approved');
+    expect(saved.supervisorApprovalStatus).toBe('approved');
     expect(notificationsService.createNotification).toHaveBeenCalledWith(
       'student-1',
-      expect.objectContaining({ title: 'Your FYP was approved' }),
+      containing({ title: 'Your FYP was approved' }),
     );
   });
 
@@ -2309,11 +2417,11 @@ describe('PathsService — FYP supervisor review', () => {
       'revision',
       'Add more evidence',
     );
-    expect((saved as any).supervisorApprovalStatus).toBe('revision_requested');
-    expect((saved as any).meritRibbon).toBeNull();
+    expect(saved.supervisorApprovalStatus).toBe('revision_requested');
+    expect(saved.meritRibbon).toBeNull();
     expect(notificationsService.createNotification).toHaveBeenCalledWith(
       'student-1',
-      expect.objectContaining({ title: 'Revision requested on your FYP' }),
+      containing({ title: 'Revision requested on your FYP' }),
     );
   });
 
@@ -2325,16 +2433,16 @@ describe('PathsService — FYP supervisor review', () => {
       'reject',
       'Not enough rigor',
     );
-    expect((saved as any).supervisorApprovalStatus).toBe('rejected');
+    expect(saved.supervisorApprovalStatus).toBe('rejected');
     expect(notificationsService.createNotification).toHaveBeenCalledWith(
       'student-1',
-      expect.objectContaining({ title: 'Your FYP was rejected' }),
+      containing({ title: 'Your FYP was rejected' }),
     );
   });
 
   it('refuses the decision when a concurrent approveFypAiAnalysis wins the lock first (0 rows affected)', async () => {
     const { service, fypRepo } = makeReviewService();
-    (fypRepo.createQueryBuilder() as any).execute.mockResolvedValueOnce({
+    fypRepo.createQueryBuilder().execute.mockResolvedValueOnce({
       affected: 0,
     });
     await expect(
@@ -2371,10 +2479,10 @@ describe('PathsService — FYP teammate share + faculty in-progress', () => {
   };
 
   function makeQb(shared: Record<string, unknown> | null) {
-    const qb: any = {
+    const qb: Pick<FakeQueryBuilder, 'where' | 'orderBy' | 'getOne'> = {
       where: jest.fn(() => qb),
       orderBy: jest.fn(() => qb),
-      getOne: jest.fn(async () => shared),
+      getOne: jest.fn(() => Promise.resolve(shared)),
     };
     return qb;
   }
@@ -2385,45 +2493,51 @@ describe('PathsService — FYP teammate share + faculty in-progress', () => {
     drafts?: Record<string, unknown>[];
   }) => {
     const fypRepo = {
-      findOne: jest.fn(async () => opts.own ?? null),
-      find: jest.fn(async () => opts.drafts ?? []),
+      findOne: jest.fn(() => Promise.resolve(opts.own ?? null)),
+      find: jest.fn(() => Promise.resolve(opts.drafts ?? [])),
       createQueryBuilder: jest.fn(() => makeQb(opts.shared ?? null)),
       manager: {
-        transaction: jest.fn(async (fn: (m: unknown) => unknown) =>
-          fn({
-            getRepository: () => ({
-              findOne: jest.fn(async () => opts.own ?? null),
-              create: jest.fn((data: Record<string, unknown>) => ({
-                ...data,
-                id: 'new-fyp',
-              })),
-              save: jest.fn(async (row: Record<string, unknown>) => row),
+        transaction: jest.fn((fn: (m: unknown) => unknown) =>
+          Promise.resolve(
+            fn({
+              getRepository: () => ({
+                findOne: jest.fn(() => Promise.resolve(opts.own ?? null)),
+                create: jest.fn((data: Record<string, unknown>) => ({
+                  ...data,
+                  id: 'new-fyp',
+                })),
+                save: jest.fn((row: Record<string, unknown>) =>
+                  Promise.resolve(row),
+                ),
+              }),
             }),
-          }),
+          ),
         ),
       },
     };
     const usersRepo = {
-      find: jest.fn(async () => [
-        { id: 'lead-1', name: 'Lead', email: 'lead@test.com' },
-      ]),
+      find: jest.fn(() =>
+        Promise.resolve([
+          { id: 'lead-1', name: 'Lead', email: 'lead@test.com' },
+        ]),
+      ),
       findOne: jest.fn(),
     };
-    const service = new PathsService(
-      {} as any,
-      fypRepo as any,
-      {} as any,
-      makeInviteRepo() as any,
-      usersRepo as any,
-      {} as any,
-      {} as any,
-      { createNotification: jest.fn() } as any,
-      {} as any,
-      {} as any,
+    const service = createService(
+      {},
+      fypRepo,
+      {},
+      makeInviteRepo(),
+      usersRepo,
+      {},
+      {},
+      { createNotification: jest.fn() },
+      {},
+      {},
     );
     jest
       .spyOn(service as any, 'fypAnnotate')
-      .mockImplementation(async (entries: unknown) => entries as any);
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
     jest.spyOn(service as any, 'syncFypInvites').mockResolvedValue(undefined);
     return { service, fypRepo };
   };
@@ -2431,17 +2545,13 @@ describe('PathsService — FYP teammate share + faculty in-progress', () => {
   it('getFyp returns the lead draft (isOwner:false) when the teammate has no row of their own', async () => {
     const { service } = makeShareService({ own: null, shared: lead });
     const result = await service.getFyp('teammate-1', 'teammate@test.com');
-    expect(result).toEqual(
-      expect.objectContaining({ id: 'fyp-lead', isOwner: false }),
-    );
+    expect(result).toEqual(containing({ id: 'fyp-lead', isOwner: false }));
   });
 
   it('getFyp prefers the shared lead record over an empty placeholder row of the teammate', async () => {
     const { service } = makeShareService({ own: placeholderOwn, shared: lead });
     const result = await service.getFyp('teammate-1', 'teammate@test.com');
-    expect(result).toEqual(
-      expect.objectContaining({ id: 'fyp-lead', isOwner: false }),
-    );
+    expect(result).toEqual(containing({ id: 'fyp-lead', isOwner: false }));
   });
 
   it("getFyp keeps a real own draft even if the student is also named on someone else's FYP", async () => {
@@ -2452,9 +2562,7 @@ describe('PathsService — FYP teammate share + faculty in-progress', () => {
     };
     const { service } = makeShareService({ own: ownReal, shared: lead });
     const result = await service.getFyp('teammate-1', 'teammate@test.com');
-    expect(result).toEqual(
-      expect.objectContaining({ id: 'fyp-shadow', isOwner: true }),
-    );
+    expect(result).toEqual(containing({ id: 'fyp-shadow', isOwner: true }));
   });
 
   it('upsertFyp refuses to create a shadow row for an accepted co-author', async () => {
@@ -2462,7 +2570,7 @@ describe('PathsService — FYP teammate share + faculty in-progress', () => {
     await expect(
       service.upsertFyp(
         'teammate-1',
-        { addedNote: 'nope' } as any,
+        { addedNote: 'nope' },
         'teammate@test.com',
       ),
     ).rejects.toBeInstanceOf(ForbiddenException);
@@ -2476,9 +2584,9 @@ describe('PathsService — FYP teammate share + faculty in-progress', () => {
     });
     const saved = await service.upsertFyp('student-1', {
       addedNote: 'ok',
-    } as any);
-    expect((saved as any).addedNote).toBe('ok');
-    expect((saved as any).isOwner).toBe(true);
+    });
+    expect(saved.addedNote).toBe('ok');
+    expect(saved.isOwner).toBe(true);
   });
 
   it('listInProgressFypForTeacher returns only draft records naming that supervisor', async () => {
@@ -2505,23 +2613,23 @@ describe('PathsService — FYP merit notify', () => {
     };
     const fypRepo = {
       findOne: jest.fn(),
-      save: jest.fn(async (row: Record<string, unknown>) => row),
+      save: jest.fn((row: Record<string, unknown>) => Promise.resolve(row)),
     };
     const usersRepo = {
       findOne: jest.fn().mockResolvedValue({ email: 'student@test.com' }),
     };
     const graderRunRepo = makeGraderRunRepo();
-    const service = new PathsService(
-      {} as any,
-      fypRepo as any,
-      {} as any,
-      makeInviteRepo() as any,
-      usersRepo as any,
-      {} as any,
-      {} as any,
-      notificationsService as any,
-      graderRunRepo as any,
-      {} as any,
+    const service = createService(
+      {},
+      fypRepo,
+      {},
+      makeInviteRepo(),
+      usersRepo,
+      {},
+      {},
+      notificationsService,
+      graderRunRepo,
+      {},
     );
     return { service, notificationsService, fypRepo, graderRunRepo };
   };
@@ -2531,7 +2639,7 @@ describe('PathsService — FYP merit notify', () => {
     jest.spyOn(service, 'getFypMeritModel').mockResolvedValue({
       scope: { label: 'Faculty supervision' },
       entries: [{ id: 'fyp-1', rank: 1 }],
-    } as any);
+    } as unknown as FypMeritModel);
     fypRepo.findOne.mockResolvedValue({
       id: 'fyp-1',
       userId: 'student-1',
@@ -2541,17 +2649,17 @@ describe('PathsService — FYP merit notify', () => {
     });
 
     const result = await service.notifyFypMeritRanks(
-      { role: 'faculty', email: 'teacher@test.com' } as any,
+      { role: 'faculty', email: 'teacher@test.com' },
       {
         picks: [{ entryId: 'fyp-1', rank: 1, of: 5, total: 91 }],
         scopeLabel: 'Your cohort',
-      } as any,
+      },
     );
 
     expect(result.notified).toBe(1);
     expect(fypRepo.save).toHaveBeenCalledWith(
-      expect.objectContaining({
-        meritRibbon: expect.objectContaining({
+      containing({
+        meritRibbon: containing({
           rank: 1,
           of: 5,
           scope: 'Your cohort',
@@ -2561,7 +2669,7 @@ describe('PathsService — FYP merit notify', () => {
     );
     expect(notificationsService.createNotification).toHaveBeenCalledWith(
       'student-1',
-      expect.objectContaining({ title: 'Your FYP ranked #1' }),
+      containing({ title: 'Your FYP ranked #1' }),
     );
   });
 
@@ -2570,7 +2678,7 @@ describe('PathsService — FYP merit notify', () => {
     jest.spyOn(service, 'getFypMeritModel').mockResolvedValue({
       scope: { label: 'Your cohort' },
       entries: [{ id: 'fyp-1', rank: 1 }],
-    } as any);
+    } as unknown as FypMeritModel);
     fypRepo.findOne.mockResolvedValue({
       id: 'fyp-1',
       userId: 'student-1',
@@ -2586,11 +2694,11 @@ describe('PathsService — FYP merit notify', () => {
     });
 
     const result = await service.notifyFypMeritRanks(
-      { role: 'faculty', email: 'teacher@test.com' } as any,
+      { role: 'faculty', email: 'teacher@test.com' },
       {
         picks: [{ entryId: 'fyp-1', rank: 1, of: 5, total: 91 }],
         scopeLabel: 'Your cohort',
-      } as any,
+      },
     );
 
     expect(result.notified).toBe(1);
@@ -2614,36 +2722,37 @@ describe('PathsService — venture supervisor review', () => {
     };
     const ventureRepo = {
       findOne: jest.fn().mockResolvedValue(entry),
-      save: jest.fn(async (row: Record<string, unknown>) => row),
+      save: jest.fn((row: Record<string, unknown>) => Promise.resolve(row)),
     };
     const usersRepo = {
       findOne: jest
         .fn()
-        .mockImplementation(
-          async ({ where }: { where: Record<string, unknown> }) =>
+        .mockImplementation(({ where }: { where: Record<string, unknown> }) =>
+          Promise.resolve(
             where.email
               ? { name: 'Dr. Supervisor', email: 'supervisor@test.com' }
               : { name: 'Ali Khan' },
+          ),
         ),
     };
-    const service = new PathsService(
-      {} as any,
-      {} as any,
-      ventureRepo as any,
-      makeInviteRepo() as any,
-      usersRepo as any,
-      {} as any,
-      {} as any,
-      notificationsService as any,
-      {} as any,
-      {} as any,
+    const service = createService(
+      {},
+      {},
+      ventureRepo,
+      makeInviteRepo(),
+      usersRepo,
+      {},
+      {},
+      notificationsService,
+      {},
+      {},
     );
     jest
       .spyOn(service as any, 'ventureAnnotate')
-      .mockImplementation(async (entries: unknown) => entries as any);
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
     jest
       .spyOn(service as any, 'attachStudents')
-      .mockImplementation(async (entries: unknown) => entries as any);
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
     jest
       .spyOn(service as any, 'withCompleteness')
       .mockImplementation((entry: unknown) => entry);
@@ -2652,46 +2761,46 @@ describe('PathsService — venture supervisor review', () => {
 
   it('approve sets reviewPipeline.supervisorStatus=approved and notifies the student', async () => {
     const { service, notificationsService } = makeReviewService();
-    const saved: any = await service.supervisorReviewVenture(
+    const saved = await service.supervisorReviewVenture(
       'supervisor@test.com',
       'venture-1',
       'approve',
     );
-    expect(saved.reviewPipeline.supervisorStatus).toBe('approved');
+    expect(saved.reviewPipeline!.supervisorStatus).toBe('approved');
     expect(notificationsService.createNotification).toHaveBeenCalledWith(
       'student-1',
-      expect.objectContaining({ title: 'Your venture was approved' }),
+      containing({ title: 'Your venture was approved' }),
     );
   });
 
   it('revision keeps the existing revisions_requested meaning, clears the ribbon, and notifies the student', async () => {
     const { service, notificationsService } = makeReviewService();
-    const saved: any = await service.supervisorReviewVenture(
+    const saved = await service.supervisorReviewVenture(
       'supervisor@test.com',
       'venture-1',
       'revision',
       'Add traction evidence',
     );
-    expect(saved.reviewPipeline.supervisorStatus).toBe('revisions_requested');
+    expect(saved.reviewPipeline!.supervisorStatus).toBe('revisions_requested');
     expect(saved.meritRibbon).toBeNull();
     expect(notificationsService.createNotification).toHaveBeenCalledWith(
       'student-1',
-      expect.objectContaining({ title: 'Revision requested on your venture' }),
+      containing({ title: 'Revision requested on your venture' }),
     );
   });
 
   it('reject sets a genuinely new terminal rejected state and notifies the student', async () => {
     const { service, notificationsService } = makeReviewService();
-    const saved: any = await service.supervisorReviewVenture(
+    const saved = await service.supervisorReviewVenture(
       'supervisor@test.com',
       'venture-1',
       'reject',
       'Not viable yet',
     );
-    expect(saved.reviewPipeline.supervisorStatus).toBe('rejected');
+    expect(saved.reviewPipeline!.supervisorStatus).toBe('rejected');
     expect(notificationsService.createNotification).toHaveBeenCalledWith(
       'student-1',
-      expect.objectContaining({ title: 'Your venture was rejected' }),
+      containing({ title: 'Your venture was rejected' }),
     );
   });
 });
@@ -2720,30 +2829,30 @@ describe('PathsService — venture faculty in-progress + self-certify', () => {
         .fn()
         .mockResolvedValue({ name: 'Dr. Supervisor', email: 'sup@test.com' }),
     };
-    const service = new PathsService(
-      {} as any,
-      {} as any,
-      ventureRepo as any,
-      makeInviteRepo() as any,
-      usersRepo as any,
-      {} as any,
-      {} as any,
-      { createNotification: jest.fn() } as any,
-      {} as any,
-      {} as any,
+    const service = createService(
+      {},
+      {},
+      ventureRepo,
+      makeInviteRepo(),
+      usersRepo,
+      {},
+      {},
+      { createNotification: jest.fn() },
+      {},
+      {},
     );
     jest
       .spyOn(service as any, 'ventureAnnotate')
-      .mockImplementation(async (entries: unknown) => entries as any);
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
     jest
       .spyOn(service as any, 'attachStudents')
-      .mockImplementation(async (entries: unknown) => entries as any);
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
     jest
       .spyOn(service as any, 'withCompleteness')
       .mockImplementation((entry: unknown) => entry);
     const result =
       await service.listInProgressVenturesForTeacher('SUP@test.com');
-    expect(result.map((e: any) => e.id)).toEqual(['v-1']);
+    expect(result.map((e) => e.id)).toEqual(['v-1']);
   });
 
   it('selfCertifyOwnVenture submits and approves the owner record', async () => {
@@ -2755,46 +2864,46 @@ describe('PathsService — venture faculty in-progress + self-certify', () => {
     };
     const ventureRepo = {
       findOne: jest.fn().mockResolvedValue(entry),
-      save: jest.fn(async (row: Record<string, unknown>) => row),
+      save: jest.fn((row: Record<string, unknown>) => Promise.resolve(row)),
     };
-    const service = new PathsService(
-      {} as any,
-      {} as any,
-      ventureRepo as any,
-      makeInviteRepo() as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      { createNotification: jest.fn() } as any,
-      {} as any,
-      {} as any,
+    const service = createService(
+      {},
+      {},
+      ventureRepo,
+      makeInviteRepo(),
+      {},
+      {},
+      {},
+      { createNotification: jest.fn() },
+      {},
+      {},
     );
     jest
       .spyOn(service as any, 'ventureAnnotate')
-      .mockImplementation(async (entries: unknown) => entries as any);
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
     jest
       .spyOn(service as any, 'withCompleteness')
       .mockImplementation((entry: unknown) => entry);
-    const saved: any = await service.selfCertifyOwnVenture('faculty-1');
-    expect(saved.status).toBe('submitted');
-    expect(saved.reviewPipeline.supervisorStatus).toBe('approved');
+    const saved = await service.selfCertifyOwnVenture('faculty-1');
+    expect(saved!.status).toBe('submitted');
+    expect(saved!.reviewPipeline!.supervisorStatus).toBe('approved');
   });
 });
 
 describe('PathsService — university + CIEL venture network', () => {
   it('listVenturesForUniversity returns empty when the org is missing', async () => {
     const organizationsRepo = { findOne: jest.fn().mockResolvedValue(null) };
-    const service = new PathsService(
-      {} as any,
-      {} as any,
-      {} as any,
-      makeInviteRepo() as any,
-      {} as any,
-      organizationsRepo as any,
-      {} as any,
-      { createNotification: jest.fn() } as any,
-      {} as any,
-      {} as any,
+    const service = createService(
+      {},
+      {},
+      {},
+      makeInviteRepo(),
+      {},
+      organizationsRepo,
+      {},
+      { createNotification: jest.fn() },
+      {},
+      {},
     );
     await expect(
       service.listVenturesForUniversity('org-missing'),
@@ -2819,24 +2928,24 @@ describe('PathsService — university + CIEL venture network', () => {
         name: 'Beaconhouse National University',
       }),
     };
-    const service = new PathsService(
-      {} as any,
-      {} as any,
-      ventureRepo as any,
-      makeInviteRepo() as any,
-      {} as any,
-      organizationsRepo as any,
-      {} as any,
-      { createNotification: jest.fn() } as any,
-      {} as any,
-      {} as any,
+    const service = createService(
+      {},
+      {},
+      ventureRepo,
+      makeInviteRepo(),
+      {},
+      organizationsRepo,
+      {},
+      { createNotification: jest.fn() },
+      {},
+      {},
     );
     jest
       .spyOn(service as any, 'ventureAnnotate')
-      .mockImplementation(async (entries: unknown) => entries as any);
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
     jest
       .spyOn(service as any, 'attachStudents')
-      .mockImplementation(async (entries: unknown) => entries as any);
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
     jest
       .spyOn(service as any, 'withCompleteness')
       .mockImplementation((entry: unknown) => entry);
@@ -2848,38 +2957,41 @@ describe('PathsService — university + CIEL venture network', () => {
     expect(qb.where).toHaveBeenCalledWith('e.status = :status', {
       status: 'submitted',
     });
-    expect(result.map((e: any) => e.id)).toEqual(['v-1']);
+    expect(result.map((e) => e.id)).toEqual(['v-1']);
   });
 
   it('getVentureMeritModel uses the university org pool for university callers', async () => {
     const organizationsRepo = {
       findOne: jest.fn().mockResolvedValue({ id: 'org-1', name: 'BNU' }),
     };
-    const service = new PathsService(
-      {} as any,
-      {} as any,
-      {} as any,
-      makeInviteRepo() as any,
-      {} as any,
-      organizationsRepo as any,
-      {} as any,
-      { createNotification: jest.fn() } as any,
-      { findOne: jest.fn().mockResolvedValue(null) } as any,
-      {} as any,
-    );
-    jest.spyOn(service, 'listVenturesForUniversity').mockResolvedValue([
-      {
-        id: 'v-ok',
-        status: 'submitted',
-        reviewPipeline: { supervisorStatus: 'approved' },
-        student: { name: 'Fatima' },
-      },
-    ] as any);
-    const result: any = await service.getVentureMeritModel(
-      { role: 'university', email: 'oric@bnu.edu', organizationId: 'org-1' },
+    const service = createService(
+      {},
+      {},
+      {},
+      makeInviteRepo(),
+      {},
+      organizationsRepo,
+      {},
+      { createNotification: jest.fn() },
+      { findOne: jest.fn().mockResolvedValue(null) },
       {},
     );
-    expect(service.listVenturesForUniversity).toHaveBeenCalledWith('org-1');
+    const listSpy = jest
+      .spyOn(service, 'listVenturesForUniversity')
+      .mockResolvedValue([
+        {
+          id: 'v-ok',
+          status: 'submitted',
+          reviewPipeline: { supervisorStatus: 'approved' },
+          student: { name: 'Fatima' },
+        },
+      ] as unknown as UniversityVentures);
+    const result = await service.getVentureMeritModel({
+      role: 'university',
+      email: 'oric@bnu.edu',
+      organizationId: 'org-1',
+    });
+    expect(listSpy).toHaveBeenCalledWith('org-1');
     expect(result.scope.label).toBe('BNU');
     expect(result.count).toBe(1);
   });
@@ -2892,29 +3004,29 @@ describe('PathsService — university + CIEL venture network', () => {
     };
     const ventureRepo = {
       findOne: jest.fn().mockResolvedValue(entry),
-      save: jest.fn(async (row: Record<string, unknown>) => row),
+      save: jest.fn((row: Record<string, unknown>) => Promise.resolve(row)),
     };
-    const service = new PathsService(
-      {} as any,
-      {} as any,
-      ventureRepo as any,
-      makeInviteRepo() as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      { createNotification: jest.fn() } as any,
-      {} as any,
-      {} as any,
+    const service = createService(
+      {},
+      {},
+      ventureRepo,
+      makeInviteRepo(),
+      {},
+      {},
+      {},
+      { createNotification: jest.fn() },
+      {},
+      {},
     );
     jest
       .spyOn(service as any, 'ventureAnnotate')
-      .mockImplementation(async (entries: unknown) => entries as any);
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
     jest
       .spyOn(service as any, 'attachStudents')
-      .mockImplementation(async (entries: unknown) => entries as any);
-    const saved: any = await service.setVentureSpotlight('v-1', true);
-    expect(saved.publishSettings.featured).toBe(true);
-    expect(saved.publishSettings.audience).toBe('investors');
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
+    const saved = await service.setVentureSpotlight('v-1', true);
+    expect(saved.publishSettings!.featured).toBe(true);
+    expect(saved.publishSettings!.audience).toBe('investors');
   });
 });
 
@@ -2925,23 +3037,23 @@ describe('PathsService — venture merit notify', () => {
     };
     const ventureRepo = {
       findOne: jest.fn(),
-      save: jest.fn(async (row: Record<string, unknown>) => row),
+      save: jest.fn((row: Record<string, unknown>) => Promise.resolve(row)),
     };
     const usersRepo = {
       findOne: jest.fn().mockResolvedValue({ name: 'Ali Khan' }),
     };
     const graderRunRepo = makeGraderRunRepo();
-    const service = new PathsService(
-      {} as any,
-      {} as any,
-      ventureRepo as any,
-      makeInviteRepo() as any,
-      usersRepo as any,
-      {} as any,
-      {} as any,
-      notificationsService as any,
-      graderRunRepo as any,
-      {} as any,
+    const service = createService(
+      {},
+      {},
+      ventureRepo,
+      makeInviteRepo(),
+      usersRepo,
+      {},
+      {},
+      notificationsService,
+      graderRunRepo,
+      {},
     );
     return { service, notificationsService, ventureRepo, graderRunRepo };
   };
@@ -2951,7 +3063,7 @@ describe('PathsService — venture merit notify', () => {
     jest.spyOn(service, 'getVentureMeritModel').mockResolvedValue({
       scope: { label: 'Faculty supervision' },
       entries: [{ id: 'venture-1', rank: 1 }],
-    } as any);
+    } as unknown as VentureMeritModel);
     ventureRepo.findOne.mockResolvedValue({
       id: 'venture-1',
       userId: 'student-1',
@@ -2960,17 +3072,17 @@ describe('PathsService — venture merit notify', () => {
     });
 
     const result = await service.notifyVentureMeritRanks(
-      { role: 'faculty', email: 'teacher@test.com' } as any,
+      { role: 'faculty', email: 'teacher@test.com' },
       {
         picks: [{ entryId: 'venture-1', rank: 1, of: 5, total: 91 }],
         scopeLabel: 'Your cohort',
-      } as any,
+      },
     );
 
     expect(result.notified).toBe(1);
     expect(ventureRepo.save).toHaveBeenCalledWith(
-      expect.objectContaining({
-        meritRibbon: expect.objectContaining({
+      containing({
+        meritRibbon: containing({
           rank: 1,
           of: 5,
           scope: 'Your cohort',
@@ -2980,7 +3092,7 @@ describe('PathsService — venture merit notify', () => {
     );
     expect(notificationsService.createNotification).toHaveBeenCalledWith(
       'student-1',
-      expect.objectContaining({ title: 'Your venture ranked #1' }),
+      containing({ title: 'Your venture ranked #1' }),
     );
   });
 
@@ -2989,7 +3101,7 @@ describe('PathsService — venture merit notify', () => {
     jest.spyOn(service, 'getVentureMeritModel').mockResolvedValue({
       scope: { label: 'Faculty supervision' },
       entries: [{ id: 'venture-1', rank: 1 }],
-    } as any);
+    } as unknown as VentureMeritModel);
     ventureRepo.findOne.mockResolvedValue({
       id: 'venture-1',
       userId: 'student-1',
@@ -2998,11 +3110,11 @@ describe('PathsService — venture merit notify', () => {
     });
 
     const result = await service.notifyVentureMeritRanks(
-      { role: 'faculty', email: 'teacher@test.com' } as any,
+      { role: 'faculty', email: 'teacher@test.com' },
       {
         picks: [{ entryId: 'venture-1', rank: 1, of: 5, total: 91 }],
         scopeLabel: 'Your cohort',
-      } as any,
+      },
     );
 
     expect(result.notified).toBe(0);
@@ -3023,7 +3135,7 @@ describe('PathsService — grader run limit is independent per path', () => {
         projectTitle: 'x',
         facultyApprovalStatus: 'approved',
       }),
-      save: jest.fn(async (row: Record<string, unknown>) => row),
+      save: jest.fn((row: Record<string, unknown>) => Promise.resolve(row)),
     };
     const fypRepo = {
       findOne: jest.fn().mockResolvedValue({
@@ -3032,7 +3144,7 @@ describe('PathsService — grader run limit is independent per path', () => {
         projectTitle: 'x',
         supervisorApprovalStatus: 'approved',
       }),
-      save: jest.fn(async (row: Record<string, unknown>) => row),
+      save: jest.fn((row: Record<string, unknown>) => Promise.resolve(row)),
     };
     const usersRepo = {
       findOne: jest
@@ -3042,43 +3154,52 @@ describe('PathsService — grader run limit is independent per path', () => {
     const mailService = {
       sendCourseworkRankNotification: jest.fn().mockResolvedValue(undefined),
     };
-    const service = new PathsService(
-      courseProjectRepo as any,
-      fypRepo as any,
-      {} as any,
-      makeInviteRepo() as any,
-      usersRepo as any,
-      {} as any,
-      mailService as any,
-      notificationsService as any,
-      graderRunRepo as any,
-      {} as any,
+    const service = createService(
+      courseProjectRepo,
+      fypRepo,
+      {},
+      makeInviteRepo(),
+      usersRepo,
+      {},
+      mailService,
+      notificationsService,
+      graderRunRepo,
+      {},
     );
     const user = { role: 'faculty', email: 'teacher@test.com' };
     jest.spyOn(service, 'getCourseProjectMeritModel').mockResolvedValue({
       scope: { label: 'x' },
       entries: [{ id: 'entry-1', rank: 1 }],
-    } as any);
+    } as unknown as CourseworkMeritModel);
     jest.spyOn(service, 'getFypMeritModel').mockResolvedValue({
       scope: { label: 'x' },
       entries: [{ id: 'fyp-1', rank: 1 }],
-    } as any);
+    } as unknown as FypMeritModel);
 
     const coursePick = {
       picks: [{ entryId: 'entry-1', rank: 1, of: 5, total: 90 }],
-    } as any;
-    await service.notifyCourseProjectMeritRanks(user as any, coursePick);
-    await service.notifyCourseProjectMeritRanks(user as any, coursePick);
-    await service.notifyCourseProjectMeritRanks(user as any, coursePick);
+    };
+    await service.notifyCourseProjectMeritRanks(
+      user as MeritModelUser,
+      coursePick,
+    );
+    await service.notifyCourseProjectMeritRanks(
+      user as MeritModelUser,
+      coursePick,
+    );
+    await service.notifyCourseProjectMeritRanks(
+      user as MeritModelUser,
+      coursePick,
+    );
     await expect(
-      service.notifyCourseProjectMeritRanks(user as any, coursePick),
+      service.notifyCourseProjectMeritRanks(user as MeritModelUser, coursePick),
     ).rejects.toBeDefined();
 
     const fypResult = await service.notifyFypMeritRanks(
-      user as any,
-      { picks: [{ entryId: 'fyp-1', rank: 1, of: 5, total: 90 }] } as any,
+      user as MeritModelUser,
+      { picks: [{ entryId: 'fyp-1', rank: 1, of: 5, total: 90 }] },
     );
-    expect((fypResult as any).graderRuns).toEqual({
+    expect(fypResult.graderRuns).toEqual({
       unlimited: false,
       used: 1,
       limit: 3,
@@ -3093,38 +3214,38 @@ describe('PathsService — venture reviewPipeline forgery guard', () => {
     const rows: Record<string, unknown>[] = initialEntry ? [initialEntry] : [];
     const manager = {
       getRepository: () => ({
-        findOne: jest.fn(async () => rows[0] ?? null),
+        findOne: jest.fn(() => Promise.resolve(rows[0] ?? null)),
         create: jest.fn((data: Record<string, unknown>) => ({ ...data })),
-        save: jest.fn(async (row: Record<string, unknown>) => {
+        save: jest.fn((row: Record<string, unknown>) => {
           rows[0] = row;
-          return row;
+          return Promise.resolve(row);
         }),
       }),
     };
-    const service = new PathsService(
-      {} as any,
-      {} as any,
+    const service = createService(
+      {},
+      {},
       {
         manager: {
-          transaction: jest.fn(async (fn: (m: unknown) => unknown) =>
-            fn(manager),
+          transaction: jest.fn((fn: (m: unknown) => unknown) =>
+            Promise.resolve(fn(manager)),
           ),
         },
-      } as any,
-      makeInviteRepo() as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      { createNotification: jest.fn() } as any,
-      {} as any,
-      {} as any,
+      },
+      makeInviteRepo(),
+      {},
+      {},
+      {},
+      { createNotification: jest.fn() },
+      {},
+      {},
     );
     jest
       .spyOn(service as any, 'syncVentureInvites')
       .mockResolvedValue(undefined);
     jest
       .spyOn(service as any, 'ventureAnnotate')
-      .mockImplementation(async (entries: unknown) => entries as any);
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
     jest
       .spyOn(service as any, 'withCompleteness')
       .mockImplementation((entry: unknown) => entry);
@@ -3142,9 +3263,9 @@ describe('PathsService — venture reviewPipeline forgery guard', () => {
     await service.upsertVenture('student-1', {
       status: 'draft',
       reviewPipeline: { supervisorStatus: 'approved' },
-    } as any);
+    });
 
-    expect((rows[0] as any).reviewPipeline.supervisorStatus).toBe(
+    expect((rows[0] as SavedRow).reviewPipeline.supervisorStatus).toBe(
       'not_started',
     );
   });
@@ -3160,10 +3281,12 @@ describe('PathsService — venture reviewPipeline forgery guard', () => {
     await service.upsertVenture('student-1', {
       status: 'submitted',
       reviewPipeline: { supervisorStatus: 'pending' },
-    } as any);
+    });
 
-    expect((rows[0] as any).reviewPipeline.supervisorStatus).toBe('pending');
-    expect((rows[0] as any).status).toBe('submitted');
+    expect((rows[0] as SavedRow).reviewPipeline.supervisorStatus).toBe(
+      'pending',
+    );
+    expect((rows[0] as SavedRow).status).toBe('submitted');
   });
 
   it('still resets a genuinely-approved venture back to pending on resubmit-after-edit', async () => {
@@ -3175,10 +3298,12 @@ describe('PathsService — venture reviewPipeline forgery guard', () => {
       meritRibbon: { rank: 1, of: 5 },
     });
 
-    await service.upsertVenture('student-1', { ventureName: 'Renamed' } as any);
+    await service.upsertVenture('student-1', { ventureName: 'Renamed' });
 
-    expect((rows[0] as any).reviewPipeline.supervisorStatus).toBe('pending');
-    expect((rows[0] as any).meritRibbon).toBeNull();
+    expect((rows[0] as SavedRow).reviewPipeline.supervisorStatus).toBe(
+      'pending',
+    );
+    expect((rows[0] as SavedRow).meritRibbon).toBeNull();
   });
 
   it('does not un-approve a venture when the student only toggles investor-track consent', async () => {
@@ -3193,11 +3318,13 @@ describe('PathsService — venture reviewPipeline forgery guard', () => {
 
     await service.upsertVenture('student-1', {
       publishSettings: { audience: 'university', acceptIntros: false },
-    } as any);
+    });
 
-    expect((rows[0] as any).reviewPipeline.supervisorStatus).toBe('approved');
-    expect((rows[0] as any).meritRibbon).toEqual({ rank: 1, of: 5 });
-    expect((rows[0] as any).publishSettings.acceptIntros).toBe(false);
+    expect((rows[0] as SavedRow).reviewPipeline.supervisorStatus).toBe(
+      'approved',
+    );
+    expect((rows[0] as SavedRow).meritRibbon).toEqual({ rank: 1, of: 5 });
+    expect((rows[0] as SavedRow).publishSettings.acceptIntros).toBe(false);
   });
 
   it('refuses to redirect an already-submitted venture to a different supervisorEmail', async () => {
@@ -3217,12 +3344,12 @@ describe('PathsService — venture reviewPipeline forgery guard', () => {
         supervisorEmail: 'supB@test.com',
         supervisorName: 'Dr B',
       },
-    } as any);
+    });
 
-    expect((rows[0] as any).academicSetup.supervisorEmail).toBe(
+    expect((rows[0] as SavedRow).academicSetup.supervisorEmail).toBe(
       'supA@test.com',
     );
-    expect((rows[0] as any).academicSetup.supervisorName).toBe('Dr A');
+    expect((rows[0] as SavedRow).academicSetup.supervisorName).toBe('Dr A');
   });
 });
 
@@ -3230,38 +3357,39 @@ describe('PathsService — listVenturesForAdmin excludes drafts from decision-st
   const makeAdminListService = (
     qbOverrides: Partial<Record<string, unknown>> = {},
   ) => {
-    const qb: any = {
+    const qb = {
       orderBy: jest.fn().mockReturnThis(),
-      andWhere: jest.fn().mockReturnThis(),
+      andWhere: jest.fn<unknown, unknown[]>().mockReturnThis(),
       getMany: jest.fn().mockResolvedValue([]),
       ...qbOverrides,
     };
     const ventureRepo = { createQueryBuilder: jest.fn().mockReturnValue(qb) };
-    const service = new PathsService(
-      {} as any,
-      {} as any,
-      ventureRepo as any,
-      makeInviteRepo() as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      { createNotification: jest.fn() } as any,
-      {} as any,
-      {} as any,
+    const service = createService(
+      {},
+      {},
+      ventureRepo,
+      makeInviteRepo(),
+      {},
+      {},
+      {},
+      { createNotification: jest.fn() },
+      {},
+      {},
     );
     jest
       .spyOn(service as any, 'ventureAnnotate')
-      .mockImplementation(async (entries: unknown) => entries as any);
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
     jest
       .spyOn(service as any, 'attachStudents')
-      .mockImplementation(async (entries: unknown) => entries as any);
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
     return { service, qb };
   };
 
   it('requires status=submitted alongside an approved/rejected/revisions_requested filter', async () => {
     const { service, qb } = makeAdminListService();
     await service.listVenturesForAdmin(undefined, 'approved');
-    const statusFilterCalls = qb.andWhere.mock.calls.filter((call: unknown[]) =>
+    const andWhereCalls: unknown[][] = qb.andWhere.mock.calls;
+    const statusFilterCalls = andWhereCalls.filter((call) =>
       String(call[0]).includes('e.status'),
     );
     expect(statusFilterCalls).toHaveLength(1);
@@ -3271,7 +3399,8 @@ describe('PathsService — listVenturesForAdmin excludes drafts from decision-st
   it('does not add the submitted-only filter for not_started (still-draft rows are the point)', async () => {
     const { service, qb } = makeAdminListService();
     await service.listVenturesForAdmin(undefined, 'not_started');
-    const statusFilterCalls = qb.andWhere.mock.calls.filter((call: unknown[]) =>
+    const andWhereCalls: unknown[][] = qb.andWhere.mock.calls;
+    const statusFilterCalls = andWhereCalls.filter((call) =>
       String(call[0]).includes('e.status'),
     );
     expect(statusFilterCalls).toHaveLength(0);
@@ -3302,22 +3431,22 @@ describe('PathsService.remindCourseProjectFaculty — student nudges the reviewi
     const courseProjectRepo = {
       findOne: jest.fn().mockResolvedValue(entry),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
-      save: jest.fn(async (row: Record<string, unknown>) => row),
+      save: jest.fn((row: Record<string, unknown>) => Promise.resolve(row)),
     };
     const mailService = {
       sendCourseworkReviewReminder: jest.fn().mockResolvedValue(mailOk),
     };
-    const service = new PathsService(
-      courseProjectRepo as any,
-      { findOne: jest.fn().mockResolvedValue(null) } as any,
-      { findOne: jest.fn().mockResolvedValue(null) } as any,
-      { findOne: jest.fn().mockResolvedValue(null) } as any,
-      { findOne: jest.fn().mockResolvedValue(null) } as any,
-      {} as any,
-      mailService as any,
-      { createNotification: jest.fn() } as any,
-      {} as any,
-      {} as any,
+    const service = createService(
+      courseProjectRepo,
+      { findOne: jest.fn().mockResolvedValue(null) },
+      { findOne: jest.fn().mockResolvedValue(null) },
+      { findOne: jest.fn().mockResolvedValue(null) },
+      { findOne: jest.fn().mockResolvedValue(null) },
+      {},
+      mailService,
+      { createNotification: jest.fn() },
+      {},
+      {},
     );
     return { service, entry, courseProjectRepo, mailService };
   };
@@ -3336,7 +3465,7 @@ describe('PathsService.remindCourseProjectFaculty — student nudges the reviewi
     );
     expect(courseProjectRepo.update).toHaveBeenCalledWith(
       { id: 'entry-1' },
-      { facultyReminderSentAt: expect.any(Date) },
+      { facultyReminderSentAt: expect.any(Date) as unknown },
     );
   });
 

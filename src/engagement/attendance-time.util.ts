@@ -1,6 +1,11 @@
 /** "HH:mm" (or "H:mm") → minutes since midnight, or null when not a valid clock time. */
 export function clockToMinutes(value: unknown): number | null {
-  const m = /^(\d{1,2}):(\d{2})/.exec(String(value ?? '').trim());
+  // Same `String(value)` coercion as before: every non-nullish value has Object.prototype.toString.
+  const text =
+    typeof value === 'string'
+      ? value
+      : String((value ?? '') as { toString(): string });
+  const m = /^(\d{1,2}):(\d{2})/.exec(text.trim());
   if (!m) return null;
   const h = Number(m[1]);
   const min = Number(m[2]);

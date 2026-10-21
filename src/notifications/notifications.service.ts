@@ -59,10 +59,7 @@ export class NotificationsService {
   }
 
   /** Default page 1 / limit 100 (max 200); returns the total for the filter. */
-  async findAllPaged(
-    userId: string,
-    query: NotificationListQuery | undefined,
-  ) {
+  async findAllPaged(userId: string, query: NotificationListQuery | undefined) {
     const { status, type } = query ?? {};
     const limit = Math.min(
       200,

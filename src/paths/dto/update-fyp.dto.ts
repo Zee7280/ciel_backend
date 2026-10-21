@@ -106,13 +106,13 @@ export class FypProjectInfoDto {
   /** Self-declared by the student, matched verbatim against the reviewing faculty's own login
    * email in supervisorReviewFyp — format-checked only, never verified against a roster. */
   @IsOptional()
-  @ValidateIf((o) => !!o.supervisorEmail)
+  @ValidateIf((o: { supervisorEmail?: string }) => !!o.supervisorEmail)
   @IsEmail()
   @MaxLength(FREE_TEXT_MAX)
   supervisorEmail?: string;
   @IsOptional() @IsString() @MaxLength(FREE_TEXT_MAX) coSupervisorName?: string;
   @IsOptional()
-  @ValidateIf((o) => !!o.coSupervisorEmail)
+  @ValidateIf((o: { coSupervisorEmail?: string }) => !!o.coSupervisorEmail)
   @IsEmail()
   @MaxLength(FREE_TEXT_MAX)
   coSupervisorEmail?: string;

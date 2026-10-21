@@ -597,10 +597,7 @@ function mapSection4(section4: UnknownRecord): UnknownRecord {
   };
 }
 
-function mapSection5(
-  section5: UnknownRecord,
-  urlToFileId: Map<string, string>,
-): UnknownRecord {
+function mapSection5(section5: UnknownRecord): UnknownRecord {
   return {
     observed_change: pickString(section5.observed_change),
     measurable_outcomes: asArray(section5.measurable_outcomes).map(
@@ -957,7 +954,7 @@ export function buildCielPkAiEvaluationPayload(
     section2_project_context_discipline: mapSection2(section2Raw, urlToFileId),
     section3_sdg_strategy_intent: mapSection3(section3Raw),
     section4_activities_outputs_scale: mapSection4(section4Raw),
-    section5_outcomes_systemic_change: mapSection5(section5Raw, urlToFileId),
+    section5_outcomes_systemic_change: mapSection5(section5Raw),
     section6_resources_mobilization: mapSection6(section6Raw, urlToFileId),
     section7_partnerships: mapSection7(section7Raw, section8Raw, urlToFileId),
     section8_evidence_verification: section8,
@@ -1058,7 +1055,7 @@ export function ciiEvidenceInspectCache(
   data: unknown,
 ): CiiEvidenceInspectCache | undefined {
   if (!data || typeof data !== 'object') return undefined;
-  const cache = Object.getOwnPropertyDescriptor(
+  const cache: unknown = Object.getOwnPropertyDescriptor(
     data,
     CII_EVIDENCE_INSPECT_KEY,
   )?.value;
@@ -1070,21 +1067,25 @@ export function ciiEvidenceInspectCache(
  * `report_id` / `input_fingerprint`. Evidence bytes are not fetched — Admin scores originals in
  * Dimension 7, and the model is report-quality only.
  */
-export async function buildCielPkAiEvaluationPayloadV45(
+export function buildCielPkAiEvaluationPayloadV45(
   report: StudentReport,
   _s3?: EvidenceByteSource,
 ): Promise<CielPkAiEvaluationPayloadV45> {
   void _s3;
-  const base = buildCielPkAiEvaluationPayload(report);
-  return {
-    ...base,
-    schema_version: CIEL_PK_AI_EVALUATION_SCHEMA_VERSION_V45,
-    report_id: report.id,
-    input_fingerprint: computeCiiV45InputFingerprint(
-      report,
-      base.uploaded_evidence_files,
-    ),
-  };
+  // Executor runs synchronously and any throw becomes a rejection — same contract as the
+  // previous `async` body, which had nothing to await.
+  return new Promise<CielPkAiEvaluationPayloadV45>((resolve) => {
+    const base = buildCielPkAiEvaluationPayload(report);
+    resolve({
+      ...base,
+      schema_version: CIEL_PK_AI_EVALUATION_SCHEMA_VERSION_V45,
+      report_id: report.id,
+      input_fingerprint: computeCiiV45InputFingerprint(
+        report,
+        base.uploaded_evidence_files,
+      ),
+    });
+  });
 }
 
 export function buildCiiV45InputCompletenessFromEvalPayload(

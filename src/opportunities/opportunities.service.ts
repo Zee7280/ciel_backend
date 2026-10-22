@@ -410,6 +410,12 @@ function pickDraftPersistFields(
 }
 
 /**
+ * Blocks a student listing whose title is similar to another at the same university. Switched off
+ * for now (product decision); set to true to turn the block back on.
+ */
+export const STUDENT_SIMILAR_TITLE_BLOCK_ENABLED = false;
+
+/**
  * 409 text for a blocked student create. Says which listing it clashes with and how to join it:
  * the student's own earlier submission, a private team (its lead adds members — it has no Apply
  * Now), or an open listing (Apply Now).
@@ -3330,7 +3336,7 @@ export class OpportunitiesService {
         lockKey,
       ]);
       locked = true;
-      if (!privateCandidate) {
+      if (STUDENT_SIMILAR_TITLE_BLOCK_ENABLED && !privateCandidate) {
         const similarOnCreate =
           await this.findSimilarStudentCreatedOpportunities(
             dto.title || '',

@@ -8,6 +8,7 @@ import {
   OpportunitiesService,
   OpportunityDetailViewer,
   similarStudentOpportunityMessage,
+  STUDENT_SIMILAR_TITLE_BLOCK_ENABLED,
 } from './opportunities.service';
 import { OpportunityWorkflowService } from './opportunity-workflow.service';
 import { Opportunity } from './entities/opportunity.entity';
@@ -689,7 +690,7 @@ describe('OpportunitiesService — createStudentOpportunity advisory lock', () =
     expect(opportunitiesRepo.manager.runner.release).toHaveBeenCalledTimes(1);
   });
 
-  it('still releases the lock when the duplicate-title check throws', async () => {
+  it('still releases the lock when creating the listing throws', async () => {
     const managerQuery: QueryMock = jest
       .fn<Promise<void>, [string, unknown[]?]>()
       .mockResolvedValue(undefined);
@@ -709,14 +710,17 @@ describe('OpportunitiesService — createStudentOpportunity advisory lock', () =
       }),
     };
     jest
-      .spyOn(service, 'findSimilarStudentCreatedOpportunities')
-      .mockResolvedValue([
-        { id: 'existing-1', title: 'Beach clean-up drive' } as SimilarRow,
-      ]);
+      .spyOn(
+        service as unknown as {
+          finishCreatingStudentOpportunity: () => Promise<unknown>;
+        },
+        'finishCreatingStudentOpportunity',
+      )
+      .mockRejectedValue(new Error('insert failed'));
 
     await expect(
       service.createStudentOpportunity('student-1', {
-        title: 'Beach clean-up drive', // >= 6 chars — reaches the real duplicate check
+        title: 'Beach clean-up drive',
         mode: 'Remote', // location.pin isn't relevant to this test — keep it out of the way
         objectives: {
           description: 'Help clean the local park and raise awareness.',
@@ -742,7 +746,7 @@ describe('OpportunitiesService — createStudentOpportunity advisory lock', () =
           information_correct_and_verifiable: true,
         },
       } as unknown as CreateOpportunityDto),
-    ).rejects.toThrow('similar title');
+    ).rejects.toThrow('insert failed');
     expect(managerQuery).toHaveBeenCalledTimes(2);
     expect(managerQuery.mock.calls[1][0]).toContain('pg_advisory_unlock');
     expect(releaseMock).toHaveBeenCalledTimes(1);
@@ -821,35 +825,16 @@ describe('OpportunitiesService — duplicate titles and private teams', () => {
     return { outcome: await outcome, finish };
   };
 
-  it("blocks a private team too when another student's similar project exists", async () => {
-    const { outcome, finish } = await run('private_team', {
-      is_own: false,
-      team_mode: 'open',
-    });
-    expect(String((outcome.error as Error)?.message)).toContain(
-      '("TEST 1: SOS Classroom Upgradation Project")',
-    );
-    expect(finish).not.toHaveBeenCalled();
-  });
-
-  it('tells a private team when the match is its own earlier listing', async () => {
-    const { outcome, finish } = await run('private_team', {
-      is_own: true,
-      team_mode: 'private_team',
-    });
-    expect(String((outcome.error as Error)?.message)).toContain(
-      'You have already submitted',
-    );
-    expect(finish).not.toHaveBeenCalled();
-  });
-
-  it('still blocks an open listing that duplicates another team', async () => {
-    const { outcome, finish } = await run('open', {
-      is_own: false,
-      team_mode: 'open',
-    });
-    expect(String((outcome.error as Error)?.message)).toContain('Apply Now');
-    expect(finish).not.toHaveBeenCalled();
+  it('does not block similar titles while the check is switched off', async () => {
+    expect(STUDENT_SIMILAR_TITLE_BLOCK_ENABLED).toBe(false);
+    for (const mode of ['open', 'private_team'] as const) {
+      const { outcome, finish } = await run(mode, {
+        is_own: false,
+        team_mode: 'open',
+      });
+      expect(outcome.error).toBeNull();
+      expect(finish).toHaveBeenCalledTimes(1);
+    }
   });
 });
 

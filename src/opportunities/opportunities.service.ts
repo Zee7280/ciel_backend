@@ -409,6 +409,33 @@ function pickDraftPersistFields(
   return picked;
 }
 
+/**
+ * 409 text for a blocked student create. Says which listing it clashes with and how to join it:
+ * the student's own earlier submission, a private team (its lead adds members — it has no Apply
+ * Now), or an open listing (Apply Now).
+ */
+export function similarStudentOpportunityMessage(
+  matches: Array<{
+    title: string;
+    is_own?: boolean;
+    team_mode?: string | null;
+  }>,
+): string {
+  const own = matches.find((m) => m.is_own);
+  if (own) {
+    return `You have already submitted "${own.title}". Open it from your created opportunities instead of submitting another copy.`;
+  }
+  const first = matches[0];
+  const name = first ? ` ("${first.title}")` : '';
+  if (
+    matches.length > 0 &&
+    matches.every((m) => m.team_mode === 'private_team')
+  ) {
+    return `Disclaimer: A private team with a similar project${name} already exists at your university. Ask its team lead to add you as a teammate instead of creating another copy.`;
+  }
+  return `Disclaimer: A project with a similar title${name} already exists at your university. Only one team lead should create the listing. Other team members must join via Apply Now on the existing opportunity instead of creating another copy.`;
+}
+
 @Injectable()
 export class OpportunitiesService {
   constructor(
@@ -3074,6 +3101,9 @@ export class OpportunitiesService {
       workflow_stage: string | null;
       created_at: string;
       match_strength: 'exact' | 'similar';
+      /** The requesting student created it (e.g. a draft submitted again after it already went in). */
+      is_own: boolean;
+      team_mode: 'private_team' | 'open' | null;
     }> = [];
 
     for (const opp of candidates) {
@@ -3094,6 +3124,11 @@ export class OpportunitiesService {
         workflow_stage: opp.workflowStage ?? null,
         created_at: opp.createdAt?.toISOString?.() ?? new Date().toISOString(),
         match_strength: otherNorm === targetNorm ? 'exact' : 'similar',
+        is_own: Boolean(
+          options?.requestingUserId &&
+          opp.creatorId === options.requestingUserId,
+        ),
+        team_mode: opp.team_mode ?? null,
       });
       if (matches.length >= limit) break;
     }
@@ -3304,8 +3339,7 @@ export class OpportunitiesService {
           );
         if (similarOnCreate.length > 0) {
           throw new ConflictException({
-            message:
-              'Disclaimer: A project with a similar title already exists at your university. Only one team lead should create the listing. Other team members must join via Apply Now on the existing opportunity instead of creating another copy.',
+            message: similarStudentOpportunityMessage(similarOnCreate),
             code: 'SIMILAR_STUDENT_OPPORTUNITY_EXISTS',
             similarOpportunities: similarOnCreate,
           });

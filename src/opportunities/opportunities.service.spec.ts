@@ -7,6 +7,7 @@ import { EntityManager, Repository } from 'typeorm';
 import {
   OpportunitiesService,
   OpportunityDetailViewer,
+  similarStudentOpportunityMessage,
 } from './opportunities.service';
 import { OpportunityWorkflowService } from './opportunity-workflow.service';
 import { Opportunity } from './entities/opportunity.entity';
@@ -745,6 +746,38 @@ describe('OpportunitiesService — createStudentOpportunity advisory lock', () =
     expect(managerQuery).toHaveBeenCalledTimes(2);
     expect(managerQuery.mock.calls[1][0]).toContain('pg_advisory_unlock');
     expect(releaseMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('similarStudentOpportunityMessage', () => {
+  it('tells a student their own earlier submission is the match', () => {
+    expect(
+      similarStudentOpportunityMessage([
+        { title: 'Other drive', is_own: false, team_mode: 'open' },
+        { title: 'Artwork Upgrade', is_own: true, team_mode: 'private_team' },
+      ]),
+    ).toBe(
+      'You have already submitted "Artwork Upgrade". Open it from your created opportunities instead of submitting another copy.',
+    );
+  });
+
+  it('never points to Apply Now when every match is a private team', () => {
+    const msg = similarStudentOpportunityMessage([
+      { title: 'Artwork Upgrade', is_own: false, team_mode: 'private_team' },
+    ]);
+    expect(msg).toContain('Ask its team lead to add you');
+    expect(msg).not.toContain('Apply Now');
+  });
+
+  it('keeps the Apply Now guidance for open or legacy listings', () => {
+    expect(
+      similarStudentOpportunityMessage([
+        { title: 'Beach drive', is_own: false, team_mode: null },
+      ]),
+    ).toContain('("Beach drive")');
+    expect(
+      similarStudentOpportunityMessage([{ title: 'Beach drive' }]),
+    ).toContain('Apply Now');
   });
 });
 

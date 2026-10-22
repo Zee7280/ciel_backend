@@ -1,4 +1,22 @@
-import { Controller, Post, Body, UseGuards, Request } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  UseGuards,
+  Request,
+  UseInterceptors,
+  UploadedFile,
+  BadRequestException,
+  ConflictException,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { proofUploadOptions } from '../common/safe-upload';
+import { S3Service } from '../common/s3.service';
+import { UsersService } from '../users/users.service';
+import {
+  SIGNUP_PROOF_FOLDER,
+  sanitizeSignupProofDocuments,
+} from './signup-proof.util';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import {
   RateLimit,
@@ -18,6 +36,8 @@ export class AuthController {
   constructor(
     private readonly authService: AuthService,
     private readonly otpService: OtpService,
+    private readonly s3Service: S3Service,
+    private readonly usersService: UsersService,
   ) {}
 
   @Post('send-otp')
@@ -43,9 +63,46 @@ export class AuthController {
     return this.otpService.verifyOtp(dto.email, dto.otp);
   }
 
+  /**
+   * Proof-of-affiliation / KYC file for an account that doesn't exist yet. Only open between a
+   * successful OTP verification and the signup call (signup clears the OTP), so it can't be used
+   * as an anonymous file host.
+   */
+  @Post('signup-proof')
+  // IP only: a multipart body isn't parsed yet when the guard runs, so an email key would be empty.
+  @RateLimit({
+    name: 'signup-proof-ip',
+    limit: 12,
+    windowMs: 10 * 60_000,
+    by: 'ip',
+  })
+  @UseInterceptors(FileInterceptor('file', proofUploadOptions))
+  async uploadSignupProof(
+    @Body('email') rawEmail: string,
+    @UploadedFile() file: Express.Multer.File | undefined,
+  ) {
+    const email =
+      typeof rawEmail === 'string' ? rawEmail.trim().toLowerCase() : '';
+    if (!email) throw new BadRequestException('Email is required.');
+    if (!file) throw new BadRequestException('Attach an image or a PDF.');
+    await this.otpService.requireVerifiedEmailForSignup(email);
+    if (await this.usersService.findByEmail(email)) {
+      throw new ConflictException('Email already exists');
+    }
+    const url = await this.s3Service.uploadFile(file, SIGNUP_PROOF_FOLDER);
+    return {
+      success: true,
+      data: { url, fileName: String(file.originalname || '').slice(0, 200) },
+    };
+  }
+
   @Post('signup')
   @RateLimit({ name: 'signup-ip', limit: 15, windowMs: 60 * 60_000, by: 'ip' })
   async signup(@Body() signupDto: SignupDto) {
+    signupDto.signupProofDocuments = sanitizeSignupProofDocuments(
+      signupDto.signupProofDocuments,
+      (url) => this.s3Service.keyFromPublicUrl(url),
+    );
     return this.authService.signup(signupDto);
   }
 

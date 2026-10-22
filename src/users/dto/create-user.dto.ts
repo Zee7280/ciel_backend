@@ -7,6 +7,7 @@ import {
   MinLength,
   ValidateIf,
   IsArray,
+  ArrayMaxSize,
   ValidateNested,
   IsNotEmpty,
   Matches,
@@ -18,6 +19,13 @@ const trimString = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim() : value;
 import { UserRole } from '../enums/user-role.enum';
 import { normalizeUserRoleInput } from '../user-role-input.util';
+
+/** A file uploaded through `POST /auth/signup-proof`; the URL is re-checked server-side. */
+export class SignupProofDocumentDto {
+  @IsString() @IsNotEmpty() label: string;
+  @IsString() @IsNotEmpty() url: string;
+  @IsOptional() @IsString() fileName?: string;
+}
 
 /** Mandate / KYC extras for Investor / VC signup — stored on `users.settings.investor`. */
 export class InvestorSignupProfileDto {
@@ -156,6 +164,14 @@ export class CreateUserDto {
   @ValidateNested()
   @Type(() => InvestorSignupProfileDto)
   investorProfile?: InvestorSignupProfileDto;
+
+  /** Proof-of-affiliation / KYC files uploaded during signup. Not stored on the user. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(4)
+  @ValidateNested({ each: true })
+  @Type(() => SignupProofDocumentDto)
+  signupProofDocuments?: SignupProofDocumentDto[];
 
   @Transform(({ value }) => normalizeUserRoleInput<unknown>(value))
   @IsEnum(UserRole)

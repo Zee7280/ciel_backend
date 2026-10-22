@@ -9,6 +9,14 @@ import {
 import { User } from '../../users/entities/user.entity';
 import { Opportunity } from '../../opportunities/entities/opportunity.entity';
 
+/** A proof-of-affiliation file uploaded on the signup form, for the admin's verification. */
+export type SignupProofDocument = {
+  label: string;
+  url: string;
+  fileName: string;
+  uploadedAt: string;
+};
+
 @Entity('organizations')
 export class Organization {
   @PrimaryGeneratedColumn('uuid')
@@ -74,6 +82,10 @@ export class Organization {
 
   @Column({ type: 'text', nullable: true })
   verificationNotes: string;
+
+  /** Not selected by default: these are identity / staff documents, admin eyes only. */
+  @Column({ type: 'jsonb', nullable: true, select: false })
+  signupProofDocuments: SignupProofDocument[] | null;
 
   @Column({ default: false })
   worksWithMinors: boolean;

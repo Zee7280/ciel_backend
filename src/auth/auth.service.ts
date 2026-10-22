@@ -40,6 +40,7 @@ import {
 } from './org-signup.util';
 import { PlatformSettingsService } from '../settings/platform-settings.service';
 import { canonicalizePhoneInput } from '../common/phone-e164.util';
+import type { SignupProofDocument } from '../organizations/entities/organization.entity';
 
 /** Shallow copy without the given keys (same result as rest-destructuring them away). */
 function omitKeys<T extends object, K extends keyof T>(
@@ -283,6 +284,7 @@ export class AuthService implements OnApplicationBootstrap {
         affiliationProofKind,
         affiliationProofLabel,
         investorProfile,
+        signupProofDocuments: rawProofDocuments,
         ...userCreateData
       } = omitKeys(
         userData as typeof userData & {
@@ -290,9 +292,15 @@ export class AuthService implements OnApplicationBootstrap {
           affiliationProofKind?: string;
           affiliationProofLabel?: string;
           investorProfile?: Record<string, unknown>;
+          signupProofDocuments?: SignupProofDocument[];
         },
         ['organizationCategory', 'legalRegistrationType'],
       );
+
+      // Already checked by the controller to be our own signup-proof uploads.
+      const proofDocuments = Array.isArray(rawProofDocuments)
+        ? rawProofDocuments
+        : [];
 
       let investorExtras: {
         status?: string;
@@ -316,6 +324,7 @@ export class AuthService implements OnApplicationBootstrap {
           settings: {
             investor: {
               ...profile,
+              ...(proofDocuments.length ? { proofDocuments } : {}),
               kycStatus: 'pending',
               appliedAt: new Date().toISOString(),
               hub: {
@@ -359,8 +368,15 @@ export class AuthService implements OnApplicationBootstrap {
         organization = await this.organizationsService.create({
           name: userCreateData.orgName,
           orgType: userCreateData.orgType,
+          // The signup form already asked for the city; don't make the org profile ask again.
+          ...(userCreateData.city?.trim()
+            ? { city: userCreateData.city.trim() }
+            : {}),
           ...(isOrgSignup
             ? { organizationCategory, legalRegistrationType }
+            : {}),
+          ...(proofDocuments.length
+            ? { signupProofDocuments: proofDocuments }
             : {}),
           ...(isOrgSignup
             ? {

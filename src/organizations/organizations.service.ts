@@ -662,6 +662,7 @@ export class OrganizationsService {
     const orgs = await this.organizationsRepository
       .createQueryBuilder('org')
       .select('org')
+      .addSelect('org.signupProofDocuments')
       .addSelect((subQuery) => {
         return subQuery
           .select('COUNT(opp.id)', 'count')
@@ -726,6 +727,9 @@ export class OrganizationsService {
         active_projects_count: toInt(counts?.active),
         opportunities_count: toInt(counts?.all),
         members_count: toInt(counts?.members),
+        signup_documents_count: Array.isArray(org.signupProofDocuments)
+          ? org.signupProofDocuments.length
+          : 0,
         created_at: org.createdAt,
       };
     });
@@ -733,6 +737,13 @@ export class OrganizationsService {
 
   async getAdminOrganizationDetails(id: string) {
     const org = await this.findOne(id);
+    // Hidden from every other read (select: false); only the admin detail view loads it.
+    const proofRow = await this.organizationsRepository
+      .createQueryBuilder('o')
+      .select('o.id')
+      .addSelect('o.signupProofDocuments')
+      .where('o.id = :id', { id: org.id })
+      .getOne();
 
     const [activeProjectsCount, opportunitiesCount, members, verifier] =
       await Promise.all([
@@ -778,6 +789,7 @@ export class OrganizationsService {
       verification_status: org.verificationStatus,
       verification_scope: org.verificationScope,
       verification_notes: org.verificationNotes,
+      signup_proof_documents: proofRow?.signupProofDocuments ?? [],
       is_blocked: org.isBlocked === true,
       active_projects_count: activeProjectsCount,
       opportunities_count: opportunitiesCount,

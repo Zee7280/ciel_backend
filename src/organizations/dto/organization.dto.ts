@@ -9,10 +9,14 @@ import {
   LEGAL_REGISTRATION_TYPES,
   ORGANIZATION_CATEGORIES,
 } from '../organization-taxonomy.constants';
+import type { SignupProofDocument } from '../entities/organization.entity';
 
 export class CreateOrganizationDto {
   @IsString()
   name: string;
+
+  /** Set by signup only (no validator, so the request-body whitelist strips it from clients). */
+  signupProofDocuments?: SignupProofDocument[];
 
   @IsString()
   orgType: string;

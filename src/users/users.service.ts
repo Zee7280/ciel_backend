@@ -216,7 +216,13 @@ export class UsersService {
       roleTitle = 'Organization Admin';
     else if (user.role === UserRole.FACULTY) roleTitle = 'Faculty';
     else if (user.role === UserRole.UNIVERSITY) roleTitle = 'University';
-    else if (user.role === UserRole.NGO) roleTitle = 'NGO';
+    else if (user.role === UserRole.NGO)
+      // HEC / Government signups are stored as NGO accounts; only the category tells them apart.
+      roleTitle = /government/i.test(
+        user.organization?.organizationCategory ?? '',
+      )
+        ? 'HEC / Government'
+        : 'NGO';
     else if (user.role === UserRole.CORPORATE) roleTitle = 'Corporate';
     else if (user.role === UserRole.INVESTOR) roleTitle = 'Investor / VC';
 
@@ -243,6 +249,7 @@ export class UsersService {
       organizationId: user.organization?.id,
       orgName: user.orgName,
       orgType: user.orgType,
+      organizationCategory: user.organization?.organizationCategory ?? null,
       contactPerson: user.contactPerson,
       cnic: user.cnic,
       countryCode: user.countryCode,

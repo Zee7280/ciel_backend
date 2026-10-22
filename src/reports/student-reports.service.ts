@@ -1874,6 +1874,16 @@ export class StudentReportsService {
       this.pickTrimmedString(row.fullName) ||
       this.pickTrimmedString(row.name) ||
       this.pickTrimmedString(student.name);
+    const university =
+      this.pickTrimmedString(row.universityName) ||
+      this.pickTrimmedString(row.university) ||
+      this.pickTrimmedString(student.university);
+    const academicProgram =
+      this.pickTrimmedString(row.academicProgram) ||
+      this.pickTrimmedString(row.academic_program);
+    const yearOfStudy =
+      this.pickTrimmedString(row.yearOfStudy) ||
+      this.pickTrimmedString(row.year);
 
     return {
       id: row.id,
@@ -1886,19 +1896,26 @@ export class StudentReportsService {
       cnic: this.engagementService.decryptCnicInternal(
         this.pickTrimmedString(row.cnic),
       ),
-      university:
-        this.pickTrimmedString(row.universityName) ||
-        this.pickTrimmedString(row.university) ||
-        this.pickTrimmedString(student.university),
+      university,
       degree:
-        this.pickTrimmedString(row.academicProgram) ||
+        academicProgram ||
         this.pickTrimmedString(row.degree) ||
         this.pickTrimmedString(student.major),
       program: this.pickTrimmedString(row.program),
-      year:
-        this.pickTrimmedString(row.yearOfStudy) ||
-        this.pickTrimmedString(row.year),
+      year: yearOfStudy,
       semester: this.pickTrimmedString(row.semester),
+      // The identity form ("Edit academic") reads the engagement field names; without them it
+      // reopens with Student ID and Degree program blank.
+      universityName: university,
+      universityId:
+        this.pickTrimmedString(row.universityId) ||
+        this.pickTrimmedString(row.university_id),
+      academicProgram,
+      department: this.pickTrimmedString(row.department),
+      yearOfStudy,
+      academicIntegrationType:
+        this.pickTrimmedString(row.academicIntegrationType) ||
+        this.pickTrimmedString(row.academic_integration_type),
       role: isLead ? 'Team Lead' : 'Team member',
       verified: row.emailVerified === true || row.verified === true,
       hours: useStoredLeadFields ? storedLead?.hours : row.hours,

@@ -337,6 +337,40 @@ describe('StudentReportsService', () => {
     service = module.get<StudentReportsService>(StudentReportsService);
   });
 
+  it('returns the identity form field names for a live roster lead, so Edit academic is not blank', () => {
+    const mapped = (
+      service as unknown as {
+        mapRosterRowToSection1Participant: (
+          row: Record<string, unknown>,
+        ) => Record<string, unknown>;
+      }
+    ).mapRosterRowToSection1Participant({
+      id: 'p1',
+      fullName: 'Spaher Ara',
+      email: 'spaher@bnu.edu.pk',
+      universityName: 'Beaconhouse National University (BNU)',
+      universityId: 'FA21-BCS-056',
+      academicProgram: 'BS Computer Science',
+      department: 'SMS',
+      yearOfStudy: '3rd Year',
+      semester: 'Semester 5',
+      academicIntegrationType: 'Course-Linked',
+      isTeamLead: true,
+    });
+    expect(mapped).toMatchObject({
+      university: 'Beaconhouse National University (BNU)',
+      universityName: 'Beaconhouse National University (BNU)',
+      universityId: 'FA21-BCS-056',
+      degree: 'BS Computer Science',
+      academicProgram: 'BS Computer Science',
+      department: 'SMS',
+      year: '3rd Year',
+      yearOfStudy: '3rd Year',
+      semester: 'Semester 5',
+      academicIntegrationType: 'Course-Linked',
+    });
+  });
+
   it('keeps status as draft when no submit intent is provided', async () => {
     const result = await service.createReport(
       'student-1',

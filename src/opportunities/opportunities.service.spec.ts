@@ -749,6 +749,110 @@ describe('OpportunitiesService — createStudentOpportunity advisory lock', () =
   });
 });
 
+describe('OpportunitiesService — duplicate titles and private teams', () => {
+  const run = async (
+    teamMode: 'private_team' | 'open',
+    match: { is_own: boolean; team_mode: 'private_team' | 'open' | null },
+  ) => {
+    const managerQuery: QueryMock = jest
+      .fn<Promise<void>, [string, unknown[]?]>()
+      .mockResolvedValue(undefined);
+    const service = makeService({ manager: lockManager(managerQuery) });
+    privates(service).usersRepository = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'student-1',
+        role: 'student',
+        name: 'Ali',
+        phone: '0300',
+        email: 'ali@uni.edu',
+        city: 'Lahore',
+        university: 'University A',
+        department: 'CS',
+      }),
+    };
+    jest.spyOn(service, 'assertStudentTeamMode').mockResolvedValue(teamMode);
+    jest
+      .spyOn(service, 'findSimilarStudentCreatedOpportunities')
+      .mockResolvedValue([
+        {
+          id: 'existing-1',
+          title: 'TEST 1: SOS Classroom Upgradation Project',
+          ...match,
+        } as SimilarRow,
+      ]);
+    const finish = jest
+      .spyOn(
+        service as unknown as {
+          finishCreatingStudentOpportunity: () => Promise<unknown>;
+        },
+        'finishCreatingStudentOpportunity',
+      )
+      .mockResolvedValue({ success: true });
+    const outcome = service
+      .createStudentOpportunity('student-1', {
+        title: 'SOS Classroom Upgradation',
+        mode: 'Remote',
+        objectives: { description: 'Paint and repair SOS village classrooms.' },
+        timeline: { start_date: '2026-10-01', end_date: '2026-10-31' },
+        supervision: { contact: 'teacher@uni.edu', faculty_department: 'CS' },
+        executing_context: {
+          type: 'independent',
+          independent_community_activity: {
+            activity_site_description: 'SOS village',
+          },
+        },
+        safety_declaration: {
+          environment_safe_and_appropriate: true,
+          students_guided_and_supervised: true,
+          lawful_ethical_and_non_hazardous: true,
+          precautions_and_basic_safety: true,
+        },
+        submission_confirmations: {
+          academically_valid_and_accurately_described: true,
+          activity_properly_supervised: true,
+          environment_safe_and_appropriate: true,
+          information_correct_and_verifiable: true,
+        },
+      } as unknown as CreateOpportunityDto)
+      .then(
+        (value) => ({ value, error: null as unknown }),
+        (error: unknown) => ({ value: null, error }),
+      );
+    return { outcome: await outcome, finish };
+  };
+
+  it("blocks a private team too when another student's similar project exists", async () => {
+    const { outcome, finish } = await run('private_team', {
+      is_own: false,
+      team_mode: 'open',
+    });
+    expect(String((outcome.error as Error)?.message)).toContain(
+      '("TEST 1: SOS Classroom Upgradation Project")',
+    );
+    expect(finish).not.toHaveBeenCalled();
+  });
+
+  it('tells a private team when the match is its own earlier listing', async () => {
+    const { outcome, finish } = await run('private_team', {
+      is_own: true,
+      team_mode: 'private_team',
+    });
+    expect(String((outcome.error as Error)?.message)).toContain(
+      'You have already submitted',
+    );
+    expect(finish).not.toHaveBeenCalled();
+  });
+
+  it('still blocks an open listing that duplicates another team', async () => {
+    const { outcome, finish } = await run('open', {
+      is_own: false,
+      team_mode: 'open',
+    });
+    expect(String((outcome.error as Error)?.message)).toContain('Apply Now');
+    expect(finish).not.toHaveBeenCalled();
+  });
+});
+
 describe('similarStudentOpportunityMessage', () => {
   it('tells a student their own earlier submission is the match', () => {
     expect(

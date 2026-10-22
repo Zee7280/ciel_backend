@@ -3337,6 +3337,7 @@ export class OpportunitiesService {
             creatorUniversity,
             { requestingUserId: user.id },
           );
+        // Every listing — open or private team — is blocked by a similar one at the same university.
         if (similarOnCreate.length > 0) {
           throw new ConflictException({
             message: similarStudentOpportunityMessage(similarOnCreate),

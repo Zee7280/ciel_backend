@@ -32,6 +32,7 @@ describe('University binding (e2e)', () => {
   let operator: E2eUser;
   let sharedOpp: string;
   const reportIds: Record<string, string> = {};
+  const studentEmails: Record<string, string> = {};
 
   const liveOpp = async (): Promise<string> => {
     const ngo = await h.makeUser(UserRole.NGO, { org: await h.makeOrg() });
@@ -55,6 +56,7 @@ describe('University binding (e2e)', () => {
     const student = await h.makeUser(UserRole.STUDENT, {
       overrides: { university: profileUniversity, institution: '' },
     });
+    studentEmails[key] = student.email;
     const seats = h.ds.getRepository(Participation);
     await seats.save(
       seats.create({
@@ -170,6 +172,74 @@ describe('University binding (e2e)', () => {
       .post('/partners/community-service/faculty-representatives')
       .send({ faculty_email: elsewhere.email });
     expect(res.status).toBe(400);
+  });
+
+  it('a faculty delegated by CIEL PK admin sees the same students and reports as the university', async () => {
+    const delegate = await h.makeUser(UserRole.FACULTY, {
+      overrides: { university: GIFT },
+    });
+    // Before the assignment: nothing of this listing is theirs.
+    const before = await h.as(delegate).get('/faculty/reports');
+    expect(before.status).toBe(200);
+    expect((before.body as ListBody).data.map((r) => r.id)).not.toContain(
+      reportIds['own'],
+    );
+
+    const assign = await h
+      .as(admin)
+      .post('/admin/faculty-university-scope')
+      .send({ facultyUserId: delegate.id, universityOrganizationId: gift.id });
+    expect(assign.status).toBe(201);
+
+    const dash = await h.as(delegate).get('/faculty/dashboard?view=university');
+    expect(dash.status).toBe(200);
+    expect(
+      (
+        dash.body as {
+          data: { university_scope?: { organization_name?: string } };
+        }
+      ).data.university_scope?.organization_name,
+    ).toBe(GIFT);
+
+    const list = await h.as(delegate).get('/faculty/reports');
+    expect(list.status).toBe(200);
+    const ids = (list.body as ListBody).data.map((r) => r.id);
+    expect(ids).toEqual(
+      expect.arrayContaining([reportIds['own'], reportIds['blank-profile']]),
+    );
+    expect(ids).not.toContain(reportIds['other-school']);
+
+    expect(
+      (await h.as(delegate).get(`/faculty/reports/${reportIds['own']}`)).status,
+    ).toBe(200);
+    expect(
+      (
+        await h
+          .as(delegate)
+          .get(`/faculty/reports/${reportIds['other-school']}`)
+      ).status,
+    ).toBe(404);
+
+    const tracking = await h
+      .as(delegate)
+      .get('/faculty/community-service/tracking');
+    expect(tracking.status).toBe(200);
+    const tracked = (
+      tracking.body as { data: Array<{ student_email?: string | null }> }
+    ).data.map((r) => String(r.student_email || ''));
+    expect(tracked).toEqual(
+      expect.arrayContaining([
+        studentEmails['own'],
+        studentEmails['blank-profile'],
+      ]),
+    );
+    expect(tracked).not.toContain(studentEmails['other-school']);
+
+    // Removing the delegation takes the access away again.
+    await h.as(admin).del(`/admin/faculty-university-scope/${delegate.id}`);
+    expect(
+      (await h.as(delegate).get(`/faculty/reports/${reportIds['own']}`)).status,
+    ).toBe(404);
   });
 
   it('an admin renames an off-list university to its listed name, never to free text', async () => {

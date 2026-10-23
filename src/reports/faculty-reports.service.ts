@@ -399,6 +399,79 @@ export class FacultyReportsService {
       .leftJoinAndSelect('opportunity.organization', 'organization');
   }
 
+  /**
+   * Faculty ↔ University delegation reaches a report THROUGH the university, so it carries the
+   * university's own restriction: on a listing the university does not own, only its students'
+   * reports (or a team with one of its students) — never other universities' students who share
+   * the listing. Reports the faculty supervises in person are never filtered.
+   */
+  private async delegationFilter(
+    facultyId: string,
+    facultyEmail: string,
+  ): Promise<{
+    isPersonalReport: (r: StudentReport) => boolean;
+    isPersonalProject: (projectId: string) => boolean;
+    access: Awaited<
+      ReturnType<FacultyUniversityScopeService['universityReportAccess']>
+    > | null;
+  }> {
+    const none = {
+      isPersonalReport: () => true,
+      isPersonalProject: () => true,
+      access: null,
+    };
+    const orgId =
+      await this.facultyUniversityScopeService.getDelegatedOrganizationId(
+        facultyId,
+      );
+    if (!orgId) return none;
+    const personal = new Set(
+      await this.facultyService.getPersonalOpportunityIds(
+        facultyId,
+        facultyEmail,
+      ),
+    );
+    const fe = this.normalizeFacultyEmail(facultyEmail);
+    const isPersonalProject = (projectId: string) => personal.has(projectId);
+    const isPersonalReport = (r: StudentReport) => {
+      const key = String(r.opportunityId || r.project_id || '').trim();
+      const rawSupervisor = (
+        r.section1 as { faculty_supervisor_email?: unknown } | null
+      )?.faculty_supervisor_email;
+      const supervisor =
+        typeof rawSupervisor === 'string'
+          ? rawSupervisor.trim().toLowerCase()
+          : '';
+      return (
+        r.facultyId === facultyId ||
+        (!!key && personal.has(key)) ||
+        (!!fe && supervisor === fe)
+      );
+    };
+    const access =
+      await this.facultyUniversityScopeService.universityReportAccess(orgId);
+    return { isPersonalReport, isPersonalProject, access };
+  }
+
+  private async restrictDelegatedReports<T extends StudentReport>(
+    rows: T[],
+    facultyId: string,
+    facultyEmail: string,
+  ): Promise<T[]> {
+    if (!rows.length) return rows;
+    const { isPersonalReport, access } = await this.delegationFilter(
+      facultyId,
+      facultyEmail,
+    );
+    if (!access) return rows;
+    const delegatedOnly = rows.filter((r) => !isPersonalReport(r));
+    if (!delegatedOnly.length) return rows;
+    const kept = new Set(
+      (await access.restrictTo(delegatedOnly)).map((r) => r.id),
+    );
+    return rows.filter((r) => isPersonalReport(r) || kept.has(r.id));
+  }
+
   async listAssignedReports(facultyId: string, facultyEmail: string) {
     const scopedOpportunityIds =
       await this.facultyService.getScopedOpportunityIds(
@@ -431,7 +504,7 @@ export class FacultyReportsService {
       .orderBy('report.submission_date', 'DESC')
       .getMany();
 
-    return reports;
+    return this.restrictDelegatedReports(reports, facultyId, facultyEmail);
   }
 
   /**
@@ -461,7 +534,10 @@ export class FacultyReportsService {
         `COALESCE(opportunity.executing_context->>'student_pathway', '') <> 'private'`,
       )
       .orderBy('report.updatedAt', 'DESC')
-      .getMany();
+      .getMany()
+      .then((rows) =>
+        this.restrictDelegatedReports(rows, facultyId, facultyEmail),
+      );
     return {
       success: true,
       data: reports.map((r) => ({
@@ -494,34 +570,54 @@ export class FacultyReportsService {
       return { success: true, data: [] as Record<string, unknown>[] };
     }
 
-    const [opportunities, participants, reports, logs] = await Promise.all([
-      this.opportunitiesRepository.find({
-        where: { id: In(scopedOpportunityIds) },
-        relations: ['organization'],
-      }),
-      this.participationRepository.find({
-        where: {
-          projectId: In(scopedOpportunityIds),
-          status: In([...TRACKING_SEAT_STATUSES]),
-        },
-        relations: ['student'],
-      }),
-      this.baseReportQuery()
-        .where('report."opportunityId"::text IN (:...scopedOppIds)', {
-          scopedOppIds: scopedOpportunityIds,
-        })
-        .orWhere(
-          `TRIM(COALESCE(report.project_id, '')) IN (:...scopedOppIds)`,
-          {
-            scopedOppIds: scopedOpportunityIds,
+    const delegation = await this.delegationFilter(facultyId, facultyEmail);
+    const [opportunities, participantsAll, reportsAll, logs] =
+      await Promise.all([
+        this.opportunitiesRepository.find({
+          where: { id: In(scopedOpportunityIds) },
+          relations: ['organization'],
+        }),
+        this.participationRepository.find({
+          where: {
+            projectId: In(scopedOpportunityIds),
+            status: In([...TRACKING_SEAT_STATUSES]),
           },
+          relations: ['student'],
+        }),
+        this.baseReportQuery()
+          .where('report."opportunityId"::text IN (:...scopedOppIds)', {
+            scopedOppIds: scopedOpportunityIds,
+          })
+          .orWhere(
+            `TRIM(COALESCE(report.project_id, '')) IN (:...scopedOppIds)`,
+            {
+              scopedOppIds: scopedOpportunityIds,
+            },
+          )
+          .orderBy('report.updatedAt', 'DESC')
+          .getMany(),
+        this.attendanceLogsRepository.find({
+          where: { projectId: In(scopedOpportunityIds) },
+        }),
+      ]);
+
+    const reports = await this.restrictDelegatedReports(
+      reportsAll,
+      facultyId,
+      facultyEmail,
+    );
+    // Seats on a delegated-only listing: the university's own students only (same rule as reports).
+    const participants = delegation.access
+      ? participantsAll.filter(
+          (seat) =>
+            delegation.isPersonalProject(seat.projectId) ||
+            delegation.access!.institutionalOpportunityIds.has(
+              seat.projectId,
+            ) ||
+            (!!seat.studentId &&
+              delegation.access!.studentIds.has(seat.studentId)),
         )
-        .orderBy('report.updatedAt', 'DESC')
-        .getMany(),
-      this.attendanceLogsRepository.find({
-        where: { projectId: In(scopedOpportunityIds) },
-      }),
-    ]);
+      : participantsAll;
 
     const oppById = new Map(
       opportunities
@@ -815,7 +911,11 @@ export class FacultyReportsService {
       .andWhere("report.status NOT IN ('draft', 'continue')")
       .getOne();
 
-    if (!report) {
+    if (
+      !report ||
+      !(await this.restrictDelegatedReports([report], facultyId, facultyEmail))
+        .length
+    ) {
       throw new NotFoundException(
         'Report not found, not assigned to you, or not yet submitted',
       );
@@ -859,7 +959,11 @@ export class FacultyReportsService {
       .andWhere("report.status NOT IN ('draft', 'continue')")
       .getOne();
 
-    if (!report) {
+    if (
+      !report ||
+      !(await this.restrictDelegatedReports([report], facultyId, facultyEmail))
+        .length
+    ) {
       throw new NotFoundException(
         'Report not found, not assigned to you, or not yet submitted',
       );

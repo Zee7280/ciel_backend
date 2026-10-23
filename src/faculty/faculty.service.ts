@@ -1220,6 +1220,14 @@ export class FacultyService {
     return this.resolveFacultyScopedOpportunityIds(facultyId, facultyEmail);
   }
 
+  /** Opportunities this faculty supervises in person (no Faculty ↔ University delegation). */
+  async getPersonalOpportunityIds(
+    facultyId: string,
+    facultyEmail: string,
+  ): Promise<string[]> {
+    return this.resolveFacultyPersonalOpportunityIds(facultyId, facultyEmail);
+  }
+
   async getProjectDetail(
     facultyId: string,
     facultyEmail: string,

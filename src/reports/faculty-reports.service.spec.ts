@@ -101,6 +101,7 @@ function makeService(
   };
   const facultyService = {
     getScopedOpportunityIds: jest.fn().mockResolvedValue([]),
+    getPersonalOpportunityIds: jest.fn().mockResolvedValue([]),
   };
   const aiService = {
     summarize: jest.fn(),
@@ -109,6 +110,9 @@ function makeService(
   const facultyUniversityScopeService = {
     normalizeOrgName: (name: string) => (name || '').trim().toLowerCase(),
     studentProfileMatchesOrganization: jest.fn().mockReturnValue(true),
+    // No delegation by default: every listed report is personal.
+    getDelegatedOrganizationId: jest.fn().mockResolvedValue(null),
+    universityReportAccess: jest.fn(),
   };
   const mailService = {
     sendStudentImpactReportFacultyDecision: jest

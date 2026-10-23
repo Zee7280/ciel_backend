@@ -454,6 +454,10 @@ export class FacultyUniversityScopeService {
    */
   async universityReportAccess(universityOrganizationId: string): Promise<{
     opportunityIds: string[];
+    /** The university's own students (see {@link resolveAffiliatedStudentIds}). */
+    studentIds: Set<string>;
+    /** Owned by the university or published by its authorised faculty: every seat / report counts. */
+    institutionalOpportunityIds: Set<string>;
     restrictTo: <T extends UniversityScopedReport>(rows: T[]) => Promise<T[]>;
     includes: (report: UniversityScopedReport) => Promise<boolean>;
   }> {
@@ -461,12 +465,16 @@ export class FacultyUniversityScopeService {
     if (!scope) {
       return {
         opportunityIds: [],
+        studentIds: new Set(),
+        institutionalOpportunityIds: new Set(),
         restrictTo: () => Promise.resolve([]),
         includes: () => Promise.resolve(false),
       };
     }
     return {
       opportunityIds: [...scope.opportunityIds],
+      studentIds: scope.studentIds,
+      institutionalOpportunityIds: scope.institutionalOpportunityIds,
       restrictTo: (rows) => this.filterReportsToUniversityScope(scope, rows),
       includes: (report) => this.reportInUniversityScope(scope, report),
     };

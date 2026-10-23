@@ -4,6 +4,8 @@ import {
   IsOptional,
   IsBoolean,
   IsIn,
+  IsNotEmpty,
+  MaxLength,
 } from 'class-validator';
 import {
   LEGAL_REGISTRATION_TYPES,
@@ -120,4 +122,11 @@ export class AcknowledgePolicyDto {
 export class AdminRejectOrganizationDto {
   @IsString()
   notes: string;
+}
+
+export class AdminRenameOrganizationDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(200)
+  name: string;
 }

@@ -442,6 +442,13 @@ export function similarStudentOpportunityMessage(
   return `Disclaimer: A project with a similar title${name} already exists at your university. Only one team lead should create the listing. Other team members must join via Apply Now on the existing opportunity instead of creating another copy.`;
 }
 
+/** The organisation fields partner name-matching reads. */
+type NamedPartnerOrg = {
+  name: string;
+  verificationStatus?: string | null;
+  isBlocked?: boolean;
+};
+
 @Injectable()
 export class OpportunitiesService {
   constructor(
@@ -1061,6 +1068,41 @@ export class OpportunitiesService {
     if (!kind) return;
     if (!this.verificationUserMatchesToken(opportunity, kind, user)) {
       throw new ForbiddenException('Ye link is account se link nahi hai');
+    }
+  }
+
+  /**
+   * A student creator must not clear their own listing's faculty / partner gate: the magic link is
+   * anonymous, so without this they could list their own email as the reviewer (or open the link
+   * while logged in) and approve it themselves.
+   */
+  private async assertNotCreatorSelfVerification(
+    opportunity: Opportunity,
+    token: string,
+    user?: { id: string; email: string; role: string },
+  ): Promise<void> {
+    if (!opportunity.isStudentCreated || !opportunity.creatorId) return;
+    const kind = this.projectVerificationTokenKind(opportunity, token);
+    if (!kind) return;
+    const refusal = new ForbiddenException(
+      'The creator of this opportunity cannot verify it. The faculty supervisor or partner listed on it must open this link.',
+    );
+    if (user?.id && user.id === opportunity.creatorId) throw refusal;
+    const creator = await this.getOpportunityCreatorContact(opportunity);
+    const creatorEmail = this.normalizeEmail(creator?.email);
+    if (!creatorEmail) return;
+    const sup = opportunity.supervision as
+      | { contact?: unknown; official_email?: unknown }
+      | null
+      | undefined;
+    const gateEmails =
+      kind === 'partner'
+        ? this.collectPartnerContactEmails(opportunity)
+        : [sup?.contact, sup?.official_email].map((e) =>
+            typeof e === 'string' ? e : '',
+          );
+    if (gateEmails.some((e) => this.normalizeEmail(e) === creatorEmail)) {
+      throw refusal;
     }
   }
 
@@ -4632,7 +4674,13 @@ export class OpportunitiesService {
     }
     if (matchNamedOrg) {
       parts.push(this.partnerOrgNameMatchSql());
-      Object.assign(params, this.partnerOrgNameMatchParams(orgNameNorm));
+      Object.assign(
+        params,
+        this.partnerOrgNameMatchParams(
+          orgNameNorm,
+          this.orgMayUseTokenNameMatch(org),
+        ),
+      );
     }
 
     const rows = await this.opportunitiesRepository
@@ -4767,7 +4815,10 @@ export class OpportunitiesService {
     const matchNamedOrg = orgNameNorm.length >= 3;
     const namedOrgSql = this.partnerOrgNameMatchSql();
     const namedOrgParams = matchNamedOrg
-      ? this.partnerOrgNameMatchParams(orgNameNorm)
+      ? this.partnerOrgNameMatchParams(
+          orgNameNorm,
+          this.orgMayUseTokenNameMatch(org),
+        )
       : {};
 
     /** Partner / executing-organization contact emails — the same identities the detail read and
@@ -4874,7 +4925,7 @@ export class OpportunitiesService {
                   filterPartnerEmail || '',
                   org?.id ?? null,
                   userId,
-                  org?.name ? [org.name] : [],
+                  org?.name ? [org] : [],
                 ),
                 is_executing_contact:
                   !!filterPartnerEmail &&
@@ -6218,6 +6269,7 @@ export class OpportunitiesService {
     }
 
     this.assertVerificationIdentityIfRequired(opportunity, token, user);
+    await this.assertNotCreatorSelfVerification(opportunity, token, user);
     if (opportunity.partnerToken === token) {
       this.assertVerificationLinkNotExpired(opportunity.partnerTokenExpiresAt);
     }
@@ -6531,6 +6583,7 @@ export class OpportunitiesService {
       );
     this.assertVerificationLinkNotExpired(opp.facultyTokenExpiresAt);
     this.assertVerificationIdentityIfRequired(opp, token, user);
+    await this.assertNotCreatorSelfVerification(opp, token, user);
     const alreadyDone = opp.isStudentCreated
       ? opp.faculty_verified
       : opp.facultyApprovalStatus === LINE_STATUS.APPROVED;
@@ -6640,15 +6693,29 @@ export class OpportunitiesService {
   }
 
   /** Exact name, or the registered name as a whole word inside the name the student typed. */
+  /**
+   * Organisation names are free text at signup. A word-level match ("Foundation" inside "Akhuwat
+   * Foundation") grants partner access to listings that only NAME the partner, so it is limited to
+   * organisations a CIEL admin has verified; an unverified one matches its exact name only.
+   */
+  private orgMayUseTokenNameMatch(
+    org?: { verificationStatus?: string | null; isBlocked?: boolean } | null,
+  ): boolean {
+    return (
+      !!org && org.verificationStatus === 'APPROVED' && org.isBlocked !== true
+    );
+  }
+
   private orgNamesReferToSamePartner(
     candidate: string,
     target: string,
+    allowTokenMatch = true,
   ): boolean {
     const left = this.foldPartnerOrgName(candidate);
     const right = this.foldPartnerOrgName(target);
     if (!left || !right || right.length < 3) return false;
     if (left === right) return true;
-    if (right.length < 4) return false;
+    if (!allowTokenMatch || right.length < 4) return false;
     return (
       left.startsWith(`${right} `) ||
       left.endsWith(` ${right}`) ||
@@ -6687,9 +6754,10 @@ export class OpportunitiesService {
 
   private partnerOrgNameMatchParams(
     orgNameNorm: string,
+    allowTokenMatch = true,
   ): Record<string, string> {
     const folded = this.foldPartnerOrgName(orgNameNorm);
-    const token = folded.length >= 4;
+    const token = allowTokenMatch && folded.length >= 4;
     return {
       orgName: folded,
       // Length under 4 stays exact-only: the LIKE patterns must not match anything. Folded text only
@@ -6706,26 +6774,26 @@ export class OpportunitiesService {
     opp: Opportunity,
     organizationId?: string | null,
     userId?: string | null,
-    preloadedOrgNames?: string[],
+    preloadedOrgs?: NamedPartnerOrg[],
   ): Promise<boolean> {
-    const orgNames: string[] = preloadedOrgNames ? [...preloadedOrgNames] : [];
-    if (!preloadedOrgNames && userId) {
+    const orgs: NamedPartnerOrg[] = preloadedOrgs ? [...preloadedOrgs] : [];
+    if (!preloadedOrgs && userId) {
       try {
         const mine = await this.organizationsService.getMyOrganization(userId);
-        if (mine?.name) orgNames.push(mine.name);
+        if (mine?.name) orgs.push(mine);
       } catch {
         /* login is not linked to an organisation */
       }
     }
-    if (!preloadedOrgNames && organizationId) {
+    if (!preloadedOrgs && organizationId) {
       try {
         const org = await this.organizationsService.findOne(organizationId);
-        if (org?.name) orgNames.push(org.name);
+        if (org?.name) orgs.push(org);
       } catch {
         /* token org id is missing or stale */
       }
     }
-    if (!orgNames.length) return false;
+    if (!orgs.length) return false;
     const collab = opp.external_partner_collaboration as
       | { organization_name?: string; contact_person?: string }
       | undefined;
@@ -6762,11 +6830,15 @@ export class OpportunitiesService {
       ctx?.partner?.organization_name,
       ctx?.partner?.contact_person,
     ];
-    return orgNames.some((orgName) =>
+    return orgs.some((org) =>
       candidates.some(
         (raw) =>
           typeof raw === 'string' &&
-          this.orgNamesReferToSamePartner(raw, orgName),
+          this.orgNamesReferToSamePartner(
+            raw,
+            org.name,
+            this.orgMayUseTokenNameMatch(org),
+          ),
       ),
     );
   }
@@ -6777,7 +6849,7 @@ export class OpportunitiesService {
     partnerEmail: string,
     organizationId?: string | null,
     userId?: string | null,
-    preloadedOrgNames?: string[],
+    preloadedOrgs?: NamedPartnerOrg[],
   ): Promise<boolean> {
     // Any partner contact email the creator entered — the partner list matches all of them.
     const actorEmail = this.normalizeEmail(partnerEmail);
@@ -6794,11 +6866,20 @@ export class OpportunitiesService {
       !!opp.organizationId &&
       organizationId === opp.organizationId;
     if (emailMatches || organizationMatches) return true;
+    // Same reasoning by name: the creator's organisation typing its own name into the partner block
+    // must not let it acknowledge the partner gate itself.
+    if (
+      opp.isStudentCreated !== true &&
+      !!organizationId &&
+      organizationId === opp.organizationId
+    ) {
+      return false;
+    }
     return this.namedPartnerOrgMatches(
       opp,
       organizationId,
       userId,
-      preloadedOrgNames,
+      preloadedOrgs,
     );
   }
 

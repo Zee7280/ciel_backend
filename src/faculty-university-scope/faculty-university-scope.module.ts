@@ -7,6 +7,7 @@ import { Organization } from '../organizations/entities/organization.entity';
 import { Participation } from '../engagement/entities/participant.entity';
 import { OpportunityApplication } from '../opportunities/entities/opportunity-application.entity';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
+import { StudentReport } from '../reports/entities/student-report.entity';
 import { AdminFacultyUniversityScopeController } from './admin-faculty-university-scope.controller';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 
@@ -19,6 +20,7 @@ import { AuditLogsModule } from '../audit-logs/audit-logs.module';
       Participation,
       OpportunityApplication,
       Opportunity,
+      StudentReport,
     ]),
     AuditLogsModule,
   ],

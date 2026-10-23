@@ -1,5 +1,5 @@
 import { academicDepartmentsMatch } from '../common/academic-department.util';
-import { randomUUID } from 'crypto';
+import { randomInt, randomUUID } from 'crypto';
 import {
   resolveTeamSeatCap,
   teamSizeCapError,
@@ -998,7 +998,7 @@ export class StudentsService {
         }
       }
 
-      otp = Math.floor(100000 + Math.random() * 900000).toString();
+      otp = randomInt(100000, 1_000_000).toString();
       const expiresAt = new Date(Date.now() + OTP_TTL_MS);
       // A resend issues a new code but does not revoke an earlier confirmation for this project —
       // otherwise a second request (student self-verifying, lead resending) would silently break a

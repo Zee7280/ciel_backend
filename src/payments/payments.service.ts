@@ -17,6 +17,17 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { Payment, PaymentStatus } from './entities/payment.entity';
 import { StudentReport } from '../reports/entities/student-report.entity';
 
+/** Report states a fee payment must not move into `payment_under_review`. */
+const REPORT_STATUSES_NOT_READY_FOR_PAYMENT = new Set([
+  '',
+  'none',
+  'draft',
+  'continue',
+  'revision',
+  'rejected',
+  'closed',
+]);
+
 @Injectable()
 export class PaymentsService {
   constructor(
@@ -131,6 +142,21 @@ export class PaymentsService {
   ) {
     const paidAmount = this.parsePaidAmount(paidAmountRaw);
 
+    // The reporting fee belongs to a project the student is on (their seat, or their team's report).
+    const report = await this.findStudentReportForPayment(studentId, projectId);
+    if (!report) {
+      const seat = this.looksLikeUuid(projectId)
+        ? await this.participantRepository.findOne({
+            where: { studentId, projectId: projectId.trim() },
+          })
+        : null;
+      if (!seat) {
+        throw new BadRequestException(
+          'You are not enrolled on this project, so there is no reporting fee to pay.',
+        );
+      }
+    }
+
     // 1. Upload proof to S3
     const proofUrl = await this.s3Service.uploadFile(
       file,
@@ -147,10 +173,14 @@ export class PaymentsService {
     });
     await this.paymentRepository.save(payment);
 
-    // 3. Update reports.status (student UI: payment_under_review)
-    const report = await this.findStudentReportForPayment(studentId, projectId);
-
-    if (report) {
+    // 3. Update reports.status (student UI: payment_under_review). A report that is still a draft or
+    // was sent back stays where it is — paying must not skip the submit checks and enter review.
+    if (
+      report &&
+      !REPORT_STATUSES_NOT_READY_FOR_PAYMENT.has(
+        String(report.status || '').toLowerCase(),
+      )
+    ) {
       report.status = 'payment_under_review';
       await this.studentReportRepository.save(report);
     }

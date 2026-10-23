@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { FundingOpportunity } from './entities/funding-opportunity.entity';
@@ -23,6 +27,11 @@ export class FundingService {
   }
 
   async createApplication(userId: string, dto: CreateFundingApplicationDto) {
+    if (!userId) {
+      throw new ForbiddenException(
+        'Only organization accounts can apply for funding.',
+      );
+    }
     const opportunity = await this.fundingOpportunityRepository.findOne({
       where: { id: dto.fundingId },
     });
@@ -40,6 +49,9 @@ export class FundingService {
   }
 
   async getApplications(userId: string) {
+    // No organization (student / faculty / investor token): an undefined key would be dropped from
+    // `where` and return every organization's applications.
+    if (!userId) return [];
     return this.fundingApplicationRepository.find({
       where: { organizationId: userId },
       relations: ['fundingOpportunity'],

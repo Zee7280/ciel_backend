@@ -320,7 +320,6 @@ describe('Faculty ↔ University scope (e2e)', () => {
     type AffiliatedIds = {
       resolveUniversityAffiliatedStudentIds(
         orgId: string,
-        orgName: string,
       ): Promise<Set<string>>;
     };
     type ScopedParticipations = {
@@ -364,10 +363,7 @@ describe('Faculty ↔ University scope (e2e)', () => {
       await scope.resolveOpportunityIdsForUniversityOrganization(bnu.id),
     ).toContain(dashOpp.id);
     // … and so are its BNU students (any spelling or org link), never the LUMS one.
-    const affiliated = await orgs.resolveUniversityAffiliatedStudentIds(
-      bnu.id,
-      bnu.name,
-    );
+    const affiliated = await orgs.resolveUniversityAffiliatedStudentIds(bnu.id);
     expect(affiliated.has(bnuAbbr.id)).toBe(true);
     expect(affiliated.has(bnuLinked.id)).toBe(true);
     expect(affiliated.has(lumsStudent.id)).toBe(false);

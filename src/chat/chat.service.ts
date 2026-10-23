@@ -11,6 +11,15 @@ import { Message } from './entities/message.entity';
 import { ConversationParticipant } from './entities/conversation-participant.entity';
 import { CreateConversationDto, CreateMessageDto } from './dto/chat.dto';
 import { User } from '../users/entities/user.entity';
+import { UserRole } from '../users/enums/user-role.enum';
+
+/** `ab***@uni.edu.pk` — enough to tell two people with the same name apart, not a mailing list. */
+function maskEmail(email: string | null | undefined): string {
+  const value = String(email || '');
+  const at = value.indexOf('@');
+  if (at <= 0) return '';
+  return `${value.slice(0, Math.min(2, at))}***${value.slice(at)}`;
+}
 
 /** The ONLY user fields chat ever returns. Never serialise a User entity: it carries the bcrypt
  * hash, the (plaintext) password-reset token, CNIC and settings. */
@@ -70,8 +79,19 @@ export class ChatService {
   async createConversation(
     createConversationDto: CreateConversationDto,
     creatorId: string,
+    creatorRole?: string,
   ) {
-    const { participantIds, type = 'DIRECT' } = createConversationDto;
+    const { participantIds } = createConversationDto;
+    const type = String(createConversationDto.type || 'DIRECT').toUpperCase();
+    if (type !== 'DIRECT' && type !== 'GROUP') {
+      throw new BadRequestException('Unknown conversation type.');
+    }
+    // The app only opens direct chats; group chats with up to 50 people are an admin tool.
+    if (type === 'GROUP' && creatorRole !== (UserRole.SUPER_ADMIN as string)) {
+      throw new ForbiddenException(
+        'Only CIEL PK Admin can start a group chat.',
+      );
+    }
 
     // Ensure creator is included
     const allParticipants = Array.from(
@@ -348,16 +368,25 @@ export class ChatService {
     return count;
   }
 
-  async getChatUsers(userId: string, search?: string) {
+  async getChatUsers(userId: string, search?: string, viewerRole?: string) {
+    const isAdmin = viewerRole === (UserRole.SUPER_ADMIN as string);
     const query = this.usersRepository
       .createQueryBuilder('user')
       .where('user.id != :userId', { userId })
       .andWhere('user.status = :status', { status: 'active' });
 
-    if (search) {
+    const term = String(search || '').trim();
+    if (term && isAdmin) {
       query.andWhere('(user.name ILIKE :search OR user.email ILIKE :search)', {
-        search: `%${search}%`,
+        search: `%${term}%`,
       });
+    } else if (term) {
+      // Partial email search ("@", ".edu") would let anyone page through every address on the
+      // platform; others find people by name, or by typing their full email.
+      query.andWhere(
+        '(user.name ILIKE :search OR LOWER(user.email) = :exactEmail)',
+        { search: `%${term}%`, exactEmail: term.toLowerCase() },
+      );
     }
 
     // Limit results for performance
@@ -368,7 +397,7 @@ export class ChatService {
     return users.map((user) => ({
       id: user.id,
       name: user.name,
-      email: user.email,
+      email: isAdmin ? user.email : maskEmail(user.email),
       avatar: user.avatar,
       role: user.role,
     }));

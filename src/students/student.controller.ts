@@ -15,6 +15,10 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import {
+  RateLimit,
+  RateLimitGuard,
+} from '../common/rate-limit/rate-limit.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { SubscriptionActiveGuard } from '../student-subscription/subscription-active.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -220,6 +224,21 @@ export class StudentController {
   }
 
   @Post('verify-team-member/send')
+  @UseGuards(RateLimitGuard)
+  @RateLimit(
+    {
+      name: 'team-otp-send-user',
+      limit: 30,
+      windowMs: 10 * 60_000,
+      by: 'user',
+    },
+    {
+      name: 'team-otp-send-email',
+      limit: 8,
+      windowMs: 60 * 60_000,
+      by: 'email',
+    },
+  )
   async sendOtp(
     @Body()
     body: {
@@ -239,6 +258,22 @@ export class StudentController {
   }
 
   @Post('verify-team-member/confirm')
+  // The code is 6 digits; without a cap it can be brute-forced to "verify" an email you don't own.
+  @UseGuards(RateLimitGuard)
+  @RateLimit(
+    {
+      name: 'team-otp-confirm-user',
+      limit: 20,
+      windowMs: 10 * 60_000,
+      by: 'user',
+    },
+    {
+      name: 'team-otp-confirm-email',
+      limit: 10,
+      windowMs: 10 * 60_000,
+      by: 'email',
+    },
+  )
   async confirmOtp(@Body() body: { email: string; otp: string }) {
     if (!body.email || !body.otp) {
       throw new BadRequestException('Email and OTP required');
@@ -247,6 +282,11 @@ export class StudentController {
   }
 
   @Post('verify-team-member')
+  @UseGuards(RateLimitGuard)
+  @RateLimit(
+    { name: 'team-verify-user', limit: 20, windowMs: 10 * 60_000, by: 'user' },
+    { name: 'team-verify-email', limit: 5, windowMs: 60 * 60_000, by: 'email' },
+  )
   async verifyTeamMember(@Body() body: { email: string }) {
     if (!body.email) {
       throw new BadRequestException('Email is required');
@@ -319,6 +359,7 @@ export class StudentController {
       originalName: meta.filename,
       contentType: meta.contentType,
       expiresInSeconds: studentReportPresignExpiresInSeconds(meta.size),
+      contentLength: meta.size,
     });
 
     return { success: true, data: { ...signed, url: signed.publicUrl } };
@@ -413,6 +454,7 @@ export class StudentController {
       originalName: meta.filename,
       contentType: meta.contentType,
       expiresInSeconds: studentReportPresignExpiresInSeconds(meta.size),
+      contentLength: meta.size,
     });
 
     return { success: true, data: { ...signed, url: signed.publicUrl } };

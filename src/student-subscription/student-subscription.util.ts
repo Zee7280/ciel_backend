@@ -54,6 +54,35 @@ function parenthesisedAcronym(name: string): string {
 }
 
 /**
+ * Fee exemption: does the student's university (normalized) name this member organization? Like
+ * {@link universityNamesMatch}, but containment only runs one way — the member's registered (often
+ * shorter) name, as whole words, inside the student's. Otherwise a generic entry such as
+ * "University" would match every member and skip the fee.
+ */
+export function studentUniversityMatchesMember(
+  student: string,
+  member: string,
+): boolean {
+  if (!student || !member) return false;
+  if (student === member) return true;
+  const studentAcronym = parenthesisedAcronym(student);
+  const memberAcronym = parenthesisedAcronym(member);
+  if (
+    studentAcronym &&
+    (studentAcronym === member || studentAcronym === memberAcronym)
+  ) {
+    return true;
+  }
+  if (memberAcronym && memberAcronym === student) return true;
+  const words = (name: string) => name.replace(/[^a-z0-9]+/g, ' ').trim();
+  const memberWords = words(member);
+  return (
+    memberWords.length >= 3 &&
+    ` ${words(student)} `.includes(` ${memberWords} `)
+  );
+}
+
+/**
  * Tolerant equality for university names (both already normalized via normalizeUniversityName):
  * exact match, acronym match, or containment of a name at least 3 characters long.
  */

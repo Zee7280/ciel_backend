@@ -12,9 +12,13 @@ import {
 import { ChatService } from './chat.service';
 import { CreateConversationDto, CreateMessageDto } from './dto/chat.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import {
+  RateLimit,
+  RateLimitGuard,
+} from '../common/rate-limit/rate-limit.guard';
 
 type AuthenticatedRequest = {
-  user: { id: string };
+  user: { id: string; role?: string };
   body?: Record<string, unknown>;
 };
 
@@ -57,6 +61,7 @@ export class ChatController {
     const data = await this.chatService.createConversation(
       payload,
       req.user.id,
+      req.user.role,
     );
     return { success: true, data };
   }
@@ -114,13 +119,25 @@ export class ChatController {
     return { success: true, data: { count } };
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RateLimitGuard)
+  @RateLimit({
+    name: 'chat-user-search',
+    // The search box queries on every keystroke.
+    limit: 240,
+    windowMs: 60_000,
+    by: 'user',
+    message: 'Too many searches. Please wait a moment and try again.',
+  })
   @Get('users')
   async getChatUsers(
     @Request() req: AuthenticatedRequest,
     @Query('search') search: string,
   ) {
-    const users = await this.chatService.getChatUsers(req.user.id, search);
+    const users = await this.chatService.getChatUsers(
+      req.user.id,
+      search,
+      req.user.role,
+    );
     return { success: true, data: users };
   }
 }

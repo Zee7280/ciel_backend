@@ -86,6 +86,13 @@ const BLOCKED_EXTENSIONS = new Set([
   '.hta',
   '.vbs',
   '.wsf',
+  // XML documents can carry an XHTML namespace / XSLT and run script when opened.
+  '.xml',
+  '.xsl',
+  '.xslt',
+  '.xht',
+  '.mht',
+  '.mhtml',
 ]);
 
 const BLOCKED_MIMETYPES = new Set([
@@ -96,6 +103,10 @@ const BLOCKED_MIMETYPES = new Set([
   'application/javascript',
   'application/x-javascript',
   'application/wasm',
+  'text/xml',
+  'application/xml',
+  'text/xsl',
+  'multipart/related',
 ]);
 
 export const STUDENT_REPORT_MAX_FILE_BYTES = 500 * 1024 * 1024;
@@ -133,7 +144,12 @@ function isBlockedStudentReportFile(
 ): boolean {
   const ext = path.extname(filename || '').toLowerCase();
   const mime = normalizeMime(contentType);
-  return BLOCKED_EXTENSIONS.has(ext) || BLOCKED_MIMETYPES.has(mime);
+  return (
+    BLOCKED_EXTENSIONS.has(ext) ||
+    BLOCKED_MIMETYPES.has(mime) ||
+    // image/svg+xml, application/xslt+xml, … (Office formats are `…ml.document`, not `+xml`).
+    mime.endsWith('+xml')
+  );
 }
 
 function isAllowedStudentReportFile(

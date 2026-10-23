@@ -37,23 +37,35 @@ export class S3Service {
     });
   }
 
-  /** Returns a presigned PUT URL and corresponding public URL for the configured bucket. */
+  /**
+   * Returns a presigned PUT URL and corresponding public URL for the configured bucket.
+   * `Content-Type` is part of the signature, so the PUT must send exactly the presigned type — an
+   * unsigned header would let a "file.pdf" presign be uploaded as text/html. When the declared
+   * size is given, `Content-Length` is signed too, so the upload cannot exceed it.
+   */
   async presignPutObject(opts: {
     folder: string;
     originalName: string;
     contentType: string;
     expiresInSeconds?: number;
+    contentLength?: number;
   }): Promise<{ uploadUrl: string; publicUrl: string; key: string }> {
     const fileExt = path.extname(opts.originalName || '').slice(0, 12);
     const key = `${opts.folder}/${crypto.randomUUID()}${fileExt}`;
+    const contentLength =
+      Number.isInteger(opts.contentLength) && (opts.contentLength ?? 0) > 0
+        ? opts.contentLength
+        : undefined;
     try {
       const command = new PutObjectCommand({
         Bucket: this.bucket,
         Key: key,
         ContentType: opts.contentType,
+        ...(contentLength ? { ContentLength: contentLength } : {}),
       });
       const uploadUrl = await getSignedUrl(this.s3Client, command, {
         expiresIn: opts.expiresInSeconds ?? 15 * 60,
+        signableHeaders: new Set(['content-type']),
       });
       const publicUrl = `https://${this.bucket}.s3.${this.region}.amazonaws.com/${key}`;
       return { uploadUrl, publicUrl, key };

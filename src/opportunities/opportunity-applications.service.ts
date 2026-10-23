@@ -3972,13 +3972,13 @@ export class OpportunityApplicationsService {
       : null;
     // Same student-identity rule as canFacultyReviewApplicationAsUniversityDelegate, so every
     // row listed here as "delegate" can actually be approved / rejected.
-    const delegatedProfile = delegatedOrg
-      ? this.facultyUniversityScopeService.studentProfileMatchesOrganizationSql(
-          's',
-          delegatedOrg.name,
-          'delegate',
-        )
-      : null;
+    const delegatedStudentIds = delegatedOrg
+      ? [
+          ...(await this.facultyUniversityScopeService.resolveAffiliatedStudentIds(
+            { id: delegatedOrg.id, name: delegatedOrg.name },
+          )),
+        ]
+      : [];
 
     const qb = this.appRepo
       .createQueryBuilder('a')
@@ -3996,20 +3996,16 @@ export class OpportunityApplicationsService {
             "LOWER(TRIM(COALESCE(o.supervision->>'contact', ''))) = :email",
             { email },
           );
-          if (delegatedOrg && delegatedProfile) {
+          if (delegatedStudentIds.length) {
             outer.orWhere(
               new Brackets((inner) => {
                 inner
                   .where('s.role = :studentRole', {
                     studentRole: UserRole.STUDENT,
                   })
-                  .andWhere(
-                    `(${delegatedProfile.sql} OR s."organizationId"::text = :delegateOrgId)`,
-                    {
-                      ...delegatedProfile.params,
-                      delegateOrgId: delegatedOrg.id,
-                    },
-                  );
+                  .andWhere('s.id::text = ANY(:delegateStudentIds)', {
+                    delegateStudentIds: delegatedStudentIds,
+                  });
               }),
             );
           }
@@ -4078,6 +4074,18 @@ export class OpportunityApplicationsService {
     return { success: true, data };
   }
 
+  /**
+   * Faculty / partner decision responses: the loaded `studentUser` relation carries the student's
+   * CNIC, phone and settings, which these reviewers must not receive. The UI only reads `res.ok`.
+   */
+  private withoutStudentProfile(
+    app: OpportunityApplication,
+  ): Omit<OpportunityApplication, 'studentUser'> {
+    const copy = { ...app };
+    Reflect.deleteProperty(copy, 'studentUser');
+    return copy;
+  }
+
   async facultyApprove(
     id: string,
     facultyEmail: string,
@@ -4117,7 +4125,7 @@ export class OpportunityApplicationsService {
     app.facultyDecidedBy = facultyUserId;
     app.facultyComment = null;
     await this.appRepo.save(app);
-    return { success: true, data: app };
+    return { success: true, data: this.withoutStudentProfile(app) };
   }
 
   async facultyReject(
@@ -4155,7 +4163,7 @@ export class OpportunityApplicationsService {
     app.facultyDecidedBy = facultyUserId;
     app.facultyComment = reason || null;
     await this.appRepo.save(app);
-    return { success: true, data: app };
+    return { success: true, data: this.withoutStudentProfile(app) };
   }
 
   /**
@@ -4232,7 +4240,7 @@ export class OpportunityApplicationsService {
     }
     app.internalStatus = 'pending_admin';
     await this.appRepo.save(app);
-    return { success: true, data: app };
+    return { success: true, data: this.withoutStudentProfile(app) };
   }
 
   async partnerReject(
@@ -4260,7 +4268,7 @@ export class OpportunityApplicationsService {
     app.internalStatus = 'partner_rejected';
     app.partnerComment = reason?.trim() || null;
     await this.appRepo.save(app);
-    return { success: true, data: app };
+    return { success: true, data: this.withoutStudentProfile(app) };
   }
 
   /** Rows waiting on CIEL admin (after faculty; legacy `pending_partner` included for same queue). */

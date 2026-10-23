@@ -1351,8 +1351,18 @@ export class StudentReportsService {
     if (myApp && ownerApp) {
       return myApp === ownerApp;
     }
-    // Same project enrollment + report owned by a team lead on that project.
-    return owner.isTeamLead === true || enrollmentLooksLikeTeam(owner);
+    // Same project enrollment + report owned by a team lead on that project. Without team /
+    // application ids that is only unambiguous on a single-team project; on a multi-team one it
+    // would open another team's report to every enrollee.
+    if (!(owner.isTeamLead === true || enrollmentLooksLikeTeam(owner))) {
+      return false;
+    }
+    const projectSeats = await this.participantRepository.find({
+      where: { projectId },
+    });
+    return !this.rosterSpansSeveralTeams(
+      projectSeats as unknown as Record<string, unknown>[],
+    );
   }
 
   /**
@@ -1926,6 +1936,90 @@ export class StudentReportsService {
     };
   }
 
+  /** True when a project's seats belong to more than one team (several team / application ids or leads). */
+  private rosterSpansSeveralTeams(roster: Record<string, unknown>[]): boolean {
+    const groups = new Set(
+      roster
+        .map(
+          (row) =>
+            this.pickTrimmedString(row.teamId ?? row.team_id) ||
+            this.pickTrimmedString(row.applicationId),
+        )
+        .filter(Boolean),
+    );
+    const leads = roster.filter(
+      (row) => row.isTeamLead === true || row.is_team_lead === true,
+    );
+    return groups.size > 1 || leads.length > 1;
+  }
+
+  /**
+   * Participation ids of the report's own team (every seat the author holds, plus the seats sharing
+   * their team / application id), so a student's dossier lists only their team's attendance.
+   */
+  private async reportTeamParticipantIds(
+    report: StudentReport,
+    projectId: string,
+  ): Promise<string[]> {
+    const seats = (await this.participantRepository.find({
+      where: { projectId },
+    })) as unknown as Record<string, unknown>[];
+    const own = seats.filter(
+      (row) => this.pickTrimmedString(row.studentId) === report.studentId,
+    );
+    const teamIds = new Set(
+      own.map((row) => this.pickTrimmedString(row.teamId)).filter(Boolean),
+    );
+    const applicationIds = new Set(
+      own
+        .map((row) => this.pickTrimmedString(row.applicationId))
+        .filter(Boolean),
+    );
+    const inTeam = seats.filter((row) => {
+      const teamId = this.pickTrimmedString(row.teamId);
+      const applicationId = this.pickTrimmedString(row.applicationId);
+      return (
+        own.includes(row) ||
+        (!!teamId && teamIds.has(teamId)) ||
+        // Legacy teammate seats can carry only the shared application id (no teamId).
+        (!!applicationId && applicationIds.has(applicationId))
+      );
+    });
+    const scoped =
+      teamIds.size || applicationIds.size || this.rosterSpansSeveralTeams(seats)
+        ? inTeam
+        : seats;
+    return scoped.map((row) => this.pickTrimmedString(row.id)).filter(Boolean);
+  }
+
+  /**
+   * The roster rows that belong to the author's own team. Without a team / application id the whole
+   * project roster is only safe on a single-team project (legacy seats); on a multi-team project
+   * the author gets just their own row instead of every team's members.
+   */
+  private scopeRosterToAuthorTeam<T extends Record<string, unknown>>(
+    roster: T[],
+    scope: { teamId: string; applicationId: string; studentId: string },
+  ): T[] {
+    const teamOf = (row: T) =>
+      this.pickTrimmedString(row.teamId ?? row.team_id);
+    if (scope.teamId) {
+      return roster.filter((row) => teamOf(row) === scope.teamId);
+    }
+    if (scope.applicationId) {
+      return roster.filter(
+        (row) =>
+          this.pickTrimmedString(row.applicationId) === scope.applicationId,
+      );
+    }
+    if (!this.rosterSpansSeveralTeams(roster)) return roster;
+    return roster.filter(
+      (row) =>
+        this.pickTrimmedString(row.studentId ?? row.student_id) ===
+        scope.studentId,
+    );
+  }
+
   /** Live enrollment roster scoped to the report author's team (certificate / dossier source of truth). */
   private async buildLiveSection1TeamFields(report: StudentReport): Promise<{
     team_lead?: Record<string, unknown>;
@@ -1952,24 +2046,34 @@ export class StudentReportsService {
       where: { studentId: report.studentId, projectId: projectKey },
     });
 
-    const storedTeamId = this.pickTrimmedString(
+    // section1 is student-written: its team id only counts when the author really sits on that
+    // team, otherwise any student could pull another team's roster (CNICs, phones) into their report.
+    const storedTeamIdRaw = this.pickTrimmedString(
       storedSection1.team_id ??
         storedSection1.teamId ??
         storedLead.team_id ??
         storedLead.teamId,
     );
+    const storedTeamId =
+      storedTeamIdRaw &&
+      allRoster.some(
+        (row) =>
+          this.pickTrimmedString(row.teamId ?? row.team_id) ===
+            storedTeamIdRaw &&
+          this.pickTrimmedString(row.studentId ?? row.student_id) ===
+            report.studentId,
+      )
+        ? storedTeamIdRaw
+        : '';
     const teamId = (authorPart?.teamId || storedTeamId || '').trim();
     const applicationId = (authorPart?.applicationId || '').trim();
 
-    let scoped = allRoster;
-    if (teamId) {
-      scoped = allRoster.filter(
-        (row) => this.pickTrimmedString(row.teamId ?? row.team_id) === teamId,
-      );
-    } else if (applicationId) {
-      scoped = allRoster.filter(
-        (row) => this.pickTrimmedString(row.applicationId) === applicationId,
-      );
+    let scoped = this.scopeRosterToAuthorTeam(allRoster, {
+      teamId,
+      applicationId,
+      studentId: report.studentId,
+    });
+    if (!teamId && applicationId) {
       const leadsInScope = scoped.filter(
         (row) => row.isTeamLead === true || row.is_team_lead === true,
       );
@@ -2843,6 +2947,8 @@ export class StudentReportsService {
     delete rest.ai_generated_impact_score;
     delete rest.institutional_alignment_score;
     delete rest.verified_narrative;
+    // Read as a score fallback by walls / ranking; the student UI never sends it.
+    delete rest.cii_score;
     return rest;
   }
 
@@ -4116,7 +4222,14 @@ export class StudentReportsService {
   }
 
   /** University dashboard: reports on institution-linked opportunities, not only org-owned listings. */
-  async findAllByOpportunityIds(opportunityIds: string[], query: unknown) {
+  async findAllByOpportunityIds(
+    opportunityIds: string[],
+    query: unknown,
+    options?: {
+      /** University scope: drops other universities' students on shared listings. */
+      restrictTo?: (rows: StudentReport[]) => Promise<StudentReport[]>;
+    },
+  ) {
     const { status, page = 1, limit = 10 } = query as ReportListQuery;
     const limitNum =
       typeof limit === 'number'
@@ -4146,6 +4259,7 @@ export class StudentReportsService {
       relations: ['student', 'opportunity', 'opportunity.organization'],
       order: { submission_date: 'DESC', createdAt: 'DESC' },
     });
+    if (options?.restrictTo) reports = await options.restrictTo(reports);
 
     if (status) {
       const wanted = String(status).trim().toLowerCase();
@@ -4236,6 +4350,8 @@ export class StudentReportsService {
     organizationId: string,
     options?: {
       universityScopeOpportunityIds?: string[];
+      /** University scope: the report must belong to one of the university's students. */
+      universityReportScope?: (report: StudentReport) => Promise<boolean>;
       /** Opportunities that name this partner by email/name (read-only, never review). */
       partnerLinkedOpportunityIds?: string[];
       viewerRole?: string;
@@ -4254,7 +4370,10 @@ export class StudentReportsService {
       !!organizationId && report.opportunity?.organizationId === organizationId;
     const oppId = report.opportunity?.id ?? report.opportunityId;
     const inUniversityScope =
-      !!oppId && (options?.universityScopeOpportunityIds ?? []).includes(oppId);
+      !!oppId &&
+      (options?.universityScopeOpportunityIds ?? []).includes(oppId) &&
+      (!options?.universityReportScope ||
+        (await options.universityReportScope(report)));
     const linkedToPartner =
       !!oppId && (options?.partnerLinkedOpportunityIds ?? []).includes(oppId);
     if (!ownsOpportunity && !inUniversityScope && !linkedToPartner) {
@@ -4455,6 +4574,7 @@ export class StudentReportsService {
         StudentReportsService.redactCiiV45ForExternalViewer(
           await this.formatReportResponse(report, attendanceParticipantId, {
             allProjectAttendance: true,
+            teamAttendanceOnly: true,
           }),
         ),
       );
@@ -4510,18 +4630,10 @@ export class StudentReportsService {
         studentId === canonicalLeadId;
       const teamId = (application.teamId || '').trim();
       const applicationId = (application.applicationId || '').trim();
-      let scopedRoster = Array.isArray(roster) ? roster : [];
-      if (teamId) {
-        scopedRoster = scopedRoster.filter(
-          (m: { teamId?: string; team_id?: string }) =>
-            String(m?.teamId || m?.team_id || '').trim() === teamId,
-        );
-      } else if (applicationId) {
-        scopedRoster = scopedRoster.filter(
-          (m: { applicationId?: string }) =>
-            String(m?.applicationId || '').trim() === applicationId,
-        );
-      }
+      const scopedRoster = this.scopeRosterToAuthorTeam(
+        Array.isArray(roster) ? roster : [],
+        { teamId, applicationId, studentId },
+      );
       const teamMembers = scopedRoster.filter(
         (m: { isTeamLead?: boolean; is_team_lead?: boolean }) => {
           const flagged =
@@ -4768,21 +4880,28 @@ export class StudentReportsService {
   private async formatReportResponse(
     report: StudentReport,
     attendanceParticipantStudentId?: string,
-    options?: { allProjectAttendance?: boolean },
+    options?: { allProjectAttendance?: boolean; teamAttendanceOnly?: boolean },
   ) {
     const pid = report.opportunityId || report.project_id;
     const attendeeId = attendanceParticipantStudentId ?? report.studentId;
     const projectKey = report.opportunityId || report.project_id;
+    // Students see their own team's logs (location pins, evidence), never other teams' on the project.
+    const teamParticipantIds =
+      options?.allProjectAttendance && options.teamAttendanceOnly && pid
+        ? await this.reportTeamParticipantIds(report, pid)
+        : null;
     const [reportAccess, attendanceLogs, latestPayment, liveTeamFields] =
       await Promise.all([
         this.buildReportAccessForViewer(attendeeId, report),
         this.attendanceLogsRepository.find({
-          where: options?.allProjectAttendance
-            ? { projectId: pid }
-            : {
-                participant: { studentId: attendeeId },
-                projectId: pid,
-              },
+          where: teamParticipantIds?.length
+            ? { projectId: pid, participantId: In(teamParticipantIds) }
+            : options?.allProjectAttendance && !teamParticipantIds
+              ? { projectId: pid }
+              : {
+                  participant: { studentId: attendeeId },
+                  projectId: pid,
+                },
           order: { dateOfEngagement: 'ASC', startTime: 'ASC' },
         }),
         this.findLatestManualPayment(report.studentId, projectKey),

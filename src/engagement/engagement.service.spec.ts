@@ -1,4 +1,5 @@
-import { BadRequestException } from '@nestjs/common';
+import { createHash } from 'crypto';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { EngagementService } from './engagement.service';
 import { getRepositoryToken } from '@nestjs/typeorm';
@@ -2326,6 +2327,170 @@ describe('EngagementService', () => {
       await expect(
         service.registerParticipant('admin1', dto(), 'admin'),
       ).rejects.toThrow('reached-transaction');
+    });
+  });
+
+  describe('finalize and seat claiming cannot override another decision or identity', () => {
+    type Lookup = {
+      findParticipationByIdentifier: (...args: unknown[]) => Promise<unknown>;
+    };
+    beforeEach(() => mockParticipationRepository.save.mockClear());
+    const stubLookup = (seat: Record<string, unknown>) =>
+      jest
+        .spyOn(service as unknown as Lookup, 'findParticipationByIdentifier')
+        .mockResolvedValue(seat);
+
+    it('refuses to finalize a seat faculty rejected', async () => {
+      stubLookup({ id: 'p1', studentId: 'u1', status: 'rejected' });
+      await expect(service.finalizeEngagement('u1', 'p1')).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(mockParticipationRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('still auto-claims through the profile CNIC when it was saved with dashes', async () => {
+      const seat: Record<string, unknown> = {
+        id: 'my-seat',
+        studentId: null,
+        email: 'invited@uni.edu',
+        cnicHash: createHash('sha256').update('3520112345671').digest('hex'),
+        projectId: 'proj1',
+        participationMode: 'individual',
+        isTeamLead: false,
+      };
+      stubLookup(seat);
+      mockUserRepository.findOne.mockResolvedValue({
+        id: 'me',
+        email: 'me@uni.edu',
+        cnic: '35201-1234567-1',
+      });
+      mockUserRepository.createQueryBuilder.mockReturnValue(
+        mockUserQueryBuilder(null),
+      );
+      mockParticipationRepository.find.mockResolvedValue([]);
+      // The claim happens before attendance validation; whatever follows, the seat is now mine.
+      await service
+        .addAttendanceLog('me', 'my-seat', {} as never)
+        .catch(() => undefined);
+      expect(seat.studentId).toBe('me');
+    });
+
+    it("does not auto-claim an unlinked seat through a CNIC typed onto one of the caller's other seats", async () => {
+      const seat: Record<string, unknown> = {
+        id: 'victim-seat',
+        studentId: null,
+        email: 'victim@uni.edu',
+        cnicHash: 'victim-cnic-hash',
+        projectId: 'proj1',
+        participationMode: 'individual',
+        isTeamLead: false,
+      };
+      stubLookup(seat);
+      mockUserRepository.findOne.mockResolvedValue({
+        id: 'attacker',
+        email: 'attacker@uni.edu',
+        cnic: null,
+      });
+      mockUserRepository.createQueryBuilder.mockReturnValue(
+        mockUserQueryBuilder(null),
+      );
+      // The attacker registered their own seat elsewhere with the victim's CNIC.
+      mockParticipationRepository.find.mockResolvedValue([
+        {
+          id: 'own-seat',
+          email: 'attacker@uni.edu',
+          cnicHash: 'victim-cnic-hash',
+        },
+      ]);
+
+      await expect(
+        service.addAttendanceLog('attacker', 'victim-seat', {} as never),
+      ).rejects.toThrow('Not authorized');
+      expect(seat.studentId).toBeNull();
+      expect(mockParticipationRepository.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('registerParticipant — an existing seat belongs to its owner or their team lead', () => {
+    type SeatGuard = {
+      assertMayUpdateExistingSeat: (
+        manager: unknown,
+        seat: Partial<Participation>,
+        callerId: string,
+        opportunity: Partial<Opportunity>,
+      ) => Promise<void>;
+    };
+    const guard = () => service as unknown as SeatGuard;
+    const opp = { id: 'proj1', isStudentCreated: false, creatorId: 'x' };
+    const managerWith = (opts: {
+      caller?: { id: string; email: string } | null;
+      leadSeats?: Partial<Participation>[];
+      ownApplication?: { id: string } | null;
+    }) => ({
+      findOne: jest.fn((entity: unknown) =>
+        Promise.resolve(
+          entity === User
+            ? (opts.caller ?? null)
+            : (opts.ownApplication ?? null),
+        ),
+      ),
+      find: jest.fn().mockResolvedValue(opts.leadSeats ?? []),
+    });
+    const victimSeat = {
+      id: 'seat-victim',
+      studentId: 'victim',
+      email: 'victim@uni.edu',
+      teamId: 'team-B',
+      applicationId: 'app-B',
+    };
+
+    it("refuses an approved student overwriting another team's seat", async () => {
+      await expect(
+        guard().assertMayUpdateExistingSeat(
+          managerWith({
+            caller: { id: 'u1', email: 'u1@uni.edu' },
+            leadSeats: [{ teamId: 'team-A', applicationId: 'app-A' }],
+          }),
+          victimSeat,
+          'u1',
+          opp,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('lets the lead of the same team update the seat, also when they lead several teams', async () => {
+      await expect(
+        guard().assertMayUpdateExistingSeat(
+          managerWith({
+            leadSeats: [{ teamId: 'team-A' }, { teamId: 'team-B' }],
+          }),
+          victimSeat,
+          'lead-B',
+          opp,
+        ),
+      ).resolves.toBeUndefined();
+    });
+
+    it('lets the applicant whose application created the seat update it before opening their own seat', async () => {
+      await expect(
+        guard().assertMayUpdateExistingSeat(
+          managerWith({ ownApplication: { id: 'app-B' } }),
+          victimSeat,
+          'lead-B',
+          opp,
+        ),
+      ).resolves.toBeUndefined();
+    });
+
+    it('lets a student claim the unlinked seat that carries their own email', async () => {
+      await expect(
+        guard().assertMayUpdateExistingSeat(
+          managerWith({ caller: { id: 'u1', email: 'U1@uni.edu' } }),
+          { id: 'seat-1', studentId: undefined, email: 'u1@uni.edu' },
+          'u1',
+          opp,
+        ),
+      ).resolves.toBeUndefined();
     });
   });
 

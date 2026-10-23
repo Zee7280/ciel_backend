@@ -12,6 +12,27 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 type AuthenticatedRequest = { user: { id: string } };
 
+/**
+ * The preference keys the settings pages save. Everything else in `user.settings` (e.g. the
+ * investor KYC record) is written by the server and must not be overwritten from this endpoint.
+ */
+function userEditablePreferences(
+  body: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of ['notifications', 'privacy'] as const) {
+    const value = body?.[key];
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      out[key] = value;
+    }
+  }
+  for (const key of ['language', 'theme'] as const) {
+    const value = body?.[key];
+    if (typeof value === 'string' && value.length <= 32) out[key] = value;
+  }
+  return out;
+}
+
 @Controller('settings')
 @UseGuards(JwtAuthGuard)
 export class SettingsController {
@@ -57,7 +78,7 @@ export class SettingsController {
 
     const newSettings: Record<string, unknown> = {
       ...((user.settings as Record<string, unknown>) || {}),
-      ...settings,
+      ...userEditablePreferences(settings),
     };
 
     await this.usersService.update(req.user.id, { settings: newSettings });

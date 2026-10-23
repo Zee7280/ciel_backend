@@ -1,4 +1,4 @@
-import { ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
 import { PaymentStatus } from './entities/payment.entity';
 
@@ -67,5 +67,64 @@ describe('PaymentsService manual payment decisions', () => {
     await expect(
       service.verifyManualPayment('p1', PaymentStatus.APPROVED),
     ).rejects.toBeInstanceOf(ConflictException);
+  });
+});
+
+describe('PaymentsService.submitManualPayment — only a submitted report moves into payment review', () => {
+  const PROJECT = '11111111-1111-4111-8111-111111111111';
+  const file = { originalname: 'slip.png', mimetype: 'image/png' } as never;
+  function build(opts: {
+    report?: { status: string } | null;
+    seat?: { id: string } | null;
+  }) {
+    const report = opts.report ? { ...opts.report } : null;
+    const participantRepo = {
+      findOne: jest.fn(() => Promise.resolve(opts.seat ?? null)),
+    };
+    const paymentRepo = {
+      create: jest.fn((row: unknown) => row),
+      save: jest.fn((row: Record<string, unknown>) =>
+        Promise.resolve({ id: 'pay-1', ...row }),
+      ),
+    };
+    const reportRepo = {
+      findOne: jest.fn(() => Promise.resolve(report)),
+      save: jest.fn((row: unknown) => Promise.resolve(row)),
+    };
+    const s3 = { uploadFile: jest.fn(() => Promise.resolve('https://s3/x')) };
+    const service = new PaymentsService(
+      participantRepo as never,
+      {} as never,
+      paymentRepo as never,
+      reportRepo as never,
+      s3 as never,
+    );
+    return { service, report, reportRepo, s3, paymentRepo };
+  }
+
+  it('moves a submitted report to payment_under_review', async () => {
+    const { service, report } = build({ report: { status: 'submitted' } });
+    await service.submitManualPayment('s1', PROJECT, file, 500);
+    expect(report?.status).toBe('payment_under_review');
+  });
+
+  it('records the payment but leaves a draft or returned report where it is', async () => {
+    for (const status of ['draft', 'revision', 'rejected']) {
+      const { service, report, reportRepo, paymentRepo } = build({
+        report: { status },
+      });
+      await service.submitManualPayment('s1', PROJECT, file, 500);
+      expect(paymentRepo.save).toHaveBeenCalled();
+      expect(report?.status).toBe(status);
+      expect(reportRepo.save).not.toHaveBeenCalled();
+    }
+  });
+
+  it('refuses a project the student has neither a seat nor a report on, before uploading', async () => {
+    const { service, s3 } = build({ report: null, seat: null });
+    await expect(
+      service.submitManualPayment('s1', PROJECT, file, 500),
+    ).rejects.toThrow(BadRequestException);
+    expect(s3.uploadFile).not.toHaveBeenCalled();
   });
 });

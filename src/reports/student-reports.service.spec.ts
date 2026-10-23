@@ -910,6 +910,122 @@ describe('StudentReportsService', () => {
     );
   }
 
+  describe("other teams' reports and attendance stay with their team", () => {
+    type Privates = {
+      participantMayAccessReport: (
+        viewerStudentId: string,
+        report: Partial<StudentReport>,
+      ) => Promise<boolean>;
+      reportTeamParticipantIds: (
+        report: Partial<StudentReport>,
+        projectId: string,
+      ) => Promise<string[]>;
+    };
+    const priv = () => service as unknown as Privates;
+    const PROJECT = '22222222-2222-4222-8222-222222222222';
+    const twoTeamSeats = [
+      { id: 'a-lead', studentId: 'lead-a', teamId: 'team-A', isTeamLead: true },
+      { id: 'a-mate', studentId: 'mate-a', teamId: 'team-A' },
+      { id: 'b-lead', studentId: 'lead-b', teamId: 'team-B', isTeamLead: true },
+      // Legacy seat without team / application id.
+      { id: 'loose', studentId: 'loose', participationMode: 'team' },
+    ];
+
+    it("a seat without team ids cannot open another team lead's report on a multi-team project", async () => {
+      mockParticipantRepository.find.mockImplementation(
+        ({ where }: { where: { studentId?: string } }) =>
+          Promise.resolve(
+            where.studentId
+              ? twoTeamSeats.filter((r) => r.studentId === where.studentId)
+              : twoTeamSeats,
+          ),
+      );
+      await expect(
+        priv().participantMayAccessReport('loose', {
+          studentId: 'lead-b',
+          opportunityId: PROJECT,
+        }),
+      ).resolves.toBe(false);
+    });
+
+    it("the student dossier's attendance covers only the report's own team", async () => {
+      mockParticipantRepository.find.mockResolvedValue(twoTeamSeats);
+      await expect(
+        priv().reportTeamParticipantIds({ studentId: 'lead-a' }, PROJECT),
+      ).resolves.toEqual(['a-lead', 'a-mate']);
+    });
+
+    it('also keeps legacy teammates that share only the application id', async () => {
+      mockParticipantRepository.find.mockResolvedValue([
+        {
+          id: 'lead',
+          studentId: 'lead',
+          teamId: 'team-A',
+          applicationId: 'app-A',
+          isTeamLead: true,
+        },
+        { id: 'legacy-mate', studentId: 'mate', applicationId: 'app-A' },
+        {
+          id: 'other',
+          studentId: 'x',
+          teamId: 'team-B',
+          applicationId: 'app-B',
+        },
+      ]);
+      await expect(
+        priv().reportTeamParticipantIds({ studentId: 'lead' }, PROJECT),
+      ).resolves.toEqual(['lead', 'legacy-mate']);
+    });
+  });
+
+  describe("report roster is scoped to the author's own team", () => {
+    type RosterScope = {
+      scopeRosterToAuthorTeam: (
+        roster: Record<string, unknown>[],
+        scope: { teamId: string; applicationId: string; studentId: string },
+      ) => Record<string, unknown>[];
+    };
+    const scopeRoster = (
+      roster: Record<string, unknown>[],
+      scope: { teamId?: string; applicationId?: string; studentId: string },
+    ) =>
+      (service as unknown as RosterScope).scopeRosterToAuthorTeam(roster, {
+        teamId: scope.teamId ?? '',
+        applicationId: scope.applicationId ?? '',
+        studentId: scope.studentId,
+      });
+    const twoTeams = [
+      { id: 'a1', studentId: 'me', teamId: 'team-A', isTeamLead: true },
+      { id: 'a2', studentId: 'mate', teamId: 'team-A' },
+      { id: 'b1', studentId: 'other-lead', teamId: 'team-B', isTeamLead: true },
+      { id: 'b2', studentId: 'other', teamId: 'team-B', cnic: '3520112345671' },
+    ];
+
+    it('keeps only the team the author sits on', () => {
+      expect(
+        scopeRoster(twoTeams, { teamId: 'team-A', studentId: 'me' }).map(
+          (r) => r.id,
+        ),
+      ).toEqual(['a1', 'a2']);
+    });
+
+    it('without a team or application id, a multi-team project yields only the author', () => {
+      expect(
+        scopeRoster(twoTeams, { studentId: 'me' }).map((r) => r.id),
+      ).toEqual(['a1']);
+    });
+
+    it('without ids, a single-team (legacy) project still yields the whole roster', () => {
+      const oneTeam = [
+        { id: 'p1', studentId: 'me', isTeamLead: true },
+        { id: 'p2', studentId: 'mate' },
+      ];
+      expect(
+        scopeRoster(oneTeam, { studentId: 'me' }).map((r) => r.id),
+      ).toEqual(['p1', 'p2']);
+    });
+  });
+
   describe('redactUnapprovedAiScoreForStudent', () => {
     const redact = (row: Record<string, unknown>) =>
       (

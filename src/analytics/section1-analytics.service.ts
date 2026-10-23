@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, In, Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { User } from '../users/entities/user.entity';
 import { UserRole } from '../users/enums/user-role.enum';
 import { Opportunity } from '../opportunities/entities/opportunity.entity';
@@ -32,7 +32,6 @@ import {
   Section1AnalyticsStakeholder,
 } from './section1-analytics.types';
 import { Section1AnalyticsQueryDto } from './dto/section1-analytics-query.dto';
-import { universityNameMatchSql } from '../opportunities/university-scope.util';
 import { getProfileCompletionStatus } from '../users/profile-completion.util';
 
 const ACTIVE_PARTICIPATION_STATUSES = [
@@ -993,39 +992,23 @@ export class Section1AnalyticsService {
     };
   }
 
+  /** Seats of the university's students / institutional projects ({@link FacultyUniversityScopeService}). */
   private async loadUniversityScopedParticipations(
     orgId: string,
   ): Promise<Participation[]> {
-    const org = await this.organizationsRepository.findOne({
-      where: { id: orgId },
-    });
-    if (!org) return [];
+    const scope =
+      await this.facultyUniversityScopeService.resolveUniversityScope(orgId);
+    const inScope = scope
+      ? this.facultyUniversityScopeService.participationInScopeSql(scope, 'p')
+      : null;
+    if (!inScope) return [];
     return this.participationRepository
       .createQueryBuilder('p')
       .leftJoinAndSelect('p.project', 'project')
       .leftJoinAndSelect('p.student', 'student')
       .where('p.student_id IS NOT NULL')
       .andWhere('p.status IN (:...st)', { st: ACTIVE_PARTICIPATION_STATUSES })
-      .andWhere(
-        new Brackets((b) => {
-          // Same name rule as apply eligibility ("BNU" names "Beaconhouse National University (BNU)").
-          const enroll = universityNameMatchSql(
-            'p.universityName',
-            org.name,
-            's1Enroll',
-          );
-          const uni = universityNameMatchSql(
-            'student.university',
-            org.name,
-            's1Uni',
-          );
-          b.where(`TRIM(COALESCE(p.universityId, '')) = :orgId`, { orgId })
-            .orWhere(`project."organizationId"::text = :orgId`, { orgId })
-            .orWhere(`student."organizationId"::text = :orgId`, { orgId })
-            .orWhere(enroll.sql, enroll.params)
-            .orWhere(uni.sql, uni.params);
-        }),
-      )
+      .andWhere(inScope.sql, inScope.params)
       .getMany();
   }
 

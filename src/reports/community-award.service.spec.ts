@@ -5,6 +5,7 @@ import {
 } from './community-award.service';
 import { StudentReport } from './entities/student-report.entity';
 import { Organization } from '../organizations/entities/organization.entity';
+import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotifyCommunityAwardDto } from './dto/notify-community-award.dto';
 
@@ -36,6 +37,7 @@ function makeService() {
     } as unknown as Repository<StudentReport>,
     {} as unknown as Repository<Organization>,
     { createNotification: jest.fn() } as unknown as NotificationsService,
+    {} as unknown as FacultyUniversityScopeService,
   );
 }
 
@@ -90,6 +92,7 @@ describe('CommunityAwardService — notify run is unlimited for every stakeholde
       {
         createNotification: jest.fn().mockResolvedValue(undefined),
       } as unknown as NotificationsService,
+      {} as unknown as FacultyUniversityScopeService,
     );
     const pool = [1, 2, 3, 4, 5].map((n) => ({ id: `r${n}`, total: 100 - n }));
     const result = await service.notifyFromPool(asCards(pool), {
@@ -119,6 +122,7 @@ describe('CommunityAwardService — notify run is unlimited for every stakeholde
       {
         createNotification: jest.fn().mockResolvedValue(undefined),
       } as unknown as NotificationsService,
+      {} as unknown as FacultyUniversityScopeService,
     );
     const pool = [1, 2, 3, 4, 5].map((n) => ({ id: `u${n}`, total: 100 - n }));
     await service.notifyFromPool(asCards(pool), {
@@ -176,6 +180,7 @@ describe('CommunityAwardService.notifyFromPool — ranking is computed server-si
         reports as unknown as Repository<StudentReport>,
         {} as unknown as Repository<Organization>,
         notifications as unknown as NotificationsService,
+        {} as unknown as FacultyUniversityScopeService,
       ),
       rows,
       notifications,
@@ -310,6 +315,7 @@ describe('CommunityAwardService.listForPartnerOrg — partner linked by email/na
       } as unknown as Repository<StudentReport>,
       {} as unknown as Repository<Organization>,
       { createNotification: jest.fn() } as unknown as NotificationsService,
+      {} as unknown as FacultyUniversityScopeService,
     );
     return { service, qb };
   }
@@ -362,6 +368,7 @@ describe('CommunityAwardService — badges follow a published ranking', () => {
           return Promise.resolve();
         }),
       } as unknown as NotificationsService,
+      {} as unknown as FacultyUniversityScopeService,
     );
     return { svc, saved, notes };
   }

@@ -205,7 +205,10 @@ function makeService(opportunitiesRepo: Stubbed<Repository<Opportunity>>) {
   return new OpportunitiesService(
     opportunitiesRepo as unknown as Repository<Opportunity>,
     unused(), // participationRepository
-    unused(), // usersRepository
+    // Creator lookups (self-verification guard) default to "no account".
+    {
+      findOne: jest.fn().mockResolvedValue(null),
+    } as unknown as Repository<User>, // usersRepository
     unused(), // organizationsRepository
     unused(), // organizationsService
     unused(), // engagementService
@@ -357,6 +360,52 @@ describe('OpportunitiesService — public partner verification', () => {
         undefined,
       );
       expect(result.success).toBe(true);
+    });
+
+    const pendingFacultyOpp = () =>
+      ({
+        id: 'opp-self',
+        faculty_verification_token: 'faculty-tok',
+        isStudentCreated: true,
+        faculty_verified: false,
+        creatorId: 'student-1',
+        supervision: { contact: 'Me.Student@uni.edu' },
+        workflowStage: 'pending_faculty',
+        status: 'pending_faculty',
+      }) as unknown as Opportunity;
+
+    it("refuses a faculty link whose reviewer email is the student creator's own email", async () => {
+      process.env.VERIFICATION_REQUIRE_AUTH = 'false';
+      const save = jest.fn();
+      const service = makeService({
+        findOne: jest.fn().mockResolvedValue(pendingFacultyOpp()),
+        save,
+      });
+      privates(service).usersRepository = {
+        findOne: jest
+          .fn()
+          .mockResolvedValue({ id: 'student-1', email: 'me.student@uni.edu' }),
+      };
+
+      await expect(
+        service.verifyOpportunityToken('faculty-tok', undefined),
+      ).rejects.toThrow(ForbiddenException);
+      expect(save).not.toHaveBeenCalled();
+    });
+
+    it('refuses the student creator opening the faculty link while logged in', async () => {
+      process.env.VERIFICATION_REQUIRE_AUTH = 'false';
+      const service = makeService({
+        findOne: jest.fn().mockResolvedValue(pendingFacultyOpp()),
+      });
+
+      await expect(
+        service.verifyFaculty('faculty-tok', {
+          id: 'student-1',
+          email: 'other@uni.edu',
+          role: 'student',
+        }),
+      ).rejects.toThrow(ForbiddenException);
     });
   });
 });
@@ -1053,9 +1102,11 @@ describe('OpportunitiesService — partnerDashboardApprove ownership guard', () 
     const service = makeService({ findOne, save });
     privates(service).organizationsService = {
       findOne: jest.fn().mockRejectedValue(new Error('stale org id')),
-      getMyOrganization: jest
-        .fn()
-        .mockResolvedValue({ id: 'org-fellah', name: 'FELLAH' }),
+      getMyOrganization: jest.fn().mockResolvedValue({
+        id: 'org-fellah',
+        name: 'FELLAH',
+        verificationStatus: 'APPROVED',
+      }),
     };
     privates(service).facultyUniversityScope = {
       normalizeOrgName: (name: string) => (name || '').trim().toLowerCase(),
@@ -1074,6 +1125,51 @@ describe('OpportunitiesService — partnerDashboardApprove ownership guard', () 
 
     expect(result).toBe(opp);
     expect(save).toHaveBeenCalled();
+  });
+
+  it('does not let an unverified organisation approve through a word match inside a longer name', async () => {
+    const opp = {
+      id: 'opp-word-match',
+      isStudentCreated: true,
+      organizationId: 'student-placeholder',
+      faculty_verified: true,
+      partnerVerified: false,
+      requiresPartnerApproval: true,
+      partnerApprovalStatus: 'pending',
+      workflowStage: 'pending_partner',
+      status: 'pending_partner',
+      partner_organization: {
+        organization_name: 'Akhuwat Foundation',
+        official_email: 'contact@akhuwat.example',
+      },
+    };
+    const save = jest.fn();
+    const service = makeService({
+      findOne: jest.fn().mockResolvedValue(opp),
+      save,
+    });
+    privates(service).organizationsService = {
+      findOne: jest.fn().mockRejectedValue(new Error('stale org id')),
+      getMyOrganization: jest.fn().mockResolvedValue({
+        id: 'org-generic',
+        name: 'Foundation',
+        verificationStatus: 'PENDING',
+      }),
+    };
+    privates(service).facultyUniversityScope = {
+      normalizeOrgName: (name: string) => (name || '').trim().toLowerCase(),
+    };
+    privates(service).opportunityWorkflow = new OpportunityWorkflowService();
+
+    await expect(
+      service.partnerDashboardApprove('opp-word-match', {
+        email: 'someone@generic.example',
+        organizationId: 'org-generic',
+        id: 'user-generic',
+        name: 'Someone',
+      }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(save).not.toHaveBeenCalled();
   });
 
   it('lets the organisation named on a student opportunity approve when the contact email is someone else', async () => {

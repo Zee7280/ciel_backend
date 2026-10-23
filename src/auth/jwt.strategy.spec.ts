@@ -8,7 +8,7 @@ type FakeUser = {
   status: string;
   tokenVersion: number;
   name: string;
-  organization: { id: string; isBlocked: boolean };
+  organization: { id: string; isBlocked: boolean; verificationStatus?: string };
 };
 
 function build(user: FakeUser) {
@@ -56,6 +56,37 @@ describe('JwtStrategy.validate', () => {
         sub: 'u1',
       }),
     ).rejects.toThrow(UnauthorizedException);
+  });
+  it('rejects organization accounts whose organization was rejected — but not pending ones or students', async () => {
+    const rejectedOrg = {
+      id: 'o1',
+      isBlocked: false,
+      verificationStatus: 'REJECTED',
+    };
+    for (const role of [
+      'university',
+      'ngo',
+      'corporate',
+      'organization_admin',
+    ]) {
+      await expect(
+        build({ ...base, role, organization: rejectedOrg }).validate({
+          sub: 'u1',
+        }),
+      ).rejects.toThrow(UnauthorizedException);
+    }
+    await expect(
+      build({
+        ...base,
+        role: 'university',
+        organization: { ...rejectedOrg, verificationStatus: 'PENDING' },
+      }).validate({ sub: 'u1' }),
+    ).resolves.toMatchObject({ role: 'university' });
+    await expect(
+      build({ ...base, role: 'faculty', organization: rejectedOrg }).validate({
+        sub: 'u1',
+      }),
+    ).resolves.toMatchObject({ role: 'faculty' });
   });
   it('mirrors login statuses', () => {
     expect(

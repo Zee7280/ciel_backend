@@ -8,7 +8,9 @@ import {
 } from '@nestjs/common';
 import { MailService } from '../mail/mail.service';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, In, Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
+import { PAKISTANI_UNIVERSITIES } from '../auth/constants/pakistani-universities';
+import { foldUniversityName } from '../opportunities/university-scope.util';
 import { Organization } from './entities/organization.entity';
 import { User } from '../users/entities/user.entity';
 import {
@@ -25,8 +27,10 @@ import { OpportunityApplication } from '../opportunities/entities/opportunity-ap
 import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { Report } from '../reports/entities/report.entity';
 import { Participation } from '../engagement/entities/participant.entity';
-import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
-import { universityNameMatchSql } from '../opportunities/university-scope.util';
+import {
+  FacultyUniversityScopeService,
+  type UniversityScope,
+} from '../faculty-university-scope/faculty-university-scope.service';
 import { canonicalizePhoneInput } from '../common/phone-e164.util';
 import { passwordPolicyError } from '../auth/password-policy.util';
 
@@ -124,53 +128,33 @@ export class OrganizationsService {
   }
 
   /**
-   * Distinct student IDs genuinely affiliated with this university (same match rules as
-   * getUniversityAnalytics's proven participation-level query) — used to filter dashboard/impact
-   * stats so a university doesn't inherit every co-participant of an opportunity its students
-   * merely joined alongside people from other schools.
+   * Distinct student IDs counted for this university: its own students (the shared rule in
+   * FacultyUniversityScopeService) plus everyone seated on a project the university owns or its
+   * authorised faculty published. A shared listing's other-school participants never count.
    */
-  /**
-   * Enrollment / profile name columns matched to the university by the apply-eligibility rule
-   * (universityNamesMatch: "BNU" names "Beaconhouse National University (BNU)"), so these stats
-   * agree with the opportunity set from resolveOpportunityIdsForUniversityOrganization.
-   */
-  private universityNameConditions(orgName: string, prefix: string) {
-    return [
-      universityNameMatchSql('p.universityName', orgName, `${prefix}Enroll`),
-      universityNameMatchSql('student.institution', orgName, `${prefix}Inst`),
-      universityNameMatchSql('student.university', orgName, `${prefix}Uni`),
-    ];
-  }
-
   private async resolveUniversityAffiliatedStudentIds(
     orgId: string,
-    orgName: string,
+    resolvedScope?: UniversityScope | null,
   ): Promise<Set<string>> {
-    const orgNameNorm = orgName.trim().toLowerCase();
-    const names = this.universityNameConditions(orgName, 'affil');
-    const rows = await this.participationRepository
-      .createQueryBuilder('p')
-      .leftJoin('p.project', 'project')
-      .leftJoin('p.student', 'student')
-      .select('p.student_id', 'studentId')
-      .where('p.student_id IS NOT NULL')
-      .andWhere('p.status IN (:...st)', {
-        st: UNIVERSITY_SCOPED_PARTICIPATION_STATUSES,
-      })
-      .andWhere(
-        new Brackets((b) => {
-          b.where(`TRIM(COALESCE(p.universityId, '')) = :orgId`, { orgId })
-            .orWhere(`project."organizationId"::text = :orgId`, { orgId })
-            .orWhere(`student."organizationId"::text = :orgId`, { orgId })
-            .orWhere(
-              `LOWER(TRIM(COALESCE(p.universityId, ''))) = :orgNameNorm`,
-              { orgNameNorm },
-            );
-          for (const n of names) b.orWhere(n.sql, n.params);
-        }),
-      )
-      .getRawMany<{ studentId: string }>();
-    return new Set(rows.map((r) => r.studentId).filter(Boolean));
+    const scope =
+      resolvedScope ??
+      (await this.facultyUniversityScopeService.resolveUniversityScope(orgId));
+    if (!scope) return new Set();
+    const ids = new Set(scope.studentIds);
+    const projectIds = [...scope.institutionalOpportunityIds];
+    if (projectIds.length) {
+      const seats = await this.participationRepository
+        .createQueryBuilder('p')
+        .select('p.student_id', 'studentId')
+        .where('p.student_id IS NOT NULL')
+        .andWhere('p.status IN (:...st)', {
+          st: UNIVERSITY_SCOPED_PARTICIPATION_STATUSES,
+        })
+        .andWhere('p.project_id::text = ANY(:projectIds)', { projectIds })
+        .getRawMany<{ studentId: string }>();
+      for (const row of seats) if (row.studentId) ids.add(row.studentId);
+    }
+    return ids;
   }
 
   /** Real applicant counts per opportunity (excludes withdrawn) — replaces a hardcoded volunteersApplied: 0. */
@@ -193,14 +177,11 @@ export class OrganizationsService {
    * Partner dashboard for university-type orgs: activity is usually on non-university-owned listings.
    * Scope opportunity IDs the same way as faculty delegation / university analytics.
    */
-  private async getPartnerDashboardStatsForUniversityOrg(
-    orgId: string,
-    orgName: string,
-  ) {
-    const oppIds =
-      await this.facultyUniversityScopeService.resolveOpportunityIdsForUniversityOrganization(
-        orgId,
-      );
+  private async getPartnerDashboardStatsForUniversityOrg(orgId: string) {
+    // Resolved once: the opportunity ids and the student population come from the same scope.
+    const scope =
+      await this.facultyUniversityScopeService.resolveUniversityScope(orgId);
+    const oppIds = scope ? [...scope.opportunityIds] : [];
 
     if (oppIds.length === 0) {
       return {
@@ -243,7 +224,7 @@ export class OrganizationsService {
     }
 
     const affiliatedStudentIds =
-      await this.resolveUniversityAffiliatedStudentIds(orgId, orgName);
+      await this.resolveUniversityAffiliatedStudentIds(orgId, scope);
 
     const activeOpportunities = await this.opportunitiesRepository.count({
       where: { id: In(oppIds), status: 'active' },
@@ -356,7 +337,7 @@ export class OrganizationsService {
       where: { id: orgId },
     });
     if (org && this.isUniversityOrgType(org.orgType)) {
-      return this.getPartnerDashboardStatsForUniversityOrg(orgId, org.name);
+      return this.getPartnerDashboardStatsForUniversityOrg(orgId);
     }
 
     // Active Opportunities
@@ -854,6 +835,8 @@ export class OrganizationsService {
     org.verifiedAt = new Date();
     org.verificationNotes = dto.notes;
     const saved = await this.organizationsRepository.save(org);
+    // Rejected organization accounts lose access (JwtStrategy); end their live sessions now.
+    await this.revokeOrganizationSessions(saved.id);
     void this.notifyOrganizationDecision(saved, 'rejected', dto.notes);
     return saved;
   }
@@ -892,6 +875,7 @@ export class OrganizationsService {
     let blocked = false;
     const wasBlocked = org.isBlocked === true;
     const wasApproved = org.verificationStatus === 'APPROVED';
+    const wasRejected = org.verificationStatus === 'REJECTED';
     if (normalized === 'suspended') {
       org.isBlocked = true;
       blocked = true;
@@ -905,7 +889,9 @@ export class OrganizationsService {
       org.verificationStatus = normalized.toUpperCase();
     }
     const saved = await this.organizationsRepository.save(org);
-    if (blocked) await this.revokeOrganizationSessions(org.id);
+    if (blocked || (!wasRejected && org.verificationStatus === 'REJECTED')) {
+      await this.revokeOrganizationSessions(org.id);
+    }
     if (blocked && !wasBlocked) {
       void this.notifyOrganizationDecision(saved, 'suspended');
     } else if (!blocked && wasBlocked && normalized === 'active') {
@@ -927,7 +913,7 @@ export class OrganizationsService {
       .trim()
       .toLowerCase();
     const password = String(data?.password ?? '');
-    const name = String(data?.name ?? '').trim();
+    let name = String(data?.name ?? '').trim();
     const contact = String(data?.contact ?? '').trim();
     // Signup stores the role bucket lowercase (`orgType = role`), and stats/role gates compare
     // against 'ngo' | 'corporate' | 'university' — an admin-onboarded org must match that.
@@ -947,6 +933,9 @@ export class OrganizationsService {
     }
     if (await this.usersRepository.findOne({ where: { email } })) {
       throw new ConflictException('Email already exists');
+    }
+    if (this.isUniversityOrgType(type)) {
+      name = await this.canonicalUniversityOrgName(name);
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -1002,6 +991,68 @@ export class OrganizationsService {
         role: newUser.role,
       },
     };
+  }
+
+  /**
+   * University organizations are linked to their students and faculty by NAME
+   * (FacultyUniversityScopeService), so the name must be the approved-list spelling — an off-list
+   * name such as "uni" silently disconnects the whole institution — and unique, or two
+   * organizations would split one university's data. Returns the canonical list spelling.
+   */
+  private async canonicalUniversityOrgName(
+    name: string,
+    excludeOrganizationId?: string,
+  ): Promise<string> {
+    const key = foldUniversityName(name);
+    const canonical = PAKISTANI_UNIVERSITIES.find(
+      (u) => foldUniversityName(u) === key,
+    );
+    if (!canonical) {
+      throw new BadRequestException(
+        'Choose the university from the approved list, exactly as students pick it at signup — otherwise its students and faculty cannot be linked to it.',
+      );
+    }
+    const existing = await this.organizationsRepository.find({
+      select: ['id', 'name', 'orgType'],
+    });
+    const duplicate = existing.find(
+      (org) =>
+        org.id !== excludeOrganizationId &&
+        this.isUniversityOrgType(org.orgType) &&
+        foldUniversityName(org.name) === key,
+    );
+    if (duplicate) {
+      throw new ConflictException(
+        `${canonical} already has a university organization. Add staff to that organization instead.`,
+      );
+    }
+    return canonical;
+  }
+
+  /** Admin rename. University names are held to the approved list (see canonicalUniversityOrgName). */
+  async renameOrganization(id: string, rawName: string) {
+    const org = await this.findOne(id);
+    let name = typeof rawName === 'string' ? rawName.trim() : '';
+    if (!name) throw new BadRequestException('Organization name is required');
+    if (name.length > 200) {
+      throw new BadRequestException(
+        'Organization name must be 200 characters or fewer',
+      );
+    }
+    if (this.isUniversityOrgType(org.orgType)) {
+      name = await this.canonicalUniversityOrgName(name, org.id);
+    }
+    if (name === org.name) return org;
+    org.name = name;
+    const saved = await this.organizationsRepository.save(org);
+    // Accounts keep a copy of the organization name (profile header, token claims at next login).
+    await this.usersRepository
+      .createQueryBuilder()
+      .update(User)
+      .set({ orgName: name })
+      .where('"organizationId" = :id', { id })
+      .execute();
+    return saved;
   }
 
   private isUniversityOrgType(orgType: string): boolean {
@@ -1078,8 +1129,6 @@ export class OrganizationsService {
       );
     }
 
-    const orgNameNorm = org.name.trim().toLowerCase();
-
     const st = [
       'pending',
       'pending_payment_approval',
@@ -1092,28 +1141,21 @@ export class OrganizationsService {
       'finalized',
     ];
 
-    const participations = await this.participationRepository
-      .createQueryBuilder('p')
-      .leftJoinAndSelect('p.project', 'project')
-      .leftJoinAndSelect('p.student', 'student')
-      .where('p.student_id IS NOT NULL')
-      .andWhere('p.status IN (:...st)', { st })
-      .andWhere(
-        new Brackets((b) => {
-          b.where(`TRIM(COALESCE(p.universityId, '')) = :orgId`, { orgId })
-            .orWhere(`project."organizationId"::text = :orgId`, { orgId })
-            .orWhere(`student."organizationId"::text = :orgId`, { orgId })
-            .orWhere(
-              `LOWER(TRIM(COALESCE(p.universityId, ''))) = :orgNameNorm`,
-              {
-                orgNameNorm,
-              },
-            );
-          for (const n of this.universityNameConditions(org.name, 'stud'))
-            b.orWhere(n.sql, n.params);
-        }),
-      )
-      .getMany();
+    const scope =
+      await this.facultyUniversityScopeService.resolveUniversityScope(orgId);
+    const inScope = scope
+      ? this.facultyUniversityScopeService.participationInScopeSql(scope, 'p')
+      : null;
+    const participations = inScope
+      ? await this.participationRepository
+          .createQueryBuilder('p')
+          .leftJoinAndSelect('p.project', 'project')
+          .leftJoinAndSelect('p.student', 'student')
+          .where('p.student_id IS NOT NULL')
+          .andWhere('p.status IN (:...st)', { st })
+          .andWhere(inScope.sql, inScope.params)
+          .getMany()
+      : [];
 
     const total_participants = participations.length;
     const distinctStudentIds = [
@@ -1443,14 +1485,11 @@ export class OrganizationsService {
     return parse(opp.sdg);
   }
 
-  private async getPartnerImpactMetricsForUniversityOrg(
-    orgId: string,
-    orgName: string,
-  ) {
-    const oppIds =
-      await this.facultyUniversityScopeService.resolveOpportunityIdsForUniversityOrganization(
-        orgId,
-      );
+  private async getPartnerImpactMetricsForUniversityOrg(orgId: string) {
+    // Resolved once: the opportunity ids and the student population come from the same scope.
+    const scope =
+      await this.facultyUniversityScopeService.resolveUniversityScope(orgId);
+    const oppIds = scope ? [...scope.opportunityIds] : [];
 
     const now = new Date();
     const emptyMonthlyTrend: Array<{
@@ -1515,7 +1554,7 @@ export class OrganizationsService {
     }
 
     const affiliatedStudentIds =
-      await this.resolveUniversityAffiliatedStudentIds(orgId, orgName);
+      await this.resolveUniversityAffiliatedStudentIds(orgId, scope);
     const verifiedTsAll = await this.timesheetsRepository.find({
       where: { opportunityId: In(oppIds), status: 'verified' },
     });
@@ -1582,7 +1621,7 @@ export class OrganizationsService {
       where: { id: orgId },
     });
     if (org && this.isUniversityOrgType(org.orgType)) {
-      return this.getPartnerImpactMetricsForUniversityOrg(orgId, org.name);
+      return this.getPartnerImpactMetricsForUniversityOrg(orgId);
     }
 
     const opps = await this.opportunitiesRepository.find({

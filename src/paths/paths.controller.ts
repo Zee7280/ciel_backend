@@ -82,6 +82,7 @@ export class PathsController {
       originalName: meta.filename,
       contentType: meta.contentType,
       expiresInSeconds: studentReportPresignExpiresInSeconds(meta.size),
+      contentLength: meta.size,
     });
     return { success: true, data: { ...signed, url: signed.publicUrl } };
   }

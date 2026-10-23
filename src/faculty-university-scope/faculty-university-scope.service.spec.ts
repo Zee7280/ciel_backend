@@ -1,4 +1,8 @@
-import { ConflictException, ForbiddenException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { FacultyUniversityScopeService } from './faculty-university-scope.service';
 import { FacultyUniversityScopeAssignment } from './entities/faculty-university-scope-assignment.entity';
 import { User } from '../users/entities/user.entity';
@@ -26,6 +30,7 @@ function build(opts: {
   users?: Record<string, Partial<User>>;
   orgs?: Record<string, Pick<Organization, 'id' | 'name' | 'orgType'>>;
   linkedCount?: number;
+  seats?: Array<{ universityName?: string; universityId?: string }>;
 }) {
   const users = opts.users ?? {};
   const orgs = opts.orgs ?? { [BNU.id]: BNU, [LUMS.id]: LUMS };
@@ -61,15 +66,19 @@ function build(opts: {
       Promise.resolve(orgs[where.id] ?? null),
     ),
   };
+  const participationRepo = {
+    find: jest.fn(() => Promise.resolve(opts.seats ?? [])),
+  };
   const service = new FacultyUniversityScopeService(
     assignmentRepo as never,
     usersRepo as never,
     orgRepo as never,
+    participationRepo as never,
     {} as never,
     {} as never,
     {} as never,
   );
-  return { service, assignmentRepo, usersRepo };
+  return { service, assignmentRepo, usersRepo, participationRepo };
 }
 
 describe('FacultyUniversityScopeService — student ↔ university matching', () => {
@@ -172,6 +181,30 @@ describe('FacultyUniversityScopeService — studentBelongsToOrganization', () =>
     ).resolves.toBe(false);
   });
 
+  it("a blank profile is completed by the university on the student's project seat", async () => {
+    const { service } = build({
+      seats: [{ universityName: 'Beaconhouse National University (BNU)' }],
+    });
+    await expect(
+      service.studentBelongsToOrganization(student({ university: '' }), BNU),
+    ).resolves.toBe(true);
+  });
+
+  it('a profile naming another listed university wins over a seat claim', async () => {
+    const { service, participationRepo } = build({
+      seats: [{ universityName: 'Beaconhouse National University (BNU)' }],
+    });
+    await expect(
+      service.studentBelongsToOrganization(
+        student({
+          university: 'Lahore University of Management Sciences (LUMS)',
+        }),
+        BNU,
+      ),
+    ).resolves.toBe(false);
+    expect(participationRepo.find).not.toHaveBeenCalled();
+  });
+
   it('rejects missing students and non-students', async () => {
     const { service } = build({ linkedCount: 1 });
     await expect(service.studentBelongsToOrganization(null, BNU)).resolves.toBe(
@@ -257,6 +290,27 @@ describe('FacultyUniversityScopeService — university operator assignment', () 
     expect(assignmentRepo.save).toHaveBeenCalledTimes(1);
   });
 
+  it('refuses a faculty whose profile names another listed university', async () => {
+    const lumsFaculty = {
+      id: 'fac-lums',
+      email: 'dr.sara@lums.edu.pk',
+      role: UserRole.FACULTY,
+      university: 'Lahore University of Management Sciences (LUMS)',
+    };
+    const { service, assignmentRepo } = build({
+      users: { ...users, [lumsFaculty.id]: lumsFaculty },
+      assignment: null,
+    });
+    await expect(
+      service.assignByUniversityOperator({
+        facultyEmail: lumsFaculty.email,
+        universityOrganizationId: BNU.id,
+        operatorUserId: bnuOperator.id,
+      }),
+    ).rejects.toThrow(BadRequestException);
+    expect(assignmentRepo.save).not.toHaveBeenCalled();
+  });
+
   it('re-confirming its own faculty changes nothing and keeps the original grantor', async () => {
     const admin = { id: 'adm', role: UserRole.SUPER_ADMIN } as User;
     const existing = {
@@ -337,5 +391,51 @@ describe('universityNameMatchSql', () => {
     });
     expect(m.sql).toContain(':...scopeKeys');
     expect(m.sql).toContain(':scopeFull');
+  });
+});
+
+describe('FacultyUniversityScopeService — university report scope', () => {
+  const scope = {
+    org: { id: BNU.id, name: BNU.name },
+    studentIds: new Set(['bnu-student']),
+    opportunityIds: new Set(['shared-opp', 'bnu-own-opp']),
+    institutionalOpportunityIds: new Set(['bnu-own-opp']),
+    affiliatedTeamKeys: new Set(['shared-opp|t:team-mixed']),
+  };
+  const build2 = (seats: Array<Record<string, string>>) => {
+    const participationRepo = { find: jest.fn(() => Promise.resolve(seats)) };
+    const service = new FacultyUniversityScopeService(
+      {} as never,
+      {} as never,
+      {} as never,
+      participationRepo as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    return service;
+  };
+
+  it("keeps its own students' reports, institutional projects, and mixed teams — not other schools' students", async () => {
+    const service = build2([
+      {
+        studentId: 'lums-lead',
+        projectId: 'shared-opp',
+        teamId: 'team-mixed',
+      },
+      { studentId: 'lums-solo', projectId: 'shared-opp', teamId: 'team-lums' },
+    ]);
+    const kept = await service.filterReportsToUniversityScope(scope, [
+      { studentId: 'bnu-student', opportunityId: 'shared-opp' },
+      { studentId: 'anyone', opportunityId: 'bnu-own-opp' },
+      { studentId: 'lums-lead', opportunityId: 'shared-opp' },
+      { studentId: 'lums-solo', opportunityId: 'shared-opp' },
+      { studentId: 'bnu-student', opportunityId: 'not-in-scope' },
+    ]);
+    expect(kept.map((r) => `${r.studentId}@${r.opportunityId}`)).toEqual([
+      'bnu-student@shared-opp',
+      'anyone@bnu-own-opp',
+      'lums-lead@shared-opp',
+    ]);
   });
 });

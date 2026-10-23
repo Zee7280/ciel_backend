@@ -16,7 +16,7 @@ import { MailService } from '../mail/mail.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import {
   normalizeUniversityName,
-  universityNamesMatch,
+  studentUniversityMatchesMember,
   parseStudentSubscriptionFeePkr,
   parseStudentSubscriptionRequiredSettingValue,
   PENDING_SUBSCRIPTION_STATUS,
@@ -127,7 +127,7 @@ export class StudentSubscriptionService {
       .map((o) => normalizeUniversityName(o.name))
       .filter(Boolean);
     return candidates.some((c) =>
-      memberNames.some((m) => universityNamesMatch(c, m)),
+      memberNames.some((m) => studentUniversityMatchesMember(c, m)),
     );
   }
 

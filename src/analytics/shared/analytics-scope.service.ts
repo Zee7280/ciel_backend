@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, In, Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { UserRole } from '../../users/enums/user-role.enum';
 import { Opportunity } from '../../opportunities/entities/opportunity.entity';
 import { Participation } from '../../engagement/entities/participant.entity';
@@ -188,41 +188,23 @@ export class AnalyticsScopeService {
     }
   }
 
+  /** Seats of the university's students / institutional projects ({@link FacultyUniversityScopeService}). */
   async loadUniversityScopedParticipations(
     orgId: string,
   ): Promise<Participation[]> {
-    const org = await this.organizationsRepository.findOne({
-      where: { id: orgId },
-    });
-    if (!org) return [];
-    const orgNameNorm = org.name.trim().toLowerCase();
+    const scope =
+      await this.facultyUniversityScopeService.resolveUniversityScope(orgId);
+    const inScope = scope
+      ? this.facultyUniversityScopeService.participationInScopeSql(scope, 'p')
+      : null;
+    if (!inScope) return [];
     return this.participationRepository
       .createQueryBuilder('p')
       .leftJoinAndSelect('p.project', 'project')
       .leftJoinAndSelect('p.student', 'student')
       .where('p.student_id IS NOT NULL')
       .andWhere('p.status IN (:...st)', { st: ACTIVE_PARTICIPATION_STATUSES })
-      .andWhere(
-        new Brackets((b) => {
-          b.where(`TRIM(COALESCE(p.universityId, '')) = :orgId`, {
-            orgId,
-          })
-            .orWhere(`project."organizationId"::text = :orgId`, {
-              orgId,
-            })
-            .orWhere(`student."organizationId"::text = :orgId`, {
-              orgId,
-            })
-            .orWhere(
-              `LOWER(TRIM(COALESCE(p.universityName, ''))) = :orgNameNorm`,
-              { orgNameNorm },
-            )
-            .orWhere(
-              `LOWER(TRIM(COALESCE(student.university, ''))) = :orgNameNorm`,
-              { orgNameNorm },
-            );
-        }),
-      )
+      .andWhere(inScope.sql, inScope.params)
       .getMany();
   }
 

@@ -1,4 +1,4 @@
-import { ForbiddenException } from '@nestjs/common';
+import { ForbiddenException, PayloadTooLargeException } from '@nestjs/common';
 import { UserRole } from '../users/enums/user-role.enum';
 import { AiController } from './ai.controller';
 import { AiService } from './ai.service';
@@ -10,23 +10,24 @@ describe('AiController.summarize — evaluator sections are CIEL PK Admin only',
 
   beforeEach(() => ai.summarize.mockClear());
 
-  it.each(['cii_v4_5_evaluation', 'fyp_ai_evaluation'])(
-    'refuses %s for student / faculty / ngo',
-    async (section) => {
-      for (const role of [
-        'student',
-        'faculty',
-        'ngo',
-        'university',
-        'corporate',
-      ]) {
-        await expect(
-          controller.summarize(as(role), { section, data: {} }),
-        ).rejects.toBeInstanceOf(ForbiddenException);
-      }
-      expect(ai.summarize).not.toHaveBeenCalled();
-    },
-  );
+  it.each([
+    'cii_v4_5_evaluation',
+    'fyp_ai_evaluation',
+    'npe_ranking_evaluation',
+  ])('refuses %s for student / faculty / ngo', async (section) => {
+    for (const role of [
+      'student',
+      'faculty',
+      'ngo',
+      'university',
+      'corporate',
+    ]) {
+      await expect(
+        controller.summarize(as(role), { section, data: {} }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    }
+    expect(ai.summarize).not.toHaveBeenCalled();
+  });
 
   it('allows evaluator sections for the admin', async () => {
     await expect(
@@ -45,6 +46,16 @@ describe('AiController.summarize — evaluator sections are CIEL PK Admin only',
         data: {},
       }),
     ).resolves.toBeTruthy();
+  });
+
+  it('refuses an oversized payload from a non-admin before calling the model', async () => {
+    await expect(
+      controller.summarize(as('student'), {
+        section: 'section5_summary',
+        data: { text: 'x'.repeat(300_001) },
+      }),
+    ).rejects.toBeInstanceOf(PayloadTooLargeException);
+    expect(ai.summarize).not.toHaveBeenCalled();
   });
 });
 

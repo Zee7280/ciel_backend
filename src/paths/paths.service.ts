@@ -50,6 +50,8 @@ import {
   UpdateVentureDto,
 } from './dto/update-venture.dto';
 import { ventureMatchesFaculty } from './venture-faculty-scope.util';
+import { universityNameMatchSql } from '../opportunities/university-scope.util';
+import { isAffiliatedWithUniversity } from '../faculty-university-scope/university-affiliation.util';
 import {
   ventureCompletenessPercent,
   ventureMissingItems,
@@ -1185,6 +1187,67 @@ export class PathsService implements OnModuleInit {
     return this.attachStudents(annotated);
   }
 
+  /**
+   * Candidate rows for a university showcase / wall: the student account is linked to the
+   * organization, the profile names it, or the entry's typed university names it. The final say
+   * is {@link keepUniversityEntries}, so a typed university never overrides a listed profile.
+   */
+  private universityEntryCandidates(
+    org: Pick<Organization, 'id' | 'name'>,
+    entryUniversityExpr: string,
+    prefix: string,
+  ): Brackets {
+    const entry = universityNameMatchSql(
+      entryUniversityExpr,
+      org.name,
+      `${prefix}Entry`,
+    );
+    const uni = universityNameMatchSql(
+      'u.university',
+      org.name,
+      `${prefix}Uni`,
+    );
+    const inst = universityNameMatchSql(
+      'u.institution',
+      org.name,
+      `${prefix}Inst`,
+    );
+    return new Brackets((b) => {
+      b.where('u."organizationId"::text = :uniOrgId', { uniOrgId: org.id })
+        .orWhere(entry.sql, entry.params)
+        .orWhere(uni.sql, uni.params)
+        .orWhere(inst.sql, inst.params);
+    });
+  }
+
+  /** Keeps the entries whose student belongs to the university by the shared affiliation rule. */
+  private async keepUniversityEntries<T extends { userId: string }>(
+    entries: T[],
+    org: Pick<Organization, 'id' | 'name'>,
+    entryUniversity: (entry: T) => unknown,
+  ): Promise<T[]> {
+    const userIds = [...new Set(entries.map((e) => e.userId).filter(Boolean))];
+    if (!userIds.length) return [];
+    const users = await this.usersRepo.find({
+      where: { id: In(userIds) },
+      relations: ['organization'],
+    });
+    const byId = new Map(users.map((u) => [u.id, u]));
+    return entries.filter((entry) => {
+      const user = byId.get(entry.userId);
+      const claim = entryUniversity(entry);
+      return isAffiliatedWithUniversity(
+        {
+          organizationId: user?.organization?.id,
+          university: user?.university,
+          institution: user?.institution,
+          claims: [typeof claim === 'string' ? claim : null],
+        },
+        { id: org.id, name: org.name },
+      );
+    });
+  }
+
   /** The university showcase deck — reports from students linked to this university org, either
    * formally (organizationId) or by the university name they entered in step 1. Same scoping
    * approach as the university analytics endpoint, so the two stay consistent. Defaults to
@@ -1198,20 +1261,16 @@ export class PathsService implements OnModuleInit {
       where: { id: organizationId },
     });
     if (!org) return [];
-    const orgNameNorm = org.name.trim().toLowerCase();
     const qb = this.courseProjectRepo
       .createQueryBuilder('e')
       .leftJoin('users', 'u', 'u.id::text = e."userId"')
       .where('e.status = :status', { status })
       .andWhere(
-        new Brackets((b) => {
-          b.where('u."organizationId"::text = :orgId', {
-            orgId: organizationId,
-          }).orWhere(
-            `LOWER(TRIM(COALESCE(e."studentInfo"->>'universityName', ''))) = :orgNameNorm`,
-            { orgNameNorm },
-          );
-        }),
+        this.universityEntryCandidates(
+          org,
+          `e."studentInfo"->>'universityName'`,
+          'cp',
+        ),
       );
     // Enforced here, not left to the caller: the "Coursework Impact Wall" must only ever be
     // able to fetch approved records, never rely on client-side filtering to hide the rest.
@@ -1220,7 +1279,11 @@ export class PathsService implements OnModuleInit {
         approvalStatus,
       });
     }
-    const entries = await qb.orderBy('e."updatedAt"', 'DESC').getMany();
+    const entries = await this.keepUniversityEntries(
+      await qb.orderBy('e."updatedAt"', 'DESC').getMany(),
+      org,
+      (e: CourseProjectEntry) => e.studentInfo?.universityName,
+    );
     const annotated = await this.courseProjectAnnotate(entries);
     return this.attachStudents(await this.attachLiveCourseworkRanks(annotated));
   }
@@ -2175,20 +2238,16 @@ export class PathsService implements OnModuleInit {
       where: { id: organizationId },
     });
     if (!org) return [];
-    const orgNameNorm = org.name.trim().toLowerCase();
     const qb = this.fypRepo
       .createQueryBuilder('e')
       .leftJoin('users', 'u', 'u.id::text = e."userId"')
       .where('e.status = :status', { status })
       .andWhere(
-        new Brackets((b) => {
-          b.where('u."organizationId"::text = :orgId', {
-            orgId: organizationId,
-          }).orWhere(
-            `LOWER(TRIM(COALESCE(e."projectInfo"->>'university', ''))) = :orgNameNorm`,
-            { orgNameNorm },
-          );
-        }),
+        this.universityEntryCandidates(
+          org,
+          `e."projectInfo"->>'university'`,
+          'fyp',
+        ),
       );
     // Enforced here, not left to the caller: the "FYP Impact Wall" must only ever be able to
     // fetch approved records, never rely on client-side filtering to hide the rest.
@@ -2197,7 +2256,12 @@ export class PathsService implements OnModuleInit {
         approvalStatus,
       });
     }
-    const entries = await qb.orderBy('e."updatedAt"', 'DESC').getMany();
+    const entries = await this.keepUniversityEntries(
+      await qb.orderBy('e."updatedAt"', 'DESC').getMany(),
+      org,
+      (e: FypEntry) =>
+        (e.projectInfo as { university?: string } | null)?.university,
+    );
     const annotated = await this.fypAnnotate(entries);
     return this.attachStudents(annotated);
   }
@@ -3479,20 +3543,16 @@ export class PathsService implements OnModuleInit {
       where: { id: organizationId },
     });
     if (!org) return [];
-    const orgNameNorm = org.name.trim().toLowerCase();
     const qb = this.ventureRepo
       .createQueryBuilder('e')
       .leftJoin('users', 'u', 'u.id::text = e."userId"')
       .where('e.status = :status', { status })
       .andWhere(
-        new Brackets((b) => {
-          b.where('u."organizationId"::text = :orgId', {
-            orgId: organizationId,
-          }).orWhere(
-            `LOWER(TRIM(COALESCE(e."academicSetup"->>'university', ''))) = :orgNameNorm`,
-            { orgNameNorm },
-          );
-        }),
+        this.universityEntryCandidates(
+          org,
+          `e."academicSetup"->>'university'`,
+          'vent',
+        ),
       );
     // Enforced here, not left to the caller: the university venture wall must only ever be able
     // to fetch approved records, never rely on client-side filtering to hide the rest.
@@ -3501,7 +3561,12 @@ export class PathsService implements OnModuleInit {
         approvalStatus,
       });
     }
-    const entries = await qb.orderBy('e."updatedAt"', 'DESC').getMany();
+    const entries = await this.keepUniversityEntries(
+      await qb.orderBy('e."updatedAt"', 'DESC').getMany(),
+      org,
+      (e: VentureEntry) =>
+        (e.academicSetup as { university?: string } | null)?.university,
+    );
     const annotated = await this.ventureAnnotate(entries);
     const enriched = annotated.map((entry) => this.withCompleteness(entry)!);
     return this.attachStudents(enriched);

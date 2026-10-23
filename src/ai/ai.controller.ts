@@ -3,6 +3,7 @@ import {
   Controller,
   ForbiddenException,
   Optional,
+  PayloadTooLargeException,
   Post,
   Request,
   ServiceUnavailableException,
@@ -34,7 +35,12 @@ const OPPORTUNITY_DRAFT_ROLES = new Set<UserRole | undefined>([
 const ADMIN_ONLY_SECTIONS = new Set([
   'cii_v4_5_evaluation',
   'fyp_ai_evaluation',
+  // Reasoning model + server-side evidence downloads; the ranking studio runs it server-side.
+  'npe_ranking_evaluation',
 ]);
+
+/** A wizard section is a few KB of text; a larger payload is only prompt-cost abuse. */
+const MAX_SUMMARIZE_DATA_CHARS = 300_000;
 
 /** The request as populated by JwtAuthGuard (JwtStrategy.validate). */
 interface AuthenticatedRequest {
@@ -108,6 +114,14 @@ export class AiController {
     ) {
       throw new ForbiddenException(
         'This AI analysis can only be run by CIEL PK Admin.',
+      );
+    }
+    if (
+      req.user?.role !== UserRole.SUPER_ADMIN &&
+      (JSON.stringify(dto.data ?? null)?.length ?? 0) > MAX_SUMMARIZE_DATA_CHARS
+    ) {
+      throw new PayloadTooLargeException(
+        'This section is too large to summarize. Shorten the text and try again.',
       );
     }
     return this.aiService.summarize(dto.section, dto.data);

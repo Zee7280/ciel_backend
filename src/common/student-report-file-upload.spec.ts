@@ -30,6 +30,11 @@ const SHOULD_BLOCK = [
   ['run.exe', 'application/octet-stream'],
   ['hook.js', 'application/javascript'],
   ['icon.svg', 'image/svg+xml'],
+  // XML can carry an XHTML namespace and run script from the public bucket URL.
+  ['page.xml', 'text/xml'],
+  ['renamed.pdf', 'application/xml'],
+  ['style.xsl', 'application/octet-stream'],
+  ['payload.bin', 'application/xslt+xml'],
 ] as const;
 
 describe('assertStudentReportUploadMeta', () => {

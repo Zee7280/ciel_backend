@@ -104,6 +104,22 @@ describe('AuthService — login does not leak account status before the password
     return { svc, jwt };
   };
 
+  it('a rejected organization cannot sign in — also while its membership fee is pending', async () => {
+    for (const role of ['ngo', 'university', 'corporate']) {
+      const { svc, jwt } = await build2({
+        id: 'u1',
+        email: 'org@x.pk',
+        role,
+        status: 'pending_membership_payment',
+        organization: { id: 'o1', verificationStatus: 'REJECTED' },
+      });
+      await expect(
+        svc.login({ email: 'org@x.pk', password: 'Right-pass-1' } as LoginDto),
+      ).rejects.toThrow(/not approved/);
+      expect(jwt.sign).not.toHaveBeenCalled();
+    }
+  });
+
   it('suspended / unverified accounts + WRONG password => generic "Invalid credentials"', async () => {
     for (const patch of [
       { status: 'suspended' },
@@ -206,5 +222,65 @@ describe('AuthService.forgotPassword — no account-existence oracle', () => {
       /^https:\/\/app\.test\/reset-password\?token=[a-f0-9]{64}$/,
     );
     expect(mailService.buildPasswordResetLink).toHaveBeenCalled();
+  });
+});
+
+describe('AuthService — NGO grandfather backfill on boot', () => {
+  const run = async (
+    orgs: Array<{ id: string; verificationStatus: string; createdAt: Date }>,
+  ) => {
+    const byId = new Map(orgs.map((o) => [o.id, { ...o }]));
+    const usersRepository = {
+      find: jest
+        .fn()
+        .mockResolvedValue(
+          orgs.map((o, i) => ({ id: `u${i}`, organization: o })),
+        ),
+    };
+    const organizationsRepository = {
+      findOne: jest.fn(({ where }: { where: { id: string } }) =>
+        Promise.resolve(byId.get(where.id) ?? null),
+      ),
+      save: jest.fn((org: { id: string }) => Promise.resolve(org)),
+    };
+    const svc = new AuthService(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      usersRepository as never,
+      organizationsRepository as never,
+    );
+    await svc.onApplicationBootstrap();
+    return organizationsRepository.save.mock.calls.map(
+      ([org]: [{ id: string }]) => org.id,
+    );
+  };
+
+  it('approves pending orgs of active NGOs, but never an admin-rejected org', async () => {
+    const approved = await run([
+      {
+        id: 'legacy',
+        verificationStatus: 'PENDING',
+        createdAt: new Date('2026-06-01T00:00:00Z'),
+      },
+      {
+        id: 'new-signup',
+        verificationStatus: 'PENDING',
+        createdAt: new Date('2026-10-01T00:00:00Z'),
+      },
+      {
+        id: 'rejected',
+        verificationStatus: 'REJECTED',
+        createdAt: new Date('2026-06-01T00:00:00Z'),
+      },
+    ]);
+    expect(approved).toEqual(['legacy', 'new-signup']);
   });
 });

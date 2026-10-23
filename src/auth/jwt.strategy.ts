@@ -19,6 +19,27 @@ export function isSessionStatusAllowed(status: string, role: string): boolean {
   return role === (UserRole.INVESTOR as string) && status === 'pending';
 }
 
+const ORGANIZATION_ACCOUNT_ROLES = new Set<string>([
+  UserRole.UNIVERSITY,
+  UserRole.NGO,
+  UserRole.CORPORATE,
+  UserRole.ORGANIZATION_ADMIN,
+]);
+
+/**
+ * An organization account whose organization a CIEL admin rejected loses access. Only REJECTED:
+ * PENDING university / corporate accounts keep working after their membership fee is approved.
+ */
+export function isOrganizationAccessRejected(
+  role: string,
+  organization?: { verificationStatus?: string | null } | null,
+): boolean {
+  return (
+    ORGANIZATION_ACCOUNT_ROLES.has(role) &&
+    String(organization?.verificationStatus || '').toUpperCase() === 'REJECTED'
+  );
+}
+
 /** Claims minted by AuthService.login(); only `sub` is guaranteed on every token. */
 export interface JwtPayload {
   sub: string;
@@ -65,6 +86,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
     if (user.organization?.isBlocked) {
       throw new UnauthorizedException('Organization is blocked');
+    }
+    if (isOrganizationAccessRejected(user.role, user.organization)) {
+      throw new UnauthorizedException(
+        'Organization application was not approved',
+      );
     }
     return {
       id: payload.sub,

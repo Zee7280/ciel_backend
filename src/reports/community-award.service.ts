@@ -4,6 +4,7 @@ import { Brackets, In, Repository, SelectQueryBuilder } from 'typeorm';
 import { StudentReport } from './entities/student-report.entity';
 import { Organization } from '../organizations/entities/organization.entity';
 import { NotificationsService } from '../notifications/notifications.service';
+import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
 import { NotifyCommunityAwardDto } from './dto/notify-community-award.dto';
 import {
   awardBadgeLabel,
@@ -71,6 +72,7 @@ export class CommunityAwardService {
     @InjectRepository(Organization)
     private readonly orgs: Repository<Organization>,
     private readonly notifications: NotificationsService,
+    private readonly universityScope: FacultyUniversityScopeService,
   ) {}
 
   toCard(report: StudentReport): CommunityAwardCard {
@@ -236,41 +238,36 @@ export class CommunityAwardService {
       .map((r) => this.toCard(r));
   }
 
+  /**
+   * University Impact Wall: live reports on the university's scope ({@link
+   * FacultyUniversityScopeService.resolveUniversityScope}) — the same students and opportunities
+   * the rest of the university dashboard uses, so its counts always agree.
+   */
   async listForUniversity(
     organizationId: string,
   ): Promise<CommunityAwardCard[]> {
     if (!organizationId) return [];
-    const org = await this.orgs.findOne({ where: { id: organizationId } });
-    const name = (org?.name || '').trim().toLowerCase();
+    const access =
+      await this.universityScope.universityReportAccess(organizationId);
+    if (!access.opportunityIds.length) return [];
     const qb = this.reports
       .createQueryBuilder('report')
       .leftJoinAndSelect('report.student', 'student')
-      .leftJoin('student.organization', 'studentOrg')
       .leftJoinAndSelect('report.opportunity', 'opportunity')
       .leftJoinAndSelect('opportunity.organization', 'organization')
       .where(
         new Brackets((q) => {
-          q.where('studentOrg.id = :oid', { oid: organizationId }).orWhere(
-            'opportunity.organizationId = :oid',
-            { oid: organizationId },
-          );
-          if (name) {
-            q.orWhere(
-              "LOWER(TRIM(COALESCE(student.university, student.institution, ''))) = :n",
-              {
-                n: name,
-              },
-            ).orWhere(
-              `LOWER(TRIM(COALESCE(report.section1->'team_lead'->>'university', ''))) = :n`,
-              {
-                n: name,
-              },
-            );
-          }
+          q.where('report."opportunityId"::text = ANY(:scopeIds::text[])', {
+            scopeIds: access.opportunityIds,
+          }).orWhere('report.project_id::text = ANY(:scopeIds::text[])', {
+            scopeIds: access.opportunityIds,
+          });
         }),
       );
     this.applyLiveDeckWhere(qb);
-    const rows = await qb.orderBy('report.submission_date', 'DESC').getMany();
+    const rows = await access.restrictTo(
+      await qb.orderBy('report.submission_date', 'DESC').getMany(),
+    );
     return rows
       .filter((r) => this.facultyApproved(r))
       .map((r) => this.toCard(r));
@@ -305,29 +302,13 @@ export class CommunityAwardService {
       .leftJoinAndSelect('opportunity.organization', 'organization')
       .where('report.id = :rid', { rid: reportId });
     if (isUni) {
-      qb.leftJoin('student.organization', 'studentOrg');
-      const org = await this.orgs.findOne({ where: { id: organizationId } });
-      const name = (org?.name || '').trim().toLowerCase();
-      qb.andWhere(
-        new Brackets((q) => {
-          q.where('studentOrg.id = :oid', { oid: organizationId }).orWhere(
-            'opportunity.organizationId = :oid',
-            { oid: organizationId },
-          );
-          if (name) {
-            q.orWhere(
-              "LOWER(TRIM(COALESCE(student.university, student.institution, ''))) = :n",
-              { n: name },
-            ).orWhere(
-              `LOWER(TRIM(COALESCE(report.section1->'team_lead'->>'university', ''))) = :n`,
-              { n: name },
-            );
-          }
-        }),
-      );
-    } else {
-      qb.andWhere('opportunity.organizationId = :oid', { oid: organizationId });
+      const report = await qb.getOne();
+      if (!report) return null;
+      const access =
+        await this.universityScope.universityReportAccess(organizationId);
+      return (await access.includes(report)) ? report : null;
     }
+    qb.andWhere('opportunity.organizationId = :oid', { oid: organizationId });
     return qb.getOne();
   }
 

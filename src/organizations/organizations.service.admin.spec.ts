@@ -44,6 +44,21 @@ describe('OrganizationsService admin flows', () => {
     );
   });
 
+  it('rejecting revokes org sessions (rejected accounts lose access)', async () => {
+    const q = qb();
+    const repo = {
+      findOne: jest.fn(() =>
+        Promise.resolve({ id: 'o', verificationStatus: 'PENDING' }),
+      ),
+      save: jest.fn((x: unknown) => Promise.resolve(x)),
+    };
+    const svc = build(repo, { createQueryBuilder: () => q });
+    await svc.rejectOrganization('o', 'adm', { notes: 'n' } as never);
+    expect(q.execute).toHaveBeenCalledTimes(1);
+    await svc.updateStatus('o', 'rejected');
+    expect(q.execute).toHaveBeenCalledTimes(2);
+  });
+
   it('blocking revokes org sessions', async () => {
     const q = qb();
     const repo = {
@@ -146,6 +161,7 @@ describe('OrganizationsService admin flows', () => {
       findOne: jest.fn().mockResolvedValue(org),
       save: jest.fn((x: unknown) => Promise.resolve(x)),
     };
+    const revoke = qb();
     const users = {
       find: jest
         .fn()
@@ -153,6 +169,7 @@ describe('OrganizationsService admin flows', () => {
           { email: 'admin@org.pk' },
           { email: 'contact@org.pk' },
         ]),
+      createQueryBuilder: () => revoke,
     };
     const args: unknown[] = new Array<unknown>(8).fill({});
     args[0] = repo;
@@ -179,5 +196,52 @@ describe('OrganizationsService admin flows', () => {
         notes: 'Missing docs',
       } as AdminRejectOrganizationDto),
     ).resolves.toBeDefined();
+  });
+
+  it('rename holds university names to the approved list and keeps them unique', async () => {
+    const orgs = [
+      { id: 'o', name: 'uni', orgType: 'university' },
+      { id: 'other', name: 'Aga Khan University', orgType: 'university' },
+    ];
+    const repo = {
+      findOne: jest.fn(() => Promise.resolve({ ...orgs[0] })),
+      find: jest.fn(() => Promise.resolve(orgs)),
+      save: jest.fn((x: unknown) => Promise.resolve(x)),
+    };
+    const q = qb();
+    const svc = build(repo, { createQueryBuilder: () => q });
+    await expect(svc.renameOrganization('o', 'uni2')).rejects.toThrow(
+      BadRequestException,
+    );
+    await expect(
+      svc.renameOrganization('o', 'aga khan university'),
+    ).rejects.toThrow(ConflictException);
+    const saved = await svc.renameOrganization(
+      'o',
+      'beaconhouse national university (bnu)',
+    );
+    // Stored in the canonical list spelling, and copied onto member accounts.
+    expect(saved.name).toBe('Beaconhouse National University (BNU)');
+    expect(q.set).toHaveBeenCalledWith({
+      orgName: 'Beaconhouse National University (BNU)',
+    });
+  });
+
+  it('admin onboarding of a university requires a listed name', async () => {
+    const svc = build(
+      { find: jest.fn(() => Promise.resolve([])) },
+      { findOne: jest.fn().mockResolvedValue(null) },
+    );
+    await expect(
+      svc.createForAdmin(
+        {
+          name: 'uni',
+          type: 'university',
+          email: 'a@b.c',
+          password: 'longenough',
+        },
+        'adm',
+      ),
+    ).rejects.toThrow(BadRequestException);
   });
 });

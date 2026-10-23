@@ -55,6 +55,19 @@ import {
 const ANALYZER_ADMIN_ONLY = 'The AI analyzer can only be run by CIEL PK Admin.';
 
 /**
+ * The listing filters a partner may set. `studentId` / `includeHidden` switch findAll onto an
+ * admin path that skips the draft, evidence and payment redaction partners must get.
+ */
+export function partnerReportListQuery(
+  query: Record<string, unknown>,
+): Record<string, unknown> {
+  const allowed = ['status', 'page', 'limit', 'q', 'dateFrom', 'dateTo'];
+  return Object.fromEntries(
+    Object.entries(query || {}).filter(([key]) => allowed.includes(key)),
+  );
+}
+
+/**
  * Shape of `req.user` as returned by JwtStrategy.validate. `organizationId` is optional on the
  * token; the handlers that have always forwarded it to a service unchecked keep doing so
  * (`as string`) so the service sees exactly what it saw before.
@@ -462,6 +475,38 @@ export class PartnersController {
     };
   }
 
+  /**
+   * Faculty whose own profile names this university and who are not authorised anywhere yet —
+   * the "awaiting authorisation" tab, so a university sees its faculty without knowing emails.
+   */
+  @Get('community-service/faculty-representatives/awaiting')
+  async communityFacultyAwaitingAuthorisation(@Request() req: PartnerRequest) {
+    if (!req.user.organizationId) {
+      throw new BadRequestException('User is not linked to an organization');
+    }
+    const org = await this.organizationsService.getMyOrganization(req.user.id);
+    if (!org || !this.facultyUniversityScope.isUniversityOrganization(org)) {
+      throw new ForbiddenException(
+        'Faculty representatives are only available for university organizations.',
+      );
+    }
+    const faculty =
+      await this.facultyUniversityScope.listFacultyAwaitingAuthorisation(
+        req.user.organizationId,
+      );
+    return {
+      success: true,
+      data: faculty.map((f) => ({
+        id: `awaiting-${f.id}`,
+        faculty_user_id: f.id,
+        faculty_email: f.email,
+        faculty_name: f.name,
+        faculty_department: f.faculty_department || f.department,
+        status: 'awaiting',
+      })),
+    };
+  }
+
   @Post('community-service/faculty-representatives')
   async allocateFacultyRepresentative(
     @Request() req: PartnerRequest,
@@ -686,7 +731,10 @@ export class PartnersController {
       org && this.facultyUniversityScope.isUniversityOrganization(org),
     );
     return this.studentReportsService.findAll(
-      { ...query, organizationId: req.user.organizationId },
+      {
+        ...partnerReportListQuery(query),
+        organizationId: req.user.organizationId,
+      },
       {
         partnerView: !isUniversity,
         linkedOpportunityIds: isUniversity
@@ -886,14 +934,20 @@ export class PartnerAliasController {
     }
     const org = await this.organizationsService.getMyOrganization(req.user.id);
     if (org && this.facultyUniversityScope.isUniversityOrganization(org)) {
-      const ids =
-        await this.facultyUniversityScope.resolveOpportunityIdsForUniversityOrganization(
-          org.id,
-        );
-      return this.studentReportsService.findAllByOpportunityIds(ids, query);
+      const access = await this.facultyUniversityScope.universityReportAccess(
+        org.id,
+      );
+      return this.studentReportsService.findAllByOpportunityIds(
+        access.opportunityIds,
+        partnerReportListQuery(query),
+        { restrictTo: access.restrictTo },
+      );
     }
     return this.studentReportsService.findAll(
-      { ...query, organizationId: req.user.organizationId },
+      {
+        ...partnerReportListQuery(query),
+        organizationId: req.user.organizationId,
+      },
       {
         partnerView: true,
         linkedOpportunityIds:
@@ -953,16 +1007,20 @@ export class PartnerAliasController {
     // The university dashboard lists reports on every institution-linked opportunity (see
     // getReports above), so the same scope must be readable here — read-only, not reviewable.
     let universityScopeOpportunityIds: string[] = [];
+    let universityReportScope:
+      | ((report: { studentId?: string | null }) => Promise<boolean>)
+      | undefined;
     let partnerLinkedOpportunityIds: string[] = [];
     if (req.user.organizationId) {
       const org = await this.organizationsService.getMyOrganization(
         req.user.id,
       );
       if (org && this.facultyUniversityScope.isUniversityOrganization(org)) {
-        universityScopeOpportunityIds =
-          await this.facultyUniversityScope.resolveOpportunityIdsForUniversityOrganization(
-            org.id,
-          );
+        const access = await this.facultyUniversityScope.universityReportAccess(
+          org.id,
+        );
+        universityScopeOpportunityIds = access.opportunityIds;
+        universityReportScope = access.includes;
       } else {
         partnerLinkedOpportunityIds =
           await this.opportunitiesService.resolvePartnerLinkedOpportunityIds(
@@ -975,6 +1033,7 @@ export class PartnerAliasController {
       req.user.organizationId as string,
       {
         universityScopeOpportunityIds,
+        universityReportScope,
         partnerLinkedOpportunityIds,
         viewerRole: req.user.role,
       },

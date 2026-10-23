@@ -2917,9 +2917,27 @@ describe('PathsService — university + CIEL venture network', () => {
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
       orderBy: jest.fn().mockReturnThis(),
-      getMany: jest
-        .fn()
-        .mockResolvedValue([{ id: 'v-1', status: 'submitted' }]),
+      getMany: jest.fn().mockResolvedValue([
+        {
+          id: 'v-1',
+          userId: 'u-blank',
+          status: 'submitted',
+          academicSetup: { university: 'Beaconhouse National University' },
+        },
+        {
+          // Typed BNU on the venture, but the profile is another listed university.
+          id: 'v-2',
+          userId: 'u-aku',
+          status: 'submitted',
+          academicSetup: { university: 'Beaconhouse National University' },
+        },
+      ]),
+    };
+    const usersRepo = {
+      find: jest.fn().mockResolvedValue([
+        { id: 'u-blank', university: '' },
+        { id: 'u-aku', university: 'Aga Khan University' },
+      ]),
     };
     const ventureRepo = { createQueryBuilder: jest.fn().mockReturnValue(qb) };
     const organizationsRepo = {
@@ -2933,7 +2951,7 @@ describe('PathsService — university + CIEL venture network', () => {
       {},
       ventureRepo,
       makeInviteRepo(),
-      {},
+      usersRepo,
       organizationsRepo,
       {},
       { createNotification: jest.fn() },

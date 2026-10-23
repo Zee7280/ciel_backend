@@ -131,6 +131,20 @@ describe('StudentSubscriptionService — signup decision', () => {
     ).toBe(false);
   });
 
+  it('charges a student who typed a generic name that merely appears inside a member university name', async () => {
+    const { svc } = build({
+      memberOrgs: [{ name: 'Beaconhouse National University (BNU)' }],
+    });
+    for (const institution of ['University', 'National', 'Beaconhouse']) {
+      expect(
+        await svc.studentNeedsSubscriptionAtSignup({
+          role: 'student',
+          institution,
+        }),
+      ).toBe(true);
+    }
+  });
+
   it('ignores pending / rejected university organizations and non-university organizations', async () => {
     const pending = build({
       memberOrgs: [

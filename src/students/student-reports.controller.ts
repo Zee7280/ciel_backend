@@ -210,21 +210,28 @@ export class StudentReportsController {
       // (read-only) the reports on opportunities in its dashboard scope; the service still
       // 403s anything outside the caller's organisation / scope.
       let universityScopeOpportunityIds: string[] = [];
+      let universityReportScope:
+        | ((report: { studentId?: string | null }) => Promise<boolean>)
+        | undefined;
       if (req.user.role === UserRole.UNIVERSITY) {
         const org = await this.organizationsService.getMyOrganization(
           req.user.id,
         );
         if (org && this.facultyUniversityScope.isUniversityOrganization(org)) {
-          universityScopeOpportunityIds =
-            await this.facultyUniversityScope.resolveOpportunityIdsForUniversityOrganization(
-              org.id,
-            );
+          const access =
+            await this.facultyUniversityScope.universityReportAccess(org.id);
+          universityScopeOpportunityIds = access.opportunityIds;
+          universityReportScope = access.includes;
         }
       }
       return await this.studentReportsService.findOneForPartner(
         id,
         partnerOrganizationId,
-        { universityScopeOpportunityIds, viewerRole: req.user.role },
+        {
+          universityScopeOpportunityIds,
+          universityReportScope,
+          viewerRole: req.user.role,
+        },
       );
     }
     // Match /student/reports/:id — accept report UUID or opportunity (project) id for the JWT student.

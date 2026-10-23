@@ -448,6 +448,76 @@ export class EngagementService {
     return { mayRegisterOthers };
   }
 
+  private async assertMayUpdateExistingSeat(
+    manager: EntityManager,
+    seat: Participation,
+    callerId: string,
+    opportunity: Opportunity,
+    dtoEmailNorm: string,
+  ): Promise<void> {
+    if (seat.studentId === callerId) return;
+    if (opportunity.isStudentCreated && opportunity.creatorId === callerId) {
+      return;
+    }
+    const caller = await manager.findOne(User, { where: { id: callerId } });
+    const callerEmail = this.normalizeParticipantEmail(caller?.email);
+    if (
+      !seat.studentId &&
+      callerEmail &&
+      this.normalizeParticipantEmail(seat.email) === callerEmail
+    ) {
+      return;
+    }
+    // A teammate invited under another address claims that unlinked seat by proving they own it:
+    // the registration form makes them confirm the seat's email by OTP for this project.
+    if (
+      !seat.studentId &&
+      dtoEmailNorm &&
+      this.normalizeParticipantEmail(seat.email) === dtoEmailNorm
+    ) {
+      try {
+        await this.assertTeammateEmailOtpVerified(dtoEmailNorm, opportunity.id);
+        return;
+      } catch {
+        /* not verified — fall through to the team-lead checks */
+      }
+    }
+    const seatTeamId = (seat.teamId || '').trim();
+    const seatApplicationId = (seat.applicationId || '').trim();
+    // A student can lead more than one team (sibling seats) on the same project.
+    const leadSeats = await manager.find(Participation, {
+      where: {
+        studentId: callerId,
+        projectId: opportunity.id,
+        isTeamLead: true,
+      },
+    });
+    if (
+      leadSeats.some(
+        (leadSeat) =>
+          (seatTeamId && (leadSeat.teamId || '').trim() === seatTeamId) ||
+          (seatApplicationId &&
+            (leadSeat.applicationId || '').trim() === seatApplicationId),
+      )
+    ) {
+      return;
+    }
+    // A lead who has not opened their own seat yet still owns the application the seat came from.
+    if (seatApplicationId) {
+      const ownApplication = await manager.findOne(OpportunityApplication, {
+        where: {
+          id: seatApplicationId,
+          studentUserId: callerId,
+          withdrawnAt: IsNull(),
+        },
+      });
+      if (ownApplication) return;
+    }
+    throw new ForbiddenException(
+      'This participant is registered on another team. Only their team lead can update this seat.',
+    );
+  }
+
   async registerParticipant(
     studentId: string,
     dto: RegisterParticipantDto,
@@ -652,6 +722,23 @@ export class EngagementService {
             projectId: opportunity.id,
             status: 'pending',
           });
+        }
+
+        // An existing seat (matched by email, CNIC or account) may only be rewritten by its owner, the
+        // lead of the same team, or the listing's student creator — otherwise any approved student
+        // could overwrite another student's CNIC, phone, team and faculty approver.
+        if (
+          participation.id &&
+          callerRole !== undefined &&
+          (callerRole as UserRole) !== UserRole.SUPER_ADMIN
+        ) {
+          await this.assertMayUpdateExistingSeat(
+            manager,
+            participation,
+            studentId,
+            opportunity,
+            dtoEmailNorm,
+          );
         }
 
         // Apply all DTO fields
@@ -1634,7 +1721,11 @@ export class EngagementService {
       const pEmail = (participation.email || '').toLowerCase().trim();
       const uEmail = (user?.email || '').toLowerCase().trim();
 
-      const userCnicHash = user?.cnic ? this.hashString(user.cnic) : null;
+      // Seat hashes are over digits only; a profile CNIC may be stored with dashes.
+      const profileCnicDigits = String(user?.cnic ?? '').replace(/\D/g, '');
+      const userCnicHash = profileCnicDigits
+        ? this.hashString(profileCnicDigits)
+        : null;
 
       // Collect transitive identifiers from other participations belonging to this user
       // We search by studentId AND email to find records that might not be linked yet
@@ -1643,16 +1734,25 @@ export class EngagementService {
       });
 
       const myEmails = new Set([uEmail]);
-      const myCnicHashes = new Set(userCnicHash ? [userCnicHash] : []);
-
       for (const p of myOtherParticipations) {
         if (p.email) myEmails.add(p.email.toLowerCase().trim());
-        if (p.cnicHash) myCnicHashes.add(p.cnicHash);
       }
 
       const isEmailMatch = pEmail && myEmails.has(pEmail);
+      // CNIC only from the account's own profile: a CNIC typed onto another seat (or another
+      // project's registration) is not proof of identity and would let anyone claim that seat.
+      // A seat whose email belongs to a different registered account is that account's, by email.
+      const seatEmailOwner =
+        pEmail && !isEmailMatch
+          ? await this.userRepository
+              .createQueryBuilder('u')
+              .where('LOWER(TRIM(u.email)) = :pEmail', { pEmail })
+              .getOne()
+          : null;
       const isCnicMatch =
-        participation.cnicHash && myCnicHashes.has(participation.cnicHash);
+        !!userCnicHash &&
+        participation.cnicHash === userCnicHash &&
+        (!seatEmailOwner || seatEmailOwner.id === studentId);
 
       this.logger.warn(
         `Authorization check: Requester ${studentId} (email: ${uEmail}) vs Participation ${participation.id} (owner: ${participation.studentId}, email: ${pEmail})`,
@@ -3191,6 +3291,12 @@ export class EngagementService {
       throw new NotFoundException('Participation record not found');
     if (participation.studentId !== studentId)
       throw new BadRequestException('Not authorized');
+    // `finalized` counts as approved downstream, so a faculty rejection must not be undone here.
+    if (String(participation.status || '').toLowerCase() === 'rejected') {
+      throw new ForbiddenException(
+        'Your participation on this project was not approved by faculty, so it cannot be finalized.',
+      );
+    }
 
     const metrics = await this.getEngagementMetrics(participantId);
 

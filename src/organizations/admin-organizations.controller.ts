@@ -12,7 +12,10 @@ import {
 } from '@nestjs/common';
 import { OrganizationsService } from './organizations.service';
 import type { AdminCreateOrganizationInput } from './organizations.service';
-import { AdminRejectOrganizationDto } from './dto/organization.dto';
+import {
+  AdminRejectOrganizationDto,
+  AdminRenameOrganizationDto,
+} from './dto/organization.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -56,6 +59,18 @@ export class AdminOrganizationsController {
     @Body() dto: AdminRejectOrganizationDto,
   ) {
     return this.organizationsService.rejectOrganization(id, req.user.id, dto);
+  }
+
+  @Patch(':id/name')
+  async rename(
+    @Param('id') id: string,
+    @Body() body: AdminRenameOrganizationDto,
+  ) {
+    const data = await this.organizationsService.renameOrganization(
+      id,
+      body.name,
+    );
+    return { success: true, data };
   }
 
   @Patch(':id/block')

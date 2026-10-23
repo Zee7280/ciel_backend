@@ -39,6 +39,7 @@ import {
   resolveOrgSignupAccount,
 } from './org-signup.util';
 import { PlatformSettingsService } from '../settings/platform-settings.service';
+import { isOrganizationAccessRejected } from './jwt.strategy';
 import { canonicalizePhoneInput } from '../common/phone-e164.util';
 import type { SignupProofDocument } from '../organizations/entities/organization.entity';
 
@@ -88,9 +89,11 @@ export class AuthService implements OnApplicationBootstrap {
       });
       const orgIdsToApprove = new Set<string>();
       for (const user of activeNgoUsers) {
+        // Never re-approve an organization a CIEL admin has rejected.
         if (
           user.organization &&
-          user.organization.verificationStatus !== 'APPROVED'
+          user.organization.verificationStatus !== 'APPROVED' &&
+          user.organization.verificationStatus !== 'REJECTED'
         ) {
           orgIdsToApprove.add(user.organization.id);
         }
@@ -519,6 +522,12 @@ export class AuthService implements OnApplicationBootstrap {
       !investorPending
     ) {
       throw new UnauthorizedException('Account is not active');
+    }
+
+    if (isOrganizationAccessRejected(user.role, user.organization)) {
+      throw new UnauthorizedException(
+        'Your organization application was not approved. Contact CIEL PK support.',
+      );
     }
 
     // NGO/partner signup promises "requires CIEL PK Admin verification" — University/Corporate

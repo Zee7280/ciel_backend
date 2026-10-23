@@ -184,6 +184,13 @@ export class OrganizationMembershipService {
     membership_fee_amount_pkr: number | null;
   }> {
     if (!(await this.roleRequiresMembershipPayment(user.role))) {
+      // Admin switched the partner fee off: a partner still parked on the payment status
+      // (bulk release missed them, or a stale per-instance setting cache at signup) gets the
+      // portal now instead of a "Membership fee" option for a fee that no longer applies.
+      if (user.status === 'pending_membership_payment') {
+        await this.activateMembershipAccounts(user.id, user.organization?.id);
+        user.status = 'active';
+      }
       return {
         requires_membership_payment: false,
         membership_fee_submission_status: null,

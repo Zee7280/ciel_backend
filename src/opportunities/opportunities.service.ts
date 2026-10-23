@@ -1993,22 +1993,83 @@ export class OpportunitiesService {
     }
   }
 
+  /** Participation statuses that hold a seat on an opportunity. */
+  private static readonly OCCUPIED_SEAT_STATUSES = [
+    'pending',
+    'accepted',
+    'approved',
+    'verified',
+    'paid',
+    'pending_payment_approval',
+    'pending_ciel_approval',
+    'pending_faculty_approval',
+  ];
+
   async getOccupiedSeats(opportunityId: string): Promise<number> {
     return await this.participationRepository.count({
       where: {
         projectId: opportunityId,
-        status: In([
-          'pending',
-          'accepted',
-          'approved',
-          'verified',
-          'paid',
-          'pending_payment_approval',
-          'pending_ciel_approval',
-          'pending_faculty_approval',
-        ]),
+        status: In(OpportunitiesService.OCCUPIED_SEAT_STATUSES),
       },
     });
+  }
+
+  /**
+   * {@link getOccupiedSeats} and {@link getFacultyOrgFallback} for a whole listing in two queries,
+   * instead of two round trips per row (153 public listings were ~300 queries per request).
+   */
+  private async loadListingSeatsAndFallbacks(opps: Opportunity[]): Promise<{
+    seats: Map<string, number>;
+    fallbacks: Map<
+      string,
+      NonNullable<
+        Awaited<ReturnType<OpportunitiesService['getFacultyOrgFallback']>>
+      >
+    >;
+  }> {
+    const seats = new Map<string, number>();
+    const fallbacks = new Map<
+      string,
+      NonNullable<
+        Awaited<ReturnType<OpportunitiesService['getFacultyOrgFallback']>>
+      >
+    >();
+    const ids = opps.map((o) => o.id).filter(Boolean);
+    if (ids.length) {
+      const rows = await this.participationRepository
+        .createQueryBuilder('p')
+        .select('p.project_id', 'projectId')
+        .addSelect('COUNT(*)', 'count')
+        .where('p.project_id::text = ANY(:ids)', { ids })
+        .andWhere('p.status IN (:...st)', {
+          st: OpportunitiesService.OCCUPIED_SEAT_STATUSES,
+        })
+        .groupBy('p.project_id')
+        .getRawMany<{ projectId: string; count: string }>();
+      for (const row of rows) {
+        seats.set(String(row.projectId), Number(row.count) || 0);
+      }
+    }
+    const facultyIds = [
+      ...new Set(
+        opps
+          .filter((o) => !o.organizationId && o.facultyId)
+          .map((o) => o.facultyId as string),
+      ),
+    ];
+    if (facultyIds.length) {
+      const faculty = await this.usersRepository.find({
+        where: { id: In(facultyIds) },
+      });
+      for (const f of faculty) {
+        fallbacks.set(f.id, {
+          id: null,
+          name: f.institution || f.university || f.name,
+          logo_url: null,
+        });
+      }
+    }
+    return { seats, fallbacks };
   }
 
   async getFacultyOrgFallback(facultyId?: string | null) {
@@ -4333,47 +4394,46 @@ export class OpportunitiesService {
       order: { createdAt: 'DESC' },
     });
 
-    const items = await Promise.all(
-      rows.map(async (opp) => {
-        const occupiedSeats = await this.getOccupiedSeats(opp.id);
-        const json = jsonColumnsOf(opp);
-        const volunteersRequired = json.timeline?.volunteers_required || 0;
-        return {
-          id: opp.id,
-          _id: opp.id,
-          opportunity_id: opp.id,
-          title: opp.title,
-          status: this.getApiOpportunityStatus(opp),
-          requires_partner_approval: opp.requiresPartnerApproval,
-          ...this.getWorkflowResponseFields(opp),
-          created_at: opp.createdAt,
-          mode: opp.mode,
-          sdg: json.sdg_info?.sdg_id || opp.sdg,
-          applicants_count: occupiedSeats,
-          remaining_seats: Math.max(0, volunteersRequired - occupiedSeats),
-          volunteers_required: volunteersRequired,
-          expected_hours: Number(json.timeline?.expected_hours) || 0,
-          organization_name: isDisplayableOrgName(opp.organization?.name)
-            ? String(opp.organization?.name).trim()
-            : null,
-          partner_name: trackingOrganizationName(opp),
-          // Lets the "Pending Partner" status line name the actual person, same contact
-          // resolution used on the student "mine" list.
-          partner_contact_name:
-            (typeof json.partner_organization?.contact_person === 'string' &&
-              json.partner_organization.contact_person.trim()) ||
-            (typeof json.partner_organization?.contact_person_name ===
-              'string' &&
-              json.partner_organization.contact_person_name.trim()) ||
-            (typeof json.supervision?.partner_contact_person === 'string' &&
-              json.supervision.partner_contact_person.trim()) ||
-            null,
-          partner_contact_email: this.resolvePartnerEmailFromOpportunity(opp),
-          admin_approved: opp.admin_approved === true,
-          rejection_reason: opp.rejectionReason ?? null,
-        };
-      }),
-    );
+    const listingAux = await this.loadListingSeatsAndFallbacks(rows);
+
+    const items = rows.map((opp) => {
+      const occupiedSeats = listingAux.seats.get(opp.id) ?? 0;
+      const json = jsonColumnsOf(opp);
+      const volunteersRequired = json.timeline?.volunteers_required || 0;
+      return {
+        id: opp.id,
+        _id: opp.id,
+        opportunity_id: opp.id,
+        title: opp.title,
+        status: this.getApiOpportunityStatus(opp),
+        requires_partner_approval: opp.requiresPartnerApproval,
+        ...this.getWorkflowResponseFields(opp),
+        created_at: opp.createdAt,
+        mode: opp.mode,
+        sdg: json.sdg_info?.sdg_id || opp.sdg,
+        applicants_count: occupiedSeats,
+        remaining_seats: Math.max(0, volunteersRequired - occupiedSeats),
+        volunteers_required: volunteersRequired,
+        expected_hours: Number(json.timeline?.expected_hours) || 0,
+        organization_name: isDisplayableOrgName(opp.organization?.name)
+          ? String(opp.organization?.name).trim()
+          : null,
+        partner_name: trackingOrganizationName(opp),
+        // Lets the "Pending Partner" status line name the actual person, same contact
+        // resolution used on the student "mine" list.
+        partner_contact_name:
+          (typeof json.partner_organization?.contact_person === 'string' &&
+            json.partner_organization.contact_person.trim()) ||
+          (typeof json.partner_organization?.contact_person_name === 'string' &&
+            json.partner_organization.contact_person_name.trim()) ||
+          (typeof json.supervision?.partner_contact_person === 'string' &&
+            json.supervision.partner_contact_person.trim()) ||
+          null,
+        partner_contact_email: this.resolvePartnerEmailFromOpportunity(opp),
+        admin_approved: opp.admin_approved === true,
+        rejection_reason: opp.rejectionReason ?? null,
+      };
+    });
 
     return { items, opportunities: items, rows: items };
   }
@@ -4903,13 +4963,15 @@ export class OpportunitiesService {
 
     const opportunities = await query.getMany();
 
+    const listingAux = await this.loadListingSeatsAndFallbacks(opportunities);
+
     const rows = await Promise.all(
       opportunities.map(async (opp) => {
-        const occupiedSeats = await this.getOccupiedSeats(opp.id);
+        const occupiedSeats = listingAux.seats.get(opp.id) ?? 0;
         const json = jsonColumnsOf(opp);
         const volunteersRequired = json.timeline?.volunteers_required || 0;
         const orgFallback = !opp.organizationId
-          ? await this.getFacultyOrgFallback(opp.facultyId)
+          ? (listingAux.fallbacks.get(opp.facultyId ?? '') ?? null)
           : null;
         // Partner queues: tell the UI which of the listed rows THIS login may actually review /
         // manage, using the very same identity rules the actions enforce.
@@ -5016,19 +5078,19 @@ export class OpportunitiesService {
     );
 
     // We need to count participants for each opportunity
-    const opportunitiesWithCounts = await Promise.all(
-      visibleOpportunities.map(async (opp) => {
-        const occupiedSeats = await this.getOccupiedSeats(opp.id);
-        const orgFallback = !opp.organizationId
-          ? await this.getFacultyOrgFallback(opp.facultyId)
-          : null;
-        return this.buildPublicOpportunityPayload(
-          opp,
-          occupiedSeats,
-          orgFallback,
-        );
-      }),
-    );
+    const listingAux =
+      await this.loadListingSeatsAndFallbacks(visibleOpportunities);
+    const opportunitiesWithCounts = visibleOpportunities.map((opp) => {
+      const occupiedSeats = listingAux.seats.get(opp.id) ?? 0;
+      const orgFallback = !opp.organizationId
+        ? (listingAux.fallbacks.get(opp.facultyId ?? '') ?? null)
+        : null;
+      return this.buildPublicOpportunityPayload(
+        opp,
+        occupiedSeats,
+        orgFallback,
+      );
+    });
 
     // Anonymous directory: never expose supervisor / partner contact details.
     return redactOpportunityContactDetails(opportunitiesWithCounts);
@@ -5464,72 +5526,72 @@ export class OpportunitiesService {
         : [];
     const creatorById = new Map(creators.map((c) => [c.id, c]));
 
-    return Promise.all(
-      opportunities.map(async (opp) => {
-        const occupiedSeats = await this.getOccupiedSeats(opp.id);
-        const json = jsonColumnsOf(opp);
-        const volunteersRequired = json.timeline?.volunteers_required || 0;
-        const orgFallback = !opp.organizationId
-          ? await this.getFacultyOrgFallback(opp.facultyId)
-          : null;
-        const creator = opp.creatorId
-          ? (creatorById.get(opp.creatorId) ?? null)
-          : null;
+    const listingAux = await this.loadListingSeatsAndFallbacks(opportunities);
 
-        const oppRest = omitKeys(opp, [
-          'faculty_verification_token',
-          'partnerToken',
-          'liaisonToken',
-          'execution_verification_token',
-        ]);
+    return opportunities.map((opp) => {
+      const occupiedSeats = listingAux.seats.get(opp.id) ?? 0;
+      const json = jsonColumnsOf(opp);
+      const volunteersRequired = json.timeline?.volunteers_required || 0;
+      const orgFallback = !opp.organizationId
+        ? (listingAux.fallbacks.get(opp.facultyId ?? '') ?? null)
+        : null;
+      const creator = opp.creatorId
+        ? (creatorById.get(opp.creatorId) ?? null)
+        : null;
 
-        const { flow_status, admin_can_approve } =
-          this.describeAdminQueueFlow(opp);
+      const oppRest = omitKeys(opp, [
+        'faculty_verification_token',
+        'partnerToken',
+        'liaisonToken',
+        'execution_verification_token',
+      ]);
 
-        return {
-          ...oppRest,
-          status: this.getApiOpportunityStatus(opp),
-          start_date: json.timeline?.start_date,
-          end_date: json.timeline?.end_date,
-          from_time: json.timeline?.from_time,
-          to_time: json.timeline?.to_time,
-          remaining_seats: Math.max(0, volunteersRequired - occupiedSeats),
-          participant_count: occupiedSeats,
-          participation_scope: json.participation_scope,
-          supervision: json.supervision,
-          executing_context: json.executing_context,
-          executing_organization: json.executing_organization,
-          partner_organization: json.partner_organization,
-          safety_supervision_declaration: json.safety_supervision_declaration,
-          safety_declaration: json.safety_declaration,
-          visibility_and_academic_linkage: json.visibility_and_academic_linkage,
-          submission_confirmations: json.submission_confirmations,
-          external_partner_collaboration: json.external_partner_collaboration,
-          academic_linkage: json.academic_linkage,
-          execution_verified: opp.execution_verified,
-          admin_approved: opp.admin_approved,
-          ...this.getWorkflowResponseFields(opp),
-          flow_status,
-          admin_can_approve,
-          is_student_created: opp.isStudentCreated,
-          organization: opp.organization || orgFallback,
-          creator: creator
-            ? {
-                id: creator.id,
-                name: creator.name,
-                email: creator.email,
-                phone: creator.phone,
-                university: creator.university,
-                institution: creator.institution,
-                department: creator.department,
-                major: creator.major,
-                city: creator.city,
-                registration_number: creator.registrationNumber,
-              }
-            : null,
-        };
-      }),
-    );
+      const { flow_status, admin_can_approve } =
+        this.describeAdminQueueFlow(opp);
+
+      return {
+        ...oppRest,
+        status: this.getApiOpportunityStatus(opp),
+        start_date: json.timeline?.start_date,
+        end_date: json.timeline?.end_date,
+        from_time: json.timeline?.from_time,
+        to_time: json.timeline?.to_time,
+        remaining_seats: Math.max(0, volunteersRequired - occupiedSeats),
+        participant_count: occupiedSeats,
+        participation_scope: json.participation_scope,
+        supervision: json.supervision,
+        executing_context: json.executing_context,
+        executing_organization: json.executing_organization,
+        partner_organization: json.partner_organization,
+        safety_supervision_declaration: json.safety_supervision_declaration,
+        safety_declaration: json.safety_declaration,
+        visibility_and_academic_linkage: json.visibility_and_academic_linkage,
+        submission_confirmations: json.submission_confirmations,
+        external_partner_collaboration: json.external_partner_collaboration,
+        academic_linkage: json.academic_linkage,
+        execution_verified: opp.execution_verified,
+        admin_approved: opp.admin_approved,
+        ...this.getWorkflowResponseFields(opp),
+        flow_status,
+        admin_can_approve,
+        is_student_created: opp.isStudentCreated,
+        organization: opp.organization || orgFallback,
+        creator: creator
+          ? {
+              id: creator.id,
+              name: creator.name,
+              email: creator.email,
+              phone: creator.phone,
+              university: creator.university,
+              institution: creator.institution,
+              department: creator.department,
+              major: creator.major,
+              city: creator.city,
+              registration_number: creator.registrationNumber,
+            }
+          : null,
+      };
+    });
   }
 
   /**

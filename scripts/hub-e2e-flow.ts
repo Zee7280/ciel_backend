@@ -748,6 +748,48 @@ async function main() {
       ticketRes.status === 201 && !!ticket?.upload_url,
       `status ${ticketRes.status}`,
     );
+    // Video and audio evidence use the same path as images.
+    const clip = Buffer.from('e2e-not-a-real-video-but-bytes-are-bytes');
+    const clipSha = crypto.createHash('sha256').update(clip).digest('hex');
+    const videoTicketRes = await vendor(
+      'POST',
+      `${V}/evidence/upload-ticket`,
+      credential,
+      {
+        connection_id: connectionId,
+        content_type: 'video/mp4',
+        size_bytes: clip.length,
+        original_name: 'e2e.mp4',
+      },
+    );
+    const videoTicket = videoTicketRes.json.ticket as
+      | {
+          upload_id: string;
+          upload_url: string;
+          headers: Record<string, string>;
+        }
+      | undefined;
+    let videoAccepted = false;
+    if (videoTicket) {
+      const putClip = await fetch(videoTicket.upload_url, {
+        method: 'PUT',
+        headers: videoTicket.headers,
+        body: clip,
+      });
+      const doneClip = await vendor(
+        'POST',
+        `${V}/evidence/${videoTicket.upload_id}/complete`,
+        credential,
+        { sha256: clipSha },
+      );
+      const evClip = doneClip.json.evidence as Json | undefined;
+      videoAccepted = putClip.status === 200 && evClip?.state === 'accepted';
+    }
+    check(
+      'video/mp4 evidence ticket, upload and completion',
+      videoTicketRes.status === 201 && videoAccepted,
+      `status ${videoTicketRes.status}`,
+    );
     if (ticket) {
       const put = await fetch(ticket.upload_url, {
         method: 'PUT',

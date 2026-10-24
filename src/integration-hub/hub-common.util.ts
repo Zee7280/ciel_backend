@@ -5,12 +5,19 @@ export const HUB_DEFAULT_SETTINGS: Required<ExternalPlatformSettings> = {
   rate_limit_per_minute: 120,
   max_batch_size: 50,
   max_payload_bytes: 256 * 1024,
-  max_evidence_bytes: 10 * 1024 * 1024,
+  max_evidence_bytes: 100 * 1024 * 1024,
   evidence_mime_allowlist: [
     'image/jpeg',
     'image/png',
     'image/webp',
     'application/pdf',
+    'video/mp4',
+    'video/quicktime',
+    'video/webm',
+    'audio/mpeg',
+    'audio/mp4',
+    'audio/wav',
+    'audio/webm',
   ],
   retention_days: 365,
   log_retention_days: 30,
@@ -22,7 +29,9 @@ export const HUB_HARD_LIMITS = {
   max_batch_size: 200,
   max_payload_bytes: 2 * 1024 * 1024,
   max_event_bytes: 64 * 1024,
-  max_evidence_bytes: 50 * 1024 * 1024,
+  // Video/audio evidence goes straight to the bucket; the only server cost is the streamed hash
+  // at completion, which stays well inside the function limit at this size.
+  max_evidence_bytes: 200 * 1024 * 1024,
   rate_limit_per_minute: 6000,
 };
 

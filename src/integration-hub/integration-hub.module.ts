@@ -19,6 +19,7 @@ import { EvidenceService } from './evidence/evidence.service';
 import { RetentionService } from './maintenance/retention.service';
 import { HubRecordsService } from './admin/hub-records.service';
 import { HubHealthService } from './admin/hub-health.service';
+import { HubDeletionService } from './platforms/hub-deletion.service';
 import { HubVendorController } from './vendor/hub-vendor.controller';
 import { HubAdminController } from './admin/hub-admin.controller';
 import { HubOrgController } from './admin/hub-org.controller';
@@ -69,6 +70,7 @@ import { HubInternalJobsController } from './maintenance/hub-internal-jobs.contr
     RetentionService,
     HubRecordsService,
     HubHealthService,
+    HubDeletionService,
     CronSecretGuard,
   ],
   exports: [TypeOrmModule],

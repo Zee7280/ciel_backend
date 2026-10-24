@@ -998,6 +998,82 @@ async function main() {
     `${afterRevoke.status}`,
   );
 
+  // ---- delete: refused for a platform with data, allowed for an unused one ------------------
+  const usedCheck = await call(
+    'GET',
+    `${A}/platforms/${platformId}/deletion-check`,
+    { token: t.admin },
+  );
+  const usedDelete = await call('DELETE', `${A}/platforms/${platformId}`, {
+    token: t.admin,
+  });
+  check(
+    'platform with data cannot be deleted (409)',
+    (usedCheck.json.data as Json)?.deletable === false &&
+      usedDelete.status === 409,
+    `deletable=${String((usedCheck.json.data as Json)?.deletable)} delete=${usedDelete.status}`,
+  );
+  const spare = await call('POST', `${A}/platforms`, {
+    token: t.admin,
+    body: {
+      name: `E2E Spare ${stamp}`,
+      slug: `e2e-spare-${stamp}`,
+      approvedEventTypes: ['activity.session'],
+    },
+  });
+  const spareId = String((spare.json.data as Json)?.id);
+  await call('POST', `${A}/platforms/${spareId}/credentials`, {
+    token: t.admin,
+    body: { label: 'spare' },
+  });
+  const spareConn = await call('POST', `${A}/connections`, {
+    token: t.admin,
+    body: { platformId: spareId, organizationId: t.orgId },
+  });
+  const spareConnId = String((spareConn.json.data as Json)?.id);
+  const connDelete = await call('DELETE', `${A}/connections/${spareConnId}`, {
+    token: t.admin,
+  });
+  check(
+    'unused connection can be deleted',
+    connDelete.status === 200,
+    `status ${connDelete.status}`,
+  );
+  await call('POST', `${A}/connections`, {
+    token: t.admin,
+    body: { platformId: spareId, organizationId: t.orgId },
+  });
+  await call('POST', `${A}/platforms/${spareId}/status`, {
+    token: t.admin,
+    body: { status: 'retired', reason: 'created by mistake' },
+  });
+  const spareDelete = await call('DELETE', `${A}/platforms/${spareId}`, {
+    token: t.admin,
+  });
+  const spareGone = await call('GET', `${A}/platforms/${spareId}`, {
+    token: t.admin,
+  });
+  const spareAudit = await call(
+    'GET',
+    `${A}/audit?action=PLATFORM_DELETED&targetId=${spareId}`,
+    { token: t.admin },
+  );
+  check(
+    'retired unused platform deleted with its credential and connection, audited',
+    spareDelete.status === 200 &&
+      spareGone.status === 404 &&
+      Number(spareAudit.json.total) === 1,
+    `delete=${spareDelete.status} get=${spareGone.status} audit=${String(spareAudit.json.total)}`,
+  );
+  const orgOnDelete = await call('DELETE', `${A}/platforms/${platformId}`, {
+    token: t.org,
+  });
+  check(
+    'org token cannot delete platforms (403)',
+    orgOnDelete.status === 403,
+    `${orgOnDelete.status}`,
+  );
+
   // ---- organization scoping -------------------------------------------------------------------
   const orgOther = await call(
     'GET',

@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   NotFoundException,
   Param,
@@ -42,6 +43,7 @@ import {
 } from '../platforms/dto/platform.dto';
 import { HubSecretsService } from '../security/hub-secrets.service';
 import { HubStorageService } from '../evidence/hub-storage.service';
+import { HubDeletionService } from '../platforms/hub-deletion.service';
 
 type AdminRequest = {
   user: { id: string; email?: string; name?: string };
@@ -77,6 +79,7 @@ export class HubAdminController {
     private readonly audit: HubAuditService,
     private readonly secrets: HubSecretsService,
     private readonly storage: HubStorageService,
+    private readonly deletion: HubDeletionService,
     @InjectRepository(Organization)
     private readonly organizations: Repository<Organization>,
   ) {}
@@ -157,6 +160,35 @@ export class HubAdminController {
   ) {
     const data = await this.platforms.update(id, dto, actorOf(req));
     return { success: true, data };
+  }
+
+  /** Whether a platform can be hard-deleted (never received data, not live). */
+  @Get('platforms/:id/deletion-check')
+  async platformDeletionCheck(@Param('id', ParseUUIDPipe) id: string) {
+    return { success: true, data: await this.deletion.checkPlatform(id) };
+  }
+
+  @Delete('platforms/:id')
+  async deletePlatform(
+    @Req() req: AdminRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    await this.deletion.deletePlatform(id, actorOf(req));
+    return { success: true, message: 'Platform deleted' };
+  }
+
+  @Get('connections/:id/deletion-check')
+  async connectionDeletionCheck(@Param('id', ParseUUIDPipe) id: string) {
+    return { success: true, data: await this.deletion.checkConnection(id) };
+  }
+
+  @Delete('connections/:id')
+  async deleteConnection(
+    @Req() req: AdminRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    await this.deletion.deleteConnection(id, actorOf(req));
+    return { success: true, message: 'Connection deleted' };
   }
 
   @Post('platforms/:id/status')

@@ -36,6 +36,8 @@ import { FeedbackModule } from './feedback/feedback.module';
 import { TutorialsModule } from './tutorials/tutorials.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { JobsModule } from './jobs/jobs.module';
+import { IntegrationHubModule } from './integration-hub/integration-hub.module';
+import { isHubEnabled } from './integration-hub/hub-connection.constants';
 import { PathsModule } from './paths/paths.module';
 import { ImpactSummaryModule } from './impact-summary/impact-summary.module';
 import { AiModule } from './ai/ai.module';
@@ -100,6 +102,8 @@ import { NpeRankingModule } from './ranking/npe-ranking.module';
     TutorialsModule,
     AnalyticsModule,
     JobsModule,
+    // Integration Hub: isolated schema + restricted DB role; loaded only when configured.
+    ...(isHubEnabled() ? [IntegrationHubModule] : []),
     PathsModule,
     ImpactSummaryModule,
     AiModule,

@@ -20,7 +20,13 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json"
+    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "hub:migrate": "ts-node ./node_modules/typeorm/cli.js migration:run -d src/integration-hub/hub-migration.data-source.ts",
+    "hub:migrate:revert": "ts-node ./node_modules/typeorm/cli.js migration:revert -d src/integration-hub/hub-migration.data-source.ts",
+    "hub:migrate:show": "ts-node ./node_modules/typeorm/cli.js migration:show -d src/integration-hub/hub-migration.data-source.ts",
+    "hub:isolation-check": "ts-node scripts/hub-isolation-check.ts",
+    "hub:schema-check": "ts-node scripts/hub-schema-check.ts",
+    "hub:e2e": "ts-node scripts/hub-e2e-flow.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1000.0",

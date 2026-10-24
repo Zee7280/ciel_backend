@@ -17,7 +17,20 @@ async function bootstrap() {
   });
 
   app.use(compression());
-  app.use(json({ limit: bodyLimit }));
+  // Integration Hub vendor requests are HMAC-signed over the exact bytes received, so the raw
+  // body is kept for those paths only (see integration-hub/security/platform-auth.guard.ts).
+  app.use(
+    json({
+      limit: bodyLimit,
+      verify: (req: Request & { rawBody?: Buffer }, _res, buf: Buffer) => {
+        if (
+          (req.originalUrl ?? req.url ?? '').startsWith('/api/integrations/')
+        ) {
+          req.rawBody = Buffer.from(buf);
+        }
+      },
+    }),
+  );
   app.use(urlencoded({ extended: true, limit: bodyLimit }));
 
   // Basic security headers (no extra dependency). The API serves JSON, so these are safe everywhere.
@@ -92,6 +105,8 @@ async function bootstrap() {
       // Browsers/bots hit backend origin for favicon — avoid 404 noise in logs (API has no UI asset).
       { path: 'favicon.ico', method: RequestMethod.GET },
       { path: 'favicon.ico', method: RequestMethod.HEAD },
+      // Integration Hub vendor API lives at /api/integrations/v1 (machine auth, not JWT).
+      { path: 'api/integrations/{*path}', method: RequestMethod.ALL },
     ],
   });
 

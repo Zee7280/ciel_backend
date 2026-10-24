@@ -9,6 +9,20 @@
             }
         }
     ],
+    "crons": [
+        {
+            "path": "/api/v1/internal/jobs/nightly",
+            "schedule": "0 21 * * *"
+        },
+        {
+            "path": "/api/v1/internal/jobs/hub-retention",
+            "schedule": "30 21 * * *"
+        },
+        {
+            "path": "/api/v1/internal/jobs/hub-retry-sweeper",
+            "schedule": "*/15 * * * *"
+        }
+    ],
     "rewrites": [
         {
             "source": "/api/v1/(.*)",

@@ -104,6 +104,14 @@ export class AdminController {
     private readonly moduleRef: ModuleRef,
   ) {}
 
+  /** Same run as the 02:00 PKT Vercel Cron; result is also written to the audit log. */
+  @Post('jobs/nightly')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  runNightlyJobs() {
+    return this.platformJobsService.runNightlyJobsNow('admin-manual');
+  }
+
   @Post('jobs/attendance-sla')
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)

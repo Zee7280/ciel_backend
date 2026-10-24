@@ -99,6 +99,18 @@ describe('findPersonalFields', () => {
       'ref',
     ]);
     expect(findPersonalFields({ trees: 40, location: 'Lahore' })).toEqual([]);
+    // Vendor domain fields that merely contain "name" are not personal.
+    expect(
+      findPersonalFields({
+        site_name: 'Model Town Park',
+        species_name: 'Neem',
+        organizer: { team_name: 'Green Squad' },
+      }),
+    ).toEqual([]);
+    expect(findPersonalFields({ name: 'Ali', volunteer_name: 'B' })).toEqual([
+      'name',
+      'volunteer_name',
+    ]);
   });
 });
 

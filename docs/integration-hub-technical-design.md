@@ -422,8 +422,21 @@ uncommitted at time of writing.
 | Core isolation (§7.1 I9) | — | e2e: row counts of users, organizations, opportunities, participations, attendance_logs, reports, student_reports, npe_ranking_snapshots identical before and after the whole flow |
 | Frontend | `ciel_frontend/src/app/dashboard/admin/integrations/**`, `ciel_frontend/src/app/dashboard/partner/integrations/**`, `ciel_frontend/src/utils/integrationHub.ts`, sidebar + header entries | `tsc`, `eslint`, `next build` |
 
-End-to-end run (`npm run hub:e2e` with `HUB_E2E_EVIDENCE=1`): **59/59 checks pass** against the
+End-to-end run (`npm run hub:e2e` with `HUB_E2E_EVIDENCE=1`): **67/67 checks pass** against the
 local backend. Backend unit suite: 139 suites, 1534 tests pass. Lint: clean.
+
+Independent review pass (backend + frontend, 36 findings, all applied) added: per-event row locks
+and status re-checks so intake, sweeper and replay can never apply an event twice; replay limited
+to failed events; fair sweeper claim (per-connection cap inside the claim query); platform status
+and validity window re-checked at processing time; evidence must be accepted and unlinked before
+an event may reference it; version numbers span voided records; summary record counts move with
+type/month corrections; per-connection lock shared by summaries and rebuild; vendor bodies must be
+JSON (415 otherwise), parsed by a dedicated strict parser with a 2 MB ceiling, with per-platform
+quota charged only after signature verification and a per-IP limiter in front; UUID/date filters
+return 400 instead of 500; organization responses are projected (no platform internals, no storage
+keys); metric PATCH validated; hub DataSource fails fast on a bad URL; bootstrap SQL is
+transactional, refuses to run without its variables, and no longer touches the PUBLIC grant on
+schema `public` (verified on a throwaway database: core role unaffected, hub role denied).
 
 ### Environment variables (backend)
 
@@ -448,8 +461,9 @@ exercised by `scripts/hub-e2e-flow.ts`.
 ### Local setup
 
 ```bash
-# 1. roles + schema (as the DB owner; core_role = your DB_USERNAME)
-psql -h 127.0.0.1 -U postgres -d <dbname> -v core_role=postgres -f scripts/hub-bootstrap-roles.sql
+# 1. roles + schema (as the DB owner; core_role = your DB_USERNAME; passwords are required)
+psql -h 127.0.0.1 -U postgres -d <dbname> -v core_role=postgres \
+  -v hub_app_pw='<pw>' -v hub_migrator_pw='<pw>' -f scripts/hub-bootstrap-roles.sql
 # 2. migrate as the migrator role
 HUB_MIGRATION_DATABASE_URL=postgres://ciel_hub_migrator:<pw>@127.0.0.1:5432/<dbname> npm run hub:migrate
 # 3. prove isolation and schema match with the runtime role

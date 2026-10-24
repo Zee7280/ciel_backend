@@ -10,7 +10,7 @@ import {
   ExternalSummary,
 } from '../entities';
 import { HUB_CONNECTION } from '../hub-connection.constants';
-import { parsePage } from '../hub-common.util';
+import { dateFilter, parsePage, uuidFilter } from '../hub-common.util';
 import { HubActor, HubAuditService } from '../audit/hub-audit.service';
 
 type Scope = { organizationId?: string };
@@ -69,17 +69,19 @@ export class HubRecordsService {
       .take(limit);
     qb = this.scopeJoin(qb, 'r', scope);
     qb.andWhere('r.status = :status', { status: filters.status || 'current' });
-    if (filters.connectionId)
-      qb.andWhere('r.connectionId = :cid', { cid: filters.connectionId });
-    if (filters.platformId)
-      qb.andWhere('r.platformId = :pid', { pid: filters.platformId });
+    const connectionId = uuidFilter(filters.connectionId, 'connectionId');
+    const platformId = uuidFilter(filters.platformId, 'platformId');
+    const from = dateFilter(filters.from, 'from');
+    const to = dateFilter(filters.to, 'to');
+    if (connectionId)
+      qb.andWhere('r.connectionId = :cid', { cid: connectionId });
+    if (platformId) qb.andWhere('r.platformId = :pid', { pid: platformId });
     if (filters.reviewState)
       qb.andWhere('r.reviewState = :rs', { rs: filters.reviewState });
     if (filters.activityType)
       qb.andWhere('r.activityType = :at', { at: filters.activityType });
-    if (filters.from)
-      qb.andWhere('r.occurredOn >= :from', { from: filters.from });
-    if (filters.to) qb.andWhere('r.occurredOn <= :to', { to: filters.to });
+    if (from) qb.andWhere('r.occurredOn >= :from', { from });
+    if (to) qb.andWhere('r.occurredOn <= :to', { to });
     if (filters.q?.trim()) {
       qb.andWhere('(r.externalActivityId ILIKE :q OR r.title ILIKE :q)', {
         q: `%${filters.q.trim()}%`,
@@ -187,10 +189,11 @@ export class HubRecordsService {
       .skip(skip)
       .take(limit);
     qb = this.scopeJoin(qb, 'e', scope);
-    if (filters.platformId)
-      qb.andWhere('e.platformId = :pid', { pid: filters.platformId });
-    if (filters.connectionId)
-      qb.andWhere('e.connectionId = :cid', { cid: filters.connectionId });
+    const platformId = uuidFilter(filters.platformId, 'platformId');
+    const connectionId = uuidFilter(filters.connectionId, 'connectionId');
+    if (platformId) qb.andWhere('e.platformId = :pid', { pid: platformId });
+    if (connectionId)
+      qb.andWhere('e.connectionId = :cid', { cid: connectionId });
     if (filters.status)
       qb.andWhere('e.status = :status', { status: filters.status });
     if (filters.eventType)

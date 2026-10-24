@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { ExternalPlatform, ExternalPlatformSettings } from './entities';
 
 export const HUB_DEFAULT_SETTINGS: Required<ExternalPlatformSettings> = {
@@ -92,6 +93,35 @@ export function parsePage(
   const p = toInt(page, 1);
   const l = Math.min(defaults.max, toInt(limit, defaults.limit));
   return { page: p, limit: l, skip: (p - 1) * l };
+}
+
+/**
+ * Query-filter helpers: an absent/blank value means "no filter"; a present but malformed value
+ * is a client error (400), never a database cast error (500).
+ */
+function filterText(v: unknown): string {
+  if (typeof v === 'string') return v.trim();
+  if (typeof v === 'number') return String(v);
+  if (Array.isArray(v) && typeof v[0] === 'string') return v[0].trim();
+  return v === undefined || v === null ? '' : '[invalid]';
+}
+
+export function uuidFilter(v: unknown, name: string): string | undefined {
+  const s = filterText(v);
+  if (s === '') return undefined;
+  if (!isUuid(s)) {
+    throw new BadRequestException(`${name} must be a UUID`);
+  }
+  return s;
+}
+
+export function dateFilter(v: unknown, name: string): string | undefined {
+  const s = filterText(v);
+  if (s === '') return undefined;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(new Date(s).getTime())) {
+    throw new BadRequestException(`${name} must be a date (YYYY-MM-DD)`);
+  }
+  return s;
 }
 
 export function isUuid(v: unknown): v is string {

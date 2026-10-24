@@ -13,7 +13,12 @@ import {
   ExternalPlatform,
 } from '../entities';
 import { HUB_CONNECTION } from '../hub-connection.constants';
-import { effectiveSettings, isUuid, parsePage } from '../hub-common.util';
+import {
+  effectiveSettings,
+  isUuid,
+  parsePage,
+  uuidFilter,
+} from '../hub-common.util';
 import { ConnectionsService } from '../platforms/connections.service';
 import { HubStorageService } from './hub-storage.service';
 import { HubActor, HubAuditService } from '../audit/hub-audit.service';
@@ -277,10 +282,11 @@ export class EvidenceService {
         { oid: filters.organizationId },
       );
     }
-    if (filters.connectionId)
-      qb.andWhere('e.connectionId = :cid', { cid: filters.connectionId });
-    if (filters.recordId)
-      qb.andWhere('e.recordId = :rid', { rid: filters.recordId });
+    const connectionId = uuidFilter(filters.connectionId, 'connectionId');
+    const recordId = uuidFilter(filters.recordId, 'recordId');
+    if (connectionId)
+      qb.andWhere('e.connectionId = :cid', { cid: connectionId });
+    if (recordId) qb.andWhere('e.recordId = :rid', { rid: recordId });
     if (filters.state)
       qb.andWhere('e.state = :state', { state: filters.state });
     const [rows, total] = await qb.getManyAndCount();

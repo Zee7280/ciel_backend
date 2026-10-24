@@ -37,7 +37,13 @@ import { HubInternalJobsController } from './maintenance/hub-internal-jobs.contr
   imports: [
     TypeOrmModule.forRootAsync({
       name: HUB_CONNECTION,
-      useFactory: () => buildHubDataSourceOptions(process.env, 'runtime'),
+      // A wrong HUB_DATABASE_URL must fail fast at boot (visible in the deploy log), not hang
+      // every cold start for Nest's default 9 × 3 s retries.
+      useFactory: () => ({
+        ...buildHubDataSourceOptions(process.env, 'runtime'),
+        retryAttempts: 1,
+        retryDelay: 500,
+      }),
     }),
     TypeOrmModule.forFeature(HUB_ENTITIES, HUB_CONNECTION),
     TypeOrmModule.forFeature([Organization]),

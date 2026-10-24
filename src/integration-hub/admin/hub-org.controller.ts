@@ -11,8 +11,10 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { UseInterceptors } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
+import { OrgResponseInterceptor } from './org-response.interceptor';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { RolesGuard } from '../../auth/roles.guard';
 import { Roles } from '../../auth/roles.decorator';
@@ -46,6 +48,7 @@ type OrgRequest = {
  */
 @Controller('org/integrations')
 @UseGuards(JwtAuthGuard, RolesGuard)
+@UseInterceptors(OrgResponseInterceptor)
 @Roles(
   UserRole.UNIVERSITY,
   UserRole.NGO,
@@ -119,9 +122,19 @@ export class HubOrgController {
     const orgId = this.orgIdOf(req);
     const org = await this.organizations.findOne({
       where: { id: orgId },
-      select: { id: true, name: true },
+      select: {
+        id: true,
+        name: true,
+        verificationStatus: true,
+        isBlocked: true,
+      },
     });
     if (!org) throw new NotFoundException('Organization not found');
+    if (org.verificationStatus !== 'APPROVED' || org.isBlocked) {
+      throw new ForbiddenException(
+        'Only approved organizations can connect external platforms',
+      );
+    }
     const data = await this.connections.propose(
       {
         ...dto,

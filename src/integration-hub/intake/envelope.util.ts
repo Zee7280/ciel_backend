@@ -18,6 +18,8 @@ export type HubEnvelope = {
   event_type: HubEventType;
   connection_id: string;
   occurred_at: string;
+  /** Calendar date (YYYY-MM-DD) in the vendor's own offset, for daily/monthly bucketing. */
+  occurred_on: string;
   activity: { external_id: string; type: string; title?: string };
   payload?: Record<string, unknown>;
   metrics?: ExternalMetricValue[];
@@ -30,8 +32,10 @@ export type EnvelopeValidation =
   | { ok: true; value: HubEnvelope; bytes: number }
   | { ok: false; code: string; errors: string[]; eventId: string | null };
 
+// Keys that denote a person. A bare `name` matches only on its own or with a person-like prefix
+// (student_name, volunteer_name …) so vendor fields such as site_name or species_name pass.
 const PERSONAL_KEY =
-  /(^|_)(name|first_name|last_name|full_name|email|e_mail|phone|mobile|cnic|national_id|nic|passport|address|dob|date_of_birth|birth_date|student_id|roll_no|roll_number|registration_no|reg_no|father_name|guardian)($|_)/i;
+  /^(name|full_name|first_name|last_name|surname|(student|participant|volunteer|person|contact|member|user|beneficiary|father|mother|guardian|teacher|supervisor)_name|email|e_mail|email_address|phone|phone_number|mobile|mobile_number|whatsapp|cnic|national_id|nic|passport|passport_no|home_address|residential_address|dob|date_of_birth|birth_date|student_id|roll_no|roll_number|registration_no|reg_no|guardian)$/i;
 // Unanchored on purpose: an e-mail or CNIC embedded in free text is still personal data.
 const PERSONAL_VALUE_EMAIL = /[^\s@<>()[\]]+@[^\s@<>()[\]]+\.[a-z]{2,}/i;
 const PERSONAL_VALUE_CNIC = /(^|\D)\d{5}-?\d{7}-?\d(\D|$)/;
@@ -183,6 +187,11 @@ export function validateEnvelope(raw: unknown): EnvelopeValidation {
     event_type: eventType as HubEventType,
     connection_id: raw.connection_id as string,
     occurred_at: occurred!.toISOString(),
+    // Keep the vendor's local calendar date when the string carries one (e.g. 2026-11-03T02:00+05:00
+    // is 3 Nov locally but 2 Nov in UTC); fall back to the UTC date.
+    occurred_on: /^\d{4}-\d{2}-\d{2}/.test(String(raw.occurred_at))
+      ? String(raw.occurred_at).slice(0, 10)
+      : occurred!.toISOString().slice(0, 10),
     activity: {
       external_id: externalId!,
       type: activityType!,

@@ -119,7 +119,12 @@ export class IntakeService {
         continue;
       }
 
-      const personal = findPersonalFields(env.payload ?? {});
+      // Scan every free-text surface a vendor controls, not only the payload.
+      const personal = findPersonalFields({
+        payload: env.payload ?? {},
+        activity_title: env.activity.title ?? '',
+        metric_methods: (env.metrics ?? []).map((m) => m.method ?? ''),
+      });
       if (personal.length > 0) {
         if (!connection.personalFieldsAllowed) {
           rejected += 1;
@@ -128,7 +133,7 @@ export class IntakeService {
             receipt_id: null,
             status: 'rejected',
             error_code: 'PERSONAL_DATA_NOT_ALLOWED',
-            errors: personal.map((p) => `payload.${p}`),
+            errors: personal,
           });
           continue;
         }
@@ -162,6 +167,9 @@ export class IntakeService {
         continue;
       }
 
+      // When we are going to process inline, hold the row lock from the insert so a concurrent
+      // sweeper run skips it (processEvent clears the lock in every outcome).
+      const inline = Date.now() < deadline;
       const row = this.events.create({
         connectionId: connection.id,
         platformId: ctx.platform.id,
@@ -172,6 +180,8 @@ export class IntakeService {
         status: 'received',
         attempts: 0,
         nextAttemptAt: new Date(),
+        lockedAt: inline ? new Date() : null,
+        lockedBy: inline ? 'intake' : null,
         credentialKeyId: ctx.credentialKeyId,
         sourceIp: ctx.ip,
         payloadBytes: v.bytes,
@@ -196,7 +206,7 @@ export class IntakeService {
       }
       accepted += 1;
 
-      if (Date.now() < deadline) {
+      if (inline) {
         const out = await this.processing.processEvent(row.id);
         if (out.status === 'processed') {
           receipts.push({

@@ -13,6 +13,7 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
+import { PartialType } from '@nestjs/mapped-types';
 import { HUB_EVENT_TYPES } from '../../intake/envelope.util';
 
 export class CreatePlatformDto {
@@ -285,3 +286,8 @@ export class MetricDefinitionDto {
   @IsBoolean()
   active?: boolean;
 }
+
+/** PATCH body for a metric: every field optional, same validators as creation. */
+export class UpdateMetricDefinitionDto extends PartialType(
+  MetricDefinitionDto,
+) {}

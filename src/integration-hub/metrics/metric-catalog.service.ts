@@ -10,6 +10,14 @@ import { HUB_CONNECTION } from '../hub-connection.constants';
 import { HubActor, HubAuditService } from '../audit/hub-audit.service';
 import { MetricDefinitionDto } from '../platforms/dto/platform.dto';
 
+export const METRIC_CLASSIFICATIONS: string[] = [
+  'observed',
+  'self_reported',
+  'estimated',
+  'projected',
+  'externally_verified',
+];
+
 export type MetricValidation =
   | { ok: true; metrics: ExternalMetricValue[] }
   | { ok: false; errors: string[] };
@@ -54,7 +62,10 @@ export function validateMetricValues(
       code: m.code,
       value: m.value,
       unit: def.unit,
-      classification: m.classification ?? def.defaultClassification,
+      classification:
+        m.classification && METRIC_CLASSIFICATIONS.includes(m.classification)
+          ? m.classification
+          : def.defaultClassification,
       ...(m.method ? { method: String(m.method).slice(0, 200) } : {}),
     });
   }

@@ -9,6 +9,7 @@ import { json, urlencoded } from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import compression from 'compression';
 import { StripSecretsInterceptor } from './common/interceptors/strip-secrets.interceptor';
+import { HUB_HARD_LIMITS } from './integration-hub/hub-common.util';
 
 async function bootstrap() {
   const bodyLimit = process.env.REQUEST_BODY_LIMIT ?? '50mb';
@@ -17,21 +18,51 @@ async function bootstrap() {
   });
 
   app.use(compression());
-  // Integration Hub vendor requests are HMAC-signed over the exact bytes received, so the raw
-  // body is kept for those paths only (see integration-hub/security/platform-auth.guard.ts).
-  app.use(
-    json({
-      limit: bodyLimit,
-      verify: (req: Request & { rawBody?: Buffer }, _res, buf: Buffer) => {
-        if (
-          (req.originalUrl ?? req.url ?? '').startsWith('/api/integrations/')
-        ) {
-          req.rawBody = Buffer.from(buf);
-        }
-      },
-    }),
-  );
-  app.use(urlencoded({ extended: true, limit: bodyLimit }));
+  // Integration Hub vendor API: refuse oversized bodies before any JSON parsing happens. The
+  // platform-specific limit is enforced later by the controller; this is the hard ceiling.
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if ((req.originalUrl ?? req.url ?? '').startsWith('/api/integrations/')) {
+      const declared = Number(req.headers['content-length'] ?? 0);
+      if (
+        Number.isFinite(declared) &&
+        declared > HUB_HARD_LIMITS.max_payload_bytes
+      ) {
+        res.status(413).json({
+          success: false,
+          code: 'PAYLOAD_TOO_LARGE',
+          message: `Request body exceeds ${HUB_HARD_LIMITS.max_payload_bytes} bytes`,
+        });
+        return;
+      }
+    }
+    next();
+  });
+  // Integration Hub vendor API gets its own strict JSON parser (hard size ceiling, JSON only,
+  // raw bytes kept for HMAC verification). The permissive core parsers never see those paths.
+  const isHubPath = (req: Request) =>
+    (req.originalUrl ?? req.url ?? '').startsWith('/api/integrations/');
+  const hubJson = json({
+    limit: HUB_HARD_LIMITS.max_payload_bytes,
+    type: 'application/json',
+    verify: (req: Request & { rawBody?: Buffer }, _res, buf: Buffer) => {
+      req.rawBody = Buffer.from(buf);
+    },
+  });
+  const coreJson = json({ limit: bodyLimit });
+  const coreUrlencoded = urlencoded({ extended: true, limit: bodyLimit });
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (isHubPath(req)) {
+      hubJson(req, res, next);
+      return;
+    }
+    coreJson(req, res, (err?: unknown) => {
+      if (err) {
+        next(err);
+        return;
+      }
+      coreUrlencoded(req, res, next);
+    });
+  });
 
   // Basic security headers (no extra dependency). The API serves JSON, so these are safe everywhere.
   app.use((_req: Request, res: Response, next: NextFunction) => {

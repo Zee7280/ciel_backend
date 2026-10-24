@@ -17,7 +17,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ExternalConnection } from '../entities';
 import { HUB_CONNECTION } from '../hub-connection.constants';
-import { effectiveSettings } from '../hub-common.util';
+import { effectiveSettings, isUuid } from '../hub-common.util';
 import { PlatformAuthGuard } from '../security/platform-auth.guard';
 import type { HubRequest } from '../security/platform-auth.guard';
 import { IntakeService } from '../intake/intake.service';
@@ -126,7 +126,7 @@ export class HubVendorController {
   @Get('events/:receiptId')
   async receipt(@Req() req: HubRequest, @Param('receiptId') receiptId: string) {
     const { platform } = this.platformOf(req);
-    const receipt = /^[0-9a-f-]{36}$/i.test(receiptId)
+    const receipt = isUuid(receiptId)
       ? await this.intake.receiptFor(platform.id, receiptId)
       : null;
     if (!receipt)
@@ -197,6 +197,12 @@ export class HubVendorController {
     @Body() body: Record<string, unknown>,
   ) {
     const { platform } = this.platformOf(req);
+    if (!isUuid(uploadId)) {
+      throw new NotFoundException({
+        success: false,
+        code: 'EVIDENCE_NOT_FOUND',
+      });
+    }
     const out = await this.evidence.complete(platform, uploadId, body?.sha256);
     return { success: true, evidence: out };
   }

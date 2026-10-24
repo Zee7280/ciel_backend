@@ -37,6 +37,7 @@ import {
   ReviewRecordDto,
   SetPlatformStatusDto,
   UpdateConnectionDto,
+  UpdateMetricDefinitionDto,
   UpdatePlatformDto,
 } from '../platforms/dto/platform.dto';
 import { HubSecretsService } from '../security/hub-secrets.service';
@@ -103,8 +104,13 @@ export class HubAdminController {
   async searchOrganizations(@Query('q') q?: string) {
     const term = (q ?? '').trim();
     if (term.length < 2) return { success: true, data: [] };
+    // Only approved, unblocked organizations can hold a connection, so only those are offered.
     const rows = await this.organizations.find({
-      where: { name: ILike(`%${term}%`) },
+      where: {
+        name: ILike(`%${term}%`),
+        verificationStatus: 'APPROVED',
+        isBlocked: false,
+      },
       select: { id: true, name: true, orgType: true, verificationStatus: true },
       take: 20,
       order: { name: 'ASC' },
@@ -369,6 +375,25 @@ export class HubAdminController {
     };
   }
 
+  /** Operational: recompute one connection's summaries from its current records (audited). */
+  @Post('connections/:id/rebuild-summaries')
+  async rebuildSummaries(
+    @Req() req: AdminRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    await this.connections.get(id);
+    const rows = await this.processing.rebuildSummaries(id);
+    await this.audit.log({
+      actor: actorOf(req),
+      action: 'SUMMARIES_REBUILT',
+      targetType: 'connection',
+      targetId: id,
+      connectionId: id,
+      details: { rows },
+    });
+    return { success: true, data: { rows } };
+  }
+
   @Get('summaries')
   async summaries(@Query('connectionId', ParseUUIDPipe) connectionId: string) {
     return {
@@ -420,7 +445,7 @@ export class HubAdminController {
   async updateMetric(
     @Req() req: AdminRequest,
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: Partial<MetricDefinitionDto>,
+    @Body() dto: UpdateMetricDefinitionDto,
   ) {
     return {
       success: true,

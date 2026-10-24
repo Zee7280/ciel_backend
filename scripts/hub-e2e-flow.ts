@@ -500,6 +500,26 @@ async function main() {
       connAll?.recordCount === 1,
     JSON.stringify(totals),
   );
+  const rebuilt = await call(
+    'POST',
+    `${A}/connections/${connectionId}/rebuild-summaries`,
+    { token: t.admin },
+  );
+  const summariesAfterRebuild = await call(
+    'GET',
+    `${A}/summaries?connectionId=${connectionId}`,
+    { token: t.admin },
+  );
+  const rebuiltAll = ((summariesAfterRebuild.json.data as Json[]) ?? []).find(
+    (s) => s.scopeKey === 'connection' && s.period === 'all',
+  );
+  check(
+    'rebuilt summaries equal incrementally maintained ones',
+    rebuilt.status === 201 &&
+      JSON.stringify(rebuiltAll?.metricTotals) === JSON.stringify(totals) &&
+      rebuiltAll?.recordCount === 1,
+    JSON.stringify(rebuiltAll?.metricTotals),
+  );
 
   const records = await call(
     'GET',
@@ -577,6 +597,64 @@ async function main() {
     'summary after void is zero',
     totals2.trees_planted === 0 && connAll2?.recordCount === 0,
     JSON.stringify(totals2),
+  );
+  const resubmit = await vendor('POST', `${V}/events`, credential, [
+    sessionEvent(connectionId, `evt-${stamp}-4`, actId, { trees_planted: 7 }),
+  ]);
+  const rr = (resubmit.json.receipts as Json[] | undefined)?.[0];
+  const afterResubmit = await call(
+    'GET',
+    `${A}/records?connectionId=${connectionId}&q=${actId}`,
+    { token: t.admin },
+  );
+  const resubmitted = ((afterResubmit.json.rows as Json[]) ?? []).find(
+    (r) => r.externalActivityId === actId,
+  );
+  check(
+    'activity re-submitted after void becomes version 3',
+    rr?.status === 'processed' &&
+      resubmitted?.version === 3 &&
+      resubmitted?.status === 'current',
+    `${String(rr?.status)} v${String(resubmitted?.version)}`,
+  );
+  const replayProcessed = await call(
+    'POST',
+    `${A}/events/${receiptId}/replay`,
+    { token: t.admin },
+  );
+  check(
+    'replaying a processed event is refused (400)',
+    replayProcessed.status === 400,
+    `status ${replayProcessed.status}`,
+  );
+  const badFilter = await call('GET', `${A}/records?connectionId=not-a-uuid`, {
+    token: t.admin,
+  });
+  check(
+    'malformed uuid filter → 400 not 500',
+    badFilter.status === 400,
+    `status ${badFilter.status}`,
+  );
+  const formBody = 'events[0][event_id]=x';
+  const formHeaders = signHubRequest({
+    keyId: credential.keyId,
+    secret: credential.secret,
+    method: 'POST',
+    path: `${V}/events`,
+    body: formBody,
+  });
+  const formRes = await fetch(`${BASE}${V}/events`, {
+    method: 'POST',
+    headers: {
+      ...formHeaders,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: formBody,
+  });
+  check(
+    'non-JSON vendor body → 415',
+    formRes.status === 415,
+    `status ${formRes.status}`,
   );
 
   // ---- batch, 202 path and sweeper ------------------------------------------------------------
@@ -773,6 +851,45 @@ async function main() {
         ru?.status === 'rejected' && ru?.error_code === 'EVIDENCE_NOT_FOUND',
         String(ru?.error_code),
       );
+      const pendingTicket = await vendor(
+        'POST',
+        `${V}/evidence/upload-ticket`,
+        credential,
+        {
+          connection_id: connectionId,
+          content_type: 'image/png',
+          size_bytes: png.length,
+        },
+      );
+      const pendingUpload = (
+        pendingTicket.json.ticket as { upload_id: string } | undefined
+      )?.upload_id;
+      const notAccepted = await vendor('POST', `${V}/events`, credential, [
+        {
+          ...sessionEvent(connectionId, `evt-${stamp}-ev3`, `ev3-${stamp}`),
+          evidence: [{ upload_id: pendingUpload }],
+        },
+      ]);
+      const rna = (notAccepted.json.receipts as Json[] | undefined)?.[0];
+      check(
+        'evidence never completed → rejected EVIDENCE_NOT_ACCEPTED',
+        rna?.status === 'rejected' &&
+          rna?.error_code === 'EVIDENCE_NOT_ACCEPTED',
+        String(rna?.error_code),
+      );
+      const orgEvidence = await call(
+        'GET',
+        `${O}/evidence?connectionId=${connectionId}`,
+        { token: t.org },
+      );
+      const orgEvRow = ((orgEvidence.json.rows as Json[]) ?? [])[0];
+      check(
+        'org evidence view hides storage internals',
+        orgEvidence.status === 200 &&
+          !!orgEvRow &&
+          !('bucket' in orgEvRow) &&
+          !('storageKey' in orgEvRow),
+      );
     }
   } else {
     check(
@@ -851,6 +968,19 @@ async function main() {
   check(
     'org cannot widen scope via query param',
     orgOther.status === 200 && !leaked,
+  );
+  const orgConn = await call('GET', `${O}/connections/${connectionId}`, {
+    token: t.org,
+  });
+  const orgPlatformView = ((orgConn.json.data as Json)?.connection as Json)
+    ?.platform as Json | undefined;
+  check(
+    'org connection view hides platform internals',
+    orgConn.status === 200 &&
+      !!orgPlatformView &&
+      !('settings' in orgPlatformView) &&
+      !('technicalContact' in orgPlatformView) &&
+      typeof orgPlatformView.name === 'string',
   );
   const orgOnAdmin = await call('GET', `${A}/platforms`, { token: t.org });
   check(

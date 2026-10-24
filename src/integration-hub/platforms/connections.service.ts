@@ -13,7 +13,7 @@ import {
   ExternalPlatform,
 } from '../entities';
 import { HUB_CONNECTION } from '../hub-connection.constants';
-import { parsePage } from '../hub-common.util';
+import { parsePage, uuidFilter } from '../hub-common.util';
 import { HubActor, HubAuditService } from '../audit/hub-audit.service';
 import { ProposeConnectionDto, UpdateConnectionDto } from './dto/platform.dto';
 
@@ -56,10 +56,11 @@ export class ConnectionsService {
       .orderBy('c.createdAt', 'DESC')
       .skip(skip)
       .take(limit);
-    if (filters.platformId)
-      qb.andWhere('c.platformId = :pid', { pid: filters.platformId });
-    if (filters.organizationId) {
-      qb.andWhere('c.organizationId = :oid', { oid: filters.organizationId });
+    const platformId = uuidFilter(filters.platformId, 'platformId');
+    const organizationId = uuidFilter(filters.organizationId, 'organizationId');
+    if (platformId) qb.andWhere('c.platformId = :pid', { pid: platformId });
+    if (organizationId) {
+      qb.andWhere('c.organizationId = :oid', { oid: organizationId });
     }
     if (filters.status)
       qb.andWhere('c.status = :status', { status: filters.status });
@@ -132,6 +133,9 @@ export class ConnectionsService {
     row.authorizedAt = null;
     row.suspendedAt = null;
     row.statusReason = null;
+    // A re-proposal over a revoked connection must not inherit an old validity window.
+    row.validFrom = null;
+    row.validUntil = null;
     await this.repo.save(row);
     await this.audit.log({
       actor,

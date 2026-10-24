@@ -42,9 +42,27 @@ export class PlatformAuthGuard implements CanActivate {
 
   constructor(private readonly credentials: CredentialsService) {}
 
+  /** Unauthenticated noise per source IP (bad or missing signatures); generous but bounded. */
+  readonly ipLimiter = new HubRateLimiter();
+
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest<HubRequest>();
     const res = context.switchToHttp().getResponse<Response>();
+
+    const fwd = req.headers['x-forwarded-for'];
+    const ip = (
+      (Array.isArray(fwd) ? fwd[0] : fwd?.split(',')[0]) ??
+      req.ip ??
+      'unknown'
+    ).trim();
+    const ipRl = this.ipLimiter.check(`ip:${ip}`, 600);
+    if (!ipRl.allowed) {
+      res.setHeader('Retry-After', String(ipRl.retryAfterSeconds));
+      throw new HttpException(
+        { success: false, code: 'RATE_LIMITED', message: 'Too many requests' },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
 
     const headers = parseHubHeaders(
       req.headers as Record<string, string | string[] | undefined>,
@@ -91,22 +109,34 @@ export class PlatformAuthGuard implements CanActivate {
       });
     }
 
-    const settings = effectiveSettings(platform);
-    const rl = this.limiter.check(
-      `platform:${platform.id}`,
-      settings.rate_limit_per_minute,
-    );
-    if (!rl.allowed) {
-      res.setHeader('Retry-After', String(rl.retryAfterSeconds));
-      throw new HttpException(
-        {
-          success: false,
-          code: 'RATE_LIMITED',
-          message: `Rate limit of ${settings.rate_limit_per_minute}/min exceeded`,
-          retry_after_seconds: rl.retryAfterSeconds,
-        },
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
+    // Integrity: a signed vendor request with a body must be JSON that we captured verbatim.
+    // Anything else (form-encoded, missing raw body) cannot be verified and is refused.
+    const method = req.method.toUpperCase();
+    const declaredLength = Number(req.headers['content-length'] ?? 0);
+    if (method === 'POST' || method === 'PUT' || method === 'PATCH') {
+      const contentType = String(req.headers['content-type'] ?? '')
+        .split(';')[0]
+        .trim()
+        .toLowerCase();
+      if (declaredLength > 0 || req.rawBody) {
+        if (contentType !== 'application/json') {
+          throw new HttpException(
+            {
+              success: false,
+              code: 'UNSUPPORTED_MEDIA_TYPE',
+              message:
+                'Vendor requests must use Content-Type: application/json',
+            },
+            HttpStatus.UNSUPPORTED_MEDIA_TYPE,
+          );
+        }
+        if (!req.rawBody) {
+          throw new HttpException(
+            { success: false, code: 'BODY_NOT_CAPTURED' },
+            HttpStatus.BAD_REQUEST,
+          );
+        }
+      }
     }
 
     const path = (req.originalUrl ?? req.url ?? '').split('?')[0];
@@ -131,6 +161,26 @@ export class PlatformAuthGuard implements CanActivate {
         code: 'HUB_NONCE_REPLAYED',
         message: 'Nonce already used',
       });
+    }
+
+    // Per-platform quota is charged only for authenticated requests, so a stranger who knows a
+    // key id cannot exhaust a vendor's quota with garbage signatures.
+    const settings = effectiveSettings(platform);
+    const rl = this.limiter.check(
+      `platform:${platform.id}`,
+      settings.rate_limit_per_minute,
+    );
+    if (!rl.allowed) {
+      res.setHeader('Retry-After', String(rl.retryAfterSeconds));
+      throw new HttpException(
+        {
+          success: false,
+          code: 'RATE_LIMITED',
+          message: `Rate limit of ${settings.rate_limit_per_minute}/min exceeded`,
+          retry_after_seconds: rl.retryAfterSeconds,
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
     }
 
     req.hubPlatform = platform;

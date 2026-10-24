@@ -12,6 +12,7 @@ import { HUB_CONNECTION } from '../hub-connection.constants';
 import { effectiveSettings } from '../hub-common.util';
 import { EvidenceService } from '../evidence/evidence.service';
 import { HubAuditService } from '../audit/hub-audit.service';
+import { ProcessingService } from '../processing/processing.service';
 
 const BATCH = 200;
 
@@ -20,6 +21,7 @@ export type RetentionResult = {
   purged_evidence: number;
   purged_records: number;
   purged_events: number;
+  summaries_rebuilt: number;
   connections_scanned: number;
 };
 
@@ -44,6 +46,7 @@ export class RetentionService {
     private readonly evidence: Repository<ExternalEvidence>,
     private readonly evidenceService: EvidenceService,
     private readonly audit: HubAuditService,
+    private readonly processing: ProcessingService,
   ) {}
 
   async run(): Promise<RetentionResult> {
@@ -52,6 +55,7 @@ export class RetentionService {
       purged_evidence: 0,
       purged_records: 0,
       purged_events: 0,
+      summaries_rebuilt: 0,
       connections_scanned: 0,
     };
 
@@ -95,11 +99,12 @@ export class RetentionService {
         result.purged_evidence += 1;
       }
 
-      // Superseded / voided record versions past retention. Current versions are kept until the
-      // connection's contractual period applies to them too (same cutoff on createdAt).
+      // Record versions past retention (superseded, voided and current alike: the contractual
+      // period applies to the data itself). Summaries of that connection are rebuilt afterwards so
+      // dashboards never show totals for records that no longer exist.
       const oldRecords = await this.records.find({
         where: { connectionId: c.id, createdAt: LessThan(cutoff) },
-        select: { id: true },
+        select: { id: true, status: true },
         take: BATCH,
       });
       if (oldRecords.length) {
@@ -109,6 +114,10 @@ export class RetentionService {
         );
         await this.records.delete({ id: In(oldRecords.map((r) => r.id)) });
         result.purged_records += oldRecords.length;
+        if (oldRecords.some((r) => r.status === 'current')) {
+          await this.processing.rebuildSummaries(c.id);
+          result.summaries_rebuilt += 1;
+        }
       }
 
       // Rejected / dead events are processing logs: shorter retention. Processed events (history)

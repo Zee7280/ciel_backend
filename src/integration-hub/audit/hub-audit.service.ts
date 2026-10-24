@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ExternalAudit, ExternalAuditActorType } from '../entities';
 import { HUB_CONNECTION } from '../hub-connection.constants';
-import { parsePage } from '../hub-common.util';
+import { parsePage, uuidFilter } from '../hub-common.util';
 
 export type HubActor = {
   type: ExternalAuditActorType;
@@ -66,8 +66,9 @@ export class HubAuditService {
       .orderBy('a.createdAt', 'DESC')
       .skip(skip)
       .take(limit);
-    if (filters.connectionId) {
-      qb.andWhere('a.connectionId = :cid', { cid: filters.connectionId });
+    const connectionId = uuidFilter(filters.connectionId, 'connectionId');
+    if (connectionId) {
+      qb.andWhere('a.connectionId = :cid', { cid: connectionId });
     }
     if (filters.action) {
       qb.andWhere('a.action = :action', { action: filters.action });

@@ -142,11 +142,34 @@ async function checkHubRole() {
       'hub role DELETE public.attendance_logs',
       `DELETE FROM public.attendance_logs WHERE false`,
     );
-    await expectDenied(
+    // Postgres < 15 grants CREATE on schema `public` to PUBLIC by default. That lets the hub role
+    // create an empty table there (never read one). Revoking it is an optional hardening that may
+    // not be permitted on managed providers, so below 15 this probe is informational.
+    const ver = await c.query('SHOW server_version_num');
+    const major = Math.floor(
+      Number(ver.rows[0]?.server_version_num ?? 0) / 10000,
+    );
+    const createErr = await probe(
       c,
-      'hub role CREATE TABLE in public',
       `CREATE TABLE public.hub_isolation_probe (id int)`,
     );
+    if (createErr) {
+      record(
+        'hub role CREATE TABLE in public',
+        createErr.code === '42501',
+        createErr.code === '42501'
+          ? 'refused (42501)'
+          : `unexpected error ${createErr.code}: ${createErr.message}`,
+      );
+    } else {
+      record(
+        'hub role CREATE TABLE in public',
+        major < 15,
+        major < 15
+          ? `allowed by the PUBLIC default on Postgres ${major} (DDL only, no data access); optional hardening: REVOKE CREATE ON SCHEMA public FROM PUBLIC`
+          : 'statement succeeded (expected permission denied)',
+      );
+    }
     await expectAllowed(
       c,
       'hub role USAGE external_hub',
@@ -198,6 +221,25 @@ async function checkCoreRole() {
         'core role sees external_hub',
         true,
         `skipped: ${user} is a superuser locally; production core role must not be`,
+      );
+      return;
+    }
+    // A database owner (or a managed-provider admin role such as Neon's neon_superuser) cannot be
+    // denied SELECT on a schema in its own database. That direction is then enforced by the code
+    // boundary (hub entities only on the hub connection; verified by hub:schema-check and the
+    // app-context boot check), not by grants.
+    const owner = await c.query(
+      `SELECT (d.datdba = r.oid) AS owner,
+              EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.roleid
+                       WHERE m.member = r.oid AND g.rolname IN ('neon_superuser', 'rds_superuser', 'cloudsqlsuperuser', 'azure_pg_admin')) AS admin_member
+         FROM pg_database d, pg_roles r
+        WHERE d.datname = current_database() AND r.rolname = current_user`,
+    );
+    if (owner.rows[0]?.owner === true || owner.rows[0]?.admin_member === true) {
+      record(
+        'core role sees external_hub',
+        true,
+        `informational: ${user} owns the database or holds a provider admin role, so grants cannot deny it; relies on the code boundary`,
       );
       return;
     }

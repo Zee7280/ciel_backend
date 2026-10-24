@@ -1,0 +1,429 @@
+/**
+ * Quick Community Work, end to end (real Nest app + scratch Postgres): a student drafts a short
+ * activity log, teammates confirm, the lead submits, and only the named faculty member reviews.
+ */
+import { bootHarness, E2eUser, Harness, oppPayload } from './e2e/harness';
+import { UserRole } from '../src/users/enums/user-role.enum';
+import { S3Service } from '../src/common/s3.service';
+import { Participation } from '../src/engagement/entities/participant.entity';
+import { AttendanceLog } from '../src/engagement/entities/attendance-log.entity';
+
+type Participant = {
+  userId: string;
+  email: string;
+  isLead: boolean;
+  joinStatus: string;
+  minutes: number;
+};
+type LogView = {
+  id: string;
+  status: string;
+  reviewNote: string | null;
+  participants: Participant[];
+};
+type Body<T> = { data: T; message?: string | string[] };
+
+const pastDay = (d: number) =>
+  new Date(Date.now() - d * 86400000).toISOString().slice(0, 10);
+
+describe('Quick Community Work (real app + real Postgres)', () => {
+  let h: Harness;
+  let evidenceUrl: (owner: E2eUser) => string;
+
+  beforeAll(async () => {
+    h = await bootHarness();
+    // Evidence must live in the lead's own presign folder: build such a URL for this bucket.
+    const s3 = h.app.get<unknown, { bucket: string; region: string }>(
+      S3Service,
+    );
+    evidenceUrl = (owner) =>
+      `https://${s3.bucket}.s3.${s3.region}.amazonaws.com/quick-work/${owner.id}/photo.jpg`;
+  });
+  afterAll(async () => {
+    await h.app.close();
+  });
+
+  const messages = (body: Body<unknown>) =>
+    ([] as string[]).concat(body.message ?? []).join(' | ');
+
+  /** Everything a complete solo log needs, on a past date. */
+  const completeLog = (
+    lead: E2eUser,
+    faculty: { email: string },
+    over: Record<string, unknown> = {},
+  ) => ({
+    mode: 'solo',
+    leadStudentId: `SID-${lead.id.slice(0, 6)}`,
+    university: 'E2E University',
+    department: 'Computer Science',
+    facultyName: 'Dr Reviewer',
+    facultyEmail: faculty.email.toUpperCase(),
+    title: 'Pinktober awareness circle',
+    activityType: 'Pinktober event',
+    activityDate: pastDay(3),
+    startTime: '10:00',
+    endTime: '11:00',
+    location: 'Campus courtyard, Lahore',
+    sdg: 3,
+    attendance: [
+      {
+        email: lead.email,
+        present: true,
+        startTime: '10:00',
+        endTime: '11:00',
+        breakMinutes: 0,
+      },
+    ],
+    summary: 'We ran an awareness desk and shared leaflets.',
+    peopleReached: 30,
+    visibility: 'Faculty, University & CIEL PK only',
+    evidence: [
+      {
+        url: evidenceUrl(lead),
+        name: 'photo.jpg',
+        type: 'image/jpeg',
+        size: 1000,
+        caption: 'Awareness desk',
+      },
+    ],
+    consent: true,
+    honest: true,
+    ...over,
+  });
+
+  const draft = async (lead: E2eUser, body: Record<string, unknown>) => {
+    const res = await h.as(lead).post('/quick-work/logs').send(body);
+    expect(res.status).toBe(201);
+    return (res.body as Body<LogView>).data;
+  };
+
+  it('solo: submit, faculty approves, the hours land on the student dashboard', async () => {
+    const lead = await h.makeUser(UserRole.STUDENT);
+    const faculty = await h.makeUser(UserRole.FACULTY);
+    const log = await draft(lead, completeLog(lead, faculty));
+    expect(log.status).toBe('draft');
+    expect(log.participants[0]).toMatchObject({ isLead: true, minutes: 60 });
+
+    h.mail.reset();
+    const sub = await h.as(lead).post(`/quick-work/logs/${log.id}/submit`);
+    expect(sub.status).toBe(201);
+    expect((sub.body as Body<LogView>).data.status).toBe('submitted');
+    expect(h.mail.of('sendQuickWorkSubmittedForReview')).toHaveLength(1);
+
+    // Submitted logs are locked for the student.
+    const edit = await h
+      .as(lead)
+      .patch(`/quick-work/logs/${log.id}`)
+      .send({ title: 'x' });
+    expect(edit.status).toBe(400);
+
+    const queue = await h.as(faculty).get('/faculty/quick-work');
+    expect(queue.status).toBe(200);
+    const pending = (queue.body as Body<{ pending: LogView[] }>).data.pending;
+    expect(pending.map((l) => l.id)).toContain(log.id);
+
+    const noCheck = await h
+      .as(faculty)
+      .post(`/faculty/quick-work/${log.id}/review`)
+      .send({ action: 'approve' });
+    expect(noCheck.status).toBe(400);
+    const ok = await h
+      .as(faculty)
+      .post(`/faculty/quick-work/${log.id}/review`)
+      .send({ action: 'approve', verified: true });
+    expect(ok.status).toBe(201);
+    expect((ok.body as Body<LogView>).data.status).toBe('approved');
+
+    const again = await h
+      .as(faculty)
+      .post(`/faculty/quick-work/${log.id}/review`)
+      .send({ action: 'reject', note: 'late' });
+    expect(again.status).toBe(400);
+
+    const me = await h.as(lead).get('/quick-work/me');
+    expect(me.status).toBe(200);
+    expect(
+      (me.body as Body<{ totals: Record<string, number> }>).data.totals,
+    ).toEqual({
+      approvedMinutes: 60,
+      pendingMinutes: 0,
+      approvedActivities: 1,
+    });
+  });
+
+  it('only the named faculty member can see or review a log', async () => {
+    const lead = await h.makeUser(UserRole.STUDENT);
+    const faculty = await h.makeUser(UserRole.FACULTY);
+    const other = await h.makeUser(UserRole.FACULTY);
+    const log = await draft(lead, completeLog(lead, faculty));
+    await h.as(lead).post(`/quick-work/logs/${log.id}/submit`).expect(201);
+
+    const queue = await h.as(other).get('/faculty/quick-work');
+    expect(
+      (queue.body as Body<{ pending: LogView[] }>).data.pending.map(
+        (l) => l.id,
+      ),
+    ).not.toContain(log.id);
+    const review = await h
+      .as(other)
+      .post(`/faculty/quick-work/${log.id}/review`)
+      .send({ action: 'approve', verified: true });
+    expect(review.status).toBe(404);
+
+    // Another student cannot open it either; a faculty user cannot use the student endpoints.
+    const stranger = await h.makeUser(UserRole.STUDENT);
+    expect(
+      (await h.as(stranger).get(`/quick-work/logs/${log.id}`)).status,
+    ).toBe(404);
+    expect((await h.as(faculty).get('/quick-work/me')).status).toBe(403);
+    expect((await h.as(null).get('/quick-work/me')).status).toBe(401);
+  });
+
+  it('team: teammates must be CIEL students who confirm before the lead can submit', async () => {
+    const lead = await h.makeUser(UserRole.STUDENT);
+    const mate = await h.makeUser(UserRole.STUDENT);
+    const faculty = await h.makeUser(UserRole.FACULTY);
+
+    const notStudent = await h
+      .as(lead)
+      .post('/quick-work/logs')
+      .send(
+        completeLog(lead, faculty, {
+          mode: 'team',
+          teammates: [{ email: faculty.email, studentId: 'X1' }],
+        }),
+      );
+    expect(notStudent.status).toBe(400);
+    expect(messages(notStudent.body as Body<unknown>)).toMatch(
+      /No CIEL student account/,
+    );
+
+    const log = await draft(
+      lead,
+      completeLog(lead, faculty, {
+        mode: 'team',
+        teammates: [{ email: mate.email, studentId: 'MATE-1' }],
+        attendance: [
+          {
+            email: lead.email,
+            present: true,
+            startTime: '10:00',
+            endTime: '11:00',
+            breakMinutes: 0,
+          },
+          {
+            email: mate.email,
+            present: true,
+            startTime: '10:15',
+            endTime: '11:00',
+            breakMinutes: 0,
+          },
+        ],
+      }),
+    );
+    const mateRow = log.participants.find((p) => p.email === mate.email);
+    expect(mateRow).toMatchObject({ joinStatus: 'invited', minutes: 45 });
+
+    const early = await h.as(lead).post(`/quick-work/logs/${log.id}/submit`);
+    expect(early.status).toBe(400);
+    expect(messages(early.body as Body<unknown>)).toMatch(
+      /not confirmed joining/,
+    );
+
+    // The teammate sees the invitation and confirms.
+    const mine = await h.as(mate).get('/quick-work/me');
+    expect(
+      (mine.body as Body<{ logs: LogView[] }>).data.logs.map((l) => l.id),
+    ).toContain(log.id);
+    await h
+      .as(mate)
+      .post(`/quick-work/logs/${log.id}/join`)
+      .send({ accept: true })
+      .expect(201);
+
+    await h.as(lead).post(`/quick-work/logs/${log.id}/submit`).expect(201);
+    await h
+      .as(faculty)
+      .post(`/faculty/quick-work/${log.id}/review`)
+      .send({ action: 'approve', verified: true })
+      .expect(201);
+
+    // Each member receives only their own approved time.
+    const mateTotals = await h.as(mate).get('/quick-work/me');
+    expect(
+      (mateTotals.body as Body<{ totals: Record<string, number> }>).data.totals
+        .approvedMinutes,
+    ).toBe(45);
+  });
+
+  it('changes requested: the lead edits the same log and resubmits', async () => {
+    const lead = await h.makeUser(UserRole.STUDENT);
+    const faculty = await h.makeUser(UserRole.FACULTY);
+    const log = await draft(lead, completeLog(lead, faculty));
+    await h.as(lead).post(`/quick-work/logs/${log.id}/submit`).expect(201);
+
+    const noNote = await h
+      .as(faculty)
+      .post(`/faculty/quick-work/${log.id}/review`)
+      .send({ action: 'changes' });
+    expect(noNote.status).toBe(400);
+    const back = await h
+      .as(faculty)
+      .post(`/faculty/quick-work/${log.id}/review`)
+      .send({ action: 'changes', note: 'Add a clearer photo' });
+    expect((back.body as Body<LogView>).data).toMatchObject({
+      status: 'changes',
+      reviewNote: 'Add a clearer photo',
+    });
+
+    await h
+      .as(lead)
+      .patch(`/quick-work/logs/${log.id}`)
+      .send({ summary: 'Updated description with more detail.' })
+      .expect(200);
+    const re = await h.as(lead).post(`/quick-work/logs/${log.id}/submit`);
+    expect(re.status).toBe(201);
+    expect((re.body as Body<LogView>).data).toMatchObject({
+      status: 'submitted',
+      reviewNote: null,
+    });
+  });
+
+  it('refuses overlapping claims, future dates and evidence that is not your own upload', async () => {
+    const lead = await h.makeUser(UserRole.STUDENT);
+    const faculty = await h.makeUser(UserRole.FACULTY);
+    const first = await draft(lead, completeLog(lead, faculty));
+    await h.as(lead).post(`/quick-work/logs/${first.id}/submit`).expect(201);
+
+    const overlap = await draft(
+      lead,
+      completeLog(lead, faculty, { title: 'Second drive' }),
+    );
+    const clash = await h
+      .as(lead)
+      .post(`/quick-work/logs/${overlap.id}/submit`);
+    expect(clash.status).toBe(400);
+    expect(messages(clash.body as Body<unknown>)).toMatch(/overlapping/);
+
+    const future = await draft(
+      lead,
+      completeLog(lead, faculty, {
+        activityDate: new Date(Date.now() + 3 * 86400000)
+          .toISOString()
+          .slice(0, 10),
+      }),
+    );
+    const fut = await h.as(lead).post(`/quick-work/logs/${future.id}/submit`);
+    expect(fut.status).toBe(400);
+    expect(messages(fut.body as Body<unknown>)).toMatch(
+      /today or a past activity/,
+    );
+
+    const someoneElse = await h.makeUser(UserRole.STUDENT);
+    const stolen = await h
+      .as(lead)
+      .post('/quick-work/logs')
+      .send(
+        completeLog(lead, faculty, {
+          evidence: [
+            {
+              url: evidenceUrl(someoneElse),
+              name: 'x.jpg',
+              type: 'image/jpeg',
+              size: 10,
+              caption: 'x',
+            },
+          ],
+        }),
+      );
+    expect(stolen.status).toBe(400);
+
+    const badType = await h
+      .as(lead)
+      .post('/quick-work/logs')
+      .send(
+        completeLog(lead, faculty, {
+          evidence: [
+            {
+              url: evidenceUrl(lead),
+              name: 'x.html',
+              type: 'text/html',
+              size: 10,
+              caption: 'x',
+            },
+          ],
+        }),
+      );
+    expect(badType.status).toBe(400);
+  });
+
+  it('refuses time already logged as structured community service attendance', async () => {
+    const lead = await h.makeUser(UserRole.STUDENT);
+    const faculty = await h.makeUser(UserRole.FACULTY);
+    const org = await h.makeOrg();
+    const ngo = await h.makeUser(UserRole.NGO, { org });
+    const opp = await h.as(ngo).post('/opportunities').send(oppPayload());
+    expect(opp.status).toBe(201);
+    const projectId = (opp.body as { id: string }).id;
+    const seat = await h.ds.getRepository(Participation).save(
+      h.ds.getRepository(Participation).create({
+        projectId,
+        studentId: lead.id,
+        fullName: 'Quick Lead',
+        status: 'approved',
+        email: lead.email,
+        mobile: '+923005550000',
+        cnic: 'enc',
+        cnicHash: `hash-${lead.email}`,
+        cnicLast4: '0000',
+        universityId: 'e2e',
+        universityName: 'E2E University',
+        academicProgram: 'BS CS',
+        yearOfStudy: '3rd Year',
+        department: 'Computer Science',
+        academicIntegrationType: 'Voluntary',
+        emailVerified: true,
+        mobileVerified: true,
+        primaryFacultyEmail: faculty.email,
+        attendanceApproverType: 'partner',
+      }),
+    );
+    const date = pastDay(5);
+    await h.ds.getRepository(AttendanceLog).save(
+      h.ds.getRepository(AttendanceLog).create({
+        participantId: seat.id,
+        projectId,
+        dateOfEngagement: date,
+        startTime: '10:30',
+        endTime: '12:00',
+        sessionHours: 1.5,
+        organizationName: 'E2E',
+        activityType: 'Fieldwork',
+        description: 'Structured session',
+      }),
+    );
+
+    const log = await draft(
+      lead,
+      completeLog(lead, faculty, { activityDate: date }),
+    );
+    const res = await h.as(lead).post(`/quick-work/logs/${log.id}/submit`);
+    expect(res.status).toBe(400);
+    expect(messages(res.body as Body<unknown>)).toMatch(
+      /structured community service attendance/,
+    );
+  });
+
+  it('a draft can be deleted; malformed ids are a 400, never a 500', async () => {
+    const lead = await h.makeUser(UserRole.STUDENT);
+    const faculty = await h.makeUser(UserRole.FACULTY);
+    const log = await draft(lead, completeLog(lead, faculty));
+    await h.as(lead).del(`/quick-work/logs/${log.id}`).expect(200);
+    expect((await h.as(lead).get(`/quick-work/logs/${log.id}`)).status).toBe(
+      404,
+    );
+    expect((await h.as(lead).get('/quick-work/logs/not-a-uuid')).status).toBe(
+      400,
+    );
+  });
+});

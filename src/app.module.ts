@@ -34,6 +34,7 @@ import { OrganizationMembershipModule } from './organization-membership/organiza
 import { StudentSubscriptionModule } from './student-subscription/student-subscription.module';
 import { FeedbackModule } from './feedback/feedback.module';
 import { TutorialsModule } from './tutorials/tutorials.module';
+import { QuickWorkModule } from './quick-work/quick-work.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { JobsModule } from './jobs/jobs.module';
 import { IntegrationHubModule } from './integration-hub/integration-hub.module';
@@ -99,6 +100,7 @@ import { NpeRankingModule } from './ranking/npe-ranking.module';
     OrganizationMembershipModule,
     StudentSubscriptionModule,
     FeedbackModule,
+    QuickWorkModule,
     TutorialsModule,
     AnalyticsModule,
     JobsModule,

@@ -2399,6 +2399,53 @@ export class MailService {
     }
   }
 
+  /** Quick Community Work log submitted: tell the named faculty member it is waiting for them. */
+  async sendQuickWorkSubmittedForReview(input: {
+    to: string;
+    facultyName: string;
+    leadName: string;
+    title: string;
+    participants: number;
+  }): Promise<void> {
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const reviewLink = this.buildFrontendLink(
+      '/dashboard/faculty/quick-work',
+      {},
+    );
+    const facultyEsc = this.escHtmlPlain(input.facultyName?.trim() || 'there');
+    const leadEsc = this.escHtmlPlain(input.leadName?.trim() || 'A student');
+    const titleEsc = this.escHtmlPlain(input.title);
+    const people =
+      input.participants === 1
+        ? 'one participant'
+        : `${input.participants} participants`;
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <p>Dear ${facultyEsc},</p>
+        <p><strong>${leadEsc}</strong> named you as the coordinating faculty member for the Quick Community Work activity "<strong>${titleEsc}</strong>" (${people}) on <strong>CIEL PK</strong>.</p>
+        <p>The activity is complete. Please review the attendance and evidence, then approve, return for changes or decline. Hours count only after your approval.</p>
+        <p><a href="${reviewLink}">Review on CIELPK.com</a> — sign in with this email address. If you do not have a CIEL PK faculty account yet, sign up with this email to see the request.</p>
+        <p>Best regards,<br><strong>CIEL PK Team</strong></p>
+      </div>
+    `;
+    try {
+      await this.sendMailReliable({
+        from,
+        to: input.to,
+        subject: `Quick Community Work to review: ${input.title}`,
+        html,
+      });
+      this.logger.log(`Quick-work review email sent to ${input.to}`);
+    } catch (error) {
+      this.logger.error(
+        `Failed to send quick-work review email to ${input.to}`,
+        (error as Error).stack,
+      );
+    }
+  }
+
   /** Student-triggered nudge to the reviewing faculty. Unlike the submit-time mails this RETURNS
    * whether delivery succeeded, because the student is told "sent" / "could not send" in the UI. */
   async sendCourseworkReviewReminder(

@@ -172,6 +172,8 @@ export class UsersService {
     createUserDto: (CreateUserDto | AdminCreateUserDto) & {
       settings?: Record<string, unknown>;
       termsAcceptedAt?: Date;
+      ssoIssuer?: string | null;
+      ssoSubject?: string | null;
     },
   ): Promise<User> {
     if (createUserDto.email !== undefined) {

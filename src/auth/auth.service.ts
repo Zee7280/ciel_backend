@@ -542,6 +542,19 @@ export class AuthService implements OnApplicationBootstrap {
       .capturePasswordRecordFromLogin?.(user.id, password)
       ?.catch(() => undefined);
 
+    await this.assertLoginAllowed(user);
+
+    return {
+      success: true,
+      data: await this.issueSession(user, loginDto.isMobile === true),
+    };
+  }
+
+  /**
+   * Account-status and organization gates every sign-in method applies once the identity is
+   * proven (password or University SSO). Throws UnauthorizedException with the user-facing reason.
+   */
+  async assertLoginAllowed(user: User): Promise<void> {
     // University / corporate account created while its fee was off: it stays out until a CIEL
     // admin approves the organization, then this first login after approval activates it.
     if (user.status === PENDING_ORG_VERIFICATION_STATUS) {
@@ -620,7 +633,10 @@ export class AuthService implements OnApplicationBootstrap {
         );
       }
     }
+  }
 
+  /** The session token and profile for a user who passed {@link assertLoginAllowed}. */
+  async issueSession(user: User, isMobile: boolean) {
     const payload = {
       sub: user.id,
       email: user.email,
@@ -635,14 +651,11 @@ export class AuthService implements OnApplicationBootstrap {
     };
     // Mobile sessions live longer than web, but a client-chosen flag must not buy a month-long
     // token that can't be revoked (logout bumps tokenVersion, which kills it).
-    const expiresIn = loginDto.isMobile ? '7d' : '10h';
+    const expiresIn = isMobile ? '7d' : '10h';
 
     return {
-      success: true,
-      data: {
-        access_token: this.jwtService.sign(payload, { expiresIn }),
-        user: await this.usersService.formatUserResponse(user),
-      },
+      access_token: this.jwtService.sign(payload, { expiresIn }),
+      user: await this.usersService.formatUserResponse(user),
     };
   }
 

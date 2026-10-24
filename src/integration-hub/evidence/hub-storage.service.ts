@@ -28,7 +28,14 @@ export class HubStorageService {
     const accessKeyId = process.env.AWS_ACCESS_KEY_ID;
     const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
     const dedicated = (process.env.HUB_EVIDENCE_BUCKET ?? '').trim();
-    this.bucket = dedicated || (process.env.AWS_S3_BUCKET ?? '').trim();
+    // The shared bucket serves core uploads from public URLs. Third-party evidence may share it
+    // only on a developer machine; a deployment without its own bucket refuses evidence instead.
+    const production =
+      process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
+    const sharedFallback = production
+      ? ''
+      : (process.env.AWS_S3_BUCKET ?? '').trim();
+    this.bucket = dedicated || sharedFallback;
     this.prefix = dedicated ? '' : 'external-hub/';
     this.client =
       region && accessKeyId && secretAccessKey && this.bucket
@@ -38,9 +45,15 @@ export class HubStorageService {
           })
         : null;
     if (!this.client) {
-      this.logger.warn(
-        'Hub evidence storage not configured (AWS_* / HUB_EVIDENCE_BUCKET); evidence endpoints will refuse',
-      );
+      if (production && !dedicated) {
+        this.logger.error(
+          'HUB_EVIDENCE_BUCKET is not set: the Integration Hub refuses evidence in production until a private bucket is configured',
+        );
+      } else {
+        this.logger.warn(
+          'Hub evidence storage not configured (AWS_* / HUB_EVIDENCE_BUCKET); evidence endpoints will refuse',
+        );
+      }
     }
   }
 

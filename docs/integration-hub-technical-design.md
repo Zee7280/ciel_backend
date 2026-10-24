@@ -445,7 +445,7 @@ schema `public` (verified on a throwaway database: core role unaffected, hub rol
 | `HUB_DATABASE_URL` | to enable the hub | runtime URL for role `ciel_hub_app`; absent ⇒ hub module not loaded |
 | `HUB_MIGRATION_DATABASE_URL` | CI / deploy step only | URL for role `ciel_hub_migrator`; used by `npm run hub:migrate` |
 | `HUB_SECRETS_KEY` | yes (hub) | 64-hex or passphrase; AES-256-GCM key for vendor signing secrets. Without it credential issuance and vendor auth are refused |
-| `HUB_EVIDENCE_BUCKET` | recommended | dedicated private bucket; when unset the hub uses `AWS_S3_BUCKET` under the isolated prefix `external-hub/` (local dev only) |
+| `HUB_EVIDENCE_BUCKET` | **required in production** | dedicated private bucket. Production (`NODE_ENV=production` or Vercel) refuses evidence until it is set; only a developer machine falls back to `AWS_S3_BUCKET` under the isolated prefix `external-hub/` |
 | `CRON_SECRET` | yes | shared by all `/api/v1/internal/jobs/*` endpoints; Vercel sends it automatically on cron calls |
 | `HUB_DB_POOL_MAX` | optional (default 2) | hub pool size per function instance |
 | `HUB_INLINE_BUDGET_MS` | optional (default 1500) | inline processing budget per intake request |

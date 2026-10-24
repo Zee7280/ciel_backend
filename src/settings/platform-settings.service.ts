@@ -51,6 +51,11 @@ export class PlatformSettingsService {
     return this.getBool(PLATFORM_SETTING_KEYS.ALLOW_REGISTRATIONS, true);
   }
 
+  /** University SSO master switch; a university must also be activated individually. */
+  isUniversitySsoEnabled(): Promise<boolean> {
+    return this.getBool(PLATFORM_SETTING_KEYS.UNIVERSITY_SSO_ENABLED, false);
+  }
+
   /** Student AI opportunity draft (Generate & Auto-Fill). */
   isAiOpportunityDraftEnabled(): Promise<boolean> {
     return this.getBool(
@@ -79,6 +84,7 @@ export class PlatformSettingsService {
       subscriptionFee,
       privateTeamEnabled,
       aiDraftEnabled,
+      universitySsoEnabled,
     ] = await Promise.all([
       this.isMaintenanceMode(),
       this.isRegistrationAllowed(),
@@ -89,6 +95,7 @@ export class PlatformSettingsService {
       this.getString(PLATFORM_SETTING_KEYS.STUDENT_SUBSCRIPTION_FEE_PKR),
       this.isPrivateTeamEnabled(),
       this.isAiOpportunityDraftEnabled(),
+      this.isUniversitySsoEnabled(),
     ]);
     const positiveInt = (raw: string | null, fallback: number) => {
       const n = parseInt(String(raw ?? '').replace(/[^\d]/g, ''), 10);
@@ -107,6 +114,7 @@ export class PlatformSettingsService {
       // Only advertised when this server can actually reach OpenAI.
       student_ai_draft_enabled:
         aiDraftEnabled && Boolean(process.env.OPENAI_API_KEY?.trim()),
+      university_sso_enabled: universitySsoEnabled,
     };
   }
 }

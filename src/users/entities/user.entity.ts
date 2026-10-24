@@ -5,11 +5,14 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   ManyToOne,
+  Index,
 } from 'typeorm';
 import { Organization } from '../../organizations/entities/organization.entity';
 import { UserRole } from '../enums/user-role.enum';
 
 @Entity('users')
+// One identity-provider subject may be linked to at most one account (duplicate-identity guard).
+@Index('UQ_users_sso_identity', ['ssoIssuer', 'ssoSubject'], { unique: true })
 export class User {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -136,4 +139,12 @@ export class User {
 
   @Column({ default: false })
   identity_verified: boolean;
+
+  /** OpenID Connect issuer of the University SSO identity linked to this account (null: none). */
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  ssoIssuer: string | null;
+
+  /** The provider's stable subject id for that identity; stays valid if the email changes. */
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  ssoSubject: string | null;
 }

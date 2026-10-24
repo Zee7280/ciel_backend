@@ -124,6 +124,12 @@ export const SETTINGS_REGISTRY: readonly SettingSpec[] = [
     description: 'Allow new account registrations',
   },
   {
+    key: PLATFORM_SETTING_KEYS.UNIVERSITY_SSO_ENABLED,
+    kind: 'boolean',
+    description:
+      'University single sign-on for students (each university must also be activated under Organizations)',
+  },
+  {
     key: PLATFORM_SETTING_KEYS.SITE_NAME,
     kind: 'text',
     maxLength: 80,

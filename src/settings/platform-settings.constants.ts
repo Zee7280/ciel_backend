@@ -16,6 +16,8 @@ export const PLATFORM_SETTING_KEYS = {
   STUDENT_PRIVATE_TEAM_ENABLED: 'STUDENT_PRIVATE_TEAM_ENABLED',
   /** Student builder "Generate & Auto-Fill" (POST /ai/opportunity-draft). Off by default. */
   STUDENT_AI_OPPORTUNITY_DRAFT_ENABLED: 'STUDENT_AI_OPPORTUNITY_DRAFT_ENABLED',
+  /** University single sign-on (university-sso module). Off by default; each university is also activated individually. */
+  UNIVERSITY_SSO_ENABLED: 'UNIVERSITY_SSO_ENABLED',
 } as const;
 
 export function parseBooleanSetting(

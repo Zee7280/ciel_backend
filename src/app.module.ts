@@ -35,6 +35,7 @@ import { StudentSubscriptionModule } from './student-subscription/student-subscr
 import { FeedbackModule } from './feedback/feedback.module';
 import { TutorialsModule } from './tutorials/tutorials.module';
 import { QuickWorkModule } from './quick-work/quick-work.module';
+import { UniversitySsoModule } from './university-sso/university-sso.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { JobsModule } from './jobs/jobs.module';
 import { IntegrationHubModule } from './integration-hub/integration-hub.module';
@@ -101,6 +102,7 @@ import { NpeRankingModule } from './ranking/npe-ranking.module';
     StudentSubscriptionModule,
     FeedbackModule,
     QuickWorkModule,
+    UniversitySsoModule,
     TutorialsModule,
     AnalyticsModule,
     JobsModule,

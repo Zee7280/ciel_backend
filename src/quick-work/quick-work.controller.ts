@@ -7,16 +7,21 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   Request,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
 import { SubscriptionActiveGuard } from '../student-subscription/subscription-active.guard';
+import { AdminMutationAuditInterceptor } from '../audit-logs/admin-mutation-audit.interceptor';
 import { QuickWorkService } from './quick-work.service';
 import {
+  AdminQuickWorkListQuery,
+  AdminQuickWorkReassignDto,
   QuickWorkJoinDto,
   QuickWorkPresignDto,
   QuickWorkReviewDto,
@@ -136,6 +141,54 @@ export class FacultyQuickWorkController {
     return {
       success: true,
       data: await this.quickWork.review(req.user, id, dto),
+    };
+  }
+}
+
+/** CIEL PK admin: oversight of every log, faculty reassignment, and review when faculty cannot. */
+@Controller('admin/quick-work')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.SUPER_ADMIN)
+@UseInterceptors(AdminMutationAuditInterceptor)
+export class AdminQuickWorkController {
+  constructor(private readonly quickWork: QuickWorkService) {}
+
+  @Get()
+  async list(@Query() q: AdminQuickWorkListQuery) {
+    return { success: true, data: await this.quickWork.listForAdmin(q) };
+  }
+
+  @Get('export')
+  async export(@Query() q: AdminQuickWorkListQuery) {
+    return { success: true, data: await this.quickWork.exportForAdmin(q) };
+  }
+
+  @Get(':id')
+  async detail(@Param('id', ParseUUIDPipe) id: string) {
+    return { success: true, data: await this.quickWork.getForAdmin(id) };
+  }
+
+  @Patch(':id/faculty')
+  async reassign(
+    @Request() req: AuthedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AdminQuickWorkReassignDto,
+  ) {
+    return {
+      success: true,
+      data: await this.quickWork.reassignFaculty(req.user, id, dto),
+    };
+  }
+
+  @Post(':id/review')
+  async review(
+    @Request() req: AuthedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: QuickWorkReviewDto,
+  ) {
+    return {
+      success: true,
+      data: await this.quickWork.adminReview(req.user, id, dto),
     };
   }
 }

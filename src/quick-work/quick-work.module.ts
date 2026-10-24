@@ -4,10 +4,13 @@ import { User } from '../users/entities/user.entity';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import { MailModule } from '../mail/mail.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { AuditLogsModule } from '../audit-logs/audit-logs.module';
+import { FacultyUniversityScopeModule } from '../faculty-university-scope/faculty-university-scope.module';
 import { QuickWorkLog } from './entities/quick-work-log.entity';
 import { QuickWorkParticipant } from './entities/quick-work-participant.entity';
 import { QuickWorkService } from './quick-work.service';
 import {
+  AdminQuickWorkController,
   FacultyQuickWorkController,
   QuickWorkController,
 } from './quick-work.controller';
@@ -22,8 +25,14 @@ import {
     ]),
     MailModule,
     NotificationsModule,
+    AuditLogsModule,
+    FacultyUniversityScopeModule,
   ],
-  controllers: [QuickWorkController, FacultyQuickWorkController],
+  controllers: [
+    QuickWorkController,
+    FacultyQuickWorkController,
+    AdminQuickWorkController,
+  ],
   providers: [QuickWorkService],
 })
 export class QuickWorkModule {}

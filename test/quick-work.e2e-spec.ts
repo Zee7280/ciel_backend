@@ -7,6 +7,7 @@ import { UserRole } from '../src/users/enums/user-role.enum';
 import { S3Service } from '../src/common/s3.service';
 import { Participation } from '../src/engagement/entities/participant.entity';
 import { AttendanceLog } from '../src/engagement/entities/attendance-log.entity';
+import { Organization } from '../src/organizations/entities/organization.entity';
 
 type Participant = {
   userId: string;
@@ -29,9 +30,25 @@ const pastDay = (d: number) =>
 describe('Quick Community Work (real app + real Postgres)', () => {
   let h: Harness;
   let evidenceUrl: (owner: E2eUser) => string;
+  let admin: E2eUser;
+  let university: Organization;
+
+  /** A faculty member authorised for the students' university, so they may approve hours. */
+  const authorisedFaculty = async (org: Organization = university) => {
+    const faculty = await h.makeUser(UserRole.FACULTY);
+    await h
+      .as(admin)
+      .post('/admin/faculty-university-scope')
+      .send({ facultyUserId: faculty.id, universityOrganizationId: org.id })
+      .expect(201);
+    return faculty;
+  };
 
   beforeAll(async () => {
     h = await bootHarness();
+    admin = await h.makeUser(UserRole.SUPER_ADMIN);
+    // Students made by the harness name "E2E University" on their profile.
+    university = await h.makeOrg('E2E University', 'university');
     // Evidence must live in the lead's own presign folder: build such a URL for this bucket.
     const s3 = h.app.get<unknown, { bucket: string; region: string }>(
       S3Service,
@@ -99,7 +116,7 @@ describe('Quick Community Work (real app + real Postgres)', () => {
 
   it('solo: submit, faculty approves, the hours land on the student dashboard', async () => {
     const lead = await h.makeUser(UserRole.STUDENT);
-    const faculty = await h.makeUser(UserRole.FACULTY);
+    const faculty = await authorisedFaculty();
     const log = await draft(lead, completeLog(lead, faculty));
     expect(log.status).toBe('draft');
     expect(log.participants[0]).toMatchObject({ isLead: true, minutes: 60 });
@@ -182,7 +199,7 @@ describe('Quick Community Work (real app + real Postgres)', () => {
   it('team: teammates must be CIEL students who confirm before the lead can submit', async () => {
     const lead = await h.makeUser(UserRole.STUDENT);
     const mate = await h.makeUser(UserRole.STUDENT);
-    const faculty = await h.makeUser(UserRole.FACULTY);
+    const faculty = await authorisedFaculty();
 
     const notStudent = await h
       .as(lead)
@@ -425,5 +442,150 @@ describe('Quick Community Work (real app + real Postgres)', () => {
     expect((await h.as(lead).get('/quick-work/logs/not-a-uuid')).status).toBe(
       400,
     );
+  });
+
+  it('a faculty account not authorised for the students’ university cannot approve', async () => {
+    const lead = await h.makeUser(UserRole.STUDENT);
+    // E.g. a "faculty" account the student made with another email address.
+    const unlinked = await h.makeUser(UserRole.FACULTY);
+    const log = await draft(lead, completeLog(lead, unlinked));
+    await h.as(lead).post(`/quick-work/logs/${log.id}/submit`).expect(201);
+
+    const queue = await h.as(unlinked).get('/faculty/quick-work');
+    const item = (
+      queue.body as Body<{
+        pending: (LogView & { approveBlockedReason: string | null })[];
+      }>
+    ).data.pending.find((l) => l.id === log.id);
+    expect(item?.approveBlockedReason).toMatch(
+      /not yet linked to a university/,
+    );
+    const res = await h
+      .as(unlinked)
+      .post(`/faculty/quick-work/${log.id}/review`)
+      .send({ action: 'approve', verified: true });
+    expect(res.status).toBe(403);
+
+    // Faculty authorised for a different university cannot approve these students either.
+    const otherUni = await h.makeOrg('Other E2E University', 'university');
+    const elsewhere = await authorisedFaculty(otherUni);
+    const log2 = await draft(
+      lead,
+      completeLog(lead, elsewhere, { activityDate: pastDay(8) }),
+    );
+    await h.as(lead).post(`/quick-work/logs/${log2.id}/submit`).expect(201);
+    const res2 = await h
+      .as(elsewhere)
+      .post(`/faculty/quick-work/${log2.id}/review`)
+      .send({ action: 'approve', verified: true });
+    expect(res2.status).toBe(403);
+    expect(messages(res2.body as Body<unknown>)).toMatch(
+      /is not a student of Other E2E University/,
+    );
+
+    // Returning the log is still allowed, so it never gets stuck with them.
+    await h
+      .as(elsewhere)
+      .post(`/faculty/quick-work/${log2.id}/review`)
+      .send({ action: 'changes', note: 'Not my student' })
+      .expect(201);
+  });
+
+  it('admin: lists and exports logs, reassigns a stuck log’s faculty, and can review it', async () => {
+    const lead = await h.makeUser(UserRole.STUDENT);
+    const log = await draft(
+      lead,
+      completeLog(
+        lead,
+        { email: 'nobody.here@e2e.test' },
+        {
+          title: 'Stuck tree drive',
+          activityDate: pastDay(10),
+        },
+      ),
+    );
+    await h.as(lead).post(`/quick-work/logs/${log.id}/submit`).expect(201);
+
+    // Only CIEL PK admins.
+    expect((await h.as(lead).get('/admin/quick-work')).status).toBe(403);
+
+    type AdminList = {
+      rows: { id: string; facultyHasAccount: boolean; minutes: number }[];
+      total: number;
+      counts: Record<string, number>;
+    };
+    const list = await h
+      .as(admin)
+      .get('/admin/quick-work?status=submitted&search=Stuck%20tree');
+    expect(list.status).toBe(200);
+    const data = (list.body as Body<AdminList>).data;
+    const row = data.rows.find((r) => r.id === log.id);
+    expect(row).toMatchObject({ facultyHasAccount: false, minutes: 60 });
+    expect(data.counts.submitted).toBeGreaterThanOrEqual(1);
+    expect(
+      (await h.as(admin).get('/admin/quick-work?from=yesterday')).status,
+    ).toBe(400);
+
+    const faculty = await authorisedFaculty();
+    h.mail.reset();
+    const moved = await h
+      .as(admin)
+      .patch(`/admin/quick-work/${log.id}/faculty`)
+      .send({
+        facultyName: 'Dr Real Reviewer',
+        facultyEmail: faculty.email,
+        note: 'Student typed a wrong email',
+      });
+    expect(moved.status).toBe(200);
+    expect(h.mail.of('sendQuickWorkSubmittedForReview')).toHaveLength(1);
+    const queue = await h.as(faculty).get('/faculty/quick-work');
+    expect(
+      (queue.body as Body<{ pending: LogView[] }>).data.pending.map(
+        (l) => l.id,
+      ),
+    ).toContain(log.id);
+
+    const exported = await h
+      .as(admin)
+      .get('/admin/quick-work/export?search=Stuck%20tree');
+    expect(exported.status).toBe(200);
+    expect(
+      (
+        exported.body as Body<{
+          rows: { logId: string; studentEmail: string; minutes: number }[];
+        }>
+      ).data.rows.find((r) => r.logId === log.id),
+    ).toMatchObject({ studentEmail: lead.email, minutes: 60 });
+
+    const noReason = await h
+      .as(admin)
+      .post(`/admin/quick-work/${log.id}/review`)
+      .send({ action: 'reject' });
+    expect(noReason.status).toBe(400);
+    const approved = await h
+      .as(admin)
+      .post(`/admin/quick-work/${log.id}/review`)
+      .send({ action: 'approve', verified: true });
+    expect(approved.status).toBe(201);
+    const detail = (
+      approved.body as Body<{
+        status: string;
+        history: { action: string; byRole: string | null }[];
+      }>
+    ).data;
+    expect(detail.status).toBe('approved');
+    expect(detail.history.map((x) => x.action)).toEqual(
+      expect.arrayContaining(['admin_faculty_changed', 'admin_approved']),
+    );
+
+    // Reviewed logs keep their reviewer.
+    expect(
+      (
+        await h
+          .as(admin)
+          .patch(`/admin/quick-work/${log.id}/faculty`)
+          .send({ facultyName: 'X', facultyEmail: 'x@e2e.test' })
+      ).status,
+    ).toBe(400);
   });
 });

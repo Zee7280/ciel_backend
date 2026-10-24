@@ -8,13 +8,14 @@ import {
   Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { Brackets, In, Repository } from 'typeorm';
 import { User } from '../users/entities/user.entity';
 import { UserRole } from '../users/enums/user-role.enum';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import { S3Service } from '../common/s3.service';
 import { MailService } from '../mail/mail.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
 import {
   QuickWorkEvidence,
   QuickWorkHistoryEntry,
@@ -22,6 +23,8 @@ import {
 } from './entities/quick-work-log.entity';
 import { QuickWorkParticipant } from './entities/quick-work-participant.entity';
 import {
+  AdminQuickWorkListQuery,
+  AdminQuickWorkReassignDto,
   QuickWorkPresignDto,
   QuickWorkReviewDto,
   SaveQuickWorkLogDto,
@@ -46,7 +49,18 @@ const ACTIVE_STUDENT_STATUSES = ['active', 'approved'];
 
 const EVIDENCE_FOLDER = 'quick-work';
 
+/** Logs an admin sees by default: everything a student has sent for review (drafts on request). */
+const ADMIN_DEFAULT_STATUSES: QuickWorkStatus[] = [
+  'submitted',
+  'changes',
+  'approved',
+  'rejected',
+];
+const ADMIN_STATUSES: QuickWorkStatus[] = ['draft', ...ADMIN_DEFAULT_STATUSES];
+const ADMIN_EXPORT_MAX_LOGS = 5000;
+
 type Viewer = { id: string };
+type ReviewOutcome = 'approved' | 'changes' | 'rejected';
 
 @Injectable()
 export class QuickWorkService {
@@ -62,6 +76,7 @@ export class QuickWorkService {
     @InjectRepository(AttendanceLog)
     private readonly attendanceRepo: Repository<AttendanceLog>,
     private readonly s3Service: S3Service,
+    private readonly universityScope: FacultyUniversityScopeService,
     @Optional() private readonly mailService?: MailService,
     @Optional() private readonly notificationsService?: NotificationsService,
   ) {}
@@ -119,10 +134,20 @@ export class QuickWorkService {
       order: { submittedAt: 'DESC' },
       take: 200,
     });
-    const views = logs.map((log) => this.toView(log, null));
+    const pending = await Promise.all(
+      logs
+        .filter((log) => log.status === 'submitted')
+        .map(async (log) => ({
+          ...this.toView(log, null),
+          approveBlockedReason: await this.approvalScopeError(viewer.id, log),
+        })),
+    );
     return {
-      pending: views.filter((v) => v.status === 'submitted'),
-      reviewed: views.filter((v) => v.status !== 'submitted').slice(0, 50),
+      pending,
+      reviewed: logs
+        .filter((log) => log.status !== 'submitted')
+        .slice(0, 50)
+        .map((log) => this.toView(log, null)),
     };
   }
 
@@ -318,6 +343,23 @@ export class QuickWorkService {
     if (log.facultyEmail !== email) {
       throw new NotFoundException('Quick-work log not found');
     }
+    if (dto.action === 'approve') {
+      const blocked = await this.approvalScopeError(viewer.id, log);
+      if (blocked) throw new ForbiddenException(blocked);
+    }
+    return this.applyReview(log, viewer.id, dto, '');
+  }
+
+  /**
+   * Shared by faculty and admin review. Approval re-checks overlaps; a return or decline needs a
+   * reason. `historyPrefix` marks an admin decision in the log history.
+   */
+  private async applyReview(
+    log: QuickWorkLog,
+    reviewerId: string,
+    dto: QuickWorkReviewDto,
+    historyPrefix: '' | 'admin_',
+  ) {
     if (log.status !== 'submitted') {
       throw new BadRequestException('This log is not awaiting review.');
     }
@@ -339,7 +381,7 @@ export class QuickWorkService {
         ]);
       }
     }
-    const status: QuickWorkStatus =
+    const status: ReviewOutcome =
       dto.action === 'approve'
         ? 'approved'
         : dto.action === 'changes'
@@ -350,11 +392,15 @@ export class QuickWorkService {
       {
         status,
         reviewNote: note || null,
-        reviewedByUserId: viewer.id,
+        reviewedByUserId: reviewerId,
         reviewedAt: new Date(),
         history: [
           ...(log.history ?? []),
-          this.historyEntry(status, viewer.id, note || undefined),
+          this.historyEntry(
+            `${historyPrefix}${status}`,
+            reviewerId,
+            note || undefined,
+          ),
         ],
       },
     );
@@ -376,6 +422,349 @@ export class QuickWorkService {
       );
     }
     return this.toView(await this.loadLog(log.id), null);
+  }
+
+  /**
+   * Why this faculty member may not approve the log, or null when they may: their account must be
+   * authorised for a university (Faculty ↔ University scope) and every student credited with time
+   * must belong to that university. Stops a self-made "faculty" account approving its own hours.
+   */
+  private async approvalScopeError(
+    facultyUserId: string,
+    log: QuickWorkLog,
+  ): Promise<string | null> {
+    const assignment =
+      await this.universityScope.getAssignmentForFaculty(facultyUserId);
+    if (!assignment?.universityOrganization) {
+      return 'Your faculty account is not yet linked to a university on CIEL PK, so you cannot approve hours. Ask your university or CIEL PK to authorise your account, or return the log.';
+    }
+    const credited = log.participants.filter(
+      (p) => p.present && attendanceMinutes(p) > 0,
+    );
+    if (!credited.length) return null;
+    const students = await this.userRepo.find({
+      where: { id: In(credited.map((p) => p.userId)) },
+      relations: ['organization'],
+    });
+    const byId = new Map(students.map((u) => [u.id, u]));
+    for (const p of credited) {
+      const ok =
+        await this.universityScope.canFacultyReviewApplicationAsUniversityDelegate(
+          facultyUserId,
+          byId.get(p.userId),
+        );
+      if (!ok) {
+        return `${p.name || p.email} is not a student of ${assignment.universityOrganization.name}, so you cannot approve this log. Return it, or ask CIEL PK to review it.`;
+      }
+    }
+    return null;
+  }
+
+  /* ------------------------------------------------------------------ admin */
+
+  /** Every log (drafts only on request), filtered and paged, with status counts and approved hours. */
+  async listForAdmin(q: AdminQuickWorkListQuery) {
+    const page = Math.max(1, q.page ?? 1);
+    const limit = Math.min(100, Math.max(1, q.limit ?? 20));
+    const qb = this.adminFilteredQuery(q, false);
+    const [logs, total] = await qb
+      .orderBy('log.submittedAt', 'DESC', 'NULLS LAST')
+      .addOrderBy('log.createdAt', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
+
+    const withParticipants = logs.length
+      ? await this.logRepo.find({
+          where: { id: In(logs.map((l) => l.id)) },
+          relations: ['participants'],
+        })
+      : [];
+    const byId = new Map(withParticipants.map((l) => [l.id, l]));
+    const facultyEmails = [
+      ...new Set(logs.map((l) => l.facultyEmail).filter(Boolean)),
+    ];
+    const facultyAccounts = facultyEmails.length
+      ? await this.userRepo
+          .createQueryBuilder('u')
+          .select(['u.id', 'u.email'])
+          .where('LOWER(u.email) IN (:...emails)', { emails: facultyEmails })
+          .andWhere('u.role = :role', { role: UserRole.FACULTY })
+          .getMany()
+      : [];
+    const facultyByEmail = new Set(
+      facultyAccounts.map((u) => normalizeEmail(u.email)),
+    );
+
+    const rows = logs.map((l) => {
+      const full = byId.get(l.id) ?? l;
+      const participants = full.participants ?? [];
+      const lead = participants.find((p) => p.isLead);
+      return {
+        id: l.id,
+        title: l.title,
+        status: l.status,
+        activityDate: l.activityDate,
+        university: l.university,
+        department: l.department,
+        leadName: lead?.name ?? '',
+        leadEmail: lead?.email ?? '',
+        facultyName: l.facultyName,
+        facultyEmail: l.facultyEmail,
+        facultyHasAccount: facultyByEmail.has(l.facultyEmail),
+        participantCount: participants.length,
+        minutes: participants.reduce(
+          (a, p) => a + (p.present ? p.minutes || 0 : 0),
+          0,
+        ),
+        evidenceCount: (l.evidence ?? []).length,
+        submittedAt: l.submittedAt,
+        reviewedAt: l.reviewedAt,
+        createdAt: l.createdAt,
+      };
+    });
+
+    const countRows = await this.adminFilteredQuery(
+      { ...q, status: undefined },
+      true,
+    )
+      .select('log.status', 'status')
+      .addSelect('COUNT(*)', 'count')
+      .groupBy('log.status')
+      .getRawMany<{ status: QuickWorkStatus; count: string }>();
+    const counts: Record<QuickWorkStatus, number> = {
+      draft: 0,
+      submitted: 0,
+      changes: 0,
+      approved: 0,
+      rejected: 0,
+    };
+    for (const r of countRows) {
+      if (r.status in counts) counts[r.status] = Number(r.count) || 0;
+    }
+    const approved = await this.adminFilteredQuery(
+      { ...q, status: 'approved' },
+      false,
+    )
+      .innerJoin('log.participants', 'p')
+      .select(
+        'COALESCE(SUM(CASE WHEN p.present THEN p.minutes ELSE 0 END), 0)',
+        'minutes',
+      )
+      .getRawOne<{ minutes: string }>();
+
+    return {
+      rows,
+      total,
+      page,
+      limit,
+      counts,
+      approvedMinutes: Number(approved?.minutes) || 0,
+    };
+  }
+
+  async getForAdmin(id: string) {
+    const log = await this.loadLog(id);
+    const faculty = log.facultyEmail
+      ? await this.userRepo
+          .createQueryBuilder('u')
+          .select(['u.id', 'u.name', 'u.email', 'u.status'])
+          .where('LOWER(u.email) = :email', { email: log.facultyEmail })
+          .andWhere('u.role = :role', { role: UserRole.FACULTY })
+          .getOne()
+      : null;
+    const assignment = faculty
+      ? await this.universityScope.getAssignmentForFaculty(faculty.id)
+      : null;
+    const actorIds = [
+      ...new Set((log.history ?? []).map((h) => h.byUserId).filter(Boolean)),
+    ];
+    const actors = actorIds.length
+      ? await this.userRepo.find({
+          where: { id: In(actorIds) },
+          select: ['id', 'name', 'email', 'role'],
+        })
+      : [];
+    const actorById = new Map(actors.map((a) => [a.id, a]));
+    return {
+      ...this.toView(log, null),
+      facultyAccount: faculty
+        ? {
+            exists: true,
+            name: faculty.name,
+            status: faculty.status,
+            authorisedUniversity:
+              assignment?.universityOrganization?.name ?? null,
+          }
+        : {
+            exists: false,
+            name: null,
+            status: null,
+            authorisedUniversity: null,
+          },
+      history: (log.history ?? []).map((h) => {
+        const actor = actorById.get(h.byUserId);
+        return {
+          ...h,
+          byName: actor?.name || actor?.email || null,
+          byRole: actor?.role ?? null,
+        };
+      }),
+    };
+  }
+
+  /** Point a log at a different reviewing faculty member (wrong email, no account, left the university). */
+  async reassignFaculty(
+    admin: Viewer,
+    id: string,
+    dto: AdminQuickWorkReassignDto,
+  ) {
+    const log = await this.loadLog(id);
+    if (log.status === 'approved' || log.status === 'rejected') {
+      throw new BadRequestException(
+        'This log has already been reviewed, so its faculty cannot change.',
+      );
+    }
+    const facultyEmail = normalizeEmail(dto.facultyEmail);
+    if (!EMAIL_RE.test(facultyEmail)) {
+      throw new BadRequestException('Enter a valid faculty email.');
+    }
+    const facultyName = dto.facultyName.trim().slice(0, 100);
+    if (!facultyName) {
+      throw new BadRequestException('Enter the faculty member’s name.');
+    }
+    if (facultyEmail === log.facultyEmail && facultyName === log.facultyName) {
+      throw new BadRequestException('That is already the reviewing faculty.');
+    }
+    if (
+      log.participants.some((p) => normalizeEmail(p.email) === facultyEmail)
+    ) {
+      throw new BadRequestException(
+        'A participant of this log cannot be its reviewer.',
+      );
+    }
+    const from = `${log.facultyName || '—'} <${log.facultyEmail || '—'}>`;
+    const reason = (dto.note ?? '').trim();
+    await this.logRepo.update(
+      { id: log.id },
+      {
+        facultyName,
+        facultyEmail,
+        history: [
+          ...(log.history ?? []),
+          this.historyEntry(
+            'admin_faculty_changed',
+            admin.id,
+            `From ${from} to ${facultyName} <${facultyEmail}>${reason ? `. ${reason}` : ''}`,
+          ),
+        ],
+      },
+    );
+    const updated = await this.loadLog(log.id);
+    if (updated.status === 'submitted') {
+      const lead = updated.participants.find((p) => p.isLead);
+      void this.notifyFaculty(updated, lead?.name || 'A student');
+    }
+    if (updated.leadUserId) {
+      void this.notify(
+        updated.leadUserId,
+        'Reviewing faculty changed',
+        `CIEL PK changed the reviewer of "${updated.title || 'your quick community activity'}" to ${facultyName}.`,
+      );
+    }
+    return this.getForAdmin(updated.id);
+  }
+
+  /** CIEL PK admin decision on a submitted log, e.g. when its faculty cannot review it. */
+  async adminReview(admin: Viewer, id: string, dto: QuickWorkReviewDto) {
+    const log = await this.loadLog(id);
+    await this.applyReview(log, admin.id, dto, 'admin_');
+    return this.getForAdmin(log.id);
+  }
+
+  /** One row per participant for every log matching the filters (capped), for CSV export. */
+  async exportForAdmin(q: AdminQuickWorkListQuery) {
+    const ids = await this.adminFilteredQuery(q, false)
+      .select(['log.id'])
+      .orderBy('log.submittedAt', 'DESC', 'NULLS LAST')
+      .addOrderBy('log.createdAt', 'DESC')
+      .take(ADMIN_EXPORT_MAX_LOGS)
+      .getMany();
+    if (!ids.length) return { rows: [], truncated: false };
+    const logs = await this.logRepo.find({
+      where: { id: In(ids.map((l) => l.id)) },
+      relations: ['participants'],
+    });
+    const order = new Map(ids.map((l, i) => [l.id, i]));
+    logs.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+    const rows = logs.flatMap((log) =>
+      [...(log.participants ?? [])]
+        .sort((a, b) => Number(b.isLead) - Number(a.isLead))
+        .map((p) => ({
+          logId: log.id,
+          title: log.title,
+          status: log.status,
+          activityType: log.activityType,
+          activityDate: log.activityDate,
+          university: log.university,
+          department: log.department,
+          location: log.location,
+          facultyName: log.facultyName,
+          facultyEmail: log.facultyEmail,
+          studentName: p.name,
+          studentEmail: p.email,
+          studentId: p.studentId,
+          role: p.isLead ? 'lead' : 'teammate',
+          joinStatus: p.joinStatus,
+          present: p.present,
+          startTime: p.startTime,
+          endTime: p.endTime,
+          breakMinutes: p.breakMinutes,
+          minutes: p.present ? p.minutes || 0 : 0,
+          submittedAt: log.submittedAt,
+          reviewedAt: log.reviewedAt,
+          reviewNote: log.reviewNote,
+        })),
+    );
+    return { rows, truncated: ids.length >= ADMIN_EXPORT_MAX_LOGS };
+  }
+
+  /** Filters shared by the admin list, counts and export. */
+  private adminFilteredQuery(q: AdminQuickWorkListQuery, allStatuses: boolean) {
+    const qb = this.logRepo.createQueryBuilder('log');
+    if (!allStatuses) {
+      const statuses =
+        q.status && ADMIN_STATUSES.includes(q.status)
+          ? [q.status]
+          : ADMIN_DEFAULT_STATUSES;
+      qb.where('log.status IN (:...statuses)', { statuses });
+    } else {
+      qb.where('1 = 1');
+    }
+    const university = (q.university ?? '').trim();
+    if (university) {
+      qb.andWhere('log.university ILIKE :university', {
+        university: `%${escapeLike(university)}%`,
+      });
+    }
+    if (q.from) qb.andWhere('log.activityDate >= :from', { from: q.from });
+    if (q.to) qb.andWhere('log.activityDate <= :to', { to: q.to });
+    const search = (q.search ?? '').trim();
+    if (search) {
+      const term = `%${escapeLike(search)}%`;
+      qb.andWhere(
+        new Brackets((w) => {
+          w.where('log.title ILIKE :term', { term })
+            .orWhere('log.facultyEmail ILIKE :term', { term })
+            .orWhere('log.facultyName ILIKE :term', { term })
+            .orWhere(
+              'EXISTS (SELECT 1 FROM quick_work_participants qp WHERE qp."logId" = log.id AND (qp.email ILIKE :term OR qp.name ILIKE :term OR qp."studentId" ILIKE :term))',
+              { term },
+            );
+        }),
+      );
+    }
+    return qb;
   }
 
   /* ------------------------------------------------------------------ evidence */
@@ -707,4 +1096,9 @@ export class QuickWorkService {
       );
     }
   }
+}
+
+/** Escape LIKE wildcards in user input so "50%" matches literally. */
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (c) => `\\${c}`);
 }

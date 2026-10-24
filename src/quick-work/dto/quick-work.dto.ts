@@ -6,6 +6,7 @@ import {
   IsIn,
   IsInt,
   IsOptional,
+  Matches,
   IsString,
   Max,
   MaxLength,
@@ -228,4 +229,59 @@ export class QuickWorkPresignDto {
   @IsInt()
   @Min(1)
   size: number;
+}
+
+const YMD = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Admin list / export filters; every field optional. */
+export class AdminQuickWorkListQuery {
+  @IsOptional()
+  @IsIn(['draft', 'submitted', 'changes', 'approved', 'rejected'])
+  status?: 'draft' | 'submitted' | 'changes' | 'approved' | 'rejected';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  university?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  search?: string;
+
+  @IsOptional()
+  @Matches(YMD, { message: 'from must be a YYYY-MM-DD date' })
+  from?: string;
+
+  @IsOptional()
+  @Matches(YMD, { message: 'to must be a YYYY-MM-DD date' })
+  to?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit?: number;
+}
+
+export class AdminQuickWorkReassignDto {
+  @IsString()
+  @MaxLength(100)
+  facultyName: string;
+
+  @IsString()
+  @MaxLength(120)
+  facultyEmail: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(QUICK_WORK_REVIEW_NOTE_MAX)
+  note?: string;
 }

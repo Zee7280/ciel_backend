@@ -6,17 +6,14 @@ import { UsersService } from '../users/users.service';
 import { UserRole } from '../users/enums/user-role.enum';
 import { resolveJwtSecret } from './jwt-secret.util';
 
-/** Mirrors the statuses AuthService.login() accepts (investors may log in while 'pending'). */
-export function isSessionStatusAllowed(status: string, role: string): boolean {
-  if (
+/** Mirrors the statuses AuthService.login() accepts. */
+export function isSessionStatusAllowed(status: string): boolean {
+  return (
     status === 'active' ||
     status === 'approved' ||
     status === 'pending_membership_payment' ||
     status === 'pending_subscription_payment'
-  ) {
-    return true;
-  }
-  return role === (UserRole.INVESTOR as string) && status === 'pending';
+  );
 }
 
 const ORGANIZATION_ACCOUNT_ROLES = new Set<string>([
@@ -28,7 +25,8 @@ const ORGANIZATION_ACCOUNT_ROLES = new Set<string>([
 
 /**
  * An organization account whose organization a CIEL admin rejected loses access. Only REJECTED:
- * PENDING university / corporate accounts keep working after their membership fee is approved.
+ * new accounts wait on `pending_org_verification` instead, and accounts already active before
+ * the review gate keep working while their organization is still PENDING.
  */
 export function isOrganizationAccessRejected(
   role: string,
@@ -81,7 +79,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException();
     }
     // Suspended / rejected / deleted-state accounts lose access immediately, not at token expiry.
-    if (!isSessionStatusAllowed(user.status, user.role)) {
+    if (!isSessionStatusAllowed(user.status)) {
       throw new UnauthorizedException('Account is not active');
     }
     if (user.organization?.isBlocked) {

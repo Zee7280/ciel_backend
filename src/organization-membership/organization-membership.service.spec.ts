@@ -8,11 +8,11 @@ type MembershipServiceArgs = ConstructorParameters<
 >;
 
 describe('OrganizationMembershipService approvals', () => {
-  function build(paid: number) {
+  function build(paid: number, orgVerification = 'APPROVED') {
     const row = {
       id: 'f1',
       userId: 'u1',
-      organizationId: null,
+      organizationId: 'o1',
       status: 'pending_review',
       paidAmountPkr: paid,
       user: { id: 'u1', role: 'university', email: 'u@x.com' },
@@ -31,6 +31,12 @@ describe('OrganizationMembershipService approvals', () => {
     const userRepo = {
       update: jest.fn(() => Promise.resolve({})),
       createQueryBuilder: jest.fn(() => orgUpdateQb),
+      findOne: jest.fn(() => Promise.resolve(null)),
+      manager: {
+        findOne: jest.fn(() =>
+          Promise.resolve({ id: 'o1', verificationStatus: orgVerification }),
+        ),
+      },
     };
     const settingRepo = {
       findOne: jest.fn(() => Promise.resolve({ value: '10000' })),
@@ -102,6 +108,18 @@ describe('OrganizationMembershipService approvals', () => {
         status: In(['pending_membership_payment', 'pending_org_verification']),
       },
       { status: 'active' },
+    );
+  });
+
+  it('a paid fee does not skip the organization profile review', async () => {
+    const { service, userRepo } = build(10000, 'PENDING');
+    await service.approveSubmission('f1', 'a1');
+    expect(userRepo.update).toHaveBeenCalledWith(
+      {
+        id: 'u1',
+        status: In(['pending_membership_payment', 'pending_org_verification']),
+      },
+      { status: 'pending_org_verification' },
     );
   });
 });

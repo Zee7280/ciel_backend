@@ -7,7 +7,7 @@ type OrganizationsServiceArgs = ConstructorParameters<
 >;
 
 function build(orgRepo: unknown, usersRepo: unknown) {
-  const args: unknown[] = new Array<unknown>(8).fill({});
+  const args: unknown[] = new Array<unknown>(9).fill({});
   args[0] = orgRepo;
   args[1] = usersRepo;
   return new OrganizationsService(
@@ -171,10 +171,10 @@ describe('OrganizationsService admin flows', () => {
         ]),
       createQueryBuilder: () => revoke,
     };
-    const args: unknown[] = new Array<unknown>(8).fill({});
+    const args: unknown[] = new Array<unknown>(9).fill({});
     args[0] = repo;
     args[1] = users;
-    args[8] = mail;
+    args[9] = mail;
     const svc = new OrganizationsService(
       ...(args as unknown as OrganizationsServiceArgs),
     );
@@ -243,5 +243,70 @@ describe('OrganizationsService admin flows', () => {
         'adm',
       ),
     ).rejects.toThrow(BadRequestException);
+  });
+
+  it('admin detail returns uploaded files, the signup proof link and member contact fields', async () => {
+    const org = {
+      id: 'o',
+      name: 'Hope',
+      verificationStatus: 'PENDING',
+      logoUrl: 'https://b.s3/logos/l.png',
+      verificationNotes:
+        'Signup proof method: link\nSignup proof detail: LinkedIn\nSignup proof URL: https://linkedin.com/in/x',
+    };
+    const repo = {
+      findOne: jest.fn().mockResolvedValue(org),
+      createQueryBuilder: () => ({
+        select: jest.fn().mockReturnThis(),
+        addSelect: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue({
+          signupProofDocuments: [{ label: 'Proof', url: 'u', fileName: 'f' }],
+        }),
+      }),
+    };
+    const users = {
+      find: jest.fn().mockResolvedValue([
+        {
+          id: 'u1',
+          name: 'Ali',
+          phone: '+923001234567',
+          contactPerson: 'CEO',
+        },
+      ]),
+      findOne: jest.fn(),
+    };
+    const fees = {
+      find: jest
+        .fn()
+        .mockResolvedValue([
+          { id: 'f1', paidAmountPkr: 5000, proofUrl: 'p', status: 'approved' },
+        ]),
+    };
+    const args: unknown[] = new Array<unknown>(9).fill({});
+    args[0] = repo;
+    args[1] = users;
+    args[2] = { count: jest.fn().mockResolvedValue(0) };
+    args[7] = fees;
+    const svc = new OrganizationsService(
+      ...(args as unknown as OrganizationsServiceArgs),
+    );
+    const d = await svc.getAdminOrganizationDetails('o');
+    expect(d.logo_url).toBe(org.logoUrl);
+    expect(d.signup_proof_documents).toHaveLength(1);
+    expect(d.signup_proof).toEqual({
+      method: 'link',
+      detail: 'LinkedIn',
+      url: 'https://linkedin.com/in/x',
+    });
+    expect(d.membership_fee_payments[0]).toMatchObject({
+      amount_pkr: 5000,
+      proof_url: 'p',
+      status: 'approved',
+    });
+    expect(d.members[0]).toMatchObject({
+      phone: '+923001234567',
+      designation: 'CEO',
+    });
   });
 });

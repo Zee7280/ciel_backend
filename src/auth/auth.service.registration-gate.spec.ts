@@ -158,6 +158,19 @@ describe('AuthService — login does not leak account status before the password
     ).rejects.toThrow('Account is not active');
   });
 
+  it('a pending investor waits for admin review instead of signing in', async () => {
+    const { svc, jwt } = await build2({
+      id: 'u',
+      email: 'vc@x.pk',
+      role: 'investor',
+      status: 'pending',
+    });
+    await expect(
+      svc.login({ email: 'vc@x.pk', password: 'Right-pass-1' } as LoginDto),
+    ).rejects.toThrow(/pending CIEL PK admin verification/);
+    expect(jwt.sign).not.toHaveBeenCalled();
+  });
+
   it('unknown email is the same generic error', async () => {
     const { svc } = await build2(null);
     await expect(
@@ -346,5 +359,67 @@ describe('AuthService — university / corporate account awaiting organization v
       { status: 'active' },
     );
     expect(jwt.sign).toHaveBeenCalled();
+  });
+});
+
+describe('AuthService.signup — non-student accounts must prove who they are', () => {
+  const buildSignup = () => {
+    const usersService = {
+      findByEmail: jest.fn().mockResolvedValue(null),
+      create: jest.fn(),
+    };
+    const svc = new AuthService(
+      usersService as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { requireVerifiedEmailForSignup: jest.fn() } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { isRegistrationAllowed: jest.fn().mockResolvedValue(true) } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    return { svc, usersService };
+  };
+  const ngo = {
+    email: 'ngo@x.pk',
+    password: 'Right-pass-1',
+    role: 'ngo',
+    name: 'Programme Manager',
+    contactPerson: 'Programme Manager',
+    orgName: 'Hope Foundation',
+    organizationCategory: 'Nonprofit Organization (NGO)',
+    legalRegistrationType: 'Trust',
+  };
+
+  it('refuses an organisation signup with neither a proof file nor a verification link', async () => {
+    const { svc, usersService } = buildSignup();
+    for (const extra of [
+      {},
+      { affiliationProofKind: 'link', affiliationProofUrl: 'not a url' },
+    ]) {
+      await expect(
+        svc.signup({ ...ngo, ...extra } as unknown as SignupDto),
+      ).rejects.toThrow(/proof document or add a public verification link/);
+    }
+    expect(usersService.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses an investor signup without proof documents', async () => {
+    const { svc, usersService } = buildSignup();
+    await expect(
+      svc.signup({
+        email: 'vc@x.pk',
+        password: 'Right-pass-1',
+        role: 'investor',
+        name: 'Ayesha',
+        contactPerson: 'Partner',
+        orgName: 'ABC Ventures',
+      } as unknown as SignupDto),
+    ).rejects.toThrow(/proof of organisation/);
+    expect(usersService.create).not.toHaveBeenCalled();
   });
 });

@@ -77,7 +77,8 @@ export class AdminOrganizationMembershipController {
     );
     return {
       success: true,
-      message: 'Membership approved; account activated',
+      message:
+        'Membership fee approved. The account is active once its organization profile is approved.',
       data: { id: row.id, userId: row.userId, status: row.status },
     };
   }

@@ -10,6 +10,7 @@ import { OpportunityApplication } from '../opportunities/entities/opportunity-ap
 import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { Report } from '../reports/entities/report.entity';
 import { Participation } from '../engagement/entities/participant.entity';
+import { OrganizationMembershipFee } from '../organization-membership/entities/organization-membership-fee.entity';
 
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 import { FacultyUniversityScopeModule } from '../faculty-university-scope/faculty-university-scope.module';
@@ -24,6 +25,7 @@ import { FacultyUniversityScopeModule } from '../faculty-university-scope/facult
       Timesheet,
       Report,
       Participation,
+      OrganizationMembershipFee,
     ]),
     AuditLogsModule,
     FacultyUniversityScopeModule,

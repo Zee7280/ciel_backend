@@ -9,6 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, Repository, In } from 'typeorm';
 import { OrganizationMembershipFee } from './entities/organization-membership-fee.entity';
 import { User } from '../users/entities/user.entity';
+import { Organization } from '../organizations/entities/organization.entity';
 import { Setting } from '../settings/entities/setting.entity';
 import { UserRole } from '../users/enums/user-role.enum';
 import { MEMBERSHIP_FEE_DEFAULT_PKR } from './membership-fee.defaults';
@@ -99,6 +100,7 @@ export class OrganizationMembershipService {
     email: string | null | undefined,
     decision: 'approved' | 'rejected',
     feedback?: string | null,
+    awaitingOrgReview = false,
   ): Promise<void> {
     const title =
       decision === 'approved'
@@ -106,7 +108,9 @@ export class OrganizationMembershipService {
         : 'Membership fee payment rejected';
     const message =
       decision === 'approved'
-        ? 'Your membership fee payment was approved. Your account is now active.'
+        ? awaitingOrgReview
+          ? 'Your membership fee payment was approved. CIEL PK is now reviewing your organisation profile; you can sign in once it is approved.'
+          : 'Your membership fee payment was approved. Your account is now active.'
         : 'Your membership fee payment proof was rejected. Please submit a new payment proof.';
     try {
       if (this.notificationsService) {
@@ -233,11 +237,10 @@ export class OrganizationMembershipService {
     );
     if (approvedSubmission) {
       if (user.status === 'pending_membership_payment') {
-        await this.activateMembershipAccounts(
+        user.status = await this.activateMembershipAccounts(
           user.id,
           user.organization?.id ?? approvedSubmission.organizationId,
         );
-        user.status = 'active';
       }
       return {
         requires_membership_payment: false,
@@ -291,29 +294,51 @@ export class OrganizationMembershipService {
     return qb.orderBy('fee.createdAt', 'DESC').getOne();
   }
 
+  /**
+   * A paid fee releases the accounts waiting on it — to `active` only once a CIEL admin has also
+   * approved the organization's profile; until then they wait on org verification (login flips
+   * them to active after approval). Never re-activates an account an admin suspended.
+   */
   private async activateMembershipAccounts(
     userId: string,
     organizationId?: string | null,
-  ) {
-    // Only release accounts still waiting on the fee (or, after the fee was switched off, on
-    // verification: a paid fee counts as that check) — never re-activate one an admin suspended.
+  ): Promise<string> {
+    const orgId =
+      organizationId ??
+      (
+        await this.userRepo.findOne({
+          where: { id: userId },
+          relations: ['organization'],
+        })
+      )?.organization?.id;
+    const org = orgId
+      ? await this.userRepo.manager.findOne(Organization, {
+          where: { id: orgId },
+          select: ['id', 'verificationStatus'],
+        })
+      : null;
+    const next =
+      !org || org.verificationStatus === 'APPROVED'
+        ? 'active'
+        : PENDING_ORG_VERIFICATION_STATUS;
     const waiting = [
       'pending_membership_payment',
       PENDING_ORG_VERIFICATION_STATUS,
     ];
     await this.userRepo.update(
       { id: userId, status: In(waiting) },
-      { status: 'active' },
+      { status: next },
     );
-    if (organizationId) {
+    if (orgId) {
       await this.userRepo
         .createQueryBuilder()
         .update(User)
-        .set({ status: 'active' })
-        .where('organizationId = :organizationId', { organizationId })
+        .set({ status: next })
+        .where('organizationId = :organizationId', { organizationId: orgId })
         .andWhere('status IN (:...waiting)', { waiting })
         .execute();
     }
+    return next;
   }
 
   async submitProof(
@@ -535,11 +560,16 @@ export class OrganizationMembershipService {
     row.status = 'approved';
     row.reviewedByUserId = adminUserId;
     row.reviewedAt = reviewedAt;
-    await this.activateMembershipAccounts(row.userId, row.organizationId);
+    const next = await this.activateMembershipAccounts(
+      row.userId,
+      row.organizationId,
+    );
     await this.notifyMembershipDecision(
       row.userId,
       row.user?.email,
       'approved',
+      null,
+      next === PENDING_ORG_VERIFICATION_STATUS,
     );
     return row;
   }

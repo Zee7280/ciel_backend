@@ -89,12 +89,11 @@ describe('JwtStrategy.validate', () => {
     ).resolves.toMatchObject({ role: 'faculty' });
   });
   it('mirrors login statuses', () => {
-    expect(
-      isSessionStatusAllowed('pending_membership_payment', 'university'),
-    ).toBe(true);
-    expect(isSessionStatusAllowed('pending', 'investor')).toBe(true);
-    expect(isSessionStatusAllowed('pending', 'student')).toBe(false);
-    expect(isSessionStatusAllowed('rejected', 'student')).toBe(false);
+    expect(isSessionStatusAllowed('pending_membership_payment')).toBe(true);
+    // Pending investors wait for admin review, like every other non-student account.
+    expect(isSessionStatusAllowed('pending')).toBe(false);
+    expect(isSessionStatusAllowed('pending_org_verification')).toBe(false);
+    expect(isSessionStatusAllowed('rejected')).toBe(false);
   });
 });
 

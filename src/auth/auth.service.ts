@@ -306,6 +306,22 @@ export class AuthService implements OnApplicationBootstrap {
         ? rawProofDocuments
         : [];
 
+      // Every account except students proves who it is at signup; an admin reviews that proof
+      // before the account gets in. Orgs may give a public verification link instead of a file.
+      const hasProofLink = /^https?:\/\/\S+\.\S+/i.test(
+        String(affiliationProofUrl || '').trim(),
+      );
+      if (isOrgSignup && !proofDocuments.length && !hasProofLink) {
+        throw new BadRequestException(
+          'Upload a proof document or add a public verification link so CIEL PK can verify your organisation.',
+        );
+      }
+      if (userCreateData.role === UserRole.INVESTOR && !proofDocuments.length) {
+        throw new BadRequestException(
+          'Upload your proof of organisation and proof of role so CIEL PK can verify your investor profile.',
+        );
+      }
+
       let investorExtras: {
         status?: string;
         settings?: Record<string, unknown>;
@@ -487,7 +503,7 @@ export class AuthService implements OnApplicationBootstrap {
             : needsSubscriptionFee
               ? 'Account created. Pay the one-time subscription fee and submit proof to activate your student portal.'
               : user.role === UserRole.INVESTOR
-                ? 'Application received. CIEL PK verifies investor accounts within 3 working days.'
+                ? 'Application received. CIEL PK verifies investor accounts within 3 working days before first sign-in.'
                 : 'User created successfully',
         data: {
           user: await this.usersService.formatUserResponse(user),
@@ -544,14 +560,22 @@ export class AuthService implements OnApplicationBootstrap {
       user.status = 'active';
     }
 
-    const investorPending =
-      user.role === UserRole.INVESTOR && user.status === 'pending';
+    // Investors wait outside until an admin has reviewed their profile and proof.
+    if (user.role === UserRole.INVESTOR && user.status === 'pending') {
+      throw new UnauthorizedException(
+        'Your investor profile is pending CIEL PK admin verification.',
+      );
+    }
+    if (user.role === UserRole.INVESTOR && user.status === 'rejected') {
+      throw new UnauthorizedException(
+        'Your investor application was not approved. Contact CIEL PK support.',
+      );
+    }
     if (
       user.status !== 'active' &&
       user.status !== 'approved' &&
       user.status !== 'pending_membership_payment' &&
-      user.status !== PENDING_SUBSCRIPTION_STATUS &&
-      !investorPending
+      user.status !== PENDING_SUBSCRIPTION_STATUS
     ) {
       throw new UnauthorizedException('Account is not active');
     }

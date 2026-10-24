@@ -27,6 +27,7 @@ import { OpportunityApplication } from '../opportunities/entities/opportunity-ap
 import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { Report } from '../reports/entities/report.entity';
 import { Participation } from '../engagement/entities/participant.entity';
+import { OrganizationMembershipFee } from '../organization-membership/entities/organization-membership-fee.entity';
 import {
   FacultyUniversityScopeService,
   type UniversityScope,
@@ -90,6 +91,8 @@ export class OrganizationsService {
     private reportsRepository: Repository<Report>,
     @InjectRepository(Participation)
     private participationRepository: Repository<Participation>,
+    @InjectRepository(OrganizationMembershipFee)
+    private membershipFeesRepository: Repository<OrganizationMembershipFee>,
     private readonly facultyUniversityScopeService: FacultyUniversityScopeService,
     @Optional() private readonly mailService?: MailService,
   ) {}
@@ -736,7 +739,16 @@ export class OrganizationsService {
         }),
         this.usersRepository.find({
           where: { organization: { id: org.id } },
-          select: ['id', 'name', 'email', 'role', 'status', 'createdAt'],
+          select: [
+            'id',
+            'name',
+            'email',
+            'role',
+            'status',
+            'phone',
+            'contactPerson',
+            'createdAt',
+          ],
           order: { createdAt: 'ASC' },
         }),
         org.verifiedBy
@@ -746,6 +758,30 @@ export class OrganizationsService {
             })
           : Promise.resolve(null),
       ]);
+
+    // Membership fee proofs: tagged with the org at submission, or by one of its login users.
+    const memberIds = members.map((m) => m.id);
+    const membershipFees = await this.membershipFeesRepository.find({
+      where: [
+        { organizationId: org.id },
+        ...(memberIds.length ? [{ userId: In(memberIds) }] : []),
+      ],
+      order: { createdAt: 'DESC' },
+      take: 20,
+    });
+
+    // Signup writes the proof link / method as "Signup proof …:" lines in verificationNotes.
+    const noteLines = String(org.verificationNotes || '').split('\n');
+    const proofLine = (prefix: string) =>
+      noteLines
+        .find((l) => l.startsWith(prefix))
+        ?.slice(prefix.length)
+        .trim() || null;
+    const signupProof = {
+      method: proofLine('Signup proof method:'),
+      detail: proofLine('Signup proof detail:'),
+      url: proofLine('Signup proof URL:'),
+    };
 
     const normalizedStatus = org.isBlocked
       ? 'suspended'
@@ -771,6 +807,19 @@ export class OrganizationsService {
       verification_scope: org.verificationScope,
       verification_notes: org.verificationNotes,
       signup_proof_documents: proofRow?.signupProofDocuments ?? [],
+      signup_proof:
+        signupProof.method || signupProof.detail || signupProof.url
+          ? signupProof
+          : null,
+      membership_fee_payments: membershipFees.map((f) => ({
+        id: f.id,
+        amount_pkr: f.paidAmountPkr,
+        proof_url: f.proofUrl,
+        status: f.status,
+        admin_feedback: f.adminFeedback,
+        submitted_at: f.createdAt,
+        reviewed_at: f.reviewedAt,
+      })),
       is_blocked: org.isBlocked === true,
       active_projects_count: activeProjectsCount,
       opportunities_count: opportunitiesCount,
@@ -782,6 +831,8 @@ export class OrganizationsService {
         email: m.email,
         role: m.role,
         status: m.status,
+        phone: m.phone,
+        designation: m.contactPerson,
         created_at: m.createdAt,
       })),
       phone: org.contactPhone,

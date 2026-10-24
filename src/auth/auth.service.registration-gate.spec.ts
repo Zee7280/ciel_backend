@@ -284,3 +284,67 @@ describe('AuthService — NGO grandfather backfill on boot', () => {
     expect(approved).toEqual(['legacy', 'new-signup']);
   });
 });
+
+describe('AuthService — university / corporate account awaiting organization verification', () => {
+  const build3 = async (verificationStatus: string, role = 'university') => {
+    const hash = await bcrypt.hash('Right-pass-1', 4);
+    const usersService = {
+      findByEmail: jest.fn().mockResolvedValue({
+        id: 'u1',
+        email: 'uni@x.pk',
+        role,
+        status: 'pending_org_verification',
+        tokenVersion: 0,
+        password: hash,
+        organization: { id: 'o1', verificationStatus },
+      }),
+      formatUserResponse: jest.fn().mockResolvedValue({}),
+    };
+    const jwt = { sign: jest.fn().mockReturnValue('jwt') };
+    const usersRepository = { update: jest.fn().mockResolvedValue({}) };
+    const svc = new AuthService(
+      usersService as never,
+      jwt as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      usersRepository as never,
+      {} as never,
+    );
+    const login = () =>
+      svc.login({ email: 'uni@x.pk', password: 'Right-pass-1' } as LoginDto);
+    return { login, jwt, usersRepository };
+  };
+
+  it('stays locked out while the organization is pending, for university and corporate', async () => {
+    for (const role of ['university', 'corporate']) {
+      const { login, jwt, usersRepository } = await build3('PENDING', role);
+      await expect(login()).rejects.toThrow(
+        /pending CIEL PK admin verification/,
+      );
+      expect(jwt.sign).not.toHaveBeenCalled();
+      expect(usersRepository.update).not.toHaveBeenCalled();
+    }
+  });
+
+  it('a rejected organization gets the not-approved message', async () => {
+    const { login, usersRepository } = await build3('REJECTED');
+    await expect(login()).rejects.toThrow(/not approved/);
+    expect(usersRepository.update).not.toHaveBeenCalled();
+  });
+
+  it('activates the account on the first login after the organization is approved', async () => {
+    const { login, jwt, usersRepository } = await build3('APPROVED');
+    await login();
+    expect(usersRepository.update).toHaveBeenCalledWith(
+      { id: 'u1', status: 'pending_org_verification' },
+      { status: 'active' },
+    );
+    expect(jwt.sign).toHaveBeenCalled();
+  });
+});

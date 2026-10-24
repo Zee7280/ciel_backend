@@ -60,7 +60,7 @@ import {
 } from '../reports/report-partner-approval.util';
 import { OrganizationMembershipService } from '../organization-membership/organization-membership.service';
 import { PartnerMembershipSettingsService } from '../organization-membership/partner-membership-settings.service';
-import { PARTNER_MEMBERSHIP_REQUIRED_KEY } from '../organization-membership/partner-membership.util';
+import { membershipRoleForSettingKey } from '../organization-membership/partner-membership.util';
 import { StudentSubscriptionService } from '../student-subscription/student-subscription.service';
 import { STUDENT_SUBSCRIPTION_REQUIRED_KEY } from '../student-subscription/student-subscription.util';
 import { StudentApplyMaintenanceService } from '../opportunities/student-apply-maintenance.service';
@@ -373,11 +373,14 @@ export class AdminService {
       this.reportPartnerApprovalSettings.invalidateCache();
       await this.reportPartnerApprovalSettings.refreshCache();
     }
-    if (key === PARTNER_MEMBERSHIP_REQUIRED_KEY) {
-      this.partnerMembershipSettings.invalidateCache();
-      const enabled = await this.partnerMembershipSettings.refreshCache();
+    const membershipRole = membershipRoleForSettingKey(key);
+    if (membershipRole) {
+      this.partnerMembershipSettings.invalidateCache(key);
+      const enabled = await this.partnerMembershipSettings.refreshCache(key);
       if (!enabled) {
-        await this.organizationMembershipService.releasePendingPartnerMembershipAccounts();
+        await this.organizationMembershipService.releasePendingMembershipAccounts(
+          membershipRole as UserRole,
+        );
       }
     }
     if (key === STUDENT_SUBSCRIPTION_REQUIRED_KEY && value === 'false') {

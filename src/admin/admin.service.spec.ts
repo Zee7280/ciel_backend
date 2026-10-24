@@ -75,7 +75,7 @@ const makeAdminServiceForTests = (overrides: Record<string, unknown> = {}) => {
       isEnabledCached: jest.fn().mockReturnValue(true),
     },
     organizationMembershipService: {
-      releasePendingPartnerMembershipAccounts: jest.fn().mockResolvedValue(0),
+      releasePendingMembershipAccounts: jest.fn().mockResolvedValue(0),
     },
     partnerMembershipSettings: {
       invalidateCache: jest.fn(),
@@ -772,6 +772,52 @@ describe('AdminService settings', () => {
         },
       }),
     );
+  });
+
+  it('turning a membership fee switch off refreshes that switch and releases that role only', async () => {
+    const settingRepository = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn((x: Record<string, unknown>) => ({ ...x })),
+      save: jest.fn((x: unknown) => Promise.resolve(x)),
+    };
+    const organizationMembershipService = {
+      releasePendingMembershipAccounts: jest.fn().mockResolvedValue(0),
+    };
+    const partnerMembershipSettings = {
+      invalidateCache: jest.fn(),
+      refreshCache: jest.fn().mockResolvedValue(false),
+    };
+    const service = makeAdminServiceForTests({
+      settingRepository,
+      auditLogsService: { recordMutation: jest.fn() },
+      platformSettings: { invalidate: jest.fn() },
+      organizationMembershipService,
+      partnerMembershipSettings,
+    });
+    for (const [key, role] of [
+      ['PARTNER_MEMBERSHIP_REQUIRED', 'ngo'],
+      ['UNIVERSITY_MEMBERSHIP_REQUIRED', 'university'],
+      ['CORPORATE_MEMBERSHIP_REQUIRED', 'corporate'],
+    ]) {
+      await service.updateSetting(key, 'false');
+      expect(
+        partnerMembershipSettings.invalidateCache,
+      ).toHaveBeenLastCalledWith(key);
+      expect(partnerMembershipSettings.refreshCache).toHaveBeenLastCalledWith(
+        key,
+      );
+      expect(
+        organizationMembershipService.releasePendingMembershipAccounts,
+      ).toHaveBeenLastCalledWith(role);
+    }
+
+    // Switching one on releases nobody.
+    partnerMembershipSettings.refreshCache.mockResolvedValue(true);
+    organizationMembershipService.releasePendingMembershipAccounts.mockClear();
+    await service.updateSetting('UNIVERSITY_MEMBERSHIP_REQUIRED', 'true');
+    expect(
+      organizationMembershipService.releasePendingMembershipAccounts,
+    ).not.toHaveBeenCalled();
   });
 
   it('getSettings is read-only and returns only registry keys', async () => {

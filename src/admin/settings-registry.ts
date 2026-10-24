@@ -7,8 +7,10 @@ import {
 } from '../opportunities/student-apply-maintenance.util';
 import { REPORT_PARTNER_APPROVAL_SETTING_KEY } from '../reports/report-partner-approval.util';
 import {
+  CORPORATE_MEMBERSHIP_REQUIRED_KEY,
   MEMBERSHIP_FEE_PARTNER_PKR_KEY,
   PARTNER_MEMBERSHIP_REQUIRED_KEY,
+  UNIVERSITY_MEMBERSHIP_REQUIRED_KEY,
 } from '../organization-membership/partner-membership.util';
 import { PLATFORM_SETTING_KEYS } from '../settings/platform-settings.constants';
 
@@ -69,6 +71,16 @@ export const SETTINGS_REGISTRY: readonly SettingSpec[] = [
     key: PARTNER_MEMBERSHIP_REQUIRED_KEY,
     kind: 'boolean',
     description: 'Require partner membership fee before activation',
+  },
+  {
+    key: UNIVERSITY_MEMBERSHIP_REQUIRED_KEY,
+    kind: 'boolean',
+    description: 'Require university membership fee before activation',
+  },
+  {
+    key: CORPORATE_MEMBERSHIP_REQUIRED_KEY,
+    kind: 'boolean',
+    description: 'Require corporate membership fee before activation',
   },
   {
     key: MEMBERSHIP_FEE_PARTNER_PKR_KEY,

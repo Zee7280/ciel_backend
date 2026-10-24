@@ -3,13 +3,19 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Setting } from '../settings/entities/setting.entity';
 import {
+  CORPORATE_MEMBERSHIP_REQUIRED_KEY,
   PARTNER_MEMBERSHIP_REQUIRED_KEY,
+  UNIVERSITY_MEMBERSHIP_REQUIRED_KEY,
   parsePartnerMembershipRequiredSettingValue,
 } from './partner-membership.util';
 
+/** Cached "membership fee required" switches (partner, university, corporate); all default to off. */
 @Injectable()
 export class PartnerMembershipSettingsService implements OnModuleInit {
-  private cache: { enabled: boolean; expiresAt: number } | null = null;
+  private readonly caches = new Map<
+    string,
+    { enabled: boolean; expiresAt: number }
+  >();
   private readonly cacheTtlMs = 300_000;
 
   constructor(
@@ -18,37 +24,49 @@ export class PartnerMembershipSettingsService implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
-    await this.refreshCache();
+    await Promise.all(
+      [
+        PARTNER_MEMBERSHIP_REQUIRED_KEY,
+        UNIVERSITY_MEMBERSHIP_REQUIRED_KEY,
+        CORPORATE_MEMBERSHIP_REQUIRED_KEY,
+      ].map((key) => this.refreshCache(key)),
+    );
   }
 
-  invalidateCache(): void {
-    this.cache = null;
+  invalidateCache(key: string = PARTNER_MEMBERSHIP_REQUIRED_KEY): void {
+    this.caches.delete(key);
   }
 
-  async refreshCache(): Promise<boolean> {
-    const setting = await this.settingRepository.findOne({
-      where: { key: PARTNER_MEMBERSHIP_REQUIRED_KEY },
-    });
+  async refreshCache(
+    key: string = PARTNER_MEMBERSHIP_REQUIRED_KEY,
+  ): Promise<boolean> {
+    const setting = await this.settingRepository.findOne({ where: { key } });
     const enabled = parsePartnerMembershipRequiredSettingValue(
       setting?.value,
       false,
     );
-    this.cache = { enabled, expiresAt: Date.now() + this.cacheTtlMs };
+    this.caches.set(key, { enabled, expiresAt: Date.now() + this.cacheTtlMs });
     return enabled;
+  }
+
+  isRequiredCached(key: string): boolean {
+    return this.caches.get(key)?.enabled ?? false;
+  }
+
+  async isRequired(key: string): Promise<boolean> {
+    const cached = this.caches.get(key);
+    if (cached && Date.now() < cached.expiresAt) {
+      return cached.enabled;
+    }
+    return this.refreshCache(key);
   }
 
   /** Defaults to false (partners register without fee until admin enables). */
   isPartnerMembershipRequiredCached(): boolean {
-    if (this.cache && Date.now() < this.cache.expiresAt) {
-      return this.cache.enabled;
-    }
-    return this.cache?.enabled ?? false;
+    return this.isRequiredCached(PARTNER_MEMBERSHIP_REQUIRED_KEY);
   }
 
   async isPartnerMembershipRequired(): Promise<boolean> {
-    if (this.cache && Date.now() < this.cache.expiresAt) {
-      return this.cache.enabled;
-    }
-    return this.refreshCache();
+    return this.isRequired(PARTNER_MEMBERSHIP_REQUIRED_KEY);
   }
 }

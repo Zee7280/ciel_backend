@@ -15,6 +15,10 @@ import { MEMBERSHIP_FEE_DEFAULT_PKR } from './membership-fee.defaults';
 import { MailService } from '../mail/mail.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PartnerMembershipSettingsService } from './partner-membership-settings.service';
+import {
+  PENDING_ORG_VERIFICATION_STATUS,
+  membershipRequiredSettingKey,
+} from './partner-membership.util';
 
 const SETTING_KEY_UNI = 'MEMBERSHIP_FEE_UNIVERSITY_PKR';
 const SETTING_KEY_CORP = 'MEMBERSHIP_FEE_CORPORATE_PKR';
@@ -132,31 +136,52 @@ export class OrganizationMembershipService {
   }
 
   async roleRequiresMembershipPayment(role: UserRole): Promise<boolean> {
-    if (role === UserRole.UNIVERSITY || role === UserRole.CORPORATE) {
-      return true;
-    }
     if (role === UserRole.NGO) {
       return this.partnerMembershipSettings.isPartnerMembershipRequired();
     }
-    return false;
+    const key = membershipRequiredSettingKey(role);
+    return key ? this.partnerMembershipSettings.isRequired(key) : false;
   }
 
   roleRequiresMembershipPaymentSync(role: UserRole): boolean {
-    if (role === UserRole.UNIVERSITY || role === UserRole.CORPORATE) {
-      return true;
-    }
-    if (role === UserRole.NGO) {
-      return this.partnerMembershipSettings.isPartnerMembershipRequiredCached();
-    }
-    return false;
+    const key = membershipRequiredSettingKey(role);
+    return key ? this.partnerMembershipSettings.isRequiredCached(key) : false;
   }
 
-  async releasePendingPartnerMembershipAccounts(): Promise<number> {
-    const result = await this.userRepo.update(
-      { role: UserRole.NGO, status: 'pending_membership_payment' },
-      { status: 'active' },
-    );
-    return result.affected ?? 0;
+  /**
+   * Where an account goes when its fee no longer applies. NGOs become active (login checks their
+   * organization). University / corporate accounts had no other CIEL check, so unless their
+   * organization is already approved they wait for admin verification instead.
+   */
+  private statusWithoutFee(user: Pick<User, 'role' | 'organization'>): string {
+    if (user.role !== UserRole.UNIVERSITY && user.role !== UserRole.CORPORATE) {
+      return 'active';
+    }
+    return user.organization?.verificationStatus === 'APPROVED'
+      ? 'active'
+      : PENDING_ORG_VERIFICATION_STATUS;
+  }
+
+  /** Admin switched a role's membership fee off: release that role's accounts still waiting to pay. */
+  async releasePendingMembershipAccounts(role: UserRole): Promise<number> {
+    if (role !== UserRole.UNIVERSITY && role !== UserRole.CORPORATE) {
+      const result = await this.userRepo.update(
+        { role, status: 'pending_membership_payment' },
+        { status: 'active' },
+      );
+      return result.affected ?? 0;
+    }
+    const pending = await this.userRepo.find({
+      where: { role, status: 'pending_membership_payment' },
+      relations: ['organization'],
+    });
+    for (const user of pending) {
+      await this.userRepo.update(
+        { id: user.id, status: 'pending_membership_payment' },
+        { status: this.statusWithoutFee(user) },
+      );
+    }
+    return pending.length;
   }
 
   async getExpectedFeePkr(role: UserRole): Promise<number> {
@@ -184,12 +209,16 @@ export class OrganizationMembershipService {
     membership_fee_amount_pkr: number | null;
   }> {
     if (!(await this.roleRequiresMembershipPayment(user.role))) {
-      // Admin switched the partner fee off: a partner still parked on the payment status
-      // (bulk release missed them, or a stale per-instance setting cache at signup) gets the
-      // portal now instead of a "Membership fee" option for a fee that no longer applies.
+      // Admin switched this role's fee off: an account still parked on the payment status
+      // (bulk release missed them, or a stale per-instance setting cache at signup) leaves it now
+      // instead of seeing a "Membership fee" option for a fee that no longer applies.
       if (user.status === 'pending_membership_payment') {
-        await this.activateMembershipAccounts(user.id, user.organization?.id);
-        user.status = 'active';
+        const next = this.statusWithoutFee(user);
+        await this.userRepo.update(
+          { id: user.id, status: 'pending_membership_payment' },
+          { status: next },
+        );
+        user.status = next;
       }
       return {
         requires_membership_payment: false,
@@ -266,9 +295,14 @@ export class OrganizationMembershipService {
     userId: string,
     organizationId?: string | null,
   ) {
-    // Only release accounts still waiting on the fee — never re-activate one an admin suspended.
+    // Only release accounts still waiting on the fee (or, after the fee was switched off, on
+    // verification: a paid fee counts as that check) — never re-activate one an admin suspended.
+    const waiting = [
+      'pending_membership_payment',
+      PENDING_ORG_VERIFICATION_STATUS,
+    ];
     await this.userRepo.update(
-      { id: userId, status: 'pending_membership_payment' },
+      { id: userId, status: In(waiting) },
       { status: 'active' },
     );
     if (organizationId) {
@@ -277,7 +311,7 @@ export class OrganizationMembershipService {
         .update(User)
         .set({ status: 'active' })
         .where('organizationId = :organizationId', { organizationId })
-        .andWhere('status = :status', { status: 'pending_membership_payment' })
+        .andWhere('status IN (:...waiting)', { waiting })
         .execute();
     }
   }

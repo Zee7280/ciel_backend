@@ -27,6 +27,7 @@ import { EngagementService } from '../engagement/engagement.service';
 import { OrganizationMembershipService } from '../organization-membership/organization-membership.service';
 import { StudentSubscriptionService } from '../student-subscription/student-subscription.service';
 import { PENDING_SUBSCRIPTION_STATUS } from '../student-subscription/student-subscription.util';
+import { PENDING_ORG_VERIFICATION_STATUS } from '../organization-membership/partner-membership.util';
 import {
   LEGAL_REGISTRATION_TYPE_SET,
   ORGANIZATION_CATEGORY_SET,
@@ -419,6 +420,14 @@ export class AuthService implements OnApplicationBootstrap {
         (await this.organizationMembershipService.roleRequiresMembershipPayment(
           userCreateData.role,
         ));
+      // Without the fee, a new university / corporate account has no CIEL check left: it waits
+      // for an admin to approve its organization (login activates it then).
+      const needsOrgVerification =
+        !!organization &&
+        !needsMembershipFee &&
+        (userCreateData.role === UserRole.UNIVERSITY ||
+          userCreateData.role === UserRole.CORPORATE) &&
+        organization.verificationStatus !== 'APPROVED';
       // Students from a university that is not a CIEL member pay a one-time subscription fee first.
       const needsSubscriptionFee =
         !needsMembershipFee &&
@@ -438,6 +447,9 @@ export class AuthService implements OnApplicationBootstrap {
         organization,
         termsAcceptedAt: new Date(),
         ...(needsMembershipFee ? { status: 'pending_membership_payment' } : {}),
+        ...(needsOrgVerification
+          ? { status: PENDING_ORG_VERIFICATION_STATUS }
+          : {}),
         ...(needsSubscriptionFee
           ? { status: PENDING_SUBSCRIPTION_STATUS }
           : {}),
@@ -470,11 +482,13 @@ export class AuthService implements OnApplicationBootstrap {
         success: true,
         message: needsMembershipFee
           ? 'Account created. Pay the membership fee and submit proof, or wait for admin activation.'
-          : needsSubscriptionFee
-            ? 'Account created. Pay the one-time subscription fee and submit proof to activate your student portal.'
-            : user.role === UserRole.INVESTOR
-              ? 'Application received. CIEL PK verifies investor accounts within 3 working days.'
-              : 'User created successfully',
+          : needsOrgVerification
+            ? 'Account created. CIEL PK verifies new organisations before portal access.'
+            : needsSubscriptionFee
+              ? 'Account created. Pay the one-time subscription fee and submit proof to activate your student portal.'
+              : user.role === UserRole.INVESTOR
+                ? 'Application received. CIEL PK verifies investor accounts within 3 working days.'
+                : 'User created successfully',
         data: {
           user: await this.usersService.formatUserResponse(user),
         },
@@ -512,6 +526,24 @@ export class AuthService implements OnApplicationBootstrap {
       .capturePasswordRecordFromLogin?.(user.id, password)
       ?.catch(() => undefined);
 
+    // University / corporate account created while its fee was off: it stays out until a CIEL
+    // admin approves the organization, then this first login after approval activates it.
+    if (user.status === PENDING_ORG_VERIFICATION_STATUS) {
+      const verification = user.organization?.verificationStatus;
+      if (verification !== 'APPROVED') {
+        throw new UnauthorizedException(
+          verification === 'REJECTED'
+            ? 'Your organization application was not approved. Contact CIEL PK support.'
+            : 'Your organization is pending CIEL PK admin verification.',
+        );
+      }
+      await this.usersRepository.update(
+        { id: user.id, status: PENDING_ORG_VERIFICATION_STATUS },
+        { status: 'active' },
+      );
+      user.status = 'active';
+    }
+
     const investorPending =
       user.role === UserRole.INVESTOR && user.status === 'pending';
     if (
@@ -531,7 +563,7 @@ export class AuthService implements OnApplicationBootstrap {
     }
 
     // NGO/partner signup promises "requires CIEL PK Admin verification" — University/Corporate
-    // already get an equivalent gate via the membership-payment status above, but an NGO whose
+    // already get an equivalent gate via the membership-payment or org-verification status above, but an NGO whose
     // membership fee isn't required (the default setting) had no gate at all: it went straight
     // to status 'active' with the organization's own verificationStatus never checked anywhere.
     if (

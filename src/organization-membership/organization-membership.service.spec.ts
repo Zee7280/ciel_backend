@@ -1,5 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
+import { In } from 'typeorm';
 import { OrganizationMembershipService } from './organization-membership.service';
+import { UserRole } from '../users/enums/user-role.enum';
 
 type MembershipServiceArgs = ConstructorParameters<
   typeof OrganizationMembershipService
@@ -91,12 +93,122 @@ describe('OrganizationMembershipService approvals', () => {
     );
   });
 
-  it('only activates users still pending_membership_payment', async () => {
+  it('only activates users still waiting on the fee or on verification', async () => {
     const { service, userRepo } = build(10000);
     await service.approveSubmission('f1', 'a1');
     expect(userRepo.update).toHaveBeenCalledWith(
-      { id: 'u1', status: 'pending_membership_payment' },
+      {
+        id: 'u1',
+        status: In(['pending_membership_payment', 'pending_org_verification']),
+      },
       { status: 'active' },
     );
+  });
+});
+
+describe('OrganizationMembershipService university / corporate fee switch', () => {
+  function build(required: Record<string, boolean> = {}) {
+    const userRepo = {
+      update: jest.fn(() => Promise.resolve({ affected: 1 })),
+      find: jest.fn(() => Promise.resolve([] as unknown[])),
+    };
+    const settings = {
+      isPartnerMembershipRequired: () =>
+        Promise.resolve(!!required.PARTNER_MEMBERSHIP_REQUIRED),
+      isRequired: (key: string) => Promise.resolve(!!required[key]),
+    };
+    const args = [
+      {},
+      userRepo,
+      { findOne: jest.fn(() => Promise.resolve(null)) },
+      settings,
+    ] as unknown as MembershipServiceArgs;
+    return { service: new OrganizationMembershipService(...args), userRepo };
+  }
+
+  it('university and corporate pay only while their admin switch is on', async () => {
+    const off = build().service;
+    expect(await off.roleRequiresMembershipPayment(UserRole.UNIVERSITY)).toBe(
+      false,
+    );
+    expect(await off.roleRequiresMembershipPayment(UserRole.CORPORATE)).toBe(
+      false,
+    );
+    const on = build({
+      UNIVERSITY_MEMBERSHIP_REQUIRED: true,
+      CORPORATE_MEMBERSHIP_REQUIRED: true,
+    }).service;
+    expect(await on.roleRequiresMembershipPayment(UserRole.UNIVERSITY)).toBe(
+      true,
+    );
+    expect(await on.roleRequiresMembershipPayment(UserRole.CORPORATE)).toBe(
+      true,
+    );
+    expect(await on.roleRequiresMembershipPayment(UserRole.STUDENT)).toBe(
+      false,
+    );
+  });
+
+  it('with the fee off, a pending university waits for verification unless its organization is approved', async () => {
+    for (const [verificationStatus, expected] of [
+      ['PENDING', 'pending_org_verification'],
+      ['APPROVED', 'active'],
+    ]) {
+      const { service, userRepo } = build();
+      const user = {
+        id: 'u1',
+        role: 'university',
+        status: 'pending_membership_payment',
+        organization: { id: 'o1', verificationStatus },
+      };
+      const flags = await service.getUiFlags(user as never);
+      expect(flags.requires_membership_payment).toBe(false);
+      expect(user.status).toBe(expected);
+      expect(userRepo.update).toHaveBeenCalledWith(
+        { id: 'u1', status: 'pending_membership_payment' },
+        { status: expected },
+      );
+    }
+  });
+
+  it('switching the university fee off releases pending universities by organization status', async () => {
+    const { service, userRepo } = build();
+    userRepo.find.mockResolvedValue([
+      {
+        id: 'a',
+        role: 'university',
+        organization: { verificationStatus: 'PENDING' },
+      },
+      {
+        id: 'b',
+        role: 'university',
+        organization: { verificationStatus: 'APPROVED' },
+      },
+    ]);
+    await expect(
+      service.releasePendingMembershipAccounts(UserRole.UNIVERSITY),
+    ).resolves.toBe(2);
+    expect(userRepo.find).toHaveBeenCalledWith({
+      where: { role: 'university', status: 'pending_membership_payment' },
+      relations: ['organization'],
+    });
+    expect(userRepo.update).toHaveBeenCalledWith(
+      { id: 'a', status: 'pending_membership_payment' },
+      { status: 'pending_org_verification' },
+    );
+    expect(userRepo.update).toHaveBeenCalledWith(
+      { id: 'b', status: 'pending_membership_payment' },
+      { status: 'active' },
+    );
+  });
+
+  it('switching the partner fee off still activates every pending NGO in one update', async () => {
+    const { service, userRepo } = build();
+    await service.releasePendingMembershipAccounts(UserRole.NGO);
+    expect(userRepo.update).toHaveBeenCalledWith(
+      { role: 'ngo', status: 'pending_membership_payment' },
+      { status: 'active' },
+    );
+    expect(userRepo.find).not.toHaveBeenCalled();
   });
 });

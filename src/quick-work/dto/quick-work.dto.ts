@@ -234,6 +234,16 @@ export class QuickWorkJoinDto {
   accept: boolean;
 }
 
+/** Answer from an emailed link: the sealed token is the credential. */
+export class QuickWorkEmailResponseDto {
+  @IsString()
+  @MaxLength(2000)
+  token: string;
+
+  @IsBoolean()
+  accept: boolean;
+}
+
 export class QuickWorkReviewDto {
   @IsIn(['approve', 'changes', 'reject'])
   action: 'approve' | 'changes' | 'reject';

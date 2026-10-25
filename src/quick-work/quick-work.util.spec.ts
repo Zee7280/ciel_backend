@@ -28,6 +28,7 @@ const complete = (
   department: 'SMS',
   facultyName: 'Dr F',
   facultyEmail: 'f@x.pk',
+  facultyConfirmation: 'accepted',
   title: 'Pinktober',
   activityType: 'Pinktober event',
   activityDate: '2026-10-20',
@@ -167,6 +168,26 @@ describe('quick-work rules', () => {
     expect(quickWorkSubmitErrors(complete({ evidence: [] }), NOW)).toContain(
       'Attach at least one photo or PDF.',
     );
+  });
+
+  it('the named faculty must accept coordinating first; logs submitted before that rule are exempt', () => {
+    const errs = (over: Partial<QuickWorkSubmitInput>) =>
+      quickWorkSubmitErrors(complete(over), NOW).join(' ');
+    expect(errs({ facultyConfirmation: 'pending' })).toMatch(
+      /has not accepted coordinating/,
+    );
+    expect(errs({ facultyConfirmation: null })).toMatch(
+      /has not accepted coordinating/,
+    );
+    expect(errs({ facultyConfirmation: 'declined' })).toMatch(
+      /declined to coordinate/,
+    );
+    expect(
+      quickWorkSubmitErrors(
+        complete({ facultyConfirmation: null, submittedAt: new Date() }),
+        NOW,
+      ),
+    ).toEqual([]);
   });
 
   it('the faculty reviewer cannot be one of the participants', () => {

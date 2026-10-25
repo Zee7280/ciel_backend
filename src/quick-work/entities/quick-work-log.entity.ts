@@ -58,6 +58,19 @@ export class QuickWorkLog {
   @Column({ type: 'varchar', length: 120, default: '' })
   facultyEmail: string;
 
+  /**
+   * pending | accepted | declined: the named faculty member's answer to coordinating this activity.
+   * Null when no faculty is named yet, or on a log first submitted before confirmations existed.
+   */
+  @Column({ type: 'varchar', length: 10, nullable: true })
+  facultyConfirmation: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  facultyRequestedAt: Date | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  facultyRespondedAt: Date | null;
+
   @Column({ type: 'varchar', length: 120, default: '' })
   title: string;
 

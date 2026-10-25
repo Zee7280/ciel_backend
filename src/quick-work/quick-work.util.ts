@@ -195,6 +195,9 @@ export type QuickWorkSubmitInput = {
   department: string;
   facultyName: string;
   facultyEmail: string;
+  /** pending | accepted | declined; null on a log submitted before confirmations existed. */
+  facultyConfirmation?: string | null;
+  submittedAt?: Date | null;
   title: string;
   activityType: string;
   activityTypeOther?: string | null;
@@ -242,6 +245,16 @@ export function quickWorkSubmitErrors(
   }
   if (people.length > QUICK_WORK_MAX_PARTICIPANTS) {
     e.push(`Maximum ${QUICK_WORK_MAX_PARTICIPANTS} participants per log.`);
+  }
+  const legacyLog = !log.facultyConfirmation && Boolean(log.submittedAt);
+  if (log.facultyConfirmation === 'declined') {
+    e.push(
+      `${log.facultyName || 'The faculty member'} declined to coordinate this activity. Name another faculty member.`,
+    );
+  } else if (log.facultyConfirmation !== 'accepted' && !legacyLog) {
+    e.push(
+      `${log.facultyName || 'Your coordinating faculty member'} has not accepted coordinating this activity yet.`,
+    );
   }
   if (log.mode === 'team' && people.length < 2) {
     e.push('Add a teammate or select “Just me”.');

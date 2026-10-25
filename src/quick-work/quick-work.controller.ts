@@ -22,6 +22,7 @@ import { QuickWorkService } from './quick-work.service';
 import {
   AdminQuickWorkListQuery,
   AdminQuickWorkReassignDto,
+  QuickWorkEmailResponseDto,
   QuickWorkJoinDto,
   QuickWorkPresignDto,
   QuickWorkReviewDto,
@@ -107,6 +108,18 @@ export class QuickWorkController {
     };
   }
 
+  /** Lead: ask the named faculty member again while they have not answered. */
+  @Post('logs/:id/faculty-request')
+  async resendFacultyRequest(
+    @Request() req: AuthedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return {
+      success: true,
+      data: await this.quickWork.resendFacultyRequest(req.user, id),
+    };
+  }
+
   @Post('evidence/presign')
   async presign(
     @Request() req: AuthedRequest,
@@ -141,6 +154,44 @@ export class FacultyQuickWorkController {
     return {
       success: true,
       data: await this.quickWork.review(req.user, id, dto),
+    };
+  }
+
+  /** Accept or decline coordinating an activity the students are still preparing. */
+  @Post(':id/coordination')
+  async coordination(
+    @Request() req: AuthedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: QuickWorkJoinDto,
+  ) {
+    return {
+      success: true,
+      data: await this.quickWork.respondAsFaculty(req.user, id, dto.accept),
+    };
+  }
+}
+
+/**
+ * Accept / decline from the request emails, without signing in. The sealed token names the log and
+ * either the faculty email or the teammate's row; opening the page (GET) never records anything.
+ */
+@Controller('quick-work/email-response')
+export class QuickWorkEmailResponseController {
+  constructor(private readonly quickWork: QuickWorkService) {}
+
+  @Get()
+  async preview(@Query('token') token: string) {
+    return {
+      success: true,
+      data: await this.quickWork.emailResponsePreview(token ?? ''),
+    };
+  }
+
+  @Post()
+  async respond(@Body() dto: QuickWorkEmailResponseDto) {
+    return {
+      success: true,
+      data: await this.quickWork.emailRespond(dto.token, dto.accept),
     };
   }
 }

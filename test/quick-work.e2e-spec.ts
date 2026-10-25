@@ -110,10 +110,37 @@ describe('Quick Community Work (real app + real Postgres)', () => {
     ...over,
   });
 
-  const draft = async (lead: E2eUser, body: Record<string, unknown>) => {
+  /** Creates a draft. Unless `askFaculty` is set, the named faculty is recorded as having accepted
+   * coordinating, so tests about other rules need not walk through that step (its own test does). */
+  const draft = async (
+    lead: E2eUser,
+    body: Record<string, unknown>,
+    { askFaculty = false }: { askFaculty?: boolean } = {},
+  ) => {
     const res = await h.as(lead).post('/quick-work/logs').send(body);
     expect(res.status).toBe(201);
-    return (res.body as Body<LogView>).data;
+    const log = (res.body as Body<LogView>).data;
+    if (!askFaculty) {
+      await h.ds.query(
+        `UPDATE quick_work_logs SET "facultyConfirmation" = 'accepted' WHERE id = $1 AND "facultyConfirmation" IS NOT NULL`,
+        [log.id],
+      );
+    }
+    return log;
+  };
+
+  /** The token with one character in the middle changed. */
+  const tampered = (token: string) => {
+    const i = Math.floor(token.length / 2);
+    return `${token.slice(0, i)}${token[i] === 'A' ? 'B' : 'A'}${token.slice(i + 1)}`;
+  };
+
+  /** Background emails (team invites) are sent after the response; wait until they are captured. */
+  const mailsOf = async (method: string, count: number) => {
+    for (let i = 0; i < 50 && h.mail.of(method).length < count; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    return h.mail.of(method);
   };
 
   it('solo: submit, faculty approves, the hours land on the student dashboard', async () => {
@@ -806,6 +833,200 @@ describe('Quick Community Work (real app + real Postgres)', () => {
           .send({ summary: `${long}x` })
       ).status,
     ).toBe(400);
+  });
+
+  it('starting a log asks the faculty to accept and emails each teammate; submit waits for both', async () => {
+    const lead = await h.makeUser(UserRole.STUDENT);
+    const mate = await h.makeUser(UserRole.STUDENT);
+    const faculty = await authorisedFaculty();
+    const otherFaculty = await authorisedFaculty();
+    type Seen = LogView & { facultyConfirmation: string | null };
+
+    h.mail.reset();
+    const log = await draft(
+      lead,
+      completeLog(lead, faculty, {
+        mode: 'team',
+        title: 'Faculty asked first',
+        teammates: [{ email: mate.email, studentId: 'M-77', name: 'Mate' }],
+        attendance: [lead, mate].map((u) => ({
+          email: u.email,
+          present: true,
+          startTime: '10:00',
+          endTime: '11:00',
+          breakMinutes: 0,
+        })),
+      }),
+      { askFaculty: true },
+    );
+    expect((log as Seen).facultyConfirmation).toBe('pending');
+    const asked = h.mail.of('sendQuickWorkFacultyRequest');
+    expect(asked).toHaveLength(1);
+    expect(asked[0].args[0]).toMatchObject({
+      to: faculty.email,
+      title: 'Faculty asked first',
+    });
+    const invites = await mailsOf('sendQuickWorkTeamInvite', 1);
+    expect(invites).toHaveLength(1);
+    expect(invites[0].args[0]).toMatchObject({ to: mate.email });
+
+    // Saving again without changing the faculty or team sends nothing new.
+    await h
+      .as(lead)
+      .patch(`/quick-work/logs/${log.id}`)
+      .send({ title: 'Faculty asked first' })
+      .expect(200);
+    expect(h.mail.of('sendQuickWorkFacultyRequest')).toHaveLength(1);
+    expect(h.mail.of('sendQuickWorkTeamInvite')).toHaveLength(1);
+
+    // A re-send is limited to once an hour.
+    const tooSoon = await h
+      .as(lead)
+      .post(`/quick-work/logs/${log.id}/faculty-request`);
+    expect(tooSoon.status).toBe(400);
+    expect(messages(tooSoon.body as Body<unknown>)).toMatch(/sent recently/);
+
+    // The teammate answers from the emailed link, without signing in; opening it records nothing.
+    const mateToken = (invites[0].args[0] as { respondToken: string })
+      .respondToken;
+    const preview = await h
+      .as(null)
+      .get(`/quick-work/email-response?token=${encodeURIComponent(mateToken)}`);
+    expect(preview.status).toBe(200);
+    expect((preview.body as Body<Record<string, unknown>>).data).toMatchObject({
+      kind: 'member',
+      answer: 'pending',
+      open: true,
+    });
+    expect(
+      (
+        await h
+          .as(null)
+          .post('/quick-work/email-response')
+          .send({ token: tampered(mateToken), accept: true })
+      ).status,
+    ).toBe(404);
+    await h
+      .as(null)
+      .post('/quick-work/email-response')
+      .send({ token: mateToken, accept: true })
+      .expect(201);
+    const mateView = await h.as(mate).get(`/quick-work/logs/${log.id}`);
+    expect(
+      (mateView.body as Body<LogView>).data.participants.find(
+        (p) => p.email === mate.email,
+      )?.joinStatus,
+    ).toBe('joined');
+    const facultyToken = (asked[0].args[0] as { respondToken: string })
+      .respondToken;
+    const early = await h.as(lead).post(`/quick-work/logs/${log.id}/submit`);
+    expect(early.status).toBe(400);
+    expect(messages(early.body as Body<unknown>)).toMatch(
+      /has not accepted coordinating/,
+    );
+
+    // The faculty sees the request; nobody else can answer it.
+    const queue = await h.as(faculty).get('/faculty/quick-work');
+    expect(
+      (queue.body as Body<{ requests: Seen[] }>).data.requests.find(
+        (l) => l.id === log.id,
+      )?.facultyConfirmation,
+    ).toBe('pending');
+    expect(
+      (
+        await h
+          .as(otherFaculty)
+          .post(`/faculty/quick-work/${log.id}/coordination`)
+          .send({ accept: true })
+      ).status,
+    ).toBe(404);
+
+    // Declined: submit names the reason; the lead names someone else, who is asked in turn.
+    await h
+      .as(faculty)
+      .post(`/faculty/quick-work/${log.id}/coordination`)
+      .send({ accept: false })
+      .expect(201);
+    const declined = await h.as(lead).post(`/quick-work/logs/${log.id}/submit`);
+    expect(messages(declined.body as Body<unknown>)).toMatch(
+      /declined to coordinate/,
+    );
+    h.mail.reset();
+    const moved = await h
+      .as(lead)
+      .patch(`/quick-work/logs/${log.id}`)
+      .send({ facultyName: 'Dr Other', facultyEmail: otherFaculty.email });
+    expect((moved.body as Body<Seen>).data.facultyConfirmation).toBe('pending');
+    const newRequest = h.mail.of('sendQuickWorkFacultyRequest')[0].args[0] as {
+      to: string;
+      respondToken: string;
+    };
+    expect(newRequest.to).toBe(otherFaculty.email);
+
+    // The first faculty member's link stopped working when the lead named someone else.
+    expect(
+      (
+        await h
+          .as(null)
+          .post('/quick-work/email-response')
+          .send({ token: facultyToken, accept: true })
+      ).status,
+    ).toBe(404);
+
+    // The new faculty member accepts from the email; the dashboard shows the same answer.
+    const fromEmail = await h
+      .as(null)
+      .post('/quick-work/email-response')
+      .send({ token: newRequest.respondToken, accept: true });
+    expect(fromEmail.status).toBe(201);
+    expect(
+      (fromEmail.body as Body<Record<string, unknown>>).data,
+    ).toMatchObject({ kind: 'faculty', answer: 'accepted' });
+    const dash = await h.as(otherFaculty).get('/faculty/quick-work');
+    expect(
+      (dash.body as Body<{ requests: Seen[] }>).data.requests.find(
+        (l) => l.id === log.id,
+      )?.facultyConfirmation,
+    ).toBe('accepted');
+    await h.as(lead).post(`/quick-work/logs/${log.id}/submit`).expect(201);
+    expect(h.mail.of('sendQuickWorkSubmittedForReview')).toHaveLength(1);
+
+    // Once submitted, the coordination request is closed.
+    expect(
+      (
+        await h
+          .as(otherFaculty)
+          .post(`/faculty/quick-work/${log.id}/coordination`)
+          .send({ accept: false })
+      ).status,
+    ).toBe(400);
+  });
+
+  it('a log cannot be used to email faculty addresses over and over', async () => {
+    const lead = await h.makeUser(UserRole.STUDENT);
+    const log = await draft(
+      lead,
+      completeLog(lead, { email: 'first.faculty@e2e.test' }),
+      { askFaculty: true },
+    );
+    h.mail.reset();
+    // The first request was sent on create; four more different addresses are allowed today.
+    for (let i = 2; i <= 5; i++) {
+      await h
+        .as(lead)
+        .patch(`/quick-work/logs/${log.id}`)
+        .send({ facultyEmail: `faculty.${i}@e2e.test` })
+        .expect(200);
+    }
+    const sixth = await h
+      .as(lead)
+      .patch(`/quick-work/logs/${log.id}`)
+      .send({ facultyEmail: 'faculty.6@e2e.test' });
+    expect(sixth.status).toBe(400);
+    expect(messages(sixth.body as Body<unknown>)).toMatch(
+      /too many times today/,
+    );
+    expect(h.mail.of('sendQuickWorkFacultyRequest')).toHaveLength(4);
   });
 
   it('a draft can be deleted; malformed ids are a 400, never a 500', async () => {

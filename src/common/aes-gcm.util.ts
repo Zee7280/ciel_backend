@@ -33,10 +33,12 @@ export function decryptWithKey(key: Buffer, payload: string): string {
   if (version !== VERSION || !ivHex || !tagHex || !ctHex) {
     throw new Error('Unrecognized ciphertext');
   }
+  // Insist on the full 16-byte tag encryptWithKey writes; a shortened tag would be easier to forge.
   const decipher = crypto.createDecipheriv(
     ALGORITHM,
     key,
     Buffer.from(ivHex, 'hex'),
+    { authTagLength: 16 },
   );
   decipher.setAuthTag(Buffer.from(tagHex, 'hex'));
   return Buffer.concat([

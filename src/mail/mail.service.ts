@@ -2446,6 +2446,137 @@ export class MailService {
     }
   }
 
+  /** Quick Community Work: a student named this faculty member as coordinator; ask them to accept. */
+  async sendQuickWorkFacultyRequest(input: {
+    /** Sealed token for the one-click accept / decline page. */
+    respondToken: string;
+    to: string;
+    facultyName: string;
+    leadName: string;
+    title: string;
+    university: string;
+    activityDate: string | null;
+    participants: number;
+  }): Promise<void> {
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const link = this.buildFrontendLink('/dashboard/faculty/quick-work', {});
+    const buttons = this.quickWorkAnswerButtons(input.respondToken, 'Accept');
+    const facultyEsc = this.escHtmlPlain(input.facultyName?.trim() || 'there');
+    const leadEsc = this.escHtmlPlain(input.leadName?.trim() || 'A student');
+    const titleEsc = this.escHtmlPlain(
+      input.title?.trim() || 'a quick community activity',
+    );
+    const uniEsc = input.university?.trim()
+      ? ` of <strong>${this.escHtmlPlain(input.university.trim())}</strong>`
+      : '';
+    const when = input.activityDate
+      ? ` on ${this.escHtmlPlain(input.activityDate)}`
+      : '';
+    const people =
+      input.participants === 1
+        ? 'one participant'
+        : `${input.participants} participants`;
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <p>Dear ${facultyEsc},</p>
+        <p><strong>${leadEsc}</strong>${uniEsc} has named you as the coordinating faculty member for the Quick Community Work activity "<strong>${titleEsc}</strong>"${when} (${people} so far) on <strong>CIEL PK</strong>.</p>
+        <p>Please accept or decline. The students can submit their hours to you only after you accept; you then review the attendance and evidence before any hours count.</p>
+        ${buttons}
+        <p>You can also answer from your <a href="${link}">CIEL PK faculty dashboard</a> (Quick Community Work) — sign in with this email address. Either way records the same answer. To review the hours later you need a CIEL PK faculty account with this email.</p>
+        <p>If you do not know this student or activity, decline and they will choose someone else.</p>
+        <p>Best regards,<br><strong>CIEL PK Team</strong></p>
+      </div>
+    `;
+    try {
+      await this.sendMailReliable({
+        from,
+        to: input.to,
+        subject: `Please confirm: coordinating faculty for "${input.title?.trim() || 'Quick Community Work'}"`,
+        html,
+      });
+      this.logger.log(`Quick-work faculty request email sent to ${input.to}`);
+    } catch (error) {
+      this.logger.error(
+        `Failed to send quick-work faculty request email to ${input.to}`,
+        (error as Error).stack,
+      );
+    }
+  }
+
+  /** Quick Community Work: a lead added this student to an activity; ask them to confirm they took part. */
+  async sendQuickWorkTeamInvite(input: {
+    /** Sealed token for the one-click confirm / decline page. */
+    respondToken: string;
+    to: string;
+    name: string;
+    leadName: string;
+    title: string;
+    activityDate: string | null;
+  }): Promise<void> {
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const link = this.buildFrontendLink(
+      '/dashboard/student/paths/community-service/quick-work',
+      {},
+    );
+    const buttons = this.quickWorkAnswerButtons(
+      input.respondToken,
+      'I took part',
+    );
+    const nameEsc = this.escHtmlPlain(input.name?.trim() || 'there');
+    const leadEsc = this.escHtmlPlain(input.leadName?.trim() || 'A student');
+    const titleEsc = this.escHtmlPlain(
+      input.title?.trim() || 'a quick community activity',
+    );
+    const when = input.activityDate
+      ? ` on ${this.escHtmlPlain(input.activityDate)}`
+      : '';
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <p>Dear ${nameEsc},</p>
+        <p><strong>${leadEsc}</strong> added you as a team member of the Quick Community Work activity "<strong>${titleEsc}</strong>"${when} on <strong>CIEL PK</strong>.</p>
+        <p>Please confirm that you took part, or decline if you did not. The activity can be submitted for faculty review only after every team member has answered, and your hours count once the faculty member approves.</p>
+        ${buttons}
+        <p>You can also answer from <a href="${link}">Quick Impact Log</a> on CIEL PK after signing in with this email address. Either way records the same answer.</p>
+        <p>Best regards,<br><strong>CIEL PK Team</strong></p>
+      </div>
+    `;
+    try {
+      await this.sendMailReliable({
+        from,
+        to: input.to,
+        subject: `Confirm your participation: ${input.title?.trim() || 'Quick Community Work'}`,
+        html,
+      });
+      this.logger.log(`Quick-work team invite email sent to ${input.to}`);
+    } catch (error) {
+      this.logger.error(
+        `Failed to send quick-work team invite email to ${input.to}`,
+        (error as Error).stack,
+      );
+    }
+  }
+
+  /** Accept / decline buttons for a Quick Community Work request; each opens a page that asks once more before recording. */
+  private quickWorkAnswerButtons(token: string, acceptLabel: string): string {
+    const yes = this.buildFrontendLink('/quick-impact/respond', {
+      token,
+      answer: 'accept',
+    });
+    const no = this.buildFrontendLink('/quick-impact/respond', {
+      token,
+      answer: 'decline',
+    });
+    return `
+        <p style="margin: 22px 0;">
+          <a href="${yes}" style="background-color: #0e7d74; color: #ffffff; padding: 11px 22px; text-decoration: none; border-radius: 6px; font-weight: bold; margin-right: 10px;">${this.escHtmlPlain(acceptLabel)}</a>
+          <a href="${no}" style="background-color: #ffffff; color: #ac3c3c; padding: 10px 22px; text-decoration: none; border-radius: 6px; font-weight: bold; border: 1px solid #e6c7c5;">Decline</a>
+        </p>`;
+  }
+
   /** Student-triggered nudge to the reviewing faculty. Unlike the submit-time mails this RETURNS
    * whether delivery succeeded, because the student is told "sent" / "could not send" in the UI. */
   async sendCourseworkReviewReminder(

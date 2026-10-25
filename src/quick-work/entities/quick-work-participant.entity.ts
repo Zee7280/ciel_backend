@@ -42,6 +42,10 @@ export class QuickWorkParticipant {
   @Column({ type: 'varchar', length: 60, default: '' })
   studentId: string;
 
+  /** Optional phone number the lead gave for this teammate. */
+  @Column({ type: 'varchar', length: 30, nullable: true })
+  contact: string | null;
+
   /** joined | invited | declined — the lead is always joined. */
   @Column({ type: 'varchar', length: 12, default: 'invited' })
   joinStatus: string;

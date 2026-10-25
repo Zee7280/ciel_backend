@@ -34,6 +34,17 @@ export class QuickWorkTeammateDto {
   @IsString()
   @MaxLength(60)
   studentId?: string;
+
+  /** Name as the lead typed it; the teammate's CIEL account name is used when it has one. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  name?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  contact?: string | null;
 }
 
 export class QuickWorkAttendanceDto {

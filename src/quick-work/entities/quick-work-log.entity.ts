@@ -96,7 +96,8 @@ export class QuickWorkLog {
   @Column({ type: 'smallint', nullable: true })
   sdg: number | null;
 
-  @Column({ type: 'varchar', length: 600, default: '' })
+  /** Length 1000: widened in place by src/database/widen-columns-before-sync.ts, never by synchronize. */
+  @Column({ type: 'varchar', length: 1000, default: '' })
   summary: string;
 
   @Column({ type: 'int', nullable: true })

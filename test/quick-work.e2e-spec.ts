@@ -8,6 +8,7 @@ import { S3Service } from '../src/common/s3.service';
 import { Participation } from '../src/engagement/entities/participant.entity';
 import { AttendanceLog } from '../src/engagement/entities/attendance-log.entity';
 import { Organization } from '../src/organizations/entities/organization.entity';
+import { widenColumnsBeforeSync } from '../src/database/widen-columns-before-sync';
 
 type Participant = {
   userId: string;
@@ -45,7 +46,8 @@ describe('Quick Community Work (real app + real Postgres)', () => {
   };
 
   beforeAll(async () => {
-    h = await bootHarness();
+    // Same body limit as production: a 500-member team saves in one request.
+    h = await bootHarness({ bodyLimit: '50mb' });
     admin = await h.makeUser(UserRole.SUPER_ADMIN);
     // Students made by the harness name "E2E University" on their profile.
     university = await h.makeOrg('E2E University', 'university');
@@ -585,6 +587,225 @@ describe('Quick Community Work (real app + real Postgres)', () => {
           .approvedMinutes,
       ).toBe(60);
     }
+  });
+
+  it('a team of 500: teammate name, ID and contact saved; submit and approval stay fast', async () => {
+    const lead = await h.makeUser(UserRole.STUDENT);
+    const faculty = await authorisedFaculty();
+    const mates: E2eUser[] = [];
+    for (let i = 0; i < 499; i++)
+      mates.push(await h.makeUser(UserRole.STUDENT));
+    const teammates = mates.map((m, i) => ({
+      email: m.email,
+      studentId: `BIG-${i}`,
+      name: `Typed Name ${i}`,
+      contact: i % 2 ? `+92300000${String(i).padStart(4, '0')}` : null,
+    }));
+    const attendance = [lead, ...mates].map((u) => ({
+      email: u.email,
+      present: true,
+      startTime: '10:00',
+      endTime: '11:00',
+      breakMinutes: 0,
+    }));
+
+    const tooMany = await h
+      .as(lead)
+      .post('/quick-work/logs')
+      .send(
+        completeLog(lead, faculty, {
+          mode: 'team',
+          teammates: [
+            ...teammates,
+            { email: 'one.more@e2e.test', studentId: 'X' },
+          ],
+        }),
+      );
+    expect(tooMany.status).toBe(400);
+
+    let t = Date.now();
+    const log = await draft(
+      lead,
+      completeLog(lead, faculty, {
+        mode: 'team',
+        title: 'Five hundred strong',
+        teammates,
+        attendance,
+      }),
+    );
+    const saveMs = Date.now() - t;
+    expect(log.participants).toHaveLength(500);
+    type Row = Participant & { studentId: string; contact: string | null };
+    const rows = log.participants as Row[];
+    const first = rows.find((p) => p.email === mates[1].email);
+    // The teammate's CIEL account name wins over the typed one; ID and contact are kept.
+    expect(first).toMatchObject({
+      studentId: 'BIG-1',
+      contact: '+923000000001',
+    });
+    expect(rows.find((p) => p.email === mates[0].email)?.contact).toBeNull();
+
+    // Everyone confirms (straight in the database: 499 join requests are not the point here).
+    await h.ds.query(
+      `UPDATE quick_work_participants SET "joinStatus" = 'joined' WHERE "logId" = $1`,
+      [log.id],
+    );
+
+    t = Date.now();
+    await h.as(lead).post(`/quick-work/logs/${log.id}/submit`).expect(201);
+    const submitMs = Date.now() - t;
+
+    t = Date.now();
+    const queue = await h.as(faculty).get('/faculty/quick-work');
+    const queueMs = Date.now() - t;
+    const pending = (
+      queue.body as Body<{
+        pending: (LogView & { approveBlockedReason: string | null })[];
+      }>
+    ).data.pending.find((l) => l.id === log.id);
+    expect(pending?.participants).toHaveLength(500);
+    expect(pending?.approveBlockedReason).toBeNull();
+
+    t = Date.now();
+    await h
+      .as(faculty)
+      .post(`/faculty/quick-work/${log.id}/review`)
+      .send({ action: 'approve', verified: true })
+      .expect(201);
+    const approveMs = Date.now() - t;
+
+    const exported = await h
+      .as(admin)
+      .get('/admin/quick-work/export?search=Five%20hundred');
+    const exportRows = (
+      exported.body as Body<{ rows: { logId: string; contact: string }[] }>
+    ).data.rows.filter((r) => r.logId === log.id);
+    expect(exportRows).toHaveLength(500);
+
+    console.log(
+      `500-member log: save ${saveMs} ms, submit ${submitMs} ms, faculty queue ${queueMs} ms, approve ${approveMs} ms`,
+    );
+    for (const ms of [saveMs, submitMs, queueMs, approveMs]) {
+      expect(ms).toBeLessThan(15000);
+    }
+  }, 180000);
+
+  it('evidence: photos, documents, video and audio up to 100 MB; nothing a browser would run', async () => {
+    const lead = await h.makeUser(UserRole.STUDENT);
+    const presign = (filename: string, contentType: string, size: number) =>
+      h
+        .as(lead)
+        .post('/quick-work/evidence/presign')
+        .send({ filename, contentType, size });
+    const MB = 1024 * 1024;
+    for (const [name, type, size] of [
+      ['photo.jpeg', 'image/jpeg', 8 * MB],
+      ['iphone.heic', 'image/heic', 12 * MB],
+      [
+        'plan.docx',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        2 * MB,
+      ],
+      [
+        'sheet.xlsx',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        MB,
+      ],
+      [
+        'slides.pptx',
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        40 * MB,
+      ],
+      ['clip.mp4', 'video/mp4', 100 * MB],
+      ['clip.mov', 'video/quicktime', 60 * MB],
+      ['voice.m4a', 'audio/mp4', 5 * MB],
+    ] as const) {
+      const res = await presign(name, type, size);
+      expect([name, res.status]).toEqual([name, 201]);
+    }
+    for (const [name, type, size] of [
+      ['page.html', 'text/html', 1000],
+      ['logo.svg', 'image/svg+xml', 1000],
+      ['all.zip', 'application/zip', MB],
+      ['run.exe', 'application/octet-stream', MB],
+      ['huge.mp4', 'video/mp4', 100 * MB + 1],
+    ] as const) {
+      const res = await presign(name, type, size);
+      expect([name, res.status]).toEqual([name, 400]);
+    }
+
+    // Ten files save on a draft; an eleventh is refused.
+    const faculty = await h.makeUser(UserRole.FACULTY);
+    const file = (i: number) => ({
+      url: evidenceUrl(lead).replace('photo.jpg', `f${i}.mp4`),
+      name: `f${i}.mp4`,
+      type: 'video/mp4',
+      size: 90 * MB,
+      caption: `Clip ${i}`,
+    });
+    const ten = Array.from({ length: 10 }, (_, i) => file(i));
+    const log = await draft(
+      lead,
+      completeLog(lead, faculty, { evidence: ten }),
+    );
+    expect((log as unknown as { evidence: unknown[] }).evidence).toHaveLength(
+      10,
+    );
+    const eleven = await h
+      .as(lead)
+      .patch(`/quick-work/logs/${log.id}`)
+      .send({ evidence: [...ten, file(10)] });
+    expect(eleven.status).toBe(400);
+  });
+
+  it('summary grows to 1000 characters without losing summaries already stored at 600', async () => {
+    const lead = await h.makeUser(UserRole.STUDENT);
+    const faculty = await h.makeUser(UserRole.FACULTY);
+    const kept = 'Stored before the upgrade. '.repeat(20).slice(0, 590);
+    const log = await draft(
+      lead,
+      completeLog(lead, faculty, { summary: kept }),
+    );
+
+    // Put the column back the way production has it, then run what a boot runs: the
+    // pre-sync widening, then TypeORM synchronize.
+    await h.ds.query(
+      'ALTER TABLE quick_work_logs ALTER COLUMN summary TYPE varchar(600)',
+    );
+    await widenColumnsBeforeSync({
+      host: process.env.DB_HOST || '127.0.0.1',
+      port: Number(process.env.DB_PORT || 5432),
+      username: process.env.DB_USERNAME,
+      password: process.env.DB_PASSWORD,
+      database: process.env.DB_NAME,
+    });
+    await h.ds.synchronize();
+
+    const [col] = await h.ds.query<{ len: number }[]>(
+      `SELECT character_maximum_length AS len FROM information_schema.columns
+        WHERE table_name = 'quick_work_logs' AND column_name = 'summary'`,
+    );
+    expect(col.len).toBe(1000);
+    const [row] = await h.ds.query<{ summary: string }[]>(
+      'SELECT summary FROM quick_work_logs WHERE id = $1',
+      [log.id],
+    );
+    expect(row.summary).toBe(kept);
+
+    const long = 'x'.repeat(1000);
+    await h
+      .as(lead)
+      .patch(`/quick-work/logs/${log.id}`)
+      .send({ summary: long })
+      .expect(200);
+    expect(
+      (
+        await h
+          .as(lead)
+          .patch(`/quick-work/logs/${log.id}`)
+          .send({ summary: `${long}x` })
+      ).status,
+    ).toBe(400);
   });
 
   it('a draft can be deleted; malformed ids are a 400, never a 500', async () => {

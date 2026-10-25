@@ -56,10 +56,10 @@ export const QUICK_WORK_VISIBILITY = [
   'Public with consent',
 ] as const;
 
-export const QUICK_WORK_MAX_PARTICIPANTS = 20;
+export const QUICK_WORK_MAX_PARTICIPANTS = 500;
 /** Per student per day, across every quick-work log. */
 export const QUICK_WORK_MAX_DAILY_MINUTES = 9 * 60;
-export const QUICK_WORK_MAX_EVIDENCE = 5;
+export const QUICK_WORK_MAX_EVIDENCE = 10;
 export const QUICK_WORK_MAX_PARTNERS = 10;
 export const QUICK_WORK_PARTNER_NAME_MAX = 120;
 
@@ -76,14 +76,37 @@ export function cleanPartnerNames(names: readonly string[]): string[] {
   }
   return out.slice(0, QUICK_WORK_MAX_PARTNERS);
 }
-export const QUICK_WORK_MAX_EVIDENCE_BYTES = 5 * 1024 * 1024;
+export const QUICK_WORK_MAX_EVIDENCE_BYTES = 100 * 1024 * 1024;
+/**
+ * Photos, documents, video and audio. Evidence sits in a public bucket, so nothing a browser
+ * would run when the link is opened (HTML, SVG, scripts) and no archives or executables.
+ */
 export const QUICK_WORK_EVIDENCE_TYPES = [
   'image/jpeg',
   'image/png',
   'image/webp',
+  'image/gif',
+  'image/heic',
+  'image/heif',
   'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'text/plain',
+  'text/csv',
+  'video/mp4',
+  'video/quicktime',
+  'video/webm',
+  'audio/mpeg',
+  'audio/mp4',
+  'audio/x-m4a',
+  'audio/wav',
+  'audio/x-wav',
 ] as const;
-export const QUICK_WORK_SUMMARY_MAX = 600;
+export const QUICK_WORK_SUMMARY_MAX = 1000;
 export const QUICK_WORK_REVIEW_NOTE_MAX = 300;
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;

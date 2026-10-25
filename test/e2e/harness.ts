@@ -1,3 +1,4 @@
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { JwtService } from '@nestjs/jwt';
@@ -89,6 +90,8 @@ export const uniq = () => randomUUID().slice(0, 8);
 export type HarnessOptions = {
   /** Replace the OpenAI-backed AiService (e2e must never reach the real API). */
   ai?: Pick<AiService, 'summarize'>;
+  /** JSON body limit, as src/main.ts sets it (REQUEST_BODY_LIMIT, default 50mb); Nest's 100kb otherwise. */
+  bodyLimit?: string;
 };
 
 export async function bootHarness(opts: HarnessOptions = {}): Promise<Harness> {
@@ -98,7 +101,8 @@ export async function bootHarness(opts: HarnessOptions = {}): Promise<Harness> {
     .useValue(makeMailMock(mail));
   if (opts.ai) builder = builder.overrideProvider(AiService).useValue(opts.ai);
   const moduleRef = await builder.compile();
-  const app = moduleRef.createNestApplication();
+  const app = moduleRef.createNestApplication<NestExpressApplication>();
+  if (opts.bodyLimit) app.useBodyParser('json', { limit: opts.bodyLimit });
   // Same wiring as src/main.ts
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
   app.setGlobalPrefix(API.replace(/^\//, ''));

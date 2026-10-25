@@ -459,11 +459,10 @@ export class QuickWorkService {
     });
     const byId = new Map(students.map((u) => [u.id, u]));
     for (const p of credited) {
-      const ok =
-        await this.universityScope.canFacultyReviewApplicationAsUniversityDelegate(
-          facultyUserId,
-          byId.get(p.userId),
-        );
+      const ok = await this.universityScope.studentBelongsToOrganization(
+        byId.get(p.userId),
+        assignment.universityOrganization,
+      );
       if (!ok) {
         return `${p.name || p.email} is not a student of ${assignment.universityOrganization.name}, so you cannot approve this log. Return it, or ask CIEL PK to review it.`;
       }
@@ -726,6 +725,7 @@ export class QuickWorkService {
           studentName: p.name,
           studentEmail: p.email,
           studentId: p.studentId,
+          contact: p.contact ?? '',
           role: p.isLead ? 'lead' : 'teammate',
           joinStatus: p.joinStatus,
           present: p.present,
@@ -787,10 +787,14 @@ export class QuickWorkService {
         dto.contentType,
       )
     ) {
-      throw new BadRequestException('Use JPG, PNG, WEBP or PDF files.');
+      throw new BadRequestException(
+        `${dto.filename}: use a photo, PDF, Word, Excel, PowerPoint, text, video or audio file.`,
+      );
     }
     if (dto.size > QUICK_WORK_MAX_EVIDENCE_BYTES) {
-      throw new BadRequestException(`${dto.filename} exceeds 5 MB.`);
+      throw new BadRequestException(
+        `${dto.filename} exceeds ${QUICK_WORK_MAX_EVIDENCE_BYTES / (1024 * 1024)} MB.`,
+      );
     }
     return this.s3Service.presignPutObject({
       folder: `${EVIDENCE_FOLDER}/${viewer.id}`,
@@ -806,21 +810,68 @@ export class QuickWorkService {
   private async claimErrors(log: QuickWorkLog): Promise<string[]> {
     const errors: string[] = [];
     if (!log.activityDate) return errors;
-    for (const p of log.participants) {
-      if (!p.present || attendanceMinutes(p) <= 0) continue;
-      const who = p.name || p.email;
-      const others = await this.participantRepo
+    const credited = log.participants.filter(
+      (p) => p.present && attendanceMinutes(p) > 0,
+    );
+    if (!credited.length) return errors;
+    // Two queries for the whole team (a log may have hundreds of members), grouped per student.
+    const userIds = [...new Set(credited.map((p) => p.userId))];
+    const [otherRows, structuredRows] = await Promise.all([
+      this.participantRepo
         .createQueryBuilder('p')
         .innerJoin('p.log', 'log')
-        .select(['p.id', 'p.startTime', 'p.endTime', 'p.minutes', 'p.present'])
-        .where('p.userId = :userId', { userId: p.userId })
+        .select([
+          'p.id',
+          'p.userId',
+          'p.startTime',
+          'p.endTime',
+          'p.minutes',
+          'p.present',
+        ])
+        .where('p.userId IN (:...userIds)', { userIds })
         .andWhere('p.present = true')
         .andWhere('log.id <> :logId', { logId: log.id })
         .andWhere('log.activityDate = :date', { date: log.activityDate })
         .andWhere('log.status IN (:...statuses)', {
           statuses: [...QUICK_WORK_CLAIMING],
         })
-        .getMany();
+        .getMany(),
+      this.attendanceRepo
+        .createQueryBuilder('a')
+        .innerJoinAndSelect('a.participant', 'part')
+        .select([
+          'a.id',
+          'a.startTime',
+          'a.endTime',
+          'part.id',
+          'part.studentId',
+        ])
+        .where('part.studentId IN (:...userIds)', { userIds })
+        .andWhere('a.dateOfEngagement = :date', { date: log.activityDate })
+        .andWhere("COALESCE(a.approvalStatus, '') <> 'rejected'")
+        .getMany(),
+    ]);
+    const group = <T>(
+      rows: T[],
+      key: (row: T) => string | null | undefined,
+    ) => {
+      const map = new Map<string, T[]>();
+      for (const row of rows) {
+        const k = key(row);
+        if (!k) continue;
+        map.set(k, [...(map.get(k) ?? []), row]);
+      }
+      return map;
+    };
+    const othersByUser = group(otherRows, (o) => o.userId);
+    const structuredByUser = group(
+      structuredRows,
+      (a) => a.participant?.studentId,
+    );
+
+    for (const p of credited) {
+      const who = p.name || p.email;
+      const others = othersByUser.get(p.userId) ?? [];
       if (
         others.some((o) =>
           timesOverlap(p.startTime, p.endTime, o.startTime, o.endTime),
@@ -835,14 +886,7 @@ export class QuickWorkService {
       if (dayTotal > QUICK_WORK_MAX_DAILY_MINUTES) {
         errors.push(`${who} would exceed 9 hours of quick work on this date.`);
       }
-      const structured = await this.attendanceRepo
-        .createQueryBuilder('a')
-        .innerJoin('a.participant', 'part')
-        .select(['a.id', 'a.startTime', 'a.endTime'])
-        .where('part.studentId = :userId', { userId: p.userId })
-        .andWhere('a.dateOfEngagement = :date', { date: log.activityDate })
-        .andWhere("COALESCE(a.approvalStatus, '') <> 'rejected'")
-        .getMany();
+      const structured = structuredByUser.get(p.userId) ?? [];
       if (
         structured.some((a) =>
           timesOverlap(p.startTime, p.endTime, a.startTime, a.endTime),
@@ -867,7 +911,12 @@ export class QuickWorkService {
     if (wanted === undefined) return [];
 
     const seen = new Set<string>();
-    const desired: { email: string; studentId?: string }[] = [];
+    const desired: {
+      email: string;
+      studentId?: string;
+      name?: string;
+      contact?: string | null;
+    }[] = [];
     for (const t of wanted) {
       const email = normalizeEmail(t.email);
       if (!EMAIL_RE.test(email)) {
@@ -882,7 +931,13 @@ export class QuickWorkService {
         throw new BadRequestException(`${email} is already on this team.`);
       }
       seen.add(email);
-      desired.push({ email, studentId: t.studentId?.trim() });
+      desired.push({
+        email,
+        studentId: t.studentId?.trim(),
+        name: t.name?.trim(),
+        contact:
+          t.contact === undefined ? undefined : t.contact?.trim() || null,
+      });
     }
     if (desired.length + 1 > QUICK_WORK_MAX_PARTICIPANTS) {
       throw new BadRequestException(
@@ -898,17 +953,28 @@ export class QuickWorkService {
     const kept = current.filter((p) => seen.has(normalizeEmail(p.email)));
     const keptByEmail = new Map(kept.map((p) => [normalizeEmail(p.email), p]));
 
+    // One lookup for every newly added teammate (a team may have hundreds).
+    const newEmails = desired
+      .map((d) => d.email)
+      .filter((email) => !keptByEmail.has(email));
+    const users = newEmails.length
+      ? await this.userRepo
+          .createQueryBuilder('u')
+          .where('LOWER(u.email) IN (:...emails)', { emails: newEmails })
+          .getMany()
+      : [];
+    const userByEmail = new Map(users.map((u) => [normalizeEmail(u.email), u]));
+
     const invited: QuickWorkParticipant[] = [];
     for (const d of desired) {
       const existing = keptByEmail.get(d.email);
       if (existing) {
         if (d.studentId !== undefined) existing.studentId = d.studentId;
+        if (d.contact !== undefined) existing.contact = d.contact;
+        if (!existing.name && d.name) existing.name = d.name.slice(0, 100);
         continue;
       }
-      const user = await this.userRepo
-        .createQueryBuilder('u')
-        .where('LOWER(u.email) = :email', { email: d.email })
-        .getOne();
+      const user = userByEmail.get(d.email);
       if (!user || user.role !== UserRole.STUDENT) {
         throw new BadRequestException(
           `No CIEL student account uses ${d.email}. Ask your teammate to sign up as a student first.`,
@@ -923,9 +989,10 @@ export class QuickWorkService {
         logId: log.id,
         userId: user.id,
         isLead: false,
-        name: (user.name || '').slice(0, 100),
+        name: (user.name || d.name || '').slice(0, 100),
         email: d.email,
         studentId: (d.studentId || user.registrationNumber || '').slice(0, 60),
+        contact: d.contact ?? null,
         joinStatus: 'invited',
         present: true,
       });
@@ -1023,6 +1090,7 @@ export class QuickWorkService {
         name: p.name,
         email: p.email,
         studentId: p.studentId,
+        contact: p.contact,
         joinStatus: p.joinStatus,
         present: p.present,
         startTime: p.startTime,

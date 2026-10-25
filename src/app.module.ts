@@ -44,6 +44,7 @@ import { PathsModule } from './paths/paths.module';
 import { ImpactSummaryModule } from './impact-summary/impact-summary.module';
 import { AiModule } from './ai/ai.module';
 import { NpeRankingModule } from './ranking/npe-ranking.module';
+import { widenColumnsBeforeSync } from './database/widen-columns-before-sync';
 
 @Module({
   imports: [
@@ -52,27 +53,34 @@ import { NpeRankingModule } from './ranking/npe-ranking.module';
     }),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: (configService: ConfigService) => ({
-        type: 'postgres',
-        host: configService.get<string>('DB_HOST'),
-        port: configService.get<number>('DB_PORT'),
-        username: configService.get<string>('DB_USERNAME'),
-        password: configService.get<string>('DB_PASSWORD'),
-        database: configService.get<string>('DB_NAME'),
-        ssl:
-          process.env.NODE_ENV === 'production' || process.env.VERCEL
-            ? {
-                rejectUnauthorized: false,
-              }
-            : configService.get<string>('DB_SSL') === 'true'
+      useFactory: async (configService: ConfigService) => {
+        const connection = {
+          host: configService.get<string>('DB_HOST'),
+          port: configService.get<number>('DB_PORT'),
+          username: configService.get<string>('DB_USERNAME'),
+          password: configService.get<string>('DB_PASSWORD'),
+          database: configService.get<string>('DB_NAME'),
+          ssl:
+            process.env.NODE_ENV === 'production' || process.env.VERCEL
               ? {
                   rejectUnauthorized: false,
                 }
-              : undefined,
-        synchronize: true,
-        autoLoadEntities: true,
-        logging: false,
-      }),
+              : configService.get<string>('DB_SSL') === 'true'
+                ? {
+                    rejectUnauthorized: false,
+                  }
+                : undefined,
+        };
+        // synchronize would drop and re-add a column whose length grew; widen those first.
+        await widenColumnsBeforeSync(connection);
+        return {
+          type: 'postgres' as const,
+          ...connection,
+          synchronize: true,
+          autoLoadEntities: true,
+          logging: false,
+        };
+      },
       inject: [ConfigService],
     }),
     AuthModule,

@@ -1,4 +1,5 @@
 import { normalizeCityKey, PAKISTAN_CITY_GEO } from './pakistan-geo';
+import { partnerList } from '../quick-work/quick-work.util';
 
 /** Path label shown on the public SDG wheel for approved Quick Community Work logs. */
 export const QUICK_WORK_LEDGER_PATH = 'Quick Community Work';
@@ -13,7 +14,8 @@ export type QuickWorkLedgerLog = {
   location: string;
   locationPin: string | null;
   host: string | null;
-  partners: string[] | null;
+  /** Names, or { name, email, contact } objects; only names ever reach the public ledger. */
+  partners: unknown[] | null;
   sdg: number | null;
   peopleReached: number | null;
   reviewedAt: Date | null;
@@ -80,7 +82,10 @@ export function quickWorkLedgerEntry(
   );
   const minutes = credited.reduce((a, p) => a + Number(p.minutes), 0);
   const sdg = Number(log.sdg);
-  const partners = [...(log.partners ?? []), log.host ?? '']
+  const partners = [
+    ...partnerList(log.partners).map((p) => p.name),
+    log.host ?? '',
+  ]
     .map((p) => p.trim())
     .filter(Boolean);
   const verifiedAt = log.reviewedAt ?? log.updatedAt;

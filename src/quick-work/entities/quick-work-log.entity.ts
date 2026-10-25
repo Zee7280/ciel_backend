@@ -7,7 +7,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import type { QuickWorkStatus } from '../quick-work.util';
+import type { QuickWorkPartner, QuickWorkStatus } from '../quick-work.util';
 import { QuickWorkParticipant } from './quick-work-participant.entity';
 
 export type QuickWorkEvidence = {
@@ -59,8 +59,8 @@ export class QuickWorkLog {
   facultyEmail: string;
 
   /**
-   * pending | accepted | declined: the named faculty member's answer to coordinating this activity.
-   * Null when no faculty is named yet, or on a log first submitted before confirmations existed.
+   * No longer used (faculty now only review after submit). Kept, with the two dates below, so that
+   * TypeORM synchronize does not drop the columns and the values stored meanwhile.
    */
   @Column({ type: 'varchar', length: 10, nullable: true })
   facultyConfirmation: string | null;
@@ -102,9 +102,19 @@ export class QuickWorkLog {
   @Column({ type: 'varchar', length: 120, nullable: true })
   host: string | null;
 
-  /** Optional partner organisations the activity was run with (names). */
+  /** Optional email and phone (+92...) of the host organisation. */
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  hostEmail: string | null;
+
+  @Column({ type: 'varchar', length: 30, nullable: true })
+  hostContact: string | null;
+
+  /**
+   * Optional partner organisations: { name, email, contact } objects. Rows saved before contacts
+   * existed hold plain names; read them through partnerList().
+   */
   @Column({ type: 'jsonb', default: () => "'[]'" })
-  partners: string[];
+  partners: (QuickWorkPartner | string)[];
 
   @Column({ type: 'smallint', nullable: true })
   sdg: number | null;

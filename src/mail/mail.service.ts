@@ -2399,34 +2399,104 @@ export class MailService {
     }
   }
 
-  /** Quick Community Work log submitted: tell the named faculty member it is waiting for them. */
+  /**
+   * Quick Community Work log submitted: the named faculty member gets the activity flashcard and
+   * Approve / Request Revision / Reject buttons. Each button opens a page that shows the record and
+   * asks once more before recording; acting there needs a CIEL PK faculty account with this email.
+   */
   async sendQuickWorkSubmittedForReview(input: {
+    /** Sealed token for the emailed review page. */
+    reviewToken: string;
     to: string;
     facultyName: string;
     leadName: string;
     title: string;
     participants: number;
+    card: {
+      activityType: string;
+      activityDate: string | null;
+      startTime: string | null;
+      endTime: string | null;
+      location: string;
+      university: string;
+      department: string;
+      sdg: number | null;
+      peopleReached: number | null;
+      teamMinutes: number;
+      evidenceCount: number;
+      summary: string;
+    };
   }): Promise<void> {
     const from =
       this.configService.get<string>('MAIL_FROM') ||
       'CIEL <no-reply@cielpk.com>';
-    const reviewLink = this.buildFrontendLink(
-      '/dashboard/faculty/quick-work',
-      {},
-    );
-    const facultyEsc = this.escHtmlPlain(input.facultyName?.trim() || 'there');
-    const leadEsc = this.escHtmlPlain(input.leadName?.trim() || 'A student');
-    const titleEsc = this.escHtmlPlain(input.title);
-    const people =
-      input.participants === 1
-        ? 'one participant'
-        : `${input.participants} participants`;
+    const loginLink = this.buildFrontendLink('/login', {});
+    const reviewLink = (action: string) =>
+      this.buildFrontendLink('/quick-impact/faculty-review', {
+        token: input.reviewToken,
+        action,
+      });
+    const esc = (v: string | null | undefined) => this.escHtmlPlain(v ?? '');
+    const title = input.title?.trim() || 'an activity';
+    const c = input.card;
+    const hours = Math.round((c.teamMinutes / 60) * 100) / 100;
+    const summary =
+      c.summary.length > 320 ? `${c.summary.slice(0, 317)}…` : c.summary;
+    const row = (label: string, value: string) =>
+      value
+        ? `<tr><td style="padding: 4px 12px 4px 0; color: #6b7c86; font-size: 13px; vertical-align: top; white-space: nowrap;">${label}</td><td style="padding: 4px 0; color: #16313d; font-size: 13px;">${value}</td></tr>`
+        : '';
+    const when = [
+      esc(c.activityDate),
+      c.startTime && c.endTime
+        ? `${esc(c.startTime)}–${esc(c.endTime)} PKT`
+        : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    const flashcard = `
+        <div style="margin: 20px 0; border: 1px solid #dcebee; border-radius: 12px; overflow: hidden;">
+          <div style="background-color: #0e7d74; color: #ffffff; padding: 12px 16px;">
+            <div style="font-size: 11px; letter-spacing: 1px; text-transform: uppercase; opacity: 0.85;">Quick Community Work</div>
+            <div style="font-size: 17px; font-weight: bold; margin-top: 2px;">${esc(title)}</div>
+          </div>
+          <div style="padding: 12px 16px;">
+            <table style="border-collapse: collapse; width: 100%;">
+              ${row('Activity', esc(c.activityType))}
+              ${row('When', when)}
+              ${row('Venue', esc(c.location))}
+              ${row('Submitted by', esc(input.leadName))}
+              ${row('Institution', [esc(c.university), esc(c.department)].filter(Boolean).join(' · '))}
+              ${row('Participants', `${input.participants} · ${hours} team hours`)}
+              ${row('SDG', c.sdg ? `SDG ${c.sdg}` : '')}
+              ${row('People reached', c.peopleReached != null ? String(c.peopleReached) : '')}
+              ${row('Evidence', `${c.evidenceCount} file${c.evidenceCount === 1 ? '' : 's'}`)}
+            </table>
+            ${summary ? `<p style="margin: 10px 0 0; font-size: 13px; color: #16313d; line-height: 1.5;">${esc(summary)}</p>` : ''}
+          </div>
+        </div>`;
+    const button = (
+      label: string,
+      href: string,
+      primary: boolean,
+      color: string,
+    ) =>
+      `<a href="${href}" style="display: inline-block; margin: 0 8px 8px 0; padding: 10px 18px; border-radius: 6px; font-weight: bold; text-decoration: none; ${
+        primary
+          ? `background-color: ${color}; color: #ffffff;`
+          : `background-color: #ffffff; color: ${color}; border: 1px solid ${color};`
+      }">${label}</a>`;
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
-        <p>Dear ${facultyEsc},</p>
-        <p><strong>${leadEsc}</strong> named you as the coordinating faculty member for the Quick Community Work activity "<strong>${titleEsc}</strong>" (${people}) on <strong>CIEL PK</strong>.</p>
-        <p>The activity is complete. Please review the attendance and evidence, then approve, return for changes or decline. Hours count only after your approval.</p>
-        <p><a href="${reviewLink}">Review on CIELPK.com</a> — sign in with this email address. If you do not have a CIEL PK faculty account yet, sign up with this email to see the request.</p>
+        <p>Dear Faculty Member,</p>
+        <p>A student has submitted <strong>${esc(title)}</strong> under Quick Community Work and listed you as the supervising faculty member. Please review the opportunity flashcard below and select Approve, Request Revision, or Reject.</p>
+        <p>If you’re registered with CIEL PK, you can take action directly here. Otherwise, please sign up or log in at <a href="${loginLink}">cielpk.com</a> to review the opportunity.</p>
+        ${flashcard}
+        <p style="margin: 18px 0 10px;">
+          ${button('Approve', reviewLink('approve'), true, '#0e7d74')}
+          ${button('Request Revision', reviewLink('changes'), false, '#916b21')}
+          ${button('Reject', reviewLink('reject'), false, '#ac3c3c')}
+        </p>
         <p>Best regards,<br><strong>CIEL PK Team</strong></p>
       </div>
     `;
@@ -2434,72 +2504,13 @@ export class MailService {
       await this.sendMailReliable({
         from,
         to: input.to,
-        subject: `Quick Community Work to review: ${input.title}`,
+        subject: `Quick Community Work to review: ${title}`,
         html,
       });
       this.logger.log(`Quick-work review email sent to ${input.to}`);
     } catch (error) {
       this.logger.error(
         `Failed to send quick-work review email to ${input.to}`,
-        (error as Error).stack,
-      );
-    }
-  }
-
-  /** Quick Community Work: a student named this faculty member as coordinator; ask them to accept. */
-  async sendQuickWorkFacultyRequest(input: {
-    /** Sealed token for the one-click accept / decline page. */
-    respondToken: string;
-    to: string;
-    facultyName: string;
-    leadName: string;
-    title: string;
-    university: string;
-    activityDate: string | null;
-    participants: number;
-  }): Promise<void> {
-    const from =
-      this.configService.get<string>('MAIL_FROM') ||
-      'CIEL <no-reply@cielpk.com>';
-    const link = this.buildFrontendLink('/dashboard/faculty/quick-work', {});
-    const buttons = this.quickWorkAnswerButtons(input.respondToken, 'Accept');
-    const facultyEsc = this.escHtmlPlain(input.facultyName?.trim() || 'there');
-    const leadEsc = this.escHtmlPlain(input.leadName?.trim() || 'A student');
-    const titleEsc = this.escHtmlPlain(
-      input.title?.trim() || 'a quick community activity',
-    );
-    const uniEsc = input.university?.trim()
-      ? ` of <strong>${this.escHtmlPlain(input.university.trim())}</strong>`
-      : '';
-    const when = input.activityDate
-      ? ` on ${this.escHtmlPlain(input.activityDate)}`
-      : '';
-    const people =
-      input.participants === 1
-        ? 'one participant'
-        : `${input.participants} participants`;
-    const html = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
-        <p>Dear ${facultyEsc},</p>
-        <p><strong>${leadEsc}</strong>${uniEsc} has named you as the coordinating faculty member for the Quick Community Work activity "<strong>${titleEsc}</strong>"${when} (${people} so far) on <strong>CIEL PK</strong>.</p>
-        <p>Please accept or decline. The students can submit their hours to you only after you accept; you then review the attendance and evidence before any hours count.</p>
-        ${buttons}
-        <p>You can also answer from your <a href="${link}">CIEL PK faculty dashboard</a> (Quick Community Work) — sign in with this email address. Either way records the same answer. To review the hours later you need a CIEL PK faculty account with this email.</p>
-        <p>If you do not know this student or activity, decline and they will choose someone else.</p>
-        <p>Best regards,<br><strong>CIEL PK Team</strong></p>
-      </div>
-    `;
-    try {
-      await this.sendMailReliable({
-        from,
-        to: input.to,
-        subject: `Please confirm: coordinating faculty for "${input.title?.trim() || 'Quick Community Work'}"`,
-        html,
-      });
-      this.logger.log(`Quick-work faculty request email sent to ${input.to}`);
-    } catch (error) {
-      this.logger.error(
-        `Failed to send quick-work faculty request email to ${input.to}`,
         (error as Error).stack,
       );
     }
@@ -2518,29 +2529,20 @@ export class MailService {
     const from =
       this.configService.get<string>('MAIL_FROM') ||
       'CIEL <no-reply@cielpk.com>';
-    const link = this.buildFrontendLink(
-      '/dashboard/student/paths/community-service/quick-work',
-      {},
-    );
+    const loginLink = this.buildFrontendLink('/login', {});
     const buttons = this.quickWorkAnswerButtons(
       input.respondToken,
-      'I took part',
+      'Approve',
+      'Reject',
     );
-    const nameEsc = this.escHtmlPlain(input.name?.trim() || 'there');
-    const leadEsc = this.escHtmlPlain(input.leadName?.trim() || 'A student');
-    const titleEsc = this.escHtmlPlain(
-      input.title?.trim() || 'a quick community activity',
-    );
-    const when = input.activityDate
-      ? ` on ${this.escHtmlPlain(input.activityDate)}`
-      : '';
+    const title = input.title?.trim() || 'an activity';
+    const titleEsc = this.escHtmlPlain(title);
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
-        <p>Dear ${nameEsc},</p>
-        <p><strong>${leadEsc}</strong> added you as a team member of the Quick Community Work activity "<strong>${titleEsc}</strong>"${when} on <strong>CIEL PK</strong>.</p>
-        <p>Please confirm that you took part, or decline if you did not. The activity can be submitted for faculty review only after every team member has answered, and your hours count once the faculty member approves.</p>
+        <p>Dear Student,</p>
+        <p>You’ve been linked to <strong>${titleEsc}</strong> under Quick Community Work. If you participated, approve it to add it to your dashboard. If you didn’t, reject it.</p>
+        <p>Log in or sign up at <a href="${loginLink}">cielpk.com</a> to review the opportunity.</p>
         ${buttons}
-        <p>You can also answer from <a href="${link}">Quick Impact Log</a> on CIEL PK after signing in with this email address. Either way records the same answer.</p>
         <p>Best regards,<br><strong>CIEL PK Team</strong></p>
       </div>
     `;
@@ -2548,7 +2550,7 @@ export class MailService {
       await this.sendMailReliable({
         from,
         to: input.to,
-        subject: `Confirm your participation: ${input.title?.trim() || 'Quick Community Work'}`,
+        subject: `You’ve been linked to ${title} under Quick Community Work`,
         html,
       });
       this.logger.log(`Quick-work team invite email sent to ${input.to}`);
@@ -2560,8 +2562,12 @@ export class MailService {
     }
   }
 
-  /** Accept / decline buttons for a Quick Community Work request; each opens a page that asks once more before recording. */
-  private quickWorkAnswerButtons(token: string, acceptLabel: string): string {
+  /** Approve / reject buttons for a Quick Community Work invite; each opens a page that asks once more before recording. */
+  private quickWorkAnswerButtons(
+    token: string,
+    acceptLabel: string,
+    declineLabel: string,
+  ): string {
     const yes = this.buildFrontendLink('/quick-impact/respond', {
       token,
       answer: 'accept',
@@ -2573,7 +2579,7 @@ export class MailService {
     return `
         <p style="margin: 22px 0;">
           <a href="${yes}" style="background-color: #0e7d74; color: #ffffff; padding: 11px 22px; text-decoration: none; border-radius: 6px; font-weight: bold; margin-right: 10px;">${this.escHtmlPlain(acceptLabel)}</a>
-          <a href="${no}" style="background-color: #ffffff; color: #ac3c3c; padding: 10px 22px; text-decoration: none; border-radius: 6px; font-weight: bold; border: 1px solid #e6c7c5;">Decline</a>
+          <a href="${no}" style="background-color: #ffffff; color: #ac3c3c; padding: 10px 22px; text-decoration: none; border-radius: 6px; font-weight: bold; border: 1px solid #e6c7c5;">${this.escHtmlPlain(declineLabel)}</a>
         </p>`;
   }
 

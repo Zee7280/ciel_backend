@@ -1,6 +1,8 @@
 import {
   attendanceMinutes,
-  cleanPartnerNames,
+  cleanPartners,
+  partnerLabel,
+  partnerList,
   minutesOfDay,
   pktNow,
   quickWorkSubmitErrors,
@@ -28,7 +30,6 @@ const complete = (
   department: 'SMS',
   facultyName: 'Dr F',
   facultyEmail: 'f@x.pk',
-  facultyConfirmation: 'accepted',
   title: 'Pinktober',
   activityType: 'Pinktober event',
   activityDate: '2026-10-20',
@@ -63,13 +64,37 @@ describe('quick-work rules', () => {
     expect(timesOverlap('10:00', '11:00', '10:59', '12:00')).toBe(true);
   });
 
-  it('partner names are trimmed, de-duplicated and capped', () => {
-    expect(cleanPartnerNames([' Edhi ', '', 'edhi', 'WWF Pakistan'])).toEqual([
-      'Edhi',
-      'WWF Pakistan',
+  it('partners are trimmed, de-duplicated by name and capped; old name-only rows still read', () => {
+    expect(
+      cleanPartners([
+        ' Edhi ',
+        '',
+        { name: 'edhi', email: 'x@y.pk' },
+        {
+          name: 'WWF Pakistan',
+          email: ' Info@WWF.org.pk ',
+          contact: '+923001234567',
+        },
+      ]),
+    ).toEqual([
+      { name: 'Edhi', email: null, contact: null },
+      {
+        name: 'WWF Pakistan',
+        email: 'info@wwf.org.pk',
+        contact: '+923001234567',
+      },
     ]);
     const many = Array.from({ length: 15 }, (_, i) => `Org ${i}`);
-    expect(cleanPartnerNames(many)).toHaveLength(10);
+    expect(cleanPartners(many)).toHaveLength(10);
+    expect(partnerList(['Edhi', { name: '' }, null, 7])).toEqual([
+      { name: 'Edhi', email: null, contact: null },
+    ]);
+    expect(
+      partnerLabel({ name: 'WWF', email: 'a@b.pk', contact: '+923001234567' }),
+    ).toBe('WWF (a@b.pk, +923001234567)');
+    expect(partnerLabel({ name: 'WWF', email: null, contact: null })).toBe(
+      'WWF',
+    );
   });
 
   it('a complete one-hour log passes', () => {
@@ -168,26 +193,6 @@ describe('quick-work rules', () => {
     expect(quickWorkSubmitErrors(complete({ evidence: [] }), NOW)).toContain(
       'Attach at least one photo or PDF.',
     );
-  });
-
-  it('the named faculty must accept coordinating first; logs submitted before that rule are exempt', () => {
-    const errs = (over: Partial<QuickWorkSubmitInput>) =>
-      quickWorkSubmitErrors(complete(over), NOW).join(' ');
-    expect(errs({ facultyConfirmation: 'pending' })).toMatch(
-      /has not accepted coordinating/,
-    );
-    expect(errs({ facultyConfirmation: null })).toMatch(
-      /has not accepted coordinating/,
-    );
-    expect(errs({ facultyConfirmation: 'declined' })).toMatch(
-      /declined to coordinate/,
-    );
-    expect(
-      quickWorkSubmitErrors(
-        complete({ facultyConfirmation: null, submittedAt: new Date() }),
-        NOW,
-      ),
-    ).toEqual([]);
   });
 
   it('the faculty reviewer cannot be one of the participants', () => {

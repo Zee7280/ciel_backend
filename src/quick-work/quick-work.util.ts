@@ -63,18 +63,58 @@ export const QUICK_WORK_MAX_EVIDENCE = 10;
 export const QUICK_WORK_MAX_PARTNERS = 10;
 export const QUICK_WORK_PARTNER_NAME_MAX = 120;
 
-/** Trimmed partner names, blanks and case-insensitive repeats dropped, capped at the maximum. */
-export function cleanPartnerNames(names: readonly string[]): string[] {
+/** A partner organisation and, optionally, how to reach it. */
+export type QuickWorkPartner = {
+  name: string;
+  email: string | null;
+  contact: string | null;
+};
+
+/**
+ * Stored partners as objects. Logs saved before contacts existed hold plain names, and older
+ * clients still send names, so both shapes are accepted everywhere partners are read.
+ */
+export function partnerList(raw: unknown): QuickWorkPartner[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((p: unknown): QuickWorkPartner | null => {
+      if (typeof p === 'string') {
+        return p.trim() ? { name: p.trim(), email: null, contact: null } : null;
+      }
+      if (!p || typeof p !== 'object') return null;
+      const o = p as Record<string, unknown>;
+      const str = (v: unknown) =>
+        typeof v === 'string' && v.trim() ? v.trim() : null;
+      const name = str(o.name);
+      return name
+        ? { name, email: str(o.email), contact: str(o.contact) }
+        : null;
+    })
+    .filter((p): p is QuickWorkPartner => p !== null);
+}
+
+/** Trimmed, blanks and case-insensitive repeat names dropped, capped at the maximum; emails lower-cased. */
+export function cleanPartners(items: readonly unknown[]): QuickWorkPartner[] {
   const seen = new Set<string>();
-  const out: string[] = [];
-  for (const raw of names) {
-    const name = raw.trim().slice(0, QUICK_WORK_PARTNER_NAME_MAX);
+  const out: QuickWorkPartner[] = [];
+  for (const p of partnerList(items)) {
+    const name = p.name.slice(0, QUICK_WORK_PARTNER_NAME_MAX);
     const key = name.toLowerCase();
-    if (!name || seen.has(key)) continue;
+    if (seen.has(key)) continue;
     seen.add(key);
-    out.push(name);
+    out.push({
+      name,
+      email: p.email ? p.email.toLowerCase().slice(0, 120) : null,
+      contact: p.contact ? p.contact.slice(0, 30) : null,
+    });
   }
   return out.slice(0, QUICK_WORK_MAX_PARTNERS);
+}
+
+/** "Edhi Foundation (info@edhi.org, +923001234567)" for exports; just the name when no contact is known. */
+export function partnerLabel(p: QuickWorkPartner): string {
+  const reach = [p.email, p.contact].filter(Boolean).join(', ');
+  return reach ? `${p.name} (${reach})` : p.name;
 }
 export const QUICK_WORK_MAX_EVIDENCE_BYTES = 100 * 1024 * 1024;
 /**
@@ -195,9 +235,6 @@ export type QuickWorkSubmitInput = {
   department: string;
   facultyName: string;
   facultyEmail: string;
-  /** pending | accepted | declined; null on a log submitted before confirmations existed. */
-  facultyConfirmation?: string | null;
-  submittedAt?: Date | null;
   title: string;
   activityType: string;
   activityTypeOther?: string | null;
@@ -245,16 +282,6 @@ export function quickWorkSubmitErrors(
   }
   if (people.length > QUICK_WORK_MAX_PARTICIPANTS) {
     e.push(`Maximum ${QUICK_WORK_MAX_PARTICIPANTS} participants per log.`);
-  }
-  const legacyLog = !log.facultyConfirmation && Boolean(log.submittedAt);
-  if (log.facultyConfirmation === 'declined') {
-    e.push(
-      `${log.facultyName || 'The faculty member'} declined to coordinate this activity. Name another faculty member.`,
-    );
-  } else if (log.facultyConfirmation !== 'accepted' && !legacyLog) {
-    e.push(
-      `${log.facultyName || 'Your coordinating faculty member'} has not accepted coordinating this activity yet.`,
-    );
   }
   if (log.mode === 'team' && people.length < 2) {
     e.push('Add a teammate or select “Just me”.');

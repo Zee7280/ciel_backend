@@ -25,6 +25,22 @@ import {
   QUICK_WORK_VISIBILITY,
 } from '../quick-work.util';
 
+export class QuickWorkPartnerDto {
+  @IsString()
+  @MaxLength(QUICK_WORK_PARTNER_NAME_MAX)
+  name: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  email?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  contact?: string | null;
+}
+
 export class QuickWorkTeammateDto {
   @IsString()
   @MaxLength(120)
@@ -179,11 +195,30 @@ export class SaveQuickWorkLogDto {
   host?: string | null;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  hostEmail?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  hostContact?: string | null;
+
+  /** Partner names only (older clients). Contacts already stored for the same names are kept. */
+  @IsOptional()
   @IsArray()
   @ArrayMaxSize(QUICK_WORK_MAX_PARTNERS)
   @IsString({ each: true })
   @MaxLength(QUICK_WORK_PARTNER_NAME_MAX, { each: true })
   partners?: string[];
+
+  /** Partners with their optional email and contact number; wins over `partners` when sent. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(QUICK_WORK_MAX_PARTNERS)
+  @ValidateNested({ each: true })
+  @Type(() => QuickWorkPartnerDto)
+  partnerDetails?: QuickWorkPartnerDto[];
 
   @IsOptional()
   @IsInt()
@@ -256,6 +291,13 @@ export class QuickWorkReviewDto {
   @IsOptional()
   @IsBoolean()
   verified?: boolean;
+}
+
+/** A faculty decision from the emailed review link: the sealed token is the credential. */
+export class QuickWorkFacultyEmailReviewDto extends QuickWorkReviewDto {
+  @IsString()
+  @MaxLength(2000)
+  token: string;
 }
 
 export class QuickWorkPresignDto {

@@ -13,6 +13,7 @@ import {
   AdminQuickWorkController,
   FacultyQuickWorkController,
   QuickWorkEmailResponseController,
+  QuickWorkFacultyEmailReviewController,
   QuickWorkController,
 } from './quick-work.controller';
 
@@ -31,6 +32,7 @@ import {
   ],
   controllers: [
     QuickWorkEmailResponseController,
+    QuickWorkFacultyEmailReviewController,
     QuickWorkController,
     FacultyQuickWorkController,
     AdminQuickWorkController,

@@ -42,7 +42,9 @@ import {
   QUICK_WORK_MAX_DAILY_MINUTES,
   QUICK_WORK_MAX_EVIDENCE_BYTES,
   QUICK_WORK_MAX_PARTICIPANTS,
-  cleanPartnerNames,
+  cleanPartners,
+  partnerLabel,
+  partnerList,
   quickWorkActivityLabel,
   quickWorkSubmitErrors,
   QuickWorkStatus,
@@ -63,21 +65,27 @@ const ADMIN_DEFAULT_STATUSES: QuickWorkStatus[] = [
 ];
 const ADMIN_STATUSES: QuickWorkStatus[] = ['draft', ...ADMIN_DEFAULT_STATUSES];
 const ADMIN_EXPORT_MAX_LOGS = 5000;
-/** A lead may re-send an unanswered faculty request at most this often. */
-const FACULTY_REQUEST_RESEND_MS = 60 * 60 * 1000;
-/** Anti-abuse: faculty-request emails per log, and logs per lead that ask a faculty member, in 24 hours. */
-const FACULTY_REQUESTS_PER_LOG_PER_DAY = 5;
-const FACULTY_REQUEST_LOGS_PER_LEAD_PER_DAY = 20;
-const DAY_MS = 24 * 60 * 60 * 1000;
 /** Emails are sent before the response (serverless may stop work left running after it), waiting at most this long. */
 const MAIL_WAIT_MS = 8000;
 const MAIL_CONCURRENCY = 5;
-/** Accept / decline links in request emails stay valid this long. */
+/** Confirm / decline links in teammate invite emails stay valid this long. */
 const EMAIL_RESPONSE_TTL_SECONDS = 14 * 24 * 60 * 60;
 const EMAIL_TOKEN_KIND = 'quick-work-email-response';
+/** Review links in the faculty "submitted for review" email. */
+const FACULTY_REVIEW_TOKEN_KIND = 'quick-work-faculty-review';
+type FacultyReviewToken = { l: string; f: string };
+/** Faculty accounts that may sign in, so may also act from the emailed review link. */
+const FACULTY_ACTIVE_STATUSES = ['active', 'approved'];
+/**
+ * Anti-abuse: a student can name any address as faculty, so the submit email (whose title and summary
+ * the student writes) goes out for at most this many of their submissions a day. Later submissions
+ * still reach the faculty dashboard, just without an email.
+ */
+const FACULTY_EMAILS_PER_LEAD_PER_DAY = 10;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** What an emailed accept / decline link carries: the log, and either the faculty email or the teammate's row. */
-type EmailResponseToken = { l: string; e?: string; p?: string };
+/** What an emailed confirm / decline link carries: the log and the teammate's row. */
+type EmailResponseToken = { l: string; p?: string };
 
 type Viewer = { id: string };
 type ReviewOutcome = 'approved' | 'changes' | 'rejected';
@@ -162,26 +170,7 @@ export class QuickWorkService {
           approveBlockedReason: await this.approvalScopeError(viewer.id, log),
         })),
     );
-    // Activities still being prepared that name this faculty member: accept / decline coordinating.
-    const preparing = await this.logRepo.find({
-      where: [
-        {
-          facultyEmail: email,
-          status: 'draft',
-          facultyConfirmation: In(['pending', 'accepted']),
-        },
-        {
-          facultyEmail: email,
-          status: 'changes',
-          facultyConfirmation: 'pending',
-        },
-      ],
-      relations: ['participants'],
-      order: { facultyRequestedAt: 'DESC' },
-      take: 200,
-    });
     return {
-      requests: preparing.map((log) => this.toView(log, null)),
       pending,
       reviewed: logs
         .filter((log) => log.status !== 'submitted')
@@ -225,7 +214,6 @@ export class QuickWorkService {
     const lead = log.participants.find((p) => p.isLead) as QuickWorkParticipant;
 
     const text = (v: string | null | undefined) => (v ?? '').trim();
-    const previousFacultyEmail = log.facultyEmail;
     if (dto.mode !== undefined) log.mode = dto.mode;
     if (dto.university !== undefined) log.university = text(dto.university);
     if (dto.department !== undefined) log.department = text(dto.department);
@@ -250,8 +238,35 @@ export class QuickWorkService {
       log.locationPin = text(dto.locationPin) || null;
     }
     if (dto.host !== undefined) log.host = text(dto.host) || null;
-    if (dto.partners !== undefined) {
-      log.partners = cleanPartnerNames(dto.partners);
+    if (dto.hostEmail !== undefined) {
+      const hostEmail = text(dto.hostEmail).toLowerCase() || null;
+      if (hostEmail && !EMAIL_RE.test(hostEmail)) {
+        throw new BadRequestException(
+          'Enter a valid email for the host organisation, or leave it empty.',
+        );
+      }
+      log.hostEmail = hostEmail;
+    }
+    if (dto.hostContact !== undefined) {
+      log.hostContact = text(dto.hostContact) || null;
+    }
+    if (dto.partnerDetails !== undefined) {
+      const partners = cleanPartners(dto.partnerDetails);
+      const bad = partners.find((p) => p.email && !EMAIL_RE.test(p.email));
+      if (bad) {
+        throw new BadRequestException(
+          `Enter a valid email for ${bad.name}, or leave it empty.`,
+        );
+      }
+      log.partners = partners;
+    } else if (dto.partners !== undefined) {
+      // Names only: keep the email / contact already stored for a partner of the same name.
+      const known = new Map(
+        partnerList(log.partners).map((p) => [p.name.toLowerCase(), p]),
+      );
+      log.partners = cleanPartners(dto.partners).map(
+        (p) => known.get(p.name.toLowerCase()) ?? p,
+      );
     }
     if (dto.sdg !== undefined) log.sdg = dto.sdg ?? null;
     if (dto.summary !== undefined) log.summary = dto.summary ?? '';
@@ -284,23 +299,10 @@ export class QuickWorkService {
     }
     for (const p of log.participants) p.minutes = attendanceMinutes(p);
 
-    const facultyBefore = log.facultyConfirmation;
-    const askFaculty = this.applyFacultyChange(log, previousFacultyEmail);
-    if (askFaculty) await this.assertFacultyRequestQuota(log);
-
-    const toSave = this.withoutParticipants(log);
-    if (!askFaculty && log.facultyConfirmation === facultyBefore) {
-      // Not ours to write: a faculty answer may have landed while this save was running.
-      const untouched = toSave as Partial<QuickWorkLog>;
-      delete untouched.facultyConfirmation;
-      delete untouched.facultyRequestedAt;
-      delete untouched.facultyRespondedAt;
-    }
-    await this.logRepo.save(toSave);
+    await this.logRepo.save(this.withoutParticipants(log));
     await this.participantRepo.save(log.participants);
 
     const mails: Promise<unknown>[] = [];
-    if (askFaculty) mails.push(this.requestFaculty(log, lead.name));
     for (const p of invited) {
       void this.notify(
         p.userId,
@@ -353,117 +355,6 @@ export class QuickWorkService {
     return this.toView(log, viewer.id);
   }
 
-  /** The lead asks the named faculty member again (at most once an hour) while they have not answered. */
-  async resendFacultyRequest(viewer: Viewer, id: string) {
-    const log = await this.loadEditableAsLead(viewer, id);
-    if (
-      log.facultyConfirmation !== 'pending' &&
-      log.facultyConfirmation !== 'declined'
-    ) {
-      throw new BadRequestException(
-        'There is no unanswered faculty request on this log.',
-      );
-    }
-    const waitMs =
-      (log.facultyRequestedAt?.getTime() ?? 0) +
-      FACULTY_REQUEST_RESEND_MS -
-      Date.now();
-    if (waitMs > 0) {
-      throw new BadRequestException(
-        `The request was sent recently. Try again in ${Math.ceil(waitMs / 60000)} minutes.`,
-      );
-    }
-    log.facultyRequestedAt = new Date();
-    log.facultyConfirmation = 'pending';
-    log.facultyRespondedAt = null;
-    log.history = [
-      ...(log.history ?? []),
-      this.historyEntry('faculty_requested', viewer.id, log.facultyEmail),
-    ];
-    await this.assertFacultyRequestQuota(log);
-    await this.logRepo.update(
-      { id: log.id },
-      {
-        facultyRequestedAt: log.facultyRequestedAt,
-        facultyConfirmation: 'pending',
-        facultyRespondedAt: null,
-        history: log.history,
-      },
-    );
-    const lead = log.participants.find((p) => p.isLead);
-    await settleWithin(
-      this.requestFaculty(log, lead?.name ?? ''),
-      MAIL_WAIT_MS,
-    );
-    return this.toView(log, viewer.id);
-  }
-
-  /** The named faculty member accepts or declines coordinating an activity that is still being prepared. */
-  async respondAsFaculty(viewer: Viewer, id: string, accept: boolean) {
-    const email = await this.viewerEmail(viewer);
-    const log = await this.loadLog(id);
-    if (!email || log.facultyEmail !== email) {
-      throw new NotFoundException('Quick-work log not found');
-    }
-    return this.applyFacultyAnswer(log, accept, viewer.id);
-  }
-
-  /** Shared by the dashboard and the emailed link, so both record the same answer. */
-  private async applyFacultyAnswer(
-    log: QuickWorkLog,
-    accept: boolean,
-    actorId: string,
-    note?: string,
-  ) {
-    if (!QUICK_WORK_EDITABLE.includes(log.status) || !log.facultyConfirmation) {
-      throw new BadRequestException(
-        'This activity no longer needs your confirmation.',
-      );
-    }
-    const answer = accept ? 'accepted' : 'declined';
-    const respondedAt = new Date();
-    const history = [
-      ...(log.history ?? []),
-      this.historyEntry(`faculty_${answer}`, actorId, note),
-    ];
-    // Only while the log still names this faculty member and is being prepared.
-    const result = await this.logRepo.update(
-      {
-        id: log.id,
-        facultyEmail: log.facultyEmail,
-        status: In([...QUICK_WORK_EDITABLE]),
-      },
-      {
-        facultyConfirmation: answer,
-        facultyRespondedAt: respondedAt,
-        history,
-      },
-    );
-    if (!result.affected) {
-      throw new NotFoundException(
-        'This request has changed. Use the latest email, or answer from your dashboard.',
-      );
-    }
-    void this.notify(
-      log.leadUserId,
-      accept
-        ? 'Coordinating faculty accepted'
-        : 'Coordinating faculty declined',
-      accept
-        ? `${log.facultyName || 'Your faculty member'} accepted coordinating "${log.title || 'your quick community activity'}". You can submit once your team has confirmed.`
-        : `${log.facultyName || 'Your faculty member'} declined coordinating "${log.title || 'your quick community activity'}". Name another faculty member in Step 1.`,
-    );
-    return this.toView(
-      {
-        ...log,
-        facultyConfirmation: answer,
-        facultyRespondedAt: respondedAt,
-        history,
-      },
-      null,
-    );
-  }
-
   /* ------------------------------------------------------------------ emailed accept / decline */
 
   /** What the emailed link is about, for the confirmation page. Opening it never records an answer. */
@@ -471,13 +362,11 @@ export class QuickWorkService {
     const { log, kind, participant } = await this.resolveEmailToken(token);
     const lead = log.participants.find((p) => p.isLead);
     const answer =
-      kind === 'faculty'
-        ? log.facultyConfirmation
-        : participant?.joinStatus === 'joined'
-          ? 'accepted'
-          : participant?.joinStatus === 'declined'
-            ? 'declined'
-            : 'pending';
+      participant.joinStatus === 'joined'
+        ? 'accepted'
+        : participant.joinStatus === 'declined'
+          ? 'declined'
+          : 'pending';
     return {
       kind,
       title: log.title,
@@ -486,33 +375,17 @@ export class QuickWorkService {
       university: log.university,
       leadName: lead?.name ?? '',
       facultyName: log.facultyName,
-      name: kind === 'faculty' ? log.facultyName : (participant?.name ?? ''),
+      name: participant.name,
       participants: log.participants.length,
       answer,
-      open:
-        QUICK_WORK_EDITABLE.includes(log.status) &&
-        (kind === 'member' || Boolean(log.facultyConfirmation)),
+      open: QUICK_WORK_EDITABLE.includes(log.status),
     };
   }
 
   /** Records the answer from an emailed link: the same effect as answering on the dashboard. */
   async emailRespond(token: string, accept: boolean) {
-    const { log, kind, participant } = await this.resolveEmailToken(token);
-    if (kind === 'member' && participant) {
-      await this.respondToInvite({ id: participant.userId }, log.id, accept);
-    } else {
-      const account = await this.userRepo
-        .createQueryBuilder('u')
-        .where('LOWER(u.email) = :email', { email: log.facultyEmail })
-        .andWhere('u.role = :role', { role: UserRole.FACULTY })
-        .getOne();
-      await this.applyFacultyAnswer(
-        log,
-        accept,
-        account?.id ?? '',
-        `Answered from the emailed link sent to ${log.facultyEmail}`,
-      );
-    }
+    const { log, participant } = await this.resolveEmailToken(token);
+    await this.respondToInvite({ id: participant.userId }, log.id, accept);
     return this.emailResponsePreview(token);
   }
 
@@ -535,7 +408,7 @@ export class QuickWorkService {
     );
   }
 
-  /** A link stops working when it expires, when the log names someone else, or when the teammate was removed. */
+  /** A link stops working when it expires or when the teammate was removed. Older faculty links no longer apply. */
   private async resolveEmailToken(token: string) {
     const data = unseal<EmailResponseToken>(
       this.emailKey(),
@@ -551,15 +424,97 @@ export class QuickWorkService {
       relations: ['participants'],
     });
     if (!log) throw invalid;
-    if (data.e) {
-      if (log.facultyEmail !== data.e) throw invalid;
-      return { log, kind: 'faculty' as const, participant: null };
-    }
     const participant = log.participants.find(
       (p) => p.id === data.p && !p.isLead,
     );
     if (!participant) throw invalid;
     return { log, kind: 'member' as const, participant };
+  }
+
+  /* ------------------------------------------------------------------ faculty review from the email */
+
+  /**
+   * The flashcard page behind the faculty email's Approve / Request Revision / Reject buttons.
+   * Opening it records nothing. `registered` says whether the named email has a faculty account
+   * that may act here; otherwise the faculty member signs up or logs in first.
+   */
+  async facultyReviewPreview(token: string) {
+    const log = await this.resolveFacultyReviewToken(token);
+    const faculty = await this.facultyAccountFor(log.facultyEmail);
+    const view = this.toView(log, null);
+    // The address was typed by a student: until a faculty account with it may act (and while the
+    // log awaits review), the link shows the activity card only, not teammates' details or evidence.
+    const full = Boolean(faculty) && log.status === 'submitted';
+    return {
+      log: {
+        ...view,
+        evidence: full ? view.evidence : [],
+        participants: view.participants.map((p) => ({
+          ...p,
+          userId: '',
+          ...(full ? {} : { email: '', studentId: '', contact: null }),
+        })),
+      },
+      facultyEmail: log.facultyEmail,
+      open: log.status === 'submitted',
+      registered: Boolean(faculty),
+      approveBlockedReason:
+        faculty && log.status === 'submitted'
+          ? await this.approvalScopeError(faculty.id, log)
+          : null,
+    };
+  }
+
+  /** The same decision as the faculty dashboard, made from the emailed link by the named faculty account. */
+  async facultyReviewByEmail(token: string, dto: QuickWorkReviewDto) {
+    const log = await this.resolveFacultyReviewToken(token);
+    const faculty = await this.facultyAccountFor(log.facultyEmail);
+    if (!faculty) {
+      throw new ForbiddenException(
+        `Sign up or log in at cielpk.com with ${log.facultyEmail} to review this activity.`,
+      );
+    }
+    await this.review({ id: faculty.id }, log.id, dto, 'email');
+    return this.facultyReviewPreview(token);
+  }
+
+  private async facultyAccountFor(email: string) {
+    return this.userRepo
+      .createQueryBuilder('u')
+      .where('LOWER(u.email) = :email', { email })
+      .andWhere('u.role = :role', { role: UserRole.FACULTY })
+      .andWhere('u.status IN (:...statuses)', {
+        statuses: FACULTY_ACTIVE_STATUSES,
+      })
+      .getOne();
+  }
+
+  private facultyReviewToken(log: QuickWorkLog): string {
+    return seal(
+      this.emailKey(),
+      FACULTY_REVIEW_TOKEN_KIND,
+      { l: log.id, f: log.facultyEmail } satisfies FacultyReviewToken,
+      EMAIL_RESPONSE_TTL_SECONDS,
+    );
+  }
+
+  /** A review link stops working when it expires or when CIEL PK names another faculty member. */
+  private async resolveFacultyReviewToken(token: string) {
+    const data = unseal<FacultyReviewToken>(
+      this.emailKey(),
+      FACULTY_REVIEW_TOKEN_KIND,
+      token,
+    );
+    const invalid = new NotFoundException(
+      'This link has expired or is no longer valid. Sign in to CIEL PK to review from your dashboard.',
+    );
+    if (!data?.l || !data.f) throw invalid;
+    const log = await this.logRepo.findOne({
+      where: { id: data.l },
+      relations: ['participants'],
+    });
+    if (!log || log.facultyEmail !== data.f) throw invalid;
+    return log;
   }
 
   /* ------------------------------------------------------------------ submit + review */
@@ -599,8 +554,17 @@ export class QuickWorkService {
     }
 
     const lead = log.participants.find((p) => p.isLead);
+    const submittedToday = await this.logRepo
+      .createQueryBuilder('log')
+      .where('log.leadUserId = :lead', { lead: log.leadUserId })
+      .andWhere('log.submittedAt >= :since', {
+        since: new Date(Date.now() - DAY_MS),
+      })
+      .getCount();
     await settleWithin(
-      this.notifyFaculty(log, lead?.name || 'A student'),
+      this.notifyFaculty(log, lead?.name || 'A student', {
+        email: submittedToday <= FACULTY_EMAILS_PER_LEAD_PER_DAY,
+      }),
       MAIL_WAIT_MS,
     );
     for (const p of log.participants) {
@@ -614,7 +578,12 @@ export class QuickWorkService {
     return this.toView(await this.loadLog(log.id), viewer.id);
   }
 
-  async review(viewer: Viewer, id: string, dto: QuickWorkReviewDto) {
+  async review(
+    viewer: Viewer,
+    id: string,
+    dto: QuickWorkReviewDto,
+    via: 'dashboard' | 'email' = 'dashboard',
+  ) {
     const email = await this.viewerEmail(viewer);
     const log = await this.loadLog(id);
     if (log.facultyEmail !== email) {
@@ -624,7 +593,12 @@ export class QuickWorkService {
       const blocked = await this.approvalScopeError(viewer.id, log);
       if (blocked) throw new ForbiddenException(blocked);
     }
-    return this.applyReview(log, viewer.id, dto, '');
+    return this.applyReview(
+      log,
+      viewer.id,
+      dto,
+      via === 'email' ? 'email_' : '',
+    );
   }
 
   /**
@@ -635,7 +609,7 @@ export class QuickWorkService {
     log: QuickWorkLog,
     reviewerId: string,
     dto: QuickWorkReviewDto,
-    historyPrefix: '' | 'admin_',
+    historyPrefix: '' | 'admin_' | 'email_',
   ) {
     if (log.status !== 'submitted') {
       throw new BadRequestException('This log is not awaiting review.');
@@ -921,27 +895,11 @@ export class QuickWorkService {
     }
     const from = `${log.facultyName || '—'} <${log.facultyEmail || '—'}>`;
     const reason = (dto.note ?? '').trim();
-    const askNewFaculty =
-      log.status !== 'submitted' && facultyEmail !== log.facultyEmail;
     await this.logRepo.update(
       { id: log.id },
       {
         facultyName,
         facultyEmail,
-        // A submitted log is already in review: CIEL PK's choice stands. Otherwise the new
-        // faculty member is asked to accept, as when a student names them.
-        ...(askNewFaculty
-          ? {
-              facultyConfirmation: 'pending',
-              facultyRequestedAt: new Date(),
-              facultyRespondedAt: null,
-            }
-          : log.status === 'submitted'
-            ? {
-                facultyConfirmation: 'accepted',
-                facultyRespondedAt: new Date(),
-              }
-            : {}),
         history: [
           ...(log.history ?? []),
           this.historyEntry(
@@ -957,11 +915,6 @@ export class QuickWorkService {
     if (updated.status === 'submitted') {
       await settleWithin(
         this.notifyFaculty(updated, updatedLead?.name || 'A student'),
-        MAIL_WAIT_MS,
-      );
-    } else if (askNewFaculty) {
-      await settleWithin(
-        this.requestFaculty(updated, updatedLead?.name ?? ''),
         MAIL_WAIT_MS,
       );
     }
@@ -1009,7 +962,7 @@ export class QuickWorkService {
           university: log.university,
           department: log.department,
           location: log.location,
-          partners: (log.partners ?? []).join('; '),
+          partners: partnerList(log.partners).map(partnerLabel).join('; '),
           facultyName: log.facultyName,
           facultyEmail: log.facultyEmail,
           studentName: p.name,
@@ -1396,9 +1349,6 @@ export class QuickWorkService {
       department: log.department,
       facultyName: log.facultyName,
       facultyEmail: log.facultyEmail,
-      facultyConfirmation: log.facultyConfirmation,
-      facultyRequestedAt: log.facultyRequestedAt,
-      facultyRespondedAt: log.facultyRespondedAt,
       title: log.title,
       activityType: log.activityType,
       activityTypeOther: log.activityTypeOther,
@@ -1408,7 +1358,10 @@ export class QuickWorkService {
       location: log.location,
       locationPin: log.locationPin,
       host: log.host,
-      partners: log.partners ?? [],
+      hostEmail: log.hostEmail,
+      hostContact: log.hostContact,
+      partners: partnerList(log.partners).map((p) => p.name),
+      partnerDetails: partnerList(log.partners),
       sdg: log.sdg,
       summary: log.summary,
       peopleReached: log.peopleReached,
@@ -1440,99 +1393,6 @@ export class QuickWorkService {
     } catch (e) {
       this.logger.warn(
         `Quick-work notification failed: ${(e as Error).message}`,
-      );
-    }
-  }
-
-  /**
-   * After the lead's edits: a new (or first) faculty email starts a fresh request. Returns true when
-   * the faculty member should be asked. A log that already went to review before confirmations
-   * existed keeps its faculty without asking again.
-   */
-  private applyFacultyChange(
-    log: QuickWorkLog,
-    previousEmail: string,
-  ): boolean {
-    const email = log.facultyEmail;
-    const changed = email !== previousEmail;
-    if (!EMAIL_RE.test(email)) {
-      log.facultyConfirmation = null;
-      return false;
-    }
-    if (!changed && log.facultyConfirmation) return false;
-    if (!changed && log.submittedAt) {
-      log.facultyConfirmation = 'accepted';
-      return false;
-    }
-    if (log.participants.some((p) => normalizeEmail(p.email) === email)) {
-      // Refused at submit anyway; never email a participant as their own faculty.
-      log.facultyConfirmation = null;
-      return false;
-    }
-    log.facultyConfirmation = 'pending';
-    log.facultyRequestedAt = new Date();
-    log.facultyRespondedAt = null;
-    log.history = [
-      ...(log.history ?? []),
-      this.historyEntry('faculty_requested', log.leadUserId, email),
-    ];
-    return true;
-  }
-
-  /** Stops a log (or a student) from being used to email arbitrary addresses from CIEL PK. */
-  private async assertFacultyRequestQuota(log: QuickWorkLog) {
-    const since = Date.now() - DAY_MS;
-    const onThisLog = (log.history ?? []).filter(
-      (h) =>
-        h.action === 'faculty_requested' && new Date(h.at).getTime() >= since,
-    ).length;
-    if (onThisLog > FACULTY_REQUESTS_PER_LOG_PER_DAY) {
-      throw new BadRequestException(
-        'This log has asked a faculty member too many times today. Try again tomorrow, or ask CIEL PK to change the faculty.',
-      );
-    }
-    const otherLogs = await this.logRepo
-      .createQueryBuilder('log')
-      .where('log.leadUserId = :lead', { lead: log.leadUserId })
-      .andWhere('log.id <> :id', { id: log.id })
-      .andWhere('log.facultyRequestedAt >= :since', { since: new Date(since) })
-      .getCount();
-    if (otherLogs >= FACULTY_REQUEST_LOGS_PER_LEAD_PER_DAY) {
-      throw new BadRequestException(
-        'You have sent many faculty requests today. Try again tomorrow.',
-      );
-    }
-  }
-
-  /** Ask the named faculty member to accept coordinating: in-app (if they have an account) and email. */
-  private async requestFaculty(log: QuickWorkLog, leadName: string) {
-    const faculty = await this.userRepo
-      .createQueryBuilder('u')
-      .where('LOWER(u.email) = :email', { email: log.facultyEmail })
-      .andWhere('u.role = :role', { role: UserRole.FACULTY })
-      .getOne()
-      .catch(() => null);
-    if (faculty) {
-      void this.notify(
-        faculty.id,
-        'Quick Community Work: please confirm',
-        `${leadName || 'A student'} named you as coordinating faculty for "${log.title || 'a quick community activity'}". Accept or decline in Quick Community Work.`,
-      );
-    }
-    try {
-      await this.mailService?.sendQuickWorkFacultyRequest({
-        respondToken: this.emailToken({ l: log.id, e: log.facultyEmail }),
-        to: log.facultyEmail,
-        facultyName: log.facultyName,
-        leadName,
-        title: log.title,
-        university: log.university,
-        activityDate: log.activityDate,
-        participants: log.participants?.length || 1,
-      });
-    } catch (e) {
-      this.logger.warn(
-        `Quick-work faculty request email failed: ${(e as Error).message}`,
       );
     }
   }
@@ -1575,7 +1435,11 @@ export class QuickWorkService {
     }
   }
 
-  private async notifyFaculty(log: QuickWorkLog, leadName: string) {
+  private async notifyFaculty(
+    log: QuickWorkLog,
+    leadName: string,
+    { email = true }: { email?: boolean } = {},
+  ) {
     const faculty = await this.userRepo
       .createQueryBuilder('u')
       .where('LOWER(u.email) = :email', { email: log.facultyEmail })
@@ -1589,13 +1453,37 @@ export class QuickWorkService {
         `${leadName} submitted "${log.title}" for your review.`,
       );
     }
+    if (!email) {
+      this.logger.warn(
+        `Quick-work review email skipped for log ${log.id}: daily limit for this student reached.`,
+      );
+      return;
+    }
     try {
       await this.mailService?.sendQuickWorkSubmittedForReview({
+        reviewToken: this.facultyReviewToken(log),
         to: log.facultyEmail,
         facultyName: log.facultyName,
         leadName,
         title: log.title,
         participants: log.participants.length,
+        card: {
+          activityType: quickWorkActivityLabel(log),
+          activityDate: log.activityDate,
+          startTime: log.startTime,
+          endTime: log.endTime,
+          location: log.location,
+          university: log.university,
+          department: log.department,
+          sdg: log.sdg,
+          peopleReached: log.peopleReached,
+          teamMinutes: log.participants.reduce(
+            (a, p) => a + (p.present ? p.minutes || 0 : 0),
+            0,
+          ),
+          evidenceCount: (log.evidence ?? []).length,
+          summary: log.summary,
+        },
       });
     } catch (e) {
       this.logger.warn(

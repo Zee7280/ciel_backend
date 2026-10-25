@@ -1,5 +1,6 @@
 import {
   attendanceMinutes,
+  cleanPartnerNames,
   minutesOfDay,
   pktNow,
   quickWorkSubmitErrors,
@@ -61,8 +62,30 @@ describe('quick-work rules', () => {
     expect(timesOverlap('10:00', '11:00', '10:59', '12:00')).toBe(true);
   });
 
+  it('partner names are trimmed, de-duplicated and capped', () => {
+    expect(cleanPartnerNames([' Edhi ', '', 'edhi', 'WWF Pakistan'])).toEqual([
+      'Edhi',
+      'WWF Pakistan',
+    ]);
+    const many = Array.from({ length: 15 }, (_, i) => `Org ${i}`);
+    expect(cleanPartnerNames(many)).toHaveLength(10);
+  });
+
   it('a complete one-hour log passes', () => {
     expect(quickWorkSubmitErrors(complete(), NOW)).toEqual([]);
+  });
+
+  it('“Other” needs the student’s own activity description', () => {
+    const other = { activityType: 'Other service activity' };
+    expect(quickWorkSubmitErrors(complete(other), NOW)).toContain(
+      'Describe the activity type for “Other”.',
+    );
+    expect(
+      quickWorkSubmitErrors(
+        complete({ ...other, activityTypeOther: 'Blood donation camp' }),
+        NOW,
+      ),
+    ).toEqual([]);
   });
 
   it('today is fine once the activity has ended; not before; never the future', () => {

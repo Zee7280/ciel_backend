@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Not, Repository } from 'typeorm';
 import { User } from '../users/entities/user.entity';
@@ -12,7 +12,13 @@ import { CourseProjectEntry } from '../paths/entities/course-project-entry.entit
 import { FypEntry } from '../paths/entities/fyp-entry.entity';
 import { VentureEntry } from '../paths/entities/venture-entry.entity';
 import { computeVentureGates } from '../paths/venture-gates.util';
+import { QuickWorkLog } from '../quick-work/entities/quick-work-log.entity';
 import { normalizeCityKey, PAKISTAN_CITY_GEO } from './pakistan-geo';
+import {
+  QUICK_WORK_LEDGER_PATH,
+  QuickWorkLedgerEntry,
+  quickWorkLedgerEntry,
+} from './quick-work-ledger.util';
 import {
   DIVIDEND_HOURLY_RATE_PKR,
   beneficiariesFromSection4,
@@ -125,6 +131,8 @@ const CONTRIBUTOR_PARTICIPATION_STATUSES = [
 
 @Injectable()
 export class PlatformStatsService {
+  private readonly logger = new Logger(PlatformStatsService.name);
+
   constructor(
     @InjectRepository(User) private readonly usersRepository: Repository<User>,
     @InjectRepository(Organization)
@@ -143,9 +151,12 @@ export class PlatformStatsService {
     private readonly fypRepository: Repository<FypEntry>,
     @InjectRepository(VentureEntry)
     private readonly ventureRepository: Repository<VentureEntry>,
+    @InjectRepository(QuickWorkLog)
+    private readonly quickWorkLogRepository: Repository<QuickWorkLog>,
   ) {}
 
   async getAggregatedStats(): Promise<PlatformStatsPayload> {
+    const quickWork = await this.loadApprovedQuickWork();
     const [
       contributors,
       studentsEnrolled,
@@ -157,7 +168,7 @@ export class PlatformStatsService {
       communityLedger,
       verifiedByPath,
     ] = await Promise.all([
-      this.countDistinctContributors(),
+      this.countDistinctContributors(quickWork),
       this.countStudentsEnrolled(),
       this.countApprovedUniversities(),
       this.opportunitiesRepository.find({
@@ -172,11 +183,11 @@ export class PlatformStatsService {
           'visibility',
         ],
       }),
-      this.sumEngagementHours(),
+      this.sumEngagementHours(quickWork),
       this.getAverageCiiScore(),
-      this.countVerifiedRecords(),
-      this.computeCommunityLedger(),
-      this.countVerifiedByPath(),
+      this.countVerifiedRecords(quickWork),
+      this.computeCommunityLedger(quickWork),
+      this.countVerifiedByPath(quickWork),
     ]);
 
     const activeProjects = opportunities.length;
@@ -234,15 +245,50 @@ export class PlatformStatsService {
     };
   }
 
-  /** A "record" is a student report that has cleared verification. */
-  private async countVerifiedRecords(): Promise<number> {
-    return this.studentReportsRepository.count({
+  /**
+   * Approved Quick Community Work logs as ledger entries. Short activities with no project or
+   * report, so they are added alongside verified reports, never matched against them (the
+   * quick-work service already refuses time also claimed as structured attendance). A failure
+   * here only drops quick work from the totals; it never takes the public stats down.
+   */
+  private async loadApprovedQuickWork(): Promise<QuickWorkLedgerEntry[]> {
+    try {
+      const logs = await this.quickWorkLogRepository.find({
+        where: { status: 'approved' },
+        relations: ['participants'],
+      });
+      if (!logs.length) return [];
+      const leadIds = [...new Set(logs.map((l) => l.leadUserId))];
+      const leads = await this.usersRepository.find({
+        where: { id: In(leadIds) },
+        select: ['id', 'city'],
+      });
+      const cityById = new Map(leads.map((u) => [u.id, u.city]));
+      return logs.map((log) =>
+        quickWorkLedgerEntry(log, cityById.get(log.leadUserId)),
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Quick-work totals skipped: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return [];
+    }
+  }
+
+  /** A "record" is a student report that has cleared verification, or an approved quick-work log. */
+  private async countVerifiedRecords(
+    quickWork: QuickWorkLedgerEntry[],
+  ): Promise<number> {
+    const reports = await this.studentReportsRepository.count({
       where: verifiedRecordWhere(),
     });
+    return reports + quickWork.length;
   }
 
   /** Verified students ∪ students with at least one approved participation (deduped; no PII in response). */
-  private async countDistinctContributors(): Promise<number> {
+  private async countDistinctContributors(
+    quickWork: QuickWorkLedgerEntry[],
+  ): Promise<number> {
     const [participationRows, verifiedStudents] = await Promise.all([
       this.participationsRepository.find({
         where: {
@@ -267,6 +313,9 @@ export class PlatformStatsService {
     for (const u of verifiedStudents) {
       ids.add(u.id);
     }
+    for (const q of quickWork) {
+      for (const id of q.memberIds) ids.add(id);
+    }
     return ids.size;
   }
 
@@ -289,7 +338,9 @@ export class PlatformStatsService {
    * is null for any row that predates the approval-request workflow (see AttendanceLog entity), so it
    * must never be treated as verified on its own; entryStatus is the field that actually defaults to
    * 'pending' and only flips to 'verified' once reviewed. */
-  private async sumEngagementHours(): Promise<number> {
+  private async sumEngagementHours(
+    quickWork: QuickWorkLedgerEntry[],
+  ): Promise<number> {
     const row = await this.attendanceLogsRepository
       .createQueryBuilder('log')
       .select('COALESCE(SUM(log.sessionHours), 0)', 'total')
@@ -302,7 +353,8 @@ export class PlatformStatsService {
       )
       .getRawOne<{ total: string | number | null }>();
 
-    const total = Number(row?.total ?? 0);
+    const total =
+      Number(row?.total ?? 0) + quickWork.reduce((a, q) => a + q.hours, 0);
     return Number.isFinite(total) ? Math.round(total) : 0;
   }
 
@@ -396,7 +448,9 @@ export class PlatformStatsService {
    * Community dividend = Σ(verified person-hours) × dividend hourly rate + Σ(verified
    * out-of-pocket spending) — the formula the ledger tiles are built to show.
    */
-  private async computeCommunityLedger(): Promise<{
+  private async computeCommunityLedger(
+    quickWork: QuickWorkLedgerEntry[] = [],
+  ): Promise<{
     peopleServing: number;
     peopleReached: number;
     verifiedHours: number;
@@ -474,6 +528,23 @@ export class PlatformStatsService {
       partners: Set<string>;
     };
     const cityAcc = new Map<string, CityAccumulator>();
+    const cityAccFor = (cityKey: string): CityAccumulator => {
+      let acc = cityAcc.get(cityKey);
+      if (!acc) {
+        acc = {
+          peopleServing: 0,
+          peopleServed: 0,
+          verifiedHours: 0,
+          resourcesDeployedPkr: 0,
+          outOfPocketPkr: 0,
+          verifiedReports: 0,
+          sdgs: new Set(),
+          partners: new Set(),
+        };
+        cityAcc.set(cityKey, acc);
+      }
+      return acc;
+    };
     const activityCandidates: RecentActivityItem[] = [];
 
     type SdgAccumulator = {
@@ -484,6 +555,20 @@ export class PlatformStatsService {
       items: SdgProjectItem[];
     };
     const sdgAcc = new Map<number, SdgAccumulator>();
+    const sdgAccFor = (goal: number): SdgAccumulator => {
+      let acc = sdgAcc.get(goal);
+      if (!acc) {
+        acc = {
+          projects: 0,
+          attributedHours: 0,
+          peopleServed: 0,
+          cities: new Set(),
+          items: [],
+        };
+        sdgAcc.set(goal, acc);
+      }
+      return acc;
+    };
 
     for (const report of reports) {
       const projectId = report.opportunityId || report.project_id || '';
@@ -591,20 +676,7 @@ export class PlatformStatsService {
 
       const cityKey = normalizeCityKey(report.student?.city);
       if (cityKey) {
-        let acc = cityAcc.get(cityKey);
-        if (!acc) {
-          acc = {
-            peopleServing: 0,
-            peopleServed: 0,
-            verifiedHours: 0,
-            resourcesDeployedPkr: 0,
-            outOfPocketPkr: 0,
-            verifiedReports: 0,
-            sdgs: new Set(),
-            partners: new Set(),
-          };
-          cityAcc.set(cityKey, acc);
-        }
+        const acc = cityAccFor(cityKey);
         if (firstForPair) {
           acc.verifiedHours += pairHours;
           acc.peopleServed += beneficiaries;
@@ -635,17 +707,7 @@ export class PlatformStatsService {
       });
 
       for (const g of reportSdgs) {
-        let sAcc = sdgAcc.get(g);
-        if (!sAcc) {
-          sAcc = {
-            projects: 0,
-            attributedHours: 0,
-            peopleServed: 0,
-            cities: new Set(),
-            items: [],
-          };
-          sdgAcc.set(g, sAcc);
-        }
+        const sAcc = sdgAccFor(g);
         const sdgProjectKey = `${g}:${projectId || pairKey}`;
         if (creditPairOnce(sdgProjectKey, creditedSdgProjects)) {
           sAcc.projects += 1;
@@ -661,6 +723,46 @@ export class PlatformStatsService {
           sAcc.attributedHours += pairHours;
         }
         if (cityKey) sAcc.cities.add(cityKey);
+      }
+    }
+
+    // Approved Quick Community Work: each log adds its own person-hours, people, SDG, partners
+    // and city exactly once (there is no project or report to de-duplicate against).
+    for (const q of quickWork) {
+      verifiedHours += q.hours;
+      peopleReachedLoose += q.peopleReached;
+      peopleServingWithoutProject += q.memberIds.length;
+      for (const name of q.partners) partnerKeys.add(normalizePartnerKey(name));
+      if (q.sdg) sdgSet.add(q.sdg);
+      const geo = q.cityKey ? PAKISTAN_CITY_GEO[q.cityKey] : null;
+      if (q.cityKey) {
+        const acc = cityAccFor(q.cityKey);
+        acc.verifiedHours += q.hours;
+        acc.peopleServed += q.peopleReached;
+        acc.peopleServing += q.memberIds.length;
+        acc.verifiedReports += 1;
+        if (q.sdg) acc.sdgs.add(q.sdg);
+        for (const name of q.partners) acc.partners.add(name);
+      }
+      activityCandidates.push({
+        city: geo?.name ?? null,
+        hours: Math.round(q.hours),
+        beneficiaries: q.peopleReached,
+        partnerName: q.partners[0] ?? null,
+        verifiedAt: q.verifiedAt,
+      });
+      if (q.sdg) {
+        const sAcc = sdgAccFor(q.sdg);
+        sAcc.projects += 1;
+        sAcc.attributedHours += q.hours;
+        sAcc.peopleServed += q.peopleReached;
+        if (q.cityKey) sAcc.cities.add(q.cityKey);
+        sAcc.items.push({
+          title: q.title,
+          city: geo?.name ?? null,
+          path: QUICK_WORK_LEDGER_PATH,
+          verifiedAt: q.verifiedAt,
+        });
       }
     }
 
@@ -785,9 +887,9 @@ export class PlatformStatsService {
 
   /** "Verified projects" spans all four paths — unlike computeCommunityLedger, this only needs a
    * count per entity's own established "verified" definition (see each path's own service). */
-  private async countVerifiedByPath(): Promise<
-    PlatformStatsPayload['verified_by_path']
-  > {
+  private async countVerifiedByPath(
+    quickWork: QuickWorkLedgerEntry[],
+  ): Promise<PlatformStatsPayload['verified_by_path']> {
     const [communityService, courseProject, fypThesis, ventures] =
       await Promise.all([
         this.countVerifiedCommunityServiceProjects(),
@@ -800,7 +902,7 @@ export class PlatformStatsService {
         this.ventureRepository.find(),
       ]);
     return {
-      community_service: communityService,
+      community_service: communityService + quickWork.length,
       course_project: courseProject,
       fyp_thesis: fypThesis,
       startup_business: ventures.filter(

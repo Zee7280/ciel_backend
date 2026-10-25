@@ -1,3 +1,4 @@
+import { QuickWorkLog } from '../quick-work/entities/quick-work-log.entity';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { User } from '../users/entities/user.entity';
@@ -24,6 +25,7 @@ import { PlatformStatsService } from './platform-stats.service';
       CourseProjectEntry,
       FypEntry,
       VentureEntry,
+      QuickWorkLog,
     ]),
   ],
   controllers: [PlatformStatsController],

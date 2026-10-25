@@ -38,6 +38,19 @@ export const QUICK_WORK_ACTIVITY_TYPES = [
   'Other service activity',
 ] as const;
 
+export const QUICK_WORK_OTHER_ACTIVITY = 'Other service activity';
+
+/** Activity type as shown to people: the student's own wording for “Other”. */
+export function quickWorkActivityLabel(log: {
+  activityType: string;
+  activityTypeOther?: string | null;
+}): string {
+  const other = log.activityTypeOther?.trim();
+  return log.activityType === QUICK_WORK_OTHER_ACTIVITY && other
+    ? `Other: ${other}`
+    : log.activityType;
+}
+
 export const QUICK_WORK_VISIBILITY = [
   'Faculty, University & CIEL PK only',
   'Public with consent',
@@ -47,6 +60,22 @@ export const QUICK_WORK_MAX_PARTICIPANTS = 20;
 /** Per student per day, across every quick-work log. */
 export const QUICK_WORK_MAX_DAILY_MINUTES = 9 * 60;
 export const QUICK_WORK_MAX_EVIDENCE = 5;
+export const QUICK_WORK_MAX_PARTNERS = 10;
+export const QUICK_WORK_PARTNER_NAME_MAX = 120;
+
+/** Trimmed partner names, blanks and case-insensitive repeats dropped, capped at the maximum. */
+export function cleanPartnerNames(names: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of names) {
+    const name = raw.trim().slice(0, QUICK_WORK_PARTNER_NAME_MAX);
+    const key = name.toLowerCase();
+    if (!name || seen.has(key)) continue;
+    seen.add(key);
+    out.push(name);
+  }
+  return out.slice(0, QUICK_WORK_MAX_PARTNERS);
+}
 export const QUICK_WORK_MAX_EVIDENCE_BYTES = 5 * 1024 * 1024;
 export const QUICK_WORK_EVIDENCE_TYPES = [
   'image/jpeg',
@@ -145,6 +174,7 @@ export type QuickWorkSubmitInput = {
   facultyEmail: string;
   title: string;
   activityType: string;
+  activityTypeOther?: string | null;
   activityDate: string | null;
   startTime: string | null;
   endTime: string | null;
@@ -229,6 +259,12 @@ export function quickWorkSubmitErrors(
     !(QUICK_WORK_ACTIVITY_TYPES as readonly string[]).includes(log.activityType)
   ) {
     e.push('Choose an activity type from the list.');
+  }
+  if (
+    log.activityType === QUICK_WORK_OTHER_ACTIVITY &&
+    !log.activityTypeOther?.trim()
+  ) {
+    e.push('Describe the activity type for “Other”.');
   }
   const eventStart = minutesOfDay(log.startTime);
   const eventEnd = minutesOfDay(log.endTime);

@@ -18,6 +18,8 @@ import {
   QUICK_WORK_MAX_EVIDENCE,
   QUICK_WORK_MAX_EVIDENCE_BYTES,
   QUICK_WORK_MAX_PARTICIPANTS,
+  QUICK_WORK_MAX_PARTNERS,
+  QUICK_WORK_PARTNER_NAME_MAX,
   QUICK_WORK_REVIEW_NOTE_MAX,
   QUICK_WORK_SUMMARY_MAX,
   QUICK_WORK_VISIBILITY,
@@ -131,6 +133,11 @@ export class SaveQuickWorkLogDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(60)
+  activityTypeOther?: string | null;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(10)
   activityDate?: string | null;
 
@@ -149,10 +156,23 @@ export class SaveQuickWorkLogDto {
   @MaxLength(180)
   location?: string;
 
+  /** Optional map pin as `lat,lng`. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  locationPin?: string | null;
+
   @IsOptional()
   @IsString()
   @MaxLength(120)
   host?: string | null;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(QUICK_WORK_MAX_PARTNERS)
+  @IsString({ each: true })
+  @MaxLength(QUICK_WORK_PARTNER_NAME_MAX, { each: true })
+  partners?: string[];
 
   @IsOptional()
   @IsInt()

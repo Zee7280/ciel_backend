@@ -64,6 +64,10 @@ export class QuickWorkLog {
   @Column({ type: 'varchar', length: 60, default: '' })
   activityType: string;
 
+  /** The student's own description when activityType is “Other service activity”. */
+  @Column({ type: 'varchar', length: 60, nullable: true })
+  activityTypeOther: string | null;
+
   /** YYYY-MM-DD, Pakistan time. Stored as text so no timezone shift can move the day. */
   @Column({ type: 'varchar', length: 10, nullable: true })
   activityDate: string | null;
@@ -78,8 +82,16 @@ export class QuickWorkLog {
   @Column({ type: 'varchar', length: 180, default: '' })
   location: string;
 
+  /** Optional Google Maps pin for the venue (`lat,lng`). */
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  locationPin: string | null;
+
   @Column({ type: 'varchar', length: 120, nullable: true })
   host: string | null;
+
+  /** Optional partner organisations the activity was run with (names). */
+  @Column({ type: 'jsonb', default: () => "'[]'" })
+  partners: string[];
 
   @Column({ type: 'smallint', nullable: true })
   sdg: number | null;

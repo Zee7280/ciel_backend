@@ -34,6 +34,7 @@ function makeService(attendanceLogsRepository: AttendanceLogsRepositoryMock) {
     noop(), // courseProjectRepository
     noop(), // fypRepository
     noop(), // ventureRepository
+    noop(), // quickWorkLogRepository
   );
   return service as unknown as ServicePrivate;
 }

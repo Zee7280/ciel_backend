@@ -39,6 +39,8 @@ import {
   QUICK_WORK_MAX_DAILY_MINUTES,
   QUICK_WORK_MAX_EVIDENCE_BYTES,
   QUICK_WORK_MAX_PARTICIPANTS,
+  cleanPartnerNames,
+  quickWorkActivityLabel,
   quickWorkSubmitErrors,
   QuickWorkStatus,
   timesOverlap,
@@ -196,6 +198,9 @@ export class QuickWorkService {
     if (dto.title !== undefined) log.title = text(dto.title);
     if (dto.activityType !== undefined)
       log.activityType = text(dto.activityType);
+    if (dto.activityTypeOther !== undefined) {
+      log.activityTypeOther = text(dto.activityTypeOther) || null;
+    }
     if (dto.activityDate !== undefined) {
       log.activityDate = text(dto.activityDate) || null;
     }
@@ -203,7 +208,13 @@ export class QuickWorkService {
       log.startTime = text(dto.startTime) || null;
     if (dto.endTime !== undefined) log.endTime = text(dto.endTime) || null;
     if (dto.location !== undefined) log.location = text(dto.location);
+    if (dto.locationPin !== undefined) {
+      log.locationPin = text(dto.locationPin) || null;
+    }
     if (dto.host !== undefined) log.host = text(dto.host) || null;
+    if (dto.partners !== undefined) {
+      log.partners = cleanPartnerNames(dto.partners);
+    }
     if (dto.sdg !== undefined) log.sdg = dto.sdg ?? null;
     if (dto.summary !== undefined) log.summary = dto.summary ?? '';
     if (dto.peopleReached !== undefined) {
@@ -704,11 +715,12 @@ export class QuickWorkService {
           logId: log.id,
           title: log.title,
           status: log.status,
-          activityType: log.activityType,
+          activityType: quickWorkActivityLabel(log),
           activityDate: log.activityDate,
           university: log.university,
           department: log.department,
           location: log.location,
+          partners: (log.partners ?? []).join('; '),
           facultyName: log.facultyName,
           facultyEmail: log.facultyEmail,
           studentName: p.name,
@@ -1028,11 +1040,14 @@ export class QuickWorkService {
       facultyEmail: log.facultyEmail,
       title: log.title,
       activityType: log.activityType,
+      activityTypeOther: log.activityTypeOther,
       activityDate: log.activityDate,
       startTime: log.startTime,
       endTime: log.endTime,
       location: log.location,
+      locationPin: log.locationPin,
       host: log.host,
+      partners: log.partners ?? [],
       sdg: log.sdg,
       summary: log.summary,
       peopleReached: log.peopleReached,

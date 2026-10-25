@@ -431,6 +431,162 @@ describe('Quick Community Work (real app + real Postgres)', () => {
     );
   });
 
+  it('“Other” activity needs a description; the venue map pin is kept', async () => {
+    const lead = await h.makeUser(UserRole.STUDENT);
+    const faculty = await authorisedFaculty();
+    const log = await draft(
+      lead,
+      completeLog(lead, faculty, {
+        activityType: 'Other service activity',
+        locationPin: '31.5204,74.3587',
+      }),
+    );
+    const blocked = await h.as(lead).post(`/quick-work/logs/${log.id}/submit`);
+    expect(blocked.status).toBe(400);
+    expect(messages(blocked.body as Body<unknown>)).toMatch(
+      /Describe the activity type/,
+    );
+
+    const saved = await h
+      .as(lead)
+      .patch(`/quick-work/logs/${log.id}`)
+      .send({ activityTypeOther: '  Blood donation camp ' });
+    expect(saved.status).toBe(200);
+    expect((saved.body as Body<Record<string, unknown>>).data).toMatchObject({
+      activityTypeOther: 'Blood donation camp',
+      locationPin: '31.5204,74.3587',
+    });
+    await h.as(lead).post(`/quick-work/logs/${log.id}/submit`).expect(201);
+  });
+
+  it('team of three with partners: faculty and admin see every member and partner', async () => {
+    const lead = await h.makeUser(UserRole.STUDENT);
+    const mates = [
+      await h.makeUser(UserRole.STUDENT),
+      await h.makeUser(UserRole.STUDENT),
+    ];
+    const faculty = await authorisedFaculty();
+    const slot = (email: string) => ({
+      email,
+      present: true,
+      startTime: '10:00',
+      endTime: '11:00',
+      breakMinutes: 0,
+    });
+    const log = await draft(
+      lead,
+      completeLog(lead, faculty, {
+        mode: 'team',
+        title: 'Three-person partner drive',
+        teammates: mates.map((m, i) => ({
+          email: m.email,
+          studentId: `MATE-${i}`,
+        })),
+        attendance: [lead, ...mates].map((u) => slot(u.email)),
+        partners: [' Edhi Foundation ', 'edhi foundation', 'WWF Pakistan'],
+        location: 'Clifton beach, Karachi',
+        peopleReached: 25,
+      }),
+    );
+    expect(log.participants).toHaveLength(3);
+    expect(log).toMatchObject({
+      partners: ['Edhi Foundation', 'WWF Pakistan'],
+    });
+
+    for (const m of mates) {
+      await h
+        .as(m)
+        .post(`/quick-work/logs/${log.id}/join`)
+        .send({ accept: true })
+        .expect(201);
+    }
+    await h.as(lead).post(`/quick-work/logs/${log.id}/submit`).expect(201);
+
+    type Seen = LogView & { partners: string[] };
+    const queue = await h.as(faculty).get('/faculty/quick-work');
+    const pending = (queue.body as Body<{ pending: Seen[] }>).data.pending.find(
+      (l) => l.id === log.id,
+    );
+    expect(pending?.partners).toEqual(['Edhi Foundation', 'WWF Pakistan']);
+    expect(pending?.participants.map((p) => p.email).sort()).toEqual(
+      [lead, ...mates].map((u) => u.email).sort(),
+    );
+
+    const detail = await h.as(admin).get(`/admin/quick-work/${log.id}`);
+    expect(detail.status).toBe(200);
+    const seen = (detail.body as Body<Seen>).data;
+    expect(seen.partners).toEqual(['Edhi Foundation', 'WWF Pakistan']);
+    expect(seen.participants).toHaveLength(3);
+
+    const exported = await h
+      .as(admin)
+      .get('/admin/quick-work/export?search=Three-person');
+    const rows = (
+      exported.body as Body<{
+        rows: { logId: string; partners: string; role: string }[];
+      }>
+    ).data.rows.filter((r) => r.logId === log.id);
+    expect(rows.map((r) => r.role).sort()).toEqual([
+      'lead',
+      'teammate',
+      'teammate',
+    ]);
+    expect(rows[0].partners).toBe('Edhi Foundation; WWF Pakistan');
+
+    type Stats = {
+      engagement_hours: number;
+      verified_records: number;
+      people_reached: number;
+      community_dividend_pkr: number;
+      verified_by_path: { community_service: number };
+      cities: { id: string; verifiedHours: number }[];
+      sdgs: {
+        number: number;
+        items: { title: string; path: string; city: string | null }[];
+      }[];
+    };
+    const stats = async () =>
+      ((await h.as(lead).get('/public/platform-stats')).body as Body<Stats>)
+        .data;
+    const before = await stats();
+
+    await h
+      .as(faculty)
+      .post(`/faculty/quick-work/${log.id}/review`)
+      .send({ action: 'approve', verified: true })
+      .expect(201);
+
+    // The public home-page ledger now counts the approved activity everywhere.
+    const after = await stats();
+    expect(after.engagement_hours - before.engagement_hours).toBe(3);
+    expect(after.verified_records - before.verified_records).toBe(1);
+    expect(after.people_reached - before.people_reached).toBe(25);
+    expect(after.community_dividend_pkr).toBeGreaterThan(
+      before.community_dividend_pkr,
+    );
+    expect(
+      after.verified_by_path.community_service -
+        before.verified_by_path.community_service,
+    ).toBe(1);
+    const karachi = (s: Stats) =>
+      s.cities.find((c) => c.id === 'karachi')?.verifiedHours ?? 0;
+    expect(karachi(after) - karachi(before)).toBe(3);
+    expect(after.sdgs.find((g) => g.number === 3)?.items).toContainEqual({
+      title: 'Three-person partner drive',
+      path: 'Quick Community Work',
+      city: 'Karachi',
+      verifiedAt: expect.any(String) as unknown as string,
+    });
+
+    for (const m of mates) {
+      const me = await h.as(m).get('/quick-work/me');
+      expect(
+        (me.body as Body<{ totals: Record<string, number> }>).data.totals
+          .approvedMinutes,
+      ).toBe(60);
+    }
+  });
+
   it('a draft can be deleted; malformed ids are a 400, never a 500', async () => {
     const lead = await h.makeUser(UserRole.STUDENT);
     const faculty = await h.makeUser(UserRole.FACULTY);

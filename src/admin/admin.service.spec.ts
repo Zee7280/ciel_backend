@@ -5,6 +5,7 @@ import { Payment } from '../payments/entities/payment.entity';
 import { OrganizationMembershipFee } from '../organization-membership/entities/organization-membership-fee.entity';
 import { IssueLog } from '../issue-logs/entities/issue-log.entity';
 import { SupportTicket } from '../support/entities/support-ticket.entity';
+import { QuickWorkLog } from '../quick-work/entities/quick-work-log.entity';
 import { MasterAnalyticsQueryDto } from './dto/master-analytics-query.dto';
 
 type AdminServiceArgs = ConstructorParameters<typeof AdminService>;
@@ -638,6 +639,7 @@ describe('AdminService verified hours / dashboard', () => {
           ],
           [IssueLog, { count: jest.fn().mockResolvedValue(8) }],
           [SupportTicket, { count: jest.fn().mockResolvedValue(6) }],
+          [QuickWorkLog, { count: jest.fn().mockResolvedValue(2) }],
         ]),
       ),
     });
@@ -650,6 +652,7 @@ describe('AdminService verified hours / dashboard', () => {
       reportsAwaitingAdmin: 7,
       issueLogsOpen: 8,
       supportOpen: 6,
+      quickWork: 2,
     });
   });
 });

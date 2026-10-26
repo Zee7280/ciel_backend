@@ -134,6 +134,15 @@ export class FacultyQuickWorkController {
     };
   }
 
+  /** Sidebar badge count; one COUNT query. */
+  @Get('pending-count')
+  async pendingCount(@Request() req: AuthedRequest) {
+    return {
+      success: true,
+      data: await this.quickWork.countPendingForFaculty(req.user),
+    };
+  }
+
   @Post(':id/review')
   async review(
     @Request() req: AuthedRequest,

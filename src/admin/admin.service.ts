@@ -40,6 +40,7 @@ import { Payment, PaymentStatus } from '../payments/entities/payment.entity';
 import { OrganizationMembershipFee } from '../organization-membership/entities/organization-membership-fee.entity';
 import { SupportTicket } from '../support/entities/support-ticket.entity';
 import { IssueLog } from '../issue-logs/entities/issue-log.entity';
+import { QuickWorkLog } from '../quick-work/entities/quick-work-log.entity';
 import { Organization } from '../organizations/entities/organization.entity';
 import { LINE_STATUS } from '../opportunities/opportunity-workflow.service';
 import { PlatformSettingsService } from '../settings/platform-settings.service';
@@ -492,6 +493,7 @@ export class AdminService {
       reportsAwaitingAdmin,
       issueLogsOpen,
       supportOpen,
+      quickWork,
     ] = await Promise.all([
       safe('opportunityApprovals', () => this.countOpportunityApprovalQueue()),
       safe('users', () =>
@@ -548,6 +550,14 @@ export class AdminService {
             where: { status: 'open' },
           })) ?? 0,
       ),
+      // Quick Community Work logs submitted and awaiting faculty review (admin can step in).
+      safe(
+        'quickWork',
+        async () =>
+          (await this.repoOf(QuickWorkLog)?.count({
+            where: { status: 'submitted' },
+          })) ?? 0,
+      ),
     ]);
     return {
       opportunityApprovals,
@@ -558,6 +568,7 @@ export class AdminService {
       reportsAwaitingAdmin,
       issueLogsOpen,
       supportOpen,
+      quickWork,
     };
   }
 

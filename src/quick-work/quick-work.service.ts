@@ -179,6 +179,16 @@ export class QuickWorkService {
     };
   }
 
+  /** Sidebar badge: logs awaiting this faculty member's review (the same rows as `pending` above). */
+  async countPendingForFaculty(viewer: Viewer) {
+    const email = await this.viewerEmail(viewer);
+    return {
+      pending: await this.logRepo.count({
+        where: { facultyEmail: email, status: 'submitted' },
+      }),
+    };
+  }
+
   /* ------------------------------------------------------------------ drafts */
 
   async createDraft(viewer: Viewer, dto: SaveQuickWorkLogDto) {

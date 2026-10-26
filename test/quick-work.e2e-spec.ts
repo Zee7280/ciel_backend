@@ -184,6 +184,42 @@ describe('Quick Community Work (real app + real Postgres)', () => {
     });
   });
 
+  it('sidebar badges: faculty and admin pending counts follow submit and review', async () => {
+    const lead = await h.makeUser(UserRole.STUDENT);
+    const faculty = await authorisedFaculty();
+    const other = await h.makeUser(UserRole.FACULTY);
+    const admin = await h.makeUser(UserRole.SUPER_ADMIN);
+    const facultyCount = async (u: typeof faculty) => {
+      const res = await h.as(u).get('/faculty/quick-work/pending-count');
+      expect(res.status).toBe(200);
+      return (res.body as Body<{ pending: number }>).data.pending;
+    };
+    const adminCount = async () => {
+      const res = await h.as(admin).get('/admin/pending-counts');
+      expect(res.status).toBe(200);
+      return (res.body as Body<{ quickWork: number }>).data.quickWork;
+    };
+    const adminBefore = await adminCount();
+
+    const log = await draft(lead, completeLog(lead, faculty));
+    expect(await facultyCount(faculty)).toBe(0);
+    await h.as(lead).post(`/quick-work/logs/${log.id}/submit`).expect(201);
+    expect(await facultyCount(faculty)).toBe(1);
+    expect(await facultyCount(other)).toBe(0);
+    expect(await adminCount()).toBe(adminBefore + 1);
+    expect(
+      (await h.as(lead).get('/faculty/quick-work/pending-count')).status,
+    ).toBe(403);
+
+    await h
+      .as(faculty)
+      .post(`/faculty/quick-work/${log.id}/review`)
+      .send({ action: 'approve', verified: true })
+      .expect(201);
+    expect(await facultyCount(faculty)).toBe(0);
+    expect(await adminCount()).toBe(adminBefore);
+  });
+
   it('only the named faculty member can see or review a log', async () => {
     const lead = await h.makeUser(UserRole.STUDENT);
     const faculty = await h.makeUser(UserRole.FACULTY);

@@ -2430,7 +2430,10 @@ export class MailService {
     const from =
       this.configService.get<string>('MAIL_FROM') ||
       'CIEL <no-reply@cielpk.com>';
-    const loginLink = this.buildFrontendLink('/login', {});
+    // After signing in, land on the faculty Quick Community Work queue (not the dashboard home).
+    const loginLink = this.buildFrontendLink('/login', {
+      next: '/dashboard/faculty/quick-work',
+    });
     const reviewLink = (action: string) =>
       this.buildFrontendLink('/quick-impact/faculty-review', {
         token: input.reviewToken,
@@ -2529,7 +2532,10 @@ export class MailService {
     const from =
       this.configService.get<string>('MAIL_FROM') ||
       'CIEL <no-reply@cielpk.com>';
-    const loginLink = this.buildFrontendLink('/login', {});
+    // After signing in, land on the student's Quick Impact Log, where the invite can be answered.
+    const loginLink = this.buildFrontendLink('/login', {
+      next: '/dashboard/student/paths/community-service/quick-work',
+    });
     const buttons = this.quickWorkAnswerButtons(
       input.respondToken,
       'Approve',

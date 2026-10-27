@@ -319,8 +319,21 @@ const YMD = /^\d{4}-\d{2}-\d{2}$/;
 /** Admin list / export filters; every field optional. */
 export class AdminQuickWorkListQuery {
   @IsOptional()
-  @IsIn(['draft', 'submitted', 'changes', 'approved', 'rejected'])
-  status?: 'draft' | 'submitted' | 'changes' | 'approved' | 'rejected';
+  @IsIn([
+    'draft',
+    'submitted',
+    'admin_review',
+    'changes',
+    'approved',
+    'rejected',
+  ])
+  status?:
+    | 'draft'
+    | 'submitted'
+    | 'admin_review'
+    | 'changes'
+    | 'approved'
+    | 'rejected';
 
   @IsOptional()
   @IsString()

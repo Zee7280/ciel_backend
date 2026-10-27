@@ -117,6 +117,14 @@ describe('Quick Community Work (real app + real Postgres)', () => {
   };
 
   /** The token with one character in the middle changed. */
+  /** CIEL PK final approval of a faculty-approved log: the step that credits the hours. */
+  const finalApprove = (logId: string) =>
+    h
+      .as(admin)
+      .post(`/admin/quick-work/${logId}/review`)
+      .send({ action: 'approve', verified: true })
+      .expect(201);
+
   const tampered = (token: string) => {
     const i = Math.floor(token.length / 2);
     return `${token.slice(0, i)}${token[i] === 'A' ? 'B' : 'A'}${token.slice(i + 1)}`;
@@ -165,7 +173,8 @@ describe('Quick Community Work (real app + real Postgres)', () => {
       .post(`/faculty/quick-work/${log.id}/review`)
       .send({ action: 'approve', verified: true });
     expect(ok.status).toBe(201);
-    expect((ok.body as Body<LogView>).data.status).toBe('approved');
+    // Faculty approval hands the log to CIEL PK; the hours stay pending until its final approval.
+    expect((ok.body as Body<LogView>).data.status).toBe('admin_review');
 
     const again = await h
       .as(faculty)
@@ -173,11 +182,149 @@ describe('Quick Community Work (real app + real Postgres)', () => {
       .send({ action: 'reject', note: 'late' });
     expect(again.status).toBe(400);
 
+    const pendingMe = await h.as(lead).get('/quick-work/me');
+    expect(
+      (pendingMe.body as Body<{ totals: Record<string, number> }>).data.totals,
+    ).toEqual({
+      approvedMinutes: 0,
+      pendingMinutes: 60,
+      approvedActivities: 0,
+    });
+
+    await finalApprove(log.id);
     const me = await h.as(lead).get('/quick-work/me');
     expect(me.status).toBe(200);
     expect(
       (me.body as Body<{ totals: Record<string, number> }>).data.totals,
     ).toEqual({
+      approvedMinutes: 60,
+      pendingMinutes: 0,
+      approvedActivities: 1,
+    });
+  });
+
+  it('CIEL PK final approval: after faculty approves, only CIEL PK approves, returns or rejects', async () => {
+    const lead = await h.makeUser(UserRole.STUDENT);
+    const faculty = await authorisedFaculty();
+    const facultyApprove = (id: string) =>
+      h
+        .as(faculty)
+        .post(`/faculty/quick-work/${id}/review`)
+        .send({ action: 'approve', verified: true });
+    const adminDecide = (id: string, body: Record<string, unknown>) =>
+      h.as(admin).post(`/admin/quick-work/${id}/review`).send(body);
+    const statusOf = async (id: string) =>
+      ((await h.as(admin).get(`/admin/quick-work/${id}`)).body as Body<LogView>)
+        .data.status;
+
+    const log = await draft(lead, completeLog(lead, faculty));
+    await h.as(lead).post(`/quick-work/logs/${log.id}/submit`).expect(201);
+    expect((await facultyApprove(log.id)).status).toBe(201);
+    expect(await statusOf(log.id)).toBe('admin_review');
+
+    // Faculty sees it as reviewed; it cannot be decided twice, edited, or handed to other faculty.
+    const queue = (
+      (await h.as(faculty).get('/faculty/quick-work')).body as Body<{
+        pending: LogView[];
+        reviewed: LogView[];
+      }>
+    ).data;
+    expect(queue.pending.map((l) => l.id)).not.toContain(log.id);
+    expect(queue.reviewed.find((l) => l.id === log.id)?.status).toBe(
+      'admin_review',
+    );
+    expect((await facultyApprove(log.id)).status).toBe(400);
+    expect(
+      (
+        await h
+          .as(lead)
+          .patch(`/quick-work/logs/${log.id}`)
+          .send({ title: 'x' })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await h
+          .as(admin)
+          .patch(`/admin/quick-work/${log.id}/faculty`)
+          .send({ facultyName: 'Dr X', facultyEmail: 'dr.x@uni.edu.pk' })
+      ).status,
+    ).toBe(400);
+
+    // The admin list counts and filters the CIEL PK queue.
+    const list = (
+      (await h.as(admin).get('/admin/quick-work?status=admin_review'))
+        .body as Body<{
+        rows: { id: string }[];
+        counts: Record<string, number>;
+      }>
+    ).data;
+    expect(list.rows.map((r) => r.id)).toContain(log.id);
+    expect(list.counts.admin_review).toBeGreaterThanOrEqual(1);
+
+    // CIEL PK returns it: the student revises and resubmits, and it goes back to faculty first.
+    expect((await adminDecide(log.id, { action: 'changes' })).status).toBe(400);
+    expect(
+      (
+        await adminDecide(log.id, {
+          action: 'changes',
+          note: 'Add the attendance sheet.',
+        })
+      ).status,
+    ).toBe(201);
+    expect(await statusOf(log.id)).toBe('changes');
+    await h
+      .as(lead)
+      .patch(`/quick-work/logs/${log.id}`)
+      .send({ summary: 'Updated with the attendance sheet.' })
+      .expect(200);
+    await h.as(lead).post(`/quick-work/logs/${log.id}/submit`).expect(201);
+    expect(await statusOf(log.id)).toBe('submitted');
+    expect((await facultyApprove(log.id)).status).toBe(201);
+
+    // Final approval needs the review confirmation, then credits the hours once.
+    expect((await adminDecide(log.id, { action: 'approve' })).status).toBe(400);
+    await finalApprove(log.id);
+    expect(await statusOf(log.id)).toBe('approved');
+    expect(
+      (await adminDecide(log.id, { action: 'reject', note: 'late' })).status,
+    ).toBe(400);
+    const history = (
+      (await h.as(admin).get(`/admin/quick-work/${log.id}`)).body as Body<{
+        history: { action: string }[];
+      }>
+    ).data.history.map((x) => x.action);
+    expect(history).toEqual([
+      'submitted',
+      'approved',
+      'admin_changes',
+      'resubmitted',
+      'approved',
+      'admin_approved',
+    ]);
+
+    // CIEL PK can also reject a faculty-approved log.
+    const second = await draft(
+      lead,
+      completeLog(lead, faculty, { activityDate: pastDay(5) }),
+    );
+    await h.as(lead).post(`/quick-work/logs/${second.id}/submit`).expect(201);
+    expect((await facultyApprove(second.id)).status).toBe(201);
+    expect(
+      (
+        await adminDecide(second.id, {
+          action: 'reject',
+          note: 'Duplicate of another record.',
+        })
+      ).status,
+    ).toBe(201);
+    expect(await statusOf(second.id)).toBe('rejected');
+    const totals = (
+      (await h.as(lead).get('/quick-work/me')).body as Body<{
+        totals: Record<string, number>;
+      }>
+    ).data.totals;
+    expect(totals).toEqual({
       approvedMinutes: 60,
       pendingMinutes: 0,
       approvedActivities: 1,
@@ -206,7 +353,8 @@ describe('Quick Community Work (real app + real Postgres)', () => {
     await h.as(lead).post(`/quick-work/logs/${log.id}/submit`).expect(201);
     expect(await facultyCount(faculty)).toBe(1);
     expect(await facultyCount(other)).toBe(0);
-    expect(await adminCount()).toBe(adminBefore + 1);
+    // The admin badge counts logs awaiting CIEL PK final approval, not those still with faculty.
+    expect(await adminCount()).toBe(adminBefore);
     expect(
       (await h.as(lead).get('/faculty/quick-work/pending-count')).status,
     ).toBe(403);
@@ -217,6 +365,9 @@ describe('Quick Community Work (real app + real Postgres)', () => {
       .send({ action: 'approve', verified: true })
       .expect(201);
     expect(await facultyCount(faculty)).toBe(0);
+    expect(await adminCount()).toBe(adminBefore + 1);
+
+    await finalApprove(log.id);
     expect(await adminCount()).toBe(adminBefore);
   });
 
@@ -316,6 +467,7 @@ describe('Quick Community Work (real app + real Postgres)', () => {
       .post(`/faculty/quick-work/${log.id}/review`)
       .send({ action: 'approve', verified: true })
       .expect(201);
+    await finalApprove(log.id);
 
     // Each member receives only their own approved time.
     const mateTotals = await h.as(mate).get('/quick-work/me');
@@ -607,6 +759,9 @@ describe('Quick Community Work (real app + real Postgres)', () => {
       .post(`/faculty/quick-work/${log.id}/review`)
       .send({ action: 'approve', verified: true })
       .expect(201);
+    // Faculty approval alone is not final: nothing reaches the public ledger yet.
+    expect((await stats()).verified_records).toBe(before.verified_records);
+    await finalApprove(log.id);
 
     // The public home-page ledger now counts the approved activity everywhere.
     const after = await stats();
@@ -1195,15 +1350,15 @@ describe('Quick Community Work (real app + real Postgres)', () => {
     expect(approved.status).toBe(201);
     expect((approved.body as Body<Preview>).data).toMatchObject({
       open: false,
-      log: { status: 'approved' },
+      log: { status: 'admin_review' },
     });
-    // Same record as the dashboard: the lead's hours are credited, and the link is spent.
+    // Same record as the dashboard: now with CIEL PK for final approval, and the link is spent.
     const mine = await h.as(lead).get('/quick-work/me');
     expect(
       (
         mine.body as Body<{ logs: (LogView & { status: string })[] }>
       ).data.logs.find((l) => l.id === log.id)?.status,
-    ).toBe('approved');
+    ).toBe('admin_review');
     expect(
       (await review(mail.reviewToken, { action: 'reject', note: 'x' })).status,
     ).toBe(400);

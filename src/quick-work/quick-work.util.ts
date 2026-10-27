@@ -1,7 +1,7 @@
 /**
  * Quick Community Work: a short activity log (tree drive, awareness desk, clean-up …) that a
  * student submits after the activity, with each participant's actual attendance and evidence, for
- * one final review by the named faculty member. Separate from Structured Community Service: it
+ * review by the named faculty member and then final approval by CIEL PK. Separate from Structured Community Service: it
  * never counts towards the 16-hour requirement, CII scores or rankings.
  *
  * Pure rules shared by the service (and mirrored by the frontend form) so they can be unit tested.
@@ -10,6 +10,8 @@
 export const QUICK_WORK_STATUSES = [
   'draft',
   'submitted',
+  /** Faculty approved; awaiting CIEL PK final approval. Hours count only once `approved`. */
+  'admin_review',
   'changes',
   'approved',
   'rejected',
@@ -25,6 +27,7 @@ export const QUICK_WORK_EDITABLE: readonly QuickWorkStatus[] = [
 /** States whose attendance blocks the same student claiming an overlapping period elsewhere. */
 export const QUICK_WORK_CLAIMING: readonly QuickWorkStatus[] = [
   'submitted',
+  'admin_review',
   'approved',
 ];
 

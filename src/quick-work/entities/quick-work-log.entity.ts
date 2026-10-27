@@ -35,7 +35,7 @@ export class QuickWorkLog {
   @Column({ type: 'uuid' })
   leadUserId: string;
 
-  /** draft | submitted | changes | approved | rejected */
+  /** draft | submitted | admin_review | changes | approved | rejected (fits varchar(16)) */
   @Index()
   @Column({ type: 'varchar', length: 16, default: 'draft' })
   status: QuickWorkStatus;

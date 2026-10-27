@@ -550,12 +550,12 @@ export class AdminService {
             where: { status: 'open' },
           })) ?? 0,
       ),
-      // Quick Community Work logs submitted and awaiting faculty review (admin can step in).
+      // Quick Community Work logs approved by faculty and awaiting CIEL PK final approval.
       safe(
         'quickWork',
         async () =>
           (await this.repoOf(QuickWorkLog)?.count({
-            where: { status: 'submitted' },
+            where: { status: 'admin_review' },
           })) ?? 0,
       ),
     ]);

@@ -59,6 +59,7 @@ const EVIDENCE_FOLDER = 'quick-work';
 /** Logs an admin sees by default: everything a student has sent for review (drafts on request). */
 const ADMIN_DEFAULT_STATUSES: QuickWorkStatus[] = [
   'submitted',
+  'admin_review',
   'changes',
   'approved',
   'rejected',
@@ -88,7 +89,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 type EmailResponseToken = { l: string; p?: string };
 
 type Viewer = { id: string };
-type ReviewOutcome = 'approved' | 'changes' | 'rejected';
+type ReviewOutcome = 'admin_review' | 'approved' | 'changes' | 'rejected';
 
 @Injectable()
 export class QuickWorkService {
@@ -128,7 +129,9 @@ export class QuickWorkService {
     const own = (v: (typeof views)[number]) =>
       v.participants.find((p) => p.userId === viewer.id);
     const approved = views.filter((v) => v.status === 'approved');
-    const pending = views.filter((v) => v.status === 'submitted');
+    const pending = views.filter(
+      (v) => v.status === 'submitted' || v.status === 'admin_review',
+    );
     const sum = (list: typeof views) =>
       list.reduce((a, v) => a + (own(v)?.minutes ?? 0), 0);
     return {
@@ -156,7 +159,13 @@ export class QuickWorkService {
     const logs = await this.logRepo.find({
       where: {
         facultyEmail: email,
-        status: In(['submitted', 'changes', 'approved', 'rejected']),
+        status: In([
+          'submitted',
+          'admin_review',
+          'changes',
+          'approved',
+          'rejected',
+        ]),
       },
       relations: ['participants'],
       order: { submittedAt: 'DESC' },
@@ -608,20 +617,27 @@ export class QuickWorkService {
       viewer.id,
       dto,
       via === 'email' ? 'email_' : '',
+      'faculty',
     );
   }
 
   /**
    * Shared by faculty and admin review. Approval re-checks overlaps; a return or decline needs a
    * reason. `historyPrefix` marks an admin decision in the log history.
+   *
+   * Two stages: faculty approval sends a submitted log to CIEL PK (`admin_review`); CIEL PK's
+   * approval is final (`approved`, hours count). CIEL PK may also decide a log still with faculty.
    */
   private async applyReview(
     log: QuickWorkLog,
     reviewerId: string,
     dto: QuickWorkReviewDto,
     historyPrefix: '' | 'admin_' | 'email_',
+    stage: 'faculty' | 'admin',
   ) {
-    if (log.status !== 'submitted') {
+    const awaiting: QuickWorkStatus[] =
+      stage === 'faculty' ? ['submitted'] : ['submitted', 'admin_review'];
+    if (!awaiting.includes(log.status)) {
       throw new BadRequestException('This log is not awaiting review.');
     }
     const note = (dto.note ?? '').trim();
@@ -644,12 +660,16 @@ export class QuickWorkService {
     }
     const status: ReviewOutcome =
       dto.action === 'approve'
-        ? 'approved'
+        ? stage === 'faculty'
+          ? 'admin_review'
+          : 'approved'
         : dto.action === 'changes'
           ? 'changes'
           : 'rejected';
+    // History keeps "approved" for a faculty approval (as before); CIEL PK's is "admin_approved".
+    const decision = dto.action === 'approve' ? 'approved' : status;
     const result = await this.logRepo.update(
-      { id: log.id, status: 'submitted' },
+      { id: log.id, status: log.status },
       {
         status,
         reviewNote: note || null,
@@ -658,7 +678,7 @@ export class QuickWorkService {
         history: [
           ...(log.history ?? []),
           this.historyEntry(
-            `${historyPrefix}${status}`,
+            `${historyPrefix}${decision}`,
             reviewerId,
             note || undefined,
           ),
@@ -670,11 +690,13 @@ export class QuickWorkService {
     }
 
     const outcome =
-      status === 'approved'
-        ? 'was approved. Your approved hours now appear in Quick Impact Log.'
-        : status === 'changes'
-          ? `was returned for changes: ${note}`
-          : `was not approved: ${note}`;
+      status === 'admin_review'
+        ? 'was approved by faculty and is now with CIEL PK for final approval. Hours count once CIEL PK approves.'
+        : status === 'approved'
+          ? 'was approved. Your approved hours now appear in Quick Impact Log.'
+          : status === 'changes'
+            ? `was returned for changes: ${note}`
+            : `was not approved: ${note}`;
     for (const p of log.participants) {
       void this.notify(
         p.userId,
@@ -795,6 +817,7 @@ export class QuickWorkService {
     const counts: Record<QuickWorkStatus, number> = {
       draft: 0,
       submitted: 0,
+      admin_review: 0,
       changes: 0,
       approved: 0,
       rejected: 0,
@@ -880,7 +903,11 @@ export class QuickWorkService {
     dto: AdminQuickWorkReassignDto,
   ) {
     const log = await this.loadLog(id);
-    if (log.status === 'approved' || log.status === 'rejected') {
+    if (
+      log.status === 'approved' ||
+      log.status === 'rejected' ||
+      log.status === 'admin_review'
+    ) {
       throw new BadRequestException(
         'This log has already been reviewed, so its faculty cannot change.',
       );
@@ -938,10 +965,10 @@ export class QuickWorkService {
     return this.getForAdmin(updated.id);
   }
 
-  /** CIEL PK admin decision on a submitted log, e.g. when its faculty cannot review it. */
+  /** CIEL PK final decision on a faculty-approved log, or on a submitted one its faculty cannot review. */
   async adminReview(admin: Viewer, id: string, dto: QuickWorkReviewDto) {
     const log = await this.loadLog(id);
-    await this.applyReview(log, admin.id, dto, 'admin_');
+    await this.applyReview(log, admin.id, dto, 'admin_', 'admin');
     return this.getForAdmin(log.id);
   }
 

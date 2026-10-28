@@ -968,6 +968,45 @@ export class OpportunityApplicationsService {
     }
   }
 
+  /**
+   * Admin tracker: the faculty a seat's report goes to — the email the student gave (report Section 1,
+   * else the one entered when applying) and whether it belongs to a CIEL account.
+   */
+  private trackerReportFacultyFields(
+    report: StudentReport | null,
+    seat: Participation | null,
+    facultyByEmail: Map<string, { name: string | null; role: string | null }>,
+  ): Record<string, unknown> {
+    const s1 =
+      report?.section1 && typeof report.section1 === 'object'
+        ? (report.section1 as { faculty_supervisor_email?: unknown })
+        : {};
+    const email =
+      this.normalizeEmail(
+        typeof s1.faculty_supervisor_email === 'string'
+          ? s1.faculty_supervisor_email
+          : '',
+      ) ||
+      this.normalizeEmail(seat?.primaryFacultyEmail) ||
+      this.normalizeEmail(seat?.facultySupervisorEmail) ||
+      null;
+    const secondary = this.normalizeEmail(seat?.secondaryFacultyEmail) || null;
+    const account = email ? facultyByEmail.get(email) : undefined;
+    return {
+      impact_report_started_at: report?.createdAt
+        ? report.createdAt.toISOString()
+        : null,
+      impact_report_submitted_at: report?.reportSubmittedAt
+        ? report.reportSubmittedAt.toISOString()
+        : null,
+      report_faculty_email: email,
+      report_faculty_secondary_email:
+        secondary && secondary !== email ? secondary : null,
+      report_faculty_name: account?.name ?? null,
+      report_faculty_account_role: account?.role ?? null,
+    };
+  }
+
   private trackerImpactReportEnrollmentFields(
     report: StudentReport | null,
   ): Record<string, unknown> {
@@ -1865,6 +1904,44 @@ export class OpportunityApplicationsService {
       }
     }
 
+    const reportFacultyEmails = [
+      ...new Set(
+        [
+          ...rows.flatMap((seat) => [
+            seat.primaryFacultyEmail,
+            seat.facultySupervisorEmail,
+          ]),
+          ...reports.map((rep) =>
+            rep.section1 && typeof rep.section1 === 'object'
+              ? (rep.section1 as { faculty_supervisor_email?: unknown })
+                  .faculty_supervisor_email
+              : null,
+          ),
+        ]
+          .map((e) => this.normalizeEmail(typeof e === 'string' ? e : ''))
+          .filter(Boolean),
+      ),
+    ];
+    const facultyByEmail = new Map<
+      string,
+      { name: string | null; role: string | null }
+    >();
+    if (reportFacultyEmails.length) {
+      const accounts = await this.userRepo
+        .createQueryBuilder('u')
+        .select(['u.id', 'u.email', 'u.name', 'u.role'])
+        .where('LOWER(TRIM(u.email)) IN (:...emails)', {
+          emails: reportFacultyEmails,
+        })
+        .getMany();
+      for (const u of accounts) {
+        facultyByEmail.set(this.normalizeEmail(u.email), {
+          name: u.name ?? null,
+          role: u.role ? String(u.role) : null,
+        });
+      }
+    }
+
     const applications_roster = allApplications.map((a) => {
       const { participation_type, team_members } =
         this.facultyJoinApplicationTeamMembersForDisplay(a);
@@ -1896,6 +1973,11 @@ export class OpportunityApplicationsService {
               opp,
             ),
             ...this.trackerImpactReportEnrollmentFields(latestReport),
+            ...this.trackerReportFacultyFields(
+              latestReport,
+              seatRow,
+              facultyByEmail,
+            ),
           };
         } else {
           enrollment_tracking = {

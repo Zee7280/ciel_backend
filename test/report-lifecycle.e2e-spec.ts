@@ -15,6 +15,7 @@ import { User } from '../src/users/entities/user.entity';
 import { Opportunity } from '../src/opportunities/entities/opportunity.entity';
 import { Participation } from '../src/engagement/entities/participant.entity';
 import { StudentReport } from '../src/reports/entities/student-report.entity';
+import { OpportunityApplication } from '../src/opportunities/entities/opportunity-application.entity';
 
 const day = (d: number) =>
   new Date(Date.now() + d * 86400000).toISOString().slice(0, 10);
@@ -985,6 +986,104 @@ describe('Impact Report lifecycle (real app + real Postgres)', () => {
       expect(
         (alias.body as ListRes).data.map((x) => x.id ?? x.report_id),
       ).not.toContain(rid);
+    });
+  });
+
+  describe('R-tracker admin Project Journey: report start and the faculty named for it', () => {
+    type Tracking = Record<string, unknown>;
+    const trackingFor = async (oppId: string, studentId: string) => {
+      const res = await h.as(admin).get(`/admin/opportunities/${oppId}/teams`);
+      expect(res.status).toBe(200);
+      const body = res.body as {
+        summary?: { applications_roster?: Array<Record<string, unknown>> };
+      };
+      const roster = body.summary?.applications_roster ?? [];
+      const row = roster.find((r) => r.student_user_id === studentId);
+      expect(row).toBeDefined();
+      return row?.enrollment_tracking as Tracking;
+    };
+
+    it('shows when the report started / was submitted and the faculty email, with its CIEL account', async () => {
+      const w = await readyWorld();
+      const fac = await h.makeUser(UserRole.FACULTY, {
+        overrides: { name: 'Dr Report Faculty' },
+      });
+      const apps = h.ds.getRepository(OpportunityApplication);
+      const app = await apps.save(
+        apps.create({
+          opportunityId: w.opp.id,
+          studentUserId: w.lead.id,
+          internalStatus: 'approved',
+          primaryFacultyEmail: fac.email,
+          applyPayload: {},
+        } as DeepPartial<OpportunityApplication>),
+      );
+      await h.ds.getRepository(Participation).update(w.leadSeat.id, {
+        applicationId: app.id,
+        primaryFacultyEmail: ` ${fac.email.toUpperCase()} `,
+        secondaryFacultyEmail: 'second.faculty@e2e.test',
+      });
+
+      const before = await trackingFor(w.opp.id, w.lead.id);
+      expect(before.impact_report_started).toBe(false);
+      expect(before.impact_report_started_at).toBeNull();
+      expect(before.impact_report_submitted_at).toBeNull();
+      expect(before.report_faculty_email).toBe(fac.email);
+      expect(before.report_faculty_secondary_email).toBe(
+        'second.faculty@e2e.test',
+      );
+      expect(before.report_faculty_name).toBe('Dr Report Faculty');
+      expect(before.report_faculty_account_role).toBe('faculty');
+      // existing fields are unchanged
+      expect(before.impact_report_summary).toBe('No impact report yet');
+
+      const rid = (
+        await draft(w.lead, w.opp.id, { section2: fullSections().section2 })
+      ).body.data.report_id;
+      const started = await trackingFor(w.opp.id, w.lead.id);
+      expect(started.impact_report_started).toBe(true);
+      expect(started.impact_report_id).toBe(rid);
+      expect(new Date(String(started.impact_report_started_at)).getTime()).toBe(
+        (await row(rid)).createdAt.getTime(),
+      );
+      expect(started.impact_report_submitted_at).toBeNull();
+
+      expect((await submit(w.lead, w.opp.id, fullSections())).status).toBe(201);
+      const sub = await trackingFor(w.opp.id, w.lead.id);
+      expect(new Date(String(sub.impact_report_submitted_at)).getTime()).toBe(
+        (await row(rid)).reportSubmittedAt!.getTime(),
+      );
+      expect(sub.report_faculty_email).toBe(fac.email);
+    });
+
+    it('an email with no CIEL account shows no name; a missing email reads null', async () => {
+      const w = await readyWorld();
+      const apps = h.ds.getRepository(OpportunityApplication);
+      const app = await apps.save(
+        apps.create({
+          opportunityId: w.opp.id,
+          studentUserId: w.lead.id,
+          internalStatus: 'approved',
+          applyPayload: {},
+        } as DeepPartial<OpportunityApplication>),
+      );
+      const parts = h.ds.getRepository(Participation);
+      await parts.update(w.leadSeat.id, {
+        applicationId: app.id,
+        primaryFacultyEmail: `nobody.${uniq()}@e2e.test`,
+      });
+      const unknown = await trackingFor(w.opp.id, w.lead.id);
+      expect(unknown.report_faculty_email).toMatch(/^nobody\./);
+      expect(unknown.report_faculty_name).toBeNull();
+      expect(unknown.report_faculty_account_role).toBeNull();
+
+      await parts.update(w.leadSeat.id, {
+        primaryFacultyEmail: null as unknown as string,
+        facultySupervisorEmail: null as unknown as string,
+      });
+      const none = await trackingFor(w.opp.id, w.lead.id);
+      expect(none.report_faculty_email).toBeNull();
+      expect(none.report_faculty_secondary_email).toBeNull();
     });
   });
 });

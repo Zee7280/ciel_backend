@@ -163,6 +163,7 @@ export class NpeStudioService {
         sdg: c.facets.sdg,
         date: c.facets.date,
         cii: c.cii,
+        ciiSource: c.ciiSource ?? null,
         ready: c.gateOk,
         evaluated: c.evaluated,
         reason: c.gateOk ? '' : c.reason,

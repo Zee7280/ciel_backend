@@ -28,6 +28,7 @@ import {
 import {
   buildNpePackageRecord,
   gateNpePackage,
+  isLegacyCiiReport,
   type NpePackageRecord,
 } from './npe-ranking-eligibility';
 import { NpeRankingEvaluation } from './entities/npe-ranking-evaluation.entity';
@@ -422,6 +423,7 @@ export class NpeRankingService {
       evaluated: r.status === 'Ranked' && !!r.scoreBreakdown,
       reason: r.reason,
       cii: r.cii,
+      ciiSource: r.ciiSource,
       criteria: r.evaluation
         ? Object.fromEntries(
             Object.entries(r.evaluation.criteria || {}).map(([key, j]) => [
@@ -688,11 +690,14 @@ export class NpeRankingService {
         'opportunity.organization',
       ],
     });
-    // The ranking compares only projects whose CII has been approved AND locked. Unlocked packages
-    // would just sit in the review queue as noise and can never be ranked.
-    const locked = rows.filter((r) => isCiiFacultyLocked(r.ciiV45Lock));
-    await this.hydrateLiveHours(locked);
-    return locked;
+    // The ranking compares projects whose CII has been approved AND locked, plus projects approved
+    // before CII v4.5 locking existed (their section11 CII was the approved score). An unlocked v4.5
+    // lock is an in-flight approval: it would just sit in the review queue as noise.
+    const pool = rows.filter(
+      (r) => isCiiFacultyLocked(r.ciiV45Lock) || isLegacyCiiReport(r),
+    );
+    await this.hydrateLiveHours(pool);
+    return pool;
   }
 
   /**
@@ -995,6 +1000,7 @@ export class NpeRankingService {
       parts: row.p.parts,
       cii: row.p.cii,
       ciiLocked: row.p.ciiLocked,
+      ciiSource: row.p.ciiSource,
       status: row.status,
       reason: row.reason,
       rank: rankMap.get(row.p.id) ?? null,

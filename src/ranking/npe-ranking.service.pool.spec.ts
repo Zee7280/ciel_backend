@@ -58,7 +58,7 @@ function build(
 }
 
 describe('NPE ranking pool', () => {
-  it('only offers reports whose CII is locked', async () => {
+  it('offers locked CII reports and pre-v4.5 (legacy) reports, never in-flight unlocked ones', async () => {
     const rows = [
       { id: 'locked', ciiV45Lock: { locked: true } },
       { id: 'string-locked', ciiV45Lock: { locked: 'true' } },
@@ -70,7 +70,7 @@ describe('NPE ranking pool', () => {
       reports: { find: jest.fn().mockResolvedValue(rows) },
     });
     const pool = await svc.poolReports({ userId: 'a', role: 'ciel_admin' });
-    expect(pool.map((r) => r.id)).toEqual(['locked', 'string-locked']);
+    expect(pool.map((r) => r.id)).toEqual(['locked', 'string-locked', 'none']);
   });
 
   it('judges the hours gate on LIVE attendance logs, not the stored section1 snapshot', async () => {

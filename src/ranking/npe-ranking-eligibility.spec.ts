@@ -17,6 +17,7 @@ function pkg(over: Partial<NpePackageRecord> = {}): NpePackageRecord {
     approval: 'approved',
     cii: 90,
     ciiLocked: true,
+    ciiSource: 'v45',
     ciiScale: NPE_CII_SCALE,
     packageComplete: true,
     hoursMet: true,
@@ -48,6 +49,65 @@ describe('gateNpePackage', () => {
   it('HOLDs an unlocked CII', () => {
     const g = gateNpePackage(pkg({ ciiLocked: false }));
     expect(g.status).toBe('Review');
+  });
+});
+
+describe('legacy CII (approved before CII v4.5 locking)', () => {
+  const base = {
+    id: 'old',
+    status: 'verified',
+    faculty_status: 'approved',
+    admin_status: 'approved',
+    opportunity: { title: 'Older project' },
+    review_package: { schema_version: '3.0', packet_integrity: { ok: true } },
+    reportSubmittedAt: new Date('2025-06-01T00:00:00.000Z'),
+    section8: { evidence_files: [] },
+  };
+
+  it('uses the approved section11 CII when the report has no v4.5 lock', () => {
+    const rec = buildNpePackageRecord({
+      ...base,
+      ciiV45Lock: null,
+      section11: { cii_index: { totalScore: 88 } },
+    } as unknown as StudentReport);
+    expect(rec.ciiSource).toBe('legacy');
+    expect(rec.ciiLocked).toBe(true);
+    expect(rec.cii).toBe(88);
+    expect(gateNpePackage(rec).reason).not.toMatch(/CII/);
+  });
+
+  it('flags a legacy report with no CII instead of guessing one', () => {
+    const rec = buildNpePackageRecord({
+      ...base,
+      ciiV45Lock: null,
+      section11: null,
+    } as unknown as StudentReport);
+    expect(rec.ciiSource).toBeNull();
+    const g = gateNpePackage(rec);
+    expect(g.status).toBe('Review');
+    expect(g.reason).toMatch(/No approved CII/);
+  });
+
+  it('never treats an in-flight (unlocked) v4.5 approval as legacy', () => {
+    const rec = buildNpePackageRecord({
+      ...base,
+      ciiV45Lock: { locked: false },
+      section11: { cii_index: { totalScore: 88 } },
+    } as unknown as StudentReport);
+    expect(rec.ciiSource).toBeNull();
+    expect(rec.ciiLocked).toBe(false);
+  });
+
+  it('never ranks a legacy CII on a report that is not approved', () => {
+    const rec = buildNpePackageRecord({
+      ...base,
+      admin_status: 'pending',
+      status: 'submitted',
+      ciiV45Lock: null,
+      section11: { cii_index: { totalScore: 88 } },
+    } as unknown as StudentReport);
+    expect(rec.ciiSource).toBeNull();
+    expect(gateNpePackage(rec).status).toBe('Review');
   });
 });
 

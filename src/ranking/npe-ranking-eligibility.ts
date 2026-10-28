@@ -1,4 +1,4 @@
-import { isCiiFacultyLocked } from '../reports/community-award.util';
+import { isCiiFacultyLocked, readCii } from '../reports/community-award.util';
 import { pickCiiV45DisplayScore } from '../reports/cii-v4-5-display.util';
 import { isCommunityAwardMedalReport } from '../reports/community-award.util';
 import { reportIndividualHoursMet } from '../reports/build-ciel-pk-ai-evaluation-payload.util';
@@ -18,6 +18,8 @@ export type NpePackageRecord = {
   approval: 'approved' | 'pending' | 'rejected';
   cii: number | null;
   ciiLocked: boolean;
+  /** `v45`: faculty-locked CII v4.5. `legacy`: approved before v4.5 locking existed (section11 CII). */
+  ciiSource: 'v45' | 'legacy' | null;
   ciiScale: typeof NPE_CII_SCALE;
   packageComplete: boolean;
   hoursMet: boolean;
@@ -69,6 +71,17 @@ export function npeUniversity(report: StudentReport): string {
   );
 }
 
+/**
+ * Reports approved before CII v4.5 locking existed carry no `ciiV45Lock` at all. Their approved CII
+ * is the section11 score that faculty and CIEL PK signed off at the time, so they stay rankable.
+ * A lock object that is present but not locked is an in-flight v4.5 approval, never legacy.
+ */
+export function isLegacyCiiReport(
+  report: Pick<StudentReport, 'ciiV45Lock'>,
+): boolean {
+  return report.ciiV45Lock == null;
+}
+
 export function gateNpePackage(p: NpePackageRecord): NpeGate {
   if (p.approval === 'rejected' || p.integrity === 'confirmed_fraud') {
     return {
@@ -86,7 +99,11 @@ export function gateNpePackage(p: NpePackageRecord): NpeGate {
     p.cii > 110 ||
     p.ciiScale !== NPE_CII_SCALE
   ) {
-    issues.push('CII lock / scale not validated');
+    issues.push(
+      p.ciiSource === null && p.cii == null
+        ? 'No approved CII on record — run and approve the CII v4.5 analyser'
+        : 'CII lock / scale not validated',
+    );
   }
   if (p.packageComplete !== true) issues.push('Incomplete report package');
   if (p.hoursMet !== true)
@@ -114,8 +131,21 @@ export function buildNpePackageRecord(report: StudentReport): NpePackageRecord {
       : medal
         ? 'approved'
         : 'pending';
-  const ciiLocked = isCiiFacultyLocked(report.ciiV45Lock);
-  const cii = pickCiiV45DisplayScore(report.ciiV45, report.ciiV45Lock);
+  const v45Locked = isCiiFacultyLocked(report.ciiV45Lock);
+  const legacyCii =
+    !v45Locked && approval === 'approved' && isLegacyCiiReport(report)
+      ? readCii(report.section11)
+      : null;
+  const ciiSource: NpePackageRecord['ciiSource'] = v45Locked
+    ? 'v45'
+    : legacyCii != null
+      ? 'legacy'
+      : null;
+  const ciiLocked = ciiSource !== null;
+  const cii =
+    ciiSource === 'legacy'
+      ? legacyCii
+      : pickCiiV45DisplayScore(report.ciiV45, report.ciiV45Lock);
   const stored = asRecord(report.review_package);
   const storedOk = asRecord(stored?.packet_integrity)?.ok === true;
   const live = validateImpactPackagePacket(report);
@@ -133,6 +163,7 @@ export function buildNpePackageRecord(report: StudentReport): NpePackageRecord {
     approval,
     cii,
     ciiLocked,
+    ciiSource,
     ciiScale: NPE_CII_SCALE,
     packageComplete,
     hoursMet: reportIndividualHoursMet(report),

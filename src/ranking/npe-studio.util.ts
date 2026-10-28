@@ -426,6 +426,8 @@ export type StudioCandidate = {
   evaluated: boolean;
   reason: string;
   cii: number | null;
+  /** `legacy`: approved before CII v4.5 locking (section11 CII); see isLegacyCiiReport. */
+  ciiSource?: 'v45' | 'legacy' | null;
   /** Per-criterion judgment from the stored evaluation (null until the package is read). */
   criteria: Record<
     string,

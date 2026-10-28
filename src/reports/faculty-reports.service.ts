@@ -738,8 +738,13 @@ export class FacultyReportsService {
         updated_at: lastActivity || report?.updatedAt || seat.updatedAt,
         last_activity_at: lastActivity || null,
         draft_locked: !submitted,
-        // Team seats share one project card on the faculty dashboard.
-        team_id: seat.teamId || null,
+        // Labels the faculty project card "Team". Same key as FacultyService's team bucket: a team
+        // seat without a teamId is grouped by the application it joined through.
+        team_id:
+          seat.teamId ||
+          (seat.participationMode === 'team' && seat.applicationId
+            ? `app:${seat.applicationId}`
+            : null),
         is_team_lead: seat.isTeamLead === true,
         participation_type:
           seat.participationMode || (seat.teamId ? 'team' : 'individual'),

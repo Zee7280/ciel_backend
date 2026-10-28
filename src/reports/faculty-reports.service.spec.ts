@@ -1451,6 +1451,78 @@ describe('FacultyReportsService — project tracking (assigned students + live h
     expect(JSON.stringify(row)).not.toMatch(/add only if/i);
   });
 
+  it('tags each seat with its team so the dashboard can show one card per team', async () => {
+    const {
+      service,
+      facultyService,
+      participationRepository,
+      opportunitiesRepository,
+      attendanceLogsRepository,
+      qb,
+    } = makeService(null);
+    facultyService.getScopedOpportunityIds.mockResolvedValue(['opp-1']);
+    opportunitiesRepository.find.mockResolvedValue([
+      {
+        id: 'opp-1',
+        title: 'Skill to Business',
+        status: 'live',
+        workflowStage: 'live',
+        timeline: { expected_hours: 16 },
+        organization: { name: 'NGO' },
+        executing_context: {},
+      },
+    ]);
+    const person = (id: string, name: string, over: object) => ({
+      id: `seat-${id}`,
+      projectId: 'opp-1',
+      studentId: `stu-${id}`,
+      fullName: name,
+      email: `${id}@uni.edu`,
+      student: { id: `stu-${id}`, name, email: `${id}@uni.edu` },
+      updatedAt: new Date('2026-10-01'),
+      createdAt: new Date('2026-09-01'),
+      ...over,
+    });
+    participationRepository.find.mockResolvedValue([
+      person('a', 'Lead Student', {
+        teamId: 'TM-1',
+        isTeamLead: true,
+        participationMode: 'team',
+      }),
+      person('b', 'Member Student', {
+        teamId: 'TM-1',
+        isTeamLead: false,
+        participationMode: 'team',
+      }),
+      person('c', 'Solo Student', {
+        teamId: null,
+        isTeamLead: false,
+        participationMode: 'individual',
+      }),
+    ]);
+    attendanceLogsRepository.find.mockResolvedValue([]);
+    qb.getMany = jest.fn(() => Promise.resolve<ReportRow[]>([]));
+    const res = await service.listProjectTracking('f-1', 'f@x.com');
+    const by = Object.fromEntries(
+      res.data.map((r) => [String(r.student_name), r]),
+    );
+    expect(by['Lead Student']).toMatchObject({
+      team_id: 'TM-1',
+      is_team_lead: true,
+      participation_type: 'team',
+    });
+    expect(by['Member Student']).toMatchObject({
+      team_id: 'TM-1',
+      is_team_lead: false,
+      participation_type: 'team',
+    });
+    expect(by['Solo Student']).toMatchObject({
+      team_id: null,
+      is_team_lead: false,
+      participation_type: 'individual',
+    });
+  });
+
   it('returns an empty list when the faculty has no scoped opportunities', async () => {
     const { service, facultyService } = makeService(null);
     facultyService.getScopedOpportunityIds.mockResolvedValue([]);

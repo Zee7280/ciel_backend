@@ -3004,6 +3004,7 @@ export class StudentsService {
         user.name,
         opportunity.title,
         saved.id,
+        '/dashboard/faculty/join-applications',
       );
     }
 

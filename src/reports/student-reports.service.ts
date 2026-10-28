@@ -56,6 +56,13 @@ import {
 import { setNestedProperty as setNestedPropertyUtil } from './nested-path.util';
 import { persistSection8Visibility } from './media-visibility.util';
 import {
+  FACULTY_SUPERVISION_PENDING,
+  SUPERVISION_REQUEST_RESEND_MS,
+  namedSupervisorEmail,
+  opportunitySupervisorEmails,
+  supervisionRequiredForReport,
+} from './report-supervision.util';
+import {
   applyEvidenceAccess,
   type EvidenceViewerRole,
 } from './evidence-access.util';
@@ -2919,6 +2926,330 @@ export class StudentReportsService {
     );
   }
 
+  /**
+   * Faculty supervision before a NEW impact report (rules in report-supervision.util). Read by the
+   * student report page, enforced when the report row is first created.
+   */
+  private async computeReportSupervision(studentId: string, opp: Opportunity) {
+    const ownerId = await this.resolveTeamReportOwnerStudentId(
+      studentId,
+      opp.id,
+    );
+    const [report, seat] = await Promise.all([
+      this.findExistingStudentReport(ownerId, opp.id),
+      findPreferredProjectEnrollment(
+        this.participantRepository,
+        ownerId,
+        opp.id,
+      ),
+    ]);
+    const named = namedSupervisorEmail(seat);
+    const oppFaculty = opp.facultyId
+      ? await this.usersRepository.findOne({
+          where: { id: opp.facultyId },
+          select: ['id', 'email'],
+        })
+      : null;
+    const required =
+      !!seat &&
+      supervisionRequiredForReport({
+        isStudentCreated: !!opp.isStudentCreated,
+        namedEmail: named,
+        opportunityFacultyEmails: opportunitySupervisorEmails(
+          opp,
+          oppFaculty?.email,
+        ),
+      });
+    const account = named
+      ? await this.usersRepository
+          .createQueryBuilder('u')
+          .select(['u.id', 'u.name', 'u.role'])
+          .where('LOWER(TRIM(u.email)) = :email', { email: named })
+          .getOne()
+      : null;
+    const confirmedAt = seat?.facultySupervisionConfirmedAt ?? null;
+    return {
+      seat,
+      ownerId,
+      state: {
+        required,
+        confirmed: !!confirmedAt,
+        // Reports already started are never stopped by this rule.
+        blocked: required && !confirmedAt && !report,
+        report_started: !!report,
+        faculty_email: named || null,
+        faculty_name:
+          account?.role === UserRole.FACULTY ? account.name || null : null,
+        faculty_registered: account?.role === UserRole.FACULTY,
+        confirmed_at: confirmedAt ? confirmedAt.toISOString() : null,
+        requested_at: seat?.facultySupervisionRequestedAt
+          ? seat.facultySupervisionRequestedAt.toISOString()
+          : null,
+      },
+    };
+  }
+
+  async getReportSupervision(studentId: string, opportunityId: string) {
+    const opp = this.looksLikeUuid(opportunityId)
+      ? await this.opportunitiesRepository.findOne({
+          where: { id: opportunityId },
+        })
+      : null;
+    if (!opp) throw new NotFoundException('Opportunity not found');
+    const { state } = await this.computeReportSupervision(studentId, opp);
+    return { success: true, data: state };
+  }
+
+  /** Refuses creating a new report row while the named faculty has not confirmed the student. */
+  private async assertFacultySupervisionForNewReport(
+    studentId: string,
+    opp: Opportunity | null,
+  ): Promise<void> {
+    if (!opp?.id) return;
+    const { seat, ownerId, state } = await this.computeReportSupervision(
+      studentId,
+      opp,
+    );
+    if (!state.blocked || !seat) return;
+    // First block for a seat registered before this rule existed: ask the faculty once.
+    if (!seat.facultySupervisionRequestedAt) {
+      await this.sendSupervisionRequest(seat, ownerId, opp).catch(() => false);
+    }
+    throw new ForbiddenException({
+      statusCode: 403,
+      error: 'Forbidden',
+      code: FACULTY_SUPERVISION_PENDING,
+      faculty_email: state.faculty_email,
+      message: `Your faculty supervisor (${state.faculty_email}) must confirm that they supervise you before you can start this report. We have asked them; you can send a reminder from the report page.`,
+    });
+  }
+
+  private async sendSupervisionRequest(
+    seat: Participation,
+    ownerId: string,
+    opp: Opportunity,
+  ): Promise<boolean> {
+    const to = namedSupervisorEmail(seat);
+    if (!to) return false;
+    const [owner, faculty, teamSize] = await Promise.all([
+      this.usersRepository.findOne({
+        where: { id: ownerId },
+        select: ['id', 'name'],
+      }),
+      this.usersRepository
+        .createQueryBuilder('u')
+        .select(['u.id', 'u.name'])
+        .where('LOWER(TRIM(u.email)) = :email', { email: to })
+        .getOne(),
+      seat.teamId
+        ? this.participantRepository.count({
+            where: { projectId: opp.id, teamId: seat.teamId },
+          })
+        : Promise.resolve(1),
+    ]);
+    const sent = await this.mailService.sendReportSupervisionRequest({
+      to,
+      facultyName: faculty?.name ?? null,
+      studentName: owner?.name || seat.fullName || 'A student',
+      title: opp.title || '',
+      teamSize,
+    });
+    await this.participantRepository.update(
+      { id: seat.id },
+      { facultySupervisionRequestedAt: new Date() },
+    );
+    return sent !== false;
+  }
+
+  /** Student reminder to the faculty who still has to confirm supervision (throttled per seat). */
+  async remindReportSupervision(studentId: string, opportunityId: string) {
+    const opp = this.looksLikeUuid(opportunityId)
+      ? await this.opportunitiesRepository.findOne({
+          where: { id: opportunityId },
+        })
+      : null;
+    if (!opp) throw new NotFoundException('Opportunity not found');
+    const { seat, ownerId, state } = await this.computeReportSupervision(
+      studentId,
+      opp,
+    );
+    if (!seat || !state.blocked) {
+      throw new BadRequestException(
+        'No faculty confirmation is needed to start this report.',
+      );
+    }
+    const last = seat.facultySupervisionRequestedAt?.getTime() ?? 0;
+    if (Date.now() - last < SUPERVISION_REQUEST_RESEND_MS) {
+      return {
+        success: true,
+        sent: false,
+        message: `Your faculty was emailed recently. You can send another reminder after ${new Date(last + SUPERVISION_REQUEST_RESEND_MS).toISOString()}.`,
+        next_allowed_at: new Date(
+          last + SUPERVISION_REQUEST_RESEND_MS,
+        ).toISOString(),
+      };
+    }
+    const sent = await this.sendSupervisionRequest(seat, ownerId, opp);
+    return {
+      success: true,
+      sent,
+      message: sent
+        ? `Reminder sent to ${state.faculty_email}.`
+        : 'The reminder could not be sent. Try again later or contact CIEL PK.',
+    };
+  }
+
+  /** Lead / solo seats waiting for (or recently given) this faculty member's confirmation. */
+  async listFacultySupervisionRequests(userId: string) {
+    const me = await this.usersRepository.findOne({
+      where: { id: userId },
+      select: ['id', 'email'],
+    });
+    const email = this.normalizeEmail(me?.email);
+    if (!email) return { success: true, data: { pending: [], confirmed: [] } };
+    const seats = await this.participantRepository
+      .createQueryBuilder('p')
+      .leftJoinAndSelect('p.student', 'student')
+      .where(
+        "LOWER(TRIM(COALESCE(p.primaryFacultyEmail, p.facultySupervisorEmail, ''))) = :email",
+        { email },
+      )
+      .andWhere('p.status IN (:...st)', {
+        st: ['accepted', 'approved', 'verified', 'paid', 'finalized'],
+      })
+      .andWhere('(p.teamId IS NULL OR p.isTeamLead = true)')
+      .orderBy('p.createdAt', 'DESC')
+      .getMany();
+    const oppIds = [...new Set(seats.map((s) => s.projectId).filter(Boolean))];
+    const opps = oppIds.length
+      ? await this.opportunitiesRepository.find({ where: { id: In(oppIds) } })
+      : [];
+    const oppById = new Map(opps.map((o) => [o.id, o]));
+    const facultyIds = [
+      ...new Set(opps.map((o) => o.facultyId).filter(Boolean)),
+    ] as string[];
+    const facultyUsers = facultyIds.length
+      ? await this.usersRepository.find({
+          where: { id: In(facultyIds) },
+          select: ['id', 'email'],
+        })
+      : [];
+    const facultyEmailById = new Map(facultyUsers.map((u) => [u.id, u.email]));
+    const pending: Record<string, unknown>[] = [];
+    const confirmed: Record<string, unknown>[] = [];
+    for (const seat of seats) {
+      const opp = oppById.get(seat.projectId);
+      if (!opp) continue;
+      const required = supervisionRequiredForReport({
+        isStudentCreated: !!opp.isStudentCreated,
+        namedEmail: namedSupervisorEmail(seat),
+        opportunityFacultyEmails: opportunitySupervisorEmails(
+          opp,
+          opp.facultyId ? facultyEmailById.get(opp.facultyId) : null,
+        ),
+      });
+      if (!required) continue;
+      const members = seat.teamId
+        ? await this.participantRepository.find({
+            where: { projectId: opp.id, teamId: seat.teamId },
+            relations: ['student'],
+          })
+        : [seat];
+      const row = {
+        participation_id: seat.id,
+        opportunity_id: opp.id,
+        opportunity_title: opp.title,
+        student_name: seat.student?.name || seat.fullName || 'Student',
+        student_email: seat.student?.email || seat.email || null,
+        university: seat.universityName || seat.student?.university || null,
+        department: seat.department || seat.academicProgram || null,
+        participation_type: seat.teamId ? 'team' : 'individual',
+        team_members: members.map((m) => ({
+          name: m.student?.name || m.fullName || 'Student',
+          email: m.student?.email || m.email || null,
+          lead: m.id === seat.id,
+        })),
+        requested_at: seat.facultySupervisionRequestedAt
+          ? seat.facultySupervisionRequestedAt.toISOString()
+          : null,
+        confirmed_at: seat.facultySupervisionConfirmedAt
+          ? seat.facultySupervisionConfirmedAt.toISOString()
+          : null,
+      };
+      if (seat.facultySupervisionConfirmedAt) confirmed.push(row);
+      else pending.push(row);
+    }
+    return {
+      success: true,
+      data: { pending, confirmed: confirmed.slice(0, 50) },
+    };
+  }
+
+  /**
+   * The named faculty (or CIEL PK admin on their behalf) confirms a lead / solo seat; a team is
+   * confirmed as a whole. Idempotent.
+   */
+  async confirmReportSupervision(userId: string, participationId: string) {
+    const actor = await this.usersRepository.findOne({
+      where: { id: userId },
+      select: ['id', 'email', 'role'],
+    });
+    if (!actor) throw new ForbiddenException('Sign in again to confirm.');
+    const seat = this.looksLikeUuid(participationId)
+      ? await this.participantRepository.findOne({
+          where: { id: participationId },
+        })
+      : null;
+    if (!seat) throw new NotFoundException('Student seat not found');
+    const isAdmin = actor.role === UserRole.SUPER_ADMIN;
+    const named = namedSupervisorEmail(seat);
+    if (!isAdmin && (!named || named !== this.normalizeEmail(actor.email))) {
+      throw new ForbiddenException(
+        'Only the faculty member named as this student’s primary supervisor can confirm.',
+      );
+    }
+    const at = seat.facultySupervisionConfirmedAt ?? new Date();
+    const by = seat.facultySupervisionConfirmedBy ?? actor.id;
+    const where = seat.teamId
+      ? { projectId: seat.projectId, teamId: seat.teamId }
+      : { id: seat.id };
+    const team = await this.participantRepository.find({ where });
+    const fresh = team.filter((m) => !m.facultySupervisionConfirmedAt);
+    if (fresh.length) {
+      await this.participantRepository.update(
+        { id: In(fresh.map((m) => m.id)) },
+        {
+          facultySupervisionConfirmedAt: at,
+          facultySupervisionConfirmedBy: by,
+        },
+      );
+      const opp = await this.opportunitiesRepository.findOne({
+        where: { id: seat.projectId },
+        select: ['id', 'title'],
+      });
+      if (this.notificationsService) {
+        for (const m of fresh) {
+          if (!m.studentId) continue;
+          await this.notificationsService
+            .createNotification(m.studentId, {
+              type: 'approval',
+              title: 'Faculty confirmed: you can start the report',
+              message: `${isAdmin ? 'CIEL PK' : 'Your faculty supervisor'} confirmed your participation in "${opp?.title || 'your project'}". You can now start the impact report.`,
+            })
+            .catch(() => undefined);
+        }
+      }
+    }
+    return {
+      success: true,
+      data: {
+        participation_id: seat.id,
+        confirmed_at: at.toISOString(),
+        confirmed_seats: team.length,
+      },
+    };
+  }
+
   async uploadFile(
     file: Express.Multer.File,
     section: string,
@@ -3596,6 +3927,10 @@ export class StudentReportsService {
         report.sdg_validation_status = 'pending';
       }
     } else {
+      await this.assertFacultySupervisionForNewReport(
+        studentId,
+        opportunityForPolicy,
+      );
       // Create new report entity
       report = this.studentReportsRepository.create({
         studentId: reportOwnerId,
@@ -3919,6 +4254,14 @@ export class StudentReportsService {
           parsedData.section11,
         ) as StudentReport['section11'];
     } else {
+      if (opportunityId) {
+        await this.assertFacultySupervisionForNewReport(
+          studentId,
+          await this.opportunitiesRepository.findOne({
+            where: { id: opportunityId },
+          }),
+        );
+      }
       report = this.studentReportsRepository.create({
         studentId: reportOwnerId,
         project_id: parsedData.project_id,

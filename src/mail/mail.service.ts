@@ -962,16 +962,17 @@ export class MailService {
     studentName: string,
     projectTitle: string,
     participationId: string,
+    /** Dashboard page the button opens after sign-in (join applications for a new application). */
+    dashboardPath?: string,
   ) {
     // Accepted for call-site compatibility; the email links to the approvals list, not one record.
     void participationId;
     const from =
       this.configService.get<string>('MAIL_FROM') ||
       'CIEL <no-reply@cielpk.com>';
-    const approvalsLink = this.buildFrontendLink(
-      '/dashboard/faculty/approvals',
-      {},
-    );
+    const approvalsLink = dashboardPath
+      ? this.buildFrontendLink('/login', { next: dashboardPath })
+      : this.buildFrontendLink('/dashboard/faculty/approvals', {});
     const studentEsc = this.escHtmlPlain(
       studentName?.trim() ? studentName.trim() : 'Student',
     );
@@ -2565,6 +2566,62 @@ export class MailService {
         `Failed to send quick-work team invite email to ${input.to}`,
         (error as Error).stack,
       );
+    }
+  }
+
+  /**
+   * Asks the named faculty supervisor to confirm a student (or team) before their impact report can
+   * start. Returns whether delivery succeeded so a student-triggered reminder can say so.
+   */
+  async sendReportSupervisionRequest(input: {
+    to: string;
+    facultyName?: string | null;
+    studentName: string;
+    title: string;
+    teamSize: number;
+  }): Promise<boolean> {
+    const from =
+      this.configService.get<string>('MAIL_FROM') ||
+      'CIEL <no-reply@cielpk.com>';
+    const link = this.buildFrontendLink('/login', {
+      next: '/dashboard/faculty/report-supervision',
+    });
+    const title = input.title?.trim() || 'a community service opportunity';
+    const titleEsc = this.escHtmlPlain(title);
+    const studentEsc = this.escHtmlPlain(
+      input.studentName?.trim() || 'A student',
+    );
+    const who =
+      input.teamSize > 1
+        ? `${studentEsc} (team lead, ${input.teamSize} members)`
+        : studentEsc;
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <p>Dear ${this.escHtmlPlain(input.facultyName?.trim() || 'Faculty Member')},</p>
+        <p><strong>${who}</strong> named you as the primary faculty supervisor for <strong>${titleEsc}</strong> on CIEL PK and wants to start the impact report.</p>
+        <p>Please confirm that you supervise this student. The report can start only after you confirm. If this is not your student, ignore this email and contact CIEL PK.</p>
+        <p style="margin: 22px 0;">
+          <a href="${link}" style="background-color: #0e7d74; color: #ffffff; padding: 11px 22px; text-decoration: none; border-radius: 6px; font-weight: bold;">Review and confirm</a>
+        </p>
+        <p style="font-size: 13px; color: #555;">Sign in with this email address (${this.escHtmlPlain(input.to)}). New to CIEL PK? Sign up as faculty with the same email.</p>
+        <p>Best regards,<br><strong>CIEL PK Team</strong></p>
+      </div>
+    `;
+    try {
+      await this.sendMailReliable({
+        from,
+        to: input.to,
+        subject: `Confirm supervision so ${input.studentName?.trim() || 'your student'} can start the report: ${title}`,
+        html,
+      });
+      this.logger.log(`Report supervision request sent to ${input.to}`);
+      return true;
+    } catch (error) {
+      this.logger.error(
+        `Failed to send report supervision request to ${input.to}`,
+        (error as Error).stack,
+      );
+      return false;
     }
   }
 

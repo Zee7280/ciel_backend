@@ -222,7 +222,13 @@ describe('Impact Report lifecycle (real app + real Postgres)', () => {
   const seat = (
     projectId: string,
     u: E2eUser,
-    o: { lead?: boolean; teamId?: string | null } = {},
+    o: {
+      lead?: boolean;
+      teamId?: string | null;
+      facultyEmail?: string | null;
+      /** Default true: the named faculty already confirmed supervision. */
+      supervised?: boolean;
+    } = {},
   ) => {
     const parts = h.ds.getRepository(Participation);
     return parts.save(
@@ -247,7 +253,10 @@ describe('Impact Report lifecycle (real app + real Postgres)', () => {
         participationMode: o.teamId ? 'team' : 'individual',
         isTeamLead: o.teamId ? !!o.lead : false,
         teamId: o.teamId ?? null,
-        primaryFacultyEmail: 'faculty@e2e.test',
+        primaryFacultyEmail:
+          o.facultyEmail === undefined ? 'faculty@e2e.test' : o.facultyEmail,
+        facultySupervisionConfirmedAt:
+          o.supervised === false ? null : new Date(),
         attendanceApproverType: 'partner',
       } as DeepPartial<Participation>),
     );
@@ -1036,6 +1045,9 @@ describe('Impact Report lifecycle (real app + real Postgres)', () => {
       expect(before.report_faculty_account_role).toBe('faculty');
       // existing fields are unchanged
       expect(before.impact_report_summary).toBe('No impact report yet');
+      // the fixture seat is already confirmed by its faculty
+      expect(before.report_supervision_required).toBe(true);
+      expect(before.report_supervision_confirmed_at).not.toBeNull();
 
       const rid = (
         await draft(w.lead, w.opp.id, { section2: fullSections().section2 })
@@ -1084,6 +1096,241 @@ describe('Impact Report lifecycle (real app + real Postgres)', () => {
       const none = await trackingFor(w.opp.id, w.lead.id);
       expect(none.report_faculty_email).toBeNull();
       expect(none.report_faculty_secondary_email).toBeNull();
+    });
+  });
+
+  describe('R-supervision the named faculty confirms before a new report can start', () => {
+    type SupervisionState = {
+      blocked: boolean;
+      required: boolean;
+      confirmed: boolean;
+      faculty_email: string | null;
+      faculty_name: string | null;
+      faculty_registered: boolean;
+      requested_at: string | null;
+    };
+    const supervision = async (u: E2eUser, oppId: string) => {
+      const r = await h.as(u).get(`/student/reports/${oppId}/supervision`);
+      expect(r.status).toBe(200);
+      return (r.body as { data: SupervisionState }).data;
+    };
+    const unconfirmedWorld = async () => {
+      const { opp } = await liveOpp();
+      const fac = await h.makeUser(UserRole.FACULTY, {
+        overrides: { name: 'Dr Supervisor' },
+      });
+      const lead = await student();
+      const leadSeat = await seat(opp.id, lead, {
+        facultyEmail: fac.email,
+        supervised: false,
+      });
+      await logHours(lead, leadSeat.id, '09:00', '12:00', 3);
+      await logHours(lead, leadSeat.id, '09:00', '12:00', 2);
+      return { opp, fac, lead, leadSeat };
+    };
+
+    it('blocks the first draft and submit, asks the faculty once, then opens after the faculty confirms', async () => {
+      const w = await unconfirmedWorld();
+      const before = await supervision(w.lead, w.opp.id);
+      expect(before).toMatchObject({
+        required: true,
+        confirmed: false,
+        blocked: true,
+        faculty_email: w.fac.email,
+        faculty_name: 'Dr Supervisor',
+        faculty_registered: true,
+        requested_at: null,
+      });
+
+      const d1 = await draft(w.lead, w.opp.id, {
+        section2: fullSections().section2,
+      });
+      expect(d1.status).toBe(403);
+      expect((d1.body as unknown as { code: string }).code).toBe(
+        'faculty_supervision_pending',
+      );
+      expect(h.mail.of('sendReportSupervisionRequest')).toHaveLength(1);
+      expect(
+        h.mail.of('sendReportSupervisionRequest')[0].args[0],
+      ).toMatchObject({
+        to: w.fac.email,
+        teamSize: 1,
+      });
+      // No report row was written, and a second attempt does not mail again.
+      expect(await reports.count({ where: { studentId: w.lead.id } })).toBe(0);
+      expect((await submit(w.lead, w.opp.id, fullSections())).status).toBe(403);
+      expect(h.mail.of('sendReportSupervisionRequest')).toHaveLength(1);
+      expect((await supervision(w.lead, w.opp.id)).requested_at).not.toBeNull();
+
+      // A reminder right after the request is throttled.
+      const remind = await h
+        .as(w.lead)
+        .post(`/student/reports/${w.opp.id}/supervision/remind`);
+      expect(remind.status).toBe(201);
+      expect((remind.body as { sent: boolean }).sent).toBe(false);
+      expect(h.mail.of('sendReportSupervisionRequest')).toHaveLength(1);
+
+      // The faculty sees the request; another faculty cannot confirm it.
+      const list = await h.as(w.fac).get('/faculty/report-supervision');
+      expect(list.status).toBe(200);
+      const pending = (
+        list.body as {
+          data: { pending: Array<{ participation_id: string }> };
+        }
+      ).data.pending;
+      expect(pending.map((p) => p.participation_id)).toContain(w.leadSeat.id);
+      const stranger = await h.makeUser(UserRole.FACULTY);
+      expect(
+        (
+          await h
+            .as(stranger)
+            .post(`/faculty/report-supervision/${w.leadSeat.id}/confirm`)
+        ).status,
+      ).toBe(403);
+      expect(
+        (
+          await h
+            .as(w.lead)
+            .post(`/faculty/report-supervision/${w.leadSeat.id}/confirm`)
+        ).status,
+      ).toBe(403);
+
+      const ok = await h
+        .as(w.fac)
+        .post(`/faculty/report-supervision/${w.leadSeat.id}/confirm`);
+      expect(ok.status).toBe(201);
+      const after = await supervision(w.lead, w.opp.id);
+      expect(after).toMatchObject({ confirmed: true, blocked: false });
+      const listAfter = await h.as(w.fac).get('/faculty/report-supervision');
+      const data = (
+        listAfter.body as {
+          data: {
+            pending: Array<{ participation_id: string }>;
+            confirmed: Array<{ participation_id: string }>;
+          };
+        }
+      ).data;
+      expect(data.pending.map((p) => p.participation_id)).not.toContain(
+        w.leadSeat.id,
+      );
+      expect(data.confirmed.map((p) => p.participation_id)).toContain(
+        w.leadSeat.id,
+      );
+
+      const d2 = await draft(w.lead, w.opp.id, {
+        section2: fullSections().section2,
+      });
+      expect(d2.status).toBe(201);
+      expect((await submit(w.lead, w.opp.id, fullSections())).status).toBe(201);
+    });
+
+    it('a report already started is never stopped, and exempt seats are not asked', async () => {
+      // Started before the rule: an existing row keeps autosaving.
+      const w = await unconfirmedWorld();
+      await reports.save(
+        reports.create({
+          studentId: w.lead.id,
+          opportunityId: w.opp.id,
+          project_id: w.opp.id,
+          status: 'draft',
+        }),
+      );
+      expect((await supervision(w.lead, w.opp.id)).blocked).toBe(false);
+      expect(
+        (await draft(w.lead, w.opp.id, { section2: fullSections().section2 }))
+          .status,
+      ).toBe(201);
+
+      // No faculty named on the seat (legacy): not gated.
+      const { opp } = await liveOpp();
+      const solo = await student();
+      await seat(opp.id, solo, { facultyEmail: null, supervised: false });
+      expect((await supervision(solo, opp.id)).required).toBe(false);
+      expect(
+        (await draft(solo, opp.id, { section2: fullSections().section2 }))
+          .status,
+      ).toBe(201);
+
+      // Named faculty is the opportunity's own supervisor: already involved.
+      const own = await liveOpp();
+      const ownFaculty = 'own.supervisor@e2e.test';
+      await h.opps.update(own.opp.id, {
+        supervision: { contact: ownFaculty, supervisor_name: 'Dr Own' },
+      } as never);
+      const s2 = await student();
+      await seat(own.opp.id, s2, {
+        facultyEmail: ownFaculty.toUpperCase(),
+        supervised: false,
+      });
+      expect((await supervision(s2, own.opp.id)).required).toBe(false);
+      expect(
+        (await draft(s2, own.opp.id, { section2: fullSections().section2 }))
+          .status,
+      ).toBe(201);
+      expect(h.mail.of('sendReportSupervisionRequest')).toHaveLength(0);
+    });
+
+    it('confirming the team lead confirms the whole team; CIEL PK admin can confirm on the faculty’s behalf', async () => {
+      const { opp } = await liveOpp();
+      const fac = await h.makeUser(UserRole.FACULTY);
+      const lead = await student();
+      const mate = await student();
+      const teamId = `TM-${uniq()}`;
+      const leadSeat = await seat(opp.id, lead, {
+        lead: true,
+        teamId,
+        facultyEmail: fac.email,
+        supervised: false,
+      });
+      const mateSeat = await seat(opp.id, mate, {
+        teamId,
+        facultyEmail: fac.email,
+        supervised: false,
+      });
+      const list = await h.as(fac).get('/faculty/report-supervision');
+      const row = (
+        list.body as {
+          data: {
+            pending: Array<{
+              participation_id: string;
+              team_members: Array<{ lead: boolean }>;
+            }>;
+          };
+        }
+      ).data.pending.find((p) => p.participation_id === leadSeat.id);
+      expect(row?.team_members).toHaveLength(2);
+      // Only the lead seat is listed, not each member.
+      expect(
+        (
+          list.body as {
+            data: { pending: Array<{ participation_id: string }> };
+          }
+        ).data.pending.map((p) => p.participation_id),
+      ).not.toContain(mateSeat.id);
+
+      const res = await h
+        .as(admin)
+        .post(`/faculty/report-supervision/${leadSeat.id}/confirm`);
+      expect(res.status).toBe(201);
+      expect(
+        (res.body as { data: { confirmed_seats: number } }).data
+          .confirmed_seats,
+      ).toBe(2);
+      const parts = h.ds.getRepository(Participation);
+      for (const id of [leadSeat.id, mateSeat.id]) {
+        const p = await parts.findOneByOrFail({ id });
+        expect(p.facultySupervisionConfirmedAt).not.toBeNull();
+        expect(p.facultySupervisionConfirmedBy).toBe(admin.id);
+      }
+      // Idempotent: confirming again changes nothing.
+      const again = await h
+        .as(fac)
+        .post(`/faculty/report-supervision/${leadSeat.id}/confirm`);
+      expect(again.status).toBe(201);
+      expect(
+        (await parts.findOneByOrFail({ id: leadSeat.id }))
+          .facultySupervisionConfirmedBy,
+      ).toBe(admin.id);
     });
   });
 });

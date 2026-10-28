@@ -11,6 +11,7 @@ import { Timesheet } from '../timesheets/entities/timesheet.entity';
 import { StudentReport } from '../reports/entities/student-report.entity';
 import { Otp } from './entities/otp.entity';
 import { StudentReportsService } from '../reports/student-reports.service';
+import { ReportSupervisionController } from './report-supervision.controller';
 import { StudentReportsController } from './student-reports.controller';
 import { PublicImpactReportsController } from './public-impact-reports.controller';
 import { PublicReportScoringController } from '../reports/public-report-scoring.controller';
@@ -53,6 +54,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     StudentsController,
     StudentReportsController,
     StudentController,
+    ReportSupervisionController,
     PublicImpactReportsController,
     PublicReportScoringController,
   ],

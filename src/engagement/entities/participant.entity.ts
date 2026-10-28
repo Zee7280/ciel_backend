@@ -40,6 +40,20 @@ export class Participation {
   @Column({ nullable: true })
   secondaryFacultyEmail: string;
 
+  /**
+   * The named primary faculty supervisor (or CIEL PK admin on their behalf) confirmed this seat.
+   * A new impact report can start only after this; reports already started are unaffected.
+   */
+  @Column({ type: 'timestamp', nullable: true })
+  facultySupervisionConfirmedAt: Date | null;
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  facultySupervisionConfirmedBy: string | null;
+
+  /** Last supervision-request email to the faculty (throttles reminders). */
+  @Column({ type: 'timestamp', nullable: true })
+  facultySupervisionRequestedAt: Date | null;
+
   @Column({ nullable: true })
   teamId: string;
 

@@ -738,6 +738,11 @@ export class FacultyReportsService {
         updated_at: lastActivity || report?.updatedAt || seat.updatedAt,
         last_activity_at: lastActivity || null,
         draft_locked: !submitted,
+        // Team seats share one project card on the faculty dashboard.
+        team_id: seat.teamId || null,
+        is_team_lead: seat.isTeamLead === true,
+        participation_type:
+          seat.participationMode || (seat.teamId ? 'team' : 'individual'),
         member_hours: [
           {
             name:

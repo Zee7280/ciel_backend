@@ -9,6 +9,11 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, In, IsNull, Not, Repository } from 'typeorm';
 import {
+  namedSupervisorEmail,
+  opportunitySupervisorEmails,
+  supervisionRequiredForReport,
+} from '../reports/report-supervision.util';
+import {
   OpportunityApplication,
   OpportunityApplicationInternalStatus,
 } from './entities/opportunity-application.entity';
@@ -976,6 +981,7 @@ export class OpportunityApplicationsService {
     report: StudentReport | null,
     seat: Participation | null,
     facultyByEmail: Map<string, { name: string | null; role: string | null }>,
+    supervision?: { isStudentCreated: boolean; oppFacultyEmails: string[] },
   ): Record<string, unknown> {
     const s1 =
       report?.section1 && typeof report.section1 === 'object'
@@ -1004,6 +1010,17 @@ export class OpportunityApplicationsService {
         secondary && secondary !== email ? secondary : null,
       report_faculty_name: account?.name ?? null,
       report_faculty_account_role: account?.role ?? null,
+      // Faculty confirmation before a new report (report-supervision.util).
+      report_supervision_required: supervision
+        ? supervisionRequiredForReport({
+            isStudentCreated: supervision.isStudentCreated,
+            namedEmail: namedSupervisorEmail(seat),
+            opportunityFacultyEmails: supervision.oppFacultyEmails,
+          })
+        : null,
+      report_supervision_confirmed_at: seat?.facultySupervisionConfirmedAt
+        ? seat.facultySupervisionConfirmedAt.toISOString()
+        : null,
     };
   }
 
@@ -1942,6 +1959,17 @@ export class OpportunityApplicationsService {
       }
     }
 
+    const oppFacultyUser = opp?.facultyId
+      ? await this.userRepo.findOne({
+          where: { id: opp.facultyId },
+          select: ['id', 'email'],
+        })
+      : null;
+    const supervisionCtx = {
+      isStudentCreated: !!opp?.isStudentCreated,
+      oppFacultyEmails: opportunitySupervisorEmails(opp, oppFacultyUser?.email),
+    };
+
     const applications_roster = allApplications.map((a) => {
       const { participation_type, team_members } =
         this.facultyJoinApplicationTeamMembersForDisplay(a);
@@ -1977,6 +2005,7 @@ export class OpportunityApplicationsService {
               latestReport,
               seatRow,
               facultyByEmail,
+              supervisionCtx,
             ),
           };
         } else {
@@ -3901,7 +3930,8 @@ export class OpportunityApplicationsService {
     const row = repo.create({
       opportunityId: params.opportunityId,
       studentUserId: params.studentUserId,
-      internalStatus: 'pending_admin',
+      // Student applies → the faculty they named approves → CIEL PK admin gives final approval.
+      internalStatus: primary ? 'pending_faculty' : 'pending_admin',
       primaryFacultyEmail: primary,
       secondaryFacultyEmail: secondary,
       attendanceApproverType,
@@ -4729,6 +4759,19 @@ export class OpportunityApplicationsService {
     }
 
     await this.provisionApprovedApplicationSeats(app);
+    // The named faculty already approved this student, so the report can start without asking again.
+    if (app.facultyDecidedAt && app.facultyDecidedBy) {
+      await this.participationRepo
+        .createQueryBuilder()
+        .update(Participation)
+        .set({
+          facultySupervisionConfirmedAt: app.facultyDecidedAt,
+          facultySupervisionConfirmedBy: app.facultyDecidedBy,
+        })
+        .where('"applicationId" = :aid', { aid: app.id })
+        .andWhere('"facultySupervisionConfirmedAt" IS NULL')
+        .execute();
+    }
 
     app.internalStatus = 'approved';
     app.adminDecidedAt = new Date();

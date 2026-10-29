@@ -685,6 +685,18 @@ export class UsersService {
         patch.settings = { ...settings, investor };
       }
     }
+    // An admin setting a faculty member's university confirms it (Quick Community Impact approval relies
+    // on it). Only the admin route passes `actorId`; a faculty's own profile edit never confirms.
+    const university =
+      typeof patch.university === 'string' ? patch.university.trim() : '';
+    if (actorId && university) {
+      const target =
+        existing ?? (await this.usersRepository.findOne({ where: { id } }));
+      if ((patch.role ?? target?.role) === UserRole.FACULTY) {
+        patch.universityConfirmedByAdmin = university.slice(0, 200);
+        patch.universityConfirmedAt = new Date();
+      }
+    }
     try {
       await this.usersRepository.update(id, patch);
     } catch (err) {

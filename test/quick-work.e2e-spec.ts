@@ -537,6 +537,7 @@ describe('Quick Community Work (real app + real Postgres)', () => {
       }),
     );
     type Full = LogView & {
+      title: string;
       summary: string;
       evidence: unknown[];
       hostEmail: string | null;
@@ -1737,6 +1738,86 @@ describe('Quick Community Work (real app + real Postgres)', () => {
     );
     expect((await h.as(lead).get('/quick-work/logs/not-a-uuid')).status).toBe(
       400,
+    );
+  });
+
+  it('a faculty whose university CIEL PK set on the profile can approve that university without a scope', async () => {
+    // Profile university as typed at signup: not trusted on its own.
+    const faculty = await h.makeUser(UserRole.FACULTY, {
+      overrides: { university: 'E2E University' },
+    });
+    const lead = await h.makeUser(UserRole.STUDENT);
+    const approve = (id: string) =>
+      h
+        .as(faculty)
+        .post(`/faculty/quick-work/${id}/review`)
+        .send({ action: 'approve', verified: true });
+    const blockedReason = async (id: string) =>
+      (
+        (await h.as(faculty).get('/faculty/quick-work')).body as Body<{
+          pending: (LogView & { approveBlockedReason: string | null })[];
+        }>
+      ).data.pending.find((l) => l.id === id)?.approveBlockedReason ?? null;
+
+    const log = await draft(lead, completeLog(lead, faculty));
+    await h.as(lead).post(`/quick-work/logs/${log.id}/submit`).expect(201);
+    expect(await blockedReason(log.id)).toMatch(
+      /not yet linked to a university/,
+    );
+    expect((await approve(log.id)).status).toBe(403);
+
+    // CIEL PK admin sets the faculty's university (Admin → Users): confirmed.
+    await h
+      .as(admin)
+      .post(`/admin/users/${faculty.id}`)
+      .send({ university: 'E2E University', institution: 'E2E University' })
+      .expect(201);
+    const stored = await h.users.findOne({ where: { id: faculty.id } });
+    expect(stored?.universityConfirmedByAdmin).toBe('E2E University');
+    // No university scope was created, so no university dashboard rights.
+    const scopes = await h.as(admin).get('/admin/faculty-university-scope');
+    expect(scopes.text).not.toContain(faculty.id);
+
+    expect(await blockedReason(log.id)).toBeNull();
+    expect((await approve(log.id)).status).toBe(201);
+
+    // A student of another university is still refused.
+    const outsider = await h.makeUser(UserRole.STUDENT, {
+      overrides: {
+        university: 'Other University',
+        institution: 'Other University',
+      },
+    });
+    const other = await draft(
+      outsider,
+      completeLog(outsider, faculty, {
+        university: 'Other University',
+        activityDate: pastDay(5),
+      }),
+    );
+    await h
+      .as(outsider)
+      .post(`/quick-work/logs/${other.id}/submit`)
+      .expect(201);
+    expect(await blockedReason(other.id)).toMatch(
+      /is not a student of E2E University/,
+    );
+    expect((await approve(other.id)).status).toBe(403);
+
+    // The faculty changing their own profile university ends the confirmation.
+    await h
+      .as(faculty)
+      .put('/profile')
+      .send({ university: 'Other University', institution: 'Other University' })
+      .expect(200);
+    const lead2 = await h.makeUser(UserRole.STUDENT);
+    const third = await draft(
+      lead2,
+      completeLog(lead2, faculty, { activityDate: pastDay(6) }),
+    );
+    await h.as(lead2).post(`/quick-work/logs/${third.id}/submit`).expect(201);
+    expect(await blockedReason(third.id)).toMatch(
+      /not yet linked to a university/,
     );
   });
 

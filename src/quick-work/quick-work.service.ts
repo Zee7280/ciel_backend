@@ -704,6 +704,26 @@ export class QuickWorkService {
         `"${log.title}" ${outcome}`,
       );
     }
+    if (status === 'admin_review') {
+      void this.notifyAdmins(
+        'Quick Community Work: final approval needed',
+        `${log.facultyName || 'Faculty'} approved "${log.title}". It now needs CIEL PK final approval.`,
+      );
+    }
+    // The faculty member who approved hears CIEL PK's final decision on that log.
+    if (stage === 'admin' && log.status === 'admin_review') {
+      void this.notifyFacultyAccount(
+        log.facultyEmail,
+        'Quick Community Work: CIEL PK decision',
+        `CIEL PK ${
+          status === 'approved'
+            ? 'gave final approval to'
+            : status === 'changes'
+              ? 'returned for changes'
+              : 'did not approve'
+        } "${log.title}"${note ? `: ${note}` : '.'}`,
+      );
+    }
     return this.toView(await this.loadLog(log.id), null);
   }
 
@@ -1432,6 +1452,23 @@ export class QuickWorkService {
         `Quick-work notification failed: ${(e as Error).message}`,
       );
     }
+  }
+
+  /** In-app notice to every CIEL PK admin (the admin sidebar badge counts the same logs). */
+  private async notifyAdmins(title: string, message: string) {
+    const admins = await this.userRepo
+      .find({ where: { role: UserRole.SUPER_ADMIN }, select: ['id'] })
+      .catch(() => [] as User[]);
+    await Promise.all(admins.map((a) => this.notify(a.id, title, message)));
+  }
+
+  private async notifyFacultyAccount(
+    email: string,
+    title: string,
+    message: string,
+  ) {
+    const faculty = await this.facultyAccountFor(email).catch(() => null);
+    if (faculty) await this.notify(faculty.id, title, message);
   }
 
   /** One email per newly added teammate, sent one after another so a large team does not flood the mail provider. */

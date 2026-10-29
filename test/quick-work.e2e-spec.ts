@@ -9,6 +9,9 @@ import { Participation } from '../src/engagement/entities/participant.entity';
 import { AttendanceLog } from '../src/engagement/entities/attendance-log.entity';
 import { Organization } from '../src/organizations/entities/organization.entity';
 import { widenColumnsBeforeSync } from '../src/database/widen-columns-before-sync';
+import { Notification } from '../src/notifications/entities/notification.entity';
+import { getRepositoryToken } from '@nestjs/typeorm';
+import type { Repository } from 'typeorm';
 
 type Participant = {
   userId: string;
@@ -329,6 +332,64 @@ describe('Quick Community Work (real app + real Postgres)', () => {
       pendingMinutes: 0,
       approvedActivities: 1,
     });
+  });
+
+  it('notifications: CIEL PK is told a log awaits final approval; the faculty hears its decision', async () => {
+    const notes = h.app.get<Repository<Notification>>(
+      getRepositoryToken(Notification),
+    );
+    /** In-app notices are written after the response; wait until `count` exist. */
+    const noticesFor = async (userId: string, title: string, count = 1) => {
+      let rows: Notification[] = [];
+      for (let i = 0; i < 50; i++) {
+        rows = await notes.find({ where: { userId, title } });
+        if (rows.length >= count) break;
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      return rows;
+    };
+    const lead = await h.makeUser(UserRole.STUDENT);
+    const faculty = await authorisedFaculty();
+    const log = await draft(
+      lead,
+      completeLog(lead, faculty, { title: 'Notify drive' }),
+    );
+    await h.as(lead).post(`/quick-work/logs/${log.id}/submit`).expect(201);
+    expect(
+      await noticesFor(faculty.id, 'Quick Community Work to review'),
+    ).toHaveLength(1);
+
+    await h
+      .as(faculty)
+      .post(`/faculty/quick-work/${log.id}/review`)
+      .send({ action: 'approve', verified: true })
+      .expect(201);
+    const forAdmin = await noticesFor(
+      admin.id,
+      'Quick Community Work: final approval needed',
+    );
+    expect(forAdmin.some((n) => n.message.includes('Notify drive'))).toBe(true);
+
+    await h
+      .as(admin)
+      .post(`/admin/quick-work/${log.id}/review`)
+      .send({ action: 'changes', note: 'Add the venue photo' })
+      .expect(201);
+    const decision = await noticesFor(
+      faculty.id,
+      'Quick Community Work: CIEL PK decision',
+    );
+    expect(decision).toHaveLength(1);
+    expect(decision[0].message).toContain('returned for changes');
+    expect(decision[0].message).toContain('Add the venue photo');
+    const toLead = await noticesFor(
+      lead.id,
+      'Quick Community Work reviewed',
+      2,
+    );
+    expect(toLead.map((n) => n.message).join(' ')).toContain(
+      'returned for changes',
+    );
   });
 
   it('sidebar badges: faculty and admin pending counts follow submit and review', async () => {

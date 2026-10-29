@@ -76,7 +76,7 @@ export class S3Service {
   }
 
   async uploadFile(file: Express.Multer.File, folder: string): Promise<string> {
-    // Public bucket: never store something a browser would execute when the URL is opened.
+    // The bucket may allow public reads: never store something a browser would execute when the URL is opened.
     if (UNSAFE_UPLOAD_MIME.test(String(file.mimetype || ''))) {
       throw new BadRequestException('This file type is not allowed.');
     }

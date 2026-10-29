@@ -6,6 +6,7 @@ import {
   Logger,
   NotFoundException,
   Optional,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { randomBytes } from 'crypto';
@@ -353,7 +354,7 @@ export class QuickWorkService {
     for (const p of invited) {
       void this.notify(
         p.userId,
-        'Quick Community Work: confirm you took part',
+        'Quick Community Impact: confirm you took part',
         `${lead.name || 'A student'} added you to "${log.title || 'a quick community activity'}". Open Quick Impact Log to confirm or decline.`,
       );
     }
@@ -386,7 +387,9 @@ export class QuickWorkService {
     }
     if (!QUICK_WORK_EDITABLE.includes(log.status)) {
       throw new BadRequestException(
-        'This log has already been submitted; your participation can no longer change.',
+        log.status === 'rejected'
+          ? 'This log was not approved and is closed; your participation can no longer change.'
+          : 'This log has already been submitted; your participation can no longer change.',
       );
     }
     me.joinStatus = accept ? 'joined' : 'declined';
@@ -397,8 +400,8 @@ export class QuickWorkService {
     void this.notify(
       log.leadUserId,
       accept
-        ? 'Quick Community Work: teammate joined'
-        : 'Quick Community Work: teammate declined',
+        ? 'Quick Community Impact: teammate joined'
+        : 'Quick Community Impact: teammate declined',
       `${me.name || me.email} ${accept ? 'confirmed they took part in' : 'declined'} "${log.title || 'your quick community activity'}".`,
     );
     return this.signEvidence(this.toView(log, viewer.id));
@@ -525,38 +528,67 @@ export class QuickWorkService {
 
   /**
    * The flashcard page behind the faculty email's Approve / Request Revision / Reject buttons.
-   * Opening it records nothing. `registered` says whether the named email has a faculty account
-   * that may act here; otherwise the faculty member signs up or logs in first.
+   * Opening it records nothing. `registered` says whether the named email has a faculty account;
+   * `signedIn` whether that account is the viewer. The link is opened from a mailbox, so until the
+   * named faculty member is signed in it shows the activity card only (what, when, where, hours):
+   * not the student's report, review notes, evidence or anyone's email, ID or contact.
    */
-  async facultyReviewPreview(token: string) {
+  async facultyReviewPreview(token: string, viewer: Viewer | null = null) {
     const log = await this.resolveFacultyReviewToken(token);
     const faculty = await this.facultyAccountFor(log.facultyEmail);
+    const signedIn = Boolean(faculty && viewer && faculty.id === viewer.id);
+    const open = log.status === 'submitted';
     const view = await this.signEvidence(this.toView(log, null));
-    // The address was typed by a student: until a faculty account with it may act (and while the
-    // log awaits review), the link shows the activity card only, not teammates' details or evidence.
-    const full = Boolean(faculty) && log.status === 'submitted';
     return {
-      log: {
-        ...view,
-        evidence: full ? view.evidence : [],
-        participants: view.participants.map((p) => ({
-          ...p,
-          userId: '',
-          ...(full ? {} : { email: '', studentId: '', contact: null }),
-        })),
-      },
+      log: signedIn
+        ? {
+            ...view,
+            // Evidence links only while the log awaits this review; a decided log is read on the dashboard.
+            evidence: open ? view.evidence : [],
+            participants: view.participants.map((p) => ({ ...p, userId: '' })),
+          }
+        : {
+            ...view,
+            summary: '',
+            reviewNote: null,
+            locationPin: null,
+            hostEmail: null,
+            hostContact: null,
+            partnerDetails: view.partnerDetails.map((p) => ({
+              ...p,
+              email: null,
+              contact: null,
+            })),
+            evidence: [],
+            participants: view.participants.map((p) => ({
+              ...p,
+              userId: '',
+              email: '',
+              studentId: '',
+              contact: null,
+            })),
+          },
       facultyEmail: log.facultyEmail,
-      open: log.status === 'submitted',
+      open,
       registered: Boolean(faculty),
+      signedIn,
       approveBlockedReason:
-        faculty && log.status === 'submitted'
+        faculty && signedIn && open
           ? await this.approvalScopeError(faculty.id, log)
           : null,
     };
   }
 
-  /** The same decision as the faculty dashboard, made from the emailed link by the named faculty account. */
-  async facultyReviewByEmail(token: string, dto: QuickWorkReviewDto) {
+  /**
+   * The same decision as the faculty dashboard, made from the emailed link. The token says which log
+   * and which faculty email; the viewer must be signed in as that faculty account (an emailed link
+   * alone never records a decision).
+   */
+  async facultyReviewByEmail(
+    token: string,
+    dto: QuickWorkReviewDto,
+    viewer: Viewer | null,
+  ) {
     const log = await this.resolveFacultyReviewToken(token);
     const faculty = await this.facultyAccountFor(log.facultyEmail);
     if (!faculty) {
@@ -564,8 +596,40 @@ export class QuickWorkService {
         `Sign up or log in at cielpk.com with ${log.facultyEmail} to review this activity.`,
       );
     }
+    if (!viewer) {
+      throw new UnauthorizedException(
+        `Sign in to CIEL PK as ${log.facultyEmail} to record your decision.`,
+      );
+    }
+    if (viewer.id !== faculty.id) {
+      throw new ForbiddenException(
+        `This review link is for ${log.facultyEmail}. Sign in with that faculty account to act on it.`,
+      );
+    }
     await this.review({ id: faculty.id }, log.id, dto, 'email');
-    return this.facultyReviewPreview(token);
+    return this.facultyReviewPreview(token, viewer);
+  }
+
+  /**
+   * Step 1 hint for the student typing a faculty email: whether a CIEL PK faculty account uses it
+   * and which university that account may approve hours for (none means it cannot approve yet).
+   */
+  async lookupFaculty(raw: string) {
+    const email = normalizeEmail(raw);
+    if (!EMAIL_RE.test(email)) {
+      throw new BadRequestException('Enter a valid faculty email.');
+    }
+    const faculty = await this.facultyAccountFor(email);
+    if (!faculty) {
+      return { email, registered: false, name: null, university: null };
+    }
+    const assignment = await this.universityScope.getAssignmentForFaculty(
+      faculty.id,
+    );
+    const university =
+      assignment?.universityOrganization?.name ??
+      (await this.adminConfirmedUniversity(faculty.id));
+    return { email, registered: true, name: faculty.name, university };
   }
 
   private async facultyAccountFor(email: string) {
@@ -661,7 +725,7 @@ export class QuickWorkService {
       if (p.isLead) continue;
       void this.notify(
         p.userId,
-        'Quick Community Work submitted',
+        'Quick Community Impact submitted',
         `"${log.title}" was submitted to ${log.facultyName} for review. Your hours count once it is approved.`,
       );
     }
@@ -773,13 +837,13 @@ export class QuickWorkService {
     for (const p of log.participants) {
       void this.notify(
         p.userId,
-        'Quick Community Work reviewed',
+        'Quick Community Impact reviewed',
         `"${log.title}" ${outcome}`,
       );
     }
     if (status === 'admin_review') {
       void this.notifyAdmins(
-        'Quick Community Work: final approval needed',
+        'Quick Community Impact: final approval needed',
         `${log.facultyName || 'Faculty'} approved "${log.title}". It now needs CIEL PK final approval.`,
       );
     }
@@ -787,7 +851,7 @@ export class QuickWorkService {
     if (stage === 'admin' && log.status === 'admin_review') {
       void this.notifyFacultyAccount(
         log.facultyEmail,
-        'Quick Community Work: CIEL PK decision',
+        'Quick Community Impact: CIEL PK decision',
         `CIEL PK ${
           status === 'approved'
             ? 'gave final approval to'
@@ -1535,9 +1599,7 @@ export class QuickWorkService {
       throw new NotFoundException('Quick-work log not found');
     }
     if (!QUICK_WORK_EDITABLE.includes(log.status)) {
-      throw new BadRequestException(
-        'This log has been submitted and can no longer be edited.',
-      );
+      throw new BadRequestException(closedLogMessage(log.status));
     }
     return log;
   }
@@ -1770,7 +1832,7 @@ export class QuickWorkService {
     if (faculty) {
       void this.notify(
         faculty.id,
-        'Quick Community Work to review',
+        'Quick Community Impact to review',
         `${leadName} submitted "${log.title}" for your review.`,
       );
     }
@@ -1829,6 +1891,18 @@ function studentOfUniversityNamed(
   return [student.university, student.institution].some((name) =>
     universityNamesMatch(name, university),
   );
+}
+
+/** Why the lead can no longer edit or resubmit a log, by its state. */
+function closedLogMessage(status: QuickWorkStatus): string {
+  switch (status) {
+    case 'rejected':
+      return 'This log was not approved and is closed: it cannot be edited or resubmitted. Start a new log if needed.';
+    case 'approved':
+      return 'This log has been approved and can no longer be edited.';
+    default:
+      return 'This log has been submitted and can no longer be edited.';
+  }
 }
 
 /** Waits for `work` (never throws) but gives up waiting after `ms`; the work itself keeps going. */

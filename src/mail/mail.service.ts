@@ -2401,9 +2401,9 @@ export class MailService {
   }
 
   /**
-   * Quick Community Work log submitted: the named faculty member gets the activity flashcard and
+   * Quick Community Impact log submitted: the named faculty member gets the activity flashcard and
    * Approve / Request Revision / Reject buttons. Each button opens a page that shows the record and
-   * asks once more before recording; acting there needs a CIEL PK faculty account with this email.
+   * asks once more before recording; acting there needs the faculty member signed in with this email.
    */
   async sendQuickWorkSubmittedForReview(input: {
     /** Sealed token for the emailed review page. */
@@ -2431,7 +2431,7 @@ export class MailService {
     const from =
       this.configService.get<string>('MAIL_FROM') ||
       'CIEL <no-reply@cielpk.com>';
-    // After signing in, land on the faculty Quick Community Work queue (not the dashboard home).
+    // After signing in, land on the faculty Quick Community Impact queue (not the dashboard home).
     const loginLink = this.buildFrontendLink('/login', {
       next: '/dashboard/faculty/quick-work',
     });
@@ -2461,7 +2461,7 @@ export class MailService {
     const flashcard = `
         <div style="margin: 20px 0; border: 1px solid #dcebee; border-radius: 12px; overflow: hidden;">
           <div style="background-color: #0e7d74; color: #ffffff; padding: 12px 16px;">
-            <div style="font-size: 11px; letter-spacing: 1px; text-transform: uppercase; opacity: 0.85;">Quick Community Work</div>
+            <div style="font-size: 11px; letter-spacing: 1px; text-transform: uppercase; opacity: 0.85;">Quick Community Impact</div>
             <div style="font-size: 17px; font-weight: bold; margin-top: 2px;">${esc(title)}</div>
           </div>
           <div style="padding: 12px 16px;">
@@ -2492,9 +2492,9 @@ export class MailService {
       }">${label}</a>`;
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
-        <p>Dear Faculty Member,</p>
-        <p>A student has submitted <strong>${esc(title)}</strong> under Quick Community Work and listed you as the supervising faculty member. Please review the opportunity flashcard below and select Approve, Request Revision, or Reject.</p>
-        <p>If you’re registered with CIEL PK, you can take action directly here. Otherwise, please sign up or log in at <a href="${loginLink}">cielpk.com</a> to review the opportunity.</p>
+        <p>Dear ${esc(input.facultyName?.trim() || 'Faculty Member')},</p>
+        <p>${esc(input.leadName?.trim() || 'A student')} has submitted <strong>${esc(title)}</strong> under Quick Community Impact and named you as the coordinating faculty member. Please review the activity flashcard below and select Approve, Request Revision or Reject.</p>
+        <p>Each button opens the activity on CIEL PK. Sign in with this email address to record your decision. New to CIEL PK? Sign up as faculty with the same email. You can also review it from your dashboard at <a href="${loginLink}">cielpk.com</a>.</p>
         ${flashcard}
         <p style="margin: 18px 0 10px;">
           ${button('Approve', reviewLink('approve'), true, '#0e7d74')}
@@ -2508,7 +2508,7 @@ export class MailService {
       await this.sendMailReliable({
         from,
         to: input.to,
-        subject: `Quick Community Work to review: ${title}`,
+        subject: `Quick Community Impact to review: ${title}`,
         html,
       });
       this.logger.log(`Quick-work review email sent to ${input.to}`);
@@ -2520,7 +2520,7 @@ export class MailService {
     }
   }
 
-  /** Quick Community Work: a lead added this student to an activity; ask them to confirm they took part. */
+  /** Quick Community Impact: a lead added this student to an activity; ask them to confirm they took part. */
   async sendQuickWorkTeamInvite(input: {
     /** Sealed token for the one-click confirm / decline page. */
     respondToken: string;
@@ -2546,9 +2546,9 @@ export class MailService {
     const titleEsc = this.escHtmlPlain(title);
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
-        <p>Dear Student,</p>
-        <p>You’ve been linked to <strong>${titleEsc}</strong> under Quick Community Work. If you participated, approve it to add it to your dashboard. If you didn’t, reject it.</p>
-        <p>Log in or sign up at <a href="${loginLink}">cielpk.com</a> to review the opportunity.</p>
+        <p>Dear ${this.escHtmlPlain(input.name?.trim() || 'Student')},</p>
+        <p>${this.escHtmlPlain(input.leadName?.trim() || 'A student')} added you to <strong>${titleEsc}</strong> under Quick Community Impact. If you took part, approve it so the activity can be submitted and your hours counted. If you didn’t, reject it.</p>
+        <p>You can also answer from your Quick Impact Log after signing in at <a href="${loginLink}">cielpk.com</a>.</p>
         ${buttons}
         <p>Best regards,<br><strong>CIEL PK Team</strong></p>
       </div>
@@ -2557,7 +2557,7 @@ export class MailService {
       await this.sendMailReliable({
         from,
         to: input.to,
-        subject: `You’ve been linked to ${title} under Quick Community Work`,
+        subject: `Confirm you took part in ${title} (Quick Community Impact)`,
         html,
       });
       this.logger.log(`Quick-work team invite email sent to ${input.to}`);
@@ -2625,7 +2625,7 @@ export class MailService {
     }
   }
 
-  /** Approve / reject buttons for a Quick Community Work invite; each opens a page that asks once more before recording. */
+  /** Approve / reject buttons for a Quick Community Impact invite; each opens a page that asks once more before recording. */
   private quickWorkAnswerButtons(
     token: string,
     acceptLabel: string,

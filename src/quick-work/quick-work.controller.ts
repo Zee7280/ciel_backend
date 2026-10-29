@@ -13,6 +13,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { OptionalJwtAuthGuard } from '../auth/optional-jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
@@ -31,8 +32,10 @@ import {
 } from './dto/quick-work.dto';
 
 type AuthedRequest = { user: { id: string } };
+/** Behind OptionalJwtAuthGuard: `user` is set only when a valid session token came with the request. */
+type MaybeAuthedRequest = { user?: { id: string } };
 
-/** Student side of Quick Community Work: draft, team confirmation, submit, My Quick Work. */
+/** Student side of Quick Community Impact: draft, team confirmation, submit, Quick Impact Log. */
 @Controller('quick-work')
 @UseGuards(JwtAuthGuard, RolesGuard, SubscriptionActiveGuard)
 @Roles(UserRole.STUDENT)
@@ -42,6 +45,15 @@ export class QuickWorkController {
   @Get('me')
   async mine(@Request() req: AuthedRequest) {
     return { success: true, data: await this.quickWork.listMine(req.user) };
+  }
+
+  /** Step 1 hint: does the faculty email the student typed belong to an account that can approve hours? */
+  @Get('faculty-lookup')
+  async facultyLookup(@Query('email') email: string) {
+    return {
+      success: true,
+      data: await this.quickWork.lookupFaculty(email ?? ''),
+    };
   }
 
   @Post('logs')
@@ -183,27 +195,42 @@ export class QuickWorkEmailResponseController {
 
 /**
  * Approve / Request Revision / Reject from the faculty "submitted for review" email. The sealed token
- * names the log and the faculty email; acting needs that email's faculty account, and runs the same
- * checks as the dashboard. Opening the page (GET) never records anything.
+ * names the log and the faculty email. Signed out, the page shows the activity card only; the full
+ * record and the decision need the named faculty member signed in, with the same checks as the
+ * dashboard. Opening the page (GET) never records anything.
  */
 @Controller('quick-work/faculty-review')
+@UseGuards(OptionalJwtAuthGuard)
 export class QuickWorkFacultyEmailReviewController {
   constructor(private readonly quickWork: QuickWorkService) {}
 
   @Get()
-  async preview(@Query('token') token: string) {
+  async preview(
+    @Request() req: MaybeAuthedRequest,
+    @Query('token') token: string,
+  ) {
     return {
       success: true,
-      data: await this.quickWork.facultyReviewPreview(token ?? ''),
+      data: await this.quickWork.facultyReviewPreview(
+        token ?? '',
+        req.user ?? null,
+      ),
     };
   }
 
   @Post()
-  async review(@Body() dto: QuickWorkFacultyEmailReviewDto) {
+  async review(
+    @Request() req: MaybeAuthedRequest,
+    @Body() dto: QuickWorkFacultyEmailReviewDto,
+  ) {
     const { token, ...decision } = dto;
     return {
       success: true,
-      data: await this.quickWork.facultyReviewByEmail(token, decision),
+      data: await this.quickWork.facultyReviewByEmail(
+        token,
+        decision,
+        req.user ?? null,
+      ),
     };
   }
 }

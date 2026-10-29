@@ -359,7 +359,7 @@ describe('Quick Community Work (real app + real Postgres)', () => {
     );
     await h.as(lead).post(`/quick-work/logs/${log.id}/submit`).expect(201);
     expect(
-      await noticesFor(faculty.id, 'Quick Community Work to review'),
+      await noticesFor(faculty.id, 'Quick Community Impact to review'),
     ).toHaveLength(1);
 
     await h
@@ -369,7 +369,7 @@ describe('Quick Community Work (real app + real Postgres)', () => {
       .expect(201);
     const forAdmin = await noticesFor(
       admin.id,
-      'Quick Community Work: final approval needed',
+      'Quick Community Impact: final approval needed',
     );
     expect(forAdmin.some((n) => n.message.includes('Notify drive'))).toBe(true);
 
@@ -380,14 +380,14 @@ describe('Quick Community Work (real app + real Postgres)', () => {
       .expect(201);
     const decision = await noticesFor(
       faculty.id,
-      'Quick Community Work: CIEL PK decision',
+      'Quick Community Impact: CIEL PK decision',
     );
     expect(decision).toHaveLength(1);
     expect(decision[0].message).toContain('returned for changes');
     expect(decision[0].message).toContain('Add the venue photo');
     const toLead = await noticesFor(
       lead.id,
-      'Quick Community Work reviewed',
+      'Quick Community Impact reviewed',
       2,
     );
     expect(toLead.map((n) => n.message).join(' ')).toContain(
@@ -1558,16 +1558,27 @@ describe('Quick Community Work (real app + real Postgres)', () => {
     const lead = await h.makeUser(UserRole.STUDENT);
     const faculty = await authorisedFaculty();
     type Preview = {
-      log: LogView & { status: string };
+      log: LogView & { status: string; summary: string; evidence: unknown[] };
       open: boolean;
       registered: boolean;
+      signedIn: boolean;
       approveBlockedReason: string | null;
     };
-    const review = (token: string, body: Record<string, unknown>) =>
+    const reviewAs = (
+      who: E2eUser | null,
+      token: string,
+      body: Record<string, unknown>,
+    ) =>
       h
-        .as(null)
+        .as(who)
         .post('/quick-work/faculty-review')
         .send({ token, ...body });
+    const review = (token: string, body: Record<string, unknown>) =>
+      reviewAs(null, token, body);
+    const previewAs = (who: E2eUser | null, token: string) =>
+      h
+        .as(who)
+        .get(`/quick-work/faculty-review?token=${encodeURIComponent(token)}`);
 
     // Faculty without a CIEL account: the link asks them to sign up first.
     const stray = await draft(
@@ -1594,16 +1605,19 @@ describe('Quick Community Work (real app + real Postgres)', () => {
         `/quick-work/faculty-review?token=${encodeURIComponent(strayToken)}`,
       );
     const strayData = (strayPreview.body as Body<Preview>).data;
-    expect(strayData).toMatchObject({ open: true, registered: false });
+    expect(strayData).toMatchObject({
+      open: true,
+      registered: false,
+      signedIn: false,
+    });
     // The address was typed by a student: no teammates' details or evidence until a faculty account acts.
     expect(strayData.log.participants[0]).toMatchObject({
       email: '',
       studentId: '',
       userId: '',
     });
-    expect(
-      (strayData.log as unknown as { evidence: unknown[] }).evidence,
-    ).toEqual([]);
+    expect(strayData.log.evidence).toEqual([]);
+    expect(strayData.log.summary).toBe('');
     const strayTry = await review(strayToken, {
       action: 'approve',
       verified: true,
@@ -1650,39 +1664,68 @@ describe('Quick Community Work (real app + real Postgres)', () => {
       teamMinutes: 60,
       evidenceCount: 1,
     });
-    const preview = await h
-      .as(null)
-      .get(
-        `/quick-work/faculty-review?token=${encodeURIComponent(mail.reviewToken)}`,
-      );
-    const full = (preview.body as Body<Preview>).data;
+    // Opened from the mailbox (signed out): the activity card only, no report, evidence or contacts.
+    const card = (
+      (await previewAs(null, mail.reviewToken)).body as Body<Preview>
+    ).data;
+    expect(card).toMatchObject({
+      open: true,
+      registered: true,
+      signedIn: false,
+      approveBlockedReason: null,
+    });
+    expect(card.log.participants[0]).toMatchObject({
+      email: '',
+      studentId: '',
+      userId: '',
+    });
+    expect(card.log.evidence).toEqual([]);
+    expect(card.log.summary).toBe('');
+    // The link alone records nothing: the decision needs the named faculty member signed in.
+    expect(
+      (await review(mail.reviewToken, { action: 'approve', verified: true }))
+        .status,
+    ).toBe(401);
+    const other = await authorisedFaculty();
+    expect(
+      (
+        await reviewAs(other, mail.reviewToken, {
+          action: 'approve',
+          verified: true,
+        })
+      ).status,
+    ).toBe(403);
+    // Signed in as that faculty member: the full record and the same checks as the dashboard.
+    const full = (
+      (await previewAs(faculty, mail.reviewToken)).body as Body<Preview>
+    ).data;
     expect(full).toMatchObject({
       open: true,
       registered: true,
+      signedIn: true,
       approveBlockedReason: null,
     });
     expect(full.log.participants[0]).toMatchObject({
       email: lead.email,
       userId: '',
     });
-    expect(
-      (full.log as unknown as { evidence: unknown[] }).evidence,
-    ).toHaveLength(1);
+    expect(full.log.evidence).toHaveLength(1);
+    expect(full.log.summary).toMatch(/awareness desk/);
     expect(
       (
-        await review(tampered(mail.reviewToken), {
+        await reviewAs(faculty, tampered(mail.reviewToken), {
           action: 'approve',
           verified: true,
         })
       ).status,
     ).toBe(404);
-    expect((await review(mail.reviewToken, { action: 'approve' })).status).toBe(
-      400,
-    );
-    expect((await review(mail.reviewToken, { action: 'changes' })).status).toBe(
-      400,
-    );
-    const approved = await review(mail.reviewToken, {
+    expect(
+      (await reviewAs(faculty, mail.reviewToken, { action: 'approve' })).status,
+    ).toBe(400);
+    expect(
+      (await reviewAs(faculty, mail.reviewToken, { action: 'changes' })).status,
+    ).toBe(400);
+    const approved = await reviewAs(faculty, mail.reviewToken, {
       action: 'approve',
       verified: true,
     });
@@ -1699,7 +1742,12 @@ describe('Quick Community Work (real app + real Postgres)', () => {
       ).data.logs.find((l) => l.id === log.id)?.status,
     ).toBe('admin_review');
     expect(
-      (await review(mail.reviewToken, { action: 'reject', note: 'x' })).status,
+      (
+        await reviewAs(faculty, mail.reviewToken, {
+          action: 'reject',
+          note: 'x',
+        })
+      ).status,
     ).toBe(400);
     const audit = await h.as(admin).get(`/admin/quick-work/${log.id}`);
     expect(
@@ -1707,6 +1755,54 @@ describe('Quick Community Work (real app + real Postgres)', () => {
         (x) => x.action,
       ),
     ).toContain('email_approved');
+  });
+
+  it('Step 1 hint: says whether the typed faculty email can approve; a declined log says it is closed', async () => {
+    const lead = await h.makeUser(UserRole.STUDENT);
+    const lookup = (email: string) =>
+      h
+        .as(lead)
+        .get(`/quick-work/faculty-lookup?email=${encodeURIComponent(email)}`);
+    type Lookup = {
+      registered: boolean;
+      name: string | null;
+      university: string | null;
+    };
+    expect((await lookup('not-an-email')).status).toBe(400);
+    expect(
+      ((await lookup('nobody.here@e2e.test')).body as Body<Lookup>).data,
+    ).toMatchObject({ registered: false, name: null, university: null });
+    const unlinked = await h.makeUser(UserRole.FACULTY);
+    expect(
+      ((await lookup(unlinked.email.toUpperCase())).body as Body<Lookup>).data,
+    ).toMatchObject({ registered: true, university: null });
+    const linked = await authorisedFaculty();
+    expect(
+      ((await lookup(linked.email)).body as Body<Lookup>).data,
+    ).toMatchObject({ registered: true, university: university.name });
+    // Students only.
+    expect(
+      (await h.as(linked).get('/quick-work/faculty-lookup?email=x@y.z')).status,
+    ).toBe(403);
+
+    const log = await draft(lead, completeLog(lead, linked));
+    await h.as(lead).post(`/quick-work/logs/${log.id}/submit`).expect(201);
+    await h
+      .as(linked)
+      .post(`/faculty/quick-work/${log.id}/review`)
+      .send({ action: 'reject', note: 'Not a service activity.' })
+      .expect(201);
+    const edit = await h
+      .as(lead)
+      .patch(`/quick-work/logs/${log.id}`)
+      .send({ title: 'Try again' });
+    expect(edit.status).toBe(400);
+    expect(messages(edit.body as Body<unknown>)).toMatch(
+      /not approved and is closed/,
+    );
+    const resubmit = await h.as(lead).post(`/quick-work/logs/${log.id}/submit`);
+    expect(resubmit.status).toBe(400);
+    expect(messages(resubmit.body as Body<unknown>)).toMatch(/closed/);
   });
 
   it('a student’s submit emails to faculty are capped per day; later submits still reach the dashboard', async () => {

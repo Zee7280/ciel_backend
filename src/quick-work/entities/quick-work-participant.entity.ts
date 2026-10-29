@@ -65,4 +65,12 @@ export class QuickWorkParticipant {
   /** Recorded minutes, set on save; credited only once the log is approved. */
   @Column({ type: 'int', default: 0 })
   minutes: number;
+
+  /**
+   * Public certificate ID (CIEL-QCI-YYYY-XXXX-XXXX), issued once when CIEL PK gives final approval
+   * and this student is credited with time; null until then. Nullable ADD COLUMN only.
+   */
+  @Index({ unique: true })
+  @Column({ type: 'varchar', length: 32, nullable: true })
+  certificateCode: string | null;
 }

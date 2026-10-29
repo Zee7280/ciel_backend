@@ -10,11 +10,13 @@ import { AttendanceLog } from '../src/engagement/entities/attendance-log.entity'
 import { Organization } from '../src/organizations/entities/organization.entity';
 import { widenColumnsBeforeSync } from '../src/database/widen-columns-before-sync';
 import { Notification } from '../src/notifications/entities/notification.entity';
+import { QuickWorkParticipant } from '../src/quick-work/entities/quick-work-participant.entity';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import type { Repository } from 'typeorm';
 
 type Participant = {
   userId: string;
+  name: string;
   email: string;
   isLead: boolean;
   joinStatus: string;
@@ -390,6 +392,280 @@ describe('Quick Community Work (real app + real Postgres)', () => {
     expect(toLead.map((n) => n.message).join(' ')).toContain(
       'returned for changes',
     );
+  });
+
+  it('certificates: issued on CIEL PK final approval to each credited student; the public check shows only that certificate', async () => {
+    const lead = await h.makeUser(UserRole.STUDENT);
+    const mate = await h.makeUser(UserRole.STUDENT);
+    const absent = await h.makeUser(UserRole.STUDENT);
+    const faculty = await authorisedFaculty();
+    const slot = (email: string, present = true) => ({
+      email,
+      present,
+      startTime: '10:00',
+      endTime: '11:00',
+      breakMinutes: 0,
+    });
+    const log = await draft(
+      lead,
+      completeLog(lead, faculty, {
+        mode: 'team',
+        title: 'Certificate drive',
+        teammates: [mate, absent].map((m, i) => ({
+          email: m.email,
+          studentId: `CERT-${i}`,
+        })),
+        attendance: [
+          slot(lead.email),
+          slot(mate.email),
+          slot(absent.email, false),
+        ],
+      }),
+    );
+    for (const m of [mate, absent]) {
+      await h
+        .as(m)
+        .post(`/quick-work/logs/${log.id}/join`)
+        .send({ accept: true })
+        .expect(201);
+    }
+    type Mine = {
+      logs: (LogView & { certificate: { code: string } | null })[];
+    };
+    const certOf = async (u: E2eUser) =>
+      ((await h.as(u).get('/quick-work/me')).body as Body<Mine>).data.logs.find(
+        (l) => l.id === log.id,
+      )?.certificate ?? null;
+
+    await h.as(lead).post(`/quick-work/logs/${log.id}/submit`).expect(201);
+    expect(await certOf(lead)).toBeNull();
+    await h
+      .as(faculty)
+      .post(`/faculty/quick-work/${log.id}/review`)
+      .send({ action: 'approve', verified: true })
+      .expect(201);
+    // Faculty approval alone is not final: no certificate yet.
+    expect(await certOf(lead)).toBeNull();
+    await finalApprove(log.id);
+
+    const leadCert = await certOf(lead);
+    const mateCert = await certOf(mate);
+    expect(leadCert?.code).toMatch(/^CIEL-QCI-\d{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$/);
+    expect(mateCert?.code).toMatch(/^CIEL-QCI-/);
+    expect(mateCert?.code).not.toBe(leadCert?.code);
+    // Absent: no time credited, so no certificate. Reading again never re-issues.
+    expect(await certOf(absent)).toBeNull();
+    expect((await certOf(lead))?.code).toBe(leadCert?.code);
+
+    // Faculty and admin views never carry anyone's certificate ID.
+    const facultyView = await h.as(faculty).get('/faculty/quick-work');
+    const adminView = await h.as(admin).get(`/admin/quick-work/${log.id}`);
+    for (const body of [facultyView.text, adminView.text]) {
+      expect(body).not.toContain(leadCert!.code);
+      expect(body).not.toContain(mateCert!.code);
+    }
+    // A student sees only their own ID, never a teammate's.
+    const leadMine = await h.as(lead).get('/quick-work/me');
+    expect(leadMine.text).not.toContain(mateCert!.code);
+    const leadName = (leadMine.body as Body<Mine>).data.logs
+      .find((l) => l.id === log.id)
+      ?.participants.find((p) => p.isLead)?.name;
+    expect(leadName).toBeTruthy();
+
+    // Public check, signed out, in any letter case: the certificate's own facts only.
+    const check = await h
+      .as(null)
+      .get(`/quick-work/certificates/${leadCert!.code.toLowerCase()}`);
+    expect(check.status).toBe(200);
+    expect((check.body as Body<Record<string, unknown>>).data).toMatchObject({
+      code: leadCert!.code,
+      valid: true,
+      holderName: leadName,
+      title: 'Certificate drive',
+      minutes: 60,
+      university: 'E2E University',
+      participation: 'team',
+      teamSize: 2,
+    });
+    expect(check.text).not.toContain(lead.email);
+    expect(check.text).not.toContain(mate.email);
+    expect(check.text).not.toContain('CERT-0');
+
+    for (const bad of ['CIEL-QCI-2026-0000-0000', 'not-a-code', "x' OR 1=1"]) {
+      const res = await h
+        .as(null)
+        .get(`/quick-work/certificates/${encodeURIComponent(bad)}`);
+      expect(res.status).toBe(404);
+    }
+
+    // A log approved before certificates existed: the ID is issued when the student next opens it.
+    const parts = h.app.get<Repository<QuickWorkParticipant>>(
+      getRepositoryToken(QuickWorkParticipant),
+    );
+    await parts.update({ logId: log.id }, { certificateCode: null });
+    const reissued = await certOf(mate);
+    expect(reissued?.code).toMatch(/^CIEL-QCI-/);
+    expect(
+      (await h.as(null).get(`/quick-work/certificates/${reissued!.code}`))
+        .status,
+    ).toBe(200);
+    expect(
+      (await h.as(null).get(`/quick-work/certificates/${mateCert!.code}`))
+        .status,
+    ).toBe(404);
+  });
+
+  it('an invited teammate sees only the invitation until they confirm; declining closes it again', async () => {
+    const lead = await h.makeUser(UserRole.STUDENT);
+    const mate = await h.makeUser(UserRole.STUDENT);
+    const other = await h.makeUser(UserRole.STUDENT);
+    const faculty = await authorisedFaculty();
+    const log = await draft(
+      lead,
+      completeLog(lead, faculty, {
+        mode: 'team',
+        title: 'Invitation privacy drive',
+        host: 'Host Org',
+        hostEmail: 'host@org.pk',
+        partnerDetails: [
+          { name: 'Partner', email: 'p@org.pk', contact: '+923001110000' },
+        ],
+        teammates: [
+          { email: mate.email, studentId: 'INV-1', contact: '+923001112222' },
+          { email: other.email, studentId: 'INV-2', contact: '+923001113333' },
+        ],
+      }),
+    );
+    type Full = LogView & {
+      summary: string;
+      evidence: unknown[];
+      hostEmail: string | null;
+      partnerDetails: unknown[];
+      facultyEmail: string;
+    };
+    const asMate = async () => {
+      const one = await h.as(mate).get(`/quick-work/logs/${log.id}`);
+      const mine = await h.as(mate).get('/quick-work/me');
+      const listed = (mine.body as Body<{ logs: Full[] }>).data.logs.find(
+        (l) => l.id === log.id,
+      );
+      return { one, view: (one.body as Body<Full>).data, listed, mine };
+    };
+
+    const invited = await asMate();
+    expect(invited.one.status).toBe(200);
+    for (const v of [invited.view, invited.listed!]) {
+      expect(v.title).toBe('Invitation privacy drive');
+      expect(v.summary).toBe('');
+      expect(v.evidence).toEqual([]);
+      expect(v.hostEmail).toBeNull();
+      expect(v.partnerDetails).toEqual([]);
+      expect(v.facultyEmail).toBe('');
+      // Only the lead (name only) and the invited teammate's own row.
+      expect(v.participants).toHaveLength(2);
+      const leadRow = v.participants.find((p) => p.isLead)!;
+      expect(leadRow.name).toBeTruthy();
+      expect(leadRow.email).toBe('');
+    }
+    for (const text of [invited.one.text, invited.mine.text]) {
+      expect(text).not.toContain(other.email);
+      expect(text).not.toContain(lead.email);
+      expect(text).not.toContain('+923001113333');
+      expect(text).not.toContain('INV-2');
+      expect(text).not.toContain('host@org.pk');
+      expect(text).not.toContain('awareness desk');
+    }
+
+    // Confirming opens the full log (and the answer itself returns it).
+    const join = await h
+      .as(mate)
+      .post(`/quick-work/logs/${log.id}/join`)
+      .send({ accept: true })
+      .expect(201);
+    expect((join.body as Body<Full>).data.evidence).toHaveLength(1);
+    const joined = await asMate();
+    expect(joined.view.summary).toContain('awareness desk');
+    expect(joined.view.participants).toHaveLength(3);
+    expect(joined.view.evidence).toHaveLength(1);
+
+    // Declining (while the lead can still edit) closes it again.
+    await h
+      .as(mate)
+      .post(`/quick-work/logs/${log.id}/join`)
+      .send({ accept: false })
+      .expect(201);
+    const declined = await asMate();
+    expect(declined.view.evidence).toEqual([]);
+    expect(declined.one.text).not.toContain(other.email);
+  });
+
+  it('evidence: views carry short-lived signed links only; the stored file URL never leaves the API', async () => {
+    const lead = await h.makeUser(UserRole.STUDENT);
+    const faculty = await authorisedFaculty();
+    const stored = evidenceUrl(lead);
+    const log = await draft(lead, completeLog(lead, faculty));
+    type WithEvidence = { evidence: { url: string }[] };
+    const urlOf = (body: unknown) =>
+      (body as Body<WithEvidence>).data.evidence[0].url;
+    const signed = urlOf(log ? { data: log } : null);
+    expect(signed.startsWith(`${stored}?`)).toBe(true);
+    expect(signed).toContain('X-Amz-Signature=');
+    expect(signed).toMatch(/X-Amz-Expires=3600/);
+
+    // Saving the form back with the signed link stores the plain file URL again.
+    const resaved = await h
+      .as(lead)
+      .patch(`/quick-work/logs/${log.id}`)
+      .send({
+        evidence: [
+          {
+            url: signed,
+            name: 'photo.jpg',
+            type: 'image/jpeg',
+            size: 1000,
+            caption: 'Awareness desk',
+          },
+        ],
+      })
+      .expect(200);
+    expect(urlOf(resaved.body)).toContain('X-Amz-Signature=');
+    const rows: { evidence: { url: string }[] }[] = await h.ds.query(
+      `SELECT evidence FROM quick_work_logs WHERE id = $1`,
+      [log.id],
+    );
+    expect(rows[0].evidence[0].url).toBe(stored);
+    // Someone else's signed link is still refused (the key must be in the lead's own folder).
+    const foreign = await h
+      .as(lead)
+      .patch(`/quick-work/logs/${log.id}`)
+      .send({
+        evidence: [
+          {
+            url: `${evidenceUrl(faculty)}?X-Amz-Signature=x`,
+            name: 'x.jpg',
+            type: 'image/jpeg',
+            size: 1,
+            caption: 'x',
+          },
+        ],
+      });
+    expect(foreign.status).toBe(400);
+
+    await h.as(lead).post(`/quick-work/logs/${log.id}/submit`).expect(201);
+    const facultyQueue = await h.as(faculty).get('/faculty/quick-work');
+    const adminDetail = await h.as(admin).get(`/admin/quick-work/${log.id}`);
+    const leadMine = await h.as(lead).get('/quick-work/me');
+    for (const res of [facultyQueue, adminDetail, leadMine]) {
+      expect(res.status).toBe(200);
+      // The bare stored URL (not followed by a signature) never appears in any view.
+      expect(
+        res.text
+          .split(stored)
+          .slice(1)
+          .every((rest) => rest.startsWith('?')),
+      ).toBe(true);
+      expect(res.text).toContain('X-Amz-Signature=');
+    }
   });
 
   it('sidebar badges: faculty and admin pending counts follow submit and review', async () => {

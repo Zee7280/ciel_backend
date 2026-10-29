@@ -208,6 +208,23 @@ export class QuickWorkFacultyEmailReviewController {
   }
 }
 
+/**
+ * Public check behind a Quick Community Impact certificate's QR code and ID, without signing in.
+ * Shows that certificate's own facts only.
+ */
+@Controller('quick-work/certificates')
+export class QuickWorkCertificateController {
+  constructor(private readonly quickWork: QuickWorkService) {}
+
+  @Get(':code')
+  async verify(@Param('code') code: string) {
+    return {
+      success: true,
+      data: await this.quickWork.verifyCertificate(code),
+    };
+  }
+}
+
 /** CIEL PK admin: oversight of every log, faculty reassignment, and review when faculty cannot. */
 @Controller('admin/quick-work')
 @UseGuards(JwtAuthGuard, RolesGuard)

@@ -12,6 +12,7 @@ import { QuickWorkService } from './quick-work.service';
 import {
   AdminQuickWorkController,
   FacultyQuickWorkController,
+  QuickWorkCertificateController,
   QuickWorkEmailResponseController,
   QuickWorkFacultyEmailReviewController,
   QuickWorkController,
@@ -31,6 +32,7 @@ import {
     FacultyUniversityScopeModule,
   ],
   controllers: [
+    QuickWorkCertificateController,
     QuickWorkEmailResponseController,
     QuickWorkFacultyEmailReviewController,
     QuickWorkController,

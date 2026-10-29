@@ -8,6 +8,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { randomBytes } from 'crypto';
 import { Brackets, In, Repository } from 'typeorm';
 import { User } from '../users/entities/user.entity';
 import { UserRole } from '../users/enums/user-role.enum';
@@ -43,9 +44,13 @@ import {
   QUICK_WORK_MAX_EVIDENCE_BYTES,
   QUICK_WORK_MAX_PARTICIPANTS,
   cleanPartners,
+  isCreditedParticipant,
+  normalizeCertificateCode,
   partnerLabel,
   partnerList,
+  pktNow,
   quickWorkActivityLabel,
+  quickWorkCertificateCode,
   quickWorkSubmitErrors,
   QuickWorkStatus,
   timesOverlap,
@@ -55,6 +60,8 @@ import {
 const ACTIVE_STUDENT_STATUSES = ['active', 'approved'];
 
 const EVIDENCE_FOLDER = 'quick-work';
+/** How long an evidence link in an API view stays valid; reopening the log issues fresh ones. */
+const EVIDENCE_LINK_TTL_SECONDS = 60 * 60;
 
 /** Logs an admin sees by default: everything a student has sent for review (drafts on request). */
 const ADMIN_DEFAULT_STATUSES: QuickWorkStatus[] = [
@@ -125,7 +132,21 @@ export class QuickWorkService {
           order: { updatedAt: 'DESC' },
         })
       : [];
-    const views = logs.map((log) => this.toView(log, viewer.id));
+    // Logs approved before certificates existed (or whose issue failed at approval) get theirs now.
+    for (const log of logs) {
+      const me = log.participants.find((p) => p.userId === viewer.id);
+      if (
+        log.status === 'approved' &&
+        me &&
+        !me.certificateCode &&
+        isCreditedParticipant(me)
+      ) {
+        await this.issueCertificates(log);
+      }
+    }
+    const views = await Promise.all(
+      logs.map((log) => this.signEvidence(this.toView(log, viewer.id))),
+    );
     const own = (v: (typeof views)[number]) =>
       v.participants.find((p) => p.userId === viewer.id);
     const approved = views.filter((v) => v.status === 'approved');
@@ -150,7 +171,7 @@ export class QuickWorkService {
     if (!log.participants.some((p) => p.userId === viewer.id)) {
       throw new NotFoundException('Quick-work log not found');
     }
-    return this.toView(log, viewer.id);
+    return this.signEvidence(this.toView(log, viewer.id));
   }
 
   /** Faculty review queue: logs naming this faculty member's email, once submitted. */
@@ -175,16 +196,18 @@ export class QuickWorkService {
       logs
         .filter((log) => log.status === 'submitted')
         .map(async (log) => ({
-          ...this.toView(log, null),
+          ...(await this.signEvidence(this.toView(log, null))),
           approveBlockedReason: await this.approvalScopeError(viewer.id, log),
         })),
     );
     return {
       pending,
-      reviewed: logs
-        .filter((log) => log.status !== 'submitted')
-        .slice(0, 50)
-        .map((log) => this.toView(log, null)),
+      reviewed: await Promise.all(
+        logs
+          .filter((log) => log.status !== 'submitted')
+          .slice(0, 50)
+          .map((log) => this.signEvidence(this.toView(log, null))),
+      ),
     };
   }
 
@@ -331,7 +354,9 @@ export class QuickWorkService {
     }
     if (invited.length) mails.push(this.emailInvites(log, lead.name, invited));
     await settleWithin(Promise.all(mails), MAIL_WAIT_MS);
-    return this.toView(await this.loadLog(log.id), viewer.id);
+    return this.signEvidence(
+      this.toView(await this.loadLog(log.id), viewer.id),
+    );
   }
 
   async deleteDraft(viewer: Viewer, id: string) {
@@ -371,7 +396,7 @@ export class QuickWorkService {
         : 'Quick Community Work: teammate declined',
       `${me.name || me.email} ${accept ? 'confirmed they took part in' : 'declined'} "${log.title || 'your quick community activity'}".`,
     );
-    return this.toView(log, viewer.id);
+    return this.signEvidence(this.toView(log, viewer.id));
   }
 
   /* ------------------------------------------------------------------ emailed accept / decline */
@@ -450,6 +475,47 @@ export class QuickWorkService {
     return { log, kind: 'member' as const, participant };
   }
 
+  /* ------------------------------------------------------------------ public certificate check */
+
+  /**
+   * What the certificate's QR code / ID verifies: that certificate's own facts only (holder, activity,
+   * hours, university, approval date). Never emails, student IDs, teammates or evidence.
+   */
+  async verifyCertificate(raw: string) {
+    const code = normalizeCertificateCode(raw);
+    const invalid = new NotFoundException(
+      'No Quick Community Impact certificate matches this ID. Check the ID and try again.',
+    );
+    if (!code) throw invalid;
+    const holder = await this.participantRepo.findOne({
+      where: { certificateCode: code },
+      relations: ['log'],
+    });
+    const log = holder?.log;
+    if (!holder || !log || log.status !== 'approved') throw invalid;
+    if (!isCreditedParticipant(holder)) throw invalid;
+    const credited = (
+      await this.participantRepo.find({
+        where: { logId: log.id, present: true },
+        select: ['id', 'present', 'startTime', 'endTime', 'breakMinutes'],
+      })
+    ).filter(isCreditedParticipant).length;
+    return {
+      code,
+      valid: true,
+      holderName: holder.name,
+      title: log.title,
+      activityType: quickWorkActivityLabel(log),
+      activityDate: log.activityDate,
+      minutes: holder.minutes,
+      university: log.university,
+      participation: credited > 1 ? ('team' as const) : ('individual' as const),
+      teamSize: credited,
+      sdg: log.sdg,
+      verifiedAt: log.reviewedAt,
+    };
+  }
+
   /* ------------------------------------------------------------------ faculty review from the email */
 
   /**
@@ -460,7 +526,7 @@ export class QuickWorkService {
   async facultyReviewPreview(token: string) {
     const log = await this.resolveFacultyReviewToken(token);
     const faculty = await this.facultyAccountFor(log.facultyEmail);
-    const view = this.toView(log, null);
+    const view = await this.signEvidence(this.toView(log, null));
     // The address was typed by a student: until a faculty account with it may act (and while the
     // log awaits review), the link shows the activity card only, not teammates' details or evidence.
     const full = Boolean(faculty) && log.status === 'submitted';
@@ -594,7 +660,9 @@ export class QuickWorkService {
         `"${log.title}" was submitted to ${log.facultyName} for review. Your hours count once it is approved.`,
       );
     }
-    return this.toView(await this.loadLog(log.id), viewer.id);
+    return this.signEvidence(
+      this.toView(await this.loadLog(log.id), viewer.id),
+    );
   }
 
   async review(
@@ -724,7 +792,9 @@ export class QuickWorkService {
         } "${log.title}"${note ? `: ${note}` : '.'}`,
       );
     }
-    return this.toView(await this.loadLog(log.id), null);
+    const decided = await this.loadLog(log.id);
+    if (status === 'approved') await this.issueCertificates(decided);
+    return this.signEvidence(this.toView(decided, null));
   }
 
   /**
@@ -890,7 +960,7 @@ export class QuickWorkService {
       : [];
     const actorById = new Map(actors.map((a) => [a.id, a]));
     return {
-      ...this.toView(log, null),
+      ...(await this.signEvidence(this.toView(log, null))),
       facultyAccount: faculty
         ? {
             exists: true,
@@ -1309,20 +1379,98 @@ export class QuickWorkService {
     items: SaveQuickWorkLogDto['evidence'],
   ): QuickWorkEvidence[] {
     return (items ?? []).map((e) => {
-      const key = this.s3Service.keyFromPublicUrl(e.url);
+      // Views carry a short-lived signed link; store the file's own URL without the signature.
+      const url = e.url.split(/[?#]/)[0];
+      const key = this.s3Service.keyFromPublicUrl(url);
       if (!key || !key.startsWith(`${EVIDENCE_FOLDER}/${leadUserId}/`)) {
         throw new BadRequestException(
           `Upload ${e.name || 'each evidence file'} again from this form.`,
         );
       }
       return {
-        url: e.url,
+        url,
         name: e.name.trim(),
         type: e.type,
         size: e.size,
         caption: e.caption.trim(),
       };
     });
+  }
+
+  /**
+   * Issues a certificate ID to every credited student of an approved log who has none yet, in one
+   * statement for the whole team; an ID is never replaced once issued. Never fails the caller: a
+   * student whose ID could not be issued gets it the next time they open Quick Impact Log.
+   */
+  private async issueCertificates(log: QuickWorkLog): Promise<void> {
+    if (log.status !== 'approved') return;
+    const missing = (log.participants ?? []).filter(
+      (p) => !p.certificateCode && isCreditedParticipant(p),
+    );
+    if (!missing.length) return;
+    const year = pktNow(log.reviewedAt ?? new Date()).date.slice(0, 4);
+    const codes = missing.map((p) => ({
+      id: p.id,
+      code: quickWorkCertificateCode(year, randomBytes(8)),
+    }));
+    try {
+      const values = codes
+        .map((_, i) => `($${i * 2 + 1}::uuid, $${i * 2 + 2})`)
+        .join(', ');
+      // "IS NULL": a concurrent request that issued first keeps its ID.
+      await this.participantRepo.query(
+        `UPDATE quick_work_participants AS p SET "certificateCode" = v.code
+         FROM (VALUES ${values}) AS v(id, code)
+         WHERE p.id = v.id AND p."certificateCode" IS NULL`,
+        codes.flatMap((c) => [c.id, c.code]),
+      );
+    } catch (e) {
+      // A (vanishingly rare) duplicate ID or a database hiccup: retry on the next read.
+      this.logger.warn(
+        `Quick-work certificate issue failed for log ${log.id}: ${(e as Error).message}`,
+      );
+      return;
+    }
+    const stored = await this.participantRepo.find({
+      where: { id: In(missing.map((p) => p.id)) },
+      select: ['id', 'certificateCode'],
+    });
+    const byId = new Map(stored.map((p) => [p.id, p.certificateCode]));
+    for (const p of missing) p.certificateCode = byId.get(p.id) ?? null;
+  }
+
+  /**
+   * Evidence links in API views are short-lived signed links, never the stored file URL, so files can
+   * be private and only people the API shows the log to can open them. A link that cannot be signed is
+   * left empty rather than falling back to the stored URL.
+   */
+  private async signEvidence<T extends { evidence: QuickWorkEvidence[] }>(
+    view: T,
+  ): Promise<T> {
+    if (!view.evidence?.length) return view;
+    const evidence = await Promise.all(
+      view.evidence.map(async (e) => {
+        const key = this.s3Service.keyFromPublicUrl(
+          String(e.url || '').split(/[?#]/)[0],
+        );
+        if (!key) return { ...e, url: '' };
+        try {
+          return {
+            ...e,
+            url: await this.s3Service.presignGetObject(
+              key,
+              EVIDENCE_LINK_TTL_SECONDS,
+            ),
+          };
+        } catch (err) {
+          this.logger.warn(
+            `Quick-work evidence link could not be signed: ${(err as Error).message}`,
+          );
+          return { ...e, url: '' };
+        }
+      }),
+    );
+    return { ...view, evidence };
   }
 
   private async loadLog(id: string): Promise<QuickWorkLog> {
@@ -1381,6 +1529,11 @@ export class QuickWorkService {
   }
 
   private toView(log: QuickWorkLog, viewerId: string | null) {
+    const viewerCode =
+      viewerId != null && log.status === 'approved'
+        ? ((log.participants ?? []).find((p) => p.userId === viewerId)
+            ?.certificateCode ?? null)
+        : null;
     const participants = [...(log.participants ?? [])]
       .sort((a, b) => Number(b.isLead) - Number(a.isLead))
       .map((p) => ({
@@ -1398,7 +1551,7 @@ export class QuickWorkService {
         breakMinutes: p.breakMinutes,
         minutes: p.minutes,
       }));
-    return {
+    const view = {
       id: log.id,
       status: log.status,
       mode: log.mode,
@@ -1436,7 +1589,58 @@ export class QuickWorkService {
       viewerParticipantId:
         participants.find((p) => viewerId != null && p.userId === viewerId)
           ?.id ?? null,
+      /** The viewing student's own certificate, once CIEL PK approved and they were credited; never teammates'. */
+      certificate: viewerCode ? { code: viewerCode } : null,
       participants,
+    };
+    const me =
+      viewerId != null
+        ? (log.participants ?? []).find((p) => p.userId === viewerId)
+        : undefined;
+    return me && !me.isLead && me.joinStatus !== 'joined'
+      ? this.invitationView(view, me.id)
+      : view;
+  }
+
+  /**
+   * A teammate who has not confirmed joining (or declined) sees only the invitation: what, when, where
+   * and who leads, plus their own row. Never the draft's evidence, summary, contacts, partners or other
+   * students' details; the full log opens once they confirm.
+   */
+  private invitationView<
+    V extends { participants: { id: string; isLead: boolean }[] },
+  >(view: V, myParticipantId: string): V {
+    return {
+      ...view,
+      facultyEmail: '',
+      locationPin: null,
+      host: null,
+      hostEmail: null,
+      hostContact: null,
+      partners: [],
+      partnerDetails: [],
+      summary: '',
+      peopleReached: null,
+      evidence: [],
+      reviewNote: null,
+      certificate: null,
+      participants: view.participants
+        .filter((p) => p.isLead || p.id === myParticipantId)
+        .map((p) =>
+          p.id === myParticipantId
+            ? p
+            : {
+                ...p,
+                userId: '',
+                email: '',
+                studentId: '',
+                contact: null,
+                startTime: null,
+                endTime: null,
+                breakMinutes: 0,
+                minutes: 0,
+              },
+        ),
     };
   }
 

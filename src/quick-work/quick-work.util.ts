@@ -177,6 +177,41 @@ export function attendanceMinutes(a: QuickWorkAttendance): number {
   return Math.max(0, end - start - (Number(a.breakMinutes) || 0));
 }
 
+/** A participant credited with time: present, with a positive attendance window. */
+export function isCreditedParticipant(a: QuickWorkAttendance): boolean {
+  return a.present && attendanceMinutes(a) > 0;
+}
+
+/** Crockford base32 (no I, L, O, U), so an ID typed from a printed certificate is not misread. */
+const CERTIFICATE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+const CERTIFICATE_RE =
+  /^CIEL-QCI-\d{4}-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/;
+
+/**
+ * Public certificate ID of one credited student, e.g. `CIEL-QCI-2026-7K3M-Q9TD`: the approval year and
+ * eight random characters (40 bits) from `bytes`, so IDs cannot be guessed from one another.
+ */
+export function quickWorkCertificateCode(
+  year: string,
+  bytes: Uint8Array,
+): string {
+  const chars = Array.from(
+    bytes.slice(0, 8),
+    (b) => CERTIFICATE_ALPHABET[b & 31],
+  );
+  if (chars.length !== 8 || !/^\d{4}$/.test(year)) {
+    throw new Error('A certificate ID needs a four-digit year and 8 bytes.');
+  }
+  return `CIEL-QCI-${year}-${chars.slice(0, 4).join('')}-${chars.slice(4).join('')}`;
+}
+
+/** A typed or scanned ID in canonical form (trimmed, upper case), or null when it cannot be one. */
+export function normalizeCertificateCode(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const code = raw.trim().toUpperCase();
+  return CERTIFICATE_RE.test(code) ? code : null;
+}
+
 /** Half-open intervals [start, end) overlap. */
 export function timesOverlap(
   aStart: string | null,

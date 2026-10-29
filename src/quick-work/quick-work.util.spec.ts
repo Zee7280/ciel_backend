@@ -1,10 +1,13 @@
 import {
   attendanceMinutes,
   cleanPartners,
+  isCreditedParticipant,
+  normalizeCertificateCode,
   partnerLabel,
   partnerList,
   minutesOfDay,
   pktNow,
+  quickWorkCertificateCode,
   quickWorkSubmitErrors,
   QuickWorkSubmitInput,
   timesOverlap,
@@ -201,5 +204,49 @@ describe('quick-work rules', () => {
     ).toContain(
       'The coordinating faculty email cannot be a participant’s email.',
     );
+  });
+});
+
+describe('quick-work certificate IDs', () => {
+  it('builds CIEL-QCI-YYYY-XXXX-XXXX from the year and 8 random bytes, without I, L, O or U', () => {
+    const code = quickWorkCertificateCode(
+      '2026',
+      Uint8Array.from([0, 1, 18, 21, 24, 27, 31, 255]),
+    );
+    expect(code).toBe('CIEL-QCI-2026-01JN-RVZZ');
+    expect(code.slice(14)).not.toMatch(/[ILOU]/);
+    expect(normalizeCertificateCode(code)).toBe(code);
+  });
+
+  it('refuses a bad year or too few bytes', () => {
+    expect(() => quickWorkCertificateCode('26', new Uint8Array(8))).toThrow();
+    expect(() => quickWorkCertificateCode('2026', new Uint8Array(7))).toThrow();
+  });
+
+  it('accepts a typed ID in any case and rejects anything else', () => {
+    expect(normalizeCertificateCode(' ciel-qci-2026-7k3m-q9td ')).toBe(
+      'CIEL-QCI-2026-7K3M-Q9TD',
+    );
+    for (const bad of [
+      '',
+      'CIEL-QCI-2026-7K3M',
+      'CIEL-QCI-2026-7K3M-Q9TO', // O is not in the alphabet
+      'CIEL-CS-2026-7K3M-Q9TD',
+      "CIEL-QCI-2026-7K3M-Q9TD' OR 1=1",
+      null,
+      42,
+      { code: 'CIEL-QCI-2026-7K3M-Q9TD' },
+    ]) {
+      expect(normalizeCertificateCode(bad)).toBeNull();
+    }
+  });
+
+  it('credits only a present participant with time', () => {
+    const slot = { startTime: '10:00', endTime: '11:00', breakMinutes: 0 };
+    expect(isCreditedParticipant({ present: true, ...slot })).toBe(true);
+    expect(isCreditedParticipant({ present: false, ...slot })).toBe(false);
+    expect(
+      isCreditedParticipant({ present: true, ...slot, breakMinutes: 60 }),
+    ).toBe(false);
   });
 });

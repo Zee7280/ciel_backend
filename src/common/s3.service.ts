@@ -127,6 +127,21 @@ export class S3Service {
     }
   }
 
+  /**
+   * Short-lived signed GET link to one object. It works whether or not the bucket allows public
+   * reads, so files can be kept private and shown only to people the API authorises.
+   */
+  async presignGetObject(
+    key: string,
+    expiresInSeconds = 60 * 60,
+  ): Promise<string> {
+    return getSignedUrl(
+      this.s3Client,
+      new GetObjectCommand({ Bucket: this.bucket, Key: key }),
+      { expiresIn: expiresInSeconds },
+    );
+  }
+
   keyFromPublicUrl(url: string | null | undefined): string | null {
     if (!url || typeof url !== 'string') return null;
     const prefix = `https://${this.bucket}.s3.${this.region}.amazonaws.com/`;

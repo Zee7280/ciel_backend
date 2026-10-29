@@ -5,6 +5,14 @@
  * different dividend figures for the same hours depending on which dashboard you were on. */
 export const DIVIDEND_HOURLY_RATE_PKR = 192.31;
 
+/** A record counts as verified only once CIEL PK Admin accepted it: 'paid' alone is just a cleared reporting fee. */
+const VERIFIED_RECORD_STATUSES = ['verified', 'paid'];
+export const verifiedRecordWhere = () =>
+  VERIFIED_RECORD_STATUSES.map((status) => ({
+    status,
+    admin_status: 'approved',
+  }));
+
 /** Credit a (project, student) pair once so duplicate verified reports cannot inflate the ledger. */
 export function creditPairOnce(pairKey: string, seen: Set<string>): boolean {
   if (!pairKey || seen.has(pairKey)) return false;

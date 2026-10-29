@@ -35,6 +35,7 @@ import { StudentSubscriptionModule } from './student-subscription/student-subscr
 import { FeedbackModule } from './feedback/feedback.module';
 import { TutorialsModule } from './tutorials/tutorials.module';
 import { QuickWorkModule } from './quick-work/quick-work.module';
+import { CsReportingModule } from './cs-reporting/cs-reporting.module';
 import { UniversitySsoModule } from './university-sso/university-sso.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { JobsModule } from './jobs/jobs.module';
@@ -110,6 +111,7 @@ import { widenColumnsBeforeSync } from './database/widen-columns-before-sync';
     StudentSubscriptionModule,
     FeedbackModule,
     QuickWorkModule,
+    CsReportingModule,
     UniversitySsoModule,
     TutorialsModule,
     AnalyticsModule,

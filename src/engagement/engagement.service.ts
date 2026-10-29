@@ -75,6 +75,7 @@ import { ConfigService } from '@nestjs/config';
 import { MailService } from '../mail/mail.service';
 import * as crypto from 'crypto';
 import { canonicalizePhoneInput } from '../common/phone-e164.util';
+import { hecHourTier } from '../common/hec-hour-tier';
 import {
   isSchoolOrInstituteAcademicLabel,
   sanitizeReportAcademicDepartment,
@@ -3448,10 +3449,7 @@ export class EngagementService {
   }
 
   private getHecCode(hours: number): string {
-    if (hours >= 48) return 'full';
-    if (hours >= 32) return 'advanced';
-    if (hours >= 16) return 'recognized';
-    return 'below';
+    return hecHourTier(hours);
   }
 
   private getHecDisplay(hours: number): string {

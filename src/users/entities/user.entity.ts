@@ -81,17 +81,6 @@ export class User {
   @Column({ nullable: true })
   university: string;
 
-  /**
-   * Faculty only: the university CIEL PK admin set on this profile (Admin → Users). A faculty account
-   * may approve Quick Community Impact for that university's students without a university scope,
-   * as long as its profile still names it. Null until an admin sets it. Nullable ADD COLUMN only.
-   */
-  @Column({ type: 'varchar', length: 200, nullable: true })
-  universityConfirmedByAdmin: string | null;
-
-  @Column({ type: 'timestamptz', nullable: true })
-  universityConfirmedAt: Date | null;
-
   @Column({ nullable: true })
   registrationNumber: string;
 

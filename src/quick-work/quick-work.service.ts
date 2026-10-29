@@ -17,7 +17,6 @@ import { S3Service } from '../common/s3.service';
 import { MailService } from '../mail/mail.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { FacultyUniversityScopeService } from '../faculty-university-scope/faculty-university-scope.service';
-import { universityNamesMatch } from '../opportunities/university-scope.util';
 import {
   QuickWorkEvidence,
   QuickWorkHistoryEntry,
@@ -809,15 +808,9 @@ export class QuickWorkService {
   ): Promise<string | null> {
     const assignment =
       await this.universityScope.getAssignmentForFaculty(facultyUserId);
-    const org = assignment?.universityOrganization ?? null;
-    // Without a university scope, the university CIEL PK set on this faculty's profile counts.
-    const confirmed = org
-      ? null
-      : await this.adminConfirmedUniversity(facultyUserId);
-    if (!org && !confirmed) {
-      return 'Your faculty account is not yet linked to a university on CIEL PK, so you cannot approve hours. Ask CIEL PK to set your university on your profile, or return the log.';
+    if (!assignment?.universityOrganization) {
+      return 'Your faculty account is not yet linked to a university on CIEL PK, so you cannot approve hours. Ask your university or CIEL PK to authorise your account, or return the log.';
     }
-    const universityName = org?.name ?? (confirmed as string);
     const credited = log.participants.filter(
       (p) => p.present && attendanceMinutes(p) > 0,
     );
@@ -828,43 +821,15 @@ export class QuickWorkService {
     });
     const byId = new Map(students.map((u) => [u.id, u]));
     for (const p of credited) {
-      const student = byId.get(p.userId);
-      const ok = org
-        ? await this.universityScope.studentBelongsToOrganization(student, org)
-        : studentOfUniversityNamed(student, confirmed as string);
+      const ok = await this.universityScope.studentBelongsToOrganization(
+        byId.get(p.userId),
+        assignment.universityOrganization,
+      );
       if (!ok) {
-        return `${p.name || p.email} is not a student of ${universityName}, so you cannot approve this log. Return it, or ask CIEL PK to review it.`;
+        return `${p.name || p.email} is not a student of ${assignment.universityOrganization.name}, so you cannot approve this log. Return it, or ask CIEL PK to review it.`;
       }
     }
     return null;
-  }
-
-  /**
-   * The university CIEL PK admin set on this faculty profile (Admin → Users), while the profile still
-   * names it: a university the faculty typed or later changed on their own never counts.
-   */
-  private async adminConfirmedUniversity(
-    facultyUserId: string,
-  ): Promise<string | null> {
-    const faculty = await this.userRepo.findOne({
-      where: { id: facultyUserId },
-      select: [
-        'id',
-        'role',
-        'university',
-        'institution',
-        'universityConfirmedByAdmin',
-      ],
-    });
-    const confirmed = faculty?.universityConfirmedByAdmin?.trim();
-    if (!faculty || faculty.role !== UserRole.FACULTY || !confirmed) {
-      return null;
-    }
-    return [faculty.university, faculty.institution].some((name) =>
-      universityNamesMatch(name, confirmed),
-    )
-      ? confirmed
-      : null;
   }
 
   /* ------------------------------------------------------------------ admin */
@@ -1804,23 +1769,6 @@ export class QuickWorkService {
       );
     }
   }
-}
-
-/**
- * Whether a student belongs to the university of that name: their linked organization decides when
- * they have one, otherwise the university / institution on their profile.
- */
-function studentOfUniversityNamed(
-  student: User | undefined,
-  university: string,
-): boolean {
-  if (!student || student.role !== UserRole.STUDENT) return false;
-  if (student.organization?.id) {
-    return universityNamesMatch(student.organization.name, university);
-  }
-  return [student.university, student.institution].some((name) =>
-    universityNamesMatch(name, university),
-  );
 }
 
 /** Waits for `work` (never throws) but gives up waiting after `ms`; the work itself keeps going. */

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { User } from './entities/user.entity';
+import { FacultyUniversityConfirmation } from './entities/faculty-university-confirmation.entity';
 import { UsersService } from './users.service';
 import { UsersController } from './users.controller';
 import { ProfileController } from './profile.controller';
@@ -10,7 +11,7 @@ import { StudentSubscriptionModule } from '../student-subscription/student-subsc
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User]),
+    TypeOrmModule.forFeature([User, FacultyUniversityConfirmation]),
     NotificationsModule,
     OrganizationMembershipModule,
     StudentSubscriptionModule,

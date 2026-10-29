@@ -4,10 +4,13 @@ import {
   BadRequestException,
   UnauthorizedException,
   ConflictException,
+  Logger,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { User } from './entities/user.entity';
+import { FacultyUniversityConfirmation } from './entities/faculty-university-confirmation.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UserRole } from './enums/user-role.enum';
 import { normalizeUserRoleInput } from './user-role-input.util';
@@ -166,7 +169,14 @@ export class UsersService {
     private readonly notificationsService: NotificationsService,
     private readonly organizationMembershipService: OrganizationMembershipService,
     private readonly studentSubscriptionService: StudentSubscriptionService,
+    @Optional()
+    @InjectRepository(FacultyUniversityConfirmation)
+    private readonly facultyConfirmations?: Repository<FacultyUniversityConfirmation>,
   ) {}
+
+  private readonly confirmationLogger = new Logger(
+    'FacultyUniversityConfirmation',
+  );
 
   async create(
     createUserDto: (CreateUserDto | AdminCreateUserDto) & {
@@ -579,6 +589,9 @@ export class UsersService {
       qb.andWhere('user.createdAt <= :joinedTo', { joinedTo });
     }
     const [users, sqlTotal] = await qb.getManyAndCount();
+    const confirmed = await this.confirmedUniversities(
+      users.filter((u) => u.role === UserRole.FACULTY).map((u) => u.id),
+    );
     const mapped = users.map((user) => {
       const { passwordRecord } = user;
       const rest = omitKeys(user, [
@@ -593,6 +606,9 @@ export class UsersService {
         ...rest,
         profile_complete,
         profile_missing_fields,
+        ...(user.role === UserRole.FACULTY
+          ? { universityConfirmedByAdmin: confirmed.get(user.id) ?? null }
+          : {}),
         ...(revealPasswordRecords
           ? { stored_password: decryptPasswordRecord(passwordRecord) }
           : {}),
@@ -698,10 +714,61 @@ export class UsersService {
       await this.revokeSessions(id);
     }
     const user = await this.findOne(id);
+    // An admin saving a faculty member's university confirms it (Quick Community Impact approval). Only
+    // the admin route passes `actorId`; a faculty's own profile edit never confirms.
+    const university =
+      typeof patch.university === 'string' ? patch.university.trim() : '';
+    if (actorId && university && user?.role === UserRole.FACULTY) {
+      await this.confirmFacultyUniversity(id, university, actorId);
+    }
     if (!user) {
       throw new NotFoundException('User not found');
     }
     return user;
+  }
+
+  /**
+   * Records the university CIEL PK confirmed for a faculty member (separate table, never `users`). A
+   * failure is logged and never fails the admin's user update.
+   */
+  private async confirmFacultyUniversity(
+    facultyUserId: string,
+    university: string,
+    adminUserId: string,
+  ): Promise<void> {
+    if (!this.facultyConfirmations) return;
+    try {
+      await this.facultyConfirmations.save(
+        this.facultyConfirmations.create({
+          facultyUserId,
+          university: university.slice(0, 200),
+          confirmedByUserId: adminUserId,
+          confirmedAt: new Date(),
+        }),
+      );
+    } catch (err) {
+      this.confirmationLogger.warn(
+        `Faculty university confirmation not saved for ${facultyUserId}: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  /** Admin list: the confirmed university of each faculty row (empty when it cannot be read). */
+  private async confirmedUniversities(
+    facultyUserIds: string[],
+  ): Promise<Map<string, string>> {
+    if (!this.facultyConfirmations || !facultyUserIds.length) return new Map();
+    try {
+      const rows = await this.facultyConfirmations.find({
+        where: { facultyUserId: In(facultyUserIds) },
+      });
+      return new Map(rows.map((r) => [r.facultyUserId, r.university]));
+    } catch (err) {
+      this.confirmationLogger.warn(
+        `Faculty university confirmations not read: ${(err as Error).message}`,
+      );
+      return new Map();
+    }
   }
 
   /** Invalidate every JWT issued to this user (JwtStrategy compares `tokenVersion`). */

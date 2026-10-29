@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { User } from '../users/entities/user.entity';
+import { FacultyUniversityConfirmation } from '../users/entities/faculty-university-confirmation.entity';
 import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
 import { MailModule } from '../mail/mail.module';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -24,6 +25,7 @@ import {
       QuickWorkLog,
       QuickWorkParticipant,
       User,
+      FacultyUniversityConfirmation,
       AttendanceLog,
     ]),
     MailModule,

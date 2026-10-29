@@ -11,6 +11,7 @@ import { Organization } from '../src/organizations/entities/organization.entity'
 import { widenColumnsBeforeSync } from '../src/database/widen-columns-before-sync';
 import { Notification } from '../src/notifications/entities/notification.entity';
 import { QuickWorkParticipant } from '../src/quick-work/entities/quick-work-participant.entity';
+import { FacultyUniversityConfirmation } from '../src/users/entities/faculty-university-confirmation.entity';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import type { Repository } from 'typeorm';
 
@@ -537,6 +538,7 @@ describe('Quick Community Work (real app + real Postgres)', () => {
       }),
     );
     type Full = LogView & {
+      title: string;
       summary: string;
       evidence: unknown[];
       hostEmail: string | null;
@@ -1738,6 +1740,130 @@ describe('Quick Community Work (real app + real Postgres)', () => {
     expect((await h.as(lead).get('/quick-work/logs/not-a-uuid')).status).toBe(
       400,
     );
+  });
+
+  it('a faculty whose university CIEL PK set on the profile can approve that university without a scope', async () => {
+    // Profile university as typed at signup: not trusted on its own.
+    const faculty = await h.makeUser(UserRole.FACULTY, {
+      overrides: { university: 'E2E University' },
+    });
+    const lead = await h.makeUser(UserRole.STUDENT);
+    const approve = (id: string) =>
+      h
+        .as(faculty)
+        .post(`/faculty/quick-work/${id}/review`)
+        .send({ action: 'approve', verified: true });
+    const blockedReason = async (id: string) =>
+      (
+        (await h.as(faculty).get('/faculty/quick-work')).body as Body<{
+          pending: (LogView & { approveBlockedReason: string | null })[];
+        }>
+      ).data.pending.find((l) => l.id === id)?.approveBlockedReason ?? null;
+
+    const log = await draft(lead, completeLog(lead, faculty));
+    await h.as(lead).post(`/quick-work/logs/${log.id}/submit`).expect(201);
+    expect(await blockedReason(log.id)).toMatch(
+      /not yet linked to a university/,
+    );
+    expect((await approve(log.id)).status).toBe(403);
+
+    // CIEL PK admin sets the faculty's university (Admin → Users): confirmed.
+    await h
+      .as(admin)
+      .post(`/admin/users/${faculty.id}`)
+      .send({ university: 'E2E University', institution: 'E2E University' })
+      .expect(201);
+    // The admin list shows it (the Users dialog reads this field).
+    const listed = await h
+      .as(admin)
+      .get(`/admin/users?search=${encodeURIComponent(faculty.email)}`);
+    expect(listed.status).toBe(200);
+    expect(listed.text).toContain(
+      '"universityConfirmedByAdmin":"E2E University"',
+    );
+    // Stored in its own table: the users table (read on every sign-in) gains no column.
+    const userColumns: { column_name: string }[] = await h.ds.query(
+      `SELECT column_name FROM information_schema.columns WHERE table_name = 'users' AND column_name ILIKE '%confirmed%'`,
+    );
+    expect(userColumns).toEqual([]);
+    // No university scope was created, so no university dashboard rights.
+    const scopes = await h.as(admin).get('/admin/faculty-university-scope');
+    expect(scopes.text).not.toContain(faculty.id);
+
+    expect(await blockedReason(log.id)).toBeNull();
+    expect((await approve(log.id)).status).toBe(201);
+
+    // A student of another university is still refused.
+    const outsider = await h.makeUser(UserRole.STUDENT, {
+      overrides: {
+        university: 'Other University',
+        institution: 'Other University',
+      },
+    });
+    const other = await draft(
+      outsider,
+      completeLog(outsider, faculty, {
+        university: 'Other University',
+        activityDate: pastDay(5),
+      }),
+    );
+    await h
+      .as(outsider)
+      .post(`/quick-work/logs/${other.id}/submit`)
+      .expect(201);
+    expect(await blockedReason(other.id)).toMatch(
+      /is not a student of E2E University/,
+    );
+    expect((await approve(other.id)).status).toBe(403);
+
+    // The faculty changing their own profile university ends the confirmation.
+    await h
+      .as(faculty)
+      .put('/profile')
+      .send({ university: 'Other University', institution: 'Other University' })
+      .expect(200);
+    const lead2 = await h.makeUser(UserRole.STUDENT);
+    const third = await draft(
+      lead2,
+      completeLog(lead2, faculty, { activityDate: pastDay(6) }),
+    );
+    await h.as(lead2).post(`/quick-work/logs/${third.id}/submit`).expect(201);
+    expect(await blockedReason(third.id)).toMatch(
+      /not yet linked to a university/,
+    );
+
+    // If the confirmations table were missing in production, nothing else may break: sign-in, the
+    // admin's user edit and the users list keep working, and approval is refused cleanly (no 500).
+    // Simulated by making every read and write of that table fail (no schema change, no DB locks).
+    const confirmations = h.app.get<Repository<FacultyUniversityConfirmation>>(
+      getRepositoryToken(FacultyUniversityConfirmation),
+    );
+    const missing = () =>
+      Promise.reject(
+        new Error('relation "faculty_university_confirmations" does not exist'),
+      );
+    const spies = [
+      jest.spyOn(confirmations, 'findOne').mockImplementation(missing),
+      jest.spyOn(confirmations, 'find').mockImplementation(missing),
+      jest.spyOn(confirmations, 'save').mockImplementation(missing),
+    ];
+    try {
+      expect((await h.as(faculty).get('/faculty/quick-work')).status).toBe(200);
+      expect((await h.as(lead2).get('/quick-work/me')).status).toBe(200);
+      await h
+        .as(admin)
+        .post(`/admin/users/${faculty.id}`)
+        .send({ university: 'E2E University', institution: 'E2E University' })
+        .expect(201);
+      expect((await h.as(admin).get('/admin/users?limit=5')).status).toBe(200);
+      expect(await blockedReason(third.id)).toMatch(
+        /not yet linked to a university/,
+      );
+      expect((await approve(third.id)).status).toBe(403);
+      expect(spies.every((spy) => spy.mock.calls.length > 0)).toBe(true);
+    } finally {
+      spies.forEach((spy) => spy.mockRestore());
+    }
   });
 
   it('a faculty account not authorised for the students’ university cannot approve', async () => {

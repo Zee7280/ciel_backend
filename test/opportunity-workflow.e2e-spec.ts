@@ -24,6 +24,7 @@ import { User } from '../src/users/entities/user.entity';
 import { Organization } from '../src/organizations/entities/organization.entity';
 import { Opportunity } from '../src/opportunities/entities/opportunity.entity';
 import { Participation } from '../src/engagement/entities/participant.entity';
+import { STUDENT_SIMILAR_TITLE_BLOCK_ENABLED } from '../src/opportunities/opportunities.service';
 
 // ------------------------------------------------------------------ response shapes
 /** A row as the creator / faculty / admin / student list endpoints return it. */
@@ -643,51 +644,87 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
       }
     });
 
-    it('parallel double-click submit by one student: exactly one row is created', async () => {
-      const s = await h.makeUser(UserRole.STUDENT);
-      const fac = await h.makeUser(UserRole.FACULTY);
-      const body = studentPayload(fac.email, {
-        title: `Parallel ${uniq()} project`,
-      });
-      const rs = await Promise.all(
-        [1, 2, 3].map(() => h.as(s).post('/student/opportunity').send(body)),
-      );
-      expect(rs.map((r) => r.status).sort()).toEqual([201, 409, 409]);
-      expect(
-        await h.opps.count({
-          where: { creatorId: s.id, title: body.title as string },
-        }),
-      ).toBe(1);
-      // and the student can still create afterwards (no leaked advisory lock)
-      const again = await h
-        .as(s)
-        .post('/student/opportunity')
-        .send(
-          studentPayload(fac.email, {
-            title: `After lock ${uniq()} ok project`,
-          }),
-        );
-      expect(again.status).toBe(201);
-    });
+    // Blocking similar titles is a product switch (off for now, see STUDENT_SIMILAR_TITLE_BLOCK_ENABLED):
+    // the 409 expectations hold only while it is on. With it off, a double-click must still neither
+    // fail nor leak the per-student advisory lock.
+    const itWhenBlocking = STUDENT_SIMILAR_TITLE_BLOCK_ENABLED ? it : it.skip;
+    const itWhenOpen = STUDENT_SIMILAR_TITLE_BLOCK_ENABLED ? it.skip : it;
 
-    it('same-title retry by the same student is refused (409), one row only', async () => {
-      const s = await h.makeUser(UserRole.STUDENT);
-      const fac = await h.makeUser(UserRole.FACULTY);
-      const body = studentPayload(fac.email, {
-        title: `Dedupe ${uniq()} project`,
-      });
-      expect(
-        (await h.as(s).post('/student/opportunity').send(body)).status,
-      ).toBe(201);
-      expect(
-        (await h.as(s).post('/student/opportunity').send(body)).status,
-      ).toBe(409);
-      expect(
-        await h.opps.count({
-          where: { creatorId: s.id, title: body.title as string },
-        }),
-      ).toBe(1);
-    });
+    itWhenOpen(
+      'with the similar-title block off, a parallel double-click creates each row and leaves no lock behind',
+      async () => {
+        const s = await h.makeUser(UserRole.STUDENT);
+        const fac = await h.makeUser(UserRole.FACULTY);
+        const body = studentPayload(fac.email, {
+          title: `Parallel open ${uniq()} project`,
+        });
+        const rs = await Promise.all(
+          [1, 2, 3].map(() => h.as(s).post('/student/opportunity').send(body)),
+        );
+        expect(rs.map((r) => r.status)).toEqual([201, 201, 201]);
+        const again = await h
+          .as(s)
+          .post('/student/opportunity')
+          .send(
+            studentPayload(fac.email, {
+              title: `After open lock ${uniq()} ok project`,
+            }),
+          );
+        expect(again.status).toBe(201);
+      },
+    );
+
+    itWhenBlocking(
+      'parallel double-click submit by one student: exactly one row is created',
+      async () => {
+        const s = await h.makeUser(UserRole.STUDENT);
+        const fac = await h.makeUser(UserRole.FACULTY);
+        const body = studentPayload(fac.email, {
+          title: `Parallel ${uniq()} project`,
+        });
+        const rs = await Promise.all(
+          [1, 2, 3].map(() => h.as(s).post('/student/opportunity').send(body)),
+        );
+        expect(rs.map((r) => r.status).sort()).toEqual([201, 409, 409]);
+        expect(
+          await h.opps.count({
+            where: { creatorId: s.id, title: body.title as string },
+          }),
+        ).toBe(1);
+        // and the student can still create afterwards (no leaked advisory lock)
+        const again = await h
+          .as(s)
+          .post('/student/opportunity')
+          .send(
+            studentPayload(fac.email, {
+              title: `After lock ${uniq()} ok project`,
+            }),
+          );
+        expect(again.status).toBe(201);
+      },
+    );
+
+    itWhenBlocking(
+      'same-title retry by the same student is refused (409), one row only',
+      async () => {
+        const s = await h.makeUser(UserRole.STUDENT);
+        const fac = await h.makeUser(UserRole.FACULTY);
+        const body = studentPayload(fac.email, {
+          title: `Dedupe ${uniq()} project`,
+        });
+        expect(
+          (await h.as(s).post('/student/opportunity').send(body)).status,
+        ).toBe(201);
+        expect(
+          (await h.as(s).post('/student/opportunity').send(body)).status,
+        ).toBe(409);
+        expect(
+          await h.opps.count({
+            where: { creatorId: s.id, title: body.title as string },
+          }),
+        ).toBe(1);
+      },
+    );
   });
 
   // ---------------------------------------------------------------- kinds

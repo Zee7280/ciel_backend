@@ -973,6 +973,10 @@ export class MailService {
     const approvalsLink = dashboardPath
       ? this.buildFrontendLink('/login', { next: dashboardPath })
       : this.buildFrontendLink('/dashboard/faculty/approvals', {});
+    // Name the page the button opens, so the faculty member finds the request without the link.
+    const pageName = (dashboardPath ?? '').includes('join-applications')
+      ? 'Join Application Approvals'
+      : 'Opportunity Request Approvals';
     const studentEsc = this.escHtmlPlain(
       studentName?.trim() ? studentName.trim() : 'Student',
     );
@@ -994,7 +998,7 @@ export class MailService {
                 <p style="margin: 0;"><strong>Opportunity title:</strong> ${titleEsc}</p>
             </div>
 
-            <p>Please sign in with the same email address this message was sent to, open <strong>Opportunity Request Approvals</strong>, and approve the request or return it with feedback so the workflow can continue.</p>
+            <p>Please sign in with the same email address this message was sent to, open <strong>${pageName}</strong>, and approve the request or return it with feedback so the workflow can continue.</p>
 
             <div style="text-align: center; margin: 35px 0;">
                 <a href="${approvalsLink}" style="background-color: #4CAF50; color: white; padding: 14px 30px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px; display: inline-block; box-shadow: 0 4px 6px rgba(76, 175, 80, 0.2);">Open approvals in CIEL PK</a>

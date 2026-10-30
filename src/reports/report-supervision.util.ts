@@ -23,9 +23,34 @@ export function namedSupervisorEmail(
   );
 }
 
+export type OpportunityFacultyLike = {
+  supervision?: unknown;
+  visibility_and_academic_linkage?: unknown;
+};
+
+/**
+ * The faculty representative an NGO / university names on its listing
+ * (`visibility_and_academic_linkage.faculty_institutional_representative.official_email`), normalised.
+ */
+export function facultyRepresentativeEmail(
+  opp: OpportunityFacultyLike | null | undefined,
+): string {
+  const val =
+    opp?.visibility_and_academic_linkage &&
+    typeof opp.visibility_and_academic_linkage === 'object'
+      ? (opp.visibility_and_academic_linkage as Record<string, unknown>)
+      : null;
+  const fir =
+    val?.faculty_institutional_representative &&
+    typeof val.faculty_institutional_representative === 'object'
+      ? (val.faculty_institutional_representative as Record<string, unknown>)
+      : null;
+  return norm(fir?.official_email);
+}
+
 /** Emails of faculty already attached to the opportunity itself. */
 export function opportunitySupervisorEmails(
-  opp: { supervision?: unknown } | null | undefined,
+  opp: OpportunityFacultyLike | null | undefined,
   facultyUserEmail?: string | null,
 ): string[] {
   const sup =
@@ -38,6 +63,7 @@ export function opportunitySupervisorEmails(
     norm(sup.official_email),
     norm(sup.supervisor_email),
     norm(sup.faculty_email),
+    facultyRepresentativeEmail(opp),
   ].filter(Boolean);
 }
 

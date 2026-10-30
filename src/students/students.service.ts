@@ -3039,6 +3039,10 @@ export class StudentsService {
     };
   }
 
+  remindFacultyForApplication(userId: string, id: string) {
+    return this.opportunityApplicationsService.remindFaculty(userId, id);
+  }
+
   async withdrawApplication(userId: string, id: string) {
     const pipelineWithdraw = await this.opportunityApplicationsService.withdraw(
       userId,

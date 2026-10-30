@@ -137,6 +137,15 @@ export class StudentsController {
     });
   }
 
+  /** Re-send the faculty approval request for an application still with the named faculty (throttled). */
+  @Post('applications/:id/remind-faculty')
+  remindFacultyForApplication(
+    @Request() req: AuthenticatedRequest,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    return this.studentsService.remindFacultyForApplication(req.user.id, id);
+  }
+
   @Delete('applications/:id')
   withdrawApplication(
     @Request() req: AuthenticatedRequest,

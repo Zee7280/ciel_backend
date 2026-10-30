@@ -9,6 +9,7 @@ import { Participation } from '../src/engagement/entities/participant.entity';
 import { OpportunityApplication } from '../src/opportunities/entities/opportunity-application.entity';
 import { User } from '../src/users/entities/user.entity';
 import { Opportunity } from '../src/opportunities/entities/opportunity.entity';
+import { Notification } from '../src/notifications/entities/notification.entity';
 import { QueryDeepPartialEntity } from 'typeorm';
 
 const day = (d: number) =>
@@ -66,7 +67,7 @@ describe('Join approval: selected faculty first, then CIEL PK admin (real app + 
   const app = (id: string) =>
     h.ds.getRepository(OpportunityApplication).findOneByOrFail({ id });
 
-  it('goes to the named faculty first; CIEL PK can approve only after the faculty did', async () => {
+  it('goes to the named faculty first, then CIEL PK; the faculty-approved seat needs no second confirmation', async () => {
     const opp = await liveOpp();
     const fac = await h.makeUser(UserRole.FACULTY);
     const s = await student();
@@ -83,11 +84,13 @@ describe('Join approval: selected faculty first, then CIEL PK admin (real app + 
     expect(mails[0].args[0]).toBe(fac.email);
     expect(mails[0].args[4]).toBe('/dashboard/faculty/join-applications');
 
-    // CIEL PK cannot skip the faculty; another faculty cannot decide.
+    // CIEL PK sees it as still with the faculty (it may override, see below); another faculty cannot decide.
+    const queue = await h.as(admin).get('/admin/applications?status=pending');
     expect(
-      (await h.as(admin).post(`/admin/applications/${id}/approve`).send({}))
-        .status,
-    ).toBe(400);
+      (
+        queue.body as { data: { id: string; application_stage: string }[] }
+      ).data.find((r) => r.id === id)?.application_stage,
+    ).toBe('faculty');
     const stranger = await h.makeUser(UserRole.FACULTY);
     expect(
       (await h.as(stranger).post(`/faculty/applications/${id}/approve`)).status,
@@ -143,6 +146,119 @@ describe('Join approval: selected faculty first, then CIEL PK admin (real app + 
       (await h.as(admin).post(`/admin/applications/${id}/approve`).send({}))
         .status,
     ).toBe(400);
+  });
+
+  it('CIEL PK sees an application stuck with faculty and may decide it; the report then still asks the faculty', async () => {
+    const opp = await liveOpp();
+    const fac = await h.makeUser(UserRole.FACULTY);
+    const s = await student();
+    const id = (
+      (await apply(s, opp.id, fac.email)).body as {
+        data: { application_id: string };
+      }
+    ).data.application_id;
+
+    // Listed for CIEL PK with its stage, so a never-responding faculty cannot hide it.
+    const pending = await h.as(admin).get('/admin/applications?status=pending');
+    expect(pending.status).toBe(200);
+    const row = (
+      pending.body as { data: { id: string; application_stage: string }[] }
+    ).data.find((r) => r.id === id);
+    expect(row).toMatchObject({ application_stage: 'faculty' });
+
+    // The student may re-send the faculty email, once per 12 hours (the apply-time email counts
+    // as the first, so pretend the application is 13 hours old).
+    await h.ds
+      .getRepository(OpportunityApplication)
+      .update({ id }, { createdAt: new Date(Date.now() - 13 * 3600 * 1000) });
+    h.mail.reset();
+    const first = await h
+      .as(s)
+      .post(`/students/applications/${id}/remind-faculty`)
+      .send({});
+    expect(first.status).toBe(201);
+    expect((first.body as { data: { sent: boolean } }).data.sent).toBe(true);
+    expect(h.mail.of('sendFacultyApprovalRequest')).toHaveLength(1);
+    const second = await h
+      .as(s)
+      .post(`/students/applications/${id}/remind-faculty`)
+      .send({});
+    expect((second.body as { data: { sent: boolean } }).data.sent).toBe(false);
+    expect(h.mail.of('sendFacultyApprovalRequest')).toHaveLength(1);
+    // Nobody else's application can be reminded.
+    const other = await student();
+    expect(
+      (
+        await h
+          .as(other)
+          .post(`/students/applications/${id}/remind-faculty`)
+          .send({})
+      ).status,
+    ).toBe(404);
+
+    // CIEL PK decides without the faculty: approved, but the seat is not faculty-confirmed.
+    expect(
+      (await h.as(admin).post(`/admin/applications/${id}/approve`).send({}))
+        .status,
+    ).toBe(201);
+    expect((await app(id)).internalStatus).toBe('approved');
+    const seat = await h.ds
+      .getRepository(Participation)
+      .findOneByOrFail({ projectId: opp.id, studentId: s.id });
+    expect(seat.status).toBe('approved');
+    expect(seat.facultySupervisionConfirmedAt).toBeNull();
+    const sup = await h.as(s).get(`/student/reports/${opp.id}/supervision`);
+    expect((sup.body as { data: unknown }).data).toMatchObject({
+      required: true,
+      confirmed: false,
+      blocked: true,
+    });
+  });
+
+  it('the student hears the faculty decision; CIEL PK hears an application now awaits it', async () => {
+    const notes = h.ds.getRepository(Notification);
+    const noticesFor = async (userId: string, title: string) => {
+      let rows: Notification[] = [];
+      for (let i = 0; i < 50; i++) {
+        rows = await notes.find({ where: { userId, title } });
+        if (rows.length) break;
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      return rows;
+    };
+    const opp = await liveOpp();
+    const fac = await h.makeUser(UserRole.FACULTY);
+    const s = await student();
+    const id = (
+      (await apply(s, opp.id, fac.email)).body as {
+        data: { application_id: string };
+      }
+    ).data.application_id;
+    await h.as(fac).post(`/faculty/applications/${id}/approve`).expect(201);
+    expect(
+      await noticesFor(s.id, 'Faculty approved your application'),
+    ).toHaveLength(1);
+    expect(
+      await noticesFor(admin.id, 'Join application awaiting CIEL PK approval'),
+    ).not.toHaveLength(0);
+
+    const s2 = await student();
+    const id2 = (
+      (await apply(s2, opp.id, fac.email)).body as {
+        data: { application_id: string };
+      }
+    ).data.application_id;
+    await h
+      .as(fac)
+      .post(`/faculty/applications/${id2}/reject`)
+      .send({ reason: 'Not enrolled in my course' })
+      .expect(201);
+    const told = await noticesFor(
+      s2.id,
+      'Faculty did not approve your application',
+    );
+    expect(told).toHaveLength(1);
+    expect(told[0].message).toMatch(/Not enrolled in my course/);
   });
 
   it('an application with no faculty named still goes straight to CIEL PK (unchanged)', async () => {

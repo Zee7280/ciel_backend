@@ -77,6 +77,14 @@ export class OpportunityApplication {
   @Column({ name: 'faculty_comment', type: 'text', nullable: true })
   facultyComment: string | null;
 
+  /** When the student last re-sent the faculty approval request email (throttled). */
+  @Column({
+    name: 'faculty_reminder_sent_at',
+    type: 'timestamp',
+    nullable: true,
+  })
+  facultyReminderSentAt: Date | null;
+
   @Column({ name: 'partner_comment', type: 'text', nullable: true })
   partnerComment: string | null;
 

@@ -55,6 +55,13 @@ export class ReportSupervisionController {
     );
   }
 
+  /** CIEL PK: every seat still waiting for a faculty confirmation, with the faculty it waits on. */
+  @Get('admin/report-supervision')
+  @Roles(UserRole.SUPER_ADMIN)
+  adminList() {
+    return this.studentReportsService.listPendingSupervisionForAdmin();
+  }
+
   @Post('faculty/report-supervision/:participationId/confirm')
   @Roles(UserRole.FACULTY, UserRole.SUPER_ADMIN)
   confirm(

@@ -9,6 +9,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, In, IsNull, Not, Repository } from 'typeorm';
 import {
+  facultyRepresentativeEmail,
   namedSupervisorEmail,
   opportunitySupervisorEmails,
   supervisionRequiredForReport,
@@ -100,6 +101,15 @@ export const TEAM_ACTIVE_PARTICIPATION_STATUSES: readonly string[] = [
   'finalized',
 ];
 
+/** CIEL PK's final decision covers the admin queue and an application the faculty never acted on. */
+const ADMIN_DECIDABLE_STATUSES: OpportunityApplicationInternalStatus[] = [
+  'pending_faculty',
+  'pending_admin',
+  'pending_partner',
+];
+/** A student may re-send the faculty approval request at most this often. */
+export const FACULTY_REMINDER_RESEND_MS = 12 * 60 * 60 * 1000;
+
 /** Teammate row as stored in `apply_payload.team_members` (free-form JSON from the apply form). */
 type ApplyPayloadTeamMember = {
   email?: string;
@@ -180,6 +190,140 @@ export class OpportunityApplicationsService {
         (error as Error).message,
       );
     }
+  }
+
+  /** Best-effort in-app + email notice to the applicant after the named faculty decided; never throws. */
+  private async notifyApplicantOfFacultyDecision(
+    app: OpportunityApplication,
+    decision: 'approved' | 'rejected',
+    reason?: string | null,
+  ): Promise<void> {
+    const projectTitle = app.opportunity?.title || 'your opportunity';
+    const title =
+      decision === 'approved'
+        ? 'Faculty approved your application'
+        : 'Faculty did not approve your application';
+    const message =
+      decision === 'approved'
+        ? `Your faculty supervisor approved your application to "${projectTitle}". It is now with CIEL PK for final approval.`
+        : `Your faculty supervisor did not approve your application to "${projectTitle}".${reason ? ` Reason: ${reason}` : ''} You may apply again after addressing the feedback.`;
+    try {
+      const studentId = app.studentUser?.id || app.studentUserId;
+      if (studentId && this.notificationsService) {
+        await this.notificationsService.createApprovalNotification(
+          studentId,
+          title,
+          message,
+        );
+      }
+    } catch (error) {
+      console.warn(
+        'Failed to create faculty decision notification',
+        (error as Error).message,
+      );
+    }
+    try {
+      const email = app.studentUser?.email;
+      if (email && this.mailService) {
+        await this.mailService.sendStudentOpportunityStatusUpdate(
+          email,
+          projectTitle,
+          title,
+          title,
+          message,
+          reason,
+        );
+      }
+    } catch (error) {
+      console.warn(
+        'Failed to send faculty decision email',
+        (error as Error).message,
+      );
+    }
+  }
+
+  /** In-app notice to every CIEL PK admin that an application now waits for their final approval. */
+  private async notifyAdminsOfApplicationAwaitingReview(
+    app: OpportunityApplication,
+  ): Promise<void> {
+    if (!this.notificationsService) return;
+    try {
+      const admins = await this.userRepo.find({
+        where: { role: UserRole.SUPER_ADMIN },
+        select: ['id'],
+      });
+      const who =
+        app.studentUser?.name || app.studentUser?.email || 'A student';
+      await Promise.all(
+        admins.map((a) =>
+          this.notificationsService!.createApprovalNotification(
+            a.id,
+            'Join application awaiting CIEL PK approval',
+            `${who}'s application to "${app.opportunity?.title || 'an opportunity'}" was approved by faculty and now needs CIEL PK final approval.`,
+          ),
+        ),
+      );
+    } catch (error) {
+      console.warn(
+        'Failed to notify admins of a pending application',
+        (error as Error).message,
+      );
+    }
+  }
+
+  /**
+   * The student re-sends the faculty approval request email for their own application still at the
+   * faculty step, at most once per `FACULTY_REMINDER_RESEND_MS`.
+   */
+  async remindFaculty(studentUserId: string, id: string) {
+    const app = await this.appRepo.findOne({
+      where: { id, studentUserId, withdrawnAt: IsNull() },
+      relations: ['opportunity', 'studentUser'],
+    });
+    if (!app) throw new NotFoundException('Application not found');
+    if (app.internalStatus !== 'pending_faculty') {
+      throw new BadRequestException(
+        'This application is not waiting for faculty approval.',
+      );
+    }
+    const to = this.normalizeEmail(app.primaryFacultyEmail);
+    if (!to) {
+      throw new BadRequestException(
+        'No faculty email is recorded on this application.',
+      );
+    }
+    const last = app.facultyReminderSentAt ?? app.createdAt;
+    const nextAllowedAt = new Date(last.getTime() + FACULTY_REMINDER_RESEND_MS);
+    if (nextAllowedAt.getTime() > Date.now()) {
+      return {
+        success: true,
+        data: {
+          sent: false,
+          next_allowed_at: nextAllowedAt.toISOString(),
+          message: `A reminder was sent recently. You can send another after ${nextAllowedAt.toISOString()}.`,
+        },
+      };
+    }
+    if (!this.mailService) {
+      throw new BadRequestException('Email is not available right now.');
+    }
+    await this.mailService.sendFacultyApprovalRequest(
+      to,
+      app.studentUser?.name || 'Student',
+      app.opportunity?.title || 'an opportunity',
+      app.id,
+      '/dashboard/faculty/join-applications',
+    );
+    app.facultyReminderSentAt = new Date();
+    await this.appRepo.save(app);
+    return {
+      success: true,
+      data: {
+        sent: true,
+        faculty_email: to,
+        sent_at: app.facultyReminderSentAt,
+      },
+    };
   }
 
   normalizeEmail(email?: string | null) {
@@ -4002,7 +4146,10 @@ export class OpportunityApplicationsService {
       sup && typeof sup.contact === 'string'
         ? this.normalizeEmail(sup.contact)
         : '';
-    return listingContact !== '' && listingContact === email;
+    if (listingContact !== '' && listingContact === email) return true;
+    // The faculty representative an NGO / university named on the listing may decide too.
+    const representative = facultyRepresentativeEmail(opp);
+    return representative !== '' && representative === email;
   }
 
   private async resolveFacultyUserIdByPrimaryEmail(
@@ -4099,13 +4246,21 @@ export class OpportunityApplicationsService {
       .where('a.withdrawnAt IS NULL')
       .andWhere(
         new Brackets((outer) => {
-          outer.where('lower(a.primaryFacultyEmail) = :email', { email });
+          // Trimmed like the decision gate, so every row listed can also be decided.
+          outer.where(
+            "LOWER(TRIM(COALESCE(a.primaryFacultyEmail, ''))) = :email",
+            { email },
+          );
           outer.orWhere(
             "LOWER(TRIM(COALESCE(a.secondaryFacultyEmail, ''))) = :email",
             { email },
           );
           outer.orWhere(
             "LOWER(TRIM(COALESCE(o.supervision->>'contact', ''))) = :email",
+            { email },
+          );
+          outer.orWhere(
+            "LOWER(TRIM(COALESCE(o.visibility_and_academic_linkage->'faculty_institutional_representative'->>'official_email', ''))) = :email",
             { email },
           );
           if (delegatedStudentIds.length) {
@@ -4237,6 +4392,8 @@ export class OpportunityApplicationsService {
     app.facultyDecidedBy = facultyUserId;
     app.facultyComment = null;
     await this.appRepo.save(app);
+    await this.notifyApplicantOfFacultyDecision(app, 'approved');
+    await this.notifyAdminsOfApplicationAwaitingReview(app);
     return { success: true, data: this.withoutStudentProfile(app) };
   }
 
@@ -4275,6 +4432,7 @@ export class OpportunityApplicationsService {
     app.facultyDecidedBy = facultyUserId;
     app.facultyComment = reason || null;
     await this.appRepo.save(app);
+    await this.notifyApplicantOfFacultyDecision(app, 'rejected', reason);
     return { success: true, data: this.withoutStudentProfile(app) };
   }
 
@@ -4418,11 +4576,17 @@ export class OpportunityApplicationsService {
       'admin_rejected',
     ];
 
+    // Pending also lists rows still with the named faculty (stage "faculty"), so CIEL PK can see
+    // an application that is stuck there and decide it when the faculty never responds.
     const rows =
       normalized === 'pending'
         ? await this.appRepo.find({
             where: {
-              internalStatus: In(['pending_admin', 'pending_partner']),
+              internalStatus: In([
+                'pending_faculty',
+                'pending_admin',
+                'pending_partner',
+              ]),
               withdrawnAt: IsNull(),
             },
             relations: [...relations],
@@ -4457,6 +4621,7 @@ export class OpportunityApplicationsService {
           created_at: a.createdAt,
           internal_status: a.internalStatus,
           application_status: this.toPublicApplicationStatus(a.internalStatus),
+          application_stage: this.applicationStage(a.internalStatus),
           admin_decided_at: a.adminDecidedAt ?? null,
           admin_decided_by: a.adminDecidedBy ?? null,
           admin_comment: a.adminComment ?? null,
@@ -4751,12 +4916,12 @@ export class OpportunityApplicationsService {
       relations: ['opportunity', 'studentUser'],
     });
     if (!app) throw new NotFoundException('Application not found');
-    if (
-      app.internalStatus !== 'pending_admin' &&
-      app.internalStatus !== 'pending_partner'
-    ) {
+    if (!ADMIN_DECIDABLE_STATUSES.includes(app.internalStatus)) {
       throw new BadRequestException('Application is not awaiting admin review');
     }
+    // CIEL PK may decide an application the named faculty never acted on. The seat then carries no
+    // faculty confirmation, so the faculty is still asked before the student's report can start.
+    const facultyOverride = app.internalStatus === 'pending_faculty';
 
     await this.provisionApprovedApplicationSeats(app);
     // The named faculty already approved this student, so the report can start without asking again.
@@ -4776,7 +4941,9 @@ export class OpportunityApplicationsService {
     app.internalStatus = 'approved';
     app.adminDecidedAt = new Date();
     app.adminDecidedBy = adminUserId;
-    app.adminComment = null;
+    app.adminComment = facultyOverride
+      ? `Approved by CIEL PK while the named faculty (${app.primaryFacultyEmail || 'unknown'}) had not decided.`
+      : null;
     await this.appRepo.save(app);
     await this.notifyApplicantOfAdminDecision(app, 'approved');
 
@@ -4821,10 +4988,7 @@ export class OpportunityApplicationsService {
       relations: ['opportunity', 'studentUser'],
     });
     if (!app) throw new NotFoundException('Application not found');
-    if (
-      app.internalStatus !== 'pending_admin' &&
-      app.internalStatus !== 'pending_partner'
-    ) {
+    if (!ADMIN_DECIDABLE_STATUSES.includes(app.internalStatus)) {
       throw new BadRequestException('Application is not awaiting admin review');
     }
     app.internalStatus = 'admin_rejected';

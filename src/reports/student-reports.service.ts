@@ -3111,7 +3111,8 @@ export class StudentReportsService {
       .createQueryBuilder('p')
       .leftJoinAndSelect('p.student', 'student')
       .where(
-        "LOWER(TRIM(COALESCE(p.primaryFacultyEmail, p.facultySupervisorEmail, ''))) = :email",
+        // Same rule as namedSupervisorEmail(): a blank primary falls back to the supervisor email.
+        "LOWER(TRIM(COALESCE(NULLIF(TRIM(p.primaryFacultyEmail), ''), p.facultySupervisorEmail, ''))) = :email",
         { email },
       )
       .andWhere('p.status IN (:...st)', {
@@ -3120,6 +3121,38 @@ export class StudentReportsService {
       .andWhere('(p.teamId IS NULL OR p.isTeamLead = true)')
       .orderBy('p.createdAt', 'DESC')
       .getMany();
+    const { pending, confirmed } = await this.supervisionRowsForSeats(seats);
+    return {
+      success: true,
+      data: { pending, confirmed: confirmed.slice(0, 50) },
+    };
+  }
+
+  /**
+   * CIEL PK: every lead / solo seat still waiting for its named faculty's confirmation, across all
+   * faculty, so an admin can confirm on a faculty member's behalf when they never respond.
+   */
+  async listPendingSupervisionForAdmin() {
+    const seats = await this.participantRepository
+      .createQueryBuilder('p')
+      .leftJoinAndSelect('p.student', 'student')
+      .where(
+        "LOWER(TRIM(COALESCE(NULLIF(TRIM(p.primaryFacultyEmail), ''), p.facultySupervisorEmail, ''))) <> ''",
+      )
+      .andWhere('p.facultySupervisionConfirmedAt IS NULL')
+      .andWhere('p.status IN (:...st)', {
+        st: ['accepted', 'approved', 'verified', 'paid', 'finalized'],
+      })
+      .andWhere('(p.teamId IS NULL OR p.isTeamLead = true)')
+      .orderBy('p.createdAt', 'DESC')
+      .take(300)
+      .getMany();
+    const { pending } = await this.supervisionRowsForSeats(seats);
+    return { success: true, data: { pending } };
+  }
+
+  /** Supervision rows for lead / solo seats, split by whether the faculty has confirmed; exempt seats dropped. */
+  private async supervisionRowsForSeats(seats: Participation[]) {
     const oppIds = [...new Set(seats.map((s) => s.projectId).filter(Boolean))];
     const opps = oppIds.length
       ? await this.opportunitiesRepository.find({ where: { id: In(oppIds) } })
@@ -3159,6 +3192,7 @@ export class StudentReportsService {
         participation_id: seat.id,
         opportunity_id: opp.id,
         opportunity_title: opp.title,
+        faculty_email: namedSupervisorEmail(seat),
         student_name: seat.student?.name || seat.fullName || 'Student',
         student_email: seat.student?.email || seat.email || null,
         university: seat.universityName || seat.student?.university || null,
@@ -3179,10 +3213,7 @@ export class StudentReportsService {
       if (seat.facultySupervisionConfirmedAt) confirmed.push(row);
       else pending.push(row);
     }
-    return {
-      success: true,
-      data: { pending, confirmed: confirmed.slice(0, 50) },
-    };
+    return { pending, confirmed };
   }
 
   /**

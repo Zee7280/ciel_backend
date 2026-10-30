@@ -7070,42 +7070,26 @@ export class OpportunitiesService {
       facultyEmail,
     );
 
-    const oppAwaitingFaculty = this.isAwaitingFacultyDashboardReview(opp);
-    const pendingApp =
-      await this.opportunityApplicationsService.findActionablePendingFacultyApplicationForDashboard(
-        opportunityId,
-        facultyEmail,
-        facultyUserId,
-      );
-
-    if (!oppAwaitingFaculty && !pendingApp) {
+    // This endpoint decides the OPPORTUNITY only. Join applications are decided one by one on
+    // /faculty/applications/:id, never silently through the listing (a faculty member with several
+    // applicants could not tell which student they had just approved).
+    if (!this.isAwaitingFacultyDashboardReview(opp)) {
       throw new BadRequestException(
-        'This opportunity is not awaiting faculty approval',
+        'This opportunity is not awaiting faculty approval. Student join requests are decided under Join Applications.',
       );
     }
 
-    if (oppAwaitingFaculty) {
-      this.opportunityWorkflow.afterFacultyVerified(opp, {
-        id: facultyUserId,
-        name: facultyName,
-      });
-      await this.assignFacultyIdFromSupervisionIfMissing(opp);
-      const saved = await this.opportunitiesRepository.save(opp);
-      const mail = await this.handleFacultyApprovedSideEffects(saved);
-      return Object.assign(saved, {
-        partner_email_sent: mail.partnerEmailSent,
-        partner_email: mail.partnerEmail,
-      });
-    }
-
-    await this.opportunityApplicationsService.facultyApprove(
-      pendingApp!.id,
-      facultyEmail,
-      facultyUserId,
-    );
-    const refreshed = await this.findOne(opportunityId);
-    if (!refreshed) throw new NotFoundException('Opportunity not found');
-    return refreshed;
+    this.opportunityWorkflow.afterFacultyVerified(opp, {
+      id: facultyUserId,
+      name: facultyName,
+    });
+    await this.assignFacultyIdFromSupervisionIfMissing(opp);
+    const saved = await this.opportunitiesRepository.save(opp);
+    const mail = await this.handleFacultyApprovedSideEffects(saved);
+    return Object.assign(saved, {
+      partner_email_sent: mail.partnerEmailSent,
+      partner_email: mail.partnerEmail,
+    });
   }
 
   async facultyDashboardReject(
@@ -7123,35 +7107,18 @@ export class OpportunitiesService {
       facultyEmail,
     );
 
-    const oppAwaitingFaculty = this.isAwaitingFacultyDashboardReview(opp);
-    const pendingApp =
-      await this.opportunityApplicationsService.findActionablePendingFacultyApplicationForDashboard(
-        opportunityId,
-        facultyEmail,
-        facultyUserId,
-      );
-
-    if (!oppAwaitingFaculty && !pendingApp) {
+    // Opportunity only; join applications are declined under /faculty/applications/:id/reject.
+    if (!this.isAwaitingFacultyDashboardReview(opp)) {
       throw new BadRequestException(
-        'This opportunity is not awaiting faculty approval',
+        'This opportunity is not awaiting faculty approval. Student join requests are decided under Join Applications.',
       );
     }
 
-    if (oppAwaitingFaculty) {
-      this.opportunityWorkflow.afterFacultyRejected(opp, reason, {
-        id: facultyUserId,
-        name: facultyName,
-      });
-      await this.assignFacultyIdFromSupervisionIfMissing(opp);
-    } else {
-      await this.opportunityApplicationsService.facultyReject(
-        pendingApp!.id,
-        facultyEmail,
-        facultyUserId,
-        reason || '',
-      );
-      return (await this.findOne(opportunityId))!;
-    }
+    this.opportunityWorkflow.afterFacultyRejected(opp, reason, {
+      id: facultyUserId,
+      name: facultyName,
+    });
+    await this.assignFacultyIdFromSupervisionIfMissing(opp);
 
     const saved = await this.opportunitiesRepository.save(opp);
     if (opp.isStudentCreated && opp.creatorId) {

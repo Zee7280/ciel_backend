@@ -32,6 +32,7 @@ import { AdminTeamOpDto } from './dto/admin-team-op.dto';
 import { SetAttendanceRoutingDto } from './dto/set-attendance-routing.dto';
 import { AdminSetOpportunityContactsDto } from './dto/admin-set-opportunity-contacts.dto';
 import { AdminDirectoryControlDto } from './dto/admin-directory-control.dto';
+import { AdminUpdateOpportunityDetailsDto } from './dto/admin-update-opportunity-details.dto';
 
 type AuthedRequest = { user: { id: string; name?: string; email?: string } };
 
@@ -225,6 +226,18 @@ export class AdminOpportunitiesController {
     @Body() dto: AdminSetOpportunityContactsDto,
   ) {
     return this.opportunitiesService.adminUpdateOpportunityContacts(id, dto);
+  }
+
+  /** Fix wrong listing values (title, place, dates, hours, seats, departments) and bind the
+   * faculty / organisation accounts. Audited through AdminMutationAuditInterceptor. */
+  @Patch(':id/details')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  async updateDetails(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: AdminUpdateOpportunityDetailsDto,
+  ) {
+    return this.opportunitiesService.adminUpdateOpportunityDetails(id, dto);
   }
 
   @Patch(':id/attendance-routing')

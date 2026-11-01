@@ -32,6 +32,8 @@ import {
   UpdateOpportunityDto,
 } from './dto/create-opportunity.dto';
 import { AdminSetOpportunityContactsDto } from './dto/admin-set-opportunity-contacts.dto';
+import { AdminUpdateOpportunityDetailsDto } from './dto/admin-update-opportunity-details.dto';
+import { OCCUPIED_SEAT_STATUSES } from './seat-capacity.util';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { EngagementService } from '../engagement/engagement.service';
 import { User } from '../users/entities/user.entity';
@@ -7513,6 +7515,323 @@ export class OpportunitiesService {
           applications_updated: 0,
           reports_updated: 0,
         },
+      },
+    };
+  }
+
+  /**
+   * Admin Project Tracker: correct listing values the creator would otherwise own (title, mode,
+   * place, dates, hours per volunteer, seats, eligible departments) and bind the faculty /
+   * organisation ACCOUNTS directly. Only the keys the admin sent are written. An admin edit never
+   * sends a live listing back through review; a faculty change propagates to enrolments,
+   * applications and open reports exactly like {@link adminUpdateOpportunityContacts}.
+   */
+  async adminUpdateOpportunityDetails(
+    opportunityId: string,
+    dto: AdminUpdateOpportunityDetailsDto,
+  ) {
+    const sentKeys = (
+      Object.keys(dto) as (keyof AdminUpdateOpportunityDetailsDto)[]
+    ).filter(
+      (k) =>
+        dto[k] !== undefined && k !== 'copy_partner_contacts_from_organization',
+    );
+    if (!sentKeys.length) {
+      throw new BadRequestException('Provide at least one field to update.');
+    }
+
+    const opp = await this.opportunitiesRepository.findOne({
+      where: { id: opportunityId },
+      relations: ['organization'],
+    });
+    if (!opp) throw new NotFoundException('Opportunity not found');
+
+    const before = this.snapshotStudentOpportunityResubmit(opp);
+    const previousFacultyUserId = opp.facultyId ?? null;
+    const changed: string[] = [];
+
+    if (dto.title !== undefined) {
+      const title = dto.title.replace(/\s+/g, ' ').trim();
+      if (!title) throw new BadRequestException('title must not be blank');
+      if (title !== opp.title) {
+        opp.title = title;
+        changed.push('title');
+      }
+    }
+
+    if (dto.mode !== undefined && dto.mode !== opp.mode) {
+      opp.mode = dto.mode;
+      changed.push('mode');
+    }
+
+    if (dto.city !== undefined || dto.venue !== undefined) {
+      const loc = {
+        ...((opp.location as Record<string, unknown> | null) ?? {}),
+      };
+      if (dto.city !== undefined) loc.city = dto.city.trim();
+      if (dto.venue !== undefined) loc.venue = dto.venue.trim();
+      opp.location = loc;
+      changed.push('location');
+    }
+
+    const timelineKeys = [
+      'start_date',
+      'end_date',
+      'from_time',
+      'to_time',
+      'expected_hours',
+      'volunteers_required',
+    ] as const;
+    if (timelineKeys.some((k) => dto[k] !== undefined)) {
+      const tl = {
+        ...((opp.timeline as Record<string, unknown> | null) ?? {}),
+      };
+      for (const k of [
+        'start_date',
+        'end_date',
+        'from_time',
+        'to_time',
+      ] as const) {
+        if (dto[k] !== undefined) tl[k] = String(dto[k]).trim();
+      }
+      if (dto.expected_hours !== undefined) {
+        tl.expected_hours = dto.expected_hours;
+      }
+      if (dto.volunteers_required !== undefined) {
+        const occupied = await this.participationRepository.count({
+          where: {
+            projectId: opportunityId,
+            status: In([...OCCUPIED_SEAT_STATUSES]),
+          },
+        });
+        if (dto.volunteers_required < occupied) {
+          throw new BadRequestException(
+            `Volunteers needed cannot be below the ${occupied} seat(s) already taken on this listing.`,
+          );
+        }
+        tl.volunteers_required = dto.volunteers_required;
+      }
+      opp.timeline = tl;
+      // Dates are only mandatory when this edit touches them: a legacy row without dates must
+      // still accept an hours / seats correction.
+      this.validateTimeline(opp.timeline, {
+        requireDates:
+          dto.start_date !== undefined || dto.end_date !== undefined,
+      });
+      if (opp.team_mode === 'private_team') {
+        const seatsError = privateTeamSeatsError(opp.timeline);
+        if (seatsError) throw new BadRequestException(seatsError);
+      }
+      changed.push('timeline');
+    }
+
+    if (dto.departments !== undefined) {
+      const departments = [
+        ...new Set(
+          dto.departments
+            .map((d) => String(d).replace(/\s+/g, ' ').trim())
+            .filter(Boolean),
+        ),
+      ];
+      const scope = {
+        ...((opp.participation_scope as Record<string, unknown> | null) ?? {}),
+      } as ParticipationScopeJson & Record<string, unknown>;
+      if (!scope.rule) scope.rule = 'open_all_universities';
+      if (departments.length) {
+        scope.department_restriction = { scope: 'specific', departments };
+        if (scope.rule === 'own_university_only') {
+          scope.rule = 'own_university_departments';
+        }
+      } else {
+        scope.department_restriction = { scope: 'all', departments: [] };
+        if (scope.rule === 'own_university_departments') {
+          scope.rule = 'own_university_only';
+        } else if (scope.rule === 'departments_across_universities') {
+          scope.rule = 'restricted_specific_universities';
+        }
+      }
+      // Legacy flat key some old rows carry; department_restriction is canonical.
+      delete scope.departments;
+      this.validateParticipationScope(scope);
+      opp.participation_scope = scope;
+      changed.push('departments');
+    }
+
+    const facultyTouched = dto.faculty_user_id !== undefined;
+    if (facultyTouched) {
+      const sup = {
+        ...((opp.supervision as Record<string, unknown>) || {}),
+      };
+      // Org-created listings mirror the executing org's contact into supervision.contact; their
+      // faculty lives on the academic-linkage representative block (see resolveFacultyEmail).
+      const supRole =
+        typeof sup.role === 'string' ? sup.role.trim().toLowerCase() : '';
+      const facultyOnLinkageBlock = supRole.startsWith(
+        'executing organization',
+      );
+      const writeFaculty = (name: string, email: string) => {
+        if (facultyOnLinkageBlock) {
+          const val = {
+            ...((opp.visibility_and_academic_linkage as Record<
+              string,
+              unknown
+            >) || {}),
+          };
+          const fir = {
+            ...((val.faculty_institutional_representative as Record<
+              string,
+              unknown
+            >) || {}),
+          };
+          fir.name = name;
+          fir.official_email = email;
+          val.faculty_institutional_representative = fir;
+          opp.visibility_and_academic_linkage = val;
+        } else {
+          if (name) sup.supervisor_name = name;
+          sup.contact = email;
+          opp.supervision = sup;
+        }
+      };
+      if (dto.faculty_user_id) {
+        const facultyUser = await this.usersRepository.findOne({
+          where: { id: dto.faculty_user_id, role: UserRole.FACULTY },
+        });
+        if (!facultyUser) {
+          throw new NotFoundException('Faculty account not found');
+        }
+        const email = this.normalizeEmail(facultyUser.email);
+        if (!email || !this.isValidEmail(email)) {
+          throw new BadRequestException(
+            'That faculty account has no valid email.',
+          );
+        }
+        writeFaculty((facultyUser.name || '').trim(), email);
+        opp.facultyId = facultyUser.id;
+      } else {
+        writeFaculty('', '');
+        if (!facultyOnLinkageBlock) {
+          sup.supervisor_name = '';
+          opp.supervision = sup;
+        }
+        opp.facultyId = null;
+      }
+      changed.push('faculty');
+    }
+
+    let partnerContactsTouched = false;
+    if (dto.organization_id !== undefined) {
+      if (dto.organization_id) {
+        const org = await this.organizationsRepository.findOne({
+          where: { id: dto.organization_id },
+        });
+        if (!org) throw new NotFoundException('Organisation not found');
+        opp.organizationId = org.id;
+        opp.organization = org;
+        if (dto.copy_partner_contacts_from_organization) {
+          const po = {
+            ...((opp.partner_organization as Record<string, unknown>) || {}),
+          };
+          const sup = {
+            ...((opp.supervision as Record<string, unknown>) || {}),
+          };
+          const orgEmail = this.normalizeEmail(org.contactEmail || '');
+          po.organization_name = org.name;
+          sup.partner_org_name = org.name;
+          if ((org.contactName || '').trim()) {
+            po.contact_person = org.contactName.trim();
+            sup.partner_contact_person = org.contactName.trim();
+          }
+          if (orgEmail && this.isValidEmail(orgEmail)) {
+            po.official_email = orgEmail;
+            sup.partner_email = orgEmail;
+          }
+          opp.partner_organization = po;
+          opp.supervision = sup;
+          partnerContactsTouched = true;
+        }
+      } else {
+        opp.organizationId = null;
+        (opp as { organization: Organization | null }).organization = null;
+      }
+      changed.push('organization');
+    }
+
+    const facultyEmailNow = this.getFacultyEmailFromOpportunity(opp);
+    const facultyEmailChanged =
+      this.normalizeEmail(before.facultyEmail || '') !==
+      this.normalizeEmail(facultyEmailNow || '');
+
+    let notifyPlan = { notifyFaculty: false, notifyPartner: false };
+    if (facultyTouched || partnerContactsTouched) {
+      opp.requiresPartnerApproval = this.studentCreatedPayloadRequiresPartner(
+        opp as unknown as CreateOpportunityDto,
+      );
+      // Still under review: the reviewer who now holds the stage gets a fresh link, as a creator
+      // edit would. A live listing keeps its approvals — the admin is the final approver anyway.
+      if (!opp.admin_approved) {
+        notifyPlan = await this.applyStudentCreatedOpportunityResubmit(
+          opp,
+          before,
+        );
+        // The resubmit planner rebinds by email; the admin picked an account explicitly.
+        if (dto.faculty_user_id) opp.facultyId = dto.faculty_user_id;
+      }
+    }
+
+    if (changed.length) {
+      opp.version = (opp.version || 1) + 1;
+      await this.opportunitiesRepository.save(opp);
+    }
+
+    if (notifyPlan.notifyFaculty) {
+      void this.notifyFacultyForStudentOpportunityVerification(opp).catch(
+        () => undefined,
+      );
+    }
+    if (notifyPlan.notifyPartner) {
+      void this.sendPartnerApprovalEmail(opp).catch(() => undefined);
+    }
+
+    let propagation = {
+      participations_updated: 0,
+      applications_updated: 0,
+      reports_updated: 0,
+    };
+    if (facultyTouched || partnerContactsTouched) {
+      const refreshed = await this.opportunitiesRepository.findOne({
+        where: { id: opportunityId },
+        relations: ['organization'],
+      });
+      if (refreshed) {
+        propagation = await this.propagateContactChangeBindings(opportunityId, {
+          oldFacultyEmail: before.facultyEmail,
+          newFacultyEmail: facultyEmailNow,
+          oldFacultyUserId: previousFacultyUserId,
+          newFacultyUserId: refreshed.facultyId ?? null,
+          facultyEmailChanged,
+        });
+        await this.engagementService.reconcilePendingAttendanceAfterOpportunityContactChange(
+          refreshed,
+        );
+      }
+    }
+
+    return {
+      success: true,
+      data: {
+        changed,
+        title: opp.title,
+        mode: opp.mode ?? null,
+        location: (opp.location as Record<string, unknown> | null) ?? null,
+        timeline: (opp.timeline as Record<string, unknown> | null) ?? null,
+        participation_scope:
+          (opp.participation_scope as Record<string, unknown> | null) ?? null,
+        faculty_user_id: opp.facultyId ?? null,
+        faculty_account_linked: !!opp.facultyId,
+        organization_id: opp.organizationId ?? null,
+        workflow_stage: opp.workflowStage ?? null,
+        propagation,
       },
     };
   }

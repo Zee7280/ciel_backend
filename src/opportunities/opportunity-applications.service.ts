@@ -33,7 +33,10 @@ import { canonicalizePhoneInput } from '../common/phone-e164.util';
 import { StudentReport } from '../reports/entities/student-report.entity';
 import { Payment } from '../payments/entities/payment.entity';
 import { AdminTeamSnapshot } from './entities/admin-team-snapshot.entity';
-import { universityScopeError } from './university-scope.util';
+import {
+  collectOpportunityDepartmentAllowlist,
+  universityScopeError,
+} from './university-scope.util';
 import {
   plain,
   saveSnapshot,
@@ -2198,6 +2201,13 @@ export class OpportunityApplicationsService {
       opp?.supervision && typeof opp.supervision === 'object'
         ? (opp.supervision as Record<string, unknown>)
         : null;
+    /** The faculty ACCOUNT bound to the listing (may differ from the typed supervisor email). */
+    const facultyAccount = opp?.facultyId
+      ? await this.userRepo.findOne({
+          where: { id: opp.facultyId },
+          select: ['id', 'name', 'email'],
+        })
+      : null;
 
     return {
       summary: {
@@ -2280,6 +2290,15 @@ export class OpportunityApplicationsService {
                   : null,
               attendance_routing_override:
                 opp.attendanceRoutingOverride ?? 'auto',
+              faculty_user_id: opp.facultyId ?? null,
+              faculty_user_name: facultyAccount?.name ?? null,
+              faculty_user_email: facultyAccount?.email ?? null,
+              participation_scope:
+                (opp.participation_scope as Record<string, unknown> | null) ??
+                null,
+              departments: collectOpportunityDepartmentAllowlist(opp),
+              is_student_created: opp.isStudentCreated,
+              workflow_stage: opp.workflowStage ?? null,
               /** Human hint: coarse approval lane for the listing (detail still in applications_by_internal_status). */
               awaiting_partner_or_faculty: awaitingSide,
             }

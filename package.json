@@ -27,7 +27,8 @@
     "hub:isolation-check": "ts-node scripts/hub-isolation-check.ts",
     "hub:schema-check": "ts-node scripts/hub-schema-check.ts",
     "hub:e2e": "ts-node scripts/hub-e2e-flow.ts",
-    "hub:send": "ts-node scripts/hub-send-event.ts"
+    "hub:send": "ts-node scripts/hub-send-event.ts",
+    "hub:export": "ts-node scripts/hub-export-pull.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1000.0",

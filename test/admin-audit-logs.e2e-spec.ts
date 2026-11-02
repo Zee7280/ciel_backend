@@ -100,6 +100,11 @@ describe('Admin audit logs (e2e)', () => {
     ).toBe(true);
 
     expect((await h.as(student).get('/admin/audit-logs')).status).toBe(403);
+    // Neighbouring admin route in the same controller block: guards against the
+    // regression where rebuilding the audit routes dropped it.
+    const cep = await h.as(admin).get('/admin/cep-feedback?page=1&limit=20');
+    expect(cep.status).toBe(200);
+    expect(cep.body).toMatchObject({ success: true });
     expect(
       (await h.as(student).del(`/admin/audit-logs/${String(mine!.id)}`)).status,
     ).toBe(403);

@@ -417,6 +417,10 @@ function pickDraftPersistFields(
  */
 export const STUDENT_SIMILAR_TITLE_BLOCK_ENABLED = false;
 
+/** Student create: the private / independent candidate pathway is no longer accepted. */
+export const STUDENT_FACULTY_APPROVAL_REQUIRED_MESSAGE =
+  'Faculty approval is required for every student-created opportunity. Add your faculty supervisor (name, official university email and department) under Verification — the private / independent candidate pathway is no longer available.';
+
 /**
  * 409 text for a blocked student create. Says which listing it clashes with and how to join it:
  * the student's own earlier submission, a private team (its lead adds members — it has no Apply
@@ -3267,6 +3271,12 @@ export class OpportunitiesService {
       dto.safety_declaration,
     );
     const privateCandidate = isPrivateCandidateDto(dto);
+    // Faculty approval is mandatory for every student-created opportunity. The private /
+    // independent candidate pathway (no faculty line, straight to CIEL PK) is closed at
+    // submission; listings created under it earlier keep their stored route untouched.
+    if (privateCandidate) {
+      throw new BadRequestException(STUDENT_FACULTY_APPROVAL_REQUIRED_MESSAGE);
+    }
     applyCanonicalPrivateCandidatePhone(dto, { required: true });
     if (
       !(dto.objectives as { description?: unknown })?.description ||

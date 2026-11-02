@@ -9,6 +9,7 @@ import {
   OpportunityDetailViewer,
   similarStudentOpportunityMessage,
   STUDENT_SIMILAR_TITLE_BLOCK_ENABLED,
+  STUDENT_FACULTY_APPROVAL_REQUIRED_MESSAGE,
 } from './opportunities.service';
 import { OpportunityWorkflowService } from './opportunity-workflow.service';
 import { Opportunity } from './entities/opportunity.entity';
@@ -628,6 +629,45 @@ describe('OpportunitiesService — student create-opportunity is locked to their
         participation_scope: { rule: 'open_all_universities' },
       } as unknown as CreateOpportunityDto),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('rejects the private / independent candidate pathway: faculty approval is mandatory', async () => {
+    const service = makeService({});
+    privates(service).usersRepository = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'student-1',
+        role: 'student',
+        name: 'Ali',
+        phone: '0300',
+        email: 'ali@uni.edu',
+        city: 'Lahore',
+        university: 'University A',
+        department: 'CS',
+      }),
+    };
+    const shapes = [
+      {
+        executing_context: { type: 'independent', student_pathway: 'private' },
+      },
+      {
+        executing_context: {
+          type: 'independent',
+          private_candidate: { programme: 'BBA' },
+        },
+      },
+      { supervision: { private_candidate: true } },
+    ];
+    for (const shape of shapes) {
+      await expect(
+        service.createStudentOpportunity('student-1', {
+          ...baseDto(),
+          ...shape,
+          student_contact: '+923001234567',
+        } as unknown as CreateOpportunityDto),
+      ).rejects.toMatchObject({
+        message: STUDENT_FACULTY_APPROVAL_REQUIRED_MESSAGE,
+      });
+    }
   });
 
   it('rejects a student trying to restrict/target a university other than their own', async () => {

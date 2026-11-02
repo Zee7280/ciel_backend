@@ -2757,28 +2757,19 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
       expect((await adminApprove(h, admin, o.id)).status).toBe(400);
     });
 
-    it('private-candidate student (no faculty line): submit -> straight to CIEL PK; cannot self-serve past it', async () => {
+    it('private-candidate pathway is refused at submission: faculty approval is mandatory for students', async () => {
       const s = await h.makeUser(UserRole.STUDENT);
       const body = oppPayload({
         title: `Private ${uniq()} candidate project`,
         executing_context: { type: 'independent', student_pathway: 'private' },
         participation_scope: { rule: 'own_university_only' },
-        student_contact: '+923001234567', // private candidates must give a mobile for CIEL PK verification
+        student_contact: '+923001234567',
       });
       const r = await h.as(s).post('/student/opportunity').send(body);
-      if (r.status !== 201) {
-        // documented: private-candidate shape is detected by `isPrivateCandidateDto`; surface why
-        throw new Error(
-          `private candidate create failed: ${r.status} ${JSON.stringify(r.body)}`,
-        );
-      }
-      const o = await h.reload(dataId(r));
-      expect(o.faculty_verified).toBe(true);
-      expect(o.status).toBe('pending_approval');
-      expect(o.workflowStage).toBe('pending_admin');
-      expect(await studentBrowseIds(h, student)).not.toContain(o.id);
-      expect((await adminApprove(h, admin, o.id)).status).toBe(201);
-      expect(await studentBrowseIds(h, student)).toContain(o.id);
+      expect(r.status).toBe(400);
+      expect(String((r.body as { message?: unknown }).message)).toContain(
+        'Faculty approval is required',
+      );
     });
   });
 });

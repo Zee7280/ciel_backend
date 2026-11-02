@@ -3,12 +3,19 @@ import {
   HttpException,
   Injectable,
   Logger,
+  NotFoundException,
 } from '@nestjs/common';
 import { MaintenanceException } from '../common/guards/maintenance.guard';
 import { InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'crypto';
 import { Request } from 'express';
-import { Brackets, Repository, SelectQueryBuilder } from 'typeorm';
+import {
+  Brackets,
+  Repository,
+  SelectQueryBuilder,
+  In,
+  LessThan,
+} from 'typeorm';
 import { IssueLog } from './entities/issue-log.entity';
 
 type RequestUser = {
@@ -166,8 +173,46 @@ export class IssueLogsService {
     const qb = this.issueLogRepository.createQueryBuilder('log');
     this.applyIssueLogListFilters(qb, query);
     qb.orderBy('log.createdAt', 'DESC');
+    // List rows are summaries: `metadata` (up to 384 KB) and `stack` (32 KB) per row pushed a
+    // 20-row page past Vercel's response-size limit, so the admin screen showed "could not load"
+    // while the open-count badge (a COUNT) kept working. Both come back from findOne on demand.
+    qb.select([
+      'log.id',
+      'log.eventType',
+      'log.severity',
+      'log.module',
+      'log.action',
+      'log.stage',
+      'log.statusCode',
+      'log.method',
+      'log.path',
+      'log.message',
+      'log.errorName',
+      'log.userId',
+      'log.userEmail',
+      'log.userRole',
+      'log.targetType',
+      'log.targetId',
+      'log.requestId',
+      'log.ip',
+      'log.resolvedAt',
+      'log.resolvedBy',
+      'log.createdAt',
+    ]);
+    qb.addSelect('log.metadata IS NOT NULL', 'log_has_metadata');
+    qb.addSelect('log.stack IS NOT NULL', 'log_has_stack');
 
-    const [logs, total] = await qb.skip(skip).take(limit).getManyAndCount();
+    const { entities, raw } = await qb
+      .skip(skip)
+      .take(limit)
+      .getRawAndEntities();
+    const total = await qb.getCount();
+    const logs = entities.map((e, i) => ({
+      ...e,
+      hasMetadata:
+        (raw[i] as { log_has_metadata?: boolean })?.log_has_metadata === true,
+      hasStack: (raw[i] as { log_has_stack?: boolean })?.log_has_stack === true,
+    }));
 
     return {
       success: true,
@@ -300,6 +345,161 @@ export class IssueLogsService {
         }),
       );
     }
+  }
+
+  /** Dashboard strip for the Issue Logs screen. */
+  async summary() {
+    const now = Date.now();
+    const d1 = new Date(now - 24 * 3600 * 1000);
+    const d7 = new Date(now - 7 * 24 * 3600 * 1000);
+    const base = () => this.issueLogRepository.createQueryBuilder('log');
+    const open = () => base().where('log.resolvedAt IS NULL');
+    const [openTotal, last24h, last7d, resolvedTotal] = await Promise.all([
+      open().getCount(),
+      base().where('log.createdAt >= :d1', { d1 }).getCount(),
+      base().where('log.createdAt >= :d7', { d7 }).getCount(),
+      base().where('log.resolvedAt IS NOT NULL').getCount(),
+    ]);
+    const group = async (expr: string, take: number) =>
+      open()
+        .select(expr, 'key')
+        .addSelect('COUNT(*)', 'count')
+        .groupBy(expr)
+        .orderBy('count', 'DESC')
+        .limit(take)
+        .getRawMany<{ key: string | null; count: string }>();
+    // Raw select / group expressions are not property-mapped by TypeORM: quote camelCase columns.
+    const [bySeverity, byModule, byStatus, topMessages] = await Promise.all([
+      group('log."severity"', 5),
+      group(`COALESCE(log."module", 'unknown')`, 8),
+      group(`COALESCE(log."statusCode"::text, 'n/a')`, 6),
+      group(`COALESCE(log."message", log."errorName", 'unknown')`, 5),
+    ]);
+    const rows = (list: { key: string | null; count: string }[]) =>
+      list.map((r) => ({
+        key: r.key ?? 'unknown',
+        count: Number(r.count) || 0,
+      }));
+    return {
+      open_total: openTotal,
+      resolved_total: resolvedTotal,
+      last_24h: last24h,
+      last_7d: last7d,
+      open_by_severity: rows(bySeverity),
+      open_by_module: rows(byModule),
+      open_by_status: rows(byStatus),
+      top_open_messages: rows(topMessages),
+    };
+  }
+
+  /** CSV of the filtered list (summary columns), capped at 5000 rows. */
+  async exportCsv(query: IssueLogListQuery = {}): Promise<string> {
+    const qb = this.issueLogRepository
+      .createQueryBuilder('log')
+      .orderBy('log.createdAt', 'DESC')
+      .take(5000);
+    this.applyIssueLogListFilters(qb, query);
+    const rows = await qb.getMany();
+    const header = [
+      'created_at',
+      'severity',
+      'status_code',
+      'method',
+      'path',
+      'module',
+      'stage',
+      'action',
+      'message',
+      'error_name',
+      'user_email',
+      'user_role',
+      'target_type',
+      'target_id',
+      'request_id',
+      'ip',
+      'resolved_at',
+      'id',
+    ];
+    const cell = (v: unknown) => {
+      const s =
+        v == null
+          ? ''
+          : v instanceof Date
+            ? v.toISOString()
+            : typeof v === 'object'
+              ? JSON.stringify(v)
+              : String(v as string | number | boolean);
+      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const lines = rows.map((r) =>
+      [
+        r.createdAt,
+        r.severity,
+        r.statusCode,
+        r.method,
+        r.path,
+        r.module,
+        r.stage,
+        r.action,
+        r.message,
+        r.errorName,
+        r.userEmail,
+        r.userRole,
+        r.targetType,
+        r.targetId,
+        r.requestId,
+        r.ip,
+        r.resolvedAt,
+        r.id,
+      ]
+        .map(cell)
+        .join(','),
+    );
+    return [header.join(','), ...lines].join('\n');
+  }
+
+  /**
+   * Admin clean-up: by ids, every resolved row, and / or rows older than N days (resolved or
+   * not). At least one criterion is required; returns how many rows went.
+   */
+  async deleteMany(input: {
+    ids?: string[];
+    resolvedOnly?: boolean;
+    olderThanDays?: number;
+  }) {
+    const ids = [
+      ...new Set(
+        (input.ids || []).map((x) => String(x).trim()).filter(Boolean),
+      ),
+    ].slice(0, 500);
+    let deleted = 0;
+    if (ids.length) {
+      const r = await this.issueLogRepository.delete({ id: In(ids) });
+      deleted += r.affected ?? 0;
+    }
+    if (input.resolvedOnly) {
+      const r = await this.issueLogRepository
+        .createQueryBuilder()
+        .delete()
+        .where('"resolvedAt" IS NOT NULL')
+        .execute();
+      deleted += r.affected ?? 0;
+    }
+    const days = Number(input.olderThanDays);
+    if (Number.isFinite(days) && days >= 1) {
+      const cutoff = new Date(Date.now() - days * 24 * 3600 * 1000);
+      const r = await this.issueLogRepository.delete({
+        createdAt: LessThan(cutoff),
+      });
+      deleted += r.affected ?? 0;
+    }
+    return { deleted };
+  }
+
+  async deleteOne(id: string) {
+    const r = await this.issueLogRepository.delete({ id });
+    if (!r.affected) throw new NotFoundException('Issue log not found');
+    return { deleted: r.affected };
   }
 
   async findOne(id: string) {

@@ -2198,12 +2198,19 @@ describe('Opportunity create + approval workflow (real app + real Postgres)', ()
             label,
             leaks: false,
           });
-        for (const pv of private_)
+        for (const pv of private_) {
+          // Product rule: the creator's own email and WhatsApp are shown to any signed-in viewer
+          // (they are the contact point); third-party contacts stay redacted, and anonymous
+          // public endpoints get nothing. The harness gives every account the same phone, so the
+          // creator's number is only allowed on signed-in bodies.
+          const creatorContact = pv === ngo.email || pv === '+923001234567';
+          if (creatorContact && !label.startsWith('public')) continue;
           expect({ label, pv, leaks: text.includes(pv) }).toEqual({
             label,
             pv,
             leaks: false,
           });
+        }
       }
       // ...while the real stakeholders still get the contact details (but never raw tokens)
       for (const [label, u] of [

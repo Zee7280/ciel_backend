@@ -2577,7 +2577,13 @@ export class AdminService {
         target: log.target,
         target_type: log.target_type,
         ip: log.ip,
-        details: log.details as unknown,
+        method: log.method ?? (log.action || '').split(' ')[0] ?? null,
+        outcome: log.outcome ?? null,
+        status_code: log.status_code ?? null,
+        user_role: log.user_role ?? null,
+        target_label: log.target_label ?? null,
+        // `details` is served by GET /admin/audit-logs/:id on demand.
+        has_details: log.has_details === true,
         created_at: log.created_at,
       })),
       meta: {

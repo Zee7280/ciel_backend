@@ -45,6 +45,7 @@ import { SetAttendanceEditableDto } from './dto/set-attendance-editable.dto';
 import { AdminDedupeStudentSeatsDto } from './dto/admin-dedupe-student-seats.dto';
 import { OpportunityApplicationsService } from '../opportunities/opportunity-applications.service';
 import { IssueLogsService } from '../issue-logs/issue-logs.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import type { IssueLogListQuery } from '../issue-logs/issue-logs.service';
 import { PlatformJobsService } from '../jobs/platform-jobs.service';
 import { FacultyReportsService } from '../reports/faculty-reports.service';
@@ -98,6 +99,7 @@ export class AdminController {
     private readonly npeStudio: NpeStudioService,
     private readonly opportunityApplicationsService: OpportunityApplicationsService,
     private readonly issueLogsService: IssueLogsService,
+    private readonly auditLogsService: AuditLogsService,
     private readonly adminProjectEvidenceService: AdminProjectEvidenceService,
     private readonly platformJobsService: PlatformJobsService,
     private readonly facultyReportsService: FacultyReportsService,
@@ -318,33 +320,104 @@ export class AdminController {
     @Query('path') path?: string,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
+    @Query('outcome') outcome?: string,
+    @Query('method') method?: string,
+    @Query('targetType') targetType?: string,
+    @Query('userRole') userRole?: string,
+    @Query('search') search?: string,
   ) {
     const pg = Number.parseInt(page ?? '', 10);
     const lim = Number.parseInt(limit ?? '', 10);
     return this.adminService.getAuditLogs(
       Number.isFinite(pg) ? pg : undefined,
       Number.isFinite(lim) ? lim : undefined,
-      { userEmail, path, dateFrom, dateTo },
+      {
+        userEmail,
+        path,
+        dateFrom,
+        dateTo,
+        outcome,
+        method,
+        targetType,
+        userRole,
+        search,
+      },
     );
   }
 
-  /** Post-report CEP experience survey submissions (students after report + payment). */
-  @Get('cep-feedback')
-  getCepExperienceFeedback(
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
+  @Get('audit-logs/summary')
+  async getAuditLogsSummary() {
+    return { success: true, data: await this.auditLogsService.summary() };
+  }
+
+  @Get('audit-logs/export')
+  async exportAuditLogs(
+    @Query() q: Record<string, string>,
+    @Res() res: Response,
   ) {
-    const pg = Number.parseInt(page ?? '', 10);
-    const lim = Number.parseInt(limit ?? '', 10);
-    return this.adminService.getCepExperienceFeedback(
-      Number.isFinite(pg) ? pg : undefined,
-      Number.isFinite(lim) ? lim : undefined,
+    const csv = await this.auditLogsService.exportCsv({
+      userEmail: q.userEmail,
+      path: q.path,
+      dateFrom: q.dateFrom,
+      dateTo: q.dateTo,
+      outcome: q.outcome,
+      method: q.method,
+      targetType: q.targetType,
+      userRole: q.userRole,
+      search: q.search,
+    });
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="audit-logs-${new Date().toISOString().slice(0, 10)}.csv"`,
     );
+    res.send(csv);
+  }
+
+  @Get('audit-logs/:id')
+  async getAuditLogById(@Param('id', ParseUUIDPipe) id: string) {
+    return { success: true, data: await this.auditLogsService.findOne(id) };
+  }
+
+  /** Deleting the trail is audited by the interceptor like every other admin mutation. */
+  @Delete('audit-logs')
+  async deleteAuditLogs(
+    @Body() body: { ids?: string[]; olderThanDays?: number },
+  ) {
+    const r = await this.auditLogsService.deleteMany({
+      ids: Array.isArray(body?.ids) ? body.ids : [],
+      olderThanDays: body?.olderThanDays,
+    });
+    return { success: true, ...r };
+  }
+
+  @Delete('audit-logs/:id')
+  async deleteAuditLog(@Param('id', ParseUUIDPipe) id: string) {
+    return { success: true, ...(await this.auditLogsService.deleteOne(id)) };
   }
 
   @Get('issue-logs')
   getIssueLogs(@Query() query: IssueLogListQuery) {
     return this.issueLogsService.findAll(query);
+  }
+
+  @Get('issue-logs/summary')
+  async getIssueLogsSummary() {
+    return { success: true, data: await this.issueLogsService.summary() };
+  }
+
+  @Get('issue-logs/export')
+  async exportIssueLogs(
+    @Query() query: IssueLogListQuery,
+    @Res() res: Response,
+  ) {
+    const csv = await this.issueLogsService.exportCsv(query);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="issue-logs-${new Date().toISOString().slice(0, 10)}.csv"`,
+    );
+    res.send(csv);
   }
 
   @Post('issue-logs/resolve')
@@ -355,6 +428,28 @@ export class AdminController {
     return this.issueLogsService
       .resolve(Array.isArray(body?.ids) ? body.ids : [], req.user?.id ?? null)
       .then((r) => ({ success: true, ...r }));
+  }
+
+  @Delete('issue-logs')
+  async deleteIssueLogs(
+    @Body()
+    body: {
+      ids?: string[];
+      resolvedOnly?: boolean;
+      olderThanDays?: number;
+    },
+  ) {
+    const r = await this.issueLogsService.deleteMany({
+      ids: Array.isArray(body?.ids) ? body.ids : [],
+      resolvedOnly: body?.resolvedOnly === true,
+      olderThanDays: body?.olderThanDays,
+    });
+    return { success: true, ...r };
+  }
+
+  @Delete('issue-logs/:id')
+  async deleteIssueLog(@Param('id', ParseUUIDPipe) id: string) {
+    return { success: true, ...(await this.issueLogsService.deleteOne(id)) };
   }
 
   @Get('issue-logs/:id')

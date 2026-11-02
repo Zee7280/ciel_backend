@@ -129,8 +129,19 @@ describe('Duplicate opportunity: source payload is complete, safe and scoped (re
     expect((await adminApprove(h, admin, id)).status).toBeLessThan(300);
     const other = await h.makeUser(UserRole.FACULTY);
     const asOther = expectCopyable(await open(other, id, 'faculty_other_live'));
-    // a third party never receives the supervisor's contact details through a copy
-    expect(JSON.stringify(asOther)).not.toContain(fac.email);
+    // The creator block carries the creator's own email (product rule: any signed-in viewer may
+    // reach the creator), but the supervision contact fields themselves stay redacted for a
+    // third party, so a copy never pre-fills someone else's supervisor details.
+    const sup =
+      (asOther as { supervision?: Record<string, unknown> }).supervision ?? {};
+    expect(sup.contact).toBeUndefined();
+    expect(sup.whatsapp_e164).toBeUndefined();
+    const dv = (
+      asOther as {
+        detail_view?: { supervision?: { faculty?: { email?: unknown } } };
+      }
+    ).detail_view;
+    expect(dv?.supervision?.faculty?.email ?? null).toBeNull();
   });
 
   it('NGO-created with a named faculty: the NGO and the linked faculty can copy it; a stranger faculty cannot while it is pending', async () => {

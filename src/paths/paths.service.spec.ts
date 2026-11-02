@@ -3699,3 +3699,56 @@ describe('PathsService — investor hub sanitisation', () => {
     expect(out.contactUnlocked).toBe(true);
   });
 });
+
+describe('PathsService — admin deletes a coursework record', () => {
+  const build = (row: Record<string, unknown> | null) => {
+    const courseRepo = {
+      findOne: jest.fn().mockResolvedValue(row),
+      delete: jest.fn().mockResolvedValue({ affected: row ? 1 : 0 }),
+    };
+    const inviteRepo = { delete: jest.fn().mockResolvedValue({ affected: 2 }) };
+    const service = createService(
+      courseRepo,
+      {},
+      {},
+      inviteRepo,
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+    );
+    return { service, courseRepo, inviteRepo };
+  };
+
+  it('removes the record and its team invites, whatever the status', async () => {
+    const { service, courseRepo, inviteRepo } = build({
+      id: 'cp-1',
+      projectTitle: 'Untitled coursework',
+      status: 'submitted',
+      facultyApprovalStatus: 'pending',
+    });
+    const out = await service.deleteCourseProjectForAdmin('cp-1');
+    expect(out).toEqual({
+      id: 'cp-1',
+      projectTitle: 'Untitled coursework',
+      status: 'submitted',
+      facultyApprovalStatus: 'pending',
+    });
+    expect(inviteRepo.delete).toHaveBeenCalledWith({
+      kind: 'course_project',
+      entryId: 'cp-1',
+    });
+    expect(courseRepo.delete).toHaveBeenCalledWith({ id: 'cp-1' });
+  });
+
+  it('404s on an unknown id and deletes nothing', async () => {
+    const { service, courseRepo, inviteRepo } = build(null);
+    await expect(service.deleteCourseProjectForAdmin('nope')).rejects.toThrow(
+      /not found/i,
+    );
+    expect(inviteRepo.delete).not.toHaveBeenCalled();
+    expect(courseRepo.delete).not.toHaveBeenCalled();
+  });
+});

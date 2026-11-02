@@ -1156,6 +1156,27 @@ export class PathsService implements OnModuleInit {
     await this.courseProjectRepo.delete({ id, userId });
   }
 
+  /**
+   * CIEL PK admin removes a coursework record outright (abandoned drafts, junk, duplicates).
+   * Any status: the Command Monitor is where admins clean up, and the admin mutation audit
+   * interceptor records who did it. Team invites that pointed at the record go with it.
+   */
+  async deleteCourseProjectForAdmin(id: string) {
+    const entry = await this.courseProjectRepo.findOne({ where: { id } });
+    if (!entry) throw new NotFoundException('Coursework record not found');
+    await this.teamMemberInviteRepo.delete({
+      kind: 'course_project',
+      entryId: id,
+    });
+    await this.courseProjectRepo.delete({ id });
+    return {
+      id: entry.id,
+      projectTitle: entry.projectTitle ?? null,
+      status: entry.status,
+      facultyApprovalStatus: entry.facultyApprovalStatus ?? null,
+    };
+  }
+
   /** Cards from students this teacher supervises — matched on the email they entered in step 1, scoped to submitted reports only. */
   async listCourseProjectsForTeacher(teacherEmail: string) {
     const email = teacherEmail.trim().toLowerCase();

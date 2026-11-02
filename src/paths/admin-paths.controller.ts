@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseUUIDPipe,
@@ -42,6 +43,13 @@ export class AdminPathsController {
       status,
       approvalStatus,
     );
+    return { success: true, data };
+  }
+
+  /** Command Monitor clean-up: remove a coursework record (any status). Audited. */
+  @Delete('course-projects/:id')
+  async deleteCourseProject(@Param('id', ParseUUIDPipe) id: string) {
+    const data = await this.pathsService.deleteCourseProjectForAdmin(id);
     return { success: true, data };
   }
 

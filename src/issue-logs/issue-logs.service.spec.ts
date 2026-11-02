@@ -27,7 +27,17 @@ describe('IssueLogsService', () => {
       orderBy: jest.fn().mockReturnThis(),
       skip: jest.fn().mockReturnThis(),
       take: jest.fn().mockReturnThis(),
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
       getManyAndCount: jest.fn().mockResolvedValue([rows, total]),
+      getRawAndEntities: jest.fn().mockResolvedValue({
+        entities: rows,
+        raw: rows.map(() => ({
+          log_has_metadata: false,
+          log_has_stack: false,
+        })),
+      }),
+      getCount: jest.fn().mockResolvedValue(total),
     };
     return chain;
   };

@@ -3,6 +3,7 @@ import {
   CreateDateColumn,
   Entity,
   PrimaryGeneratedColumn,
+  Index,
 } from 'typeorm';
 
 @Entity('issue_logs')
@@ -72,12 +73,14 @@ export class IssueLog {
   metadata: Record<string, unknown> | null;
 
   /** Set when an admin marks the incident handled; unresolved error logs count as "open". */
+  @Index()
   @Column({ type: 'timestamp', nullable: true })
   resolvedAt: Date | null;
 
   @Column({ type: 'uuid', nullable: true })
   resolvedBy: string | null;
 
+  @Index()
   @CreateDateColumn()
   createdAt: Date;
 }

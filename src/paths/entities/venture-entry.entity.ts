@@ -315,14 +315,14 @@ export interface VentureSectionSummaries {
   founder?: string;
 }
 
-/** One record per student — Startup / Business path: venture profile, traction, team, materials, visibility, plus the 8-step guided wizard record. */
+/** Startup / Business path record: venture profile, traction, team, materials, visibility, plus the guided wizard record. A student may own several ventures. */
 @Entity('venture_entries')
 export class VentureEntry {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  /** One venture record per student — enforced at the DB level so a race between two saves can never create a duplicate row that silently shadows the other. */
-  @Index({ unique: true })
+  /** Owner. Not unique: a student may run several ventures, each with its own Venture ID. */
+  @Index()
   @Column()
   userId: string;
 

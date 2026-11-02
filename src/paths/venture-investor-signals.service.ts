@@ -197,10 +197,18 @@ export class VentureInvestorSignalsService {
   /** Interest and intro rows on the caller's own venture. Investor identity only once CIEL PK
    * screened the request; organisation name is enough before that. */
   async forFounder(userId: string) {
-    const venture = await this.ventures.findOne({ where: { userId } });
-    if (!venture) return [];
+    // A founder may run several ventures — show the requests on all of them.
+    const owned = await this.ventures.find({
+      where: { userId },
+      select: ['id', 'ventureName'],
+    });
+    if (!owned.length) return [];
+    const nameById = new Map(owned.map((v) => [v.id, v.ventureName]));
     const rows = await this.repo.find({
-      where: { ventureId: venture.id, kind: In(['interest', 'intro']) },
+      where: {
+        ventureId: In(owned.map((v) => v.id)),
+        kind: In(['interest', 'intro']),
+      },
       order: { createdAt: 'DESC' },
     });
     const investors = await this.usersById(rows.map((r) => r.investorUserId));
@@ -215,6 +223,8 @@ export class VentureInvestorSignalsService {
         status: r.status,
         note: r.note,
         created_at: r.createdAt,
+        venture_id: r.ventureId,
+        venture_name: nameById.get(r.ventureId) || null,
         investor: {
           organisation: inv?.orgName || 'Investor (organisation withheld)',
           name: revealed ? inv?.name || null : null,
@@ -231,12 +241,15 @@ export class VentureInvestorSignalsService {
     signalId: string,
     decision: 'accept' | 'decline',
   ) {
-    const venture = await this.ventures.findOne({ where: { userId } });
-    if (!venture) throw new NotFoundException('Venture not found');
     const row = await this.repo.findOne({
-      where: { id: signalId, ventureId: venture.id, kind: 'intro' },
+      where: { id: signalId, kind: 'intro' },
     });
-    if (!row) throw new NotFoundException('Introduction request not found');
+    // Only the founder of the venture this request is on may decide it.
+    const venture = row
+      ? await this.ventures.findOne({ where: { id: row.ventureId, userId } })
+      : null;
+    if (!row || !venture)
+      throw new NotFoundException('Introduction request not found');
     if (row.status !== 'screened') {
       throw new ForbiddenException(
         row.status === 'pending'

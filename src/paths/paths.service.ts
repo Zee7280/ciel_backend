@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -121,9 +122,17 @@ export class PathsService implements OnModuleInit {
     private readonly aiService: AiService,
   ) {}
 
-  /** One-row-era unique index on fyp_entries.userId blocks Create. Entity is @Index() only;
-   * TypeORM synchronize does not always drop the leftover unique constraint. */
+  /** One-row-era unique index on userId blocks Create for FYP and Venture. Entities are @Index()
+   * only; TypeORM synchronize does not always drop the leftover unique constraint. */
   async onModuleInit() {
+    for (const table of ['fyp_entries', 'venture_entries'] as const) {
+      await this.dropLeftoverUserIdUnique(table);
+    }
+  }
+
+  private async dropLeftoverUserIdUnique(
+    table: 'fyp_entries' | 'venture_entries',
+  ) {
     try {
       await this.fypRepo.query(`
         DO $$
@@ -133,18 +142,18 @@ export class PathsService implements OnModuleInit {
             SELECT c.conname
             FROM pg_constraint c
             JOIN pg_class t ON c.conrelid = t.oid
-            WHERE t.relname = 'fyp_entries'
+            WHERE t.relname = '${table}'
               AND c.contype = 'u'
               AND pg_get_constraintdef(c.oid) ILIKE '%userId%'
           LOOP
-            EXECUTE format('ALTER TABLE fyp_entries DROP CONSTRAINT IF EXISTS %I', r.conname);
+            EXECUTE format('ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS %I', r.conname);
           END LOOP;
           FOR r IN
             SELECT i.relname AS idxname
             FROM pg_index x
             JOIN pg_class i ON i.oid = x.indexrelid
             JOIN pg_class t ON t.oid = x.indrelid
-            WHERE t.relname = 'fyp_entries'
+            WHERE t.relname = '${table}'
               AND x.indisunique
               AND NOT x.indisprimary
               AND pg_get_indexdef(x.indexrelid) ILIKE '%userId%'
@@ -155,7 +164,7 @@ export class PathsService implements OnModuleInit {
       `);
     } catch (err) {
       this.logger.warn(
-        `Could not drop leftover fyp_entries.userId unique index: ${(err as Error).message}`,
+        `Could not drop leftover ${table}.userId unique index: ${(err as Error).message}`,
       );
     }
   }
@@ -3579,7 +3588,10 @@ export class PathsService implements OnModuleInit {
    * founder's *submitted* venture on their own dashboard instead (read-only), gated on a real
    * accepted invite, same pattern as getFyp. A student's own record always takes priority. */
   async getVenture(userId: string, userEmail?: string) {
-    const own = await this.ventureRepo.findOne({ where: { userId } });
+    const own = await this.ventureRepo.findOne({
+      where: { userId },
+      order: { updatedAt: 'DESC' },
+    });
     if (own)
       return {
         ...this.withCompleteness((await this.ventureAnnotate([own]))[0]),
@@ -3599,6 +3611,9 @@ export class PathsService implements OnModuleInit {
     return { ...this.withCompleteness(annotated), isOwner: false };
   }
 
+  /** Legacy single-venture upsert: edits the student's most recently updated venture (or creates
+   * the first one). Kept for older clients and the faculty-founder track; the multi-venture deck
+   * uses createVentureForUser / updateVentureByIdForUser. */
   async upsertVenture(userId: string, dto: UpdateVentureDto) {
     // Locked read-modify-write — see comment on upsertCourseProject for why this matters.
     const saved = await this.ventureRepo.manager.transaction(
@@ -3606,159 +3621,114 @@ export class PathsService implements OnModuleInit {
         const repo = manager.getRepository(VentureEntry);
         let entry = await repo.findOne({
           where: { userId },
+          order: { updatedAt: 'DESC' },
           lock: { mode: 'pessimistic_write' },
         });
         if (!entry) entry = repo.create({ userId });
-        const priorStatusForSupervisorLock = entry.status;
-        const priorSupervisorEmail = entry.academicSetup?.supervisorEmail;
-        const priorSupervisorName = entry.academicSetup?.supervisorName;
-        if (dto.ventureName !== undefined) entry.ventureName = dto.ventureName;
-        if (dto.description !== undefined) entry.description = dto.description;
-        if (dto.stage !== undefined) entry.stage = dto.stage;
-        if (dto.tractionRows !== undefined)
-          entry.tractionRows = dto.tractionRows;
-        if (dto.team !== undefined) entry.team = dto.team;
-        if (dto.materialUrls !== undefined)
-          entry.materialUrls = dto.materialUrls;
-        // 8-step guided wizard — frontend sends each group fully merged, so a straight assign is safe.
-        if (dto.academicSetup !== undefined) {
-          entry.academicSetup = dto.academicSetup;
-          // supervisorEmail/supervisorName are what ventureMatchesFaculty relies on (self-declared,
-          // never verified against a roster) — once submitted, silently redirecting to a different
-          // faculty account would let that faculty score a venture they were never assigned. Same
-          // fix as Course Project's teacherEmail / FYP's supervisorEmail.
-          if (priorStatusForSupervisorLock === 'submitted') {
-            entry.academicSetup = {
-              ...entry.academicSetup,
-              supervisorEmail: priorSupervisorEmail,
-              supervisorName: priorSupervisorName,
-            };
-          }
-        }
-        if (dto.ideaInfo !== undefined) entry.ideaInfo = dto.ideaInfo;
-        if (dto.solutionInfo !== undefined)
-          entry.solutionInfo = dto.solutionInfo;
-        if (dto.sdgMapping !== undefined) entry.sdgMapping = dto.sdgMapping;
-        if (dto.evidenceInfo !== undefined)
-          entry.evidenceInfo = dto.evidenceInfo;
-        if (dto.reviewPipeline !== undefined) {
-          // reviewPipeline.supervisorStatus is a decision field — only supervisorReviewVenture/
-          // selfCertifyOwnVenture (faculty-only) may move it to a terminal state. The student's own
-          // wizard only ever legitimately sends 'pending'/'not_started' here, so a client-supplied
-          // terminal value is never trusted — keep whatever was already persisted instead. Without
-          // this, a forged terminal status could persist on a still-'draft' row (the reset-to-pending
-          // guard below only fires once status flips to 'submitted'), and such a row wasn't excluded
-          // from listVenturesForAdmin's approved-only query (see the accompanying fix there).
-          const TERMINAL_SUPERVISOR_STATUSES = new Set([
-            'approved',
-            'rejected',
-            'revisions_requested',
-          ]);
-          const requestedSupervisorStatus = dto.reviewPipeline.supervisorStatus;
-          entry.reviewPipeline = {
-            ...dto.reviewPipeline,
-            supervisorStatus: TERMINAL_SUPERVISOR_STATUSES.has(
-              requestedSupervisorStatus as string,
-            )
-              ? (entry.reviewPipeline?.supervisorStatus ?? 'not_started')
-              : requestedSupervisorStatus,
-          };
-        }
-        if (dto.publishSettings !== undefined) {
-          // `featured` is the CIEL PK Investor Hub spotlight (setVentureSpotlight, super admin
-          // only) — whatever the client sends for it is ignored.
-          const featured = entry.publishSettings?.featured;
-          entry.publishSettings = {
-            ...dto.publishSettings,
-            featured,
-          };
-        }
-        if (dto.teamConsent !== undefined) entry.teamConsent = dto.teamConsent;
-        if (dto.sectionSummaries !== undefined)
-          entry.sectionSummaries = dto.sectionSummaries;
-        if (dto.stepCompleted !== undefined)
-          entry.stepCompleted = dto.stepCompleted;
-        if (dto.status !== undefined) entry.status = dto.status;
-        if (
-          priorStatusForSupervisorLock !== 'submitted' &&
-          entry.status === 'submitted'
-        ) {
-          // Submit gate (mirror of computeFypReadiness): a venture can never enter the review
-          // queue without a name and a supervisor for a faculty account to match on.
-          const missing = ventureSubmitMissing(entry);
-          if (missing.length) {
-            throw new BadRequestException(
-              `This venture isn't ready to submit yet. Missing: ${missing.join('; ')}.`,
-            );
-          }
-          // Entering the queue: the supervisor line starts at 'pending' so faculty / university /
-          // admin filters on supervisorStatus see it (the client used to have to send this).
-          const line = entry.reviewPipeline?.supervisorStatus;
-          if (!line || line === 'not_started') {
-            entry.reviewPipeline = {
-              ...(entry.reviewPipeline || {}),
-              supervisorStatus: 'pending',
-            };
-          }
-        }
-        // Pulling a submitted venture back to draft withdraws it from review (same reasoning as
-        // the FYP branch: the supervisor lock lifts with the status).
-        if (
-          priorStatusForSupervisorLock === 'submitted' &&
-          entry.status === 'draft' &&
-          entry.reviewPipeline?.supervisorStatus &&
-          entry.reviewPipeline.supervisorStatus !== 'pending' &&
-          entry.reviewPipeline.supervisorStatus !== 'not_started'
-        ) {
-          entry.reviewPipeline = {
-            ...entry.reviewPipeline,
-            supervisorStatus: 'pending',
-          };
-          entry.meritRibbon = null;
-        }
-        // Toggling investor-track consent is not an academic edit — it must not bounce an
-        // approved record back to pending (students can withdraw/opt-in at any time).
-        const consentOnly =
-          dto.publishSettings !== undefined &&
-          dto.ventureName === undefined &&
-          dto.description === undefined &&
-          dto.stage === undefined &&
-          dto.tractionRows === undefined &&
-          dto.team === undefined &&
-          dto.materialUrls === undefined &&
-          dto.academicSetup === undefined &&
-          dto.ideaInfo === undefined &&
-          dto.solutionInfo === undefined &&
-          dto.sdgMapping === undefined &&
-          dto.evidenceInfo === undefined &&
-          dto.reviewPipeline === undefined &&
-          dto.teamConsent === undefined &&
-          dto.sectionSummaries === undefined &&
-          dto.stepCompleted === undefined &&
-          dto.status === undefined;
-        // Editing a previously-reviewed record after the fact invalidates that review — same rule
-        // as Course Project/FYP: fix & resubmit should land as a fresh review. Keep the supervisor's
-        // note so the student still sees it.
-        const priorStatus = entry.reviewPipeline?.supervisorStatus;
-        if (
-          !consentOnly &&
-          entry.status === 'submitted' &&
-          (priorStatus === 'approved' ||
-            priorStatus === 'rejected' ||
-            priorStatus === 'revisions_requested')
-        ) {
-          entry.reviewPipeline = {
-            ...entry.reviewPipeline,
-            supervisorStatus: 'pending',
-          };
-          entry.meritRibbon = null;
-        }
-        // isVisible is earned, not self-toggled, once the guided wizard is in use — recomputed
-        // on every save so it always reflects the current Showcase-Ready + audience state.
-        entry.isVisible = deriveVentureIsVisible(entry);
-        return repo.save(entry);
+        return repo.save(this.applyVenturePatch(entry, dto));
       },
     );
+    return this.afterVentureSave(saved, userId);
+  }
+
+  /** Starts a new, separate venture for this student (its own Venture ID). The first save of the
+   * wizard calls this, so an opened-but-never-saved form never leaves an empty row behind. */
+  async createVentureForUser(userId: string, dto: UpdateVentureDto = {}) {
+    let saved: VentureEntry;
+    try {
+      saved = await this.ventureRepo.save(
+        this.applyVenturePatch(this.ventureRepo.create({ userId }), dto),
+      );
+    } catch (err) {
+      const code = postgresErrorCode(err);
+      if (
+        code === '23505' ||
+        /duplicate key/i.test(err instanceof Error ? err.message : String(err))
+      ) {
+        // The one-venture-per-student unique index is still on this database. Never fall back to
+        // overwriting the existing venture with the new one's data.
+        throw new ConflictException(
+          'A second venture cannot be created yet. Please try again in a few minutes.',
+        );
+      }
+      throw err;
+    }
+    return this.afterVentureSave(saved, userId);
+  }
+
+  /** Every venture this student owns, plus submitted ventures they were named on as a teammate
+   * (read-only, accepted invite only) — same sharing rule as getVenture. */
+  async listVenturesForUser(userId: string, userEmail?: string) {
+    const own = await this.ventureRepo.find({
+      where: { userId },
+      order: { updatedAt: 'DESC' },
+    });
+    const email = (userEmail || '').trim().toLowerCase();
+    const shared = email
+      ? await this.ventureRepo
+          .createQueryBuilder('e')
+          .where(`e.status = 'submitted'`)
+          .andWhere('e."userId" <> :userId', { userId })
+          .andWhere(PathsService.VENTURE_TEAM_MEMBER_EMAIL_MATCH, {
+            teamEmail: email,
+          })
+          .orderBy('e."updatedAt"', 'DESC')
+          .getMany()
+      : [];
+    const annotated = await this.ventureAnnotate([...own, ...shared]);
+    return annotated.map((e) => ({
+      ...this.withCompleteness(e)!,
+      isOwner: e.userId === userId,
+    }));
+  }
+
+  /** One venture by id — the owner's, or a submitted one this student is a named teammate on. */
+  async getVentureByIdForUser(userId: string, userEmail: string, id: string) {
+    const email = (userEmail || '').trim().toLowerCase();
+    const qb = this.ventureRepo
+      .createQueryBuilder('e')
+      .where('e.id = :id', { id })
+      .andWhere(
+        new Brackets((b) => {
+          b.where('e."userId" = :userId', { userId });
+          if (email) {
+            b.orWhere(
+              `(e.status = 'submitted' AND ${PathsService.VENTURE_TEAM_MEMBER_EMAIL_MATCH})`,
+              { teamEmail: email },
+            );
+          }
+        }),
+      );
+    const entry = await qb.getOne();
+    if (!entry) throw new NotFoundException('Venture not found');
+    const [annotated] = await this.ventureAnnotate([entry]);
+    return {
+      ...this.withCompleteness(annotated)!,
+      isOwner: entry.userId === userId,
+    };
+  }
+
+  /** Owner-only edit of one specific venture — same rules as upsertVenture. */
+  async updateVentureByIdForUser(
+    userId: string,
+    id: string,
+    dto: UpdateVentureDto,
+  ) {
+    const saved = await this.ventureRepo.manager.transaction(
+      async (manager) => {
+        const repo = manager.getRepository(VentureEntry);
+        const entry = await repo.findOne({
+          where: { id, userId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!entry) throw new NotFoundException('Venture not found');
+        return repo.save(this.applyVenturePatch(entry, dto));
+      },
+    );
+    return this.afterVentureSave(saved, userId);
+  }
+
+  private async afterVentureSave(saved: VentureEntry, userId: string) {
     // Fire-and-forget — see the comment on upsertCourseProject for why.
     void this.syncVentureInvites(saved, userId).catch((err) =>
       this.logger.error(
@@ -3767,6 +3737,158 @@ export class PathsService implements OnModuleInit {
     );
     const [annotated] = await this.ventureAnnotate([saved]);
     return this.withCompleteness(annotated);
+  }
+
+  /** Applies a wizard save to a venture row in place (submit gate, supervisor lock, review reset,
+   * derived visibility). Shared by every venture write path so they cannot drift apart. */
+  private applyVenturePatch(
+    entry: VentureEntry,
+    dto: UpdateVentureDto,
+  ): VentureEntry {
+    const priorStatusForSupervisorLock = entry.status;
+    const priorSupervisorEmail = entry.academicSetup?.supervisorEmail;
+    const priorSupervisorName = entry.academicSetup?.supervisorName;
+    if (dto.ventureName !== undefined) entry.ventureName = dto.ventureName;
+    if (dto.description !== undefined) entry.description = dto.description;
+    if (dto.stage !== undefined) entry.stage = dto.stage;
+    if (dto.tractionRows !== undefined) entry.tractionRows = dto.tractionRows;
+    if (dto.team !== undefined) entry.team = dto.team;
+    if (dto.materialUrls !== undefined) entry.materialUrls = dto.materialUrls;
+    // 8-step guided wizard — frontend sends each group fully merged, so a straight assign is safe.
+    if (dto.academicSetup !== undefined) {
+      entry.academicSetup = dto.academicSetup;
+      // supervisorEmail/supervisorName are what ventureMatchesFaculty relies on (self-declared,
+      // never verified against a roster) — once submitted, silently redirecting to a different
+      // faculty account would let that faculty score a venture they were never assigned. Same
+      // fix as Course Project's teacherEmail / FYP's supervisorEmail.
+      if (priorStatusForSupervisorLock === 'submitted') {
+        entry.academicSetup = {
+          ...entry.academicSetup,
+          supervisorEmail: priorSupervisorEmail,
+          supervisorName: priorSupervisorName,
+        };
+      }
+    }
+    if (dto.ideaInfo !== undefined) entry.ideaInfo = dto.ideaInfo;
+    if (dto.solutionInfo !== undefined) entry.solutionInfo = dto.solutionInfo;
+    if (dto.sdgMapping !== undefined) entry.sdgMapping = dto.sdgMapping;
+    if (dto.evidenceInfo !== undefined) entry.evidenceInfo = dto.evidenceInfo;
+    if (dto.reviewPipeline !== undefined) {
+      // reviewPipeline.supervisorStatus is a decision field — only supervisorReviewVenture/
+      // selfCertifyOwnVenture (faculty-only) may move it to a terminal state. The student's own
+      // wizard only ever legitimately sends 'pending'/'not_started' here, so a client-supplied
+      // terminal value is never trusted — keep whatever was already persisted instead. Without
+      // this, a forged terminal status could persist on a still-'draft' row (the reset-to-pending
+      // guard below only fires once status flips to 'submitted'), and such a row wasn't excluded
+      // from listVenturesForAdmin's approved-only query (see the accompanying fix there).
+      const TERMINAL_SUPERVISOR_STATUSES = new Set([
+        'approved',
+        'rejected',
+        'revisions_requested',
+      ]);
+      const requestedSupervisorStatus = dto.reviewPipeline.supervisorStatus;
+      entry.reviewPipeline = {
+        ...dto.reviewPipeline,
+        supervisorStatus: TERMINAL_SUPERVISOR_STATUSES.has(
+          requestedSupervisorStatus as string,
+        )
+          ? (entry.reviewPipeline?.supervisorStatus ?? 'not_started')
+          : requestedSupervisorStatus,
+      };
+    }
+    if (dto.publishSettings !== undefined) {
+      // `featured` is the CIEL PK Investor Hub spotlight (setVentureSpotlight, super admin
+      // only) — whatever the client sends for it is ignored.
+      const featured = entry.publishSettings?.featured;
+      entry.publishSettings = {
+        ...dto.publishSettings,
+        featured,
+      };
+    }
+    if (dto.teamConsent !== undefined) entry.teamConsent = dto.teamConsent;
+    if (dto.sectionSummaries !== undefined)
+      entry.sectionSummaries = dto.sectionSummaries;
+    if (dto.stepCompleted !== undefined)
+      entry.stepCompleted = dto.stepCompleted;
+    if (dto.status !== undefined) entry.status = dto.status;
+    if (
+      priorStatusForSupervisorLock !== 'submitted' &&
+      entry.status === 'submitted'
+    ) {
+      // Submit gate (mirror of computeFypReadiness): a venture can never enter the review
+      // queue without a name and a supervisor for a faculty account to match on.
+      const missing = ventureSubmitMissing(entry);
+      if (missing.length) {
+        throw new BadRequestException(
+          `This venture isn't ready to submit yet. Missing: ${missing.join('; ')}.`,
+        );
+      }
+      // Entering the queue: the supervisor line starts at 'pending' so faculty / university /
+      // admin filters on supervisorStatus see it (the client used to have to send this).
+      const line = entry.reviewPipeline?.supervisorStatus;
+      if (!line || line === 'not_started') {
+        entry.reviewPipeline = {
+          ...(entry.reviewPipeline || {}),
+          supervisorStatus: 'pending',
+        };
+      }
+    }
+    // Pulling a submitted venture back to draft withdraws it from review (same reasoning as
+    // the FYP branch: the supervisor lock lifts with the status).
+    if (
+      priorStatusForSupervisorLock === 'submitted' &&
+      entry.status === 'draft' &&
+      entry.reviewPipeline?.supervisorStatus &&
+      entry.reviewPipeline.supervisorStatus !== 'pending' &&
+      entry.reviewPipeline.supervisorStatus !== 'not_started'
+    ) {
+      entry.reviewPipeline = {
+        ...entry.reviewPipeline,
+        supervisorStatus: 'pending',
+      };
+      entry.meritRibbon = null;
+    }
+    // Toggling investor-track consent is not an academic edit — it must not bounce an
+    // approved record back to pending (students can withdraw/opt-in at any time).
+    const consentOnly =
+      dto.publishSettings !== undefined &&
+      dto.ventureName === undefined &&
+      dto.description === undefined &&
+      dto.stage === undefined &&
+      dto.tractionRows === undefined &&
+      dto.team === undefined &&
+      dto.materialUrls === undefined &&
+      dto.academicSetup === undefined &&
+      dto.ideaInfo === undefined &&
+      dto.solutionInfo === undefined &&
+      dto.sdgMapping === undefined &&
+      dto.evidenceInfo === undefined &&
+      dto.reviewPipeline === undefined &&
+      dto.teamConsent === undefined &&
+      dto.sectionSummaries === undefined &&
+      dto.stepCompleted === undefined &&
+      dto.status === undefined;
+    // Editing a previously-reviewed record after the fact invalidates that review — same rule
+    // as Course Project/FYP: fix & resubmit should land as a fresh review. Keep the supervisor's
+    // note so the student still sees it.
+    const priorStatus = entry.reviewPipeline?.supervisorStatus;
+    if (
+      !consentOnly &&
+      entry.status === 'submitted' &&
+      (priorStatus === 'approved' ||
+        priorStatus === 'rejected' ||
+        priorStatus === 'revisions_requested')
+    ) {
+      entry.reviewPipeline = {
+        ...entry.reviewPipeline,
+        supervisorStatus: 'pending',
+      };
+      entry.meritRibbon = null;
+    }
+    // isVisible is earned, not self-toggled, once the guided wizard is in use — recomputed
+    // on every save so it always reflects the current Showcase-Ready + audience state.
+    entry.isVisible = deriveVentureIsVisible(entry);
+    return entry;
   }
 
   /** Submitted ventures that name this teacher — email first, then stripped supervisor name. */
@@ -3863,7 +3985,10 @@ export class PathsService implements OnModuleInit {
 
   /** Faculty founder track — owner certifies their own record (no student review loop). */
   async selfCertifyOwnVenture(userId: string) {
-    const entry = await this.ventureRepo.findOne({ where: { userId } });
+    const entry = await this.ventureRepo.findOne({
+      where: { userId },
+      order: { updatedAt: 'DESC' },
+    });
     if (!entry) throw new NotFoundException('Venture entry not found');
     entry.status = 'submitted';
     entry.reviewPipeline = {
@@ -4119,13 +4244,21 @@ export class PathsService implements OnModuleInit {
     return { notified: sent, scope, graderRuns };
   }
 
-  async addVentureDocument(userId: string, dto: AddVentureDocumentDto) {
+  /** Without `ventureId`: the legacy single-venture path (latest venture, created if none).
+   * With `ventureId`: that venture only, and only if this user owns it. */
+  async addVentureDocument(
+    userId: string,
+    dto: AddVentureDocumentDto,
+    ventureId?: string,
+  ) {
     return this.ventureRepo.manager.transaction(async (manager) => {
       const repo = manager.getRepository(VentureEntry);
       let entry = await repo.findOne({
-        where: { userId },
+        where: ventureId ? { id: ventureId, userId } : { userId },
+        order: { updatedAt: 'DESC' },
         lock: { mode: 'pessimistic_write' },
       });
+      if (!entry && ventureId) throw new NotFoundException('Venture not found');
       if (!entry) entry = repo.create({ userId });
       const priorVersions = (entry.documents ?? []).filter(
         (d) => d.type === dto.type,
@@ -4150,6 +4283,7 @@ export class PathsService implements OnModuleInit {
       const repo = manager.getRepository(VentureEntry);
       let entry = await repo.findOne({
         where: { userId },
+        order: { updatedAt: 'DESC' },
         lock: { mode: 'pessimistic_write' },
       });
       if (!entry) entry = repo.create({ userId });

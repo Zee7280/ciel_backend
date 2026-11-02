@@ -766,6 +766,79 @@ export class PathsController {
     return { success: true, data };
   }
 
+  /** A student may run several ventures, each with its own Venture ID — the multi-record deck,
+   * mirroring FYP's list/create/id-scoped routes. The singleton routes above stay for older
+   * clients and the faculty-founder track. */
+  @Get('startup-ventures')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.STUDENT)
+  async listVentures(@Request() req: AuthenticatedRequest) {
+    const data = await this.signals.attach(
+      await this.pathsService.listVenturesForUser(req.user.id, req.user.email),
+    );
+    return { success: true, data };
+  }
+
+  @Post('startup-ventures')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.STUDENT)
+  async createVenture(
+    @Request() req: AuthenticatedRequest,
+    @Body() dto: UpdateVentureDto,
+  ) {
+    const data = await this.pathsService.createVentureForUser(req.user.id, dto);
+    return { success: true, data };
+  }
+
+  @Get('startup-ventures/:id')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.STUDENT)
+  async getVentureById(
+    @Request() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const data = await this.signals.attach(
+      await this.pathsService.getVentureByIdForUser(
+        req.user.id,
+        req.user.email,
+        id,
+      ),
+    );
+    return { success: true, data };
+  }
+
+  @Patch('startup-ventures/:id')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.STUDENT)
+  async updateVentureById(
+    @Request() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateVentureDto,
+  ) {
+    const data = await this.pathsService.updateVentureByIdForUser(
+      req.user.id,
+      id,
+      dto,
+    );
+    return { success: true, data };
+  }
+
+  @Post('startup-ventures/:id/documents')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.STUDENT)
+  async addVentureDocumentById(
+    @Request() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AddVentureDocumentDto,
+  ) {
+    const data = await this.pathsService.addVentureDocument(
+      req.user.id,
+      dto,
+      id,
+    );
+    return { success: true, data };
+  }
+
   @Patch('startup-business/visibility')
   @UseGuards(RolesGuard)
   @Roles(UserRole.STUDENT)

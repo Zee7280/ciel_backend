@@ -3752,3 +3752,128 @@ describe('PathsService — admin deletes a coursework record', () => {
     expect(courseRepo.delete).not.toHaveBeenCalled();
   });
 });
+
+describe('PathsService — venture multi-record (list / create / id-scoped)', () => {
+  const makeMultiVentureService = () => {
+    const rows: Record<string, unknown>[] = [
+      {
+        id: 'v-old',
+        userId: 'student-1',
+        ventureName: 'First',
+        status: 'draft',
+      },
+      {
+        id: 'v-new',
+        userId: 'student-1',
+        ventureName: 'Second',
+        status: 'draft',
+      },
+    ];
+    const lockedRepo = {
+      findOne: jest.fn(({ where }: { where: Record<string, unknown> }) =>
+        Promise.resolve(
+          rows.find((r) =>
+            Object.entries(where).every(([k, v]) => r[k] === v),
+          ) ?? null,
+        ),
+      ),
+      save: jest.fn((row: Record<string, unknown>) => Promise.resolve(row)),
+    };
+    const ventureRepo = {
+      find: jest.fn().mockResolvedValue(rows),
+      create: jest.fn((row: Record<string, unknown>) => ({ ...row })),
+      save: jest.fn((row: Record<string, unknown>) =>
+        Promise.resolve({ id: 'v-created', ...row }),
+      ),
+      manager: {
+        transaction: jest.fn(
+          (cb: (m: { getRepository: () => typeof lockedRepo }) => unknown) =>
+            cb({ getRepository: () => lockedRepo }),
+        ),
+      },
+    };
+    const service = createService(
+      {},
+      {},
+      ventureRepo,
+      makeInviteRepo(),
+      {},
+      {},
+      {},
+      {},
+      {},
+      {},
+    );
+    jest
+      .spyOn(service as any, 'ventureAnnotate')
+      .mockImplementation((entries: unknown) => Promise.resolve(entries));
+    jest
+      .spyOn(service as any, 'withCompleteness')
+      .mockImplementation((entry: unknown) => entry);
+    jest
+      .spyOn(service as any, 'syncVentureInvites')
+      .mockResolvedValue(undefined);
+    return { service, ventureRepo, lockedRepo, rows };
+  };
+
+  it('lists every venture the student owns', async () => {
+    const { service } = makeMultiVentureService();
+    const list = await service.listVenturesForUser('student-1');
+    expect(list.map((v) => v.id)).toEqual(['v-old', 'v-new']);
+    expect(list.every((v) => v.isOwner)).toBe(true);
+  });
+
+  it('create starts a separate venture and never touches the existing ones', async () => {
+    const { service, ventureRepo, lockedRepo } = makeMultiVentureService();
+    const created = await service.createVentureForUser('student-1', {
+      ventureName: 'Third',
+    });
+    expect(created).toEqual(
+      expect.objectContaining({
+        id: 'v-created',
+        userId: 'student-1',
+        ventureName: 'Third',
+      }),
+    );
+    expect(ventureRepo.create).toHaveBeenCalledWith({ userId: 'student-1' });
+    expect(lockedRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('create refuses (409) instead of overwriting when the old unique index is still present', async () => {
+    const { service, ventureRepo, lockedRepo } = makeMultiVentureService();
+    ventureRepo.save.mockRejectedValueOnce(
+      Object.assign(new Error('duplicate key value'), { code: '23505' }),
+    );
+    await expect(
+      service.createVentureForUser('student-1', { ventureName: 'Third' }),
+    ).rejects.toThrow('A second venture cannot be created yet');
+    expect(lockedRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('update by id edits only that venture', async () => {
+    const { service, rows } = makeMultiVentureService();
+    await service.updateVentureByIdForUser('student-1', 'v-old', {
+      ventureName: 'First renamed',
+    });
+    expect(rows[0].ventureName).toBe('First renamed');
+    expect(rows[1].ventureName).toBe('Second');
+  });
+
+  it("update by id refuses another student's venture", async () => {
+    const { service } = makeMultiVentureService();
+    await expect(
+      service.updateVentureByIdForUser('student-2', 'v-old', {
+        ventureName: 'Hijack',
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('update by id still enforces the submit gate', async () => {
+    const { service } = makeMultiVentureService();
+    await expect(
+      service.updateVentureByIdForUser('student-1', 'v-new', {
+        status: 'submitted',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+});

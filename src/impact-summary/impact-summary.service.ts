@@ -193,7 +193,10 @@ export class ImpactSummaryService {
         order: { updatedAt: 'DESC' },
       }),
       this.fypRepo.findOne({ where: { userId } }),
-      this.ventureRepo.findOne({ where: { userId } }),
+      this.ventureRepo.findOne({
+        where: { userId },
+        order: { updatedAt: 'DESC' },
+      }),
     ]);
 
     return {

@@ -2,7 +2,6 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { RequestMethod, ValidationPipe } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
-import { AppModule } from './app.module';
 import { join } from 'path';
 import * as fs from 'fs';
 import { json, urlencoded } from 'express';
@@ -10,9 +9,21 @@ import type { NextFunction, Request, Response } from 'express';
 import compression from 'compression';
 import { StripSecretsInterceptor } from './common/interceptors/strip-secrets.interceptor';
 import { HUB_HARD_LIMITS } from './integration-hub/hub-common.util';
+import { preflightHub } from './integration-hub/hub-preflight';
+import type { AppModule as AppModuleType } from './app.module';
 
 async function bootstrap() {
   const bodyLimit = process.env.REQUEST_BODY_LIMIT ?? '50mb';
+  // The hub is registered at module-decoration time from HUB_DATABASE_URL, so the reachability
+  // check must run before the app module is loaded: an unreachable hub database disables the hub
+  // for this process instead of failing every request on the platform.
+  await preflightHub();
+  // CommonJS require (not `import()`): the build is CJS, and an ESM dynamic import would need a
+  // file extension at runtime. The type-only import above is erased.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { AppModule } = require('./app.module') as {
+    AppModule: typeof AppModuleType;
+  };
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bodyParser: false,
   });

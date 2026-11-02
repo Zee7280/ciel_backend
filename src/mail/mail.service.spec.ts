@@ -132,6 +132,36 @@ describe('MailService — SMTP reliability', () => {
     expect(privateHtml).toContain('This is a private team');
     expect(privateHtml).toContain('add your members in Section 1');
     expect(openHtml).not.toContain('private team');
+    expect(openHtml).toContain(
+      'add your team members in <strong>Section 1</strong>, if any',
+    );
+    expect(openHtml).toContain('You can add or remove team members later.');
+    expect(openHtml).toContain('Good luck with your community impact journey!');
+    expect(privateHtml).not.toContain(
+      'add your team members in <strong>Section 1</strong>',
+    );
+  });
+
+  it('live start-report email to a non-student creator has no team-member or good-luck lines', async () => {
+    const { service, internals } = makeService();
+    const sendMailReliable = jest.fn<Promise<unknown>, [SendMailOptions]>(() =>
+      Promise.resolve({ messageId: 'x' }),
+    );
+    internals.sendMailReliable = sendMailReliable;
+    await service.sendOpportunityLiveStartReportEmail({
+      to: 'ngo@org.pk',
+      creatorName: 'Partner',
+      projectTitle: 'Clinic drive',
+      partnerName: '—',
+      requiredHours: '16',
+      projectPeriod: 'Oct – Dec 2026',
+      reportPath: '/dashboard/partner/community-service',
+      isStudentCreator: false,
+    });
+    const sent = sendMailReliable.mock.calls[0][0].html;
+    const html = typeof sent === 'string' ? sent : '';
+    expect(html).not.toContain('add your team members');
+    expect(html).not.toContain('Good luck with your community impact journey!');
   });
 
   it('admin bulk email: one message per recipient, dedupes, skips invalid, survives failures', async () => {

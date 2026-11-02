@@ -1771,7 +1771,9 @@ export class MailService {
           }</p>${
             input.isPrivateTeam
               ? '<p style="margin: 0 0 18px 0;"><strong>This is a private team:</strong> nobody applies. Start your report and add your members in Section 1 (up to the seats you reserved, including you).</p>'
-              : ''
+              : student
+                ? '<p style="margin: 0 0 18px 0;">Click <strong>Start Report</strong> and add your team members in <strong>Section 1</strong>, if any. You can add or remove team members later.</p>'
+                : ''
           }
 
           <div style="background: #f3faf7; border: 1px solid #d3ebe3; border-radius: 12px; padding: 14px 16px; margin: 0 0 22px 0;">
@@ -1793,7 +1795,11 @@ export class MailService {
           }
 
           <p style="margin: 0 0 10px 0; font-size: 14px;"><strong>Tip:</strong> You do not need to wait until the project ends. Update your report as you go — keep dates, hours, and evidence organized.</p>
-          <p style="margin: 0 0 18px 0; font-size: 14px; color: #0f6e62;"><strong>Create impact. Document it. Get it verified.</strong></p>
+          <p style="margin: 0 0 18px 0; font-size: 14px; color: #0f6e62;"><strong>Create impact. Document it. Get it verified.</strong></p>${
+            student
+              ? '<p style="margin: 0 0 18px 0; font-size: 14px;">Good luck with your community impact journey!</p>'
+              : ''
+          }
           <p style="margin: 0; font-size: 13px; color: #6a7d84;">— <strong style="color: #16313d;">CIEL PK</strong><br>Community Impact Education Lab Pakistan</p>
         </div>
       </div>

@@ -83,3 +83,18 @@ export function deriveVentureIsVisible(v: Partial<VentureEntry>): boolean {
     v.publishSettings.audience !== 'private'
   );
 }
+
+/**
+ * Submit gate for the student wizard (server side, mirrors computeFypReadiness): the minimum a
+ * venture needs before it can enter the faculty review queue. Deliberately light — the fuller
+ * academic / showcase / investment gates stay advisory via computeVentureGates.
+ */
+export function ventureSubmitMissing(v: Partial<VentureEntry>): string[] {
+  const missing: string[] = [];
+  const a = v.academicSetup || {};
+  if (!(v.ventureName || '').trim()) missing.push('venture name');
+  if (!(a.supervisorEmail || '').trim() && !(a.supervisorName || '').trim()) {
+    missing.push('faculty supervisor (name or official email)');
+  }
+  return missing;
+}

@@ -654,7 +654,10 @@ export class PathsController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.INVESTOR)
   async listInvestorHubVentures(@Request() req: AuthenticatedRequest) {
-    const maskFounders = req.user?.status === 'pending';
+    // Founder identity is shown only to an investor whose account CIEL PK has verified. Anything
+    // else (pending KYC, pending fee, suspended) sees the masked deck.
+    const status = String(req.user?.status || '').toLowerCase();
+    const maskFounders = status !== 'active' && status !== 'approved';
     const data = await this.pathsService.listVenturesForInvestorHub({
       maskFounders,
     });

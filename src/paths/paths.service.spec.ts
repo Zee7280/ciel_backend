@@ -3293,6 +3293,8 @@ describe('PathsService — venture reviewPipeline forgery guard', () => {
       id: 'v-1',
       userId: 'student-1',
       status: 'draft',
+      ventureName: 'Solar Cart',
+      academicSetup: { supervisorEmail: 'prof@uni.edu' },
       reviewPipeline: { supervisorStatus: 'not_started' },
     });
 
@@ -3305,6 +3307,65 @@ describe('PathsService — venture reviewPipeline forgery guard', () => {
       'pending',
     );
     expect((rows[0] as SavedRow).status).toBe('submitted');
+  });
+
+  it('submit gate: a venture with no name or no supervisor never enters the queue', async () => {
+    const { service } = makeUpsertVentureService({
+      id: 'v-1',
+      userId: 'student-1',
+      status: 'draft',
+      reviewPipeline: { supervisorStatus: 'not_started' },
+    });
+    await expect(
+      service.upsertVenture('student-1', { status: 'submitted' }),
+    ).rejects.toThrow(/venture name.*faculty supervisor/);
+  });
+
+  it('submit without a client-sent pipeline still lands as pending (filters depend on it)', async () => {
+    const { service, rows } = makeUpsertVentureService({
+      id: 'v-1',
+      userId: 'student-1',
+      status: 'draft',
+      ventureName: 'Solar Cart',
+      academicSetup: { supervisorName: 'Dr Ayesha' },
+    });
+    await service.upsertVenture('student-1', { status: 'submitted' });
+    expect((rows[0] as SavedRow).reviewPipeline.supervisorStatus).toBe(
+      'pending',
+    );
+  });
+
+  it('ignores a client-sent spotlight flag: `featured` is the super-admin Investor Hub control', async () => {
+    const { service, rows } = makeUpsertVentureService({
+      id: 'v-1',
+      userId: 'student-1',
+      status: 'draft',
+      publishSettings: { audience: 'investors', featured: false },
+    });
+    await service.upsertVenture('student-1', {
+      publishSettings: { audience: 'investors', featured: true },
+    });
+    expect(
+      (rows[0] as { publishSettings: { featured?: boolean } }).publishSettings
+        .featured,
+    ).toBe(false);
+  });
+
+  it('pulling a submitted, approved venture back to draft withdraws the approval', async () => {
+    const { service, rows } = makeUpsertVentureService({
+      id: 'v-1',
+      userId: 'student-1',
+      status: 'submitted',
+      ventureName: 'Solar Cart',
+      academicSetup: { supervisorEmail: 'prof@uni.edu' },
+      reviewPipeline: { supervisorStatus: 'approved' },
+      meritRibbon: { rank: 1, of: 5 },
+    });
+    await service.upsertVenture('student-1', { status: 'draft' });
+    expect((rows[0] as SavedRow).reviewPipeline.supervisorStatus).toBe(
+      'pending',
+    );
+    expect((rows[0] as { meritRibbon: unknown }).meritRibbon).toBeNull();
   });
 
   it('still resets a genuinely-approved venture back to pending on resubmit-after-edit', async () => {
@@ -3543,5 +3604,88 @@ describe('PathsService.remindCourseProjectFaculty — student nudges the reviewi
       service.remindCourseProjectFaculty('stu-1', 'entry-1'),
     ).rejects.toThrow(/could not deliver/);
     expect(courseProjectRepo.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('PathsService — investor hub sanitisation', () => {
+  const makeService = () =>
+    new PathsService(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+  const entry = () => ({
+    id: 'v-1',
+    ventureName: 'Solar Cart',
+    publishSettings: { audience: 'investors', acceptIntros: true },
+    academicSetup: {
+      university: 'BNU',
+      supervisorEmail: 'prof@uni.edu',
+      coSupervisor: 'Dr B',
+      founderName: 'Ali',
+      founderEmail: 'ali@x.com',
+      founderWhatsappCode: '+92',
+      founderWhatsappNumber: '3001234567',
+    },
+    reviewPipeline: {
+      supervisorStatus: 'approved',
+      supervisorNote: 'internal',
+    },
+    teamConsent: [{ email: 'mate@x.com', consented: true }],
+    team: [{ name: 'Mate', email: 'mate@x.com', inviteStatus: 'accepted' }],
+    documents: [{ label: 'plan', url: 'x' }],
+    materialUrls: ['x'],
+    student: {
+      id: 's-1',
+      name: 'Ali',
+      email: 'ali@x.com',
+      institution: 'BNU',
+      department: 'CS',
+      role: 'student',
+    },
+  });
+  const sanitize = (service: PathsService, mask: boolean) =>
+    (
+      service as unknown as {
+        sanitizeVentureForInvestor: (
+          e: unknown,
+          m: boolean,
+        ) => Record<string, unknown>;
+      }
+    ).sanitizeVentureForInvestor(entry(), mask);
+
+  it('masked (KYC pending): no founder identity or contact, no supervisor, no internal note', () => {
+    const out = sanitize(makeService(), true);
+    const a = out.academicSetup as Record<string, unknown>;
+    expect(a.supervisorEmail).toBeUndefined();
+    expect(a.coSupervisor).toBeUndefined();
+    expect(a.founderName).toBeUndefined();
+    expect(a.founderEmail).toBeUndefined();
+    expect(a.founderWhatsappNumber).toBeUndefined();
+    expect(a.university).toBe('BNU');
+    expect(
+      (out.reviewPipeline as Record<string, unknown>).supervisorNote,
+    ).toBeUndefined();
+    expect(out.teamConsent).toBeUndefined();
+    expect(out.documents).toBeUndefined();
+    expect((out.student as Record<string, unknown>).name).toBe('Founding team');
+    expect((out.team as Record<string, unknown>[])[0].name).toBeUndefined();
+    expect(JSON.stringify(out)).not.toContain('mate@x.com');
+  });
+
+  it('verified investor + founder opted into intros: founder contact is shown, supervisor still hidden', () => {
+    const out = sanitize(makeService(), false);
+    const a = out.academicSetup as Record<string, unknown>;
+    expect(a.founderEmail).toBe('ali@x.com');
+    expect(a.founderWhatsappNumber).toBe('3001234567');
+    expect(a.supervisorEmail).toBeUndefined();
+    expect((out.student as Record<string, unknown>).name).toBe('Ali');
   });
 });

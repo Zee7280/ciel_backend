@@ -59,6 +59,7 @@ import {
 } from './venture-completeness.constants';
 import {
   computeVentureGates,
+  ventureSubmitMissing,
   deriveVentureIsVisible,
 } from './venture-gates.util';
 import { User } from '../users/entities/user.entity';
@@ -2005,6 +2006,9 @@ export class PathsService implements OnModuleInit {
       .andWhere(
         `(e."publishSettings"->>'acceptIntros' = 'true' OR e."publishSettings"->>'audience' = 'investors')`,
       )
+      // "Private" is the founder's explicit opt-out; an accept-intros flag left on from an
+      // earlier choice must not override it.
+      .andWhere(`COALESCE(e."publishSettings"->>'audience', '') <> 'private'`)
       .orderBy('e."updatedAt"', 'DESC');
     const entries = await qb.getMany();
     const annotated = await this.ventureAnnotate(entries);
@@ -2038,14 +2042,39 @@ export class PathsService implements OnModuleInit {
           inviteStatus: m.inviteStatus,
         }))
       : [];
+    // Founder contact (email / WhatsApp) is an intro channel: only a KYC-verified investor sees
+    // it, and only when the founder opted into intros. Supervisor email is never an investor field.
+    const showContact =
+      !maskFounders && entry.publishSettings?.acceptIntros === true;
     const academicSetup = entry.academicSetup
-      ? { ...entry.academicSetup, supervisorEmail: undefined }
+      ? {
+          ...entry.academicSetup,
+          supervisorEmail: undefined,
+          coSupervisor: undefined,
+          founderName: maskFounders
+            ? undefined
+            : entry.academicSetup.founderName,
+          founderEmail: showContact
+            ? entry.academicSetup.founderEmail
+            : undefined,
+          founderWhatsappCode: showContact
+            ? entry.academicSetup.founderWhatsappCode
+            : undefined,
+          founderWhatsappNumber: showContact
+            ? entry.academicSetup.founderWhatsappNumber
+            : undefined,
+        }
+      : null;
+    const reviewPipeline = entry.reviewPipeline
+      ? { ...entry.reviewPipeline, supervisorNote: undefined }
       : null;
     return {
       ...entry,
       student,
       team,
       academicSetup,
+      reviewPipeline,
+      teamConsent: undefined,
       documents: undefined,
       materialUrls: undefined,
     };
@@ -2351,6 +2380,20 @@ export class PathsService implements OnModuleInit {
       entry.aiAnalysis = null;
       entry.aiAnalysisLock = null;
     }
+    // Pulling a submitted record back to draft withdraws it from review. The supervisor lock
+    // lifts together with the status, so a draft that silently kept "approved" could be pointed
+    // at another faculty account and resubmitted as already approved.
+    if (
+      priorStatusForSupervisorLock === 'submitted' &&
+      entry.status === 'draft' &&
+      entry.supervisorApprovalStatus !== 'pending'
+    ) {
+      entry.supervisorApprovalStatus = 'pending';
+      entry.supervisorApprovalAt = null;
+      entry.meritRibbon = null;
+      entry.aiAnalysis = null;
+      entry.aiAnalysisLock = null;
+    }
     // "Ready to Submit" gate — block the draft→submitted transition (not every autosave, and not
     // a resubmission edit — supervisorEmail is already locked in by then) if required fields are
     // missing, so a record can never reach 'submitted' with no supervisor to review it. See
@@ -2438,7 +2481,10 @@ export class PathsService implements OnModuleInit {
       const saved = await this.fypRepo.save(
         this.fypRepo.create({ userId, milestones: DEFAULT_FYP_MILESTONES }),
       );
-      return { ...saved, isOwner: true };
+      return PathsService.redactFypAiAnalysisForStudent({
+        ...saved,
+        isOwner: true,
+      });
     } catch (err) {
       // Older DBs still unique-index userId (one-row era). Opening Create must not 500 —
       // return the existing row so the student form actually opens.
@@ -2455,7 +2501,10 @@ export class PathsService implements OnModuleInit {
       this.logger.warn(
         `createFyp reused existing row ${existing.id} for ${userId} (unique userId still present)`,
       );
-      return { ...existing, isOwner: true };
+      return PathsService.redactFypAiAnalysisForStudent({
+        ...existing,
+        isOwner: true,
+      });
     }
   }
 
@@ -2585,7 +2634,12 @@ export class PathsService implements OnModuleInit {
           uploadedAt: new Date().toISOString(),
         },
       ];
-      return repo.save(entry);
+      const saved = await repo.save(entry);
+      // Student-facing response: same redaction as every other student read.
+      return PathsService.redactFypAiAnalysisForStudent({
+        ...saved,
+        isOwner: saved.userId === userId,
+      });
     });
   }
 
@@ -3281,7 +3335,11 @@ export class PathsService implements OnModuleInit {
           uploadedAt: new Date().toISOString(),
         },
       ];
-      return repo.save(entry);
+      const saved = await repo.save(entry);
+      return PathsService.redactFypAiAnalysisForStudent({
+        ...saved,
+        isOwner: true,
+      });
     });
   }
 
@@ -3415,10 +3473,12 @@ export class PathsService implements OnModuleInit {
           };
         }
         if (dto.publishSettings !== undefined) {
+          // `featured` is the CIEL PK Investor Hub spotlight (setVentureSpotlight, super admin
+          // only) — whatever the client sends for it is ignored.
           const featured = entry.publishSettings?.featured;
           entry.publishSettings = {
             ...dto.publishSettings,
-            featured: dto.publishSettings.featured ?? featured,
+            featured,
           };
         }
         if (dto.teamConsent !== undefined) entry.teamConsent = dto.teamConsent;
@@ -3427,6 +3487,43 @@ export class PathsService implements OnModuleInit {
         if (dto.stepCompleted !== undefined)
           entry.stepCompleted = dto.stepCompleted;
         if (dto.status !== undefined) entry.status = dto.status;
+        if (
+          priorStatusForSupervisorLock !== 'submitted' &&
+          entry.status === 'submitted'
+        ) {
+          // Submit gate (mirror of computeFypReadiness): a venture can never enter the review
+          // queue without a name and a supervisor for a faculty account to match on.
+          const missing = ventureSubmitMissing(entry);
+          if (missing.length) {
+            throw new BadRequestException(
+              `This venture isn't ready to submit yet. Missing: ${missing.join('; ')}.`,
+            );
+          }
+          // Entering the queue: the supervisor line starts at 'pending' so faculty / university /
+          // admin filters on supervisorStatus see it (the client used to have to send this).
+          const line = entry.reviewPipeline?.supervisorStatus;
+          if (!line || line === 'not_started') {
+            entry.reviewPipeline = {
+              ...(entry.reviewPipeline || {}),
+              supervisorStatus: 'pending',
+            };
+          }
+        }
+        // Pulling a submitted venture back to draft withdraws it from review (same reasoning as
+        // the FYP branch: the supervisor lock lifts with the status).
+        if (
+          priorStatusForSupervisorLock === 'submitted' &&
+          entry.status === 'draft' &&
+          entry.reviewPipeline?.supervisorStatus &&
+          entry.reviewPipeline.supervisorStatus !== 'pending' &&
+          entry.reviewPipeline.supervisorStatus !== 'not_started'
+        ) {
+          entry.reviewPipeline = {
+            ...entry.reviewPipeline,
+            supervisorStatus: 'pending',
+          };
+          entry.meritRibbon = null;
+        }
         // Toggling investor-track consent is not an academic edit — it must not bounce an
         // approved record back to pending (students can withdraw/opt-in at any time).
         const consentOnly =
@@ -3702,7 +3799,8 @@ export class PathsService implements OnModuleInit {
         scopeLabel = org?.name ?? 'University';
       }
     } else if (role === UserRole.SUPER_ADMIN) {
-      pool = await this.listVenturesForAdmin();
+      // Decision-status query → submitted rows only; a draft can never hold a ranking.
+      pool = await this.listVenturesForAdmin(undefined, 'approved');
       scopeLabel = 'CIEL — all universities';
     } else {
       return {

@@ -24,15 +24,26 @@ import { HubVendorController } from './vendor/hub-vendor.controller';
 import { HubAdminController } from './admin/hub-admin.controller';
 import { HubOrgController } from './admin/hub-org.controller';
 import { HubInternalJobsController } from './maintenance/hub-internal-jobs.controller';
+import { HubExportController } from './export/hub-export.controller';
+import { HubExportService } from './export/hub-export.service';
+import { User } from '../users/entities/user.entity';
+import { Opportunity } from '../opportunities/entities/opportunity.entity';
+import { AttendanceLog } from '../engagement/entities/attendance-log.entity';
+import { StudentReport } from '../reports/entities/student-report.entity';
+import { FypEntry } from '../paths/entities/fyp-entry.entity';
+import { VentureEntry } from '../paths/entities/venture-entry.entity';
+import { QuickWorkLog } from '../quick-work/entities/quick-work-log.entity';
+import { FacultyUniversityScopeModule } from '../faculty-university-scope/faculty-university-scope.module';
 
 /**
  * Integration Hub root module. Registered by AppModule only when HUB_DATABASE_URL is set, so a
  * deployment without the hub (or with a broken hub URL) never affects the core application.
  *
  * Hub services inject repositories with `@InjectRepository(Entity, HUB_CONNECTION)` and therefore
- * run under the restricted database role. The only core repository in this module is
- * `Organization` (default connection), used read-only by the admin/org controllers to validate and
- * name the organization on a connection — never by intake or processing.
+ * run under the restricted database role. Core repositories (default connection) appear here for
+ * two read-only uses: `Organization`, used by the admin/org controllers to validate and name the
+ * organization on a connection, and the University Export API (`export/`), which reads core
+ * records for the university on an approved connection — never intake or processing.
  */
 @Module({
   imports: [
@@ -47,15 +58,27 @@ import { HubInternalJobsController } from './maintenance/hub-internal-jobs.contr
       }),
     }),
     TypeOrmModule.forFeature(HUB_ENTITIES, HUB_CONNECTION),
-    TypeOrmModule.forFeature([Organization]),
+    TypeOrmModule.forFeature([
+      Organization,
+      User,
+      Opportunity,
+      AttendanceLog,
+      StudentReport,
+      FypEntry,
+      VentureEntry,
+      QuickWorkLog,
+    ]),
+    FacultyUniversityScopeModule,
   ],
   controllers: [
     HubVendorController,
+    HubExportController,
     HubAdminController,
     HubOrgController,
     HubInternalJobsController,
   ],
   providers: [
+    HubExportService,
     HubAuditService,
     HubSecretsService,
     CredentialsService,

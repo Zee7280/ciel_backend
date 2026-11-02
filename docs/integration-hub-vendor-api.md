@@ -17,6 +17,10 @@ What you receive from CIEL PK:
 What you never receive: CIEL PK student, opportunity, attendance, report or ranking data. The API
 is one-way. The only thing you can read back is the status of your own submissions.
 
+Exception: a **university's own system** connected with export scopes (`export:students`,
+`export:community-service`, …) may read that university's records through the read-only
+[University Export API](./university-export-api.md), which uses the same signing and credentials.
+
 ---
 
 ## 1. Signing every request

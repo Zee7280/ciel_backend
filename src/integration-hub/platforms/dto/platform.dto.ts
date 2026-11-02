@@ -14,7 +14,7 @@ import {
   MinLength,
 } from 'class-validator';
 import { PartialType } from '@nestjs/mapped-types';
-import { HUB_EVENT_TYPES } from '../../intake/envelope.util';
+import { HUB_PLATFORM_CAPABILITIES } from '../../export/export-scopes.constants';
 
 export class CreatePlatformDto {
   @IsString()
@@ -39,7 +39,7 @@ export class CreatePlatformDto {
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(16)
-  @IsIn([...HUB_EVENT_TYPES], { each: true })
+  @IsIn([...HUB_PLATFORM_CAPABILITIES], { each: true })
   approvedEventTypes?: string[];
 
   @IsOptional()
@@ -75,7 +75,7 @@ export class UpdatePlatformDto {
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(16)
-  @IsIn([...HUB_EVENT_TYPES], { each: true })
+  @IsIn([...HUB_PLATFORM_CAPABILITIES], { each: true })
   approvedEventTypes?: string[];
 
   @IsOptional()
@@ -131,7 +131,7 @@ export class ProposeConnectionDto {
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(16)
-  @IsIn([...HUB_EVENT_TYPES], { each: true })
+  @IsIn([...HUB_PLATFORM_CAPABILITIES], { each: true })
   scopes?: string[];
 
   @IsOptional()
@@ -167,7 +167,7 @@ export class UpdateConnectionDto {
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(16)
-  @IsIn([...HUB_EVENT_TYPES], { each: true })
+  @IsIn([...HUB_PLATFORM_CAPABILITIES], { each: true })
   scopes?: string[];
 
   @IsOptional()

@@ -3,6 +3,10 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { PathsController } from './paths.controller';
 import { AdminPathsController } from './admin-paths.controller';
 import { PublicCourseworkVerificationController } from './public-coursework-verification.controller';
+import { PublicPathsController } from './public-paths.controller';
+import { VentureInvestorController } from './venture-investor.controller';
+import { VentureInvestorSignalsService } from './venture-investor-signals.service';
+import { VentureInvestorSignal } from './entities/venture-investor-signal.entity';
 import { PathsService } from './paths.service';
 import { CourseProjectEntry } from './entities/course-project-entry.entity';
 import { FypEntry } from './entities/fyp-entry.entity';
@@ -25,6 +29,7 @@ import { AuditLogsModule } from '../audit-logs/audit-logs.module';
       VentureEntry,
       TeamMemberInvite,
       PathGraderRun,
+      VentureInvestorSignal,
       User,
       Organization,
     ]),
@@ -36,10 +41,12 @@ import { AuditLogsModule } from '../audit-logs/audit-logs.module';
   ],
   controllers: [
     PathsController,
+    VentureInvestorController,
     AdminPathsController,
     PublicCourseworkVerificationController,
+    PublicPathsController,
   ],
-  providers: [PathsService],
+  providers: [PathsService, VentureInvestorSignalsService],
   exports: [TypeOrmModule],
 })
 export class PathsModule {}

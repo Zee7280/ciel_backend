@@ -3651,15 +3651,16 @@ describe('PathsService — investor hub sanitisation', () => {
       role: 'student',
     },
   });
-  const sanitize = (service: PathsService, mask: boolean) =>
+  const sanitize = (service: PathsService, mask: boolean, unlocked = false) =>
     (
       service as unknown as {
         sanitizeVentureForInvestor: (
           e: unknown,
           m: boolean,
+          u: boolean,
         ) => Record<string, unknown>;
       }
-    ).sanitizeVentureForInvestor(entry(), mask);
+    ).sanitizeVentureForInvestor(entry(), mask, unlocked);
 
   it('masked (KYC pending): no founder identity or contact, no supervisor, no internal note', () => {
     const out = sanitize(makeService(), true);
@@ -3680,12 +3681,21 @@ describe('PathsService — investor hub sanitisation', () => {
     expect(JSON.stringify(out)).not.toContain('mate@x.com');
   });
 
-  it('verified investor + founder opted into intros: founder contact is shown, supervisor still hidden', () => {
+  it('verified investor without an accepted introduction: identity yes, contact no', () => {
     const out = sanitize(makeService(), false);
+    const a = out.academicSetup as Record<string, unknown>;
+    expect((out.student as Record<string, unknown>).name).toBe('Ali');
+    expect(a.founderEmail).toBeUndefined();
+    expect(a.founderWhatsappNumber).toBeUndefined();
+    expect(out.contactUnlocked).toBe(false);
+  });
+
+  it('founder accepted the introduction (gate 3): contact is shown, supervisor still hidden', () => {
+    const out = sanitize(makeService(), false, true);
     const a = out.academicSetup as Record<string, unknown>;
     expect(a.founderEmail).toBe('ali@x.com');
     expect(a.founderWhatsappNumber).toBe('3001234567');
     expect(a.supervisorEmail).toBeUndefined();
-    expect((out.student as Record<string, unknown>).name).toBe('Ali');
+    expect(out.contactUnlocked).toBe(true);
   });
 });

@@ -16,13 +16,18 @@ import { UserRole } from '../users/enums/user-role.enum';
 import { PathsService } from './paths.service';
 import { SetVentureSpotlightDto } from './dto/update-venture.dto';
 import { AdminMutationAuditInterceptor } from '../audit-logs/admin-mutation-audit.interceptor';
+import { VentureInvestorSignalsService } from './venture-investor-signals.service';
+import { AdminIntroScreeningDto } from './dto/venture-investor-signal.dto';
 
 @Controller('admin/paths')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.SUPER_ADMIN)
 @UseInterceptors(AdminMutationAuditInterceptor)
 export class AdminPathsController {
-  constructor(private readonly pathsService: PathsService) {}
+  constructor(
+    private readonly pathsService: PathsService,
+    private readonly signals: VentureInvestorSignalsService,
+  ) {}
 
   /** All student course-project path entries (draft + submitted) for admin review.
    * Pass ?approvalStatus=approved to get the "Approved Coursework" wall enforced at the query
@@ -82,10 +87,30 @@ export class AdminPathsController {
       | 'revisions_requested'
       | 'rejected',
   ) {
-    const data = await this.pathsService.listVenturesForAdmin(
-      visibility,
-      approvalStatus,
+    const data = await this.signals.attach(
+      await this.pathsService.listVenturesForAdmin(visibility, approvalStatus),
     );
+    return { success: true, data };
+  }
+
+  /** Investor Activity Log — who viewed, saved, marked interest or asked for an introduction. */
+  @Get('startup-business/investor-activity')
+  async investorActivity(
+    @Query('kind') kind?: string,
+    @Query('status') status?: string,
+    @Query('ventureId') ventureId?: string,
+  ) {
+    const data = await this.signals.adminActivity({ kind, status, ventureId });
+    return { success: true, ...data };
+  }
+
+  /** Gate 1 of an introduction: CIEL PK screening. */
+  @Patch('startup-business/investor-activity/:id')
+  async screenIntro(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AdminIntroScreeningDto,
+  ) {
+    const data = await this.signals.adminScreen(id, dto.status, dto.note);
     return { success: true, data };
   }
 
@@ -101,7 +126,9 @@ export class AdminPathsController {
 
   @Get('startup-business/:id')
   async getVenture(@Param('id', ParseUUIDPipe) id: string) {
-    const data = await this.pathsService.getVentureForAdmin(id);
+    const data = await this.signals.attach(
+      await this.pathsService.getVentureForAdmin(id),
+    );
     return { success: true, data };
   }
 }

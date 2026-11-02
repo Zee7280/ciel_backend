@@ -578,6 +578,7 @@ export class HubExportService {
       id: e.id,
     }));
     const users = await this.usersById(page.rows.map((e) => e.userId));
+    const frontendUrl = this.frontendUrl();
     return {
       ...page,
       rows: page.rows.map((e) => {
@@ -612,6 +613,7 @@ export class HubExportService {
                 scope: e.meritRibbon.scope,
               }
             : null,
+          verify_url: `${frontendUrl}/fyp/verify/${e.id}`,
           created_at: iso(e.createdAt),
           updated_at: iso(e.updatedAt),
         };
@@ -655,6 +657,7 @@ export class HubExportService {
       id: e.id,
     }));
     const users = await this.usersById(page.rows.map((e) => e.userId));
+    const frontendUrl = this.frontendUrl();
     return {
       ...page,
       rows: page.rows.map((e) => {
@@ -687,6 +690,7 @@ export class HubExportService {
                 scope: e.meritRibbon.scope,
               }
             : null,
+          verify_url: `${frontendUrl}/venture/verify/${e.id}`,
           created_at: iso(e.createdAt),
           updated_at: iso(e.updatedAt),
         };

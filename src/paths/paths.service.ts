@@ -1868,6 +1868,156 @@ export class PathsService implements OnModuleInit {
     };
   }
 
+  /** Public, unauthenticated verification of an approved FYP — PII-minimal like coursework. */
+  async getPublicFypVerification(id: string) {
+    const entry = PathsService.isUuid(id)
+      ? await this.fypRepo.findOne({ where: { id } })
+      : null;
+    if (!entry) throw new NotFoundException('Verification link not found');
+    if (
+      entry.status !== 'submitted' ||
+      entry.supervisorApprovalStatus !== 'approved'
+    ) {
+      return {
+        success: true,
+        verified: false,
+        status: entry.supervisorApprovalStatus,
+      };
+    }
+    const pi = entry.projectInfo || {};
+    return {
+      success: true,
+      verified: true,
+      kind: 'fyp',
+      project_title: entry.projectTitle || pi.title || 'Untitled FYP',
+      university: pi.university || null,
+      school: pi.school || null,
+      degree: pi.degree || null,
+      route: pi.leadRoute || null,
+      supervisor_name: pi.supervisorName || null,
+      sdgs: PathsService.sdgNumbers(entry.sdgMapping),
+      badge_level: entry.meritRibbon?.badgeLevel ?? null,
+      rank: entry.meritRibbon?.rank ?? null,
+      of: entry.meritRibbon?.of ?? null,
+      scope: entry.meritRibbon?.scope ?? null,
+      verification_code: formatCertificateVerificationCode(entry.id),
+      verified_at: entry.supervisorApprovalAt ?? entry.updatedAt,
+    };
+  }
+
+  /** Public, unauthenticated verification of an approved venture — never founder contact. */
+  async getPublicVentureVerification(id: string) {
+    const entry = PathsService.isUuid(id)
+      ? await this.ventureRepo.findOne({ where: { id } })
+      : null;
+    if (!entry) throw new NotFoundException('Verification link not found');
+    if (
+      entry.status !== 'submitted' ||
+      entry.reviewPipeline?.supervisorStatus !== 'approved'
+    ) {
+      return {
+        success: true,
+        verified: false,
+        status: entry.reviewPipeline?.supervisorStatus ?? 'not_started',
+      };
+    }
+    const a = entry.academicSetup || {};
+    return {
+      success: true,
+      verified: true,
+      kind: 'venture',
+      venture_name: entry.ventureName || 'Untitled venture',
+      stage: entry.stage || null,
+      university: a.university || null,
+      faculty: a.faculty || null,
+      program: a.program || null,
+      supervisor_name: a.supervisorName || null,
+      sdgs: PathsService.sdgNumbers(entry.sdgMapping),
+      badge_level: entry.meritRibbon?.badgeLevel ?? null,
+      rank: entry.meritRibbon?.rank ?? null,
+      of: entry.meritRibbon?.of ?? null,
+      scope: entry.meritRibbon?.scope ?? null,
+      verification_code: formatCertificateVerificationCode(entry.id),
+      verified_at: entry.updatedAt,
+    };
+  }
+
+  /** Home-page spotlight: spotlighted (else top-ranked) approved ventures + top-ranked FYPs. */
+  async getPublicSpotlight() {
+    const approvedVentures = await this.ventureRepo
+      .createQueryBuilder('e')
+      .where(`e.status = 'submitted'`)
+      .andWhere(`e."reviewPipeline"->>'supervisorStatus' = 'approved'`)
+      .andWhere(`COALESCE(e."publishSettings"->>'audience', '') <> 'private'`)
+      .orderBy('e."updatedAt"', 'DESC')
+      .take(200)
+      .getMany();
+    const featured = approvedVentures.filter(
+      (v) => v.publishSettings?.featured === true,
+    );
+    const ranked = approvedVentures
+      .filter((v) => (v.meritRibbon?.rank ?? 99) <= 3)
+      .sort(
+        (x, y) => (x.meritRibbon?.rank ?? 99) - (y.meritRibbon?.rank ?? 99),
+      );
+    const ventures = [...featured, ...ranked]
+      .filter((v, i, arr) => arr.findIndex((o) => o.id === v.id) === i)
+      .slice(0, 3)
+      .map((v) => ({
+        id: v.id,
+        venture_name: v.ventureName || 'Untitled venture',
+        stage: v.stage || null,
+        university: v.academicSetup?.university || null,
+        sdgs: PathsService.sdgNumbers(v.sdgMapping),
+        badge_level: v.meritRibbon?.badgeLevel ?? null,
+        rank: v.meritRibbon?.rank ?? null,
+        featured: v.publishSettings?.featured === true,
+      }));
+    const fyps = (
+      await this.fypRepo.find({
+        where: { status: 'submitted', supervisorApprovalStatus: 'approved' },
+        order: { updatedAt: 'DESC' },
+        take: 200,
+      })
+    )
+      .filter((e) => (e.meritRibbon?.rank ?? 99) <= 3)
+      .sort((x, y) => (x.meritRibbon?.rank ?? 99) - (y.meritRibbon?.rank ?? 99))
+      .slice(0, 3)
+      .map((e) => ({
+        id: e.id,
+        project_title: e.projectTitle || e.projectInfo?.title || 'Untitled FYP',
+        university: e.projectInfo?.university || null,
+        route: e.projectInfo?.leadRoute || null,
+        sdgs: PathsService.sdgNumbers(e.sdgMapping),
+        badge_level: e.meritRibbon?.badgeLevel ?? null,
+        rank: e.meritRibbon?.rank ?? null,
+        of: e.meritRibbon?.of ?? null,
+      }));
+    return { success: true, ventures, fyps };
+  }
+
+  private static isUuid(v: string): boolean {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      (v || '').trim(),
+    );
+  }
+
+  /** SDG goal numbers from the jsonb mapping (several historical shapes). */
+  private static sdgNumbers(mapping: unknown): number[] {
+    const entries = Array.isArray((mapping as { entries?: unknown[] })?.entries)
+      ? ((mapping as { entries: unknown[] }).entries as Record<
+          string,
+          unknown
+        >[])
+      : [];
+    const out = new Set<number>();
+    for (const e of entries) {
+      const n = Number(e?.goalNumber ?? e?.sdg ?? e?.sdgNumber ?? e?.goal);
+      if (Number.isInteger(n) && n >= 1 && n <= 17) out.add(n);
+    }
+    return [...out].sort((a, b) => a - b);
+  }
+
   private async attachStudents<T extends { userId: string }>(entries: T[]) {
     if (!entries.length) return [];
     const users = await this.usersRepo.find({
@@ -1996,7 +2146,11 @@ export class PathsService implements OnModuleInit {
   }
 
   /** Faculty-approved + founder-opted-in ventures for the CIEL Investor Hub. */
-  async listVenturesForInvestorHub(opts: { maskFounders: boolean }) {
+  async listVenturesForInvestorHub(opts: {
+    maskFounders: boolean;
+    /** Ventures whose founder accepted this investor's introduction (gate 3). */
+    contactUnlockedIds?: Set<string>;
+  }) {
     const qb = this.ventureRepo
       .createQueryBuilder('e')
       .where(`e.status = 'submitted'`)
@@ -2015,7 +2169,11 @@ export class PathsService implements OnModuleInit {
     const enriched = annotated.map((entry) => this.withCompleteness(entry)!);
     const withStudents = await this.attachStudents(enriched);
     return withStudents.map((entry) =>
-      this.sanitizeVentureForInvestor(entry as never, opts.maskFounders),
+      this.sanitizeVentureForInvestor(
+        entry as never,
+        opts.maskFounders,
+        opts.contactUnlockedIds?.has(entry.id) === true,
+      ),
     );
   }
 
@@ -2026,6 +2184,7 @@ export class PathsService implements OnModuleInit {
       missingItems?: string[];
     },
     maskFounders: boolean,
+    contactUnlocked = false,
   ) {
     const student = entry.student
       ? {
@@ -2042,10 +2201,13 @@ export class PathsService implements OnModuleInit {
           inviteStatus: m.inviteStatus,
         }))
       : [];
-    // Founder contact (email / WhatsApp) is an intro channel: only a KYC-verified investor sees
-    // it, and only when the founder opted into intros. Supervisor email is never an investor field.
+    // Founder contact (email / WhatsApp) is the outcome of an accepted introduction: a verified
+    // investor, the founder opted into intros, CIEL PK screened the request and the founder
+    // accepted it. Supervisor email is never an investor field.
     const showContact =
-      !maskFounders && entry.publishSettings?.acceptIntros === true;
+      !maskFounders &&
+      entry.publishSettings?.acceptIntros === true &&
+      contactUnlocked;
     const academicSetup = entry.academicSetup
       ? {
           ...entry.academicSetup,
@@ -2074,6 +2236,7 @@ export class PathsService implements OnModuleInit {
       team,
       academicSetup,
       reviewPipeline,
+      contactUnlocked: showContact,
       teamConsent: undefined,
       documents: undefined,
       materialUrls: undefined,
@@ -2221,6 +2384,16 @@ export class PathsService implements OnModuleInit {
 
   /** The faculty supervision deck — submitted FYP records naming this supervisor by email, same
    * scoping as listCourseProjectsForTeacher. */
+  /** Supervisor or co-supervisor: both are named by the student and both review the record. */
+  private static fypSupervisedBy(entry: FypEntry, email: string): boolean {
+    const target = (email || '').trim().toLowerCase();
+    if (!target) return false;
+    const pi = entry.projectInfo || {};
+    return [pi.supervisorEmail, pi.coSupervisorEmail].some(
+      (e) => (e || '').trim().toLowerCase() === target,
+    );
+  }
+
   async listFypForTeacher(supervisorEmail: string) {
     const email = supervisorEmail.trim().toLowerCase();
     if (!email) return [];
@@ -2228,9 +2401,8 @@ export class PathsService implements OnModuleInit {
       where: { status: 'submitted' },
       order: { updatedAt: 'DESC' },
     });
-    const matched = entries.filter(
-      (e) =>
-        (e.projectInfo?.supervisorEmail || '').trim().toLowerCase() === email,
+    const matched = entries.filter((e) =>
+      PathsService.fypSupervisedBy(e, email),
     );
     const annotated = await this.fypAnnotate(matched);
     return this.attachStudents(annotated);
@@ -2246,9 +2418,8 @@ export class PathsService implements OnModuleInit {
       where: { status: 'draft' },
       order: { updatedAt: 'DESC' },
     });
-    const matched = entries.filter(
-      (e) =>
-        (e.projectInfo?.supervisorEmail || '').trim().toLowerCase() === email,
+    const matched = entries.filter((e) =>
+      PathsService.fypSupervisedBy(e, email),
     );
     const annotated = await this.fypAnnotate(matched);
     return this.attachStudents(annotated);
@@ -2739,7 +2910,7 @@ export class PathsService implements OnModuleInit {
     if (
       !entry ||
       entry.status !== 'submitted' ||
-      (entry.projectInfo?.supervisorEmail || '').trim().toLowerCase() !== email
+      !PathsService.fypSupervisedBy(entry, email)
     ) {
       throw new NotFoundException('FYP entry not found');
     }
@@ -2835,7 +3006,7 @@ export class PathsService implements OnModuleInit {
     if (
       !entry ||
       entry.status !== 'submitted' ||
-      (entry.projectInfo?.supervisorEmail || '').trim().toLowerCase() !== email
+      !PathsService.fypSupervisedBy(entry, email)
     ) {
       throw new NotFoundException('FYP entry not found');
     }

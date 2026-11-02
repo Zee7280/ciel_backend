@@ -257,6 +257,7 @@ Submitted FYP / thesis entries approved by the supervisor.
 | `sdgs` | number[] |
 | `approval` | `{ status, approved_at }` |
 | `merit_rank` | `{ rank, of, scope }` \| null |
+| `verify_url` | public verification page |
 | `created_at` `updated_at` | ISO |
 
 ### GET /ventures — `export:ventures`
@@ -273,6 +274,7 @@ Submitted venture entries approved by the supervisor. Founder contact is never e
 | `visible_on_showcase` | boolean |
 | `approval` | `{ supervisor_status, university_status }` |
 | `merit_rank` | `{ rank, of, scope }` \| null |
+| `verify_url` | public verification page |
 | `created_at` `updated_at` | ISO |
 
 ### GET /summary — `export:summary`

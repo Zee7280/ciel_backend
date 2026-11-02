@@ -310,6 +310,64 @@ describe('FYP + Venture flow across every login (e2e)', () => {
       expect(d.isOwner).toBe(true);
       expect(d.aiAnalysisLock ?? null).toBeNull();
     });
+
+    it('a named co-supervisor sees and can review the record too', async () => {
+      const coSup = await h.makeUser(UserRole.FACULTY, {
+        overrides: { university: BNU },
+      });
+      const fresh = await h.as(student).post('/paths/fyp-theses').send({});
+      const id = String(data(fresh).id);
+      const r = await h
+        .as(student)
+        .patch(`/paths/fyp-theses/${id}`)
+        .send({
+          projectTitle: `Co-supervised ${uniq()}`,
+          projectInfo: {
+            title: 'Co-supervised',
+            university: BNU,
+            supervisorEmail: faculty.email,
+            coSupervisorEmail: coSup.email,
+          },
+          status: 'submitted',
+        });
+      expect(r.status).toBe(200);
+      expect(
+        ids(await h.as(coSup).get('/paths/fyp-thesis/supervised')),
+      ).toContain(id);
+      expect(
+        ids(await h.as(otherFaculty).get('/paths/fyp-thesis/supervised')),
+      ).not.toContain(id);
+      const ok = await h
+        .as(coSup)
+        .patch(`/paths/fyp-thesis/${id}/supervisor-review`)
+        .send({ action: 'approve' });
+      expect(ok.status).toBe(200);
+      expect(
+        data(await h.as(student).get(`/paths/fyp-theses/${id}`))
+          .supervisorApprovalStatus,
+      ).toBe('approved');
+    });
+
+    it('public verification: approved record verifies without PII; a draft does not; garbage is 404', async () => {
+      const r = await h.as(null).get(`/public/paths/fyp/${fypId}/verification`);
+      expect(r.status).toBe(200);
+      const b = r.body as Record<string, any>;
+      expect(b.verified).toBe(true);
+      expect(b.kind).toBe('fyp');
+      expect(b.university).toBe(BNU);
+      expect(b.verification_code).toBeTruthy();
+      expect(JSON.stringify(b)).not.toContain(student.email);
+      expect(JSON.stringify(b)).not.toContain(faculty.email);
+      const draft = await h.as(student).post('/paths/fyp-theses').send({});
+      const d = await h
+        .as(null)
+        .get(`/public/paths/fyp/${String(data(draft).id)}/verification`);
+      expect((d.body as { verified: boolean }).verified).toBe(false);
+      expect(
+        (await h.as(null).get('/public/paths/fyp/not-a-uuid/verification'))
+          .status,
+      ).toBe(404);
+    });
   });
 
   // -------------------------------------------------------------- Venture
@@ -439,7 +497,9 @@ describe('FYP + Venture flow across every login (e2e)', () => {
       );
       expect(row).toBeDefined();
       expect(row!.student.name).not.toBe('Founding team');
-      expect(row!.academicSetup.founderEmail).toBe(student.email);
+      // identity yes, contact not until the founder accepts an introduction (gate 3)
+      expect(row!.academicSetup.founderEmail).toBeUndefined();
+      expect(row!.contactUnlocked).toBe(false);
       expect(row!.academicSetup.supervisorEmail).toBeUndefined();
       expect(row!.documents).toBeUndefined();
 
@@ -560,6 +620,247 @@ describe('FYP + Venture flow across every login (e2e)', () => {
       expect(
         ids(await h.as(investor).get('/paths/startup-business/investor-hub')),
       ).not.toContain(ventureId);
+    });
+
+    it('investor signals: view / save / interest / intro are recorded once and every stakeholder reads the same counts', async () => {
+      await h
+        .as(student)
+        .patch('/paths/startup-business')
+        .send({ status: 'submitted' });
+      expect(
+        (
+          await h
+            .as(faculty)
+            .patch(`/paths/startup-business/${ventureId}/supervisor-review`)
+            .send({ action: 'approve' })
+        ).status,
+      ).toBe(200);
+
+      const sig = (kind: string, note?: string) =>
+        h
+          .as(investor)
+          .post(`/paths/startup-business/investor-hub/${ventureId}/signals`)
+          .send({ kind, note });
+      expect((await sig('view')).status).toBe(201);
+      expect((await sig('view')).status).toBe(201);
+      expect((await sig('save')).status).toBe(201);
+      expect(
+        (await sig('interest', 'Strong fit for our seed thesis')).status,
+      ).toBe(201);
+      expect((await sig('interest')).status).toBe(201); // idempotent
+      expect((await sig('intro', 'Would like a call')).status).toBe(201);
+      expect(
+        (
+          await h
+            .as(feePendingInvestor)
+            .post(`/paths/startup-business/investor-hub/${ventureId}/signals`)
+            .send({ kind: 'view' })
+        ).status,
+      ).toBe(201);
+      expect(
+        (
+          await h
+            .as(feePendingInvestor)
+            .post(`/paths/startup-business/investor-hub/${ventureId}/signals`)
+            .send({ kind: 'interest' })
+        ).status,
+      ).toBe(403);
+      expect(
+        (
+          await h
+            .as(student)
+            .post(`/paths/startup-business/investor-hub/${ventureId}/signals`)
+            .send({ kind: 'view' })
+        ).status,
+      ).toBe(403);
+      expect((await sig('view')).status).toBe(201);
+      expect(
+        (
+          await h
+            .as(investor)
+            .post(
+              '/paths/startup-business/investor-hub/00000000-0000-4000-8000-000000000000/signals',
+            )
+            .send({ kind: 'view' })
+        ).status,
+      ).toBe(404);
+
+      const mine = data<{ kind: string; status: string | null }[]>(
+        await h
+          .as(investor)
+          .get('/paths/startup-business/investor-hub/signals'),
+      );
+      expect(mine.map((m) => m.kind).sort()).toEqual([
+        'interest',
+        'intro',
+        'save',
+        'view',
+      ]);
+      expect(mine.find((m) => m.kind === 'intro')?.status).toBe('pending');
+
+      const expectCounts = (row: Record<string, any> | undefined) => {
+        expect(row?.investorActivity).toMatchObject({
+          views: 4,
+          saves: 1,
+          interests: 1,
+          intros: 1,
+          introsOpen: 1,
+          introsAccepted: 0,
+        });
+      };
+      expectCounts(
+        data<Record<string, any>>(
+          await h.as(student).get('/paths/startup-business'),
+        ),
+      );
+      expectCounts(
+        data<Record<string, any>[]>(
+          await h.as(faculty).get('/paths/startup-business/supervised'),
+        ).find((e) => e.id === ventureId),
+      );
+      expectCounts(
+        data<Record<string, any>[]>(
+          await h.as(bnuOperator).get('/paths/startup-business/university'),
+        ).find((e) => e.id === ventureId),
+      );
+      expectCounts(
+        data<Record<string, any>[]>(
+          await h.as(admin).get('/admin/paths/startup-business'),
+        ).find((e) => e.id === ventureId),
+      );
+      expectCounts(
+        data<Record<string, any>>(
+          await h.as(admin).get(`/admin/paths/startup-business/${ventureId}`),
+        ),
+      );
+
+      expect(
+        (
+          await h
+            .as(investor)
+            .del(
+              `/paths/startup-business/investor-hub/${ventureId}/signals/save`,
+            )
+        ).status,
+      ).toBe(200);
+      expect(
+        data<Record<string, any>>(
+          await h.as(student).get('/paths/startup-business'),
+        ).investorActivity.saves,
+      ).toBe(0);
+    });
+
+    it('introduction gates: CIEL PK screens → founder accepts → contact unlocks for that investor only', async () => {
+      let mine = data<Record<string, any>[]>(
+        await h.as(student).get('/paths/startup-business/investor-signals'),
+      );
+      const intro = mine.find((r) => r.kind === 'intro');
+      expect(intro?.status).toBe('pending');
+      expect(intro?.investor.name).toBeNull();
+      expect(
+        (
+          await h
+            .as(student)
+            .patch(`/paths/startup-business/investor-signals/${intro!.id}`)
+            .send({ decision: 'accept' })
+        ).status,
+      ).toBe(403);
+
+      const log = await h
+        .as(admin)
+        .get('/admin/paths/startup-business/investor-activity');
+      expect(log.status).toBe(200);
+      const body = log.body as {
+        items: Record<string, any>[];
+        totals: Record<string, number>;
+      };
+      const item = body.items.find((i) => i.id === intro!.id);
+      expect(item?.investor.email).toBe(investor.email);
+      expect(item?.venture.id).toBe(ventureId);
+      expect(body.totals.intros_pending).toBeGreaterThanOrEqual(1);
+      expect(
+        (
+          await h
+            .as(student)
+            .get('/admin/paths/startup-business/investor-activity')
+        ).status,
+      ).toBe(403);
+
+      expect(
+        (
+          await h
+            .as(admin)
+            .patch(
+              `/admin/paths/startup-business/investor-activity/${intro!.id}`,
+            )
+            .send({ status: 'screened', note: 'Verified fund' })
+        ).status,
+      ).toBe(200);
+      mine = data<Record<string, any>[]>(
+        await h.as(student).get('/paths/startup-business/investor-signals'),
+      );
+      expect(mine.find((r) => r.kind === 'intro')?.status).toBe('screened');
+      expect(mine.find((r) => r.kind === 'intro')?.investor.name).toBeTruthy();
+      let hub = data<Record<string, any>[]>(
+        await h.as(investor).get('/paths/startup-business/investor-hub'),
+      ).find((e) => e.id === ventureId);
+      expect(hub!.academicSetup.founderEmail).toBeUndefined();
+
+      expect(
+        (
+          await h
+            .as(student)
+            .patch(`/paths/startup-business/investor-signals/${intro!.id}`)
+            .send({ decision: 'accept' })
+        ).status,
+      ).toBe(200);
+      hub = data<Record<string, any>[]>(
+        await h.as(investor).get('/paths/startup-business/investor-hub'),
+      ).find((e) => e.id === ventureId);
+      expect(hub!.contactUnlocked).toBe(true);
+      expect(hub!.academicSetup.founderEmail).toBe(student.email);
+      const other = await h.makeUser(UserRole.INVESTOR);
+      const otherRow = data<Record<string, any>[]>(
+        await h.as(other).get('/paths/startup-business/investor-hub'),
+      ).find((e) => e.id === ventureId);
+      expect(otherRow!.academicSetup.founderEmail).toBeUndefined();
+      expect(
+        data<Record<string, any>>(
+          await h.as(student).get('/paths/startup-business'),
+        ).investorActivity,
+      ).toMatchObject({ introsOpen: 0, introsAccepted: 1 });
+      expect(
+        (
+          await h
+            .as(admin)
+            .patch(
+              `/admin/paths/startup-business/investor-activity/${intro!.id}`,
+            )
+            .send({ status: 'declined' })
+        ).status,
+      ).toBe(403);
+    });
+
+    it('public verification + spotlight: approved venture verifies without contact; spotlight lists it once featured', async () => {
+      const r = await h
+        .as(null)
+        .get(`/public/paths/venture/${ventureId}/verification`);
+      expect(r.status).toBe(200);
+      const b = r.body as Record<string, any>;
+      expect(b.verified).toBe(true);
+      expect(b.kind).toBe('venture');
+      expect(b.university).toBe(BNU);
+      expect(JSON.stringify(b)).not.toContain(student.email);
+      expect(JSON.stringify(b)).not.toContain('3001234567');
+
+      const spot = await h.as(null).get('/public/paths/spotlight');
+      expect(spot.status).toBe(200);
+      const sb = spot.body as {
+        ventures: Record<string, any>[];
+        fyps: unknown[];
+      };
+      expect(sb.ventures.find((v) => v.id === ventureId)?.featured).toBe(true);
+      expect(JSON.stringify(sb)).not.toContain(student.email);
     });
 
     it('faculty-owned venture: self-certify lands it approved + submitted for university and admin', async () => {

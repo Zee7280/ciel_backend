@@ -139,7 +139,7 @@ describe('Community service reporting (real app + real Postgres)', () => {
         admin_status: 'approved',
         adminApprovedAt: new Date('2026-04-02T06:00:00Z'),
         section4: { distinct_total_beneficiaries: 80 },
-      } as Partial<StudentReport>),
+      } as unknown as Partial<StudentReport>),
     );
 
     // An approved Quick Community Impact log with one credited student (90 minutes).
@@ -191,7 +191,7 @@ describe('Community service reporting (real app + real Postgres)', () => {
       .as(admin)
       .get(`/admin/cs-reports/${id}/${format}`)
       .buffer(true)
-      .parse(binary);
+      .parse(binary as never);
 
   it('is for CIEL PK admins only', async () => {
     const student = await h.makeUser(UserRole.STUDENT);

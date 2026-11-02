@@ -48,6 +48,7 @@ import {
 } from './dto/update-venture.dto';
 import { VentureMeritModelQueryDto } from './dto/venture-merit-model-query.dto';
 import { ResendTeamInviteDto } from './dto/team-invite.dto';
+import { VentureInvestorSignalsService } from './venture-investor-signals.service';
 
 /** req.user as populated by JwtStrategy.validate — declared locally (like the other controllers)
  * so every handler reads a typed principal instead of an untyped request. */
@@ -67,6 +68,7 @@ export class PathsController {
   constructor(
     private readonly pathsService: PathsService,
     private readonly s3Service: S3Service,
+    private readonly signals: VentureInvestorSignalsService,
   ) {}
 
   /** JSON-only presign shared by all path workspaces' evidence/material uploads. */
@@ -605,9 +607,11 @@ export class PathsController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.FACULTY)
   async listSupervisedVentures(@Request() req: AuthenticatedRequest) {
-    const data = await this.pathsService.listVenturesForTeacher(
-      req.user.email,
-      req.user.id,
+    const data = await this.signals.attach(
+      await this.pathsService.listVenturesForTeacher(
+        req.user.email,
+        req.user.id,
+      ),
     );
     return { success: true, data };
   }
@@ -641,10 +645,12 @@ export class PathsController {
       | 'revisions_requested'
       | 'rejected',
   ) {
-    const data = await this.pathsService.listVenturesForUniversity(
-      req.user.organizationId,
-      status,
-      approvalStatus,
+    const data = await this.signals.attach(
+      await this.pathsService.listVenturesForUniversity(
+        req.user.organizationId,
+        status,
+        approvalStatus,
+      ),
     );
     return { success: true, data };
   }
@@ -658,8 +664,14 @@ export class PathsController {
     // else (pending KYC, pending fee, suspended) sees the masked deck.
     const status = String(req.user?.status || '').toLowerCase();
     const maskFounders = status !== 'active' && status !== 'approved';
+    // Founder contact is a gate-3 outcome: only ventures whose founder accepted THIS investor's
+    // introduction request unlock it.
+    const contactUnlockedIds = maskFounders
+      ? new Set<string>()
+      : await this.signals.contactUnlockedVentureIds(req.user.id);
     const data = await this.pathsService.listVenturesForInvestorHub({
       maskFounders,
+      contactUnlockedIds,
     });
     return {
       success: true,
@@ -737,9 +749,8 @@ export class PathsController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.STUDENT, UserRole.FACULTY)
   async getVenture(@Request() req: AuthenticatedRequest) {
-    const data = await this.pathsService.getVenture(
-      req.user.id,
-      req.user.email,
+    const data = await this.signals.attach(
+      await this.pathsService.getVenture(req.user.id, req.user.email),
     );
     return { success: true, data };
   }
